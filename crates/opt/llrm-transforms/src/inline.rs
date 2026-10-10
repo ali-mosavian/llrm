@@ -1151,6 +1151,53 @@ const RECURSIVE_SIZE: i64 = 450;
 /// this per call of it.
 const RECURSIVE_PROBABILITY: i64 = 10;
 
+/// Only a body the ordinary inline threshold admits (`want_inline_small_function_p`
+/// is asked of the recursive edge too), by its growth: the body less the call it
+/// replaces; and one that allocates no stack, each copy of which would add its
+/// frame.
+fn recursion_admits(
+    original: &Function,
+    budget: i64,
+) -> bool {
+    semantic_count(original) - 1 <= budget
+        && !original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. }))
+        && carries(original)
+}
+
+/// GCC's inlining of a recursive callee into a caller that is not it (ipa-inline.cc
+/// L2263-2290): `caller` is given a copy of `original`, the body of recursive `id` as
+/// it was before it was given copies of itself, at each call to it, under the limits
+/// the recursion's own copies are held to; the copies made. One level: gcc's
+/// frequency test (`want_inline_self_recursive_call_p`, `peeling`) is asked only
+/// of an edge inside a copy, the copies' own calls being the callee's to peel
+/// once it has grown.
+pub fn peeled_into(
+    id: GlobalId,
+    caller: &mut Function,
+    original: &Function,
+    budget: i64,
+    context: &mut Context,
+    unit: &mut UnitSize,
+) -> usize {
+    if !recursion_admits(original, budget) {
+        return 0;
+    }
+    let mut made = 0;
+    let base = semantic_count(caller);
+    let calls: Vec<InstId> =
+        caller.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, caller, inst) == Some(id)).collect();
+    for call in calls {
+        let copy = semantic_count(original);
+        if !within_function_limits(semantic_count(caller), base, copy, GCC_LARGE_FUNCTION) || !unit.admits(copy - 1) {
+            break;
+        }
+        unit.now += copy - 1;
+        splice(context, caller, call, original);
+        made += 1;
+    }
+    made
+}
+
 /// GCC's `recursive_inlining` (ipa-inline.cc): `function`, the body of `id`,
 /// with calls to itself replaced by copies of `original`, its body as it was,
 /// breadth first and each copy's own calls in turn, while a call is likelier
@@ -1171,13 +1218,7 @@ pub fn inlined_into_itself(
     let own = |function: &Function, context: &Context| -> Vec<InstId> {
         function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst) == Some(id)).collect()
     };
-    // Only a body the ordinary inline threshold admits
-    // (`want_inline_small_function_p` is asked of the recursive edge
-    // too), by its growth: the body less the call it replaces.
-    if semantic_count(original) - 1 > budget
-        || original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. }))
-        || !carries(original)
-    {
+    if !recursion_admits(original, budget) {
         return 0;
     }
     let mut depth: IndexMap<InstId, u32> = own(function, context).into_iter().map(|call| (call, 1)).collect();
