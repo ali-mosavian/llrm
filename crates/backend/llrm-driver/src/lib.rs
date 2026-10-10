@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use llrm_core::abi::machine::Machine;
-use llrm_core::backend::isel::{self, Compiled};
+use llrm_core::backend::isel::Compiled;
 use llrm_core::driver::Options;
 use llrm_core::driver::flags::Flags;
 use llrm_target::Target;
@@ -16,6 +16,22 @@ pub const DEFAULT: &str = "x86-m16";
 /// Every target built in.
 pub fn all() -> Vec<Rc<dyn Target>> {
     vec![Rc::new(llrm_x86_m16::M16), Rc::new(llrm_x86_m32::M32)]
+}
+
+/// The instruction selector of the target `name`, from its select crate. The
+/// effect rows of its code width are bound with it.
+pub fn selector(name: &str) -> Option<&'static Compiled> {
+    match name {
+        "x86-m16" => {
+            llrm_core::backend::effects::register(llrm_x86_m16_select::MODE, llrm_x86_m16_select::rows);
+            Some(&llrm_x86_m16_select::SELECTOR)
+        }
+        "x86-m32" => {
+            llrm_core::backend::effects::register(llrm_x86_m32_select::MODE, llrm_x86_m32_select::rows);
+            Some(&llrm_x86_m32_select::SELECTOR)
+        }
+        _ => None,
+    }
 }
 
 /// A target and the instruction selector generated from its definitions.
@@ -40,7 +56,7 @@ impl Bound {
 /// BC objects) and of the tests of those: the one place that names it for them.
 pub fn m16_options(machine: Machine) -> Options {
     let target: Rc<dyn Target> = Rc::new(llrm_x86_m16::M16);
-    let selection = isel::selector(target.name()).expect("the 16-bit selector is built");
+    let selection = selector(target.name()).expect("the 16-bit selector is built");
     Options::new(machine, target, selection)
 }
 
@@ -102,7 +118,7 @@ pub fn planned(
     }
     flags.format(&**found)?;
     flags.convention(&**found)?;
-    let selection = isel::selector(name).ok_or_else(|| format!("no instruction selector is built for {name}"))?;
+    let selection = selector(name).ok_or_else(|| format!("no instruction selector is built for {name}"))?;
     Ok(Bound { target: Rc::clone(found), selection })
 }
 

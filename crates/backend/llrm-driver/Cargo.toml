@@ -11,6 +11,8 @@ llrm-target = { workspace = true }
 llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
+llrm-x86-m16-select = { workspace = true }
+llrm-x86-m32-select = { workspace = true }
 
 [dev-dependencies]
 iced-x86 = { workspace = true }

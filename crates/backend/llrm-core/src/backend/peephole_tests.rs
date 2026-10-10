@@ -19,7 +19,7 @@ use crate::support::pyrepr::Repr;
 
 /// The 16-bit x86 rules, as the phase takes them by default.
 fn rules() -> &'static crate::backend::peep::Rules {
-    &crate::backend::peep::targets::x86_m16::RULES
+    &crate::backend::targets::x86_m16::RULES
 }
 
 fn r(
@@ -4097,7 +4097,7 @@ fn test_a_dword_copy_and_add_are_priced_with_their_operand_size_prefixes() {
 // extensions
 
 fn flat() -> &'static crate::backend::peep::Rules {
-    &crate::backend::peep::targets::x86_m32::RULES
+    &crate::backend::targets::x86_m32::RULES
 }
 
 fn word_load(into: Register) -> Arc<Insn> {

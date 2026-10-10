@@ -77,7 +77,9 @@ pub mod api {
 }
 mod unwind;
 
-pub use matcher::{Compiled, selector};
+pub use matcher::Compiled;
+#[cfg(feature = "fixtures")]
+pub use matcher::selector;
 #[cfg(test)]
 pub(crate) use matcher::{HOOKED, m16};
 mod expand;
