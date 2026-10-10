@@ -21,6 +21,7 @@
 
 use std::collections::BTreeSet;
 
+use llrm_analysis::cfg::Around;
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction;
 use llrm_analysis::manager::Registers;
@@ -153,15 +154,11 @@ pub(crate) fn _shape(
     function: &Function,
     loop_: &Loop,
 ) -> Option<Shape> {
-    // Asked of the blocks the loop's entry and exit are made of, not of a graph
-    // of the whole function built for each loop.
-    let predecessors =
-        |at: i64| -> BTreeSet<i64> { function.predecessors(cfg::block(at)).into_iter().map(cfg::id).collect() };
-    let succ = |at: i64| -> Vec<i64> { function.successors(cfg::block(at)).into_iter().map(cfg::id).collect() };
+    let succ = |at: i64| cfg::successors_of(function, at);
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
         return None;
     };
-    let [preheader] = predecessors(loop_.header).difference(&loop_.body).copied().collect::<Vec<_>>()[..] else {
+    let [preheader] = loop_.entering(function).into_iter().collect::<Vec<_>>()[..] else {
         return None;
     };
     let header = cfg::block(loop_.header);
@@ -183,7 +180,9 @@ pub(crate) fn _shape(
     let ([first], [exit]) = (&inside[..], &outside[..]) else {
         return None;
     };
-    if predecessors(*first) != BTreeSet::from([loop_.header]) || !_phis(function, cfg::block(*first)).is_empty() {
+    if cfg::predecessors_of(function, *first) != BTreeSet::from([loop_.header])
+        || !_phis(function, cfg::block(*first)).is_empty()
+    {
         return None;
     }
     let work = function

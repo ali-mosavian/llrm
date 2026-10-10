@@ -500,9 +500,36 @@ pub fn candidates(
     reach: i64,
     threshold: Threshold,
 ) -> IndexMap<GlobalId, Candidate> {
+    candidates_over(
+        module,
+        callees,
+        layout,
+        calls,
+        private,
+        costs,
+        reach,
+        threshold,
+        &recursive(module),
+        &llrm_mir::callgraph::addressed(module),
+    )
+}
+
+/// `candidates` where the module's recursive and addressed functions are known:
+/// a round asks twice (the bytes and the clocks) and found them each time.
+pub fn candidates_over(
+    module: &Module,
+    callees: &Callees,
+    layout: &DataLayout,
+    calls: &Counter,
+    private: &BTreeSet<GlobalId>,
+    costs: &OperationCosts,
+    reach: i64,
+    threshold: Threshold,
+    recursive: &BTreeSet<GlobalId>,
+    addressed: &BTreeSet<GlobalId>,
+) -> IndexMap<GlobalId, Candidate> {
     let budget = threshold.budget(reach);
     let call_cost = costs.call;
-    let (recursive, addressed) = (recursive(module), llrm_mir::callgraph::addressed(module));
     let mut out = IndexMap::default();
     let mut lasts = IndexMap::default();
     for (&name, &count) in calls {
@@ -677,6 +704,7 @@ pub fn expanded(
     let empty = IndexMap::default();
     let constant = constant.unwrap_or(&empty);
     let calls = function.walk().map(|(_, inst)| inst).collect::<Vec<_>>();
+    let own = semantic_count(function);
     for call in calls {
         if !matches!(function.instruction(call).opcode, Opcode::Call(_)) {
             continue;
@@ -686,7 +714,7 @@ pub fn expanded(
         let Some(candidate) = candidate else {
             continue;
         };
-        if fits(context, function, caller, call, candidate) {
+        if fits(context, function, caller, own, call, candidate) {
             copy_byval_arguments(context, function, caller.layout, call, &candidate.body, declared)?;
             splice(context, function, call, &candidate.body);
             return Ok(true);
@@ -695,12 +723,96 @@ pub fn expanded(
     Ok(false)
 }
 
+/// Every legal call site in `function` inlined, as `expanded` called until it
+/// says no would: the first legal one, again from the top, a copy's own calls
+/// ahead of the calls after it. In one scan, with the size kept as it grows:
+/// `expanded` read the calls and counted the body again for each site, a body
+/// of N sites N times. How many were.
+pub fn expanded_all(
+    context: &mut Context,
+    function: &mut Function,
+    caller: &Caller,
+    available: &IndexMap<GlobalId, Candidate>,
+    constant: Option<&llrm_support::hash::SparseIdMap<InstId, Candidate>>,
+    declared: &mut Declared,
+) -> Result<usize, String> {
+    let empty = IndexMap::default();
+    let constant = constant.unwrap_or(&empty);
+    let mut own = semantic_count(function);
+    let calls: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
+    let candidate_of = |context: &Context, function: &Function, call: InstId| {
+        if !matches!(function.instruction(call).opcode, Opcode::Call(_)) {
+            return None;
+        }
+        constant.get(&call).or_else(|| callee(context, function, call).and_then(|name| available.get(&name)))
+    };
+    // Copies that bring no calls to inline, no stack and no copied argument
+    // leave the sites where they were: which fit is decided in one pass
+    // over the size as it grows, and the copies made from the last to the
+    // first, so that each splits a block whose tail is only what is left of
+    // it (made in order, each moved the whole tail of the one block a body
+    // of calls is: N sites N times its size).
+    let simple = available
+        .values()
+        .chain(constant.values())
+        .all(
+            |candidate| candidate.frame == 0
+                && byval_types(&candidate.body).is_empty()
+                && !candidate.body.walk().any(|(_, inst)| {
+                    matches!(candidate.body.instruction(inst).opcode, Opcode::Call(_))
+                        && callee(context, &candidate.body, inst).is_some_and(|name| available.contains_key(&name))
+                }),
+        );
+    if simple {
+        let mut plan: Vec<(InstId, &Candidate)> = Vec::new();
+        for call in calls {
+            let Some(candidate) = candidate_of(context, function, call) else { continue };
+            if fits(context, function, caller, own, call, candidate) {
+                own += semantic_count(&candidate.body) - 1;
+                plan.push((call, candidate));
+            }
+        }
+        for &(call, candidate) in plan.iter().rev() {
+            splice(context, function, call, &candidate.body);
+        }
+        assert_eq!(own, semantic_count(function), "the size kept is not the body's");
+        return Ok(plan.len());
+    }
+    // The calls still to look at, the next one last. A site that does not fit
+    // does not later (the body only grows), so each is looked at once.
+    let mut todo = calls;
+    todo.reverse();
+    let mut done = 0;
+    while let Some(call) = todo.pop() {
+        let Some(candidate) = candidate_of(context, function, call) else { continue };
+        if !fits(context, function, caller, own, call, candidate) {
+            continue;
+        }
+        let before = semantic_count(function);
+        copy_byval_arguments(context, function, caller.layout, call, &candidate.body, declared)?;
+        let copied = semantic_count(function) - before;
+        let size = semantic_count(&candidate.body);
+        let copies = splice(context, function, call, &candidate.body);
+        // The call goes (one operation) and the body comes (its operations);
+        // the jumps and phis the copy adds do no work.
+        own += copied + size - 1;
+        done += 1;
+        todo.extend(
+            copies.into_iter().rev().filter(|&copy| matches!(function.instruction(copy).opcode, Opcode::Call(_))),
+        );
+    }
+    assert_eq!(own, semantic_count(function), "the size kept is not the body's");
+    Ok(done)
+}
+
 /// Whether the call fits its callee, which returns, and the stack the copy
-/// adds stays within `FRAME_LIMIT`, and in a recursive function none.
+/// adds stays within `FRAME_LIMIT`, and in a recursive function none; `own` is
+/// the caller's size now.
 fn fits(
     context: &Context,
     function: &Function,
     caller: &Caller,
+    own: i64,
     call: InstId,
     candidate: &Candidate,
 ) -> bool {
@@ -713,7 +825,7 @@ fn fits(
         )
         && (candidate.frame == 0
             || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
-        && grows_within_limits(function, caller, callee, candidate.moved)
+        && grows_within_limits(own, caller, callee, candidate.moved)
         && callee.parameters().iter().enumerate().all(|(at, _)| {
             !Facts::of(&callee.parameter_attrs[at]).releases()
                 || owned(context, function, function.instruction(call).operands[at], 0)
@@ -723,12 +835,12 @@ fn fits(
 /// gcc's `caller_growth_limits`: the size after the inline, against the
 /// function limits. A caller whose size before is not known is its own base.
 fn grows_within_limits(
-    function: &Function,
+    own: i64,
     caller: &Caller,
     callee: &Function,
     moved: bool,
 ) -> bool {
-    let (own, callee_size) = (semantic_count(function), semantic_count(callee));
+    let callee_size = semantic_count(callee);
     let base = if caller.base > 0 { caller.base } else { own };
     let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
     let after = own + callee_size;
