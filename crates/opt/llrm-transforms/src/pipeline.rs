@@ -303,7 +303,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
         Box::new(fill::Fill { size: applied.options.prefers_size() }),
-        Box::new(fill::Merge),
+        Box::new(fill::Merge { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }

@@ -291,7 +291,7 @@ fn adjacent_stores_of_one_byte_are_one_memset() {
     let stores = "  store i16 0, ptr %a\n  store i16 0, ptr %p2\n  store i16 0, ptr %p4\n  store i8 0, ptr %p6\n  store i8 0, ptr %p7\n";
     let before = parsed(&format!("{DOS}{}", local(stores)));
     let mut module = before.clone();
-    let text = managed(&mut module, Merge);
+    let text = managed(&mut module, Merge { size: false });
     assert!(
         text.contains("call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 8, i1 false)") && !text.contains("store"),
         "{text}"
@@ -307,7 +307,7 @@ fn stores_a_memset_would_not_reduce_are_kept() {
     let stores = "  store i16 0, ptr %p2\n  store i16 0, ptr %p4\n  store i16 0, ptr %p6\n";
     let before = parsed(&format!("{DOS}{}", local(stores)));
     let mut module = before.clone();
-    let text = managed(&mut module, Merge);
+    let text = managed(&mut module, Merge { size: false });
     assert!(!text.contains("call void @llvm.memset"), "{text}");
 }
 
@@ -317,7 +317,7 @@ fn stores_that_are_not_one_fill_are_kept() {
     let unchanged = |stores: &str| {
         let before = parsed(&format!("{DOS}{}", local(stores)));
         let mut module = before.clone();
-        let text = managed(&mut module, Merge);
+        let text = managed(&mut module, Merge { size: false });
         assert!(!text.contains("call void @llvm.memset"), "{text}");
         assert_eq!(results(&module, BYTES), results(&before, BYTES));
     };
@@ -648,7 +648,7 @@ fn adjacent_constants_are_stores_of_the_widest_integer() {
     let stores = |text: &str| {
         let before = parsed(&format!("{DOS}{}", local(text)));
         let mut module = before.clone();
-        let after = managed(&mut module, Merge);
+        let after = managed(&mut module, Merge { size: false });
         assert_eq!(results(&module, BYTES), results(&before, BYTES), "{after}");
         after
     };
@@ -666,7 +666,7 @@ fn constants_that_cannot_be_one_wider_store_are_kept() {
     let kept = |text: &str, count: usize| {
         let before = parsed(&format!("{DOS}{}", local(text)));
         let mut module = before.clone();
-        let after = managed(&mut module, Merge);
+        let after = managed(&mut module, Merge { size: false });
         assert_eq!(after.matches("store").count(), count, "{after}");
         assert_eq!(results(&module, BYTES), results(&before, BYTES));
     };
@@ -685,7 +685,7 @@ fn two_fills(
     second_index: &str,
 ) -> String {
     format!(
-        "%S = type {{ [8 x i16], [8 x i16], [8 x i16] }}
+        "%S = type {{ [32 x i16], [32 x i16], [32 x i16] }}
 @s = global %S zeroinitializer
 
 {MEMSET}define i16 @f(i16 %n, i16 %q) {{
@@ -724,23 +724,32 @@ const CELLS: &[&[i128]] = &[&[0, 0], &[0, 3], &[0, 6], &[0, 7]];
 /// clocks, in the init of a kernel whose gcc and clang spend 8).
 #[test]
 fn a_loop_of_two_fills_to_apart_bytes_is_a_memset_each() {
-    let (text, changed) = fill(&two_fills(7, "-1", "-1", "%i"), CELLS);
+    let (text, changed) = fill(&two_fills(30, "-1", "-1", "%i"), CELLS);
     assert!(changed);
     assert!(
-        text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 -1, i16 14, i1 false)")
-            && text.contains("call void @llvm.memset.p0.i16(ptr %r, i8 -1, i16 14, i1 false)")
+        text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 -1, i16 60, i1 false)")
+            && text.contains("call void @llvm.memset.p0.i16(ptr %r, i8 -1, i16 60, i1 false)")
             && !text.contains("store"),
         "{text}"
     );
 }
 
-/// Fills that may meet keep the loop: nine trips over eight cells run the first
+/// Fills that may meet keep the loop: 33 trips over 32 cells run the first
 /// array into the second's bytes, and a word that is not a repeated byte is no
 /// memset.
 #[test]
 fn fills_that_may_meet_are_kept() {
-    for text in [two_fills(9, "-1", "-1", "%i"), two_fills(7, "-1", "%n", "%i")] {
+    for text in [two_fills(33, "-1", "-1", "%i"), two_fills(30, "-1", "%n", "%i")] {
         let (after, changed) = fill(&text, CELLS);
         assert!(!changed && !after.contains("call void @llvm.memset"), "{after}");
     }
+}
+
+/// Seven trips of two word stores are stores enough: priced against the loop in
+/// bytes as well as clocks, the memsets are no gain (bench: lru -O2 grew 78
+/// bytes in 16-bit code where its loop was 20).
+#[test]
+fn a_short_loop_of_two_fills_is_kept_where_the_stores_are_no_smaller() {
+    let (after, changed) = fill(&two_fills(7, "-1", "-1", "%i"), CELLS);
+    assert!(!changed && !after.contains("call void @llvm.memset"), "{after}");
 }

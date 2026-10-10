@@ -85,7 +85,11 @@ impl FunctionPass for Fill {
 /// The straight-line fills, once the scalar passes have settled: no pass
 /// asks a memset what a cell holds, so merged sooner a store's value is
 /// lost to the forwarding after it. LLVM merges stores in codegen, too.
-pub struct Merge;
+/// `size`: not priced in bytes where a register already holds the value, so
+/// that a pair of constants is not made one dword store under `-Os`.
+pub struct Merge {
+    pub size: bool,
+}
 
 impl FunctionPass for Merge {
     fn name(&self) -> &'static str {
@@ -97,8 +101,15 @@ impl FunctionPass for Merge {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        if merged(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), unit.declared)
-        {
+        if merged(
+            unit.context,
+            unit.layout,
+            analyses.outer().callees(),
+            unit.function,
+            analyses.outer(),
+            unit.declared,
+            self.size,
+        ) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -136,6 +147,7 @@ pub fn merged(
     function: &mut Function,
     outer: &Outer,
     declared: &mut Declared,
+    size: bool,
 ) -> bool {
     let mut runs: Vec<(Vec<_Cell>, u32, u32)> = Vec::new();
     let mut wides: Vec<_Wide> = Vec::new();
@@ -144,7 +156,12 @@ pub fn merged(
         let mut take = |open: Vec<_Cell>| {
             let (filled, rest) = _adjacent(&unit, open);
             runs.extend(filled);
-            wides.extend(_wide(&unit, rest));
+            // Under -Os a constant a register holds for several stores is
+            // smaller than a dword immediate for each in 16-bit
+            // code, so no pair is made one.
+            if !size {
+                wides.extend(_wide(&unit, rest));
+            }
         };
         for block in function.layout() {
             let mut open: Vec<_Cell> = Vec::new();
@@ -443,6 +460,7 @@ pub fn filled_with(
     standing: &mut llrm_analysis::memory::Standing,
 ) -> bool {
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
+    let bytes = outer.target().size_costs();
     let mut changed = false;
     'again: loop {
         let shape = cfg::Shape::of(function);
@@ -450,7 +468,7 @@ pub fn filled_with(
             let found = {
                 let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
                 let facts = standing.of(&unit);
-                _fill(&unit.with_registers(facts), callees, &loop_, &costs, size)
+                _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
             };
             if let Some(found) = found {
                 _filled(context, declared, function, &found);
@@ -544,6 +562,7 @@ fn _fill(
     callees: &Callees,
     loop_: &Loop,
     costs: &OperationCosts,
+    bytes_costs: &OperationCosts,
     size: bool,
 ) -> Option<_Found> {
     let function = unit.function;
@@ -656,9 +675,22 @@ fn _fill(
         Stored::Copy(copy) => Some((bytes.to_i64()?, copy.descending && copy.how == How::Overlapping)),
         Stored::Fill(_) => None,
     };
-    if (pattern || moved.is_some())
-        && !_pays(unit, callees, if posttested { &chain[1..] } else { &chain }, header, &proof, costs, size, moved)
+    // A loop of several fills is as many memsets: priced against the loop like
+    // a pattern's, since a few cells are as many stores each (bench: lru
+    // -O2 grew 78 bytes in 16-bit code where its 7-trip loop of two stores
+    // was 20).
+    let fills = 1 + extras.len() as i64;
+    let body = if posttested { &chain[1..] } else { &chain };
+    if (pattern || moved.is_some() || fills > 1)
+        && !_pays(unit, callees, body, header, &proof, costs, size, moved, fills)
     {
+        return None;
+    }
+    // And no larger than the loop, which a speed price does not say: in 16-bit
+    // code a dword store takes the operand-size prefix and its address, and
+    // seven of them are more bytes than the loop that made them (bench: lru
+    // -O2, 408 -> 486).
+    if fills > 1 && !_pays(unit, callees, body, header, &proof, bytes_costs, true, moved, fills) {
         return None;
     }
     // Trips of a byte never wrap the index; wider cells need a promise.
@@ -797,6 +829,7 @@ fn _pays(
     costs: &OperationCosts,
     size: bool,
     moved: Option<(i64, bool)>,
+    fills: i64,
 ) -> bool {
     let function = unit.function;
     let each: i64 = std::iter::once(&header)
@@ -815,7 +848,7 @@ fn _pays(
         .sum();
     let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
     let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
-    _cheaper(each, known, most, costs, size, moved)
+    _cheaper_by(each, known, most, costs, size, moved, fills)
 }
 
 /// Whether a fill beats a loop of `each` per trip, over `known` trips or, where
@@ -829,6 +862,19 @@ fn _cheaper(
     size: bool,
     moved: Option<(i64, bool)>,
 ) -> bool {
+    _cheaper_by(each, known, most, costs, size, moved, 1)
+}
+
+/// `_cheaper`, for a loop whose trips are `fills` fills, each its own memset.
+fn _cheaper_by(
+    each: i64,
+    known: Option<i64>,
+    most: Option<i64>,
+    costs: &OperationCosts,
+    size: bool,
+    moved: Option<(i64, bool)>,
+    fills: i64,
+) -> bool {
     let trips = if size { 1 } else { known.unwrap_or_else(|| most.unwrap_or(i64::MAX).min(profit::UNKNOWN_TRIPS)) };
     // Isel expands a few cells, whatever the target is tuned for, to stores,
     // and a few bytes of a copy to loads and stores.
@@ -838,7 +884,7 @@ fn _cheaper(
             Some(count) if count <= 16 => count * costs.store,
             _ => string,
         };
-        return trips * each > fill;
+        return trips * each > fills * fill;
     };
     let string = costs.copy + (trips * bytes + 3) / 4 * costs.copy_cell + if backward { costs.direction } else { 0 };
     let pairs = known.map(|count| count * bytes).map(|length| length / 4 + i64::from((length % 4).count_ones()));

@@ -1,5 +1,5 @@
-reason = "a diamond-bodied loop's latch falls into the header (x_collatz -15.7% clocks); costs one jmp per loop entry: quicksort bas +2.1% instructions"
-blessed = "2026-10-09"
+reason = "fill: adjacent constant stores are one store of the widest integer (gcc store-merging, LLVM MergeConsecutiveStores); a loop of several fills to apart bytes is a memset each where the stores are no larger than the loop"
+blessed = "2026-10-10"
 
 [bas.O2]
 instructions = 1036
@@ -16,9 +16,9 @@ data_bytes = 13
 bss_bytes = 0
 
 [c.O2]
-instructions = 269
-memory_operands = 80
-code_bytes = 375
+instructions = 266
+memory_operands = 77
+code_bytes = 369
 data_bytes = 0
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 314
-memory_operands = 85
-code_bytes = 435
+instructions = 311
+memory_operands = 82
+code_bytes = 429
 data_bytes = 0
 bss_bytes = 0
 
