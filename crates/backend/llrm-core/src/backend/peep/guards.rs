@@ -4,13 +4,13 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use super::walk::Cx;
 use super::{Set, field};
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{_lanes, _register_effects};
-use crate::backend::{select, target, upperzero};
+use crate::backend::{select, upperzero};
 use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Space};
 use crate::model::lir::Insn;
 
@@ -57,7 +57,7 @@ impl Wide for &Loc {
 
 /// `one` carries none of the metadata `fields` names (`peep::field`).
 pub fn free(
-    _: &Cx,
+    _cx: &Cx,
     one: &Insn,
     fields: u32,
 ) -> bool {
@@ -94,7 +94,8 @@ pub fn dead(
     one: &Arc<Insn>,
     lanes: Lanes,
 ) -> bool {
-    lanes.is_subset(&cx.dead_after(one))
+    let regs = cx.regs();
+    lanes.is_subset(&cx.dead_after(regs, one))
 }
 
 /// Nothing after this instruction reads an arithmetic flag.
@@ -121,14 +122,14 @@ pub fn flags_dead_out(
 }
 
 pub fn empty(
-    _: &Cx,
+    _cx: &Cx,
     lanes: Lanes,
 ) -> bool {
     lanes.is_empty()
 }
 
 pub fn disjoint(
-    _: &Cx,
+    _cx: &Cx,
     one: Lanes,
     other: Lanes,
 ) -> bool {
@@ -220,13 +221,14 @@ pub fn clears_before_byte_load(cx: &Cx) -> bool {
 
 /// `d` has a byte view and the address of `src` reads none of its register.
 pub fn byte_loadable(
-    _: &Cx,
+    cx: &Cx,
     d: Reg,
     src: &Mem,
 ) -> bool {
+    let regs = cx.regs();
     let root = ir::root(d.register);
     d.width == 4
-        && target::named(d.register, 1) != d.register
+        && regs.named(d.register, 1) != d.register
         && [src.through, src.index_through].iter().all(|one| ir::root(*one) != root)
 }
 
@@ -236,7 +238,7 @@ pub fn doubles_by_add(cx: &Cx) -> bool {
 }
 
 pub fn same_width(
-    _: &Cx,
+    _cx: &Cx,
     one: impl Wide,
     other: impl Wide,
 ) -> bool {
@@ -244,7 +246,7 @@ pub fn same_width(
 }
 
 pub fn narrower(
-    _: &Cx,
+    _cx: &Cx,
     one: impl Wide,
     other: impl Wide,
 ) -> bool {
@@ -253,7 +255,7 @@ pub fn narrower(
 
 /// The width, in bits, is one of these.
 pub fn width_in(
-    _: &Cx,
+    _cx: &Cx,
     one: impl Wide,
     bits: &[u32],
 ) -> bool {
@@ -261,7 +263,7 @@ pub fn width_in(
 }
 
 pub fn same_root(
-    _: &Cx,
+    _cx: &Cx,
     one: Reg,
     other: Reg,
 ) -> bool {
@@ -270,37 +272,41 @@ pub fn same_root(
 
 /// A general register at its own width.
 pub fn register_width(
-    _: &Cx,
+    cx: &Cx,
     one: Reg,
 ) -> bool {
-    target::integer(one.register) && target::width_of(one.register) == Some(i64::from(one.width))
+    let regs = cx.regs();
+    regs.integer(one.register) && regs.width_of(one.register) == Some(i64::from(one.width))
 }
 
 /// A general register.
 pub fn register_named(
-    _: &Cx,
+    cx: &Cx,
     one: Reg,
 ) -> bool {
-    target::integer(one.register)
+    let regs = cx.regs();
+    regs.integer(one.register)
 }
 
 pub fn stack_or_frame(
-    _: &Cx,
+    cx: &Cx,
     one: Reg,
 ) -> bool {
-    crate::backend::registerinfo::is_stack(one.register) || crate::backend::registerinfo::is_frame(one.register)
+    let regs = cx.regs();
+    regs.is_stack(one.register) || regs.is_frame(one.register)
 }
 
 pub fn segment(
-    _: &Cx,
+    cx: &Cx,
     one: Reg,
 ) -> bool {
-    target::SEGMENTS.contains(&one.register)
+    let regs = cx.regs();
+    regs.is_segment(one.register)
 }
 
 /// `one` is the fixed register of a member of `set`.
 pub fn fixed_by(
-    _: &Cx,
+    _cx: &Cx,
     set: &Set,
     one: Reg,
 ) -> bool {
@@ -309,7 +315,7 @@ pub fn fixed_by(
 
 /// Its `covers` is the point it stands at.
 pub fn placed(
-    _: &Cx,
+    _cx: &Cx,
     one: &Insn,
 ) -> bool {
     one.covers == Some((one.at, one.at))
@@ -317,7 +323,7 @@ pub fn placed(
 
 /// `one`'s bytes end where `next` stands.
 pub fn ends_at(
-    _: &Cx,
+    _cx: &Cx,
     one: &Insn,
     next: &Insn,
 ) -> bool {
@@ -337,7 +343,7 @@ pub fn feeds_once(
 
 /// `one` neither reads nor redefines what `first` defines.
 pub fn independent(
-    _: &Cx,
+    _cx: &Cx,
     first: &Insn,
     one: &Arc<Insn>,
 ) -> bool {
@@ -355,18 +361,19 @@ pub fn hoistable(
     first: &Insn,
     crossed: &[Arc<Insn>],
 ) -> bool {
+    let regs = cx.regs();
     if crossed.is_empty() {
         // Nothing to cross. Asking anyway refused every unrolled clone,
         // whose effects `_register_effects` will not read.
         return true;
     }
     let (Some(original), Some(combined)) =
-        (_register_effects(cx.bits(), first, false, true), _register_effects(cx.bits(), made, false, true))
+        (_register_effects(regs, cx.bits(), first, false, true), _register_effects(regs, cx.bits(), made, false, true))
     else {
         return false;
     };
     let newly_written: Lanes = combined.1.minus(&original.1);
-    crossed.iter().all(|one| match _register_effects(cx.bits(), one, false, true) {
+    crossed.iter().all(|one| match _register_effects(regs, cx.bits(), one, false, true) {
         None => false,
         Some((reads, writes)) => !newly_written.iter().any(|lane| reads.contains(lane) || writes.contains(lane)),
     })
@@ -379,8 +386,9 @@ pub fn clear_of(
     s: Reg,
     one: &Arc<Insn>,
 ) -> bool {
-    let (temporary, source) = (_lanes(t.register), _lanes(s.register));
-    _register_effects(cx.bits(), one, true, false)
+    let regs = cx.regs();
+    let (temporary, source) = (_lanes(regs, t.register), _lanes(regs, s.register));
+    _register_effects(regs, cx.bits(), one, true, false)
         .is_some_and(|(reads, writes)| reads.is_disjoint(&temporary) && writes.is_disjoint(&temporary.or(&source)))
 }
 
@@ -393,6 +401,7 @@ pub fn delays(
     load: &Insn,
     crossed: &Arc<Insn>,
 ) -> bool {
+    let regs = cx.regs();
     let Some(crossed_what) = &crossed.what else {
         return false;
     };
@@ -438,9 +447,10 @@ pub fn delays(
     {
         return false;
     }
-    let (Some((load_reads, load_writes)), Some((crossed_reads, crossed_writes))) =
-        (_register_effects(cx.bits(), load, false, true), _register_effects(cx.bits(), crossed, false, true))
-    else {
+    let (Some((load_reads, load_writes)), Some((crossed_reads, crossed_writes))) = (
+        _register_effects(regs, cx.bits(), load, false, true),
+        _register_effects(regs, cx.bits(), crossed, false, true),
+    ) else {
         return false;
     };
     let address_lanes: Lanes = match load.what.as_ref().map(|what| what.sources.as_slice()) {
@@ -455,7 +465,7 @@ pub fn delays(
                     address_registers.insert(addr.base);
                 }
             }
-            address_registers.into_iter().flat_map(_lanes).collect()
+            address_registers.into_iter().flat_map(|one| _lanes(regs, one)).collect()
         }
         _ => return false,
     };
@@ -468,7 +478,7 @@ pub fn delays(
 
 /// An immediate without an address, or a register of another root than `r`.
 pub fn operand(
-    _: &Cx,
+    _cx: &Cx,
     one: &Loc,
     r: Reg,
 ) -> bool {
@@ -481,7 +491,7 @@ pub fn operand(
 
 /// `r` is how the cell is reached.
 pub fn addresses(
-    _: &Cx,
+    _cx: &Cx,
     cell: &Mem,
     r: Reg,
 ) -> bool {
@@ -490,7 +500,7 @@ pub fn addresses(
 
 /// The cell is reached through segment register `g`.
 pub fn segment_of(
-    _: &Cx,
+    _cx: &Cx,
     cell: &Mem,
     g: Reg,
 ) -> bool {
@@ -503,15 +513,15 @@ pub fn segment_of(
 /// compares the address and the values the operand names, not the registers,
 /// so the registers are compared beside it.
 pub fn same_cell(
-    _: &Cx,
+    _cx: &Cx,
     one: &Mem,
     other: &Mem,
 ) -> bool {
     let logical = |cell: &Mem| Mem { base: None, index: None, ..cell.clone() };
     let physical = |cell: &Mem| (cell.through, cell.index_through, cell.offset);
     let placed = |cell: &Mem| {
-        (cell.base.is_none() || cell.through != Register::None)
-            && (cell.index.is_none() || cell.index_through != Register::None)
+        (cell.base.is_none() || cell.through != RegId::None)
+            && (cell.index.is_none() || cell.index_through != RegId::None)
     };
     logical(one).same_place(&logical(other)) && physical(one) == physical(other) && placed(one) && placed(other)
 }
@@ -520,7 +530,7 @@ pub fn same_cell(
 /// displacement may be carried by the address, by the operand's offset,
 /// or by both at once, so either may be the one two further on.
 pub fn next_word(
-    _: &Cx,
+    _cx: &Cx,
     low: &Mem,
     high: &Mem,
 ) -> bool {
@@ -537,7 +547,7 @@ pub fn next_word(
 
 /// A plain move, which changes no flag.
 pub fn moves(
-    _: &Cx,
+    _cx: &Cx,
     one: &Arc<Insn>,
 ) -> bool {
     one.what.as_ref().is_some_and(|what| what.op == Operation::Move && what.name.as_deref() == Some("mov"))
@@ -553,7 +563,7 @@ pub fn used_once(
 }
 
 pub fn defines_only(
-    _: &Cx,
+    _cx: &Cx,
     one: &Insn,
     value: Held,
 ) -> bool {
@@ -561,7 +571,7 @@ pub fn defines_only(
 }
 
 pub fn uses_only(
-    _: &Cx,
+    _cx: &Cx,
     one: &Insn,
     value: Held,
 ) -> bool {
@@ -592,7 +602,7 @@ pub fn unchanged(
 
 /// `high` is the word above `low`.
 pub fn above(
-    _: &Cx,
+    _cx: &Cx,
     high: &Mem,
     low: &Mem,
 ) -> bool {
@@ -601,7 +611,7 @@ pub fn above(
 
 /// Both cells are reached through the same registers.
 pub fn same_registers(
-    _: &Cx,
+    _cx: &Cx,
     one: &Mem,
     other: &Mem,
 ) -> bool {
@@ -610,19 +620,21 @@ pub fn same_registers(
 
 /// The cell is reached through the stack pointer.
 pub fn stack_based(
-    _: &Cx,
+    cx: &Cx,
     cell: &Mem,
 ) -> bool {
-    crate::backend::registerinfo::is_stack(cell.through)
+    let regs = cx.regs();
+    regs.is_stack(cell.through)
 }
 
 /// A frame cell at or above the arguments, reached without the stack pointer.
 pub fn frame_argument(
-    _: &Cx,
+    cx: &Cx,
     cell: &Mem,
 ) -> bool {
+    let regs = cx.regs();
     cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp >= 4)
-        && !crate::backend::registerinfo::is_stack(cell.through)
-        && !crate::backend::registerinfo::is_stack(cell.index_through)
+        && !regs.is_stack(cell.through)
+        && !regs.is_stack(cell.index_through)
         && !cell.stack_argument
 }

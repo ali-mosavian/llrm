@@ -54,7 +54,9 @@ pub fn predecessors<N: Node>(blocks: &[N]) -> BTreeMap<i64, BTreeSet<i64>> {
 /// Every block that must have run before each one, to a fixed point.
 ///
 /// A block unreachable from the entry gets the empty set rather than "every
-/// block".
+/// block". The sets are the square of a chain of blocks: the tests' and the
+/// oracles' way to say what the tree says.
+#[cfg(test)]
 pub fn dominators<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
@@ -153,6 +155,16 @@ impl Dominance {
         self.ats.binary_search(&at).ok()
     }
 
+    /// The nearest block that strictly dominates `at`; none for the entry and
+    /// for a block the entry does not reach.
+    pub fn immediate(
+        &self,
+        at: i64,
+    ) -> Option<i64> {
+        let slot = self.slot(at)?;
+        (self.enter[slot] != NONE && self.idom[slot] != NONE).then(|| self.ats[self.idom[slot] as usize])
+    }
+
     /// Whether the entry reaches `at`: only then does anything dominate it.
     pub fn reachable(
         &self,
@@ -176,6 +188,7 @@ impl Dominance {
         }
     }
 
+    #[cfg(test)]
     fn named(&self) -> BTreeMap<i64, BTreeSet<i64>> {
         (0..self.ats.len())
             .map(|slot| {
@@ -507,6 +520,27 @@ pub fn immediate_dominators<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
 ) -> BTreeMap<i64, Option<i64>> {
+    // The tree `dominance` found already says it; naming every block's
+    // dominators to pick the one with the most was the square of the blocks
+    // on a chain of them.
+    let tree = dominance(blocks, entry);
+    let found = blocks.iter().map(|block| (block.at(), tree.immediate(block.at()))).collect();
+    #[cfg(test)]
+    assert_eq!(
+        found,
+        immediate_dominators_named(blocks, entry),
+        "the tree's immediate dominators are not the named ones"
+    );
+    found
+}
+
+/// `immediate_dominators` from the sets of dominators, the oracle for the
+/// tree's.
+#[cfg(test)]
+fn immediate_dominators_named<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, Option<i64>> {
     let doms = dominators(blocks, entry);
     let mut found = BTreeMap::new();
     for block in blocks {
@@ -523,28 +557,30 @@ pub fn immediate_dominators<N: Node>(
 }
 
 /// Where a definition stops being the only one that reaches -- the blocks
-/// a phi belongs in.
+/// a phi belongs in: for each block, the joins it reaches without dominating
+/// them (Cytron et al., by the walk up the tree from each predecessor of a
+/// join). A block the entry does not reach has none, and is no predecessor.
 pub fn frontiers<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
 ) -> BTreeMap<i64, BTreeSet<i64>> {
-    let doms = dominators(blocks, entry);
-    let live = blocks.iter().filter(|block| !doms[&block.at()].is_empty()).collect::<Vec<_>>();
-    let idom = immediate_dominators(&live, entry);
+    let tree = dominance(blocks, entry);
+    let live = blocks.iter().filter(|block| tree.reachable(block.at())).collect::<Vec<_>>();
     let preds = predecessors(&live);
     let mut found = blocks.iter().map(|block| (block.at(), BTreeSet::new())).collect::<BTreeMap<_, _>>();
     for block in &live {
         if preds[&block.at()].len() < 2 {
             continue;
         }
+        let stop = tree.immediate(block.at());
         for &one in &preds[&block.at()] {
             let mut runner = Some(one);
             while let Some(at) = runner {
-                if Some(at) == idom[&block.at()] {
+                if Some(at) == stop {
                     break;
                 }
                 found.get_mut(&at).expect("live").insert(block.at());
-                runner = idom.get(&at).copied().flatten();
+                runner = tree.immediate(at);
             }
         }
     }

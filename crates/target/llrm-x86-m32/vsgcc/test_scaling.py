@@ -89,3 +89,14 @@ def test_a_straight_statement_does_not_cost_millions_of_instructions(tmp_path):
     source = tmp_path / "s.c"
     source.write_text(scaling.AXES["straight"](16))
     assert scaling.measure(levels_time.command("llrm", "O0", source), 1)["ins"] < 150_000_000
+
+
+def test_a_measured_command_reads_the_same_count_every_run(tmp_path):
+    """A Python `sum(range(...))` of 82 M iterations read 12,969 Minstr in 7 runs of 50 and 13,381 in 43 (the layout of the address
+    space; 50 of 50 the lower with randomisation off): the stand-in's slope read 1.845 for 2.0 in one gate run in twenty. A command
+    is measured with the layout fixed (`levels_time.UNRANDOMIZED`)."""
+    source = tmp_path / "x.c"
+    source.write_text(scaling.AXES["straight"](512))
+    command = stand_in("300 * n * n")("python", "O2", source)
+    counts = [scaling.sample(command)[0] for _ in range(40)]
+    assert max(counts) / min(counts) < 1.001, (min(counts), max(counts))

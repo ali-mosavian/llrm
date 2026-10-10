@@ -23,9 +23,11 @@ use crate::support::hash::IndexMap;
 
 /// The lanes live on entry to each block.
 fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
-    let universe = _universe();
+    let regs = body.regs();
+    let universe = _universe(regs);
     // Decoded once: the fixed point reads each block several times.
-    let decoded: IndexMap<i64, _> = body.blocks.iter().map(|block| (block.at, _effects(body.bits, block))).collect();
+    let decoded: IndexMap<i64, _> =
+        body.blocks.iter().map(|block| (block.at, _effects(regs, body.bits, block))).collect();
     let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
     let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
     dataflow::solve(
@@ -236,6 +238,7 @@ impl Reads {
 /// what is live into that block, not what is live into its successors, which is
 /// what the next step asks.
 pub fn sunk(body: &LirBody) -> LirBody {
+    let regs = body.regs();
     if !body.blocks.iter().any(|block| {
         block.succ.len() > 1 && block.insns.iter().any(|one| copy_of(one).is_some() || spill_store_of(one).is_some())
     }) {
@@ -263,7 +266,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
         for index in (0..insns[&at].len()).rev() {
             let one = Arc::clone(&insns[&at][index]);
             if let Some((source, cell)) = spill_store_of(&one) {
-                let read = _lanes(source.register);
+                let read = _lanes(regs, source.register);
                 let readers: Vec<i64> = to
                     .iter()
                     .copied()
@@ -275,7 +278,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
                     || to.iter().filter(|next| **next == target).count() != 1
                     || insns[&at][index + 1..]
                         .iter()
-                        .any(|other| touches(body.bits, other, &read, false) || may_read(other, &cell))
+                        .any(|other| touches(regs, body.bits, other, &read, false) || may_read(other, &cell))
                 {
                     continue;
                 }
@@ -292,7 +295,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 continue;
             }
             let Some((dest, source)) = copy_of(&one) else { continue };
-            let (written, read) = (_lanes(dest.register), _lanes(source.register));
+            let (written, read) = (_lanes(regs, dest.register), _lanes(regs, source.register));
             if written.is_empty() || read.is_empty() || !written.is_disjoint(&read) {
                 continue;
             }
@@ -310,10 +313,9 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 continue;
             }
             let both = written.or(&read);
-            if insns[&at][index + 1..]
-                .iter()
-                .any(|other| touches(body.bits, other, &both, false) || touches(body.bits, other, &written, true))
-            {
+            if insns[&at][index + 1..].iter().any(|other| {
+                touches(regs, body.bits, other, &both, false) || touches(regs, body.bits, other, &written, true)
+            }) {
                 continue;
             }
             insns.get_mut(&at).expect("a block").remove(index);
@@ -406,14 +408,15 @@ pub fn sunk(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register::{self, AX, BX, DI, DX};
+    use iced_x86::Register::{AX, BX, DI, DX};
+    use llrm_lir::registers::RegId;
 
     use super::sunk;
     use crate::model::ir::{Loc, Operation, Reg, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
-    fn r(register: Register) -> Loc {
+    fn r(register: RegId) -> Loc {
         Loc::Reg(Reg { register, width: 2 })
     }
 
@@ -436,8 +439,8 @@ mod tests {
 
     fn copy(
         at: i64,
-        dest: Register,
-        source: Register,
+        dest: RegId,
+        source: RegId,
     ) -> Arc<Insn> {
         insn(at, Operation::Move, "mov", vec![r(dest)], vec![r(source)], None)
     }
@@ -562,10 +565,10 @@ mod tests {
                 space: Space::Frame,
                 disp: -4 * (k + 1),
                 index: -(k + 1),
-                base: Register::None,
-                segment: Register::None,
+                base: RegId::None,
+                segment: RegId::None,
             };
-            crate::model::ir::Mem { through: Register::BP, ..crate::model::ir::Mem::new(Some(addr), 2) }
+            crate::model::ir::Mem { through: RegId::BP, ..crate::model::ir::Mem::new(Some(addr), 2) }
         };
         let mut blocks = Vec::new();
         for k in 0..n {

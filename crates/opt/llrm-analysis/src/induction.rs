@@ -135,6 +135,11 @@ pub struct CountedLoop {
     pub step: BigInt,
     pub posttested: bool,
     pub stepped: bool,
+    /// The latch compare reads the counter before its step, and `bound` is the
+    /// one a compare of the stepped counter would test: `phi >= 1` is
+    /// `update >= 0` for a step of -1. The count and `stepped` are those of
+    /// that compare.
+    pub shifted: bool,
     /// Some other exit stops the program; `count` is the trips when it goes on.
     pub stops: bool,
     /// Another exit goes on, to code that returns (only where `counted_leaving`
@@ -178,6 +183,7 @@ impl CountedLoop {
     pub fn rises_unsigned_after(&self) -> bool {
         self.posttested
             && self.stepped
+            && !self.shifted
             && self.entry_guarded
             && matches!(self.reach, Reach::Distance)
             && self.test == IntPredicate::Ult
@@ -715,6 +721,35 @@ fn _proven(
         if !(test == IntPredicate::Ne || (_ascending(test) && step > zero) || (_descending(test) && step < zero)) {
             continue;
         }
+        // Tested before its step at the latch, the counter against a constant
+        // is the stepped counter against that constant one step on
+        // (LLVM's exit count reads the test the same way): the one form the
+        // proofs below count. For an ordered test the step must not
+        // wrap; for equality a wrapping sum is a bijection.
+        let (mut bound, mut stepped, mut shifted) = (bound, stepped, false);
+        if shape.posttested
+            && !stepped
+            && function.parent(branch) == Some(cfg::block(latch))
+            && let AffineOperand::Const(limit) = &bound
+        {
+            let unsigned = _unsigned(test);
+            let (low, high) = _extent(unsigned, width);
+            let moved = if unsigned {
+                mod_floor(&limit.n, &(BigInt::from(1) << width))
+            } else {
+                _signed_value(&limit.n, width)
+            } + &step;
+            if test == IntPredicate::Ne {
+                bound = AffineOperand::constant(masked(&moved, width), width);
+                (stepped, shifted) = (true, true);
+            } else if low <= moved
+                && moved <= high
+                && _promised(function, update, &step, unsigned, _signed(&counter.start, facts, width).as_ref())
+            {
+                bound = AffineOperand::constant(masked(&moved, width), width);
+                (stepped, shifted) = (true, true);
+            }
+        }
         let start = counter.start.clone();
         let limit = _constant(&bound, facts, width);
         let counted_from = |start: &AffineOperand| {
@@ -818,6 +853,7 @@ fn _proven(
             step,
             posttested: shape.posttested,
             stepped,
+            shifted,
             stops: shape.stops,
             leaves: shape.leaves,
             entry_guarded,
@@ -842,8 +878,45 @@ fn _entered(
 ) -> bool {
     let Some(preheader) = shape.preheader else { return false };
     let (value, limit) = (start, bound);
+    // A side that is a constant off a value is that value and the constant: the
+    // guards read in the same terms are what the two share, `a != 1` and `a
+    // - 1 != 0`.
+    let anchor = |one: &Scev| -> Scev {
+        let [(product, factor)] = one.terms.iter().collect::<Vec<_>>()[..] else { return one.clone() };
+        let Some(value) = product.single().filter(|_| *factor == BigInt::from(1)) else { return one.clone() };
+        match anchored(unit, &AffineOperand::Value(value, width), width, None) {
+            (Some(root), offset) => Scev::unknown(root, width)
+                .plus(&Scev::constant(offset, width))
+                .plus(&Scev::constant(one.constant.clone(), width)),
+            _ => one.clone(),
+        }
+    };
     let (start, bound) = (Scev::of(start, width), Scev::of(bound, width));
-    crate::guards::holds(unit, preheader, test, &start, &bound) || _ranged(unit, preheader, value, limit, test, width)
+    if crate::guards::holds(unit, preheader, test, &start, &bound)
+        || _ranged(unit, preheader, value, limit, test, width)
+    {
+        return true;
+    }
+    // Only an equality test reads the guards at an offset (`a != 1` proves `a -
+    // 1 != 0`), and only where the ones above do not prove it as they
+    // stand.
+    matches!(test, IntPredicate::Eq | IntPredicate::Ne) && {
+        let (start, bound) = (anchor(&start), anchor(&bound));
+        crate::guards::guards(unit, preheader)
+            .into_iter()
+            .any(
+                |guard| crate::guards::implies(
+                    &crate::guards::Guard {
+                        predicate: guard.predicate,
+                        left: anchor(&guard.left),
+                        right: anchor(&guard.right),
+                    },
+                    test,
+                    &start,
+                    &bound,
+                ),
+            )
+    }
 }
 
 /// Whether the counters of the loops around the entry put the start of a
@@ -1343,10 +1416,17 @@ pub fn anchored(
             break;
         }
         let Some((_, op)) = unit.defining(Operand::Value(value)) else { break };
-        if op.opcode != Opcode::Binary(BinaryOp::Add) {
+        if !matches!(op.opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)) {
             break;
         }
         let (Some(left), Some(right)) = (term(unit, op.operands[0]), term(unit, op.operands[1])) else { break };
+        if op.opcode == Opcode::Binary(BinaryOp::Sub) {
+            // `x - c`: only the constant on the right.
+            let (other, AffineOperand::Const(constant)) = (left, right) else { break };
+            offset -= &constant.n;
+            term_ = other;
+            continue;
+        }
         let ((AffineOperand::Const(constant), other) | (other, AffineOperand::Const(constant))) = (left, right) else {
             break;
         };

@@ -234,7 +234,21 @@ fn planned(
         .keys()
         .filter_map(|&site| provided(unit, accesses, site).map(|(cell, value)| (site, cell, value)))
         .collect();
+    // The providers by the bytes they name, so that a load compares itself with
+    // those and not with all.
     let cfg::Shape { dominance, loops: natural, .. } = unit.shape().into_owned();
+    let nearest = llrm_analysis::nearest::Nearest::of(
+        dominance.tree(),
+        providers
+            .iter()
+            .enumerate()
+            .flat_map(
+                |(at, (source, cell, _))| {
+                    let block = cfg::block(places[source].0);
+                    memoryssa::byte_keys(unit, cell).list().into_iter().map(move |key| (key, block, at))
+                },
+            ),
+    );
     let shape = Shape { depth: dominance.depths(function), dominance, loops: natural };
 
     let mut found = Vec::new();
@@ -257,31 +271,64 @@ fn planned(
                 let translated =
                     MemRef { typed: reference.typed.clone(), ..MemRef::at(unit, pointer, reference.width) };
                 let translated = MemRef { provenance: pointers.reference(unit, &translated), ..translated };
-                let candidates = providers
-                    .iter()
-                    .filter(
-                        |(source, cell, value)| {
-                            let (at, _) = places[source];
-                            at != block.at
-                                && shape.dominance.dominates(at, parent)
-                                && !shape.dominance.dominates(at, block.at)
-                                && unit.operand_type(*value) == Some(ty)
-                                && same_bytes(unit, cell, &translated)
-                                && shape.loops.iter().all(|one| !one.body.contains(&at) || one.body.contains(&block.at))
-                                && memory.available_on_edge(*source, load, parent, &reference, Some(&translated))
-                        },
-                    );
+                let accepts = |(source, cell, value): &&(InstId, MemRef, Operand)| {
+                    let (at, _) = places[source];
+                    at != block.at
+                        && shape.dominance.dominates(at, parent)
+                        && !shape.dominance.dominates(at, block.at)
+                        && unit.operand_type(*value) == Some(ty)
+                        && same_bytes(unit, cell, &translated)
+                        && shape.loops.iter().all(|one| !one.body.contains(&at) || one.body.contains(&block.at))
+                        && memory.available_on_edge(*source, load, parent, &reference, Some(&translated))
+                };
+                let keys = memoryssa::byte_keys(unit, &translated).list();
+                let program = |at: usize| places[&providers[at].0].1;
+                let scan = || {
+                    providers
+                        .iter()
+                        .filter(accepts)
+                        .fold(
+                            None::<&(InstId, MemRef, Operand)>,
+                            |best, one| match best {
+                                Some(best)
+                                    if (shape.depth[&places[&one.0].0], places[&one.0].1)
+                                        <= (shape.depth[&places[&best.0].0], places[&best.0].1) =>
+                                {
+                                    Some(best)
+                                }
+                                _ => Some(one),
+                            },
+                        )
+                };
                 // The deepest source, the latest in its block; the first of
-                // equals.
-                let best = candidates.fold(None::<&(InstId, MemRef, Operand)>, |best, one| match best {
-                    Some(best)
-                        if (shape.depth[&places[&one.0].0], places[&one.0].1)
-                            <= (shape.depth[&places[&best.0].0], places[&best.0].1) =>
+                // equals: the blocks that dominate `parent` from the nearest,
+                // and in the first with a source, the latest.
+                let best = if shape.dominance.reachable(parent) {
+                    let mut best: Option<usize> = None;
+                    let mut block = None;
+                    for (enter, at) in
+                        nearest.dominating(shape.dominance.tree(), &keys.iter().collect::<Vec<_>>(), cfg::block(parent))
                     {
-                        Some(best)
+                        if block.is_some_and(|had| had != enter) {
+                            break;
+                        }
+                        if accepts(&&providers[at]) {
+                            block = Some(enter);
+                            best = Some(best.map_or(at, |had| if program(at) > program(had) { at } else { had }));
+                        }
                     }
-                    _ => Some(one),
-                });
+                    best.map(|at| &providers[at])
+                } else {
+                    scan()
+                };
+                if llrm_support::env_set("LLRM_CHECK_BYTES") {
+                    let every = scan();
+                    assert_eq!(
+                        best.map(|one| one.0),
+                        every.map(|one| one.0),
+                        "the provider found nearest first is not the deepest of a scan of all"
+                    );
+                }
                 match best {
                     Some((_, _, value)) => incoming.push((cfg::block(parent), Incoming::Held(*value))),
                     None if insert && insertable(unit, callees, &shape, cfg::block(parent), join, index, pointer) => {

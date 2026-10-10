@@ -5,13 +5,14 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::Profile;
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{_flags_dead_after, _flags_live_out, _lanes, _register_effects, DeadAfter, id};
-use crate::backend::{liveness, masm, regthrash, select, target};
+use crate::backend::{liveness, masm, regthrash, select};
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};
 
@@ -46,9 +47,10 @@ fn bytes(
 pub fn shared(
     body: &LirBody,
     cpu: &Profile,
-    saved: &[Register],
+    saved: &[RegId],
     classes: &RegisterClasses,
 ) -> LirBody {
+    let regs = body.regs();
     if !cpu.size {
         return body.clone();
     }
@@ -56,7 +58,7 @@ pub fn shared(
     // the body names (`masm::_frame_parts`): one it does not name would be
     // pushed and popped for the run.
     let used = masm::_roots(body);
-    let scratch: Vec<Register> =
+    let scratch: Vec<RegId> =
         classes.available.iter().copied().filter(|one| !saved.contains(one) || used.contains(one)).collect();
     let exits = liveness::dead_at_exit(body);
     let flags_out = _flags_live_out(body);
@@ -64,9 +66,9 @@ pub fn shared(
         .blocks
         .iter()
         .map(|block| {
-            let dead = regthrash::_dead_after(body.bits, block, exits[&block.at].clone());
+            let dead = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
             let flags_dead_out = flags_out.get(&block.at).is_some_and(|lanes| lanes.is_empty());
-            let flags_dead = _flags_dead_after(body.bits, block, flags_dead_out);
+            let flags_dead = _flags_dead_after(regs, body.bits, block, flags_dead_out);
             let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
             let mut at = 0;
             while at < block.insns.len() {
@@ -83,7 +85,7 @@ pub fn shared(
                         literal(one).is_some_and(|(wide, same)| same == value && (value == 0 || wide == width))
                     })
                     .count();
-                match shared_run(body.bits, &block.insns[at..at + run], value, &scratch, &dead, &flags_dead) {
+                match shared_run(regs, body.bits, &block.insns[at..at + run], value, &scratch, &dead, &flags_dead) {
                     Some(made) => insns.extend(made),
                     None => insns.extend(block.insns[at..at + run].iter().cloned()),
                 }
@@ -96,10 +98,11 @@ pub fn shared(
 }
 
 fn shared_run(
+    regs: Regs,
     bits: u32,
     run: &[Arc<Insn>],
     value: i64,
-    scratch: &[Register],
+    scratch: &[RegId],
     dead: &DeadAfter,
     flags_dead: &crate::support::hash::HashSet<usize>,
 ) -> Option<Vec<Arc<Insn>>> {
@@ -108,19 +111,20 @@ fn shared_run(
     let width = *widths.iter().max()?;
     let reads = run
         .iter()
-        .filter_map(|one| _register_effects(bits, one, false, true))
+        .filter_map(|one| _register_effects(regs, bits, one, false, true))
         .fold(Lanes::new(), |all, (reads, _)| all.or(&reads));
-    let named = |width: u32, full: Register| -> Option<Reg> {
-        let register = target::named(full, i64::from(width));
-        (target::width_of(register) == Some(i64::from(width))).then_some(Reg { register, width })
+    let named = |width: u32, full: RegId| -> Option<Reg> {
+        let register = regs.named(full, i64::from(width));
+        (regs.width_of(register) == Some(i64::from(width))).then_some(Reg { register, width })
     };
     let (full, register) = scratch
         .iter()
         .find_map(
             |full| {
                 let register = named(width, *full)?;
-                (_lanes(register.register).is_subset(&dead[&id(last)]) && _lanes(register.register).is_disjoint(&reads))
-                    .then_some((*full, register))
+                (_lanes(regs, register.register).is_subset(&dead[&id(last)])
+                    && _lanes(regs, register.register).is_disjoint(&reads))
+                .then_some((*full, register))
             },
         )?;
     let destination = Loc::Reg(register);

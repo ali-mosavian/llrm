@@ -3,10 +3,10 @@
 
 use std::collections::BTreeSet;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::backend::cpu::Profile;
-use crate::backend::target;
 use crate::model::ir::{AddressRef, Imm, Loc, Operation, Reg};
 use crate::model::lir::Insn;
 
@@ -24,7 +24,7 @@ pub enum Step {
 }
 
 /// One register's multiple, as an affine chain computes it.
-pub type Terms = Vec<(Register, i64)>;
+pub type Terms = Vec<(RegId, i64)>;
 
 /// Whether `one` has no effect beyond its operands.
 pub fn plain(one: &Insn) -> bool {
@@ -39,6 +39,7 @@ pub fn plain(one: &Insn) -> bool {
 /// The register `one` writes, how, and what `cpu` charges for it, where the
 /// register stays an affine sum.
 pub fn step(
+    regs: Regs,
     one: &Insn,
     cpu: &Profile,
 ) -> Option<(Reg, Step, i64)> {
@@ -49,7 +50,7 @@ pub fn step(
     let [Loc::Reg(dest)] = what.dests.as_slice() else {
         return None;
     };
-    let register = |one: &Reg| one.width == dest.width && target::integer(one.register);
+    let register = |one: &Reg| one.width == dest.width && regs.integer(one.register);
     if ![2, 4].contains(&dest.width) || !register(dest) {
         return None;
     }
@@ -81,12 +82,13 @@ pub fn step(
 /// The 67h address naming `terms` plus `disp`, if one does.
 /// `scales` are the index scales the target's 32-bit address form takes.
 pub fn form(
-    terms: &[(Register, i64)],
+    regs: Regs,
+    terms: &[(RegId, i64)],
     disp: i64,
     scales: &BTreeSet<i64>,
 ) -> Option<AddressRef> {
-    let at = |through: Register, index: Register, scale: i64| {
-        (!crate::backend::registerinfo::is_stack(index) && scales.contains(&scale)).then_some(AddressRef {
+    let at = |through: RegId, index: RegId, scale: i64| {
+        (!regs.is_stack(index) && scales.contains(&scale)).then_some(AddressRef {
             through,
             index_through: index,
             scale,
@@ -96,7 +98,7 @@ pub fn form(
     };
     match *terms {
         [(only, 1)] => Some(AddressRef { through: only, offset: disp, ..AddressRef::new(None) }),
-        [(only, scale)] => at(only, only, scale - 1).or_else(|| at(Register::None, only, scale)),
+        [(only, scale)] => at(only, only, scale - 1).or_else(|| at(RegId::None, only, scale)),
         [(base, 1), (index, scale)] | [(index, scale), (base, 1)] => {
             at(base, index, scale).or_else(|| at(index, base, 1).filter(|_| scale == 1))
         }
@@ -107,13 +109,13 @@ pub fn form(
 /// The real-mode address naming `terms` plus `disp`, if one does: a lone base
 /// or index register, or one of BX/BP and one of SI/DI. No prefix, no scale.
 pub fn word_form(
-    terms: &[(Register, i64)],
+    terms: &[(RegId, i64)],
     disp: i64,
 ) -> Option<AddressRef> {
     use llrm_x86::addressing16::{BASES, INDEXES};
     let word =
-        |one: Register| llrm_x86::registers::word_of(one).filter(|word| BASES.contains(word) || INDEXES.contains(word));
-    let is_base = |one: Register| BASES.contains(&one);
+        |one: RegId| llrm_x86::registers::word_of(one).filter(|word| BASES.contains(word) || INDEXES.contains(word));
+    let is_base = |one: RegId| BASES.contains(&one);
     match *terms {
         [(only, 1)] => Some(AddressRef { through: word(only)?, offset: disp, ..AddressRef::new(None) }),
         [(first, 1), (second, 1)] => {

@@ -37,7 +37,7 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
+    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -269,6 +269,9 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before anything asks what a port call does to memory.
         Box::new(ports::Ports),
         Box::new(decide::Decide),
+        // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes
+        // at -Os.
+        Box::new(phiopt::PhiOpt { size: applied.options.prefers_size() }),
         // Once the arguments are values rather than frame cells; the loop it
         // makes goes to the loop passes below.
         Box::new(tailrec::TailRecursion),
@@ -419,6 +422,11 @@ pub fn recorded(
         manager.add(rotate::Rotate { proven: false, copy: true });
         manager.add(loopsimplify::LoopSimplify);
         manager.add(lcssa::LoopClosedSSA);
+        // What the copy leaves in the latch (a test of the step: `x - 2 < 2`)
+        // is cleaned as gcc's DOM, forwprop and DCE do after `pass_ch`.
+        manager.add(fold::Fold);
+        manager.add(algebraic::Algebraic { size: false });
+        manager.add(dead::Dead);
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.

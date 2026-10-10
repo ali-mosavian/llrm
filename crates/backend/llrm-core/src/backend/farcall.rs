@@ -49,6 +49,7 @@ pub fn materialized(
     body: &LirBody,
     frame: &mut Frame,
 ) -> Result<LirBody, frames::Refused> {
+    let far = body.regs().far_segment.is_some();
     let mut slot = None;
     let mut out = body.clone();
     for block in &mut out.blocks {
@@ -58,10 +59,10 @@ pub fn materialized(
                 Some(what)
                     if what.op == Operation::Call
                         && what.indirect
-                        // A far pointer packs selector and offset in four bytes
-                        // of a 16-bit segment; in a 32-bit one a dword is a
-                        // near pointer.
-                        && body.bits == 16
+                        // A far pointer packs selector and offset in four
+                        // bytes; where the target has no far segment a dword is
+                        // a near pointer.
+                        && far
                         && matches!(what.sources.as_slice(), [Loc::Held(Held { width: 4, .. })]) =>
                 {
                     let Loc::Held(target) = what.sources[0] else { unreachable!() };
@@ -104,6 +105,8 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
+
+    use llrm_lir::registers::RegId;
 
     use super::FarIndirectCalls;
     use crate::backend::frame::{Frame, SlotKey};
@@ -186,7 +189,7 @@ mod tests {
             vec![],
             vec![7, 5],
         );
-        call.requires = vec![(Held { value: 7, width: 4 }, iced_x86::Register::EAX)];
+        call.requires = vec![(Held { value: 7, width: 4 }, RegId::EAX)];
         let body = LirBody::new(
             "far",
             0,
@@ -203,10 +206,13 @@ mod tests {
         assert_eq!(called.uses, vec![7]);
     }
 
-    /// In a 32-bit segment a dword target is a near pointer: the call stays as
-    /// it was.
+    /// Where the target has no far segment a dword target is a near pointer:
+    /// Compiles for two targets, taken turns in one thread, each ask the
+    /// register file of their own body: a dword call target is a far pointer
+    /// in m16 and a near one in m32. A process-wide file answered both alike
+    /// (29 of llrm-c's m16 tests failed when an m32 compile bound first).
     #[test]
-    fn a_dword_target_in_a_32_bit_segment_is_not_a_far_pointer() {
+    fn a_dword_call_target_is_far_or_near_by_the_register_file_of_its_own_body() {
         let call = Arc::new(Insn::new(
             4,
             Some((4, 7)),
@@ -219,10 +225,22 @@ mod tests {
             vec![],
             vec![5],
         ));
-        let mut body =
-            LirBody::new("near", 0, vec![LirBlock::new(0, vec![call])], IndexMap::default(), IndexMap::default());
-        body.bits = 32;
-        let out = FarIndirectCalls::new(Rc::new(RefCell::new(Frame::new(-16)))).transform(body).unwrap();
-        assert_eq!(out.insns().len(), 1);
+        for (info, calls_made) in [
+            (&llrm_x86_m16::REGISTER_INFO, 2),
+            (&llrm_x86_m32::REGISTER_INFO, 1),
+            (&llrm_x86_m16::REGISTER_INFO, 2),
+            (&llrm_x86_m32::REGISTER_INFO, 1),
+        ] {
+            let mut body = LirBody::new(
+                "f",
+                0,
+                vec![LirBlock::new(0, vec![Arc::clone(&call)])],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.registers = Some(llrm_lir::registers::Regs(info));
+            let out = super::materialized(&body, &mut Frame::new(-16)).unwrap();
+            assert_eq!(out.insns().len(), calls_made, "{:?}", out.insns());
+        }
     }
 }

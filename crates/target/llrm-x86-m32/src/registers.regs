@@ -19,6 +19,10 @@
 # allocatable; it equals DS (`string_segment` in datalayout.toml). FS and GS
 # are never described.
 #
+# @scratch: the words a pass may borrow for a moment, most preferred first (gcc's REG_ALLOC_ORDER): a
+# register the result is not left in comes last.
+@scratch cx dx bx ax
+#
 # name  bits root lane classes dwarf codeview
 eax     32   eax  0    gpr,byte,base,index,int  0  17
 ecx     32   ecx  0    gpr,byte,base,index,int  1  18
@@ -46,7 +50,12 @@ ah      8    eax  8    int  -  5
 ch      8    ecx  8    int  -  6
 dh      8    edx  8    int  -  7
 bh      8    ebx  8    int  -  8
-es      16   es   0    reserved,string_segment  40  25
+es      16   es   0    segment,reserved,string_segment  40  25
+cs      16   cs   0    segment,reserved,code_segment  41  26
+ss      16   ss   0    segment,reserved,stack_segment  42  27
+ds      16   ds   0    segment,reserved,data_segment  43  28
+fs      16   fs   0    segment,reserved  44  29
+gs      16   gs   0    segment,reserved  45  30
 st0     80   st0 0    x87,positional  11  128
 st1     80   st1 0    x87,positional  12  129
 st2     80   st2 0    x87,positional  13  130

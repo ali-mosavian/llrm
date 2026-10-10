@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::allocate::live;
 use crate::backend::classes::RegisterClasses;
@@ -54,7 +54,7 @@ impl LIRTransform for PressureSink {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Class {
     Stack,
-    Within(BTreeSet<Register>),
+    Within(BTreeSet<RegId>),
     Any,
 }
 
@@ -155,6 +155,7 @@ fn _reader(
     class_of: &dyn Fn(u32, bool) -> Class,
     stack: &dyn Fn(u32) -> bool,
 ) -> Option<usize> {
+    let regs = body.regs();
     let (value, cell) = plain_load(&insns[at])?;
     if defined.get(&value) != Some(&1) || live_out.contains(&value) {
         return None;
@@ -175,7 +176,7 @@ fn _reader(
     let addresses: BTreeSet<u32> = insns[at].uses.iter().copied().collect();
     for between in &insns[at + 1..reader] {
         let Some(what) = &between.what else { return None };
-        if crate::backend::floatregions::boundary(between)
+        if crate::backend::floatregions::boundary(regs, between)
             || between.volatile()
             || may_write(between, cell, body.sealed_arguments)
             || between.defines.iter().any(|defined| addresses.contains(defined) || *defined == value)

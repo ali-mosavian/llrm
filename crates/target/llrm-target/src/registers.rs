@@ -1,7 +1,9 @@
 //! A target's register file, from its `registers.regs`: one register a line,
-//! `name bits root lane classes dwarf codeview`, classes comma separated and
-//! `-` for none; the last two are the register's number in each debug format,
-//! `-` where it has none.
+//! `name bits root lane classes dwarf codeview [load]`, classes comma separated
+//! and `-` for none; dwarf and codeview are the register's number in each debug
+//! format, `-` where it has none; `load` is the mnemonic that loads a far
+//! pointer's offset and this segment register (`les` for `es`), where there is
+//! one.
 
 /// One register: a root, or a view of one.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17,6 +19,8 @@ pub struct Register {
     pub dwarf: Option<u16>,
     /// Its CodeView register id (`CV_HREG_e`).
     pub codeview: Option<u16>,
+    /// The far-pointer load that fills this segment register.
+    pub load: Option<String>,
 }
 
 impl Register {
@@ -33,16 +37,31 @@ fn optional(text: &str) -> Result<Option<u16>, String> {
     if text == "-" { Ok(None) } else { text.parse().map(Some).map_err(|_| text.to_owned()) }
 }
 
+/// The scratch order a `@scratch cx dx bx ax` line states: the registers a pass
+/// may borrow for a moment, most preferred first (gcc's `REG_ALLOC_ORDER`).
+pub fn scratch(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|raw| raw.split('#').next().unwrap_or("").trim().strip_prefix("@scratch"))
+        .flat_map(|names| names.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        .collect()
+}
+
 pub fn parse(text: &str) -> Result<Vec<Register>, String> {
     let mut registers = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
+        if line.is_empty() || line.starts_with('@') {
             continue;
         }
         let columns: Vec<&str> = line.split_whitespace().collect();
-        let [name, bits, root, lane, classes, dwarf, codeview] = columns[..] else {
-            return Err(format!("registers.regs:{}: {} columns, not 7", index + 1, columns.len()));
+        let (name, bits, root, lane, classes, dwarf, codeview, load) = match columns[..] {
+            [name, bits, root, lane, classes, dwarf, codeview] => {
+                (name, bits, root, lane, classes, dwarf, codeview, None)
+            }
+            [name, bits, root, lane, classes, dwarf, codeview, load] => {
+                (name, bits, root, lane, classes, dwarf, codeview, Some(load.to_owned()))
+            }
+            _ => return Err(format!("registers.regs:{}: {} columns, not 7 or 8", index + 1, columns.len())),
         };
         let number =
             |text: &str, what: &str| text.parse().map_err(|_| format!("registers.regs:{}: {what} `{text}`", index + 1));
@@ -54,6 +73,7 @@ pub fn parse(text: &str) -> Result<Vec<Register>, String> {
             classes: if classes == "-" { Vec::new() } else { classes.split(',').map(str::to_owned).collect() },
             dwarf: optional(dwarf).map_err(|text| format!("registers.regs:{}: dwarf `{text}`", index + 1))?,
             codeview: optional(codeview).map_err(|text| format!("registers.regs:{}: codeview `{text}`", index + 1))?,
+            load,
         });
     }
     Ok(registers)
@@ -83,7 +103,7 @@ mod tests {
         assert_eq!(registers.len(), 4);
         assert_eq!(allocatable(&registers), 2);
         assert!(registers[0].is("byte") && registers[2].classes.is_empty());
-        assert_eq!(parse("eax 32 eax").unwrap_err(), "registers.regs:1: 3 columns, not 7");
+        assert_eq!(parse("eax 32 eax").unwrap_err(), "registers.regs:1: 3 columns, not 7 or 8");
         assert_eq!((registers[0].dwarf, registers[0].codeview), (Some(0), Some(17)));
     }
 
@@ -107,6 +127,7 @@ pub fn source(
     text: &str,
     id: &str,
     classes: &[&str],
+    effects: &str,
 ) -> Result<String, String> {
     let registers = parse(text)?;
     let mut widths: Vec<u32> = registers.iter().map(|one| one.bits).collect();
@@ -153,13 +174,32 @@ pub fn source(
             }
         }
     };
+    let loads: Vec<String> = registers
+        .iter()
+        .filter_map(|one| one.load.as_ref().map(|load| format!("({id}::{}, {load:?})", one.name.to_uppercase())))
+        .collect();
+    let scratch: Vec<String> = scratch(text).iter().map(|name| format!("{id}::{}", name.to_uppercase())).collect();
+    let optional = |class: &str| -> Result<String, String> {
+        let roots: Vec<&Register> = registers.iter().filter(|one| one.is(class)).collect();
+        match roots[..] {
+            [] => Ok("None".to_owned()),
+            [one] => Ok(format!("Some({id}::{})", one.name.to_uppercase())),
+            _ => Err(format!("registers.regs: {} registers have the class `{class}`, not one", roots.len())),
+        }
+    };
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, widths, views }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views }}\n}};\n",
+        loads.join(", "),
+        scratch.join(", "),
         columns.join(", "),
         role("frame")?,
-        role("stack")?
+        role("stack")?,
+        optional("data_segment")?,
+        optional("stack_segment")?,
+        optional("code_segment")?,
+        optional("far_segment")?
     ));
     Ok(code)
 }
@@ -179,11 +219,15 @@ mod source_tests {
     fn a_class_without_a_bit_is_refused_where_the_table_is_made() {
         let text =
             "ebp 32 ebp 0 frame - 3\nesp 32 esp 0 stack - 4\neax 32 eax 0 gpr,int - 1\nal 8 eax 0 int,byte - 2\n";
-        let error = source(text, "Reg", &CLASSES).err().expect("refused");
+        let error = source(text, "Reg", &CLASSES, "rows").err().expect("refused");
         assert!(error.contains("al has the class `byte`"), "{error}");
-        let made =
-            source("ebp 32 ebp 0 frame - 3\nesp 32 esp 0 stack - 4\neax 32 eax 0 gpr,int - 1\n", "Reg", &CLASSES)
-                .expect("made");
+        let made = source(
+            "ebp 32 ebp 0 frame - 3\nesp 32 esp 0 stack - 4\neax 32 eax 0 gpr,int - 1\n",
+            "Reg",
+            &CLASSES,
+            "rows",
+        )
+        .expect("made");
         assert!(made.contains("Reg::EAX as usize"), "{made}");
         assert!(made.contains("llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT"), "{made}");
     }
@@ -192,11 +236,54 @@ mod source_tests {
     #[test]
     fn a_role_needs_exactly_one_root() {
         let one = "ebp 32 ebp 0 frame,stack - 1\n";
-        assert!(source(one, "Reg", &["frame", "stack"]).is_ok());
+        assert!(source(one, "Reg", &["frame", "stack"], "rows").is_ok());
         let two = "ebp 32 ebp 0 frame,stack - 1\nesi 32 esi 0 frame - 2\n";
-        let error = source(two, "Reg", &["frame", "stack"]).err().expect("refused");
+        let error = source(two, "Reg", &["frame", "stack"], "rows").err().expect("refused");
         assert!(error.contains("2 registers are the root with the class `frame`"), "{error}");
         let none = "eax 32 eax 0 - - 1\n";
-        assert!(source(none, "Reg", &["frame", "stack"]).err().expect("refused").contains("0 registers"));
+        assert!(source(none, "Reg", &["frame", "stack"], "rows").err().expect("refused").contains("0 registers"));
+    }
+
+    /// Two registers meaning the same segment is no role: the table is not
+    /// made.
+    #[test]
+    fn a_segment_role_is_one_register_or_none() {
+        let base = "ebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\n";
+        let classes = ["frame", "stack", "data_segment"];
+        assert!(
+            source(&format!("{base}ds 16 ds 0 data_segment - 3\n"), "Reg", &classes, "rows")
+                .unwrap()
+                .contains("data_segment: Some(Reg::DS)")
+        );
+        assert!(source(base, "Reg", &classes, "rows").unwrap().contains("data_segment: None"));
+        let two = format!("{base}ds 16 ds 0 data_segment - 3\nes 16 es 0 data_segment - 4\n");
+        assert!(
+            source(&two, "Reg", &classes, "rows")
+                .err()
+                .expect("refused")
+                .contains("2 registers have the class `data_segment`")
+        );
+    }
+
+    /// A far load names the segment register it fills; a row without one has
+    /// none.
+    #[test]
+    fn a_load_is_the_eighth_column() {
+        let text = "ebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\nes 16 es 0 - - 3 les\nds 16 ds 0 - - 4\n";
+        let made = source(text, "Reg", &["frame", "stack"], "rows").unwrap();
+        assert!(made.contains("(Reg::ES, \"les\")") && !made.contains("(Reg::DS"), "{made}");
+        assert_eq!(
+            crate::registers::parse("a 8 a 0 - - 1 x y").unwrap_err(),
+            "registers.regs:1: 9 columns, not 7 or 8"
+        );
+    }
+
+    /// A `@scratch` line is an order, not a register row.
+    #[test]
+    fn a_scratch_line_is_an_order_not_a_register() {
+        let text = "@scratch cx ax\nebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\n";
+        assert_eq!(crate::registers::scratch(text), ["cx", "ax"]);
+        assert_eq!(crate::registers::parse(text).unwrap().len(), 2);
+        assert!(source(text, "Reg", &["frame", "stack"], "rows").unwrap().contains("&[Reg::CX, Reg::AX]"));
     }
 }

@@ -9,10 +9,10 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::backend::peephole::{_lanes, Lane, Lanes, id};
-use crate::backend::target;
 use crate::model::ir::{Addr, Loc, Operation, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::support::hash::{HashMap, HashSet};
@@ -32,9 +32,9 @@ fn _relocated(where_: &Loc) -> bool {
 /// `_shape`'s tuples: every encoded field of a source.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Shape {
-    Reg(Register, u32),
+    Reg(RegId, u32),
     Imm(i64, u32, Option<Addr>),
-    Address(Option<Addr>, Register, Register, i64, i64, u32),
+    Address(Option<Addr>, RegId, RegId, i64, i64, u32),
 }
 
 /// Every encoded field of a source, including compare=False address fields.
@@ -50,18 +50,21 @@ fn _shape(where_: &Loc) -> Result<Shape, String> {
 }
 
 /// Physical input lanes, or None for a register this tracker omits.
-fn _source_lanes(where_: &Loc) -> Option<Lanes> {
-    let registers: Vec<Register> = match where_ {
+fn _source_lanes(
+    regs: Regs,
+    where_: &Loc,
+) -> Option<Lanes> {
+    let registers: Vec<RegId> = match where_ {
         Loc::Reg(one) => vec![one.register],
         Loc::Address(one) => {
-            [one.through, one.index_through].into_iter().filter(|register| *register != Register::None).collect()
+            [one.through, one.index_through].into_iter().filter(|register| *register != RegId::None).collect()
         }
         Loc::Imm(_) => Vec::new(),
         _ => return None,
     };
     let mut lanes = Lanes::new();
     for register in registers {
-        let found = _lanes(register);
+        let found = _lanes(regs, register);
         if found.is_empty() {
             return None;
         }
@@ -81,7 +84,10 @@ pub type Expression = (Operation, Option<String>, Vec<Shape>, u32);
 /// artifacts created below that boundary.  Relocations are excluded because
 /// every emitted symbolic occurrence owns a fixup as well as instruction
 /// bytes.
-fn _candidate(one: &Insn) -> Result<Option<(Expression, Vec<Lane>, Vec<Lane>)>, String> {
+fn _candidate(
+    regs: Regs,
+    one: &Insn,
+) -> Result<Option<(Expression, Vec<Lane>, Vec<Lane>)>, String> {
     let Some(what) = &one.what else {
         return Ok(None);
     };
@@ -106,7 +112,7 @@ fn _candidate(one: &Insn) -> Result<Option<(Expression, Vec<Lane>, Vec<Lane>)>, 
     {
         return Ok(None);
     }
-    let read_sets: Vec<Option<Lanes>> = what.sources.iter().map(_source_lanes).collect();
+    let read_sets: Vec<Option<Lanes>> = what.sources.iter().map(|place| _source_lanes(regs, place)).collect();
     if read_sets.iter().any(Option::is_none) {
         return Ok(None);
     }
@@ -114,7 +120,7 @@ fn _candidate(one: &Insn) -> Result<Option<(Expression, Vec<Lane>, Vec<Lane>)>, 
     let Loc::Reg(destination) = &what.dests[0] else {
         unreachable!("checked above");
     };
-    let writes = _lanes(destination.register);
+    let writes = _lanes(regs, destination.register);
     if writes.is_empty() || !reads.is_disjoint(&writes) {
         return Ok(None);
     }
@@ -127,7 +133,10 @@ fn _candidate(one: &Insn) -> Result<Option<(Expression, Vec<Lane>, Vec<Lane>)>, 
 }
 
 /// Explicit and declared physical writes, or None for an opaque boundary.
-fn _written(one: &Insn) -> Option<Lanes> {
+fn _written(
+    regs: Regs,
+    one: &Insn,
+) -> Option<Lanes> {
     let what = one.what.as_ref()?;
     if [Operation::Barrier, Operation::Call, Operation::Return, Operation::Fill, Operation::Copy, Operation::Leave]
         .contains(&what.op)
@@ -137,17 +146,17 @@ fn _written(one: &Insn) -> Option<Lanes> {
     let mut writes = Lanes::new();
     for dest in &what.dests {
         if let Loc::Reg(dest) = dest {
-            writes.extend(_lanes(dest.register));
+            writes.extend(_lanes(regs, dest.register));
         }
     }
     for (held, register) in &one.delivers {
-        writes.extend(_lanes(target::named(*register, i64::from(held.width))));
+        writes.extend(_lanes(regs, regs.named(*register, i64::from(held.width))));
     }
     for register in &one.clobbers {
-        writes.extend(_lanes(*register));
+        writes.extend(_lanes(regs, *register));
     }
     for register in &one.clobbers_high {
-        writes.extend(_lanes(*register).into_iter().filter(|lane| lane.1 >= 2));
+        writes.extend(_lanes(regs, *register).into_iter().filter(|lane| lane.1 >= 2));
     }
     Some(writes)
 }
@@ -169,13 +178,14 @@ pub type State = HashMap<Lane, Token>;
 
 /// Physical values leaving one block and redundant occurrences within it.
 fn _transfer(
+    regs: Regs,
     block: &LirBlock,
     incoming: &State,
 ) -> Result<(State, HashSet<usize>), String> {
     let mut state = incoming.clone();
     let mut redundant: HashSet<usize> = HashSet::default();
     for one in &block.insns {
-        let candidate = _candidate(one)?;
+        let candidate = _candidate(regs, one)?;
         if let Some((expression, reads, writes)) = candidate {
             let inputs: Vec<(Lane, Token)> = reads
                 .iter()
@@ -191,7 +201,7 @@ fn _transfer(
             state.extend(wanted);
             continue;
         }
-        let Some(writes) = _written(one) else {
+        let Some(writes) = _written(regs, one) else {
             state.clear();
             continue;
         };
@@ -215,12 +225,13 @@ fn _merged(states: &[&State]) -> State {
 }
 
 fn _lanes_used(body: &LirBody) -> Result<Lanes, String> {
+    let regs = body.regs();
     let mut lanes = Lanes::new();
     for one in body.insns() {
-        if let Some((_expression, reads, writes)) = _candidate(&one)? {
+        if let Some((_expression, reads, writes)) = _candidate(regs, &one)? {
             lanes.extend(reads);
             lanes.extend(writes);
-        } else if let Some(writes) = _written(&one) {
+        } else if let Some(writes) = _written(regs, &one) {
             lanes.extend(writes);
         }
     }
@@ -229,6 +240,7 @@ fn _lanes_used(body: &LirBody) -> Result<Lanes, String> {
 
 /// Value-number deterministic register computations across the CFG.
 pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
+    let regs = body.regs();
     let mut predecessors: HashMap<i64, HashSet<i64>> =
         body.blocks.iter().map(|block| (block.at, HashSet::default())).collect();
     for block in &body.blocks {
@@ -257,7 +269,7 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                 states.push(&entry);
             }
             let incoming = _merged(&states);
-            let (after, gone) = _transfer(block, &incoming)?;
+            let (after, gone) = _transfer(regs, block, &incoming)?;
             if outgoing.get(&block.at) != Some(&after) || redundant.get(&block.at) != Some(&gone) {
                 outgoing.insert(block.at, after);
                 redundant.insert(block.at, gone);
@@ -293,7 +305,7 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::eliminated;
     use crate::model::ir::{Addr, AddressRef, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -310,7 +322,7 @@ mod tests {
     }
 
     fn bx() -> Loc {
-        Loc::Reg(Reg { register: Register::BX, width: 2 })
+        Loc::Reg(Reg { register: RegId::BX, width: 2 })
     }
 
     fn _lea(
@@ -318,7 +330,7 @@ mod tests {
         at: i64,
     ) -> Arc<Insn> {
         let address = AddressRef {
-            through: Register::BP,
+            through: RegId::BP,
             offset: -100,
             disp_width: 1,
             ..AddressRef::new(Some(Addr::new(Space::Frame, -100)))
@@ -373,11 +385,11 @@ mod tests {
                 Operation::Move,
                 "mov",
                 vec![Loc::Mem(Mem {
-                    through: Register::BP,
+                    through: RegId::BP,
                     disp_width: 1,
                     ..Mem::new(Some(Addr::new(Space::Frame, -2)), 2)
                 })],
-                vec![Loc::Reg(Reg { register: Register::AX, width: 2 })],
+                vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })],
             ),
             vec![],
             vec![],
@@ -490,7 +502,7 @@ mod tests {
     fn test_address_coefficients_are_part_of_the_expression_identity() {
         // `ax + si*2` and `si + ax*2` read the same lanes and compute different
         // numbers.
-        let lea = |at: i64, covers: (i64, i64), through: Register, index: Register, defines: u32| {
+        let lea = |at: i64, covers: (i64, i64), through: RegId, index: RegId, defines: u32| {
             Arc::new(Insn::new(
                 at,
                 Some(covers),
@@ -504,8 +516,8 @@ mod tests {
                 vec![],
             ))
         };
-        let first = lea(0, (0, 3), Register::AX, Register::SI, 1);
-        let different = lea(3, (3, 6), Register::SI, Register::AX, 2);
+        let first = lea(0, (0, 3), RegId::AX, RegId::SI, 1);
+        let different = lea(3, (3, 6), RegId::SI, RegId::AX, 2);
 
         let result = eliminated(&_body(vec![first, Arc::clone(&different)])).unwrap();
 

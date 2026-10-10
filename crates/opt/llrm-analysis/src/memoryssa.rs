@@ -462,6 +462,22 @@ pub fn byte_keys(
     ByteKeys { frame: displaced_span(reference), pointer }
 }
 
+/// One of a reference's `ByteKeys`, to hash.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum ByteKey {
+    Frame(crate::regions::Frame, i128, i128),
+    Pointer(llrm_mir::module::Operand, i64, u64),
+}
+
+impl ByteKeys {
+    /// The keys it has: none, one or two.
+    pub fn list(self) -> Vec<ByteKey> {
+        let frame = self.frame.map(|(frame, low, high)| ByteKey::Frame(frame, low, high));
+        let pointer = self.pointer.map(|(base, offset, bytes)| ByteKey::Pointer(base, offset, bytes));
+        frame.into_iter().chain(pointer).collect()
+    }
+}
+
 /// Whether `one` and `other` certainly name the same bytes.
 pub fn same_bytes(
     unit: &Unit,

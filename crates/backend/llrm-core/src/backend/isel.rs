@@ -10,6 +10,7 @@ use iced_x86::Register;
 use llrm_analysis::cfg;
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::ranges::{self, Facts};
+use llrm_lir::registers::Regs;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
@@ -778,6 +779,7 @@ pub fn selected_with<'c>(
         module,
         function,
         arch,
+        regs: Regs(arch.registers()),
         callee_facts,
         spaces: arch.layout().spaces.roles,
         layout,
@@ -1260,6 +1262,8 @@ pub struct Selector<'m, 'c, 'p> {
     module: &'m Module,
     function: &'m Function,
     arch: &'c dyn llrm_target::Target,
+    /// The register file of `arch`.
+    regs: Regs,
     /// What the functions that take part leave different.
     callee_facts: &'c CalleeFacts,
     layout: DataLayout,
@@ -1402,11 +1406,17 @@ pub struct Selector<'m, 'c, 'p> {
 }
 
 impl Selector<'_, '_, '_> {
+    /// The register file of the target being compiled for.
+    pub(crate) fn regs(&self) -> Regs {
+        self.regs
+    }
+
     fn body(
         &mut self,
         name: &str,
         convention: &Convention,
     ) -> Result<LirBody, Unselected> {
+        let regs = self.regs();
         let function = self.function;
         if let (Some(&last), Some(&Parameter::Cell(disp))) =
             (function.parameters().last(), convention.parameters.last())
@@ -1556,7 +1566,7 @@ impl Selector<'_, '_, '_> {
                         } else {
                             self.fresh_held(width)
                         };
-                        arrived.push((own, crate::backend::target::named(register, i64::from(width))));
+                        arrived.push((own, regs.named(register, i64::from(width))));
                         halves.push(own);
                         if registers.len() == 1 && self.homed.contains(&index) {
                             // Below the allocas, where the frame has room: a
@@ -1777,6 +1787,7 @@ impl Selector<'_, '_, '_> {
             })
             .collect();
         let blocks = self.widen(combined::combined(
+            regs,
             self.arch.object().bitness,
             self.unread_halves_dropped(blocks),
             self.cpu,
@@ -1785,6 +1796,7 @@ impl Selector<'_, '_, '_> {
         let (blocks, root) = self.rooted(blocks, block_at[&entry], pads.first().map(|pad| block_at[pad]), at);
         let mut body = LirBody::new(name, root, blocks, IndexMap::default(), self.pins.clone());
         body.bits = self.arch.object().bitness;
+        body.registers = Some(llrm_lir::registers::Regs(self.arch.registers()));
         body.float_stack = self.arch.float_stack();
         body.sealed_arguments = !self.unsealed;
         body.inputs = self.inputs.clone();
@@ -2741,6 +2753,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let Some(disp) = self.variadic else {
             return refuse("va_start with no parameter before the variadic arguments");
         };
@@ -2752,7 +2765,7 @@ impl Selector<'_, '_, '_> {
         let list = self.pointer(arguments[0])?;
         out.push(insn(
             at,
-            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(list, width))], vec![Loc::Held(held)]),
+            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, list, width))], vec![Loc::Held(held)]),
         ));
         Ok(())
     }
@@ -2812,6 +2825,7 @@ impl Selector<'_, '_, '_> {
         &mut self,
         operand: Operand,
     ) -> Result<Pointer, Unselected> {
+        let regs = self.regs();
         let Operand::Value(value) = operand else { return self.global(operand) };
         if let Some(pointer) = self.folded(value)? {
             return Ok(pointer);
@@ -2822,7 +2836,7 @@ impl Selector<'_, '_, '_> {
         }
         let segment = match self.types().get(ty) {
             Type::Pointer(space) if *space == self.spaces.data => None,
-            Type::Pointer(space) if *space == self.spaces.stack => Some(Register::SS),
+            Type::Pointer(space) if *space == self.spaces.stack => Some(regs.stack_segment_register()),
             _ => return refuse(format!("an access through a {}", self.types().display(ty))),
         };
         let width = self.width(ty)?;
@@ -2907,7 +2921,7 @@ impl Selector<'_, '_, '_> {
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
             .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
-        if self.module.global(global).address_space != 0 {
+        if self.module.global(global).address_space != self.spaces.near {
             let Some(block) = self.current else { return refuse("a far global outside a block") };
             // A carried pointer is canonical: whole 64K strides of its offset
             // are in the selector, so a constant past 64K is a
@@ -2984,6 +2998,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let function = self.function;
         let instruction = function.instruction(inst);
         if self.carries(instruction.ty) {
@@ -3026,7 +3041,7 @@ impl Selector<'_, '_, '_> {
                 })
             && let Pointer::Based { index: Some(_), segment: None, .. } = valued
         {
-            let cell = Self::memory(valued, 4);
+            let cell = Self::memory(regs, valued, 4);
             let held = Held { value: self.value(address), width: 4 };
             out.push(insn(at, semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Mem(cell)])));
             if let Some((Operand::Value(product), _)) = one
@@ -3763,6 +3778,7 @@ impl Selector<'_, '_, '_> {
         &mut self,
         blocks: Vec<LirBlock>,
     ) -> Result<Vec<LirBlock>, Unselected> {
+        let regs = self.regs();
         let marked = |what: &Semantics| {
             let exact = |operand: &Loc| match operand {
                 Loc::Mem(cell)
@@ -3800,7 +3816,7 @@ impl Selector<'_, '_, '_> {
             next += 1;
             next
         };
-        let mut promoted = addressforms::promote(&by_at, &self.promoted, &mut fresh).map_err(Unselected)?;
+        let mut promoted = addressforms::promote(regs, &by_at, &self.promoted, &mut fresh).map_err(Unselected)?;
         self.next = next;
         Ok(blocks
             .into_iter()
@@ -3920,6 +3936,7 @@ impl Selector<'_, '_, '_> {
     }
 
     fn memory(
+        regs: Regs,
         pointer: Pointer,
         width: u32,
     ) -> Mem {
@@ -3933,7 +3950,10 @@ impl Selector<'_, '_, '_> {
                 disp_width: 2,
                 index: Some(index),
                 scale,
-                ..Mem::new(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, disp) }), width)
+                ..Mem::new(
+                    Some(Addr { segment: regs.stack_segment_register(), ..Addr::new(Space::Literal, disp) }),
+                    width,
+                )
             },
             Pointer::Global { space, index, offset, base, scale: 1, plus } => Mem {
                 disp_width: 2,
@@ -3983,7 +4003,7 @@ impl Selector<'_, '_, '_> {
                 base,
                 index,
                 selector: Some(selector),
-                ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, offset) }), width)
+                ..Mem::new(Some(Addr { segment: regs.far(), ..Addr::new(Space::Far, offset) }), width)
             },
         }
     }
@@ -4046,13 +4066,14 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> (Held, Held) {
+        let regs = self.regs();
         let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
         for (held, by) in [(offset, 0), (selector, 2)] {
             let what = semantics(
                 Operation::Move,
                 "mov",
                 vec![Loc::Held(held)],
-                vec![Loc::Mem(Self::memory(pointer.moved(by), 2))],
+                vec![Loc::Mem(Self::memory(regs, pointer.moved(by), 2))],
             );
             out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
         }
@@ -4102,6 +4123,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let instruction = self.function.instruction(inst);
         let (operand, to) = (instruction.operands[0], instruction.ty);
         let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
@@ -4133,7 +4155,7 @@ impl Selector<'_, '_, '_> {
                         Operand::Value(value) if matches!(self.function.value(value).def, ValueDef::Instruction(def) if matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. }))
                     );
                     let segment = if framed {
-                        Loc::Reg(Reg { register: Register::SS, width: 2 })
+                        Loc::Reg(Reg { register: regs.stack_segment_register(), width: 2 })
                     } else {
                         let (space, index) = crate::hir::symbols::DGROUP;
                         Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
@@ -4144,7 +4166,7 @@ impl Selector<'_, '_, '_> {
                 (CastOp::AddrSpaceCast, Type::Pointer(space)) if space == self.spaces.stack => {
                     let offset = self.held(operand, from, at, out)?;
                     let selector = self.fresh_held(2);
-                    out.push(mov(selector, Loc::Reg(Reg { register: Register::SS, width: 2 })));
+                    out.push(mov(selector, Loc::Reg(Reg { register: regs.stack_segment_register(), width: 2 })));
                     (Some(offset), selector)
                 }
                 (CastOp::AddrSpaceCast, Type::Pointer(2)) => (None, self.held(operand, from, at, out)?),
@@ -4211,6 +4233,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let instruction = self.function.instruction(inst);
         let (operand, to) = (instruction.operands[0], instruction.ty);
         let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
@@ -4247,7 +4270,7 @@ impl Selector<'_, '_, '_> {
                     semantics(
                         Operation::Move,
                         "mov",
-                        vec![Loc::Mem(Self::memory(cell, held.width))],
+                        vec![Loc::Mem(Self::memory(regs, cell, held.width))],
                         vec![Loc::Held(held)],
                     ),
                 ));
@@ -4270,7 +4293,7 @@ impl Selector<'_, '_, '_> {
                         semantics(
                             Operation::Move,
                             "mov",
-                            vec![Loc::Mem(Self::memory(cell, width))],
+                            vec![Loc::Mem(Self::memory(regs, cell, width))],
                             vec![Loc::Held(wide)],
                         ),
                     ));
@@ -4278,11 +4301,21 @@ impl Selector<'_, '_, '_> {
                     let zero = Loc::Imm(Imm { value: 0, width: 4, address: None });
                     out.push(insn(
                         at,
-                        semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell, 4))], vec![Loc::Held(held)]),
+                        semantics(
+                            Operation::Move,
+                            "mov",
+                            vec![Loc::Mem(Self::memory(regs, cell, 4))],
+                            vec![Loc::Held(held)],
+                        ),
                     ));
                     out.push(insn(
                         at,
-                        semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(4), 4))], vec![zero]),
+                        semantics(
+                            Operation::Move,
+                            "mov",
+                            vec![Loc::Mem(Self::memory(regs, cell.moved(4), 4))],
+                            vec![zero],
+                        ),
                     ));
                 } else {
                     return refuse(format!(
@@ -4346,13 +4379,14 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let width = self.width(to)?;
         let held = self.float(operand, at, out)?;
         let cell = self.float_stored(held, name, (if unsigned { 2 * width } else { width }).max(2), at, out);
         let into = Held { value: self.value(result), width };
         out.push(insn(
             at,
-            semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Mem(Self::memory(cell, width))]),
+            semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Mem(Self::memory(regs, cell, width))]),
         ));
         Ok(())
     }
@@ -4462,9 +4496,12 @@ impl Selector<'_, '_, '_> {
             let held = self.float(value, at, out)?;
             out.push(insn(at, semantics(Operation::FloatStore, "", vec![], vec![Loc::Held(held)])));
         } else if let Some(&value) = operands.first().filter(|&&one| self.is_wide(type_of(one))) {
-            // edx:eax.
+            // The convention's pair, low half first.
             let (low, high) = self.wide(value, at, out)?;
-            one.requires = vec![(low, Register::EAX), (high, Register::EDX)];
+            let [low_register, high_register] = convention.returns[..] else {
+                return refuse("a wide result the convention has no register pair for");
+            };
+            one.requires = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
             one.uses = vec![low.value, high.value];
         } else if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
             // One register holds both, offset low and selector high: the dword
@@ -4672,6 +4709,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let ty = self.function.operand_type(&self.module.context, callee).expect("a typed callee");
         let target = if self.is_far(ty) {
             let (offset, selector) = self.far(callee, at, out)?;
@@ -4682,12 +4720,12 @@ impl Selector<'_, '_, '_> {
                     semantics(
                         Operation::Move,
                         "mov",
-                        vec![Loc::Mem(Self::memory(cell.moved(by), 2))],
+                        vec![Loc::Mem(Self::memory(regs, cell.moved(by), 2))],
                         vec![Loc::Held(held)],
                     ),
                 ));
             }
-            Loc::Mem(Self::memory(cell, 4))
+            Loc::Mem(Self::memory(regs, cell, 4))
         } else {
             Loc::Held(self.held(callee, ty, at, out)?)
         };
@@ -4788,6 +4826,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let function = self.function;
         let instruction = function.instruction(inst);
         let name = match &callee {
@@ -4899,7 +4938,7 @@ impl Selector<'_, '_, '_> {
                     );
                     if entry.sized_arguments {
                         // The register is the value's own width: AL, AX or EAX.
-                        requires.push((held, crate::backend::target::named(registers[0], i64::from(held.width))));
+                        requires.push((held, regs.named(registers[0], i64::from(held.width))));
                     } else {
                         let held = self.extended(held, registers[0].size() as u32, signed, at, out);
                         requires.push((held, registers[0]));
@@ -4982,7 +5021,12 @@ impl Selector<'_, '_, '_> {
                 for (by, width) in dwords.chain(word).collect::<Vec<_>>().into_iter().rev() {
                     out.push(insn(
                         at,
-                        semantics(Operation::Push, "push", vec![], vec![Loc::Mem(Self::memory(cell.moved(by), width))]),
+                        semantics(
+                            Operation::Push,
+                            "push",
+                            vec![],
+                            vec![Loc::Mem(Self::memory(regs, cell.moved(by), width))],
+                        ),
                     ));
                 }
                 pushed += i64::from(size);
@@ -5149,7 +5193,11 @@ impl Selector<'_, '_, '_> {
             float = Some(Held { value: self.value(value), width: FLOAT });
         } else if let Some(value) = instruction.result.filter(|_| self.is_wide(instruction.ty)) {
             let (low, high) = (self.fresh_held(4), self.fresh_held(4));
-            delivers = vec![(low, Register::EAX), (high, Register::EDX)];
+            let [low_register, high_register] = results(self.arch, self::entry(self.arch, convention, variadic), 8)[..]
+            else {
+                return refuse(format!("@{name}'s wide result"));
+            };
+            delivers = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
             self.wides.insert(value, (low, high));
         } else if let Some(value) = instruction.result.filter(|_| self.is_far(instruction.ty)) {
             match results(self.arch, self::entry(self.arch, convention, variadic), 4)[..] {
@@ -5289,6 +5337,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<i64, Unselected> {
+        let regs = self.regs();
         let bytes = i64::from(byval_bytes(self.module, &self.layout, self.arch, aggregate)?);
         let copy = self.layout.alloc_size(self.types(), aggregate) as i64;
         let from = self.pointer(source)?;
@@ -5297,7 +5346,8 @@ impl Selector<'_, '_, '_> {
         out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp.clone(), count])));
         let base = self.fresh_held(self.address_bytes());
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(base)], vec![sp])));
-        let to = Pointer::Based { base, index: None, scale: 1, offset: 0, segment: Some(Register::SS) };
+        let to =
+            Pointer::Based { base, index: None, scale: 1, offset: 0, segment: Some(regs.stack_segment_register()) };
         self.copied(to, from, Some(copy), None, false, false, at, out)?;
         Ok(bytes)
     }
@@ -5352,6 +5402,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let length = length.filter(|_| constant.is_none());
         let counted_operand = || length.expect("a length that is no constant is an operand");
         if let Some(length) = constant
@@ -5375,12 +5426,12 @@ impl Selector<'_, '_, '_> {
                     Operation::Move,
                     "mov",
                     vec![Loc::Held(held)],
-                    vec![Loc::Mem(Self::memory(from.moved(offset), width))],
+                    vec![Loc::Mem(Self::memory(regs, from.moved(offset), width))],
                 );
                 let store = semantics(
                     Operation::Move,
                     "mov",
-                    vec![Loc::Mem(Self::memory(to.moved(offset), width))],
+                    vec![Loc::Mem(Self::memory(regs, to.moved(offset), width))],
                     vec![Loc::Held(held)],
                 );
                 out.push(Arc::new(Insn { volatile, ..insn_of(at, load) }));
@@ -5459,9 +5510,9 @@ impl Selector<'_, '_, '_> {
         let source_segment = match from {
             Pointer::Far { selector, .. } => Loc::Held(selector),
             Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. } => {
-                Loc::Reg(Reg { register: Register::SS, width: 2 })
+                Loc::Reg(Reg { register: regs.stack_segment_register(), width: 2 })
             }
-            _ => Loc::Reg(Reg { register: Register::DS, width: 2 }),
+            _ => Loc::Reg(Reg { register: regs.data(), width: 2 }),
         };
         // A near destination's selector is made just ahead of the first move,
         // so that it is live across nothing else.
@@ -5626,6 +5677,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let &[destination, value, length, volatile] = arguments else {
             return refuse("a memset of other than four operands");
         };
@@ -5654,7 +5706,7 @@ impl Selector<'_, '_, '_> {
             let mut offset = 0;
             for width in [4, 2, 1] {
                 while length - offset >= i64::from(width) {
-                    let cell = Self::memory(pointer.moved(offset), width);
+                    let cell = Self::memory(regs, pointer.moved(offset), width);
                     let value = if width == 4 { dwords.clone() } else { imm(pattern(byte, width), width) };
                     put(semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![value]), out);
                     offset += i64::from(width);
@@ -5752,6 +5804,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let &[destination, value, count, volatile] = arguments else {
             return refuse("a pattern fill of other than four operands");
         };
@@ -5769,7 +5822,7 @@ impl Selector<'_, '_, '_> {
         }
         if let Some(count) = self.constant(count, self.address_bytes()).filter(|&count| count <= MEMSET_STORES) {
             for cell in 0..count {
-                let memory = Self::memory(pointer.moved(cell * i64::from(width)), width);
+                let memory = Self::memory(regs, pointer.moved(cell * i64::from(width)), width);
                 out.push(Arc::new(Insn {
                     volatile,
                     ..insn_of(at, semantics(Operation::Move, "mov", vec![Loc::Mem(memory)], vec![Loc::Held(stored)]))
@@ -5865,13 +5918,14 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Loc {
+        let regs = self.regs();
         // The stack's segment need not be DGROUP; DGROUP is a constant, made
         // again wherever read.
         let from = if matches!(
             pointer,
             Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. }
         ) {
-            Loc::Reg(Reg { register: Register::SS, width: 2 })
+            Loc::Reg(Reg { register: regs.stack_segment_register(), width: 2 })
         } else {
             let (space, index) = crate::hir::symbols::DGROUP;
             Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
@@ -6117,6 +6171,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Test, Unselected> {
+        let regs = self.regs();
         let instruction = self.function.instruction(inst);
         let Some((swapped, test)) = float_conditions(predicate) else { return refuse(format!("fcmp {predicate:?}")) };
         let (a, b) = if swapped {
@@ -6127,7 +6182,7 @@ impl Selector<'_, '_, '_> {
         let b = match self.cell(b) {
             Some(load) => {
                 let loaded = self.function.instruction(load);
-                Loc::Mem(Self::memory(self.pointer(loaded.operands[0])?, self.size(loaded.ty)?))
+                Loc::Mem(Self::memory(regs, self.pointer(loaded.operands[0])?, self.size(loaded.ty)?))
             }
             None => Loc::Held(self.float(b, at, out)?),
         };
@@ -6186,10 +6241,16 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Pointer {
+        let regs = self.regs();
         let cell = self.temporary(i64::from(size));
         out.push(insn(
             at,
-            semantics(Operation::FloatStore, name, vec![Loc::Mem(Self::memory(cell, size))], vec![Loc::Held(held)]),
+            semantics(
+                Operation::FloatStore,
+                name,
+                vec![Loc::Mem(Self::memory(regs, cell, size))],
+                vec![Loc::Held(held)],
+            ),
         ));
         cell
     }
@@ -6206,8 +6267,13 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) {
-        let what =
-            semantics(Operation::FloatLoad, name, vec![Loc::Held(into)], vec![Loc::Mem(Self::memory(pointer, size))]);
+        let regs = self.regs();
+        let what = semantics(
+            Operation::FloatLoad,
+            name,
+            vec![Loc::Held(into)],
+            vec![Loc::Mem(Self::memory(regs, pointer, size))],
+        );
         out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
     }
 

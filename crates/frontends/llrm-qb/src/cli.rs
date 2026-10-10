@@ -141,11 +141,12 @@ pub fn main(argv: &[String]) -> i32 {
         if args.flags.assembly {
             let module = compile::assembled(&program, None, &args.codegen).map_err(|error| error.to_string())?;
             let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
-            std::fs::write(output, llrm_core::driver::basic::text(&module)?).map_err(|error| error.to_string())?;
+            llrm_core::driver::flags::write_output(&output, llrm_core::driver::basic::text(&module)?)
+                .map_err(|error| error.to_string())?;
         } else if let Some(output) = &args.flags.output {
             let bytes = compile::object_bytes(&program, &args.source, None, &args.codegen)
                 .map_err(|error| error.to_string())?;
-            llrm_core::support::debug::timed("write output", || std::fs::write(output, bytes))
+            llrm_core::support::debug::timed("write output", || llrm_core::driver::flags::write_output(output, bytes))
                 .map_err(|error| error.to_string())?;
         } else if args.dump.is_none() {
             print!("{}", codec::encode(&program, None).map_err(|error| error.0)?);

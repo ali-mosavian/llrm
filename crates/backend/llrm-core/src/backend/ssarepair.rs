@@ -38,7 +38,7 @@ pub fn repaired(
 ) -> LirBody {
     let (live_in, _) = allocate::live(body);
     let graph = &body.blocks;
-    let doms = loops::dominators(&graph, Some(body.entry));
+    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let idom = loops::immediate_dominators(&graph, Some(body.entry));
     let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
     for block in &body.blocks {
@@ -47,20 +47,7 @@ pub fn repaired(
         }
     }
     // Dominance frontiers.
-    let mut frontier: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
-    for block in &body.blocks {
-        let Some(coming) = preds.get(&block.at).filter(|from| from.len() > 1) else { continue };
-        for from in coming {
-            let mut runner = Some(*from);
-            while let Some(at) = runner {
-                if Some(at) == idom.get(&block.at).copied().flatten() || !doms.contains_key(&at) {
-                    break;
-                }
-                frontier.entry(at).or_default().insert(block.at);
-                runner = idom.get(&at).copied().flatten();
-            }
-        }
-    }
+    let frontier = loops::frontiers(&graph, Some(body.entry));
     // Where each value is defined, and so where it needs a phi.
     let mut defined: IndexMap<u32, BTreeSet<i64>> = IndexMap::default();
     for block in &body.blocks {
@@ -89,10 +76,7 @@ pub fn repaired(
                     let registered = held.get(next).is_none_or(|set| set.contains(value));
                     if registered
                         && live_in[next].contains(value)
-                        && !body
-                            .blocks
-                            .iter()
-                            .any(|block| block.at == *next && block.phis.iter().any(|phi| phi.result == *value))
+                        && !by_at.get(next).is_some_and(|block| block.phis.iter().any(|phi| phi.result == *value))
                     {
                         placed.entry(*next).or_default().push(*value);
                     }
@@ -110,7 +94,6 @@ pub fn repaired(
             children.entry(*parent).or_default().push(block.at);
         }
     }
-    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut next = spiller::_next_value(body);
     let mut stacks: IndexMap<u32, Vec<u32>> = IndexMap::default();
     let mut insns_of: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();

@@ -110,6 +110,13 @@ def crate_tests(pkgs: dict[str, dict]) -> list[tuple[str, str]]:
     return out
 
 
+def reading(cfg: dict, pkgs: dict[str, dict], live: list[str]) -> set[str]:
+    """The crates whose own tests read other crates' sources (`[[reads]]`), for the files changed: a crate that reads what
+    changed is not one that depends on it, so `dependents` leaves it out (facts_rewrite's audit of every reader of nsw/nuw
+    went unrun when a pass in another crate began to read them)."""
+    return {r["package"] for r in cfg.get("reads", []) if r["package"] in pkgs and any(matches(f, r["paths"]) for f in live)}
+
+
 def plan(files: list[str], forced: str = "auto") -> Plan:
     cfg = load()
     pkgs = packages()
@@ -129,7 +136,7 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
 
     touched = {crate_of(f, pkgs) for f in live} - {None}
     cargo = any(not f.startswith("tools/") or f.startswith("tools/bench/") for f in live)
-    p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"})  # the root crate enables features (llrm-c's toolchain) the others lack alone
+    p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"} | reading(cfg, pkgs, live))  # the root crate enables features (llrm-c's toolchain) the others lack alone
     steps = []
     if cargo or p.tier == "full":
         steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture"]
@@ -180,7 +187,12 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
-WARNINGS_AS_ERRORS = "RUSTFLAGS='-D warnings'"
+WARNING_FLAGS = "-D warnings"
+WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
+# Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-c apart from the build step's and put
+# its binary over target/release/llrm-c (the inode changed after `integration`), while `torture`, `run` and the like were running it:
+# "No such file or directory: .../release/llrm-c" in torture. One set of flags, one build, one binary.
+STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS}
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
@@ -189,9 +201,22 @@ BUILD = (
 )
 # Measurements compare two revisions, so their historical base is built without
 # today's warning policy.
-MEASURE_BUILD = "cargo build --release -q --bins && cargo test --release -q --workspace --no-run"
+MEASURE_BUILD = "env -u RUSTFLAGS cargo build --release -q --bins && env -u RUSTFLAGS cargo test --release -q --workspace --no-run"
 # The shipped build (Cargo.toml `[profile.dist]`): what the creep run on main measures. Not a gate step: three minutes cold.
 DIST_BUILD = "cargo build --profile dist -q --bins"
+
+
+# A lib test that depends on the order tests run in passes in the plain order and fails when the threads start in
+# another (llrm-c's m16 tests, 29 of 136, when an m32 test bound the register file first). The lib step runs the
+# tests in a random order; each test binary prints its seed ("running 136 tests (shuffle seed: N)", kept in the
+# failed step's log), and LLRM_SHUFFLE_SEED=N repeats that order. libtest reads RUSTC_BOOTSTRAP when it runs, not
+# when it is built: the build is not redone.
+SHUFFLED = "RUSTC_BOOTSTRAP=1"
+
+
+def shuffle() -> str:
+    seed = os.environ.get("LLRM_SHUFFLE_SEED")
+    return f"--shuffle-seed {int(seed)}" if seed else "--shuffle"
 
 
 # Commands. Each runs under bash in the repo root with CARGO_TARGET_DIR set.
@@ -213,7 +238,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     )
     steps = {
         "build": BUILD,
-        "lib": f"{cargo} {libs} --lib" if libs else "true",
+        "lib": f"{SHUFFLED} {cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
         "doc": f"{cargo} {libs} --doc" if libs else "true",
         "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
@@ -362,7 +387,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     if not target:
         sys.exit("gate: CARGO_TARGET_DIR is not set")
     # The run test compares the tree before and after; a tool writing a .pyc into it meanwhile is not a leak.
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
+    env = {**os.environ, **STEP_ENV, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
     logs = Path(target) / "gate-logs"
     logs.mkdir(parents=True, exist_ok=True)
     pkgs = packages()

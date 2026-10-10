@@ -8,12 +8,12 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use llrm_lir::registers::Regs;
 use llrm_object::{Arch, Binding, Definition, Kind, Object, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::Format;
 
 use crate::backend::masm;
 use crate::backend::select;
-use crate::backend::target;
 use crate::model::ir::{self, Loc, Operation, Semantics, Space};
 use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
@@ -333,6 +333,7 @@ pub fn live(module: &masm::Module) -> Result<masm::Module, Error> {
 }
 
 fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
+    let regs = module.registers;
     if !module.data.iter().any(|(_, items)| items.iter().any(|item| matches!(item, masm::Datum::Object(_)))) {
         return Ok(module.clone());
     }
@@ -340,7 +341,7 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
     for (number, procedure) in module.procedures.iter().enumerate() {
         reached.insert(procedure.name.clone());
         for item in masm::listing(procedure, number)? {
-            for one in _items(&item, &module.names, number, module.object.bitness)? {
+            for one in _items(regs, &item, &module.names, number, module.object.bitness)? {
                 match one {
                     Encoded::Piece(Piece { fixups, .. }) => {
                         reached.extend(fixups.iter().map(|fixup| _target(&fixup.name).to_owned()));
@@ -576,12 +577,13 @@ pub fn _code_by(
     symbols: &mut IndexMap<String, (usize, usize)>,
     listed: impl Fn(&masm::Procedure, usize) -> Result<Vec<masm::Item>, String>,
 ) -> Result<(), Error> {
+    let regs = module.registers;
     let mut items: Vec<Encoded> = Vec::new();
     for &number in group {
         let procedure = &module.procedures[number];
         items.push(Encoded::Label(masm::Label { name: procedure.name.clone() }));
         for item in listed(procedure, number).map_err(Unencodable)? {
-            match _items(&item, &module.names, number, module.object.bitness) {
+            match _items(regs, &item, &module.names, number, module.object.bitness) {
                 Ok(encoded) => items.extend(encoded),
                 Err(error) => return Err(Unencodable(format!("{}: {error}", procedure.name)).into()),
             }
@@ -630,6 +632,7 @@ pub fn _code_by(
 }
 
 pub fn _items(
+    regs: Regs,
     item: &masm::Item,
     names: &IndexMap<(Space, i64), String>,
     number: usize,
@@ -663,7 +666,7 @@ pub fn _items(
             };
             vec![Encoded::Jump(Jump::new(name.unwrap_or("jmp"), masm::label(number, *target)))]
         }
-        masm::Item::Semantics(what) => vec![Encoded::Piece(_encoded(what, names, bits)?)],
+        masm::Item::Semantics(what) => vec![Encoded::Piece(_encoded(regs, what, names, bits)?)],
     })
 }
 
@@ -691,6 +694,7 @@ pub fn _part(
 }
 
 pub fn _encoded(
+    regs: Regs,
     what: &Semantics,
     names: &IndexMap<(Space, i64), String>,
     bits: u32,
@@ -708,7 +712,7 @@ pub fn _encoded(
             Loc::Mem(ir::Mem { addr: Some(addr), through, index_through, .. })
                 if matches!(addr.space, Space::Segment | Space::External) =>
             {
-                let wide = [through, index_through].into_iter().any(|one| target::width_of(*one) == Some(4));
+                let wide = [through, index_through].into_iter().any(|one| regs.width_of(*one) == Some(4));
                 (made.displacement_at, if wide { OFFSET32 } else { near }, addr.disp, addr)
             }
             Loc::Address(ir::AddressRef { addr: Some(addr), .. })
@@ -1002,7 +1006,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::*;
     use crate::model::ir::Addr;
@@ -1069,7 +1073,7 @@ mod tests {
         }
     }
 
-    fn reg(register: Register) -> Loc {
+    fn reg(register: RegId) -> Loc {
         Loc::Reg(ir::Reg { register, width: 2 })
     }
 
@@ -1202,13 +1206,14 @@ mod tests {
         let load = semantics(
             Operation::Move,
             "mov",
-            vec![reg(Register::AX)],
+            vec![reg(RegId::AX)],
             vec![Loc::Mem(ir::Mem::new(Some(Addr { index: 7, ..Addr::new(Space::External, 0) }), 2))],
         );
         let call = semantics(Operation::Call, "call", vec![], vec![]);
         let leave = semantics(Operation::Return, "retf", vec![], vec![]);
         let insns = vec![insn(1, load), insn(2, call), insn(3, leave)];
         let built = masm::Module {
+            registers: crate::backend::registerinfo::test_regs(),
             code: "GET_TEXT".into(),
             names: IndexMap::from_iter([((Space::External, 7), "_d".to_owned())]),
             externs: vec![("_f".into(), "far".into()), ("_d".into(), "byte".into())],
@@ -1252,6 +1257,7 @@ mod tests {
             items.extend(to.map(|to| masm::Datum::Align(masm::Align { to })));
             items.push(masm::Datum::Bytes(vec![2]));
             let module = masm::Module {
+                registers: crate::backend::registerinfo::test_regs(),
                 code: "M_TEXT".into(),
                 names: IndexMap::default(),
                 externs: vec![],
@@ -1282,9 +1288,9 @@ mod tests {
     /// module and inline code: text and object bytes as Python writes them.
     #[test]
     fn test_rich_module_matches_python() {
-        let ax = reg(Register::AX);
+        let ax = reg(RegId::AX);
         let cell = Loc::Mem(ir::Mem::new(Some(Addr { index: 1, ..Addr::new(Space::Segment, 2) }), 2));
-        let frame = Loc::Mem(ir::Mem { through: Register::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, 6)), 2) });
+        let frame = Loc::Mem(ir::Mem { through: RegId::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, 6)), 2) });
         let first = vec![
             insn(1, semantics(Operation::Move, "mov", vec![ax.clone()], vec![frame])),
             insn(2, semantics(Operation::Compare, "cmp", vec![], vec![ax.clone(), imm(3, None)])),
@@ -1293,19 +1299,19 @@ mod tests {
         let table = Some(Addr { index: 1, ..Addr::new(Space::Segment, 4) });
         let second = vec![
             insn(10, semantics(Operation::Move, "mov", vec![cell], vec![ax.clone()])),
-            insn(11, semantics(Operation::Move, "mov", vec![reg(Register::BX)], vec![imm(0, table)])),
+            insn(11, semantics(Operation::Move, "mov", vec![reg(RegId::BX)], vec![imm(0, table)])),
             insn(12, semantics(Operation::Call, "call", vec![], vec![])),
             insn(13, targeted(Operation::Jump, "jmp", 1)),
         ];
         let group = Some(Addr { index: 1, ..Addr::new(Space::Group, 0) });
         let third = vec![
             insn(20, semantics(Operation::Call, "call", vec![], vec![])),
-            insn(21, semantics(Operation::Move, "mov", vec![reg(Register::ES)], vec![imm(0, group)])),
+            insn(21, semantics(Operation::Move, "mov", vec![reg(RegId::ES)], vec![imm(0, group)])),
             insn(22, semantics(Operation::Return, "", vec![], vec![])),
         ];
         let f = body("f", vec![block(1, first, vec![10, 20]), block(10, second, vec![1]), block(20, third, vec![])]);
         let helper = vec![
-            insn(1, semantics(Operation::Move, "mov", vec![reg(Register::SI)], vec![ax])),
+            insn(1, semantics(Operation::Move, "mov", vec![reg(RegId::SI)], vec![ax])),
             insn(2, semantics(Operation::Return, "ret", vec![], vec![])),
         ];
         let inline = vec![
@@ -1314,6 +1320,7 @@ mod tests {
             masm::InlinePart::Fixup("segment".into(), "_far".into(), 0),
         ];
         let rich = masm::Module {
+            registers: crate::backend::registerinfo::test_regs(),
             code: "RICH_TEXT".into(),
             names: IndexMap::from_iter([
                 ((Space::Segment, 1), "_table".to_owned()),
@@ -1395,22 +1402,23 @@ mod tests {
     /// only its low word and left the high word of the addend in place.
     #[test]
     fn test_a_wide_symbolic_address_takes_an_offset32_fixup() {
+        let regs = crate::backend::registerinfo::test_regs();
         let cell = ir::Mem {
             addr: Some(Addr { index: 3, ..Addr::new(Space::Segment, 1280) }),
             index: Some(ir::Held { value: 1, width: 4 }),
-            index_through: Register::ESI,
+            index_through: RegId::ESI,
             scale: 2,
             ..ir::Mem::new(None, 2)
         };
         let what = semantics(
             Operation::Move,
             "mov",
-            vec![Loc::Reg(ir::Reg { register: Register::CX, width: 2 })],
+            vec![Loc::Reg(ir::Reg { register: RegId::CX, width: 2 })],
             vec![Loc::Mem(cell)],
         );
         let names = IndexMap::from_iter([((Space::Segment, 3), "S%".to_owned())]);
 
-        let piece = _encoded(&what, &names, 16).unwrap();
+        let piece = _encoded(regs, &what, &names, 16).unwrap();
 
         let [fixup] = piece.fixups.as_slice() else { panic!("{:?}", piece.fixups) };
         assert_eq!(

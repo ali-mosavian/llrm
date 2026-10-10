@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use super::*;
 use crate::backend::frame::Frame;
@@ -15,15 +15,15 @@ use crate::model::ir::{Imm, Loc, Reg};
 use crate::support::hash::IndexMap;
 
 fn ax() -> Loc {
-    Loc::Reg(Reg { register: Register::AX, width: 2 })
+    Loc::Reg(Reg { register: RegId::AX, width: 2 })
 }
 
 fn bx() -> Loc {
-    Loc::Reg(Reg { register: Register::BX, width: 2 })
+    Loc::Reg(Reg { register: RegId::BX, width: 2 })
 }
 
 fn cx() -> Loc {
-    Loc::Reg(Reg { register: Register::CX, width: 2 })
+    Loc::Reg(Reg { register: RegId::CX, width: 2 })
 }
 
 fn imm(value: i64) -> Loc {

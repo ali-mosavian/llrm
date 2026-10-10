@@ -36,6 +36,7 @@ mov_ri       1   1
 shift_ri     2   1
 shift_r1     3   1
 movzx        3   3
+setcc        4   1
 cdq          3   2
 lea          1   1
 imul_r32     26  10
@@ -108,6 +109,7 @@ mov_ri       1   1
 shift_ri     2   1
 shift_r1     3   1
 movzx        3   3
+setcc        4   1
 cdq          3   2
 lea          1   1
 imul_r32     26  10

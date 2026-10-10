@@ -224,9 +224,12 @@ pub fn main(argv: &[String]) -> i32 {
         } else {
             nib::object(&module, &args.source, args.layout, args.flags.format(&*args.codegen.arch)?)?
         };
-        llrm_core::support::debug::timed("write output", || std::fs::write(&output, &bytes))
+        llrm_core::support::debug::timed("write output", || llrm_core::driver::flags::write_output(&output, &bytes))
             .map_err(|error| error.to_string())?;
-        println!("{} ({} bytes)", output.display(), bytes.len());
+        // Standard output is the output's, where it is asked for.
+        if output != std::path::Path::new("-") {
+            println!("{} ({} bytes)", output.display(), bytes.len());
+        }
         Ok(())
     })();
     match result {
@@ -254,6 +257,9 @@ mod tests {
         }
         fn cpus(&self) -> &'static [&'static str] {
             self.0.cpus()
+        }
+        fn registers(&self) -> &'static llrm_core::backend::registerinfo::Info {
+            self.0.registers()
         }
         fn march(
             &self,

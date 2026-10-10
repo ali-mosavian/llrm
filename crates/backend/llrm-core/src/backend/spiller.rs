@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
+use llrm_lir::registers::Regs;
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
 use crate::backend::allocate::Error;
@@ -17,7 +18,6 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::coalesce;
 use crate::backend::frame::{self as frames, Frame, SlotKey};
 use crate::backend::postings::{self, At, Postings};
-use crate::backend::target;
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
@@ -226,6 +226,7 @@ pub fn materialized(
     classes: &RegisterClasses,
     plain: &BTreeSet<u32>,
 ) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>), Error> {
+    let regs = body.regs();
     let mut fresh = crate::backend::splitkit::_next_value_following(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
@@ -331,7 +332,7 @@ pub fn materialized(
             // A pure frame address used only as a memory base.
             for value in one.uses.clone() {
                 if let Some(address) = addresses.get(&value) {
-                    if let Some(folded) = _address_source(&one, value, address) {
+                    if let Some(folded) = _address_source(regs, &one, value, address) {
                         one = folded;
                     }
                 }
@@ -641,8 +642,14 @@ fn _short_update_runs_whole(
     frame: &mut Frame,
     fresh: u32,
 ) -> Result<(LirBody, u32), Error> {
-    let index = ranges::indexed_shared(body);
-    let live = ranges::intervals_shared(body, Some(&index));
+    let (index, live) = match crate::backend::live::held(body) {
+        Some(held) => (Arc::clone(held.index()), Shared::Held(held)),
+        None => {
+            let index = ranges::indexed_shared(body);
+            let live = Shared::Worked(ranges::intervals_shared(body, Some(&index)));
+            (index, live)
+        }
+    };
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -661,7 +668,7 @@ fn _short_update_runs_whole(
             let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
             let eligible = stored.contains(&into)
                 && !stored.contains(&outof)
-                && !live[&outof].segments.iter().any(|segment| segment.overlaps(&after))
+                && !live.get(&outof).expect("live").segments.iter().any(|segment| segment.overlaps(&after))
                 && first.covers == Some((first.at, first.at))
                 && second.group.is_none()
                 && second.what.as_ref().is_some_and(|what| {
@@ -721,8 +728,14 @@ fn _local_updates_whole(
     frame: &mut Frame,
     mut fresh: u32,
 ) -> Result<(LirBody, u32), Error> {
-    let index = ranges::indexed_shared(body);
-    let live = ranges::intervals_shared(body, Some(&index));
+    let (index, live) = match crate::backend::live::held(body) {
+        Some(held) => (Arc::clone(held.index()), Shared::Held(held)),
+        None => {
+            let index = ranges::indexed_shared(body);
+            let live = Shared::Worked(ranges::intervals_shared(body, Some(&index)));
+            (index, live)
+        }
+    };
     let register_only = |one: &Insn| {
         one.group.is_none()
             && one.requires.is_empty()
@@ -769,7 +782,7 @@ fn _local_updates_whole(
             };
             let slot = index.at[&key(&insns[last])];
             let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
-            let kept = live[&value].segments.iter().any(|segment| segment.overlaps(&after));
+            let kept = live.get(&value).expect("live").segments.iter().any(|segment| segment.overlaps(&after));
             // Worth it when it saves a memory operand: the update's own
             // and each read's, against one reload and perhaps one store.
             if reads.len() + 1 <= 1 + usize::from(kept) {
@@ -1251,8 +1264,51 @@ pub fn made_for_homes() -> usize {
 /// The intervals `_existing_colors` reads: the body's own, as remembered and
 /// shared, and the homes' beside them.
 struct Lives {
-    shared: Option<std::sync::Arc<IndexMap<u32, Interval>>>,
+    shared: Option<Shared>,
     own: IndexMap<u32, Interval>,
+}
+
+/// The body's intervals: the allocator's, where it holds them for this body,
+/// else worked out and remembered.
+enum Shared {
+    Held(std::sync::Arc<crate::backend::live::LiveRanges>),
+    Worked(std::sync::Arc<IndexMap<u32, Interval>>),
+}
+
+impl Shared {
+    fn of(
+        body: &LirBody,
+        index: Option<&ranges::Indexes>,
+    ) -> Self {
+        match crate::backend::live::held(body) {
+            Some(live) => Self::Held(live),
+            None => Self::Worked(ranges::intervals_shared(body, index)),
+        }
+    }
+
+    fn get(
+        &self,
+        value: &u32,
+    ) -> Option<&Interval> {
+        match self {
+            Self::Held(live) => live.get(value),
+            Self::Worked(map) => map.get(value),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Held(live) => live.len(),
+            Self::Worked(map) => map.len(),
+        }
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = (&u32, &Interval)> + '_> {
+        match self {
+            Self::Held(live) => Box::new(live.iter()),
+            Self::Worked(map) => Box::new(map.iter()),
+        }
+    }
 }
 
 impl Lives {
@@ -1576,7 +1632,7 @@ fn _existing_colors_by(
     let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
     homes.sort_unstable();
     if homes.is_empty() {
-        return (Vec::new(), Lives { shared: Some(ranges::intervals_shared(body, None)), own: IndexMap::default() });
+        return (Vec::new(), Lives { shared: Some(Shared::of(body, None)), own: IndexMap::default() });
     }
     let first = u32::MAX - homes.len() as u32;
     let pseudo: IndexMap<i64, u32> =
@@ -1692,7 +1748,11 @@ fn _existing_colors_by(
         // are walked in a body of the instructions that name them alone
         // (whole parallel copies, which share a point), at the slots they have
         // in the body.
-        shared = ranges::indexed_shared(body);
+        // The numbering the allocator's intervals of this body are in, where it
+        // holds them.
+        shared = crate::backend::live::held(body)
+            .map(|held| Arc::clone(held.index()))
+            .unwrap_or_else(|| ranges::indexed_shared(body));
         index = &*shared;
         let homes_found =
             llrm_support::debug::timed("intervals homes", || homes_kept(body, &shared, &named, &homes, first));
@@ -1704,7 +1764,7 @@ fn _existing_colors_by(
                 body.name
             );
         }
-        live = Lives { shared: Some(ranges::intervals_shared(body, None)), own: homes_found };
+        live = Lives { shared: Some(Shared::of(body, None)), own: homes_found };
     }
     let end = index.span.values().map(|(_first, last)| *last).max().unwrap_or(1);
     let mut colors = Vec::new();
@@ -2493,11 +2553,12 @@ fn _frame_loads(
     body: &LirBody,
     values: &BTreeSet<u32>,
 ) -> IndexMap<u32, Mem> {
+    let regs = body.regs();
     let pinned = &body.pins;
     let candidates: BTreeSet<u32> = values
         .iter()
         .copied()
-        .filter(|value| pinned.get(value).is_some_and(|register| target::SEGMENTS.contains(register)))
+        .filter(|value| pinned.get(value).is_some_and(|register| regs.is_segment(*register)))
         .collect();
     if candidates.is_empty() {
         return IndexMap::default();
@@ -3099,6 +3160,7 @@ fn _source<F: CellOf>(
 
 /// Fold a rematerializable frame address into every cell that uses it.
 fn _address_source(
+    regs: Regs,
     one: &Insn,
     value: u32,
     address: &AddressRef,
@@ -3135,7 +3197,7 @@ fn _address_source(
             && cell.addr.is_some_and(|found| {
                 found.space == Space::Literal
                     && found.index == 0
-                    && matches!(found.segment, Register::None | Register::SS)
+                    && (found.segment == Register::None || regs.is_stack_segment(found.segment))
             });
         if !fits {
             invalid = true;
@@ -3981,6 +4043,7 @@ fn _encodable(
     what: &Semantics,
     classes: &RegisterClasses,
 ) -> Result<bool, Error> {
+    let regs = classes.registers;
     let mut taken: IndexMap<u32, Register> = IndexMap::default();
     let rows: IndexMap<u32, Vec<Register>> = [1_u32, 2, 4]
         .into_iter()
@@ -3992,8 +4055,8 @@ fn _encodable(
                     .iter()
                     .copied()
                     .filter(|one| {
-                        target::width_of(target::named(*one, i64::from(width)))
-                            .filter(|_| target::integer(target::named(*one, i64::from(width))))
+                        regs.width_of(regs.named(*one, i64::from(width)))
+                            .filter(|_| regs.integer(regs.named(*one, i64::from(width))))
                             == Some(i64::from(width))
                     })
                     .collect(),
@@ -4013,7 +4076,7 @@ fn _encodable(
             }
             taken.insert(held.value, row[taken.len()]);
         }
-        Loc::Reg(Reg { register: target::named(taken[&held.value], i64::from(held.width)), width: held.width })
+        Loc::Reg(Reg { register: regs.named(taken[&held.value], i64::from(held.width)), width: held.width })
     };
 
     let probe = Semantics {
@@ -4683,6 +4746,7 @@ mod tests {
 
     #[test]
     fn test_spilled_relocatable_address_is_rematerialized_without_a_frame_slot() {
+        let regs = crate::backend::registerinfo::test_regs();
         for space in [Space::Segment, Space::External] {
             let source =
                 AddressRef { disp_width: 2, ..AddressRef::new(Some(Addr { index: 7, ..Addr::new(space, 12) })) };
@@ -4707,7 +4771,7 @@ mod tests {
                 vec![Loc::Address(source)],
             );
             let names: IndexMap<(Space, i64), String> = IndexMap::from_iter([((space, 7), "_descriptor".to_owned())]);
-            let emitted = objbuild::_encoded(&lea, &names, 16).expect("encodes");
+            let emitted = objbuild::_encoded(regs, &lea, &names, 16).expect("encodes");
             assert_eq!(emitted.code, [0x8D, 0x1E, 0x0C, 0x00]);
             assert_eq!(emitted.fixups, [objbuild::Fixup::new(2, objbuild::OFFSET, "_descriptor")]);
         }

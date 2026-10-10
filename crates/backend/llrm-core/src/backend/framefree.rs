@@ -11,17 +11,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::LirBody;
 
 /// The registers that are the frame register as LIR names it.
 fn is_frame(
-    register: Register,
-    pointer: Register,
+    register: RegId,
+    pointer: RegId,
 ) -> bool {
-    register != Register::None && crate::model::ir::root(register) == crate::model::ir::root(pointer)
+    register != RegId::None && crate::model::ir::root(register) == crate::model::ir::root(pointer)
 }
 
 /// Whether the function described by `body` (its calls' popped bytes in `pops`)
@@ -34,6 +34,7 @@ pub fn without_frame_register(
     far: bool,
     landing: bool,
 ) -> bool {
+    let regs = body.regs();
     let pointer = registers.pointer;
     if !registers.optional
         || body.bits != 32
@@ -91,7 +92,7 @@ pub fn without_frame_register(
                 // As `masm::stack_addressed`: an exchange of x87 registers,
                 // memory or general registers and the x87 and port instructions
                 // leave the stack pointer alone.
-                Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| (crate::backend::target::positional_place(place) || matches!(place, Loc::Mem(_))) || matches!(
+                Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| (crate::backend::target::positional_place(regs, place) || matches!(place, Loc::Mem(_))) || matches!(
                     place,
                     Loc::Reg(reg) if crate::model::ir::root(reg.register) != crate::model::ir::root(registers.stack)
                 )) => {}

@@ -4,6 +4,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use llrm_lir::registers::Regs;
+
 use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::model::lir::{self, Insn};
 use crate::support::hash::{IndexMap, IndexSet};
@@ -16,6 +18,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 /// value.  In both cases the promoted value has one definition and remains
 /// the same live range for later low-word uses.
 pub fn promote(
+    regs: Regs,
     blocks: &IndexMap<i64, Vec<Arc<Insn>>>,
     values: &BTreeSet<u32>,
     fresh: &mut dyn FnMut() -> u32,
@@ -82,7 +85,10 @@ pub fn promote(
             out[&at][index] = Arc::new(changed);
             continue;
         }
-        if what.op != Operation::Move || !matches!(what.name.as_deref(), Some("les" | "lfs" | "lgs")) || position != 0 {
+        if what.op != Operation::Move
+            || !what.name.as_deref().is_some_and(|form| regs.loads_a_selector(form))
+            || position != 0
+        {
             let spelled = match what.name.as_deref() {
                 Some(name) if !name.is_empty() => name.to_owned(),
                 _ => what.op.to_string(),

@@ -1,0 +1,7 @@
+fn add(a: i16, b: i16) -> i16:
+    let sum: i16 = a + b
+    return sum
+
+fn main() -> i16:
+    let total = add(3, 4)
+    return total

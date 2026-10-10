@@ -10,7 +10,7 @@ compile takes LIMIT seconds; `--programs` adds QCport's modules, each as one poi
 `run` at -O2 also keeps llrm's per-pass own time (LLRM_DEBUG=time) at each size, and the MIR size (LLRM_DEBUG=mir).
 """
 from concurrent.futures import ThreadPoolExecutor
-import argparse, json, math, os, re, statistics, subprocess, sys, tempfile
+import argparse, json, math, os, re, shutil, statistics, subprocess, sys, tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -138,14 +138,39 @@ AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "bra
 # --- measuring -------------------------------------------------------------------------------------------------------
 
 
+ENVIRONMENT_BYTES = 4096
+
+
+def measured_environment(env: dict | None = None) -> dict:
+    """What the compiler under measurement is given: PATH, LLRM_BIN where set, `env`'s own, and padding to a constant size. The bytes
+    of the caller's environment (a sourced script, a longer worktree path) move the stack and the allocator's first pages, and `lir
+    peephole` read 157.0 or 168.8 Minstr of cells(224) by 4 bytes of environment alone: base and head must be given the same bytes."""
+    kept = {"PATH": "/usr/bin:/bin", **({"LLRM_BIN": os.environ["LLRM_BIN"]} if "LLRM_BIN" in os.environ else {}), **(env or {})}
+    used = sum(len(k) + len(v) + 2 for k, v in kept.items())
+    return {**kept, "LLRM_PAD": "x" * max(0, ENVIRONMENT_BYTES - used - len("LLRM_PAD") - 2)}
+
+
 def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tuple[int, int, str]:
     """(instructions:u, task-clock ns, stderr) of one run; raises on a failed compile.
 
     The child sees no LLRM_ variable of the caller's but LLRM_BIN (and `env`'s own): LLRM_CHECK_*, LLRM_VERIFY and the like add work to
     the step they check, and a count taken under them is not the compiler's (regparm16: 'lir peephole' read 4.5 Minstr over at every size).
+
+    A source file is compiled from a directory of its own under /tmp, as `src.c`, and an llrm binary is run as `./llrm-c` through a
+    link: the length of the paths the compiler is given (its own name as run, the source's) moves the allocator's pages, and `lir
+    peephole` read 173.7 or 159.0 Minstr of cells(224) by that length alone (mimalloc: a block that lives all run in a size class's
+    page, or none, decides whether the page is given back and made again at every free). Base and head, and one run and the next,
+    must be given the same strings.
     """
-    with tempfile.NamedTemporaryFile("r") as out:
-        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, env={**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k == "LLRM_BIN"}, **(env or {})})
+    source = Path(cmd[-1]) if cmd and cmd[-1].endswith(".c") else None
+    with tempfile.TemporaryDirectory(prefix="llrm-", dir="/tmp") as here, tempfile.NamedTemporaryFile("r") as out:
+        if source is not None and source.is_file():
+            shutil.copyfile(source, Path(here) / "src.c")
+            cmd = [*cmd[:-1], "src.c"]
+        if Path(cmd[0]).name.startswith("llrm-") and Path(cmd[0]).is_file():
+            (Path(here) / Path(cmd[0]).name).symlink_to(Path(cmd[0]).resolve())
+            cmd = [f"./{Path(cmd[0]).name}", *cmd[1:]]
+        done = subprocess.run([*levels_time.UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, cwd=here, env=measured_environment(env))
         if done.returncode:
             said = [l for l in (done.stderr or done.stdout).splitlines() if l and not l.startswith(("[time]", "[mir]"))]
             raise RuntimeError(f"{' '.join(cmd[-1:])}: " + " | ".join(said)[:300])

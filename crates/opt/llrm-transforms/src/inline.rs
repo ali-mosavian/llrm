@@ -107,7 +107,26 @@ impl Threshold {
     ) -> Option<i64> {
         (self.limit > 0).then(|| 6.max(24.min(call_cost.div_euclid(2))) * self.limit / Self::default().limit)
     }
+
+    /// The same for a call a function makes to itself:
+    /// `want_inline_small_function_p` is asked of the recursive edge too,
+    /// so the growth the function may have is `max-inline-insns-auto`, 15
+    /// at -O2 (params.opt:545), where a call priced at 12 or less admits
+    /// six operations. `rectwo`'s body is nine.
+    pub(crate) fn recursive_budget(
+        self,
+        call_cost: i64,
+    ) -> Option<i64> {
+        // -O1 has no `-finline-functions`: its threshold keeps the ordinary
+        // budget.
+        let floor =
+            if self.limit < Self::default().limit { 0 } else { INSNS_AUTO * self.limit / Self::default().limit };
+        self.budget(call_cost).map(|budget| budget.max(floor))
+    }
 }
+
+/// GCC's `max-inline-insns-auto` at -O2 (params.opt:545).
+const INSNS_AUTO: i64 = 15;
 
 /// Direct call counts by callee.
 pub type Counter = IndexMap<GlobalId, i64>;
@@ -579,9 +598,9 @@ pub fn candidates_over(
         // the call's callee counted once too many.
         let last =
             threshold.last && copies == 0 && semantic_count(body) <= LAST_CALL_OPERATIONS && !always && !admitted();
-        // A body held only to inline from (`available_externally`) is priced by
-        // the trial of what it leaves, not by its size: any size is a
-        // candidate there, never in the plain round.
+        // A body held only to inline from (`available_externally`) is a
+        // candidate at any size: it is emitted nowhere, so a copy costs
+        // nothing the program had.
         let verdict = always || admitted() || module.global(name).linkage == Linkage::AvailableExternally;
         llrm_support::debug!(
             "inline",

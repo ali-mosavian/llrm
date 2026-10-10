@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::allocate::RegAlloc;
 use crate::backend::coalesce::Coalescer;
@@ -67,7 +67,7 @@ fn imm(value: i64) -> Loc {
 }
 
 fn frame(disp: i64) -> Mem {
-    Mem { through: Register::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), 2) }
+    Mem { through: RegId::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), 2) }
 }
 
 /// What a generated body is made of.
@@ -191,10 +191,9 @@ impl Builder {
             9 => {
                 let result = self.fresh();
                 let mut call = self.insn(Operation::Call, "call", vec![], vec![], &[result], &[s]);
-                call.requires = vec![(Held { value: s, width: 2 }, Register::AX)];
-                call.delivers = vec![(Held { value: result, width: 2 }, Register::AX)];
-                call.clobbers =
-                    [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ES].into_iter().collect();
+                call.requires = vec![(Held { value: s, width: 2 }, RegId::AX)];
+                call.delivers = vec![(Held { value: result, width: 2 }, RegId::AX)];
+                call.clobbers = [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ES].into_iter().collect();
                 out.push(call);
                 out.push(self.mov(d, held(result), &[result]));
             }
@@ -436,6 +435,7 @@ fn in_ssa(body: &LirBody) -> LirBody {
 /// What a finished body must be: every value placed, nothing a later phase
 /// cannot schedule or the machine cannot name.
 fn complaints(done: &LirBody) -> Vec<String> {
+    let regs = done.regs();
     let mut out = verify::verify(done, false);
     for one in done.insns() {
         let Some(what) = &one.what else { continue };
@@ -443,10 +443,10 @@ fn complaints(done: &LirBody) -> Vec<String> {
             let unplaced = match place {
                 Loc::Held(_) => true,
                 Loc::Mem(cell) => {
-                    (cell.base.is_some() && cell.through == Register::None)
-                        || (cell.index.is_some() && cell.index_through == Register::None)
+                    (cell.base.is_some() && cell.through == RegId::None)
+                        || (cell.index.is_some() && cell.index_through == RegId::None)
                         || (cell.selector.is_some()
-                            && cell.addr.is_some_and(|addr| addr.space == Space::Far && addr.segment == Register::None))
+                            && cell.addr.is_some_and(|addr| addr.space == Space::Far && addr.segment == RegId::None))
                 }
                 _ => false,
             };
@@ -454,7 +454,7 @@ fn complaints(done: &LirBody) -> Vec<String> {
                 out.push(format!("{:#06x}: {} is not placed", one.at, place.repr()));
             }
             if let Loc::Reg(Reg { register, width }) = place {
-                if target::width_of(*register).is_some_and(|got| got != i64::from(*width)) {
+                if regs.width_of(*register).is_some_and(|got| got != i64::from(*width)) {
                     out.push(format!("{:#06x}: register {register:?} at width {width}", one.at));
                 }
             }
@@ -466,7 +466,7 @@ fn complaints(done: &LirBody) -> Vec<String> {
 /// What a body does, run: the generator's body in values, and the allocator's
 /// in registers and frame cells, must store the same things.
 mod run {
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use crate::model::ir::{self, Loc, Mem, Operation, Space};
     use crate::model::lir::LirBody;
@@ -475,7 +475,7 @@ mod run {
     pub struct Machine {
         virtual_: bool,
         vals: HashMap<u32, u32>,
-        regs: HashMap<Register, u32>,
+        regs: HashMap<RegId, u32>,
         mem: HashMap<(i64, i64, i64, i64), u32>,
         stack: Vec<u32>,
         poison: u32,
@@ -513,7 +513,7 @@ mod run {
 
         fn register(
             &mut self,
-            register: Register,
+            register: RegId,
         ) -> u32 {
             let poison = &mut self.poison;
             *self
@@ -536,10 +536,10 @@ mod run {
             if cell.addr.is_some_and(|addr| addr.space == Space::Frame) {
                 return Ok((space, disp + cell.offset, 0, 0));
             }
-            let placed = |held: Option<ir::Held>, through: Register, this: &mut Self| -> Result<i64, String> {
+            let placed = |held: Option<ir::Held>, through: RegId, this: &mut Self| -> Result<i64, String> {
                 match held {
                     None => Ok(0),
-                    Some(_) if through != Register::None => Ok(i64::from(this.register(through))),
+                    Some(_) if through != RegId::None => Ok(i64::from(this.register(through))),
                     Some(held) => this
                         .vals
                         .get(&held.value)
@@ -550,7 +550,7 @@ mod run {
             let base = placed(cell.base, cell.through, self)?;
             let index = placed(cell.index, cell.index_through, self)? * cell.scale;
             let segment = match (cell.addr.map(|addr| addr.segment), cell.selector) {
-                (Some(segment), _) if segment != Register::None => i64::from(self.register(segment)),
+                (Some(segment), _) if segment != RegId::None => i64::from(self.register(segment)),
                 (_, Some(selector)) => self
                     .vals
                     .get(&selector.value)
@@ -618,6 +618,7 @@ mod run {
             body: &LirBody,
             again: i64,
         ) -> Result<(), String> {
+            let regs = body.regs();
             let mut at = body.entry;
             for _ in 0..10_000 {
                 let block = body.blocks.iter().find(|block| block.at == at).ok_or(format!("no block {at:#x}"))?;
@@ -651,7 +652,7 @@ mod run {
                     match what.op {
                         Operation::Nothing | Operation::Compare => {}
                         Operation::Move => {
-                            if crate::backend::target::far_load(what) {
+                            if crate::backend::target::far_load(regs, what) {
                                 // A far pointer: its offset, then its segment,
                                 // a word on.
                                 let Loc::Mem(cell) = &what.sources[0] else {
@@ -725,7 +726,7 @@ mod run {
                                 let (held, _) = one.requires.first().ok_or("a call with no argument")?;
                                 *self.vals.get(&held.value).ok_or("the argument is read before it is set")?
                             } else {
-                                self.register(Register::AX)
+                                self.register(RegId::AX)
                             };
                             let answer = (argument.wrapping_mul(31).wrapping_add(7)) & 0xFFFF;
                             if self.virtual_ {
@@ -736,7 +737,7 @@ mod run {
                                     self.poison += 1;
                                     self.regs.insert(ir::root(*register), Self::poisoned(self.poison));
                                 }
-                                self.regs.insert(Register::EAX, answer);
+                                self.regs.insert(RegId::EAX, answer);
                             }
                         }
                         Operation::Jump => next = what.target,
@@ -1544,14 +1545,16 @@ fn test_fold_prices_are_what_the_per_instruction_lookup_gave() {
                         }
                     }
                 }
+                let numbered = crate::analysis::intervals::indexed(&body);
                 let mut expected = live.clone();
                 for (value, found) in &free {
                     if let Some(one) = expected.get_mut(value).filter(|one| one.weight != f64::INFINITY) {
-                        one.weight =
-                            (one.weight - found / (one.size() + crate::analysis::intervals::GRACE) as f64).max(0.0);
+                        one.weight = (one.weight
+                            - found / (one.size(&numbered) + crate::analysis::intervals::GRACE) as f64)
+                            .max(0.0);
                     }
                 }
-                let priced = _fold_priced(&body, live, profile, &busy);
+                let priced = _fold_priced(&body, live, profile, &busy, &numbered);
                 assert!(priced.iter().eq(expected.iter()), "seed {seed} on {cpu}");
             }
         }
@@ -1753,9 +1756,9 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
 /// A mask at `slot` over registers, for the `_clobbered` tests.
 fn _mask_at(
     slot: i64,
-    during: &[Register],
-    high: &[Register],
-    before: &[Register],
+    during: &[RegId],
+    high: &[RegId],
+    before: &[RegId],
 ) -> super::allocate::Mask {
     super::allocate::Mask {
         slot,
@@ -1771,14 +1774,14 @@ fn _mask_at(
 fn test_clobbered_agrees_with_a_look_at_every_point() {
     use super::allocate::{_clobbered, _clobbered_reference, Masks};
     use crate::analysis::intervals::{Interval, Segment};
-    let registers = [Register::AX, Register::BX, Register::CX, Register::DX, Register::SI];
+    let registers = [RegId::AX, RegId::BX, RegId::CX, RegId::DX, RegId::SI];
     let mut seed = 99_u64;
     let mut next = |modulus: u64| {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         (seed >> 33) % modulus
     };
     for _ in 0..200 {
-        let pick = |next: &mut dyn FnMut(u64) -> u64| -> Vec<Register> {
+        let pick = |next: &mut dyn FnMut(u64) -> u64| -> Vec<RegId> {
             registers.iter().copied().filter(|_| next(4) == 0).collect()
         };
         let list: Vec<_> = (0..next(12))
@@ -1822,12 +1825,12 @@ fn test_clobbered_agrees_with_a_look_at_every_point() {
 fn test_clobbered_does_not_look_at_every_point() {
     use super::allocate::{_clobbered, Masks};
     use crate::analysis::intervals::{Interval, Segment};
-    let masks = Masks::new((0..20_000).map(|at| _mask_at(at * 3, &[Register::DX], &[], &[])).collect());
+    let masks = Masks::new((0..20_000).map(|at| _mask_at(at * 3, &[RegId::DX], &[], &[])).collect());
     let started = std::time::Instant::now();
     let mut clobbered = 0;
     for at in 0..20_000 {
         let one = Interval::new(1, vec![Segment { start: at * 3 + 1, end: at * 3 + 2 }]);
-        clobbered += usize::from(_clobbered(&one, Register::DX, &masks, 2));
+        clobbered += usize::from(_clobbered(&one, RegId::DX, &masks, 2));
     }
     assert_eq!(clobbered, 0, "a value live between two points is not across either");
     assert!(started.elapsed().as_secs_f64() < 0.2, "{:?} for 20,000 questions", started.elapsed());
@@ -1852,4 +1855,137 @@ fn test_a_value_live_through_blocks_is_one_segment() {
             }
         }
     }
+}
+
+/// Slots are spaced `GAP` apart so a rewrite can add an instruction without
+/// moving the others; what the code reads of them is `uniform`, which must be
+/// the consecutive numbering's, point for point.
+#[test]
+fn test_the_spaced_numbering_is_the_consecutive_one_under_uniform() {
+    use crate::analysis::frequency::Frequency;
+    use crate::analysis::intervals::{indexed, indexed_consecutive, intervals_where};
+    for seed in 0..40u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        let (spaced, consecutive) = (indexed(&plain), indexed_consecutive(&plain));
+        for (key, slot) in &spaced.at {
+            assert_eq!(spaced.uniform(*slot), consecutive.at[key], "seed {seed}: an instruction's slot");
+        }
+        for (block, (first, last)) in &spaced.span {
+            let (was_first, was_last) = consecutive.span[block];
+            assert_eq!(
+                (spaced.uniform(*first), spaced.uniform(*last)),
+                (was_first, was_last),
+                "seed {seed}: block {block}"
+            );
+        }
+        let busy = Frequency::of(&plain);
+        let (new, old) = (
+            intervals_where(&plain, &spaced, &busy, &|_| true),
+            intervals_where(&plain, &consecutive, &busy, &|_| true),
+        );
+        assert_eq!(new.len(), old.len(), "seed {seed}");
+        for (value, one) in &new {
+            let was = &old[value];
+            let mapped: Vec<(i64, i64)> =
+                one.segments.iter().map(|s| (spaced.uniform(s.start), spaced.uniform(s.end))).collect();
+            let expected: Vec<(i64, i64)> = was.segments.iter().map(|s| (s.start, s.end)).collect();
+            assert_eq!(mapped, expected, "seed {seed}: value {value}");
+        }
+    }
+}
+
+/// The numbering a rewrite leaves is the old one with the instructions it added
+/// put between their neighbours' slots (LLVM's `SlotIndexes`): under `uniform`
+/// every point is where a fresh consecutive numbering of the new body puts it,
+/// however many instructions went in or out; and where a gap has no
+/// room left the patch says so, for a fresh numbering to answer.
+#[test]
+fn test_a_patched_numbering_is_the_consecutive_one_under_uniform() {
+    use crate::analysis::intervals::{indexed, indexed_consecutive};
+    let mut patched_any = false;
+    for seed in 0..60u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        let mut numbering = indexed(&plain);
+        let mut current = plain.clone();
+        let mut next = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let mut random = |bound: usize| {
+            next = next.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (next >> 33) as usize % bound
+        };
+        for _ in 0..12 {
+            let mut blocks = current.blocks.clone();
+            let at = random(blocks.len());
+            let mut insns: Vec<std::sync::Arc<crate::model::lir::Insn>> = blocks[at].insns.to_vec();
+            for _ in 0..1 + random(3) {
+                match random(3) {
+                    0 if !insns.is_empty() => {
+                        let one = (*insns[random(insns.len())]).clone();
+                        insns.insert(random(insns.len() + 1), std::sync::Arc::new(one));
+                    }
+                    1 if insns.len() > 1 => {
+                        insns.remove(random(insns.len()));
+                    }
+                    _ if !insns.is_empty() => {
+                        let place = random(insns.len());
+                        insns[place] = std::sync::Arc::new((*insns[place]).clone());
+                    }
+                    _ => {}
+                }
+            }
+            blocks[at].insns = insns.into();
+            let edited = current.with_blocks(blocks);
+            let Some(patched) = numbering.patched(&current, &edited) else {
+                numbering = indexed(&edited);
+                current = edited;
+                continue;
+            };
+            patched_any = true;
+            let whole = indexed_consecutive(&edited);
+            assert_eq!(patched.at.len(), whole.at.len(), "seed {seed}: the instructions numbered");
+            for (insn, slot) in &patched.at {
+                assert_eq!(patched.uniform(*slot), whole.at[insn], "seed {seed}: an instruction's slot");
+            }
+            for (block, (first, last)) in &patched.span {
+                assert_eq!(
+                    (patched.uniform(*first), patched.uniform(*last)),
+                    whole.span[block],
+                    "seed {seed}: block {block}"
+                );
+            }
+            assert_eq!(patched.epoch, numbering.epoch, "seed {seed}: a patch is of the same numbering");
+            numbering = patched;
+            current = edited;
+        }
+    }
+    assert!(patched_any, "no edit was patched");
+}
+
+/// A gap halves with each instruction added in it: after 20 added at one point
+/// the next has no room and the numbering must be made afresh, not patched into
+/// slots that collide.
+#[test]
+fn test_a_gap_with_no_room_left_is_answered_by_a_fresh_numbering() {
+    use crate::analysis::intervals::indexed;
+    let (plain, _) = body(3, &Shape { pool: 8, ops: 12 });
+    let mut numbering = indexed(&plain);
+    let mut current = plain;
+    let mut refused = false;
+    for round in 0..40 {
+        let mut blocks = current.blocks.clone();
+        let mut insns: Vec<std::sync::Arc<crate::model::lir::Insn>> = blocks[0].insns.to_vec();
+        let copy = std::sync::Arc::new((*insns[1]).clone());
+        insns.insert(1, copy);
+        blocks[0].insns = insns.into();
+        let edited = current.with_blocks(blocks);
+        match numbering.patched(&current, &edited) {
+            Some(patched) => numbering = patched,
+            None => {
+                refused = true;
+                numbering = indexed(&edited);
+                assert!(round >= 15, "a gap of 2^20 ran out after only {round} instructions");
+            }
+        }
+        current = edited;
+    }
+    assert!(refused, "40 instructions in one gap were all patched");
 }

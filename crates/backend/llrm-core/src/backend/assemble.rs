@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use llrm_lir::registers::Regs;
 use llrm_mir::facts::Fact;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 use llrm_support::debug::timed;
@@ -85,8 +86,9 @@ pub fn assembled_by(
     arch: &dyn llrm_target::Target,
 ) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
-    let module = &*timed("mir near code", || crate::backend::nearcode::placed(module));
-    let mut names = timed("global names", || globals::names(module, &|name| abi.linked(name)))?;
+    let module = &*timed("mir near code", || crate::backend::nearcode::placed(module, &arch.layout().spaces.roles));
+    let mut names =
+        timed("global names", || globals::names(module, &arch.layout().spaces.roles, &|name| abi.linked(name)))?;
     names.extend(crate::hir::symbols::symbol_names());
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
@@ -192,6 +194,22 @@ pub fn assembled_by(
                     .map_err(|error| error.to_string())? as i64;
                 let body =
                     timed("lir duplicated returns", || jumps::duplicated_returns(procedure.body.clone(), overhead));
+                let procedure = masm::Procedure { body, ..procedure };
+                let enough = std::cell::OnceCell::new();
+                let body = timed("lir shrink-wrap tails", || {
+                    crate::backend::shrinkwrap::tails_split(&procedure.body, &|candidate| {
+                        // Asked only once a tail could be copied.
+                        if !procedure.size
+                            && *enough.get_or_init(|| {
+                                masm::pieces_to_set_up(&procedure) >= crate::backend::shrinkwrap::PIECES
+                            })
+                        {
+                            masm::wrapped_pieces(&procedure, candidate)
+                        } else {
+                            0
+                        }
+                    })
+                });
                 procedures.push(masm::Procedure { body, ..procedure });
             }
             _ => {}
@@ -239,6 +257,7 @@ pub fn assembled_by(
         crate::backend::debuginfo::described(module, &names, llrm_object::debug::Producer::Native, arch)
     })?;
     Ok(masm::Module {
+        registers: Regs(arch.registers()),
         code: code.to_owned(),
         names,
         externs,

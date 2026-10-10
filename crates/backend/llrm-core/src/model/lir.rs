@@ -7,6 +7,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use llrm_lir::registers::{RegId, Regs};
+
 use crate::model::ir::{Addr, Held, Operation, Semantics, Space};
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::{self, Repr};
@@ -43,7 +45,7 @@ pub struct CallMemory {
     /// function that keeps one for its caller saves it before such a call,
     /// as it does before writing it. Empty where the callee's contract is what
     /// the call went by.
-    pub disturbs: BTreeSet<iced_x86::Register>,
+    pub disturbs: BTreeSet<RegId>,
 }
 
 impl CallMemory {
@@ -114,14 +116,14 @@ pub struct Insn {
     pub what: Option<Semantics>,
     pub defines: Vec<u32>,
     pub uses: Vec<u32>,
-    pub clobbers: BTreeSet<iced_x86::Register>,
-    pub clobbers_high: BTreeSet<iced_x86::Register>,
+    pub clobbers: BTreeSet<RegId>,
+    pub clobbers_high: BTreeSet<RegId>,
     pub spread: Vec<(i64, i64)>,
     /// What a call may touch, as the MIR's answers say.
     pub call: Option<Arc<CallMemory>>,
     pub group: Option<i64>,
-    pub requires: Vec<(Held, iced_x86::Register)>,
-    pub delivers: Vec<(Held, iced_x86::Register)>,
+    pub requires: Vec<(Held, RegId)>,
+    pub delivers: Vec<(Held, RegId)>,
     pub widths: Vec<(u32, u32)>,
     pub symbol: Option<bool>,
     pub spill_reload: bool,
@@ -699,7 +701,7 @@ pub struct DebugVariable {
     pub argument: Option<i64>,
     /// The register that argument arrives in, where one does: it holds the
     /// value until the function stores it into the home.
-    pub arrives: Option<iced_x86::Register>,
+    pub arrives: Option<RegId>,
 }
 
 /// Where a `-g` variable is.
@@ -709,7 +711,7 @@ pub enum DebugPlace {
     At(Addr),
     /// The register a parameter arrives in, which holds it until the body
     /// starts.
-    Register(iced_x86::Register),
+    Register(RegId),
     /// A parameter the optimiser removed: there is none to show.
     Gone,
     /// A variable the code keeps in no one place: where it is over the code is
@@ -765,8 +767,8 @@ pub struct LirBody {
     pub name: String,
     pub entry: i64,
     pub blocks: Vec<LirBlock>,
-    pub origin: IndexMap<u32, iced_x86::Register>,
-    pub pins: IndexMap<u32, iced_x86::Register>,
+    pub origin: IndexMap<u32, RegId>,
+    pub pins: IndexMap<u32, RegId>,
     pub inputs: BTreeSet<u32>,
     pub loop_trip_counts: Vec<(i64, i64)>,
     pub ordered: bool,
@@ -804,6 +806,9 @@ pub struct LirBody {
     /// 16 or 32: the mode the target's code runs in, which decides how an
     /// instruction encodes and what it touches.
     pub bits: u32,
+    /// The register file of the target the body is for (instruction selection
+    /// sets it): what every query of a register in this body asks.
+    pub registers: Option<Regs>,
     /// Every frame cell names the slot it lies in (`Addr::slot_home`): set once
     /// instruction selection has tagged them, and then a rule of the
     /// verifier.
@@ -925,8 +930,8 @@ impl LirBody {
         name: impl Into<String>,
         entry: i64,
         blocks: Vec<LirBlock>,
-        origin: IndexMap<u32, iced_x86::Register>,
-        pins: IndexMap<u32, iced_x86::Register>,
+        origin: IndexMap<u32, RegId>,
+        pins: IndexMap<u32, RegId>,
     ) -> Self {
         Self {
             name: name.into(),
@@ -948,12 +953,28 @@ impl LirBody {
             float_stack: 0,
             homes: Arc::default(),
             bits: crate::frontends::bc::declen::BITNESS,
+            registers: Self::default_registers(),
             slotted: false,
             cfa_variables: false,
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
             facts: Default::default(),
         }
+    }
+
+    /// The register file a body made with no target has: m16's, for the tests
+    /// of this crate alone; none otherwise.
+    fn default_registers() -> Option<Regs> {
+        #[cfg(test)]
+        return Some(Regs(&llrm_x86_m16::REGISTER_INFO));
+        #[cfg(not(test))]
+        None
+    }
+
+    /// The register file of the body's target.
+    #[must_use]
+    pub fn regs(&self) -> Regs {
+        self.registers.expect("the body has no register file: instruction selection sets it")
     }
 
     /// Python's `replace(body, blocks=blocks)`: the old blocks are never
@@ -965,7 +986,7 @@ impl LirBody {
     ) -> Self {
         let frequencies = self.frequencies.as_ref().map(|kept| {
             // A block removed leaves the table with it.
-            let present: BTreeSet<i64> = blocks.iter().map(|one| one.at).collect();
+            let present: crate::support::hash::HashSet<i64> = blocks.iter().map(|one| one.at).collect();
             if kept.0.keys().all(|at| present.contains(at)) {
                 Arc::clone(kept)
             } else {
@@ -994,6 +1015,7 @@ impl LirBody {
             float_stack: self.float_stack,
             homes: Arc::clone(&self.homes),
             bits: self.bits,
+            registers: self.registers,
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
             notes: Arc::clone(&self.notes),
@@ -1151,6 +1173,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use llrm_lir::registers::RegId;
 
     /// A table kept past the instruction it named answered for whatever was
     /// allocated at its address next: the key of an instruction was its
@@ -1229,7 +1252,7 @@ mod tests {
         source.defines = vec![2];
         source.uses = vec![1];
         source.group = Some(7);
-        source.requires = vec![(Held { value: 1, width: 2 }, iced_x86::Register::DL)];
+        source.requires = vec![(Held { value: 1, width: 2 }, RegId::DL)];
         source.spill_reload = true;
         let source = Arc::new(source);
         let anchored = anchor(Arc::clone(&source));
@@ -1317,7 +1340,7 @@ mod tests {
     #[test]
     fn stage_dump_reprs_match_python() {
         // Expected strings printed by compile._lir_text's pieces in Python.
-        use iced_x86::Register;
+        use llrm_lir::registers::RegId;
 
         use crate::model::ir::Loc;
         use crate::support::pyrepr::{self, Repr};
@@ -1339,8 +1362,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        one.requires = vec![(Held { value: 1, width: 2 }, Register::CX), (Held { value: 7, width: 4 }, Register::EBX)];
-        one.delivers = vec![(Held { value: 9, width: 1 }, Register::AL)];
+        one.requires = vec![(Held { value: 1, width: 2 }, RegId::CX), (Held { value: 7, width: 4 }, RegId::EBX)];
+        one.delivers = vec![(Held { value: 9, width: 1 }, RegId::AL)];
         let line = |one: &Insn| {
             format!(
                 "  {:4} {} req={} del={}",

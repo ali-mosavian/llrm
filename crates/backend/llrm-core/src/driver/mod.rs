@@ -10,6 +10,7 @@ pub mod flags;
 use std::path::PathBuf;
 
 use data::Placed;
+use llrm_lir::registers::Regs;
 use llrm_mir::program::Program;
 use llrm_mir::{GlobalId, Module};
 use llrm_support::debug::timed;
@@ -136,7 +137,11 @@ pub fn compiled(
     });
     optimized(&mut mir, options)?;
     let abi = HirAbi::of(program)?;
-    let segments = Segments::of(&options.machine);
+    let segments = Segments::of(
+        &options.machine,
+        Regs(options.arch.registers()),
+        crate::backend::target::offset_bytes(&*options.arch),
+    );
     let mut out = Vec::new();
     for ((module, hir), placed) in mir.modules.iter().zip(&program.modules).zip(&placed) {
         let mut assembled = timed("assemble", || {
@@ -431,6 +436,7 @@ pub fn statement_table(
     rows: &[(i64, i64, String, i64)],
     registers: llrm_target::FrameRegisters,
     word: usize,
+    regs: Regs,
 ) -> masm::Procedure {
     // A row is two words: where the statement is, and its line; the table ends with a word of 0. The word is
     // the target's near pointer.
@@ -442,13 +448,14 @@ pub fn statement_table(
     code.push(masm::InlinePart::Bytes(vec![0; word]));
     let what = Semantics { name: Some("statement-table".to_owned()), ..Semantics::new(Operation::Call) };
     let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
-    let body = lir::LirBody::new(
+    let mut body = lir::LirBody::new(
         "$QB$STAT",
         1,
         vec![lir::LirBlock::new(1, vec![std::sync::Arc::new(instruction)])],
         Default::default(),
         Default::default(),
     );
+    body.registers = Some(regs);
     masm::Procedure {
         name: "$QB$STAT".into(),
         public: false,
@@ -490,5 +497,22 @@ mod location_ranges_tests {
         assert!(!of("omf", Format::Default) && !of("omf", Format::CodeView) && !of("omf", Format::TurboDebugger));
         assert!(of("elf", Format::Default) && of("macho", Format::Default) && of("elf", Format::Dwarf { version: 4 }));
         assert!(of("coff", Format::Default) && of("coff", Format::CodeView));
+    }
+
+    /// The statement table's body is made here, not by instruction selection:
+    /// it carries its target's register file too, or listing it panicked (every
+    /// BASIC module: "the body has no register file").
+    #[test]
+    fn the_statement_table_is_listed_with_its_targets_register_file() {
+        use llrm_target::Target;
+        let table = super::statement_table(
+            &[],
+            llrm_x86_m16::M16.frame_registers(),
+            2,
+            llrm_lir::registers::Regs(llrm_x86_m32::M32.registers()),
+        );
+        // m32's file, which a body made with no target (m16's, in tests) is
+        // not.
+        assert_eq!(table.body.registers, Some(llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO)));
     }
 }

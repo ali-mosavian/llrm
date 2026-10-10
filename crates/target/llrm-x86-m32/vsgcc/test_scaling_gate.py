@@ -1,5 +1,6 @@
 """scaling_gate.py: a pass gone quadratic reads as 2N/N = 4, a linear one as 2, and neither direction of change passes unseen."""
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -101,6 +102,19 @@ def test_a_count_does_not_inherit_the_callers_llrm_variables(monkeypatch):
     monkeypatch.setenv("LLRM_BIN", "/kept")
     seen = scaling.sample([sys.executable, "-I", "-c", "import os, sys; print(sorted(k for k in os.environ if k.startswith('LLRM_')), file=sys.stderr)"], {"LLRM_DEBUG": "time"})[2]
     assert "LLRM_CHECK_FOO" not in seen and "LLRM_BIN" in seen and "LLRM_DEBUG" in seen, seen
+
+
+def test_a_count_does_not_depend_on_the_size_of_the_callers_environment(monkeypatch):
+    """cells(224) at -O2 read 157.0 Minstr in `lir peephole`, or 168.8 with 4 bytes more environment: the bytes the caller's environment
+    adds move the stack and the allocator's first pages, so base and head measured from different worktrees (or a sourced script) gave
+    a rise on a program with no call in it. The child is given the same bytes whatever the caller's."""
+    code = "import os, sys; print(sum(len(k) + len(v) + 2 for k, v in os.environ.items()), file=sys.stderr)"
+    sizes = set()
+    for width in (0, 3, 40, 300):
+        monkeypatch.setenv("CALLERS_PADDING", "x" * width)
+        monkeypatch.setenv("LLRM_BIN", "/kept" + "b" * width)
+        sizes.add(scaling.sample([sys.executable, "-I", "-c", code], {"LLRM_DEBUG": "time"})[2].strip())
+    assert len(sizes) == 1, sizes
 
 
 def test_the_nest_axis_is_a_loop_nest_as_deep_as_it_says_and_the_gate_sizes_it():
@@ -394,14 +408,14 @@ def test_lsr_does_not_add_up_the_function_or_rebuild_its_graph_for_each_loop(tmp
     built the graph of the whole function to ask three blocks' neighbours (`rotate::_shape`): 1,391 Minstr; on `nest` at N=128 it also
     gathered each block's live sets again for each loop around it and built them as trees: 9,362. The traffic is added up once and
     each loop's instructions taken out, the neighbours are asked of the blocks, the live sets kept and the cells sorted in vectors:
-    about 600 and 5,900. Both stay quadratic (the loops are, and each changed loop invalidates what the next asks for), so the bounds
-    are on the cost."""
+    about 600 and 5,900; the spill forecast is a sweep of the loop's blocks, not a list of residents at each point of them: 1,340 on
+    `nest`. The bounds are on the cost."""
     costs = {}
     for axis, n in (("branches", 512), ("nest", 128)):
         source = tmp_path / f"{axis}_{n}.c"
         source.write_text(scaling.AXES[axis](n))
         costs[axis] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir lsr"]
-    assert costs["branches"] <= 900 and costs["nest"] <= 7500, costs
+    assert costs["branches"] <= 900 and costs["nest"] <= 2000, costs
 
 
 def test_lsr_loop_reads_its_own_blocks_and_the_function_facts_once(tmp_path):
@@ -457,9 +471,9 @@ def test_summaries_keep_the_call_graph_when_a_body_calls_a_deeper_one(tmp_path):
 def test_interprocedural_own_work_stays_near_linear_on_the_chain_functions_and_callers_axes(tmp_path):
     """The module-wide step did work per body that grew with the module: the declarations were compared global by global after each of
     N bodies, the noreturn fixed point rounds took N bodies N times, and the no-recurse proof walked everything each function reaches
-    (`mir interprocedural` own, 2N/N on chain: 2.80). A doubling above 2.65, 2.15 and 2.2 fails (chain keeps what `analysis summaries`
-    leaves in it); functions and callers hold what the call graph's dense components gave them (2.01, 2.07)."""
-    limits = {"chain": (128, 2.65), "functions": (512, 2.15), "callers": (1024, 2.2)}
+    (`mir interprocedural` own, 2N/N on chain: 2.80). A doubling above 2.15 and 2.2 fails; functions and callers hold what the call
+    graph's dense components gave them (2.01, 2.07); the chain axis is the next test's."""
+    limits = {"functions": (512, 2.15), "callers": (1024, 2.2)}
     grown = {}
     for axis, (n, limit) in limits.items():
         own = {}
@@ -471,3 +485,146 @@ def test_interprocedural_own_work_stays_near_linear_on_the_chain_functions_and_c
         if big > limit * small:
             grown[axis] = f"{small:.0f} -> {big:.0f} Minstr"
     assert not grown, grown
+
+
+def test_a_step_counts_the_same_whatever_the_paths_the_compiler_is_given(tmp_path):
+    """cells(224) at -O2 read 173.7 Minstr in `lir peephole` from one path and 159.0 from another, the whole compile 4521 or 4506:
+    the length of the compiler's own path and of the source's moves the allocator's pages (mimalloc given a block that lives all run,
+    or none, in the page of a size class), and a gate that measured base and head from binaries and temporary directories of
+    different names failed on a step that had not moved. `scaling.sample` runs `./llrm-c` on `src.c` in a directory of its own."""
+    counts = set()
+    for width in range(1, 40, 3):
+        where = tmp_path / ("d" * width)
+        where.mkdir()
+        source = where / "c.c"
+        source.write_text(scaling.cells(224))
+        binary = where / "bin" / "llrm-c"
+        binary.parent.mkdir()
+        shutil.copy(Path(gate.levels_time.command("llrm", "O2", source)[0]).resolve(), binary)
+        command = [str(binary), *gate.levels_time.command("llrm", "O2", source)[1:]]
+        counts.add(round(gate.own_work(command)["lir peephole"], 0))
+    assert max(counts) - min(counts) <= 1, sorted(counts)
+
+
+def test_the_interprocedural_step_does_not_build_the_bodies_its_last_calls_took_on_the_chain_axis(tmp_path):
+    """gcc inlines the whole chain of N private functions into the one that stays and builds no other body. Here each of the N bodies was
+    built with the ones below it inlined and run through the pipeline (`mir interprocedural` own at N=256 and 512: 2,826 and 8,452 Minstr,
+    2N/N 2.99); now the bodies that stay are built, 766 and 1,836 (2.40). A doubling above 2.7, or more than 4,000 Minstr at N=512, fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 256), ("2n", 512)):
+        source = tmp_path / f"chain_{label}.c"
+        source.write_text("" if size == 0 else scaling.AXES["chain"](size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir interprocedural", 0.0) - own["empty"].get("mir interprocedural", 0.0) for label in ("n", "2n"))
+    assert big <= 2.7 * small and big <= 4000, f"{small:.0f} -> {big:.0f} Minstr"
+    # The bodies the pieces took are not built at all: the whole compile at N=512 was 18,947 Minstr, and 9,910 with only the piece tops built.
+    whole = sum(own["2n"].values()) - sum(own["empty"].values())
+    assert whole <= 12000, f"{whole:.0f} Minstr for the whole compile"
+
+
+def test_lir_jumps_copies_a_tail_without_checking_the_whole_function_for_each_copy(tmp_path):
+    """`lir jumps` on `branches` at N=1024 (3,073 blocks, 258 tail copies) checked that the body stayed reducible after each copy,
+    copied the odds table for each block, and looked for an arm among all the blocks for each block it placed: 5,802 Minstr,
+    3.7x a doubling. The copies are checked once (one by one only when the whole is not reducible), and an arm is looked for among
+    the predecessors: 825."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir jumps"]
+    assert cost <= 1500, cost
+
+
+def test_a_split_reads_the_blocks_of_its_values_range_not_the_functions(tmp_path):
+    """`split placed` on `branches` at N=1024 (3,073 blocks, a value live in 14 of them) asked every block of the function whether
+    the value is live there (`analysed`, `_whole_range`, `crossings`) and made a map of the blocks for each of its steps, for each
+    of 340 splits: 5,529 Minstr, 4x a doubling. The blocks are those the value is named in and the predecessors it is live into:
+    527."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["split placed"]
+    assert cost <= 1500, cost
+
+
+def test_copy_forwarding_does_not_clone_the_instruction_for_each_operand_it_tries(tmp_path):
+    """cells(224) at -O2: `copyprop::forward_use` cloned the whole instruction (`Semantics`) before asking of each source and each
+    address register whether an older copy fits, and answered no almost always: `lir peephole` read 157 to 174 Minstr (the clones
+    cost 2.3x as much when mimalloc's page for their size class was recycled at every free, by the length of a path), 135 once the
+    operand is asked of the instruction itself. Above 145 fails (#1293)."""
+    source = tmp_path / "cells224.c"
+    source.write_text(scaling.cells(224))
+    assert gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir peephole"] <= 145.0
+
+
+def test_a_carve_touches_the_blocks_it_changes_not_every_block(tmp_path):
+    """`split carving` on `branches` at N=1024 (340 carves of 3,073 blocks) found where the value is live by a pass over every
+    instruction, made a table of positions for every block, put every block through a map and back, and trimmed and snapped
+    the region by walking every block: 3,003 Minstr, 3.9x a doubling. The blocks it changes are found from the region and the
+    copies, the postings give where the value is live, and the rest are the blocks they were: 920."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["split carving"]
+    assert cost <= 1800, cost
+
+
+def test_the_backends_liveness_follows_each_value_from_its_reads_not_rows_of_every_value(tmp_path):
+    """`allocate::live_rows_by` solved rows of bits, blocks x values/64, for every pass that asks where values are live (13
+    callers): on `branches` at N=1024, `lir twoaddr` 2,751 Minstr, `intervals walk` 1,199, `lir pressuresink` 955 (3.3x to 3.8x
+    a doubling). In a body with no phis each value is followed from where it occurs up its predecessors to where it is written
+    (gcc `calculate_live_on_exit`, LLVM `LiveVariables`): 621, 97, 94."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    rows = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert rows["lir twoaddr"] <= 1200 and rows["intervals walk"] <= 400 and rows["lir pressuresink"] <= 400, rows
+
+
+def test_a_branchs_guards_come_from_its_nearest_dominators(tmp_path):
+    """`mir decide` on `branches` at N=1024 read every dominator above each branch for the compares that hold there (60 on average,
+    the square of the branches in all): 7,799 Minstr, 3.8x a doubling, half of it in `_implied`. The nearest 64 dominators: 4,246."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir decide"]
+    assert cost <= 5500, cost
+
+
+def test_the_immediate_dominators_are_the_trees_not_every_blocks_set_of_dominators(tmp_path):
+    """`immediate_dominators` named every block's dominators and took the one with the most: the square of a chain of blocks, and
+    `masm return overhead` (shrinkwrap) on `branches` at N=1024 spent 2,277 Minstr in it, 4.3x a doubling, with `ssa repaired`. The
+    dominator tree already says it, and the home of a wrap only rises: 98. `ssa repaired` (2,132, the same function, the dominators'
+    sets, a scan of the blocks for each phi asked and the liveness of a body with phis over rows) 78."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    rows = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert rows["masm return overhead"] <= 400 and rows["ssa repaired"] <= 400, rows
+
+
+def test_hoist_prices_a_run_by_what_it_moves_not_by_a_clone_of_the_function(tmp_path):
+    """`mir hoist` on `branches` at N=1024 cloned the function and priced all of it for each loop with a run to move, where no
+    register is priced and the price is a sum over the instructions: 2,595 Minstr, 3.8x a doubling. The run changes the sum by
+    what each instruction costs at the preheader's frequency less at its own: 339."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir hoist"]
+    assert cost <= 900, cost
+
+
+def test_a_set_membership_test_is_not_a_scan_of_the_set_on_the_branches_axis(tmp_path):
+    """`PySet::contains` scanned its whole table, and the constant-cycle propagation asked it for every consumer of every value it settled
+    (`live.contains`): on a function of N if/else diamonds 4.0 G of its 4.5 G instructions at N=1024. `analysis registers` read
+    260 -> 527 -> 1,064 Minstr at N=256, 512, 1024 once fixed (2.0 per doubling), 5.7 G at 1,024 before (slope 1.76); `mir decide`
+    4.2 G -> 2.1 G. A doubling of `analysis registers` above 2.4 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 256), ("2n", 512)):
+        source = tmp_path / f"branches_{label}.c"
+        source.write_text("" if size == 0 else scaling.AXES["branches"](size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("analysis registers", 0.0) - own["empty"].get("analysis registers", 0.0) for label in ("n", "2n"))
+    assert big <= 2.4 * small, f"analysis registers {small:.0f} -> {big:.0f} Minstr"
+
+
+def test_a_load_looks_for_its_provider_in_the_blocks_above_it_not_among_every_load(tmp_path):
+    """`mir gvn` on `branches` at N=1024 took every load of the same bytes as a candidate for each of 7,000 sites, sorted, and
+    skipped those that do not dominate it (9.5 M candidates), and `loadjoins` compared each join load with every provider:
+    5,032 Minstr, 3.2x a doubling. The candidates are found from the site's block up the dominator tree, nearest first: 2,260."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir gvn"]
+    assert cost <= 3400, cost

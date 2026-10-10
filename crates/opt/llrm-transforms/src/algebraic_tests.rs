@@ -596,6 +596,37 @@ no:
     assert!(kept.contains("xor"), "{kept}");
 }
 
+/// A recursion inlined into itself tests `n - 1 == 0`, then `n - 2 == 0`: each
+/// is `n == k`, and the differences each level held (and spilled) are dead.
+/// InstCombine's `foldICmpAddConstant`, gcc's `fold_comparison`: a wrapping sum
+/// is a bijection, so equality needs no flag, and the sum's other readers do
+/// not matter.
+#[test]
+fn test_a_compare_of_a_sum_with_a_constant_is_a_compare_of_the_term() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  %a = sub nsw i16 %n, 1
+  %b = add i16 %a, 5
+  %z = icmp eq i16 %a, 0
+  br i1 %z, label %yes, label %no
+yes:
+  ret i16 %b
+no:
+  %w = icmp ne i16 %b, 9
+  %e = zext i1 %w to i16
+  ret i16 %e
+}
+";
+    let inputs: Vec<Vec<i128>> = [0, 1, 2, 4, 5, 65535, 32767].iter().map(|&n| vec![n]).collect();
+    let printed = checked(text, &inputs);
+    assert!(
+        printed.contains("icmp eq i16 %n, 1")
+            && printed.contains("icmp ne i16 %n, 5")
+            && !printed.contains("icmp eq i16 %a"),
+        "{printed}"
+    );
+}
+
 /// Nib's `if !(a < b)`: the compare sign-extended to a byte, complemented and
 /// tested against zero, and the same through `zext` and `xor 1`. One compare
 /// of the inverse predicate, where it cost `setl; neg; xor; jne` and hid the
@@ -962,6 +993,43 @@ b0:
 ";
     let after = checked(nested, &inputs);
     assert!(after.contains("sub i16 0, %y"), "{after}");
+}
+
+/// A loop's test of its step, `x - 2 < 2`, read the counter once more through a
+/// subtraction the update already made: fib's nest (`-ftree-ch`) computed
+/// `n - 1` and `n - 2` and compared the second, 3 more instructions a trip
+/// than gcc's `cmp n, 3` (x_fib 271098 clocks against 248195 with the fold).
+#[test]
+fn test_a_compare_of_a_sum_with_no_wrap_is_a_compare_of_its_addend() {
+    let text = "define i1 @f(i16 %x) {
+b0:
+  %s = sub nsw i16 %x, 2
+  %c = icmp slt i16 %s, 2
+  ret i1 %c
+}
+";
+    let inputs: Vec<Vec<i128>> = (-100..100).map(|x| vec![x]).collect();
+    let after = checked(text, &inputs);
+    assert!(after.contains("icmp slt i16 %x, 4"), "{after}");
+    let unsigned = "define i1 @f(i16 %x) {
+b0:
+  %s = add nuw i16 %x, 3
+  %c = icmp ult i16 %s, 10
+  ret i1 %c
+}
+";
+    let inputs: Vec<Vec<i128>> = (0..100).map(|x| vec![x]).collect();
+    let after = checked(unsigned, &inputs);
+    assert!(after.contains("icmp ult i16 %x, 7"), "{after}");
+    let wrapping = "define i1 @f(i16 %x) {
+b0:
+  %s = sub i16 %x, 2
+  %c = icmp slt i16 %s, 2
+  ret i1 %c
+}
+";
+    let after = checked(wrapping, &inputs);
+    assert!(after.contains("icmp slt i16 %s, 2"), "{after}");
 }
 
 /// A non-negative dividend divided by a constant that is not a power of two is

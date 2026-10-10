@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::sign_bits;
@@ -167,6 +167,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let instruction = self.function.instruction(inst);
         let (operand, to) = (instruction.operands[0], instruction.ty);
         let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
@@ -180,7 +181,7 @@ impl Selector<'_, '_, '_> {
                     semantics(
                         Operation::Move,
                         "mov",
-                        vec![Loc::Mem(Self::memory(cell.moved(half.offset), half.bytes))],
+                        vec![Loc::Mem(Self::memory(regs, cell.moved(half.offset), half.bytes))],
                         vec![Loc::Held(held)],
                     ),
                     at,
@@ -202,7 +203,7 @@ impl Selector<'_, '_, '_> {
                         Operation::Move,
                         "mov",
                         vec![Loc::Held(held)],
-                        vec![Loc::Mem(Self::memory(cell.moved(half.offset), half.bytes))],
+                        vec![Loc::Mem(Self::memory(regs, cell.moved(half.offset), half.bytes))],
                     ),
                     at,
                     out,
@@ -226,7 +227,7 @@ impl Selector<'_, '_, '_> {
                         semantics(
                             Operation::Move,
                             "mov",
-                            vec![Loc::Mem(Self::memory(cell.moved(place.offset), place.bytes))],
+                            vec![Loc::Mem(Self::memory(regs, cell.moved(place.offset), place.bytes))],
                             vec![part],
                         ),
                         at,
@@ -691,42 +692,26 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(Pair, Pair), Unselected> {
-        use crate::abi::runtime::Reg;
-        use crate::backend::lower_int64::{
-            _SDIV, _SDIV_CONST32, _UDIV, _UDIV_CONST32, _four_clobbers, _four_inputs, _helper,
-        };
+        use crate::backend::lower_int64::{_helper, runtime_registers};
         let dividend = self.wide(left, at, out)?;
         let dword = self.constant(right, 8).is_some_and(|bits| bits >> 32 == 0);
         let divisor = self.wide(right, at, out)?;
-        let (name, code, requires, inputs) = if dword {
-            let (name, code) = if signed { ("__I8D32", &*_SDIV_CONST32) } else { ("__U8D32", &*_UDIV_CONST32) };
-            (
-                name,
-                code,
-                vec![(dividend.0, Register::EAX), (divisor.0, Register::EBX), (dividend.1, Register::EDX)],
-                std::collections::BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Dx]),
-            )
-        } else {
-            let (name, code) = if signed { ("__I8D", &*_SDIV) } else { ("__U8D", &*_UDIV) };
-            (
-                name,
-                code,
-                vec![
-                    (dividend.0, Register::EAX),
-                    (divisor.0, Register::EBX),
-                    (divisor.1, Register::ECX),
-                    (dividend.1, Register::EDX),
-                ],
-                _four_inputs(),
-            )
-        };
-        let contract = _helper(name, inputs, _four_clobbers());
+        let routine = llrm_x86::helpers::divide(signed, !dword, self.arch.object().bitness)
+            .map_err(|refused| Unselected(format!("the i64 divide: {}", refused.message)))?;
+        let name = routine.name;
+        let mut requires = vec![(dividend.0, routine.dividend[0]), (divisor.0, routine.divisor[0])];
+        if !dword {
+            requires.push((divisor.1, routine.divisor[1]));
+        }
+        requires.push((dividend.1, routine.dividend[1]));
+        let reads: Vec<RegId> = requires.iter().map(|(_, register)| *register).collect();
+        let contract = _helper(name, runtime_registers(&reads, false), runtime_registers(&routine.clobbers, true));
         let (quotient, remainder) = ((self.half(), self.half()), (self.half(), self.half()));
         let delivers = vec![
-            (quotient.0, Register::EAX),
-            (quotient.1, Register::EDX),
-            (remainder.0, Register::EBX),
-            (remainder.1, Register::ECX),
+            (quotient.0, routine.quotient[0]),
+            (quotient.1, routine.quotient[1]),
+            (remainder.0, routine.remainder[0]),
+            (remainder.1, routine.remainder[1]),
         ];
         out.push(Arc::new(Insn {
             clobbers: call_clobbers(&contract, self.segments, &self.cpu.general),
@@ -739,10 +724,7 @@ impl Selector<'_, '_, '_> {
             ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
         }));
         self.calls.insert(at, name.to_owned());
-        // The bytes are 386 code for a 16-bit segment.
-        let code =
-            if self.arch.object().bitness == 32 { crate::backend::lower_int64::flat(code) } else { code.to_vec() };
-        self.inline.insert(at, code);
+        self.inline.insert(at, routine.code);
         Ok((quotient, remainder))
     }
 

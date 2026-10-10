@@ -10,18 +10,19 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
+use crate::backend::liveness;
 use crate::backend::peephole::{_register_effects, id};
-use crate::backend::{liveness, target};
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::{HashMap, IndexMap};
 
 /// The roots a general register names, one bit each.
-pub const ROOTS: [Register; 7] = llrm_x86::registers::ROOTS;
+pub const ROOTS: [RegId; 7] = llrm_x86::registers::ROOTS;
 
 /// A set of roots, one bit per `ROOTS` entry.
 pub type Roots = u8;
@@ -29,7 +30,7 @@ pub type Roots = u8;
 const ALL: Roots = (1 << ROOTS.len()) - 1;
 
 /// The bit of `register`'s root, if it has one here.
-pub fn bit(register: Register) -> Option<Roots> {
+pub fn bit(register: RegId) -> Option<Roots> {
     let root = crate::model::ir::root(register);
     ROOTS.iter().position(|one| *one == root).map(|index| 1 << index)
 }
@@ -62,6 +63,7 @@ fn zeroing(one: &Insn) -> Roots {
 
 /// The roots whose upper half `one` may leave other than it found it.
 fn disturbed(
+    regs: Regs,
     bits: u32,
     one: &Insn,
 ) -> Roots {
@@ -69,7 +71,7 @@ fn disturbed(
     if liveness::_terminator(one.what.as_ref()) {
         return 0;
     }
-    let effects = _register_effects(bits, one, true, false).or_else(|| liveness::_declared(one));
+    let effects = _register_effects(regs, bits, one, true, false).or_else(|| liveness::_declared(regs, one));
     let Some((_, writes)) = effects else {
         return ALL;
     };
@@ -82,6 +84,7 @@ fn disturbed(
 
 /// What `one` makes of `zero`, the roots known zero before it.
 pub fn after(
+    regs: Regs,
     bits: u32,
     one: &Insn,
     zero: Roots,
@@ -90,7 +93,7 @@ pub fn after(
         return swapped;
     }
     let zeroed = zeroing(one) | copied(one, zero);
-    (zero & !disturbed(bits, one)) | zeroed
+    (zero & !disturbed(regs, bits, one)) | zeroed
 }
 
 /// `zero` after `xchg a, b` of two whole registers: each now holds the other's
@@ -134,6 +137,7 @@ fn copied(
 
 /// Before each instruction, by `id`, the roots whose upper half is zero.
 pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
+    let regs = body.regs();
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
@@ -149,7 +153,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
             }
             zero
         },
-        |at, zero| blocks[&at].insns.iter().fold(*zero, |zero, one| after(body.bits, one, zero)),
+        |at, zero| blocks[&at].insns.iter().fold(*zero, |zero, one| after(regs, body.bits, one, zero)),
     );
     let into = solved.input;
     let mut result = HashMap::default();
@@ -157,7 +161,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
         let mut zero = into[&block.at];
         for one in &block.insns {
             result.insert(id(one), zero);
-            zero = after(body.bits, one, zero);
+            zero = after(regs, body.bits, one, zero);
         }
     }
     result
@@ -165,6 +169,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
 
 /// `movzx root,word` for each root in `roots`, before `block`'s terminator.
 pub fn extended(
+    regs: Regs,
     block: &LirBlock,
     roots: Roots,
 ) -> LirBlock {
@@ -179,7 +184,7 @@ pub fn extended(
         if roots & 1 << index == 0 {
             continue;
         }
-        let word = target::named(*root, 2);
+        let word = regs.named(*root, 2);
         let what = Semantics {
             name: Some("movzx".into()),
             dests: vec![Loc::Reg(Reg { register: *root, width: 4 })],
@@ -199,6 +204,7 @@ pub fn preheaded(
     wanted: &IndexMap<i64, Roots>,
     held: bool,
 ) -> (LirBody, IndexMap<i64, Roots>) {
+    let regs = body.regs();
     let graph = &body.blocks;
     let found = loops::loops(&graph, Some(body.entry));
     let predecessors = loops::predecessors(&graph);
@@ -235,7 +241,7 @@ pub fn preheaded(
         .blocks
         .iter()
         .map(|block| match per_block.get(&block.at) {
-            Some(roots) => extended(block, *roots),
+            Some(roots) => extended(regs, block, *roots),
             None => block.clone(),
         })
         .collect();
@@ -244,12 +250,15 @@ pub fn preheaded(
 
 /// The roots `one`'s cells read 32 bits wide through a register holding no
 /// value, the frame pointer: nothing defines their upper half.
-pub(crate) fn unheld(one: &Insn) -> Roots {
+pub(crate) fn unheld(
+    regs: Regs,
+    one: &Insn,
+) -> Roots {
     let Some(what) = &one.what else {
         return 0;
     };
-    let wide = |register: Register, held: bool| {
-        if !held && target::width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 }
+    let wide = |register: RegId, held: bool| {
+        if !held && regs.width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 }
     };
     what.dests
         .iter()
@@ -268,13 +277,14 @@ pub(crate) fn unheld(one: &Insn) -> Roots {
 /// leaves that half alone, or before the first cell of a block no
 /// preheader proves.
 pub fn established(body: &LirBody) -> LirBody {
+    let regs = body.regs();
     let graph = &body.blocks;
     let natural = loops::loops(&graph, Some(body.entry));
     let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
         body.blocks
             .iter()
             .filter(|block| inside.contains(&block.at))
-            .all(|block| block.insns.iter().all(|one| disturbed(body.bits, one) & roots == 0))
+            .all(|block| block.insns.iter().all(|one| disturbed(regs, body.bits, one) & roots == 0))
     };
     let outermost = |at: i64, roots: Roots| {
         let around = natural.iter().filter(|one| one.body.contains(&at));
@@ -293,7 +303,7 @@ pub fn established(body: &LirBody) -> LirBody {
             .blocks
             .iter()
             .flat_map(|block| block.insns.iter().map(move |one| (block.at, one)))
-            .map(|(at, one)| (at, id(one), unheld(one) & !zero[&id(one)]))
+            .map(|(at, one)| (at, id(one), unheld(regs, one) & !zero[&id(one)]))
             .filter(|(_, _, roots)| *roots != 0)
             .collect();
         if missing.is_empty() {
@@ -323,7 +333,7 @@ pub fn established(body: &LirBody) -> LirBody {
                 Some((position, roots)) => {
                     let at = block.insns.iter().position(|one| id(one) == *position).expect("the cell");
                     let mut insns = block.insns.to_vec();
-                    let zeroed = extended(&LirBlock::new(block.at, Vec::new()), *roots).insns.to_vec();
+                    let zeroed = extended(regs, &LirBlock::new(block.at, Vec::new()), *roots).insns.to_vec();
                     let when = insns[at].at;
                     insns.splice(at..at, zeroed.into_iter().map(|one| Arc::new(Insn { at: when, ..(*one).clone() })));
                     block.with_insns(insns)
@@ -338,7 +348,7 @@ pub fn established(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::{before, bit};
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
@@ -362,7 +372,7 @@ mod tests {
         // A `jmp` decoded as unknown lost every root, so no loop kept the
         // preheader's `movzx`.
         let (ebx, bx) =
-            (Loc::Reg(Reg { register: Register::EBX, width: 4 }), Loc::Reg(Reg { register: Register::BX, width: 2 }));
+            (Loc::Reg(Reg { register: RegId::EBX, width: 4 }), Loc::Reg(Reg { register: RegId::BX, width: 2 }));
         let word = || Loc::Imm(Imm { value: 5, width: 2, address: None });
         let entry = LirBlock {
             succ: vec![1],
@@ -390,7 +400,7 @@ mod tests {
 
         let zero = before(&body);
 
-        let ebx = bit(Register::EBX).unwrap();
+        let ebx = bit(RegId::EBX).unwrap();
         for block in &body.blocks[1..] {
             for insn in &block.insns {
                 assert_ne!(zero[&crate::backend::peephole::id(insn)] & ebx, 0, "{:?}", insn.what);
@@ -404,7 +414,7 @@ mod tests {
     #[test]
     fn test_an_exchange_swaps_the_zero_upper_halves() {
         let (ecx, esi) =
-            (Loc::Reg(Reg { register: Register::ECX, width: 4 }), Loc::Reg(Reg { register: Register::ESI, width: 4 }));
+            (Loc::Reg(Reg { register: RegId::ECX, width: 4 }), Loc::Reg(Reg { register: RegId::ESI, width: 4 }));
         let two = Loc::Imm(Imm { value: 2, width: 4, address: None });
         let entry = LirBlock::new(
             0,
@@ -426,7 +436,7 @@ mod tests {
         let zero = before(&body);
 
         let id = |at: usize| crate::backend::peephole::id(&body.blocks[0].insns[at]);
-        assert_ne!(zero[&id(2)] & bit(Register::ESI).unwrap(), 0);
-        assert_eq!(zero[&id(2)] & bit(Register::ECX).unwrap(), 0);
+        assert_ne!(zero[&id(2)] & bit(RegId::ESI).unwrap(), 0);
+        assert_eq!(zero[&id(2)] & bit(RegId::ECX).unwrap(), 0);
     }
 }

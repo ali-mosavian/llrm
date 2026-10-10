@@ -9,10 +9,10 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::backend::peephole::{_branch_reads, _flag_lanes, _lanes, _moved_lanes, _register_effects, Lane, Lanes};
-use crate::backend::target;
 use crate::model::ir::{Held, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
@@ -33,16 +33,18 @@ pub fn _terminator(what: Option<&Semantics>) -> bool {
 // dead final write to either register must remain removable.  Treating them as
 // semantic return inputs retained one-use loads and other dead computations
 // immediately before an epilogue.
-pub fn _return_state() -> [Register; 5] {
-    use crate::backend::registerinfo::{frame_root, stack_root};
-    [frame_root(), stack_root(), Register::DS, Register::SS, Register::CS]
+pub fn _return_state(regs: Regs) -> Vec<RegId> {
+    [Some(regs.frame), Some(regs.stack), regs.data_segment, regs.stack_segment, regs.code_segment]
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 /// Every lane a body can name. "Dead" here means every lane but the live ones.
-pub fn _universe() -> Lanes {
+pub fn _universe(regs: Regs) -> Lanes {
     let mut lanes = _flag_lanes(0xFFFF_FFFF);
-    for register in target::integer_registers().chain(target::SEGMENTS.iter().copied()) {
-        lanes.extend(_lanes(register));
+    for register in regs.integer_registers().iter().copied().chain(regs.segments()) {
+        lanes.extend(_lanes(regs, register));
     }
     lanes
 }
@@ -81,7 +83,7 @@ impl Effect {
     ) -> Lanes {
         let mut reads = self.reads;
         // A shift's flags come from the bits it moves.
-        let flagged = self.writes.iter().any(|lane| lane.0 == Register::None && live(lane));
+        let flagged = self.writes.iter().any(|lane| lane.0 == RegId::None && live(lane));
         for (written, source) in &self.moved {
             if flagged || live(written) {
                 reads.insert(*source);
@@ -103,26 +105,28 @@ pub fn effects_worked_out() -> usize {
 
 /// `with` given `one`'s effect, as `effect` has it but without a copy of it.
 pub fn with_effect<R>(
+    regs: Regs,
     bits: u32,
     one: &Insn,
     with: impl FnOnce(Option<&Effect>) -> R,
 ) -> R {
-    let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(bits, one)));
-    if *was == bits { with(answer.as_ref()) } else { with(worked_out(bits, one).as_ref()) }
+    let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(regs, bits, one)));
+    if *was == bits { with(answer.as_ref()) } else { with(worked_out(regs, bits, one).as_ref()) }
 }
 
 /// `one`'s effect as it decodes, else as its contract declares; None when
 /// unknown. Worked out once for the instruction, whoever asks.
 pub fn effect(
+    regs: Regs,
     bits: u32,
     one: &Insn,
 ) -> Option<Effect> {
-    let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(bits, one)));
+    let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(regs, bits, one)));
     // Asked at another width than the first time: not the answer kept.
-    let found = if *was == bits { answer.clone() } else { worked_out(bits, one) };
+    let found = if *was == bits { answer.clone() } else { worked_out(regs, bits, one) };
     if llrm_support::env_set("LLRM_CHECK_EFFECT") {
         assert!(
-            format!("{found:?}") == format!("{:?}", worked_out(bits, one)),
+            format!("{found:?}") == format!("{:?}", worked_out(regs, bits, one)),
             "an instruction's kept effect is not the one its fields give"
         );
     }
@@ -130,6 +134,7 @@ pub fn effect(
 }
 
 fn worked_out(
+    regs: Regs,
     bits: u32,
     one: &Insn,
 ) -> Option<Effect> {
@@ -140,8 +145,8 @@ fn worked_out(
         let reads = if what.op == Operation::Branch { _branch_reads(what) } else { Lanes::new() };
         return Some(Effect { reads, writes: Lanes::new(), moved: Vec::new() });
     }
-    let (reads, writes) = _register_effects(bits, one, false, true).or_else(|| _declared(one))?;
-    Some(match _moved_lanes(bits, one) {
+    let (reads, writes) = _register_effects(regs, bits, one, false, true).or_else(|| _declared(regs, one))?;
+    Some(match _moved_lanes(regs, bits, one) {
         Some((moved, operands)) => Effect { reads: reads.minus(&operands), writes, moved },
         None => Effect { reads, writes, moved: Vec::new() },
     })
@@ -150,10 +155,11 @@ fn worked_out(
 /// Each instruction's effect in `block`, decoded once for a fixed point to
 /// reuse.
 pub fn _effects(
+    regs: Regs,
     bits: u32,
     block: &LirBlock,
 ) -> Vec<Option<Effect>> {
-    block.insns.iter().map(|one| effect(bits, one)).collect()
+    block.insns.iter().map(|one| effect(regs, bits, one)).collect()
 }
 
 /// The lanes live before `effects`, given those live after them. An unknown
@@ -168,6 +174,7 @@ pub fn _before(
 
 /// The lanes live before `block`, given those live after it.
 pub fn _backwards(
+    regs: Regs,
     bits: u32,
     block: &LirBlock,
     live: Lanes,
@@ -176,7 +183,7 @@ pub fn _backwards(
     // Each effect is read where it is kept: a copy of every instruction's, for
     // each round of a fixed point, was a tenth of peephole.
     block.insns.iter().rev().fold(live, |live, one| {
-        with_effect(bits, one, |effect| effect.map_or_else(|| *universe, |effect| effect.live_before(&live)))
+        with_effect(regs, bits, one, |effect| effect.map_or_else(|| *universe, |effect| effect.live_before(&live)))
     })
 }
 
@@ -186,17 +193,20 @@ pub fn _backwards(
 /// on, so reading a call as touching every register only makes a register the
 /// callee never names look live -- which kept every value a phi copies alive
 /// across the whole loop.
-pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
-    let held_lanes = |held: &Held, register: Register| _lanes(target::named(register, i64::from(held.width)));
+pub fn _declared(
+    regs: Regs,
+    one: &Insn,
+) -> Option<(Lanes, Lanes)> {
+    let held_lanes = |held: &Held, register: RegId| _lanes(regs, regs.named(register, i64::from(held.width)));
 
     if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) && one.reads_complete() {
         // Nothing runs after it: it reads explicit results and only the
         // architectural state its generated epilogue itself needs.
         let mut reads: Lanes = one.requires.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
-        for register in _return_state() {
-            reads.extend(_lanes(register));
+        for register in _return_state(regs) {
+            reads.extend(_lanes(regs, register));
         }
-        let writes = _universe().minus(&reads);
+        let writes = _universe(regs).minus(&reads);
         return Some((reads, writes));
     }
     if one.clobbers.is_empty() || one.symbol == Some(true) {
@@ -205,8 +215,8 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
     let mut reads: Lanes = one.requires.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
     // A callee runs on the caller's frame chain, stack and data group.
     if one.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
-        for register in _return_state() {
-            reads.extend(_lanes(register));
+        for register in _return_state(regs) {
+            reads.extend(_lanes(regs, register));
         }
     }
     // A transfer's decoded effects are unavailable, but its explicit operands
@@ -214,20 +224,20 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
     // before the calling convention clobbers it.
     for source in one.what.as_ref().map_or(&[][..], |what| what.sources.as_slice()) {
         if let Loc::Reg(source) = source {
-            reads.extend(_lanes(source.register));
+            reads.extend(_lanes(regs, source.register));
         }
         // `selector` is a `Held`, never an `ir.Reg`.
         if let Some(at) = source.address() {
-            reads.extend(_lanes(at.through));
-            reads.extend(_lanes(at.index_through));
+            reads.extend(_lanes(regs, at.through));
+            reads.extend(_lanes(regs, at.index_through));
         }
     }
     let mut writes: Lanes = one.delivers.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
     for register in &one.clobbers {
-        writes.extend(_lanes(*register));
+        writes.extend(_lanes(regs, *register));
     }
     for register in &one.clobbers_high {
-        writes.extend(_lanes(*register).into_iter().filter(|lane| lane.1 >= 2));
+        writes.extend(_lanes(regs, *register).into_iter().filter(|lane| lane.1 >= 2));
     }
     writes.extend(_flag_lanes(0xFFFF_FFFF));
     Some((reads, writes))
@@ -245,7 +255,8 @@ pub fn visits() -> usize {
 
 /// Per block, the lanes live on entry -- with its successors and the universe.
 pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64>>, Lanes) {
-    let universe = _universe();
+    let regs = body.regs();
+    let universe = _universe(regs);
     let at_of: crate::support::hash::HashSet<i64> = body.blocks.iter().map(|block| block.at).collect();
     let successors: IndexMap<i64, Vec<i64>> = body
         .blocks
@@ -255,7 +266,7 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, Lanes> = blocks.keys().map(|at| (*at, Lanes::new())).collect();
     let effects: IndexMap<i64, Vec<Option<Effect>>> =
-        blocks.iter().map(|(at, block)| (*at, _effects(body.bits, block))).collect();
+        blocks.iter().map(|(at, block)| (*at, _effects(regs, body.bits, block))).collect();
     // The least fixed point of a backward problem, found by a worklist that
     // starts from the last block: a block is recomputed when a successor's
     // lanes changed. Taken round the layout from the first block, each
@@ -352,7 +363,7 @@ fn _dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::live_into;
     use crate::backend::peephole::_lanes;
@@ -360,8 +371,8 @@ mod tests {
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
-    const AX: Reg = Reg { register: Register::AX, width: 2 };
-    const DX: Reg = Reg { register: Register::DX, width: 2 };
+    const AX: Reg = Reg { register: RegId::AX, width: 2 };
+    const DX: Reg = Reg { register: RegId::DX, width: 2 };
 
     fn _insn(
         at: i64,
@@ -381,6 +392,7 @@ mod tests {
 
     #[test]
     fn test_a_register_written_before_an_unknown_instruction_is_not_live_into_its_block() {
+        let regs = crate::backend::registerinfo::test_regs();
         // A return, which nothing decodes, made its whole block live-in for
         // every lane: the `mov edx,eax` before it did not count.
         let block = LirBlock::new(
@@ -392,14 +404,14 @@ mod tests {
         );
         let body = LirBody::new("f", 1, vec![block], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
-        assert!(_lanes(Register::DX).is_disjoint(&into[&1]));
-        assert!(_lanes(Register::AX).is_subset(&into[&1]));
+        assert!(_lanes(regs, RegId::DX).is_disjoint(&into[&1]));
+        assert!(_lanes(regs, RegId::AX).is_subset(&into[&1]));
     }
 
     /// A chain of blocks, the last reading AX and each before it writing a
     /// register: the lanes live into the first.
     fn chain(blocks: i64) -> LirBody {
-        let bx = Reg { register: Register::BX, width: 2 };
+        let bx = Reg { register: RegId::BX, width: 2 };
         let blocks: Vec<LirBlock> = (1..=blocks)
             .map(|at| {
                 let insns = if at == blocks {
@@ -420,21 +432,23 @@ mod tests {
     /// about once.
     #[test]
     fn test_a_chain_of_blocks_is_not_a_round_of_the_body_for_each_block() {
+        let regs = crate::backend::registerinfo::test_regs();
         let body = chain(200);
         let before = super::visits();
         let (into, _successors, _universe) = live_into(&body);
         assert!(super::visits() - before <= 3 * 200, "{} block visits for 200 blocks", super::visits() - before);
         assert!(
-            _lanes(Register::AX).is_subset(&into[&1]),
+            _lanes(regs, RegId::AX).is_subset(&into[&1]),
             "AX is read at the end of the chain and written nowhere before"
         );
     }
 
     #[test]
     fn test_a_return_whose_reads_are_complete_reads_only_results_and_return_state() {
+        let regs = crate::backend::registerinfo::test_regs();
         // Every return read every register; one the raise wrote reads its
         // results and the registers the return itself needs.
-        let cx = Reg { register: Register::CX, width: 2 };
+        let cx = Reg { register: RegId::CX, width: 2 };
         let mut ret = Insn::new(
             3,
             Some((3, 3)),
@@ -442,7 +456,7 @@ mod tests {
             vec![],
             vec![1],
         );
-        ret.requires = vec![(Held { value: 1, width: 2 }, Register::AX)];
+        ret.requires = vec![(Held { value: 1, width: 2 }, RegId::AX)];
         ret.reads_complete = true;
         let block = LirBlock::new(
             1,
@@ -450,9 +464,9 @@ mod tests {
         );
         let body = LirBody::new("f", 1, vec![block], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
-        assert!(_lanes(Register::AX).is_subset(&into[&1]));
-        assert!(_lanes(Register::SI).is_disjoint(&into[&1]));
-        assert!(_lanes(Register::BP).is_subset(&into[&1]));
-        assert!(_lanes(Register::DX).is_disjoint(&into[&1]));
+        assert!(_lanes(regs, RegId::AX).is_subset(&into[&1]));
+        assert!(_lanes(regs, RegId::SI).is_disjoint(&into[&1]));
+        assert!(_lanes(regs, RegId::BP).is_subset(&into[&1]));
+        assert!(_lanes(regs, RegId::DX).is_disjoint(&into[&1]));
     }
 }

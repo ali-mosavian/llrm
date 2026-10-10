@@ -8,7 +8,8 @@
 
 use std::collections::BTreeSet;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::analysis::intervals as ranges;
 use crate::backend::allocate::{_clobbered, _masks};
@@ -18,14 +19,14 @@ use crate::model::ir::{Loc, Operation, Space};
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
-pub type Classes = IndexMap<u32, BTreeSet<Register>>;
+pub type Classes = IndexMap<u32, BTreeSet<RegId>>;
 
 fn _restrict(
     out: &mut Classes,
     value: u32,
-    choices: &BTreeSet<Register>,
+    choices: &BTreeSet<RegId>,
 ) {
-    let now: BTreeSet<Register> = match out.get(&value) {
+    let now: BTreeSet<RegId> = match out.get(&value) {
         Some(had) => had.intersection(choices).copied().collect(),
         None => choices.clone(),
     };
@@ -60,7 +61,7 @@ pub fn classes_with(
 /// gives `classes`, which reads them for its `[word+word]` roles and would
 /// number the body and find both again.
 pub struct Found<'a> {
-    pub live: &'a IndexMap<u32, ranges::Interval>,
+    pub live: &'a dyn crate::backend::live::Ranges,
     pub masks: &'a crate::backend::allocate::Masks,
 }
 
@@ -90,7 +91,7 @@ pub struct Use {
     pub block: usize,
     pub insn: usize,
     pub value: u32,
-    pub class: BTreeSet<Register>,
+    pub class: BTreeSet<RegId>,
     pub role: Role,
     /// The instruction writes the value there, rather than reads it.
     pub defining: bool,
@@ -124,15 +125,12 @@ impl Kind {
     fn registers<'a>(
         self,
         registers: &'a RegisterClasses,
-    ) -> &'a BTreeSet<Register> {
-        static BYTES: std::sync::OnceLock<BTreeSet<Register>> = std::sync::OnceLock::new();
+    ) -> &'a BTreeSet<RegId> {
         match self {
             Kind::WordIndexes => &registers.word_indexes,
             Kind::Addressing => &registers.addressing,
             Kind::WordBases => &registers.word_bases,
-            Kind::Bytes => {
-                BYTES.get_or_init(|| BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX]))
-            }
+            Kind::Bytes => &registers.byte_words,
         }
     }
 }
@@ -158,6 +156,7 @@ pub enum Item {
 
 /// The items of `one`, appended.
 pub fn contribution(
+    regs: Regs,
     one: &crate::model::lir::Insn,
     items: &mut Vec<Item>,
 ) {
@@ -237,7 +236,7 @@ pub fn contribution(
             }
         }
     }
-    if target::far_load(what) {
+    if target::far_load(regs, what) {
         if let Loc::Held(held) = &what.dests[1] {
             items.push(Item::Far(held.value));
         }
@@ -277,10 +276,11 @@ impl Scan {
         registers: &RegisterClasses,
         segments: &Segments,
     ) -> Self {
+        let regs = body.regs();
         let mut scan = Scan::default();
         let mut touched = Vec::new();
         for one in body.blocks.iter().flat_map(|block| &block.insns) {
-            scan.count(one, true, &mut touched);
+            scan.count(regs, one, true, &mut touched);
         }
         scan.classify(touched, registers, segments);
         scan
@@ -295,13 +295,14 @@ impl Scan {
         registers: &RegisterClasses,
         segments: &Segments,
     ) -> Self {
+        let regs = segments.registers;
         let mut scan = self.clone();
         let mut touched = Vec::new();
         for one in gone {
-            scan.count(one, false, &mut touched);
+            scan.count(regs, one, false, &mut touched);
         }
         for one in added {
-            scan.count(one, true, &mut touched);
+            scan.count(regs, one, true, &mut touched);
         }
         scan.classify(touched, registers, segments);
         scan
@@ -309,12 +310,13 @@ impl Scan {
 
     fn count(
         &mut self,
+        regs: Regs,
         one: &crate::model::lir::Insn,
         put: bool,
         touched: &mut Vec<u32>,
     ) {
         let mut items = Vec::new();
-        contribution(one, &mut items);
+        contribution(regs, one, &mut items);
         for item in items {
             let (value, slot): (u32, fn(&mut Counts) -> &mut u32) = match item {
                 Item::Restrict { value, kind, .. } => (
@@ -360,13 +362,13 @@ impl Scan {
     ) {
         touched.sort_unstable();
         touched.dedup();
-        let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
+        let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
         for value in touched {
             let counts = self.counts[&value];
             if counts.is_empty() {
                 self.counts.remove(&value);
             }
-            let mut sets: Vec<&BTreeSet<Register>> = Kind::ALL
+            let mut sets: Vec<&BTreeSet<RegId>> = Kind::ALL
                 .iter()
                 .zip(counts.kinds)
                 .filter(|(_, n)| *n > 0)
@@ -380,7 +382,7 @@ impl Scan {
                     self.pre.swap_remove(&value);
                 }
                 Some((first, rest)) => {
-                    let class: BTreeSet<Register> =
+                    let class: BTreeSet<RegId> =
                         first.iter().copied().filter(|one| rest.iter().all(|set| set.contains(one))).collect();
                     self.pre.insert(value, class);
                 }
@@ -401,7 +403,7 @@ impl Scan {
         let mut pairs: Vec<(u32, u32)> = self.pairs.keys().copied().collect();
         pairs.sort_unstable();
         _word_address_roles(&pairs, &mut out, body, prefer_indexes, segments, registers, Some(found));
-        let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
+        let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
         let (selecting, numeric) = (
             |value: u32| self.counts.get(&value).is_some_and(|c| c.selecting > 0),
             |value: u32| self.counts.get(&value).is_some_and(|c| c.numeric > 0),
@@ -420,6 +422,7 @@ fn collected(
     mut uses: Option<&mut Vec<Use>>,
     found: Option<&Found>,
 ) -> Classes {
+    let regs = body.regs();
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
@@ -429,7 +432,7 @@ fn collected(
     for (at, block) in body.blocks.iter().enumerate() {
         for (position, one) in block.insns.iter().enumerate() {
             items.clear();
-            contribution(one, &mut items);
+            contribution(regs, one, &mut items);
             for item in &items {
                 match *item {
                     Item::Restrict { value, kind, role, defining } => {
@@ -454,13 +457,13 @@ fn collected(
         }
     }
     drop(_scan);
-    let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
+    let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
     for value in selecting.difference(&numeric) {
         _restrict(&mut out, *value, &selectors);
     }
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         if let Some(what) = &one.what {
-            if target::far_load(what) {
+            if target::far_load(regs, what) {
                 if let Loc::Held(held) = &what.dests[1] {
                     _restrict(&mut out, held.value, &selectors);
                 }
@@ -491,7 +494,7 @@ fn _through_webs(
     body: &LirBody,
     selecting: &dyn Fn(u32) -> bool,
     numeric: &dyn Fn(u32) -> bool,
-    selectors: &BTreeSet<Register>,
+    selectors: &BTreeSet<RegId>,
     optimistic: bool,
     out: &mut Classes,
 ) {
@@ -529,7 +532,7 @@ fn _through_webs(
         // The web has a class where its members agree; a member that has one of
         // its own keeps it, as the allocator copies between members of
         // different classes.
-        let mut agreed: Option<BTreeSet<Register>> = None;
+        let mut agreed: Option<BTreeSet<RegId>> = None;
         let mut agree = true;
         for value in list {
             if let Some(mine) = out.get(value) {
@@ -590,7 +593,7 @@ fn _word_address_roles(
             let numbered = ranges::indexed(body);
             own_live = ranges::intervals(body, Some(&numbered));
             own_masks = _masks(body, &numbered, segments);
-            (&own_live, &own_masks)
+            (&own_live as &dyn crate::backend::live::Ranges, &own_masks)
         }
     };
     let word_base = *registers.word_bases.iter().next().expect("one word base");
@@ -598,12 +601,12 @@ fn _word_address_roles(
     let base_penalty = |values: &BTreeSet<u32>| -> i64 {
         values
             .iter()
-            .filter_map(|value| live.get(value))
+            .filter_map(|value| live.range(*value))
             .map(|interval| i64::from(_clobbered(interval, word_base, &masks, 2)))
             .sum()
     };
 
-    let allowed = |confined: &Classes, values: &BTreeSet<u32>, choices: &BTreeSet<Register>| -> bool {
+    let allowed = |confined: &Classes, values: &BTreeSet<u32>, choices: &BTreeSet<RegId>| -> bool {
         values
             .iter()
             .all(
@@ -614,7 +617,7 @@ fn _word_address_roles(
             )
     };
 
-    let restrict = |confined: &mut Classes, values: &BTreeSet<u32>, choices: &BTreeSet<Register>| {
+    let restrict = |confined: &mut Classes, values: &BTreeSet<u32>, choices: &BTreeSet<RegId>| {
         for value in values {
             _restrict(confined, *value, choices);
         }
@@ -711,12 +714,12 @@ pub enum Why {
 
 /// Whether every value of `wanted` can take a distinct register of its own set:
 /// a bipartite matching.
-fn matched(wanted: &[(u32, BTreeSet<Register>)]) -> bool {
+fn matched(wanted: &[(u32, BTreeSet<RegId>)]) -> bool {
     fn place(
         at: usize,
-        wanted: &[(u32, BTreeSet<Register>)],
-        taken: &mut IndexMap<Register, usize>,
-        seen: &mut BTreeSet<Register>,
+        wanted: &[(u32, BTreeSet<RegId>)],
+        taken: &mut IndexMap<RegId, usize>,
+        seen: &mut BTreeSet<RegId>,
     ) -> bool {
         for register in &wanted[at].1 {
             if !seen.insert(*register) {
@@ -730,7 +733,7 @@ fn matched(wanted: &[(u32, BTreeSet<Register>)]) -> bool {
         }
         false
     }
-    let mut taken: IndexMap<Register, usize> = IndexMap::default();
+    let mut taken: IndexMap<RegId, usize> = IndexMap::default();
     (0..wanted.len()).all(|at| place(at, wanted, &mut taken, &mut BTreeSet::new()))
 }
 
@@ -747,15 +750,15 @@ pub fn violations(
 ) -> Vec<Violation> {
     let confined = classes_with(body, &BTreeSet::new(), segments, registers, true);
     let (_, live_out) = crate::backend::allocate::live(body);
-    let general: BTreeSet<Register> =
+    let general: BTreeSet<RegId> =
         registers.available.iter().map(|one| crate::backend::allocate::_whole(*one)).collect();
-    let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
-    let files: [(&'static str, &BTreeSet<Register>); 2] = [("general", &general), ("selector", &selectors)];
-    let in_file = |value: u32, file: &BTreeSet<Register>, general_file: bool| match confined.get(&value) {
+    let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
+    let files: [(&'static str, &BTreeSet<RegId>); 2] = [("general", &general), ("selector", &selectors)];
+    let in_file = |value: u32, file: &BTreeSet<RegId>, general_file: bool| match confined.get(&value) {
         Some(class) => class.iter().any(|one| file.contains(&crate::backend::allocate::_whole(*one))),
         None => general_file,
     };
-    let class_in = |value: u32, file: &BTreeSet<Register>| -> BTreeSet<Register> {
+    let class_in = |value: u32, file: &BTreeSet<RegId>| -> BTreeSet<RegId> {
         match confined.get(&value) {
             Some(class) => class
                 .iter()
@@ -818,7 +821,7 @@ pub fn violations(
                         });
                         continue;
                     }
-                    let acting: Vec<(u32, BTreeSet<Register>)> = acting_values
+                    let acting: Vec<(u32, BTreeSet<RegId>)> = acting_values
                         .iter()
                         .copied()
                         .filter(|value| members.contains(value))
@@ -860,7 +863,7 @@ mod tests {
         let cell = Mem {
             base: Some(Held { value: base, width: 2 }),
             selector: Some(Held { value: segment, width: 2 }),
-            ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, 0) }), 2)
+            ..Mem::new(Some(Addr { segment: RegId::ES, ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources, target| Semantics {
             name: Some(name.to_owned()),

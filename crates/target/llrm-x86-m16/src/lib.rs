@@ -1,6 +1,7 @@
 //! The 16-bit x86 target: what its instructions cost, as `Dos` prices them
 //! for the passes, and the machine description a program is built for.
 
+include!(concat!(env!("OUT_DIR"), "/effects.rs"));
 include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
 
 pub mod cycles;
@@ -51,6 +52,10 @@ fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::targ
 }
 
 impl llrm_target::Target for M16 {
+    fn registers(&self) -> &'static llrm_lir::registers::Info {
+        &REGISTER_INFO
+    }
+
     fn register_capacity(&self) -> i64 {
         GENERAL.len() as i64
     }

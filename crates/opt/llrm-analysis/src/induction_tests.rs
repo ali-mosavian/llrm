@@ -2343,3 +2343,87 @@ b3:
     }
     assert!(checked > 500, "{checked} runs");
 }
+
+/// A loop whose latch tests the counter before its step, `do { .. } while (i >=
+/// 1)` with `i - 1` the step, entered behind a guard, is the counted loop `i -
+/// 1 >= 0` is: one proof, the stepped form with the bound a step on. Unread,
+/// the loop had none, and LSR kept both the counter and a pointer where the
+/// stepped form ends on the pointer's flags (x_insertion's inner loop, `dec;
+/// jl` beside `add; je`).
+#[test]
+fn test_a_latch_test_of_the_counter_before_its_step_is_the_stepped_test_a_step_on() {
+    let parsed = Parsed::new(
+        "define i32 @f(i32 %n) {
+b0:
+  %g = icmp slt i32 %n, 0
+  br i1 %g, label %b4, label %b1
+
+b1:
+  br label %b2
+
+b2:
+  %i = phi i32 [ %n, %b1 ], [ %next, %b2 ]
+  %trips = phi i32 [ 0, %b1 ], [ %up, %b2 ]
+  %up = add i32 %trips, 1
+  %next = sub nsw i32 %i, 1
+  %c = icmp sge i32 %i, 1
+  br i1 %c, label %b2, label %b3
+
+b3:
+  ret i32 %up
+
+b4:
+  ret i32 0
+}
+",
+    );
+    let proofs = parsed.counted(false);
+    let [proof] = &proofs[..] else { panic!("{proofs:?}") };
+    assert!(proof.posttested && proof.stepped && proof.shifted && proof.entry_guarded, "{proof:?}");
+    assert_eq!(proof.bound, constant(0, 32));
+    // n + 1 trips for the guarded n >= 0.
+    for n in [0, 1, 5] {
+        assert_eq!(parsed.run(&[(n, 32)], 10_000), Some(n as u128 + 1), "{n}");
+    }
+}
+
+/// A loop that starts at `x - 1` behind a guard `x != 1` starts off its bound:
+/// `a != 1` proves `a - 1 != 0` (LLVM's isKnownPredicate compares the sides'
+/// difference). Unproven, hanoi's nest (`-ftree-ch`) had eight loops no pass
+/// could count, each holding its counter and the step beside it.
+#[test]
+fn test_a_loop_started_a_step_off_its_guard_s_value_is_entered() {
+    let parsed = Parsed::new(
+        "define i32 @f(i32 %x) {
+b0:
+  %g = icmp eq i32 %x, 1
+  br i1 %g, label %b4, label %b1
+
+b1:
+  %start = sub nsw i32 %x, 1
+  br label %b2
+
+b2:
+  %i = phi i32 [ %start, %b1 ], [ %next, %b2 ]
+  %trips = phi i32 [ 0, %b1 ], [ %up, %b2 ]
+  %up = add i32 %trips, 1
+  %next = sub nsw i32 %i, 1
+  %c = icmp eq i32 %i, 1
+  br i1 %c, label %b3, label %b2
+
+b3:
+  ret i32 %up
+
+b4:
+  ret i32 0
+}
+",
+    );
+    let proofs = parsed.counted(false);
+    let [proof] = &proofs[..] else { panic!("{proofs:?}") };
+    assert!(proof.shifted && proof.entry_guarded, "{proof:?}");
+    // x - 1 trips for x > 1.
+    for x in [2, 3, 9] {
+        assert_eq!(parsed.run(&[(x, 32)], 10_000), Some(x as u128 - 1), "{x}");
+    }
+}

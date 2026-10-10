@@ -2,7 +2,7 @@
 //! QB runtime's naming of registers around it (`Reg`, the registers a runtime
 //! routine's contract names).
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_x86::asm::REGISTERS;
 pub use llrm_x86::asm::{Mode, Refusal, assembled};
 
@@ -67,9 +67,9 @@ pub fn view(name: &str) -> Option<(Reg, u32)> {
     if !(register.is_gpr8() || register.is_gpr16() || register.is_gpr32()) {
         return None;
     }
-    // iced numbers every view of a general register as the register itself: the
-    // root is the 16-bit register of that number.
-    let sixteen = crate::backend::registerinfo::view(crate::backend::registerinfo::root(register), 16)?;
+    // The 16-bit register of the root: asm names are x86's, whatever the
+    // target.
+    let sixteen = llrm_x86::registers::word_of(register.full_register32())?;
     let bits = if register.is_gpr8() {
         8
     } else if register.is_gpr16() {
@@ -85,7 +85,7 @@ pub fn view(name: &str) -> Option<(Reg, u32)> {
 pub fn machine(
     reg: Reg,
     bits: u32,
-) -> Option<Register> {
+) -> Option<RegId> {
     let sixteen = REGISTERS.get(&reg.name().to_lowercase()).copied()?;
     Some(if bits == 32 { sixteen.full_register32() } else { sixteen })
 }

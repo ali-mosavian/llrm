@@ -275,6 +275,15 @@ pub fn reduced(
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
+            if let Some(rewrite) = _post_incremented(&view, &loop_) {
+                drop(facts);
+                _read_after_step(unit, rewrite);
+                analyses.invalidate(unit.function, &PreservedAnalyses::none());
+                whole = Whole::default();
+                changed = true;
+                done.remove(&loop_.header);
+                continue;
+            }
             let pressure = analyses.get::<spill::Pressure>(unit.context, unit.layout, unit.function);
             let (context, layout, function) = (&*unit.context, unit.layout, &*unit.function);
             let mut products = || analyses.get::<Products>(context, layout, function);
@@ -455,16 +464,22 @@ struct Problem<'a> {
     exits: Vec<Option<(i64, Option<usize>)>>,
     keys: Vec<Key>,
     /// What the loop keeps in registers before each of its instructions,
-    /// and across each call, by block, whatever is chosen.
+    /// and across each call, whatever is chosen: its blocks as a sweep takes
+    /// them.
+    run: spill::Run,
+    /// The blocks of `run`, in order, and each one's place in it.
+    order: Vec<i64>,
+    at: BTreeMap<i64, usize>,
+    #[cfg(test)]
     fixed: BTreeMap<i64, Vec<spill::Site>>,
-    /// The spill traffic of what `fixed` keeps, priced for the values asked.
+    /// The spill traffic of what `run` keeps, priced for the values asked.
     traffic: spill::TrafficLess,
     function: &'a Function,
     words: Box<dyn Fn(ValueId) -> i64 + 'a>,
     /// `total` of each set asked: the search asks the same set again from the
     /// other start and from each step's neighbours.
     totals: std::cell::RefCell<llrm_support::hash::HashMap<BTreeSet<usize>, Option<i64>>>,
-    /// Where each site's value is live, at the points of `fixed`.
+    /// Where each site's value is live, at the points of `run`.
     alive: Vec<BTreeMap<i64, Vec<bool>>>,
     latch: i64,
     header: i64,
@@ -599,7 +614,11 @@ fn _plan(
     let web_values = users.values.keys().copied().collect::<BTreeSet<_>>();
     let live = _live_anyway(function, pressure.found(), loop_, &users, exit.as_ref());
     let cells = pressure.cells();
+    let run = _run(view, outer, loop_, target.room, pressure, &web_values, &users, exit.as_ref(), &live);
+    #[cfg(test)]
     let fixed = _fixed(view, outer, loop_, target.room, pressure, &web_values, &users, exit.as_ref(), &live);
+    let order: Vec<i64> = loop_.body.iter().copied().collect();
+    let at = order.iter().enumerate().map(|(position, &block)| (block, position)).collect();
     // The web's reads are the uses the choice replaces; each use adds its own
     // back.
     let base = whole.traffic.get_or_insert_with(|| {
@@ -643,6 +662,10 @@ fn _plan(
         exit,
         exits,
         keys,
+        run,
+        order,
+        at,
+        #[cfg(test)]
         fixed,
         traffic,
         function,
@@ -796,6 +819,85 @@ fn _hoisted(
     }
 }
 
+/// A latch test of the counter before its step, which the step is made for
+/// anyway: the compare to rewrite, the step it reads instead and the bound a
+/// step on. LLVM's `OptimizeLoopTermCond` makes the same of a compare whose
+/// operand is the counter, where the step is live: the test reads the stepped
+/// counter and the counter itself is dead after the step, one register for two.
+struct PostIncrement {
+    compare: InstId,
+    counter: ValueId,
+    step: ValueId,
+    ty: TypeId,
+    bound: i128,
+}
+
+fn _post_incremented(
+    view: &memory::Unit,
+    loop_: &Loop,
+) -> Option<PostIncrement> {
+    let function = view.function;
+    // Cheap first: a latch branch on a compare of a header phi with a constant,
+    // whose step is read elsewhere too.
+    let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
+    let branch = function.terminator(cfg::block(latch))?;
+    let Some(&Operand::Value(condition)) = function.instruction(branch).operands.first() else { return None };
+    let ValueDef::Instruction(compare) = function.value(condition).def else { return None };
+    if !matches!(function.instruction(compare).opcode, Opcode::ICmp(_)) {
+        return None;
+    }
+    let operands = &function.instruction(compare).operands;
+    let ((Operand::Value(read), Operand::Constant(_)) | (Operand::Constant(_), Operand::Value(read))) =
+        (operands[0], operands[1])
+    else {
+        return None;
+    };
+    let ValueDef::Instruction(phi) = function.value(read).def else { return None };
+    if function.instruction(phi).opcode != Opcode::Phi || function.parent(phi) != Some(cfg::block(loop_.header)) {
+        return None;
+    }
+    let Some(Operand::Value(step)) = _latch_arm(function, read, cfg::block(latch)) else { return None };
+    if function.users(step).iter().all(|one| one.user == phi || one.user == compare) {
+        return None;
+    }
+    let proofs = induction::counted_leaving(view, loop_, None, true);
+    let [proof] = &proofs[..] else { return None };
+    if !proof.shifted || !proof.posttested || proof.compare != compare {
+        return None;
+    }
+    let counter = read;
+    let ty = function.value(counter).ty;
+    let width = proof.width();
+    let moved = match &proof.bound {
+        induction::AffineOperand::Const(known) => {
+            let modulus = BigInt::from(1) << width;
+            let low = ((&known.n % &modulus) + &modulus) % &modulus;
+            let signed = if low >= (BigInt::from(1) << (width - 1)) { low - modulus } else { low };
+            signed.to_i128()?
+        }
+        induction::AffineOperand::Value(..) => return None,
+    };
+    Some(PostIncrement { compare: proof.compare, counter, step, ty, bound: moved })
+}
+
+/// `rewrite`: the compare reads the step and the bound a step on.
+fn _read_after_step(
+    unit: &mut Unit,
+    rewrite: PostIncrement,
+) {
+    let constant = Operand::Constant(unit.context.int(rewrite.ty, rewrite.bound));
+    let operands = unit.function.instruction(rewrite.compare).operands.clone();
+    for (at, operand) in operands.iter().enumerate() {
+        match operand {
+            Operand::Value(value) if *value == rewrite.counter => {
+                unit.function.set_operand(rewrite.compare, at, Operand::Value(rewrite.step));
+            }
+            Operand::Constant(_) => unit.function.set_operand(rewrite.compare, at, constant),
+            _ => {}
+        }
+    }
+}
+
 /// The loop's counted exit, where its compare is read only by its branch.
 fn _exit(
     view: &memory::Unit,
@@ -903,6 +1005,30 @@ fn _symbols(
 /// What the loop keeps in registers besides its counters and the
 /// invariants only its recurrences read, at each instruction.
 #[allow(clippy::too_many_arguments)]
+fn _run(
+    view: &memory::Unit,
+    outer: &Outer,
+    loop_: &Loop,
+    room: Room,
+    pressure: &spill::Pressure,
+    web: &BTreeSet<ValueId>,
+    users: &Users,
+    exit: Option<&Exit>,
+    live: &BTreeSet<ValueId>,
+) -> spill::Run {
+    let function = view.function;
+    let symbols = _symbols(users, exit);
+    let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
+    let model = spill::View::over(pressure, view.context, view.layout, function, room, &across);
+    let hide = |value: ValueId| web.contains(&value) || (symbols.contains(&value) && !live.contains(&value));
+    let blocks = loop_.body.iter().map(|&at| cfg::block(at)).collect::<Vec<_>>();
+    model.run(&blocks, &hide)
+}
+
+/// What the loop keeps in registers besides its counters and the
+/// invariants only its recurrences read, at each instruction.
+#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn _fixed(
     view: &memory::Unit,
     outer: &Outer,
@@ -1860,10 +1986,10 @@ impl Problem<'_> {
                             Place::Before(inst) => Some(inst),
                             _ => None,
                         };
-                        let points = self.fixed.get(&block);
-                        let at = points
-                            .and_then(|points| points.iter().position(|point| Some(point.inst) == reader))
-                            .unwrap_or_else(|| points.map_or(0, |points| points.len().saturating_sub(1)));
+                        let in_run = self.at.get(&block).copied();
+                        let at = in_run
+                            .and_then(|run| self.run.insts(run).position(|inst| Some(inst) == reader))
+                            .unwrap_or_else(|| in_run.map_or(0, |run| self.run.insts(run).count().saturating_sub(1)));
                         let slot = last.entry((one, k, block)).or_insert(at);
                         *slot = (*slot).max(at);
                         *reads.entry(Resident::Product(one, k, block)).or_default() += site.frequency;
@@ -1914,6 +2040,50 @@ impl Problem<'_> {
             .filter(|&&key| !self.free(&self.keys[key]) && self.viewed(key))
             .map(|&key| Resident::Held(key))
             .collect::<Vec<_>>();
+        if self.target.room.priced() {
+            let room = self.target.room;
+            let price = |one: Resident| self.spill_price(one, &reads);
+            let mut extra = |run: usize, index: usize, out: &mut Vec<Resident>| {
+                let block = self.order[run];
+                out.extend(throughout.iter().copied());
+                out.extend(
+                    last.iter()
+                        .filter(|(product, read)| product.2 == block && **read >= index)
+                        .map(|(&(one, k, block), _)| Resident::Product(one, k, block)),
+                );
+                out.extend(
+                    rebuilt
+                        .iter()
+                        .filter(|&&at| self.alive[at].get(&block).is_some_and(|alive| alive[index]))
+                        .map(|&at| Resident::Rebuilt(at)),
+                );
+            };
+            let swept = self.run.fit::<Resident, Residents>(room, &Resident::Value, &price, &segmented, &mut extra);
+            #[cfg(test)]
+            assert_eq!(
+                swept,
+                self.spilled_dense(&throughout, &segmented, &last, &rebuilt, &reads),
+                "the sweep over the loop's blocks is not the forecast over its points"
+            );
+            cost += swept;
+        }
+        if let Some((bases, indices)) = self.target.forms.first().and_then(AddressForm::register_classes) {
+            cost += _misplaced(&address, &pairs, bases, indices) * costs.r#move * self.header;
+        }
+        Some(cost)
+    }
+
+    /// What `total_of` spilled before the sweep: `spilled_in` over the loop's
+    /// points, a list of residents at each. The sweep is held to it.
+    #[cfg(test)]
+    fn spilled_dense(
+        &self,
+        throughout: &[Resident],
+        segmented: &[Resident],
+        last: &BTreeMap<(usize, i64, i64), usize>,
+        rebuilt: &[usize],
+        reads: &BTreeMap<Resident, i64>,
+    ) -> i64 {
         let points = self
             .fixed
             .iter()
@@ -1974,16 +2144,71 @@ impl Problem<'_> {
                 },
             );
         if self.target.room.priced() {
-            cost += spill::spilled_in::<Resident, Residents>(points.chain(segment_points), |one| {
+            return spill::spilled_in::<Resident, Residents>(points.chain(segment_points), |one| {
                 self.spill_price(one, &reads)
             });
         }
-        if let Some((bases, indices)) = self.target.forms.first().and_then(AddressForm::register_classes) {
-            cost += _misplaced(&address, &pairs, bases, indices) * costs.r#move * self.header;
-        }
-        Some(cost)
+        let points = self
+            .fixed
+            .iter()
+            .flat_map(
+                |(&block, sites)| {
+                    let (throughout, last, rebuilt) = (&throughout, &last, &rebuilt);
+                    sites
+                        .iter()
+                        .enumerate()
+                        .flat_map(
+                            move |(index, site)| {
+                                let added = throughout
+                                    .iter()
+                                    .copied()
+                                    .chain(
+                                        last.iter()
+                                            .filter(|(product, read)| product.2 == block && **read >= index)
+                                            .map(|(&(one, k, block), _)| Resident::Product(one, k, block)),
+                                    )
+                                    .chain(
+                                        rebuilt
+                                            .iter()
+                                            .filter(|&&at| self.alive[at].get(&block).is_some_and(|alive| alive[index]))
+                                            .map(|&at| Resident::Rebuilt(at)),
+                                    )
+                                    .collect::<Vec<_>>();
+                                std::iter::once(&site.before)
+                                    .chain(&site.across)
+                                    .map(
+                                        move |point| spill::Point {
+                                            registers: point.registers,
+                                            residents: point
+                                                .residents
+                                                .iter()
+                                                .map(|&value| Resident::Value(value))
+                                                .chain(added.iter().copied())
+                                                .collect(),
+                                        },
+                                    )
+                            },
+                        )
+                },
+            );
+        let segment_points = self
+            .fixed
+            .values()
+            .flatten()
+            .map(
+                |site| spill::Point {
+                    registers: site.segments.registers,
+                    residents: site
+                        .segments
+                        .residents
+                        .iter()
+                        .map(|&value| Resident::Value(value))
+                        .chain(segmented.iter().copied())
+                        .collect(),
+                },
+            );
+        spill::spilled_in::<Resident, Residents>(points.chain(segment_points), |one| self.spill_price(one, reads))
     }
-
     /// Whether `key` is a far view of a segment: held in a segment register.
     fn viewed(
         &self,

@@ -10,6 +10,7 @@ use std::fmt;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::Register;
+use llrm_lir::registers::Regs;
 
 use crate::backend::{select, target};
 use crate::model::ir::{self, Addr, Loc, Operation, Semantics, Space};
@@ -153,6 +154,8 @@ pub enum Datum {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
+    /// The register file of the target the module is for.
+    pub registers: Regs,
     /// the code segment's name, MODULE_TEXT
     pub code: String,
     pub names: IndexMap<(Space, i64), String>,
@@ -191,7 +194,7 @@ impl Module {
 }
 
 pub fn text(module: &Module) -> Result<String, Unprintable> {
-    text_by(module, listing)
+    text_by(module, |procedure, number| listing(procedure, number))
 }
 
 /// `module`'s text, each procedure's items as `listed` gives them.
@@ -467,15 +470,13 @@ fn saved_of(procedure: &Procedure) -> Vec<Register> {
 /// is not its entry (`shrinkwrap`).
 fn wrap_of(
     procedure: &Procedure,
+    body: &crate::model::lir::LirBody,
     frame: bool,
+    stack_addressed: bool,
 ) -> Option<crate::backend::shrinkwrap::Wrap> {
-    let kept: BTreeSet<Register> = procedure
-        .registers
-        .saved
-        .iter()
-        .filter(|(_, low)| saved_of(procedure).contains(low))
-        .map(|(whole, _)| *whole)
-        .collect();
+    let lows = saved_of(procedure);
+    let kept: BTreeSet<Register> =
+        procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
     // The runtime's entry builds an `entry` frame, an interrupt handler and the
     // stack check run at the entry, and inline code may address the frame.
     let movable = procedure.entry == 0
@@ -484,10 +485,31 @@ fn wrap_of(
         && procedure.callees.values().all(|one| one.code.is_empty());
     let registers = &procedure.registers;
     crate::backend::shrinkwrap::wrapped(
-        &procedure.body,
+        body,
         &kept,
         (frame && movable).then_some((registers.pointer, registers.stack)),
+        stack_addressed,
     )
+}
+
+/// How many pieces `procedure` sets up (the frame, the registers it keeps): no
+/// body of it can set up more late.
+pub fn pieces_to_set_up(procedure: &Procedure) -> usize {
+    let (enter, _) = parts(procedure, true);
+    let count = saved_of(procedure).len();
+    count + usize::from(enter.len() > count)
+}
+
+/// How many of `procedure`'s pieces `body` sets up after its entry
+/// (`shrinkwrap`), the frame addressed through the stack pointer as it is where
+/// that is smaller.
+pub fn wrapped_pieces(
+    procedure: &Procedure,
+    body: &crate::model::lir::LirBody,
+) -> usize {
+    let (enter, _) = parts(procedure, true);
+    let count = saved_of(procedure).len();
+    wrap_of(procedure, body, enter.len() > count, true).map_or(0, |wrap| wrap.wrapped.len() * 1000 + wrap.depth)
 }
 
 /// The implicit entry and return sequences shared by text and OMF emission.
@@ -682,24 +704,56 @@ fn built(
     number: usize,
     omit: bool,
 ) -> Result<Vec<Item>, Unprintable> {
+    let regs = procedure.body.regs();
     let (mut enter, mut leave) = parts(procedure, omit);
-    // Saved where first needed, restored where that path returns: not at the
-    // entry and every return. The frame too, where nothing outside the wrap
-    // touches it: the returns before it take none back.
+    // Each piece (the frame, a register kept) is set up where it is first
+    // needed and taken back on the returns that path reaches, not at the entry
+    // and every return (`shrinkwrap`).
     let count = saved_of(procedure).len();
-    let wrap = wrap_of(procedure, enter.len() > count);
-    let (mut saves, mut restores, mut opened): (Vec<Semantics>, Vec<Semantics>, Vec<Semantics>) =
-        (Vec::new(), Vec::new(), Vec::new());
-    if let Some(wrap) = &wrap {
-        let kept = enter.split_off(enter.len() - count);
-        restores = leave.drain(..count).collect();
-        saves = kept;
-        if wrap.frame {
-            opened = std::mem::take(&mut enter);
+    let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
+    let kept = enter.split_off(enter.len() - count);
+    let restores: Vec<Semantics> = leave.drain(..count).collect();
+    let saved: Vec<Register> = {
+        let lows = saved_of(procedure);
+        procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect()
+    };
+    // The items that set a piece up and take it back.
+    let item = |piece: &crate::backend::shrinkwrap::Piece| -> (Vec<Semantics>, Vec<Semantics>) {
+        match piece {
+            crate::backend::shrinkwrap::Piece::Frame => (enter.clone(), leave.clone()),
+            crate::backend::shrinkwrap::Piece::Saved(whole) => {
+                let at = saved.iter().position(|one| one == whole).expect("a kept register");
+                // `kept` is in the order of `saved_of`; `restores` is the
+                // reverse.
+                (vec![kept[at].clone()], vec![restores[count - 1 - at].clone()])
+            }
+        }
+    };
+    let wrapped =
+        |piece: crate::backend::shrinkwrap::Piece| wrap.as_ref().is_some_and(|wrap| wrap.wrapped.contains(&piece));
+    // What the entry sets up: every piece no block sets up later.
+    let mut entry_items: Vec<Semantics> = Vec::new();
+    let mut entry_leave: Vec<Semantics> = Vec::new();
+    if !wrapped(crate::backend::shrinkwrap::Piece::Frame) {
+        entry_items.extend(enter.iter().cloned());
+    }
+    for (at, whole) in saved.iter().enumerate() {
+        if !wrapped(crate::backend::shrinkwrap::Piece::Saved(*whole)) {
+            entry_items.push(kept[at].clone());
         }
     }
-    let wrapped_frame = wrap.as_ref().is_some_and(|wrap| wrap.frame);
-    let unwrapped_leave = if wrapped_frame { Vec::new() } else { leave.clone() };
+    // Taken back in the reverse of that order: the registers last set up
+    // first, then the frame.
+    for (at, whole) in saved.iter().enumerate().rev() {
+        if !wrapped(crate::backend::shrinkwrap::Piece::Saved(*whole)) {
+            entry_leave.push(restores[count - 1 - at].clone());
+        }
+    }
+    if !wrapped(crate::backend::shrinkwrap::Piece::Frame) {
+        entry_leave.extend(leave.iter().cloned());
+    }
+    let enter = entry_items;
+    let unwrapped_leave = entry_leave;
     let blocks = &procedure.body.blocks;
     let lined = || blocks.iter().flat_map(|block| &block.insns).filter(|one| one.line.is_some());
     let first = lined().next();
@@ -732,8 +786,8 @@ fn built(
         .collect();
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
-        if wrap.as_ref().is_some_and(|wrap| wrap.at == block.at) {
-            out.extend(opened.iter().chain(&saves).cloned().map(Item::Semantics));
+        if let Some(pieces) = wrap.as_ref().and_then(|wrap| wrap.opens.get(&block.at)) {
+            out.extend(pieces.iter().flat_map(|piece| item(piece).0).map(Item::Semantics));
         }
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
         let fallthrough = _fallthrough_jump(block, following);
@@ -760,7 +814,7 @@ fn built(
                 out.extend(line.map(&mut marked));
             }
             match what.op {
-                Operation::Move if _segment(&what.dests[0]) && matches!(what.sources[0], Loc::Imm(_)) => {
+                Operation::Move if _segment(regs, &what.dests[0]) && matches!(what.sources[0], Loc::Imm(_)) => {
                     // x86 has no immediate move into a segment register; the
                     // stack holds it for one instruction.
                     let Loc::Imm(source) = &what.sources[0] else { unreachable!() };
@@ -796,11 +850,10 @@ fn built(
                     }
                 }
                 Operation::Return => {
-                    if wrap.as_ref().is_some_and(|wrap| wrap.restored.contains(&block.at)) {
-                        out.extend(restores.iter().chain(&leave).cloned().map(Item::Semantics));
-                    } else {
-                        out.extend(unwrapped_leave.iter().cloned().map(Item::Semantics));
+                    if let Some(pieces) = wrap.as_ref().and_then(|wrap| wrap.closes.get(&block.at)) {
+                        out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
                     }
+                    out.extend(unwrapped_leave.iter().cloned().map(Item::Semantics));
                     if let Some(Loc::Imm(popped)) =
                         what.sources.first().filter(|_| procedure.interrupt.is_none() && !procedure.far)
                     {
@@ -1347,6 +1400,7 @@ pub fn _procedure_of(
     names: &IndexMap<(Space, i64), String>,
     number: usize,
 ) -> Result<Vec<String>, Unprintable> {
+    let regs = procedure.body.regs();
     let mut out = vec![format!("{} proc {}", procedure.name, if procedure.far { "far" } else { "near" })];
     for item in items {
         match item {
@@ -1358,7 +1412,7 @@ pub fn _procedure_of(
             Item::Callee(Callee { name, far, .. }) => {
                 out.push(format!("    call {}{name}", if far { "far ptr " } else { "" }));
             }
-            Item::Semantics(item) => match _instruction(&item, names, number) {
+            Item::Semantics(item) => match _instruction(regs, &item, names, number) {
                 Ok(lines) => out.extend(lines.into_iter().map(|line| format!("    {line}"))),
                 Err(error) => return Err(Unprintable(format!("{}: {error}", procedure.name))),
             },
@@ -1448,6 +1502,7 @@ pub fn _roots(body: &lir::LirBody) -> BTreeSet<Register> {
 }
 
 pub fn _instruction(
+    regs: Regs,
     what: &Semantics,
     names: &IndexMap<(Space, i64), String>,
     number: usize,
@@ -1471,7 +1526,7 @@ pub fn _instruction(
         };
         let segmented = what.sources.len() == if counted { 5 } else { 4 };
         return Ok(vec![match what.sources.get(what.sources.len().wrapping_sub(2)).filter(|_| segmented) {
-            Some(Loc::Reg(one)) if one.register != Register::DS => {
+            Some(Loc::Reg(one)) if !regs.is_data_segment(one.register) => {
                 format!(
                     "{rep}movs {size} ptr es:[di], {size} ptr {}:[si]",
                     format!("{:?}", one.register).to_lowercase()
@@ -1480,8 +1535,8 @@ pub fn _instruction(
             _ => format!("{rep}{name}"),
         }]);
     }
-    let dests = what.dests.iter().map(|x| _operand(x, names)).collect::<Result<Vec<_>, _>>()?;
-    let sources = what.sources.iter().map(|x| _operand(x, names)).collect::<Result<Vec<_>, _>>()?;
+    let dests = what.dests.iter().map(|x| _operand(regs, x, names)).collect::<Result<Vec<_>, _>>()?;
+    let sources = what.sources.iter().map(|x| _operand(regs, x, names)).collect::<Result<Vec<_>, _>>()?;
     let last = |items: &[String]| items[items.len() - 1].clone();
     Ok(match what.op {
         Operation::Nothing => {
@@ -1588,10 +1643,13 @@ pub fn _code(parts: &[InlinePart]) -> Vec<String> {
     out
 }
 
-pub fn _segment(r#where: &Loc) -> bool {
+pub fn _segment(
+    regs: Regs,
+    r#where: &Loc,
+) -> bool {
     matches!(
         r#where,
-        Loc::Reg(ir::Reg { register: Register::ES | Register::DS | Register::SS | Register::FS | Register::GS, .. })
+        Loc::Reg(one) if regs.is_segment(one.register) && !regs.is_code_segment(one.register)
     )
 }
 
@@ -1604,12 +1662,13 @@ fn named(
 }
 
 pub fn _operand(
+    regs: Regs,
     r#where: &Loc,
     names: &IndexMap<(Space, i64), String>,
 ) -> Result<String, Unprintable> {
     Ok(match r#where {
         Loc::Reg(one) if one.st_index().is_some() => format!("st({})", one.st_index().expect("an x87 register")),
-        Loc::Reg(ir::Reg { register, .. }) => target::name_of(*register),
+        Loc::Reg(ir::Reg { register, .. }) => target::name_of(regs, *register),
         Loc::Imm(ir::Imm { value, address: None, .. }) => value.to_string(),
         Loc::Imm(ir::Imm { value, address: Some(address), .. }) => {
             if address.space == Space::Group {
@@ -1618,31 +1677,33 @@ pub fn _operand(
                 format!("offset {}{}", named(names, address), _signed(address.disp + value))
             }
         }
-        Loc::Mem(cell) => _memory(cell, names)?,
+        Loc::Mem(cell) => _memory(regs, cell, names)?,
         Loc::Address(ir::AddressRef { addr: Some(address), index_through: Register::None, through, .. }) => {
-            let text = _memory(&ir::Mem { through: *through, ..ir::Mem::new(Some(*address), 2) }, names)?;
+            let text = _memory(regs, &ir::Mem { through: *through, ..ir::Mem::new(Some(*address), 2) }, names)?;
             text.strip_prefix("word ptr ").map_or(text.clone(), str::to_owned)
         }
         Loc::Address(ir::AddressRef { through, index_through: index, scale, offset, .. }) => {
-            format!("[{}{}]", _registers(*through, *index, *scale), _signed(*offset))
+            format!("[{}{}]", _registers(regs, *through, *index, *scale), _signed(*offset))
         }
         Loc::Held(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
     })
 }
 
 pub fn _registers(
+    regs: Regs,
     base: Register,
     index: Register,
     scale: i64,
 ) -> String {
-    let mut parts = if base != Register::None { vec![target::name_of(base)] } else { vec![] };
+    let mut parts = if base != Register::None { vec![target::name_of(regs, base)] } else { vec![] };
     if index != Register::None {
-        parts.push(target::name_of(index) + &(if scale != 1 { format!("*{scale}") } else { String::new() }));
+        parts.push(target::name_of(regs, index) + &(if scale != 1 { format!("*{scale}") } else { String::new() }));
     }
     parts.join("+")
 }
 
 pub fn _memory(
+    regs: Regs,
     cell: &ir::Mem,
     names: &IndexMap<(Space, i64), String>,
 ) -> Result<String, Unprintable> {
@@ -1653,9 +1714,9 @@ pub fn _memory(
         if cell.through == Register::None {
             return Err(Unprintable(format!("cell {}", cell.repr())));
         }
-        return Ok(format!("{size}[{}{}]", target::name_of(cell.through), _signed(cell.offset)));
+        return Ok(format!("{size}[{}{}]", target::name_of(regs, cell.through), _signed(cell.offset)));
     };
-    let registers = _registers(cell.through, cell.index_through, cell.scale);
+    let registers = _registers(regs, cell.through, cell.index_through, cell.scale);
     let disp = _signed(address.disp);
     match address.space {
         Space::Frame => {
@@ -1667,16 +1728,17 @@ pub fn _memory(
             let segment = if address.segment == Register::None {
                 String::new()
             } else {
-                format!("{}:", target::name_of(address.segment))
+                format!("{}:", target::name_of(regs, address.segment))
             };
             return Ok(format!("{size}{segment}{symbol}{disp}{indexed}"));
         }
         Space::Literal if !registers.is_empty() => {
-            let segment = if crate::backend::select::overriding(cell.through, address.segment) == Register::None {
-                String::new()
-            } else {
-                format!("{}:", target::name_of(address.segment))
-            };
+            let segment =
+                if address.segment == Register::None || regs.default_segment(cell.through) == Some(address.segment) {
+                    String::new()
+                } else {
+                    format!("{}:", target::name_of(regs, address.segment))
+                };
             return Ok(format!("{size}{segment}[{registers}{disp}]"));
         }
         // A direct address, as `[disp16]`: the offset is unsigned.
@@ -1685,7 +1747,7 @@ pub fn _memory(
         }
         Space::Far if address.segment != Register::None => {
             let inside = if registers.is_empty() { address.disp.to_string() } else { format!("{registers}{disp}") };
-            return Ok(format!("{size}{}:[{inside}]", target::name_of(address.segment)));
+            return Ok(format!("{size}{}:[{inside}]", target::name_of(regs, address.segment)));
         }
         _ => {}
     }
@@ -1728,6 +1790,7 @@ mod tests {
     /// count.
     #[test]
     fn test_a_string_move_prints_with_rep_where_it_repeats() {
+        let regs = crate::backend::registerinfo::test_regs();
         let held = |value| Loc::Held(crate::model::ir::Held { value, width: 2 });
         // A count is the extra result; the segments, where the target has them,
         // the last two sources.
@@ -1740,15 +1803,15 @@ mod tests {
         };
         let repeated = semantics(4, vec![held(1), held(2), held(3), held(4), held(5)]);
         let single = semantics(3, vec![held(2), held(3), held(4), held(5)]);
-        assert_eq!(_instruction(&repeated, &no_names(), 0).unwrap(), ["rep movsw"]);
-        assert_eq!(_instruction(&single, &no_names(), 0).unwrap(), ["movsw"]);
+        assert_eq!(_instruction(regs, &repeated, &no_names(), 0).unwrap(), ["rep movsw"]);
+        assert_eq!(_instruction(regs, &single, &no_names(), 0).unwrap(), ["movsw"]);
         // A target with no segment registers names none: its operands are the
         // registers.
         assert_eq!(
-            _instruction(&semantics(4, vec![held(1), held(2), held(3)]), &no_names(), 0).unwrap(),
+            _instruction(regs, &semantics(4, vec![held(1), held(2), held(3)]), &no_names(), 0).unwrap(),
             ["rep movsw"]
         );
-        assert_eq!(_instruction(&semantics(3, vec![held(2), held(3)]), &no_names(), 0).unwrap(), ["movsw"]);
+        assert_eq!(_instruction(regs, &semantics(3, vec![held(2), held(3)]), &no_names(), 0).unwrap(), ["movsw"]);
         let ss = |name: &str, sources: Vec<Loc>| Semantics {
             name: Some(name.to_owned()),
             dests: results(4),
@@ -1757,7 +1820,10 @@ mod tests {
         };
         let segment = |register| Loc::Reg(ir::Reg { register, width: 2 });
         let through = ss("movsd", vec![held(1), held(2), held(3), segment(Register::SS), segment(Register::ES)]);
-        assert_eq!(_instruction(&through, &no_names(), 0).unwrap(), ["rep movs dword ptr es:[di], dword ptr ss:[si]"]);
+        assert_eq!(
+            _instruction(regs, &through, &no_names(), 0).unwrap(),
+            ["rep movs dword ptr es:[di], dword ptr ss:[si]"]
+        );
     }
 
     /// `lea bx,[bp-20]` for `&n` at bp-10: lower carries the displacement in
@@ -1765,31 +1831,34 @@ mod tests {
     /// ten bytes below where qglsurf then read it.
     #[test]
     fn test_frame_address_displacement_once() {
+        let regs = crate::backend::registerinfo::test_regs();
         let placed = Loc::Address(ir::AddressRef {
             through: Register::BP,
             offset: -10,
             disp_width: 1,
             ..ir::AddressRef::new(Some(Addr::new(Space::Frame, -10)))
         });
-        assert_eq!(_operand(&placed, &no_names()).unwrap(), "[bp-10]");
+        assert_eq!(_operand(regs, &placed, &no_names()).unwrap(), "[bp-10]");
     }
 
     /// `es:[bx+si+4]` for field 2 of a 3-byte record: pal_install copied the
     /// palette's blue from the next entry's green.
     #[test]
     fn test_far_cell_displacement_once() {
+        let regs = crate::backend::registerinfo::test_regs();
         let addr = Addr { base: Register::BX, segment: Register::ES, ..Addr::new(Space::Far, 2) };
         let cell = ir::Mem { through: Register::BX, offset: 2, ..ir::Mem::new(Some(addr), 1) };
-        assert_eq!(_operand(&Loc::Mem(cell), &no_names()).unwrap(), "byte ptr es:[bx+2]");
+        assert_eq!(_operand(regs, &Loc::Mem(cell), &no_names()).unwrap(), "byte ptr es:[bx+2]");
     }
 
     /// FloatAlloc's `fxch st(1)` printed as `xchg st(0), st(1)`, which jwasm
     /// refuses: 122 errors over qcport.
     #[test]
     fn test_x87_exchange_is_fxch() {
+        let regs = crate::backend::registerinfo::test_regs();
         let st = |index| Loc::st(index);
         let swap = semantics(Operation::Exchange, "fxch", vec![st(0), st(1)], vec![st(0), st(1)]);
-        assert_eq!(_instruction(&swap, &no_names(), 0).unwrap(), ["fxch st(1)"]);
+        assert_eq!(_instruction(regs, &swap, &no_names(), 0).unwrap(), ["fxch st(1)"]);
     }
 
     /// What the interrupt entry saves, lowest slot first: each push's register
@@ -2062,6 +2131,7 @@ mod tests {
     #[test]
     fn test_a_listing_opens_with_its_targets_header() {
         let module = Module {
+            registers: crate::backend::registerinfo::test_regs(),
             object: llrm_target::object::ObjectFormat {
                 formats: vec![llrm_target::object::Format::Omf],
                 default: llrm_target::object::Format::Omf,
@@ -2436,12 +2506,13 @@ mod tests {
     /// peephole's multiply by three has no address, only base, index and scale.
     #[test]
     fn test_arithmetic_lea_scales_its_index() {
+        let regs = crate::backend::registerinfo::test_regs();
         let r#where = ir::AddressRef {
             through: Register::EBX,
             index_through: Register::EBX,
             scale: 2,
             ..ir::AddressRef::new(None)
         };
-        assert_eq!(_operand(&Loc::Address(r#where), &no_names()).unwrap(), "[ebx+ebx*2]");
+        assert_eq!(_operand(regs, &Loc::Address(r#where), &no_names()).unwrap(), "[ebx+ebx*2]");
     }
 }

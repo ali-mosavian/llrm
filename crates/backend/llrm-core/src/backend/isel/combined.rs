@@ -7,6 +7,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use llrm_lir::registers::Regs;
+
 use crate::backend::cpu::Profile;
 use crate::backend::peep::{self, walk::Facts};
 use crate::backend::{comparefold, farload, rmw, stepflags};
@@ -17,6 +19,7 @@ use crate::support::hash::IndexMap;
 /// `blocks` with the selections made. No value of isel's is exposed: a
 /// result leaves through a return's operands.
 pub(super) fn combined(
+    regs: Regs,
     bits: u32,
     blocks: Vec<LirBlock>,
     cpu: &Profile,
@@ -33,7 +36,7 @@ pub(super) fn combined(
     // instruction.
     let selecting = farload::selectors(&made, &read_by_phis);
     let made: IndexMap<i64, Vec<Arc<Insn>>> =
-        made.into_iter().map(|(at, insns)| (at, farload::selected(&insns, &selecting))).collect();
+        made.into_iter().map(|(at, insns)| (at, farload::selected(regs, &insns, &selecting))).collect();
     let uses = recount(&made, &blocks);
     // A one-use comparison load is a legal memory operand.
     let made: IndexMap<i64, Vec<Arc<Insn>>> =
@@ -46,7 +49,7 @@ pub(super) fn combined(
     let made: IndexMap<i64, Vec<Arc<Insn>>> =
         made.into_iter().map(|(at, insns)| (at, rmw::selected(&insns, &uses))).collect();
     // The argument selections of peephole.peep, over held values.
-    let facts = Facts::counted(&uses, bits).with_cpu(cpu);
+    let facts = Facts::counted(&uses, bits, regs).with_cpu(cpu);
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made
         .into_iter()
         .map(|(at, insns)| (at, peep::rewritten_insns(rules.memory_arguments, &insns, &facts)))
@@ -60,7 +63,7 @@ pub(super) fn combined(
     let made: IndexMap<i64, Vec<Arc<Insn>>> =
         made.into_iter().map(|(at, insns)| (at, _rematerialized_arguments(&insns, &uses, &exposed))).collect();
     let uses = recount(&made, &blocks);
-    let mut made = dword_pairs(made, &uses, &blocks);
+    let mut made = dword_pairs(regs, made, &uses, &blocks);
     blocks
         .into_iter()
         .map(|block| LirBlock { insns: made.shift_remove(&block.at).expect("every block").into(), ..block })
@@ -125,7 +128,10 @@ fn immediate_copy(what: &ir::Semantics) -> Option<(u32, u32, ir::Imm)> {
 }
 
 /// A word load of a dword's low or high half, and the cell it reads.
-fn word_load(one: &Insn) -> Option<(u32, &ir::Mem)> {
+fn word_load(
+    regs: Regs,
+    one: &Insn,
+) -> Option<(u32, &ir::Mem)> {
     let what = one.what.as_ref()?;
     match (what.op, what.name.as_deref(), &what.dests[..], &what.sources[..]) {
         (Operation::Move, Some("mov"), [Loc::Held(dest)], [Loc::Mem(source)])
@@ -134,7 +140,7 @@ fn word_load(one: &Insn) -> Option<(u32, &ir::Mem)> {
                 && one.defines == [dest.value]
                 && !one.volatile
                 && plain(one)
-                && !crate::backend::registerinfo::is_stack(source.through) =>
+                && !regs.is_stack(source.through) =>
         {
             Some((dest.value, source))
         }
@@ -146,21 +152,22 @@ fn word_load(one: &Insn) -> Option<(u32, &ir::Mem)> {
 /// high then the low, as one dword load pushed whole: the old route's far
 /// pointer, never taken apart, was one dword.
 fn dword_pairs(
+    regs: Regs,
     mut made: IndexMap<i64, Vec<Arc<Insn>>>,
     uses: &IndexMap<u32, i64>,
     blocks: &[LirBlock],
 ) -> IndexMap<i64, Vec<Arc<Insn>>> {
-    let loads: IndexMap<u32, (i64, usize, ir::Mem)> =
-        made.iter()
-            .flat_map(|(at, insns)| {
-                insns
-                    .iter()
-                    .enumerate()
-                    .filter_map(
-                        move |(index, one)| word_load(one).map(|(value, cell)| (value, (*at, index, cell.clone()))),
-                    )
-            })
-            .collect();
+    let loads: IndexMap<u32, (i64, usize, ir::Mem)> = made
+        .iter()
+        .flat_map(|(at, insns)| {
+            insns
+                .iter()
+                .enumerate()
+                .filter_map(
+                    move |(index, one)| word_load(regs, one).map(|(value, cell)| (value, (*at, index, cell.clone()))),
+                )
+        })
+        .collect();
     let pushed = |one: &Insn| {
         one.what
             .as_ref()
@@ -236,7 +243,10 @@ fn dword_pairs(
         let (_, _, cell) = loads[&low].clone();
         let insns = made.get_mut(&at).expect("the loads' block");
         let place = |value: u32| {
-            insns.iter().position(|one| word_load(one).is_some_and(|(loaded, _)| loaded == value)).expect("the load")
+            insns
+                .iter()
+                .position(|one| word_load(regs, one).is_some_and(|(loaded, _)| loaded == value))
+                .expect("the load")
         };
         let (high_index, low_index) = (place(high), place(low));
         let first = high_index.min(low_index);
