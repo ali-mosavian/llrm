@@ -449,7 +449,7 @@ fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
             function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
         let seven = Operand::Value(value(function, "seven"));
         function.set_operand(lim, 0, seven);
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate(function, &PreservedAnalyses::none());
     }
     let (context, function) = module.function_mut("f").unwrap();
     let proved = crate::induction::proved();
@@ -497,7 +497,7 @@ fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
             function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
         let seven = Operand::Value(value(function, "seven"));
         function.set_operand(lim, 0, seven);
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate(function, &PreservedAnalyses::none());
     }
     let solved = ranges::blocks_solved();
     let after = states(&mut analyses, &module);
@@ -576,7 +576,7 @@ fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
             function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(t)).unwrap();
         let four = Operand::Value(value(function, "four"));
         function.set_operand(t, 1, four);
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate(function, &PreservedAnalyses::none());
     }
     let after = facts(&mut analyses, &module);
     assert_ne!(before, after, "the value the change reached");
@@ -621,7 +621,7 @@ fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
             .find(|&inst| function.instruction(inst).result == Some(seven))
             .unwrap();
         function.erase(made).unwrap();
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate(function, &PreservedAnalyses::none());
     }
     let after = facts(&mut analyses, &module);
     assert!(after.values().all(|known| !known.contains_key(&seven)), "gone from every loop");
@@ -822,7 +822,7 @@ fn test_erasing_a_dead_pointer_load_does_not_work_the_call_effects_out_again() {
     let entry = f.entry().expect("an entry");
     let load = f.block(entry).instructions()[0];
     f.erase(load).expect("an unused load");
-    analyses.invalidate(&PreservedAnalyses::none());
+    analyses.invalidate(f, &PreservedAnalyses::none());
     analyses.get::<CallEffects>(context, &layout, f);
     let counts = llrm_mir::passes::recomputes();
     llrm_mir::passes::trace_recomputes(false);
@@ -912,4 +912,61 @@ fn test_summaries_fold_one_changed_entry_into_the_callbacks_not_all_of_them() {
     analyses.get::<Summaries>(&module);
     let added = alias::callback_entries() - before;
     assert!(added <= 4 * BODIES, "{added} entries instantiated for {BODIES} bodies");
+}
+
+/// A module pass spliced a loop into a caller and did not say so (`changed`),
+/// and the next module analysis to ask for the caller's shape was given the one
+/// from before: no block of the loop in it, no back edge to widen at, and a
+/// value solve that gained a slice a round for ever (qb-runtime's i8out.c,
+/// minutes in GlobalsAA). An analysis of a function is not returned as it stood
+/// before an edit that was not reported.
+#[test]
+fn test_a_shape_asked_after_an_unreported_splice_is_the_shape_after_it() {
+    let mut module = parsed(
+        "define internal void @copy(ptr %a, i16 %n) {
+entry:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %entry ], [ %next, %body ]
+  %more = icmp ult i16 %i, %n
+  br i1 %more, label %body, label %exit
+
+body:
+  %p = getelementptr inbounds i8, ptr %a, i16 %i
+  store i8 0, ptr %p
+  %next = add i16 %i, 1
+  br label %head
+
+exit:
+  ret void
+}
+
+define void @f(ptr %x, i16 %m) {
+entry:
+  call void @copy(ptr %x, i16 %m)
+  ret void
+}
+",
+    );
+    let (copy, f) = (module.named("copy").unwrap(), module.named("f").unwrap());
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let before = analyses.function::<Shape>(&module, f);
+    assert!(before.loops.is_empty(), "premise: the caller has no loop");
+    let body = module.global(copy).function().unwrap().clone();
+    let call = {
+        let function = module.global(f).function().unwrap();
+        function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| llrm_mir::memory::callee(&module.context, function, inst) == Some(copy))
+            .unwrap()
+    };
+    let llrm_mir::module::GlobalKind::Function(function) = &mut module.globals[f.0 as usize].kind else {
+        unreachable!()
+    };
+    llrm_mir::splice::splice(&mut module.context, function, call, &body);
+    let after = analyses.function::<Shape>(&module, f);
+    assert_eq!(*after, Shape::of(module.global(f).function().unwrap()), "the shape from before the splice");
+    assert_eq!(after.loops.len(), 1);
 }

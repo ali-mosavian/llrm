@@ -281,7 +281,7 @@ pub fn reduced(
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate(unit.function, &PreservedAnalyses::none());
         if let Some((before, Some(kept))) = saved {
             dead::dead(unit.context, outer.callees(), unit.function);
             let moved_price = _function_price(unit, &*analyses, outer, &target);
