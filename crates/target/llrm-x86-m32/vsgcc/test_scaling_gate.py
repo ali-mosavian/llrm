@@ -431,6 +431,19 @@ def test_an_entry_does_not_hold_up_the_summary_of_what_calls_through_a_pointer(t
     assert done.returncode == 0, done.stderr[-300:]
 
 
+def test_merging_blocks_does_not_build_the_graph_of_the_function_for_each_merge(tmp_path):
+    """callers(N) at -O2: `cfg::merged` (run by decide, rotate and lsr) built the graph of the whole function and its predecessor
+    sets, again after each merge it made: `mir decide` read 2N/N = 3.2, 3.65 (2.5 / 7.9 / 29.0 G at N=1024..4096). Each block
+    is asked of its own neighbours (the uses of its jump's target): 2.0, 2.1 (0.9 / 1.9 / 4.0 G). A step above 2.6 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 1024), ("2n", 2048)):
+        source = tmp_path / f"callers_{label}.c"
+        source.write_text("" if size == 0 else scaling.callers(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir decide", 0.0) - own["empty"].get("mir decide", 0.0) for label in ("n", "2n"))
+    assert big <= 2.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
 def test_summaries_keep_the_call_graph_when_a_body_calls_a_deeper_one(tmp_path):
     """chain(N) at -O2: each splice of a callee into its caller gives the caller calls to bodies below the callee, and the
     graph of all N bodies (components, order, readers) was made again for it: `summaries topology` read 23.8 / 107.5 Minstr at
