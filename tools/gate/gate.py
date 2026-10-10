@@ -93,6 +93,34 @@ class Plan:
     languages: list[str] = field(default_factory=list)
 
 
+def head_state() -> tuple[str, bool]:
+    """The commit the tree is at and whether a tracked file differs from it."""
+    head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    changed = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, check=True).stdout.strip()
+    return head, bool(changed)
+
+
+def refusal(head: str, dirty: bool, expect: str | None, allow_dirty: bool) -> str | None:
+    """Why a run must not start: the checkout it was asked for is not the head, or the tree is not the head's (a gate reports on
+    a commit, and a pass on anything else names a commit that was not run)."""
+    if expect and not head.startswith(expect):
+        return f"HEAD is {head[:12]}, not the checkout asked for ({expect}): nothing was run"
+    if dirty and not allow_dirty:
+        return f"the tree differs from HEAD {head[:12]} in tracked files: commit or stash them (--allow-dirty runs it anyway, and says so)"
+    return None
+
+
+def verdict_line(tier: str, failed: list[str], cut: list[str], took: float, skipped: list[str], head: str) -> str:
+    """The last line of a run: its verdict, at the commit it ran."""
+    verdict = "FAIL: " + " ".join(failed) if failed else "PASS"
+    return (
+        f"GATE {tier} {verdict} at {head[:12]}"
+        + (f" (INCOMPLETE: {' '.join(cut)})" if cut else "")
+        + f" in {took:.0f}s"
+        + (f" (skipped: {' '.join(skipped)})" if skipped else "")
+    )
+
+
 def changed_files(base: str) -> list[str]:
     out = subprocess.run(["git", "diff", "--name-only", base, "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
     return out.split()
@@ -108,6 +136,13 @@ def crate_tests(pkgs: dict[str, dict]) -> list[tuple[str, str]]:
         if p["dir"] != ".":
             out += [(name, f.stem) for f in sorted((ROOT / p["dir"] / "tests").glob("*.rs"))]
     return out
+
+
+def reading(cfg: dict, pkgs: dict[str, dict], live: list[str]) -> set[str]:
+    """The crates whose own tests read other crates' sources (`[[reads]]`), for the files changed: a crate that reads what
+    changed is not one that depends on it, so `dependents` leaves it out (facts_rewrite's audit of every reader of nsw/nuw
+    went unrun when a pass in another crate began to read them)."""
+    return {r["package"] for r in cfg.get("reads", []) if r["package"] in pkgs and any(matches(f, r["paths"]) for f in live)}
 
 
 def plan(files: list[str], forced: str = "auto") -> Plan:
@@ -129,7 +164,7 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
 
     touched = {crate_of(f, pkgs) for f in live} - {None}
     cargo = any(not f.startswith("tools/") or f.startswith("tools/bench/") for f in live)
-    p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"})  # the root crate enables features (llrm-c's toolchain) the others lack alone
+    p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"} | reading(cfg, pkgs, live))  # the root crate enables features (llrm-c's toolchain) the others lack alone
     steps = []
     if cargo or p.tier == "full":
         steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture"]
@@ -180,7 +215,12 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
-WARNINGS_AS_ERRORS = "RUSTFLAGS='-D warnings'"
+WARNING_FLAGS = "-D warnings"
+WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
+# Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-c apart from the build step's and put
+# its binary over target/release/llrm-c (the inode changed after `integration`), while `torture`, `run` and the like were running it:
+# "No such file or directory: .../release/llrm-c" in torture. One set of flags, one build, one binary.
+STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS}
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
@@ -189,7 +229,7 @@ BUILD = (
 )
 # Measurements compare two revisions, so their historical base is built without
 # today's warning policy.
-MEASURE_BUILD = "cargo build --release -q --bins && cargo test --release -q --workspace --no-run"
+MEASURE_BUILD = "env -u RUSTFLAGS cargo build --release -q --bins && env -u RUSTFLAGS cargo test --release -q --workspace --no-run"
 # The shipped build (Cargo.toml `[profile.dist]`): what the creep run on main measures. Not a gate step: three minutes cold.
 DIST_BUILD = "cargo build --profile dist -q --bins"
 
@@ -375,7 +415,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     if not target:
         sys.exit("gate: CARGO_TARGET_DIR is not set")
     # The run test compares the tree before and after; a tool writing a .pyc into it meanwhile is not a leak.
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
+    env = {**os.environ, **STEP_ENV, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
     logs = Path(target) / "gate-logs"
     logs.mkdir(parents=True, exist_ok=True)
     pkgs = packages()
@@ -414,7 +454,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     if "build" in p.steps:
         report(*run_step("build", cmds["build"], logs, env, unset=unset))
         if results["build"][0]:
-            print(f"GATE {p.tier} FAIL: build")
+            print(verdict_line(p.tier, ["build"], [], time.time() - start, [], head_state()[0]))
             return 1, ["build"]
     alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
@@ -429,7 +469,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     failed = [n for n, (c, _) in results.items() if c not in (0, 77)]
     skipped = [n for n, (c, _) in results.items() if c == 77]
     cut = [n for n in failed if results[n][0] == 78]
-    print(f"GATE {p.tier} {'FAIL: ' + ' '.join(failed) if failed else 'PASS'}{' (INCOMPLETE: ' + ' '.join(cut) + ')' if cut else ''} in {time.time() - start:.0f}s" + (f" (skipped: {' '.join(skipped)})" if skipped else ""))
+    print(verdict_line(p.tier, failed, cut, time.time() - start, skipped, head_state()[0]))
     return (1 if failed else 0), failed
 
 
@@ -505,6 +545,8 @@ def main() -> int:
     ap.add_argument("--base", default="origin/main")
     ap.add_argument("--files", nargs="*")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--expect", metavar="SHA", help="refuse to run unless HEAD starts with this: the commit the run is to report on")
+    ap.add_argument("--allow-dirty", action="store_true", help="run on a tree that differs from HEAD (the verdict is then of no commit)")
     ap.add_argument("--group")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--tier", default="auto", choices=["auto", "fast", "full"])
@@ -514,6 +556,12 @@ def main() -> int:
         return watch_main(args.force)
     if args.command == "bisect":
         return bisect(args.rest[0], args.rest[1], args.rest[2:])
+    if args.command == "run":
+        head, dirty = head_state()
+        if (why := refusal(head, dirty, args.expect, args.allow_dirty)) is not None:
+            print(f"gate: {why}")
+            return 2
+        print(f"gate: HEAD {head} {'dirty (allowed)' if dirty else 'clean'}", flush=True)
     p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
     if args.steps:
         p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))

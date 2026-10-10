@@ -22,6 +22,8 @@ const LNS_PROLOGUE_END: u8 = 10;
 const LNS_EPILOGUE_BEGIN: u8 = 11;
 const LNE_END_SEQUENCE: u8 = 1;
 const LNE_SET_ADDRESS: u8 = 2;
+/// Open Watcom's: the segment of a 16-bit program's addresses.
+const LNE_SET_SEGMENT: u8 = 4;
 
 const LNCT_PATH: u8 = 1;
 const LNCT_DIRECTORY_INDEX: u8 = 2;
@@ -199,6 +201,14 @@ pub fn program(
         }
         let (symbol, base) = crate::anchor(object, section)?;
         let start = rows[0].offset;
+        if address == 2 {
+            // Open Watcom's extended opcode 4: the segment the addresses are
+            // in.
+            buf.u8(0);
+            buf.uleb(3);
+            buf.u8(LNE_SET_SEGMENT);
+            buf.segment(section);
+        }
         buf.u8(0);
         buf.uleb(1 + address as u64);
         buf.u8(LNE_SET_ADDRESS);

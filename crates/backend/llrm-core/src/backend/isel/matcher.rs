@@ -437,6 +437,42 @@ impl Selector<'_, '_, '_> {
         Ok(Loc::Held(Held { width: to, ..held }))
     }
 
+    /// Held, read at the native width: an operation the target runs there
+    /// (`promote`) reads what the narrow value left above it and does not care.
+    pub fn op_promoted(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+        operand: Operand,
+    ) -> Result<Loc, Unselected> {
+        let held = self.held(operand, self.type_of(operand), m.at, out)?;
+        Ok(Loc::Held(Held { width: self.native_width(), ..held }))
+    }
+
+    /// As `source`, a register at the native width or an immediate.
+    pub fn op_promoted_source(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+        operand: Operand,
+    ) -> Result<Loc, Unselected> {
+        Ok(match self.source(operand, self.type_of(operand), m.at, out)? {
+            Loc::Held(held) => Loc::Held(Held { width: self.native_width(), ..held }),
+            Loc::Imm(imm) => Loc::Imm(Imm { width: self.native_width(), ..imm }),
+            other => other,
+        })
+    }
+
+    /// The result, written at the native width.
+    pub fn op_promoted_result(
+        &mut self,
+        m: &Match,
+        _: &mut Vec<Arc<Insn>>,
+    ) -> Result<Loc, Unselected> {
+        let instruction = self.function.instruction(m.inst);
+        Ok(Loc::Held(Held { value: self.value(instruction.result.expect("a result")), width: self.native_width() }))
+    }
+
     pub fn op_result(
         &mut self,
         m: &Match,
@@ -482,8 +518,9 @@ impl Selector<'_, '_, '_> {
         _: &mut Vec<Arc<Insn>>,
         pointer: Operand,
     ) -> Result<Loc, Unselected> {
+        let regs = self.regs();
         let pointer = self.pointer(pointer)?;
-        Ok(Loc::Mem(Self::memory(pointer, self.size(self.accessed(m))?)))
+        Ok(Loc::Mem(Self::memory(regs, pointer, self.size(self.accessed(m))?)))
     }
 
     /// The cell the load defining `value` reads.
@@ -493,9 +530,10 @@ impl Selector<'_, '_, '_> {
         _: &mut Vec<Arc<Insn>>,
         value: Operand,
     ) -> Result<Loc, Unselected> {
+        let regs = self.regs();
         let loaded = self.function.instruction(self.definition(value).expect("a load"));
         let pointer = self.pointer(loaded.operands[0])?;
-        Ok(Loc::Mem(Self::memory(pointer, self.size(loaded.ty)?)))
+        Ok(Loc::Mem(Self::memory(regs, pointer, self.size(loaded.ty)?)))
     }
 
     /// The cell an integer load or store reaches: its register's bytes.
@@ -505,8 +543,9 @@ impl Selector<'_, '_, '_> {
         _: &mut Vec<Arc<Insn>>,
         pointer: Operand,
     ) -> Result<Loc, Unselected> {
+        let regs = self.regs();
         let width = self.width(self.accessed(m))?;
-        Ok(Loc::Mem(Self::memory(self.pointer(pointer)?, width)))
+        Ok(Loc::Mem(Self::memory(regs, self.pointer(pointer)?, width)))
     }
 
     pub fn op_imm(
@@ -520,6 +559,48 @@ impl Selector<'_, '_, '_> {
     }
 
     // Predicates.
+
+    /// Whether the target would rather run this operation, at its width, on
+    /// the whole register (`promote`).
+    pub fn is_promoted(
+        &self,
+        m: &Match,
+    ) -> bool {
+        let instruction = self.function.instruction(m.inst);
+        let Some(bits) = self.types().int_bits(instruction.ty) else { return false };
+        // Not where a load nothing else reads can be the operation's memory
+        // operand (the other is a register, not a constant), or its cell is
+        // updated in place (a store is the only reader of the result): the word
+        // operation does that, the dword operation cannot (LLVM's
+        // `IsDesirableToPromoteOp`: `MayFoldLoad`, `IsFoldableRMW`).
+        let loaded = |operand: Operand| {
+            let Operand::Value(value) = operand else { return false };
+            let sole = matches!(self.function.users(value), [only] if only.user == m.inst);
+            sole && match self.function.value(value).def {
+                ValueDef::Instruction(inst) => matches!(self.function.instruction(inst).opcode, Opcode::Load { .. }),
+                ValueDef::Argument(_) => self.in_cells.contains(&value),
+            }
+        };
+        let width = bits / 8;
+        let registers = instruction.operands.iter().filter(|operand| self.constant(**operand, width).is_none()).count();
+        let stored = instruction
+            .result
+            .is_some_and(
+                |result| matches!(
+                    self.function.users(result),
+                    [only] if matches!(self.function.instruction(only.user).opcode, Opcode::Store { .. })
+                ),
+            );
+        let foldable = instruction.operands.iter().any(|operand| loaded(*operand)) && (registers >= 2 || stored);
+        bits < self.native_width() * 8
+            && self.promote.iter().any(|one| *one == format!("{}.i{bits}", instruction.opcode.mnemonic()))
+            && !foldable
+    }
+
+    /// The bytes of the widest integer the target computes natively.
+    fn native_width(&self) -> u32 {
+        self.layout.largest_legal_integer() / 8
+    }
 
     pub fn is_selected_elsewhere(
         &self,
@@ -881,6 +962,7 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
         pointer: Operand,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let pointer = self.pointer(pointer)?;
         let mut made: IndexMap<i64, Held> = IndexMap::default();
         let mut halves = self.words[&m.inst].clone();
@@ -889,7 +971,7 @@ impl Selector<'_, '_, '_> {
             let held = Held { value: self.value(result), width: 2 };
             let source = match made.get(&offset) {
                 Some(&earlier) => Loc::Held(earlier),
-                None => Loc::Mem(Self::memory(pointer.moved(offset), 2)),
+                None => Loc::Mem(Self::memory(regs, pointer.moved(offset), 2)),
             };
             made.entry(offset).or_insert(held);
             out.push(insn(m.at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![source])));
@@ -927,6 +1009,7 @@ impl Selector<'_, '_, '_> {
         constant: Operand,
         pointer: Operand,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let (pointer, size) = (self.pointer(pointer)?, self.size(self.type_of(constant))?);
         let Operand::Constant(id) = constant else { unreachable!("a constant") };
         let ConstantKind::Float(bits) = self.module.context.get(id).kind else {
@@ -942,7 +1025,7 @@ impl Selector<'_, '_, '_> {
                 let what = semantics(
                     Operation::Move,
                     "mov",
-                    vec![Loc::Mem(Self::memory(pointer.moved(by as i64), width))],
+                    vec![Loc::Mem(Self::memory(regs, pointer.moved(by as i64), width))],
                     vec![Loc::Imm(Imm { value, width, address: None })],
                 );
                 out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
@@ -953,13 +1036,13 @@ impl Selector<'_, '_, '_> {
         let low = semantics(
             Operation::Move,
             "mov",
-            vec![Loc::Mem(Self::memory(pointer, 4))],
+            vec![Loc::Mem(Self::memory(regs, pointer, 4))],
             vec![Loc::Imm(Imm { value: bits as u32 as i64, width: 4, address: None })],
         );
         let what = if size == 8 {
             out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, low) }));
             let high = Loc::Imm(Imm { value: (bits >> 32) as u32 as i64, width: 4, address: None });
-            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(4), 4))], vec![high])
+            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, pointer.moved(4), 4))], vec![high])
         } else {
             low
         };
@@ -975,6 +1058,7 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
         pointer: Operand,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let pointer = self.pointer(pointer)?;
         let halves = self.wide_halves()?;
         let held = [self.fresh_held(halves[0].bytes), self.fresh_held(halves[1].bytes)];
@@ -983,7 +1067,7 @@ impl Selector<'_, '_, '_> {
                 Operation::Move,
                 "mov",
                 vec![Loc::Held(held)],
-                vec![Loc::Mem(Self::memory(pointer.moved(half.offset), half.bytes))],
+                vec![Loc::Mem(Self::memory(regs, pointer.moved(half.offset), half.bytes))],
             );
             out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
         }
@@ -999,13 +1083,14 @@ impl Selector<'_, '_, '_> {
         value: Operand,
         pointer: Operand,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let (low, high) = self.wide(value, m.at, out)?;
         let pointer = self.pointer(pointer)?;
         for (half, held) in self.wide_halves()?.iter().zip([low, high]) {
             let what = semantics(
                 Operation::Move,
                 "mov",
-                vec![Loc::Mem(Self::memory(pointer.moved(half.offset), half.bytes))],
+                vec![Loc::Mem(Self::memory(regs, pointer.moved(half.offset), half.bytes))],
                 vec![Loc::Held(held)],
             );
             out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
@@ -1032,6 +1117,7 @@ impl Selector<'_, '_, '_> {
         value: Operand,
         pointer: Operand,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let words = match self.far_words(value)? {
             Some(words) => words,
             None => self.far(value, m.at, out).map(|(offset, selector)| [Loc::Held(offset), Loc::Held(selector)])?,
@@ -1039,7 +1125,7 @@ impl Selector<'_, '_, '_> {
         let pointer = self.pointer(pointer)?;
         for (word, by) in words.into_iter().zip([0, 2]) {
             let what =
-                semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by), 2))], vec![word]);
+                semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, pointer.moved(by), 2))], vec![word]);
             out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
         }
         Ok(())

@@ -18,20 +18,11 @@ pub fn all() -> Vec<Rc<dyn Target>> {
     vec![Rc::new(llrm_x86_m16::M16), Rc::new(llrm_x86_m32::M32)]
 }
 
-/// The instruction selector of the target `name`, from its select crate. The
-/// effect rows of its code width are bound with it.
+/// The instruction selector of the target `name`, from its select crate.
 pub fn selector(name: &str) -> Option<&'static Compiled> {
     match name {
-        "x86-m16" => {
-            llrm_core::backend::registerinfo::bind(&llrm_x86_m16::REGISTER_INFO);
-            llrm_core::backend::effects::register(llrm_x86_m16_select::MODE, llrm_x86_m16_select::rows);
-            Some(&llrm_x86_m16_select::SELECTOR)
-        }
-        "x86-m32" => {
-            llrm_core::backend::registerinfo::bind(&llrm_x86_m32::REGISTER_INFO);
-            llrm_core::backend::effects::register(llrm_x86_m32_select::MODE, llrm_x86_m32_select::rows);
-            Some(&llrm_x86_m32_select::SELECTOR)
-        }
+        "x86-m16" => Some(&llrm_x86_m16_select::SELECTOR),
+        "x86-m32" => Some(&llrm_x86_m32_select::SELECTOR),
         _ => None,
     }
 }

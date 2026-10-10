@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use iced_x86::Register;
 
-use super::target::{self, Segments};
+use super::target::Segments;
 use crate::abi::runtime;
 use crate::model::ir;
 use crate::support::hash::IndexMap;
@@ -96,8 +96,8 @@ fn _names(general: &[Register]) -> IndexMap<Register, BTreeSet<String>> {
             (
                 register,
                 BTreeSet::from([
-                    target::name_of(target::named(register, 2)),
-                    target::name_of(target::named(register, 4)),
+                    format!("{:?}", llrm_x86::registers::word_of(register).unwrap_or(register)).to_lowercase(),
+                    format!("{register:?}").to_lowercase(),
                 ]),
             )
         })

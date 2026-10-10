@@ -177,11 +177,9 @@ fn the_flavor_asked_for_is_the_formats_or_an_error() {
         assert!(!made.status.success(), "{arguments:?} was written");
         String::from_utf8_lossy(&made.stderr).into_owned()
     };
-    assert!(refused(&["-m32", "-gdwarf"]).contains("OMF cannot carry DWARF"));
-    assert!(refused(&["-m32", "-gdwarf-4", "-fobject-format=omf"]).contains("OMF cannot carry DWARF"));
     assert!(refused(&["-m32", "-gcodeview", "-fobject-format=elf"]).contains("cannot carry CodeView"));
     assert!(refused(&["-m32", "-gtd", "-fobject-format=elf"]).contains("Turbo Debugger"));
-    assert!(refused(&["-m32", "-gdwarf-3", "-fobject-format=elf"]).contains("unrecognized"));
+    assert!(refused(&["-m32", "-gdwarf-1", "-fobject-format=elf"]).contains("unrecognized"));
     // Borland's records are 16-bit.
     assert!(refused(&["-m32", "-gtd"]).contains("16-bit"));
     let made = compile(&source, &["-m16", "-gtd"], &object);
@@ -734,4 +732,169 @@ fn an_extern_nothing_names_is_asked_of_no_linker_with_g_or_without() {
         );
         assert_eq!(plain, assembly(true), "{machine}");
     }
+}
+
+/// `llrm-nib -m32 -fobject-format=elf -g` left out every local that lives in
+/// a frame cell (`sum`, `total` of tests/fixtures/matrix/known.nib): the
+/// driver's options kept the default object format (OMF), whose writer wants
+/// a frame register, so the ELF writer was handed the frameless function's
+/// cells as ones to drop.
+#[test]
+fn nib_in_elf_keeps_the_locals_that_live_in_frame_cells() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("known.o");
+    let nib = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-nib");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.nib");
+    let made = Command::new(nib)
+        .args(["-m32", "-O0", "-g", "-fobject-format=elf"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let said = Command::new(dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout);
+    for name in ["sum", "total"] {
+        assert!(text.contains(&format!("DW_AT_name\t(\"{name}\")")), "no {name}:\n{text}");
+    }
+}
+
+/// CodeView 4 in a 32-bit OMF object left out every local of a function that
+/// keeps no frame register (`sum` of tests/fixtures/matrix/known.c): its
+/// BP-relative record has no EBP to be relative to, and wdump/jwlink images
+/// of -m32 programs showed no locals. The stack pointer is the same distance
+/// from the frame address over the whole body, so a register-relative record
+/// names the cell.
+#[test]
+fn cv4_names_a_local_of_a_function_without_a_frame_register_off_the_stack_pointer() {
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("known.obj");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");
+    let made = compile(&source, &["-m32", "-O0", "-g", "-fobject-format=omf"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
+    let shape = llrm_core::objectfile::cv4info::shape(&records);
+    assert!(shape.iter().any(|one| one.starts_with("REGREL add.sum:")), "{shape:#?}");
+}
+
+/// DWARF in an OMF object, linked by jwlink into an LE image: the sections
+/// ride in segments of the class DWARF, as Open Watcom's `-hd` writes them, and
+/// the linker's "flat addresses" directive makes their addresses the image's.
+/// Without the directive a variable's address was its offset in its segment
+/// (`counter` at 0, not 0x10000). llvm-dwarfdump reads the sections that jwlink
+/// puts at the end of the image.
+#[test]
+fn dwarf_in_an_omf_object_links_into_an_le_image_that_llvm_reads() {
+    let (Some(dwarfdump), jwlink) =
+        (dwarfdump(), Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("jwlink"))
+    else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    if !jwlink.exists() {
+        skipped("needs jwlink beside llrm");
+        return;
+    }
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");
+    let made = compile(&source, &["-m32", "-O0", "-gdwarf", "-fobject-format=omf"], &dir.join("known.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(&jwlink)
+        .args(["format", "os2", "le", "debug", "dwarf", "file", "known.obj", "name", "known.exe"])
+        .args(["option", "quiet,start=_main,nodefaultlibs"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    let image =
+        std::fs::read(dir.join("known.exe")).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&linked.stdout)));
+    let elf = image.windows(4).rposition(|four| four == b"\x7fELF").expect("jwlink appends the DWARF as an ELF image");
+    std::fs::write(dir.join("known.elf"), &image[elf..]).unwrap();
+    let ran = |args: &[&str]| Command::new(&dwarfdump).args(args).arg(dir.join("known.elf")).output().unwrap();
+    let verified = ran(&["--verify"]);
+    assert!(verified.status.success(), "{}", String::from_utf8_lossy(&verified.stdout));
+    let text = String::from_utf8_lossy(&ran(&["--debug-info"]).stdout).into_owned();
+    for name in ["add", "main", "first", "second", "sum", "counter", "p", "pt"] {
+        assert!(text.contains(&format!("DW_AT_name\t(\"{name}\")")), "no {name}:\n{text}");
+    }
+    assert!(text.contains("DW_OP_addr 0x10000"), "the global is not at the image's address of the data:\n{text}");
+    // `-g` changes no code or data: the pages of the image are those of the
+    // same program linked without it (the header's debug-information pointers
+    // differ).
+    let made = compile(&source, &["-m32", "-O0", "-fobject-format=omf"], &dir.join("plain.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(&jwlink)
+        .args(["format", "os2", "le", "file", "plain.obj", "name", "plain.exe"])
+        .args(["option", "quiet,start=_main,nodefaultlibs"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    let plain =
+        std::fs::read(dir.join("plain.exe")).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&linked.stdout)));
+    let le = image.windows(4).position(|four| four == b"LE\0\0").expect("an LE header");
+    let pages = u32::from_le_bytes(image[le + 0x80..le + 0x84].try_into().unwrap()) as usize;
+    assert_eq!(image[pages..elf], plain[pages..plain.len()], "the pages of the image differ with -g");
+}
+
+/// DWARF in a 16-bit OMF object, linked by jwlink into an MZ image, in Open
+/// Watcom's own convention for segmented code: address size 2, a
+/// `DW_AT_segment` on each function and data symbol, the segment of a line
+/// program (extended opcode 4) and of an arange. Open Watcom's wdump is the
+/// reader (llvm-dwarfdump has no 16-bit addresses); it read none of it before
+/// the segment forms, and the offsets were unrelocated zeros without
+/// the linker's directive.
+#[test]
+fn dwarf_in_a_16_bit_omf_object_links_into_an_mz_image_that_wdump_reads() {
+    let wdump = std::env::var_os("WDUMP")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("dos/devtools/dev/c/watcom/binl/wdump")))
+        .filter(|path| path.exists());
+    let jwlink = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("jwlink");
+    let (Some(wdump), true) = (wdump, jwlink.exists()) else {
+        skipped("needs Open Watcom's wdump (WDUMP) and jwlink beside llrm");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");
+    let made = compile(&source, &["-m16", "-O0", "-gdwarf-2", "-fobject-format=omf"], &dir.join("known.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(&jwlink)
+        .args(["format", "dos", "debug", "dwarf", "file", "known.obj", "name", "known.exe"])
+        .args(["option", "quiet,start=_main,nodefaultlibs,map=known.map"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(dir.join("known.exe").exists(), "{}", String::from_utf8_lossy(&linked.stdout));
+    let said = Command::new(wdump).args(["-q", "-d", "-Dx"]).arg(dir.join("known.exe")).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    for wanted in [
+        "Address Size 02",
+        "Segment Size 02",
+        "DW_AT_name                    counter",
+        "DW_AT_name                    add",
+        "DW_AT_name                    first",
+        "DW_AT_name                    sum",
+        "DW_AT_segment",
+        "SET_SEGMENT",
+    ] {
+        assert!(text.contains(wanted), "no {wanted:?}:\n{text}");
+    }
+    // The global is where the linker put it: its offset in the data group, not
+    // zero, and its segment the group's.
+    let map = std::fs::read_to_string(dir.join("known.map")).unwrap();
+    let place = map.lines().find(|line| line.contains("_counter")).expect("the map names counter");
+    let offset =
+        place.split_whitespace().next().unwrap().split(':').nth(1).unwrap().trim_end_matches(['*', '+']).to_uppercase();
+    let wanted = format!("Loc expr: addr {}", &offset[offset.len() - 4..]);
+    assert!(text.contains(&wanted), "{wanted:?} not in the dump:\n{text}");
+    // -O2 keeps values in registers, whose DWARF numbers 16-bit code lacked:
+    // `register ax has no DWARF number` refused the compile.
+    let optimised = compile(&source, &["-m16", "-O2", "-gdwarf-2", "-fobject-format=omf"], &dir.join("fast.obj"));
+    assert!(optimised.status.success(), "{}", String::from_utf8_lossy(&optimised.stderr));
 }

@@ -127,6 +127,7 @@ pub fn source(
     text: &str,
     id: &str,
     classes: &[&str],
+    effects: &str,
 ) -> Result<String, String> {
     let registers = parse(text)?;
     let mut widths: Vec<u32> = registers.iter().map(|one| one.bits).collect();
@@ -189,7 +190,7 @@ pub fn source(
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, views }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views }}\n}};\n",
         loads.join(", "),
         scratch.join(", "),
         columns.join(", "),
@@ -218,11 +219,15 @@ mod source_tests {
     fn a_class_without_a_bit_is_refused_where_the_table_is_made() {
         let text =
             "ebp 32 ebp 0 frame - 3\nesp 32 esp 0 stack - 4\neax 32 eax 0 gpr,int - 1\nal 8 eax 0 int,byte - 2\n";
-        let error = source(text, "Reg", &CLASSES).err().expect("refused");
+        let error = source(text, "Reg", &CLASSES, "rows").err().expect("refused");
         assert!(error.contains("al has the class `byte`"), "{error}");
-        let made =
-            source("ebp 32 ebp 0 frame - 3\nesp 32 esp 0 stack - 4\neax 32 eax 0 gpr,int - 1\n", "Reg", &CLASSES)
-                .expect("made");
+        let made = source(
+            "ebp 32 ebp 0 frame - 3\nesp 32 esp 0 stack - 4\neax 32 eax 0 gpr,int - 1\n",
+            "Reg",
+            &CLASSES,
+            "rows",
+        )
+        .expect("made");
         assert!(made.contains("Reg::EAX as usize"), "{made}");
         assert!(made.contains("llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT"), "{made}");
     }
@@ -231,12 +236,12 @@ mod source_tests {
     #[test]
     fn a_role_needs_exactly_one_root() {
         let one = "ebp 32 ebp 0 frame,stack - 1\n";
-        assert!(source(one, "Reg", &["frame", "stack"]).is_ok());
+        assert!(source(one, "Reg", &["frame", "stack"], "rows").is_ok());
         let two = "ebp 32 ebp 0 frame,stack - 1\nesi 32 esi 0 frame - 2\n";
-        let error = source(two, "Reg", &["frame", "stack"]).err().expect("refused");
+        let error = source(two, "Reg", &["frame", "stack"], "rows").err().expect("refused");
         assert!(error.contains("2 registers are the root with the class `frame`"), "{error}");
         let none = "eax 32 eax 0 - - 1\n";
-        assert!(source(none, "Reg", &["frame", "stack"]).err().expect("refused").contains("0 registers"));
+        assert!(source(none, "Reg", &["frame", "stack"], "rows").err().expect("refused").contains("0 registers"));
     }
 
     /// Two registers meaning the same segment is no role: the table is not
@@ -246,14 +251,17 @@ mod source_tests {
         let base = "ebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\n";
         let classes = ["frame", "stack", "data_segment"];
         assert!(
-            source(&format!("{base}ds 16 ds 0 data_segment - 3\n"), "Reg", &classes)
+            source(&format!("{base}ds 16 ds 0 data_segment - 3\n"), "Reg", &classes, "rows")
                 .unwrap()
                 .contains("data_segment: Some(Reg::DS)")
         );
-        assert!(source(base, "Reg", &classes).unwrap().contains("data_segment: None"));
+        assert!(source(base, "Reg", &classes, "rows").unwrap().contains("data_segment: None"));
         let two = format!("{base}ds 16 ds 0 data_segment - 3\nes 16 es 0 data_segment - 4\n");
         assert!(
-            source(&two, "Reg", &classes).err().expect("refused").contains("2 registers have the class `data_segment`")
+            source(&two, "Reg", &classes, "rows")
+                .err()
+                .expect("refused")
+                .contains("2 registers have the class `data_segment`")
         );
     }
 
@@ -262,7 +270,7 @@ mod source_tests {
     #[test]
     fn a_load_is_the_eighth_column() {
         let text = "ebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\nes 16 es 0 - - 3 les\nds 16 ds 0 - - 4\n";
-        let made = source(text, "Reg", &["frame", "stack"]).unwrap();
+        let made = source(text, "Reg", &["frame", "stack"], "rows").unwrap();
         assert!(made.contains("(Reg::ES, \"les\")") && !made.contains("(Reg::DS"), "{made}");
         assert_eq!(
             crate::registers::parse("a 8 a 0 - - 1 x y").unwrap_err(),
@@ -276,6 +284,6 @@ mod source_tests {
         let text = "@scratch cx ax\nebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\n";
         assert_eq!(crate::registers::scratch(text), ["cx", "ax"]);
         assert_eq!(crate::registers::parse(text).unwrap().len(), 2);
-        assert!(source(text, "Reg", &["frame", "stack"]).unwrap().contains("&[Reg::CX, Reg::AX]"));
+        assert!(source(text, "Reg", &["frame", "stack"], "rows").unwrap().contains("&[Reg::CX, Reg::AX]"));
     }
 }

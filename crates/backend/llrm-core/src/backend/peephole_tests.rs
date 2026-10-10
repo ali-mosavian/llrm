@@ -1578,16 +1578,17 @@ fn test_stores_of_one_literal_are_not_shared_at_o2() {
 
 #[test]
 fn test_lea_of_a_frame_cell_is_decoded() {
+    let regs = crate::backend::registerinfo::test_regs();
     // `lea ax,[bp-18]` read as touching every lane kept all upper halves live
     // across the B$ERAS calls after a loop.
     let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-18), 2) });
     let lea =
         insn(0, Some((0, 0)), Some(sem(Operation::Address, "lea", vec![rl(RegId::AX, 2)], vec![cell])), vec![], vec![]);
 
-    let (reads, writes) = _register_effects(16, &lea, false, true).expect("decoded");
+    let (reads, writes) = _register_effects(regs, 16, &lea, false, true).expect("decoded");
 
-    assert!(reads.is_subset(&_lanes(RegId::EBP)));
-    assert!(_lanes(RegId::AX).is_subset(&writes) && writes.and(&_lanes(RegId::EBX)).is_empty());
+    assert!(reads.is_subset(&_lanes(regs, RegId::EBP)));
+    assert!(_lanes(regs, RegId::AX).is_subset(&writes) && writes.and(&_lanes(regs, RegId::EBX)).is_empty());
 }
 
 #[test]
@@ -2190,6 +2191,58 @@ fn test_copied_value_survives_overwriting_its_original_register() {
     assert_eq!(whats(&result.insns()), expected);
 }
 
+/// `mov ax, 1; movzx eax, ax` is `mov eax, 1`: the extension of a register
+/// holding a constant is the extended constant (dos32 BASIC passed every
+/// INTEGER constant to a runtime call so).
+#[test]
+fn test_the_extension_of_a_register_holding_a_constant_is_the_extended_constant() {
+    let moved = |at: i64, dest: Loc, source: Loc| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 1)),
+            Some(sem(Operation::Move, "mov", vec![dest], vec![source])),
+            vec![],
+            vec![],
+        ))
+    };
+    let extended = |at: i64, name: &str, dest: Loc, source: Loc| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 1)),
+            Some(sem(Operation::Extend, name, vec![dest], vec![source])),
+            vec![],
+            vec![],
+        ))
+    };
+    let after = |input: Vec<Arc<Insn>>| whats(&constants(&body("extension", 0, vec![block(0, input, vec![])])).insns());
+    let mov32 = |register: RegId, value: i64| sem(Operation::Move, "mov", vec![rl(register, 4)], vec![im(value, 4)]);
+    // Zero extension of a word, in place and into another register.
+    let narrow = moved(0, rl(RegId::AX, 2), im(1, 2));
+    assert_eq!(
+        after(vec![narrow.clone(), extended(1, "movzx", rl(RegId::EAX, 4), rl(RegId::AX, 2))])[1],
+        mov32(RegId::EAX, 1)
+    );
+    assert_eq!(
+        after(vec![narrow.clone(), extended(1, "movzx", rl(RegId::ECX, 4), rl(RegId::AX, 2))])[1],
+        mov32(RegId::ECX, 1)
+    );
+    // A byte's sign: -3 is 0xfffffffd, 200 as a byte is 200 whether or not it
+    // is negative to `movsx`.
+    let byte = moved(0, rl(RegId::AL, 1), im(-3, 1));
+    assert_eq!(
+        after(vec![byte.clone(), extended(1, "movsx", rl(RegId::EAX, 4), rl(RegId::AL, 1))])[1],
+        mov32(RegId::EAX, -3)
+    );
+    assert_eq!(after(vec![byte, extended(1, "movzx", rl(RegId::EAX, 4), rl(RegId::AL, 1))])[1], mov32(RegId::EAX, 253));
+    // The low word of a whole register, and nothing once the source is written
+    // between.
+    let whole = moved(0, rl(RegId::EAX, 4), im(0x1_0005, 4));
+    assert_eq!(after(vec![whole, extended(1, "movzx", rl(RegId::ECX, 4), rl(RegId::AX, 2))])[1], mov32(RegId::ECX, 5));
+    let unknown = moved(1, rl(RegId::AX, 2), rl(RegId::DX, 2));
+    let kept = after(vec![narrow, unknown, extended(2, "movzx", rl(RegId::EAX, 4), rl(RegId::AX, 2))]);
+    assert_eq!(kept[2].name.as_deref(), Some("movzx"));
+}
+
 #[test]
 fn test_partial_write_invalidates_constant() {
     let moved = |at: i64, dest: Loc, source: Loc| {
@@ -2422,7 +2475,9 @@ fn test_constant_knowledge_is_local_and_invalidated() {
         let result = constants(&body("constants", 0, blocks));
         assert_eq!(
             result.insns().iter().filter(|one| one.what.as_ref() == Some(&what)).count(),
-            if ["none", "extend"].contains(&interruption) { 1 } else { 2 },
+            // A movsx of the held constant is that constant again, so the later
+            // copy is redundant.
+            if ["none", "extend", "extend_write"].contains(&interruption) { 1 } else { 2 },
             "{interruption}"
         );
     }
@@ -4352,8 +4407,10 @@ fn repeated_fill(
 /// half across it read as overwritten.
 #[test]
 fn test_a_rep_in_real_mode_writes_cx_and_not_the_upper_half_of_ecx() {
-    let (_, writes) = _register_effects(16, &repeated_fill("stosw", 2, RegId::DI, RegId::CX, RegId::AX), true, false)
-        .expect("encodes");
+    let regs = crate::backend::registerinfo::test_regs();
+    let (_, writes) =
+        _register_effects(regs, 16, &repeated_fill("stosw", 2, RegId::DI, RegId::CX, RegId::AX), true, false)
+            .expect("encodes");
     assert!(writes.contains(&(RegId::ECX, 0)) && writes.contains(&(RegId::ECX, 1)), "{writes:?}");
     assert!(!writes.contains(&(RegId::ECX, 2)) && !writes.contains(&(RegId::ECX, 3)), "{writes:?}");
 }
@@ -4361,8 +4418,9 @@ fn test_a_rep_in_real_mode_writes_cx_and_not_the_upper_half_of_ecx() {
 /// In 32-bit code it counts ECX.
 #[test]
 fn test_a_rep_in_flat_mode_writes_ecx_whole() {
+    let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
     let (_, writes) =
-        _register_effects(32, &repeated_fill("stosd", 4, RegId::EDI, RegId::ECX, RegId::EAX), true, false)
+        _register_effects(regs, 32, &repeated_fill("stosd", 4, RegId::EDI, RegId::ECX, RegId::EAX), true, false)
             .expect("encodes");
     assert!((0..4).all(|lane| writes.contains(&(RegId::ECX, lane))), "{writes:?}");
 }
@@ -4372,11 +4430,12 @@ fn test_a_rep_in_flat_mode_writes_ecx_whole() {
 /// `x86.instr` is answered from it, and one without is not known, not decoded.
 #[test]
 fn test_an_instruction_with_a_row_is_answered_from_the_table_and_one_without_is_unknown() {
+    let regs = crate::backend::registerinfo::test_regs();
     let table = sem(Operation::Binary, "add", vec![rl(RegId::CX, 2)], vec![rl(RegId::CX, 2), rl(RegId::DX, 2)]);
-    let (reads, writes) = _register_effects_of_what(16, &table, true, true).expect("the table answers");
+    let (reads, writes) = _register_effects_of_what(regs, 16, &table, true, true).expect("the table answers");
     assert!(reads.contains(&(RegId::ECX, 0)) && reads.contains(&(RegId::EDX, 1)) && writes.contains(&(RegId::ECX, 1)));
     let none = sem(Operation::Unary, "bswap", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4)]);
-    assert_eq!(_register_effects_of_what(32, &none, true, true), None);
+    assert_eq!(_register_effects_of_what(regs, 32, &none, true, true), None);
 }
 
 /// A cache of an instruction's effects was given a memory operand equal, when
@@ -4384,6 +4443,7 @@ fn test_an_instruction_with_a_row_is_answered_from_the_table_and_one_without_is_
 /// another register (queens -Os: `mov es,[bx+2]` for `mov es,[si+2]`).
 #[test]
 fn test_two_cells_equal_but_spelled_through_other_registers_have_their_own_effects() {
+    let regs = crate::backend::registerinfo::test_regs();
     let through = |register| {
         let cell = Mem { through: register, offset: 2, base: Some(Held { value: 1, width: 2 }), ..Mem::new(None, 2) };
         sem(Operation::Move, "mov", vec![rl(RegId::ES, 2)], vec![Loc::Mem(cell)])
@@ -4395,9 +4455,9 @@ fn test_two_cells_equal_but_spelled_through_other_registers_have_their_own_effec
         place.same_meaning(&through(RegId::SI)) && place != through(RegId::SI),
         "the same cell, spelled another way, is not equal to it"
     );
-    let (first, _) = _register_effects_of_what(16, &place, true, false).expect("the table answers");
+    let (first, _) = _register_effects_of_what(regs, 16, &place, true, false).expect("the table answers");
     place = through(RegId::SI);
-    let (second, _) = _register_effects_of_what(16, &place, true, false).expect("the table answers");
+    let (second, _) = _register_effects_of_what(regs, 16, &place, true, false).expect("the table answers");
     assert!(first.contains(&(RegId::EBX, 0)) && !first.contains(&(RegId::ESI, 0)));
     assert!(second.contains(&(RegId::ESI, 0)) && !second.contains(&(RegId::EBX, 0)), "[si+2] answered as [bx+2]");
 }
@@ -4408,6 +4468,7 @@ fn test_two_cells_equal_but_spelled_through_other_registers_have_their_own_effec
 /// one already answered is answered from it, whichever `Insn` it is held in.
 #[test]
 fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
+    let regs = crate::backend::registerinfo::test_regs();
     let add = |at| {
         insn(
             at,
@@ -4418,9 +4479,9 @@ fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
         )
     };
     let before = effects_computed();
-    let first = _register_effects(16, &add(0), false, true);
+    let first = _register_effects(regs, 16, &add(0), false, true);
     for at in 1..6 {
-        assert_eq!(_register_effects(16, &add(at), false, true), first);
+        assert_eq!(_register_effects(regs, 16, &add(at), false, true), first);
     }
     assert_eq!(effects_computed() - before, 1, "worked out again for each ask");
     let other = insn(
@@ -4430,7 +4491,11 @@ fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
         vec![],
         vec![],
     );
-    assert_ne!(_register_effects(16, &other, false, true), first, "another instruction was given this one's answer");
+    assert_ne!(
+        _register_effects(regs, 16, &other, false, true),
+        first,
+        "another instruction was given this one's answer"
+    );
 }
 
 /// `dead_at_exit` was worked out for the body ten passes in a row, though all
@@ -4572,8 +4637,13 @@ fn test_a_function_without_a_copy_runs_copy_propagation_zero_times() {
 /// root, the stack pointer and what the file omits have none.
 #[test]
 fn the_lanes_of_a_register_are_the_descriptions() {
-    assert_eq!(_lanes(RegId::AH), [(RegId::EAX, 1)].into_iter().collect());
-    assert_eq!(_lanes(RegId::BL), [(RegId::EBX, 0)].into_iter().collect());
-    assert_eq!(_lanes(RegId::DX), [(RegId::EDX, 0), (RegId::EDX, 1)].into_iter().collect());
-    assert!(!_lanes(RegId::EBP).is_empty() && _lanes(RegId::ESP).is_empty() && _lanes(RegId::XMM0).is_empty());
+    let regs = crate::backend::registerinfo::test_regs();
+    assert_eq!(_lanes(regs, RegId::AH), [(RegId::EAX, 1)].into_iter().collect());
+    assert_eq!(_lanes(regs, RegId::BL), [(RegId::EBX, 0)].into_iter().collect());
+    assert_eq!(_lanes(regs, RegId::DX), [(RegId::EDX, 0), (RegId::EDX, 1)].into_iter().collect());
+    assert!(
+        !_lanes(regs, RegId::EBP).is_empty()
+            && _lanes(regs, RegId::ESP).is_empty()
+            && _lanes(regs, RegId::XMM0).is_empty()
+    );
 }

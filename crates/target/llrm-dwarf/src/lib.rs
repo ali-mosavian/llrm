@@ -57,8 +57,8 @@ pub fn expanded(
 ) -> Result<Object, Unsupported> {
     let version = match info.format {
         Format::Default => DEFAULT_VERSION,
-        Format::Dwarf { version } if matches!(version, 4 | 5) => version,
-        Format::Dwarf { version } => return refused(format!("version {version} is not written: 4 and 5 are")),
+        Format::Dwarf { version } if matches!(version, 2..=5) => version,
+        Format::Dwarf { version } => return refused(format!("version {version} is not written: 2 to 5 are")),
         Format::CodeView => return refused("this object format cannot carry CodeView"),
         Format::TurboDebugger => return refused("this object format cannot carry Turbo Debugger's information"),
     };
@@ -148,6 +148,15 @@ pub(crate) fn symbol_reloc(
     addend: i64,
 ) -> Reloc {
     Reloc { at, kind: llrm_object::Kind::Abs { width }, target: Target::Symbol(symbol), addend }
+}
+
+/// A segment base: the selector of the segment `section` is in, which the
+/// linker places (a 16-bit program's addresses are a segment and an offset).
+pub(crate) fn segment_reloc(
+    at: usize,
+    section: usize,
+) -> Reloc {
+    Reloc { at, kind: llrm_object::Kind::SegmentBase, target: Target::Section(section), addend: 0 }
 }
 
 pub(crate) fn section_reloc(

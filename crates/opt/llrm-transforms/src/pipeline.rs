@@ -37,7 +37,7 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
+    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -51,6 +51,9 @@ pub struct Options {
     /// Whether the callers' arguments are stated as ranges on a body's
     /// parameters: gcc's `-fipa-vrp`, -O2 and up.
     pub ipa_ranges: bool,
+    /// Alias and branch decisions use the intervals of counted loops (gcc's
+    /// `-ftree-vrp`, -O2; its -O1 has them for induction variables only).
+    pub loop_intervals: bool,
     pub lcssa: bool,
     pub floatloop: bool,
     pub fold: bool,
@@ -98,6 +101,7 @@ impl Default for Options {
             dead: true,
             hoist: true,
             ipa_ranges: true,
+            loop_intervals: true,
             forward: true,
             drop_loads: true,
             drop_stores: true,
@@ -133,6 +137,7 @@ impl Options {
             limits: Limits { grows: false, ..Self::default().limits },
             inline: inline::Threshold::new(Self::default().inline.limit * 6 / 15),
             ipa_ranges: false,
+            loop_intervals: false,
             forward: false,
             drop_loads: false,
             fill: false,
@@ -269,6 +274,9 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before anything asks what a port call does to memory.
         Box::new(ports::Ports),
         Box::new(decide::Decide),
+        // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes
+        // at -Os.
+        Box::new(phiopt::PhiOpt { size: applied.options.prefers_size() }),
         // Once the arguments are values rather than frame cells; the loop it
         // makes goes to the loop passes below.
         Box::new(tailrec::TailRecursion),
@@ -340,6 +348,7 @@ pub fn recorded(
 ) -> Result<Vec<Stage>, String> {
     timed();
     let mut manager = PassManager::default();
+    manager.without_loop_intervals = !applied.options.loop_intervals;
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     if !applied.options.optimize {

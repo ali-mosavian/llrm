@@ -9,6 +9,8 @@
 
 use std::sync::Arc;
 
+use llrm_lir::registers::Regs;
+
 use crate::analysis::dataflow::{self, Direction};
 use crate::backend::peephole::{_frame_cell, _frame_written, _lanes, _overlapping, _register_effects, id};
 use crate::model::ir::{Loc, Mem, Operation, Reg};
@@ -45,6 +47,7 @@ fn _empty(one: &Insn) -> bool {
 /// memory the displacement alone does not name, ends every fact: the write
 /// could be to any slot.
 fn _held(
+    regs: Regs,
     bits: u32,
     one: &Insn,
     facts: Facts,
@@ -66,11 +69,11 @@ fn _held(
         // every fact.
         return (facts, false, None);
     }
-    let Some(effects) = _register_effects(bits, one, false, false) else {
+    let Some(effects) = _register_effects(regs, bits, one, false, false) else {
         return (Facts::default(), false, None);
     };
     let writes = effects.1;
-    if !writes.is_disjoint(&_lanes(crate::backend::registerinfo::frame_root())) {
+    if !writes.is_disjoint(&_lanes(regs, regs.frame)) {
         return (Facts::default(), false, None);
     }
     if let (Operation::Move, Some("mov"), [Loc::Mem(cell)], [Loc::Reg(register)]) =
@@ -130,7 +133,7 @@ fn _held(
                 .map(|((other, _), _)| *other)
                 .min_by_key(|other| other.register as u32)
                 .filter(|_| _plain(one) && !one.volatile && one.group.is_none() && one.symbol != Some(true));
-            facts.retain(|pair, _| _lanes(pair.0.register).is_disjoint(&writes));
+            facts.retain(|pair, _| _lanes(regs, pair.0.register).is_disjoint(&writes));
             facts.insert((*register, cell.clone()), false);
             return (facts, false, held_in.map(|from| (0, from)));
         }
@@ -172,11 +175,11 @@ fn _held(
             .min_by_key(|other| other.register as u32)
             .map(|from| (at, from))
     })();
-    facts.retain(|pair, _| _lanes(pair.0.register).is_disjoint(&writes));
+    facts.retain(|pair, _| _lanes(regs, pair.0.register).is_disjoint(&writes));
     if let Some(written) = written {
         if what.op == Operation::Move && what.sources.len() == 1 {
             if let Loc::Reg(source) = &what.sources[0] {
-                if source.width == written.width && _lanes(source.register).is_disjoint(&writes) {
+                if source.width == written.width && _lanes(regs, source.register).is_disjoint(&writes) {
                     facts.insert((*source, written), true);
                 }
             }
@@ -192,6 +195,7 @@ fn _held(
 /// against nothing its backedge would start out killing the very fact the
 /// header is there to establish.
 fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
+    let regs = body.regs();
     let mut predecessors: IndexMap<i64, Vec<i64>> = body.blocks.iter().map(|block| (block.at, Vec::new())).collect();
     for block in &body.blocks {
         for at in &block.succ {
@@ -226,13 +230,14 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
             }
             met
         },
-        |at, facts| facts.as_ref().map(|facts| _transfer(body.bits, blocks[&at], facts.clone()).2),
+        |at, facts| facts.as_ref().map(|facts| _transfer(regs, body.bits, blocks[&at], facts.clone()).2),
     );
     solved.input.into_iter().map(|(at, facts)| (at, facts.unwrap_or_default())).collect()
 }
 
 /// The reloads `facts` makes redundant in `block`, and the facts after it.
 fn _transfer(
+    regs: Regs,
     bits: u32,
     block: &LirBlock,
     facts: Facts,
@@ -241,7 +246,7 @@ fn _transfer(
     let mut redundant = Vec::new();
     let mut copies = IndexMap::default();
     for one in &block.insns {
-        let (after, drop, copy) = _held(bits, one, facts);
+        let (after, drop, copy) = _held(regs, bits, one, facts);
         facts = after;
         if drop {
             redundant.push(id(one));
@@ -254,10 +259,11 @@ fn _transfer(
 }
 
 pub fn forwarded(body: &LirBody) -> LirBody {
+    let regs = body.regs();
     let into = _available(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let (redundant, copies, _) = _transfer(body.bits, block, into[&block.at].clone());
+        let (redundant, copies, _) = _transfer(regs, body.bits, block, into[&block.at].clone());
         if redundant.is_empty() && copies.is_empty() {
             blocks.push(block.clone());
             continue;

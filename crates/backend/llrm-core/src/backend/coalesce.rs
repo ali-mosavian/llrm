@@ -11,12 +11,13 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment};
 use crate::backend::classes::RegisterClasses;
+use crate::backend::neighbours::Neighbours;
 use crate::backend::target::{self, Segments};
 use crate::backend::{allocate, regclass};
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;
-use crate::support::hash::IndexMap;
+use crate::support::hash::{HashMap, IndexMap};
 
 pub struct Coalescer {
     pub pinned: IndexMap<u32, RegId>,
@@ -57,7 +58,7 @@ impl LIRTransform for Coalescer {
     }
 }
 
-pub type Graph = IndexMap<u32, BTreeSet<u32>>;
+pub type Graph = IndexMap<u32, Neighbours>;
 
 fn _find(
     parent: &mut IndexMap<u32, u32>,
@@ -323,7 +324,7 @@ impl Webs {
         &self,
         node: u32,
     ) -> usize {
-        self.near.get(&node).map_or(0, BTreeSet::len)
+        self.near.get(&node).map_or(0, Neighbours::len)
     }
 
     fn make_attr(
@@ -346,11 +347,39 @@ impl Webs {
             let attr = self.make_attr(node, held.contains_key(&node));
             self.attr.insert(node, attr);
         }
-        for (node, neighbours) in self.near.clone() {
-            for other in neighbours {
-                self.add(node, self.attr[&other]);
+        // Each node's counts are summed over its neighbours and written once,
+        // from the attributes in an array: a pair costs a read, not three
+        // hash lookups.
+        let near = std::mem::take(&mut self.near);
+        let span = self.attr.keys().copied().max().map_or(0, |last| last as usize + 1);
+        let mut attrs = vec![None; span];
+        for (node, attr) in &self.attr {
+            attrs[*node as usize] = Some(*attr);
+        }
+        for (node, neighbours) in &near {
+            let (mut counted, mut hot, mut pinned): (IndexMap<u32, u32>, IndexMap<u32, u32>, u32) =
+                (IndexMap::default(), IndexMap::default(), 0);
+            for other in neighbours.iter() {
+                let attr = attrs[other as usize].expect("a neighbour has its attributes");
+                if attr.significant {
+                    *counted.entry(attr.palette).or_default() += 1;
+                }
+                if attr.significant || attr.pinned {
+                    *hot.entry(attr.palette).or_default() += 1;
+                }
+                pinned += u32::from(attr.pinned);
+            }
+            if !counted.is_empty() {
+                self.counts.entry(*node).or_default().extend(counted);
+            }
+            if !hot.is_empty() {
+                self.hots.entry(*node).or_default().extend(hot);
+            }
+            if pinned > 0 {
+                *self.pinned_near.entry(*node).or_default() += pinned;
             }
         }
+        self.near = near;
     }
 
     fn attr_of(
@@ -435,16 +464,16 @@ impl Webs {
             .filter(|(palette, _)| self.meets(**palette, allowed))
             .map(|(_, n)| *n as usize)
             .sum();
-        let empty = BTreeSet::new();
+        let empty = Neighbours::default();
         let beside = self.near.get(&big).unwrap_or(&empty);
         count += self
             .near
             .get(&small)
             .unwrap_or(&empty)
             .iter()
-            .filter(|other| !beside.contains(*other))
+            .filter(|other| !beside.contains(other))
             .filter(|other| {
-                let attr = self.attr_of(**other);
+                let attr = self.attr_of(*other);
                 attr.significant && self.meets(attr.palette, allowed)
             })
             .count();
@@ -459,13 +488,13 @@ impl Webs {
         there: u32,
         allowed: &BTreeSet<RegId>,
     ) -> usize {
-        let empty = BTreeSet::new();
+        let empty = Neighbours::default();
         let neighbours: BTreeSet<u32> = self
             .near
             .get(&here)
             .unwrap_or(&empty)
-            .union(self.near.get(&there).unwrap_or(&empty))
-            .copied()
+            .iter()
+            .chain(self.near.get(&there).unwrap_or(&empty).iter())
             .filter(|one| *one != here && *one != there)
             .collect();
         let k = allowed.len();
@@ -494,12 +523,12 @@ impl Webs {
         if allowed != self.palette(kept) {
             return false;
         }
-        let empty = BTreeSet::new();
+        let empty = Neighbours::default();
         let (beside, own) = (self.near.get(&kept).unwrap_or(&empty), self.near.get(&gone).unwrap_or(&empty));
         if own.len() <= beside.len() {
-            return own.iter().filter(|other| **other != gone && **other != kept).all(|other| {
-                let attr = self.attr_of(*other);
-                beside.contains(other) || !self.meets(attr.palette, allowed) || !(attr.significant || attr.pinned)
+            return own.iter().filter(|other| *other != gone && *other != kept).all(|other| {
+                let attr = self.attr_of(other);
+                beside.contains(&other) || !self.meets(attr.palette, allowed) || !(attr.significant || attr.pinned)
             });
         }
         let hot: usize = self
@@ -512,9 +541,9 @@ impl Webs {
             .sum();
         let shared = beside
             .iter()
-            .filter(|other| own.contains(*other))
+            .filter(|other| own.contains(other))
             .filter(|other| {
-                let attr = self.attr_of(**other);
+                let attr = self.attr_of(*other);
                 self.meets(attr.palette, allowed) && (attr.significant || attr.pinned)
             })
             .count();
@@ -532,18 +561,18 @@ impl Webs {
         if allowed != self.palette(kept) {
             return false;
         }
-        let empty = BTreeSet::new();
+        let empty = Neighbours::default();
         self.near
             .get(&gone)
             .unwrap_or(&empty)
             .iter()
-            .filter(|other| **other != gone && **other != kept)
+            .filter(|other| *other != gone && *other != kept)
             .all(
                 |other| {
-                    let palette = self.palette(*other);
-                    self.near.get(&kept).is_some_and(|found| found.contains(other))
+                    let palette = self.palette(other);
+                    self.near.get(&kept).is_some_and(|found| found.contains(&other))
                         || palette.intersection(allowed).next().is_none()
-                        || (!self.attr_of(*other).pinned && self.degree(*other) < palette.len())
+                        || (!self.attr_of(other).pinned && self.degree(other) < palette.len())
                 },
             )
     }
@@ -573,7 +602,7 @@ impl Webs {
         pin: bool,
     ) {
         let (old_gone, old_kept) = (self.attr_of(gone), self.attr_of(kept));
-        let gone_near: Vec<u32> = self.near.get(&gone).map(|set| set.iter().copied().collect()).unwrap_or_default();
+        let gone_near: Vec<u32> = self.near.get(&gone).map(|set| set.iter().collect()).unwrap_or_default();
         let (common, only): (Vec<u32>, Vec<u32>) =
             gone_near.iter().copied().partition(|other| self.near.get(&kept).is_some_and(|set| set.contains(other)));
         // A neighbour of both loses one: it may stop being significant, and its
@@ -582,9 +611,7 @@ impl Webs {
             let old = self.attr_of(other);
             let significant = self.degree(other) - 1 >= self.palettes[old.palette as usize].len();
             if significant != old.significant {
-                for neighbour in
-                    self.near.get(&other).map(|set| set.iter().copied().collect::<Vec<_>>()).unwrap_or_default()
-                {
+                for neighbour in self.near.get(&other).map(|set| set.iter().collect::<Vec<_>>()).unwrap_or_default() {
                     if neighbour != gone {
                         self.remove(neighbour, old);
                         self.add(neighbour, Attr { significant, ..old });
@@ -601,8 +628,7 @@ impl Webs {
         let degree = self.degree(kept) + only.len();
         let new_kept = Attr { significant: degree >= allowed.len(), palette, pinned: old_kept.pinned || pin };
         if new_kept != old_kept {
-            for neighbour in self.near.get(&kept).map(|set| set.iter().copied().collect::<Vec<_>>()).unwrap_or_default()
-            {
+            for neighbour in self.near.get(&kept).map(|set| set.iter().collect::<Vec<_>>()).unwrap_or_default() {
                 self.remove(neighbour, old_kept);
                 self.add(neighbour, new_kept);
             }
@@ -629,7 +655,7 @@ impl Webs {
     fn consistent(&self) -> bool {
         let mut fresh = self.clone_shape();
         for (node, neighbours) in fresh.near.clone() {
-            for other in neighbours {
+            for other in neighbours.iter() {
                 let attr = fresh.attr[&other];
                 fresh.add(node, attr);
             }
@@ -670,6 +696,7 @@ impl Webs {
 thread_local! {
     static ASKED: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static NUMBERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many values the liveness rows of the last interference graph of this
@@ -684,6 +711,11 @@ pub fn last_numbered() -> usize {
 /// only.
 pub fn last_asked() -> Option<usize> {
     ASKED.with(std::cell::Cell::get)
+}
+
+/// How many instructions the last interference graph of this thread looked at.
+pub fn last_visited() -> usize {
+    VISITED.with(std::cell::Cell::get)
 }
 
 pub fn _interference(body: &LirBody) -> Graph {
@@ -748,21 +780,21 @@ pub fn _interference_among(
         None => Rows::Dense(allocate::live_rows_by(body, wanted)),
     };
     NUMBERED.with(|numbered| numbered.set(rows.numbered()));
+    VISITED.with(|visited| visited.set(0));
     // A copy's widths are read only where both its values are asked of (an edge
     // needs both).
     let widths = match (&among, &web) {
         (Some(found), Some(_)) => found.widths(body, &wanted),
         _ => crate::analysis::occurrences::widths_of(body.blocks.iter().flat_map(|block| &block.insns), &wanted),
     };
-    let mut graph: Graph = IndexMap::default();
+    let mut graph = Building::default();
 
-    let edge = |graph: &mut Graph, one: u32, other: u32| {
+    let edge = |graph: &mut Building, one: u32, other: u32| {
         if one != other && wanted(one) && wanted(other) {
-            graph.entry(one).or_default().insert(other);
-            graph.entry(other).or_default().insert(one);
+            graph.link(one, other);
         }
     };
-    let all_pairs = |graph: &mut Graph, alive: &BTreeSet<u32>| {
+    let all_pairs = |graph: &mut Building, alive: &BTreeSet<u32>| {
         let named: Vec<u32> = alive.iter().copied().filter(|one| wanted(*one)).collect();
         for value in &named {
             for other in &named {
@@ -786,6 +818,18 @@ pub fn _interference_among(
                 .collect()
         })
     });
+    // Asked of a few values, an instruction that names none of them and is no
+    // parallel copy changes nothing in the walk (what it defines or reads is
+    // never live here), so the walk is of the instructions that do.
+    let naming: Option<HashMap<usize, Vec<usize>>> = only.map(|only| {
+        crate::backend::postings::following(body, |postings| {
+            let mut found: HashMap<usize, Vec<usize>> = HashMap::default();
+            for at in only.iter().flat_map(|value| postings.defs(*value).iter().chain(postings.uses(*value))) {
+                found.entry(at.0 as usize).or_default().push(at.1 as usize);
+            }
+            found
+        })
+    });
     for (block_index, block) in body.blocks.iter().enumerate() {
         let mut alive: BTreeSet<u32> = rows.leaving(block.at).into_iter().filter(|one| wanted(*one)).collect();
         if let Some(touched) = &touched {
@@ -800,8 +844,32 @@ pub fn _interference_among(
         if entries.contains(&block.at) {
             all_pairs(&mut graph, &rows.entering(block.at).into_iter().filter(|one| wanted(*one)).collect());
         }
+        // The positions to walk, last first; every one where not asked of a
+        // few.
+        let sparse: Option<Vec<usize>> = naming
+            .as_ref()
+            .map(
+                |naming| {
+                    let mut at: Vec<usize> = naming.get(&block_index).cloned().unwrap_or_default();
+                    at.extend(block.insns.iter().enumerate().filter(|(_, one)| one.group.is_some()).map(|(i, _)| i));
+                    at.sort_unstable_by(|a, b| b.cmp(a));
+                    at.dedup();
+                    at
+                },
+            );
+        let mut next = 0;
         let mut index = block.insns.len() as i64 - 1;
-        while index >= 0 {
+        loop {
+            if let Some(sparse) = &sparse {
+                while next < sparse.len() && sparse[next] as i64 > index {
+                    next += 1;
+                }
+                let Some(&at) = sparse.get(next) else { break };
+                index = at as i64;
+            } else if index < 0 {
+                break;
+            }
+            VISITED.with(|visited| visited.set(visited.get() + 1));
             let one = &block.insns[index as usize];
             if one.group.is_some() {
                 let mut first = index as usize;
@@ -825,7 +893,7 @@ pub fn _interference_among(
                 for item in group {
                     for value in &item.defines {
                         if wanted(*value) {
-                            graph.entry(*value).or_default();
+                            graph.touch(*value);
                         }
                     }
                 }
@@ -867,7 +935,49 @@ pub fn _interference_among(
             }
         }
     }
-    graph
+    graph.finish()
+}
+
+/// An interference graph as it is built: a row of bits for each value, indexed
+/// by its number, so a pair costs two bit writes and no hash lookup, and the
+/// graph's nodes in the order the first pair named them.
+#[derive(Default)]
+struct Building {
+    rows: Vec<Neighbours>,
+    seen: Vec<bool>,
+    order: Vec<u32>,
+}
+
+impl Building {
+    fn touch(
+        &mut self,
+        value: u32,
+    ) {
+        let at = value as usize;
+        if at >= self.rows.len() {
+            self.rows.resize_with(at + 1, Neighbours::default);
+            self.seen.resize(at + 1, false);
+        }
+        if !self.seen[at] {
+            self.seen[at] = true;
+            self.order.push(value);
+        }
+    }
+
+    fn link(
+        &mut self,
+        one: u32,
+        other: u32,
+    ) {
+        self.touch(one);
+        self.touch(other);
+        self.rows[one as usize].insert(other);
+        self.rows[other as usize].insert(one);
+    }
+
+    fn finish(mut self) -> Graph {
+        self.order.iter().map(|value| (*value, std::mem::take(&mut self.rows[*value as usize]))).collect()
+    }
 }
 
 /// One block's instructions, with a joined copy's bytes given away.
@@ -1284,6 +1394,7 @@ mod tests {
 
     #[test]
     fn test_coalescing_keeps_the_pinned_return_as_representative() {
+        let regs = crate::backend::registerinfo::test_regs();
         let body = body("return", vec![_define(0, 1), _move(3, 2, 1), _use(5, 2)], &[]);
         let done = joined(
             &body,
@@ -1307,7 +1418,7 @@ mod tests {
             let insns = emitted.insns();
             assert_eq!(
                 insns[insns.len() - 1].what.as_ref().expect("semantics").sources,
-                vec![Loc::Reg(Reg { register: target::named(register, 2), width: 2 })]
+                vec![Loc::Reg(Reg { register: regs.named(register, 2), width: 2 })]
             );
         }
     }

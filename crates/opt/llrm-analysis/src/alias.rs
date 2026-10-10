@@ -2935,7 +2935,7 @@ impl Bounded<'_> {
     fn at(
         &self,
         at: i64,
-    ) -> Option<&IndexMap<ValueId, ranges::Interval>> {
+    ) -> Option<&ranges::Intervals> {
         match self {
             Bounded::Held(held) => held.at(at),
             Bounded::Worked(worked) => worked.get(&at),
@@ -2951,8 +2951,13 @@ pub fn annotated_with(
     let bounded = match (unit.bounds, unit.registers) {
         (Some(held), Some(registers)) if std::ptr::eq(known, registers) => {
             if llrm_support::env_set("LLRM_CHECK_REPLAY") {
+                // The body's own intervals, or at a level without them (-O1:
+                // `Outer::loop_intervals`) none: a unit made for alias carries
+                // none there, one made for an induction variable's range the
+                // body's.
+                let facts = held.facts();
                 assert!(
-                    held.facts() == ranges::bounded_with(unit, known)?,
+                    (!unit.loop_intervals && facts.is_empty()) || facts == ranges::bounded_with(unit, known)?,
                     "the bounds a unit carries are not those of the body it stands over: stale"
                 );
             }

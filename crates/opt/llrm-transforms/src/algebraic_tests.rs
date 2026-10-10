@@ -727,6 +727,35 @@ fn test_a_mask_then_trunc_then_zext_reads_the_low_part_once() {
     );
 }
 
+/// `and (zext x), 255` kept the extension, then masked: `movzx eax, ax; and
+/// eax, 255`. The mask has no bit above `x`, so it is `x` masked and then
+/// extended, which is the one `movzx eax, al` of the byte.
+#[test]
+fn test_a_mask_under_an_extension_that_the_mask_does_not_reach_past_is_taken_before_it() {
+    let text = "define i32 @f(i16 %x) {\nb0:\n  %z = zext i16 %x to i32\n  %r = and i32 %z, 255\n  ret i32 %r\n}\n";
+    let after = checked(text, &singles(&edges(16)));
+    assert_eq!(
+        after,
+        "define i32 @f(i16 %x) {\nb0:\n  %0 = trunc i16 %x to i8\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n}\n"
+    );
+    // A mask that reaches past the extended value, or an extension read
+    // elsewhere, stays.
+    unchanged("define i32 @f(i16 %x) {\nb0:\n  %z = zext i16 %x to i32\n  %r = and i32 %z, 65792\n  ret i32 %r\n}\n");
+    // Any mask the narrow type holds is taken under the extension; the word
+    // `and` it leaves is widened again by m32's peephole (quicksort -O2 was
+    // `mov dx, ax; and dx, 32767; movzx edx, dx` until it was).
+    assert_eq!(
+        checked(
+            "define i32 @f(i16 %x) {\nb0:\n  %z = zext i16 %x to i32\n  %r = and i32 %z, 32767\n  ret i32 %r\n}\n",
+            &singles(&edges(16))
+        ),
+        "define i32 @f(i16 %x) {\nb0:\n  %0 = and i16 %x, 32767\n  %1 = zext i16 %0 to i32\n  ret i32 %1\n}\n"
+    );
+    unchanged(
+        "define i32 @f(i16 %x) {\nb0:\n  %z = zext i16 %x to i32\n  %r = and i32 %z, 255\n  %s = add i32 %r, %z\n  ret i32 %s\n}\n",
+    );
+}
+
 /// A `sext` of a masked value, whose sign bit the mask cleared, is a
 /// `zext`: `movsx edx,dx` after the mask in the QB loop.
 #[test]

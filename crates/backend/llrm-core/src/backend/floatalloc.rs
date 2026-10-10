@@ -831,6 +831,7 @@ fn _converted(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> Result<LirBody, Raised> {
+    let regs = body.regs();
     let floating = floatassign::_floating_values(body);
     if floating.is_empty() {
         return Ok(body.clone());
@@ -894,7 +895,7 @@ fn _converted(
                 if one.uses.iter().chain(&one.defines).any(|value| floating.contains(value)) {
                     return Err(unlowered("floating value used by an unmodelled instruction"));
                 }
-                if boundary(one) {
+                if boundary(regs, one) {
                     stack.one = Some(Arc::clone(one));
                     stack.flush()?;
                 }

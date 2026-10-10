@@ -50,8 +50,15 @@ def test_lib_tests_run_in_the_changed_crate_and_its_dependents_only():
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     pkgs = gate.packages()
     assert "llrm-c" in p.packages
-    assert "llrm-mir" not in p.packages
-    assert set(p.packages) == gate.dependents(pkgs, {"llrm-c"}) | {"llrm"}
+    assert "llrm-transforms" not in p.packages
+    assert set(p.packages) == gate.dependents(pkgs, {"llrm-c"}) | {"llrm", "llrm-mir"}
+
+
+def test_a_change_in_any_crate_runs_the_lib_tests_that_read_the_sources_of_the_others():
+    """facts_rewrite's audit of the readers of nsw/nuw/inbounds is in llrm-mir, which a pass in llrm-transforms does not
+    reach as a dependent: #1324 added a reader, the gate ran no llrm-mir test, and main was red."""
+    p = gate.plan(["crates/opt/llrm-transforms/src/algebraic.rs"])
+    assert "llrm-mir" in p.packages and "lib" in p.steps
 
 
 def test_a_python_only_change_runs_the_python_tests_and_not_the_build():
@@ -481,3 +488,27 @@ def test_the_lib_step_runs_tests_in_a_random_order_that_a_seed_repeats(monkeypat
     assert "RUSTC_BOOTSTRAP=1" in command and command.endswith("-Zunstable-options --shuffle"), command
     monkeypatch.setenv("LLRM_SHUFFLE_SEED", "42")
     assert gate.commands(p, cfg, pkgs)["lib"].endswith("-Zunstable-options --shuffle-seed 42")
+
+
+def test_every_step_runs_with_the_flags_the_build_used_and_the_base_build_with_none():
+    """`integration` (`cargo test --test X`) without the build step's RUSTFLAGS rebuilt llrm-c and replaced target/release/llrm-c while
+    `torture` was starting it ("No such file or directory"): the steps share one set of flags, and the base the measure builds, which
+    is historical, has none."""
+    assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS}
+    assert f"RUSTFLAGS='{gate.WARNING_FLAGS}'" in gate.BUILD
+    assert "RUSTFLAGS" in gate.MEASURE_BUILD and "env -u RUSTFLAGS cargo" in gate.MEASURE_BUILD
+    assert "RUSTFLAGS" not in gate.MEASURE_BUILD.replace("env -u RUSTFLAGS", "")
+
+
+def test_a_run_asked_for_another_commit_refuses_and_names_no_pass():
+    """A gate started on a checkout that had failed passed on the previous run's log, and the commit it named was never run."""
+    done = subprocess.run([sys.executable, str(ROOT / "tools/gate/gate.py"), "run", "--expect", "0000000"], capture_output=True, text=True, cwd=ROOT)
+    assert done.returncode == 2 and "not the checkout asked for" in done.stdout, done.stdout + done.stderr
+    assert "PASS" not in done.stdout
+
+
+def test_a_dirty_tree_is_refused_unless_it_is_allowed_and_a_verdict_names_its_commit():
+    assert gate.refusal("a" * 40, True, None, False) and "differs from HEAD" in gate.refusal("a" * 40, True, None, False)
+    assert gate.refusal("a" * 40, True, None, True) is None and gate.refusal("a" * 40, False, "aaaa", False) is None
+    assert gate.verdict_line("fast", [], [], 5.0, [], "abcdef0123456789").startswith("GATE fast PASS at abcdef012345")
+    assert gate.verdict_line("fast", ["lib"], [], 5.0, [], "abcdef0123456789").startswith("GATE fast FAIL: lib at abcdef012345")

@@ -101,6 +101,11 @@ pub struct Program {
     /// program links against, with what the frontend knows of them:
     /// attributes, and `!llrm.named` and `!llrm.writes`.
     pub runtime: Rc<Module>,
+    /// Whether the intervals of counted loops (`Bounded`) are asked by alias
+    /// and by branch decisions. gcc's -O1 has them for induction variables
+    /// only (SCEV with the loop's iteration bound), and no value ranges
+    /// before -O2's `-ftree-vrp`.
+    pub loop_intervals: bool,
 }
 
 impl Program {
@@ -119,7 +124,15 @@ impl Program {
             None => DataLayout::default(),
         };
         let segments = SegmentLayout::of(&layout);
-        Ok(Self { modules, layout, target, segments, exports: Exports::default(), runtime: Rc::default() })
+        Ok(Self {
+            modules,
+            layout,
+            target,
+            segments,
+            exports: Exports::default(),
+            runtime: Rc::default(),
+            loop_intervals: true,
+        })
     }
 
     /// The program linked against `runtime`: each module's declaration of
@@ -402,6 +415,7 @@ impl ProgramAnalyses {
             segments: program.segments.clone(),
             exports: program.exports.clone(),
             runtime: Rc::clone(&program.runtime),
+            loop_intervals: program.loop_intervals,
             module,
             results: self.cache.clone(),
         })
@@ -431,6 +445,8 @@ pub struct ProgramProxy {
     pub segments: SegmentLayout,
     pub exports: Exports,
     pub runtime: Rc<Module>,
+    /// `Program::loop_intervals`.
+    pub loop_intervals: bool,
     /// The module reading it, by its index in the program.
     pub module: usize,
     results: HashMap<TypeId, Rc<dyn Any>>,
@@ -455,6 +471,7 @@ impl ProgramProxy {
             target,
             exports: Exports::default(),
             runtime: Rc::default(),
+            loop_intervals: true,
             module: 0,
             results: HashMap::default(),
         })

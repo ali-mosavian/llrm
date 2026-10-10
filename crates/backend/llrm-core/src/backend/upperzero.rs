@@ -11,11 +11,12 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
+use crate::backend::liveness;
 use crate::backend::peephole::{_register_effects, id};
-use crate::backend::{liveness, target};
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::{HashMap, IndexMap};
@@ -32,6 +33,11 @@ const ALL: Roots = (1 << ROOTS.len()) - 1;
 pub fn bit(register: RegId) -> Option<Roots> {
     let root = crate::model::ir::root(register);
     ROOTS.iter().position(|one| *one == root).map(|index| 1 << index)
+}
+
+/// Whether a dword with this value has nothing above its low word.
+fn is_word(value: i64) -> bool {
+    (0..=0xFFFF).contains(&value)
 }
 
 /// The roots whose upper half `one` sets to zero.
@@ -52,8 +58,10 @@ fn zeroing(one: &Insn) -> Roots {
     let zeroes = match (what.op, what.name.as_deref(), what.sources.as_slice()) {
         (Operation::Extend, Some("movzx"), [Loc::Reg(Reg { width: 1 | 2, .. }) | Loc::Mem(_)]) => true,
         (_, Some("xor" | "sub"), [left, right]) => left == destination && right == destination,
-        (Operation::Move, Some("mov"), [Loc::Imm(constant)]) => {
-            constant.address.is_none() && (0..=0xFFFF).contains(&constant.value)
+        (Operation::Move, Some("mov"), [Loc::Imm(constant)]) => constant.address.is_none() && is_word(constant.value),
+        // A mask of a word clears what lies above it.
+        (Operation::Binary, Some("and"), [left, Loc::Imm(constant)]) => {
+            left == destination && constant.address.is_none() && is_word(constant.value)
         }
         _ => false,
     };
@@ -62,6 +70,7 @@ fn zeroing(one: &Insn) -> Roots {
 
 /// The roots whose upper half `one` may leave other than it found it.
 fn disturbed(
+    regs: Regs,
     bits: u32,
     one: &Insn,
 ) -> Roots {
@@ -69,7 +78,7 @@ fn disturbed(
     if liveness::_terminator(one.what.as_ref()) {
         return 0;
     }
-    let effects = _register_effects(bits, one, true, false).or_else(|| liveness::_declared(one));
+    let effects = _register_effects(regs, bits, one, true, false).or_else(|| liveness::_declared(regs, one));
     let Some((_, writes)) = effects else {
         return ALL;
     };
@@ -82,6 +91,7 @@ fn disturbed(
 
 /// What `one` makes of `zero`, the roots known zero before it.
 pub fn after(
+    regs: Regs,
     bits: u32,
     one: &Insn,
     zero: Roots,
@@ -90,7 +100,7 @@ pub fn after(
         return swapped;
     }
     let zeroed = zeroing(one) | copied(one, zero);
-    (zero & !disturbed(bits, one)) | zeroed
+    (zero & !disturbed(regs, bits, one)) | zeroed
 }
 
 /// `zero` after `xchg a, b` of two whole registers: each now holds the other's
@@ -134,6 +144,7 @@ fn copied(
 
 /// Before each instruction, by `id`, the roots whose upper half is zero.
 pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
+    let regs = body.regs();
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
@@ -149,7 +160,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
             }
             zero
         },
-        |at, zero| blocks[&at].insns.iter().fold(*zero, |zero, one| after(body.bits, one, zero)),
+        |at, zero| blocks[&at].insns.iter().fold(*zero, |zero, one| after(regs, body.bits, one, zero)),
     );
     let into = solved.input;
     let mut result = HashMap::default();
@@ -157,7 +168,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
         let mut zero = into[&block.at];
         for one in &block.insns {
             result.insert(id(one), zero);
-            zero = after(body.bits, one, zero);
+            zero = after(regs, body.bits, one, zero);
         }
     }
     result
@@ -165,6 +176,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
 
 /// `movzx root,word` for each root in `roots`, before `block`'s terminator.
 pub fn extended(
+    regs: Regs,
     block: &LirBlock,
     roots: Roots,
 ) -> LirBlock {
@@ -179,7 +191,7 @@ pub fn extended(
         if roots & 1 << index == 0 {
             continue;
         }
-        let word = target::named(*root, 2);
+        let word = regs.named(*root, 2);
         let what = Semantics {
             name: Some("movzx".into()),
             dests: vec![Loc::Reg(Reg { register: *root, width: 4 })],
@@ -199,6 +211,7 @@ pub fn preheaded(
     wanted: &IndexMap<i64, Roots>,
     held: bool,
 ) -> (LirBody, IndexMap<i64, Roots>) {
+    let regs = body.regs();
     let graph = &body.blocks;
     let found = loops::loops(&graph, Some(body.entry));
     let predecessors = loops::predecessors(&graph);
@@ -235,7 +248,7 @@ pub fn preheaded(
         .blocks
         .iter()
         .map(|block| match per_block.get(&block.at) {
-            Some(roots) => extended(block, *roots),
+            Some(roots) => extended(regs, block, *roots),
             None => block.clone(),
         })
         .collect();
@@ -244,12 +257,15 @@ pub fn preheaded(
 
 /// The roots `one`'s cells read 32 bits wide through a register holding no
 /// value, the frame pointer: nothing defines their upper half.
-pub(crate) fn unheld(one: &Insn) -> Roots {
+pub(crate) fn unheld(
+    regs: Regs,
+    one: &Insn,
+) -> Roots {
     let Some(what) = &one.what else {
         return 0;
     };
     let wide = |register: RegId, held: bool| {
-        if !held && target::width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 }
+        if !held && regs.width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 }
     };
     what.dests
         .iter()
@@ -268,13 +284,14 @@ pub(crate) fn unheld(one: &Insn) -> Roots {
 /// leaves that half alone, or before the first cell of a block no
 /// preheader proves.
 pub fn established(body: &LirBody) -> LirBody {
+    let regs = body.regs();
     let graph = &body.blocks;
     let natural = loops::loops(&graph, Some(body.entry));
     let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
         body.blocks
             .iter()
             .filter(|block| inside.contains(&block.at))
-            .all(|block| block.insns.iter().all(|one| disturbed(body.bits, one) & roots == 0))
+            .all(|block| block.insns.iter().all(|one| disturbed(regs, body.bits, one) & roots == 0))
     };
     let outermost = |at: i64, roots: Roots| {
         let around = natural.iter().filter(|one| one.body.contains(&at));
@@ -293,7 +310,7 @@ pub fn established(body: &LirBody) -> LirBody {
             .blocks
             .iter()
             .flat_map(|block| block.insns.iter().map(move |one| (block.at, one)))
-            .map(|(at, one)| (at, id(one), unheld(one) & !zero[&id(one)]))
+            .map(|(at, one)| (at, id(one), unheld(regs, one) & !zero[&id(one)]))
             .filter(|(_, _, roots)| *roots != 0)
             .collect();
         if missing.is_empty() {
@@ -323,7 +340,7 @@ pub fn established(body: &LirBody) -> LirBody {
                 Some((position, roots)) => {
                     let at = block.insns.iter().position(|one| id(one) == *position).expect("the cell");
                     let mut insns = block.insns.to_vec();
-                    let zeroed = extended(&LirBlock::new(block.at, Vec::new()), *roots).insns.to_vec();
+                    let zeroed = extended(regs, &LirBlock::new(block.at, Vec::new()), *roots).insns.to_vec();
                     let when = insns[at].at;
                     insns.splice(at..at, zeroed.into_iter().map(|one| Arc::new(Insn { at: when, ..(*one).clone() })));
                     block.with_insns(insns)
@@ -396,6 +413,35 @@ mod tests {
                 assert_ne!(zero[&crate::backend::peephole::id(insn)] & ebx, 0, "{:?}", insn.what);
             }
         }
+    }
+
+    /// `and edx, 32767` left edx's upper half unknown, so the `movzx edx, dx`
+    /// that followed a promoted word `and` stayed (quicksort -O2: three
+    /// instructions for two).
+    #[test]
+    fn test_a_word_mask_leaves_the_upper_half_zero() {
+        let edx = Loc::Reg(Reg { register: RegId::EDX, width: 4 });
+        let mask = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let body = |value| {
+            LirBody::new(
+                "mask",
+                0,
+                vec![LirBlock::new(
+                    0,
+                    vec![
+                        one(0, Operation::Binary, "and", vec![edx.clone()], vec![edx.clone(), mask(value)], None),
+                        one(1, Operation::Move, "mov", vec![edx.clone()], vec![edx.clone()], None),
+                    ],
+                )],
+                IndexMap::default(),
+                IndexMap::default(),
+            )
+        };
+        let (narrow, wide) = (body(32767), body(0x1_0000));
+        let at = |body: &LirBody| before(body)[&crate::backend::peephole::id(&body.blocks[0].insns[1])];
+        let bit = bit(RegId::EDX).unwrap();
+        assert_ne!(at(&narrow) & bit, 0, "and with a word leaves the upper half zero");
+        assert_eq!(at(&wide) & bit, 0, "and with a dword mask does not");
     }
 
     /// `xchg esi, ecx` lost both registers' zero upper halves, so a counter

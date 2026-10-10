@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
+use llrm_lir::registers::Regs;
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
 use crate::backend::allocate::Error;
@@ -17,7 +18,6 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::coalesce;
 use crate::backend::frame::{self as frames, Frame, SlotKey};
 use crate::backend::postings::{self, At, Postings};
-use crate::backend::target;
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
@@ -226,6 +226,7 @@ pub fn materialized(
     classes: &RegisterClasses,
     plain: &BTreeSet<u32>,
 ) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>), Error> {
+    let regs = body.regs();
     let mut fresh = crate::backend::splitkit::_next_value_following(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
@@ -331,7 +332,7 @@ pub fn materialized(
             // A pure frame address used only as a memory base.
             for value in one.uses.clone() {
                 if let Some(address) = addresses.get(&value) {
-                    if let Some(folded) = _address_source(&one, value, address) {
+                    if let Some(folded) = _address_source(regs, &one, value, address) {
                         one = folded;
                     }
                 }
@@ -960,7 +961,7 @@ fn siblings_over(
             let among = |graph: &coalesce::Graph| {
                 graph
                     .get(value)
-                    .map(|near| near.intersection(&wanted).copied().collect::<BTreeSet<u32>>())
+                    .map(|near| near.iter().filter(|one| wanted.contains(one)).collect::<BTreeSet<u32>>())
                     .unwrap_or_default()
             };
             assert!(
@@ -2552,11 +2553,12 @@ fn _frame_loads(
     body: &LirBody,
     values: &BTreeSet<u32>,
 ) -> IndexMap<u32, Mem> {
+    let regs = body.regs();
     let pinned = &body.pins;
     let candidates: BTreeSet<u32> = values
         .iter()
         .copied()
-        .filter(|value| pinned.get(value).is_some_and(|register| target::SEGMENTS.contains(register)))
+        .filter(|value| pinned.get(value).is_some_and(|register| regs.is_segment(*register)))
         .collect();
     if candidates.is_empty() {
         return IndexMap::default();
@@ -3158,6 +3160,7 @@ fn _source<F: CellOf>(
 
 /// Fold a rematerializable frame address into every cell that uses it.
 fn _address_source(
+    regs: Regs,
     one: &Insn,
     value: u32,
     address: &AddressRef,
@@ -3194,8 +3197,7 @@ fn _address_source(
             && cell.addr.is_some_and(|found| {
                 found.space == Space::Literal
                     && found.index == 0
-                    && (found.segment == Register::None
-                        || crate::backend::registerinfo::is_stack_segment(found.segment))
+                    && (found.segment == Register::None || regs.is_stack_segment(found.segment))
             });
         if !fits {
             invalid = true;
@@ -4041,6 +4043,7 @@ fn _encodable(
     what: &Semantics,
     classes: &RegisterClasses,
 ) -> Result<bool, Error> {
+    let regs = classes.registers;
     let mut taken: IndexMap<u32, Register> = IndexMap::default();
     let rows: IndexMap<u32, Vec<Register>> = [1_u32, 2, 4]
         .into_iter()
@@ -4052,8 +4055,8 @@ fn _encodable(
                     .iter()
                     .copied()
                     .filter(|one| {
-                        target::width_of(target::named(*one, i64::from(width)))
-                            .filter(|_| target::integer(target::named(*one, i64::from(width))))
+                        regs.width_of(regs.named(*one, i64::from(width)))
+                            .filter(|_| regs.integer(regs.named(*one, i64::from(width))))
                             == Some(i64::from(width))
                     })
                     .collect(),
@@ -4073,7 +4076,7 @@ fn _encodable(
             }
             taken.insert(held.value, row[taken.len()]);
         }
-        Loc::Reg(Reg { register: target::named(taken[&held.value], i64::from(held.width)), width: held.width })
+        Loc::Reg(Reg { register: regs.named(taken[&held.value], i64::from(held.width)), width: held.width })
     };
 
     let probe = Semantics {
@@ -4743,6 +4746,7 @@ mod tests {
 
     #[test]
     fn test_spilled_relocatable_address_is_rematerialized_without_a_frame_slot() {
+        let regs = crate::backend::registerinfo::test_regs();
         for space in [Space::Segment, Space::External] {
             let source =
                 AddressRef { disp_width: 2, ..AddressRef::new(Some(Addr { index: 7, ..Addr::new(space, 12) })) };
@@ -4767,7 +4771,7 @@ mod tests {
                 vec![Loc::Address(source)],
             );
             let names: IndexMap<(Space, i64), String> = IndexMap::from_iter([((space, 7), "_descriptor".to_owned())]);
-            let emitted = objbuild::_encoded(&lea, &names, 16).expect("encodes");
+            let emitted = objbuild::_encoded(regs, &lea, &names, 16).expect("encodes");
             assert_eq!(emitted.code, [0x8D, 0x1E, 0x0C, 0x00]);
             assert_eq!(emitted.fixups, [objbuild::Fixup::new(2, objbuild::OFFSET, "_descriptor")]);
         }

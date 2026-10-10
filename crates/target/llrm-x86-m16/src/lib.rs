@@ -1,6 +1,7 @@
 //! The 16-bit x86 target: what its instructions cost, as `Dos` prices them
 //! for the passes, and the machine description a program is built for.
 
+include!(concat!(env!("OUT_DIR"), "/effects.rs"));
 include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
 
 pub mod cycles;
@@ -51,6 +52,10 @@ fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::targ
 }
 
 impl llrm_target::Target for M16 {
+    fn registers(&self) -> &'static llrm_lir::registers::Info {
+        &REGISTER_INFO
+    }
+
     fn register_capacity(&self) -> i64 {
         GENERAL.len() as i64
     }
@@ -280,13 +285,24 @@ mod tests {
         );
     }
 
-    /// Real mode has no psABI DWARF register map: none is numbered, so a DWARF
-    /// location in m16 code is refused instead of written with i386's.
+    /// Real mode has no psABI DWARF register map: its registers are numbered
+    /// as Open Watcom's debugger and jwlink number them (dwregx86.h: AX is 27,
+    /// DX 30, BP 33). A 16-bit register with no number made `-g -O2` refuse the
+    /// compile ("register ax has no DWARF number").
     /// CodeView's ids are there for BP and AX.
     #[test]
-    fn real_mode_numbers_codeview_but_not_dwarf() {
+    fn real_mode_numbers_codeview_and_dwarf_as_open_watcom_does() {
         let file = llrm_target::registers::parse(&M16.registers_text()).unwrap();
-        assert!(file.iter().all(|one| one.dwarf.is_none()));
+        let dwarf = |name: &str| file.iter().find(|one| one.name == name).unwrap().dwarf;
+        assert_eq!(
+            (dwarf("ax"), dwarf("dx"), dwarf("bp"), dwarf("sp"), dwarf("es")),
+            (Some(27), Some(30), Some(33), Some(34), Some(38))
+        );
+        assert!(
+            file.iter().all(|one| one.dwarf.is_some()),
+            "{:?}",
+            file.iter().filter(|one| one.dwarf.is_none()).map(|one| &one.name).collect::<Vec<_>>()
+        );
         let cv = |name: &str| file.iter().find(|one| one.name == name).unwrap().codeview;
         assert_eq!((cv("bp"), cv("ax"), cv("st0")), (Some(14), Some(9), Some(128)));
     }
