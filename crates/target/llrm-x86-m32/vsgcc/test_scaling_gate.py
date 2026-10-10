@@ -444,8 +444,8 @@ def test_summaries_keep_the_call_graph_when_a_body_calls_a_deeper_one(tmp_path):
 def test_interprocedural_own_work_stays_near_linear_on_the_chain_functions_and_callers_axes(tmp_path):
     """The module-wide step did work per body that grew with the module: the declarations were compared global by global after each of
     N bodies, the noreturn fixed point rounds took N bodies N times, and the no-recurse proof walked everything each function reaches
-    (`mir interprocedural` own, 2N/N: chain 2.80, functions 2.33, callers 2.39). A doubling above 2.65, 2.15 and 2.2 fails (chain keeps
-    what `analysis summaries` leaves in it)."""
+    (`mir interprocedural` own, 2N/N on chain: 2.80). A doubling above 2.65, 2.15 and 2.2 fails (chain keeps what `analysis summaries`
+    leaves in it); functions and callers hold what the call graph's dense components gave them (2.01, 2.07)."""
     limits = {"chain": (128, 2.65), "functions": (512, 2.15), "callers": (1024, 2.2)}
     grown = {}
     for axis, (n, limit) in limits.items():
