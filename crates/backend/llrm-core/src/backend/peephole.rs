@@ -2682,7 +2682,7 @@ pub fn constants(body: &LirBody) -> LirBody {
             // The extension of a register holding a constant is the extended
             // constant: a fact asked of `held`, not a pattern of
             // the bytes before it (gcc's combine does it through known values).
-            if let Some(value) = extended_constant(&held, what, body.bits) {
+            if let Some(value) = extended_constant(&held, what, body.regs()) {
                 if let (Some(Loc::Reg(dest)), true) = (what.dests.first(), one.clobbers.is_empty()) {
                     let made = semantics(
                         Operation::Move,
@@ -2767,16 +2767,15 @@ pub fn constants(body: &LirBody) -> LirBody {
 fn extended_constant(
     held: &IndexMap<Reg, Known>,
     what: &Semantics,
-    bits: u32,
+    regs: Regs,
 ) -> Option<i64> {
-    let _ = bits;
     if what.op != Operation::Extend || !matches!(what.name.as_deref(), Some("movzx" | "movsx")) {
         return None;
     }
     let (Some(Loc::Reg(dest)), [Loc::Reg(source)]) = (what.dests.first(), &what.sources[..]) else { return None };
     if what.dests.len() != 1
-        || !target::integer(dest.register)
-        || !target::integer(source.register)
+        || !regs.integer(dest.register)
+        || !regs.integer(source.register)
         || source.width >= dest.width
     {
         return None;
