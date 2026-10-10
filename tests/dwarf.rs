@@ -893,4 +893,8 @@ fn dwarf_in_a_16_bit_omf_object_links_into_an_mz_image_that_wdump_reads() {
         place.split_whitespace().next().unwrap().split(':').nth(1).unwrap().trim_end_matches(['*', '+']).to_uppercase();
     let wanted = format!("Loc expr: addr {}", &offset[offset.len() - 4..]);
     assert!(text.contains(&wanted), "{wanted:?} not in the dump:\n{text}");
+    // -O2 keeps values in registers, whose DWARF numbers 16-bit code lacked:
+    // `register ax has no DWARF number` refused the compile.
+    let optimised = compile(&source, &["-m16", "-O2", "-gdwarf-2", "-fobject-format=omf"], &dir.join("fast.obj"));
+    assert!(optimised.status.success(), "{}", String::from_utf8_lossy(&optimised.stderr));
 }

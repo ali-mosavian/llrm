@@ -176,18 +176,20 @@ fn an_unwritable_type_is_refused_where_it_is_used_and_nowhere_else() {
     assert!(written(vec![frame("x", 8)], vec![int(), far], Format::Default).is_ok());
 }
 
-/// BASIC's array (its bounds are a descriptor's) and a register with no DWARF
-/// number are refused by name, not written as something else.
+/// BASIC's array (its bounds are a descriptor's) is refused by name, not
+/// written as something else; a place DWARF has no expression for (a register
+/// with no number, a static in a list) is left out of the variable, which is
+/// written with no location: a refused compile was `-g` failing a program that
+/// uses `ah`.
 #[test]
-fn what_dwarf_cannot_say_is_refused_by_name() {
+fn what_dwarf_cannot_say_is_refused_by_name_or_left_out() {
     let array = Type::Array { element: 0, bytes: None };
     let mut basic = frame("a", 8);
     basic.r#type = 1;
     assert!(written(vec![basic], vec![int(), array], Format::Default).unwrap_err().0.contains("BASIC array"));
     let high = Variable { name: "h".into(), r#type: 0, kind: Kind::Local, location: Location::Register("ah".into()) };
-    assert!(
-        written(vec![high], vec![int()], Format::Default).unwrap_err().0.contains("register ah has no DWARF number")
-    );
+    let kept = written(vec![high], vec![int()], Format::Default).expect("written without a location");
+    assert!(kept.sections.iter().any(|one| one.name == ".debug_str" && one.image.windows(2).any(|two| two == b"h\0")));
     // A list of one that holds neither a frame cell nor a register (a static,
     // say) has no expression here.
     let range = Range { section: 0, offset: 0, length: 4 };
@@ -197,7 +199,7 @@ fn what_dwarf_cannot_say_is_refused_by_name() {
         kind: Kind::Local,
         location: Location::List(vec![(range, Location::Static { symbol: 0, disp: 0 })]),
     };
-    assert!(written(vec![moved], vec![int()], Format::Default).unwrap_err().0.contains("holds frame cells, registers"));
+    assert!(written(vec![moved], vec![int()], Format::Default).is_ok());
 }
 
 /// A format this writer does not write is refused with which: an object cannot

@@ -396,8 +396,12 @@ impl Tree<'_> {
         }
         // A list with no entry is a variable the optimiser removed: no location
         // says "optimized out".
+        // A place DWARF as written here cannot say (a register it has no number
+        // for) is left out the same way: gcc's rule.
         if !matches!(&one.location, Location::List(entries) if entries.is_empty()) {
-            die.attrs.push((AT_LOCATION, self.location(&one.location)?));
+            if let Ok(location) = self.location(&one.location) {
+                die.attrs.push((AT_LOCATION, location));
+            }
         }
         Ok(self.push(die))
     }
