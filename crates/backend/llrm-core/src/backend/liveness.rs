@@ -33,9 +33,12 @@ pub fn _terminator(what: Option<&Semantics>) -> bool {
 // dead final write to either register must remain removable.  Treating them as
 // semantic return inputs retained one-use loads and other dead computations
 // immediately before an epilogue.
-pub fn _return_state() -> [Register; 5] {
-    use crate::backend::registerinfo::{frame_root, stack_root};
-    [frame_root(), stack_root(), Register::DS, Register::SS, Register::CS]
+pub fn _return_state() -> Vec<Register> {
+    use crate::backend::registerinfo::{code_segment, data_segment, frame_root, stack_root, stack_segment};
+    [Some(frame_root()), Some(stack_root()), data_segment(), stack_segment(), code_segment()]
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 /// Every lane a body can name. "Dead" here means every lane but the live ones.

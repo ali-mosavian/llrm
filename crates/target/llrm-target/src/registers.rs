@@ -153,13 +153,25 @@ pub fn source(
             }
         }
     };
+    let optional = |class: &str| -> Result<String, String> {
+        let roots: Vec<&Register> = registers.iter().filter(|one| one.is(class)).collect();
+        match roots[..] {
+            [] => Ok("None".to_owned()),
+            [one] => Ok(format!("Some({id}::{})", one.name.to_uppercase())),
+            _ => Err(format!("registers.regs: {} registers have the class `{class}`, not one", roots.len())),
+        }
+    };
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, widths, views }}\n}};\n",
+        "    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, views }}\n}};\n",
         columns.join(", "),
         role("frame")?,
-        role("stack")?
+        role("stack")?,
+        optional("data_segment")?,
+        optional("stack_segment")?,
+        optional("code_segment")?,
+        optional("far_segment")?
     ));
     Ok(code)
 }
@@ -198,5 +210,23 @@ mod source_tests {
         assert!(error.contains("2 registers are the root with the class `frame`"), "{error}");
         let none = "eax 32 eax 0 - - 1\n";
         assert!(source(none, "Reg", &["frame", "stack"]).err().expect("refused").contains("0 registers"));
+    }
+
+    /// Two registers meaning the same segment is no role: the table is not
+    /// made.
+    #[test]
+    fn a_segment_role_is_one_register_or_none() {
+        let base = "ebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\n";
+        let classes = ["frame", "stack", "data_segment"];
+        assert!(
+            source(&format!("{base}ds 16 ds 0 data_segment - 3\n"), "Reg", &classes)
+                .unwrap()
+                .contains("data_segment: Some(Reg::DS)")
+        );
+        assert!(source(base, "Reg", &classes).unwrap().contains("data_segment: None"));
+        let two = format!("{base}ds 16 ds 0 data_segment - 3\nes 16 es 0 data_segment - 4\n");
+        assert!(
+            source(&two, "Reg", &classes).err().expect("refused").contains("2 registers have the class `data_segment`")
+        );
     }
 }
