@@ -1536,6 +1536,8 @@ enum Names<'a> {
 struct Places {
     count: u8,
     place: [u32; Places::ROOM],
+    /// Bit `i` set: it writes the cell of `place[i]`.
+    writes: u8,
 }
 
 impl Places {
@@ -1544,11 +1546,41 @@ impl Places {
     fn push(
         &mut self,
         place: usize,
+        writes: bool,
     ) {
         if let Some(slot) = self.place.get_mut(usize::from(self.count)) {
             *slot = place as u32;
+            self.writes |= u8::from(writes) << self.count;
         }
         self.count = self.count.saturating_add(1);
+    }
+
+    /// The values it defines and reads among the `asked` homes, ascending and
+    /// once, in lists of the caller's emptied first; none where it names more
+    /// than it has room for (`false`: ask its cells).
+    fn sets_into(
+        &self,
+        first: u32,
+        asked: &[bool],
+        defined: &mut Vec<u32>,
+        used: &mut Vec<u32>,
+    ) -> bool {
+        defined.clear();
+        used.clear();
+        if usize::from(self.count) > Self::ROOM {
+            return false;
+        }
+        for at in 0..usize::from(self.count) {
+            let place = self.place[at] as usize;
+            if asked[place] {
+                if self.writes >> at & 1 == 1 { &mut *defined } else { &mut *used }.push(first + place as u32);
+            }
+        }
+        for list in [defined, used] {
+            list.sort_unstable();
+            list.dedup();
+        }
+        true
     }
 
     /// Whether it may name one of the `wanted` homes (by place); true where it
@@ -1652,7 +1684,9 @@ fn homes_kept(
         let mut plan = crate::analysis::occurrences::Occurrences::default();
         let (mut defined, mut used): (Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new());
         for one in named.iter().filter(|one| one.places.may_name(&asked)) {
-            one.sets_into(homes, first, &|disp| disps.binary_search(&disp).is_ok(), &mut defined, &mut used);
+            if !one.places.sets_into(first, &asked, &mut defined, &mut used) {
+                one.sets_into(homes, first, &|disp| disps.binary_search(&disp).is_ok(), &mut defined, &mut used);
+            }
             if !defined.is_empty() || !used.is_empty() {
                 plan.plan(one.block, one.at, &defined, &used);
             }
@@ -1801,10 +1835,10 @@ fn _existing_colors_by(
                 let one = &block.insns[at as usize];
                 let mut names = false;
                 let mut places = Places::default();
-                for (disp, width, _) in frame_cells(one) {
+                for (disp, width, writes) in frame_cells(one) {
                     if let Some((place, _, had)) = capacities.get_full_mut(&disp) {
                         *had = (*had).max(width).max(WORD);
-                        places.push(place);
+                        places.push(place, writes);
                         names = true;
                     } else if frame_spills(disp) {
                         unknown = true;
