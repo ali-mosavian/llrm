@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::{Mnemonic, OpKind, Register};
+use llrm_lir::registers::RegId;
 use llrm_qbruntime::INLINE_TABLE;
 use llrm_target::machine::{Machine, PortMemory};
 
@@ -171,12 +172,12 @@ pub fn _literal_dx(
         if span(previous).1 != span(&nodes[index]).0 || defs.is_none() {
             return None;
         }
-        if defs.is_some_and(|defs| defs.contains(&Register::EDX)) {
+        if defs.is_some_and(|defs| defs.contains(&RegId::EDX)) {
             let Semantics { op, dests, sources, .. } = previous.semantics();
             return match (op, dests.as_slice(), sources.as_slice()) {
                 (
                     Operation::Move,
-                    [Loc::Reg(Reg { register: Register::DX | Register::EDX, .. })],
+                    [Loc::Reg(Reg { register: RegId::DX | RegId::EDX, .. })],
                     [Loc::Imm(Imm { value, address: None, .. })],
                 ) => Some(value & 0xFFFF),
                 _ => None,

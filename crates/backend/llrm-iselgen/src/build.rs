@@ -234,7 +234,8 @@ fn peephole(
     mod generated {{
         use std::sync::Arc;
 
-        use iced_x86::{{Register, RflagsBits}};
+        use iced_x86::RflagsBits;
+        use {core}::backend::registerinfo::RegId;
 
         use {core}::backend::lanes::Lanes;
         use {core}::backend::peep::walk::{{self, Cx, Facts, Kind, Matcher, Out, Rewrite, Side, Skip, Window}};

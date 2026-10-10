@@ -4,18 +4,18 @@
 //! defs and `ImplicitUses`/`ImplicitDefs`, with the flags the row's iced Code
 //! reads and writes.
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_lir::{Loc, Operation, Reg, Semantics};
 
 use crate::select;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Effects {
-    pub reads: Vec<Register>,
-    pub writes: Vec<Register>,
+    pub reads: Vec<RegId>,
+    pub writes: Vec<RegId>,
     /// Written only if the instruction runs: a repeated string operation's, but
     /// its count's.
-    pub maybe_writes: Vec<Register>,
+    pub maybe_writes: Vec<RegId>,
     /// `RflagsBits`, the writes including those left undefined.
     pub flags_read: u32,
     pub flags_written: u32,
@@ -35,31 +35,31 @@ pub enum Served {
 pub fn root(
     name: &str,
     bits: u32,
-) -> Register {
+) -> RegId {
     let wide = bits == 32;
     match (name, wide) {
-        ("ax", true) => Register::EAX,
-        ("bx", true) => Register::EBX,
-        ("cx", true) => Register::ECX,
-        ("dx", true) => Register::EDX,
-        ("si", true) => Register::ESI,
-        ("di", true) => Register::EDI,
-        ("bp", true) => Register::EBP,
-        ("sp", true) => Register::ESP,
-        ("ax", _) => Register::AX,
-        ("bx", _) => Register::BX,
-        ("cx", _) => Register::CX,
-        ("dx", _) => Register::DX,
-        ("si", _) => Register::SI,
-        ("di", _) => Register::DI,
-        ("bp", _) => Register::BP,
-        ("sp", _) => Register::SP,
-        ("es", _) => Register::ES,
-        ("ds", _) => Register::DS,
-        ("fs", _) => Register::FS,
-        ("ss", _) => Register::SS,
-        ("ah", _) => Register::AH,
-        _ => Register::GS,
+        ("ax", true) => RegId::EAX,
+        ("bx", true) => RegId::EBX,
+        ("cx", true) => RegId::ECX,
+        ("dx", true) => RegId::EDX,
+        ("si", true) => RegId::ESI,
+        ("di", true) => RegId::EDI,
+        ("bp", true) => RegId::EBP,
+        ("sp", true) => RegId::ESP,
+        ("ax", _) => RegId::AX,
+        ("bx", _) => RegId::BX,
+        ("cx", _) => RegId::CX,
+        ("dx", _) => RegId::DX,
+        ("si", _) => RegId::SI,
+        ("di", _) => RegId::DI,
+        ("bp", _) => RegId::BP,
+        ("sp", _) => RegId::SP,
+        ("es", _) => RegId::ES,
+        ("ds", _) => RegId::DS,
+        ("fs", _) => RegId::FS,
+        ("ss", _) => RegId::SS,
+        ("ah", _) => RegId::AH,
+        _ => RegId::GS,
     }
 }
 
@@ -68,11 +68,11 @@ pub fn root(
 fn used(
     places: &[Loc],
     bits: u32,
-    reads: &mut Vec<Register>,
-    mut writes: Option<&mut Vec<Register>>,
+    reads: &mut Vec<RegId>,
+    mut writes: Option<&mut Vec<RegId>>,
 ) -> bool {
-    let add = |into: &mut Vec<Register>, register: Register| {
-        if register != Register::None && !into.contains(&register) {
+    let add = |into: &mut Vec<RegId>, register: RegId| {
+        if register != RegId::None && !into.contains(&register) {
             into.push(register);
         }
     };
@@ -88,7 +88,7 @@ fn used(
                 continue;
             }
             Loc::Mem(one) => {
-                let named = one.through != Register::None || one.index_through != Register::None || one.addr.is_some();
+                let named = one.through != RegId::None || one.index_through != RegId::None || one.addr.is_some();
                 match select::operand_of(one, bits) {
                     // An address that cannot be encoded (`[sp]` in real mode)
                     // is an instruction that cannot be.
@@ -106,20 +106,20 @@ fn used(
             Loc::Imm(_) | Loc::Held(_) => continue,
         };
         if let Some((operand, _)) = address {
-            add(reads, operand.base);
-            add(reads, operand.index);
+            add(reads, RegId::from(operand.base));
+            add(reads, RegId::from(operand.index));
             if matches!(place, Loc::Mem(_)) {
                 // The segment it names, else the default: SS behind the stack's
                 // registers, DS otherwise.
-                let stack = [Register::BP, Register::EBP, Register::SP, Register::ESP].contains(&operand.base);
+                let stack = [RegId::BP, RegId::EBP, RegId::SP, RegId::ESP].contains(&RegId::from(operand.base));
                 add(
                     reads,
-                    if operand.segment_prefix != Register::None {
-                        operand.segment_prefix
+                    if operand.segment_prefix != (RegId::None).iced() {
+                        RegId::from(operand.segment_prefix)
                     } else if stack {
-                        Register::SS
+                        RegId::SS
                     } else {
-                        Register::DS
+                        RegId::DS
                     },
                 );
             }
@@ -170,18 +170,18 @@ fn form_of(
 fn pinned(
     root_name: &str,
     bytes: u32,
-) -> Option<Register> {
+) -> Option<RegId> {
     Some(match (bytes, root_name) {
-        (_, "es") => Register::ES,
-        (_, "ds") => Register::DS,
-        (_, "fs") => Register::FS,
-        (_, "gs") => Register::GS,
-        (_, "ss") => Register::SS,
+        (_, "es") => RegId::ES,
+        (_, "ds") => RegId::DS,
+        (_, "fs") => RegId::FS,
+        (_, "gs") => RegId::GS,
+        (_, "ss") => RegId::SS,
         (1, "ax" | "bx" | "cx" | "dx") => match root_name {
-            "ax" => Register::AL,
-            "bx" => Register::BL,
-            "cx" => Register::CL,
-            _ => Register::DL,
+            "ax" => RegId::AL,
+            "bx" => RegId::BL,
+            "cx" => RegId::CL,
+            _ => RegId::DL,
         },
         (2, _) => root(root_name, 16),
         (4, _) => root(root_name, 32),

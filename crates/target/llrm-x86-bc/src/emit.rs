@@ -22,6 +22,7 @@ use std::rc::Rc;
 use iced_x86::Register;
 use llrm_analysis::ssa::{SsaUpdater, provider};
 use llrm_hir::onerror::Handled;
+use llrm_lir::registers::RegId;
 use llrm_mir::build::Builder;
 use llrm_mir::{
     BinaryOp, BlockId, CastOp, Constant, ConstantId, ConstantKind, Flags, FloatKind, InstId, IntPredicate, Opcode,
@@ -1536,17 +1537,17 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         match loc {
             Loc::Reg(one) if one.st_index().is_some() => Err("x87 registers".to_owned()),
             Loc::Reg(reg) => match reg.register {
-                register if self.unit.objects.names_data(register) => {
+                register if self.unit.objects.names_data(register.iced()) => {
                     let selector = self.selector()?;
                     let word = self.b.context.types.int(16);
                     Ok(self.cast(CastOp::PtrToInt, selector, word))
                 }
-                Register::ES => {
+                RegId::ES => {
                     let es = self.get(Var::Es);
                     let word = self.b.context.types.int(16);
                     Ok(self.cast(CastOp::PtrToInt, es, word))
                 }
-                Register::CS => {
+                RegId::CS => {
                     let code = self.unit.objects.code().ok_or("reads cs, with no code segment")?;
                     let (segment, word) = (
                         self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces)),
@@ -1555,7 +1556,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                     let selector = self.cast(CastOp::AddrSpaceCast, Operand::Constant(code), segment);
                     Ok(self.cast(CastOp::PtrToInt, selector, word))
                 }
-                register => self.register(register),
+                register => self.register(register.iced()),
             },
             Loc::Imm(imm) => match imm.address {
                 None => Ok(self.b.int(imm.width * 8, i128::from(imm.value))),
@@ -1605,13 +1606,13 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         match loc {
             Loc::Reg(one) if one.st_index().is_some() => Err(format!("writes {loc:?}")),
             Loc::Reg(reg) => match reg.register {
-                Register::ES => {
+                RegId::ES => {
                     let segment = self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces));
                     let made = self.b.cast(CastOp::IntToPtr, value, segment, "");
                     self.set(Var::Es, made);
                     Ok(())
                 }
-                register => self.set_register(register, value),
+                register => self.set_register(register.iced(), value),
             },
             Loc::Mem(_) => {
                 let insn = self.insn.clone().ok_or("memory with no instruction")?;
@@ -1793,7 +1794,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         what: &Semantics,
         effects: &Effects,
     ) -> Emit<bool> {
-        let is = |loc: &Loc, register: Register| matches!(loc, Loc::Reg(Reg { register: one, .. }) if *one == register);
+        let is = |loc: &Loc, register: Register| {
+            matches!(
+                loc,
+                Loc::Reg(Reg { register: one, .. }) if *one == RegId::from(register)
+            )
+        };
         let (dest, source) = (what.dests.first(), what.sources.first());
         let frame = |this: &Self| this.bp.filter(|_| this.frame == Frame::Active);
         match what.op {
@@ -1855,11 +1861,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 let Some(Loc::Reg(Reg { register, .. })) = source.filter(|one| loc_width(one) == Some(2)) else {
                     return Ok(false);
                 };
-                let Some(index) = tracked(*register) else { return Ok(false) };
+                let Some(index) = tracked((*register).iced()) else { return Ok(false) };
                 let value = self.get(Var::Reg(index, Half::Low));
                 self.depth += 2;
                 self.deepest = self.deepest.max(self.depth);
-                self.saved.push((self.depth, *register, value));
+                self.saved.push((self.depth, (*register).iced(), value));
             }
             Operation::Pop
                 if frame(self).is_some()

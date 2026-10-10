@@ -446,7 +446,9 @@ fn complaints(done: &LirBody) -> Vec<String> {
                     (cell.base.is_some() && cell.through == RegId::None)
                         || (cell.index.is_some() && cell.index_through == RegId::None)
                         || (cell.selector.is_some()
-                            && cell.addr.is_some_and(|addr| addr.space == Space::Far && addr.segment == RegId::None))
+                            && cell
+                                .addr
+                                .is_some_and(|addr| addr.space == Space::Far && addr.segment == (RegId::None).iced()))
                 }
                 _ => false,
             };
@@ -550,7 +552,7 @@ mod run {
             let base = placed(cell.base, cell.through, self)?;
             let index = placed(cell.index, cell.index_through, self)? * cell.scale;
             let segment = match (cell.addr.map(|addr| addr.segment), cell.selector) {
-                (Some(segment), _) if segment != RegId::None => i64::from(self.register(segment)),
+                (Some(segment), _) if segment != (RegId::None).iced() => i64::from(self.register(RegId::from(segment))),
                 (_, Some(selector)) => self
                     .vals
                     .get(&selector.value)

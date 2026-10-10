@@ -1563,7 +1563,7 @@ mod tests {
     }
 
     fn where_() -> Addr {
-        Addr { base: RegId::SI, ..Addr::new(Space::Segment, 0x10) }
+        Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Segment, 0x10) }
     }
 
     /// `analysed`, `_benefit` and `_whole_range` walked every instruction of

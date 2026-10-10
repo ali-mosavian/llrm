@@ -2,9 +2,10 @@
 //! in the register the convention passed it in, from the entry until the
 //! instruction that stores it. Read back from the code, like the frame rows.
 
-use iced_x86::{Decoder, DecoderOptions, FlowControl, Mnemonic, OpKind, Register};
+use iced_x86::{Decoder, DecoderOptions, FlowControl, Mnemonic, OpKind};
+use llrm_lir::registers::RegId;
 
-fn full(register: Register) -> Register {
+fn full(register: RegId) -> RegId {
     if register.is_gpr() { register.full_register32() } else { register }
 }
 
@@ -14,8 +15,8 @@ fn full(register: Register) -> Register {
 /// bytes below it when the function starts.
 #[derive(Clone, Copy)]
 pub enum Cell {
-    Frame { register: Register, disp: i64 },
-    Stack { register: Register, entry: i64, from_cfa: i64 },
+    Frame { register: RegId, disp: i64 },
+    Stack { register: RegId, entry: i64, from_cfa: i64 },
 }
 
 /// The offset after the first instruction that stores `register` into `cell`,
@@ -25,7 +26,7 @@ pub enum Cell {
 pub fn stored(
     code: &[u8],
     cell: Cell,
-    register: Register,
+    register: RegId,
 ) -> Option<usize> {
     let mut decoder = Decoder::with_ip(32, code, 0, DecoderOptions::NONE);
     // The stack pointer's distance from the canonical frame address, where the
@@ -45,16 +46,16 @@ pub fn stored(
         };
         let to_cell = one.mnemonic() == Mnemonic::Mov
             && one.op0_kind() == OpKind::Memory
-            && full(one.memory_base()) == full(base)
-            && one.memory_index() == Register::None
+            && full(RegId::from(one.memory_base())) == full(base)
+            && one.memory_index() == (RegId::None).iced()
             && i64::from(one.memory_displacement32() as i32) == wanted
             && one.op1_kind() == OpKind::Register
-            && full(one.op1_register()) == full(register);
+            && full(RegId::from(one.op1_register())) == full(register);
         if to_cell {
             return Some(one.ip() as usize + one.len());
         }
         if one.op0_kind() == OpKind::Register
-            && full(one.op0_register()) == full(register)
+            && full(RegId::from(one.op0_register())) == full(register)
             && one.mnemonic() != Mnemonic::Push
         {
             return None;
@@ -63,7 +64,7 @@ pub fn stored(
             match one.mnemonic() {
                 Mnemonic::Push | Mnemonic::Pop => depth += i64::from(one.stack_pointer_increment()),
                 Mnemonic::Sub | Mnemonic::Add
-                    if one.op0_kind() == OpKind::Register && full(one.op0_register()) == full(stack) =>
+                    if one.op0_kind() == OpKind::Register && full(RegId::from(one.op0_register())) == full(stack) =>
                 {
                     if one.op1_kind() == OpKind::Register || one.op1_kind() == OpKind::Memory {
                         return None;
@@ -71,7 +72,9 @@ pub fn stored(
                     let amount = one.immediate(1) as i32 as i64;
                     depth += if one.mnemonic() == Mnemonic::Sub { -amount } else { amount };
                 }
-                _ if one.op0_kind() == OpKind::Register && full(one.op0_register()) == full(stack) => return None,
+                _ if one.op0_kind() == OpKind::Register && full(RegId::from(one.op0_register())) == full(stack) => {
+                    return None;
+                }
                 _ => {}
             }
         }
@@ -84,12 +87,17 @@ pub fn stored(
 
 #[cfg(test)]
 mod tests {
-    use iced_x86::Register::{EAX, EBP, ECX, EDX, ESP};
+    use llrm_lir::registers::RegId;
+    const EAX: RegId = RegId::EAX;
+    const EBP: RegId = RegId::EBP;
+    const ECX: RegId = RegId::ECX;
+    const EDX: RegId = RegId::EDX;
+    const ESP: RegId = RegId::ESP;
 
     use super::{Cell, stored};
 
     fn framed(disp: i64) -> Cell {
-        Cell::Frame { register: EBP, disp }
+        Cell::Frame { register: RegId::from(EBP), disp }
     }
 
     /// `push ebp; mov ebp, esp; sub esp, 8; mov [ebp-4], eax; mov [ebp-8], edx;
@@ -98,10 +106,10 @@ mod tests {
     #[test]
     fn the_first_store_of_the_arrival_register_into_the_home_ends_its_stay_in_the_register() {
         let code = [0x55, 0x89, 0xE5, 0x83, 0xEC, 0x08, 0x89, 0x45, 0xFC, 0x89, 0x55, 0xF8, 0xC3];
-        assert_eq!(stored(&code, framed(-4), EAX), Some(9));
-        assert_eq!(stored(&code, framed(-8), EDX), Some(12));
-        assert_eq!(stored(&code, framed(-8), EAX), None);
-        assert_eq!(stored(&code, framed(-4), ECX), None);
+        assert_eq!(stored(&code, framed(-4), RegId::from(EAX)), Some(9));
+        assert_eq!(stored(&code, framed(-8), RegId::from(EDX)), Some(12));
+        assert_eq!(stored(&code, framed(-8), RegId::from(EAX)), None);
+        assert_eq!(stored(&code, framed(-4), RegId::from(ECX)), None);
     }
 
     /// A register written before its store holds something else by then: the
@@ -110,7 +118,7 @@ mod tests {
     fn a_register_overwritten_before_its_store_is_not_the_argument() {
         // mov eax, 1; mov [ebp-4], eax
         let code = [0xB8, 1, 0, 0, 0, 0x89, 0x45, 0xFC];
-        assert_eq!(stored(&code, framed(-4), EAX), None);
+        assert_eq!(stored(&code, framed(-4), RegId::from(EAX)), None);
     }
 
     /// `push ebx; sub esp, 8; mov [esp+4], eax`: with no frame register the
@@ -128,9 +136,9 @@ mod tests {
         // Entry: esp is 4 below the canonical frame address. After the push and
         // the sub: 16 below. The cell at bias 8, disp -4 is 12 below;
         // esp+4 is 12 below.
-        let stack = |from_cfa| Cell::Stack { register: ESP, entry: 4, from_cfa };
-        assert_eq!(stored(&code, stack(-12), EAX), Some(8));
-        assert_eq!(stored(&code, stack(-16), EDX), Some(11));
-        assert_eq!(stored(&code, stack(-8), EAX), None);
+        let stack = |from_cfa| Cell::Stack { register: RegId::from(ESP), entry: 4, from_cfa };
+        assert_eq!(stored(&code, stack(-12), RegId::from(EAX)), Some(8));
+        assert_eq!(stored(&code, stack(-16), RegId::from(EDX)), Some(11));
+        assert_eq!(stored(&code, stack(-8), RegId::from(EAX)), None);
     }
 }

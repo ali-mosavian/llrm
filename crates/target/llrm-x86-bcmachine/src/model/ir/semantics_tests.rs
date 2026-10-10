@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use super::*;
 use crate::frontends::bc::declen::decode;
@@ -27,8 +28,8 @@ const ECX: Loc = reg(Register::ECX, 4);
 const EDX: Loc = reg(Register::EDX, 4);
 const ES: Loc = reg(Register::ES, 2);
 const CS: Loc = reg(Register::CS, 2);
-const ST0: Loc = Loc::Reg(Reg { register: Register::ST0, width: 10 });
-const ST1: Loc = Loc::Reg(Reg { register: Register::ST1, width: 10 });
+const ST0: Loc = Loc::Reg(Reg { register: RegId::ST0, width: 10 });
+const ST1: Loc = Loc::Reg(Reg { register: RegId::ST1, width: 10 });
 
 fn mem(
     addr: Option<Addr>,
@@ -65,19 +66,19 @@ fn _semantics(code: &str) -> Semantics {
     instruction_semantics(&_insn(code), &literal_only)
 }
 
-fn _defs(code: &str) -> BTreeSet<Register> {
+fn _defs(code: &str) -> BTreeSet<RegId> {
     _effects(code).defs.expect("a real instruction, not a call")
 }
 
-fn _uses(code: &str) -> BTreeSet<Register> {
+fn _uses(code: &str) -> BTreeSet<RegId> {
     _effects(code).uses.expect("a real instruction, not a call")
 }
 
 #[test]
 fn test_a_sub_register_write_is_normalised_in_a_real_instructions_own_effects() {
     let effects = _effects("B0 05");
-    assert_eq!(effects.defs, Some(BTreeSet::from([Register::EAX])));
-    assert_eq!(effects.uses, Some(BTreeSet::from([Register::EAX])));
+    assert_eq!(effects.defs, Some(BTreeSet::from([RegId::EAX])));
+    assert_eq!(effects.uses, Some(BTreeSet::from([RegId::EAX])));
 }
 
 #[test]
@@ -165,28 +166,28 @@ fn test_lea_touches_no_memory_at_all() {
 
 #[test]
 fn test_cwd_writes_dx_alone_and_reads_ax() {
-    assert_eq!(_defs("99"), BTreeSet::from([Register::EDX]));
-    assert!(!_defs("99").contains(&Register::EAX));
-    assert_eq!(_uses("99"), BTreeSet::from([Register::EAX, Register::EDX]));
+    assert_eq!(_defs("99"), BTreeSet::from([RegId::EDX]));
+    assert!(!_defs("99").contains(&RegId::EAX));
+    assert_eq!(_uses("99"), BTreeSet::from([RegId::EAX, RegId::EDX]));
 }
 
 #[test]
 fn test_the_absorbed_divide_names_both_of_its_destinations() {
     assert_modelled(_semantics("66 F7 F9"), semantics(Operation::Divide, "idiv", vec![EAX, EDX], vec![EDX, EAX, ECX]));
-    assert_eq!(_defs("66 F7 F9"), BTreeSet::from([Register::EAX, Register::EDX]));
-    assert!(!_defs("66 F7 F9").contains(&Register::ECX));
+    assert_eq!(_defs("66 F7 F9"), BTreeSet::from([RegId::EAX, RegId::EDX]));
+    assert!(!_defs("66 F7 F9").contains(&RegId::ECX));
 }
 
 #[test]
 fn test_the_absorbed_multiply_leaves_edx_alone() {
     assert_modelled(_semantics("66 0F AF C1"), semantics(Operation::Multiply, "imul", vec![EAX], vec![EAX, ECX]));
-    assert_eq!(_defs("66 0F AF C1"), BTreeSet::from([Register::EAX]));
+    assert_eq!(_defs("66 0F AF C1"), BTreeSet::from([RegId::EAX]));
 }
 
 #[test]
 fn test_a_three_operand_multiply_does_not_read_its_own_destination() {
     assert_modelled(_semantics("66 6B C1 04"), semantics(Operation::Multiply, "imul", vec![EAX], vec![ECX, imm(4, 4)]));
-    assert!(!_uses("66 6B C1 04").contains(&Register::EAX));
+    assert!(!_uses("66 6B C1 04").contains(&RegId::EAX));
 }
 
 #[test]
@@ -280,13 +281,13 @@ fn test_a_segment_override_is_modelled_with_its_segment() {
 #[test]
 fn test_xchg_is_a_genuine_two_way_swap() {
     assert_modelled(_semantics("93"), semantics(Operation::Exchange, "xchg", vec![BX, AX], vec![AX, BX]));
-    assert_eq!(_defs("93"), BTreeSet::from([Register::EBX, Register::EAX]));
-    assert_eq!(_uses("93"), BTreeSet::from([Register::EBX, Register::EAX]));
+    assert_eq!(_defs("93"), BTreeSet::from([RegId::EBX, RegId::EAX]));
+    assert_eq!(_uses("93"), BTreeSet::from([RegId::EBX, RegId::EAX]));
 }
 
 #[test]
 fn test_a_barrier_still_carries_a_complete_effect() {
-    assert_eq!(_defs("E4 40"), BTreeSet::from([Register::EAX]));
+    assert_eq!(_defs("E4 40"), BTreeSet::from([RegId::EAX]));
     assert_eq!(_effects("E4 40").flags_written, Flag::NONE);
 }
 
@@ -400,7 +401,7 @@ fn test_leave_names_both_registers_it_writes_and_the_one_it_reads() {
             vec![reg(Register::BP, 2)],
         ),
     );
-    assert_eq!(_defs("C9"), BTreeSet::from([Register::EBP, Register::ESP]));
+    assert_eq!(_defs("C9"), BTreeSet::from([RegId::EBP, RegId::ESP]));
     assert_eq!(_effects("C9").flags_written, Flag::NONE);
 }
 
@@ -426,7 +427,7 @@ fn test_the_widening_multiply_names_both_halves_of_its_product() {
         semantics(Operation::Multiply, "imul", vec![AX, DX], vec![AX, reg(Register::CX, 2)]),
     );
     assert_modelled(_semantics("66 F7 E9"), semantics(Operation::Multiply, "imul", vec![EAX, EDX], vec![EAX, ECX]));
-    assert_eq!(_defs("F7 E9"), BTreeSet::from([Register::EAX, Register::EDX]));
+    assert_eq!(_defs("F7 E9"), BTreeSet::from([RegId::EAX, RegId::EDX]));
 }
 
 #[test]

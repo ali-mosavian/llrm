@@ -171,15 +171,12 @@ fn a_targets_pins_come_from_its_own_forms() {
 /// frame.
 #[test]
 fn a_targets_registers_come_from_its_description() {
-    use iced_x86::Register;
     use llrm_core::backend::classes::RegisterClasses;
+    use llrm_lir::registers::RegId;
 
     let flat = RegisterClasses::of(&llrm_x86_m32::M32);
-    assert_eq!(
-        flat.available,
-        [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESI, Register::EDI]
-    );
-    assert_eq!(flat.frame, Register::EBP);
+    assert_eq!(flat.available, [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ESI, RegId::EDI]);
+    assert_eq!(flat.frame, RegId::EBP);
 }
 
 /// -Os prices a shift-and-add multiply by its bytes, and the 66h prefix is for
