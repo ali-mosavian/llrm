@@ -1398,7 +1398,13 @@ pub fn known_walked(
                 // stores that reach it.
                 let mut bytes: Vec<Vec<(InstId, u32)>> = Vec::new();
                 'bytes: for k in 0..reference.width {
-                    let one = MemRef { disp: reference.disp + i64::from(k), width: 1, ..reference.clone() };
+                    // The byte, with the provenance moved to it.
+                    let one = MemRef {
+                        disp: reference.disp + i64::from(k),
+                        width: 1,
+                        provenance: reference.provenance.as_ref().map(|found| found.shifted(i64::from(k))),
+                        ..reference.clone()
+                    };
                     let mut from = Vec::new();
                     for id in graph.clobbers_ignoring_invariance(inst, &one) {
                         let access = graph.access(id);
