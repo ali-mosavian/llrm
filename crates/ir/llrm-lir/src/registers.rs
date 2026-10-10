@@ -24,72 +24,88 @@ include!(concat!(env!("OUT_DIR"), "/reg_consts.rs"));
 
 impl RegId {
     /// The register iced names, for the encoder and the decoder.
+    #[inline]
     pub const fn new(register: Register) -> Self {
         RegId(register)
     }
 
+    #[inline]
     pub const fn iced(self) -> Register {
         self.0
     }
 
     /// Every register iced names.
+    #[inline]
     pub fn values() -> impl Iterator<Item = RegId> + DoubleEndedIterator + ExactSizeIterator {
         Register::values().map(RegId)
     }
 
     /// iced's number of the register: the index into the tables.
+    #[inline]
     pub const fn index(self) -> usize {
         self.0 as usize
     }
 
+    #[inline]
     pub fn full_register32(self) -> RegId {
         RegId(self.0.full_register32())
     }
 
+    #[inline]
     pub fn full_register(self) -> RegId {
         RegId(self.0.full_register())
     }
 
+    #[inline]
     pub fn size(self) -> usize {
         self.0.size()
     }
 
+    #[inline]
     pub fn number(self) -> usize {
         self.0.number()
     }
 
+    #[inline]
     pub fn is_gpr(self) -> bool {
         self.0.is_gpr()
     }
 
+    #[inline]
     pub fn is_gpr8(self) -> bool {
         self.0.is_gpr8()
     }
 
+    #[inline]
     pub fn is_gpr16(self) -> bool {
         self.0.is_gpr16()
     }
 
+    #[inline]
     pub fn is_gpr32(self) -> bool {
         self.0.is_gpr32()
     }
 
+    #[inline]
     pub fn is_segment_register(self) -> bool {
         self.0.is_segment_register()
     }
 
+    #[inline]
     pub fn is_st(self) -> bool {
         self.0.is_st()
     }
 }
 
 impl From<Register> for RegId {
+    #[inline]
     fn from(register: Register) -> Self {
         RegId::new(register)
     }
 }
 
 impl From<RegId> for Register {
+    #[inline]
     fn from(register: RegId) -> Self {
         register.0
     }
