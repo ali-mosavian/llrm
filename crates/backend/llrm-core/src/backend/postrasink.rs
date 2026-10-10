@@ -688,7 +688,13 @@ mod tests {
     #[test]
     fn test_a_spill_store_does_not_move_past_a_later_store_to_its_cell() {
         use crate::objectfile::module::{Addr, Space};
-        let addr = Addr { space: Space::Frame, disp: -8, index: -1, base: RegId::None, segment: RegId::None };
+        let addr = Addr {
+            space: Space::Frame,
+            disp: -8,
+            index: -1,
+            base: iced_x86::Register::None,
+            segment: iced_x86::Register::None,
+        };
         let cell = crate::model::ir::Mem { through: RegId::BP, ..crate::model::ir::Mem::new(Some(addr), 2) };
         let store = |at, source| {
             Arc::new(Insn {
