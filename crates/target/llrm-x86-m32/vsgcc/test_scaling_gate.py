@@ -594,3 +594,13 @@ def test_the_immediate_dominators_are_the_trees_not_every_blocks_set_of_dominato
     source.write_text(scaling.AXES["branches"](1024))
     rows = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert rows["masm return overhead"] <= 400 and rows["ssa repaired"] <= 400, rows
+
+
+def test_hoist_prices_a_run_by_what_it_moves_not_by_a_clone_of_the_function(tmp_path):
+    """`mir hoist` on `branches` at N=1024 cloned the function and priced all of it for each loop with a run to move, where no
+    register is priced and the price is a sum over the instructions: 2,595 Minstr, 3.8x a doubling. The run changes the sum by
+    what each instruction costs at the preheader's frequency less at its own: 339."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir hoist"]
+    assert cost <= 900, cost
