@@ -1651,11 +1651,6 @@ fn _unread_bits_once(
         let Some(&bits) = read.get(&result) else { continue };
         let width = context.types.int_bits(instruction.ty).expect("an integer");
         let all = if width == 128 { u128::MAX } else { (1_u128 << width) - 1 };
-        // Every bit read: nothing is gone but what an all-ones mask or a zero
-        // `or` states.
-        if bits == all {
-            continue;
-        }
         let zero = llrm_mir::valuetracking::known_zero(context, function, Operand::Value(result)) & all;
         let (opcode, operands) = (instruction.opcode.clone(), instruction.operands.clone());
         let replacement = if bits & !zero == 0 {
