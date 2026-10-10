@@ -2,6 +2,8 @@
 //! Its descriptions are the files beside this one; this answers what they
 //! cannot say.
 
+include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
+
 use std::sync::LazyLock;
 
 use iced_x86::Register;

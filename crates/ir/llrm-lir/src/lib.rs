@@ -22,6 +22,8 @@ mod root;
 
 pub use root::root;
 
+pub mod registers;
+
 /// One physical register operand, at the instruction's width.
 ///
 /// Direct port of `qbopt.model.ir:Reg`.

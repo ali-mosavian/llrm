@@ -1244,6 +1244,10 @@ pub fn summaries_updating(
             result.insert(name.clone(), made);
             let mut woken: Vec<usize> = readers[at].iter().copied().collect();
             if entries.contains(&at) {
+                // The callbacks may not move while an entry that is among the
+                // coupled bodies' own makers does: they could hold each other
+                // up.
+                deferred |= waiting_coupled;
                 let now = llrm_support::debug::timed("summaries callbacks", || {
                     match called_back.as_mut() {
                         Some(held) => held.changed(name, &result[name]),

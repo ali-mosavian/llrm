@@ -1,11 +1,15 @@
 """scaling_gate.py: a pass gone quadratic reads as 2N/N = 4, a linear one as 2, and neither direction of change passes unseen."""
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 import scaling
+import programs
 import scaling_gate as gate
+import wrap
 
 REQUIRES = ["perf"]  # the gate leaves this file out where `perf stat` reads no count
 STAND_IN = "import sys; n = len(open(sys.argv[1]).read().splitlines()); sum(range({work}))"
@@ -348,3 +352,53 @@ def test_summaries_do_not_work_out_every_caller_of_an_edited_body_again(tmp_path
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     small, big = (own[label].get("summaries visit", 0.0) - own["empty"].get("summaries visit", 0.0) for label in ("n", "2n"))
     assert big <= 2.7 * small + 2.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_loop_passes_read_a_loop_not_the_body_around_it(tmp_path):
+    """branches(N) at -O2: lcssa, rotate and trivialunswitch each built the graph of the whole function for each loop (a vector of
+    every block and its successors), lcssa also read every instruction outside the loop for its uses of what the loop defines and
+    found the dominators of the body for each loop: 2N/N = 3.9, 4.0 and 3.5 at N=128 (lcssa 4.3 G at N=1024). A loop is asked of its own
+    blocks and the header's users (`cfg::Around`), uses are found from the uses of a value, and the dominators once: 2.1, 2.0, 2.0
+    (lcssa 105 M). A step above 2.6 (slope 1.38) fails; a few Minstr of start-up are allowed."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"branches_{label}.c"
+        source.write_text("" if size == 0 else scaling.branches(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    grown = {}
+    for step in ("mir lcssa", "mir rotate", "mir trivialunswitch"):
+        small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
+        if big > 2.6 * small + 5.0:
+            grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
+    assert not grown, grown
+
+
+def test_lsr_does_not_add_up_the_function_or_rebuild_its_graph_for_each_loop(tmp_path):
+    """`mir lsr` on `branches` at N=512 (64 loops of a function of 500 blocks) added up the whole function's traffic for each loop and
+    built the graph of the whole function to ask three blocks' neighbours (`rotate::_shape`): 1,391 Minstr; on `nest` at N=128 it also
+    gathered each block's live sets again for each loop around it and built them as trees: 9,362. The traffic is added up once and
+    each loop's instructions taken out, the neighbours are asked of the blocks, the live sets kept and the cells sorted in vectors:
+    about 600 and 5,900. Both stay quadratic (the loops are, and each changed loop invalidates what the next asks for), so the bounds
+    are on the cost."""
+    costs = {}
+    for axis, n in (("branches", 512), ("nest", 128)):
+        source = tmp_path / f"{axis}_{n}.c"
+        source.write_text(scaling.AXES[axis](n))
+        costs[axis] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir lsr"]
+    assert costs["branches"] <= 900 and costs["nest"] <= 7500, costs
+
+
+def test_an_entry_does_not_hold_up_the_summary_of_what_calls_through_a_pointer(tmp_path):
+    """An address-taken function is an entry, and `main` calls it through a pointer: the two feed each other. Bringing the
+    summaries up to date kept `main`'s from before the entry's was lowered (the callbacks, which `main` is part of, did not
+    move), and `LLRM_CHECK_MODULES` found them differing from a whole run: it died on x_strlen at -O2."""
+    source = tmp_path / "x_strlen.c"
+    source.write_text(wrap.wrapped("x_strlen", programs.sources()["x_strlen"].read_text()))
+    done = subprocess.run(
+        [*gate.levels_time.command("llrm", "O2", source), *programs.LLRM_FLAGS],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "LLRM_CHECK_MODULES": "1"},
+    )
+    assert done.returncode == 0, done.stderr[-300:]
