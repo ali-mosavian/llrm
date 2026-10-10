@@ -83,6 +83,8 @@ pub struct Info {
     /// The root the description gives the class `frame`, and `stack`.
     pub frame: RegId,
     pub stack: RegId,
+    /// The far-pointer load that fills each segment register: `(es, "les")`.
+    pub loads: &'static [(RegId, &'static str)],
     /// The segment register each address space of a pair kind means, where the
     /// target has segments: what an access without a prefix reads, the stack's,
     /// the code's, and the one a far pointer's selector is loaded into.
@@ -185,6 +187,22 @@ impl Info {
         register: RegId,
     ) -> bool {
         self.root(register) == self.stack
+    }
+
+    /// The mnemonic that loads a far pointer's offset and `segment`.
+    pub fn load_form(
+        &self,
+        segment: RegId,
+    ) -> Option<&'static str> {
+        self.loads.iter().find(|(one, _)| *one == segment).map(|(_, name)| *name)
+    }
+
+    /// The segment register `form` loads, where it is a far-pointer load.
+    pub fn loaded_by(
+        &self,
+        form: &str,
+    ) -> Option<RegId> {
+        self.loads.iter().find(|(_, name)| *name == form).map(|(one, _)| *one)
     }
 
     /// The entries in iced's number order, with their registers.
