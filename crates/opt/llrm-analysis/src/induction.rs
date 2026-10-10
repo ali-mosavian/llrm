@@ -771,6 +771,15 @@ fn _proven(
             let Reach::Solved { bits, .. } = &solved else { unreachable!("_solved solves") };
             let period = BigInt::from(1) << *bits;
             reach = solved;
+            // Counted from a start the branch over the entry proves is not the
+            // bound: `n == 0` skips a loop that ends at `n - 1 ==
+            // 0`, which then runs `n` trips (the `(bound - start) / step` of a
+            // loop tested after its trip is wrong only where it
+            // starts at the bound).
+            entry_guarded = shape.posttested
+                && stepped
+                && abs(&step) == BigInt::from(1)
+                && _entered(unit, &shape, &start, &bound, IntPredicate::Ne, width);
             Some(period)
         } else if test != IntPredicate::Ne && abs(&step) != BigInt::from(1) {
             // An ordered test by more than one: promised not to wrap past the
