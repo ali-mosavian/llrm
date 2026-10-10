@@ -588,8 +588,9 @@ def test_a_branchs_guards_come_from_its_nearest_dominators(tmp_path):
 def test_the_immediate_dominators_are_the_trees_not_every_blocks_set_of_dominators(tmp_path):
     """`immediate_dominators` named every block's dominators and took the one with the most: the square of a chain of blocks, and
     `masm return overhead` (shrinkwrap) on `branches` at N=1024 spent 2,277 Minstr in it, 4.3x a doubling, with `ssa repaired`. The
-    dominator tree already says it, and the home of a wrap only rises: 98."""
+    dominator tree already says it, and the home of a wrap only rises: 98. `ssa repaired` (2,132, the same function, the dominators'
+    sets, a scan of the blocks for each phi asked and the liveness of a body with phis over rows) 78."""
     source = tmp_path / "branches_1024.c"
     source.write_text(scaling.AXES["branches"](1024))
-    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["masm return overhead"]
-    assert cost <= 400, cost
+    rows = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert rows["masm return overhead"] <= 400 and rows["ssa repaired"] <= 400, rows
