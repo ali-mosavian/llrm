@@ -88,8 +88,7 @@ pub fn tied(body: &LirBody) -> LirBody {
         .filter(|(_, alive)| alive.is_some_and(BTreeSet::is_empty))
         .filter_map(|(one, _)| _swappable(one))
         .filter_map(|(into, first, second)| {
-            let neighbours = copies.get(&into)?;
-            Some(neighbours.iter().copied().chain([first, second]))
+            Some(copies.get(&into).into_iter().flatten().copied().chain([into, first, second]))
         })
         .flatten()
         .collect();
@@ -731,7 +730,10 @@ mod tests {
     fn test_a_source_that_interferes_with_the_destination_is_not_the_one_tied() {
         let one = addition("xor");
         let copies = graph(&[(3, &[1, 2])]);
-        let interference = graph(&[(1, &[2, 3]), (2, &[1]), (3, &[1])]);
+        let interference: crate::backend::coalesce::Graph = graph(&[(1, &[2, 3]), (2, &[1]), (3, &[1])])
+            .into_iter()
+            .map(|(value, near)| (value, near.into_iter().collect()))
+            .collect();
 
         let chosen = _commuted(&one, &BTreeSet::new(), Some(&copies), Some(&interference)).expect("swapped");
 
