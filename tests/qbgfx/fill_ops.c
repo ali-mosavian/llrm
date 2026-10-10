@@ -193,6 +193,34 @@ int main(void)
                             return 0;
                         }
             }
+            /* and the eight points of a circle step (set only), against eight dots */
+            if (operation == 0) {
+                int u = next() % 11, v = next() % 11, w = next() % 11, z = next() % 11;
+                unsigned cx = 11 + next() % (REGION_W - 22), cy = 11 + next() % (REGION_H - 22);
+
+                grab(saved);
+                gd_dots_begin(&fill);
+                fill.dot(&fill, cx + u, cy - v);
+                fill.dot(&fill, cx + w, cy - z);
+                fill.dot(&fill, cx - w, cy - z);
+                fill.dot(&fill, cx - u, cy - v);
+                fill.dot(&fill, cx - u, cy + v);
+                fill.dot(&fill, cx - w, cy + z);
+                fill.dot(&fill, cx + w, cy + z);
+                fill.dot(&fill, cx + u, cy + v);
+                gd_dots_end(&fill);
+                grab(expected);
+                put_back(saved);
+                gd_dots_begin(&fill);
+                fill.octet(&fill, cx, cy, u, v, w, z);
+                gd_dots_end(&fill);
+                for (y = 0; y < REGION_H; y++)
+                    for (x = 0; x < REGION_W; x++)
+                        if (gd_read(x, y) != expected[y * REGION_W + x]) {
+                            report((long)modes[m] * 1000000L + (long)(cx + cy * 100) + 60000L);
+                            return 0;
+                        }
+            }
             /* and a few dots of the same fill: the pixel as the operation says, its neighbours as they were */
             for (x = 0; x < 6; x++) {
                 unsigned dx = 1 + next() % (REGION_W - 2), dy = next() % REGION_H;

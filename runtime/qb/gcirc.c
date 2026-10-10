@@ -161,6 +161,40 @@ static void rim(Circle *c)
     }
 }
 
+/* The circle without start or end angles, as QB plots one: whole integer steps, the aspect's scaling a running sum of 256ths, and
+   the eight points of a step all together, with no test of each against the screen when the circle is on it. */
+static void rim_plain(Circle *c)
+{
+    int x = (int)c->radius, y = 0, sum = 1 - x, scale = (int)c->scale;
+    unsigned long ax = (unsigned long)x * scale + FIXED / 2, ay = FIXED / 2;
+    int reach_x = (int)(c->scale_x ? (ax >> 8) : (unsigned long)x), reach_y = (int)(c->scale_x ? (unsigned long)x : (ax >> 8));
+    int inside = c->cx - reach_x >= 0 && c->cy - reach_y >= 0 && (unsigned)(c->cx + reach_x) < gfx_current->width
+                 && (unsigned)(c->cy + reach_y) < gfx_current->height;
+
+    if (!inside) {
+        rim(c);
+        return;
+    }
+    for (;;) {
+        int sx = (int)(ax >> 8), sy = (int)(ay >> 8);
+
+        if (c->scale_x)
+            c->fill.octet(&c->fill, (unsigned)c->cx, (unsigned)c->cy, sx, y, sy, x);
+        else
+            c->fill.octet(&c->fill, (unsigned)c->cx, (unsigned)c->cy, x, sy, y, sx);
+        if (y >= x)
+            break;
+        if (sum >= 0) {
+            sum += 2 - 2 * x;
+            x--;
+            ax -= scale;
+        }
+        sum += 2 * y + 3;
+        y++;
+        ay += scale;
+    }
+}
+
 /* An angle as the circle takes it: not past a turn. */
 static double turn(double angle, int *spoked)
 {
@@ -220,7 +254,10 @@ void B_CIRC(float radius, short color)
         c.to = last;
     }
     gd_dots_begin(&c.fill);
-    rim(&c);
+    if (arc)
+        rim(&c);
+    else
+        rim_plain(&c);
     gd_dots_end(&c.fill);
 }
 #pragma aux B_CSTT "B$CSTT"

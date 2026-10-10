@@ -626,6 +626,67 @@ static void planar_dot(const GdFill *fill, unsigned x, unsigned y)
     *at = (u8)fill->color;
 }
 
+/* Eight points of a circle step at once, without a call for each (set only: the dots' `color` and masks as they are). */
+static void linear_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
+{
+    Video *c = pixel_at(cx, cy), *a, *b;
+    unsigned long vp = (unsigned long)v * pitch, zp = (unsigned long)z * pitch;
+    u8 color = (u8)fill->color;
+
+    a = c - vp;
+    b = c + vp;
+    a[-u] = color;
+    a[u] = color;
+    b[-u] = color;
+    b[u] = color;
+    a = c - zp;
+    b = c + zp;
+    a[-w] = color;
+    a[w] = color;
+    b[-w] = color;
+    b[w] = color;
+}
+
+static void packed4_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
+{
+    packed_dot(fill, cx + u, cy - v, 2);
+    packed_dot(fill, cx + w, cy - z, 2);
+    packed_dot(fill, cx - w, cy - z, 2);
+    packed_dot(fill, cx - u, cy - v, 2);
+    packed_dot(fill, cx - u, cy + v, 2);
+    packed_dot(fill, cx - w, cy + z, 2);
+    packed_dot(fill, cx + w, cy + z, 2);
+    packed_dot(fill, cx + u, cy + v, 2);
+}
+
+static void packed2_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
+{
+    packed_dot(fill, cx + u, cy - v, 1);
+    packed_dot(fill, cx + w, cy - z, 1);
+    packed_dot(fill, cx - w, cy - z, 1);
+    packed_dot(fill, cx - u, cy - v, 1);
+    packed_dot(fill, cx - u, cy + v, 1);
+    packed_dot(fill, cx - w, cy + z, 1);
+    packed_dot(fill, cx + w, cy + z, 1);
+    packed_dot(fill, cx + u, cy + v, 1);
+}
+
+static void planar_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
+{
+    planar_dot(fill, cx + u, cy - v);
+    planar_dot(fill, cx + w, cy - z);
+    planar_dot(fill, cx - w, cy - z);
+    planar_dot(fill, cx - u, cy - v);
+    planar_dot(fill, cx - u, cy + v);
+    planar_dot(fill, cx - w, cy + z);
+    planar_dot(fill, cx + w, cy + z);
+    planar_dot(fill, cx + u, cy + v);
+}
+
+static void (*const octets[KINDS])(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z) = {
+    planar_octet, linear_octet, packed4_octet, packed2_octet
+};
+
 static void (*const dots[KINDS][2])(const GdFill *fill, unsigned x, unsigned y) = {
     { planar_dot, planar_dot },
     { linear_dot, linear_dot_set },
@@ -729,6 +790,7 @@ void gd_fill_select(GdFill *fill, unsigned color, unsigned operation)
     fill->box = boxes[kind];
     fill->dot = dots[kind][operation == 0];
     fill->line = lines[kind];
+    fill->octet = octets[kind];
     fill->color = color & 0xFF;
     fill->style = 0xFFFF;
     fill->operation = operation;
