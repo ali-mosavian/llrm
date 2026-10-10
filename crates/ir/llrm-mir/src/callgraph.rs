@@ -211,58 +211,18 @@ impl<N: Copy + Ord> CallGraph<N> {
     /// this call itself, and through whom".
     fn components(&self) -> &BTreeMap<N, (usize, bool)> {
         self.components.get_or_init(|| {
-            let (mut index, mut stack, mut next) = (BTreeMap::<N, usize>::new(), Vec::<N>::new(), 0);
-            let (mut low, mut on, mut found) =
-                (BTreeMap::<N, usize>::new(), BTreeSet::<N>::new(), BTreeMap::<N, (usize, bool)>::new());
-            let mut components = 0;
+            // Over dense indices of the nodes, in order: no map is asked in
+            // the walk.
             let nodes: BTreeSet<N> =
                 self.callees.iter().flat_map(|(from, to)| std::iter::once(*from).chain(to.iter().copied())).collect();
-            for &root in &nodes {
-                if index.contains_key(&root) {
-                    continue;
-                }
-                let mut work = vec![(root, 0_usize)];
-                while let Some((at, done)) = work.pop() {
-                    if done == 0 {
-                        index.insert(at, next);
-                        low.insert(at, next);
-                        next += 1;
-                        stack.push(at);
-                        on.insert(at);
-                    }
-                    let out: Vec<N> = self.callees.get(&at).into_iter().flatten().copied().collect();
-                    if let Some(&to) = out.get(done) {
-                        work.push((at, done + 1));
-                        if !index.contains_key(&to) {
-                            work.push((to, 0));
-                        } else if on.contains(&to) {
-                            let lowest = low[&at].min(index[&to]);
-                            low.insert(at, lowest);
-                        }
-                        continue;
-                    }
-                    if let Some(&(parent, _)) = work.last() {
-                        let lowest = low[&parent].min(low[&at]);
-                        low.insert(parent, lowest);
-                    }
-                    if low[&at] == index[&at] {
-                        let mut members = Vec::new();
-                        while let Some(one) = stack.pop() {
-                            on.remove(&one);
-                            members.push(one);
-                            if one == at {
-                                break;
-                            }
-                        }
-                        let cyclic = members.len() > 1 || self.callees.get(&at).is_some_and(|to| to.contains(&at));
-                        for one in members {
-                            found.insert(one, (components, cyclic));
-                        }
-                        components += 1;
-                    }
-                }
+            let nodes: Vec<N> = nodes.into_iter().collect();
+            let at = |node: &N| nodes.binary_search(node).expect("a node of the graph");
+            let mut out: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+            for (from, to) in &self.callees {
+                out[at(from)] = to.iter().map(at).collect();
             }
-            found
+            let (component, cyclic) = strong_components(&out);
+            nodes.iter().enumerate().map(|(one, node)| (*node, (component[one], cyclic[component[one]]))).collect()
         })
     }
 
@@ -346,6 +306,55 @@ impl ProgramAnalysis for ProgramCallGraph {
     ) -> CallGraph<Defined> {
         CallGraph::of(program)
     }
+}
+
+/// Tarjan's, iteratively, over the nodes `0..callees.len()` and their callees
+/// in order: each node's component, numbered callees first, and whether that
+/// component is a cycle (more than one node, or a call to itself).
+pub fn strong_components(callees: &[Vec<usize>]) -> (Vec<usize>, Vec<bool>) {
+    const NONE: usize = usize::MAX;
+    let count = callees.len();
+    let (mut index, mut low) = (vec![NONE; count], vec![0; count]);
+    let (mut on, mut stack, mut next) = (vec![false; count], Vec::<usize>::new(), 0);
+    let (mut component, mut cyclic) = (vec![NONE; count], Vec::<bool>::new());
+    for root in 0..count {
+        if index[root] != NONE {
+            continue;
+        }
+        let mut work = vec![(root, 0_usize)];
+        while let Some((node, done)) = work.pop() {
+            if done == 0 {
+                index[node] = next;
+                low[node] = next;
+                next += 1;
+                stack.push(node);
+                on[node] = true;
+            }
+            if let Some(&to) = callees[node].get(done) {
+                work.push((node, done + 1));
+                if index[to] == NONE {
+                    work.push((to, 0));
+                } else if on[to] {
+                    low[node] = low[node].min(index[to]);
+                }
+                continue;
+            }
+            if let Some(&(parent, _)) = work.last() {
+                low[parent] = low[parent].min(low[node]);
+            }
+            if low[node] == index[node] {
+                let first = stack.iter().rposition(|one| *one == node).expect("on the stack");
+                let members = stack.split_off(first);
+                let this = cyclic.len();
+                cyclic.push(members.len() > 1 || callees[node].contains(&node));
+                for one in members {
+                    on[one] = false;
+                    component[one] = this;
+                }
+            }
+        }
+    }
+    (component, cyclic)
 }
 
 #[cfg(test)]

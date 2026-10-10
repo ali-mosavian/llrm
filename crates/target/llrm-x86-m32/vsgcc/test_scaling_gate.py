@@ -334,3 +334,17 @@ def test_counted_stays_below_cubic_in_the_loops_of_one_function(tmp_path):
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     small, big = (own[label].get("analysis counted", 0.0) - own["empty"].get("analysis counted", 0.0) for label in ("n", "2n"))
     assert big <= 2.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_summaries_do_not_work_out_every_caller_of_an_edited_body_again(tmp_path):
+    """chain(N) at -O2: an edited body started its whole chain of callers again from nothing (`summaries_updating`'s closure), so
+    each of the run's ~N edits visited ~N bodies: `summaries visit` read 2N/N = 3.5, 3.7 (8.7 / 30.6 / 114 Minstr at N=32..128).
+    A body is visited again from what it reads, and its readers where its summary came out other than it was (gcc's summaries
+    stop where one does not change): 2.2, 2.2 (2.6 / 5.9 / 12.8). A step above 2.7 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 64), ("2n", 128)):
+        source = tmp_path / f"chain_{label}.c"
+        source.write_text("" if size == 0 else scaling.chain(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("summaries visit", 0.0) - own["empty"].get("summaries visit", 0.0) for label in ("n", "2n"))
+    assert big <= 2.7 * small + 2.0, f"{small:.1f} -> {big:.1f} Minstr"
