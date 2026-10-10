@@ -2,11 +2,13 @@
 
    A note is a letter A to G, a sharp (# or +) or a flat (-), a length and dots;
    the other commands set the octave (O, < and >), the length (L), the tempo (T)
-   and the style (M).  Music in the background (MB) is accepted and not played;
-   music in the foreground is played through the speaker, and the program waits
-   for it. */
+   and the style (M).  The notes go to a queue that the clock tick plays through
+   the speaker; music in the foreground makes the program wait until the queue is
+   empty (the last note has begun), music in the background only while it is
+   full. */
 #include "device.h"
 #include "nhstutil.h"
+#include "rtinit.h"
 
 enum {
     LOWEST_OCTAVE = 0,
@@ -19,8 +21,7 @@ enum {
     LONGEST_NOTE = 64,
     HIGHEST_NOTE = 84,
     SEMITONES = 12,
-    HUNDREDTHS_PER_MINUTE = 6000,
-    DAY = 8640000L
+    TICKS_PER_MINUTE = 1092390L    /* a minute of the clock's ticks, in thousandths */
 };
 
 /* How much of a note sounds before the silence that ends it, in eighths. */
@@ -30,7 +31,7 @@ typedef struct Player {
     const char *at, *end;
     int octave, length, tempo;
     enum Style style;
-    int foreground;
+    byte foreground;
 } Player;
 
 static void illegal(void)
@@ -56,6 +57,8 @@ static long number(Player *p)
 {
     long value = -1;
 
+    while (p->at < p->end && *p->at == ' ')
+        p->at++;
     while (p->at < p->end && *p->at >= '0' && *p->at <= '9') {
         value = (value < 0 ? 0 : value) * 10 + (*p->at++ - '0');
         if (value > 30000)
@@ -64,19 +67,69 @@ static long number(Player *p)
     return value;
 }
 
-/* Waits `hundredths` of a second. */
-static void wait(long hundredths)
-{
-    long start = dev_clock();
+/* The music waiting to be played, a ring the clock tick empties: the program
+   writes `head` and the tick writes `tail`, so neither needs the other to stop. */
+typedef struct Note {
+    unsigned hertz;               /* 0 for a rest */
+    byte sound, quiet;            /* ticks of tone, then of silence */
+} Note;
 
-    while ((dev_clock() - start + DAY) % DAY < hundredths)
+enum { QUEUE = 19 };   /* one place is left empty: 18 notes wait before a background PLAY does, as with BCOM45 */
+
+static Note queue[QUEUE];
+static volatile unsigned head, tail;
+static byte tick_started;
+static byte sound_left, quiet_left;
+
+/* The clock tick: counts the note out, and starts the next. */
+void music_tick(void)
+{
+    if (sound_left && --sound_left == 0)
+        dev_tone(0);
+    else if (!sound_left && quiet_left)
+        quiet_left--;
+    /* a note too short to last a tick is passed over */
+    while (!sound_left && !quiet_left && tail != head) {
+        const Note *next = &queue[tail];
+
+        sound_left = next->sound;
+        quiet_left = next->quiet;
+        if (sound_left)
+            dev_tone(next->hertz);
+        tail = (tail + 1) % QUEUE;
+    }
+}
+#pragma aux music_tick "B$MUSICTICK"
+
+/* Waits, with the tick running, until `done` is so. */
+static void wait_for_room(void)
+{
+    while ((head + 1) % QUEUE == tail)
         ;
 }
 
-/* A note of `length`th of a whole note and `dots` dots, in hundredths. */
+static void wait_for_empty(void)
+{
+    while (tail != head)
+        ;
+}
+
+/* A time in thousandths of a tick as whole ticks, the part left over kept in
+   `owed` for the next time: a run of short notes takes as long as they should,
+   though each is a whole number of ticks. */
+static byte ticks_of(long thousandths, long *owed)
+{
+    long whole = (*owed + thousandths) / 1000;
+
+    *owed = *owed + thousandths - whole * 1000;
+    return (byte)whole;
+}
+
+/* A note of `length`th of a whole note and `dots` dots, in thousandths of a
+   tick. */
 static long duration(const Player *p, int length, int dots)
 {
-    long whole = 4L * HUNDREDTHS_PER_MINUTE / p->tempo;
+    long whole = 4L * TICKS_PER_MINUTE / p->tempo;
     long time = whole / length, extra = time;
 
     while (dots--) {
@@ -97,17 +150,28 @@ static unsigned frequency(int note)
     return octave >= 0 ? hertz << octave : hertz >> -octave;
 }
 
+/* Queues a note, or a rest with `note` 0, `time` long. */
 static void play_note(Player *p, int note, long time)
 {
-    long sounding = time * p->style / LEGATO;
+    static long owed_sound, owed_quiet;
+    long sounding = note ? time * p->style / LEGATO : 0;
+    Note *at;
 
-    if (!p->foreground)
-        return;
-    dev_tone(note ? frequency(note) : 0);
-    wait(note ? sounding : time);
-    dev_tone(0);
-    if (note)
-        wait(time - sounding);
+    if (!tick_started) {
+        dev_ticker_start();
+        tick_started = 1;
+    }
+    wait_for_room();
+    at = &queue[head];
+    at->hertz = note ? frequency(note) : 0;
+    at->sound = ticks_of(sounding, &owed_sound);
+    at->quiet = ticks_of(time - sounding, &owed_quiet);
+    head = (head + 1) % QUEUE;
+    /* with nothing sounding the note starts now, not at the next tick */
+    dev_interrupts_off();
+    if (!sound_left && !quiet_left)
+        music_tick();
+    dev_interrupts_on();
 }
 
 static int dots(Player *p)
@@ -211,19 +275,36 @@ static void run(Player *p)
     }
 }
 
-/* B$SPLY: PLAY with the string of commands. */
+/* B$SPLY: PLAY with the string of commands.  What the commands set (the octave,
+   the length, the tempo, the style and foreground or background) stays set for
+   the next PLAY.  Music in the foreground has the program wait until the last
+   note has begun. */
 void B_SPLY(SD *commands)
 {
-    Player player;
+    static Player player = { 0, 0, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NORMAL, 1 };
 
     player.at = commands->ptr;
     player.end = commands->ptr + commands->len;
-    player.octave = DEFAULT_OCTAVE;
-    player.length = DEFAULT_LENGTH;
-    player.tempo = DEFAULT_TEMPO;
-    player.style = NORMAL;
-    player.foreground = 1;
     run(&player);
     str_tmp_free(commands);
+    if (player.foreground)
+        wait_for_empty();
 }
 #pragma aux B_SPLY "B$SPLY"
+
+/* The program has ended: what is queued is not played, and the speaker is quiet. */
+static void music_stop(void)
+{
+    tail = head;
+    sound_left = quiet_left = 0;
+    dev_tone(0);
+}
+
+static Comp comp = { 0, C_SN, { 0, 0, 0, 0, music_stop } };
+
+#define XI_FN play_xinit
+#include "xi.h"
+void play_xinit(void)
+{
+    qb_comp_add(&comp);
+}

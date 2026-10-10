@@ -23,6 +23,8 @@ extern void dev_int21(Regs *regs);
 extern void dev_outb(unsigned port, unsigned value);
 extern void dev_outw(unsigned port, unsigned word);
 extern unsigned dev_inb(unsigned port);
+extern void dev_interrupts_off(void);
+extern void dev_interrupts_on(void);
 extern void dev_move(BlockOp *op);
 extern void dev_fill(BlockOp *op);
 extern void dev_atan2(const double *y, const double *x, double *out);
@@ -34,6 +36,8 @@ extern void dev_sincos(const double *angle, double *sine, double *cosine);
 #pragma aux dev_outb "B$OUTB"
 #pragma aux dev_outw "B$OUTW"
 #pragma aux dev_inb "B$INB"
+#pragma aux dev_interrupts_off "B$CLI"
+#pragma aux dev_interrupts_on "B$STI"
 #pragma aux dev_move "B$MOVE"
 #pragma aux dev_fill "B$FILL"
 #pragma aux dev_atan2 "B$ATAN2"
@@ -45,6 +49,10 @@ int dev_stdout_is_screen(void);
 int dev_printer_ready(void);
 /* The time of day in hundredths of a second since midnight. */
 long dev_clock(void);
+/* From now on the clock's tick (18.2 a second) calls music_tick (play.c); the
+   handler is put back when the program ends.  Called once. */
+void dev_ticker_start(void);
+#pragma aux dev_ticker_start "B$TICKON"
 /* A tone of `hertz` until the next call; 0 is silence. */
 void dev_tone(unsigned hertz);
 

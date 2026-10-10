@@ -1,4 +1,4 @@
-;; name: B$OUTB, B$OUTW, B$INB
+;; name: B$OUTB, B$OUTW, B$INB, B$CLI, B$STI
 ;; desc: I/O ports
 ;;
 ;; args: ax:word port, dx:word value | a byte or a word to the port: for a word the index is the low byte and the datum the high one, as the VGA's index/data pairs take it
@@ -43,4 +43,18 @@ B$INB           proc    public
                 xor     ah, ah
                 ret
 B$INB           endp
+
+;;::::::::::::::
+;; B$CLI (), B$STI ()
+B$CLI           proc    public
+
+                cli
+                ret
+B$CLI           endp
+
+B$STI           proc    public
+
+                sti
+                ret
+B$STI           endp
                 end
