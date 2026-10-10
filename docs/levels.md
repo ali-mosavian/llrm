@@ -34,8 +34,8 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir dead` | x | on | on | on | on | on |
 | `mir unroll`: operations, at most 16 iterations | x | 150, no growth | 150, no growth | 150, may grow | 300, may grow | 150, no growth |
 | `mir peel`: operations | x | x | x | 150, may grow | 300, may grow | x |
-| `mir fill` | x | x | on | on | on | x |
-| `mir merge` | x | x | on | on | on | x |
+| `mir fill` | x | on | on | on | on | x |
+| `mir merge` | x | on | on | on | on | x |
 | `mir unswitch` | x | x | x | on | x | x |
 | *MIR, whole module (`mir interprocedural`; stages as `LLRM_DEBUG=runs` names them)* | | | | | | |
 | `mir interprocedural` | x | on | on | on | on | on |
@@ -127,7 +127,7 @@ Sources read:
 | `sibcalls` / `optimize-sibling-calls` | `-foptimize-sibling-calls` | -O2 ([636](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L636)) | same |
 | `copy_headers` / `tree-ch` | `-ftree-ch` | -O1 and up (`OPT_LEVELS_1_PLUS`, [587](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L587)); `should_duplicate_loop_header_p` ([`tree-ssa-loop-ch.cc`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-loop-ch.cc)) | off at every level until the range solve covers a guarded post-tested counter (#1194); `-ftree-ch` turns it on, not at -Os or -Oz, where gcc copies a loop only if its entry is known (`optimize_loop_for_size_p`) |
 | (`jumpthread`) | `-fthread-jumps` | -O1 and up (`OPT_LEVELS_1_PLUS`, [584](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L584)); `-ftree-dominator-opts` ([591](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L591)) threads in DOM at -O1 too | every level above -O0. Off at -O1 it costs x_switch x1.87 the clocks, queens x1.10, geomean of the 66 +1.1% clocks, code -2.2% (2026-10-09); gcc has it on there. (This row said -O2 until 2026-10-10: `opts.cc` [584](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L584) is `OPT_LEVELS_1_PLUS`.) |
-| `fill` / `tree-loop-distribute-patterns` | `-ftree-loop-distribute-patterns` | -O2 ([653](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L653)) | same |
+| `fill` / `tree-loop-distribute-patterns` | `-ftree-loop-distribute-patterns` | -O2 ([653](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L653), `OPT_LEVELS_2_PLUS`) | **departs from gcc's -O1**: on at -O1 and up, not -Og, as clang's -O1 pipeline has `LoopIdiomRecognize` ([PassBuilderPipelines.cpp L562](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L562), in `buildO1FunctionSimplificationPipeline`). The user's decision of 2026-10-10. Measured on the 67 programs at -O1 (flag on / off): clocks vs the better of gcc and clang 1.0530 -> 1.0244 geomean (worst scroll 3.43 -> bintree 1.70), instructions 1.1663 -> 1.1197, code bytes 0.9422 -> 0.9406; 8 programs change (scroll 1,821,256 -> 494,310 clocks; sieve, x_transpose, x_radix, bintree, x_hash, histo faster; x_mergesort +1.9%); compile instructions +0.53% on the programs, +0.11% on QCport |
 | `unroll` / `unroll-loops` | complete unrolling (`cunroll`) is in the loop passes at every level with loop optimisation; it may *grow* the code only with `-O3`, `-funroll-loops` or `-fpeel-loops` (`opts.cc` [1311-1316](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L1311-L1316), `flag_cunroll_grow_size`) | -O1 and up; may grow at -O3 | -O1 and up, may grow at -O3 ([`limits.grows`](../crates/opt/llrm-analysis/src/peelsize.rs#L83)) |
 | `peel` / `peel-loops` | `-fpeel-loops` | -O3 ([679](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L679)) | -O3 |
 | `unswitch` / `unswitch-loops` | `-funswitch-loops` | -O3 ([685](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L685)) | -O3 |
