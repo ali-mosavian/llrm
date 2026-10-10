@@ -177,3 +177,18 @@ def test_a_rewrite_patches_the_numbering_and_keeps_the_intervals_it_did_not_chan
         run = steps(compiler, source, "-O2")
     spent = run["facts slots"] + run["facts intervals"]
     assert spent < 450, f"cells N=448 -O2: facts slots + facts intervals cost {spent} Minstr (450 allowed; 2063 before): {run}"
+
+
+def test_the_recolor_step_costs_what_it_did_before_the_intervals_were_shared():
+    """`LiveRanges::get` was not inlined into the interference scans of `regalloc recolor`: the same 578k `busy` calls and 2.2M holder
+    steps cost 702 Minstr on `cells` N=448 -O2, against 644 before the intervals were shared behind an `Arc` (the gate's recolor
+    rows rose 8-19% at 2N). Forced inlining brings it to ~657."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["regalloc recolor"] < 680, f"cells N=448 -O2: regalloc recolor cost {run['regalloc recolor']} Minstr (680 allowed; 702 before the fix): {run}"
