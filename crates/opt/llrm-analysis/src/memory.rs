@@ -761,6 +761,10 @@ pub struct Unit<'a> {
     /// What calling back into the module does, the module's `Callbacks`;
     /// without it each `calls_annotated` adds up every entry's summary.
     pub callbacks: Option<&'a Option<crate::alias::Summary>>,
+    /// Whether the unit's `bounds`, held, are the counted loops' intervals: at
+    /// a level without them (`Outer::loop_intervals`) they are empty on
+    /// purpose.
+    pub loop_intervals: bool,
 }
 
 impl<'a> Unit<'a> {
@@ -814,6 +818,7 @@ impl<'a> Unit<'a> {
             exposed: None,
             point_values: None,
             callbacks: None,
+            loop_intervals: true,
         }
     }
 

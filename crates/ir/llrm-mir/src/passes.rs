@@ -566,11 +566,13 @@ pub struct PreservedAnalyses {
     kept: HashSet<TypeId>,
     /// The function itself unchanged, whatever else did.
     function: bool,
+    /// Analyses given up though the rest stand (`except`).
+    dropped: HashSet<TypeId>,
 }
 
 impl PreservedAnalyses {
     pub fn all() -> Self {
-        Self { all: true, kept: HashSet::default(), function: true }
+        Self { all: true, kept: HashSet::default(), function: true, dropped: HashSet::default() }
     }
 
     pub fn none() -> Self {
@@ -581,6 +583,15 @@ impl PreservedAnalyses {
     /// every analysis reading only the function.
     pub fn function() -> Self {
         Self { function: true, ..Self::default() }
+    }
+
+    /// `self` without `A`: for a pass that changed what only a few analyses
+    /// read (hoist moved instructions, which the dominated edges of the
+    /// values moved follow), so that those go and the rest stand.
+    #[must_use]
+    pub fn except<A: Analysis>(mut self) -> Self {
+        self.dropped.insert(TypeId::of::<A>());
+        self
     }
 
     pub fn preserve<A: Analysis>(mut self) -> Self {
@@ -607,7 +618,7 @@ impl PreservedAnalyses {
 
     /// Whether the pass changed nothing: LLVM's `areAllPreserved`.
     pub fn are_all_preserved(&self) -> bool {
-        self.all
+        self.all && self.dropped.is_empty()
     }
 
     /// Whether `A` is kept, named or with everything.
@@ -652,6 +663,11 @@ impl Outer {
     ) {
         let result = ModuleAnalyses::new(Rc::clone(&self.program)).get::<M>(module);
         self.modules.insert(TypeId::of::<M>(), result);
+    }
+
+    /// Whether alias and decisions ask the intervals of counted loops.
+    pub fn loop_intervals(&self) -> bool {
+        self.program.loop_intervals
     }
 
     pub fn program(&self) -> &ProgramProxy {
@@ -763,7 +779,7 @@ impl<A: Analysis> Cached for Entry<A> {
         &self,
         preserved: &PreservedAnalyses,
     ) -> bool {
-        A::preserved(preserved)
+        !preserved.dropped.contains(&TypeId::of::<A>()) && A::preserved(preserved)
     }
 
     fn incremental(&self) -> bool {
@@ -1599,6 +1615,9 @@ pub struct PassManager {
     /// named on stderr, and those past the limit are skipped.
     pub bisect: Option<usize>,
     pub(crate) required: Vec<Kind>,
+    /// The program is run without the intervals of counted loops for alias and
+    /// decisions (`Program::loop_intervals`).
+    pub without_loop_intervals: bool,
     /// Program analyses computed before each module's run.
     pub(crate) program_required: Vec<fn(&Program, &mut ProgramAnalyses)>,
     /// Pass runs so far, for `bisect`.
@@ -1657,6 +1676,7 @@ impl PassManager {
         &mut self,
         program: &mut Program,
     ) -> Result<Vec<Stage>, String> {
+        program.loop_intervals = !self.without_loop_intervals;
         self.managed(program, &mut ProgramAnalyses::default())
     }
 
