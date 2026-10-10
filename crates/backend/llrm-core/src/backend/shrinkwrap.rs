@@ -105,21 +105,14 @@ fn placed(
         .map(|block| block.at)
         .collect();
     let first = *uses.first()?;
-    let above = |block: i64| {
-        let mut chain = vec![block];
-        while let Some(&Some(next)) = idom.get(chain.last().expect("one")) {
-            chain.push(next);
-        }
-        chain
-    };
     // The nearest block above every use: the first of one's ancestors every
-    // other use is below.
+    // other use is below. The home only rises, so the climb is the depth of
+    // the first use in all, not a chain of its ancestors for each use.
     let mut home = first;
     for &other in &uses[1..] {
-        home = above(home)
-            .into_iter()
-            .find(|&candidate| from_entry.dominates(candidate, other))
-            .expect("the entry dominates every block");
+        while !from_entry.dominates(home, other) {
+            home = idom[&home].expect("the entry dominates every block");
+        }
     }
     // Not in a loop: a save there would run each trip.
     let cycles = loops(&body.blocks, entry);
