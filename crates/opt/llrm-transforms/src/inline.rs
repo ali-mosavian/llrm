@@ -46,7 +46,7 @@ use llrm_mir::memory::{Callees, Effects, callee};
 use llrm_mir::module::{Function, InstId, Linkage, Module, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
-use llrm_mir::splice::{carries, splice};
+use llrm_mir::splice::{carries, splice, splice_before};
 use llrm_mir::types::Type;
 use llrm_support::hash::{IndexMap, SparseIdMap};
 
@@ -246,9 +246,11 @@ fn copy_byval_arguments(
     call: InstId,
     callee: &Function,
     declared: &mut Declared,
-) -> Result<(), String> {
+    anchor: Option<InstId>,
+) -> Result<Option<InstId>, String> {
+    let mut placed = None;
     if !llrm_mir::memory::stated(&callee.attrs).writes {
-        return Ok(());
+        return Ok(None);
     }
     for (at, aggregate) in byval_types(callee) {
         let source = function.instruction(call).operands[at];
@@ -260,12 +262,14 @@ fn copy_byval_arguments(
         let width = layout.pointer(space).index_bits;
         let (pointer, void, flag) = (context.types.ptr(0), context.types.void(), context.types.int(1));
         let entry = function.entry().ok_or("a caller with a body")?;
-        let first = function
-            .block(entry)
-            .instructions()
-            .iter()
-            .copied()
-            .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }));
+        let first = anchor.or_else(|| {
+            function
+                .block(entry)
+                .instructions()
+                .iter()
+                .copied()
+                .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
+        });
         let alloca = function.create_instruction(
             Opcode::Alloca { allocated: aggregate, align: None, address_space: 0 },
             pointer,
@@ -274,6 +278,7 @@ fn copy_byval_arguments(
             Some("byval"),
         );
         function.insert(alloca, first.map_or(Position::End(entry), Position::Before))?;
+        placed.get_or_insert(alloca);
         let copy = Operand::Value(function.instruction(alloca).result.expect("a pointer"));
         let count_type = context.types.int(width);
         let length = Operand::Constant(context.int(count_type, i128::from(bytes)));
@@ -302,7 +307,7 @@ fn copy_byval_arguments(
         operands[at] = copy;
         function.set_operands(call, operands);
     }
-    Ok(())
+    Ok(placed)
 }
 
 /// Bytes of stack `function` allocates.
@@ -715,7 +720,7 @@ pub fn expanded(
             continue;
         };
         if fits(context, function, caller, own, call, candidate) {
-            copy_byval_arguments(context, function, caller.layout, call, &candidate.body, declared)?;
+            copy_byval_arguments(context, function, caller.layout, call, &candidate.body, declared, None)?;
             splice(context, function, call, &candidate.body);
             return Ok(true);
         }
@@ -776,6 +781,9 @@ impl Scope<'_> {
 /// The calls that are inlined into a copy, by their place among the copy's
 /// instructions, each with what is inlined into it.
 struct Planned<'a> {
+    /// Where it comes among the decisions, which are taken in the order
+    /// `expanded` would splice.
+    seq: usize,
     candidate: &'a Candidate,
     nested: Vec<(usize, Planned<'a>)>,
 }
@@ -788,6 +796,7 @@ struct Plan<'a, 'c> {
     available: &'a IndexMap<GlobalId, Candidate>,
     own: i64,
     frame: u64,
+    seq: usize,
 }
 
 impl<'a> Plan<'a, '_> {
@@ -804,13 +813,15 @@ impl<'a> Plan<'a, '_> {
             return None;
         }
         let callee = &*candidate.body;
+        self.seq += 1;
+        let seq = self.seq;
         let mut actuals = actuals.to_vec();
-        let copied = copied_byval(self.context, self.caller.layout, callee);
-        for &(at, _) in &copied.0 {
+        let copied = copied_byval(callee);
+        for &(at, _) in &copied {
             actuals[at] = Actual { callee: None, owned: true };
         }
-        self.own += copied.0.len() as i64 * 2 + semantic_count(callee) - 1;
-        self.frame += candidate.frame + copied.1;
+        self.own += copied.len() as i64 * 2 + semantic_count(callee) - 1;
+        self.frame += candidate.frame;
         let mut results = SparseIdMap::default();
         let mut nested = Vec::new();
         let mut place = 0;
@@ -850,23 +861,29 @@ impl<'a> Plan<'a, '_> {
                 .actual(self.context, one.operands[0], 0),
             _ => Actual::default(),
         };
-        Some((Planned { candidate, nested }, result))
+        Some((Planned { seq, candidate, nested }, result))
     }
 }
 
 /// The byval arguments `copy_byval_arguments` copies for a call of `callee`
-/// (their places) and the bytes of stack the copies take.
-fn copied_byval(
-    context: &Context,
-    layout: &DataLayout,
-    callee: &Function,
-) -> (Vec<(usize, llrm_mir::types::TypeId)>, u64) {
-    if !llrm_mir::memory::stated(&callee.attrs).writes {
-        return (Vec::new(), 0);
-    }
-    let types = byval_types(callee);
-    let bytes = types.iter().map(|&(_, aggregate)| layout.alloc_size(&context.types, aggregate)).sum();
-    (types, bytes)
+/// (their places): their bytes are in the candidate's frame.
+fn copied_byval(callee: &Function) -> Vec<(usize, llrm_mir::types::TypeId)> {
+    if llrm_mir::memory::stated(&callee.attrs).writes { byval_types(callee) } else { Vec::new() }
+}
+
+/// The static allocas the copies made so far put on the caller's entry, by the
+/// place of their site among the decisions. Made in order, each copy's go
+/// before those of the copies made before it (the stack objects of a byval
+/// argument after them): made from the last to the first, each goes
+/// where the copies of its neighbours say, and the frame comes out as made in
+/// order.
+#[derive(Default)]
+struct Placed {
+    /// The first instruction of the entry before any copy: the allocas go
+    /// before it.
+    base: Option<InstId>,
+    stack: std::collections::BTreeMap<usize, InstId>,
+    copies: std::collections::BTreeMap<usize, InstId>,
 }
 
 /// `planned` at `call`, then what is inlined into the copy.
@@ -877,11 +894,26 @@ fn executed(
     call: InstId,
     planned: &Planned,
     declared: &mut Declared,
+    placed: &mut Placed,
 ) -> Result<(), String> {
-    copy_byval_arguments(context, function, layout, call, &planned.candidate.body, declared)?;
-    let copies = splice(context, function, call, &planned.candidate.body);
+    let seq = planned.seq;
+    let after = placed.copies.range(seq + 1..).next().map(|(_, &one)| one);
+    if let Some(copy) = copy_byval_arguments(context, function, layout, call, &planned.candidate.body, declared, after)?
+    {
+        placed.copies.insert(seq, copy);
+    }
+    let anchor = placed.stack.range(..seq).next_back().map(|(_, &one)| one).or(placed.base);
+    let copies = splice_before(context, function, call, &planned.candidate.body, anchor);
+    let body = &*planned.candidate.body;
+    let entry = body.entry();
+    let first = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret).zip(&copies).find(
+        |&((block, inst), _)| Some(block) == entry && matches!(body.instruction(inst).opcode, Opcode::Alloca { .. }),
+    );
+    if let Some((_, &copy)) = first {
+        placed.stack.insert(seq, copy);
+    }
     for (place, nested) in planned.nested.iter().rev() {
-        executed(context, function, layout, copies[*place], nested, declared)?;
+        executed(context, function, layout, copies[*place], nested, declared, placed)?;
     }
     Ok(())
 }
@@ -905,7 +937,7 @@ pub fn expanded_all(
 ) -> Result<usize, String> {
     let calls: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
     let start = (semantic_count(function), frame(context, caller.layout, function));
-    let mut plan = Plan { context: &*context, caller, available, own: start.0, frame: start.1 };
+    let mut plan = Plan { context: &*context, caller, available, own: start.0, frame: start.1, seq: 0 };
     let mut results = SparseIdMap::default();
     let mut sites: Vec<(InstId, Planned)> = Vec::new();
     for call in calls {
@@ -925,8 +957,12 @@ pub fn expanded_all(
         }
     }
     let end = (plan.own, plan.frame);
+    let mut placed = Placed {
+        base: function.entry().and_then(|entry| function.block(entry).instructions().first().copied()),
+        ..Placed::default()
+    };
     for (call, planned) in sites.iter().rev() {
-        executed(context, function, caller.layout, *call, planned, declared)?;
+        executed(context, function, caller.layout, *call, planned, declared, &mut placed)?;
     }
     assert_eq!(end.0, semantic_count(function), "the size kept is not the body's");
     assert_eq!(end.1, frame(context, caller.layout, function), "the stack kept is not the body's");
