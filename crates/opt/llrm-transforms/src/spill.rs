@@ -805,62 +805,127 @@ pub fn traffic(
 ) -> BTreeMap<ValueId, Traffic> {
     #[cfg(test)]
     TRAFFIC.with(|count| count.set(count.get() + 1));
-    let mut found = BTreeMap::<ValueId, Traffic>::new();
-    let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
-    let mut makers = BTreeMap::<ValueId, usize>::new();
-    for &block in function.layout() {
-        let each = often(block);
-        for &inst in function.block(block).instructions() {
-            let instruction = function.instruction(inst);
-            let result = instruction.result;
-            if let Some(value) = result {
-                *makers.entry(value).or_default() += 1;
+    TrafficBase::of(function, frequency, cells, kept).finished(function, costs, words)
+}
+
+/// Every instruction's traffic added up, before the stores are made words and
+/// a lone maker's rebuild is priced: what a loop's own instructions are taken
+/// out of (`without`), so that each loop of a function does not add up the
+/// function again.
+#[derive(Clone, Debug)]
+pub struct TrafficBase {
+    found: BTreeMap<ValueId, Traffic>,
+    makers: BTreeMap<ValueId, usize>,
+}
+
+impl TrafficBase {
+    /// The traffic of the instructions `kept` says stay.
+    pub fn of(
+        function: &Function,
+        frequency: &BTreeMap<i64, i64>,
+        cells: &BTreeMap<ValueId, ValueId>,
+        kept: &dyn Fn(InstId) -> bool,
+    ) -> Self {
+        let mut base = Self { found: BTreeMap::new(), makers: BTreeMap::new() };
+        let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
+        for &block in function.layout() {
+            let each = often(block);
+            for &inst in function.block(block).instructions() {
+                if let Some(value) = function.instruction(inst).result {
+                    *base.makers.entry(value).or_default() += 1;
+                }
+                if kept(inst) {
+                    base.add(function, inst, each, &often, cells, 1);
+                }
             }
-            if !kept(inst) {
-                continue;
+        }
+        base
+    }
+
+    /// These instructions' traffic taken out: what `of` finds when they are not
+    /// kept.
+    pub fn without(
+        &self,
+        function: &Function,
+        frequency: &BTreeMap<i64, i64>,
+        cells: &BTreeMap<ValueId, ValueId>,
+        gone: impl IntoIterator<Item = InstId>,
+    ) -> Self {
+        let mut base = self.clone();
+        let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
+        for inst in gone {
+            if let Some(block) = function.parent(inst) {
+                base.add(function, inst, often(block), &often, cells, -1);
             }
-            let own = result.map(|value| _cell(cells, value));
-            if instruction.opcode == Opcode::Phi {
-                // Each edge from another cell copies into this one.
-                for pair in instruction.operands.chunks(2) {
-                    let from = match pair[1] {
-                        Operand::Block(from) => often(from),
-                        _ => each,
-                    };
-                    match pair[0] {
-                        Operand::Value(value) if Some(_cell(cells, value)) == own => {}
-                        Operand::Value(value) => {
-                            found.entry(_cell(cells, value)).or_default().loads += from;
-                            found.entry(own.expect("a phi's value")).or_default().stores += from;
-                        }
-                        _ => found.entry(own.expect("a phi's value")).or_default().stores += from,
+        }
+        // A cell whose traffic all went is one the instructions left alone.
+        base.found.retain(|_, one| (one.stores, one.updates, one.loads) != (0, 0, 0));
+        base
+    }
+
+    fn add(
+        &mut self,
+        function: &Function,
+        inst: InstId,
+        each: i64,
+        often: &dyn Fn(BlockId) -> i64,
+        cells: &BTreeMap<ValueId, ValueId>,
+        sign: i64,
+    ) {
+        let found = &mut self.found;
+        let instruction = function.instruction(inst);
+        let own = instruction.result.map(|value| _cell(cells, value));
+        if instruction.opcode == Opcode::Phi {
+            // Each edge from another cell copies into this one.
+            for pair in instruction.operands.chunks(2) {
+                let from = match pair[1] {
+                    Operand::Block(from) => often(from),
+                    _ => each,
+                } * sign;
+                match pair[0] {
+                    Operand::Value(value) if Some(_cell(cells, value)) == own => {}
+                    Operand::Value(value) => {
+                        found.entry(_cell(cells, value)).or_default().loads += from;
+                        found.entry(own.expect("a phi's value")).or_default().stores += from;
                     }
-                }
-                continue;
-            }
-            if let Some(value) = result
-                && cells.contains_key(&value)
-            {
-                found.entry(_cell(cells, value)).or_default().updates += each;
-                continue;
-            }
-            for operand in &instruction.operands {
-                if let Operand::Value(value) = *operand {
-                    found.entry(_cell(cells, value)).or_default().loads += each;
+                    _ => found.entry(own.expect("a phi's value")).or_default().stores += from,
                 }
             }
-            if let Some(cell) = own {
-                found.entry(cell).or_default().stores += each;
+            return;
+        }
+        if let Some(value) = instruction.result
+            && cells.contains_key(&value)
+        {
+            found.entry(_cell(cells, value)).or_default().updates += each * sign;
+            return;
+        }
+        for operand in &instruction.operands {
+            if let Operand::Value(value) = *operand {
+                found.entry(_cell(cells, value)).or_default().loads += each * sign;
             }
         }
-    }
-    for (value, one) in &mut found {
-        one.stores *= words(*value);
-        if makers.get(value) == Some(&1) {
-            one.rebuild = _rebuild(function, *value, costs);
+        if let Some(cell) = own {
+            found.entry(cell).or_default().stores += each * sign;
         }
     }
-    found
+
+    /// The traffic priced: stores in words, and a rebuild where one instruction
+    /// makes the value.
+    pub fn finished(
+        &self,
+        function: &Function,
+        costs: &OperationCosts,
+        words: &dyn Fn(ValueId) -> i64,
+    ) -> BTreeMap<ValueId, Traffic> {
+        let mut found = self.found.clone();
+        for (value, one) in &mut found {
+            one.stores *= words(*value);
+            if self.makers.get(value) == Some(&1) {
+                one.rebuild = _rebuild(function, *value, costs);
+            }
+        }
+        found
+    }
 }
 
 /// What making `value` again costs, where one instruction does from
@@ -913,44 +978,57 @@ pub fn sites(
     segment: &dyn Fn(ValueId) -> bool,
     addressed: &dyn Fn(ValueId) -> bool,
 ) -> Vec<Site> {
+    sites_over(
+        function,
+        &liveness::live_points(function, found, block),
+        room,
+        across,
+        transient,
+        cells,
+        counted,
+        segment,
+        addressed,
+    )
+}
+
+/// `sites` of a block whose live sets are `points`.
+#[allow(clippy::too_many_arguments)]
+pub fn sites_over(
+    function: &Function,
+    points: &[LivePoint],
+    room: Room,
+    across: &dyn Fn(InstId) -> i64,
+    transient: &dyn Fn(InstId, &BTreeSet<ValueId>) -> i64,
+    cells: &BTreeMap<ValueId, ValueId>,
+    counted: &dyn Fn(ValueId) -> bool,
+    segment: &dyn Fn(ValueId) -> bool,
+    addressed: &dyn Fn(ValueId) -> bool,
+) -> Vec<Site> {
     let viewed = |one: ValueId| room.segments > 0 && segment(one);
-    let residents = |live: BTreeSet<ValueId>| {
-        live.into_iter()
-            .filter(|&one| counted(one) && !viewed(one))
-            .map(|one| _cell(cells, one))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+    // The cells of the live values that pass `keep`, in order and once each:
+    // sorted in a vector, where a tree of them was most of a loop's model.
+    let cells_of = |live: &BTreeSet<ValueId>, keep: &dyn Fn(ValueId) -> bool| -> Vec<ValueId> {
+        let mut found: Vec<ValueId> =
+            live.iter().copied().filter(|&one| keep(one)).map(|one| _cell(cells, one)).collect();
+        found.sort_unstable();
+        found.dedup();
+        found
     };
-    let held = |live: &BTreeSet<ValueId>| {
-        live.iter()
-            .copied()
-            .filter(|&one| counted(one) && viewed(one))
-            .map(|one| _cell(cells, one))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    };
-    let routed = |live: &BTreeSet<ValueId>| {
-        live.iter()
-            .copied()
-            .filter(|&one| counted(one) && !viewed(one) && addressed(one))
-            .map(|one| _cell(cells, one))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    };
-    liveness::live_points(function, found, block)
-        .into_iter()
+    let residents = |live: &BTreeSet<ValueId>| cells_of(live, &|one| counted(one) && !viewed(one));
+    let held = |live: &BTreeSet<ValueId>| cells_of(live, &|one| counted(one) && viewed(one));
+    let routed = |live: &BTreeSet<ValueId>| cells_of(live, &|one| counted(one) && !viewed(one) && addressed(one));
+    points
+        .iter()
+        .map(|(inst, before, past)| (*inst, before, past))
         .map(|(inst, before, past)| Site {
             inst,
             addresses: Point {
                 registers: room.addresses,
-                residents: if room.addresses > 0 { routed(&before) } else { Vec::new() },
+                residents: if room.addresses > 0 { routed(before) } else { Vec::new() },
             },
-            segments: Point { registers: room.segments, residents: held(&before) },
+            segments: Point { registers: room.segments, residents: held(before) },
             before: Point {
-                registers: room.registers - transient(inst, &before) - copied(function, inst, &past, room, counted),
+                registers: room.registers - transient(inst, before) - copied(function, inst, past, room, counted),
                 residents: residents(before),
             },
             across: calls(function, inst).then(|| Point { registers: across(inst), residents: residents(past) }),
@@ -981,6 +1059,34 @@ pub struct Pressure {
     /// Whether each pointer an access is made through is folded: asked of the
     /// function once.
     folds: Folds,
+    /// What is live before and across each instruction of a block, worked out
+    /// when first asked and kept for every loop that asks of the block.
+    points: BlockPoints,
+}
+
+/// The live sets of each block's instructions: a cache of what `found` says,
+/// so two `Pressure`s of one function are equal whatever was asked.
+#[derive(Clone, Default)]
+struct BlockPoints(std::rc::Rc<std::cell::RefCell<BTreeMap<i64, std::rc::Rc<Vec<LivePoint>>>>>);
+
+type LivePoint = (InstId, BTreeSet<ValueId>, BTreeSet<ValueId>);
+
+impl PartialEq for BlockPoints {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for BlockPoints {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(formatter, "BlockPoints({} blocks)", self.0.borrow().len())
+    }
 }
 
 impl Pressure {
@@ -1004,7 +1110,24 @@ impl Pressure {
                 .collect(),
             addressed: addressed.into_iter().collect(),
             folds,
+            points: BlockPoints::default(),
         }
+    }
+
+    /// What is live before and across each instruction of `block` but its phis,
+    /// as `liveness::live_points` has it, worked out once.
+    pub fn points(
+        &self,
+        function: &Function,
+        block: BlockId,
+    ) -> std::rc::Rc<Vec<LivePoint>> {
+        let at = cfg::id(block);
+        if let Some(found) = self.points.0.borrow().get(&at) {
+            return std::rc::Rc::clone(found);
+        }
+        let found = std::rc::Rc::new(liveness::live_points(function, &self.found, block));
+        self.points.0.borrow_mut().insert(at, std::rc::Rc::clone(&found));
+        found
     }
 }
 
@@ -1084,10 +1207,9 @@ impl<'a> View<'a> {
         hide: &dyn Fn(ValueId) -> bool,
     ) -> Vec<Site> {
         let (context, layout, function, room) = (self.context, self.layout, self.function, self.room);
-        sites(
+        sites_over(
             function,
-            &self.pressure.found,
-            block,
+            &self.pressure.points(function, block),
             room,
             self.across,
             &|inst, live| {
