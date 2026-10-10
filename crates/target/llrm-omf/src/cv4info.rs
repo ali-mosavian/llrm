@@ -293,8 +293,8 @@ pub fn procedures(records_of_object: &[Rc<Record>]) -> Vec<Procedure> {
 
 /// What `records`' CodeView 4 says, one line each and sorted: `PROC name
 /// far|near (parameters) -> result`, `PARAM` and `LOCAL name.variable: type`,
-/// `REGISTER name.variable: type in register N`, `DATA name: type` and
-/// `UDT name: type`.
+/// `REGISTER name.variable: type in register N`, `REGREL name.variable: type at
+/// register N+disp`, `DATA name: type` and `UDT name: type`.
 pub fn shape(records_of_object: &[Rc<Record>]) -> Vec<String> {
     let (types, symbols) = (cvinfo::types(records_of_object), cvinfo::symbols(records_of_object));
     let types = Types { records: if types.len() >= 4 { records(&types) } else { Vec::new() } };
@@ -332,6 +332,20 @@ pub fn shape(records_of_object: &[Rc<Record>]) -> Vec<String> {
                     "{} {procedure}.{name}: {}",
                     if disp > 0 { "PARAM" } else { "LOCAL" },
                     types.name(u16_at(data, width))
+                ));
+            }
+            0x010C | 0x020C => {
+                let width = if wide(code) { 4 } else { 2 };
+                let disp = if wide(code) {
+                    i64::from(i32::from_le_bytes(data[..4].try_into().unwrap()))
+                } else {
+                    i64::from(i16::from_le_bytes([data[0], data[1]]))
+                };
+                let (name, _) = pascal(data, width + 4);
+                out.push(format!(
+                    "REGREL {procedure}.{name}: {} at register {}{disp:+}",
+                    types.name(u16_at(data, width + 2)),
+                    u16_at(data, width)
                 ));
             }
             0x0002 => {

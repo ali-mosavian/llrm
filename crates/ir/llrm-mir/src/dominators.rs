@@ -88,6 +88,17 @@ impl DominatorTree {
         self.order.get(block.0 as usize).is_some_and(|one| *one != NONE)
     }
 
+    /// The preorder number of `block` in the tree and the last one in its
+    /// subtree: `a` dominates `b` where `b`'s number lies between `a`'s two.
+    /// None for an unreachable block.
+    pub fn span(
+        &self,
+        block: BlockId,
+    ) -> Option<(u32, u32)> {
+        let at = block.0 as usize;
+        self.is_reachable(block).then(|| (self.enter[at], self.last[at]))
+    }
+
     pub fn immediate_dominator(
         &self,
         block: BlockId,

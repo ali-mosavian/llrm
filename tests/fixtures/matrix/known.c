@@ -2,9 +2,9 @@ struct pt { int x; int y; };
 
 int counter = 7;
 
-int add(int a, int b)
+int add(int first, int second)
 {
-    int sum = a + b;
+    int sum = first + second;
     return sum + counter;
 }
 

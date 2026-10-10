@@ -33,6 +33,7 @@ pub mod liveness;
 pub mod manager;
 pub mod memory;
 pub mod memoryssa;
+pub mod nearest;
 pub mod noreturn;
 pub mod observers;
 pub mod occurrence;
