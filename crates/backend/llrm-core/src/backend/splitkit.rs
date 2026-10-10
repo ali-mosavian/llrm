@@ -235,10 +235,11 @@ impl Region {
         body: &LirBody,
         value: u32,
     ) -> Self {
-        let graph = crate::analysis::graph::Graph::of(body);
+        let found = Blocks::of(body);
+        let graph = &found.graph;
         let mut out = Self::default();
-        for block in &body.blocks {
-            let Some(ranges) = self.spans.get(&block.at) else { continue };
+        for (at, ranges) in &self.spans {
+            let block = found.block(*at);
             let named: Vec<usize> = (0..block.insns.len())
                 .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
                 .collect();
@@ -270,9 +271,10 @@ impl Region {
         &self,
         body: &LirBody,
     ) -> Self {
+        let found = Blocks::of(body);
         let mut out = Self::default();
-        for block in &body.blocks {
-            let Some(ranges) = self.spans.get(&block.at) else { continue };
+        for (at, ranges) in &self.spans {
+            let block = found.block(*at);
             let inside = |position: usize| {
                 0 < position
                     && position < block.insns.len()
@@ -454,24 +456,26 @@ pub fn carved_moving(
     // Trimming to the references can end a range inside a parallel group; snap
     // last.
     let region = region.trimmed(body, value).snapped(body);
-    let referenced = body
-        .blocks
+    let blocks = Blocks::of(body);
+    let referenced = region
+        .spans
         .iter()
         .any(
-            |block| region.spans.get(&block.at).is_some_and(|ranges| {
+            |(at, ranges)| {
+                let block = blocks.block(*at);
                 ranges.iter().any(|(from, to)| {
                     block.insns[*from..*to].iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value))
                 })
-            }),
+            },
         );
     if !referenced {
         return None;
     }
     // Only `value` is asked of: its liveness alone.
-    let live = crate::analysis::occurrences::live_among(body, &BTreeSet::from([value]));
+    let live = live_of(body, value);
     let found = crossings(body, value, &region, &*live);
-    let graph = crate::analysis::graph::Graph::of(body);
-    let at_of = Blocks::of(body);
+    let graph = &blocks.graph;
+    let at_of = &blocks;
     // (block, position) -> copies before it; usize::MAX is before the
     // terminator.
     let mut inserted: BTreeMap<(i64, usize), Vec<bool>> = BTreeMap::new();
@@ -523,17 +527,19 @@ pub fn carved_moving(
         }
     };
     let rename = IndexMap::from_iter([(value, fresh)]);
-    let mut blocks: Vec<LirBlock> = Vec::new();
+    // The blocks as they were, but those a copy is put in or the region
+    // covers, which are in `touched`: the positions of an untouched block stay
+    // (`Moved` says nothing of it).
+    let mut out: Vec<LirBlock> = body.blocks.clone();
     let mut moved: Moved = IndexMap::default();
-    let reached: crate::support::hash::HashSet<i64> = inserted.keys().map(|(block, _)| *block).collect();
-    for block in &body.blocks {
-        // A block nothing is put in and the region does not cover is as it was,
-        // and its positions stay.
-        if !reached.contains(&block.at) && !region.spans.contains_key(&block.at) {
-            moved.insert(block.at, (0..=block.insns.len()).collect());
-            blocks.push(block.clone());
-            continue;
-        }
+    let touched: BTreeSet<usize> = inserted
+        .keys()
+        .map(|(block, _)| *block)
+        .chain(region.spans.keys().copied())
+        .map(|at| graph.position[&at])
+        .collect();
+    for &place in &touched {
+        let block = &body.blocks[place];
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         let mut shift: Vec<usize> = Vec::with_capacity(block.insns.len() + 1);
         let end = _tail(block);
@@ -557,17 +563,20 @@ pub fn carved_moving(
         // block it was: the facts held of it stand.
         let same = insns.len() == block.insns.len()
             && insns.iter().zip(block.insns.iter()).all(|(made, was)| Arc::ptr_eq(made, was));
-        blocks.push(if same { block.clone() } else { block.with_insns(insns) });
+        if !same {
+            out[place] = block.with_insns(insns);
+        }
     }
-    let mut by_at: IndexMap<i64, LirBlock> = blocks.into_iter().map(|block| (block.at, block)).collect();
     let mut made: Vec<LirBlock> = Vec::new();
-    let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
+    let mut next_at =
+        if bridges.is_empty() { 0 } else { body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1 };
     let mut bridged: IndexMap<(i64, i64), i64> = IndexMap::default();
     for (source, outside, entering) in bridges {
         let bridge = next_at;
         next_at += 1;
         bridged.insert((source, outside), bridge);
-        let original = by_at[&source].clone();
+        let place = graph.position[&source];
+        let original = out[place].clone();
         let beside = Arc::clone(original.insns.last().expect("checked above"));
         let rewritten: Vec<Arc<Insn>> = original
             .insns
@@ -581,13 +590,10 @@ pub fn carved_moving(
                 _ => Arc::clone(one),
             })
             .collect();
-        by_at.insert(
-            source,
-            LirBlock {
-                succ: original.succ.iter().map(|one| if *one == outside { bridge } else { *one }).collect(),
-                ..original.with_insns(rewritten)
-            },
-        );
+        out[place] = LirBlock {
+            succ: original.succ.iter().map(|one| if *one == outside { bridge } else { *one }).collect(),
+            ..original.with_insns(rewritten)
+        };
         let mut jump = Insn::new(
             beside.at,
             Some((beside.at, beside.at)),
@@ -601,8 +607,8 @@ pub fn carved_moving(
             ..LirBlock::new(bridge, vec![copy(&beside, entering), Arc::new(jump)])
         });
         // A phi in the target now arrives from the bridge.
-        if let Some(target) = by_at.get_mut(&outside) {
-            for phi in &mut target.phis {
+        if let Some(&target) = graph.position.get(&outside) {
+            for phi in &mut out[target].phis {
                 for (from, _) in &mut phi.incoming {
                     if *from == source {
                         *from = bridge;
@@ -611,12 +617,10 @@ pub fn carved_moving(
             }
         }
     }
-    let mut out: Vec<LirBlock> =
-        body.blocks.iter().map(|block| by_at.swap_remove(&block.at).expect("a block of the body")).collect();
     out.extend(made);
     let mut split = body.with_blocks(out);
     for (&(source, outside), &bridge) in &bridged {
-        let succ = &body.blocks.iter().find(|one| one.at == source).expect("a bridged edge's block").succ;
+        let succ = &body.blocks[graph.position[&source]].succ;
         split.odds.rerouted(source, succ, outside, &[(bridge, 1.0)]);
     }
     Some((split, moved))
@@ -984,6 +988,25 @@ impl Occupied<'_> {
             })
             .map(|mask| (mask.slot, mask.slot));
         held.chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)))
+    }
+}
+
+/// Where `value` alone is live, from the instructions the postings say name it
+/// and not from a pass over every instruction (`occurrences::live_among`).
+fn live_of(
+    body: &LirBody,
+    value: u32,
+) -> Box<dyn allocate::LiveAt> {
+    let only = BTreeSet::from([value]);
+    let found = crate::backend::postings::following(body, |postings| {
+        crate::analysis::occurrences::Occurrences::of(postings, &only)
+    });
+    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+        found.check_against_scan(body, &|one| one == value);
+    }
+    match found.rows(body) {
+        Some(rows) => Box::new(rows),
+        None => crate::analysis::occurrences::live_among(body, &only),
     }
 }
 

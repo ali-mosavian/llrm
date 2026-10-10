@@ -965,7 +965,7 @@ impl LirBody {
     ) -> Self {
         let frequencies = self.frequencies.as_ref().map(|kept| {
             // A block removed leaves the table with it.
-            let present: BTreeSet<i64> = blocks.iter().map(|one| one.at).collect();
+            let present: crate::support::hash::HashSet<i64> = blocks.iter().map(|one| one.at).collect();
             if kept.0.keys().all(|at| present.contains(at)) {
                 Arc::clone(kept)
             } else {
