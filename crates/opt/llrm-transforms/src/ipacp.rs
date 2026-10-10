@@ -84,7 +84,7 @@ pub fn cloned(
     procedures: &[GlobalId],
     private: &BTreeSet<GlobalId>,
     costs: &OperationCosts,
-    (clone, recursion): (bool, bool),
+    (clone, full): (bool, bool),
     state: &mut Cloning,
 ) -> Changed {
     let mut changed = Changed { added: Vec::new(), edited: Vec::new() };
@@ -125,9 +125,10 @@ pub fn cloned(
     }
     for ((name, known), sites) in groups {
         let Some(body) = module.global(name).function() else { continue };
-        // The clones of a recursive function are the next clone's callers, to
-        // the depth GCC's -O3 unrolls it; below -O3 nothing takes them.
-        if !recursion && recursive.contains(&name) {
+        // Below -O3: not a recursive function (its clones are the next
+        // clone's callers, to the depth GCC's -O3 unrolls it, and nothing takes
+        // them) and not a call that passes every actual (the inliner folds it).
+        if !full && (recursive.contains(&name) || known.iter().all(Option::is_some)) {
             continue;
         }
         if !inline::copyable(module, body)
@@ -169,6 +170,14 @@ pub fn cloned(
         let replaces = private.contains(&name)
             && !addressed.contains(&name)
             && counts.get(&name).copied().unwrap_or(0) == sites.len() as i64;
+        // Below -O3 not a function every call of which is for these
+        // constants: they are its parameters' values (`ipa-args`, gcc's -O2
+        // `-fipa-cp`), and a clone would be the same body made again, in the
+        // order that keeps the promotion after it from folding (`queens`'
+        // bounds checks stay: nearcalls).
+        if !full && replaces {
+            continue;
+        }
         let (saved, loops) = time_saved(module, layout, body, &known, &callees, costs);
         let frequency: i64 = sites.iter().map(|site| site.2).sum();
         let mut benefit = (saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 }) * frequency / profit::UNIT;

@@ -1422,6 +1422,24 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     assert_eq!(cloned(true), (true, true));
 }
 
+/// `g` called with every actual known folds when it is inlined, which is the
+/// inliner's: below -O3 its copy is a compile that does not pay (`functions`
+/// +60% at 2N) and a body folded away (`parity/qlight` has nothing left to
+/// measure).
+#[test]
+fn test_a_call_with_every_actual_known_is_cloned_only_where_every_context_is_wanted() {
+    let text =
+        TWO_CONTEXTS.replace("@g(i16 4, i16 %x)", "@g(i16 4, i16 3)").replace("@g(i16 5, i16 %x)", "@g(i16 5, i16 3)");
+    let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[-3]];
+    let cloned = |full: bool| {
+        let mut module = parsed(&text);
+        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: true, cp_full: full, ..Threshold::none() });
+        assert_eq!(results(&module, inputs), results(&parsed(&text), inputs), "{}", printed(&module));
+        module.named("g.constprop.1").is_some()
+    };
+    assert_eq!((cloned(false), cloned(true)), (false, true));
+}
+
 /// `g` calls itself: its copies for the constants of its callers are one more
 /// call each (`g.constprop` for 4 calls `g` for 3), which -O2's inliner does
 /// not take, and `queens` read +1.0 KB and +3% clocks for them. -O3 keeps them
@@ -1470,12 +1488,7 @@ fn test_a_recursive_function_is_cloned_for_its_constants_only_where_recursion_is
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[-3]];
     let cloned = |recursive: bool| {
         let mut module = parsed(RECURSIVE_CONTEXTS);
-        stepped(
-            &mut module,
-            &["f", "g"],
-            20,
-            Threshold { cp_clone: true, cp_recursive: recursive, ..Threshold::none() },
-        );
+        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: true, cp_full: recursive, ..Threshold::none() });
         assert_eq!(results(&module, inputs), results(&parsed(RECURSIVE_CONTEXTS), inputs), "{}", printed(&module));
         module.named("g.constprop.1").is_some()
     };

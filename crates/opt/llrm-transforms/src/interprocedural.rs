@@ -1210,7 +1210,7 @@ pub fn optimized_with<E: From<String>>(
                     &procedures[at],
                     &private[at],
                     costs,
-                    (threshold.cp_clone, threshold.cp_recursive),
+                    (threshold.cp_clone, threshold.cp_full),
                     &mut cloning,
                 )
             });

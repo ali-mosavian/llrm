@@ -101,7 +101,7 @@ fn each_level_selects_gcc_s_passes() {
     assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
     // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676); -O2 clones the functions
     // that do not call themselves, under the same limits.
-    let cloning = |args: &[&str]| (pipeline(args).inline.cp_clone, pipeline(args).inline.cp_recursive);
+    let cloning = |args: &[&str]| (pipeline(args).inline.cp_clone, pipeline(args).inline.cp_full);
     assert_eq!(
         (
             cloning(&["-O2"]),
@@ -120,7 +120,7 @@ fn each_level_selects_gcc_s_passes() {
     assert_eq!(max.limits, Limits { target_percent: 200, ..Limits::default() });
     assert_eq!(
         (max.inline, max.unroll, max.peel),
-        (Threshold { cp_clone: true, cp_recursive: true, ..Threshold::new(250) }, true, true)
+        (Threshold { cp_clone: true, cp_full: true, ..Threshold::new(250) }, true, true)
     );
     let os = pipeline(&["-Os"]);
     assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));
@@ -159,7 +159,7 @@ fn test_no_inline_functions_leaves_called_once_on_as_gcc_does() {
 fn a_pass_option_overrides_the_level_wherever_it_stands() {
     let options = pipeline(&["-fno-unroll-loops", "-O3", "-funswitch-loops", "-fno-inline-functions", "-fno-gcse"]);
     assert!(!options.unroll && options.unswitch && !options.forward && !options.drop_loads);
-    assert_eq!(options.inline, Threshold { cp_clone: true, cp_recursive: true, ..Threshold::new(0) });
+    assert_eq!(options.inline, Threshold { cp_clone: true, cp_full: true, ..Threshold::new(0) });
     assert_eq!(pipeline(&["-O2", "-fno-peel-loops", "-fpeel-loops"]).peel, true);
     assert_eq!(
         pipeline(&["-O2", "-fno-inline-functions", "-finline-functions"]).inline,
