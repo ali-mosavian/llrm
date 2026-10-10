@@ -420,6 +420,9 @@ pub struct Options {
     /// The most bytes the target's data segment holds, which the near-data and
     /// frame budgets are: none where there are no segments, and no budget.
     pub segment_bytes: Option<usize>,
+    /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
+    /// standard CodeView 4, which debuggers other than BASIC's read.
+    pub bc_codeview: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1378,7 +1381,11 @@ impl Compiler {
             numbered_lines: BTreeMap::new(),
             debug: llrm_hir::debug::Builder::for_language(
                 llrm_hir::model::DebugLanguage::Basic,
-                llrm_hir::model::DebugDialect::Cv4,
+                if options.bc_codeview {
+                    llrm_hir::model::DebugDialect::Bc
+                } else {
+                    llrm_hir::model::DebugDialect::Cv4
+                },
             ),
             debug_structures: BTreeMap::new(),
             load_lines: BTreeMap::new(),

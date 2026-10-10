@@ -21,8 +21,10 @@ fn object(
         written(&directory, name, text.as_bytes());
     }
     let path = written(&directory, "debug.bas", source.as_bytes());
+    // These tests read BC's layout: its /Zi objects are their oracle.
     let frontend = qb_driver::Frontend {
         debug,
+        bc_codeview: true,
         includes: vec![directory.path().to_path_buf()],
         ..qb_driver::Frontend::new(dialect, runtime)
     };
@@ -106,8 +108,12 @@ fn a_local_is_where_its_code_keeps_it() {
     for runtime_frames in [true, false] {
         let directory = tempfile::tempdir().expect("creates a directory");
         let path = written(&directory, "local.bas", source.as_bytes());
-        let frontend =
-            qb_driver::Frontend { debug: true, runtime_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+        let frontend = qb_driver::Frontend {
+            debug: true,
+            bc_codeview: true,
+            runtime_frames,
+            ..qb_driver::Frontend::new("vbdos", "vbdos")
+        };
         let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
         // Not optimised: `k` is in its cell (promoted to a register it is left
         // out of CodeView 4, which names a cell).
@@ -145,4 +151,22 @@ fn a_name_is_spelled_as_its_whole_word() {
     let records = object("DECLARE SUB s ()\ns\nSUB s\nPRINT 1\nEND SUB\n", &[], "vbdos", "vbdos", true);
     let names: Vec<String> = cvinfo::parse(&records).procedures.into_iter().map(|one| one.name).collect();
     assert_eq!(names, ["s"]);
+}
+
+/// `-g` writes standard CodeView 4 unless `--bc-codeview` asks for BC's own
+/// layout: Open Watcom's cvpack and wdump, and a debugger that reads
+/// S_GPROC32/S_BPREL32, found BC's records invalid (`cvpack`: "invalid header
+/// detected in types") and no symbols in a linked image.
+#[test]
+fn g_writes_standard_codeview_4_by_default() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = "DECLARE SUB Square (n AS INTEGER)\nSquare 2\nEND\nSUB Square (n AS INTEGER)\nPRINT n * n\nEND SUB\n";
+    let path = written(&directory, "std.bas", source.as_bytes());
+    let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+    let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
+    let shape = llrm_core::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
+    assert!(shape.iter().any(|one| one.starts_with("PROC SQUARE ") || one.starts_with("PROC Square ")), "{shape:#?}");
+    assert!(shape.iter().any(|one| one.starts_with("PARAM ") && one.contains(".n:")), "{shape:#?}");
 }
