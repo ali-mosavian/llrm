@@ -299,7 +299,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
             if object.arch.bits() != 32 {
                 return Err(unencodable("DWARF in OMF is 32-bit code's: 16-bit addresses are a segment and an offset"));
             }
-            let mut expanded = llrm_dwarf::expanded(object, info).map_err(|error| unencodable(error.0))?;
+            let expanded = llrm_dwarf::expanded(object, info).map_err(|error| unencodable(error.0))?;
 
             lines.resize(expanded.sections.len(), Vec::new());
             (Cow::Owned(expanded), lines)
