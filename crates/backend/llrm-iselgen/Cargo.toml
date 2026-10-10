@@ -7,4 +7,5 @@ description = "Compiles a target's instruction-selection patterns into a decisio
 
 [dependencies]
 llrm-lir = { workspace = true }
+llrm-peepgen = { workspace = true }
 llrm-support = { workspace = true }
