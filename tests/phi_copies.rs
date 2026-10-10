@@ -52,3 +52,13 @@ fn test_a_variable_a_subtraction_reads_as_its_second_operand_is_not_defined_by_i
     });
     assert_eq!(same, None, "{text}");
 }
+
+/// crc's loop copied the masked bit into a register of its own and the result
+/// back into the accumulator (`mov esi, eax` ... `mov eax, ebx`): +17% clocks
+/// and a fourth saved register.
+#[test]
+fn test_a_crc_step_keeps_the_accumulator_in_one_register() {
+    let text = listing("bench/crc/crc.c", &[]);
+    let body = text.split("_bench_crc proc").nth(1).unwrap().split("_bench_crc endp").next().unwrap();
+    assert!(!body.contains("esi") && !body.contains("mov eax, ebx"), "{body}");
+}
