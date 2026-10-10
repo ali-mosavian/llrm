@@ -85,6 +85,75 @@ fn expand_once(
     done
 }
 
+/// `expanded_all` is `expanded` called until it says no: a caller of calls to a
+/// callee that calls another, with a branch between them, comes out the same
+/// body, printed.
+#[test]
+fn test_the_one_scan_inliner_leaves_the_body_the_repeated_one_does() {
+    let nested = "define internal i16 @one() {
+b1:
+  ret i16 1
+}
+
+define internal i16 @two(i16 %x) {
+b1:
+  %a = call i16 @one()
+  %b = add i16 %a, %x
+  ret i16 %b
+}
+
+define internal i16 @three(i16 %x) {
+b1:
+  %c = icmp eq i16 %x, 0
+  br i1 %c, label %t, label %e
+
+t:
+  ret i16 7
+
+e:
+  ret i16 %x
+}
+
+define i16 @main(i16 %p) {
+b1:
+  %u = call i16 @two(i16 %p)
+  %c = icmp eq i16 %u, 0
+  br i1 %c, label %t, label %e
+
+t:
+  %v = call i16 @three(i16 %u)
+  br label %e
+
+e:
+  %w = phi i16 [ %u, %b1 ], [ %v, %t ]
+  ret i16 %w
+}
+";
+    let flat = nested.replace("  %a = call i16 @one()\n  %b = add i16 %a, %x", "  %b = add i16 %x, 1");
+    for source in [nested, flat.as_str()] {
+        let layout = DataLayout::default();
+        let (mut one, mut many) = (parsed(source), parsed(source));
+        let available = candidates(
+            &one,
+            &llrm_mir::memory::callees(&one),
+            &layout,
+            &call_counts(&one),
+            &private(&one),
+            &costs(1),
+            1,
+            Threshold::default(),
+        );
+        let by = Caller { layout: &layout, recursive: false, base: 0 };
+        while expand_once(&mut many, "main", &by, &available) {}
+        let mut declared = llrm_mir::passes::Declared::of(&one);
+        let (context, function) = one.function_mut("main").unwrap();
+        let spliced = expanded_all(context, function, &by, &available, None, &mut declared).unwrap();
+        declared.place(&mut one).unwrap();
+        assert!(spliced > 0 && printed(&many) != printed(&parsed(source)), "nothing was inlined");
+        assert_eq!(printed(&one), printed(&many));
+    }
+}
+
 fn run(
     module: &Module,
     name: &str,

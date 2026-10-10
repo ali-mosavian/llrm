@@ -161,7 +161,7 @@ pub fn sunk_stores(
         }
         // What alias said of the old placement no longer holds; no value, block
         // or edge changed, so what is said of them does.
-        analyses.invalidate(&kept_when_stores_move());
+        analyses.invalidate(function, &kept_when_stores_move());
         changed = true;
     }
     Ok(changed)

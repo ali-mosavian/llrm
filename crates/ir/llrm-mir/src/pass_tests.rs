@@ -508,7 +508,7 @@ fn a_recomputation_that_comes_to_the_same_result_is_counted() {
     let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
     crate::passes::trace_recomputes(true);
     analyses.get::<Counted>(&module.context, &layout, function);
-    analyses.invalidate(&PreservedAnalyses::none());
+    analyses.invalidate(function, &PreservedAnalyses::none());
     crate::passes::note_pass("retarget");
     analyses.get::<Counted>(&module.context, &layout, function);
     let counts = crate::passes::recomputes();
