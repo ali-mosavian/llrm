@@ -1,7 +1,7 @@
 //! A phi of two constants that a branch chooses between becomes arithmetic of
 //! the branch's condition: gcc's `pass_phiopt` (`conditional_replacement`,
-//! `two_value_replacement`, and match.pd's `cond ? c : 0` as `-cond & c` through
-//! `match_simplify_replacement`, tree-ssa-phiopt.cc) and LLVM's
+//! `two_value_replacement`, and match.pd's `cond ? c : 0` as `-cond & c`
+//! through `match_simplify_replacement`, tree-ssa-phiopt.cc) and LLVM's
 //! `FoldTwoEntryPHINode` (SimplifyCFG). gcc runs it at -O1 and above
 //! (`-fssa-phiopt`, opts.cc:609, passes.def:96, :230, :252, :354).
 //!
@@ -217,9 +217,8 @@ fn rewritten(
     let candidates = [
         (difference == 1).then(|| (Form::Step { sign: false }, costs.extend + kept)),
         (difference == -1).then(|| (Form::Step { sign: true }, costs.extend + kept)),
-        (difference > 1 && difference & (difference - 1) == 0).then(|| {
-            (Form::Shifted { shift: difference.trailing_zeros() }, costs.extend + costs.shift + kept)
-        }),
+        (difference > 1 && difference & (difference - 1) == 0)
+            .then(|| (Form::Shifted { shift: difference.trailing_zeros() }, costs.extend + costs.shift + kept)),
         scaled.filter(|_| difference > 1).map(|target| {
             let factor = i64::try_from(difference).unwrap_or(i64::MAX);
             (Form::Scaled { difference }, costs.extend + target.multiply_by(factor) + kept)
@@ -243,9 +242,8 @@ fn applied(
             let right = Operand::Constant(context.int(ty, right));
             placed(function, Opcode::Binary(op), ty, vec![left, right], at)
         };
-        let extended = |function: &mut Function, kind: CastOp| {
-            placed(function, Opcode::Cast(kind), ty, vec![plan.condition], at)
-        };
+        let extended =
+            |function: &mut Function, kind: CastOp| placed(function, Opcode::Cast(kind), ty, vec![plan.condition], at);
         let result = match form {
             Form::Step { sign } => {
                 let one = extended(function, if sign { CastOp::SExt } else { CastOp::ZExt });
@@ -271,8 +269,7 @@ fn applied(
         function.replace_value(value, result);
         function.erase(phi).expect("a replaced phi");
     }
-    let jump =
-        function.create_instruction(Opcode::Br, void, vec![Operand::Block(plan.join)], Flags::default(), None);
+    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(plan.join)], Flags::default(), None);
     function.insert(jump, at).expect("a placed terminator");
     function.erase(last).expect("a terminator defines nothing");
 }

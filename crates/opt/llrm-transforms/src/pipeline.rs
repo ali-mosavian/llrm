@@ -269,7 +269,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before anything asks what a port call does to memory.
         Box::new(ports::Ports),
         Box::new(decide::Decide),
-        // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes at -Os.
+        // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes
+        // at -Os.
         Box::new(phiopt::PhiOpt { size: applied.options.prefers_size() }),
         // Once the arguments are values rather than frame cells; the loop it
         // makes goes to the loop passes below.
