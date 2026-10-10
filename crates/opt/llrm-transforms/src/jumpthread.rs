@@ -85,7 +85,7 @@ impl FunctionPass for JumpThread {
             &mut crate::decide::Decide,
             &mut crate::dead::Dead,
         ] {
-            analyses.invalidate(&PreservedAnalyses::none());
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
             pass.run(unit, analyses);
         }
         PreservedAnalyses::none()

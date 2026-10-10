@@ -284,7 +284,7 @@ pub fn reduced(
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate(unit.function, &PreservedAnalyses::none());
         traffic = None;
         if let Some((before, Some(kept))) = saved {
             dead::dead(unit.context, outer.callees(), unit.function);

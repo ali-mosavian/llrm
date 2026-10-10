@@ -281,6 +281,22 @@ def test_algebraic_stays_below_cubic_in_the_masks_of_one_function(tmp_path):
     assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
 
 
+def test_decide_stays_below_cubic_in_the_blocks_of_one_function(tmp_path):
+    """branches(N) at -O2: `mir decide` asked every live block which way it goes at each round of the constant propagation (a round
+    for each level of a chain of branches), and scanned every value for the ones left with no state at each stall: its own work
+    read 2N/N = 3.5, 3.8 (450 / 1580 / 5985 Minstr at N=128..512). A block is asked again when a value it reads changes, and the
+    values left are kept: it reads 2.9, 3.4 (the guards of each block, the next cost, are the rest). A step above 3.1 fails;
+    a few Minstr of start-up are allowed."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"branches_{label}.c"
+        source.write_text("" if size == 0 else scaling.branches(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir decide", 0.0) - own["empty"].get("mir decide", 0.0) for label in ("n", "2n"))
+    assert big <= 3.1 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
 def test_loopslots_asks_each_instruction_once_not_once_for_each_loop_around_it(tmp_path):
     """`lir loopslots` worked out each instruction's effect on the frame and its registers, and whether it fits a slot in a register, for
     every loop around it: on `nest` at N=128 (a loop around the innermost instructions N deep) it cost 1,025 Minstr. Each is now worked
