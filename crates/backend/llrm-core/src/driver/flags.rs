@@ -402,6 +402,21 @@ impl Flags {
     }
 }
 
+/// Writes `bytes` to `path`, or to standard output where `path` is `-`, as
+/// gcc's `-o -` does.
+pub fn write_output(
+    path: &std::path::Path,
+    bytes: impl AsRef<[u8]>,
+) -> std::io::Result<()> {
+    if path == std::path::Path::new("-") {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        out.write_all(bytes.as_ref())?;
+        return out.flush();
+    }
+    std::fs::write(path, bytes)
+}
+
 #[cfg(test)]
 #[path = "flags_tests.rs"]
 mod flags_tests;
