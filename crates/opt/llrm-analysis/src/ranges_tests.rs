@@ -15,8 +15,8 @@ use super::{
     exact_offsets_given, on_edge, operations_applied, scoped, singletons,
 };
 use crate::cfg;
-use crate::ranges::Intervals;
 use crate::memory::{MemRef, Unit};
+use crate::ranges::Intervals;
 use crate::testing::{DOS, block, function, layout, parsed, value};
 
 fn interval(

@@ -614,3 +614,23 @@ def test_the_intervals_of_a_block_are_its_dominators_not_a_copy_of_them_on_the_b
     source.write_text(scaling.AXES["branches"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis dominated-edges"]
     assert cost <= 1500, cost
+
+
+def test_a_blocks_edges_changed_is_asked_of_what_made_them_not_of_the_maps_on_the_branches_axis(tmp_path):
+    """`analysis dominated-edges` compared each re-solved block's new map with its old one, entry by entry, though the
+    maps share nothing once an ancestor is rebuilt: on `branches` at N=1024 that was 1,240 Minstr (slope 1.75 beyond
+    the copy). Asked of a digest of what made the block it reads 470 (slope 1.1). More than 700 fails."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis dominated-edges"]
+    assert cost <= 700, cost
+
+
+def test_a_loop_takes_the_values_it_reads_and_the_edges_above_it_once_on_the_branches_axis(tmp_path):
+    """`analysis bounded` gave each loop every interval known above it and narrowed them by the edges above it for
+    every block and every round of its boxes: on `branches` at N=1024 that was 3,900 Minstr (slope 1.95). A loop that
+    takes what it reads and narrows by the edges above it once reads 880. More than 1,300 fails."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis bounded"]
+    assert cost <= 1300, cost

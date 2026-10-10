@@ -37,7 +37,7 @@ use crate::cfg;
 use crate::consts::{self, Calls, Cells};
 use crate::floatfacts::{self, Finite, Format, Operation, Rule};
 use crate::memory::{MemRef, Unit};
-use crate::ranges::{self, Interval};
+use crate::ranges;
 
 pub type Bounds = (BigInt, BigInt);
 
