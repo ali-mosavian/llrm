@@ -49,7 +49,7 @@ pub fn step(
     let [Loc::Reg(dest)] = what.dests.as_slice() else {
         return None;
     };
-    let register = |one: &Reg| one.width == dest.width && target::WIDTHS.contains_key(&one.register);
+    let register = |one: &Reg| one.width == dest.width && target::integer(one.register);
     if ![2, 4].contains(&dest.width) || !register(dest) {
         return None;
     }

@@ -62,11 +62,18 @@ fn main() {
 /// The register file every target's `registers.regs` states, as the table
 /// `backend::registerinfo` queries: one entry per register, by iced's number.
 /// The targets state the same registers (checked here: name, width, root and
-/// lane; the classes and the debug-format numbers are each target's own and are
-/// not here).
+/// lane). The classes are those every target listing the register gives it
+/// (`base` and `index` differ by target and are not here); the debug-format
+/// numbers are each target's own.
 fn register_info(targets: &[std::path::PathBuf]) -> String {
-    let mut seen: Vec<(String, (String, String, String))> = Vec::new();
-    let mut rows: Vec<(String, u32, String, u32)> = Vec::new();
+    struct Row {
+        name: String,
+        bits: u32,
+        root: String,
+        lane: u32,
+        classes: Vec<String>,
+    }
+    let mut rows: Vec<Row> = Vec::new();
     for dir in targets {
         let path = dir.join("src/registers.regs");
         println!("cargo:rerun-if-changed={}", path.display());
@@ -77,19 +84,23 @@ fn register_info(targets: &[std::path::PathBuf]) -> String {
             if columns.len() != 7 {
                 continue;
             }
-            let key = (columns[1].to_owned(), columns[2].to_owned(), columns[3].to_owned());
-            match seen.iter().find(|(name, _)| name == columns[0]) {
-                Some((_, again)) => {
-                    assert_eq!(again, &key, "{}: {} differs between targets", path.display(), columns[0])
+            let classes: Vec<String> =
+                if columns[4] == "-" { Vec::new() } else { columns[4].split(',').map(str::to_owned).collect() };
+            let (bits, lane) = (columns[1].parse().unwrap(), columns[3].parse().unwrap());
+            match rows.iter_mut().find(|one| one.name == columns[0]) {
+                Some(seen) => {
+                    assert_eq!(
+                        (seen.bits, &seen.root, seen.lane),
+                        (bits, &columns[2].to_owned(), lane),
+                        "{}: {} differs between targets",
+                        path.display(),
+                        columns[0]
+                    );
+                    // Only the classes every target gives it.
+                    seen.classes.retain(|one| classes.contains(one));
                 }
                 None => {
-                    seen.push((columns[0].to_owned(), key));
-                    rows.push((
-                        columns[0].to_owned(),
-                        columns[1].parse().unwrap(),
-                        columns[2].to_owned(),
-                        columns[3].parse().unwrap(),
-                    ));
+                    rows.push(Row { name: columns[0].to_owned(), bits, root: columns[2].to_owned(), lane, classes })
                 }
             }
         }
@@ -97,11 +108,15 @@ fn register_info(targets: &[std::path::PathBuf]) -> String {
     let mut code = String::from(
         "pub static TABLE: [Option<Entry>; 256] = {\n    let mut table: [Option<Entry>; 256] = [None; 256];\n",
     );
-    for (name, bits, root, lane) in &rows {
+    for row in &rows {
+        let classes = row.classes.iter().map(|one| format!("{one:?}")).collect::<Vec<_>>().join(", ");
         code.push_str(&format!(
-            "    table[iced_x86::Register::{} as usize] = Some(Entry {{ name: {name:?}, bits: {bits}, root: iced_x86::Register::{}, lane: {lane} }});\n",
-            name.to_uppercase(),
-            root.to_uppercase()
+            "    table[iced_x86::Register::{} as usize] = Some(Entry {{ name: {:?}, bits: {}, root: iced_x86::Register::{}, lane: {}, classes: &[{classes}] }});\n",
+            row.name.to_uppercase(),
+            row.name,
+            row.bits,
+            row.root.to_uppercase(),
+            row.lane
         ));
     }
     code.push_str("    table\n};\n");

@@ -38,8 +38,8 @@ pub const _RETURN_STATE: [Register; 5] = [Register::EBP, Register::ESP, Register
 /// Every lane a body can name. "Dead" here means every lane but the live ones.
 pub fn _universe() -> Lanes {
     let mut lanes = _flag_lanes(0xFFFF_FFFF);
-    for register in target::WIDTHS.keys().chain(target::SEGMENTS.iter()) {
-        lanes.extend(_lanes(*register));
+    for register in target::integer_registers().chain(target::SEGMENTS.iter().copied()) {
+        lanes.extend(_lanes(register));
     }
     lanes
 }

@@ -1440,8 +1440,8 @@ fn _loaded_scaled_add<'a>(
     };
     if temporary.width != total.width
         || ![2, 4].contains(&temporary.width)
-        || !target::WIDTHS.contains_key(&temporary.register)
-        || !target::WIDTHS.contains_key(&total.register)
+        || !target::integer(temporary.register)
+        || !target::integer(total.register)
         || ir::root(temporary.register) == ir::root(total.register)
         || ir::root(temporary.register) == Register::ESP
         || load.defines.len() != 1
@@ -2546,7 +2546,7 @@ pub fn zeroes(body: &LirBody) -> LirBody {
                         if flags_dead
                             && dest.width == *width
                             && [2, 4].contains(width)
-                            && target::WIDTHS.contains_key(&dest.register)
+                            && target::integer(dest.register)
                             && one.symbol != Some(true)
                         {
                             let dest = *dest;
@@ -2662,13 +2662,13 @@ pub fn constants(body: &LirBody) -> LirBody {
                         Loc::Imm(source) => Some(source.width),
                         _ => None,
                     };
-                    if target::WIDTHS.contains_key(&dest.register) && source_width == Some(dest.width) {
+                    if target::integer(dest.register) && source_width == Some(dest.width) {
                         match source {
                             Loc::Imm(source) if source.address.is_none() => {
                                 candidate =
                                     Some((*dest, Known::Value(source.value & ((1i64 << (dest.width * 8)) - 1))));
                             }
-                            Loc::Reg(source) if target::WIDTHS.contains_key(&source.register) => {
+                            Loc::Reg(source) if target::integer(source.register) => {
                                 let value = *held
                                     .entry(*source)
                                     .or_insert_with(

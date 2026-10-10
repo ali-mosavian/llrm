@@ -1,6 +1,6 @@
 //! The register file as the target description states it (`registers.regs`),
 //! asked through queries, as LLVM's generated `MCRegisterInfo` is: the width,
-//! root, lane and name of a register, and the view of a root at a
+//! root, lane, name and classes of a register, and the view of a root at a
 //! width. A `RegId` is iced's `Register` until the newtype (row 11).
 
 pub type RegId = iced_x86::Register;
@@ -13,6 +13,8 @@ pub struct Entry {
     pub root: RegId,
     /// The bit offset inside the root.
     pub lane: u32,
+    /// The classes every target gives it.
+    pub classes: &'static [&'static str],
 }
 
 include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
@@ -51,6 +53,15 @@ pub fn name(register: RegId) -> Option<&'static str> {
     get(register).map(|one| one.name)
 }
 
+/// Whether the description gives `register` the class in every target that
+/// lists it.
+pub fn in_class(
+    register: RegId,
+    class: &str,
+) -> bool {
+    get(register).is_some_and(|one| one.classes.contains(&class))
+}
+
 /// The register of `root` that is `bits` wide: the first by iced's number where
 /// several share it (AL and AH are both EAX's byte; AL is the one named).
 pub fn view(
@@ -64,7 +75,6 @@ pub fn view(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::target;
 
     /// The tables the allocator has always read (`WIDTHS`, `AT_WIDTH`, `LANES`,
     /// `NAMES`, `ir::root`) and the description's queries say the same of every
@@ -72,13 +82,16 @@ mod tests {
     /// are on their way out (row 11).
     #[test]
     fn the_description_says_what_the_hand_tables_say() {
-        for (register, width) in target::WIDTHS.iter() {
+        for (register, width) in llrm_x86::registers::WIDTHS.iter() {
             assert_eq!(bytes(*register), Some(*width), "{register:?}");
             assert_eq!(root(*register), crate::model::ir::root(*register), "{register:?}");
-            assert_eq!(lanes(*register), target::lanes(*register), "{register:?}");
-            assert_eq!(name(*register).map(str::to_owned), Some(target::name_of(*register)), "{register:?}");
+            assert_eq!(
+                name(*register).map(str::to_owned),
+                Some(format!("{register:?}").to_lowercase()),
+                "{register:?}"
+            );
         }
-        for (root_register, views) in target::AT_WIDTH.iter() {
+        for (root_register, views) in llrm_x86::registers::AT_WIDTH.iter() {
             for (width, register) in views {
                 assert_eq!(view(*root_register, *width as u32 * 8), Some(*register), "{root_register:?} at {width}");
             }

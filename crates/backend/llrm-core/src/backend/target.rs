@@ -13,6 +13,7 @@ use iced_x86::Register;
 
 use crate::abi::machine::Machine;
 use crate::backend::classes::RegisterClasses;
+use crate::backend::registerinfo;
 use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::support::hash::IndexMap;
 use crate::support::pyset::PySet;
@@ -165,22 +166,40 @@ pub fn writes(
     out
 }
 
-pub static WIDE: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::DWORDS.into_iter().collect());
-pub static NARROW: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::WORDS.into_iter().collect());
+pub static WIDE: LazyLock<PySet<Register>> = LazyLock::new(|| integer_of(4).into_iter().collect());
+pub static NARROW: LazyLock<PySet<Register>> = LazyLock::new(|| integer_of(2).into_iter().collect());
 // The byte halves. BC reaches for them to clear a high byte and to read one
 // byte of an array.
-pub static BYTE: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::BYTES.into_iter().collect());
+pub static BYTE: LazyLock<PySet<Register>> = LazyLock::new(|| integer_of(1).into_iter().collect());
 
-// The width each register names, and the register file at each width: the
-// architecture's.
-pub use llrm_x86::registers::{AT_WIDTH, WIDTHS};
+/// The integer registers `bytes` wide, by iced's number.
+fn integer_of(bytes: i64) -> Vec<Register> {
+    registerinfo::TABLE
+        .iter()
+        .enumerate()
+        .filter(|(_, one)| one.is_some_and(|one| one.classes.contains(&"int") && i64::from(one.bits / 8) == bytes))
+        .filter_map(|(at, _)| Register::values().find(|one| *one as usize == at))
+        .collect()
+}
+
+/// Every integer register (the 8, 16 and 32-bit views), wide ones first, each
+/// width by iced's number: the order the allocator's tables have always been
+/// walked in.
+pub fn integer_registers() -> impl Iterator<Item = Register> {
+    [4, 2, 1].into_iter().flat_map(integer_of)
+}
+
+/// Whether `register` is an integer register: one the tables name by width.
+pub fn integer(register: Register) -> bool {
+    registerinfo::in_class(register, "int")
+}
 
 /// The same register named at the width an operand needs.
 pub fn named(
     register: Register,
     width: i64,
 ) -> Register {
-    AT_WIDTH.get(&ir::root(register)).and_then(|widths| widths.get(&width)).copied().unwrap_or(register)
+    registerinfo::view(registerinfo::root(register), width as u32 * 8).unwrap_or(register)
 }
 
 /// The registers an operand may take, in the order to try them.
@@ -333,36 +352,19 @@ pub fn positional_place(place: &Loc) -> bool {
 
 /// Whether this is a register this target describes at all.
 pub fn known(register: Register) -> bool {
-    WIDTHS.contains_key(&register) || SEGMENTS.contains(&register)
+    integer(register) || SEGMENTS.contains(&register)
 }
 
 /// How wide this register is, or None where the target does not say.
 pub fn width_of(register: Register) -> Option<i64> {
-    if SEGMENTS.contains(&register) { Some(2) } else { WIDTHS.get(&register).copied() }
+    if SEGMENTS.contains(&register) { Some(2) } else { registerinfo::bytes(register).filter(|_| integer(register)) }
 }
 
 // ------------------------------------------------------------ subregisters
 
-// Which bytes of its root each register is, as a mask: LLVM's lane masks,
-// with four lanes. `ir.ROOT` answers "same register file entry", not "same
-// bytes", and al and ah are where those differ.
-pub static LANES: LazyLock<IndexMap<Register, i64>> = LazyLock::new(|| {
-    let mut lanes = IndexMap::default();
-    for (_row, _mask) in [(&*WIDE, 0b1111), (&*NARROW, 0b0011)] {
-        for _one in _row.iter() {
-            lanes.insert(*_one, _mask);
-        }
-    }
-    for _one in BYTE.iter() {
-        let high = [Register::AH, Register::CH, Register::DH, Register::BH].contains(_one);
-        lanes.insert(*_one, if high { 0b0010 } else { 0b0001 });
-    }
-    lanes
-});
-
 /// Which bytes of its root this register names.
 pub fn lanes(register: Register) -> i64 {
-    LANES.get(&register).copied().unwrap_or(0b1111)
+    registerinfo::lanes(register)
 }
 
 /// Whether writing one can be seen by reading the other.
@@ -378,22 +380,15 @@ pub fn overlaps(
     lanes(one) & lanes(other) != 0
 }
 
-// Each register by the name a human writes, which is what runtime.py's own
-// contracts are keyed on. Python's `iced_x86.Register` defines no
-// `DontUse*` member, so those have no name here either.
-pub static NAMES: LazyLock<IndexMap<Register, String>> = LazyLock::new(|| {
-    let mut names: Vec<(String, Register)> = Register::values()
-        .map(|register| (format!("{register:?}").to_uppercase(), register))
-        .filter(|(name, _)| !name.starts_with("DONTUSE"))
-        .collect();
-    // `dir(Register)` is sorted by name.
-    names.sort();
-    names.into_iter().map(|(name, register)| (register, name.to_lowercase())).collect()
-});
-
 /// This register's own name, lowercase.
 pub fn name_of(register: Register) -> String {
-    NAMES.get(&register).cloned().unwrap_or_else(|| (register as i64).to_string())
+    if let Some(name) = registerinfo::name(register) {
+        return name.to_owned();
+    }
+    // Python's `iced_x86.Register` defines no `DontUse*` member, so those have
+    // no name here.
+    let spelled = format!("{register:?}");
+    if spelled.starts_with("DontUse") { (register as i64).to_string() } else { spelled.to_lowercase() }
 }
 
 #[cfg(test)]
@@ -718,19 +713,25 @@ mod tests {
     #[test]
     #[allow(deprecated)]
     fn tables_match_python() {
-        let values = |pairs: Vec<(Register, i64)>| pairs.into_iter().map(|(k, v)| (k as i64, v)).collect::<Vec<_>>();
         let rows = [37, 38, 39, 40, 41, 42, 43, 44, 21, 22, 23, 24, 25, 26, 27, 28, 1, 2, 3, 4, 5, 6, 7, 8];
-        let widths: Vec<i64> = WIDTHS.keys().map(|one| *one as i64).collect();
-        assert_eq!(widths, rows);
-        let lanes = values(LANES.iter().map(|(k, v)| (*k, *v)).collect());
+        let walked: Vec<i64> = integer_registers().map(|one| one as i64).collect();
+        assert_eq!(walked, rows);
         let masks = [15, 15, 15, 15, 15, 15, 15, 15, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 2, 2, 2, 2];
-        assert_eq!(lanes, rows.into_iter().zip(masks).collect::<Vec<_>>());
-        let at_width: Vec<(i64, Vec<(i64, i64)>)> = AT_WIDTH
+        let lanes_of: Vec<(i64, i64)> = integer_registers().map(|one| (one as i64, lanes(one))).collect();
+        assert_eq!(lanes_of, rows.into_iter().zip(masks).collect::<Vec<_>>());
+        let by_root: Vec<(i64, Vec<(i64, i64)>)> = rows[..8]
             .iter()
-            .map(|(root, widths)| (*root as i64, widths.iter().map(|(w, r)| (*w, *r as i64)).collect()))
+            .map(|root| {
+                let root = Register::values().find(|one| *one as i64 == *root).unwrap();
+                let views = [4_i64, 2, 1]
+                    .into_iter()
+                    .filter_map(|width| registerinfo::view(root, width as u32 * 8).map(|one| (width, one as i64)))
+                    .collect();
+                (root as i64, views)
+            })
             .collect();
         assert_eq!(
-            at_width,
+            by_root,
             [
                 (37, vec![(4, 37), (2, 21), (1, 1)]),
                 (38, vec![(4, 38), (2, 22), (1, 2)]),

@@ -34,7 +34,7 @@
 1 crates/backend/llrm-core/src/backend/spillforward.rs
 3 crates/backend/llrm-core/src/backend/ssaspill.rs
 2 crates/backend/llrm-core/src/backend/storecombine.rs
-7 crates/backend/llrm-core/src/backend/target.rs
+3 crates/backend/llrm-core/src/backend/target.rs
 1 crates/backend/llrm-core/src/backend/upperzero.rs
 5 crates/backend/llrm-core/src/driver/basic.rs
 3 crates/bc/llrm-bcdriver/src/lib.rs
