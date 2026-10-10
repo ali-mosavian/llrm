@@ -97,7 +97,8 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                 // it define the phi's result outright says what the phi said.
                 if edges.iter().all(|&(w, v)| {
                     _defined_in(at_of[&w], v)
-                        && once.get(&v).copied() == Some(1)
+                        && (once.get(&v).copied() == Some(1) || _read_past_loop(&at_of, block.at, w, v))
+                        && _defined_in_place(at_of[&w], v, phi.result)
                         && !_live_after(&at_of, block.at, w, v, phi.result)
                 }) {
                     for &(_where, value) in &edges {
@@ -351,6 +352,77 @@ fn _live_after(
         }
     }
     false
+}
+
+/// Whether `value`, which `from` defines on the back edge into `header`, is
+/// read besides by the phi only outside the loop that edge closes (or on edges
+/// from `from`): the loop's variable then holds it wherever it is read, and the
+/// phi can define the variable outright, as gcc's out-of-SSA coalesces a phi's
+/// result with an argument they do not interfere (`tree-ssa-coalesce`) whoever
+/// else reads the argument.
+fn _read_past_loop(
+    at_of: &IndexMap<i64, &LirBlock>,
+    header: i64,
+    from: i64,
+    value: u32,
+) -> bool {
+    // The loop: what reaches `from` without passing the header. A header that
+    // does not dominate `from` is no loop.
+    let mut inside: BTreeSet<i64> = BTreeSet::from([header]);
+    let mut pending = vec![from];
+    while let Some(at) = pending.pop() {
+        if !inside.insert(at) {
+            continue;
+        }
+        let preds: Vec<i64> = at_of.values().filter(|block| block.succ.contains(&at)).map(|block| block.at).collect();
+        if preds.is_empty() && at != header {
+            return false;
+        }
+        pending.extend(preds);
+    }
+    at_of.values().all(|block| {
+        let in_loop = inside.contains(&block.at);
+        let phis_ok = block.phis.iter().all(|phi| {
+            phi.incoming.iter().all(|&(edge, read)| read != value || (edge == from && (block.at == header || !in_loop)))
+        });
+        let insns_ok = !block
+            .insns
+            .iter()
+            .any(
+                |one| (one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value))
+                    && in_loop
+                    && block.at != from,
+            );
+        phis_ok && insns_ok
+    })
+}
+
+/// Whether the instruction defining `value` may define `result` instead: not
+/// where it is a two-address operation that reads `result` as other than its
+/// first source, which the destination would then overwrite (`1 - cur` became
+/// `sub cur, cur`; a commutative one is swapped).
+fn _defined_in_place(
+    block: &LirBlock,
+    value: u32,
+    result: u32,
+) -> bool {
+    let Some(one) = block.insns.iter().find(|one| one.defines.contains(&value)) else { return true };
+    if !one.uses.contains(&result) {
+        return true;
+    }
+    let Some(what) = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return true };
+    let reads = |at: usize| {
+        matches!(
+            what.sources.get(at),
+            Some(Loc::Held(held)) if held.value == result
+        )
+    };
+    let commutes =
+        matches!(
+            what.name.as_deref(),
+            Some("add" | "and" | "or" | "xor" | "imul")
+        ) && what.sources.len() == 2;
+    commutes || !(1..what.sources.len()).any(reads)
 }
 
 /// Whether exactly one instruction in this block defines the value.
