@@ -132,7 +132,28 @@ def cells(n: int) -> str:
     return PRELUDE_C + f"static unsigned cell[{n}];\nunsigned fn(unsigned a) {{\n" + body + "    return a;\n}\n" + _main("cells", "    return (long)fn(3u);\n")
 
 
-AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells}
+def joins(n: int) -> str:
+    """Four functions, each with N static cells all known after its first N stores and N if/else joins that store to one and read
+    another: every join meets N held cells, so a pass that keeps the cells of memory as one map per block, and meets the maps of the
+    predecessors at a join (through-memory's dense solve), costs N^2 a function. `cells` is one block and has no join; GORILLA.BAS (1,300
+    lines of graphics statements over global state) compiled 17 s at -O1, 62 % of it there."""
+    out = [PRELUDE_C]
+    for f in range(4):
+        out.append(f"static unsigned c{f}[{n}];\nunsigned fn{f}(unsigned a) {{\n")
+        out.append("".join(f"    c{f}[{k}] = {k + 1}u;\n" for k in range(n)))
+        out.append(
+            "".join(
+                f"    if ((a >> {k % 7}) & 1u) {{ c{f}[{(k * 3) % n}] = {k + 5}u; }} else {{ a += c{f}[{(k * 5 + 1) % n}]; }}\n"
+                for k in range(n)
+            )
+        )
+        out.append(f"    return a + c{f}[{n - 1}];\n}}\n")
+    calls = " + ".join(f"fn{f}(3u)" for f in range(4))
+    out.append(_main("joins", f"    return (long)({calls});\n"))
+    return "".join(out)
+
+
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------

@@ -697,3 +697,12 @@ def test_the_homes_wanted_again_are_asked_of_the_instructions_that_name_them_on_
     source.write_text(scaling.AXES["cells"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["intervals homes"]
     assert cost <= 3200, cost
+
+def test_homes_walks_the_live_sets_once_for_all_its_candidates_not_once_for_each(tmp_path):
+    """`joins(128)` at -O2 (N cells held across N joins): `mir homes` asked `live_points` of every block for each phi in a cell
+    (it copies the live set twice per instruction) and found the paths between a store and a block again for each store: 9,257
+    Minstr, 8x a doubling (72.6 G at N=256). One walk with one live set, the paths found backward from the block: 316, 4x."""
+    source = tmp_path / "joins_128.c"
+    source.write_text(scaling.AXES["joins"](128))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir homes"]
+    assert cost <= 800, cost
