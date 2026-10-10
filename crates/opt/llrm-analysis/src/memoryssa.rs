@@ -281,6 +281,21 @@ impl Accesses {
         Self { references, touched, fills: IndexMap::default(), source: None }
     }
 
+    /// These accesses with the stores `absolute` names writing nothing a
+    /// program object holds: a far store through a selector taken to be an
+    /// absolute segment (`consts::_selector`).
+    pub fn without_absolute_writes(
+        mut self,
+        absolute: &llrm_mir::dense::IdSet<InstId>,
+    ) -> Self {
+        for inst in absolute.iter() {
+            if let Some((_, writes)) = self.touched.get_mut(&inst) {
+                *writes = Some(none());
+            }
+        }
+        self
+    }
+
     /// What `inst` writes; `None` where it may write anything.
     pub fn writes(
         &self,
@@ -589,6 +604,11 @@ pub struct MemorySSA<'a> {
     span: Vec<(u32, u32)>,
     /// Per access, the walk that last visited it, and the walks made.
     stamps: std::cell::RefCell<(Vec<u32>, u32)>,
+    /// Of each def that writes one cell at a fixed displacement, the frame and
+    /// bytes (`regions::displaced_span`): a cell at a fixed displacement of the
+    /// same frame whose bytes miss them is not written, settled without asking
+    /// `may_clobber` or remembering the answer.
+    fixed: llrm_mir::dense::IdMap<InstId, (crate::regions::Frame, i128, i128)>,
 }
 
 impl MemorySSA<'_> {
@@ -788,6 +808,8 @@ impl MemorySSA<'_> {
         // reads.
         let invariant =
             honor && llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
+        let memory_span = displaced_span(memory);
+        let edge_span = edge_memory.and_then(displaced_span);
         let mut pending = vec![self.at(site).defining];
         // Visited accesses by stamp: a set built per walk was most of its cost.
         let mut stamps = self.stamps.borrow_mut();
@@ -873,9 +895,20 @@ impl MemorySSA<'_> {
                     };
                     let written = &self.written[&access.site.expect("a def has a site")];
                     let site = access.site.expect("a def has a site");
-                    if changes(queried, invariant, written.as_deref(), |_| {
-                        self.clobbered(queried_slot, queried, current, site)
-                    }) {
+                    let apart = match (
+                        self.fixed.get(&site),
+                        if std::ptr::eq(queried, memory) { &memory_span } else { &edge_span },
+                    ) {
+                        (Some((frame, low, high)), Some((cell_frame, cell_low, cell_high))) => {
+                            frame == cell_frame && !(cell_low < high && low < cell_high)
+                        }
+                        _ => false,
+                    };
+                    if !apart
+                        && changes(queried, invariant, written.as_deref(), |_| {
+                            self.clobbered(queried_slot, queried, current, site)
+                        })
+                    {
                         ended(table, &mut chain, current);
                         found.insert(current);
                     } else {
@@ -1027,6 +1060,13 @@ pub fn built<'a>(
         std::iter::once(live.clone()).chain(phis.values().cloned()).chain(sites.values().cloned()).collect();
     accesses.sort_by_key(|access| access.id);
     let span = spans(&accesses);
+    let fixed = written
+        .iter()
+        .filter_map(|(site, writes)| match writes.as_deref() {
+            Some([only]) => displaced_span(only).map(|span| (site, span)),
+            _ => None,
+        })
+        .collect();
     MemorySSA {
         live,
         accesses,
@@ -1041,6 +1081,7 @@ pub fn built<'a>(
         jumps: Default::default(),
         span,
         stamps: Default::default(),
+        fixed,
     }
 }
 
