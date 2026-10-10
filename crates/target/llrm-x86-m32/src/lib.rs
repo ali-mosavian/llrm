@@ -60,6 +60,10 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 });
 
 impl llrm_target::Target for M32 {
+    fn registers(&self) -> &'static llrm_lir::registers::Info {
+        &REGISTER_INFO
+    }
+
     fn name(&self) -> &'static str {
         "x86-m32"
     }

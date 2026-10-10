@@ -110,6 +110,13 @@ def crate_tests(pkgs: dict[str, dict]) -> list[tuple[str, str]]:
     return out
 
 
+def reading(cfg: dict, pkgs: dict[str, dict], live: list[str]) -> set[str]:
+    """The crates whose own tests read other crates' sources (`[[reads]]`), for the files changed: a crate that reads what
+    changed is not one that depends on it, so `dependents` leaves it out (facts_rewrite's audit of every reader of nsw/nuw
+    went unrun when a pass in another crate began to read them)."""
+    return {r["package"] for r in cfg.get("reads", []) if r["package"] in pkgs and any(matches(f, r["paths"]) for f in live)}
+
+
 def plan(files: list[str], forced: str = "auto") -> Plan:
     cfg = load()
     pkgs = packages()
@@ -129,7 +136,7 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
 
     touched = {crate_of(f, pkgs) for f in live} - {None}
     cargo = any(not f.startswith("tools/") or f.startswith("tools/bench/") for f in live)
-    p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"})  # the root crate enables features (llrm-c's toolchain) the others lack alone
+    p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"} | reading(cfg, pkgs, live))  # the root crate enables features (llrm-c's toolchain) the others lack alone
     steps = []
     if cargo or p.tier == "full":
         steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture"]

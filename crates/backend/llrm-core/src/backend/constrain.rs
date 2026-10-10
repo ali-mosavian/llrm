@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::backend::classes::RegisterClasses;
 use crate::backend::{regclass, spiller, target};
@@ -17,6 +18,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 
 /// Whether two requirement names mean the same register at `width`.
 fn _same_register(
+    regs: Regs,
     one: RegId,
     other: RegId,
     width: u32,
@@ -25,17 +27,18 @@ fn _same_register(
         return true;
     }
     let width = i64::from(width);
-    if target::width_of(one) == Some(width) {
-        return one == target::named(other, width);
+    if regs.width_of(one) == Some(width) {
+        return one == regs.named(other, width);
     }
-    if target::width_of(other) == Some(width) {
-        return other == target::named(one, width);
+    if regs.width_of(other) == Some(width) {
+        return other == regs.named(one, width);
     }
     ir::root(one) == ir::root(other)
 }
 
 /// Whether this value is pinned to the register the instruction wants.
 fn _already_there(
+    regs: Regs,
     pinned: &IndexMap<u32, RegId>,
     value: u32,
     register: RegId,
@@ -47,7 +50,7 @@ fn _already_there(
     if ir::root(*had) != ir::root(register) {
         return false;
     }
-    target::width_of(register) == Some(i64::from(width))
+    regs.width_of(register) == Some(i64::from(width))
 }
 
 /// `widths.get(value) or _width(one, value)`.
@@ -68,6 +71,7 @@ pub fn constrained(
     pinned: Option<&IndexMap<u32, RegId>>,
     classes: &RegisterClasses,
 ) -> (LirBody, IndexMap<u32, RegId>) {
+    let regs = body.regs();
     // A pin the caller released is not merged back from `body.pins`.
     let ids = body.pins.keys().chain(pinned.into_iter().flat_map(|given| given.keys())).copied().max();
     let mut pinned: IndexMap<u32, RegId> = pinned.unwrap_or(&body.pins).clone();
@@ -128,12 +132,14 @@ pub fn constrained(
                 one.requires.iter().chain(&one.delivers).map(|(held, _r)| (held.value, held.width)).collect();
             let wanted: Vec<Wanted> = _wanted(&one, classes)
                 .into_iter()
-                .filter(|got| !_already_there(&pinned, got.value, got.register, _declared(&widths, &one, got.value)))
+                .filter(|got| {
+                    !_already_there(regs, &pinned, got.value, got.register, _declared(&widths, &one, got.value))
+                })
                 .collect();
             let given: IndexMap<u32, RegId> = _delivered(&one)
                 .into_iter()
                 .filter(|(value, register)| {
-                    !_already_there(&pinned, *value, *register, _declared(&widths, &one, *value))
+                    !_already_there(regs, &pinned, *value, *register, _declared(&widths, &one, *value))
                 })
                 .collect();
             if wanted.is_empty() && given.is_empty() {
@@ -696,9 +702,11 @@ fn _wanted(
     one: &Insn,
     classes: &RegisterClasses,
 ) -> Vec<Wanted> {
+    let regs = classes.registers;
     let mut out: Vec<Wanted> = Vec::new();
     let group = |out: &mut Vec<Wanted>, value: u32, register: RegId, width: u32| -> usize {
-        match out.iter().position(|found| found.value == value && _same_register(found.register, register, width)) {
+        match out.iter().position(|found| found.value == value && _same_register(regs, found.register, register, width))
+        {
             Some(at) => at,
             None => {
                 out.push(Wanted { value, register, places: Vec::new() });

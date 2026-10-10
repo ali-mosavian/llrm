@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use iced_x86::Register;
+use llrm_lir::registers::Regs;
 
 use crate::backend::liveness;
 use crate::backend::peephole::{_lanes, _register_effects, _register_operand, DeadAfter, Lanes, id};
@@ -29,6 +30,7 @@ use crate::model::lir::{self, Insn, LirBlock, LirBody};
 pub const ROUNDS: usize = 8;
 
 pub fn thrashed(body: LirBody) -> LirBody {
+    let regs = body.regs();
     // A rename leaves its block's live-in as it was, so what is dead at every
     // block's exit is the same whatever is renamed, and the blocks do not
     // depend on one another: each is renamed to a fixed point of its own.
@@ -37,7 +39,7 @@ pub fn thrashed(body: LirBody) -> LirBody {
     let blocks: Vec<LirBlock> = body
         .blocks
         .iter()
-        .map(|block| match _thrash_block(body.bits, block, exits[&block.at]) {
+        .map(|block| match _thrash_block(regs, body.bits, block, exits[&block.at]) {
             Some(done) => {
                 changed = true;
                 done
@@ -51,16 +53,18 @@ pub fn thrashed(body: LirBody) -> LirBody {
 
 /// Per instruction, the register lanes dead once it has run.
 pub fn _dead_after(
+    regs: Regs,
     bits: u32,
     block: &LirBlock,
     dead: Lanes,
 ) -> DeadAfter {
-    let by_position = _dead_after_by(bits, &block.insns, dead);
+    let by_position = _dead_after_by(regs, bits, &block.insns, dead);
     block.insns.iter().zip(by_position).map(|(one, dead)| (id(one), dead)).collect()
 }
 
 /// `_dead_after` by position.
 fn _dead_after_by(
+    regs: Regs,
     bits: u32,
     insns: &[Arc<Insn>],
     dead: Lanes,
@@ -69,7 +73,7 @@ fn _dead_after_by(
     let mut out = vec![Lanes::new(); insns.len()];
     for (position, one) in insns.iter().enumerate().rev() {
         out[position] = dead;
-        dead = liveness::with_effect(bits, one, |effect| {
+        dead = liveness::with_effect(regs, bits, one, |effect| {
             effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead))
         });
     }
@@ -95,16 +99,19 @@ struct Rename {
 /// earlier than the first instruction whose liveness moved: an earlier one saw
 /// the same instructions and the same liveness, and failed.
 fn _thrash_block(
+    regs: Regs,
     bits: u32,
     block: &LirBlock,
     dead: Lanes,
 ) -> Option<LirBlock> {
     let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
     let exit = dead;
-    let mut after = _dead_after_by(bits, &insns, exit);
+    let mut after = _dead_after_by(regs, bits, &insns, exit);
     let (mut from, mut renamed) = (0, 0);
     while renamed < ROUNDS {
-        let Some(Rename { position, at, tied, rewritten }) = _first_rename(bits, &insns, &after, from) else { break };
+        let Some(Rename { position, at, tied, rewritten }) = _first_rename(regs, bits, &insns, &after, from) else {
+            break;
+        };
         if !tied {
             // The producer never read Y, so writing Z instead is the whole
             // physical operation. Keep the copy's virtual definition as an
@@ -123,7 +130,7 @@ fn _thrash_block(
         let mut dead = after[position];
         for index in (at..=position).rev() {
             after[index] = dead;
-            dead = liveness::with_effect(bits, &insns[index], |effect| {
+            dead = liveness::with_effect(regs, bits, &insns[index], |effect| {
                 effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead))
             });
         }
@@ -137,13 +144,13 @@ fn _thrash_block(
             }
             after[index] = dead;
             from = index;
-            dead = liveness::with_effect(bits, &insns[index], |effect| {
+            dead = liveness::with_effect(regs, bits, &insns[index], |effect| {
                 effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead))
             });
         }
         if cfg!(test) || llrm_support::env_set("LLRM_CHECK_THRASH") {
             assert!(
-                after == _dead_after_by(bits, &insns, exit),
+                after == _dead_after_by(regs, bits, &insns, exit),
                 "a rename changed what is dead beyond what was worked out again"
             );
         }
@@ -154,6 +161,7 @@ fn _thrash_block(
 
 /// The first copy at or after `from` that can be renamed.
 fn _first_rename(
+    regs: Regs,
     bits: u32,
     insns: &[Arc<Insn>],
     after: &[Lanes],
@@ -166,13 +174,13 @@ fn _first_rename(
         // Y has to die at the move. That is the whole licence for the
         // rename: if anything later reads Y, its definition still has to
         // land in Y and there is nothing to rewrite.
-        if !_lanes(out_of.register).is_subset(&after[position]) {
+        if !_lanes(regs, out_of.register).is_subset(&after[position]) {
             continue;
         }
-        let Some((at, tied)) = _producer(bits, insns, position, &out_of, &into, after) else {
+        let Some((at, tied)) = _producer(regs, bits, insns, position, &out_of, &into, after) else {
             continue;
         };
-        let Some(rewritten) = _renamed(bits, &insns[at], out_of.register, into.register, !tied) else {
+        let Some(rewritten) = _renamed(regs, bits, &insns[at], out_of.register, into.register, !tied) else {
             continue;
         };
         return Some(Rename { position, at, tied, rewritten });
@@ -207,6 +215,7 @@ fn _plain_copy(one: &Insn) -> Option<(Reg, Reg)> {
 /// to leave Z dead, or renaming into it destroys a value something else
 /// still wants.
 fn _producer(
+    regs: Regs,
     bits: u32,
     insns: &[Arc<Insn>],
     position: usize,
@@ -214,7 +223,7 @@ fn _producer(
     into: &Reg,
     after: &[Lanes],
 ) -> Option<(usize, bool)> {
-    let (mine, theirs) = (_lanes(out_of.register), _lanes(into.register));
+    let (mine, theirs) = (_lanes(regs, out_of.register), _lanes(regs, into.register));
     for at in (0..position).rev() {
         let one = &insns[at];
         let what = one.what.as_ref()?;
@@ -224,7 +233,7 @@ fn _producer(
         if liveness::_terminator(Some(what)) || what.op == Operation::Barrier {
             return None;
         }
-        let (reads, writes) = _register_effects(bits, one, false, true)?;
+        let (reads, writes) = _register_effects(regs, bits, one, false, true)?;
         // Z dead here, or the rename overwrites a live value.
         if !theirs.is_subset(&after[at]) {
             return None;
@@ -232,7 +241,7 @@ fn _producer(
         if what.op == Operation::Move && one.spill_store {
             return None;
         }
-        if _writes(what, &mine) {
+        if _writes(regs, what, &mine) {
             // It must own the whole of Y: a partial write leaves lanes
             // belonging to some earlier definition, and renaming this one
             // alone would split the value in two.
@@ -255,6 +264,7 @@ fn _producer(
 
 /// Whether this operation names those lanes as its own destination.
 fn _writes(
+    regs: Regs,
     what: &Semantics,
     lanes: &Lanes,
 ) -> bool {
@@ -263,7 +273,7 @@ fn _writes(
         .any(
             |dest| matches!(
                 dest,
-                Loc::Reg(dest) if !_lanes(dest.register).is_disjoint(lanes)
+                Loc::Reg(dest) if !_lanes(regs, dest.register).is_disjoint(lanes)
             ),
         )
 }
@@ -280,6 +290,7 @@ fn _writes(
 /// `select.emit` answering None is exactly `FindGenEntry` returning
 /// `G_UNKNOWN` there.
 fn _renamed(
+    regs: Regs,
     bits: u32,
     one: &Insn,
     before: Register,
@@ -288,11 +299,11 @@ fn _renamed(
 ) -> Option<Arc<Insn>> {
     let what = one.what.as_ref().expect("a producer has semantics");
     let changed = Semantics {
-        dests: what.dests.iter().map(|dest| _register_operand(dest, before, after)).collect(),
+        dests: what.dests.iter().map(|dest| _register_operand(regs, dest, before, after)).collect(),
         sources: if result_only {
             what.sources.clone()
         } else {
-            what.sources.iter().map(|source| _register_operand(source, before, after)).collect()
+            what.sources.iter().map(|source| _register_operand(regs, source, before, after)).collect()
         },
         ..what.clone()
     };
@@ -304,11 +315,12 @@ fn _renamed(
     // EDX -- emits the same bytes under any name. The decoded effects have to
     // move from `before` to `after`, or the rename exists only in the LIR.
     let renamed = Insn { what: Some(changed), ..one.clone() };
-    let (was, now) = (_register_effects(bits, one, false, false), _register_effects(bits, &renamed, false, false));
+    let (was, now) =
+        (_register_effects(regs, bits, one, false, false), _register_effects(regs, bits, &renamed, false, false));
     let (Some(was), Some(now)) = (was, now) else {
         return None;
     };
-    let (mine, theirs) = (_lanes(before), _lanes(after));
+    let (mine, theirs) = (_lanes(regs, before), _lanes(regs, after));
     let reads: Lanes =
         if result_only || was.0.is_disjoint(&mine) { was.0.clone() } else { was.0.minus(&mine).or(&theirs) };
     let writes: Lanes = was.1.minus(&mine).or(&theirs);

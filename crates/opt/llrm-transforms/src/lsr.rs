@@ -275,6 +275,15 @@ pub fn reduced(
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
+            if let Some(rewrite) = _post_incremented(&view, &loop_) {
+                drop(facts);
+                _read_after_step(unit, rewrite);
+                analyses.invalidate(unit.function, &PreservedAnalyses::none());
+                whole = Whole::default();
+                changed = true;
+                done.remove(&loop_.header);
+                continue;
+            }
             let pressure = analyses.get::<spill::Pressure>(unit.context, unit.layout, unit.function);
             let (context, layout, function) = (&*unit.context, unit.layout, &*unit.function);
             let mut products = || analyses.get::<Products>(context, layout, function);
@@ -807,6 +816,85 @@ fn _hoisted(
     match outermost.and_then(|one| _preheader(function, one)) {
         Some(preheader) => Place::End(preheader),
         None => at,
+    }
+}
+
+/// A latch test of the counter before its step, which the step is made for
+/// anyway: the compare to rewrite, the step it reads instead and the bound a
+/// step on. LLVM's `OptimizeLoopTermCond` makes the same of a compare whose
+/// operand is the counter, where the step is live: the test reads the stepped
+/// counter and the counter itself is dead after the step, one register for two.
+struct PostIncrement {
+    compare: InstId,
+    counter: ValueId,
+    step: ValueId,
+    ty: TypeId,
+    bound: i128,
+}
+
+fn _post_incremented(
+    view: &memory::Unit,
+    loop_: &Loop,
+) -> Option<PostIncrement> {
+    let function = view.function;
+    // Cheap first: a latch branch on a compare of a header phi with a constant,
+    // whose step is read elsewhere too.
+    let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
+    let branch = function.terminator(cfg::block(latch))?;
+    let Some(&Operand::Value(condition)) = function.instruction(branch).operands.first() else { return None };
+    let ValueDef::Instruction(compare) = function.value(condition).def else { return None };
+    if !matches!(function.instruction(compare).opcode, Opcode::ICmp(_)) {
+        return None;
+    }
+    let operands = &function.instruction(compare).operands;
+    let ((Operand::Value(read), Operand::Constant(_)) | (Operand::Constant(_), Operand::Value(read))) =
+        (operands[0], operands[1])
+    else {
+        return None;
+    };
+    let ValueDef::Instruction(phi) = function.value(read).def else { return None };
+    if function.instruction(phi).opcode != Opcode::Phi || function.parent(phi) != Some(cfg::block(loop_.header)) {
+        return None;
+    }
+    let Some(Operand::Value(step)) = _latch_arm(function, read, cfg::block(latch)) else { return None };
+    if function.users(step).iter().all(|one| one.user == phi || one.user == compare) {
+        return None;
+    }
+    let proofs = induction::counted_leaving(view, loop_, None, true);
+    let [proof] = &proofs[..] else { return None };
+    if !proof.shifted || !proof.posttested || proof.compare != compare {
+        return None;
+    }
+    let counter = read;
+    let ty = function.value(counter).ty;
+    let width = proof.width();
+    let moved = match &proof.bound {
+        induction::AffineOperand::Const(known) => {
+            let modulus = BigInt::from(1) << width;
+            let low = ((&known.n % &modulus) + &modulus) % &modulus;
+            let signed = if low >= (BigInt::from(1) << (width - 1)) { low - modulus } else { low };
+            signed.to_i128()?
+        }
+        induction::AffineOperand::Value(..) => return None,
+    };
+    Some(PostIncrement { compare: proof.compare, counter, step, ty, bound: moved })
+}
+
+/// `rewrite`: the compare reads the step and the bound a step on.
+fn _read_after_step(
+    unit: &mut Unit,
+    rewrite: PostIncrement,
+) {
+    let constant = Operand::Constant(unit.context.int(rewrite.ty, rewrite.bound));
+    let operands = unit.function.instruction(rewrite.compare).operands.clone();
+    for (at, operand) in operands.iter().enumerate() {
+        match operand {
+            Operand::Value(value) if *value == rewrite.counter => {
+                unit.function.set_operand(rewrite.compare, at, Operand::Value(rewrite.step));
+            }
+            Operand::Constant(_) => unit.function.set_operand(rewrite.compare, at, constant),
+            _ => {}
+        }
     }
 }
 

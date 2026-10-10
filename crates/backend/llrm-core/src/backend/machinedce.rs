@@ -10,6 +10,8 @@
 
 use std::sync::Arc;
 
+use llrm_lir::registers::Regs;
+
 use crate::backend::liveness;
 use crate::backend::peephole::id;
 use crate::model::ir::{Loc, Operation, Space};
@@ -36,18 +38,24 @@ fn _relocated(where_: &Loc) -> bool {
 }
 
 /// Architectural state whose writes are not ordinary dead values.
-fn _stateful_destination(where_: &Loc) -> bool {
+fn _stateful_destination(
+    regs: Regs,
+    where_: &Loc,
+) -> bool {
     matches!(
         where_,
-        Loc::Reg(one) if crate::backend::registerinfo::is_stack(one.register) || crate::backend::registerinfo::is_segment(one.register)
+        Loc::Reg(one) if regs.is_stack(one.register) || regs.is_segment(one.register)
     )
 }
 
 /// A register, an immediate or an address: not a positional register, whose
 /// exchanges and loads change it through no register a liveness walk sees.
-fn _general(where_: &Loc) -> bool {
+fn _general(
+    regs: Regs,
+    where_: &Loc,
+) -> bool {
     match where_ {
-        Loc::Reg(one) => !crate::backend::target::positional(one.register),
+        Loc::Reg(one) => !regs.positional(one.register),
         Loc::Imm(_) | Loc::Address(_) => true,
         _ => false,
     }
@@ -62,17 +70,20 @@ fn _slot(where_: &Loc) -> bool {
 }
 
 /// Whether removing this occurrence can remove only registers and flags.
-fn _pure(one: &Insn) -> bool {
+fn _pure(
+    regs: Regs,
+    one: &Insn,
+) -> bool {
     let Some(what) = &one.what else {
         return false;
     };
     _PURE.contains(&what.op)
         && what.target.is_none()
         && !what.indirect
-        && what.dests.iter().all(_general)
-        && what.sources.iter().all(|arg| _general(arg) || _slot(arg))
+        && what.dests.iter().all(|place| _general(regs, place))
+        && what.sources.iter().all(|arg| _general(regs, arg) || _slot(arg))
         && !what.dests.iter().chain(&what.sources).any(_relocated)
-        && !what.dests.iter().any(_stateful_destination)
+        && !what.dests.iter().any(|place| _stateful_destination(regs, place))
         && one.clobbers.is_empty()
         && one.clobbers_high.is_empty()
         && one.requires.is_empty()
@@ -89,6 +100,7 @@ fn _pure(one: &Insn) -> bool {
 /// `body` with one sweep's dead work anchored, or None where Python returns
 /// `body` itself.
 fn _once(body: &LirBody) -> Option<LirBody> {
+    let regs = body.regs();
     let exits = liveness::dead_at_exit(body);
     let mut blocks = Vec::new();
     let mut changed = false;
@@ -96,11 +108,11 @@ fn _once(body: &LirBody) -> Option<LirBody> {
         let mut dead = exits[&block.at].clone();
         let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
-            let Some(effect) = liveness::effect(body.bits, one) else {
+            let Some(effect) = liveness::effect(regs, body.bits, one) else {
                 dead.clear();
                 continue;
             };
-            if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && _pure(one) {
+            if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && _pure(regs, one) {
                 redundant.insert(id(one));
                 changed = true;
                 continue;

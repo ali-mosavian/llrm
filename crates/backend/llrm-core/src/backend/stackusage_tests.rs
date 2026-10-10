@@ -58,6 +58,7 @@ fn procedure(
 
 fn module(procedures: Vec<Procedure>) -> Module {
     Module {
+        registers: crate::backend::registerinfo::test_regs(),
         object: llrm_target::Target::object(&llrm_x86_m16::M16),
         code: String::new(),
         names: IndexMap::default(),
