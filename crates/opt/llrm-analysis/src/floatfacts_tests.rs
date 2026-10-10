@@ -349,9 +349,6 @@ fn test_a_loop_exit_repeats_its_stores_every_iteration() {
     assert_eq!(exits[0].count, BigInt::from(10));
     let stored = exits[0].stores.iter().map(|(_, fact)| fact.n.clone()).collect::<Vec<_>>();
     assert_eq!(stored, [0x43f3_c000, 0x4240_0000, 0x3f40_0000].map(BigInt::from));
-    let edges = exit_cells(&unit, &Calls::default());
-    let after = consts::known(&unit, Some(&Calls::default()), Some(&edges), None);
-    assert_eq!(after.get(&parsed.value("after")), Some(&Known::new(0x43f3_c000, 32)));
 }
 
 /// A trip whose result no float holds proves no exit.

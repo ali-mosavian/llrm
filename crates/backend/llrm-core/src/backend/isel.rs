@@ -755,7 +755,7 @@ pub fn selected_with<'c>(
     // each.
     let exposed = llrm_analysis::memory::exposed_frames(&unit);
     let unit = unit.with_exposed(&exposed);
-    let registers = llrm_analysis::consts::known(&unit, None, None, None);
+    let registers = llrm_analysis::consts::known(&unit);
     let unit = unit.with_registers(&registers);
     // One solve of the scoped bounds serves the exact offsets and, below, the
     // dword-indexed accesses.

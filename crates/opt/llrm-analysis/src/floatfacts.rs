@@ -772,41 +772,7 @@ fn _exits<'s>(
     exits
 }
 
-/// Numeric memory facts on exit edges, never on a header's backedge.
-pub fn exit_cells(
-    unit: &Unit,
-    calls: &Calls,
-) -> IndexMap<(i64, i64), Cells> {
-    let proofs = loop_exits(unit, calls);
-    if proofs.is_empty() {
-        return IndexMap::default();
-    }
-    let function = unit.function;
-    let graph = cfg::graph(function);
-    let regions = unit.shape().loops.iter().map(|loop_| (loop_.header, loop_.body.clone())).collect::<IndexMap<_, _>>();
-    let successors = graph.iter().map(|block| (block.at, &block.succ)).collect::<IndexMap<_, _>>();
-    let mut queries = consts::memory_queries(*unit, &IndexMap::default());
-    let mut edges = IndexMap::default();
-    for proof in proofs {
-        let leaving = successors[&proof.header]
-            .iter()
-            .copied()
-            .filter(|at| !regions[&proof.header].contains(at))
-            .collect::<Vec<_>>();
-        // A header leaving by two edges is not the shape proven.
-        let [destination] = leaving[..] else {
-            continue;
-        };
-        let mut memory = Cells::default();
-        for (reference, fact) in &proof.stores {
-            memory.extend(consts::_fragments(&queries.resolve(reference), fact));
-        }
-        edges.insert((proof.header, destination), memory);
-    }
-    edges
-}
-
-/// Numeric facts, optionally given independently established entry cells.
+/// Numeric facts.
 pub fn known(
     unit: &Unit,
     calls: &Calls,

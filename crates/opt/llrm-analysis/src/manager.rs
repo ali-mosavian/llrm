@@ -816,9 +816,6 @@ impl Analysis for Registers {
                 .with_shape(&shape)
                 .with_assumptions(&assumptions)
                 .with_exposed(&exposed),
-            None,
-            None,
-            None,
         )
     }
 }
@@ -1058,16 +1055,7 @@ impl Analysis for FloatFacts {
             .with_annotated(&references)
             .with_exposed(&exposed);
         match &*through {
-            Ok(integers) => {
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
-                    let dense = consts::known(&unit, Some(&calls), None, None);
-                    assert!(
-                        dense.iter().all(|(value, fact)| integers.get(value) == Some(fact)),
-                        "ThroughMemory's integers lack a fact the dense solve derives"
-                    );
-                }
-                floatfacts::solved_over(&unit, &calls, integers)
-            }
+            Ok(integers) => floatfacts::solved_over(&unit, &calls, integers),
             Err(_) => floatfacts::solved_with(&unit, &calls),
         }
     }
