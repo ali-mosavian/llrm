@@ -53,6 +53,7 @@ mov_ri                  2    1    1    1    1    1    1    1
 shift_ri                3    2    1    1    1    1    1    1   # shl/shr/sar reg,imm
 shift_r1                3    3    1    1    1    1    1    1   # the D1 form, reg,1
 movzx                   4    3    3    1    1    1    1    1
+setcc                   4    4    1    1    1    1    1    1   # setcc r8: 386 and 486 4 when set (Intel 240440-002); P5 onwards 1-2
 cdq                     2    3    2    1    1    1    1    1
 imul_r32               22   26   10    4    4    3    5    3   # 486 is 13-42, data dependent
 imul_m32               26   27   11    4    4    3    5    3

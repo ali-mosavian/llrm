@@ -266,6 +266,18 @@ mod tests {
         assert_eq!(model.costs().load, 1, "the clock prices are the CPU's");
     }
 
+    /// A condition held as a value had no price: `phiopt` priced it as the
+    /// `movzx` after it (3 clocks) and made x_switch 59% slower (45,159 clocks
+    /// to 71,757) where `setcc` is 4 clocks on a 486 and 3 bytes.
+    #[test]
+    fn test_m32_prices_a_condition_held_as_a_value() {
+        let table = M32.cpu_table("486").expect("the 486");
+        let clocks = table.clocks.iter().find(|(form, _)| form == "setcc").map(|&(_, clocks)| clocks);
+        assert_eq!(clocks, Some(4));
+        let priced = OPCOSTS.operations(&|form| table.clocks.iter().find(|(one, _)| one == form).map_or(1, |p| p.1), 0);
+        assert_eq!((priced.set, OPCOSTS.size_costs().set), (4, 3));
+    }
+
     /// Flat code indexes by dwords natively: one form, no prefix, any scale.
     #[test]
     fn test_m32_has_one_native_dword_address_form() {
