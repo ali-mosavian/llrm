@@ -6,8 +6,8 @@
 #include "nhstutil.h"
 #include "rtinit.h"
 
-/* The most an array may hold, unless it is huge. */
-enum { ARRAY_MAX = 0x10000UL };
+/* The most an array may hold, unless it is huge: what the target's pointer can reach. */
+enum { ARRAY_MAX = AD_MAX_BYTES };
 
 static int is_string_array(const AD *ad)
 {
@@ -32,17 +32,18 @@ static int array_bytes(const AD *ad, unsigned long *bytes)
 
 /* The bounds into the descriptor, and the offset that turns a subscript sum
    into an address: each dimension's count times what the dimensions before it
-   came to, less its lower bound, times the element size, in 16 bits. */
+   came to, less its lower bound, times the element size, in a machine word. */
 static void describe(AD *ad, const DimCall *call)
 {
     unsigned dim;
-    u16 adjustment = 0;
+    uword adjustment = 0;
+    unsigned rank_and_features = (unsigned short)call->rank_and_features;
 
-    ad->dims = call->rank_and_features & 0xFF;
-    ad->features = call->rank_and_features >> 8;
-    ad->elem = call->element;
+    ad->dims = rank_and_features & 0xFF;
+    ad->features = rank_and_features >> 8;
+    ad->elem = (unsigned short)call->element;
     for (dim = 0; dim < ad->dims; dim++) {
-        int upper = call->bounds[dim].upper, lower = call->bounds[dim].lower;
+        int upper = (short)call->bounds[dim].upper, lower = (short)call->bounds[dim].lower;
 
         if (upper < lower)
             qb_error(BE_SUBSCRIP);
@@ -50,7 +51,7 @@ static void describe(AD *ad, const DimCall *call)
         ad->dm[dim].lbound = lower;
         adjustment = adjustment * ad->dm[dim].count - lower;
     }
-    ad->adjusted = adjustment * ad->elem;
+    ad->adjusted = (uword)(adjustment * ad->elem);
 }
 
 /* A near array's elements, zeroed, in the local heap. */
@@ -135,12 +136,15 @@ static void moved(void *data, int delta)
 {
     LhEntry *entry = lh_entry(data);
     AD *ad = entry->owner;
-    SD *sd = data;
-    unsigned strings;
-    unsigned capacity = entry->size - sizeof(LhEntry) - sizeof(uword);
 
-    for (strings = capacity / sizeof(SD); strings; strings--, sd++)
-        str_owner_moved(sd, delta);
+    if (is_string_array(ad)) {
+        SD *sd = data;
+        unsigned strings;
+        unsigned capacity = entry->size - sizeof(LhEntry) - sizeof(uword);
+
+        for (strings = capacity / sizeof(SD); strings; strings--, sd++)
+            str_owner_moved(sd, delta);
+    }
     ad_near_moved(ad, delta);
 }
 

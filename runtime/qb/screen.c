@@ -25,15 +25,15 @@ void (*screen_set_colors)(int foreground, int background);
    it. */
 static void arguments(const int *block, int *values, unsigned slots)
 {
-    unsigned count = block[0], word = count, at;
+    unsigned count = (unsigned short)block[0], word = count, at;
 
     for (at = 0; at < slots; at++)
         values[at] = ABSENT;
     for (at = 0; word > 0 && at < slots; at++) {
-        int present = block[word--];
+        int present = (short)block[word--];
 
         if (present) {
-            values[at] = block[word--];
+            values[at] = (short)block[word--];
             if (values[at] < 0)
                 qb_error(BE_ILLFUN);
         }

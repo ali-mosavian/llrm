@@ -180,7 +180,7 @@ void file_close(const int *channels, unsigned count)
         return;
     }
     while (count--) {
-        fdb = fdb_of(*channels++);
+        fdb = fdb_of((short)*channels++);
         if (fdb)
             close_fdb(fdb);
     }
