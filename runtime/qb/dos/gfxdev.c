@@ -633,7 +633,8 @@ static void (*const dots[KINDS][2])(const GdFill *fill, unsigned x, unsigned y) 
     { packed2_dot, packed2_dot }
 };
 
-/* Lines: the loops of fill.asm, one for each kind of mode, with Bresenham's terms here.  The terms are kept in one static
+/* WORKAROUND M32-FRAMEBASE (remove when target-neutral's fix lands).
+   Lines: the loops of fill.asm, one for each kind of mode, with Bresenham's terms here.  The terms are kept in one static
    structure: the m32 compiler took the address of a local one with a 16-bit base register in these functions
    (`lea eax, [bx-52]`). */
 static FillLine line;

@@ -43,7 +43,8 @@ static unsigned sprite_bytes(unsigned mode, unsigned w, unsigned h)
     return h * planes * ((w * bits + 7) / 8);
 }
 
-/* The box under test, in globals: the m32 compiler gets a function of six or more arguments wrong (see m32-lea-workaround). */
+/* WORKAROUND M32-FRAMEBASE (remove when target-neutral's fix lands).
+   The box under test, in globals: the m32 compiler gets a function of six or more arguments wrong. */
 static unsigned t_mode, t_bx, t_by, t_w, t_h, t_colors;
 
 static void pack_ref(unsigned char *out)
