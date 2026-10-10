@@ -15,7 +15,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
-use llrm_support::hash::HashMap;
 
 use crate::cfg::id;
 
@@ -374,6 +373,7 @@ pub fn live(function: &Function) -> Liveness {
 #[cfg(test)]
 pub(crate) fn live_dense(function: &Function) -> Liveness {
     use llrm_support::bits::Bits;
+    use llrm_support::hash::HashMap;
     let layout = function.layout();
     let mut index: HashMap<ValueId, usize> = HashMap::default();
     let mut values: Vec<ValueId> = Vec::new();
