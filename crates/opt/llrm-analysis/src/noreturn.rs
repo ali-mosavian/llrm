@@ -52,7 +52,7 @@ pub fn inferred(
         .filter(|(id, _, function)| bodies.contains(id) && !function.is_declaration())
         .map(|(id, _, function)| (id, &module.context, declarations, function))
         .collect();
-    fixed(&bodies, |_, proven| proven.clone())
+    fixed(&bodies, |_, target| Some(target))
 }
 
 /// `inferred` over a program, `declarations` each module's: a declaration
@@ -70,29 +70,60 @@ pub fn inferred_in(
             Some(((at, id), &module.context, declarations[at], function))
         })
         .collect();
-    fixed(&bodies, |(at, _), proven| program.local(at, proven))
+    fixed(&bodies, |(at, _), target| program.definition(at, target))
 }
 
 /// The greatest set of `bodies` none of which returns, where a call stops
-/// when `local` of the set so far names its callee.
+/// when its callee is defined by a body of the set so far (`definition` names
+/// it). A body leaves the set when it can return, and only its callers are
+/// looked at again: gcc's ipa-pure-const propagates along the call graph so,
+/// not by working every body out again until none changes (a chain of N
+/// callees took N rounds of N bodies).
 fn fixed<K: Copy + Ord>(
     bodies: &[(K, &Context, &Declarations, &Function)],
-    local: impl Fn(K, &BTreeSet<K>) -> BTreeSet<GlobalId>,
+    definition: impl Fn(K, GlobalId) -> Option<K>,
 ) -> BTreeSet<K> {
-    let mut proven = bodies.iter().map(|&(key, ..)| key).collect::<BTreeSet<_>>();
-    loop {
-        let found = bodies
-            .iter()
-            .filter(|&&(key, context, declarations, function)| {
-                _cannot_return(function, &terminal_sites(context, declarations, function, &local(key, &proven)))
-            })
-            .map(|&(key, ..)| key)
-            .collect::<BTreeSet<_>>();
-        if found == proven {
-            return proven;
+    let index: BTreeMap<K, usize> = bodies.iter().enumerate().map(|(at, &(key, ..))| (key, at)).collect();
+    // What each body calls directly, and the body of the set that defines it.
+    let edges: Vec<Vec<(GlobalId, Option<usize>)>> = bodies
+        .iter()
+        .map(|&(key, context, _, function)| {
+            let mut seen = BTreeSet::new();
+            function
+                .walk()
+                .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Call(_)))
+                .filter_map(|(_, inst)| effects::callee(context, function, inst))
+                .filter(|&target| seen.insert(target))
+                .map(|target| (target, definition(key, target).and_then(|one| index.get(&one).copied())))
+                .collect()
+        })
+        .collect();
+    let mut callers: Vec<Vec<usize>> = vec![Vec::new(); bodies.len()];
+    for (at, calls) in edges.iter().enumerate() {
+        for &(_, defined) in calls {
+            if let Some(callee) = defined {
+                callers[callee].push(at);
+            }
         }
-        proven = found;
     }
+    let mut proven = vec![true; bodies.len()];
+    let mut work: Vec<usize> = (0..bodies.len()).collect();
+    while let Some(at) = work.pop() {
+        if !proven[at] {
+            continue;
+        }
+        let (_, context, declarations, function) = bodies[at];
+        let stopped: BTreeSet<GlobalId> = edges[at]
+            .iter()
+            .filter(|(_, defined)| defined.is_some_and(|one| proven[one]))
+            .map(|&(target, _)| target)
+            .collect();
+        if !_cannot_return(function, &terminal_sites(context, declarations, function, &stopped)) {
+            proven[at] = false;
+            work.extend(callers[at].iter().copied().filter(|&caller| proven[caller]));
+        }
+    }
+    bodies.iter().zip(&proven).filter(|&(_, &kept)| kept).map(|(&(key, ..), _)| key).collect()
 }
 
 /// Direct calls whose callee cannot return: named in `noreturn`, or stated

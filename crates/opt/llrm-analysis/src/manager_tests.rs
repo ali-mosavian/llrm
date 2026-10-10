@@ -970,3 +970,42 @@ entry:
     assert_eq!(*after, Shape::of(module.global(f).function().unwrap()), "the shape from before the splice");
     assert_eq!(after.loops.len(), 1);
 }
+
+/// The declarations every function analysis reads are checked, after a pass
+/// over one body, against that body alone (`body_edited`): scanning every
+/// global after each of N bodies is N squared (chain, `mir interprocedural` own
+/// 101 -> 384 -> 1,487 M at N=128, 256, 512).
+#[test]
+fn test_after_one_body_is_edited_only_its_declaration_is_looked_at() {
+    let mut module = parsed(
+        "define void @a() {
+entry:
+  ret void
+}
+
+define void @b() {
+entry:
+  ret void
+}
+",
+    );
+    let (a, b) = (module.named("a").unwrap(), module.named("b").unwrap());
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let nounwind = |outer: &Outer, id: llrm_mir::context::GlobalId| {
+        llrm_mir::facts::Facts::of(&outer.globals[id.0 as usize].function().expect("a function").attrs)
+            .contains(llrm_mir::facts::Fact::NoUnwind)
+    };
+    let first = analyses.outer(&module);
+    assert!(!nounwind(&first, b));
+    // The body reported is looked at: its new attribute is in the declarations.
+    module.function_mut("b").unwrap().1.attrs.extend(llrm_mir::facts::Fact::NoUnwind.attribute());
+    analyses.body_edited(b, &PreservedAnalyses::none());
+    assert!(nounwind(&analyses.outer(&module), b), "the edited body's declaration was not read again");
+    // One not reported is not: a pass over `b` says nothing of `a`.
+    module.function_mut("a").unwrap().1.attrs.extend(llrm_mir::facts::Fact::NoUnwind.attribute());
+    analyses.body_edited(b, &PreservedAnalyses::none());
+    assert!(!nounwind(&analyses.outer(&module), a), "every global was looked at after one body's edit");
+    // Anything else dropped (`invalidate`) looks at all.
+    analyses.invalidate(&PreservedAnalyses::none());
+    assert!(nounwind(&analyses.outer(&module), a));
+}

@@ -11,6 +11,7 @@
 //! and recomputing every analysis a pass claims to have preserved.
 
 use std::any::{Any, TypeId};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use crate::context::{Context, GlobalId};
@@ -450,6 +451,7 @@ impl ModuleAnalysis for TypeAncestry {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
+        analyses.metadata_open = false;
         analyses.memo::<TbaaSeen>().0 = Some(module.metadata.clone());
         crate::tbaa::Tbaa::of(&module.metadata)
     }
@@ -459,7 +461,18 @@ impl ModuleAnalysis for TypeAncestry {
         analyses: &mut ModuleAnalyses,
         _: &Self::Result,
     ) -> bool {
-        analyses.memo::<TbaaSeen>().0.as_ref().is_some_and(|then| *then == module.metadata)
+        // Function passes add metadata nodes and change none: where only bodies
+        // were edited the length says.
+        let appended_only = !analyses.metadata_open;
+        analyses
+            .memo::<TbaaSeen>()
+            .0
+            .as_ref()
+            .is_some_and(
+                |then| if appended_only { then.len() == module.metadata.len() } else { *then == module.metadata },
+            )
+            .then(|| analyses.metadata_open = false)
+            .is_some()
     }
 }
 
@@ -472,18 +485,26 @@ impl ModuleAnalysis for Declarations {
     const NAME: &'static str = "declarations";
     fn run(
         module: &Module,
-        _: &mut ModuleAnalyses,
+        analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
+        analyses.declarations_verified();
         module.declarations()
     }
 
     fn unchanged(
         module: &Module,
-        _: &mut ModuleAnalyses,
+        analyses: &mut ModuleAnalyses,
         previous: &Self::Result,
     ) -> bool {
-        module.globals.len() == previous.len()
-            && module.globals.iter().zip(previous).all(|(global, declared)| global.declares(declared))
+        let same = module.globals.len() == previous.len()
+            && match analyses.declarations_edits() {
+                Some(edited) => edited.iter().all(|id| module.global(*id).declares(&previous[id.0 as usize])),
+                None => module.globals.iter().zip(previous).all(|(global, declared)| global.declares(declared)),
+            };
+        if same {
+            analyses.declarations_verified();
+        }
+        same
     }
 }
 
@@ -1171,6 +1192,13 @@ pub struct ModuleAnalyses {
     dropped: HashMap<TypeId, Rc<dyn Any>>,
     outer: Option<Rc<Outer>>,
     functions: HashMap<GlobalId, Analyses>,
+    /// The bodies reported edited since the declarations were last checked
+    /// against the module, and whether anything else may have changed them
+    /// (`invalidate`): a pass that edits bodies says which, and the
+    /// declarations of the rest then stand without a look at each.
+    edited: BTreeSet<GlobalId>,
+    declarations_open: bool,
+    metadata_open: bool,
     /// What an analysis keeps for its next run, by its type: the working of an
     /// update that reuses the last.
     memos: HashMap<TypeId, Box<dyn Any>>,
@@ -1188,6 +1216,9 @@ impl ModuleAnalyses {
             dropped: HashMap::default(),
             outer: None,
             functions: HashMap::default(),
+            edited: BTreeSet::new(),
+            declarations_open: true,
+            metadata_open: true,
             memos: HashMap::default(),
             scratch: false,
         }
@@ -1306,6 +1337,19 @@ impl ModuleAnalyses {
         &mut self,
         preserved: &PreservedAnalyses,
     ) {
+        self.declarations_open = true;
+        self.metadata_open = true;
+        self.invalidate_bodies(preserved);
+    }
+
+    /// `invalidate` for a pass that edited only bodies, each reported to
+    /// `changed` (or `body_edited`) and none of them touching the metadata
+    /// or another global's declaration: the declarations and the
+    /// metadata are checked against those bodies alone.
+    pub fn invalidate_bodies(
+        &mut self,
+        preserved: &PreservedAnalyses,
+    ) {
         let gone: Vec<TypeId> = self.results.keys().filter(|one| !preserved.keeps(**one)).copied().collect();
         for one in gone {
             let (_, result) = self.results.remove(&one).expect("held");
@@ -1369,6 +1413,29 @@ impl ModuleAnalyses {
         id: GlobalId,
     ) {
         self.functions.remove(&id);
+        self.edited.insert(id);
+    }
+
+    /// Body `id` was edited by a function pass over it alone, which left
+    /// `preserved`.
+    pub fn body_edited(
+        &mut self,
+        id: GlobalId,
+        preserved: &PreservedAnalyses,
+    ) {
+        self.edited.insert(id);
+        self.invalidate_bodies(preserved);
+    }
+
+    /// The bodies the declarations are to be checked against, or `None` where
+    /// anything may have changed.
+    fn declarations_edits(&self) -> Option<&BTreeSet<GlobalId>> {
+        (!self.declarations_open).then_some(&self.edited)
+    }
+
+    fn declarations_verified(&mut self) {
+        self.declarations_open = false;
+        self.edited.clear();
     }
 
     /// What a function analysis reads of `module`: the same proxy as last
@@ -1387,6 +1454,16 @@ impl ModuleAnalyses {
         .into_iter()
         .chain(self.required.clone());
         let modules: HashMap<TypeId, Rc<dyn Any>> = every.map(|kind| (kind.id, self.computed(kind, module))).collect();
+        // The declarations and the metadata are results among these: where
+        // every result is the one the proxy holds, so are they, and
+        // neither is read again.
+        if let Some(old) = self.outer.as_ref().filter(|old| {
+            Rc::ptr_eq(&old.program, &self.program)
+                && old.modules.len() == modules.len()
+                && modules.iter().all(|(key, one)| old.modules.get(key).is_some_and(|two| Rc::ptr_eq(one, two)))
+        }) {
+            return Rc::clone(old);
+        }
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()])
             .downcast::<Vec<GlobalValue>>()
             .expect("keyed by its type");
