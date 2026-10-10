@@ -92,7 +92,7 @@ fn slot(mem: &Mem) -> Option<i64> {
     let addr = mem.addr?;
     (addr.space == Space::Frame
         && addr.base == Register::None
-        && mem.through == Register::BP
+        && mem.through == ir::FRAME
         && mem.base.is_none()
         && mem.index.is_none()
         && mem.index_through == Register::None)
@@ -100,7 +100,7 @@ fn slot(mem: &Mem) -> Option<i64> {
 }
 
 fn is_bp(register: Register) -> bool {
-    register != Register::None && ir::root(register) == ir::root(Register::BP)
+    register != Register::None && crate::backend::registerinfo::is_frame(register)
 }
 
 /// The word slot `mem` names, when it is exactly one.

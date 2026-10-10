@@ -371,7 +371,10 @@ fn rewritten(
         return None;
     }
     // A 32-bit EBP base selects SS where a 16-bit cell's register did not.
-    if address.through == Register::EBP && addr.segment == Register::None {
+    if crate::backend::registerinfo::is_frame(address.through)
+        && crate::backend::registerinfo::bytes(address.through) == Some(4)
+        && addr.segment == Register::None
+    {
         return None;
     }
     let widened = Mem {
