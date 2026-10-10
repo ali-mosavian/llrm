@@ -1,4 +1,5 @@
 """scaling.py's instrument: a known-quadratic compiler must read as slope 2, and the generators must not collapse."""
+import os
 import subprocess
 import sys
 
@@ -100,3 +101,27 @@ def test_a_measured_command_reads_the_same_count_every_run(tmp_path):
     command = stand_in("300 * n * n")("python", "O2", source)
     counts = [scaling.sample(command)[0] for _ in range(40)]
     assert max(counts) / min(counts) < 1.001, (min(counts), max(counts))
+
+
+def test_the_budget_of_a_run_is_its_cpu_not_the_wall_clock_so_load_cannot_break_it():
+    """A compile of 3 s timed out at `timeout=120` wall seconds in the gate's measure under a load average near 100. The budget is CPU
+    seconds, limited in the child: a run that waits longer than the budget on the wall passes, a CPU-bound hang past it stops."""
+    import subprocess
+    import time
+
+    waits = [sys.executable, "-c", "import time; time.sleep(2.5)"]
+    assert scaling.sample(waits, timeout=1)[0] > 0, "2.5 s of waiting passed a 1 s wall budget"
+    spins = [sys.executable, "-c", "while True: pass"]
+    started = time.time()
+    with pytest.raises(TimeoutError, match="CPU seconds"):
+        scaling.sample(spins, timeout=1)
+    assert time.time() - started < 20, "a spinning run was not stopped by its CPU limit"
+    # The machine busy: twice as many spinning processes as CPUs, and a run needing about a CPU second still passes.
+    busy = [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(2 * (os.cpu_count() or 4))]
+    try:
+        work = [sys.executable, "-c", "print(sum(range(8 * 10**6)))"]
+        assert scaling.sample(work, timeout=30)[0] > 0
+    finally:
+        for one in busy:
+            one.kill()
+            one.wait()
