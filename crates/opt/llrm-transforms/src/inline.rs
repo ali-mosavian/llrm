@@ -420,9 +420,9 @@ pub fn size_of(
         .flat_map(|&block| llrm_analysis::liveness::live_points(body, &found, block))
         // An intrinsic, an inline block, is code in line: it keeps every
         // register but those it names.
-        .filter(|(inst, _, _)| {
-            matches!(body.instruction(*inst).opcode, Opcode::Call(_))
-                && !callee(&module.context, body, *inst).is_some_and(|id| {
+        .filter(|point| {
+            matches!(body.instruction(point.inst).opcode, Opcode::Call(_))
+                && !callee(&module.context, body, point.inst).is_some_and(|id| {
                     module
                         .global(id)
                         .name
@@ -430,7 +430,7 @@ pub fn size_of(
                         .is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
                 })
         })
-        .map(|(_, _, across)| across.len() as i64)
+        .map(|point| point.across.len() as i64)
         .sum::<i64>()
         * costs.store;
     work(module, body, callees, costs).map(|work| work + calls + kept)

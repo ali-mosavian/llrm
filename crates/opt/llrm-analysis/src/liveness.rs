@@ -138,13 +138,20 @@ pub fn pressure_of(
     peak
 }
 
+/// An instruction, the values live before it and those live across it.
+pub struct LivePoint {
+    pub inst: InstId,
+    pub before: BTreeSet<ValueId>,
+    pub across: BTreeSet<ValueId>,
+}
+
 /// The values live before each instruction of `block` but its phis, and
 /// those live across it, in order.
 pub fn live_points(
     function: &Function,
     found: &Liveness,
     block: BlockId,
-) -> Vec<(InstId, BTreeSet<ValueId>, BTreeSet<ValueId>)> {
+) -> Vec<LivePoint> {
     let mut alive = found.live_out[&id(block)].clone();
     let mut points = Vec::new();
     for &inst in function.block(block).instructions().iter().rev() {
@@ -157,7 +164,7 @@ pub fn live_points(
         }
         let across = alive.clone();
         alive.extend(reads(op));
-        points.push((inst, alive.clone(), across));
+        points.push(LivePoint { inst, before: alive.clone(), across });
     }
     points.reverse();
     points
@@ -210,7 +217,7 @@ pub fn pressure_points(
 ) -> Vec<(InstId, usize)> {
     live_points(function, found, block)
         .into_iter()
-        .map(|(inst, before, _)| (inst, before.iter().filter(|&&one| counted(one)).count()))
+        .map(|point| (point.inst, point.before.iter().filter(|&&one| counted(one)).count()))
         .collect()
 }
 
