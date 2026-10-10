@@ -13,15 +13,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::cfg;
-use llrm_analysis::liveness::{self, Liveness};
+use llrm_analysis::liveness::{self, LivePoint, Liveness};
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::{Dense, IdSet};
+use llrm_mir::dense::{Dense, IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::Type;
+use llrm_support::hash::SparseIdMap;
 
 /// How many integer values the target holds in registers, and how many of
 /// them a call leaves; none leaves pressure unpriced.
@@ -805,62 +806,188 @@ pub fn traffic(
 ) -> BTreeMap<ValueId, Traffic> {
     #[cfg(test)]
     TRAFFIC.with(|count| count.set(count.get() + 1));
-    let mut found = BTreeMap::<ValueId, Traffic>::new();
-    let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
-    let mut makers = BTreeMap::<ValueId, usize>::new();
-    for &block in function.layout() {
-        let each = often(block);
-        for &inst in function.block(block).instructions() {
-            let instruction = function.instruction(inst);
-            let result = instruction.result;
-            if let Some(value) = result {
-                *makers.entry(value).or_default() += 1;
-            }
-            if !kept(inst) {
-                continue;
-            }
-            let own = result.map(|value| _cell(cells, value));
-            if instruction.opcode == Opcode::Phi {
-                // Each edge from another cell copies into this one.
-                for pair in instruction.operands.chunks(2) {
-                    let from = match pair[1] {
-                        Operand::Block(from) => often(from),
-                        _ => each,
-                    };
-                    match pair[0] {
-                        Operand::Value(value) if Some(_cell(cells, value)) == own => {}
-                        Operand::Value(value) => {
-                            found.entry(_cell(cells, value)).or_default().loads += from;
-                            found.entry(own.expect("a phi's value")).or_default().stores += from;
-                        }
-                        _ => found.entry(own.expect("a phi's value")).or_default().stores += from,
-                    }
+    TrafficBase::of(function, frequency, &|value| cells.get(&value).copied(), kept).finished(function, costs, words)
+}
+
+/// Every instruction's traffic added up, before the stores are made words and
+/// a lone maker's rebuild is priced: what a loop's own instructions are taken
+/// out of (`without`), so that each loop of a function does not add up the
+/// function again.
+#[derive(Clone, Debug)]
+pub struct TrafficBase {
+    found: IdMap<ValueId, Traffic>,
+    makers: IdMap<ValueId, usize>,
+}
+
+impl TrafficBase {
+    /// The traffic of the instructions `kept` says stay.
+    pub fn of(
+        function: &Function,
+        frequency: &BTreeMap<i64, i64>,
+        cell: &dyn Fn(ValueId) -> Option<ValueId>,
+        kept: &dyn Fn(InstId) -> bool,
+    ) -> Self {
+        let mut base = Self { found: IdMap::new(), makers: IdMap::new() };
+        let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
+        for &block in function.layout() {
+            let each = often(block);
+            for &inst in function.block(block).instructions() {
+                if let Some(value) = function.instruction(inst).result {
+                    *base.makers.get_or_insert_with(value, || 0) += 1;
                 }
-                continue;
-            }
-            if let Some(value) = result
-                && cells.contains_key(&value)
-            {
-                found.entry(_cell(cells, value)).or_default().updates += each;
-                continue;
-            }
-            for operand in &instruction.operands {
-                if let Operand::Value(value) = *operand {
-                    found.entry(_cell(cells, value)).or_default().loads += each;
+                if kept(inst) {
+                    _add(&mut base.found, function, inst, each, &often, cell, 1);
                 }
             }
-            if let Some(cell) = own {
-                found.entry(cell).or_default().stores += each;
+        }
+        base
+    }
+
+    /// These instructions' traffic taken out: what `of` finds when they are not
+    /// kept. Only the instructions' own cells are touched, so a loop pays for
+    /// its size, not the function's.
+    pub fn without(
+        self: &std::rc::Rc<Self>,
+        function: &Function,
+        frequency: &BTreeMap<i64, i64>,
+        cell: &dyn Fn(ValueId) -> Option<ValueId>,
+        gone: impl IntoIterator<Item = InstId>,
+    ) -> TrafficLess {
+        let mut less = TrafficLess { base: std::rc::Rc::clone(self), gone: SparseIdMap::default() };
+        let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
+        for inst in gone {
+            if let Some(block) = function.parent(inst) {
+                _add(&mut less.gone, function, inst, often(block), &often, cell, -1);
             }
         }
+        less
     }
-    for (value, one) in &mut found {
-        one.stores *= words(*value);
-        if makers.get(value) == Some(&1) {
-            one.rebuild = _rebuild(function, *value, costs);
+
+    fn priced(
+        &self,
+        function: &Function,
+        costs: &OperationCosts,
+        words: &dyn Fn(ValueId) -> i64,
+        value: ValueId,
+        mut one: Traffic,
+    ) -> Traffic {
+        one.stores *= words(value);
+        if self.makers.get(&value) == Some(&1) {
+            one.rebuild = _rebuild(function, value, costs);
+        }
+        one
+    }
+
+    /// The traffic priced: stores in words, and a rebuild where one instruction
+    /// makes the value.
+    pub fn finished(
+        &self,
+        function: &Function,
+        costs: &OperationCosts,
+        words: &dyn Fn(ValueId) -> i64,
+    ) -> BTreeMap<ValueId, Traffic> {
+        self.found.iter().map(|(value, one)| (value, self.priced(function, costs, words, value, *one))).collect()
+    }
+}
+
+/// Where a value's traffic is counted.
+trait Tally {
+    fn at(
+        &mut self,
+        value: ValueId,
+    ) -> &mut Traffic;
+}
+
+impl Tally for IdMap<ValueId, Traffic> {
+    fn at(
+        &mut self,
+        value: ValueId,
+    ) -> &mut Traffic {
+        self.get_or_insert_with(value, Default::default)
+    }
+}
+
+impl Tally for SparseIdMap<ValueId, Traffic> {
+    fn at(
+        &mut self,
+        value: ValueId,
+    ) -> &mut Traffic {
+        self.entry(value).or_default()
+    }
+}
+
+/// `inst`'s traffic, `sign` times, added to `found` by its cell.
+fn _add(
+    found: &mut impl Tally,
+    function: &Function,
+    inst: InstId,
+    each: i64,
+    often: &dyn Fn(BlockId) -> i64,
+    cell: &dyn Fn(ValueId) -> Option<ValueId>,
+    sign: i64,
+) {
+    let instruction = function.instruction(inst);
+    let of = |value: ValueId| cell(value).unwrap_or(value);
+    let own = instruction.result.map(of);
+    if instruction.opcode == Opcode::Phi {
+        // Each edge from another cell copies into this one.
+        for pair in instruction.operands.chunks(2) {
+            let from = match pair[1] {
+                Operand::Block(from) => often(from),
+                _ => each,
+            } * sign;
+            match pair[0] {
+                Operand::Value(value) if Some(of(value)) == own => {}
+                Operand::Value(value) => {
+                    found.at(of(value)).loads += from;
+                    found.at(own.expect("a phi's value")).stores += from;
+                }
+                _ => found.at(own.expect("a phi's value")).stores += from,
+            }
+        }
+        return;
+    }
+    if let Some(value) = instruction.result
+        && cell(value).is_some()
+    {
+        found.at(of(value)).updates += each * sign;
+        return;
+    }
+    for operand in &instruction.operands {
+        if let Operand::Value(value) = *operand {
+            found.at(of(value)).loads += each * sign;
         }
     }
-    found
+    if let Some(cell) = own {
+        found.at(cell).stores += each * sign;
+    }
+}
+
+/// The traffic of a function less some instructions', each value's priced when
+/// asked: a cell whose traffic all went is one they left alone.
+pub struct TrafficLess {
+    base: std::rc::Rc<TrafficBase>,
+    gone: SparseIdMap<ValueId, Traffic>,
+}
+
+impl TrafficLess {
+    pub fn of(
+        &self,
+        function: &Function,
+        costs: &OperationCosts,
+        words: &dyn Fn(ValueId) -> i64,
+        value: ValueId,
+    ) -> Traffic {
+        let mut one = self.base.found.get(&value).copied().unwrap_or_default();
+        if let Some(gone) = self.gone.get(&value) {
+            (one.stores, one.updates, one.loads) =
+                (one.stores + gone.stores, one.updates + gone.updates, one.loads + gone.loads);
+        }
+        if (one.stores, one.updates, one.loads) == (0, 0, 0) {
+            return Traffic::default();
+        }
+        self.base.priced(function, costs, words, value, one)
+    }
 }
 
 /// What making `value` again costs, where one instruction does from
@@ -887,7 +1014,9 @@ fn _rebuild(
 
 /// A point of an instruction: the cells `counted` says live before it, in
 /// the target's registers, and for a call, those live across it, in the
-/// registers `across` says it keeps.
+/// registers `across` says it keeps. The forecast over points, which the
+/// sweep (`Run`) is held to.
+#[cfg(test)]
 pub struct Site {
     pub inst: InstId,
     pub before: Point<ValueId>,
@@ -900,11 +1029,13 @@ pub struct Site {
     pub addresses: Point<ValueId>,
 }
 
-/// Each instruction's site in `block` but its phis, in order.
+/// Each instruction's site in a block but its phis, in order, from the values
+/// live before and across each.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub fn sites(
     function: &Function,
-    found: &Liveness,
-    block: BlockId,
+    points: &[LivePoint],
     room: Room,
     across: &dyn Fn(InstId) -> i64,
     transient: &dyn Fn(InstId, &BTreeSet<ValueId>) -> i64,
@@ -914,43 +1045,30 @@ pub fn sites(
     addressed: &dyn Fn(ValueId) -> bool,
 ) -> Vec<Site> {
     let viewed = |one: ValueId| room.segments > 0 && segment(one);
-    let residents = |live: BTreeSet<ValueId>| {
-        live.into_iter()
-            .filter(|&one| counted(one) && !viewed(one))
-            .map(|one| _cell(cells, one))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+    // The cells of the live values that pass `keep`, in order and once each:
+    // sorted in a vector, where a tree of them was most of a loop's model.
+    let cells_of = |live: &BTreeSet<ValueId>, keep: &dyn Fn(ValueId) -> bool| -> Vec<ValueId> {
+        let mut found: Vec<ValueId> =
+            live.iter().copied().filter(|&one| keep(one)).map(|one| _cell(cells, one)).collect();
+        found.sort_unstable();
+        found.dedup();
+        found
     };
-    let held = |live: &BTreeSet<ValueId>| {
-        live.iter()
-            .copied()
-            .filter(|&one| counted(one) && viewed(one))
-            .map(|one| _cell(cells, one))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    };
-    let routed = |live: &BTreeSet<ValueId>| {
-        live.iter()
-            .copied()
-            .filter(|&one| counted(one) && !viewed(one) && addressed(one))
-            .map(|one| _cell(cells, one))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    };
-    liveness::live_points(function, found, block)
-        .into_iter()
+    let residents = |live| cells_of(live, &|one| counted(one) && !viewed(one));
+    let held = |live| cells_of(live, &|one| counted(one) && viewed(one));
+    let routed = |live| cells_of(live, &|one| counted(one) && !viewed(one) && addressed(one));
+    points
+        .iter()
+        .map(|point| (point.inst, &point.before, &point.across))
         .map(|(inst, before, past)| Site {
             inst,
             addresses: Point {
                 registers: room.addresses,
-                residents: if room.addresses > 0 { routed(&before) } else { Vec::new() },
+                residents: if room.addresses > 0 { routed(before) } else { Vec::new() },
             },
-            segments: Point { registers: room.segments, residents: held(&before) },
+            segments: Point { registers: room.segments, residents: held(before) },
             before: Point {
-                registers: room.registers - transient(inst, &before) - copied(function, inst, &past, room, counted),
+                registers: room.registers - transient(inst, before) - copied(function, inst, past, room, counted),
                 residents: residents(before),
             },
             across: calls(function, inst).then(|| Point { registers: across(inst), residents: residents(past) }),
@@ -958,6 +1076,7 @@ pub fn sites(
         .collect()
 }
 
+#[cfg(test)]
 impl Site {
     /// Its points, in order.
     pub fn points(self) -> impl Iterator<Item = Point<ValueId>> {
@@ -981,6 +1100,127 @@ pub struct Pressure {
     /// Whether each pointer an access is made through is folded: asked of the
     /// function once.
     folds: Folds,
+    /// What is live before and across each instruction of a block, worked out
+    /// when first asked and kept for every loop that asks of the block.
+    points: BlockPoints,
+    /// What changes in the live set across each instruction of a block, and
+    /// what changes from one block's end to another's start: the same.
+    stepped: Stepped,
+}
+
+/// The live sets of each block's instructions: a cache of what `found` says,
+/// so two `Pressure`s of one function are equal whatever was asked.
+#[derive(Clone, Default)]
+struct BlockPoints(std::rc::Rc<std::cell::RefCell<BTreeMap<i64, std::rc::Rc<Vec<LivePoint>>>>>);
+
+impl PartialEq for BlockPoints {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for BlockPoints {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(formatter, "BlockPoints({} blocks)", self.0.borrow().len())
+    }
+}
+
+/// The steps of each block, and the cells that change between two blocks run
+/// one after the other: asked for by every loop around them, found once.
+#[derive(Clone, Default)]
+struct Stepped {
+    steps: std::rc::Rc<std::cell::RefCell<BTreeMap<i64, std::rc::Rc<liveness::Steps>>>>,
+    moves: std::rc::Rc<std::cell::RefCell<BTreeMap<(i64, i64), std::rc::Rc<Moves>>>>,
+}
+
+/// What stops being live, and what starts, between the end of one block and the
+/// start of the next.
+struct Moves {
+    leave: Vec<ValueId>,
+    enter: Vec<ValueId>,
+}
+
+impl PartialEq for Stepped {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for Stepped {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(formatter, "Stepped({} blocks)", self.steps.borrow().len())
+    }
+}
+
+impl Pressure {
+    /// `liveness::live_steps` of `block`, worked out once.
+    fn steps(
+        &self,
+        function: &Function,
+        block: BlockId,
+    ) -> std::rc::Rc<liveness::Steps> {
+        let at = cfg::id(block);
+        if let Some(found) = self.stepped.steps.borrow().get(&at) {
+            return std::rc::Rc::clone(found);
+        }
+        let found = std::rc::Rc::new(liveness::live_steps(function, &self.found, block));
+        self.stepped.steps.borrow_mut().insert(at, std::rc::Rc::clone(&found));
+        found
+    }
+
+    /// What changes in the live set going from the end of `from` to the start
+    /// of `to`.
+    fn moves(
+        &self,
+        function: &Function,
+        from: BlockId,
+        to: BlockId,
+    ) -> std::rc::Rc<Moves> {
+        let key = (cfg::id(from), cfg::id(to));
+        if let Some(found) = self.stepped.moves.borrow().get(&key) {
+            return std::rc::Rc::clone(found);
+        }
+        let out = &self.found.live_out[&key.0];
+        let first = &self.steps(function, to).first;
+        let (mut leave, mut enter) = (Vec::new(), Vec::new());
+        let (mut ahead, mut behind) = (out.iter().copied().peekable(), first.iter().copied().peekable());
+        loop {
+            match (ahead.peek(), behind.peek()) {
+                (Some(&gone), Some(&new)) if gone == new => {
+                    ahead.next();
+                    behind.next();
+                }
+                (Some(&gone), Some(&new)) if gone < new => {
+                    leave.push(gone);
+                    ahead.next();
+                }
+                (_, Some(&new)) => {
+                    enter.push(new);
+                    behind.next();
+                }
+                (Some(&gone), None) => {
+                    leave.push(gone);
+                    ahead.next();
+                }
+                (None, None) => break,
+            }
+        }
+        let found = std::rc::Rc::new(Moves { leave, enter });
+        self.stepped.moves.borrow_mut().insert(key, std::rc::Rc::clone(&found));
+        found
+    }
 }
 
 impl Pressure {
@@ -1004,7 +1244,25 @@ impl Pressure {
                 .collect(),
             addressed: addressed.into_iter().collect(),
             folds,
+            points: BlockPoints::default(),
+            stepped: Stepped::default(),
         }
+    }
+
+    /// What is live before and across each instruction of `block` but its phis,
+    /// as `liveness::live_points` has it, worked out once.
+    pub fn points(
+        &self,
+        function: &Function,
+        block: BlockId,
+    ) -> std::rc::Rc<Vec<LivePoint>> {
+        let at = cfg::id(block);
+        if let Some(found) = self.points.0.borrow().get(&at) {
+            return std::rc::Rc::clone(found);
+        }
+        let found = std::rc::Rc::new(liveness::live_points(function, &self.found, block));
+        self.points.0.borrow_mut().insert(at, std::rc::Rc::clone(&found));
+        found
     }
 }
 
@@ -1078,6 +1336,7 @@ impl<'a> View<'a> {
     }
 
     /// Each instruction's site in `block`, without the values `hide` names.
+    #[cfg(test)]
     pub fn sites(
         &self,
         block: BlockId,
@@ -1086,8 +1345,7 @@ impl<'a> View<'a> {
         let (context, layout, function, room) = (self.context, self.layout, self.function, self.room);
         sites(
             function,
-            &self.pressure.found,
-            block,
+            &self.pressure.points(function, block),
             room,
             self.across,
             &|inst, live| {
@@ -1104,6 +1362,72 @@ impl<'a> View<'a> {
             &|value| segment_view(context, layout, room.spaces, function, value),
             &|value| self.pressure.addressed.contains(&value),
         )
+    }
+
+    /// The sweep of `blocks`, in order, without the values `hide` names: what
+    /// changes at each point, found from the blocks' steps and not from what is
+    /// live at each.
+    pub fn run(
+        &self,
+        blocks: &[BlockId],
+        hide: &dyn Fn(ValueId) -> bool,
+    ) -> Run {
+        let (context, layout, function, room) = (self.context, self.layout, self.function, self.room);
+        let counted = |value: ValueId| self.pressure.counted.contains(&value) && !hide(value);
+        let mut folded = |value: ValueId| {
+            if self.pressure.folds.asked.contains(&value) {
+                self.pressure.folds.yes.contains(&value)
+            } else {
+                folded_in(context, function, value, room.index_scales)
+            }
+        };
+        let mut classes: llrm_support::hash::HashMap<ValueId, Option<Cell>> = Default::default();
+        let mut class = |value: ValueId| {
+            *classes
+                .entry(value)
+                .or_insert_with(
+                    || {
+                        let viewed = room.segments > 0 && segment_view(context, layout, room.spaces, function, value);
+                        let counted = counted(value);
+                        let member = [counted && !viewed, counted && viewed, false];
+                        (member[0] || member[1]).then(|| Cell { cell: _cell(&self.pressure.cells, value), member })
+                    },
+                )
+        };
+        let mut out = Vec::new();
+        let mut previous = None::<BlockId>;
+        for &block in blocks {
+            let steps = self.pressure.steps(function, block);
+            let points = self.pressure.points(function, block);
+            let (leave, enter) = match previous {
+                None => (Vec::new(), steps.first.clone()),
+                Some(from) => {
+                    let moves = self.pressure.moves(function, from, block);
+                    (moves.leave.clone(), moves.enter.clone())
+                }
+            };
+            previous = Some(block);
+            let mut run = RunBlock {
+                block: cfg::id(block),
+                leave: leave.into_iter().filter_map(&mut class).collect(),
+                enter: enter.into_iter().filter_map(&mut class).collect(),
+                steps: Vec::with_capacity(steps.steps.len()),
+            };
+            for (step, point) in steps.steps.iter().zip(points.iter()) {
+                let inst = step.inst;
+                run.steps.push(RunStep {
+                    inst,
+                    registers: room.registers
+                        - transient_by(context, layout, function, inst, room, &point.before, &mut folded)
+                        - copied(function, inst, &point.across, room, &counted),
+                    across: calls(function, inst).then(|| (self.across)(inst)),
+                    read: step.read.iter().copied().filter_map(&mut class).collect(),
+                    made: step.made.and_then(&mut class),
+                });
+            }
+            out.push(run);
+        }
+        Run { blocks: out }
     }
 
     /// What fitting the function spills, each cell priced by its traffic.
@@ -1136,8 +1460,8 @@ impl<'a> View<'a> {
                 folded_in(context, function, value, room.index_scales)
             }
         };
-        let mut sweep = Sweep { spilled: IdSet::default(), cost: 0, peak: 0 };
-        let mut kinds = [Resident::default(), Resident::default(), Resident::default()];
+        let mut sweep = Sweep::<ValueId, IdSet<ValueId>>::new();
+        let mut kinds: [Ranked<ValueId>; 3] = Default::default();
         // A value's cell, and which kinds of point it is a resident of.
         let mut classes: llrm_support::hash::HashMap<ValueId, (ValueId, [bool; 3])> = Default::default();
         let mut class = |value: ValueId| {
@@ -1206,20 +1530,143 @@ impl<'a> View<'a> {
     }
 }
 
-/// What `View::swept` has spilled so far.
-struct Sweep {
-    spilled: IdSet<ValueId>,
-    cost: i64,
-    peak: i64,
+/// A cell that starts or stops being a resident, and of which kinds of point.
+#[derive(Clone, Copy, Debug)]
+struct Cell {
+    cell: ValueId,
+    member: [bool; 3],
 }
 
-impl Sweep {
+/// Blocks run one after the other as a sweep takes them: at each instruction,
+/// the registers its point has, the cells it reads for the last time and the
+/// one it makes, and at each block's start, what changed since the last one's
+/// end.
+pub struct Run {
+    blocks: Vec<RunBlock>,
+}
+
+struct RunBlock {
+    block: i64,
+    leave: Vec<Cell>,
+    enter: Vec<Cell>,
+    steps: Vec<RunStep>,
+}
+
+struct RunStep {
+    inst: InstId,
+    registers: i64,
+    /// The registers a call keeps.
+    across: Option<i64>,
+    read: Vec<Cell>,
+    made: Option<Cell>,
+}
+
+impl Run {
+    /// The instructions of each block, in order: where a resident that lives
+    /// to a reader is asked of.
+    pub fn insts(
+        &self,
+        block: usize,
+    ) -> impl Iterator<Item = InstId> + '_ {
+        self.blocks[block].steps.iter().map(|step| step.inst)
+    }
+
+    /// The block ids, in the order they run.
+    pub fn blocks(&self) -> impl Iterator<Item = i64> + '_ {
+        self.blocks.iter().map(|block| block.block)
+    }
+
+    /// What spilling costs to fit the points the blocks have, as `spilled_in`
+    /// prices them: at each, the cheapest residents past its registers are
+    /// spilled and stay spilled. `key` names a cell; `extra` is asked, at each
+    /// instruction (block and step by position), for the residents besides the
+    /// cells there, and `held` are those besides at each point of the segment
+    /// registers, which come after all the others.
+    pub fn fit<K: Ord + Copy + std::hash::Hash, S: Spilled<K>>(
+        &self,
+        room: Room,
+        key: &dyn Fn(ValueId) -> K,
+        price: &dyn Fn(K) -> i64,
+        held: &[K],
+        extra: &mut dyn FnMut(usize, usize, &mut Vec<K>),
+    ) -> i64 {
+        let mut sweep = Sweep::<K, S>::new();
+        let mut kinds: [Ranked<K>; 3] = Default::default();
+        let mut wanted = Vec::new();
+        let mut now = Vec::<K>::new();
+        for (at, block) in self.blocks.iter().enumerate() {
+            for cell in block.leave.iter().filter(|cell| cell.member[0]) {
+                kinds[0].remove(key(cell.cell));
+            }
+            for cell in block.enter.iter().filter(|cell| cell.member[0]) {
+                kinds[0].add(key(cell.cell), price(key(cell.cell)), &sweep.spilled);
+            }
+            for (index, step) in block.steps.iter().enumerate() {
+                wanted.clear();
+                extra(at, index, &mut wanted);
+                for gone in now.iter().filter(|one| !wanted.contains(one)) {
+                    kinds[0].remove(*gone);
+                }
+                for new in wanted.iter().filter(|one| !now.contains(one)) {
+                    kinds[0].add(*new, price(*new), &sweep.spilled);
+                }
+                std::mem::swap(&mut now, &mut wanted);
+                sweep.fit(&mut kinds, 0, step.registers);
+                for cell in step.read.iter().filter(|cell| cell.member[0]) {
+                    kinds[0].remove(key(cell.cell));
+                }
+                if let Some(across) = step.across {
+                    sweep.fit(&mut kinds, 0, across);
+                }
+                if let Some(cell) = step.made.filter(|cell| cell.member[0]) {
+                    kinds[0].add(key(cell.cell), price(key(cell.cell)), &sweep.spilled);
+                }
+            }
+        }
+        kinds[0].clear();
+        for one in held {
+            kinds[1].add(*one, price(*one), &sweep.spilled);
+        }
+        for block in &self.blocks {
+            for cell in block.leave.iter().filter(|cell| cell.member[1]) {
+                kinds[1].remove(key(cell.cell));
+            }
+            for cell in block.enter.iter().filter(|cell| cell.member[1]) {
+                kinds[1].add(key(cell.cell), price(key(cell.cell)), &sweep.spilled);
+            }
+            for step in &block.steps {
+                sweep.fit(&mut kinds, 1, room.segments);
+                for cell in step.read.iter().filter(|cell| cell.member[1]) {
+                    kinds[1].remove(key(cell.cell));
+                }
+                if let Some(cell) = step.made.filter(|cell| cell.member[1]) {
+                    kinds[1].add(key(cell.cell), price(key(cell.cell)), &sweep.spilled);
+                }
+            }
+        }
+        sweep.cost
+    }
+}
+
+/// What a sweep has spilled so far.
+struct Sweep<K, S> {
+    spilled: S,
+    cost: i64,
+    peak: i64,
+    key: std::marker::PhantomData<K>,
+}
+
+impl<K: Ord + Copy + std::hash::Hash, S: Spilled<K>> Sweep<K, S> {
+    fn new() -> Self {
+        Self { spilled: S::default(), cost: 0, peak: 0, key: std::marker::PhantomData }
+    }
+
     /// `fitted`'s step at one point of kind `which`: spill the cells that
     /// number past `registers`, the cheapest first, dearer ties to the larger
     /// cell, out of every kind.
     fn fit(
         &mut self,
-        kinds: &mut [Resident; 3],
+        kinds: &mut [Ranked<K>; 3],
         which: usize,
         registers: i64,
     ) {
@@ -1232,7 +1679,7 @@ impl Sweep {
         touched(victims.len());
         for (each, cell) in victims {
             self.cost += each;
-            self.spilled.insert(cell);
+            self.spilled.add(cell);
             for kind in kinds.iter_mut() {
                 kind.purge(cell);
             }
@@ -1242,13 +1689,18 @@ impl Sweep {
 
 /// The cells live at a point and not spilled: how many values of each, and
 /// their prices in order.
-#[derive(Default)]
-struct Resident {
-    count: llrm_support::hash::HashMap<ValueId, (u32, i64)>,
-    order: BTreeSet<(i64, ValueId)>,
+struct Ranked<K> {
+    count: llrm_support::hash::HashMap<K, (u32, i64)>,
+    order: BTreeSet<(i64, K)>,
 }
 
-impl Resident {
+impl<K> Default for Ranked<K> {
+    fn default() -> Self {
+        Self { count: Default::default(), order: BTreeSet::new() }
+    }
+}
+
+impl<K: Ord + Copy + std::hash::Hash> Ranked<K> {
     fn clear(&mut self) {
         self.count.clear();
         self.order.clear();
@@ -1256,11 +1708,11 @@ impl Resident {
 
     fn add(
         &mut self,
-        cell: ValueId,
+        cell: K,
         price: i64,
-        spilled: &IdSet<ValueId>,
+        spilled: &impl Spilled<K>,
     ) {
-        if spilled.contains(&cell) {
+        if spilled.has(&cell) {
             return;
         }
         touched(1);
@@ -1273,7 +1725,7 @@ impl Resident {
 
     fn remove(
         &mut self,
-        cell: ValueId,
+        cell: K,
     ) {
         let Some(held) = self.count.get_mut(&cell) else { return };
         touched(1);
@@ -1287,7 +1739,7 @@ impl Resident {
 
     fn purge(
         &mut self,
-        cell: ValueId,
+        cell: K,
     ) {
         if let Some((_, price)) = self.count.remove(&cell) {
             self.order.remove(&(price, cell));

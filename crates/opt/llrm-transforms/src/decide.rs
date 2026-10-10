@@ -92,7 +92,7 @@ fn _decided(
 ) -> Result<bool, String> {
     let threaded = _threaded(context, function) | _phi_threaded(context, function)?;
     if threaded {
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate(function, &PreservedAnalyses::none());
     }
     let held = Held::of(context, layout, function, analyses, true).with_bounded(context, layout, function, analyses);
     let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()))?;
@@ -125,7 +125,33 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
     let successors = |at: i64, values: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>| {
         _executable_successors(unit, at, values, states, Some(&nonnull))
     };
-    let facts = constant_cycles::propagated(unit, &facts, Some(&successors));
+    // What a block's way is read from: its terminator's operands and, for a
+    // branch, those of the comparison its condition is.
+    let reads = |at: i64| -> Vec<ValueId> {
+        let block = cfg::block(at);
+        let Some(last) = function.terminator(block) else { return Vec::new() };
+        let mut values: Vec<ValueId> = function
+            .instruction(last)
+            .operands
+            .iter()
+            .filter_map(|operand| if let Operand::Value(value) = operand { Some(*value) } else { None })
+            .collect();
+        if let Some(compare) = transform::_comparison(function, block, last) {
+            values.extend(
+                function
+                    .instruction(compare)
+                    .operands
+                    .iter()
+                    .filter_map(|operand| if let Operand::Value(value) = operand { Some(*value) } else { None }),
+            );
+        }
+        values
+    };
+    let facts = constant_cycles::propagated(
+        unit,
+        &facts,
+        Some(constant_cycles::Successors { choose: &successors, reads: &reads }),
+    );
     let scoped = ranges::bounds(unit)?;
     let mut out = Vec::new();
     for &block in function.layout() {

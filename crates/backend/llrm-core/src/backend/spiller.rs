@@ -3135,7 +3135,8 @@ fn _address_source(
             && cell.addr.is_some_and(|found| {
                 found.space == Space::Literal
                     && found.index == 0
-                    && matches!(found.segment, Register::None | Register::SS)
+                    && (found.segment == Register::None
+                        || crate::backend::registerinfo::is_stack_segment(found.segment))
             });
         if !fits {
             invalid = true;
@@ -3991,7 +3992,11 @@ fn _encodable(
                     .available
                     .iter()
                     .copied()
-                    .filter(|one| target::WIDTHS.get(&target::named(*one, i64::from(width))) == Some(&i64::from(width)))
+                    .filter(|one| {
+                        target::width_of(target::named(*one, i64::from(width)))
+                            .filter(|_| target::integer(target::named(*one, i64::from(width))))
+                            == Some(i64::from(width))
+                    })
                     .collect(),
             )
         })

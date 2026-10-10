@@ -1,6 +1,6 @@
 //! The spill model's facts, each on the smallest function that shows it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::testing::DOS;
 use llrm_analysis::{cfg, liveness};
@@ -169,8 +169,7 @@ entry:
         .flat_map(|&block| {
             sites(
                 function,
-                &found,
-                block,
+                &liveness::live_points(function, &found, block),
                 room,
                 &|_| room.across_call,
                 &|_, _| 0,
@@ -259,13 +258,23 @@ entry:
     let at = |segments: i64| {
         let room = Room { registers: 6, across_call: 2, segments, ..Room::default() };
         let block = function.layout()[0];
-        sites(function, &found, block, room, &|_| 2, &|_, _| 0, &cells, &integer, &views, &|_| false)
-            .into_iter()
-            .find(|site| matches!(
-                function.instruction(site.inst).opcode,
-                llrm_mir::opcode::Opcode::Load { .. }
-            ))
-            .expect("a load")
+        sites(
+            function,
+            &liveness::live_points(function, &found, block),
+            room,
+            &|_| 2,
+            &|_, _| 0,
+            &cells,
+            &integer,
+            &views,
+            &|_| false,
+        )
+        .into_iter()
+        .find(|site| matches!(
+            function.instruction(site.inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .expect("a load")
     };
     let held = at(3);
     assert_eq!(held.segments.residents.len(), 2, "both views are in segment registers");
@@ -296,8 +305,7 @@ fn _peak(
         .flat_map(|&block| {
             sites(
                 function,
-                &found,
-                block,
+                &liveness::live_points(function, &found, block),
                 room,
                 &|_| 2,
                 &|inst, live| transient(&module.context, &layout, function, inst, room, live),
@@ -827,4 +835,46 @@ fn pressure_is_the_same_after_an_instruction_is_made_and_erased() {
     function.insert(made, Position::Before(ret)).expect("a position");
     function.erase(made).expect("nothing reads it");
     assert_eq!(Pressure::of(context, function, 0), before, "a value made and erased changed the pressure");
+}
+
+/// Every loop of a function added up the function's traffic again, with its
+/// own instructions left out (`mir lsr` on `branches` spent half its time
+/// there); the sum is made once and each loop's instructions taken out of it.
+/// What is left is what adding up the others gives.
+#[test]
+fn test_traffic_less_some_instructions_is_the_traffic_of_the_others() {
+    for text in [COUNTED.to_owned(), across_a_call(12)] {
+        let module = module(&text);
+        let function = function(&module);
+        let layout =
+            llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
+        let costs = OperationCosts { load: 3, store: 5, memory_update: 7, ..OperationCosts::default() };
+        let frequency: BTreeMap<i64, i64> =
+            function.layout().iter().enumerate().map(|(at, &block)| (cfg::id(block), 1 + at as i64)).collect();
+        let cells = cells(function);
+        let words = |value: ValueId| words(&module.context, &layout, function, value);
+        let every = function.walk().map(|(_, inst)| inst).collect::<Vec<_>>();
+        let base = std::rc::Rc::new(super::TrafficBase::of(
+            function,
+            &frequency,
+            &|value| cells.get(&value).copied(),
+            &|_| true,
+        ));
+        for step in 1..=4 {
+            let gone: BTreeSet<InstId> = every.iter().copied().step_by(step).collect();
+            let direct = traffic(function, &frequency, &cells, &costs, &|inst| !gone.contains(&inst), &words);
+            let taken_out =
+                base.without(function, &frequency, &|value| cells.get(&value).copied(), gone.iter().copied());
+            let asked =
+                direct.keys().copied().chain(every.iter().filter_map(|&inst| function.instruction(inst).result));
+            for value in asked {
+                let want = direct.get(&value).copied().unwrap_or_default();
+                assert_eq!(
+                    taken_out.of(function, &costs, &words, value),
+                    want,
+                    "{value:?} with every {step}th instruction left out of\n{text}"
+                );
+            }
+        }
+    }
 }

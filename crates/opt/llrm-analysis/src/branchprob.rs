@@ -796,13 +796,24 @@ pub fn propagated_edges(
     }
     let plans: std::cell::RefCell<BTreeMap<(i64, i64), Option<std::rc::Rc<Counted>>>> =
         std::cell::RefCell::new(BTreeMap::new());
+    // Each block's loops, inner first, and each header's loops: a loop is
+    // asked about from its own blocks, so no ask walks every loop of the
+    // function.
+    let mut around: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    let mut headed: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    for (index, one) in cycles.iter().enumerate() {
+        headed.entry(one.header).or_default().push(index);
+        for &at in one.body.iter() {
+            around.entry(at).or_default().push(index);
+        }
+    }
     let plan = |from: i64, to: i64| -> Option<std::rc::Rc<Counted>> {
         if let Some(known) = plans.borrow().get(&(from, to)) {
             return known.clone();
         }
         let made = (|| {
             let next = successors(from);
-            for (index, one) in cycles.iter().enumerate().filter(|(_, one)| one.body.contains(&from)) {
+            for (index, one) in around.get(&from).into_iter().flatten().map(|&index| (index, &cycles[index])) {
                 let inside = next.iter().filter(|at| one.body.contains(at)).count();
                 let outside = next.len() - inside;
                 if inside == 0 || outside == 0 {
@@ -842,14 +853,22 @@ pub fn propagated_edges(
     };
     let edge = |from: i64, to: i64| counted(from, to).unwrap_or_else(|| given(from, to));
     // `to` is a loop header and `from` is in its loop.
-    let backward = |from: i64, to: i64| cycles.iter().any(|one| one.header == to && one.body.contains(&from));
+    let backward =
+        |from: i64, to: i64| headed.get(&to).into_iter().flatten().any(|&index| cycles[index].body.contains(&from));
+    // Where each block is in `order`, to take a loop's blocks in order without
+    // walking the function's.
+    let position: BTreeMap<i64, usize> = order.iter().enumerate().map(|(index, &at)| (at, index)).collect();
     // Innermost first: an inner header's scale is known when its outer loop is
     // weighed.
     let mut scale: BTreeMap<i64, f64> = BTreeMap::new();
     for found in cycles {
         let weighed = |edge: &dyn Fn(i64, i64) -> f64, scale: &BTreeMap<i64, f64>| -> BTreeMap<i64, f64> {
             let mut mass: BTreeMap<i64, f64> = BTreeMap::new();
-            for &at in order.iter().filter(|at| found.body.contains(at)) {
+            let mut inside: Vec<i64> = found.body.iter().copied().filter(|at| position.contains_key(at)).collect();
+            inside.sort_unstable_by_key(|at| position[at]);
+            #[cfg(test)]
+            VISITS.with(|visits| visits.set(visits.get() + found.body.len()));
+            for at in inside {
                 let entering: f64 = if at == found.header {
                     1.0
                 } else {
@@ -948,6 +967,13 @@ pub fn reverse_postorder_of(
 fn reverse_postorder(function: &Function) -> Vec<i64> {
     let Some(entry) = function.entry() else { return Vec::new() };
     reverse_postorder_of(id(entry), &|at| function.successors(cfg::block(at)).into_iter().map(id).collect())
+}
+
+// Blocks the loops' weighings looked at to find their own, for a test that a
+// loop is weighed by its own blocks.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

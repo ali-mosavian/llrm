@@ -38,6 +38,18 @@ pub mod framefree;
 pub mod globals;
 pub mod inline_asm;
 pub mod isel;
+
+/// Every target's peephole rules, as its definition directory is named.
+pub mod targets {
+    include!(concat!(env!("OUT_DIR"), "/peep_targets.rs"));
+}
+
+/// Every target's generated selector, bound by name (`isel::selector`).
+pub mod selectors {
+    use super::isel::api::Compiled;
+
+    include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
+}
 #[cfg(test)]
 mod isel_tests;
 pub mod jumps;
@@ -74,6 +86,7 @@ pub mod selects;
 pub mod shrinkwrap;
 pub mod slots;
 pub mod stackusage;
+pub mod stepflags;
 pub mod valuetrack;
 /// The x86 encoder is `llrm_x86::select`; the tests of this crate encode in
 /// real mode through `emit`.
@@ -139,6 +152,7 @@ pub mod select {
     }
 }
 pub mod regclass;
+pub mod registerinfo;
 pub mod sharedstores;
 pub mod spiller;
 pub mod spillforward;

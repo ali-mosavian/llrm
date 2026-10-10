@@ -194,6 +194,7 @@ fn operand(
 
 #[test]
 fn the_table_gives_the_effects_the_decoder_does() {
+    llrm_core::backend::registerinfo::bind(&llrm_x86_m16::REGISTER_INFO);
     let mut checked = 0;
     let mut refused = 0;
     let mut shifts = 0;
@@ -307,6 +308,7 @@ fn the_table_gives_the_effects_the_decoder_does() {
 /// name.
 #[test]
 fn the_table_follows_the_encoder_into_what_it_lowers_to() {
+    llrm_core::backend::registerinfo::bind(&llrm_x86_m16::REGISTER_INFO);
     let reg = |register, width| Loc::Reg(Reg { register, width });
     let imm = Loc::Imm(Imm {
         value: 0,

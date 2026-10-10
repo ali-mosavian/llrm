@@ -131,7 +131,14 @@ impl Kind {
             Kind::Addressing => &registers.addressing,
             Kind::WordBases => &registers.word_bases,
             Kind::Bytes => {
-                BYTES.get_or_init(|| BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX]))
+                BYTES.get_or_init(|| {
+                    // The words whose low byte has a register of its own.
+                    let byte = crate::backend::registerinfo::class::BYTE;
+                    crate::backend::registerinfo::entries()
+                        .filter(|(id, one)| one.classes & byte == byte && one.root == *id)
+                        .filter_map(|(id, _)| crate::backend::registerinfo::view(id, 16))
+                        .collect()
+                })
             }
         }
     }

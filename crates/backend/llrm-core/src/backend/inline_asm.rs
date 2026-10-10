@@ -69,16 +69,7 @@ pub fn view(name: &str) -> Option<(Reg, u32)> {
     }
     // iced numbers every view of a general register as the register itself: the
     // root is the 16-bit register of that number.
-    let sixteen = [
-        Register::AX,
-        Register::CX,
-        Register::DX,
-        Register::BX,
-        Register::SP,
-        Register::BP,
-        Register::SI,
-        Register::DI,
-    ][register.full_register32().number()];
+    let sixteen = crate::backend::registerinfo::view(crate::backend::registerinfo::root(register), 16)?;
     let bits = if register.is_gpr8() {
         8
     } else if register.is_gpr16() {

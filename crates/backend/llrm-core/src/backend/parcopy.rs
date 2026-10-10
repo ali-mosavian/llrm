@@ -8,8 +8,6 @@
 use std::fmt;
 use std::sync::Arc;
 
-use iced_x86::Register;
-
 use crate::backend::target;
 use crate::model::ir::{self, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBody};
@@ -128,7 +126,7 @@ fn _expanded(one: &Arc<Insn>) -> Result<Vec<Arc<Insn>>, Malformed> {
     };
     if into.width != source.width
         || !matches!(into.width, 1 | 2 | 4)
-        || [into, source].iter().any(|cell| cell.through != Register::BP)
+        || [into, source].iter().any(|cell| cell.through != ir::FRAME)
     {
         return Err(Malformed("memory parallel copy needs equal-width frame slots".to_owned()));
     }

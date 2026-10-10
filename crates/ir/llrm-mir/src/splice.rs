@@ -37,13 +37,26 @@ fn phis(
 }
 
 /// `call`, a call to `callee`, replaced by a copy of its body, which
-/// `carries`.
+/// `carries`. The instructions of the copy, in the order of the body's.
 pub fn splice(
     context: &mut Context,
     function: &mut Function,
     call: InstId,
     callee: &Function,
-) {
+) -> Vec<InstId> {
+    splice_before(context, function, call, callee, None)
+}
+
+/// `splice` where the copy's static allocas go before `anchor`, an instruction
+/// of the caller's entry, not before the entry's first: copies made out of
+/// order stand as they would made in it.
+pub fn splice_before(
+    context: &mut Context,
+    function: &mut Function,
+    call: InstId,
+    callee: &Function,
+    anchor: Option<InstId>,
+) -> Vec<InstId> {
     let void = context.types.void();
     let block = function.parent(call).expect("a placed call");
     let instructions = function.block(block).instructions().to_vec();
@@ -72,7 +85,7 @@ pub fn splice(
         blocks.insert(one, copy);
         last = copy;
     }
-    let first = function.block(function.entry().expect("a defined caller")).instructions()[0];
+    let first = anchor.unwrap_or_else(|| function.block(function.entry().expect("a defined caller")).instructions()[0]);
     let entry = callee.entry().expect("a defined callee");
     let mut made = Vec::new();
     let mut returns = Vec::new();
@@ -114,6 +127,7 @@ pub fn splice(
         Operand::Block(one) => Operand::Block(blocks[&one]),
         constant => constant,
     };
+    let copies: Vec<InstId> = made.iter().map(|&(copy, _)| copy).collect();
     for (copy, inst) in made {
         let operands = callee.instruction(inst).operands.iter().map(|&operand| mapped(operand)).collect();
         function.set_operands(copy, operands);
@@ -138,4 +152,5 @@ pub fn splice(
         function.replace_all_uses_with(result, with);
     }
     function.erase(call).expect("its uses were replaced");
+    copies
 }

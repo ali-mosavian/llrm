@@ -63,7 +63,7 @@ pub fn restored(
     loop {
         let mut changed = false;
         for (index, block) in body.blocks.iter().enumerate() {
-            let out = _walk(&block.insns, dirty[index], data, through, None);
+            let out = _walk(&block.insns, dirty[index], data, through, segments.offset_bytes, None);
             for next in &block.succ {
                 let next = at[next];
                 if out && !dirty[next] {
@@ -79,7 +79,7 @@ pub fn restored(
     let mut out = body.clone();
     for (index, block) in body.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insns.len());
-        let left = _walk(&block.insns, dirty[index], data, through, Some(&mut insns));
+        let left = _walk(&block.insns, dirty[index], data, through, segments.offset_bytes, Some(&mut insns));
         if left && block.succ.is_empty() {
             let last = insns.last().cloned();
             let position = if last.as_ref().is_some_and(|one| _leaves(one)) { insns.len() - 1 } else { insns.len() };
@@ -99,6 +99,7 @@ fn _walk(
     mut dirty: bool,
     data: Register,
     through: Register,
+    offset_bytes: i64,
     mut out: Option<&mut Vec<Arc<Insn>>>,
 ) -> bool {
     for one in insns {
@@ -109,7 +110,7 @@ fn _walk(
             dirty = false;
         }
         if let Some(out) = out.as_deref_mut() {
-            out.push(if dirty { _through(one, through) } else { Arc::clone(one) });
+            out.push(if dirty { _through(one, through, offset_bytes) } else { Arc::clone(one) });
         }
         if _writes_data(one, data) {
             dirty = true;
@@ -166,12 +167,13 @@ fn _restore(
 fn _through(
     one: &Arc<Insn>,
     through: Register,
+    offset_bytes: i64,
 ) -> Arc<Insn> {
     let Some(what) = &one.what else {
         return Arc::clone(one);
     };
     let moved = |place: &Loc| match place {
-        Loc::Mem(cell) => _prefixed(cell, through).map(Loc::Mem),
+        Loc::Mem(cell) => _prefixed(cell, through, offset_bytes).map(Loc::Mem),
         _ => None,
     };
     if !what.dests.iter().chain(&what.sources).any(|place| moved(place).is_some()) {
@@ -189,13 +191,12 @@ fn _through(
 fn _prefixed(
     cell: &ir::Mem,
     through: Register,
+    offset_bytes: i64,
 ) -> Option<ir::Mem> {
-    let stack_based = |base: Register| matches!(
-        base,
-        Register::BP | Register::EBP | Register::SP | Register::ESP
-    );
+    let stack_based =
+        |base: Register| crate::backend::registerinfo::is_frame(base) || crate::backend::registerinfo::is_stack(base);
     let Some(addr) = cell.addr else {
-        if cell.index.is_some() || !matches!(cell.through, Register::SI | Register::DI | Register::BX) {
+        if cell.index.is_some() || !crate::backend::registerinfo::holds_a_segment_offset(cell.through, offset_bytes) {
             return None;
         }
         let addr = Addr { space: Space::Literal, disp: cell.offset, index: 0, base: cell.through, segment: through };

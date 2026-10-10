@@ -109,7 +109,7 @@ impl Peephole {
         Self::with_rules(
             frame,
             cpu,
-            &peep::targets::x86_m16::RULES,
+            &crate::backend::targets::x86_m16::RULES,
             llrm_x86_m16::PRESERVED.iter().map(|(whole, _)| *whole).collect(),
             RegisterClasses::m16(),
         )
@@ -529,12 +529,12 @@ pub fn _lanes(register: Register) -> Lanes {
         return (0..width).map(|byte| (register, byte as u32)).collect();
     }
     let full = full32(register);
-    if ![Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP]
-        .contains(&full)
+    if !crate::backend::registerinfo::in_class(full, crate::backend::registerinfo::class::INT)
+        || crate::backend::registerinfo::is_stack(full)
     {
         return Lanes::new();
     }
-    let start = u32::from([Register::AH, Register::BH, Register::CH, Register::DH].contains(&register));
+    let start = crate::backend::registerinfo::get(register).map_or(0, |one| one.lane / 8);
     (start..start + register.size() as u32).map(|byte| (full, byte)).collect()
 }
 
@@ -1440,8 +1440,8 @@ fn _loaded_scaled_add<'a>(
     };
     if temporary.width != total.width
         || ![2, 4].contains(&temporary.width)
-        || !target::WIDTHS.contains_key(&temporary.register)
-        || !target::WIDTHS.contains_key(&total.register)
+        || !target::integer(temporary.register)
+        || !target::integer(total.register)
         || ir::root(temporary.register) == ir::root(total.register)
         || ir::root(temporary.register) == Register::ESP
         || load.defines.len() != 1
@@ -1661,17 +1661,7 @@ pub fn addresses<'a>(
 fn _root_get(register: Register) -> Option<Register> {
     let rooted = ir::root(register);
     let key = rooted != register
-        || [
-            Register::EAX,
-            Register::EBX,
-            Register::ECX,
-            Register::EDX,
-            Register::ESI,
-            Register::EDI,
-            Register::EBP,
-            Register::ESP,
-        ]
-        .contains(&register);
+        || crate::backend::registerinfo::in_class(register, crate::backend::registerinfo::class::INT);
     key.then_some(rooted)
 }
 
@@ -2546,7 +2536,7 @@ pub fn zeroes(body: &LirBody) -> LirBody {
                         if flags_dead
                             && dest.width == *width
                             && [2, 4].contains(width)
-                            && target::WIDTHS.contains_key(&dest.register)
+                            && target::integer(dest.register)
                             && one.symbol != Some(true)
                         {
                             let dest = *dest;
@@ -2662,13 +2652,13 @@ pub fn constants(body: &LirBody) -> LirBody {
                         Loc::Imm(source) => Some(source.width),
                         _ => None,
                     };
-                    if target::WIDTHS.contains_key(&dest.register) && source_width == Some(dest.width) {
+                    if target::integer(dest.register) && source_width == Some(dest.width) {
                         match source {
                             Loc::Imm(source) if source.address.is_none() => {
                                 candidate =
                                     Some((*dest, Known::Value(source.value & ((1i64 << (dest.width * 8)) - 1))));
                             }
-                            Loc::Reg(source) if target::WIDTHS.contains_key(&source.register) => {
+                            Loc::Reg(source) if target::integer(source.register) => {
                                 let value = *held
                                     .entry(*source)
                                     .or_insert_with(

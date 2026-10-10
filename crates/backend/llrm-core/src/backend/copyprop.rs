@@ -189,9 +189,9 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
     }
     let slot = Slots(places);
     let mut register_for: IndexMap<Vec<Lane>, Register> = IndexMap::default();
-    for register in target::WIDTHS.keys() {
-        if !_lanes(*register).is_empty() && ir::root(*register) != Register::ESP {
-            register_for.insert(_lanes(*register).into_iter().collect(), *register);
+    for register in target::integer_registers() {
+        if !_lanes(register).is_empty() && !crate::backend::registerinfo::is_stack(register) {
+            register_for.insert(_lanes(register).into_iter().collect(), register);
         }
     }
     let mut recipes: HashMap<usize, Recipe> = HashMap::default();
@@ -386,13 +386,13 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
             let Loc::Reg(source) = changed.sources[index] else {
                 continue;
             };
-            let current = changed.clone();
+            let current = &changed;
             let put = |replacement: Register| {
                 let mut sources = current.sources.clone();
                 sources[index] = Loc::Reg(Reg { register: replacement, width: source.width });
                 Semantics { sources, ..current.clone() }
             };
-            if let Some(proposed) = substitute(&current, source.register, 0, &put) {
+            if let Some(proposed) = substitute(current, source.register, 0, &put) {
                 touched = true;
                 changed = proposed;
             }
@@ -402,7 +402,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         for (side, count) in [(true, changed.dests.len()), (false, changed.sources.len())] {
             for index in 0..count {
                 for through in [true, false] {
-                    let current = changed.clone();
+                    let current = &changed;
                     let place = if side { &current.dests[index] } else { &current.sources[index] };
                     let Some(at) = place.address() else { continue };
                     let register = if through { at.through } else { at.index_through };
@@ -425,8 +425,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                         }
                         Semantics { dests, sources, ..current.clone() }
                     };
-                    if let Some(proposed) =
-                        substitute(&current, register, target::width_of(register).unwrap_or(0), &put)
+                    if let Some(proposed) = substitute(current, register, target::width_of(register).unwrap_or(0), &put)
                     {
                         touched = true;
                         changed = proposed;

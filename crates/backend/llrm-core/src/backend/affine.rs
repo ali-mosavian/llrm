@@ -49,7 +49,7 @@ pub fn step(
     let [Loc::Reg(dest)] = what.dests.as_slice() else {
         return None;
     };
-    let register = |one: &Reg| one.width == dest.width && target::WIDTHS.contains_key(&one.register);
+    let register = |one: &Reg| one.width == dest.width && target::integer(one.register);
     if ![2, 4].contains(&dest.width) || !register(dest) {
         return None;
     }
@@ -86,7 +86,7 @@ pub fn form(
     scales: &BTreeSet<i64>,
 ) -> Option<AddressRef> {
     let at = |through: Register, index: Register, scale: i64| {
-        (index != Register::ESP && scales.contains(&scale)).then_some(AddressRef {
+        (!crate::backend::registerinfo::is_stack(index) && scales.contains(&scale)).then_some(AddressRef {
             through,
             index_through: index,
             scale,

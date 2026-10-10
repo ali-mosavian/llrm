@@ -9,8 +9,6 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
-
 use crate::analysis::dataflow::{self, Direction};
 use crate::backend::peephole::{_frame_cell, _frame_written, _lanes, _overlapping, _register_effects, id};
 use crate::model::ir::{Loc, Mem, Operation, Reg};
@@ -72,7 +70,7 @@ fn _held(
         return (Facts::default(), false, None);
     };
     let writes = effects.1;
-    if !writes.is_disjoint(&_lanes(Register::EBP)) {
+    if !writes.is_disjoint(&_lanes(crate::backend::registerinfo::frame_root())) {
         return (Facts::default(), false, None);
     }
     if let (Operation::Move, Some("mov"), [Loc::Mem(cell)], [Loc::Reg(register)]) =

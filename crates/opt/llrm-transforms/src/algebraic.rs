@@ -1450,16 +1450,16 @@ fn _redundant_masks(
     // brought up to date by what they changed, not worked out afresh for
     // each round.
     if edited {
-        analyses.invalidate(&PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let held = Ranges::of(context, layout, function, analyses, true);
-    let registers = held.registers();
     let unit = held.unit(context, layout, function, outer);
     let made: Vec<(InstId, Operand)> = candidates
         .into_iter()
         .filter_map(|(block, inst, value, mask, width)| {
-            let scope = ranges::scope_at(&unit, cfg::id(block)).unwrap_or_default();
-            let interval = ranges::_operand(&unit, value, &scope, registers)
+            let interval = ranges::operand_at(&unit, value, cfg::id(block))
+                .ok()
+                .flatten()
                 .filter(|interval| interval.width == width && interval.low.sign() != num_bigint::Sign::Minus)?;
             let top = u128::try_from(interval.high).ok()?;
             let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };
@@ -1512,10 +1512,9 @@ fn _unsigned_divisions(
     // brought up to date by what they changed, not worked out afresh for
     // each round.
     if edited {
-        analyses.invalidate(&PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let held = Ranges::of(context, layout, function, analyses, true);
-    let registers = held.registers();
     let unit = held.unit(context, layout, function, outer);
     let made: Vec<(InstId, BinaryOp)> = candidates
         .into_iter()
@@ -1536,8 +1535,9 @@ fn _unsigned_divisions(
                 && divisor > BigInt::from(1u8)
                 && divisor < BigInt::from(1u8) << (width - 1)
                 && (power || (!size && width == 32 && layout.pointer(0).bits == 32));
-            let scope = ranges::scope_at(&unit, cfg::id(block)).unwrap_or_default();
-            let proved = ranges::_operand(&unit, operands[0], &scope, registers)
+            let proved = ranges::operand_at(&unit, operands[0], cfg::id(block))
+                .ok()
+                .flatten()
                 .filter(|interval| interval.width == width)
                 .is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
                 || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;

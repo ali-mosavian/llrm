@@ -11,6 +11,7 @@
 //! and recomputing every analysis a pass claims to have preserved.
 
 use std::any::{Any, TypeId};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use crate::context::{Context, GlobalId};
@@ -450,6 +451,7 @@ impl ModuleAnalysis for TypeAncestry {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
+        analyses.metadata_open = false;
         analyses.memo::<TbaaSeen>().0 = Some(module.metadata.clone());
         crate::tbaa::Tbaa::of(&module.metadata)
     }
@@ -459,7 +461,18 @@ impl ModuleAnalysis for TypeAncestry {
         analyses: &mut ModuleAnalyses,
         _: &Self::Result,
     ) -> bool {
-        analyses.memo::<TbaaSeen>().0.as_ref().is_some_and(|then| *then == module.metadata)
+        // Function passes add metadata nodes and change none: where only bodies
+        // were edited the length says.
+        let appended_only = !analyses.metadata_open;
+        analyses
+            .memo::<TbaaSeen>()
+            .0
+            .as_ref()
+            .is_some_and(
+                |then| if appended_only { then.len() == module.metadata.len() } else { *then == module.metadata },
+            )
+            .then(|| analyses.metadata_open = false)
+            .is_some()
     }
 }
 
@@ -472,18 +485,26 @@ impl ModuleAnalysis for Declarations {
     const NAME: &'static str = "declarations";
     fn run(
         module: &Module,
-        _: &mut ModuleAnalyses,
+        analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
+        analyses.declarations_verified();
         module.declarations()
     }
 
     fn unchanged(
         module: &Module,
-        _: &mut ModuleAnalyses,
+        analyses: &mut ModuleAnalyses,
         previous: &Self::Result,
     ) -> bool {
-        module.globals.len() == previous.len()
-            && module.globals.iter().zip(previous).all(|(global, declared)| global.declares(declared))
+        let same = module.globals.len() == previous.len()
+            && match analyses.declarations_edits() {
+                Some(edited) => edited.iter().all(|id| module.global(*id).declares(&previous[id.0 as usize])),
+                None => module.globals.iter().zip(previous).all(|(global, declared)| global.declares(declared)),
+            };
+        if same {
+            analyses.declarations_verified();
+        }
+        same
     }
 }
 
@@ -707,6 +728,8 @@ trait Cached {
         preserved: &PreservedAnalyses,
     ) -> bool;
     fn incremental(&self) -> bool;
+    /// The function's history when the result was derived.
+    fn mark(&self) -> crate::module::Mark;
 }
 
 struct Entry<A: Analysis> {
@@ -746,6 +769,10 @@ impl<A: Analysis> Cached for Entry<A> {
     fn incremental(&self) -> bool {
         A::INCREMENTAL || A::SKIPS
     }
+
+    fn mark(&self) -> crate::module::Mark {
+        self.mark
+    }
 }
 
 /// One function's cached analyses, and what they may read of its module.
@@ -754,6 +781,10 @@ pub struct Analyses {
     /// Results invalidated that `update` may bring up to date.
     kept: HashMap<TypeId, Box<dyn Cached>>,
     evicted: HashMap<TypeId, Box<dyn Cached>>,
+    /// The history of the function when a pass last vouched for what it kept
+    /// (`invalidate`): a result derived before and held is as true now as
+    /// then.
+    vouched: Option<crate::module::Mark>,
     outer: Rc<Outer>,
 }
 
@@ -814,7 +845,7 @@ fn check_replay() -> bool {
 
 impl Analyses {
     pub fn new(outer: Rc<Outer>) -> Self {
-        Self { cache: HashMap::default(), kept: HashMap::default(), evicted: HashMap::default(), outer }
+        Self { cache: HashMap::default(), kept: HashMap::default(), evicted: HashMap::default(), vouched: None, outer }
     }
 
     /// An empty cache over the same module and target, for another body.
@@ -950,8 +981,29 @@ impl Analyses {
     }
 
     /// Drops what `preserved` does not keep: LLVM's
-    /// `FunctionAnalysisManager::invalidate`, for a pass running others.
+    /// `FunctionAnalysisManager::invalidate`, for a pass running others. What
+    /// it keeps the pass vouches for as `function` is now: it is stamped
+    /// with this history, so that an edit made after, and not reported, is
+    /// told from the pass's own.
     pub fn invalidate(
+        &mut self,
+        function: &Function,
+        preserved: &PreservedAnalyses,
+    ) {
+        self.drop_unpreserved(preserved);
+        self.vouched = Some(function.mark());
+    }
+
+    /// Every result held stands, as `function` is now: a pass that edited and
+    /// put back, or that changed nothing.
+    pub fn vouch(
+        &mut self,
+        function: &Function,
+    ) {
+        self.vouched = Some(function.mark());
+    }
+
+    fn drop_unpreserved(
         &mut self,
         preserved: &PreservedAnalyses,
     ) {
@@ -959,6 +1011,72 @@ impl Analyses {
             self.cache.iter().filter(|(_, entry)| !entry.preserved(preserved)).map(|(key, _)| *key).collect();
         for key in gone {
             let entry = self.cache.remove(&key).expect("held");
+            if entry.incremental() {
+                self.kept.insert(key, entry);
+            } else if why() {
+                self.evicted.insert(key, entry);
+            }
+        }
+    }
+
+    /// What `function` was edited without saying so since each cached result
+    /// was derived or vouched for: those results are no longer held as they
+    /// stand, and are brought up to date from the history (or computed
+    /// again) when asked. A module pass that changes a body and does not
+    /// call `ModuleAnalyses::changed` would otherwise read what the
+    /// body was (the shape a splice's new loop was not in, a GlobalsAA that
+    /// never ended). `LLRM_CHECK_UNREPORTED` makes it a failure, naming the
+    /// analysis.
+    fn forget_unreported(
+        &mut self,
+        function: &Function,
+    ) {
+        let now = function.mark();
+        if self.vouched == Some(now) {
+            // Every result held was vouched for at this history, or derived at
+            // it.
+            return;
+        }
+        let behind: Vec<TypeId> =
+            self.cache.iter().filter(|(_, entry)| entry.mark() != now).map(|(key, _)| *key).collect();
+        for key in behind {
+            let entry = self.cache.remove(&key).expect("held");
+            if unreported_fails() && entry.mark().same_history(now) {
+                use crate::module::Change;
+                let edits: Vec<String> = function
+                    .changes_since(entry.mark())
+                    .map_or_else(
+                        Vec::new,
+                        |changes| changes
+                            .iter()
+                            .map(|change| match *change {
+                                Change::Inserted { inst, .. } => {
+                                    format!("insert {}", function.instruction(inst).opcode.mnemonic())
+                                }
+                                Change::Erased { inst, .. } => {
+                                    format!("erase {}", function.instruction(inst).opcode.mnemonic())
+                                }
+                                Change::Rewritten(inst) => {
+                                    format!("rewrite {}", function.instruction(inst).opcode.mnemonic())
+                                }
+                                Change::Moved { inst, .. } => {
+                                    format!("move {}", function.instruction(inst).opcode.mnemonic())
+                                }
+                                ref other => format!("{other:?}"),
+                            })
+                            .collect(),
+                    );
+                eprintln!("EDITS {edits:?}");
+            }
+            // A function replaced by a copy (a trial put back, a transaction
+            // committed) is another history, not an edit that was not said.
+            assert!(
+                !unreported_fails() || !entry.mark().same_history(now),
+                "{} was read after an edit that was not reported (the body went from {:?} to {now:?}, last pass {}): call `changed` as the edit is made",
+                entry.name(),
+                entry.mark(),
+                PASS.with(std::cell::Cell::get)
+            );
             if entry.incremental() {
                 self.kept.insert(key, entry);
             } else if why() {
@@ -983,6 +1101,13 @@ impl Analyses {
         out.sort_unstable();
         out
     }
+}
+
+/// `LLRM_CHECK_UNREPORTED`: an analysis of a function read after an edit that
+/// was not reported fails, where otherwise it is brought up to date.
+fn unreported_fails() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_UNREPORTED").is_some())
 }
 
 /// A module analysis: how to compute it, and whether two results agree.
@@ -1067,6 +1192,13 @@ pub struct ModuleAnalyses {
     dropped: HashMap<TypeId, Rc<dyn Any>>,
     outer: Option<Rc<Outer>>,
     functions: HashMap<GlobalId, Analyses>,
+    /// The bodies reported edited since the declarations were last checked
+    /// against the module, and whether anything else may have changed them
+    /// (`invalidate`): a pass that edits bodies says which, and the
+    /// declarations of the rest then stand without a look at each.
+    edited: BTreeSet<GlobalId>,
+    declarations_open: bool,
+    metadata_open: bool,
     /// What an analysis keeps for its next run, by its type: the working of an
     /// update that reuses the last.
     memos: HashMap<TypeId, Box<dyn Any>>,
@@ -1084,6 +1216,9 @@ impl ModuleAnalyses {
             dropped: HashMap::default(),
             outer: None,
             functions: HashMap::default(),
+            edited: BTreeSet::new(),
+            declarations_open: true,
+            metadata_open: true,
             memos: HashMap::default(),
             scratch: false,
         }
@@ -1202,6 +1337,19 @@ impl ModuleAnalyses {
         &mut self,
         preserved: &PreservedAnalyses,
     ) {
+        self.declarations_open = true;
+        self.metadata_open = true;
+        self.invalidate_bodies(preserved);
+    }
+
+    /// `invalidate` for a pass that edited only bodies, each reported to
+    /// `changed` (or `body_edited`) and none of them touching the metadata
+    /// or another global's declaration: the declarations and the
+    /// metadata are checked against those bodies alone.
+    pub fn invalidate_bodies(
+        &mut self,
+        preserved: &PreservedAnalyses,
+    ) {
         let gone: Vec<TypeId> = self.results.keys().filter(|one| !preserved.keeps(**one)).copied().collect();
         for one in gone {
             let (_, result) = self.results.remove(&one).expect("held");
@@ -1230,7 +1378,9 @@ impl ModuleAnalyses {
             self.functions.insert(id, Analyses::new(outer));
         }
         let layout = self.program.layout.clone();
-        self.functions.get_mut(&id).expect("inserted above").get::<A>(&module.context, &layout, function)
+        let analyses = self.functions.get_mut(&id).expect("inserted above");
+        analyses.forget_unreported(function);
+        analyses.get::<A>(&module.context, &layout, function)
     }
 
     /// `A` of function `id`, if its manager holds it.
@@ -1250,7 +1400,7 @@ impl ModuleAnalyses {
     ) -> &mut Analyses {
         let cache = self.functions.entry(id).or_insert_with(|| Analyses::new(Rc::clone(outer)));
         if !Rc::ptr_eq(&cache.outer, outer) {
-            cache.invalidate(&PreservedAnalyses::function());
+            cache.drop_unpreserved(&PreservedAnalyses::function());
             cache.outer = Rc::clone(outer);
         }
         cache
@@ -1263,6 +1413,29 @@ impl ModuleAnalyses {
         id: GlobalId,
     ) {
         self.functions.remove(&id);
+        self.edited.insert(id);
+    }
+
+    /// Body `id` was edited by a function pass over it alone, which left
+    /// `preserved`.
+    pub fn body_edited(
+        &mut self,
+        id: GlobalId,
+        preserved: &PreservedAnalyses,
+    ) {
+        self.edited.insert(id);
+        self.invalidate_bodies(preserved);
+    }
+
+    /// The bodies the declarations are to be checked against, or `None` where
+    /// anything may have changed.
+    fn declarations_edits(&self) -> Option<&BTreeSet<GlobalId>> {
+        (!self.declarations_open).then_some(&self.edited)
+    }
+
+    fn declarations_verified(&mut self) {
+        self.declarations_open = false;
+        self.edited.clear();
     }
 
     /// What a function analysis reads of `module`: the same proxy as last
@@ -1281,6 +1454,16 @@ impl ModuleAnalyses {
         .into_iter()
         .chain(self.required.clone());
         let modules: HashMap<TypeId, Rc<dyn Any>> = every.map(|kind| (kind.id, self.computed(kind, module))).collect();
+        // The declarations and the metadata are results among these: where
+        // every result is the one the proxy holds, so are they, and
+        // neither is read again.
+        if let Some(old) = self.outer.as_ref().filter(|old| {
+            Rc::ptr_eq(&old.program, &self.program)
+                && old.modules.len() == modules.len()
+                && modules.iter().all(|(key, one)| old.modules.get(key).is_some_and(|two| Rc::ptr_eq(one, two)))
+        }) {
+            return Rc::clone(old);
+        }
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()])
             .downcast::<Vec<GlobalValue>>()
             .expect("keyed by its type");
@@ -1289,6 +1472,19 @@ impl ModuleAnalyses {
             self.outer = Some(Rc::new(now));
         }
         Rc::clone(self.outer.as_ref().expect("set above"))
+    }
+
+    /// `outer`, without reading the module again where nothing was dropped
+    /// since: for a caller that asks again and again between changes (a
+    /// decision per call site) and so pays the module's size for each.
+    pub fn outer_held(
+        &mut self,
+        module: &Module,
+    ) -> Rc<Outer> {
+        match &self.outer {
+            Some(held) if self.dropped.is_empty() => Rc::clone(held),
+            _ => self.outer(module),
+        }
     }
 
     /// The held results among `kept` a fresh computation disagrees with.
@@ -1641,7 +1837,7 @@ impl PassManager {
                 });
                 let preserved = preserved.unless_unchanged(function, before);
                 kept.retain(|one| preserved.keeps(*one));
-                spanned("invalidate", || cache.invalidate(&preserved));
+                spanned("invalidate", || cache.invalidate(function, &preserved));
                 cache.check_kept(name, context, &layout, function);
                 if self.verify_invalidation {
                     let stale = cache.stale(context, &layout, function);

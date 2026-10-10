@@ -19,7 +19,7 @@ use crate::support::pyrepr::Repr;
 
 /// The 16-bit x86 rules, as the phase takes them by default.
 fn rules() -> &'static crate::backend::peep::Rules {
-    &crate::backend::peep::targets::x86_m16::RULES
+    &crate::backend::targets::x86_m16::RULES
 }
 
 fn r(
@@ -4097,7 +4097,7 @@ fn test_a_dword_copy_and_add_are_priced_with_their_operand_size_prefixes() {
 // extensions
 
 fn flat() -> &'static crate::backend::peep::Rules {
-    &crate::backend::peep::targets::x86_m32::RULES
+    &crate::backend::targets::x86_m32::RULES
 }
 
 fn word_load(into: Register) -> Arc<Insn> {
@@ -4649,4 +4649,14 @@ fn test_a_function_without_a_copy_runs_copy_propagation_zero_times() {
     let before = copyprop::runs();
     transform(one_block(vec![copy(0, Register::AX, Register::BX), add(1, Register::CX, Register::AX)]));
     assert!(copyprop::runs() - before >= 1, "copy propagation did not run on a body with a copy");
+}
+
+/// The lanes of a register follow the description: a high byte is lane 1 of its
+/// root, the stack pointer and what the file omits have none.
+#[test]
+fn the_lanes_of_a_register_are_the_descriptions() {
+    assert_eq!(_lanes(Register::AH), [(Register::EAX, 1)].into_iter().collect());
+    assert_eq!(_lanes(Register::BL), [(Register::EBX, 0)].into_iter().collect());
+    assert_eq!(_lanes(Register::DX), [(Register::EDX, 0), (Register::EDX, 1)].into_iter().collect());
+    assert!(!_lanes(Register::EBP).is_empty() && _lanes(Register::ESP).is_empty() && _lanes(Register::XMM0).is_empty());
 }

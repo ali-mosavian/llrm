@@ -20,7 +20,7 @@ use crate::backend::layout::_OPPOSITE;
 use crate::backend::objbuild::{SHORT_JUMP, short_reaches};
 use crate::backend::{cpu, machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, BlockOdds, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::hash::HashSet;
 use crate::support::hash::{IndexMap, IndexSet};
@@ -248,9 +248,10 @@ fn duplicated(
     let mut odds = body.odds.clone();
     let irreducible = |blocks: &[LirBlock]| !loopy::irreducible(blocks, Some(body.entry)).is_empty();
     let reducible = !irreducible(&body.blocks);
-    let mut blocks: Vec<LirBlock> = body.blocks.clone();
+    // Every copy that can be made, whether or not an earlier one is: what a
+    // copy reads is the body as it came.
+    let mut copies: Vec<(usize, LirBlock, i64, Vec<(i64, f64)>)> = Vec::new();
     for (index, parent) in body.blocks.iter().enumerate() {
-        let mut tried = odds.clone();
         let made = (|| {
             let real = _real(parent);
             let Some(last) = real
@@ -302,21 +303,56 @@ fn duplicated(
             // The edge to the tail becomes the tail's edges, at their odds.
             let into: Vec<(i64, f64)> =
                 tail.succ.iter().map(|next| (*next, body.odds.chance(tail.at, &tail.succ, *next))).collect();
-            tried.rerouted(parent.at, &parent.succ, tail.at, &into);
             // The parent's own branches keep their targets.
             let mut succ: Vec<i64> = parent.succ.iter().copied().filter(|at| *at != tail.at).collect();
             succ.extend(tail.succ.iter().filter(|at| !succ.contains(at)).copied().collect::<Vec<_>>());
-            Some(LirBlock { succ, ..parent.with_insns(insns) })
+            Some((LirBlock { succ, ..parent.with_insns(insns) }, tail.at, into))
         })();
-        // A copy that makes a second entry into a loop is refused: an
-        // irreducible body has no estimate of its loops.
-        if let Some(made) = made {
+        if let Some((made, tail, into)) = made {
+            copies.push((index, made, tail, into));
+        }
+    }
+    // A copy that makes a second entry into a loop is refused: an irreducible
+    // body has no estimate of its loops. Checked once for all the copies, as
+    // each is checked after the ones before it only when the whole is not
+    // reducible.
+    // One by one, each checked after the ones before it.
+    let sequential = |odds: &mut BlockOdds, copies: Vec<(usize, LirBlock, i64, Vec<(i64, f64)>)>| {
+        let mut blocks = body.blocks.clone();
+        for (index, made, tail, into) in copies {
             let before = std::mem::replace(&mut blocks[index], made);
             if reducible && irreducible(&blocks) {
                 blocks[index] = before;
             } else {
-                odds = tried;
+                odds.rerouted(body.blocks[index].at, &body.blocks[index].succ, tail, &into);
             }
+        }
+        blocks
+    };
+    let mut blocks: Vec<LirBlock> = body.blocks.clone();
+    for (index, made, _, _) in &copies {
+        blocks[*index] = made.clone();
+    }
+    if reducible && irreducible(&blocks) {
+        blocks = sequential(&mut odds, copies);
+    } else {
+        #[cfg(test)]
+        {
+            let mut checked = odds.clone();
+            assert!(
+                sequential(&mut checked, copies.clone()) == blocks
+                    && checked == {
+                        let mut all = odds.clone();
+                        for (index, _, tail, into) in &copies {
+                            all.rerouted(body.blocks[*index].at, &body.blocks[*index].succ, *tail, into);
+                        }
+                        all
+                    },
+                "the copies checked once are not the copies checked one by one"
+            );
+        }
+        for (index, _, tail, into) in &copies {
+            odds.rerouted(body.blocks[*index].at, &body.blocks[*index].succ, *tail, into);
         }
     }
     _reachable(&LirBody { odds, ..body.clone() }, blocks)
@@ -724,21 +760,27 @@ fn _placed(
         // fall-through the arm takes, reaches the join as `LIKELY` as
         // MachineBlockPlacement asks: else the shorter layout stands.
         let before = order.last().filter(|last| last.succ.contains(&at));
-        let arm = explicit
-            .iter()
-            .find(
-                |one| one.at != at
-                    && !one.cold
-                    && !done.contains(&one.at)
-                    && one.succ == [at]
-                    && predecessors.get(&one.at).is_some_and(|from| from.iter().all(|from| done.contains(from)))
-                    && odds.is_none_or(|busy| {
-                        before.is_none_or(|before| {
-                            busy.edge(one.at, at) * branchprob::LIKELY / (1.0 - branchprob::LIKELY)
-                                >= busy.edge(before.at, at)
-                        })
-                    }),
-            );
+        let is_arm = |one: &&LirBlock| {
+            one.at != at
+                && !one.cold
+                && !done.contains(&one.at)
+                && one.succ == [at]
+                && predecessors.get(&one.at).is_some_and(|from| from.iter().all(|from| done.contains(from)))
+                && odds.is_none_or(|busy| {
+                    before.is_none_or(|before| {
+                        busy.edge(one.at, at) * branchprob::LIKELY / (1.0 - branchprob::LIKELY)
+                            >= busy.edge(before.at, at)
+                    })
+                })
+        };
+        // Only a block that jumps to it can be, in the order blocks come.
+        let arm = predecessors.get(&at).into_iter().flatten().filter_map(|from| by_at.get(from)).find(is_arm);
+        #[cfg(test)]
+        assert_eq!(
+            arm.map(|one| one.at),
+            explicit.iter().find(is_arm).map(|one| one.at),
+            "the arm found among the predecessors is not the first of all the blocks"
+        );
         if let Some(arm) = arm {
             (current, source) = (Some(arm.at), None);
             continue;

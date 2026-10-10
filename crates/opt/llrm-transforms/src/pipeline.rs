@@ -375,7 +375,7 @@ pub fn recorded(
             let mut alone = Fixed::new(&Applied { dump: None, ..applied.clone() });
             Box::new(move |module, analyses, mut function| {
                 let layout = analyses.program().layout.clone();
-                let outer = analyses.outer(module);
+                let outer = analyses.outer_held(module);
                 let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
                 let Module { context, metadata, .. } = &mut *module;
                 let mut unit = Unit {
@@ -495,7 +495,7 @@ fn rerun(
     };
     let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
     let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
-    analyses.invalidate(&preserved);
+    analyses.body_edited(id, &preserved);
     if declared.place(module)? > 0 {
         analyses.invalidate(&PreservedAnalyses::none());
     }
@@ -774,10 +774,13 @@ impl Run {
             );
         }
         if preserved.are_all_preserved() {
+            // Every result stands, as the body is now (it may have edited and
+            // put back).
+            analyses.vouch(unit.function);
             return false;
         }
         llrm_mir::passes::note_pass(pass.name());
-        llrm_mir::passes::spanned("invalidate", || analyses.invalidate(&preserved));
+        llrm_mir::passes::spanned("invalidate", || analyses.invalidate(unit.function, &preserved));
         analyses.check_kept(pass.name(), unit.context, unit.layout, unit.function);
         self.changed(stage, unit, analyses);
         true
@@ -790,7 +793,7 @@ impl Run {
         analyses: &mut Analyses,
     ) {
         if cfg::_unreachable(unit.context, unit.function) {
-            analyses.invalidate(&PreservedAnalyses::none());
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
             self.changed("unreachable", unit, analyses);
         }
     }
