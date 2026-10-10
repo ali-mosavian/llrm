@@ -86,10 +86,11 @@ static int clip(Point *first, Point *last)
    (the value then takes four times the shorter less the longer, else four times
    the shorter): the pixels are where QB's are, and a line style's bits fall on
    the same ones. */
-static void line(const GdFill *fill, int x1, int y1, int x2, int y2, int solid)
+static void line(GdFill *fill, int x1, int y1, int x2, int y2, int solid)
 {
     Point first, last;
-    int dx, dy, major, minor, decision, minor4, step4, step_y, x, y, k;
+    int dx, dy, step_y;
+    unsigned turn;
 
     first.x = x1;
     first.y = y1;
@@ -103,49 +104,22 @@ static void line(const GdFill *fill, int x1, int y1, int x2, int y2, int solid)
         first = last;
         last = swap;
     }
-    x = (int)first.x;
-    y = (int)first.y;
     dx = (int)(last.x - first.x);
     dy = (int)(last.y > first.y ? last.y - first.y : first.y - last.y);
     step_y = last.y > first.y ? 1 : -1;
-    if (dy == 0 && solid) {
-        fill->box(fill, (unsigned)x, (unsigned)y, (unsigned)dx + 1, 1);
-        return;
-    }
     if (solid) {
-        fill->line(fill, (unsigned)x, (unsigned)y, (unsigned)dx, (unsigned)dy, step_y);
-        return;
-    }
-    major = dx > dy ? dx : dy;
-    minor = dx > dy ? dy : dx;
-    minor4 = 4 * minor;
-    step4 = 4 * (minor - major);
-    decision = minor4 - major;
-    gd_dots_begin(fill);
-    if (dx > dy) {
-        for (k = 0; k <= major; k++, x++) {
-            if (pattern & (0x8000u >> (phase++ & 15)))
-                fill->dot(fill, (unsigned)x, (unsigned)y);
-            if (decision < 0) {
-                decision += minor4;
-            } else {
-                decision += step4;
-                y += step_y;
-            }
+        if (dy == 0) {
+            fill->box(fill, (unsigned)first.x, (unsigned)first.y, (unsigned)dx + 1, 1);
+            return;
         }
+        fill->style = 0xFFFF;
     } else {
-        for (k = 0; k <= major; k++, y += step_y) {
-            if (pattern & (0x8000u >> (phase++ & 15)))
-                fill->dot(fill, (unsigned)x, (unsigned)y);
-            if (decision < 0) {
-                decision += minor4;
-            } else {
-                decision += step4;
-                x++;
-            }
-        }
+        /* the style's bits fall on the pixels in turn along the statement's lines: the next is the one the phase says */
+        turn = phase & 15;
+        fill->style = turn ? (pattern << turn | pattern >> (16 - turn)) & 0xFFFF : pattern;
+        phase += (unsigned)(dx > dy ? dx : dy) + 1;
     }
-    gd_dots_end(fill);
+    fill->line(fill, (unsigned)first.x, (unsigned)first.y, (unsigned)dx, (unsigned)dy, step_y);
 }
 
 /* B$LINE: color (-1 for the foreground), style (-1 for solid), and how: a line,

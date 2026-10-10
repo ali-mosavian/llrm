@@ -39,13 +39,12 @@ FillLine        struc
                 decision        dword   ?
                 minor4          dword   ?
                 step4           dword   ?
-                steps           dword   2 dup (?)       ;; bytes to the next row, after an even and after an odd one
-                phase           dword   ?               ;; 0 or 4: which of them follows the first
-                x_major         dword   ?
-                bit             dword   ?               ;; planar: the mask of the first pixel; CGA: its place in the byte
-                pixels          dword   ?               ;; CGA: pixels in a byte
-                tab             dword   ?               ;; CGA: the and of each place, then the xor
-                color           dword   ?               ;; planar
+                ystep           dword   ?               ;; bytes to the next row (CGA: 80, down; -80, up)
+                style           dword   ?               ;; the 16 bits of the line style, the first pixel's the high bit
+                x_major         dword   ?               ;; 1 along x, 0 along y, 2 straight down or up
+                pmask           dword   ?               ;; the first pixel's mask in its byte (EGA: one bit; CGA: its pixel's bits)
+                bpp             dword   ?               ;; CGA: bits a pixel
+                color           dword   ?               ;; the byte of the colour: CGA all its pixels, EGA the nibble
 FillLine        ends
 
 .code
@@ -73,8 +72,16 @@ B$FSEL          proc
                 mov     ax, word ptr byte_ops[ebx * 2]
                 mov     word ptr [lx_op], ax
                 mov     word ptr [ly_op], ax
+                mov     word ptr [sx_op], ax
+                mov     word ptr [sy_op], ax
+                mov     word ptr [lv_op], ax
+                mov     word ptr [sv_op], ax
                 mov     byte ptr [lx_imm], dl
                 mov     byte ptr [ly_imm], dl
+                mov     byte ptr [sx_imm], dl
+                mov     byte ptr [sy_imm], dl
+                mov     byte ptr [lv_imm], dl
+                mov     byte ptr [sv_imm], dl
                 jmp     short @F                ;; the patched bytes are not in the prefetch queue
 @@:
                 pop     ebx
@@ -163,7 +170,7 @@ B$FBOX          endp
 ;; the opcode and the mod/rm of each operation, for a dword and for a byte
 
 ;;::::::::::::::
-;; B$FLIN (eax: ptr FillLine): the 256-colour mode, a pixel a byte
+;; B$FLIN (eax: ptr FillLine): the 256-colour mode, a pixel a byte; the colour and `mov` patched in by B$FSEL
 B$FLIN          proc
 
                 push    ebx
@@ -173,46 +180,114 @@ B$FLIN          proc
                 push    edi
                 push    ebp
                 mov     esi, eax
+                push    [esi].FillLine.x_major
                 mov     edi, [esi].FillLine.dst
                 mov     ecx, [esi].FillLine.count
                 mov     ebx, [esi].FillLine.decision
                 mov     edx, [esi].FillLine.minor4
                 mov     ebp, [esi].FillLine.step4
-                mov     eax, [esi].FillLine.steps
-                cmp     [esi].FillLine.x_major, 0
-                je      @@ymajor
-@@xloop:
-lx_op           db      0C6h, 07h               ;; mov byte ptr [edi], imm8; patched as the box loop's is
-lx_imm          db      0
-                inc     edi
-                test    ebx, ebx
-                js      @@xflat
-                add     ebx, ebp
-                add     edi, eax
-                dec     ecx
-                jnz     @@xloop
-                jmp     @@done
-@@xflat:
-                add     ebx, edx
-                dec     ecx
-                jnz     @@xloop
-                jmp     @@done
-@@ymajor:
+                mov     eax, [esi].FillLine.ystep
+                movzx   esi, word ptr [esi].FillLine.style
+                cmp     dword ptr [esp], 1
+                je      @@x
+                cmp     dword ptr [esp], 2
+                je      @@v
+                cmp     si, 0FFFFh
+                jne     @@sy
+@@ly:
 ly_op           db      0C6h, 07h
 ly_imm          db      0
                 add     edi, eax
                 test    ebx, ebx
-                js      @@yflat
+                js      @@lyf
                 add     ebx, ebp
                 inc     edi
                 dec     ecx
-                jnz     @@ymajor
+                jnz     @@ly
                 jmp     @@done
-@@yflat:
+@@lyf:
                 add     ebx, edx
                 dec     ecx
-                jnz     @@ymajor
+                jnz     @@ly
+                jmp     @@done
+@@sy:
+                rol     si, 1
+                jnc     @F
+sy_op           db      0C6h, 07h
+sy_imm          db      0
+@@:
+                add     edi, eax
+                test    ebx, ebx
+                js      @@syf
+                add     ebx, ebp
+                inc     edi
+                dec     ecx
+                jnz     @@sy
+                jmp     @@done
+@@syf:
+                add     ebx, edx
+                dec     ecx
+                jnz     @@sy
+                jmp     @@done
+@@x:
+                cmp     si, 0FFFFh
+                jne     @@sx
+@@lx:
+lx_op           db      0C6h, 07h
+lx_imm          db      0
+                inc     edi
+                test    ebx, ebx
+                js      @@lxf
+                add     ebx, ebp
+                add     edi, eax
+                dec     ecx
+                jnz     @@lx
+                jmp     @@done
+@@lxf:
+                add     ebx, edx
+                dec     ecx
+                jnz     @@lx
+                jmp     @@done
+@@sx:
+                rol     si, 1
+                jnc     @F
+sx_op           db      0C6h, 07h
+sx_imm          db      0
+@@:
+                inc     edi
+                test    ebx, ebx
+                js      @@sxf
+                add     ebx, ebp
+                add     edi, eax
+                dec     ecx
+                jnz     @@sx
+                jmp     @@done
+@@sxf:
+                add     ebx, edx
+                dec     ecx
+                jnz     @@sx
+                jmp     @@done
+@@v:
+                cmp     si, 0FFFFh
+                jne     @@sv
+@@lv:
+lv_op           db      0C6h, 07h
+lv_imm          db      0
+                add     edi, eax
+                dec     ecx
+                jnz     @@lv
+                jmp     @@done
+@@sv:
+                rol     si, 1
+                jnc     @F
+sv_op           db      0C6h, 07h
+sv_imm          db      0
+@@:
+                add     edi, eax
+                dec     ecx
+                jnz     @@sv
 @@done:
+                add     esp, 4
                 pop     ebp
                 pop     edi
                 pop     esi
@@ -223,7 +298,8 @@ ly_imm          db      0
 B$FLIN          endp
 
 ;;::::::::::::::
-;; B$FLIC (eax: ptr FillLine): the CGA modes, pixels packed in bytes, each under its own and and xor
+;; B$FLIC (eax: ptr FillLine): the CGA modes, as QB's: the mask of the pixels of a line that fall in a byte is accumulated and
+;; the byte blended once; a step down or up a row toggles the bank (bit 13) and adds 80 when it comes back to the first
 B$FLIC          proc
 
                 push    ebx
@@ -233,65 +309,126 @@ B$FLIC          proc
                 push    edi
                 push    ebp
                 mov     esi, eax
+                mov     eax, [esi].FillLine.minor4
+                mov     [cx_i1v], eax
+                mov     [cy_i1v], eax
+                mov     eax, [esi].FillLine.step4
+                mov     [cx_i2v], eax
+                mov     [cy_i2v], eax
+                mov     eax, [esi].FillLine.ystep
+                mov     [cx_sv], eax
+                mov     [cy_sv], eax
+                mov     [cv_sv], eax
+                mov     bl, 75h                 ;; down: a row that was odd comes back to even: add 80
+                test    eax, eax
+                jns     @F
+                mov     bl, 74h                 ;; up: a row that was even comes out odd: subtract 80
+@@:
+                mov     [cx_j], bl
+                mov     [cy_j], bl
+                mov     [cv_j], bl
                 mov     edi, [esi].FillLine.dst
-                mov     ecx, [esi].FillLine.count
-                mov     ebx, [esi].FillLine.decision
-                mov     ebp, [esi].FillLine.bit
-                cmp     [esi].FillLine.x_major, 0
-                je      @@ymajor
-@@xloop:
-                mov     edx, [esi].FillLine.tab
-                mov     al, [edi]
-                and     al, [edx + ebp]
-                xor     al, [edx + ebp + 8]
-                mov     [edi], al
-                inc     ebp
-                cmp     ebp, [esi].FillLine.pixels
-                jb      @F
-                xor     ebp, ebp
-                inc     edi
+                mov     ebp, [esi].FillLine.decision
+                mov     bl, byte ptr [esi].FillLine.pmask
+                mov     cl, byte ptr [esi].FillLine.bpp
+                mov     ah, byte ptr [esi].FillLine.color
+                mov     bh, byte ptr [esi].FillLine.x_major
+                movzx   edx, word ptr [esi].FillLine.style
+                mov     esi, [esi].FillLine.count
+                xor     al, al
+                cmp     bh, 1
+                je      @@xl
+                cmp     bh, 2
+                je      @@vl
+@@yl:
+                rol     dx, 1
+                jnc     @@y2
+                mov     bh, ah
+                xor     bh, [edi]
+                and     bh, bl
+                xor     [edi], bh
+@@y2:
+                test    ebp, ebp
+                jns     @@y3
+cy_i1           db      81h, 0C5h               ;; add ebp, minor4
+cy_i1v          dd      0
+                jmp     @@ys
+@@y3:
+cy_i2           db      81h, 0C5h               ;; add ebp, step4
+cy_i2v          dd      0
+                ror     bl, cl
+                adc     edi, 0
+@@ys:
+                xor     edi, 2000h
+                test    edi, 2000h
+cy_j            db      75h, 6
+cy_s            db      81h, 0C7h               ;; add edi, +-80
+cy_sv           dd      0
+                dec     esi
+                jnz     @@yl
+                jmp     @@done
+@@xl:
+                rol     dx, 1
+                jnc     @F
+                or      al, bl
 @@:
-                test    ebx, ebx
-                js      @@xflat
-                add     ebx, [esi].FillLine.step4
-                mov     edx, [esi].FillLine.phase
-                add     edi, [esi + edx].FillLine.steps
-                xor     edx, 4
-                mov     [esi].FillLine.phase, edx
-                dec     ecx
-                jnz     @@xloop
-                jmp     @@done
-@@xflat:
-                add     ebx, [esi].FillLine.minor4
-                dec     ecx
-                jnz     @@xloop
-                jmp     @@done
-@@ymajor:
-                mov     edx, [esi].FillLine.tab
-                mov     al, [edi]
-                and     al, [edx + ebp]
-                xor     al, [edx + ebp + 8]
-                mov     [edi], al
-                mov     edx, [esi].FillLine.phase
-                add     edi, [esi + edx].FillLine.steps
-                xor     edx, 4
-                mov     [esi].FillLine.phase, edx
-                test    ebx, ebx
-                js      @@yflat
-                add     ebx, [esi].FillLine.step4
-                inc     ebp
-                cmp     ebp, [esi].FillLine.pixels
-                jb      @F
-                xor     ebp, ebp
+                test    ebp, ebp
+                jns     @@xy
+cx_i1           db      81h, 0C5h
+cx_i1v          dd      0
+                ror     bl, cl
+                jc      @@xb
+                dec     esi
+                jnz     @@xl
+                jmp     @@xe
+@@xb:
+                mov     bh, ah
+                xor     bh, [edi]
+                and     bh, al
+                xor     [edi], bh
+                xor     al, al
                 inc     edi
-@@:
-                dec     ecx
-                jnz     @@ymajor
+                dec     esi
+                jnz     @@xl
+                jmp     @@xe
+@@xy:
+cx_i2           db      81h, 0C5h
+cx_i2v          dd      0
+                mov     bh, ah
+                xor     bh, [edi]
+                and     bh, al
+                xor     [edi], bh
+                xor     al, al
+                ror     bl, cl
+                adc     edi, 0
+                xor     edi, 2000h
+                test    edi, 2000h
+cx_j            db      75h, 6
+cx_s            db      81h, 0C7h
+cx_sv           dd      0
+                dec     esi
+                jnz     @@xl
+@@xe:
+                mov     bh, ah
+                xor     bh, [edi]
+                and     bh, al
+                xor     [edi], bh
                 jmp     @@done
-@@yflat:
-                add     ebx, [esi].FillLine.minor4
-                dec     ecx
-                jnz     @@ymajor
+@@vl:
+                rol     dx, 1
+                jnc     @F
+                mov     bh, ah
+                xor     bh, [edi]
+                and     bh, bl
+                xor     [edi], bh
+@@:
+                xor     edi, 2000h
+                test    edi, 2000h
+cv_j            db      75h, 6
+cv_s            db      81h, 0C7h
+cv_sv           dd      0
+                dec     esi
+                jnz     @@vl
 @@done:
                 pop     ebp
                 pop     edi
@@ -303,8 +440,9 @@ B$FLIC          proc
 B$FLIC          endp
 
 ;;::::::::::::::
-;; B$FLIP (eax: ptr FillLine): the planar modes, the bit mask written for each pixel, the colour through write mode 2; the
-;; mask is FFh again at the end
+;; B$FLIP (eax: ptr FillLine): the EGA and VGA planar modes, as QB's: the mask of the pixels of a line in a byte is accumulated,
+;; then `out` it and one `xchg` reads the latches and writes the colour; a vertical line sets the mask once.  The graphics controller is
+;; left with the bit mask FFh.
 B$FLIP          proc
 
                 push    ebx
@@ -314,65 +452,110 @@ B$FLIP          proc
                 push    edi
                 push    ebp
                 mov     esi, eax
+                mov     eax, [esi].FillLine.minor4
+                mov     [ex_i1v], eax
+                mov     [ey_i1v], eax
+                mov     eax, [esi].FillLine.step4
+                mov     [ex_i2v], eax
+                mov     [ey_i2v], eax
+                mov     eax, [esi].FillLine.ystep
+                mov     [ex_ysv], eax
+                mov     [ey_ys1v], eax
+                mov     [ey_ys2v], eax
+                mov     [ev_ysv], eax
                 mov     edi, [esi].FillLine.dst
                 mov     ecx, [esi].FillLine.count
-                mov     ebx, [esi].FillLine.decision
-                mov     ebp, [esi].FillLine.bit
+                mov     ebp, [esi].FillLine.decision
+                mov     ah, byte ptr [esi].FillLine.color
+                mov     bl, byte ptr [esi].FillLine.pmask
+                mov     bh, byte ptr [esi].FillLine.x_major
+                movzx   esi, word ptr [esi].FillLine.style
                 mov     edx, 3CEh
-                cmp     [esi].FillLine.x_major, 0
-                je      @@ymajor
-@@xloop:
-                mov     eax, ebp
-                shl     eax, 8
                 mov     al, 8
-                out     dx, ax                  ;; the bit mask
-                mov     al, [edi]               ;; loads the latches
-                mov     al, byte ptr [esi].FillLine.color
-                mov     [edi], al
-                shr     ebp, 1
-                jnz     @F
-                mov     ebp, 80h
-                inc     edi
+                out     dx, al
+                inc     edx                     ;; the data port: the bit mask is addressed
+                xor     al, al
+                cmp     bh, 1
+                je      @@xl
+                cmp     bh, 2
+                je      @@v
+                mov     al, bl
+                out     dx, al
+@@yl:
+                rol     si, 1
+                jnc     @@y2
+                mov     al, ah
+                xchg    al, [edi]
+@@y2:
+                test    ebp, ebp
+                jns     @@y3
+ey_i1           db      81h, 0C5h
+ey_i1v          dd      0
+ey_ys1          db      81h, 0C7h               ;; add edi, ystep
+ey_ys1v         dd      0
+                loop    @@yl
+                jmp     @@done
+@@y3:
+ey_i2           db      81h, 0C5h
+ey_i2v          dd      0
+                ror     bl, 1
+                mov     al, bl
+                out     dx, al
+ey_ys2          db      81h, 0D7h               ;; adc edi, ystep: a step along x to the next byte as well
+ey_ys2v         dd      0
+                loop    @@yl
+                jmp     @@done
+@@xl:
+                rol     si, 1
+                jnc     @F
+                or      al, bl
 @@:
-                test    ebx, ebx
-                js      @@xflat
-                add     ebx, [esi].FillLine.step4
-                add     edi, [esi].FillLine.steps
-                dec     ecx
-                jnz     @@xloop
-                jmp     @@done
-@@xflat:
-                add     ebx, [esi].FillLine.minor4
-                dec     ecx
-                jnz     @@xloop
-                jmp     @@done
-@@ymajor:
-                mov     eax, ebp
-                shl     eax, 8
-                mov     al, 8
-                out     dx, ax
-                mov     al, [edi]
-                mov     al, byte ptr [esi].FillLine.color
-                mov     [edi], al
-                add     edi, [esi].FillLine.steps
-                test    ebx, ebx
-                js      @@yflat
-                add     ebx, [esi].FillLine.step4
-                shr     ebp, 1
-                jnz     @F
-                mov     ebp, 80h
+                test    ebp, ebp
+                jns     @@xy
+ex_i1           db      81h, 0C5h
+ex_i1v          dd      0
+                ror     bl, 1
+                jc      @@xb
+                loop    @@xl
+                jmp     @@xe
+@@xb:
+                out     dx, al
+                mov     al, ah
+                xchg    al, [edi]
+                xor     al, al
                 inc     edi
-@@:
-                dec     ecx
-                jnz     @@ymajor
+                loop    @@xl
+                jmp     @@xe
+@@xy:
+ex_i2           db      81h, 0C5h
+ex_i2v          dd      0
+                out     dx, al
+                mov     al, ah
+                xchg    al, [edi]
+                xor     al, al
+                ror     bl, 1
+ex_ys           db      81h, 0D7h
+ex_ysv          dd      0
+                loop    @@xl
+@@xe:
+                out     dx, al
+                xchg    ah, [edi]
                 jmp     @@done
-@@yflat:
-                add     ebx, [esi].FillLine.minor4
-                dec     ecx
-                jnz     @@ymajor
+@@v:
+                mov     al, bl
+                out     dx, al
+@@vl:
+                rol     si, 1
+                jnc     @F
+                mov     al, ah
+                xchg    al, [edi]
+@@:
+ev_ys           db      81h, 0C7h
+ev_ysv          dd      0
+                loop    @@vl
 @@done:
-                mov     eax, 0FF08h
-                out     dx, ax
+                mov     al, 0FFh
+                out     dx, al
                 pop     ebp
                 pop     edi
                 pop     esi

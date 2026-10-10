@@ -633,8 +633,8 @@ static void (*const dots[KINDS][2])(const GdFill *fill, unsigned x, unsigned y) 
     { packed2_dot, packed2_dot }
 };
 
-/* Lines: the loops of fill.asm, one for each kind of mode, with Bresenham's terms here. */
-static void line_terms(FillLine *line, unsigned dx, unsigned dy)
+/* Lines: the loops of fill.asm, one for each kind of mode, with Bresenham's terms here.  They draw in the colour, as set. */
+static void line_terms(FillLine *line, const GdFill *fill, unsigned dx, unsigned dy)
 {
     int major = (int)(dx > dy ? dx : dy), minor = (int)(dx > dy ? dy : dx);
 
@@ -642,18 +642,17 @@ static void line_terms(FillLine *line, unsigned dx, unsigned dy)
     line->minor4 = 4 * minor;
     line->step4 = 4 * (minor - major);
     line->decision = 4 * minor - major;
-    line->x_major = dx > dy;
+    line->x_major = dx == 0 ? 2 : dx > dy;
+    line->style = fill->style;
 }
 
 static void linear_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y)
 {
     FillLine line;
 
-    (void)fill;
-    line_terms(&line, dx, dy);
+    line_terms(&line, fill, dx, dy);
     line.dst = pixel_at(x, y);
-    line.steps[0] = line.steps[1] = step_y > 0 ? (int)pitch : -(int)pitch;
-    line.phase = 0;
+    line.ystep = step_y > 0 ? (int)pitch : -(int)pitch;
     dev_line_linear(&line);
 }
 
@@ -661,19 +660,12 @@ static void packed_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx,
 {
     FillLine line;
 
-    line_terms(&line, dx, dy);
+    line_terms(&line, fill, dx, dy);
     line.dst = packed_row(y) + (x * bits >> 3);
-    line.bit = x % (8 / bits);
-    line.pixels = 8 / bits;
-    line.tab = fill->tab;
-    if (step_y > 0) {
-        line.steps[0] = CGA_ODD_ROWS;
-        line.steps[1] = CGA_ROW_BYTES - CGA_ODD_ROWS;
-    } else {
-        line.steps[0] = CGA_ODD_ROWS - CGA_ROW_BYTES;
-        line.steps[1] = -CGA_ODD_ROWS;
-    }
-    line.phase = y & 1 ? sizeof(unsigned) : 0;
+    line.pmask = ((1u << bits) - 1) << (8 - bits - (x * bits & 7));
+    line.bpp = bits;
+    line.color = fill->flip;
+    line.ystep = step_y > 0 ? CGA_ROW_BYTES : -CGA_ROW_BYTES;
     dev_line_packed(&line);
 }
 
@@ -691,15 +683,12 @@ static void planar_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx,
 {
     FillLine line;
 
-    line_terms(&line, dx, dy);
+    line_terms(&line, fill, dx, dy);
     line.dst = byte_of(x, y);
-    line.bit = 0x80 >> (x & 7);
-    line.steps[0] = line.steps[1] = step_y > 0 ? (int)pitch : -(int)pitch;
-    line.phase = 0;
+    line.pmask = 0x80 >> (x & 7);
+    line.ystep = step_y > 0 ? (int)pitch : -(int)pitch;
     line.color = fill->color;
-    gd_dots_begin(fill);
     dev_line_planar(&line);
-    gd_dots_end(fill);
 }
 
 static void (*const lines[KINDS])(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y) = {
@@ -740,17 +729,8 @@ void gd_fill_select(GdFill *fill, unsigned color, unsigned operation)
     fill->box = boxes[kind];
     fill->dot = dots[kind][operation == 0];
     fill->line = lines[kind];
-    if (kind == KIND_PACKED4 || kind == KIND_PACKED2) {
-        unsigned bits = kind == KIND_PACKED4 ? 2 : 1, place;
-
-        for (place = 0; place < 8 / bits; place++) {
-            unsigned mask = ((1u << bits) - 1) << (8 - bits - place * bits);
-
-            fill->tab[place] = (u8)(operation == 0 ? 0 : operation == 1 ? byte : operation == 2 ? ~byte & 0xFF : 0xFF) | (u8)~mask;
-            fill->tab[8 + place] = (u8)((operation == 1 ? 0 : byte) & mask);
-        }
-    }
     fill->color = color & 0xFF;
+    fill->style = 0xFFFF;
     fill->operation = operation;
     fill->keep = operation == 0 ? 0 : operation == 1 ? byte : operation == 2 ? ~byte & 0xFF : 0xFF;
     fill->flip = operation == 1 ? 0 : byte;

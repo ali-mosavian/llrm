@@ -26,10 +26,10 @@ typedef struct GdFill {
     void (*dot)(const struct GdFill *fill, unsigned x, unsigned y);
     void (*line)(const struct GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y);
     unsigned color, operation, keep, flip;
-    unsigned char tab[16];      /* CGA: the and of each place in a byte, then the xor */
+    unsigned style;             /* of the next line: its 16 bits, the next pixel's the high one */
 } GdFill;
-/* A solid line from pixel (x, y) to the right, clipped to the screen: dx pixels across and dy down (step_y 1) or up
-   (-1), Bresenham's way, stepping along the longer side.  Not under gd_dots_begin. */
+/* A line of the fill's colour from pixel (x, y) to the right, clipped to the screen: dx pixels across and dy down (step_y 1) or up
+   (-1), Bresenham's way, stepping along the longer side, the pixels of the fill's `style` (0xFFFF for solid) drawn.  Set only. */
 /* One pixel with the same fill, for primitives that have clipped to the screen: bracketed by gd_dots_begin and
    gd_dots_end, which leave the adapter as a plot would (the planar modes keep their controller's function and mask
    between the two). */

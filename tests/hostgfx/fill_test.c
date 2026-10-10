@@ -51,34 +51,54 @@ void dev_fill_box(FillBox *box)
     }
 }
 
-/* The line loops of fill.asm in C (the planar one is the controller's: not modelled). */
+/* The line loops of fill.asm in C, a pixel at a time (the loops accumulate a byte's pixels, and the planar one is the controller's:
+   not modelled): the style rotated through, the colour set, a step along x moving the byte or, in CGA, the mask, and a step in y moving
+   the row or the CGA bank. */
 static void walk(FillLine *line, int packed)
 {
     unsigned char *at = line->dst;
-    unsigned place = line->bit, phase = line->phase;
+    unsigned mask = line->pmask, style = line->style & 0xFFFF;
     int decision = line->decision;
 
     for (unsigned k = 0; k < line->count; k++) {
-        if (packed)
-            *at = (*at & line->tab[place]) ^ line->tab[8 + place];
-        else
-            *at = (unsigned char)apply(*at);
-        int step = decision >= 0;
+        int x_step, y_step;
 
-        if (line->x_major) {
-            if (packed && ++place == line->pixels) { place = 0; at++; } else if (!packed) at++;
-        } else {
-            at += (int)line->steps[phase / sizeof(unsigned)];
-            phase ^= sizeof(unsigned);
+        if (style & 0x8000) {
+            if (packed)
+                *at = (*at & ~mask) | (line->color & mask);
+            else
+                *at = (unsigned char)apply(*at);
         }
-        if (step) {
-            decision += line->step4;
-            if (line->x_major) {
-                at += (int)line->steps[phase / sizeof(unsigned)];
-                phase ^= sizeof(unsigned);
-            } else if (packed && ++place == line->pixels) { place = 0; at++; } else if (!packed) at++;
+        style = (style << 1 | style >> 15) & 0xFFFF;
+        if (line->x_major == 2) {
+            x_step = 0;
+            y_step = 1;
         } else {
-            decision += line->minor4;
+            x_step = line->x_major == 1 || decision >= 0;
+            y_step = line->x_major == 0 || decision >= 0;
+            decision += decision < 0 ? line->minor4 : line->step4;
+        }
+        if (x_step) {
+            if (!packed) {
+                at++;
+            } else {
+                unsigned wraps = mask & ((1u << line->bpp) - 1);
+
+                mask = (mask >> line->bpp | mask << (8 - line->bpp)) & 0xFF;
+                if (wraps)
+                    at++;
+            }
+        }
+        if (y_step) {
+            if (!packed) {
+                at += line->ystep;
+            } else {
+                unsigned off = (unsigned)(at - cga_ram) ^ 0x2000;
+
+                if (line->ystep > 0 ? !(off & 0x2000) : (off & 0x2000))
+                    off += line->ystep;
+                at = cga_ram + off;
+            }
         }
     }
 }
@@ -133,23 +153,30 @@ int main(void)
                     return 1;
                 }
             }
-            if (modes[m].mode != 0x10 && modes[m].mode != 0x0D) {
-                /* a line, against Bresenham's loop through the dot */
+            if (modes[m].mode != 0x10 && modes[m].mode != 0x0D && op == 0) {
+                /* a line with a style, against Bresenham's loop through the dot */
                 unsigned lx = next() % 100, ly = 50 + next() % 100, ldx = next() % 100, ldy = next() % 50;
-                int up = next() & 1, step_y = up ? -1 : 1, major = (int)(ldx > ldy ? ldx : ldy), minor = (int)(ldx > ldy ? ldy : ldx);
-                int decision = 4 * minor - major, px = (int)lx, py = (int)ly;
+                unsigned style = next() & 1 ? 0xFFFF : (next() & 0xFFFF), turn = next() & 15;
+                int up = next() & 1, step_y = up ? -1 : 1, major, minor, decision, px = (int)lx, py = (int)ly;
 
+                if (next() % 4 == 0)
+                    ldx = 0;
+                major = (int)(ldx > ldy ? ldx : ldy);
+                minor = (int)(ldx > ldy ? ldy : ldx);
+                decision = 4 * minor - major;
                 memcpy(ram, before, size);
                 for (int k = 0; k <= major; k++) {
-                    fill.dot(&fill, (unsigned)px, (unsigned)py);
+                    if (style & (0x8000u >> ((turn + k) & 15)))
+                        fill.dot(&fill, (unsigned)px, (unsigned)py);
                     if (decision < 0) decision += 4 * minor; else { decision += 4 * (minor - major); if (ldx > ldy) py += step_y; else px++; }
                     if (ldx > ldy) px++; else py += step_y;
                 }
                 memcpy(after, ram, size);
                 memcpy(ram, before, size);
+                fill.style = turn ? (style << turn | style >> (16 - turn)) & 0xFFFF : style;
                 fill.line(&fill, lx, ly, ldx, ldy, step_y);
                 if (memcmp(ram, after, size)) {
-                    fprintf(stderr, "line: mode %u op %u color %u from %u,%u dx %u dy %u up %d\n", modes[m].mode, op, color, lx, ly, ldx, ldy, up);
+                    fprintf(stderr, "line: mode %u color %u from %u,%u dx %u dy %u up %d style %x turn %u\n", modes[m].mode, color, lx, ly, ldx, ldy, up, style, turn);
                     return 1;
                 }
             }

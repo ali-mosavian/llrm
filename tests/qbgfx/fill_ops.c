@@ -155,18 +155,25 @@ int main(void)
                             return 0;
                         }
             }
-            /* and a line: the loop of fill.asm against Bresenham's through the dot */
-            {
+            /* and a line with a style (set only): the loop of fill.asm against Bresenham's through the dot */
+            if (operation == 0) {
                 unsigned lx = next() % REGION_W, ly = next() % REGION_H, ldx = next() % (REGION_W - lx);
                 int up = next() & 1, step_y = up ? -1 : 1;
                 unsigned room = up ? ly : REGION_H - 1 - ly, ldy = room ? next() % (room + 1) : 0;
-                int major = (int)(ldx > ldy ? ldx : ldy), minor = (int)(ldx > ldy ? ldy : ldx), decision = 4 * minor - major, k;
+                unsigned style = next() & 1 ? 0xFFFF : (next() & 0xFFFF), turn = next() & 15;
+                int major, minor, decision, k;
                 int px = (int)lx, py = (int)ly;
 
+                if (next() % 4 == 0)
+                    ldx = 0;
+                major = (int)(ldx > ldy ? ldx : ldy);
+                minor = (int)(ldx > ldy ? ldy : ldx);
+                decision = 4 * minor - major;
                 grab(saved);
                 gd_dots_begin(&fill);
                 for (k = 0; k <= major; k++) {
-                    fill.dot(&fill, (unsigned)px, (unsigned)py);
+                    if (style & (0x8000u >> ((turn + k) & 15)))
+                        fill.dot(&fill, (unsigned)px, (unsigned)py);
                     if (decision < 0) {
                         decision += 4 * minor;
                     } else {
@@ -184,11 +191,12 @@ int main(void)
                 gd_dots_end(&fill);
                 grab(expected);
                 put_back(saved);
+                fill.style = turn ? (style << turn | style >> (16 - turn)) & 0xFFFF : style;
                 fill.line(&fill, lx, ly, ldx, ldy, step_y);
                 for (y = 0; y < REGION_H; y++)
                     for (x = 0; x < REGION_W; x++)
                         if (gd_read(x, y) != expected[y * REGION_W + x]) {
-                            report((long)modes[m] * 1000000L + (long)operation * 100000L + (long)(lx + ly * 100) + 70000L);
+                            report((long)modes[m] * 1000000L + (long)(lx + ly * 100) + 70000L + (ldx == 0 ? 5000L : 0));
                             return 0;
                         }
             }

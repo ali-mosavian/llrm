@@ -24,18 +24,16 @@ typedef struct FillBox {
     void QB_FAR *dst;
     unsigned rows, middle, steps[2], phase, edges, left, right;
 } FillBox;
-/* A line (fill.asm): `count` pixels from `dst`, Bresenham's decision value and its two increments, `x_major` if the
-   longer side is x; the first pixel is at `bit` (planar: its mask; CGA: its place in the byte) of the byte at dst,
-   and a step down a row adds steps[0] to the pointer from an even row, steps[1] from an odd one, `phase` (in bytes)
-   naming the first.  The pixel is the one B$FSEL's operation writes (CGA: `tab`, the and of each place in a byte,
-   then the xor; planar: `color`). */
+/* A line (fill.asm), set with the colour B$FSEL last had: `count` pixels from `dst` (the byte holding the first), Bresenham's decision
+   value and its two increments (`minor4`, `step4`), `x_major` 1 if the longer side is x, 0 if y, 2 for a vertical line; `style` the 16 bits
+   of the line style, the next pixel's the high bit.  `ystep` is the bytes to the next row, down or up (CGA: 80 and -80, the banks
+   toggling).  The first pixel's mask in its byte is `pmask` (a bit for the planar modes; the bits of the pixel for CGA, `bpp` wide, and
+   `color` the colour in every pixel of a byte; planar: the colour). */
 typedef struct FillLine {
     void QB_FAR *dst;
     unsigned count;
-    int decision, minor4, step4, steps[2];
-    unsigned phase, x_major, bit, pixels;
-    const unsigned char *tab;
-    unsigned color;
+    int decision, minor4, step4, ystep;
+    unsigned style, x_major, pmask, bpp, color;
 } FillLine;
 
 extern void dev_int10(Regs *regs);
