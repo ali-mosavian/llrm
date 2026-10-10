@@ -24,6 +24,12 @@ LEVELS = ["O0", "O1", "O2", "O3", "Os"]
 FLAGS = ["-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", "-fcf-protection=none", "-Dfar="]
 
 
+# Address space layout randomisation moves what a count depends on: a Python `sum(range(...))` read 12,969 or 13,381 Minstr (50
+# runs: 7 and 43; 50 of 50 the lower with it off), and `lir peephole` read two counts by where mimalloc's pages fell. A measured
+# command runs with the layout fixed, so one run and the next, base and head, are given the same addresses.
+UNRANDOMIZED = ["setarch", "-R"]
+
+
 def command(compiler: str, level: str, source: Path, bits: int = 32) -> list[str]:
     if compiler == "llrm":
         return [str(llrmbin.bin_dir() / "llrm-c"), f"-m{bits}", *(["-march=i486"] if bits == 32 else []), f"-{level}", "-o", "/dev/null", str(source)]
@@ -32,7 +38,7 @@ def command(compiler: str, level: str, source: Path, bits: int = 32) -> list[str
 
 def instructions(cmd: list[str]) -> int:
     with tempfile.NamedTemporaryFile("r") as out:
-        subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", out.name, *cmd], check=True, capture_output=True)
+        subprocess.run([*UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u", "-o", out.name, *cmd], check=True, capture_output=True)
         line = [l for l in out.read().splitlines() if "instructions" in l][0]
     return int(line.split(",")[0])
 
