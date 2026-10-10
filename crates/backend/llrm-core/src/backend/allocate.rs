@@ -156,14 +156,23 @@ pub type Live = IndexMap<i64, BTreeSet<u32>>;
 /// in one array, the fixed point a worklist over the rows. No set is built but
 /// the answer.
 pub fn live(body: &LirBody) -> (Live, Live) {
-    let dense = live_rows(body);
-    (dense.sets(&dense.into), dense.sets(&dense.out))
+    let rows = live_rows(body);
+    (rows.sets(true), rows.sets(false))
 }
 
 /// What is live at each block's entry and exit as the fixed point leaves it:
 /// rows of bits, which a reader that only walks the values need not turn into
 /// sets.
-pub struct LiveRows {
+pub struct LiveRows(Found);
+
+enum Found {
+    /// Rows of bits, one for each block: the fixed point over every value.
+    Dense(DenseRows),
+    /// The values each block has live, found from where the values occur.
+    Web(WebRows),
+}
+
+struct DenseRows {
     numbered: Vec<u32>,
     words: usize,
     position: IndexMap<i64, usize>,
@@ -175,25 +184,55 @@ pub struct LiveRows {
 impl LiveRows {
     /// How many values the rows number.
     pub fn numbered(&self) -> usize {
-        self.numbered.len()
+        match &self.0 {
+            Found::Dense(dense) => dense.numbered.len(),
+            Found::Web(web) => web.numbered(),
+        }
     }
 
     /// The values live at the entry of the block at `at`, in order.
     pub fn entering(
         &self,
         at: i64,
-    ) -> impl Iterator<Item = u32> + '_ {
-        self.values(&self.into, self.position[&at])
+    ) -> Box<dyn Iterator<Item = u32> + '_> {
+        match &self.0 {
+            Found::Dense(dense) => Box::new(dense.values(&dense.into, dense.position[&at])),
+            Found::Web(web) => Box::new(web.entering(at)),
+        }
     }
 
     /// The values live at the exit of the block at `at`, in order.
     pub fn leaving(
         &self,
         at: i64,
-    ) -> impl Iterator<Item = u32> + '_ {
-        self.values(&self.out, self.position[&at])
+    ) -> Box<dyn Iterator<Item = u32> + '_> {
+        match &self.0 {
+            Found::Dense(dense) => Box::new(dense.values(&dense.out, dense.position[&at])),
+            Found::Web(web) => Box::new(web.leaving(at)),
+        }
     }
 
+    /// Each block's entry (`entering`) or exit values, as sets, in the order of
+    /// the blocks.
+    fn sets(
+        &self,
+        entering: bool,
+    ) -> Live {
+        match &self.0 {
+            Found::Dense(dense) => dense.sets(if entering { &dense.into } else { &dense.out }),
+            Found::Web(web) => web
+                .graph
+                .position
+                .keys()
+                .map(|&block| {
+                    (block, if entering { web.entering(block).collect() } else { web.leaving(block).collect() })
+                })
+                .collect(),
+        }
+    }
+}
+
+impl DenseRows {
     fn holds(
         &self,
         rows: &[u64],
@@ -375,7 +414,10 @@ impl LiveAt for LiveRows {
         block: i64,
         value: u32,
     ) -> bool {
-        self.holds(&self.into, block, value)
+        match &self.0 {
+            Found::Dense(dense) => dense.holds(&dense.into, block, value),
+            Found::Web(web) => web.live_in(block, value),
+        }
     }
 
     fn live_out(
@@ -383,7 +425,10 @@ impl LiveAt for LiveRows {
         block: i64,
         value: u32,
     ) -> bool {
-        self.holds(&self.out, block, value)
+        match &self.0 {
+            Found::Dense(dense) => dense.holds(&dense.out, block, value),
+            Found::Web(web) => web.live_out(block, value),
+        }
     }
 }
 
@@ -414,6 +459,41 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
 /// the whole, the others are not numbered, so a caller that asks of a few
 /// values pays for rows of those.
 pub fn live_rows_by(
+    body: &LirBody,
+    keep: impl Fn(u32) -> bool,
+) -> LiveRows {
+    // Each value is followed from where it occurs up the predecessors to where
+    // it is written, so the work is the size of the live ranges and not the
+    // blocks times the values (gcc's `calculate_live_on_exit`, LLVM's
+    // `LiveVariables`). A body with phis is solved over the rows.
+    if body.blocks.iter().all(|block| block.phis.is_empty())
+        && let Some(web) = {
+            body.facts.0.bump("live-rows-walks");
+            crate::analysis::occurrences::Occurrences::scan(body, &keep).rows(body)
+        }
+    {
+        let found = LiveRows(Found::Web(web));
+        if llrm_support::env_set("LLRM_CHECK_LIVE") {
+            let walk = live_rows_dense(body, &keep);
+            for block in &body.blocks {
+                assert!(
+                    found.entering(block.at).eq(walk.entering(block.at))
+                        && found.leaving(block.at).eq(walk.leaving(block.at))
+                        && found.numbered() == walk.numbered(),
+                    "{}: the liveness found from the occurrences differs from the rows in block {:#x}",
+                    body.name,
+                    block.at
+                );
+            }
+        }
+        return found;
+    }
+    live_rows_dense(body, keep)
+}
+
+/// `live_rows_by` solved over rows of bits for every block: the oracle for the
+/// walk from the occurrences, and what a body with phis is solved by.
+pub fn live_rows_dense(
     body: &LirBody,
     keep: impl Fn(u32) -> bool,
 ) -> LiveRows {
@@ -562,7 +642,14 @@ pub fn live_rows_by(
             *word |= bits;
         }
     }
-    LiveRows { numbered, words, position, blocks: body.blocks.iter().map(|block| block.at).collect(), into, out }
+    LiveRows(Found::Dense(DenseRows {
+        numbered,
+        words,
+        position,
+        blocks: body.blocks.iter().map(|block| block.at).collect(),
+        into,
+        out,
+    }))
 }
 
 /// `live` as it was written over sorted sets, which the tests hold the dense

@@ -560,3 +560,14 @@ def test_a_carve_touches_the_blocks_it_changes_not_every_block(tmp_path):
     source.write_text(scaling.AXES["branches"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["split carving"]
     assert cost <= 1800, cost
+
+
+def test_the_backends_liveness_follows_each_value_from_its_reads_not_rows_of_every_value(tmp_path):
+    """`allocate::live_rows_by` solved rows of bits, blocks x values/64, for every pass that asks where values are live (13
+    callers): on `branches` at N=1024, `lir twoaddr` 2,751 Minstr, `intervals walk` 1,199, `lir pressuresink` 955 (3.3x to 3.8x
+    a doubling). In a body with no phis each value is followed from where it occurs up its predecessors to where it is written
+    (gcc `calculate_live_on_exit`, LLVM `LiveVariables`): 621, 97, 94."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    rows = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert rows["lir twoaddr"] <= 1200 and rows["intervals walk"] <= 400 and rows["lir pressuresink"] <= 400, rows

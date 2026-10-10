@@ -5785,9 +5785,16 @@ mod tests {
     fn test_the_plan_of_a_spill_reads_where_values_occur_from_the_postings_not_a_scan_of_the_body() {
         use crate::analysis::occurrences::Occurrences;
         let body = _three_blocks();
-        let before = Occurrences::scans(&body);
+        // The walk that finds where the values are live reads every instruction
+        // once (`live_rows_walks`); nothing else scans.
+        let before = (Occurrences::scans(&body), crate::backend::allocate::live_rows_walks(&body));
         planned(&body, &set(&[1]), &mut Frame::new(0)).expect("plans");
-        assert_eq!(Occurrences::scans(&body), before, "the body was scanned for the stable loads of the values");
+        let after = (Occurrences::scans(&body), crate::backend::allocate::live_rows_walks(&body));
+        assert_eq!(
+            after.0 - before.0,
+            after.1 - before.1,
+            "the body was scanned for the stable loads of the values, not only for liveness"
+        );
     }
 
     /// The homes' intervals were found afresh for every home after every spill,
