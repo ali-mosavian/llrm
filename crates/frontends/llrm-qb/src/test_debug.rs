@@ -170,3 +170,44 @@ fn g_writes_standard_codeview_4_by_default() {
     assert!(shape.iter().any(|one| one.starts_with("PROC SQUARE ") || one.starts_with("PROC Square ")), "{shape:#?}");
     assert!(shape.iter().any(|one| one.starts_with("PARAM ") && one.contains(".n:")), "{shape:#?}");
 }
+
+/// A STRING variable made `-g` refuse the whole compile ("CodeView 4: no
+/// primitive for BasicString"). CodeView 4 has no string; BASIC's near
+/// descriptor is a length and a pointer to the characters, so it is said as the
+/// struct it is.
+#[test]
+fn a_string_variable_is_a_struct_of_its_length_and_characters() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = "DECLARE SUB t ()\nt\nEND\nSUB t\nDIM s AS STRING\ns = \"hello\"\nPRINT s\nEND SUB\n";
+    let path = written(&directory, "str.bas", source.as_bytes());
+    let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+    let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+    // Not optimised: the variable is in its cell.
+    let codegen = llrm_core::driver::Options {
+        pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
+        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+    };
+    let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -g");
+    let shape = llrm_core::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
+    assert!(shape.iter().any(|one| one.starts_with("LOCAL T.S$:") && one.contains("struct STRING")), "{shape:#?}");
+}
+
+/// A variable of a type CodeView 4 cannot say (VBDOS's far string descriptor)
+/// is left out of the symbols; it did not refuse the compile, and the procedure
+/// stays.
+#[test]
+fn a_variable_of_a_type_codeview_cannot_say_is_left_out_not_a_refused_compile() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = "DECLARE SUB t ()\nt\nEND\nSUB t\nDIM s AS STRING\ns = \"hello\"\nPRINT s\nEND SUB\n";
+    let path = written(&directory, "far.bas", source.as_bytes());
+    let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+    let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+    let codegen = llrm_core::driver::Options {
+        pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
+        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+    };
+    let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -g");
+    let shape = llrm_core::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
+    assert!(shape.iter().any(|one| one.starts_with("PROC t ")), "{shape:#?}");
+    assert!(!shape.iter().any(|one| one.contains(".S$")), "{shape:#?}");
+}
