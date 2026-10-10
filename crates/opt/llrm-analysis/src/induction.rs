@@ -34,7 +34,7 @@ use crate::consts::{Known, masked};
 use crate::graph::loops::Loop;
 use crate::memory::{MemRef, Unit};
 use crate::noreturn;
-use crate::occurrence::{operations, phis};
+use crate::occurrence::{operations_in, phis};
 
 /// A recurrence's start or step: a value, or a number.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -2569,14 +2569,7 @@ fn _recurrences(
     priced: bool,
 ) -> Users {
     let function = unit.function;
-    let walk = Walk {
-        unit,
-        loop_,
-        counters,
-        priced,
-        still: invariant(function, &loop_.body),
-        facts: unit.registers().into_owned(),
-    };
+    let walk = Walk { unit, loop_, counters, priced, still: invariant(function, &loop_.body), facts: unit.registers() };
     let mut found = Users::default();
     for counter in counters.values() {
         let Some(phi) = defining(function, counter.value) else { continue };
@@ -2601,10 +2594,9 @@ fn _recurrences(
     let mut changed = true;
     while changed {
         changed = false;
-        for (inst, block, op) in operations(function) {
+        for (inst, block, op) in operations_in(function, &loop_.body) {
             let Some(result) = op.result else { continue };
-            if !loop_.body.contains(&cfg::id(block)) || found.web.contains(&inst) || found.values.contains_key(&result)
-            {
+            if found.web.contains(&inst) || found.values.contains_key(&result) {
                 continue;
             }
             if let Some(of) = walk.fold(&found, cfg::id(block), op) {
@@ -2623,7 +2615,7 @@ struct Walk<'a> {
     counters: &'a IndexMap<ValueId, Affine>,
     priced: bool,
     still: Invariant,
-    facts: IndexMap<ValueId, Known>,
+    facts: std::borrow::Cow<'a, IndexMap<ValueId, Known>>,
 }
 
 impl Walk<'_> {
