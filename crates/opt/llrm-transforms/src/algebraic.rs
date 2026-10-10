@@ -273,19 +273,22 @@ fn _extended_boolean_negated(
     true
 }
 
-/// `icmp eq (x + C1), C2` is `icmp eq x, C2 - C1`, and the same of `ne` and of
-/// a `sub`: a wrapping sum is a bijection, so equality needs no flag.
-/// InstCombine's `foldICmpAddConstant` and gcc's `fold_comparison` do it
+/// `icmp P (x + C1), C2` is `icmp P x, C2 - C1`, and the same of a `sub`.
+/// Equality needs no flag: a wrapping sum is a bijection. An ordered test
+/// needs the sum not to wrap as its own signedness (`nsw` for a signed
+/// predicate, `nuw` for an unsigned one) and the new constant to stay in the
+/// type. InstCombine's `foldICmpAddConstant` and gcc's `fold_comparison` do it
 /// whoever else reads the sum. A recursion inlined into itself tests `n - 1 ==
 /// 0`, `n - 2 == 0`, ... which are `n == 1`, `n == 2`: the chain of differences
-/// each level held in a register, and spilled, is dead (`rectwo`, `hanoi`).
+/// each level held in a register, and spilled, is dead (`rectwo`, `hanoi`); a
+/// loop's test of its step (`x - 2 < 2`) reads the counter itself again.
 fn _offset_compared(
     context: &mut Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
     let instruction = function.instruction(inst);
-    let Opcode::ICmp(predicate @ (IntPredicate::Eq | IntPredicate::Ne)) = instruction.opcode else { return false };
+    let Opcode::ICmp(predicate) = instruction.opcode else { return false };
     let [shifted, number] = instruction.operands[..] else { return false };
     let Some(wanted) = _integer(context, number) else { return false };
     let Some(made) = _definition(function, shifted) else { return false };
@@ -293,13 +296,40 @@ fn _offset_compared(
         return false;
     };
     let Some((source, offset)) = _value_and_constant(context, op, left, right) else { return false };
-    if width > 128 {
+    if width > 64 {
         return false;
     }
-    let target =
-        if op == BinaryOp::Add { wanted.wrapping_sub(offset) } else { wanted.wrapping_add(offset) } & mask(width);
+    let signed = matches!(
+        predicate,
+        IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
+    );
+    let ordered =
+        signed || matches!(
+            predicate,
+            IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge
+        );
     let ty = function.instruction(made).ty;
-    let constant = Operand::Constant(context.int(ty, target as i128));
+    let target = if !ordered {
+        let moved = if op == BinaryOp::Add { wanted.wrapping_sub(offset) } else { wanted.wrapping_add(offset) };
+        (moved & mask(width)) as i128
+    } else {
+        let wrap = if signed { Flags::NSW } else { Flags::NUW };
+        if !function.instruction(made).flags.contains(wrap) {
+            return false;
+        }
+        let (low, high) =
+            if signed { (-(1_i128 << (width - 1)), (1_i128 << (width - 1)) - 1) } else { (0, (1_i128 << width) - 1) };
+        let numeric = |value: u128| -> i128 {
+            if signed { ((value as i128) << (128 - width)) >> (128 - width) } else { value as i128 }
+        };
+        let shift = if op == BinaryOp::Add { numeric(offset) } else { -numeric(offset) };
+        let bound = numeric(wanted) - shift;
+        if !(low..=high).contains(&bound) {
+            return false;
+        }
+        bound
+    };
+    let constant = Operand::Constant(context.int(ty, target));
     _replace(function, inst, Opcode::ICmp(predicate), vec![source, constant]);
     true
 }

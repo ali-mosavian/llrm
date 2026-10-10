@@ -39,6 +39,11 @@ class OptionTests(unittest.TestCase):
         self.assertEqual(torture.program_options('/* { dg-additional-options "-O3 -fwrapv -fno-tree-ccp" } */'), ["-fwrapv"])
         self.assertEqual(torture.program_options("int x;"), [])
 
+    def test_a_program_that_asks_for_fwrapv_with_dg_options_is_built_with_it(self):
+        """920711-1 says `{ dg-options "-fwrapv" }`, which the runner did not read: `--a > 0` of the smallest int was folded to
+        `a > 1` on the no-wrap promise of a build that had asked for wrapping, and the program aborted (-O2 and -Os)."""
+        self.assertEqual(torture.program_options('/* { dg-options "-fwrapv" } */\nint x;'), ["-fwrapv"])
+
 class SymbolTests(unittest.TestCase):
     def test_an_undefined_symbol_is_refused_whichever_way_the_target_decorates_it(self):
         """m16 (cdecl, a leading underscore) reported `___builtin_prefetch` and `_sprintf`: the refusals name `__builtin_` and
