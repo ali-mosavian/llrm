@@ -84,3 +84,21 @@ fn test_a_loop_behind_a_guard_that_rules_out_its_bound_ends_on_the_flags_of_its_
         "{text}"
     );
 }
+
+/// mandel's `x * x >> 8` is a 32-bit `imul` and `sar` where the ranges prove the
+/// product fits. Behind the copy, they lost the bound of `x` (its header
+/// computes what the loop tested, and the step is tested after the increment),
+/// so the fixed-point product stayed `imul` + `shrd` (+32.5% instructions).
+#[test]
+fn test_a_fixed_point_product_in_a_rotated_loop_is_still_narrowed() {
+    let source = format!("{}/bench/mandel/mandel.nib", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(!text.contains("shrd"), "{text}");
+}
