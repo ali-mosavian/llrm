@@ -278,7 +278,7 @@ def test_algebraic_stays_below_cubic_in_the_masks_of_one_function(tmp_path):
         source.write_text("" if size == 0 else scaling.branches(size))
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     small, big = (own[label].get("mir algebraic", 0.0) - own["empty"].get("mir algebraic", 0.0) for label in ("n", "2n"))
-    assert big <= 3.3 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+    assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
 
 
 def test_loopslots_asks_each_instruction_once_not_once_for_each_loop_around_it(tmp_path):
@@ -290,6 +290,3 @@ def test_loopslots_asks_each_instruction_once_not_once_for_each_loop_around_it(t
     source.write_text(scaling.AXES["nest"](128))
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["lir loopslots"] <= 600, f"{own['lir loopslots']:.1f} Minstr"
-
-
-    assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
