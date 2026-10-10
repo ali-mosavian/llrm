@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::backend::registerinfo::segments;
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn};
 use crate::support::hash::{IndexMap, IndexSet};
@@ -97,10 +98,14 @@ fn _pair(
     {
         return None;
     }
-    // Spelt `les`; the rewriter respells it for the segment register the
-    // selector is given.
+    // Spelt as the load of the far segment; the rewriter respells it for the
+    // segment register the selector is given.
     let what = Semantics {
-        name: Some("les".to_owned()),
+        name: Some(
+            crate::backend::registerinfo::load_form(segments::far())
+                .expect("a target with a far segment states the load that fills it")
+                .to_owned(),
+        ),
         dests: vec![Loc::Held(first_dest), Loc::Held(second_dest)],
         sources: vec![Loc::Mem(Mem { width: 4, ..first_cell })],
         ..Semantics::new(Operation::Move)

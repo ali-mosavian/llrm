@@ -353,15 +353,12 @@ fn named_for_data_group(name: &str) -> bool {
         .any(|one| bare.starts_with(one))
         || name.starts_with('f')
 }
-// One far load per selector: its selector result is in the class, not pinned,
-// and the rewriter spells the instruction for the register it was given.
-pub static FAR_LOADS: LazyLock<IndexMap<Register, &'static str>> = LazyLock::new(|| {
-    IndexMap::from_iter([(Register::ES, "les"), (Register::FS, "lfs"), (Register::GS, "lgs"), (Register::DS, "lds")])
-});
-
+// One far load per selector register, as the register file states: its
+// selector result is in the class, not pinned, and the rewriter spells the
+// instruction for the register it was given.
 pub fn far_load(what: &Semantics) -> bool {
     what.op == Operation::Move
-        && what.name.as_deref().is_some_and(|name| FAR_LOADS.values().any(|one| *one == name))
+        && what.name.as_deref().is_some_and(|name| registerinfo::loaded_by(name).is_some())
         && what.dests.len() == 2
 }
 

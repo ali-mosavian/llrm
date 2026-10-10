@@ -3503,8 +3503,8 @@ fn _placed(
     let mut name = what.name.clone();
     if target::far_load(what) {
         if let Loc::Reg(selector) = &dests[1] {
-            if let Some(spelt) = target::FAR_LOADS.get(&selector.register) {
-                name = Some((*spelt).to_owned());
+            if let Some(spelt) = crate::backend::registerinfo::load_form(selector.register) {
+                name = Some(spelt.to_owned());
             }
         }
     }

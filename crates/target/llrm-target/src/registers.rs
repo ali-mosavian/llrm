@@ -1,7 +1,9 @@
 //! A target's register file, from its `registers.regs`: one register a line,
-//! `name bits root lane classes dwarf codeview`, classes comma separated and
-//! `-` for none; the last two are the register's number in each debug format,
-//! `-` where it has none.
+//! `name bits root lane classes dwarf codeview [load]`, classes comma separated
+//! and `-` for none; dwarf and codeview are the register's number in each debug
+//! format, `-` where it has none; `load` is the mnemonic that loads a far
+//! pointer's offset and this segment register (`les` for `es`), where there is
+//! one.
 
 /// One register: a root, or a view of one.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17,6 +19,8 @@ pub struct Register {
     pub dwarf: Option<u16>,
     /// Its CodeView register id (`CV_HREG_e`).
     pub codeview: Option<u16>,
+    /// The far-pointer load that fills this segment register.
+    pub load: Option<String>,
 }
 
 impl Register {
@@ -41,8 +45,14 @@ pub fn parse(text: &str) -> Result<Vec<Register>, String> {
             continue;
         }
         let columns: Vec<&str> = line.split_whitespace().collect();
-        let [name, bits, root, lane, classes, dwarf, codeview] = columns[..] else {
-            return Err(format!("registers.regs:{}: {} columns, not 7", index + 1, columns.len()));
+        let (name, bits, root, lane, classes, dwarf, codeview, load) = match columns[..] {
+            [name, bits, root, lane, classes, dwarf, codeview] => {
+                (name, bits, root, lane, classes, dwarf, codeview, None)
+            }
+            [name, bits, root, lane, classes, dwarf, codeview, load] => {
+                (name, bits, root, lane, classes, dwarf, codeview, Some(load.to_owned()))
+            }
+            _ => return Err(format!("registers.regs:{}: {} columns, not 7 or 8", index + 1, columns.len())),
         };
         let number =
             |text: &str, what: &str| text.parse().map_err(|_| format!("registers.regs:{}: {what} `{text}`", index + 1));
@@ -54,6 +64,7 @@ pub fn parse(text: &str) -> Result<Vec<Register>, String> {
             classes: if classes == "-" { Vec::new() } else { classes.split(',').map(str::to_owned).collect() },
             dwarf: optional(dwarf).map_err(|text| format!("registers.regs:{}: dwarf `{text}`", index + 1))?,
             codeview: optional(codeview).map_err(|text| format!("registers.regs:{}: codeview `{text}`", index + 1))?,
+            load,
         });
     }
     Ok(registers)
@@ -83,7 +94,7 @@ mod tests {
         assert_eq!(registers.len(), 4);
         assert_eq!(allocatable(&registers), 2);
         assert!(registers[0].is("byte") && registers[2].classes.is_empty());
-        assert_eq!(parse("eax 32 eax").unwrap_err(), "registers.regs:1: 3 columns, not 7");
+        assert_eq!(parse("eax 32 eax").unwrap_err(), "registers.regs:1: 3 columns, not 7 or 8");
         assert_eq!((registers[0].dwarf, registers[0].codeview), (Some(0), Some(17)));
     }
 
@@ -153,6 +164,10 @@ pub fn source(
             }
         }
     };
+    let loads: Vec<String> = registers
+        .iter()
+        .filter_map(|one| one.load.as_ref().map(|load| format!("({id}::{}, {load:?})", one.name.to_uppercase())))
+        .collect();
     let optional = |class: &str| -> Result<String, String> {
         let roots: Vec<&Register> = registers.iter().filter(|one| one.is(class)).collect();
         match roots[..] {
@@ -164,7 +179,8 @@ pub fn source(
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, views }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, views }}\n}};\n",
+        loads.join(", "),
         columns.join(", "),
         role("frame")?,
         role("stack")?,
@@ -227,6 +243,19 @@ mod source_tests {
         let two = format!("{base}ds 16 ds 0 data_segment - 3\nes 16 es 0 data_segment - 4\n");
         assert!(
             source(&two, "Reg", &classes).err().expect("refused").contains("2 registers have the class `data_segment`")
+        );
+    }
+
+    /// A far load names the segment register it fills; a row without one has
+    /// none.
+    #[test]
+    fn a_load_is_the_eighth_column() {
+        let text = "ebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\nes 16 es 0 - - 3 les\nds 16 ds 0 - - 4\n";
+        let made = source(text, "Reg", &["frame", "stack"]).unwrap();
+        assert!(made.contains("(Reg::ES, \"les\")") && !made.contains("(Reg::DS"), "{made}");
+        assert_eq!(
+            crate::registers::parse("a 8 a 0 - - 1 x y").unwrap_err(),
+            "registers.regs:1: 9 columns, not 7 or 8"
         );
     }
 }

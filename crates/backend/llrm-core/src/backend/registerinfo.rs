@@ -110,6 +110,20 @@ pub fn far_segment() -> Option<RegId> {
 }
 
 /// Whether `register` is a segment register.
+pub fn load_form(segment: RegId) -> Option<&'static str> {
+    info().load_form(segment)
+}
+
+pub fn loaded_by(form: &str) -> Option<RegId> {
+    info().loaded_by(form)
+}
+
+/// Whether `form` loads a far pointer into a segment register an address may
+/// be held in: any but the data segment, which is the default.
+pub fn loads_a_selector(form: &str) -> bool {
+    loaded_by(form).is_some_and(|segment| !is_data_segment(segment))
+}
+
 pub fn is_segment(register: RegId) -> bool {
     in_class(register, class::SEGMENT)
 }
@@ -217,5 +231,19 @@ mod tests {
         assert!([RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS].into_iter().all(is_segment));
         assert!(![RegId::AX, RegId::EBP, RegId::ST0].into_iter().any(is_segment));
         assert!(!is_stack_segment(RegId::DS) && !is_data_segment(RegId::FS) && !is_code_segment(RegId::None));
+    }
+
+    /// The load that fills each segment register is the description's, and
+    /// agrees with the form table's `d1=<segment>` row of that mnemonic.
+    #[test]
+    fn the_far_loads_are_the_ones_the_description_states() {
+        let forms = include_str!("../../../../target/llrm-x86-m16/src/instructions/x86.instr");
+        for (segment, form) in [(RegId::ES, "les"), (RegId::DS, "lds"), (RegId::FS, "lfs"), (RegId::GS, "lgs")] {
+            assert_eq!((load_form(segment), loaded_by(form)), (Some(form), Some(segment)));
+            let row = forms.lines().find(|line| line.starts_with(&format!("{form} "))).expect("a form row");
+            assert!(row.contains(&format!("d1={}", info().name(segment).unwrap())), "{row}");
+        }
+        assert_eq!((load_form(RegId::CS), loaded_by("mov")), (None, None));
+        assert!(loads_a_selector("les") && !loads_a_selector("lds") && !loads_a_selector("mov"));
     }
 }
