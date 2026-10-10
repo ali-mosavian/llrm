@@ -48,7 +48,7 @@ use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{FloatKind, Type};
-use llrm_support::hash::{HashMap, HashSet, IndexMap};
+use llrm_support::hash::{HashMap, IndexMap};
 use num_bigint::BigInt;
 
 use crate::avail;
