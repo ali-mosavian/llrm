@@ -4463,9 +4463,12 @@ impl Selector<'_, '_, '_> {
             let held = self.float(value, at, out)?;
             out.push(insn(at, semantics(Operation::FloatStore, "", vec![], vec![Loc::Held(held)])));
         } else if let Some(&value) = operands.first().filter(|&&one| self.is_wide(type_of(one))) {
-            // edx:eax.
+            // The convention's pair, low half first.
             let (low, high) = self.wide(value, at, out)?;
-            one.requires = vec![(low, Register::EAX), (high, Register::EDX)];
+            let [low_register, high_register] = convention.returns[..] else {
+                return refuse("a wide result the convention has no register pair for");
+            };
+            one.requires = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
             one.uses = vec![low.value, high.value];
         } else if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
             // One register holds both, offset low and selector high: the dword
@@ -5150,7 +5153,11 @@ impl Selector<'_, '_, '_> {
             float = Some(Held { value: self.value(value), width: FLOAT });
         } else if let Some(value) = instruction.result.filter(|_| self.is_wide(instruction.ty)) {
             let (low, high) = (self.fresh_held(4), self.fresh_held(4));
-            delivers = vec![(low, Register::EAX), (high, Register::EDX)];
+            let [low_register, high_register] = results(self.arch, self::entry(self.arch, convention, variadic), 8)[..]
+            else {
+                return refuse(format!("@{name}'s wide result"));
+            };
+            delivers = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
             self.wides.insert(value, (low, high));
         } else if let Some(value) = instruction.result.filter(|_| self.is_far(instruction.ty)) {
             match results(self.arch, self::entry(self.arch, convention, variadic), 4)[..] {
