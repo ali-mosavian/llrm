@@ -219,21 +219,24 @@ impl Peephole {
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
             self.rules,
-            &fused(
+            &fused_calls(
                 self.rules,
-                &overwritten(&shuttles(
+                &fused(
                     self.rules,
-                    &restored_copies(
+                    &overwritten(&shuttles(
                         self.rules,
-                        &high_extracts(
-                            &transferred(
-                                self.rules,
-                                &commuted(self.rules, &constants(&pushes(self.rules, &body, &self.cpu))),
-                            ),
-                            &self.cpu,
-                        )?,
-                    ),
-                )),
+                        &restored_copies(
+                            self.rules,
+                            &high_extracts(
+                                &transferred(
+                                    self.rules,
+                                    &commuted(self.rules, &constants(&pushes(self.rules, &body, &self.cpu))),
+                                ),
+                                &self.cpu,
+                            )?,
+                        ),
+                    )),
+                ),
             ),
         );
         let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
@@ -1391,6 +1394,15 @@ pub fn fused(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.fused, body, &Facts::new(body, None))
+}
+
+/// Fold a load that only an indirect call reads into the call
+/// (`peephole.peep`).
+pub fn fused_calls(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.fused_calls, body, &Facts::new(body, None))
 }
 
 /// Load a far pointer's two words with one les (lds, lfs, lgs)

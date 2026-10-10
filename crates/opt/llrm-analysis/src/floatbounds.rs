@@ -37,7 +37,7 @@ use crate::cfg;
 use crate::consts::{self, Calls, Cells};
 use crate::floatfacts::{self, Finite, Format, Operation, Rule};
 use crate::memory::{MemRef, Unit};
-use crate::ranges::{self, Interval};
+use crate::ranges;
 
 pub type Bounds = (BigInt, BigInt);
 
@@ -87,8 +87,8 @@ pub fn _memory(
     unit: &Unit,
     inst: InstId,
     format: Format,
-    memory: &Cells,
-    scoped: &IndexMap<ValueId, Interval>,
+    read: &mut dyn FnMut(&[MemRef]) -> Cells,
+    scoped: &crate::ranges::Intervals,
 ) -> Option<Bounds> {
     let reference = MemRef::of(unit, inst)?;
     let width = match format {
@@ -102,7 +102,7 @@ pub fn _memory(
     let mut offsets = vec![BigInt::from(0)];
     if let Some(base) = reference.base {
         let interval = scoped.get(&base)?;
-        let known = scoped.iter().map(|(value, interval)| (*value, interval.clone())).collect::<BTreeMap<_, _>>();
+        let known = scoped.iter().map(|(value, interval)| (value, interval.clone())).collect::<BTreeMap<_, _>>();
         if ranges::covering(&reference, &known).base.is_some() {
             return None;
         }
@@ -116,15 +116,21 @@ pub fn _memory(
             index += 1;
         }
     }
+    let cells = offsets
+        .into_iter()
+        .map(|offset| {
+            Some(MemRef {
+                base: None,
+                scale: 0,
+                disp: reference.disp.checked_add(i64::try_from(offset).ok()?)?,
+                ..reference.clone()
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let memory = read(&cells);
     let mut values = Vec::new();
-    for offset in offsets {
-        let cell = MemRef {
-            base: None,
-            scale: 0,
-            disp: reference.disp.checked_add(i64::try_from(offset).ok()?)?,
-            ..reference.clone()
-        };
-        let bits = consts::_cell(memory, &cell)?;
+    for cell in cells {
+        let bits = consts::_cell(&memory, &cell)?;
         let value = floatfacts::decoded(&bits.n, format).filter(|value| value.value.denominator == BigInt::from(1))?;
         values.push(value.value.numerator);
     }
@@ -175,7 +181,8 @@ pub fn exact(
     if pending.is_empty() {
         return Ok(BTreeSet::new());
     }
-    let memory = floatfacts::cells(unit, &Calls::default());
+    let integers = consts::known_walked(unit, &Calls::default());
+    let mut asked = consts::memory_queries(*unit, &integers);
     // What the counted loops bound is the manager's: it is never solved here
     // (no program in the corpus reached a solve here).
     let scoped = unit.bounds.ok_or("float bounds without the manager's bounds of the body")?;
@@ -189,7 +196,7 @@ pub fn exact(
         .collect::<Vec<_>>();
     let mut safe = BTreeSet::new();
     let mut values = IndexMap::<ValueId, Bounds>::default();
-    let (empty_cells, empty_scope) = (Cells::default(), IndexMap::default());
+    let empty_scope = crate::ranges::Intervals::default();
     let mut changed = true;
     while changed {
         changed = false;
@@ -218,8 +225,18 @@ pub fn exact(
         for (block, inst, rule) in pending {
             let op = function.instruction(inst);
             let inputs = if let Opcode::Load { .. } = op.opcode {
-                let here = memory.get(&inst).map(|here| &**here).unwrap_or(&empty_cells);
-                _memory(unit, inst, rule.inputs[0], here, scoped.at(cfg::id(block)).unwrap_or(&empty_scope))
+                let mut read = |references: &[MemRef]| {
+                    floatfacts::cells_before(
+                        unit,
+                        &Calls::default(),
+                        &integers,
+                        constants,
+                        consts::ReadAt::Before(inst),
+                        references,
+                        &mut asked,
+                    )
+                };
+                _memory(unit, inst, rule.inputs[0], &mut read, scoped.at(cfg::id(block)).unwrap_or(&empty_scope))
                     .map(|one| vec![one])
             } else {
                 rule.inputs

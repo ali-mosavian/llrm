@@ -51,6 +51,9 @@ pub struct Options {
     /// Whether the callers' arguments are stated as ranges on a body's
     /// parameters: gcc's `-fipa-vrp`, -O2 and up.
     pub ipa_ranges: bool,
+    /// Alias and branch decisions use the intervals of counted loops (gcc's
+    /// `-ftree-vrp`, -O2; its -O1 has them for induction variables only).
+    pub loop_intervals: bool,
     pub lcssa: bool,
     pub floatloop: bool,
     pub fold: bool,
@@ -98,6 +101,7 @@ impl Default for Options {
             dead: true,
             hoist: true,
             ipa_ranges: true,
+            loop_intervals: true,
             forward: true,
             drop_loads: true,
             drop_stores: true,
@@ -127,15 +131,18 @@ impl Options {
     /// loop is copied out completely only where the code does not grow;
     /// nothing is inlined that `early-inlining-insns` (6) over
     /// `max-inline-insns-auto` (15) of the -O2 threshold does not admit,
-    /// and no gcse, sibling calls, pattern fill, peeling or unswitching.
+    /// and no gcse, sibling calls, peeling or unswitching. Pattern fill is on
+    /// (`LoopIdiomRecognize` is in LLVM's O1 pipeline, PassBuilderPipelines.cpp
+    /// L562): the one departure from gcc's -O1 here, the user's decision of
+    /// 2026-10-10 (docs/levels.md).
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
             inline: inline::Threshold::new(Self::default().inline.limit * 6 / 15),
             ipa_ranges: false,
+            loop_intervals: false,
             forward: false,
             drop_loads: false,
-            fill: false,
             sibcalls: false,
             peel: false,
             unswitch: false,
@@ -298,7 +305,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
         Box::new(fill::Fill { size: applied.options.prefers_size() }),
-        Box::new(fill::Merge),
+        Box::new(fill::Merge { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
@@ -343,6 +350,7 @@ pub fn recorded(
 ) -> Result<Vec<Stage>, String> {
     timed();
     let mut manager = PassManager::default();
+    manager.without_loop_intervals = !applied.options.loop_intervals;
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     if !applied.options.optimize {

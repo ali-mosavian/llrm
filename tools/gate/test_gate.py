@@ -498,3 +498,38 @@ def test_every_step_runs_with_the_flags_the_build_used_and_the_base_build_with_n
     assert f"RUSTFLAGS='{gate.WARNING_FLAGS}'" in gate.BUILD
     assert "RUSTFLAGS" in gate.MEASURE_BUILD and "env -u RUSTFLAGS cargo" in gate.MEASURE_BUILD
     assert "RUSTFLAGS" not in gate.MEASURE_BUILD.replace("env -u RUSTFLAGS", "")
+
+
+def test_a_run_asked_for_another_commit_refuses_and_names_no_pass():
+    """A gate started on a checkout that had failed passed on the previous run's log, and the commit it named was never run."""
+    done = subprocess.run([sys.executable, str(ROOT / "tools/gate/gate.py"), "run", "--expect", "0000000"], capture_output=True, text=True, cwd=ROOT)
+    assert done.returncode == 2 and "not the checkout asked for" in done.stdout, done.stdout + done.stderr
+    assert "PASS" not in done.stdout
+
+
+def test_a_dirty_tree_is_refused_unless_it_is_allowed_and_a_verdict_names_its_commit():
+    assert gate.refusal("a" * 40, True, None, False) and "differs from HEAD" in gate.refusal("a" * 40, True, None, False)
+    assert gate.refusal("a" * 40, True, None, True) is None and gate.refusal("a" * 40, False, "aaaa", False) is None
+    assert gate.verdict_line("fast", [], [], 5.0, [], "abcdef0123456789").startswith("GATE fast PASS at abcdef012345")
+    assert gate.verdict_line("fast", ["lib"], [], 5.0, [], "abcdef0123456789").startswith("GATE fast FAIL: lib at abcdef012345")
+
+
+def test_the_steps_run_the_binaries_cargo_linked_before_them_not_the_path_cargo_relinks(tmp_path):
+    """Torture died on `No such file .../release/llrm-c`: a `cargo test --release --test X` in another step removes the file and links
+    its own binary there, even when nothing was rebuilt. The steps get links to the build's files, which a later link does not touch."""
+    release = tmp_path / "release"
+    release.mkdir()
+    (release / "deps").mkdir()
+    for name, text in (("llrm-c", "built"), ("jwlink", "tool"), ("llrm-c.d", "dep-info")):
+        (release / name).write_text(text)
+        (release / name).chmod(0o755)
+    shared = gate.snapshot_binaries(release, tmp_path / "gate-bins")
+    assert sorted(one.name for one in shared.iterdir()) == ["jwlink", "llrm-c"], "the dep-info or a directory was taken"
+    # What cargo does for the next invocation: remove, then link another file.
+    (release / "llrm-c").unlink()
+    assert not (release / "llrm-c").exists() and (shared / "llrm-c").read_text() == "built"
+    (release / "llrm-c").write_text("relinked")
+    assert (shared / "llrm-c").read_text() == "built"
+    # A second snapshot (another group of the gate) replaces the links.
+    (release / "llrm-c").chmod(0o755)
+    assert (gate.snapshot_binaries(release, tmp_path / "gate-bins") / "llrm-c").read_text() == "relinked"

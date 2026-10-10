@@ -44,11 +44,12 @@ use std::fmt;
 use std::rc::Rc;
 
 use llrm_mir::context::{ConstantExpr, ConstantKind};
+use llrm_mir::dense::IdMap;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{FloatKind, Type};
-use llrm_support::hash::{HashMap, HashSet, IndexMap};
+use llrm_support::hash::{HashMap, IndexMap};
 use num_bigint::BigInt;
 
 use crate::avail;
@@ -83,9 +84,6 @@ pub static ARITH: [(BinaryOp, Binary); 8] = [
 /// joins do not discard an untouched neighbor. A cell is its address and
 /// its width in bytes.
 pub type Cells = IndexMap<(Addr, u32), Known>;
-
-/// What each instruction sees in memory; runs of instructions share one map.
-pub type HeldCells = IndexMap<InstId, Rc<Cells>>;
 
 /// What each call writes, where `alias::calls_annotated` found it. A call
 /// not here writes what `memory::unmodeled_write` says: everything, or
@@ -377,7 +375,7 @@ pub fn folds(kind: BinaryOp) -> bool {
 
 /// What this store puts in its cell, where that is a number: a float's
 /// bits too, which floatfacts supplies for a computed value.
-fn _put(
+pub fn _put(
     unit: &Unit,
     inst: InstId,
     known: &IndexMap<ValueId, Known>,
@@ -459,9 +457,9 @@ fn _selector(
 
 /// Every value an instruction that writes memory reads: `_kills` asks
 /// `known` of no other.
-fn _memory_reads(unit: &Unit) -> HashSet<ValueId> {
+fn _memory_reads(unit: &Unit) -> llrm_mir::dense::IdSet<ValueId> {
     let function = unit.function;
-    let mut read = HashSet::default();
+    let mut read = llrm_mir::dense::IdSet::new();
     for (_, inst) in function.walk() {
         let op = function.instruction(inst);
         if !matches!(
@@ -593,362 +591,6 @@ fn _killed(
     here
 }
 
-/// What `cells_solved` found, and what each block ends with, which a later
-/// solve of the same body with some blocks changed starts from. A restart's is
-/// of the blocks it worked alone, for `restarted` to put in their place.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SolvedCells {
-    /// Each block's instructions' cells, a block's together: a restart replaces
-    /// those of the blocks it works and shares the rest. One per instruction,
-    /// in the block's order; only where the solve is asked to keep them.
-    pub blocks: IndexMap<i64, Rc<Vec<Rc<Cells>>>>,
-    /// Otherwise every instruction's, in one map.
-    pub flat: HeldCells,
-    pub outof: IndexMap<i64, Option<Rc<Cells>>>,
-    /// The body's blocks and edges, as solved: a restart is of the same ones.
-    frame: Rc<Frame>,
-}
-
-/// What the solve reads of a body's shape, found once for its blocks and edges.
-#[derive(Debug, Default)]
-struct Frame {
-    graph: Vec<cfg::Block>,
-    preds: IndexMap<i64, Vec<i64>>,
-    successors: HashMap<i64, Vec<i64>>,
-    /// Reverse postorder from the entry, and each block's place in it.
-    order: Vec<i64>,
-    rank: HashMap<i64, usize>,
-    /// Each block of a cycle with the blocks of its cycle, when asked.
-    cycles: std::cell::OnceCell<HashMap<i64, Vec<i64>>>,
-}
-
-impl PartialEq for Frame {
-    fn eq(
-        &self,
-        other: &Self,
-    ) -> bool {
-        self.graph == other.graph
-    }
-}
-
-impl Frame {
-    fn of(
-        function: &llrm_mir::module::Function,
-        entry: i64,
-    ) -> Self {
-        let graph = cfg::graph(function);
-        let mut preds = graph.iter().map(|block| (block.at, Vec::new())).collect::<IndexMap<i64, Vec<i64>>>();
-        for one in &graph {
-            for to in &one.succ {
-                if let Some(from) = preds.get_mut(to).filter(|from| from.last() != Some(&one.at)) {
-                    from.push(one.at);
-                }
-            }
-        }
-        let order = loops_order(&graph, entry);
-        let rank = order.iter().enumerate().map(|(rank, at)| (*at, rank)).collect();
-        let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect();
-        Self { graph, preds, successors, order, rank, cycles: std::cell::OnceCell::new() }
-    }
-
-    fn cycles(&self) -> &HashMap<i64, Vec<i64>> {
-        self.cycles.get_or_init(|| cycles(&self.graph))
-    }
-}
-
-impl SolvedCells {
-    /// What is held before `inst`.
-    pub fn at(
-        &self,
-        function: &llrm_mir::module::Function,
-        inst: InstId,
-    ) -> Option<&Rc<Cells>> {
-        let block = function.parent(inst)?;
-        let at = function.block(block).instructions().iter().position(|one| *one == inst)?;
-        self.blocks.get(&cfg::id(block))?.get(at)
-    }
-
-    /// This, with the blocks `touched` had instructions moved in or out brought
-    /// up to date (`cells_restarted`), in place; whether that could be done.
-    pub fn restarted(
-        &mut self,
-        unit: &Unit,
-        touched: &BTreeSet<i64>,
-    ) -> bool {
-        let Some(worked) = cells_restarted(unit, self, touched) else { return false };
-        self.blocks.extend(worked.blocks);
-        self.outof.extend(worked.outof);
-        true
-    }
-}
-
-/// What each memory cell holds before each instruction, where it is a
-/// number.
-///
-/// Forward to a fixed point, meeting at a join on agreement. A block none
-/// of whose predecessors have been visited yet is deferred, not treated as
-/// knowing nothing.
-///
-/// With `restart`, the blocks of `previous`' body it names are worked again
-/// from nothing, the rest standing as `previous` left them: the result is the
-/// one a whole solve gives if what enters a block outside them is as it was,
-/// which the caller checks (`cells_restarted`).
-#[allow(clippy::too_many_arguments)]
-pub fn cells_solved(
-    unit: &Unit,
-    calls: &Calls,
-    known: Option<&IndexMap<ValueId, Known>>,
-    initial: Option<&Cells>,
-    edges: Option<&IndexMap<(i64, i64), Cells>>,
-    mut assume: Option<&mut BTreeSet<ValueId>>,
-    allowed: Option<&BTreeSet<ValueId>>,
-    restart: Option<(&SolvedCells, &BTreeSet<i64>)>,
-    keep: bool,
-) -> SolvedCells {
-    if restart.is_none() {
-        CELL_DERIVATIONS.with(|count| count.set(count.get() + 1));
-    }
-    let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
-    let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
-    let function = unit.function;
-    let Some(entry) = function.entry().map(cfg::id) else {
-        return SolvedCells::default();
-    };
-    let empty = IndexMap::default();
-    let known = known.unwrap_or(&empty);
-    let mut queries = memory_queries(*unit, known);
-    let initial = initial.cloned().unwrap_or_default();
-    // Kept indexed: an edge from a lone predecessor hands its map on as it is.
-    let frame = restart.map_or_else(|| Rc::new(Frame::of(function, entry)), |(previous, _)| Rc::clone(&previous.frame));
-    let Frame { graph, preds, order, rank, successors, .. } = &*frame;
-    // The blocks to work: a restart's, or every one. A block not here has no
-    // end yet.
-    let work = restart.map_or_else(
-        || graph.iter().map(|block| block.at).collect(),
-        |(_, reset)| reset.iter().copied().collect::<Vec<_>>(),
-    );
-    let mut outof = IndexMap::<i64, Option<IndexedCells>>::default();
-    let no_edges = IndexMap::default();
-    let edge_map = edges.unwrap_or(&no_edges);
-    let edge_facts = edges.is_some_and(|edges| !edges.is_empty());
-
-    let entering = |outof: &IndexMap<i64, Option<IndexedCells>>, at: i64| -> Option<Here> {
-        if preds[&at].is_empty() {
-            return Some(Here::Plain(if at == entry { initial.clone() } else { Cells::default() }));
-        }
-        let mut seen: Vec<std::borrow::Cow<Cells>> = Vec::new();
-        let mut sole = None;
-        for one in &preds[&at] {
-            let Some(Some(here)) = outof.get(one) else {
-                continue;
-            };
-            let none = Cells::default();
-            let extra = edge_map.get(&(*one, at)).unwrap_or(&none);
-            if extra.is_empty() {
-                sole = Some(here);
-                seen.push(std::borrow::Cow::Borrowed(&**here));
-                continue;
-            }
-            let mut here = here
-                .iter()
-                .filter(|(where_, _)| {
-                    !(0..where_.1).any(|offset| extra.contains_key(&(where_.0.plus(i64::from(offset)), 1)))
-                })
-                .map(|(where_, fact)| (*where_, fact.clone()))
-                .collect::<Cells>();
-            for (where_, fact) in extra {
-                here.insert(*where_, fact.clone());
-            }
-            seen.push(std::borrow::Cow::Owned(here));
-        }
-        if at == entry {
-            seen.push(std::borrow::Cow::Borrowed(&initial));
-        }
-        if let ([std::borrow::Cow::Borrowed(_)], Some(sole)) = (seen.as_slice(), sole) {
-            if at != entry {
-                return Some(Here::Indexed(sole.clone()));
-            }
-        }
-        let first = seen.first()?;
-        Some(Here::Plain(
-            first
-                .iter()
-                .filter(|(where_, fact)| seen[1..].iter().all(|one| one.get(*where_) == Some(*fact)))
-                .map(|(where_, fact)| (*where_, fact.clone()))
-                .collect(),
-        ))
-    };
-
-    // A worklist in reverse postorder, as LLVM's dataflow solvers drain theirs:
-    // a block runs again only when what enters it changed, not every round.
-    // A restart works the blocks it names and holds, as they were, what
-    // enters them from the others.
-    let active = |at: &i64| restart.is_none_or(|(_, reset)| reset.contains(at));
-    if let Some((previous, _)) = restart {
-        for at in &work {
-            for pred in preds[at].iter().filter(|pred| !active(pred)) {
-                let held = previous.outof.get(pred).cloned().flatten();
-                outof.insert(*pred, held.map(|cells| queries.owned(Here::Plain((*cells).clone()))));
-            }
-        }
-    }
-    let mut waiting = work.iter().filter_map(|at| rank.get(at).copied()).collect::<BTreeSet<_>>();
-    while let Some(next) = waiting.pop_first() {
-        let at = order[next];
-        let Some(mut here) = entering(&outof, at) else {
-            continue;
-        };
-        for &inst in function.block(cfg::block(at)).instructions() {
-            here = _killed(here, inst, known, calls, assume.as_deref_mut(), allowed, edge_facts, &mut queries);
-        }
-        if outof.get(&at).and_then(|held| held.as_deref()) != Some(here.cells()) {
-            outof.insert(at, Some(queries.owned(here)));
-            waiting.extend(successors[&at].iter().filter(|at| active(at)).filter_map(|at| rank.get(at).copied()));
-        }
-    }
-
-    let mut found = IndexMap::default();
-    let mut flat = IndexMap::default();
-    for &at in &work {
-        let mut here = entering(&outof, at).unwrap_or(Here::Plain(Cells::default()));
-        // Instructions between two writes see one map, shared rather than
-        // copied per instruction.
-        let mut shared: Option<Rc<Cells>> = None;
-        let mut within = Vec::new();
-        for &inst in function.block(cfg::block(at)).instructions() {
-            let here_cells = Rc::clone(shared.get_or_insert_with(|| Rc::new(here.cells().clone())));
-            if keep {
-                within.push(here_cells);
-            } else {
-                flat.insert(inst, here_cells);
-            }
-            let writes = is_call(unit, inst)
-                || unmodeled_write(unit, inst)
-                || matches!(function.instruction(inst).opcode, Opcode::Store { .. });
-            if writes {
-                shared = None;
-            }
-            here = _killed(here, inst, known, calls, assume.as_deref_mut(), allowed, edge_facts, &mut queries);
-        }
-        if keep {
-            found.insert(at, Rc::new(within));
-        }
-    }
-    let ends = work
-        .iter()
-        .filter(|_| keep)
-        .map(|at| (*at, outof.get(at).and_then(|held| held.as_ref()).map(|cells| Rc::new((**cells).clone()))))
-        .collect();
-    SolvedCells { blocks: found, flat, outof: ends, frame: Rc::clone(&frame) }
-}
-
-/// `previous`, what `cells` gave the body of the default question (no callee's
-/// writes, no outside facts) before the blocks `touched` had instructions moved
-/// in or out, made what it gives now, without working the others again.
-///
-/// A block's end is a function of the ends of its predecessors, and a
-/// cycle of them can hold a fact that only the cycle gives itself, so what a
-/// touched block lies in a cycle with is worked again from nothing, whole. So
-/// is what comes after any block whose end changed, until none past the
-/// worked ones does. What is left stands: what enters it is as it was.
-pub fn cells_restarted(
-    unit: &Unit,
-    previous: &SolvedCells,
-    touched: &BTreeSet<i64>,
-) -> Option<SolvedCells> {
-    let frame = &previous.frame;
-    let successors = &frame.successors;
-    let cycles = frame.cycles();
-    let whole = |blocks: &BTreeSet<i64>| {
-        let mut all = blocks.clone();
-        for at in blocks {
-            all.extend(cycles.get(at).into_iter().flatten().copied());
-        }
-        all
-    };
-    let mut reset = whole(touched);
-    loop {
-        let solved =
-            cells_solved(unit, &Calls::default(), None, None, None, None, None, Some((previous, &reset)), true);
-        let spread = reset
-            .iter()
-            .filter(|at| solved.outof[*at] != previous.outof[*at])
-            .flat_map(|at| successors[at].iter().copied())
-            .filter(|at| !reset.contains(at))
-            .collect::<BTreeSet<_>>();
-        if spread.is_empty() {
-            return Some(solved);
-        }
-        reset.extend(whole(&spread));
-    }
-}
-
-/// Each block of a cycle in the graph, with the blocks of its cycle (strongly
-/// connected component); a block in none has no entry.
-fn cycles(graph: &[cfg::Block]) -> HashMap<i64, Vec<i64>> {
-    let successors = graph.iter().map(|block| (block.at, block.succ.as_slice())).collect::<HashMap<_, _>>();
-    let (mut index, mut low) = (HashMap::<i64, usize>::default(), HashMap::<i64, usize>::default());
-    let (mut stack, mut on) = (Vec::<i64>::new(), BTreeSet::<i64>::new());
-    let mut found = HashMap::default();
-    let mut counter = 0;
-    for root in graph.iter().map(|block| block.at) {
-        if index.contains_key(&root) {
-            continue;
-        }
-        // (block, next successor to visit)
-        let mut work = vec![(root, 0usize)];
-        while let Some(&mut (at, ref mut next)) = work.last_mut() {
-            if *next == 0 {
-                index.insert(at, counter);
-                low.insert(at, counter);
-                counter += 1;
-                stack.push(at);
-                on.insert(at);
-            }
-            let edges = successors.get(&at).copied().unwrap_or(&[]);
-            if let Some(&to) = edges.get(*next) {
-                *next += 1;
-                if !index.contains_key(&to) {
-                    work.push((to, 0));
-                } else if on.contains(&to) {
-                    let lowest = low[&at].min(index[&to]);
-                    low.insert(at, lowest);
-                }
-                continue;
-            }
-            work.pop();
-            if let Some(&(parent, _)) = work.last() {
-                let lowest = low[&parent].min(low[&at]);
-                low.insert(parent, lowest);
-            }
-            if low[&at] == index[&at] {
-                let mut members = Vec::new();
-                while let Some(member) = stack.pop() {
-                    on.remove(&member);
-                    members.push(member);
-                    if member == at {
-                        break;
-                    }
-                }
-                let cyclic = members.len() > 1 || successors.get(&at).is_some_and(|edges| edges.contains(&at));
-                if cyclic {
-                    for &member in &members {
-                        found.insert(member, members.clone());
-                    }
-                }
-            }
-        }
-    }
-    found
-}
-
-fn loops_order(
-    graph: &[cfg::Block],
-    entry: i64,
-) -> Vec<i64> {
-    crate::graph::loops::reverse_postorder(graph, entry)
-}
-
 fn _read(
     fact: Option<&Known>,
     width: u32,
@@ -998,7 +640,7 @@ fn _addressed(
     let Some(base) = reference.base else {
         return reference.clone();
     };
-    let interval = ranges::_operand(unit, Operand::Value(base), &IndexMap::default(), known);
+    let interval = ranges::_operand(unit, Operand::Value(base), &ranges::Intervals::default(), known);
     let Some(interval) = interval else {
         return reference.clone();
     };
@@ -1173,58 +815,53 @@ pub fn holds(
     }
 }
 
-/// Every value this function computes that is a number, to a fixed point;
-/// memory too, where `calls` says what each call writes.
-///
-/// Optimistic, then shrinking: a run may assume every selector it does not
-/// know is some absolute segment; the ones that came out numbers keep the
-/// assumption and the rest lose it, until every one still assumed resolved.
-pub fn known(
-    unit: &Unit,
-    calls: Option<&Calls>,
-    edges: Option<&IndexMap<(i64, i64), Cells>>,
-    initial: Option<&Cells>,
-) -> IndexMap<ValueId, Known> {
-    if calls.is_none() {
-        REGISTER_DERIVATIONS.with(|count| count.set(count.get() + 1));
-    } else {
-        MEMORY_DERIVATIONS.with(|count| count.set(count.get() + 1));
-    }
+/// Every value this function computes that is a number, to a fixed point,
+/// without memory (`known_walked` has it).
+pub fn known(unit: &Unit) -> IndexMap<ValueId, Known> {
+    REGISTER_DERIVATIONS.with(|count| count.set(count.get() + 1));
     // Each access asks whether its frame object is exposed: found once for the
     // body, if no caller has.
     let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
     let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
-    // What alias annotates a store with reads what is known without memory:
-    // found here, with the memory's, where the unit carries none.
-    let registers = (calls.is_some() && unit.registers.is_none()).then(|| known(unit, None, None, None));
-    let unit = &registers.as_ref().map_or(*unit, |found| unit.with_registers(found));
-    // A store kills the cells alias's provenance leaves it able to reach.
-    let annotated = (calls.is_some() && unit.references.is_none()).then(|| unit.annotated().ok()).flatten();
-    let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
-    // No edge facts is no edges: the solve reads only a nonempty map.
-    let edges = edges.filter(|edges| !edges.is_empty());
-    let mut allowed: Option<BTreeSet<ValueId>> = None;
-    loop {
-        let (got, assumed) = _solved(unit, calls, edges, initial, Some(BTreeSet::new()), allowed.as_ref());
-        let resolved = assumed.iter().filter(|value| got.contains_key(*value)).copied().collect::<BTreeSet<_>>();
-        if resolved == assumed {
-            return got;
+    #[cfg(test)]
+    SOLVED.with(|solved| solved.set(solved.get() + 1));
+    let function = unit.function;
+    let mut facts = IndexMap::<ValueId, Known>::default();
+    let empty = Cells::default();
+    let mut changing = true;
+    while changing {
+        changing = false;
+        for (_, inst) in function.walk() {
+            let op = function.instruction(inst);
+            let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else {
+                continue;
+            };
+            // A join is known where every path into it agrees.
+            if op.opcode == Opcode::Phi {
+                let seen = op.operands.iter().step_by(2).map(|&one| incoming(unit, one, &facts)).collect::<Vec<_>>();
+                let known = seen.iter().flatten().collect::<Vec<_>>();
+                if seen.is_empty()
+                    || known.len() != seen.len()
+                    || known.iter().map(|one| (&one.n, one.width)).collect::<BTreeSet<_>>().len() != 1
+                {
+                    continue;
+                }
+                facts.insert(target, (*known[0]).clone());
+                changing = true;
+                continue;
+            }
+            if let Some(found) = _result(unit, inst, &facts, Some(&empty)) {
+                facts.insert(target, found);
+                changing = true;
+            }
         }
-        allowed = Some(resolved);
     }
+    constant_cycles::propagated(unit, &facts, None)
 }
 
 thread_local! {
     static REGISTER_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MEMORY_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static CELL_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread has worked out what each memory cell holds at
-/// each instruction (`cells`), for a test that a pass asks the manager and not
-/// once for each loop.
-pub fn cell_derivations() -> usize {
-    CELL_DERIVATIONS.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has derived what is known of a body through
@@ -1265,7 +902,7 @@ fn incoming(
 fn _pointer_stores(
     unit: &Unit,
     calls: &Calls,
-) -> IndexMap<ValueId, Operand> {
+) -> llrm_mir::dense::IdMap<ValueId, Operand> {
     let function = unit.function;
     let accesses = Accesses::plain(unit, calls);
     let candidates = function
@@ -1276,7 +913,7 @@ fn _pointer_stores(
         })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
-        return IndexMap::default();
+        return Default::default();
     }
     let graph = memoryssa::built(unit, &accesses);
     let shape = unit.shape();
@@ -1291,7 +928,7 @@ fn _pointer_stores(
             None => false,
         }
     };
-    let mut providers = IndexMap::default();
+    let mut providers = llrm_mir::dense::IdMap::default();
     for (block, inst, (reference, result)) in candidates {
         let clobbers = graph.clobbers(inst, &reference);
         let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
@@ -1310,79 +947,397 @@ fn _pointer_stores(
     providers
 }
 
-fn _solved(
+/// The cell a store writes and what it puts there, a volatile store's too: the
+/// cell holds the number a volatile store wrote until something else writes it.
+fn _stored_cell(
     unit: &Unit,
-    calls: Option<&Calls>,
-    edges: Option<&IndexMap<(i64, i64), Cells>>,
-    initial: Option<&Cells>,
-    mut assume: Option<BTreeSet<ValueId>>,
-    allowed: Option<&BTreeSet<ValueId>>,
-) -> (IndexMap<ValueId, Known>, BTreeSet<ValueId>) {
-    #[cfg(test)]
-    SOLVED.with(|solved| solved.set(solved.get() + 1));
+    accesses: &Accesses,
+    inst: InstId,
+) -> Option<(MemRef, Operand)> {
+    let instruction = unit.function.instruction(inst);
+    matches!(instruction.opcode, Opcode::Store { .. })
+        .then(|| Some((accesses.references.get(&inst)?.clone(), instruction.operands[0])))
+        .flatten()
+}
+
+/// What serves a load: stores of all its bytes, or stores of each byte.
+pub enum Provider {
+    Whole(Vec<InstId>),
+    Bytes(Vec<Vec<(InstId, u32)>>),
+}
+
+/// The loads that read what a counted float loop left at its exit: those the
+/// exit's block dominates, whose stores are the ones the end of the loop's
+/// header reaches, and what `exits` says the loop left in their bytes.
+fn exit_loads(
+    unit: &Unit,
+    accesses: &Accesses,
+    registers: &IndexMap<ValueId, Known>,
+    exits: &[crate::floatfacts::LoopExit],
+) -> IdMap<ValueId, Known> {
+    let mut found = IdMap::default();
+    if exits.is_empty() {
+        return found;
+    }
     let function = unit.function;
-    let mut facts = IndexMap::<ValueId, Known>::default();
-    let mut held = HeldCells::default();
-    let pointer_stores = calls.map(|calls| _pointer_stores(unit, calls)).unwrap_or_default();
-    let empty = Cells::default();
-    // The cells read only what writes name; until a round learns one of
-    // those, solving them again gives the same answer.
-    let read = match calls {
-        Some(_) => _memory_reads(unit),
-        None => HashSet::default(),
-    };
-    // Registers go first, as SCCP learns them before memory: cells solved
-    // with what registers alone prove need solving again only when a value
-    // learned from memory is one a write names.
-    let mut learned = false;
-    let mut remembered = calls.is_none();
-    let mut rounds = 0;
-    let mut changing = true;
-    while changing || !remembered {
-        changing = false;
-        rounds += 1;
-        // What memory holds, recomputed from what is known so far: the two
-        // feed each other and run to one fixed point together.
-        if let Some(calls) = calls {
-            if rounds > 1 && (learned || !remembered) {
-                held =
-                    cells_solved(unit, calls, Some(&facts), initial, edges, assume.as_mut(), allowed, None, false).flat;
-                remembered = true;
-            }
-            learned = false;
+    let graph = memoryssa::built(unit, accesses).with_known(_intervals(registers));
+    let blocks = cfg::graph(function);
+    let successors = blocks.iter().map(|block| (block.at, &block.succ)).collect::<IndexMap<_, _>>();
+    let predecessors = crate::graph::loops::predecessors(&blocks);
+    let mut queries = memory_queries(*unit, registers);
+    let shape = unit.shape();
+    for exit in exits {
+        let Some(body) = shape.loops.iter().find(|one| one.header == exit.header).map(|one| &one.body) else {
+            continue;
+        };
+        let leaving = successors[&exit.header].iter().copied().filter(|at| !body.contains(at)).collect::<Vec<_>>();
+        let [after] = leaving[..] else { continue };
+        if predecessors[&after] != BTreeSet::from([exit.header]) {
+            continue;
+        }
+        let mut cells = Cells::default();
+        for (reference, fact) in &exit.stores {
+            cells.extend(_fragments(&queries.resolve(reference), fact));
         }
         for (_, inst) in function.walk() {
-            let op = function.instruction(inst);
-            let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else {
-                continue;
-            };
-            // A join is known where every path into it agrees.
-            if op.opcode == Opcode::Phi {
-                let seen = op.operands.iter().step_by(2).map(|&one| incoming(unit, one, &facts)).collect::<Vec<_>>();
-                let known = seen.iter().flatten().collect::<Vec<_>>();
-                if seen.is_empty()
-                    || known.len() != seen.len()
-                    || known.iter().map(|one| (&one.n, one.width)).collect::<BTreeSet<_>>().len() != 1
-                {
-                    continue;
-                }
-                let fact = (*known[0]).clone();
-                learned |= read.contains(&target);
-                facts.insert(target, fact);
-                changing = true;
+            let Some((reference, result)) = avail::loaded_into(unit, accesses, inst) else { continue };
+            let block = cfg::id(function.parent(inst).expect("a placed load"));
+            if !shape.dominance.dominates(after, block) {
                 continue;
             }
-            let here = held.get(&inst).map(|here| &**here).unwrap_or(&empty);
-            let found = _result(unit, inst, &facts, Some(here))
-                .or_else(|| _operand(unit, *pointer_stores.get(&target)?, &facts, None));
-            if let Some(found) = found {
-                learned |= read.contains(&target);
-                facts.insert(target, found);
-                changing = true;
+            let reference = _addressed(unit, &reference, registers);
+            let Some(fact) = _cell(&cells, &queries.resolve(&reference)) else { continue };
+            if graph.clobbers_ignoring_invariance(inst, &reference) == graph.clobbers_at_end(exit.header, &reference) {
+                found.insert(result, fact);
             }
         }
     }
-    (constant_cycles::propagated(unit, &facts, None), assume.unwrap_or_default())
+    found
+}
+
+/// What serves a read of `reference` (its index placed by `placed`): the stores
+/// `ask` says reach it, whole or byte by byte. None where a path meets no
+/// write.
+fn provider_of(
+    unit: &Unit,
+    accesses: &Accesses,
+    graph: &memoryssa::MemorySSA,
+    reference: &MemRef,
+    ask: &dyn Fn(&MemRef) -> BTreeSet<usize>,
+) -> Option<Provider> {
+    let placed = unit.registers.expect("a provider is found over the registers that place the indices");
+    let mut values = Vec::new();
+    let mut exact = true;
+    let reaching = ask(reference);
+    // A path to the entry that no write meets leaves every byte as it
+    // was found, so no byte is a store's.
+    if reaching.iter().any(|id| graph.access(*id).kind == memoryssa::Kind::Live) {
+        return None;
+    }
+    for id in reaching {
+        let access = graph.access(id);
+        let stored = access
+            .site
+            .filter(|_| access.kind == memoryssa::Kind::Def)
+            .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)));
+        match stored {
+            Some((site, (cell, _))) if memoryssa::same_bytes(unit, reference, &_addressed(unit, &cell, placed)) => {
+                values.push(site)
+            }
+            _ => {
+                exact = false;
+                break;
+            }
+        }
+    }
+    if exact && !values.is_empty() {
+        Some(Provider::Whole(values))
+    } else if let Some(address) = reference.addr().filter(|_| reference.width <= 8) {
+        // Some of the bytes are another store's, or a wider one's: each
+        // byte is asked of the walk, and read from the
+        // stores that reach it.
+        let mut bytes: Vec<Vec<(InstId, u32)>> = Vec::new();
+        'bytes: for k in 0..reference.width {
+            // The byte, with the provenance moved to it.
+            let one = MemRef {
+                disp: reference.disp + i64::from(k),
+                width: 1,
+                provenance: reference.provenance.as_ref().map(|found| found.shifted(i64::from(k))),
+                ..reference.clone()
+            };
+            let mut from = Vec::new();
+            for id in ask(&one) {
+                let access = graph.access(id);
+                let Some((site, (cell, _))) = access
+                    .site
+                    .filter(|_| access.kind == memoryssa::Kind::Def)
+                    .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)))
+                else {
+                    bytes.clear();
+                    break 'bytes;
+                };
+                let Some(there) = _addressed(unit, &cell, placed).addr().filter(|there| there.root == address.root)
+                else {
+                    bytes.clear();
+                    break 'bytes;
+                };
+                let at = address.disp + i64::from(k) - there.disp;
+                if !(0..i64::from(cell.width)).contains(&at) {
+                    bytes.clear();
+                    break 'bytes;
+                }
+                from.push((site, at as u32));
+            }
+            if from.is_empty() {
+                bytes.clear();
+                break;
+            }
+            bytes.push(from);
+        }
+        if bytes.len() == reference.width as usize { Some(Provider::Bytes(bytes)) } else { None }
+    } else {
+        None
+    }
+}
+
+/// The stores that serve each load `wanted` picks, found by MemorySSA walks,
+/// with the indices `unit.registers` proves constant taken into every address.
+pub fn load_providers(
+    unit: &Unit,
+    accesses: &Accesses,
+    wanted: &dyn Fn(ValueId) -> bool,
+) -> llrm_mir::dense::IdMap<ValueId, Provider> {
+    let Some(placed) = unit.registers else { return Default::default() };
+    let function = unit.function;
+    let graph = memoryssa::built(unit, accesses).with_known(_intervals(placed));
+    let mut providers: llrm_mir::dense::IdMap<ValueId, Provider> = Default::default();
+    for (_, inst) in function.walk() {
+        let Some((reference, result)) = avail::loaded_into(unit, accesses, inst) else { continue };
+        if !wanted(result) {
+            continue;
+        }
+        // An index the registers prove constant is part of the address, in
+        // the load and in each store alike.
+        let reference = _addressed(unit, &reference, placed);
+        if crate::memory::constant_bits(unit, &reference).is_some() {
+            continue;
+        }
+        let ask = |one: &MemRef| graph.clobbers_ignoring_invariance(inst, one);
+        if let Some(provider) = provider_of(unit, accesses, &graph, &reference, &ask) {
+            providers.insert(result, provider);
+        }
+    }
+    providers
+}
+
+/// Where `cells_read` reads: the end of a block, or before an instruction.
+#[derive(Clone, Copy)]
+pub enum ReadAt {
+    End(i64),
+    Before(InstId),
+}
+
+/// The cells `references` hold at `at`, each as the stores MemorySSA says reach
+/// it put it (`known` says what a store puts): the cells of one point that a
+/// caller needs, found by walks of those references alone rather than by a
+/// solve of every cell of the body.
+pub fn cells_read(
+    unit: &Unit,
+    calls: &Calls,
+    known: &IdMap<ValueId, Known>,
+    at: ReadAt,
+    references: &[MemRef],
+    queries: &mut _MemoryQueries,
+) -> Cells {
+    let ask = |graph: &memoryssa::MemorySSA, one: &MemRef| match at {
+        ReadAt::End(block) => graph.clobbers_at_end(block, one),
+        ReadAt::Before(site) => graph.clobbers_ignoring_invariance(site, one),
+    };
+    let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
+    let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
+    let accesses = Accesses::plain(unit, calls);
+    let known = known.iter().map(|(value, fact)| (value, fact.clone())).collect::<IndexMap<_, _>>();
+    let unit = &unit.with_registers(&known);
+    let graph = memoryssa::built(unit, &accesses).with_known(_intervals(&known));
+    let mut cells = Cells::default();
+    for reference in references {
+        let reference = _addressed(unit, reference, &known);
+        if reference.addr().is_none() || crate::memory::constant_bits(unit, &reference).is_some() {
+            continue;
+        }
+        let Some(provider) = provider_of(unit, &accesses, &graph, &reference, &|one| ask(&graph, one)) else {
+            continue;
+        };
+        let Some(fact) = provided(&provider, 8 * reference.width, &|site| _put(unit, site, &known)) else { continue };
+        cells.extend(_fragments(&queries.resolve(&reference), &fact));
+    }
+    cells
+}
+
+/// What `provider`'s stores put in the `width` bits a load reads, where all
+/// agree: `put` is the number a store puts.
+pub fn provided(
+    provider: &Provider,
+    width: u32,
+    put: &dyn Fn(InstId) -> Option<Known>,
+) -> Option<Known> {
+    match provider {
+        Provider::Whole(sites) => {
+            let mut numbers = sites.iter().map(|site| put(*site));
+            let first = numbers.next()??;
+            numbers
+                .all(|one| one.as_ref().is_some_and(|one| one.n == first.n && one.width == first.width))
+                .then(|| if first.width == width { _read(Some(&first), width) } else { None })
+                .flatten()
+        }
+        Provider::Bytes(bytes) => {
+            let mut number = BigInt::from(0);
+            for (k, from) in bytes.iter().enumerate() {
+                let mut seen = BTreeSet::new();
+                for (site, at) in from {
+                    let put = put(*site).filter(|put| put.width > 8 * at)?;
+                    seen.insert((&put.n >> (8 * at)) & BigInt::from(255));
+                }
+                if seen.len() != 1 {
+                    return None;
+                }
+                number |= seen.into_iter().next().expect("one byte") << (8 * k);
+            }
+            Some(Known::new(number, width))
+        }
+    }
+}
+
+/// What is known of a body through memory: the registers' facts, then each load
+/// by what the stores MemorySSA says reach it put in its bytes, where they all
+/// put the same (GVN's forwarding with constants; GCC's FRE walks the same
+/// virtual use-def chain for a load's value, `vn_reference_lookup`). A store
+/// may serve a load of its bytes of another type, or a load of bytes several
+/// stores wrote, which is asked of the walk a byte at a time. No state is held
+/// per block: the cost is the walks, not cells times joins.
+pub fn known_walked(
+    unit: &Unit,
+    calls: &Calls,
+) -> IndexMap<ValueId, Known> {
+    known_walked_over(unit, calls, &[])
+}
+
+/// `known_walked`, with what counted float loops leave in memory when they exit
+/// (`floatfacts::loop_exits`): a load after one, reaching what the loop's exit
+/// reaches, holds what it left there.
+pub fn known_walked_over(
+    unit: &Unit,
+    calls: &Calls,
+    exits: &[crate::floatfacts::LoopExit],
+) -> IndexMap<ValueId, Known> {
+    MEMORY_DERIVATIONS.with(|count| count.set(count.get() + 1));
+    // What the caller did not bring, as `known` finds it.
+    let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
+    let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
+    let registers = unit.registers.cloned().unwrap_or_else(|| known(unit));
+    let annotated = unit.references.is_none().then(|| unit.annotated().ok()).flatten();
+    let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
+    let function = unit.function;
+    let plain = Accesses::plain(unit, calls);
+    let left = exit_loads(unit, &plain, &registers, exits);
+    let wanted = |result: ValueId| _width(unit, Operand::Value(result)).is_some();
+    let solve = |accesses: &Accesses| {
+        let mut facts = registers.clone();
+        let mut placed = registers.clone();
+        let mut providers = load_providers(&unit.with_registers(&placed), accesses, &wanted);
+        for _round in 0..4 {
+            let mut changing = true;
+            while changing {
+                changing = false;
+                for (_, inst) in function.walk() {
+                    let op = function.instruction(inst);
+                    let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else {
+                        continue;
+                    };
+                    if op.opcode == Opcode::Phi {
+                        let seen =
+                            op.operands.iter().step_by(2).map(|&one| incoming(unit, one, &facts)).collect::<Vec<_>>();
+                        let known = seen.iter().flatten().collect::<Vec<_>>();
+                        if seen.is_empty()
+                            || known.len() != seen.len()
+                            || known.iter().map(|one| (&one.n, one.width)).collect::<BTreeSet<_>>().len() != 1
+                        {
+                            continue;
+                        }
+                        facts.insert(target, (*known[0]).clone());
+                        changing = true;
+                        continue;
+                    }
+                    let found = if matches!(op.opcode, Opcode::Load { volatile: false, .. }) {
+                        let loaded = _result(unit, inst, &facts, None);
+                        loaded
+                            .or_else(|| {
+                                let values = providers.get(&target)?;
+                                let width = _width(unit, Operand::Value(target))?;
+                                provided(values, width, &|site| _put(unit, site, &facts))
+                            })
+                            .or_else(|| left.get(&target).cloned())
+                    } else {
+                        _result(unit, inst, &facts, None)
+                    };
+                    if let Some(found) = found {
+                        facts.insert(target, found);
+                        changing = true;
+                    }
+                }
+            }
+            // A load whose index only memory taught us is asked again with it
+            // placed.
+            let learned = facts.iter().any(|(value, _)| !placed.contains_key(value));
+            let unplaced = learned
+                && function.walk().any(|(_, inst)| {
+                    avail::loaded_into(unit, accesses, inst).is_some_and(|(reference, result)| {
+                        !facts.contains_key(&result)
+                            && reference
+                                .base
+                                .is_some_and(|base| facts.contains_key(&base) && !placed.contains_key(&base))
+                    })
+                });
+            if !unplaced {
+                break;
+            }
+            placed = facts.clone();
+            providers = load_providers(&unit.with_registers(&placed), accesses, &wanted);
+        }
+        facts
+    };
+    // A far store through a selector nothing yet says the value of is taken to
+    // write no program object (an absolute segment: BASIC's POKE after DEF
+    // SEG); the assumption stands where every such selector came out a
+    // number, and the solve is made again without the ones that did not, as
+    // `known` does.
+    let far_stores: Vec<(InstId, ValueId)> = function
+        .walk()
+        .filter_map(|(_, inst)| {
+            let reference = plain.references.get(&inst)?;
+            let store = matches!(function.instruction(inst).opcode, Opcode::Store { .. });
+            let Some(Operand::Value(segment)) = reference.segment else { return None };
+            (store && reference.space == unit.spaces().far && !registers.contains_key(&segment))
+                .then_some((inst, segment))
+        })
+        .collect();
+    let mut allowed: Option<llrm_mir::dense::IdSet<ValueId>> = None;
+    let facts = loop {
+        let assumed: Vec<(InstId, ValueId)> = far_stores
+            .iter()
+            .copied()
+            .filter(|(_, segment)| allowed.as_ref().is_none_or(|allowed| allowed.contains(segment)))
+            .collect();
+        let accesses = plain.clone().without_absolute_writes(&assumed.iter().map(|(inst, _)| *inst).collect());
+        let facts = solve(&accesses);
+        let resolved: llrm_mir::dense::IdSet<ValueId> =
+            assumed.iter().map(|(_, segment)| *segment).filter(|segment| facts.contains_key(segment)).collect();
+        if assumed.iter().all(|(_, segment)| resolved.contains(segment)) {
+            break facts;
+        }
+        allowed = Some(resolved);
+    };
+    constant_cycles::propagated(unit, &facts, None)
 }
 
 #[cfg(test)]

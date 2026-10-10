@@ -172,7 +172,8 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
     // The target's register file, once, for writers that know no target.
     assert_eq!(info.frame_register, "ebp");
     let number = |name: &str| info.registers.iter().find(|one| one.name == name).map(|one| (one.dwarf, one.codeview));
-    assert_eq!(number("bp"), Some((None, Some(14))));
+    // DWARF's is Open Watcom's (dwregx86.h): BP is 33.
+    assert_eq!(number("bp"), Some((Some(33), Some(14))));
 }
 
 /// HIR's codec writes a variable's `parameter` key only where it is true, so a

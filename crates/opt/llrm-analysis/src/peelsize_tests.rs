@@ -53,7 +53,7 @@ impl Parsed {
         entries: i64,
     ) -> bool {
         let unit = self.unit();
-        let facts = consts::known(&unit, None, None, None);
+        let facts = consts::known(&unit);
         let loop_ = self.outer();
         let count = induction::trip_count(&unit, &loop_, &facts).expect("a proven count");
         admitted(&unit, &loop_, &count, &facts, limits, Site { entries, ..Site::default() })
@@ -230,7 +230,7 @@ b5:
 fn the_count_is_the_one_asked_about() {
     let parsed = summing(4, "%x", "");
     let unit = parsed.unit();
-    let facts = consts::known(&unit, None, None, None);
+    let facts = consts::known(&unit);
     assert!(admitted(&unit, &parsed.outer(), &BigInt::from(4), &facts, &Limits::default(), Site::default()));
     assert!(!admitted(&unit, &parsed.outer(), &BigInt::from(17), &facts, &Limits::default(), Site::default()));
 }

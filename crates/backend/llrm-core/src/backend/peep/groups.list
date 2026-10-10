@@ -12,6 +12,7 @@ transferred body
 shuttles body
 restored_copies body
 fused body
+fused_calls body
 far_loads body
 increments body
 borrows body

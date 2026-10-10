@@ -487,6 +487,7 @@ dependencies = [
  "llrm-core",
  "llrm-driver",
  "llrm-mir",
+ "llrm-object",
  "llrm-support",
  "llrm-transforms",
  "llrm-x86-m16",

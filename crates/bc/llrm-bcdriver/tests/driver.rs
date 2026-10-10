@@ -114,7 +114,9 @@ fn a_data_row_keeps_its_original_key() {
 /// place yet".
 #[test]
 fn a_pooled_constant_joins_bcs_constants() {
-    let name = "fpcse-p-noo.obj";
+    // Not fpcse: its loop constants are known through memory, so none stays in
+    // the pool.
+    let name = "fpcsex-p-noo.obj";
     let (before, after) = (records(name), recompiled(name));
     assert!(segment(&after, "BC_CN").1.len() > segment(&before, "BC_CN").1.len());
 }

@@ -1,5 +1,5 @@
-reason = "movzx r,m8 becomes xor r,r; mov rl,m8 where the CPU description prices the pair lower (486: 2 clocks against 3), one instruction and one byte more per load: vsgcc harness 486 clocks fall, crc 864 to 855, x_life 400178 to 356042 (now under gcc -O2's 368012); gcc -march=i486 emits the same pair"
-blessed = "2026-10-09"
+reason = "fill: adjacent constant stores are one store of the widest integer where that is fewer bytes tuned for size (gcc store-merging, LLVM MergeConsecutiveStores); several fills in a loop are a memset each where memsets are cheaper in clocks and bytes"
+blessed = "2026-10-10"
 
 [bas.O2]
 instructions = 1216
@@ -31,16 +31,16 @@ data_bytes = 10
 bss_bytes = 0
 
 [nib.O2]
-instructions = 649
-memory_operands = 18
-code_bytes = 115
+instructions = 643
+memory_operands = 12
+code_bytes = 99
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 640
-memory_operands = 18
-code_bytes = 114
+instructions = 634
+memory_operands = 12
+code_bytes = 98
 data_bytes = 0
 bss_bytes = 0
 

@@ -167,7 +167,7 @@ fn accesses(module: &Module) -> Vec<(InstId, MemRef)> {
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
     let function = module.global(module.named("main").expect("a main")).function().expect("a function");
     let unit = Unit::of(module, &layout, function);
-    let registers = llrm_analysis::consts::known(&unit, None, None, None);
+    let registers = llrm_analysis::consts::known(&unit);
     let shape = llrm_analysis::cfg::Shape::of(function);
     let references = annotated(&unit.with_registers(&registers).with_shape(&shape)).expect("annotates");
     references.into_iter().collect()

@@ -755,7 +755,7 @@ pub fn selected_with<'c>(
     // each.
     let exposed = llrm_analysis::memory::exposed_frames(&unit);
     let unit = unit.with_exposed(&exposed);
-    let registers = llrm_analysis::consts::known(&unit, None, None, None);
+    let registers = llrm_analysis::consts::known(&unit);
     let unit = unit.with_registers(&registers);
     // One solve of the scoped bounds serves the exact offsets and, below, the
     // dword-indexed accesses.
@@ -780,7 +780,7 @@ pub fn selected_with<'c>(
         function,
         arch,
         promote: arch.layout().promote,
-        in_cells: BTreeSet::new(),
+        in_cells: llrm_mir::dense::IdSet::new(),
         regs: Regs(arch.registers()),
         callee_facts,
         spaces: arch.layout().spaces.roles,
@@ -1269,7 +1269,7 @@ pub struct Selector<'m, 'c, 'p> {
     promote: Vec<String>,
     /// The parameters the caller pushed: each is in its cell, which an
     /// operation can read in place.
-    in_cells: BTreeSet<ValueId>,
+    in_cells: llrm_mir::dense::IdSet<ValueId>,
     /// The register file of `arch`.
     regs: Regs,
     /// What the functions that take part leave different.

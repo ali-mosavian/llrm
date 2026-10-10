@@ -43,7 +43,7 @@ impl Parsed {
         // them.
         let bounds = ranges::bounds(&unit).unwrap();
         let unit = unit.with_bounds(&bounds);
-        exact(&unit, &floatfacts::known(&unit, &Calls::default(), None)).unwrap().contains(&self.made(name))
+        exact(&unit, &floatfacts::known(&unit, &Calls::default())).unwrap().contains(&self.made(name))
     }
 
     /// `_memory` of the load `%name`, its block's scope as `ranges::bounded`
@@ -55,9 +55,29 @@ impl Parsed {
         let unit = self.unit();
         let load = self.made(name);
         let block = cfg::id(unit.function.parent(load).unwrap());
-        let memory = floatfacts::cells(&unit, &Calls::default());
+        let calls = Calls::default();
+        let integers = crate::consts::known_walked(&unit, &calls);
+        let facts = floatfacts::known(&unit, &calls);
+        let mut asked = crate::consts::memory_queries(unit, &integers);
+        let mut read = |references: &[MemRef]| {
+            floatfacts::cells_before(
+                &unit,
+                &calls,
+                &integers,
+                &facts,
+                crate::consts::ReadAt::Before(load),
+                references,
+                &mut asked,
+            )
+        };
         let scoped = ranges::bounded(&unit).unwrap();
-        _memory(&unit, load, Format::Binary32, &memory[&load], scoped.get(&block).unwrap_or(&IndexMap::default()))
+        _memory(
+            &unit,
+            load,
+            Format::Binary32,
+            &mut read,
+            scoped.get(&block).unwrap_or(&crate::ranges::Intervals::default()),
+        )
     }
 }
 

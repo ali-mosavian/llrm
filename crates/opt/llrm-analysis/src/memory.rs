@@ -761,6 +761,10 @@ pub struct Unit<'a> {
     /// What calling back into the module does, the module's `Callbacks`;
     /// without it each `calls_annotated` adds up every entry's summary.
     pub callbacks: Option<&'a Option<crate::alias::Summary>>,
+    /// Whether the unit's `bounds`, held, are the counted loops' intervals: at
+    /// a level without them (`Outer::loop_intervals`) they are empty on
+    /// purpose.
+    pub loop_intervals: bool,
 }
 
 impl<'a> Unit<'a> {
@@ -814,6 +818,7 @@ impl<'a> Unit<'a> {
             exposed: None,
             point_values: None,
             callbacks: None,
+            loop_intervals: true,
         }
     }
 
@@ -942,7 +947,7 @@ impl<'a> Unit<'a> {
         match self.registers {
             Some(registers) => {
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
-                    let fresh = crate::consts::known(&Unit { registers: None, ..*self }, None, None, None);
+                    let fresh = crate::consts::known(&Unit { registers: None, ..*self });
                     assert!(
                         *registers == fresh,
                         "the registers a unit carries are not those of the body it stands over: stale"
@@ -1126,7 +1131,7 @@ impl<'h> Standing<'h> {
         if let Some(held) = self.held {
             return held;
         }
-        self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }, None, None, None))
+        self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }))
     }
 }
 
