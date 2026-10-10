@@ -1,217 +1,99 @@
-//! The bound target's register file, as its description states it
-//! (`registers.regs`) and the target generated it: queries on the `Info` the
-//! driver bound with the target's selector. A `RegId` is iced's `Register`
+//! A target's register file, as its description states it
+//! (`registers.regs`) and the target generated it: the `Info` a `Target` hands
+//! out and every query of a register asks. A `RegId` is iced's `Register`
 //! until the newtype (row 11).
 
-use std::sync::OnceLock;
+pub use llrm_lir::registers::{Entry, FRAME, Info, RegId, Regs, STACK, class};
 
-pub use llrm_lir::registers::{Entry, FRAME, Info, RegId, STACK, class};
-
-static BOUND: OnceLock<&'static Info> = OnceLock::new();
-
-thread_local! {
-    /// The register file the thread bound: a process compiles for one target,
-    /// but a process of tests compiles for several, each on its own thread, and
-    /// the first binding of the process must not decide the others.
-    static OWN: std::cell::Cell<Option<&'static Info>> = const { std::cell::Cell::new(None) };
-}
-
-/// Binds the register file of the target the driver builds for: for this
-/// thread, and for the threads that bind none, the first binding of the
-/// process. Targets that share a register file bind the same facts.
-pub fn bind(info: &'static Info) {
-    OWN.with(|own| own.set(Some(info)));
-    let _ = BOUND.set(info);
-}
-
-fn info() -> &'static Info {
-    if let Some(own) = OWN.with(std::cell::Cell::get) {
-        return own;
-    }
-    #[cfg(test)]
-    return BOUND.get_or_init(|| &llrm_x86_m16::REGISTER_INFO);
-    #[cfg(not(test))]
-    BOUND.get().expect("no target's register file is bound: the driver binds it with the selector")
-}
-
-/// The entry for `register`, if the description lists it.
-pub fn get(register: RegId) -> Option<&'static Entry> {
-    info().get(register)
-}
-
-/// Whether the description lists `register`.
-pub fn known(register: RegId) -> bool {
-    info().known(register)
-}
-
-/// The width of `register`, in bytes.
-pub fn bytes(register: RegId) -> Option<i64> {
-    info().bytes(register)
-}
-
-/// The register `register` is a view of (itself for a root, and for one the
-/// description does not list).
-pub fn root(register: RegId) -> RegId {
-    info().root(register)
-}
-
-/// Which of a root's four bytes `register` names, one bit each: the lane mask.
-pub fn lanes(register: RegId) -> i64 {
-    info().lanes(register)
-}
-
-/// `register`'s own name, lowercase.
-pub fn name(register: RegId) -> Option<&'static str> {
-    info().name(register)
-}
-
-/// Whether the description gives `register` every class in `mask`.
-pub fn in_class(
-    register: RegId,
-    mask: u32,
-) -> bool {
-    info().in_class(register, mask)
-}
-
-/// The register of `root` that is `bits` wide: the first by iced's number where
-/// several share it (AL and AH are both EAX's byte; AL is the one named).
-pub fn view(
-    root: RegId,
-    bits: u32,
-) -> Option<RegId> {
-    info().view(root, bits)
-}
-
-/// Whether `register` is a view of the frame register's root.
-pub fn is_frame(register: RegId) -> bool {
-    info().is_frame(register)
-}
-
-/// Whether `register` is a view of the stack pointer's root.
-pub fn is_stack(register: RegId) -> bool {
-    info().is_stack(register)
-}
-
-/// The root of the frame register.
-pub fn frame_root() -> RegId {
-    info().frame
-}
-
-/// The root of the stack pointer.
-pub fn stack_root() -> RegId {
-    info().stack
-}
-
-/// The segment register an address space of a pair kind means, `None` where
-/// the target has no segments.
-pub fn data_segment() -> Option<RegId> {
-    info().data_segment
-}
-
-pub fn stack_segment() -> Option<RegId> {
-    info().stack_segment
-}
-
-pub fn code_segment() -> Option<RegId> {
-    info().code_segment
-}
-
-/// The one a far pointer's selector is loaded into.
-pub fn far_segment() -> Option<RegId> {
-    info().far_segment
-}
-
-/// Whether `register` is a segment register.
-pub fn load_form(segment: RegId) -> Option<&'static str> {
-    info().load_form(segment)
-}
-
-pub fn loaded_by(form: &str) -> Option<RegId> {
-    info().loaded_by(form)
-}
-
-/// Whether `form` loads a far pointer into a segment register an address may
-/// be held in: any but the data segment, which is the default.
-pub fn loads_a_selector(form: &str) -> bool {
-    loaded_by(form).is_some_and(|segment| !is_data_segment(segment))
-}
-
-/// The segment an address through `base` reads without a prefix: the stack's
-/// through the stack pointer or the frame register, the data segment's
-/// through any other. None where the target has no segments.
-pub fn default_segment(base: RegId) -> Option<RegId> {
-    if is_stack(base) || is_frame(base) { stack_segment() } else { data_segment() }
-}
-
-/// Whether a word register can hold the offset of an address read through a
-/// segment: a base or index of the description that is neither the frame
-/// register nor the stack pointer, which select their own segment.
-pub fn holds_a_segment_offset(
-    register: RegId,
-    offset_bytes: i64,
-) -> bool {
-    let root = root(register);
-    bytes(register) == Some(offset_bytes)
-        && (in_class(root, class::BASE) || in_class(root, class::INDEX))
-        && !is_frame(register)
-        && !is_stack(register)
-}
-
-/// The registers a pass may borrow for a moment, most preferred first: the
-/// description's scratch order.
-pub fn scratch_order() -> &'static [RegId] {
-    info().scratch
-}
-
-pub fn is_segment(register: RegId) -> bool {
-    in_class(register, class::SEGMENT)
-}
-
-pub fn is_data_segment(register: RegId) -> bool {
-    data_segment() == Some(register)
-}
-
-pub fn is_stack_segment(register: RegId) -> bool {
-    stack_segment() == Some(register)
-}
-
-pub fn is_code_segment(register: RegId) -> bool {
-    code_segment() == Some(register)
-}
-
-/// The segment registers for code that exists only where the target has
-/// address spaces of a pair kind: a target without them never reaches it.
-pub mod segments {
-    use super::RegId;
-
-    fn named(
-        role: Option<RegId>,
-        what: &str,
-    ) -> RegId {
-        role.unwrap_or_else(|| panic!("the target's register file names no {what} segment"))
-    }
-
-    pub fn data() -> RegId {
-        named(super::data_segment(), "data")
-    }
-
-    pub fn stack() -> RegId {
-        named(super::stack_segment(), "stack")
-    }
-
-    pub fn far() -> RegId {
-        named(super::far_segment(), "far")
-    }
-}
-
-/// Every integer register by `bytes` wide, by iced's number.
-pub fn entries() -> impl Iterator<Item = (RegId, &'static Entry)> {
-    info().entries()
+/// m16's register file, for the tests of this crate that compile for no target.
+#[cfg(test)]
+pub fn test_regs() -> Regs {
+    Regs(&llrm_x86_m16::REGISTER_INFO)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// m16's file, which these tests ask directly.
+    fn info() -> &'static Info {
+        &llrm_x86_m16::REGISTER_INFO
+    }
+    fn known(register: RegId) -> bool {
+        info().known(register)
+    }
+    fn bytes(register: RegId) -> Option<i64> {
+        info().bytes(register)
+    }
+    fn root(register: RegId) -> RegId {
+        info().root(register)
+    }
+    fn name(register: RegId) -> Option<&'static str> {
+        info().name(register)
+    }
+    fn view(
+        root: RegId,
+        bits: u32,
+    ) -> Option<RegId> {
+        info().view(root, bits)
+    }
+    fn is_stack(register: RegId) -> bool {
+        info().is_stack(register)
+    }
+    fn is_frame(register: RegId) -> bool {
+        info().is_frame(register)
+    }
+    fn stack_root() -> RegId {
+        info().stack
+    }
+    fn frame_root() -> RegId {
+        info().frame
+    }
+    fn data_segment() -> Option<RegId> {
+        info().data_segment
+    }
+    fn stack_segment() -> Option<RegId> {
+        info().stack_segment
+    }
+    fn code_segment() -> Option<RegId> {
+        info().code_segment
+    }
+    fn far_segment() -> Option<RegId> {
+        info().far_segment
+    }
+    fn is_segment(register: RegId) -> bool {
+        info().is_segment(register)
+    }
+    fn is_data_segment(register: RegId) -> bool {
+        info().is_data_segment(register)
+    }
+    fn is_stack_segment(register: RegId) -> bool {
+        info().is_stack_segment(register)
+    }
+    fn is_code_segment(register: RegId) -> bool {
+        info().is_code_segment(register)
+    }
+    fn load_form(segment: RegId) -> Option<&'static str> {
+        info().load_form(segment)
+    }
+    fn loaded_by(form: &str) -> Option<RegId> {
+        info().loaded_by(form)
+    }
+    fn loads_a_selector(form: &str) -> bool {
+        info().loads_a_selector(form)
+    }
+    fn default_segment(base: RegId) -> Option<RegId> {
+        info().default_segment(base)
+    }
+    fn holds_a_segment_offset(
+        register: RegId,
+        offset_bytes: i64,
+    ) -> bool {
+        info().holds_a_segment_offset(register, offset_bytes)
+    }
+    fn scratch_order() -> &'static [RegId] {
+        info().scratch
+    }
 
     /// The tables the allocator has always read (`WIDTHS`, `AT_WIDTH`, `LANES`,
     /// `NAMES`, `ir::root`) and the description's queries say the same of every
@@ -319,25 +201,5 @@ mod tests {
     #[test]
     fn the_scratch_order_is_the_descriptions() {
         assert_eq!(scratch_order(), [RegId::CX, RegId::DX, RegId::BX, RegId::AX]);
-    }
-
-    /// Tests that compile for two targets in one process ran on one register
-    /// file: the first to bind decided, and 29 of llrm-c's m16 tests failed
-    /// ("the target's register file names no far segment") whenever an m32 one
-    /// ran first.
-    #[test]
-    fn test_a_thread_binding_a_target_is_not_decided_by_another_threads() {
-        let bound = |info: &'static Info| {
-            std::thread::spawn(move || {
-                bind(info);
-                far_segment().is_some()
-            })
-            .join()
-            .expect("a thread")
-        };
-        // m32 first: it has no far segment, and must not take m16's.
-        assert!(!bound(&llrm_x86_m32::REGISTER_INFO));
-        assert!(bound(&llrm_x86_m16::REGISTER_INFO));
-        assert!(!bound(&llrm_x86_m32::REGISTER_INFO));
     }
 }

@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use llrm_lir::registers::Regs;
 use llrm_mir::facts::Fact;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 use llrm_support::debug::timed;
@@ -256,6 +257,7 @@ pub fn assembled_by(
         crate::backend::debuginfo::described(module, &names, llrm_object::debug::Producer::Native, arch)
     })?;
     Ok(masm::Module {
+        registers: Regs(arch.registers()),
         code: code.to_owned(),
         names,
         externs,

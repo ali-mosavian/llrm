@@ -260,6 +260,10 @@ pub trait Target {
         far: bool,
     ) -> i64;
 
+    /// The register file the target's description states: what every query of
+    /// a register asks, so a process can compile for several targets at once.
+    fn registers(&self) -> &'static llrm_lir::registers::Info;
+
     /// The registers a result of `width` bytes leaves in, low part first.
     fn results(
         &self,
