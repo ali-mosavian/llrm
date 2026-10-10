@@ -145,9 +145,9 @@ class Differential:
     sizes: tuple[int, int] = (0, 0)
 
 
-# Cells that hold something different on every run: NIBBLES scatters sparkles over its introduction at
-# random, so its asterisks are not compared.
-RANDOM_CELLS = {"NIBBLES": str.maketrans("*", " ")}
+# Cells that hold something different on every run: NIBBLES and GORILLA scatter sparkles over their
+# introductions at random, so their asterisks are not compared.
+RANDOM_CELLS = {"NIBBLES": str.maketrans("*", " "), "GORILLA": str.maketrans("*", " ")}
 
 
 def draws_screen(name: str) -> bool:

@@ -1,0 +1,20 @@
+' PUT of a picture in QB's own array format (the banana of GORILLA.BAS), in every mode.
+SCREEN 9
+DIM up&(8), right&(8)
+FOR i% = 0 TO 8: READ up&(i%): NEXT
+FOR i% = 0 TO 8: READ right&(i%): NEXT
+PUT (100, 100), up&, PSET
+PUT (120, 100), right&, PSET
+PUT (140, 100), up&, PRESET
+PUT (160, 100), up&, OR
+PUT (160, 100), right&, XOR
+PUT (180, 100), up&, AND
+LINE (200, 90)-(240, 120), 3, BF
+PUT (205, 95), up&, XOR
+PUT (215, 95), right&, OR
+PUT (225, 95), up&, AND
+PUT (300, 100), up&, XOR
+PUT (300, 100), up&, XOR
+SLEEP
+DATA 262153, 4063232, 4063294, 8323072, 8323199, -2130771968, -2130738945, -2134835200,-2134802239
+DATA 458758, -1061109760, -522133504, 1886416896, 1886416896, 1886416896,-522133504,-1061109760,0

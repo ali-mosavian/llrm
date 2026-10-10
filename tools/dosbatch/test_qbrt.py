@@ -74,13 +74,7 @@ def demos(tmp_path_factory):
     return qbruntime.differential_batch(objects, archive, work / "differential")
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "NIBBLES",
-        pytest.param("GORILLA", marks=pytest.mark.xfail(strict=True, reason="graphics, sound and ON ERROR are not here yet")),
-    ],
-)
+@pytest.mark.parametrize("name", ["NIBBLES", "GORILLA"])
 def test_demo_introduction_matches_bcom45(demos, name: str):
     """Both draw the same introduction and wait for a key (NIBBLES's random sparkles aside)."""
     result = demos[name]

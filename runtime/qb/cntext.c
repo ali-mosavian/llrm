@@ -25,6 +25,7 @@ enum {
 static byte column, row, columns, rows;
 static byte attribute = DEFAULT_ATTRIBUTE;
 static byte view_top, view_bottom;
+static int view_set;           /* VIEW PRINT gave bounds */
 static int cursor_stale;
 static int cursor_wanted;     /* LOCATE ,,1 */
 static int cursor_shown = 1;
@@ -63,9 +64,11 @@ static void text_newline(void)
     }
 }
 
+/* CLS clears a window VIEW PRINT gave; else the whole screen, the last row,
+   which PRINT does not use, with it. */
 static void text_clear(void)
 {
-    dev_text_scroll(view_top, view_bottom, 0, attribute);
+    dev_text_scroll(view_top, view_set ? view_bottom : rows - 1, 0, attribute);
     row = view_top;
     column = 0;
     cursor_stale = 1;
@@ -201,7 +204,8 @@ static void text_locate(int new_row, int new_column)
 
 static void text_view(int top, int bottom)
 {
-    if (top == -1 && bottom == -1) {
+    view_set = top != -1 || bottom != -1;
+    if (!view_set) {
         view_top = 0;
         view_bottom = rows - 1;
     } else {

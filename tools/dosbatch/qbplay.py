@@ -73,7 +73,7 @@ class Session:
 
     def screen(self) -> str:
         reply = self.send({"cmd": "text_screen"})
-        text = reply.get("screen") or reply.get("text") or reply.get("rows") or ""
+        text = reply.get("text") or ""
         return "\n".join(text) if isinstance(text, list) else text
 
     def wait_for(self, text: str, seconds: float = 60) -> None:
@@ -150,3 +150,37 @@ def differing_pixels(left: Path, right: Path) -> int:
     if a[:2] != b[:2]:
         return a[0] * a[1]
     return sum(1 for i in range(0, len(a[2]), 3) if a[2][i : i + 3] != b[2][i : i + 3])
+
+
+def built_pairs(sources: dict[str, Path], work: Path) -> dict[str, tuple[Path, Path]]:
+    """Each program as two linked EXEs, BCOM45's and the llrm runtime's: (reference, candidate) by name."""
+    import shutil
+
+    import qbruntime
+
+    objects = {}
+    for name, source in sources.items():
+        pair = (work / f"{name}.qb45.obj", work / f"{name}.llrm.obj")
+        for runtime, obj in zip(("qb45", "llrm"), pair):
+            error = qbruntime.compile_basic(source, obj, runtime)
+            assert error is None, error
+        objects[name] = (*pair, *qbruntime.linked_objects(source, work))
+    archive, _ = qbruntime.build(work / "archive")
+    exes: dict[str, list[Path | None]] = {name: [None, None] for name in objects}
+    for tag, runtime in (("ref", "bcom45"), ("cand", "llrmqb")):
+        jobs = []
+        for at, (reference, candidate, *more) in enumerate(objects.values()):
+            stem = f"J{at:03d}"
+            if tag == "ref":
+                jobs.append(dosbatch.Job(stem, "obj", reference, objects=tuple(more), budget_ms=200))
+            else:
+                jobs.append(
+                    dosbatch.Job(stem, "obj", candidate, runtime=runtime, runtime_file=archive, objects=tuple(more), budget_ms=200)
+                )
+        run = work / f"link_{tag}"
+        dosbatch.run(jobs, run)
+        for name, job in zip(objects, jobs):
+            kept = work / f"{name}.{tag}.exe"
+            shutil.copy(run / f"{job.stem.upper()}.EXE", kept)
+            exes[name][tag == "cand"] = kept
+    return {name: (pair[0], pair[1]) for name, pair in exes.items()}

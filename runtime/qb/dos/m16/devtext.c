@@ -1,24 +1,7 @@
-/* This target's devices: DOS and the BIOS for the clock and the console's
-   state, the timer and the speaker port for sound, video memory for the text
-   screen. */
+/* The text screen: cells in video memory, the BIOS for the cursor. */
 #include "device.h"
 
 enum {
-    DOS_IOCTL = 0x4400,
-    STDOUT_HANDLE = 1,
-    DEVICE_BIT = 0x80,
-    CONSOLE_OUT_BIT = 0x02,
-    CARRY = 1,
-    DOS_GET_TIME = 0x2C00,
-    MINUTES_PER_HOUR = 60,
-    SECONDS_PER_MINUTE = 60,
-    HUNDREDTHS = 100,
-    TIMER_COMMAND = 0x43,
-    TIMER_CHANNEL_2 = 0x42,
-    SQUARE_WAVE_2 = 0xB6,
-    SPEAKER_PORT = 0x61,
-    SPEAKER_ON = 0x03,
-    TIMER_CLOCK = 1193182L,
     BIOS_COLUMNS = 0x4A,
     BIOS_MODE = 0x49,
     BIOS_ROWS = 0x84,
@@ -34,45 +17,6 @@ enum {
 /* The BIOS data area, 0040h:0000h. */
 static const volatile u8 QB_FAR *const bios =
     (const volatile u8 QB_FAR *)0x400UL;
-
-int dev_stdout_is_screen(void)
-{
-    Regs r;
-
-    r.rax = DOS_IOCTL;
-    r.rbx = STDOUT_HANDLE;
-    dev_int21(&r);
-    return !(r.rflags & CARRY)
-           && (r.rdx & (DEVICE_BIT | CONSOLE_OUT_BIT))
-              == (DEVICE_BIT | CONSOLE_OUT_BIT);
-}
-
-long dev_clock(void)
-{
-    Regs r;
-    long seconds;
-
-    r.rax = DOS_GET_TIME;
-    dev_int21(&r);
-    seconds = ((r.rcx >> 8) * MINUTES_PER_HOUR + (r.rcx & 0xFF))
-              * SECONDS_PER_MINUTE + (r.rdx >> 8);
-    return seconds * HUNDREDTHS + (r.rdx & 0xFF);
-}
-
-void dev_tone(unsigned hertz)
-{
-    unsigned speaker = dev_inb(SPEAKER_PORT);
-
-    if (!hertz) {
-        dev_outb(SPEAKER_PORT, speaker & ~SPEAKER_ON);
-        return;
-    }
-    hertz = (unsigned)(TIMER_CLOCK / hertz);
-    dev_outb(TIMER_COMMAND, SQUARE_WAVE_2);
-    dev_outb(TIMER_CHANNEL_2, hertz & 0xFF);
-    dev_outb(TIMER_CHANNEL_2, hertz >> 8);
-    dev_outb(SPEAKER_PORT, speaker | SPEAKER_ON);
-}
 
 static unsigned columns_of(void)
 {

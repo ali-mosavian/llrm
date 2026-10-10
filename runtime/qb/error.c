@@ -111,28 +111,11 @@ static void fatal(unsigned n)
     llrm_os_exit(255);
 }
 
-/* The frame the module's code registered its handler from (land.asm), and where
-   the handler is. */
+/* Where the module's ON ERROR handler is and where it was registered from
+   (land.asm); the code that takes an error there, set by onerror.c when the
+   program has an ON ERROR, else 0. */
 unsigned qb_land_sp, qb_land_bp, qb_land_to, qb_err_ip;
-void qb_land(void);
-
-/* B$OEGA: the handler's offset in the module's code, or 0 for none.  A handler
-   set again is how the compiled RESUME ends the error: ERR is 0 after it. */
-void on_error(unsigned target)
-{
-    md_set_on_error(module_data(), target);
-    b_inonerr = 0;
-    if (target)
-        b_errnum = 0;
-}
-
-/* B$SERR: ERROR n; 0 and numbers past 255 are Illegal function call. */
-void raise(unsigned n)
-{
-    if (n == 0 || n > 255)
-        n = BE_ILLFUN;
-    qb_error(n);
-}
+void (*qb_lander)(void);
 
 void qb_error(unsigned n)
 {
@@ -140,12 +123,12 @@ void qb_error(unsigned n)
 
     b_errnum = n;
     qb_dispatch(V_ERR);
-    handler = md_on_error(module_data());
+    handler = qb_lander ? md_on_error(module_data()) : 0;
     if (handler && n < 256 && !b_inonerr) {
         str_all_tmp_free(0);
         b_inonerr = 1;
         qb_land_to = handler;
-        qb_land();
+        qb_lander();
     }
     fatal(n);
 }
@@ -154,6 +137,3 @@ void qb_no_resume(void)
 {
     qb_error(BE_NORESUME);
 }
-#pragma aux qb_land "QB_LAND"
-#pragma aux on_error "@on_error@2"
-#pragma aux raise "@raise@2"

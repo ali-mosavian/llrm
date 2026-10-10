@@ -21,7 +21,7 @@ enum {
     FUNCTION_SHIFT = 3,
     PLANES = 4,
     MODE_320 = 0x0D,
-    TEXT_MODE_BIT = 0x80,
+    LAST_TEXT_MODE = 7,
     GET_MODE = 0x0F00,
     SET_PALETTE = 0x1000,
     GET_FONT = 0x1130,
@@ -57,7 +57,8 @@ int gd_set_mode(unsigned mode)
     pitch = mode == MODE_320 ? 40 : 80;
     if ((r.rax & 0x7F) != (mode & 0x7F))
         return 0;
-    controller(GC_MODE, WRITE_MODE_2);
+    if (mode > LAST_TEXT_MODE)
+        controller(GC_MODE, WRITE_MODE_2);
     return 1;
 }
 
