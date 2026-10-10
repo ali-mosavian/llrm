@@ -529,12 +529,12 @@ pub fn _lanes(register: Register) -> Lanes {
         return (0..width).map(|byte| (register, byte as u32)).collect();
     }
     let full = full32(register);
-    if ![Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP]
-        .contains(&full)
+    if !crate::backend::registerinfo::in_class(full, crate::backend::registerinfo::class::INT)
+        || crate::backend::registerinfo::is_stack(full)
     {
         return Lanes::new();
     }
-    let start = u32::from([Register::AH, Register::BH, Register::CH, Register::DH].contains(&register));
+    let start = crate::backend::registerinfo::get(register).map_or(0, |one| one.lane / 8);
     (start..start + register.size() as u32).map(|byte| (full, byte)).collect()
 }
 
@@ -1661,17 +1661,7 @@ pub fn addresses<'a>(
 fn _root_get(register: Register) -> Option<Register> {
     let rooted = ir::root(register);
     let key = rooted != register
-        || [
-            Register::EAX,
-            Register::EBX,
-            Register::ECX,
-            Register::EDX,
-            Register::ESI,
-            Register::EDI,
-            Register::EBP,
-            Register::ESP,
-        ]
-        .contains(&register);
+        || crate::backend::registerinfo::in_class(register, crate::backend::registerinfo::class::INT);
     key.then_some(rooted)
 }
 

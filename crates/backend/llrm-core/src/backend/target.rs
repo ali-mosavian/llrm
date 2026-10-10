@@ -246,6 +246,9 @@ pub struct Segments {
     /// The selector stride a huge pointer takes per carried 64K, as a shift:
     /// the machine's (`Machine::huge_shift`), where it states one.
     pub huge_shift: Option<u32>,
+    /// The bytes of a pair space's offset: the width of a register an address
+    /// is held in (`registerinfo::holds_a_segment_offset`).
+    pub offset_bytes: i64,
 }
 
 impl Segments {
@@ -266,11 +269,20 @@ impl Segments {
             .collect()
     }
 
-    pub fn of(machine: &Machine) -> Self {
+    pub fn of(
+        machine: &Machine,
+        offset_bytes: i64,
+    ) -> Self {
         // A flat machine has no selector to place: DS is only what string
         // operations read.
         let Some(segments) = machine.segments.as_ref() else {
-            return Self { selectors: Vec::new(), data: Self::data_register(), through: None, huge_shift: None };
+            return Self {
+                selectors: Vec::new(),
+                data: Self::data_register(),
+                through: None,
+                huge_shift: None,
+                offset_bytes,
+            };
         };
         let named = |one: &Register, name: &String| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one]);
         let register = |name: &String| {
@@ -291,17 +303,26 @@ impl Segments {
             data: register(&segments.data),
             through: segments.stack_is_data.then(|| register(&segments.stack)),
             huge_shift: machine.huge_shift(),
+            offset_bytes,
         }
     }
 }
 
+/// The bytes of the offset of the target's far pointer: what a register an
+/// address is held in is wide in a segmented program.
+pub fn offset_bytes(arch: &dyn llrm_target::Target) -> i64 {
+    let layout = arch.layout();
+    let parsed = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout).expect("a target's datalayout parses");
+    i64::from(parsed.offset_bits(layout.spaces.roles.far) / 8)
+}
+
 /// The built-in machine's, for the tests of this crate.
 #[cfg(test)]
-pub static BUILT_IN: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BUILT_IN));
+pub static BUILT_IN: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BUILT_IN, 2));
 
 /// The segment registers of `machine::BASIC`, for the tests of this crate.
 #[cfg(test)]
-pub static BASIC: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BASIC));
+pub static BASIC: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BASIC, 2));
 
 /// Whether `one` needs the data segment register to hold the data group: it
 /// calls, returns, traps or is opaque; it is an x87 instruction, whose
@@ -496,7 +517,7 @@ mod tests {
     fn test_a_flat_machine_has_no_selector_to_place() {
         let flat =
             Machine::parse("addressing = \"flat\"\nsegment_end_faults = false\nfar_bss = false\n", "486").unwrap();
-        let segments = Segments::of(&flat);
+        let segments = Segments::of(&flat, 4);
         assert!(segments.selectors.is_empty() && segments.through.is_none() && segments.huge_shift.is_none());
     }
 
@@ -629,7 +650,7 @@ mod tests {
                 .map(|segments| crate::abi::machine::Segments { stack_is_data: true, ..segments }),
             ..llrm_x86_m16::machine::BUILT_IN.clone()
         };
-        let joined = Segments::of(&joined);
+        let joined = Segments::of(&joined, 2);
         assert_eq!(joined.selectors, [Register::ES, Register::FS, Register::GS, Register::DS]);
         assert_eq!((joined.data, joined.through), (Register::DS, Some(Register::SS)));
     }
