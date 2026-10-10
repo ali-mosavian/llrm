@@ -275,7 +275,7 @@ fn _planned(
     let before = function.terminator(preheader)?;
     let mut asked = consts::memory_queries(*unit, &solved.integers);
     let initial = consts::_kills(
-        (*solved.cells[&before]).clone(),
+        (*floatfacts::cells_before(unit, calls, solved, before)).clone(),
         before,
         &solved.integers,
         calls,

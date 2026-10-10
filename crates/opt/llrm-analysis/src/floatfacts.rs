@@ -538,6 +538,7 @@ fn _inputs(
     rule: &Rule,
     integers: &IndexMap<ValueId, Known>,
     here: Option<&Cells>,
+    provided: Option<(&consts::Provider, &dyn Fn(InstId) -> Option<Known>)>,
     queries: &mut _MemoryQueries,
     facts: &IndexMap<ValueId, Finite>,
 ) -> Option<Vec<Finite>> {
@@ -547,7 +548,11 @@ fn _inputs(
         if let Some(bits) = crate::memory::constant_bits(unit, &reference) {
             return Some(vec![decoded(&bits, rule.inputs[0])?]);
         }
-        let bits = consts::_cell(here?, &reference)?;
+        let bits = match (here, provided) {
+            (Some(here), _) => consts::_cell(here, &reference)?,
+            (None, Some((provider, put))) => consts::provided(provider, rule.inputs[0].bits(), put)?,
+            (None, None) => return None,
+        };
         return Some(vec![decoded(&bits.n, rule.inputs[0])?]);
     }
     rule.inputs
@@ -618,7 +623,7 @@ pub fn repeated<'a>(
                 }
                 continue;
             };
-            let inputs = _inputs(unit, inst, &rule, &integers, Some(&memory), queries, &floating)?;
+            let inputs = _inputs(unit, inst, &rule, &integers, Some(&memory), None, queries, &floating)?;
             let result = evaluated(&rule, &inputs)?;
             if let Opcode::Store { .. } = op.opcode {
                 let reference = queries.resolve(&MemRef::of(unit, inst)?);
@@ -742,13 +747,19 @@ fn _exits<'s>(
         {
             continue;
         }
-        let Solved { integers, cells: memory, .. } = solve();
+        let solved = solve();
+        let Solved { integers, .. } = &solved;
         let Some(count) = induction::agreed_count(&induction::counted(unit, &loop_, Some(integers), false)) else {
             continue;
         };
         let mut asked = consts::memory_queries(*unit, integers);
         let last = function.terminator(cfg::block(preheader)).expect("a terminated block");
-        let initial = consts::_kills((*memory[&last]).clone(), last, integers, calls, None, None, false, &mut asked);
+        let before = if solved.cells.is_empty() {
+            cells_before(unit, calls, &solved, last)
+        } else {
+            solved.cells[&last].clone()
+        };
+        let initial = consts::_kills((*before).clone(), last, integers, calls, None, None, false, &mut asked);
         let Some(after) = repeated(unit, instructions(latch), &count, &initial, Some(integers), Some(&mut asked))
         else {
             continue;
@@ -857,6 +868,8 @@ pub fn cells(
 pub struct Solved {
     pub integers: IndexMap<ValueId, Known>,
     pub facts: IndexMap<ValueId, Finite>,
+    /// Empty from the manager's solve (`solved_over` with `dense` false): see
+    /// `cells_before`.
     pub cells: HeldCells,
 }
 
@@ -865,16 +878,52 @@ fn _with_stored(
     unit: &Unit,
     integers: &IndexMap<ValueId, Known>,
     facts: &IndexMap<ValueId, Finite>,
-    sources: &HashSet<ValueId>,
+    sources: &llrm_mir::dense::IdSet<ValueId>,
 ) -> IndexMap<ValueId, Known> {
     let mut known = integers.clone();
-    for value in sources {
-        let format = Format::of(&unit.context.types, unit.function.value(*value).ty);
-        if let Some(bits) = facts.get(value).zip(format).and_then(|(fact, format)| _bits(fact, format)) {
-            known.insert(*value, bits);
+    for value in sources.iter() {
+        let format = Format::of(&unit.context.types, unit.function.value(value).ty);
+        if let Some(bits) = facts.get(&value).zip(format).and_then(|(fact, format)| _bits(fact, format)) {
+            known.insert(value, bits);
         }
     }
     known
+}
+
+/// The cells before each instruction as the dense solve makes them, over what
+/// `solved` learned: for a caller that needs the whole map of one point (a
+/// counted float loop's repetition, `floatloop`), and not the manager's solve.
+pub fn cells_before(
+    unit: &Unit,
+    calls: &Calls,
+    solved: &Solved,
+    at: InstId,
+) -> std::rc::Rc<Cells> {
+    let function = unit.function;
+    let sources = function
+        .walk()
+        .filter_map(|(_, inst)| rule(unit, inst).map(|_| inst))
+        .filter(|inst| matches!(function.instruction(*inst).opcode, Opcode::Store { .. }))
+        .filter_map(|inst| match function.instruction(inst).operands[0] {
+            Operand::Value(value) => Some(value),
+            _ => None,
+        })
+        .collect::<llrm_mir::dense::IdSet<_>>();
+    consts::cells_solved(
+        unit,
+        calls,
+        Some(&_with_stored(unit, &solved.integers, &solved.facts, &sources)),
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+    )
+    .flat
+    .get(&at)
+    .cloned()
+    .unwrap_or_default()
 }
 
 /// `known` and `cells` in one solve, and the integers under them.
@@ -883,19 +932,26 @@ pub fn solved_with(
     calls: &Calls,
     initial: Option<&Cells>,
 ) -> Solved {
-    solved_over(unit, calls, initial, &consts::known(unit, Some(calls), None, initial))
+    solved_over(unit, calls, initial, &consts::known(unit, Some(calls), None, initial), true)
 }
 
 /// `solved_with`, given the integers under it: `consts::known(unit,
 /// Some(calls), None, initial)`, which a caller that asks it of the same body
 /// for itself (the manager's `ThroughMemory`, for `initial` none) need not
 /// derive again.
+///
+/// With `dense` false and no `initial`, a float load is read from the stores
+/// MemorySSA says reach it, as `consts::known_walked` reads an integer one, and
+/// the cells before each instruction are not made (`cells` is empty: a caller
+/// that wants them asks `cells_before`).
 pub fn solved_over(
     unit: &Unit,
     calls: &Calls,
     initial: Option<&Cells>,
     integers: &IndexMap<ValueId, Known>,
+    dense: bool,
 ) -> Solved {
+    let walking = !dense && initial.is_none();
     let function = unit.function;
     let rules = function.walk().filter_map(|(_, inst)| rule(unit, inst).map(|rule| (inst, rule))).collect::<Vec<_>>();
     let phis = function
@@ -914,11 +970,38 @@ pub fn solved_over(
             Operand::Value(value) => Some(value),
             _ => None,
         })
-        .collect::<HashSet<_>>();
+        .collect::<llrm_mir::dense::IdSet<_>>();
     let mut queries = consts::memory_queries(*unit, &integers);
-    let mut facts = IndexMap::<ValueId, Finite>::default();
+    let mut facts = IndexMap::default();
     let mut memory = HeldCells::default();
-    let mut reshadow = true;
+    // The loads' providers, and the bits of each stored value learned so far.
+    let loads: llrm_mir::dense::IdSet<ValueId> = rules
+        .iter()
+        .filter(|(inst, _)| matches!(function.instruction(*inst).opcode, Opcode::Load { .. }))
+        .filter_map(|(inst, _)| function.instruction(*inst).result)
+        .collect();
+    // The walk reads each access with the provenance alias found, as
+    // `known_walked` does.
+    let annotated = (walking && unit.references.is_none()).then(|| unit.annotated().ok()).flatten();
+    let walked_unit = annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
+    let accesses = crate::memoryssa::Accesses::plain(&walked_unit, calls);
+    let providers = if walking {
+        consts::load_providers(&walked_unit.with_registers(integers), &accesses, &|result| loads.contains(&result))
+    } else {
+        Default::default()
+    };
+    let stored = std::cell::RefCell::new(if walking { integers.clone() } else { IndexMap::default() });
+    let put = |site: InstId| consts::_put(unit, site, &stored.borrow());
+    let rule_at: llrm_mir::dense::IdMap<InstId, usize> =
+        rules.iter().enumerate().map(|(at, (inst, _))| (*inst, at)).collect();
+    let phi_set: llrm_mir::dense::IdSet<InstId> = phis.iter().copied().collect();
+    let steps: Vec<(InstId, Option<usize>)> = function
+        .walk()
+        .filter_map(|(_, inst)| {
+            if phi_set.contains(&inst) { Some((inst, None)) } else { rule_at.get(&inst).map(|at| (inst, Some(*at))) }
+        })
+        .collect();
+    let mut reshadow = !walking;
     let mut changed = true;
     while changed {
         changed = false;
@@ -938,28 +1021,39 @@ pub fn solved_over(
             reshadow = false;
         }
         let mut learned = |value: ValueId, fact: Finite, facts: &mut IndexMap<ValueId, Finite>| {
+            if walking && sources.contains(&value) {
+                let format = Format::of(&unit.context.types, unit.function.value(value).ty);
+                if let Some(bits) = format.and_then(|format| _bits(&fact, format)) {
+                    stored.borrow_mut().insert(value, bits);
+                }
+            }
             facts.insert(value, fact);
             changed = true;
-            reshadow |= sources.contains(&value);
+            reshadow |= !walking && sources.contains(&value);
         };
-        for &phi in &phis {
-            let op = function.instruction(phi);
-            let result = op.result.expect("a phi's value");
-            if facts.contains_key(&result) {
+        // In program order, so a flow forward through joins settles in one
+        // pass.
+        for (inst, which) in &steps {
+            let Some(at) = which else {
+                let phi = *inst;
+                let op = function.instruction(phi);
+                let result = op.result.expect("a phi's value");
+                if facts.contains_key(&result) {
+                    continue;
+                }
+                let format = Format::of(&unit.context.types, op.ty).expect("a float phi");
+                let seen = op
+                    .operands
+                    .iter()
+                    .step_by(2)
+                    .map(|&one| _operand(unit, one, format, &integers, &facts))
+                    .collect::<Option<Vec<_>>>();
+                if let Some(seen) = seen.filter(|seen| !seen.is_empty() && seen.iter().all(|one| *one == seen[0])) {
+                    learned(result, seen[0].clone(), &mut facts);
+                }
                 continue;
-            }
-            let format = Format::of(&unit.context.types, op.ty).expect("a float phi");
-            let seen = op
-                .operands
-                .iter()
-                .step_by(2)
-                .map(|&one| _operand(unit, one, format, &integers, &facts))
-                .collect::<Option<Vec<_>>>();
-            if let Some(seen) = seen.filter(|seen| !seen.is_empty() && seen.iter().all(|one| *one == seen[0])) {
-                learned(result, seen[0].clone(), &mut facts);
-            }
-        }
-        for (inst, rule) in &rules {
+            };
+            let (inst, rule) = &rules[*at];
             let op = function.instruction(*inst);
             let Some(result) = op.result.filter(|result| !facts.contains_key(result)) else {
                 continue;
@@ -967,9 +1061,20 @@ pub fn solved_over(
             if let Format::Signed(_) | Format::Unsigned(_) = rule.result {
                 continue; // `converted`'s
             }
-            let Some(inputs) =
-                _inputs(unit, *inst, rule, &integers, memory.get(inst).map(|here| &**here), &mut queries, &facts)
-            else {
+            let Some(inputs) = _inputs(
+                unit,
+                *inst,
+                rule,
+                &integers,
+                memory.get(inst).map(|here| &**here),
+                function
+                    .instruction(*inst)
+                    .result
+                    .and_then(|result| providers.get(&result))
+                    .map(|provider| (provider, &put as &dyn Fn(InstId) -> Option<Known>)),
+                &mut queries,
+                &facts,
+            ) else {
                 continue;
             };
             if let Some(fact) = evaluated(rule, &inputs) {

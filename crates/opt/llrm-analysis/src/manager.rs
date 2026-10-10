@@ -1066,7 +1066,17 @@ impl Analysis for FloatFacts {
                         "ThroughMemory's integers lack a fact the dense solve derives"
                     );
                 }
-                floatfacts::solved_over(&unit, &calls, None, integers)
+                let walked = floatfacts::solved_over(&unit, &calls, None, integers, false);
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                    let dense = floatfacts::solved_over(&unit, &calls, None, integers, true);
+                    let lacking: Vec<_> =
+                        dense.facts.iter().filter(|(value, fact)| walked.facts.get(*value) != Some(*fact)).collect();
+                    assert!(
+                        lacking.is_empty(),
+                        "FloatFacts' walk lacks float facts the dense solve derives: {lacking:?}"
+                    );
+                }
+                walked
             }
             Err(_) => floatfacts::solved_with(&unit, &calls, None),
         }
