@@ -33,6 +33,9 @@ typedef unsigned char *os_data_mut;
 /* The pointer to segment:offset, as a real-mode interrupt returns one. */
 #define QB_REAL_POINTER(segment, offset) ((void *)(((unsigned long)(segment) << 4) + (offset)))
 
+/* The most bytes a BASIC string holds: a signed length of the target's word. */
+#define QB_STRING_LIMIT 0x7FFFFFFFL
+
 /* A function pointer in a startup table (xi.h, rtinit.h). */
 typedef void (*qb_init_fn)(void);
 

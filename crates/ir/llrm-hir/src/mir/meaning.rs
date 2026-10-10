@@ -172,7 +172,10 @@ impl Body<'_, '_> {
             }
             Expr::Length(at) => {
                 let address = self.field(self.b.parameter(*at), self.descriptor.length);
-                self.b.load(word, address, false, "length")
+                // The length is a word of the target; the routines count in 16 bits.
+                let wide = self.b.context.types.int(8 * self.descriptor.word as u32);
+                let length = self.b.load(wide, address, false, "length");
+                if wide == word { length } else { Operand::from(self.b.cast(CastOp::Trunc, length, word, "")) }
             }
             Expr::Data(at) => {
                 let (pointer, address) =

@@ -8452,8 +8452,9 @@ impl Compiler {
             llrm_qbruntime::semantics::descriptor(&self.runtime, self.options.near())
         {
             let mut literal = vec![0; near.size as usize];
-            literal[near.length as usize..near.length as usize + 2]
-                .copy_from_slice(&(encoded.len() as u16).to_le_bytes());
+            let word = near.word as usize;
+            literal[near.length as usize..near.length as usize + word]
+                .copy_from_slice(&(encoded.len() as u64).to_le_bytes()[..word]);
             literal.extend_from_slice(&encoded);
             if literal.len() % 2 != 0 {
                 literal.push(0);

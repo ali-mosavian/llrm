@@ -155,6 +155,38 @@ def run(names: list[str], work: Path) -> dict[str, tuple[str, bool]]:
     return found
 
 
+def flat_programs(names: list[str], work: Path) -> dict[str, str]:
+    """Each program of tests/qbflat (NAME.bas, with NAME.out) on the flat target: what only a flat target can do, so
+    BCOM45 has no output to compare. '' where it printed NAME.out, else the first difference or why it did not run."""
+    work.mkdir(parents=True, exist_ok=True)
+    runtime = build(work / "runtime")
+    found, jobs, stems = {}, [], {}
+    for at, name in enumerate(names):
+        source = dosbatch.ROOT / "tests" / "qbflat" / f"{name}.bas"
+        obj = work / f"{name}.obj"
+        if reason := compile_basic(source, obj):
+            found[name] = f"compile: {reason}"
+            continue
+        try:
+            loaders = link(obj, runtime, work / f"{name}.exe", work)
+        except dosbatch.BuildError as error:
+            found[name] = f"link: {str(error)[-300:]}"
+            continue
+        stems[f"F{at:03d}"] = name
+        jobs.append(dosbatch.Job(f"F{at:03d}", "exe", work / f"{name}.exe", files=loaders))
+    if jobs:
+        results = dosbatch.run(jobs, work / "run")
+        for job in jobs:
+            name = stems[job.stem]
+            if results[job.stem].status != "ok":
+                found[name] = f"run: {results[job.stem].status}"
+                continue
+            want = (dosbatch.ROOT / "tests" / "qbflat" / f"{name}.out").read_bytes()
+            got = qbruntime.raw_output(work / "run", job.stem)
+            found[name] = qbruntime.first_byte_difference(want.replace(b"\r\n", b"\n"), got.replace(b"\r\n", b"\n"))
+    return found
+
+
 def probes(names: list[str], work: Path) -> dict[str, str]:
     """Each probe of tests/qbrt (by name) on the flat target against BCOM45's own output: '' where they are the same bytes,
     else the first difference or why it did not run."""

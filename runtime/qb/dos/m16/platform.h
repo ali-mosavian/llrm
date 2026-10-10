@@ -35,6 +35,9 @@ typedef unsigned char QB_FAR *os_data_mut;
 /* The pointer to segment:offset, as a real-mode interrupt returns one. */
 #define QB_REAL_POINTER(segment, offset) ((void QB_FAR *)((unsigned long)(segment) << 16 | (offset)))
 
+/* The most bytes a BASIC string holds: QB 4.5's 32767. */
+#define QB_STRING_LIMIT 32767L
+
 /* A function pointer in a startup table (xi.h, rtinit.h). */
 typedef void (QB_FAR *qb_init_fn)(void);
 

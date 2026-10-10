@@ -223,7 +223,7 @@ char *str_alloc(SD *owner, uword len)
     uword bytes = WORD + even(len);
     StrEntry *entry;
 
-    if (len == 0xFFFF)
+    if (len > SD_MAX_LENGTH)
         qb_error(BE_STRINGSP);
     owner->len = len;
     entry = fit(bytes);

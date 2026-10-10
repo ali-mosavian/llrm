@@ -43,13 +43,13 @@ pub fn descriptor(
     let at =
         |key: &str| row.get(key).and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("layout.{family}.{key}"));
     let length = at("length");
-    // A natural layout puts the pointer after the 2-byte length, on its own alignment.
+    // A natural layout is a C struct of a length and a pointer, each a word of the target: the pointer is on its
+    // own alignment, and a target with a wider word has a wider length.
     if row.get("natural").and_then(toml::Value::as_bool) == Some(true) && near_bytes > 2 {
         let near = near_bytes as i64;
-        let data = (length + 2 + near - 1) / near * near;
-        return Some(Descriptor { length, data, size: data + near });
+        return Some(Descriptor { length, word: near, data: near, size: 2 * near });
     }
-    Some(Descriptor { length, data: at("data"), size: at("size") })
+    Some(Descriptor { length, word: 2, data: at("data"), size: at("size") })
 }
 
 /// Whether llrm's runtime keeps BASIC's stack block for `name`, which no register convention can state.
@@ -261,7 +261,7 @@ mod tests {
     /// at an offset, so it states none and keeps every call.
     #[test]
     fn the_far_runtime_states_no_descriptor() {
-        assert_eq!(descriptor("qb45", 2), Some(Descriptor { length: 0, data: 2, size: 4 }));
+        assert_eq!(descriptor("qb45", 2), Some(Descriptor { length: 0, word: 2, data: 2, size: 4 }));
         assert_eq!(descriptor("pds71", 2), descriptor("qb45", 2));
         assert_eq!(descriptor("vbdos", 2), None);
         assert_eq!((form("qb45"), form("pds71"), form("vbdos")), (Some(Form::Near), Some(Form::Near), Some(Form::Far)));
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn llrm_lays_its_descriptor_out_by_the_pointer_it_has() {
         assert_eq!(descriptor("llrm", 2), descriptor("qb45", 2));
-        assert_eq!(descriptor("llrm", 4), Some(Descriptor { length: 0, data: 4, size: 8 }));
+        assert_eq!(descriptor("llrm", 4), Some(Descriptor { length: 0, word: 4, data: 4, size: 8 }));
         assert_eq!(descriptor("qb45", 4), descriptor("qb45", 2), "the Microsoft runtimes' layout is fixed");
     }
 

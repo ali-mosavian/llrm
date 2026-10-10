@@ -146,3 +146,18 @@ def test_demo_played_looks_as_bcom45_does_on_dos32(demo_pairs, tmp_path, name: s
     got = test_qbdemos.play(candidate, tmp_path / "cand", script)
     for checkpoint, box in PLAYED[name][1].items():
         assert region_difference(want[checkpoint], got[checkpoint], box) <= test_qbdemos.CURSOR_PIXELS, checkpoint
+
+
+FLAT_PROGRAMS = ["long_strings"]
+
+
+@pytest.fixture(scope="module")
+def flat_found(tmp_path_factory):
+    if not qbruntime.dosbatch.DOSBOX.exists():
+        pytest.skip("DOSBox-X is unavailable")
+    return qb32.flat_programs(FLAT_PROGRAMS, tmp_path_factory.mktemp("qb32flat"))
+
+
+@pytest.mark.parametrize("name", FLAT_PROGRAMS)
+def test_flat_only_program_prints_what_it_should(flat_found, name: str):
+    assert flat_found[name] == ""

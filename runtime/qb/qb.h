@@ -13,11 +13,11 @@ typedef u8 byte;
 
 /* A string descriptor (inc/string.inc): the length, and the data's address in
    DGROUP. */
-/* The most bytes a string holds: its length is a word. */
-enum { SD_MAX_LENGTH = 0xFFFF };
+/* The most bytes a string holds: its length is a word, and the entry round it must not wrap. */
+enum { SD_MAX_LENGTH = (uword)~0u - 8 };
 
 typedef struct SD {
-    u16 len;
+    uword len;
     char *ptr;
 } SD;
 

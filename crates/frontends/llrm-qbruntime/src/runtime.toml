@@ -1042,8 +1042,8 @@ size = 4
 [layout.vbdos]
 form = "far"
 
-# llrm's runtime lays a descriptor out as a C struct of a 16-bit length and a near pointer: QB 4.5's four bytes
-# where the pointer is 2 bytes, and the pointer on its own alignment where it is wider.
+# llrm's runtime lays a descriptor out as a C struct of a length and a near pointer, each a word of the target:
+# QB 4.5's four bytes where the pointer is 2 bytes, and a length as wide as the pointer where that is wider.
 [layout.llrm]
 form = "near"
 length = 0

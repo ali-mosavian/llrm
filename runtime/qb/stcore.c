@@ -25,7 +25,7 @@ SD *B_SCAT(SD *left, SD *right)
     char *data;
     SD *joined;
 
-    if (length > 32767)
+    if (length > QB_STRING_LIMIT)
         qb_error(BE_ILLFUN);
     joined = str_tmp(length, &data);
     copy_bytes(data, left->ptr, left->len);
