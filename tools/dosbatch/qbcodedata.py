@@ -2,7 +2,7 @@
 BCOM45.LIB (our compiler, Microsoft's runtime); the llrm runtime on m16 (MS LINK with LLRMQB.LIB); and on m32 (jwlink, LE
 under DOS/32A).
 
-    python tools/dosbatch/qbcodedata.py [--work DIR]
+    python tools/dosbatch/qbcodedata.py [--work DIR] [SOURCE.BAS ...]
 """
 
 from __future__ import annotations
@@ -86,7 +86,9 @@ def bc(work: Path, sources: list[Path]) -> dict:
         head = source.read_text(encoding="latin-1").splitlines()[:6]
         data = tuple(source.parent / one for line in head if (m := re.match(r"\s*'\s*data:\s*(.*?)\s*$", line)) for one in m.group(1).split() if not one.startswith("@"))
         huge = any("--huge-arrays" in line for line in head)
-        jobs.append(dosbatch.Job(f"B{at:03d}", "bas", source, map=True, budget_ms=2000, files=data, switches="/O /FPi /Ah" if huge else "/O /FPi"))
+        text = source.read_text(encoding="latin-1").upper()
+        errors = " /E /X" if "ON ERROR" in text else ""
+        jobs.append(dosbatch.Job(f"B{at:03d}", "bas", source, map=True, budget_ms=2000, files=data, switches=("/O /FPi /Ah" if huge else "/O /FPi") + errors))
     dosbatch.run(jobs, work / "bc_run")
     return {source.stem: ms_map(work / "bc_run" / f"{job.stem.upper()}.MAP") for source, job in zip(sources, jobs)}
 
@@ -106,10 +108,11 @@ def m32(work: Path, sources: list[Path]) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", type=Path, default=None)
+    parser.add_argument("sources", nargs="*", type=Path, help="BASIC sources (the 25 bench programs by default)")
     args = parser.parse_args()
     work = args.work or Path(tempfile.mkdtemp(prefix="qbcodedata-"))
     work.mkdir(parents=True, exist_ok=True)
-    sources = qbruntime.milestone_sources()
+    sources = args.sources or qbruntime.milestone_sources()
     ref, cand = m16(work, sources)
     big = m32(work, sources)
     microsoft = bc(work, sources)
