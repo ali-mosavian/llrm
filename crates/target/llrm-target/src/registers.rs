@@ -109,8 +109,17 @@ pub fn source(
     classes: &[&str],
 ) -> Result<String, String> {
     let registers = parse(text)?;
+    let mut widths: Vec<u32> = registers.iter().map(|one| one.bits).collect();
+    widths.sort_unstable();
+    widths.dedup();
+    if widths.len() > WIDTH_COLUMNS {
+        return Err(format!(
+            "registers.regs: {} register widths, the table has room for {WIDTH_COLUMNS}",
+            widths.len()
+        ));
+    }
     let mut code = String::from(
-        "pub static REGISTER_INFO: llrm_lir::registers::Info = llrm_lir::registers::Info {\n    table: {\n        let mut table: [Option<llrm_lir::registers::Entry>; 256] = [None; 256];\n",
+        "pub static REGISTER_INFO: llrm_lir::registers::Info = {\n    let mut table: [Option<llrm_lir::registers::Entry>; 256] = [None; 256];\n",
     );
     for one in &registers {
         let mut mask = Vec::new();
@@ -125,7 +134,8 @@ pub fn source(
         }
         let mask = if mask.is_empty() { "0".to_owned() } else { mask.join(" | ") };
         code.push_str(&format!(
-            "        table[{id}::{} as usize] = Some(llrm_lir::registers::Entry {{ name: {:?}, bits: {}, root: {id}::{}, lane: {}, classes: {mask} }});\n",
+            "    table[{id}::{} as usize] = Some(llrm_lir::registers::Entry {{ id: {id}::{}, name: {:?}, bits: {}, root: {id}::{}, lane: {}, classes: {mask} }});\n",
+            one.name.to_uppercase(),
             one.name.to_uppercase(),
             one.name,
             one.bits,
@@ -143,37 +153,37 @@ pub fn source(
             }
         }
     };
+    let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
+    // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "        table\n    }},\n    frame: {},\n    stack: {},\n    views: &[\n",
+        "    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, widths, views }}\n}};\n",
+        columns.join(", "),
         role("frame")?,
         role("stack")?
     ));
-    for one in &registers {
-        code.push_str(&format!(
-            "        ({id}::{}, {}, {id}::{}),\n",
-            one.root.to_uppercase(),
-            one.bits,
-            one.name.to_uppercase()
-        ));
-    }
-    code.push_str("    ],\n};\n");
     Ok(code)
 }
+
+/// The most register widths a description may state.
+const WIDTH_COLUMNS: usize = 8;
 
 #[cfg(test)]
 mod source_tests {
     use super::source;
 
-    const CLASSES: [&str; 2] = ["gpr", "int"];
+    const CLASSES: [&str; 4] = ["gpr", "int", "frame", "stack"];
 
     /// A class the table has no bit for would be dropped without a word: the
     /// generated mask would miss it and a query for it answer no.
     #[test]
     fn a_class_without_a_bit_is_refused_where_the_table_is_made() {
-        let text = "eax 32 eax 0 gpr,int - 1\nal 8 eax 0 int,byte - 2\n";
+        let text =
+            "ebp 32 ebp 0 frame - 3\nesp 32 esp 0 stack - 4\neax 32 eax 0 gpr,int - 1\nal 8 eax 0 int,byte - 2\n";
         let error = source(text, "Reg", &CLASSES).err().expect("refused");
         assert!(error.contains("al has the class `byte`"), "{error}");
-        let made = source("eax 32 eax 0 gpr,int - 1\n", "Reg", &CLASSES).expect("made");
+        let made =
+            source("ebp 32 ebp 0 frame - 3\nesp 32 esp 0 stack - 4\neax 32 eax 0 gpr,int - 1\n", "Reg", &CLASSES)
+                .expect("made");
         assert!(made.contains("Reg::EAX as usize"), "{made}");
         assert!(made.contains("llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT"), "{made}");
     }

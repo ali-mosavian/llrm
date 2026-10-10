@@ -42,6 +42,8 @@ pub const STACK: RegId = Register::SP;
 /// One register of the file.
 #[derive(Clone, Copy, Debug)]
 pub struct Entry {
+    /// The register itself.
+    pub id: RegId,
     pub name: &'static str,
     pub bits: u32,
     pub root: RegId,
@@ -58,8 +60,10 @@ pub struct Info {
     /// The root the description gives the class `frame`, and `stack`.
     pub frame: RegId,
     pub stack: RegId,
-    /// (root, bits, register) for every entry.
-    pub views: &'static [(RegId, u32, RegId)],
+    /// The widths the file states (0 pads), and each root's register at each:
+    /// `views[root as usize][column of the width]`.
+    pub widths: [u32; 8],
+    pub views: [[Option<RegId>; 8]; 256],
 }
 
 impl Info {
@@ -133,11 +137,8 @@ impl Info {
         root: RegId,
         bits: u32,
     ) -> Option<RegId> {
-        self.views
-            .iter()
-            .filter(|(of, width, _)| *of == root && *width == bits)
-            .map(|(_, _, one)| *one)
-            .min_by_key(|one| *one as usize)
+        let column = self.widths.iter().position(|one| *one == bits && bits != 0)?;
+        self.views.get(root as usize)?[column]
     }
 
     /// Whether `register` is a view of the frame register's root.
@@ -158,6 +159,6 @@ impl Info {
 
     /// The entries in iced's number order, with their registers.
     pub fn entries(&self) -> impl Iterator<Item = (RegId, &Entry)> {
-        self.views.iter().map(|(_, _, one)| *one).filter_map(|one| self.get(one).map(|entry| (one, entry)))
+        self.table.iter().flatten().map(|entry| (entry.id, entry))
     }
 }
