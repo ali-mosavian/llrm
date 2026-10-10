@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment};
 use crate::backend::classes::RegisterClasses;
@@ -19,7 +19,7 @@ use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 
 pub struct Coalescer {
-    pub pinned: IndexMap<u32, Register>,
+    pub pinned: IndexMap<u32, RegId>,
     pub segments: Segments,
     pub classes: std::rc::Rc<RegisterClasses>,
 }
@@ -28,7 +28,7 @@ impl Coalescer {
     pub const NAME: &'static str = "coalesce";
 
     pub fn new(
-        pinned: Option<&IndexMap<u32, Register>>,
+        pinned: Option<&IndexMap<u32, RegId>>,
         segments: &Segments,
         classes: &std::rc::Rc<RegisterClasses>,
     ) -> Self {
@@ -79,23 +79,22 @@ fn _find(
 /// `body` with every copy this can prove unnecessary removed.
 pub fn joined(
     body: &LirBody,
-    pinned: Option<&IndexMap<u32, Register>>,
+    pinned: Option<&IndexMap<u32, RegId>>,
     segments: &Segments,
     classes: &RegisterClasses,
 ) -> LirBody {
     let mut every = body.pins.clone();
     every.extend(pinned.into_iter().flatten().map(|(value, register)| (*value, *register)));
-    let pinned: IndexMap<u32, Register> =
-        every.into_iter().map(|(value, register)| (value, ir::root(register))).collect();
+    let pinned: IndexMap<u32, RegId> = every.into_iter().map(|(value, register)| (value, ir::root(register))).collect();
 
     let index = ranges::indexed(body);
     let mut live = ranges::intervals(body, Some(&index));
     let masks = allocate::_masks(body, &index, segments);
     let mut widths = allocate::_widest(body);
     let where_of = regclass::classes(body, &BTreeSet::new(), segments, classes);
-    let everything: BTreeSet<Register> = classes.available.iter().copied().collect();
+    let everything: BTreeSet<RegId> = classes.available.iter().copied().collect();
     let mut webs = Webs::new(everything);
-    let mut may: IndexMap<u32, BTreeSet<Register>> = live
+    let mut may: IndexMap<u32, BTreeSet<RegId>> = live
         .keys()
         .map(|one| (*one, target::order(where_of.get(one), segments, classes).into_iter().collect()))
         .collect();
@@ -108,7 +107,7 @@ pub fn joined(
         let id = webs.intern(&palette);
         webs.palette_of.insert(value, id);
     }
-    let mut held: IndexMap<u32, Register> = pinned.clone();
+    let mut held: IndexMap<u32, RegId> = pinned.clone();
     let mut parent: IndexMap<u32, u32> = IndexMap::default();
     // The web a root's values are kept as: the larger of the two joined, so a
     // join costs the smaller's neighbours.
@@ -140,7 +139,7 @@ pub fn joined(
             if webs.near.get(&mine_node).is_some_and(|found| found.contains(&theirs_node)) {
                 continue;
             }
-            let allowed: BTreeSet<Register> =
+            let allowed: BTreeSet<RegId> =
                 webs.palette(mine_node).intersection(webs.palette(theirs_node)).copied().collect();
             if allowed.is_empty() {
                 continue;
@@ -148,7 +147,7 @@ pub fn joined(
             let merged = _merged(mine, theirs);
             let width =
                 widths.get(&mine_node).copied().unwrap_or(0).max(widths.get(&theirs_node).copied().unwrap_or(0)).max(1);
-            let allowed: BTreeSet<Register> = allowed
+            let allowed: BTreeSet<RegId> = allowed
                 .into_iter()
                 .filter(|register| !allocate::_clobbered(&merged, *register, &masks, width))
                 .collect();
@@ -267,9 +266,9 @@ struct Attr {
 /// the smaller web's neighbours and not the larger's (LLVM keeps no graph: the
 /// live ranges of the two answer, in the size of the smaller).
 struct Webs {
-    everything: BTreeSet<Register>,
-    palettes: Vec<BTreeSet<Register>>,
-    ids: IndexMap<BTreeSet<Register>, u32>,
+    everything: BTreeSet<RegId>,
+    palettes: Vec<BTreeSet<RegId>>,
+    ids: IndexMap<BTreeSet<RegId>, u32>,
     palette_of: IndexMap<u32, u32>,
     near: Graph,
     attr: IndexMap<u32, Attr>,
@@ -283,7 +282,7 @@ struct Webs {
 }
 
 impl Webs {
-    fn new(everything: BTreeSet<Register>) -> Self {
+    fn new(everything: BTreeSet<RegId>) -> Self {
         let mut webs = Self {
             everything: everything.clone(),
             palettes: Vec::new(),
@@ -301,7 +300,7 @@ impl Webs {
 
     fn intern(
         &mut self,
-        set: &BTreeSet<Register>,
+        set: &BTreeSet<RegId>,
     ) -> u32 {
         if let Some(found) = self.ids.get(set) {
             return *found;
@@ -316,7 +315,7 @@ impl Webs {
     fn palette(
         &self,
         node: u32,
-    ) -> &BTreeSet<Register> {
+    ) -> &BTreeSet<RegId> {
         &self.palettes[self.palette_of.get(&node).copied().unwrap_or(0) as usize]
     }
 
@@ -339,7 +338,7 @@ impl Webs {
     fn begin(
         &mut self,
         near: Graph,
-        held: &IndexMap<u32, Register>,
+        held: &IndexMap<u32, RegId>,
     ) {
         self.near = near;
         let nodes: BTreeSet<u32> = self.near.keys().chain(self.palette_of.keys()).chain(held.keys()).copied().collect();
@@ -406,7 +405,7 @@ impl Webs {
     fn meets(
         &self,
         palette: u32,
-        allowed: &BTreeSet<Register>,
+        allowed: &BTreeSet<RegId>,
     ) -> bool {
         self.palettes[palette as usize].intersection(allowed).next().is_some()
     }
@@ -417,7 +416,7 @@ impl Webs {
         &self,
         here: u32,
         there: u32,
-        allowed: &BTreeSet<Register>,
+        allowed: &BTreeSet<RegId>,
     ) -> usize {
         let (a, b) = (self.attr_of(here), self.attr_of(there));
         let constrained = a.pinned
@@ -458,7 +457,7 @@ impl Webs {
         &self,
         here: u32,
         there: u32,
-        allowed: &BTreeSet<Register>,
+        allowed: &BTreeSet<RegId>,
     ) -> usize {
         let empty = BTreeSet::new();
         let neighbours: BTreeSet<u32> = self
@@ -490,7 +489,7 @@ impl Webs {
         &self,
         gone: u32,
         kept: u32,
-        allowed: &BTreeSet<Register>,
+        allowed: &BTreeSet<RegId>,
     ) -> bool {
         if allowed != self.palette(kept) {
             return false;
@@ -528,7 +527,7 @@ impl Webs {
         &self,
         gone: u32,
         kept: u32,
-        allowed: &BTreeSet<Register>,
+        allowed: &BTreeSet<RegId>,
     ) -> bool {
         if allowed != self.palette(kept) {
             return false;
@@ -555,7 +554,7 @@ impl Webs {
         &self,
         one: u32,
         other: u32,
-        allowed: &BTreeSet<Register>,
+        allowed: &BTreeSet<RegId>,
     ) -> bool {
         let (small, big) = if self.degree(one) <= self.degree(other) { (one, other) } else { (other, one) };
         self.george(small, big, allowed) || self.george(big, small, allowed)
@@ -570,7 +569,7 @@ impl Webs {
         &mut self,
         gone: u32,
         kept: u32,
-        allowed: &BTreeSet<Register>,
+        allowed: &BTreeSet<RegId>,
         pin: bool,
     ) {
         let (old_gone, old_kept) = (self.attr_of(gone), self.attr_of(kept));
@@ -917,9 +916,9 @@ pub fn _copy(one: &Insn) -> Option<(u32, u32)> {
 
 /// A requirement, naming the value that survived the join.
 fn _wants(
-    side: &[(Held, Register)],
+    side: &[(Held, RegId)],
     swap: &dyn Fn(u32) -> u32,
-) -> Vec<(Held, Register)> {
+) -> Vec<(Held, RegId)> {
     side.iter().map(|(held, r)| (Held { value: swap(held.value), width: held.width }, *r)).collect()
 }
 
@@ -958,7 +957,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::{_interference, _merged, joined};
     use crate::analysis::intervals;
@@ -1024,7 +1023,7 @@ mod tests {
     fn body(
         name: &str,
         insns: Vec<Insn>,
-        pins: &[(u32, Register)],
+        pins: &[(u32, RegId)],
     ) -> LirBody {
         LirBody::new(
             name,
@@ -1044,7 +1043,7 @@ mod tests {
 
     fn allocated(
         body: &LirBody,
-        pins: &IndexMap<u32, Register>,
+        pins: &IndexMap<u32, RegId>,
     ) -> allocate::Assignment {
         allocate::allocate(
             body,
@@ -1063,7 +1062,7 @@ mod tests {
     /// coverage gap.
     #[test]
     fn test_retained_resource_identity_has_a_legal_encoding() {
-        let body = body("resource-copy", vec![_move(3, 1, 1)], &[(1, Register::ES)]);
+        let body = body("resource-copy", vec![_move(3, 1, 1)], &[(1, RegId::ES)]);
         let result =
             allocate::applied(&body, &allocated(&body, &body.pins), &crate::backend::classes::RegisterClasses::m16())
                 .expect("applies");
@@ -1100,19 +1099,19 @@ mod tests {
             Operation::Move,
             "mov",
             vec![held(1, 2)],
-            vec![Loc::Mem(Mem { through: Register::BP, offset: 0, disp_width: 2, ..Mem::new(None, 2) })],
+            vec![Loc::Mem(Mem { through: RegId::BP, offset: 0, disp_width: 2, ..Mem::new(None, 2) })],
         ));
         let mut insns = vec![load];
         insns.extend((0..6).map(|index| _define(3 + index * 3, 10 + index as u32)));
         insns.extend([_move(21, 2, 1), _use(26, 1), _use(28, 2)]);
         insns.extend((0..6).map(|index| _use(30 + index * 3, 10 + index as u32)));
-        let body = body("resources", insns, &[(1, Register::ES), (2, Register::ES)]);
+        let body = body("resources", insns, &[(1, RegId::ES), (2, RegId::ES)]);
         let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         assert_eq!(done.insns().len(), body.insns().len() - 1);
         let result = allocated(&done, &done.pins);
         assert!(result.spilled.is_empty());
-        assert!(result.r#where.values().any(|register| *register == Register::ES));
-        let wholes: BTreeSet<Register> = result.r#where.values().map(|register| allocate::_whole(*register)).collect();
+        assert!(result.r#where.values().any(|register| *register == RegId::ES));
+        let wholes: BTreeSet<RegId> = result.r#where.values().map(|register| allocate::_whole(*register)).collect();
         assert!(
             crate::backend::classes::RegisterClasses::m16().available.iter().all(|register| wholes.contains(register))
         );
@@ -1122,8 +1121,7 @@ mod tests {
     fn test_resource_constraints_survive_coalescing() {
         for other in ["different_resource", "clobber"] {
             let mut insns = vec![_define(0, 1), _move(3, 2, 1), _use(6, 2)];
-            let pins =
-                [(1, Register::ES), (2, if other == "different_resource" { Register::FS } else { Register::ES })];
+            let pins = [(1, RegId::ES), (2, if other == "different_resource" { RegId::FS } else { RegId::ES })];
             if other == "clobber" {
                 let mut call = Insn::new(
                     5,
@@ -1132,7 +1130,7 @@ mod tests {
                     vec![],
                     vec![],
                 );
-                call.clobbers = BTreeSet::from([Register::ES]);
+                call.clobbers = BTreeSet::from([RegId::ES]);
                 insns.insert(2, call);
             }
             let body = body("resource-safety", insns, &pins);
@@ -1270,7 +1268,7 @@ mod tests {
             vec![2],
         );
         let body = body("pointer", vec![_define(0, 1), _move(3, 2, 1), load], &[]);
-        let pins: IndexMap<u32, Register> = IndexMap::from_iter([(1, Register::EAX)]);
+        let pins: IndexMap<u32, RegId> = IndexMap::from_iter([(1, RegId::EAX)]);
         assert_eq!(
             joined(&body, Some(&pins), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16())
                 .insns()
@@ -1289,14 +1287,14 @@ mod tests {
         let body = body("return", vec![_define(0, 1), _move(3, 2, 1), _use(5, 2)], &[]);
         let done = joined(
             &body,
-            Some(&IndexMap::from_iter([(2, Register::EAX)])),
+            Some(&IndexMap::from_iter([(2, RegId::EAX)])),
             &target::BUILT_IN,
             &crate::backend::classes::RegisterClasses::m16(),
         );
         let insns = done.insns();
         assert_eq!(insns[0].defines, vec![2]);
         assert_eq!(insns[insns.len() - 1].uses, vec![2]);
-        for register in [Register::EAX, Register::EBX, Register::ECX, Register::EDX] {
+        for register in [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX] {
             let pins = IndexMap::from_iter([(2, register)]);
             let joined =
                 joined(&body, Some(&pins), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
@@ -1351,7 +1349,7 @@ mod tests {
             insns.extend([_define(0x10, 50), _define(0x13, 1), _move(0x16, 2, 1), _use(0x18, 2)]);
             insns.extend(long_lived.iter().chain([&50]).enumerate().map(|(at, one)| _use(0x20 + at as i64, *one)));
             let count = insns.len();
-            let pins: Vec<(u32, Register)> = if pinned { vec![(50, Register::BX)] } else { vec![] };
+            let pins: Vec<(u32, RegId)> = if pinned { vec![(50, RegId::BX)] } else { vec![] };
             let body = body("counter", insns, &pins);
             assert_eq!(
                 joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).insns().len(),

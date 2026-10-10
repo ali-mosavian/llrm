@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::allocate::live;
 use crate::backend::classes::RegisterClasses;
@@ -174,14 +174,14 @@ struct _Stack {
     absorbed: HashSet<i64>, // later copies of a group already taken
     fresh: u32,             // the next value no instruction names
     depth: usize,           // how many values the stack holds
-    status_word: Register,  // where `fnstsw` stores the status word
+    status_word: RegId,     // where `fnstsw` stores the status word
 }
 
 impl _Stack {
     fn new(
         floating: HashSet<u32>,
         depth: usize,
-        status_word: Register,
+        status_word: RegId,
     ) -> Self {
         Self {
             floating,

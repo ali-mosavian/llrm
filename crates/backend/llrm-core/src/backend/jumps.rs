@@ -10,8 +10,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
 use llrm_analysis::branchprob;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::frequency::Frequency;
@@ -1063,8 +1063,7 @@ fn _live_values(blocks: &[LirBlock]) -> IndexMap<i64, BTreeSet<u32>> {
 }
 
 /// Python's `_tail_key` tuple.
-pub type TailKey =
-    (Vec<(Semantics, BTreeSet<Register>, BTreeSet<Register>, Vec<Register>, Vec<Register>, bool)>, Vec<i64>);
+pub type TailKey = (Vec<(Semantics, BTreeSet<RegId>, BTreeSet<RegId>, Vec<RegId>, Vec<RegId>, bool)>, Vec<i64>);
 
 /// Merge physically identical allocated tails after fallthroughs are explicit.
 pub fn merged(body: &LirBody) -> Result<LirBody, masm::Unprintable> {

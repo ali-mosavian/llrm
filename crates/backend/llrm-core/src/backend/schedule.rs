@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::peephole::{_lanes, _register_effects, Lanes};
@@ -25,7 +25,7 @@ use crate::support::hash::IndexMap;
 
 /// An integer register the schedule may reason about: any but the stack
 /// pointer's.
-fn _general(register: Register) -> bool {
+fn _general(register: RegId) -> bool {
     crate::backend::registerinfo::in_class(register, crate::backend::registerinfo::class::INT)
         && !crate::backend::registerinfo::is_stack(register)
 }
@@ -106,7 +106,7 @@ pub fn _safe(
     {
         return None;
     }
-    let mut registers: Vec<Register> = what
+    let mut registers: Vec<RegId> = what
         .dests
         .iter()
         .chain(&what.sources)
@@ -117,15 +117,14 @@ pub fn _safe(
         .collect();
     if what.op == Operation::Address {
         let Loc::Address(address) = &what.sources[0] else { unreachable!("checked above") };
-        registers.extend(
-            [address.through, address.index_through].into_iter().filter(|register| *register != Register::None),
-        );
+        registers
+            .extend([address.through, address.index_through].into_iter().filter(|register| *register != RegId::None));
     }
     if registers.iter().any(|register| !_general(*register)) {
         return None;
     }
     let (reads, writes) = _register_effects(bits, one, false, true)?;
-    if reads.union(&writes).any(|lane| lane.0 != Register::None && !_lanes(lane.0).contains(lane)) {
+    if reads.union(&writes).any(|lane| lane.0 != RegId::None && !_lanes(lane.0).contains(lane)) {
         return None;
     }
     Some((reads, writes))
@@ -208,7 +207,7 @@ pub fn _partial_merge_delay(
     }
     let before = window[producer].what.as_ref().expect("a safe form has semantics");
     let after = window[consumer].what.as_ref().expect("a safe form has semantics");
-    let partial: BTreeSet<Register> = before
+    let partial: BTreeSet<RegId> = before
         .dests
         .iter()
         .filter_map(|r#where| match r#where {
@@ -216,7 +215,7 @@ pub fn _partial_merge_delay(
             _ => None,
         })
         .collect();
-    let wide: BTreeSet<Register> = after
+    let wide: BTreeSet<RegId> = after
         .sources
         .iter()
         .filter_map(|r#where| match r#where {

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
@@ -12,14 +12,14 @@ use crate::support::hash::IndexMap;
 pub struct Entry {
     pub floor: i64,
     pub reserve_at: i64,
-    pub saved: Vec<Register>,
+    pub saved: Vec<RegId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Plan {
     pub entry: Entry,
     pub releases: BTreeSet<i64>,
-    pub registers: Vec<(i64, Register)>,
+    pub registers: Vec<(i64, RegId)>,
     pub outgoing: BTreeSet<(i64, i64, u32)>,
     pub framed: bool,
     pub return_depth: i64,
@@ -31,8 +31,8 @@ impl Plan {}
 pub fn pins(
     body: &LirBody,
     layout: &Plan,
-) -> IndexMap<u32, Register> {
-    let registers: IndexMap<i64, Register> = layout.registers.iter().copied().collect();
+) -> IndexMap<u32, RegId> {
+    let registers: IndexMap<i64, RegId> = layout.registers.iter().copied().collect();
     let mut result = IndexMap::default();
     for one in body.insns() {
         let Some(what) = &one.what else { continue };

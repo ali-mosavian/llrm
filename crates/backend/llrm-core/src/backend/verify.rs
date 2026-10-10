@@ -297,6 +297,8 @@ fn _values(
 mod tests {
     use std::sync::Arc;
 
+    use llrm_lir::registers::RegId;
+
     use super::*;
     use crate::model::lir::Insn;
     use crate::support::hash::IndexMap;
@@ -395,10 +397,9 @@ mod tests {
         });
         let flat = llrm_target::Target::layout(&llrm_x86_m32::M32).spaces.roles;
         let real = llrm_target::Target::layout(&llrm_x86_m16::M16).spaces.roles;
-        for (source, uses, says) in [
-            (reg(iced_x86::Register::ES), vec![], "segment register ES"),
-            (selected, vec![1], "a cell with a selector"),
-        ] {
+        for (source, uses, says) in
+            [(reg(RegId::ES), vec![], "segment register ES"), (selected, vec![1], "a cell with a selector")]
+        {
             let body = push(source, uses);
             assert_eq!(verify_for(&body, false, &real), Vec::<String>::new(), "real mode has segments");
             let said = verify_for(&body, false, &flat);
@@ -412,8 +413,7 @@ mod tests {
     /// frame cell.
     #[test]
     fn test_a_slotted_body_refuses_a_frame_cell_that_names_no_slot() {
-        let cell =
-            |addr: ir::Addr| Loc::Mem(ir::Mem { through: iced_x86::Register::BP, ..ir::Mem::new(Some(addr), 2) });
+        let cell = |addr: ir::Addr| Loc::Mem(ir::Mem { through: RegId::BP, ..ir::Mem::new(Some(addr), 2) });
         let store = |addr| {
             let what = semantics(
                 Operation::Move,

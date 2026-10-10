@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::target::{self, Segments};
 use crate::model::ir::{self, Loc, Operation, Semantics};
@@ -97,8 +97,8 @@ pub fn restored(
 fn _walk(
     insns: &[Arc<Insn>],
     mut dirty: bool,
-    data: Register,
-    through: Register,
+    data: RegId,
+    through: RegId,
     offset_bytes: i64,
     mut out: Option<&mut Vec<Arc<Insn>>>,
 ) -> bool {
@@ -121,7 +121,7 @@ fn _walk(
 
 fn _writes_data(
     one: &Insn,
-    data: Register,
+    data: RegId,
 ) -> bool {
     one.what
         .as_ref()
@@ -145,8 +145,8 @@ fn _leaves(one: &Insn) -> bool {
 /// The data segment register loaded with the data group, beside `one`.
 fn _restore(
     one: &Insn,
-    data: Register,
-    through: Register,
+    data: RegId,
+    through: RegId,
 ) -> Arc<Insn> {
     let at = one.covers.map_or(one.at, |covers| covers.0);
     let what = Semantics {
@@ -166,7 +166,7 @@ fn _restore(
 /// segment register reaching it through `through` instead.
 fn _through(
     one: &Arc<Insn>,
-    through: Register,
+    through: RegId,
     offset_bytes: i64,
 ) -> Arc<Insn> {
     let Some(what) = &one.what else {
@@ -190,11 +190,11 @@ fn _through(
 /// the stack segment itself.
 fn _prefixed(
     cell: &ir::Mem,
-    through: Register,
+    through: RegId,
     offset_bytes: i64,
 ) -> Option<ir::Mem> {
     let stack_based =
-        |base: Register| crate::backend::registerinfo::is_frame(base) || crate::backend::registerinfo::is_stack(base);
+        |base: RegId| crate::backend::registerinfo::is_frame(base) || crate::backend::registerinfo::is_stack(base);
     let Some(addr) = cell.addr else {
         if cell.index.is_some() || !crate::backend::registerinfo::holds_a_segment_offset(cell.through, offset_bytes) {
             return None;
@@ -202,7 +202,7 @@ fn _prefixed(
         let addr = Addr { space: Space::Literal, disp: cell.offset, index: 0, base: cell.through, segment: through };
         return Some(ir::Mem { addr: Some(addr), ..cell.clone() });
     };
-    if addr.segment != Register::None {
+    if addr.segment != RegId::None {
         return None;
     }
     if !matches!(addr.space, Space::Segment | Space::External | Space::Literal) {

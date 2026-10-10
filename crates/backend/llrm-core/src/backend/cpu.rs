@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
+use llrm_lir::registers::RegId;
 use llrm_target::Target;
 
 use crate::model::passes::{
@@ -24,7 +25,7 @@ pub struct Profile {
     pub register_capacity: i64,
     /// The registers a value may be placed in, from the description's `gpr`
     /// class.
-    pub general: Vec<iced_x86::Register>,
+    pub general: Vec<RegId>,
     /// The target's address spaces by role.
     pub spaces: llrm_mir::spaces::Spaces,
     /// The convention its description gives a function nothing outside the
@@ -399,12 +400,12 @@ pub fn tuned_routing(
 }
 
 /// The registers a value may be placed in: the description's `gpr` class.
-fn general_registers(arch: &dyn Target) -> Vec<iced_x86::Register> {
+fn general_registers(arch: &dyn Target) -> Vec<RegId> {
     let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
     llrm_target::registers::of_class(&file, "gpr")
         .into_iter()
         .map(|name| {
-            iced_x86::Register::values()
+            RegId::values()
                 .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
                 .unwrap_or_else(|| panic!("no register {name}"))
         })

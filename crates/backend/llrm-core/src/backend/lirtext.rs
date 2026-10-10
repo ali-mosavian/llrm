@@ -3,6 +3,8 @@
 
 use std::fmt::Write as _;
 
+use llrm_lir::registers::RegId;
+
 use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
 use crate::support::pyrepr::Repr;
@@ -85,7 +87,7 @@ fn _lir_body(
     }
 }
 
-fn _name_of(register: iced_x86::Register) -> String {
+fn _name_of(register: RegId) -> String {
     format!("{register:?}").to_uppercase()
 }
 
@@ -105,11 +107,7 @@ fn _operand(one: &Loc) -> String {
             match mem.base {
                 None => format!("[{addr}]"),
                 Some(base) => {
-                    let placed = if mem.through == iced_x86::Register::None {
-                        "unplaced".to_owned()
-                    } else {
-                        _name_of(mem.through)
-                    };
+                    let placed = if mem.through == RegId::None { "unplaced".to_owned() } else { _name_of(mem.through) };
                     format!("[{addr} v{}@{placed}]", base.value)
                 }
             }

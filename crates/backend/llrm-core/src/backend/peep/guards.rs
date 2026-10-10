@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use super::walk::Cx;
 use super::{Set, field};
@@ -510,8 +510,8 @@ pub fn same_cell(
     let logical = |cell: &Mem| Mem { base: None, index: None, ..cell.clone() };
     let physical = |cell: &Mem| (cell.through, cell.index_through, cell.offset);
     let placed = |cell: &Mem| {
-        (cell.base.is_none() || cell.through != Register::None)
-            && (cell.index.is_none() || cell.index_through != Register::None)
+        (cell.base.is_none() || cell.through != RegId::None)
+            && (cell.index.is_none() || cell.index_through != RegId::None)
     };
     logical(one).same_place(&logical(other)) && physical(one) == physical(other) && placed(one) && placed(other)
 }

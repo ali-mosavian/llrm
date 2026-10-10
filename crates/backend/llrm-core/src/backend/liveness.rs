@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::peephole::{_branch_reads, _flag_lanes, _lanes, _moved_lanes, _register_effects, Lane, Lanes};
 use crate::backend::target;
@@ -33,7 +33,7 @@ pub fn _terminator(what: Option<&Semantics>) -> bool {
 // dead final write to either register must remain removable.  Treating them as
 // semantic return inputs retained one-use loads and other dead computations
 // immediately before an epilogue.
-pub fn _return_state() -> Vec<Register> {
+pub fn _return_state() -> Vec<RegId> {
     use crate::backend::registerinfo::{code_segment, data_segment, frame_root, stack_root, stack_segment};
     [Some(frame_root()), Some(stack_root()), data_segment(), stack_segment(), code_segment()]
         .into_iter()
@@ -84,7 +84,7 @@ impl Effect {
     ) -> Lanes {
         let mut reads = self.reads;
         // A shift's flags come from the bits it moves.
-        let flagged = self.writes.iter().any(|lane| lane.0 == Register::None && live(lane));
+        let flagged = self.writes.iter().any(|lane| lane.0 == RegId::None && live(lane));
         for (written, source) in &self.moved {
             if flagged || live(written) {
                 reads.insert(*source);
@@ -190,7 +190,7 @@ pub fn _backwards(
 /// callee never names look live -- which kept every value a phi copies alive
 /// across the whole loop.
 pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
-    let held_lanes = |held: &Held, register: Register| _lanes(target::named(register, i64::from(held.width)));
+    let held_lanes = |held: &Held, register: RegId| _lanes(target::named(register, i64::from(held.width)));
 
     if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) && one.reads_complete() {
         // Nothing runs after it: it reads explicit results and only the
@@ -355,7 +355,7 @@ fn _dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::live_into;
     use crate::backend::peephole::_lanes;
@@ -363,8 +363,8 @@ mod tests {
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
-    const AX: Reg = Reg { register: Register::AX, width: 2 };
-    const DX: Reg = Reg { register: Register::DX, width: 2 };
+    const AX: Reg = Reg { register: RegId::AX, width: 2 };
+    const DX: Reg = Reg { register: RegId::DX, width: 2 };
 
     fn _insn(
         at: i64,
@@ -395,14 +395,14 @@ mod tests {
         );
         let body = LirBody::new("f", 1, vec![block], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
-        assert!(_lanes(Register::DX).is_disjoint(&into[&1]));
-        assert!(_lanes(Register::AX).is_subset(&into[&1]));
+        assert!(_lanes(RegId::DX).is_disjoint(&into[&1]));
+        assert!(_lanes(RegId::AX).is_subset(&into[&1]));
     }
 
     /// A chain of blocks, the last reading AX and each before it writing a
     /// register: the lanes live into the first.
     fn chain(blocks: i64) -> LirBody {
-        let bx = Reg { register: Register::BX, width: 2 };
+        let bx = Reg { register: RegId::BX, width: 2 };
         let blocks: Vec<LirBlock> = (1..=blocks)
             .map(|at| {
                 let insns = if at == blocks {
@@ -428,7 +428,7 @@ mod tests {
         let (into, _successors, _universe) = live_into(&body);
         assert!(super::visits() - before <= 3 * 200, "{} block visits for 200 blocks", super::visits() - before);
         assert!(
-            _lanes(Register::AX).is_subset(&into[&1]),
+            _lanes(RegId::AX).is_subset(&into[&1]),
             "AX is read at the end of the chain and written nowhere before"
         );
     }
@@ -437,7 +437,7 @@ mod tests {
     fn test_a_return_whose_reads_are_complete_reads_only_results_and_return_state() {
         // Every return read every register; one the raise wrote reads its
         // results and the registers the return itself needs.
-        let cx = Reg { register: Register::CX, width: 2 };
+        let cx = Reg { register: RegId::CX, width: 2 };
         let mut ret = Insn::new(
             3,
             Some((3, 3)),
@@ -445,7 +445,7 @@ mod tests {
             vec![],
             vec![1],
         );
-        ret.requires = vec![(Held { value: 1, width: 2 }, Register::AX)];
+        ret.requires = vec![(Held { value: 1, width: 2 }, RegId::AX)];
         ret.reads_complete = true;
         let block = LirBlock::new(
             1,
@@ -453,9 +453,9 @@ mod tests {
         );
         let body = LirBody::new("f", 1, vec![block], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
-        assert!(_lanes(Register::AX).is_subset(&into[&1]));
-        assert!(_lanes(Register::SI).is_disjoint(&into[&1]));
-        assert!(_lanes(Register::BP).is_subset(&into[&1]));
-        assert!(_lanes(Register::DX).is_disjoint(&into[&1]));
+        assert!(_lanes(RegId::AX).is_subset(&into[&1]));
+        assert!(_lanes(RegId::SI).is_disjoint(&into[&1]));
+        assert!(_lanes(RegId::BP).is_subset(&into[&1]));
+        assert!(_lanes(RegId::DX).is_disjoint(&into[&1]));
     }
 }

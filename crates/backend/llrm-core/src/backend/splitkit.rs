@@ -9,7 +9,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::intervals::{self as ranges, Indexes, Segment};
 use crate::analysis::loops;
@@ -896,17 +896,17 @@ fn named_in(
 /// destroy it.
 pub struct Occupied<'a> {
     /// Each register's occupants' segments, sorted by start.
-    segments: IndexMap<Register, Vec<Segment>>,
+    segments: IndexMap<RegId, Vec<Segment>>,
     /// The furthest end among a register's segments up to each: sorted, so the
     /// first that reaches a span is found by search. Values of different views
     /// of one register (`al` and `ah`) overlap, so ends alone are not sorted.
-    reach: IndexMap<Register, Vec<i64>>,
+    reach: IndexMap<RegId, Vec<i64>>,
     masks: &'a allocate::Masks,
 }
 
 impl<'a> Occupied<'a> {
     pub fn new(
-        mut segments: IndexMap<Register, Vec<Segment>>,
+        mut segments: IndexMap<RegId, Vec<Segment>>,
         masks: &'a allocate::Masks,
     ) -> Self {
         let mut reach = IndexMap::default();
@@ -932,7 +932,7 @@ impl Occupied<'_> {
     /// destroys `register`.
     fn interference(
         &self,
-        register: Register,
+        register: RegId,
         width: u32,
         span: (i64, i64),
     ) -> Option<(i64, i64)> {
@@ -964,7 +964,7 @@ impl Occupied<'_> {
     /// `interference`, looking at every segment and point.
     fn interference_by_scan(
         &self,
-        whole: Register,
+        whole: RegId,
         width: u32,
         span: (i64, i64),
     ) -> Option<(i64, i64)> {
@@ -1332,7 +1332,7 @@ pub fn placed(
     index: &Indexes,
     live: &dyn allocate::LiveAt,
     bundles: &spillplacement::Bundles,
-    candidates: &[Register],
+    candidates: &[RegId],
     occupied: &Occupied,
     width: u32,
 ) -> Vec<Region> {
@@ -1400,7 +1400,7 @@ pub fn local(
     value: u32,
     index: &Indexes,
     live: &dyn allocate::LiveAt,
-    candidates: &[Register],
+    candidates: &[RegId],
     occupied: &Occupied,
     width: u32,
 ) -> Option<Region> {
@@ -1477,7 +1477,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::{Region, carved, loop_bases};
     use crate::analysis::frequency::Frequency;
@@ -1563,7 +1563,7 @@ mod tests {
     }
 
     fn where_() -> Addr {
-        Addr { base: Register::SI, ..Addr::new(Space::Segment, 0x10) }
+        Addr { base: RegId::SI, ..Addr::new(Space::Segment, 0x10) }
     }
 
     /// `analysed`, `_benefit` and `_whole_range` walked every instruction of
@@ -1595,7 +1595,7 @@ mod tests {
     /// v3 is made before the loop, read in it and after it, as a cell's base.
     fn _pointer_across_a_loop() -> LirBody {
         let cell = Loc::Mem(Mem {
-            through: Register::None,
+            through: RegId::None,
             offset: 0,
             disp_width: 2,
             base: Some(Held { value: 3, width: 2 }),
@@ -1891,12 +1891,12 @@ mod tests {
     fn test_a_cut_range_renames_what_an_instruction_requires_and_delivers() {
         let what = sem(Operation::Call, "call", vec![], vec![], None);
         let call = Insn {
-            delivers: vec![(Held { value: 3, width: 2 }, Register::DI)],
+            delivers: vec![(Held { value: 3, width: 2 }, RegId::DI)],
             widths: vec![(3, 2)],
             ..Insn::new(0x10, Some((0x10, 0x12)), Some(what), vec![3], vec![])
         };
         let out = Insn {
-            requires: vec![(Held { value: 3, width: 1 }, Register::AL)],
+            requires: vec![(Held { value: 3, width: 1 }, RegId::AL)],
             widths: vec![(3, 1)],
             ..Insn::new(0x12, Some((0x12, 0x13)), None, vec![], vec![3])
         };
@@ -1932,7 +1932,7 @@ mod tests {
             let Loc::Mem(cell) = &load.what.as_ref().expect("semantics").sources[0] else { panic!("not a cell") };
             let base = cell.base.expect("base");
             assert_eq!(load.uses, [base.value], "uses {:?}, cell on {base:?}", load.uses);
-            assert_eq!(cell.through, Register::None, "the rename placed it");
+            assert_eq!(cell.through, RegId::None, "the rename placed it");
             last = Some(cell.clone());
         }
         let cell = last.expect("a load");
@@ -2070,8 +2070,8 @@ mod tests {
             intervals::Segment { start: slot(0x20, 1), end: index.span[&0x20].1 },
         ];
         let masks = crate::backend::allocate::Masks::default();
-        let occupied = super::Occupied::new(IndexMap::from_iter([(Register::EAX, taken)]), &masks);
-        let regions = super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[Register::AX], &occupied, 2);
+        let occupied = super::Occupied::new(IndexMap::from_iter([(RegId::EAX, taken)]), &masks);
+        let regions = super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[RegId::AX], &occupied, 2);
         let first = regions.first().expect("a region");
         assert_eq!(first.spans.get(&0x10), Some(&vec![(0, 3)]), "{regions:?}");
         assert_eq!(first.spans.get(&0x20), Some(&vec![(0, 1)]), "{regions:?}");
@@ -2087,7 +2087,7 @@ mod tests {
         let points: Vec<Mask> = (0..1000)
             .map(|at| Mask {
                 slot: at * 10,
-                during: BTreeSet::from([Register::EAX]),
+                during: BTreeSet::from([RegId::EAX]),
                 high: BTreeSet::new(),
                 before: BTreeSet::new(),
             })
@@ -2099,10 +2099,10 @@ mod tests {
             intervals::Segment { start: 5010, end: 5020 },
             intervals::Segment { start: 5030, end: 5040 },
         ];
-        let occupied = super::Occupied::new(IndexMap::from_iter([(Register::EAX, taken)]), &masks);
-        assert_eq!(occupied.interference(Register::AX, 2, (5025, 5026)), Some((5025, 5025)), "the long segment");
-        assert_eq!(occupied.interference(Register::AX, 2, (5101, 5105)), None);
-        assert_eq!(occupied.interference(Register::AX, 2, (0, 1)), Some((0, 0)), "the first point");
+        let occupied = super::Occupied::new(IndexMap::from_iter([(RegId::EAX, taken)]), &masks);
+        assert_eq!(occupied.interference(RegId::AX, 2, (5025, 5026)), Some((5025, 5025)), "the long segment");
+        assert_eq!(occupied.interference(RegId::AX, 2, (5101, 5105)), None);
+        assert_eq!(occupied.interference(RegId::AX, 2, (0, 1)), Some((0, 0)), "the first point");
         assert_eq!(masks.walked(), 0, "every point of the function was walked");
     }
 
@@ -2123,8 +2123,8 @@ mod tests {
         let slot = |position: i64| index.span[&0].0 + intervals::PER_INSN * (position + 1);
         let taken = vec![intervals::Segment { start: slot(3), end: slot(5) }];
         let masks = crate::backend::allocate::Masks::default();
-        let occupied = super::Occupied::new(IndexMap::from_iter([(Register::EAX, taken)]), &masks);
-        let got = super::local(&body, 3, &index, &(&live.0, &live.1), &[Register::AX], &occupied, 2).expect("a split");
+        let occupied = super::Occupied::new(IndexMap::from_iter([(RegId::EAX, taken)]), &masks);
+        let got = super::local(&body, 3, &index, &(&live.0, &live.1), &[RegId::AX], &occupied, 2).expect("a split");
         assert_eq!(got.spans.get(&0), Some(&vec![(0, 3)]));
     }
 
