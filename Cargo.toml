@@ -25,9 +25,11 @@ toml = { version = "0.9", features = ["preserve_order"] }
 regex = "1"
 llrm-support = { path = "crates/support/llrm-support" }
 llrm-x86-m16 = { path = "crates/target/llrm-x86-m16" }
+llrm-x86-m16-select = { path = "crates/target/llrm-x86-m16-select" }
 llrm-target = { path = "crates/target/llrm-target" }
 llrm-x86 = { path = "crates/target/llrm-x86" }
 llrm-x86-m32 = { path = "crates/target/llrm-x86-m32" }
+llrm-x86-m32-select = { path = "crates/target/llrm-x86-m32-select" }
 llrm-omf = { path = "crates/target/llrm-omf" }
 llrm-object = { path = "crates/target/llrm-object" }
 llrm-elf = { path = "crates/target/llrm-elf" }
