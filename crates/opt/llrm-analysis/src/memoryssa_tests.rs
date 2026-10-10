@@ -774,3 +774,26 @@ fn a_store_to_another_object_is_ruled_out_without_alias_reasoning() {
     assert_eq!(found.len(), 1, "only the live-on-entry memory reaches the load");
     assert_eq!(asked, 0, "{asked} alias questions for 20 stores to another object");
 }
+
+/// 48 stores to 48 cells of one object, then a load of each: each load walked
+/// back over every store after its own (48 x 48 / 2 pairs; the `cells` axis'
+/// through-memory was 2,088 Minstr at N=1024, quadratic). The index of a
+/// frame's last writes finds each at once, stepping over none of the others.
+#[test]
+fn test_a_load_of_one_of_many_fixed_cells_finds_its_store_without_walking_the_others() {
+    let cell = |at: usize| format!("getelementptr (i8, ptr @g, i16 {at})");
+    let stores: String = (0..48).map(|at| format!("  store i8 {at}, ptr {}\n", cell(at))).collect();
+    let loads: String = (0..48).map(|at| format!("  %y{at} = load i8, ptr {}\n", cell(at))).collect();
+    let parsed = Parsed::new(&format!("define void @f() {{\nb0:\n{stores}{loads}  ret void\n}}\n"));
+    let unit = parsed.unit();
+    let graph = graph(&unit);
+    let before = STEPS.with(std::cell::Cell::get);
+    for at in 0..48 {
+        let load = site(&unit, "b0", 48 + at);
+        let found = graph.clobbers(load, &self::cell(&unit, load));
+        let store = site(&unit, "b0", at);
+        assert_eq!(found, BTreeSet::from([graph.at(store).id]), "the load of cell {at}");
+    }
+    let steps = STEPS.with(std::cell::Cell::get) - before;
+    assert!(steps <= 2 * 48, "{steps} accesses stepped over for 48 loads");
+}

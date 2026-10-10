@@ -512,6 +512,148 @@ pub fn clobber_runs() -> usize {
     RUNS.with(std::cell::Cell::get)
 }
 
+/// Frames with at least this many writes at fixed displacements get a
+/// `FrameIndex`.
+const HOT_FRAME: usize = 32;
+/// The widest write or read an index of bytes holds.
+const WIDEST: i128 = 64;
+
+/// The nearest write to each fixed cell of one frame, found as LLVM's
+/// `OptimizeUses` finds each use's clobber (a stack of the last def of each
+/// location as the tree of defining links is walked, popped on the way
+/// back), so a load of one of N cells costs its width and not the N stores
+/// before it. GCC's `walk_aliased_vdefs` and LLVM's `memssa-check-limit`
+/// bound the walk instead; this does not give an answer up.
+#[derive(Clone, Debug, Default)]
+struct FrameIndex {
+    /// Per load: the bytes it reads, the nearest def of the frame writing some
+    /// of them, the nearest def above it that may be anything (the walk asks
+    /// it), and the root (a phi or the entry) its chain ends in.
+    uses: llrm_mir::dense::IdMap<InstId, (i128, i128, Option<usize>, Option<usize>, usize)>,
+    /// Per access: the nearest such wild def strictly above it.
+    up: Vec<Option<usize>>,
+}
+
+/// What a def does to the stacks of a frame, to be undone on the way back.
+enum Undone {
+    Nothing,
+    Bytes(i128, i128),
+    Wild(Option<usize>),
+}
+
+fn frame_indexes<'r>(
+    accesses: &[Access],
+    span: &[(u32, u32)],
+    fixed: &llrm_mir::dense::IdMap<InstId, (crate::regions::Frame, i128, i128)>,
+    written: &llrm_mir::dense::IdMap<InstId, Option<Rc<[MemRef]>>>,
+    reference: &dyn Fn(InstId) -> Option<&'r MemRef>,
+    every: &[&'r MemRef],
+) -> std::collections::HashMap<crate::regions::Frame, FrameIndex> {
+    let mut count: std::collections::HashMap<crate::regions::Frame, usize> = std::collections::HashMap::new();
+    for (_, (frame, low, high)) in fixed.iter() {
+        if high - low <= WIDEST {
+            *count.entry(*frame).or_default() += 1;
+        }
+    }
+    let hot: Vec<crate::regions::Frame> =
+        count.into_iter().filter(|(_, n)| *n >= HOT_FRAME).map(|(frame, _)| frame).collect();
+    if hot.is_empty() {
+        return Default::default();
+    }
+    let top = accesses.last().map_or(0, |last| last.id) + 1;
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); top];
+    let mut roots = Vec::new();
+    for access in accesses {
+        match access.defining {
+            Some(parent) => children[parent].push(access.id),
+            None => roots.push(access.id),
+        }
+    }
+    let by_id =
+        |id: usize| &accesses[accesses.binary_search_by_key(&id, |access| access.id).expect("a numbered access")];
+    let mut indexes = std::collections::HashMap::new();
+    for frame in hot {
+        // A cell of the frame, to ask which writes miss its object outright:
+        // sound where every reference of the frame is of the same
+        // objects.
+        let in_frame = |one: &&MemRef| displaced_span(one).is_some_and(|(own, _, _)| own == frame);
+        let objects = |one: &MemRef| {
+            one.provenance.as_ref().filter(|found| !found.slices.is_empty()).map(|found| {
+                found.slices.iter().map(|slice| slice.object.id()).collect::<std::collections::BTreeSet<_>>()
+            })
+        };
+        let Some(sample) = every.iter().copied().find(in_frame) else { continue };
+        let wanted = objects(sample);
+        let ruling = wanted.is_some() && every.iter().copied().filter(in_frame).all(|one| objects(one) == wanted);
+        let mut index = FrameIndex { uses: Default::default(), up: vec![None; top] };
+        let mut stacks: std::collections::HashMap<i128, Vec<usize>> = std::collections::HashMap::new();
+        let mut wild: Option<usize> = None;
+        for &root in &roots {
+            let mut path: Vec<(usize, usize, Undone)> = Vec::new();
+            let enter = |node: usize,
+                         wild: &mut Option<usize>,
+                         stacks: &mut std::collections::HashMap<i128, Vec<usize>>,
+                         index: &mut FrameIndex|
+             -> Undone {
+                index.up[node] = *wild;
+                let access = by_id(node);
+                match (access.kind, access.site) {
+                    (Kind::Def, Some(site)) => match fixed.get(&site) {
+                        Some((own, low, high)) if *own == frame && high - low <= WIDEST => {
+                            for byte in *low..*high {
+                                stacks.entry(byte).or_default().push(node);
+                            }
+                            Undone::Bytes(*low, *high)
+                        }
+                        _ if ruling && written.get(&site).is_some_and(|writes| Reach::of(writes).misses(sample)) => {
+                            Undone::Nothing
+                        }
+                        _ => {
+                            let before = *wild;
+                            *wild = Some(node);
+                            Undone::Wild(before)
+                        }
+                    },
+                    (Kind::Use, Some(site)) => {
+                        if let Some((own, low, high)) = reference(site).and_then(displaced_span)
+                            && own == frame
+                            && high - low <= WIDEST
+                        {
+                            let nearest = (low..high)
+                                .filter_map(|byte| stacks.get(&byte).and_then(|stack| stack.last().copied()))
+                                .max_by_key(|found| span[*found].0);
+                            index.uses.insert(site, (low, high, nearest, *wild, root));
+                        }
+                        Undone::Nothing
+                    }
+                    _ => Undone::Nothing,
+                }
+            };
+            let first = enter(root, &mut wild, &mut stacks, &mut index);
+            path.push((root, 0, first));
+            while let Some((node, next, undone)) = path.pop() {
+                if let Some(&child) = children[node].get(next) {
+                    path.push((node, next + 1, undone));
+                    let undo = enter(child, &mut wild, &mut stacks, &mut index);
+                    path.push((child, 0, undo));
+                } else {
+                    match undone {
+                        Undone::Nothing => {}
+                        Undone::Bytes(low, high) => {
+                            for byte in low..high {
+                                stacks.get_mut(&byte).expect("pushed").pop();
+                            }
+                        }
+                        Undone::Wild(before) => wild = before,
+                    }
+                }
+            }
+        }
+        indexes.insert(frame, index);
+    }
+    indexes
+}
+
 /// `MemorySSA::span`.
 fn spans(accesses: &[Access]) -> Vec<(u32, u32)> {
     let top = accesses.last().map_or(0, |last| last.id) + 1;
@@ -560,6 +702,8 @@ thread_local! {
     pub(crate) static MAY_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static SLOW_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static UNCHANGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Accesses the walks stepped over.
+    pub(crate) static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -609,6 +753,8 @@ pub struct MemorySSA<'a> {
     /// same frame whose bytes miss them is not written, settled without asking
     /// `may_clobber` or remembering the answer.
     fixed: llrm_mir::dense::IdMap<InstId, (crate::regions::Frame, i128, i128)>,
+    /// The last-write index of each frame with many fixed writes.
+    frames: std::collections::HashMap<crate::regions::Frame, FrameIndex>,
 }
 
 impl MemorySSA<'_> {
@@ -811,6 +957,41 @@ impl MemorySSA<'_> {
         let memory_span = displaced_span(memory);
         let edge_span = edge_memory.and_then(displaced_span);
         let mut pending = vec![self.at(site).defining];
+        // A fixed cell of a frame with many fixed writes: the nearest write of
+        // it is the index's, past the writes `fixed` rules apart.
+        if jumping
+            && boundary.is_none()
+            && edge.is_none()
+            && edge_memory.is_none()
+            && !invariant
+            && let Some((frame, low, high)) = memory_span
+            && let Some((first, last, nearest, wild, root)) =
+                self.frames.get(&frame).and_then(|index| index.uses.get(&site)).copied()
+            && (first, last) == (low, high)
+        {
+            let index = &self.frames[&frame];
+            let mut wild = wild;
+            let mut hit = None;
+            // The wild writes nearer than the fixed one, nearest first: the
+            // walk asks each, as it asks any def.
+            while let Some(candidate) = wild {
+                if nearest.is_some_and(|nearest| !self.behind(candidate, nearest) || candidate == nearest) {
+                    break;
+                }
+                let written = &self.written[&self.access(candidate).site.expect("a def has a site")];
+                let at = self.access(candidate).site.expect("a def has a site");
+                let slot = self.slot(memory);
+                if changes(memory, invariant, written.as_deref(), |_| self.clobbered(slot, memory, candidate, at)) {
+                    hit = Some(candidate);
+                    break;
+                }
+                wild = index.up[candidate];
+            }
+            if let Some(found) = hit.or(nearest) {
+                return BTreeSet::from([found]);
+            }
+            pending = vec![Some(root)];
+        }
         // Visited accesses by stamp: a set built per walk was most of its cost.
         let mut stamps = self.stamps.borrow_mut();
         if stamps.0.len() < self.span.len() {
@@ -846,6 +1027,8 @@ impl MemorySSA<'_> {
             chain.clear();
         };
         while let Some(current) = pending.pop() {
+            #[cfg(test)]
+            STEPS.with(|steps| steps.set(steps.get() + 1));
             let Some(current) = current else {
                 chain.clear();
                 continue;
@@ -960,6 +1143,7 @@ pub fn built<'a>(
     unit: &Unit<'a>,
     accesses: &Accesses,
 ) -> MemorySSA<'a> {
+    let references = &accesses.references;
     let function = unit.function;
     let graph = cfg::graph(function);
     let entry = function.entry().map(cfg::id);
@@ -1067,6 +1251,14 @@ pub fn built<'a>(
             _ => None,
         })
         .collect();
+    let frames = frame_indexes(
+        &accesses,
+        &span,
+        &fixed,
+        &written,
+        &|inst| references.get(&inst),
+        &references.values().collect::<Vec<_>>(),
+    );
     MemorySSA {
         live,
         accesses,
@@ -1081,6 +1273,7 @@ pub fn built<'a>(
         jumps: Default::default(),
         span,
         stamps: Default::default(),
+        frames,
         fixed,
     }
 }
