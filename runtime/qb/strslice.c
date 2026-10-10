@@ -41,6 +41,37 @@ SD *B_FMID(SD *sd, int start, int len)
     return slice(sd, start - 1, len);
 }
 
+/* B$SMID: MID$(target, start, max) = source, overwriting in place: a fixed
+   string has `width` bytes at `target`, else `target` is the descriptor. */
+void B_SMID(qb_data_ptr target, int width, SD *source, int max, int start)
+{
+    char *data;
+    unsigned room, count;
+
+    if (start < 1 || max < 0)
+        qb_error(BE_ILLFUN);
+    if (width) {
+        data = (char *)QB_NEAR_OF(target);
+        room = width;
+    } else {
+        SD *sd = QB_NEAR_OF(target);
+
+        data = sd->ptr;
+        room = sd->len;
+    }
+    if ((unsigned)start > room)
+        qb_error(BE_ILLFUN);
+    data += start - 1;
+    count = room - (start - 1);
+    if (count > (unsigned)max)
+        count = max;
+    if (count > source->len)
+        count = source->len;
+    /* the source may be the target: move forwards byte by byte */
+    copy_bytes(data, source->ptr, count);
+    str_tmp_free(source);
+}
+
 /* B$FCHR: CHR$(code). */
 SD *B_FCHR(int code)
 {
@@ -75,6 +106,7 @@ int B_SCMP(SD *first, SD *second)
 #pragma aux B_LEFT "B$LEFT"
 #pragma aux B_RGHT "B$RGHT"
 #pragma aux B_FMID "B$FMID"
+#pragma aux B_SMID "B$SMID"
 #pragma aux B_FCHR "B$FCHR"
 #pragma aux B_SCMP "B$SCMP"
 
