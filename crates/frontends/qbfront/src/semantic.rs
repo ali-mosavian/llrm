@@ -405,15 +405,50 @@ pub(super) struct AdLayout {
     pub origin: usize,
     /// The first dimension record: a word of count and a word of lower bound each.
     pub header: usize,
+    /// The bytes of a word: of the element's size, and of each count and lower bound. 2 in real mode, a pointer's
+    /// where there is one space.
+    pub word: usize,
 }
 
 impl AdLayout {
     pub(super) fn of(options: &Options) -> Self {
         if options.one_space() {
-            Self { data: 0, selector: None, rank: 8, features: 9, element: 10, origin: 12, header: 16 }
+            // A C struct of whole words: the pointer, the size in bytes, the rank and features bytes, then the
+            // element size, the origin and the dimension records, each a word.
+            let word = options.near();
+            Self {
+                data: 0,
+                selector: None,
+                rank: 2 * word,
+                features: 2 * word + 1,
+                element: 3 * word,
+                origin: 4 * word,
+                header: 5 * word,
+                word,
+            }
         } else {
-            Self { data: 0, selector: Some(2), rank: 8, features: 9, element: 12, origin: 10, header: 14 }
+            Self { data: 0, selector: Some(2), rank: 8, features: 9, element: 12, origin: 10, header: 14, word: 2 }
         }
+    }
+
+    /// The bytes of a dimension record: its count and its lower bound.
+    pub(super) fn record(&self) -> usize {
+        2 * self.word
+    }
+
+    /// Where dimension record `record` keeps its element count, and its lower bound.
+    pub(super) fn count(
+        &self,
+        record: usize,
+    ) -> usize {
+        self.header + self.record() * record
+    }
+
+    pub(super) fn lower(
+        &self,
+        record: usize,
+    ) -> usize {
+        self.count(record) + self.word
     }
 
     /// The bytes of a descriptor of `rank` dimensions.
@@ -421,7 +456,7 @@ impl AdLayout {
         &self,
         rank: usize,
     ) -> usize {
-        self.header + 4 * rank
+        self.header + self.record() * rank
     }
 }
 
@@ -2746,16 +2781,16 @@ impl Compiler {
         bytes[layout.rank] = bounds.len() as u8;
         bytes[layout.features] = 0x40;
 
-        bytes[layout.element..layout.element + 2].copy_from_slice(&(element_width as u16).to_le_bytes());
+        let word = layout.word;
+        bytes[layout.element..layout.element + word].copy_from_slice(&(element_width as u64).to_le_bytes()[..word]);
         // Q45A05's QB 4.5 BC_CN bytes are 03 00 01 00 then
         // 02 00 01 00 for source bounds (1 TO 2, 1 TO 3); BC /R stores
         // 02 00 01 00 first.
         let records = self.descriptor_records(bounds);
         for (record, (low, high)) in records.iter().enumerate() {
-            let at = layout.header + 4 * record;
-            let count = (high - low + 1) as u16;
-            bytes[at..at + 2].copy_from_slice(&count.to_le_bytes());
-            bytes[at + 2..at + 4].copy_from_slice(&(*low as u16).to_le_bytes());
+            let count = (high - low + 1) as u64;
+            bytes[layout.count(record)..layout.count(record) + word].copy_from_slice(&count.to_le_bytes()[..word]);
+            bytes[layout.lower(record)..layout.lower(record) + word].copy_from_slice(&(*low as i64 as u64).to_le_bytes()[..word]);
         }
         // B$DDIM's bias: the element number of the lower bounds.
         let mut lower_linear = None;
@@ -4825,10 +4860,11 @@ impl Compiler {
         );
         self.raise_if(unallocated, 9)?;
         for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
-            let lower = self.descriptor_field(descriptor, self.ad().header + 2 + 4 * record, INTEGER);
-            let lower = self.convert(Operand::Value(lower), INTEGER, LONG)?;
-            let count = self.descriptor_field(descriptor, self.ad().header + 4 * record, INTEGER);
-            let count = self.convert(Operand::Value(count), INTEGER, LONG)?;
+            let word = self.word_type();
+            let lower = self.descriptor_field(descriptor, self.ad().lower(record), word);
+            let lower = self.convert(Operand::Value(lower), word, LONG)?;
+            let count = self.descriptor_field(descriptor, self.ad().count(record), word);
+            let count = self.convert(Operand::Value(count), word, LONG)?;
             self.subscript_checked(subscripts[dimension].clone(), offset_type, lower, count)?;
         }
         Ok(())
@@ -4889,8 +4925,9 @@ impl Compiler {
         for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
             let mut subscript = subscripts[dimension].clone();
             if lower {
-                let bound = self.descriptor_field(descriptor, self.ad().header + 2 + 4 * record, INTEGER);
-                let bound = self.convert(Operand::Value(bound), INTEGER, offset_type)?;
+                let word = self.word_type();
+                let bound = self.descriptor_field(descriptor, self.ad().lower(record), word);
+                let bound = self.convert(Operand::Value(bound), word, offset_type)?;
                 let from = self.value(offset_type);
                 self.emit("sub", vec![from], vec![subscript, bound]);
                 subscript = Operand::Value(from);
@@ -4898,8 +4935,9 @@ impl Compiler {
             linear = Some(match linear {
                 None => subscript,
                 Some(previous) => {
-                    let count = self.descriptor_field(descriptor, self.ad().header + 4 * record, INTEGER);
-                    let count = self.convert(Operand::Value(count), INTEGER, offset_type)?;
+                    let word = self.word_type();
+                    let count = self.descriptor_field(descriptor, self.ad().count(record), word);
+                    let count = self.convert(Operand::Value(count), word, offset_type)?;
                     let multiplied = self.value(offset_type);
                     self.emit("mul", vec![multiplied], vec![previous, count]);
                     let combined = self.value(offset_type);
@@ -4955,6 +4993,11 @@ impl Compiler {
         }
         self.descriptor_fields.insert(key, value);
         value
+    }
+
+    /// The type of a descriptor's count, lower bound and element size: a signed word of the target.
+    fn word_type(&self) -> u32 {
+        if self.options.one_space() { integer_type(self.options.near(), true) } else { INTEGER }
     }
 
     /// Where an array descriptor keeps what.

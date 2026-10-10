@@ -90,8 +90,10 @@ impl Slot {
         if offset == layout.origin {
             return Some(Self::Origin);
         }
-        let record = |from: usize| offset.checked_sub(from).filter(|rest| rest.is_multiple_of(4)).map(|rest| rest / 4);
-        match (record(layout.header), record(layout.header + 2)) {
+        let size = layout.record();
+        let record =
+            |from: usize| offset.checked_sub(from).filter(|rest| rest.is_multiple_of(size)).map(|rest| rest / size);
+        match (record(layout.header), record(layout.header + layout.word)) {
             (Some(at), _) => Some(Self::Count(at)),
             (None, Some(at)) => Some(Self::Lower(at)),
             _ => None,

@@ -1,5 +1,6 @@
 /* The array descriptor of this target, which the frontend emits and indexes (llrm-qb's AdLayout): QB's AD with
-   whole pointers where QB's has an offset and a segment, and no far heap, so no links or paragraphs.
+   whole pointers where QB's has an offset and a segment, no far heap, so no links or paragraphs, and every count, bound
+   and size a word of the target (W bytes), not 16 bits.
 
    The part runtime/qb reads is the rank, features, element size, adjusted address and the bounds; where the
    elements are is the target's, behind the ad_* functions: here all in the local heap. */
@@ -9,18 +10,18 @@
 #include "platform.h"
 
 typedef struct DM {
-    u16 count;
-    short lbound;
+    uword count;
+    int lbound;
 } DM;
 
 typedef struct AD {
     void *data;       /* 0: the elements, 0 when none */
-    u32 size;         /* 4: bytes */
-    u8 dims;          /* 8 */
-    u8 features;      /* 9 */
-    u16 elem;         /* 10: bytes of an element */
-    uword adjusted;   /* 12: where element (0,...,0) would be: the data less every lower bound's elements */
-    DM dm[1];         /* 16 */
+    uword size;       /* W: bytes */
+    u8 dims;          /* 2W */
+    u8 features;      /* 2W + 1 */
+    uword elem;       /* 3W: bytes of an element */
+    uword adjusted;   /* 4W: where element (0,...,0) would be: the data less every lower bound's elements */
+    DM dm[1];         /* 5W */
 } AD;
 
 /* Any array may hold what memory has. */
