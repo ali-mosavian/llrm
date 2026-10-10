@@ -77,7 +77,7 @@ void screen_mode(const int *block)
 }
 
 /* B$SCLS: CLS, with -1 for no argument. */
-void B_SCLS(int selector)
+void B_SCLS(short selector)
 {
     (void)selector;
     cn_cls();
@@ -90,20 +90,20 @@ int B_CSRL(void)
 }
 
 /* B$FPOS: POS(x), the cursor's 1-based column; the argument is ignored. */
-int B_FPOS(int ignored)
+int B_FPOS(short ignored)
 {
     (void)ignored;
     return cn_pos() + 1;
 }
 
 /* B$VWPT: VIEW PRINT top TO bottom; -1 and -1 for no bounds. */
-void B_VWPT(int top, int bottom)
+void B_VWPT(short top, short bottom)
 {
     cn_view(top, bottom);
 }
 
 /* B$WIDT: WIDTH columns, rows. */
-void B_WIDT(int columns, int rows)
+void B_WIDT(short columns, short rows)
 {
     cn_set_size(columns, rows);
 }

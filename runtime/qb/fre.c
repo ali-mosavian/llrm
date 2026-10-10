@@ -23,7 +23,7 @@ long B_FRSD(SD *sd)
 
 /* B$FRI2: FRE(0) is the free string space too, FRE(-1) the largest array the
    far heap could take and FRE(-2) the unused stack. */
-long B_FRI2(int selector)
+long B_FRI2(short selector)
 {
     if (selector == -1)
         return fh_free_bytes();

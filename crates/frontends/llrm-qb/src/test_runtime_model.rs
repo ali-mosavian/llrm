@@ -222,3 +222,24 @@ fn pset_and_preset_without_a_colour_call_the_runtime_for_it() {
     let drawing: Vec<_> = names.iter().filter(|name| name.contains("PSTC") || name.contains("PSET") || name.contains("PRST")).collect();
     assert_eq!(drawing, ["B$PSET", "B$PRST", "B$PSTC", "B$PSTC"]);
 }
+
+/// On the flat target a string argument was cut to the low 4 bits of its pointer (a 4-byte descriptor pointer was
+/// taken for a far one): `Twice$("ab")` printed nothing. Where there is one space, no pointer is split.
+#[test]
+fn flat_target_string_pointers_are_not_split() {
+    let source = "DECLARE FUNCTION T$ (s$)\nPRINT T$(\"ab\")\nFUNCTION T$ (s$)\nT$ = s$ + s$\nEND FUNCTION\n";
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "flat.bas", source.as_bytes());
+    let mut frontend = qb_driver::Frontend::new("qb45", "llrm");
+    (frontend.near_bytes, frontend.far_bytes) = (4, 4);
+    let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{error}"));
+    let split = program
+        .modules
+        .iter()
+        .flat_map(|module| &module.functions)
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .filter(|one| one.op == llrm_core::hir::model::Op::PointerOffset)
+        .count();
+    assert_eq!(split, 0);
+}

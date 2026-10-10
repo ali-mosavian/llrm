@@ -98,7 +98,7 @@ static void string(SD *sd, enum Terminator end)
 
 /* B$FTAB: TAB(column) in a PRINT: spaces up to the 1-based column, on the next
    line if the cursor is past it. */
-void B_FTAB(int column)
+void B_FTAB(short column)
 {
     int width = cn_width(), target, pos = cn_pos();
 
@@ -133,9 +133,9 @@ void B_PEOS(void)
         using_ops->end(0);
 }
 
-void B_PCI2(int v) { number(v, COMMA); }
-void B_PSI2(int v) { number(v, SEMI); }
-void B_PEI2(int v) { number(v, EOL); }
+void B_PCI2(short v) { number(v, COMMA); }
+void B_PSI2(short v) { number(v, SEMI); }
+void B_PEI2(short v) { number(v, EOL); }
 void B_PCI4(long v) { number(v, COMMA); }
 void B_PSI4(long v) { number(v, SEMI); }
 void B_PEI4(long v) { number(v, EOL); }

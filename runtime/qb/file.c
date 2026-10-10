@@ -69,7 +69,7 @@ static short open_file(const char *path, enum FileMode mode)
 }
 
 /* B$OPEN: OPEN "name" FOR mode AS #channel LEN = record_length. */
-void B_OPEN(SD *name, int channel, int record_length, unsigned mode)
+void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
 {
     char path[PATH_MAX];
     Fdb *fdb;
@@ -187,7 +187,7 @@ void file_close(const int *channels, unsigned count)
 }
 
 /* B$FLOF: LOF(#channel), the file's size. */
-long B_FLOF(int channel)
+long B_FLOF(short channel)
 {
     Fdb *fdb = open_fdb(channel);
     long here, size;
@@ -219,7 +219,7 @@ static void record_of(
     }
 }
 
-void B_GET3(int channel, qb_data_ptr record, int length)
+void B_GET3(short channel, qb_data_ptr record, short length)
 {
     Fdb *fdb = open_fdb(channel);
     os_data_mut data;
@@ -233,7 +233,7 @@ void B_GET3(int channel, qb_data_ptr record, int length)
         qb_error(os_error(got));
 }
 
-void B_PUT3(int channel, qb_data_ptr record, int length)
+void B_PUT3(short channel, qb_data_ptr record, short length)
 {
     Fdb *fdb = open_fdb(channel);
     os_data_mut data;
@@ -265,20 +265,20 @@ static void position_at(Fdb *fdb, long position)
 }
 
 /* B$GET4, B$PUT4: GET and PUT with a record number or byte position. */
-void B_GET4(int channel, long record, int length, qb_data_ptr data)
+void B_GET4(short channel, long record, short length, qb_data_ptr data)
 {
     position_at(open_fdb(channel), record);
     B_GET3(channel, data, length);
 }
 
-void B_PUT4(int channel, long record, int length, qb_data_ptr data)
+void B_PUT4(short channel, long record, short length, qb_data_ptr data)
 {
     position_at(open_fdb(channel), record);
     B_PUT3(channel, data, length);
 }
 
 /* B$SSEK: SEEK #channel, position. */
-void B_SSEK(int channel, long position)
+void B_SSEK(short channel, long position)
 {
     position_at(open_fdb(channel), position);
 }
@@ -296,7 +296,7 @@ int B_FREF(void)
 }
 
 /* B$FEOF: EOF(#channel), true (-1) when a read would find no more. */
-int B_FEOF(int channel)
+int B_FEOF(short channel)
 {
     Fdb *fdb = open_fdb(channel);
     int next;
@@ -361,7 +361,7 @@ void file_print_to(Fdb *fdb)
 }
 
 /* B$CHOU: PRINT # or WRITE # channel (0: the screen). */
-void B_CHOU(int channel)
+void B_CHOU(short channel)
 {
     Fdb *fdb;
 
@@ -400,7 +400,7 @@ static const char *next_line(void *file)
 }
 
 /* B$DSKI: INPUT # or LINE INPUT # channel. */
-void B_DSKI(int channel)
+void B_DSKI(short channel)
 {
     Fdb *fdb = open_fdb(channel);
 

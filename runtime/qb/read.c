@@ -34,7 +34,7 @@ static void restore_first(void)
 
 /* B$RSTB: RESTORE to the first DATA line whose key is `line` or more (0 is the
    first line). */
-void B_RSTB(unsigned line)
+void B_RSTB(unsigned short line)
 {
     const char *at = module_first_data();
 

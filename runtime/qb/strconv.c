@@ -54,7 +54,7 @@ static SD *made(const void *value, unsigned size)
     return result;
 }
 
-SD *B_FMKI(int value)
+SD *B_FMKI(short value)
 {
     return made(&value, 2);
 }

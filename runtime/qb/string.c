@@ -19,7 +19,7 @@ static SD *integer_text(long v)
     return temporary_of(text, fout_i4(v, text));
 }
 
-SD *B_STI2(int v)
+SD *B_STI2(short v)
 {
     return integer_text(v);
 }

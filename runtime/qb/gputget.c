@@ -72,7 +72,7 @@ void B_GGET(qb_data_ptr data, const AD *ad)
 }
 
 /* B$GPUT: PUT (x, y), array, how; the corner was given by B$N1xx. */
-void B_GPUT(qb_data_ptr data, const AD *ad, int how)
+void B_GPUT(qb_data_ptr data, const AD *ad, short how)
 {
     Bytes in = (Bytes)data;
     unsigned planes = gfx_current->planes, bits = gfx_current->bits;

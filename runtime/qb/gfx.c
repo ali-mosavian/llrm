@@ -179,7 +179,7 @@ static void need_graphics(void)
         qb_error(BE_ILLFUN);
 }
 
-void B_N1I2(int x, int y)
+void B_N1I2(short x, short y)
 {
     need_graphics();
     gfx_x1 = x;
@@ -193,7 +193,7 @@ void B_N1R4(float x, float y)
     gfx_y1 = rounded(y);
 }
 
-void B_N2I2(int x, int y)
+void B_N2I2(short x, short y)
 {
     gfx_x2 = x;
     gfx_y2 = y;
@@ -206,7 +206,7 @@ void B_N2R4(float x, float y)
 }
 
 /* B$PSTC: PSET and PRESET at the first point. */
-void B_PSTC(int color)
+void B_PSTC(short color)
 {
     gfx_plot(gfx_x1, gfx_y1, gfx_attribute(color), OP_SET);
 }
@@ -232,14 +232,14 @@ int B_PNR4(float x, float y)
 }
 
 /* B$PNI2: POINT with whole-number coordinates. */
-int B_PNI2(int x, int y)
+int B_PNI2(short x, short y)
 {
     need_graphics();
     return gfx_pixel(x, y);
 }
 
 /* B$PAL2: PALETTE attribute, colour. */
-void B_PAL2(int attribute, long color)
+void B_PAL2(short attribute, long color)
 {
     need_graphics();
     if (attribute < 0 || (unsigned)attribute >= gfx_current->colors || color < 0)

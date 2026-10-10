@@ -48,7 +48,7 @@ static void seed_row(int left, int right, int y, int border, int fill)
 
 /* B$PAIN: the fill colour and the border colour (-1 for the foreground, and for
    the border the fill colour). */
-void B_PAIN(int fill, int border)
+void B_PAIN(short fill, short border)
 {
     byte paint = gfx_color(fill);
     byte edge = border == -1 ? paint : gfx_color(border);

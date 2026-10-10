@@ -170,7 +170,7 @@ static double turn(double angle, int *spoked)
 }
 
 /* B$CIRC: the radius and the colour (-1 for the foreground). */
-void B_CIRC(float radius, int color)
+void B_CIRC(float radius, short color)
 {
     Circle c;
     double ratio = has_aspect ? aspect_ratio : gfx_current->aspect;

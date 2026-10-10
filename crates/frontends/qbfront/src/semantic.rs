@@ -5088,11 +5088,13 @@ impl Compiler {
         place: Operand,
     ) -> Operand {
         if let Operand::Indirect { base, offset: 0, .. } = &place {
-            if self
-                .values
-                .iter()
-                .find_map(|(id, pointer)| (*id == *base).then_some(*pointer))
-                .is_some_and(|pointer| self.width(pointer) == 4)
+            // Where far pointers are near ones a 4-byte descriptor pointer is the near pointer.
+            if !self.options.one_space()
+                && self
+                    .values
+                    .iter()
+                    .find_map(|(id, pointer)| (*id == *base).then_some(*pointer))
+                    .is_some_and(|pointer| self.width(pointer) == 4)
             {
                 // VBDOS array descriptors carry a whole data pointer, but
                 // dynamic STRING descriptors are allocated in the near string

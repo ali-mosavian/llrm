@@ -33,7 +33,7 @@ static SD *made(long length)
 }
 
 /* B$FEVI: ENVIRON$(n), the nth variable as NAME=VALUE, or "" past the last. */
-SD *B_FEVI(int n)
+SD *B_FEVI(short n)
 {
     if (n < 1)
         qb_error(BE_ILLFUN);

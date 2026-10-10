@@ -139,7 +139,7 @@ void B_INPP(SD *prompt, const InputBlock QB_FAR *block)
 /* B$LNIN: LINE INPUT [prompt;] variable: the whole line, as typed, to a string
    variable.  `fixed` is 0 for a dynamic string; `newline` is 0 when the
    statement began with a semicolon. */
-void B_LNIN(SD *prompt, qb_data_ptr destination, int fixed, int newline)
+void B_LNIN(SD *prompt, qb_data_ptr destination, short fixed, short newline)
 {
     char *text;
     SD *item;
