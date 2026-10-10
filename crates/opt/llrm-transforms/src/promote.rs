@@ -44,6 +44,7 @@ use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, regions, ssa};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
+use llrm_mir::footprint::Footprint;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
@@ -247,6 +248,12 @@ pub struct Promote;
 impl FunctionPass for Promote {
     fn name(&self) -> &'static str {
         "promote"
+    }
+
+    /// A load becomes the value a store left in its cell: memory operations
+    /// (and what addresses them) and the CFG.
+    fn reads(&self) -> Footprint {
+        Footprint::MEMORY | Footprint::STRUCTURE
     }
 
     fn run(
