@@ -106,7 +106,7 @@ pub fn _static_frame(
         .collect();
     // Through BP no longer: the data object's own address.
     let through =
-        |register: Register| if matches!(register, Register::BP | Register::EBP) { Register::None } else { register };
+        |register: Register| if crate::backend::registerinfo::is_frame(register) { Register::None } else { register };
     let operand = |r#where: &Loc| -> Loc {
         if !r#where.in_frame() {
             return r#where.clone();

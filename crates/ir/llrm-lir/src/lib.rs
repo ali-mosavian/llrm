@@ -23,6 +23,7 @@ mod root;
 pub use root::root;
 
 pub mod registers;
+pub use registers::{FRAME, STACK};
 
 /// One physical register operand, at the instruction's width.
 ///

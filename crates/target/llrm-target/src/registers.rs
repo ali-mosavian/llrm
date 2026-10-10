@@ -133,7 +133,21 @@ pub fn source(
             one.lane
         ));
     }
-    code.push_str("        table\n    },\n    views: &[\n");
+    // The roles: the root the description gives the class `frame`, and `stack`.
+    let role = |class: &str| -> Result<String, String> {
+        let roots: Vec<&Register> = registers.iter().filter(|one| one.is(class) && one.root == one.name).collect();
+        match roots[..] {
+            [one] => Ok(format!("{id}::{}", one.name.to_uppercase())),
+            _ => {
+                Err(format!("registers.regs: {} registers are the root with the class `{class}`, not one", roots.len()))
+            }
+        }
+    };
+    code.push_str(&format!(
+        "        table\n    }},\n    frame: {},\n    stack: {},\n    views: &[\n",
+        role("frame")?,
+        role("stack")?
+    ));
     for one in &registers {
         code.push_str(&format!(
             "        ({id}::{}, {}, {id}::{}),\n",
@@ -162,5 +176,17 @@ mod source_tests {
         let made = source("eax 32 eax 0 gpr,int - 1\n", "Reg", &CLASSES).expect("made");
         assert!(made.contains("Reg::EAX as usize"), "{made}");
         assert!(made.contains("llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT"), "{made}");
+    }
+
+    /// Two frame registers (or none) are no role: the table is not made.
+    #[test]
+    fn a_role_needs_exactly_one_root() {
+        let one = "ebp 32 ebp 0 frame,stack - 1\n";
+        assert!(source(one, "Reg", &["frame", "stack"]).is_ok());
+        let two = "ebp 32 ebp 0 frame,stack - 1\nesi 32 esi 0 frame - 2\n";
+        let error = source(two, "Reg", &["frame", "stack"]).err().expect("refused");
+        assert!(error.contains("2 registers are the root with the class `frame`"), "{error}");
+        let none = "eax 32 eax 0 - - 1\n";
+        assert!(source(none, "Reg", &["frame", "stack"]).err().expect("refused").contains("0 registers"));
     }
 }

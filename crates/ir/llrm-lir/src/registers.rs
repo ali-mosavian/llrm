@@ -33,6 +33,12 @@ pub mod class {
     pub const X87: u32 = 1 << 11;
 }
 
+/// What LIR calls the frame register and the stack pointer, whatever the
+/// target: a listing and an object spell them as the target has them
+/// (`FrameRegisters::spelled`).
+pub const FRAME: RegId = Register::BP;
+pub const STACK: RegId = Register::SP;
+
 /// One register of the file.
 #[derive(Clone, Copy, Debug)]
 pub struct Entry {
@@ -49,6 +55,9 @@ pub struct Entry {
 /// each width by its root.
 pub struct Info {
     pub table: [Option<Entry>; 256],
+    /// The root the description gives the class `frame`, and `stack`.
+    pub frame: RegId,
+    pub stack: RegId,
     /// (root, bits, register) for every entry.
     pub views: &'static [(RegId, u32, RegId)],
 }
@@ -129,6 +138,22 @@ impl Info {
             .filter(|(of, width, _)| *of == root && *width == bits)
             .map(|(_, _, one)| *one)
             .min_by_key(|one| *one as usize)
+    }
+
+    /// Whether `register` is a view of the frame register's root.
+    pub fn is_frame(
+        &self,
+        register: RegId,
+    ) -> bool {
+        self.root(register) == self.frame
+    }
+
+    /// Whether `register` is a view of the stack pointer's root.
+    pub fn is_stack(
+        &self,
+        register: RegId,
+    ) -> bool {
+        self.root(register) == self.stack
     }
 
     /// The entries in iced's number order, with their registers.

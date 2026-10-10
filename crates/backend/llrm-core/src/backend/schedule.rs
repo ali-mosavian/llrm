@@ -23,8 +23,12 @@ use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 
-const _GENERAL: [Register; 7] =
-    [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
+/// An integer register the schedule may reason about: any but the stack
+/// pointer's.
+fn _general(register: Register) -> bool {
+    crate::backend::registerinfo::in_class(register, crate::backend::registerinfo::class::INT)
+        && !crate::backend::registerinfo::is_stack(register)
+}
 
 /// Hide measured dependency latency where the complete hardware state is known.
 pub struct Scheduler {
@@ -117,7 +121,7 @@ pub fn _safe(
             [address.through, address.index_through].into_iter().filter(|register| *register != Register::None),
         );
     }
-    if registers.iter().any(|register| !_GENERAL.contains(&register.full_register32())) {
+    if registers.iter().any(|register| !_general(*register)) {
         return None;
     }
     let (reads, writes) = _register_effects(bits, one, false, true)?;
@@ -208,9 +212,7 @@ pub fn _partial_merge_delay(
         .dests
         .iter()
         .filter_map(|r#where| match r#where {
-            Loc::Reg(reg) if reg.width < 4 && _GENERAL.contains(&reg.register.full_register32()) => {
-                Some(reg.register.full_register32())
-            }
+            Loc::Reg(reg) if reg.width < 4 && _general(reg.register) => Some(reg.register.full_register32()),
             _ => None,
         })
         .collect();

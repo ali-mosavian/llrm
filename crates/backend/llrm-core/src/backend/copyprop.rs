@@ -190,7 +190,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
     let slot = Slots(places);
     let mut register_for: IndexMap<Vec<Lane>, Register> = IndexMap::default();
     for register in target::WIDTHS.keys() {
-        if !_lanes(*register).is_empty() && ir::root(*register) != Register::ESP {
+        if !_lanes(*register).is_empty() && !crate::backend::registerinfo::is_stack(*register) {
             register_for.insert(_lanes(*register).into_iter().collect(), *register);
         }
     }
