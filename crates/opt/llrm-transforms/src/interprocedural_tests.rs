@@ -113,7 +113,8 @@ fn test_private_leaves_are_inlined_and_each_changed_body_reoptimised() {
     let (proved, stages) = step(&mut module, &["f"], 4);
     let text = printed(&module);
     assert!(!text[text.find("define i16 @f").unwrap()..].contains("call "), "{text}");
-    assert!(staged(&stages, "f", "inline0.") && staged(&stages, "f", "inline2."), "{stages:?}");
+    // Every site of `f` is taken in one scan, and `f` is built once for them.
+    assert_eq!(stages, [("f".to_owned(), "inline0.".to_owned())]);
     // No call reaches the helpers any more.
     assert_eq!(proved.reachable, defined(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
@@ -183,7 +184,7 @@ fn test_disagreeing_actuals_or_a_public_callee_are_not_specialized() {
     ] {
         let mut module = parsed(&text);
         step(&mut module, &["f"], 40);
-        assert!(printed(&module).contains("  store i16 %x, ptr @g\n"), "{text}");
+        assert!(!printed(&module).contains("constprop"), "{text}");
     }
 }
 
@@ -353,7 +354,14 @@ fn test_the_step_runs_as_a_program_pass() {
         ranges: true,
     });
     let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
-    assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
+    // The helpers every call of which went lose their bodies: changed, and no
+    // pipeline for them.
+    let changed = stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>();
+    assert!(changed.contains(&module.named("f").unwrap()));
+    for name in ["scale", "clamp"] {
+        let helper = module.global(module.named(name).unwrap()).function().unwrap();
+        assert_eq!(helper.walk().count(), 1, "@{name} kept its body: {}", printed(&module));
+    }
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
 }
 
