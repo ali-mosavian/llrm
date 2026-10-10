@@ -144,16 +144,20 @@ def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tup
     The child sees no LLRM_ variable of the caller's but LLRM_BIN (and `env`'s own): LLRM_CHECK_*, LLRM_VERIFY and the like add work to
     the step they check, and a count taken under them is not the compiler's (regparm16: 'lir peephole' read 4.5 Minstr over at every size).
 
-    A source file is compiled from a directory of its own under /tmp, as `src.c`: the length of the path the compiler is given moves
-    the allocator's pages, and `lir peephole` read 173.7 or 159.0 Minstr of cells(224) by that length alone (mimalloc: a block that
-    lives all run in a size class's page, or none, decides whether the page is given back and made again at every free). Base and
-    head, and one run and the next, must be given the same strings.
+    A source file is compiled from a directory of its own under /tmp, as `src.c`, and an llrm binary is run as `./llrm-c` through a
+    link: the length of the paths the compiler is given (its own name as run, the source's) moves the allocator's pages, and `lir
+    peephole` read 173.7 or 159.0 Minstr of cells(224) by that length alone (mimalloc: a block that lives all run in a size class's
+    page, or none, decides whether the page is given back and made again at every free). Base and head, and one run and the next,
+    must be given the same strings.
     """
     source = Path(cmd[-1]) if cmd and cmd[-1].endswith(".c") else None
     with tempfile.TemporaryDirectory(prefix="llrm-", dir="/tmp") as here, tempfile.NamedTemporaryFile("r") as out:
         if source is not None and source.is_file():
             shutil.copyfile(source, Path(here) / "src.c")
             cmd = [*cmd[:-1], "src.c"]
+        if Path(cmd[0]).name.startswith("llrm-") and Path(cmd[0]).is_file():
+            (Path(here) / Path(cmd[0]).name).symlink_to(Path(cmd[0]).resolve())
+            cmd = [f"./{Path(cmd[0]).name}", *cmd[1:]]
         done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, cwd=here, env={**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k == "LLRM_BIN"}, **(env or {})})
         if done.returncode:
             said = [l for l in (done.stderr or done.stdout).splitlines() if l and not l.startswith(("[time]", "[mir]"))]

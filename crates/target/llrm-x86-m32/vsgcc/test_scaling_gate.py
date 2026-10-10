@@ -1,5 +1,6 @@
 """scaling_gate.py: a pass gone quadratic reads as 2N/N = 4, a linear one as 2, and neither direction of change passes unseen."""
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -473,16 +474,20 @@ def test_interprocedural_own_work_stays_near_linear_on_the_chain_functions_and_c
     assert not grown, grown
 
 
-def test_a_step_counts_the_same_whatever_the_path_of_the_source(tmp_path):
+def test_a_step_counts_the_same_whatever_the_paths_the_compiler_is_given(tmp_path):
     """cells(224) at -O2 read 173.7 Minstr in `lir peephole` from one path and 159.0 from another, the whole compile 4521 or 4506:
-    the length of the path the compiler is given moves the allocator's pages (mimalloc given a block that lives all run, or none,
-    in the page of a size class), and a gate that measured base and head from temporary directories of different names failed on a
-    step that had not moved. `scaling.sample` compiles from a directory of its own, as `src.c`."""
+    the length of the compiler's own path and of the source's moves the allocator's pages (mimalloc given a block that lives all run,
+    or none, in the page of a size class), and a gate that measured base and head from binaries and temporary directories of
+    different names failed on a step that had not moved. `scaling.sample` runs `./llrm-c` on `src.c` in a directory of its own."""
     counts = set()
     for width in range(1, 40, 3):
         where = tmp_path / ("d" * width)
         where.mkdir()
         source = where / "c.c"
         source.write_text(scaling.cells(224))
-        counts.add(round(gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir peephole"], 1))
-    assert max(counts) - min(counts) <= 0.1, sorted(counts)
+        binary = where / "bin" / "llrm-c"
+        binary.parent.mkdir()
+        shutil.copy(Path(gate.levels_time.command("llrm", "O2", source)[0]).resolve(), binary)
+        command = [str(binary), *gate.levels_time.command("llrm", "O2", source)[1:]]
+        counts.add(round(gate.own_work(command)["lir peephole"], 0))
+    assert max(counts) - min(counts) <= 1, sorted(counts)
