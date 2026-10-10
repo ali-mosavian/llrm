@@ -441,195 +441,140 @@ static const GdOps packed2_ops = {
     packed2_plot, packed2_read, packed2_search, packed_move_rows, packed2_glyph
 };
 
-/* Box fills: one routine for each kind of mode and each operation, chosen once by gd_fill_select and run on a box that
-   has already been clipped to the screen.  A routine has its operation written in and tests nothing per pixel; what
-   depends only on the box (the edge masks, the first row) is worked out once, and each row is then a straight run of
-   stores with the bytes at its ends patched.  COMBINE gives a byte's new value from what is there and the pattern. */
-#define COMBINE_SET(old, pattern) (pattern)
-#define COMBINE_AND(old, pattern) ((old) & (pattern))
-#define COMBINE_OR(old, pattern) ((old) | (pattern))
-#define COMBINE_XOR(old, pattern) ((old) ^ (pattern))
+/* Box fills: one routine for each kind of mode, chosen once by gd_fill_select with the operation patched into the box
+   loop (fill.asm), and run on a box that has already been clipped to the screen.  The geometry is worked out once for
+   the box; each row is a straight run of `op mem, imm`, with the byte at each end of a row patched where the pixels in
+   it are not all the box's.  An edge byte is old & keep ^ flip, which every operation is: set keeps nothing and flips
+   to the pattern; and keeps the pattern; or keeps what the pattern lacks and flips to it; xor keeps all and flips. */
+static unsigned edge_and(const GdFill *fill, unsigned mask)
+{
+    return (fill->keep | ~mask) & 0xFF;
+}
 
-typedef volatile u32 QB_FAR Video32;
-
-/* `count` bytes at `at` become the pattern, by dwords and then bytes. */
-#define RUN_SET(at, count, pattern) \
-    { \
-        Video32 *w_ = (Video32 *)(at); \
-        Video *b_; \
-        unsigned n_ = (count) >> 2; \
-        while (n_--) \
-            *w_++ = (pattern); \
-        b_ = (Video *)w_; \
-        n_ = (count) & 3; \
-        while (n_--) \
-            *b_++ = (u8)(pattern); \
-    }
-
-/* The same read-modify-write. */
-#define RUN_OP(combine, at, count, pattern) \
-    { \
-        Video32 *w_ = (Video32 *)(at); \
-        Video *b_; \
-        unsigned n_ = (count) >> 2; \
-        while (n_--) { \
-            u32 old_ = *w_; \
-            *w_++ = combine(old_, (pattern)); \
-        } \
-        b_ = (Video *)w_; \
-        n_ = (count) & 3; \
-        while (n_--) { \
-            unsigned old_ = *b_; \
-            *b_++ = (u8)combine(old_, (pattern)); \
-        } \
-    }
-
-#define RUN_COMBINE_SET(at, count, pattern) RUN_SET(at, count, pattern)
-#define RUN_COMBINE_AND(at, count, pattern) RUN_OP(COMBINE_AND, at, count, pattern)
-#define RUN_COMBINE_OR(at, count, pattern) RUN_OP(COMBINE_OR, at, count, pattern)
-#define RUN_COMBINE_XOR(at, count, pattern) RUN_OP(COMBINE_XOR, at, count, pattern)
+static unsigned edge_xor(const GdFill *fill, unsigned mask)
+{
+    return fill->flip & mask;
+}
 
 /* The 256-colour mode: a row is `count` bytes, `pitch` apart. */
-#define LINEAR_BOX(name, combine) \
-    static void name(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows) \
-    { \
-        Video *row = pixel_at(x, y); \
-        u32 pattern = fill->pattern; \
-        while (rows--) { \
-            RUN_##combine(row, count, pattern) \
-            row += pitch; \
-        } \
+static void linear_box(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows)
+{
+    FillBox box;
+
+    box.dst = pixel_at(x, y);
+    box.rows = rows;
+    box.middle = count;
+    box.steps[0] = box.steps[1] = pitch;
+    box.phase = 0;
+    box.edges = 0;
+    dev_fill_box(&box);
+}
+
+/* The CGA modes: the bytes at the ends of a row keep the pixels the box does not cover.  Rows alternate between the two
+   banks of the screen. */
+static void packed_box(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows, unsigned bits)
+{
+    unsigned last = x + count - 1;
+    unsigned first_byte = x * bits >> 3, last_byte = last * bits >> 3;
+    unsigned left = 0xFF >> (x * bits & 7), right = 0xFF << (8 - bits - (last * bits & 7)) & 0xFF;
+    Video *row = packed_row(y);
+    FillBox box;
+
+    if (first_byte == last_byte) {
+        unsigned keep = edge_and(fill, left & right), flip = edge_xor(fill, left & right);
+
+        while (rows--) {
+            Video *at = row + first_byte;
+
+            *at = (u8)(*at & keep ^ flip);
+            row += y++ & 1 ? CGA_ROW_BYTES - CGA_ODD_ROWS : CGA_ODD_ROWS;
+        }
+        return;
     }
+    box.dst = row + first_byte;
+    box.rows = rows;
+    box.middle = last_byte - first_byte - 1;
+    box.steps[0] = CGA_ODD_ROWS;
+    box.steps[1] = CGA_ROW_BYTES - CGA_ODD_ROWS;
+    box.phase = y & 1 ? sizeof(unsigned) : 0;
+    box.edges = 1;
+    box.left = edge_and(fill, left) | edge_xor(fill, left) << 8;
+    box.right = edge_and(fill, right) | edge_xor(fill, right) << 8;
+    dev_fill_box(&box);
+}
 
-LINEAR_BOX(linear_set, COMBINE_SET)
-LINEAR_BOX(linear_and, COMBINE_AND)
-LINEAR_BOX(linear_or, COMBINE_OR)
-LINEAR_BOX(linear_xor, COMBINE_XOR)
+static void packed4_box(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows)
+{
+    packed_box(fill, x, y, count, rows, 2);
+}
 
-/* The CGA modes: the pattern is the colour in every pixel of a byte; the bytes at the ends of a row keep the pixels the
-   box does not cover.  Rows alternate between the two banks of the screen. */
-#define PACKED_BOX(name, bits, combine) \
-    static void name(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows) \
-    { \
-        unsigned last = x + count - 1, pattern = (unsigned)fill->pattern & 0xFF; \
-        unsigned first_byte = x * bits >> 3, last_byte = last * bits >> 3; \
-        unsigned left = 0xFF >> (x * bits & 7), right = 0xFF << (8 - bits - (last * bits & 7)) & 0xFF; \
-        unsigned middle = last_byte - first_byte - 1; \
-        u32 run = fill->pattern; \
-        Video *row = packed_row(y); \
-        if (first_byte == last_byte) { \
-            left &= right; \
-            while (rows--) { \
-                Video *at = row + first_byte; \
-                unsigned old = *at; \
-                *at = (u8)(old & ~left | combine(old, pattern) & left); \
-                row += y++ & 1 ? CGA_ROW_BYTES - CGA_ODD_ROWS : CGA_ODD_ROWS; \
-            } \
-            return; \
-        } \
-        while (rows--) { \
-            Video *at = row + first_byte; \
-            unsigned old = *at; \
-            *at++ = (u8)(old & ~left | combine(old, pattern) & left); \
-            RUN_##combine(at, middle, run) \
-            at = row + last_byte; \
-            old = *at; \
-            *at = (u8)(old & ~right | combine(old, pattern) & right); \
-            row += y++ & 1 ? CGA_ROW_BYTES - CGA_ODD_ROWS : CGA_ODD_ROWS; \
-        } \
-    }
-
-PACKED_BOX(packed4_set, 2, COMBINE_SET)
-PACKED_BOX(packed4_and, 2, COMBINE_AND)
-PACKED_BOX(packed4_or, 2, COMBINE_OR)
-PACKED_BOX(packed4_xor, 2, COMBINE_XOR)
-PACKED_BOX(packed2_set, 1, COMBINE_SET)
-PACKED_BOX(packed2_and, 1, COMBINE_AND)
-PACKED_BOX(packed2_or, 1, COMBINE_OR)
-PACKED_BOX(packed2_xor, 1, COMBINE_XOR)
+static void packed2_box(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows)
+{
+    packed_box(fill, x, y, count, rows, 1);
+}
 
 /* The planar modes: the colour goes through the controller's write mode 2, the operation through its function, and the
    bytes at the ends of a row under a bit mask.  What a mask covers is written down a whole column, so the mask is
-   written three times for a box.  A set reads nothing; the other operations read each byte to load the latches (a
-   dword read would load only the last one). */
-#define PLANAR_EDGE(first, rows, color) \
-    { \
-        Video *p_ = (first); \
-        unsigned n_ = (rows); \
-        while (n_--) { \
-            (void)*p_; \
-            *p_ = (u8)(color); \
-            p_ += pitch; \
-        } \
+   written three times for a box.  A set has the run of the box loop; the other operations read each byte to load the
+   latches (a dword read would load only the last one). */
+static void planar_edge(Video *at, unsigned rows, unsigned color)
+{
+    while (rows--) {
+        (void)*at;
+        *at = (u8)color;
+        at += pitch;
     }
+}
 
-#define PLANAR_MIDDLE_SET(first, rows, bytes, color, pattern) \
-    { \
-        Video *r_ = (first); \
-        unsigned n_ = (rows); \
-        while (n_--) { \
-            RUN_SET(r_, bytes, pattern) \
-            r_ += pitch; \
-        } \
+static void planar_box(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows)
+{
+    unsigned last = x + count - 1, color = fill->color, function = fill->operation;
+    unsigned left = 0xFF >> (x & 7), right = 0xFF << (7 - (last & 7)) & 0xFF;
+    unsigned between = (last >> 3) - (x >> 3);
+    Video *at = byte_of(x, y);
+
+    if (function)
+        controller(GC_DATA_ROTATE, function << FUNCTION_SHIFT);
+    if (between == 0) {
+        controller(GC_BIT_MASK, left & right);
+        planar_edge(at, rows, color);
+    } else {
+        controller(GC_BIT_MASK, left);
+        planar_edge(at, rows, color);
+        controller(GC_BIT_MASK, 0xFF);
+        if (between > 1) {
+            if (function) {
+                unsigned n;
+
+                for (n = 1; n < between; n++)
+                    planar_edge(at + n, rows, color);
+            } else {
+                FillBox box;
+
+                box.dst = at + 1;
+                box.rows = rows;
+                box.middle = between - 1;
+                box.steps[0] = box.steps[1] = pitch;
+                box.phase = 0;
+                box.edges = 0;
+                dev_fill_box(&box);
+            }
+        }
+        controller(GC_BIT_MASK, right);
+        planar_edge(at + between, rows, color);
     }
+    controller(GC_BIT_MASK, 0xFF);
+    if (function)
+        controller(GC_DATA_ROTATE, 0);
+}
 
-#define PLANAR_MIDDLE_LATCH(first, rows, bytes, color, pattern) \
-    { \
-        Video *r_ = (first); \
-        unsigned n_ = (rows); \
-        while (n_--) { \
-            Video *p_ = r_; \
-            unsigned m_ = (bytes); \
-            while (m_--) { \
-                (void)*p_; \
-                *p_++ = (u8)(color); \
-            } \
-            r_ += pitch; \
-        } \
-    }
-
-#define PLANAR_BOX(name, function, middle) \
-    static void name(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows) \
-    { \
-        unsigned last = x + count - 1, color = fill->color; \
-        unsigned left = 0xFF >> (x & 7), right = 0xFF << (7 - (last & 7)) & 0xFF; \
-        unsigned between = (last >> 3) - (x >> 3); \
-        u32 pattern = fill->pattern; \
-        Video *at = byte_of(x, y); \
-        if (function) \
-            controller(GC_DATA_ROTATE, function << FUNCTION_SHIFT); \
-        if (between == 0) { \
-            controller(GC_BIT_MASK, left & right); \
-            PLANAR_EDGE(at, rows, color) \
-        } else { \
-            controller(GC_BIT_MASK, left); \
-            PLANAR_EDGE(at, rows, color) \
-            controller(GC_BIT_MASK, 0xFF); \
-            if (between > 1) \
-                middle(at + 1, rows, between - 1, color, pattern) \
-            controller(GC_BIT_MASK, right); \
-            PLANAR_EDGE(at + between, rows, color) \
-        } \
-        controller(GC_BIT_MASK, 0xFF); \
-        if (function) \
-            controller(GC_DATA_ROTATE, 0); \
-    }
-
-PLANAR_BOX(planar_set, 0, PLANAR_MIDDLE_SET)
-PLANAR_BOX(planar_and, 1, PLANAR_MIDDLE_LATCH)
-PLANAR_BOX(planar_or, 2, PLANAR_MIDDLE_LATCH)
-PLANAR_BOX(planar_xor, 3, PLANAR_MIDDLE_LATCH)
-
-static void (*const boxes[KINDS][4])(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows) = {
-    { planar_set, planar_and, planar_or, planar_xor },
-    { linear_set, linear_and, linear_or, linear_xor },
-    { packed4_set, packed4_and, packed4_or, packed4_xor },
-    { packed2_set, packed2_and, packed2_or, packed2_xor }
+static void (*const boxes[KINDS])(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows) = {
+    planar_box, linear_box, packed4_box, packed2_box
 };
 
 void gd_fill_select(GdFill *fill, unsigned color, unsigned operation)
 {
-    u32 byte = color & 0xFF;
+    unsigned byte = color & 0xFF;
 
     switch (kind) {
     case KIND_PACKED4:
@@ -642,7 +587,11 @@ void gd_fill_select(GdFill *fill, unsigned color, unsigned operation)
         byte = color & 0x0F;
         break;
     }
-    fill->box = boxes[kind][operation & 3];
+    operation &= 3;
+    fill->box = boxes[kind];
     fill->color = color & 0xFF;
-    fill->pattern = byte * 0x01010101UL;
+    fill->operation = operation;
+    fill->keep = operation == 0 ? 0 : operation == 1 ? byte : operation == 2 ? ~byte & 0xFF : 0xFF;
+    fill->flip = operation == 1 ? 0 : byte;
+    dev_fill_select(operation, byte);
 }

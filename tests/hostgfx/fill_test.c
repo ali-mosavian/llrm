@@ -26,6 +26,31 @@ void dev_fill(BlockOp *op)
         *at++ = (unsigned short)op->value;
 }
 
+/* fill.asm in C: the run of `op mem, imm`, and the edge bytes. */
+static unsigned fill_operation, fill_byte;
+void dev_fill_select(unsigned operation, unsigned byte) { fill_operation = operation; fill_byte = byte; }
+static unsigned apply(unsigned old) { return fill_operation == 0 ? fill_byte : fill_operation == 1 ? old & fill_byte : fill_operation == 2 ? old | fill_byte : old ^ fill_byte; }
+void dev_fill_box(FillBox *box)
+{
+    unsigned char *row = box->dst;
+    unsigned phase = box->phase;
+
+    for (unsigned r = 0; r < box->rows; r++) {
+        unsigned char *at = row;
+
+        if (box->edges) {
+            *at = (*at & (box->left & 0xFF)) ^ (box->left >> 8 & 0xFF);
+            at++;
+        }
+        for (unsigned i = 0; i < box->middle; i++, at++)
+            *at = (unsigned char)apply(*at);
+        if (box->edges)
+            *at = (*at & (box->right & 0xFF)) ^ (box->right >> 8 & 0xFF);
+        row += (int)box->steps[phase / sizeof(unsigned)];   /* a step back wraps as the target's offsets do */
+        phase ^= sizeof(unsigned);
+    }
+}
+
 static unsigned rng = 7;
 static unsigned next(void) { rng = rng * 1103515245u + 12345u; return (rng >> 8) & 0xFFFFFF; }
 

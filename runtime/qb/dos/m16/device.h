@@ -16,6 +16,14 @@ typedef struct BlockOp {
     unsigned count;
     unsigned value;
 } BlockOp;
+/* A box fill (fill.asm): `rows` rows from `dst`, each a run of `middle` bytes of the operation and pattern B$FSEL last set,
+   with an edge byte before and after it if `edges` (new = old & and ^ xor, `left` and `right` hold the and low, the xor
+   next); a row starts steps[0] after the one before when that is even, steps[1] when odd, `phase` (in bytes) naming
+   the first. */
+typedef struct FillBox {
+    void QB_FAR *dst;
+    unsigned rows, middle, steps[2], phase, edges, left, right;
+} FillBox;
 
 extern void dev_int10(Regs *regs);
 /* Where protected mode has to ask for a real-mode result, the interrupt run in real mode; here it is the same. */
@@ -29,6 +37,8 @@ extern void dev_interrupts_off(void);
 extern void dev_interrupts_on(void);
 extern void dev_move(BlockOp *op);
 extern void dev_fill(BlockOp *op);
+extern void dev_fill_select(unsigned operation, unsigned byte);
+extern void dev_fill_box(FillBox *box);
 extern void dev_atan2(const double *y, const double *x, double *out);
 extern void dev_sincos(const double *angle, double *sine, double *cosine);
 
@@ -42,6 +52,8 @@ extern void dev_sincos(const double *angle, double *sine, double *cosine);
 #pragma aux dev_interrupts_on "B$STI"
 #pragma aux dev_move "B$MOVE"
 #pragma aux dev_fill "B$FILL"
+#pragma aux dev_fill_select "B$FSEL"
+#pragma aux dev_fill_box "B$FBOX"
 #pragma aux dev_atan2 "B$ATAN2"
 #pragma aux dev_sincos "B$SINCOS"
 
