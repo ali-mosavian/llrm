@@ -4,6 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use llrm_lir::registers::RegId;
+
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::lir::{LirBlock, LirBody};
 
@@ -41,8 +43,13 @@ pub fn verify_for(
 /// of any segment but the stack's and the data's, which are the one space here
 /// (the encoder drops them): the machine of the target has no other to name.
 fn _flat(body: &LirBody) -> Vec<String> {
-    use iced_x86::Register::{DS, None as NoSegment, SS};
-    let other = |segment| segment != NoSegment && segment != SS && segment != DS;
+    const DS: RegId = RegId::DS;
+    const NO_SEGMENT: RegId = RegId::None;
+    const SS: RegId = RegId::SS;
+    let other = |segment: iced_x86::Register| {
+        let segment = RegId::from(segment);
+        segment != NO_SEGMENT && segment != SS && segment != DS
+    };
     let mut out = vec![];
     for block in &body.blocks {
         for one in &block.insns {
@@ -208,7 +215,7 @@ fn _operands(body: &LirBody) -> Vec<String> {
                 if regs.positional(reg.register) {
                     continue;
                 }
-                let register = reg.register as u32;
+                let register = reg.register.index() as u32;
                 if !regs.described(reg.register) {
                     out.push(format!("{:#06x} names {register}, which is not a register this target has", one.at));
                 }

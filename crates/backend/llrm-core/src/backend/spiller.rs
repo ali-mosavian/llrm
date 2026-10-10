@@ -3197,7 +3197,7 @@ fn _address_source(
             && cell.addr.is_some_and(|found| {
                 found.space == Space::Literal
                     && found.index == 0
-                    && (found.segment == RegId::None || regs.is_stack_segment(found.segment))
+                    && (found.segment == (RegId::None).iced() || regs.is_stack_segment(RegId::from(found.segment)))
             });
         if !fits {
             invalid = true;
@@ -4721,7 +4721,7 @@ mod tests {
         let source = _frame_address(-38, 1);
         let cell = Mem {
             base: Some(Held { value: 1, width: 2 }),
-            ..Mem::new(Some(Addr { base: RegId::SI, ..Addr::new(Space::Literal, 10) }), 2)
+            ..Mem::new(Some(Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Literal, 10) }), 2)
         };
         let load = insn(
             0x14,
@@ -5352,7 +5352,7 @@ mod tests {
 
     #[test]
     fn test_spilling_a_pointer_renames_the_cell_it_is_the_base_of() {
-        let where_ = Addr { base: RegId::SI, ..Addr::new(Space::Segment, 0x10) };
+        let where_ = Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Segment, 0x10) };
         let cell = Mem { base: Some(Held { value: 3, width: 2 }), ..mem(where_, 2, RegId::None, 0, 2) };
         let load = insn(
             0x20,
@@ -5388,7 +5388,7 @@ mod tests {
             base: Some(Held { value: 5, width: 4 }),
             index: Some(Held { value: 1, width: 4 }),
             scale: 2,
-            ..Mem::new(Some(Addr { segment: RegId::ES, ..Addr::new(Space::Far, 0) }), 2)
+            ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let read = insn(
             0x100,
@@ -5743,7 +5743,7 @@ mod tests {
         Mem {
             base: Some(Held { value: 5, width: 2 }),
             index: index.map(|value| Held { value, width: 2 }),
-            ..Mem::new(Some(Addr { segment: RegId::ES, ..Addr::new(Space::Far, disp) }), 2)
+            ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, disp) }), 2)
         }
     }
 

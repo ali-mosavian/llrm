@@ -1725,29 +1725,30 @@ pub fn _memory(
         Space::Segment | Space::External => {
             let symbol = named(names, address);
             let indexed = if registers.is_empty() { String::new() } else { format!("[{registers}]") };
-            let segment = if address.segment == RegId::None {
+            let segment = if address.segment == (RegId::None).iced() {
                 String::new()
             } else {
-                format!("{}:", target::name_of(regs, address.segment))
+                format!("{}:", target::name_of(regs, RegId::from(address.segment)))
             };
             return Ok(format!("{size}{segment}{symbol}{disp}{indexed}"));
         }
         Space::Literal if !registers.is_empty() => {
-            let segment =
-                if address.segment == RegId::None || regs.default_segment(cell.through) == Some(address.segment) {
-                    String::new()
-                } else {
-                    format!("{}:", target::name_of(regs, address.segment))
-                };
+            let segment = if address.segment == (RegId::None).iced()
+                || regs.default_segment(cell.through) == Some(RegId::from(address.segment))
+            {
+                String::new()
+            } else {
+                format!("{}:", target::name_of(regs, RegId::from(address.segment)))
+            };
             return Ok(format!("{size}{segment}[{registers}{disp}]"));
         }
         // A direct address, as `[disp16]`: the offset is unsigned.
-        Space::Literal if registers.is_empty() && address.segment == RegId::None => {
+        Space::Literal if registers.is_empty() && address.segment == (RegId::None).iced() => {
             return Ok(format!("{size}[{}]", address.disp & 0xFFFF));
         }
-        Space::Far if address.segment != RegId::None => {
+        Space::Far if address.segment != (RegId::None).iced() => {
             let inside = if registers.is_empty() { address.disp.to_string() } else { format!("{registers}{disp}") };
-            return Ok(format!("{size}{}:[{inside}]", target::name_of(regs, address.segment)));
+            return Ok(format!("{size}{}:[{inside}]", target::name_of(regs, RegId::from(address.segment))));
         }
         _ => {}
     }
@@ -1846,7 +1847,7 @@ mod tests {
     #[test]
     fn test_far_cell_displacement_once() {
         let regs = crate::backend::registerinfo::test_regs();
-        let addr = Addr { base: RegId::BX, segment: RegId::ES, ..Addr::new(Space::Far, 2) };
+        let addr = Addr { base: (RegId::BX).iced(), segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 2) };
         let cell = ir::Mem { through: RegId::BX, offset: 2, ..ir::Mem::new(Some(addr), 1) };
         assert_eq!(_operand(regs, &Loc::Mem(cell), &no_names()).unwrap(), "byte ptr es:[bx+2]");
     }

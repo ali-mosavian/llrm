@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use iced_x86::{Code, FlowControl, Mnemonic, Register, RflagsBits};
+use llrm_lir::registers::RegId;
 use llrm_mir::BinaryOp;
 use llrm_x86_bcmachine::frontends::bc::blocks::Block;
 use llrm_x86_bcmachine::frontends::bc::declen::Insn;
@@ -193,11 +194,7 @@ fn after(
         pushed
     } else {
         state.same
-            && node
-                .effects()
-                .defs
-                .as_ref()
-                .is_some_and(|defs| !defs.contains(&Register::DS) && !defs.contains(&Register::ES))
+            && node.effects().defs.as_ref().is_some_and(|defs| !defs.contains(&RegId::DS) && !defs.contains(&RegId::ES))
     };
     State { direction, same }
 }

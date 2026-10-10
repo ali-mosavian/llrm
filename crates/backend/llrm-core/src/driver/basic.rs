@@ -92,8 +92,9 @@ pub fn _static_frame(
 ) -> lir::LirBody {
     let regs = body.regs();
     let moved = |addr: &Addr| -> Addr {
-        let segment = if regs.is_stack_segment(addr.segment) { RegId::None } else { addr.segment };
-        Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, segment, ..*addr }
+        let segment =
+            if regs.is_stack_segment(RegId::from(addr.segment)) { RegId::None } else { RegId::from(addr.segment) };
+        Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, segment: segment.iced(), ..*addr }
     };
     let variables = body
         .variables

@@ -147,7 +147,7 @@ fn step(
                 OpAccess::Write | OpAccess::CondWrite | OpAccess::ReadWrite | OpAccess::ReadCondWrite
             )
         })
-        .map(|used| full(used.register()))
+        .map(|used| full(RegId::from(used.register())))
         .collect();
     let mnemonic = one.mnemonic();
     let end = (one.ip() + one.len() as u64) as usize;
@@ -173,7 +173,7 @@ fn step(
             let moved = -i64::from(one.stack_pointer_increment());
             state.stack += moved;
             if mnemonic == Mnemonic::Push && one.op0_kind() == OpKind::Register {
-                let register = full(one.op0_register());
+                let register = full(RegId::from(one.op0_register()));
                 if register.is_gpr32()
                     && register != stack
                     && !state.changed.contains(&register)
@@ -183,7 +183,7 @@ fn step(
                 }
             }
             if mnemonic == Mnemonic::Pop && one.op0_kind() == OpKind::Register {
-                let register = full(one.op0_register());
+                let register = full(RegId::from(one.op0_register()));
                 // Its own slot, popped: it has the entry value again.
                 if let Some(at) =
                     state.saved.iter().position(|&(saved, below)| saved == register && below == state.stack + 4)
@@ -205,7 +205,9 @@ fn step(
             state.changed.retain(|one| *one != full(frame));
             return Ok(state);
         }
-        Mnemonic::Sub | Mnemonic::Add if full(one.op0_register()) == stack && one.op0_kind() == OpKind::Register => {
+        Mnemonic::Sub | Mnemonic::Add
+            if full(RegId::from(one.op0_register())) == stack && one.op0_kind() == OpKind::Register =>
+        {
             let Some(amount) = immediate() else {
                 return Err(format!("{:?} of the stack pointer by a register at {}", mnemonic, one.ip()));
             };
@@ -213,7 +215,7 @@ fn step(
             return Ok(state);
         }
         Mnemonic::Mov if one.op0_kind() == OpKind::Register && one.op1_kind() == OpKind::Register => {
-            let (to, from) = (full(one.op0_register()), full(one.op1_register()));
+            let (to, from) = (full(RegId::from(one.op0_register())), full(RegId::from(one.op1_register())));
             if to == full(frame) && from == stack && state.base == Base::Stack {
                 // The frame register now stands where the stack pointer does.
                 state.base = Base::Frame;

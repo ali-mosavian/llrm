@@ -42,7 +42,7 @@ fn loaded(body: &LirBody) -> Mem {
 /// An indexed frame cell as isel and addressforms spell it, `[bp+si-30]`:
 /// through BP, with a literal displacement.
 fn indexed_frame_cell() -> Mem {
-    let addr = Addr { segment: RegId::SS, ..Addr::new(Space::Literal, -30) };
+    let addr = Addr { segment: (RegId::SS).iced(), ..Addr::new(Space::Literal, -30) };
     Mem { through: RegId::BP, disp_width: 2, index: Some(Held { value: 2, width: 2 }), ..Mem::new(Some(addr), 2) }
 }
 

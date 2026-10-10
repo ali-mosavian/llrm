@@ -457,12 +457,12 @@ pub fn delays(
         Some([Loc::Mem(cell)]) => {
             let mut address_registers = BTreeSet::from([cell.through, cell.index_through]);
             if let Some(addr) = cell.addr {
-                address_registers.insert(addr.segment);
+                address_registers.insert(RegId::from(addr.segment));
                 // Once MIR computed a base value, allocation's `through` is
                 // the encoded register and BC's original `addr.base` is only
                 // provenance. A cell with no value still encodes that base.
                 if cell.base.is_none() {
-                    address_registers.insert(addr.base);
+                    address_registers.insert(RegId::from(addr.base));
                 }
             }
             address_registers.into_iter().flat_map(|one| _lanes(regs, one)).collect()
@@ -504,7 +504,7 @@ pub fn segment_of(
     cell: &Mem,
     g: Reg,
 ) -> bool {
-    cell.addr.is_some_and(|addr| addr.segment == g.register)
+    cell.addr.is_some_and(|addr| addr.segment == g.register.iced())
 }
 
 /// Two operands address the same bytes. The registers and displacement

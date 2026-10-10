@@ -968,7 +968,7 @@ fn test_repeated_allocated_address_copies_use_one_clean_67h_base() {
             through: register,
             base: Some(Held { value, width: 2 }),
             selector: Some(Held { value: 20, width: 2 }),
-            ..Mem::new(Some(Addr { segment: RegId::FS, ..Addr::new(Space::Far, index) }), 2)
+            ..Mem::new(Some(Addr { segment: (RegId::FS).iced(), ..Addr::new(Space::Far, index) }), 2)
         };
         let load = insn(
             index,
@@ -2075,7 +2075,7 @@ fn test_far_pointer_loaded_in_one_instruction() {
             // As lowered and allocated: the offset value placed in si.
             let far = |disp: i64| Mem {
                 base: Some(Held { value: 1, width: 2 }),
-                ..mem(Some(Addr { segment: RegId::ES, ..Addr::new(Space::Far, disp) }), 2, RegId::SI, 0, 2)
+                ..mem(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, disp) }), 2, RegId::SI, 0, 2)
             };
             (low, high) = (far(16), far(18));
             base = RegId::SI;
@@ -2103,7 +2103,10 @@ fn test_far_pointer_loaded_in_one_instruction() {
         let made = code(result[0].what.as_ref().unwrap());
         let decoded = Decoder::new(16, &made, DecoderOptions::NONE).decode();
         let expected = if variant == "fs" { Mnemonic::Lfs } else { Mnemonic::Les };
-        assert_eq!((decoded.mnemonic(), decoded.op0_register(), decoded.memory_base()), (expected, RegId::BX, base));
+        assert_eq!(
+            (decoded.mnemonic(), decoded.op0_register(), decoded.memory_base()),
+            (expected, iced_x86::Register::BX, base.iced())
+        );
     }
 }
 
@@ -2752,7 +2755,8 @@ fn test_memory_round_trip_folds_across_an_independent_operand_load() {
 fn test_single_use_loaded_addend_folds_into_the_arithmetic_operand() {
     // Frontend-parity MEMORY emitted C's `mov cx,[si]; add ax,cx`.
     let (ax, cx) = (rl(RegId::AX, 2), rl(RegId::CX, 2));
-    let delta = Loc::Mem(mem(Some(Addr { base: RegId::SI, ..Addr::new(Space::Segment, 0) }), 2, RegId::SI, 0, 0));
+    let delta =
+        Loc::Mem(mem(Some(Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Segment, 0) }), 2, RegId::SI, 0, 0));
     let load = plain(0, Operation::Move, "mov", vec![cx.clone()], vec![delta.clone()], None);
     let addition = plain(1, Operation::Binary, "add", vec![ax.clone()], vec![ax.clone(), cx], None);
     let finish = Arc::new(Insn {
@@ -2904,7 +2908,8 @@ fn test_one_use_compare_folds_before_a_complete_return() {
 fn test_dead_compare_load_may_overwrite_its_own_address_register() {
     // lru_use's bnext test used DI for both the pointer and loaded value.
     let di = rl(RegId::DI, 2);
-    let cell = Loc::Mem(mem(Some(Addr { base: RegId::DI, ..Addr::new(Space::Segment, 0) }), 2, RegId::DI, 0, 2));
+    let cell =
+        Loc::Mem(mem(Some(Addr { base: (RegId::DI).iced(), ..Addr::new(Space::Segment, 0) }), 2, RegId::DI, 0, 2));
     let load = plain(1, Operation::Move, "mov", vec![di.clone()], vec![cell.clone()], None);
     let compare = plain(2, Operation::Compare, "cmp", vec![], vec![di.clone(), im(0, 2)], None);
     let overwrite = plain(3, Operation::Move, "mov", vec![di], vec![rl(RegId::AX, 2)], None);
@@ -2931,7 +2936,7 @@ fn test_memory_round_trip_does_not_cross_a_dependent_or_writing_instruction() {
         let through = if hazard == "changes address" { RegId::BX } else { RegId::BP };
         let position = Loc::Mem(mem(
             Some(if through == RegId::BX {
-                Addr { base: through, ..Addr::new(Space::Segment, 0) }
+                Addr { base: through.iced(), ..Addr::new(Space::Segment, 0) }
             } else {
                 Addr::new(Space::Frame, -4)
             }),
@@ -4270,7 +4275,7 @@ fn test_a_copy_is_forwarded_into_the_address_that_reads_it() {
     let cell = Mem {
         index_through: RegId::ESI,
         index: Some(Held { value: 32, width: 4 }),
-        ..mem(Some(Addr { segment: RegId::SS, ..Addr::new(Space::Literal, -1032) }), 1, RegId::EBP, 0, 2)
+        ..mem(Some(Addr { segment: (RegId::SS).iced(), ..Addr::new(Space::Literal, -1032) }), 1, RegId::EBP, 0, 2)
     };
     let store = Arc::new(insn(
         1,
@@ -4306,7 +4311,7 @@ fn test_a_copy_is_not_forwarded_past_a_write_of_its_source() {
     let cell = Mem {
         index_through: RegId::ESI,
         index: Some(Held { value: 32, width: 4 }),
-        ..mem(Some(Addr { segment: RegId::SS, ..Addr::new(Space::Literal, -1032) }), 1, RegId::EBP, 0, 2)
+        ..mem(Some(Addr { segment: (RegId::SS).iced(), ..Addr::new(Space::Literal, -1032) }), 1, RegId::EBP, 0, 2)
     };
     let store = Arc::new(insn(
         2,

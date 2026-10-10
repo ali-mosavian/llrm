@@ -408,7 +408,10 @@ pub fn sunk(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register::{AX, BX, DI, DX};
+    const AX: RegId = RegId::AX;
+    const BX: RegId = RegId::BX;
+    const DI: RegId = RegId::DI;
+    const DX: RegId = RegId::DX;
     use llrm_lir::registers::RegId;
 
     use super::sunk;
@@ -460,7 +463,7 @@ mod tests {
         exit_reads: bool,
         body_has_two_predecessors: bool,
     ) -> LirBody {
-        let cmp = insn(2, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None);
+        let cmp = insn(2, Operation::Compare, "cmp", vec![], vec![r(RegId::from(AX)), r(RegId::from(BX))], None);
         let branch = insn(3, Operation::Branch, "jl", vec![], vec![], Some(9));
         // A generated return reads only what it requires and the epilogue: DI
         // is not among them.
@@ -468,7 +471,16 @@ mod tests {
             reads_complete: true,
             ..Arc::unwrap_or_clone(insn(5, Operation::Return, "ret", vec![], vec![], None))
         });
-        let use_di = |at| insn(at, Operation::Binary, "add", vec![r(AX)], vec![r(AX), r(DI)], None);
+        let use_di = |at| {
+            insn(
+                at,
+                Operation::Binary,
+                "add",
+                vec![r(RegId::from(AX))],
+                vec![r(RegId::from(AX)), r(RegId::from(DI))],
+                None,
+            )
+        };
         let mut blocks = vec![
             block(1, vec![copy(1, DI, DX), cmp, branch], vec![9, 5]),
             block(5, if exit_reads { vec![use_di(5), ret] } else { vec![ret] }, vec![]),
@@ -476,7 +488,7 @@ mod tests {
         let tail = if body_has_two_predecessors {
             vec![
                 use_di(9),
-                insn(10, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None),
+                insn(10, Operation::Compare, "cmp", vec![], vec![r(RegId::from(AX)), r(RegId::from(BX))], None),
                 insn(11, Operation::Branch, "jl", vec![], vec![], Some(9)),
             ]
         } else {
@@ -527,7 +539,7 @@ mod tests {
     /// 0.3% of compile time).
     #[test]
     fn test_a_copy_goes_on_through_a_second_branch_in_one_pass() {
-        let cmp = |at| insn(at, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None);
+        let cmp = |at| insn(at, Operation::Compare, "cmp", vec![], vec![r(RegId::from(AX)), r(RegId::from(BX))], None);
         let branch = |at, target| insn(at, Operation::Branch, "jl", vec![], vec![], Some(target));
         let ret = Arc::new(Insn {
             reads_complete: true,
@@ -540,7 +552,14 @@ mod tests {
                 block(
                     9,
                     vec![
-                        insn(9, Operation::Binary, "add", vec![r(AX)], vec![r(AX), r(DI)], None),
+                        insn(
+                            9,
+                            Operation::Binary,
+                            "add",
+                            vec![r(RegId::from(AX))],
+                            vec![r(RegId::from(AX)), r(RegId::from(DI))],
+                            None,
+                        ),
                         insn(10, Operation::Jump, "jmp", vec![], vec![], Some(5)),
                     ],
                     vec![5],
@@ -565,8 +584,8 @@ mod tests {
                 space: Space::Frame,
                 disp: -4 * (k + 1),
                 index: -(k + 1),
-                base: RegId::None,
-                segment: RegId::None,
+                base: (RegId::None).iced(),
+                segment: (RegId::None).iced(),
             };
             crate::model::ir::Mem { through: RegId::BP, ..crate::model::ir::Mem::new(Some(addr), 2) }
         };
@@ -575,15 +594,33 @@ mod tests {
             let (head, arm, next) = (10 * k + 1, 10 * k + 5, 10 * (k + 1) + 1);
             let store = Arc::new(Insn {
                 spill_store: true,
-                ..Arc::unwrap_or_clone(insn(head, Operation::Move, "mov", vec![Loc::Mem(cell(k))], vec![r(AX)], None))
+                ..Arc::unwrap_or_clone(insn(
+                    head,
+                    Operation::Move,
+                    "mov",
+                    vec![Loc::Mem(cell(k))],
+                    vec![r(RegId::from(AX))],
+                    None,
+                ))
             });
             let branch = insn(head + 2, Operation::Branch, "jl", vec![], vec![], Some(arm));
             blocks.push(block(
                 head,
-                vec![store, insn(head + 1, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None), branch],
+                vec![
+                    store,
+                    insn(
+                        head + 1,
+                        Operation::Compare,
+                        "cmp",
+                        vec![],
+                        vec![r(RegId::from(AX)), r(RegId::from(BX))],
+                        None,
+                    ),
+                    branch,
+                ],
                 vec![arm, next],
             ));
-            let read = insn(arm, Operation::Move, "mov", vec![r(DX)], vec![Loc::Mem(cell(k))], None);
+            let read = insn(arm, Operation::Move, "mov", vec![r(RegId::from(DX))], vec![Loc::Mem(cell(k))], None);
             blocks.push(block(
                 arm,
                 vec![read, insn(arm + 1, Operation::Jump, "jmp", vec![], vec![], Some(next))],

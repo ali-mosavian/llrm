@@ -91,7 +91,7 @@ impl LIRTransform for LoopSlots {
 fn slot(mem: &Mem) -> Option<i64> {
     let addr = mem.addr?;
     (addr.space == Space::Frame
-        && addr.base == RegId::None
+        && addr.base == (RegId::None).iced()
         && mem.through == ir::FRAME
         && mem.base.is_none()
         && mem.index.is_none()

@@ -379,15 +379,15 @@ mod tests {
                 match insn.mnemonic() {
                     Mnemonic::Mov => {
                         let value = if insn.op1_kind() == OpKind::Register {
-                            state[&insn.op1_register()]
+                            state[&RegId::from(insn.op1_register())]
                         } else {
                             insn.immediate(1)
                         };
-                        state.insert(into, value & MASK);
+                        state.insert(RegId::from(into), value & MASK);
                     }
                     Mnemonic::Add => {
-                        let value = (state[&into] + state[&insn.op1_register()]) & MASK;
-                        state.insert(into, value);
+                        let value = (state[&RegId::from(into)] + state[&RegId::from(insn.op1_register())]) & MASK;
+                        state.insert(RegId::from(into), value);
                     }
                     Mnemonic::Cdq => {
                         let value = if state[&RegId::EAX] & 0x8000_0000 != 0 { MASK } else { 0 };
@@ -399,7 +399,7 @@ mod tests {
                         };
                         let dividend =
                             signed(i128::from(state[&RegId::EDX]) << 32 | i128::from(state[&RegId::EAX]), 64);
-                        let divisor = signed(i128::from(state[&into]), 32);
+                        let divisor = signed(i128::from(state[&RegId::from(into)]), 32);
                         assert!(divisor != 0, "divide by zero");
                         let sign = if (dividend < 0) == (divisor < 0) { 1 } else { -1 };
                         let quotient = dividend.abs() / divisor.abs() * sign;

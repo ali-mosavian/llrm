@@ -61,8 +61,12 @@ fn by_decoding(
             reads.extend(read);
             writes.extend(_flag_lanes(insn.rflags_modified()));
         }
-        let used: Vec<(RegId, OpAccess)> =
-            info.info(insn).used_registers().iter().map(|access| (access.register(), access.access())).collect();
+        let used: Vec<(RegId, OpAccess)> = info
+            .info(insn)
+            .used_registers()
+            .iter()
+            .map(|access| (RegId::from(access.register()), access.access()))
+            .collect();
         for (register, access) in &used {
             if READS.contains(access) {
                 let read: Lanes = _lanes(regs, *register).minus(&writes);
@@ -94,7 +98,7 @@ fn moved_by_decoding(
 ) -> Option<(Vec<(llrm_core::backend::lanes::Lane, llrm_core::backend::lanes::Lane)>, Lanes)> {
     let instructions = decoded(bits, what)?;
     let [insn] = instructions.as_slice() else { return None };
-    let register = |index: u32| (insn.op_kind(index) == OpKind::Register).then(|| insn.op_register(index));
+    let register = |index: u32| (insn.op_kind(index) == OpKind::Register).then(|| RegId::from(insn.op_register(index)));
     let shift = match insn.mnemonic() {
         Mnemonic::Shl | Mnemonic::Shr if insn.op_count() == 2 && insn.op1_kind() == OpKind::Immediate8 => {
             (insn.mnemonic() == Mnemonic::Shl, register(0), None, insn.immediate8())
@@ -166,7 +170,13 @@ fn operand(
         'm' => Some(Loc::Mem(match pick % 2 {
             0 => Mem { through: base, ..Mem::new(None, bytes) },
             _ => Mem {
-                addr: Some(Addr { space: Space::Frame, disp: -4, index: 0, base: RegId::None, segment: RegId::None }),
+                addr: Some(Addr {
+                    space: Space::Frame,
+                    disp: -4,
+                    index: 0,
+                    base: (RegId::None).iced(),
+                    segment: (RegId::None).iced(),
+                }),
                 through: RegId::None,
                 ..Mem::new(None, bytes)
             },
@@ -312,7 +322,13 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
     let imm = Loc::Imm(Imm {
         value: 0,
         width: 2,
-        address: Some(Addr { space: Space::Group, disp: 0, index: 0, base: RegId::None, segment: RegId::None }),
+        address: Some(Addr {
+            space: Space::Group,
+            disp: 0,
+            index: 0,
+            base: (RegId::None).iced(),
+            segment: (RegId::None).iced(),
+        }),
     });
     let step = |op, name: &str, dests, sources| Semantics {
         op,

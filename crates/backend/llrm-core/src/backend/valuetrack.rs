@@ -157,11 +157,11 @@ fn cell(
     bytes: u32,
     regs: &Regs,
 ) -> Option<Held> {
-    if one.memory_index() != RegId::None || one.memory_base() == RegId::None {
+    if one.memory_index() != (RegId::None).iced() || one.memory_base() == (RegId::None).iced() {
         return None;
     }
     let row = rows.iter().rev().find(|row| row.offset <= at)?;
-    let base = regs.root(one.memory_base());
+    let base = regs.root(RegId::from(one.memory_base()));
     if base != row.cfa_register {
         return None;
     }
@@ -192,13 +192,17 @@ fn step(
             (OpKind::Register, OpKind::Register | OpKind::Memory) | (OpKind::Memory, OpKind::Register)
         );
     if copy {
-        let (to, from) = (size(one.op0_kind(), one.op0_register()), size(one.op1_kind(), one.op1_register()));
+        let (to, from) = (
+            size(one.op0_kind(), RegId::from(one.op0_register())),
+            size(one.op1_kind(), RegId::from(one.op1_register())),
+        );
         let place = |kind: OpKind, register: RegId, bytes: u32| match kind {
             OpKind::Register => Some(Held::Register(register)),
             _ => cell(one, rows, at, bias, bytes, regs),
         };
-        let source = place(one.op1_kind(), one.op1_register(), from).and_then(|held| state.holds.get(&held).copied());
-        let target = place(one.op0_kind(), one.op0_register(), to);
+        let source = place(one.op1_kind(), RegId::from(one.op1_register()), from)
+            .and_then(|held| state.holds.get(&held).copied());
+        let target = place(one.op0_kind(), RegId::from(one.op0_register()), to);
         match (target, source) {
             (Some(target), Some(value)) if to == from => state.set(target, value, regs),
             (Some(target), _) => state.lose(&target, regs),
@@ -218,7 +222,7 @@ fn step(
             register.access(),
             OpAccess::Write | OpAccess::CondWrite | OpAccess::ReadWrite | OpAccess::ReadCondWrite
         ) {
-            state.lose(&Held::Register(register.register()), regs);
+            state.lose(&Held::Register(RegId::from(register.register())), regs);
         }
     }
     for memory in used.used_memory() {
@@ -355,7 +359,9 @@ pub fn tracked(
         let mut found = false;
         while scan.can_decode() {
             let one = scan.decode();
-            if one.mnemonic() == Mnemonic::Lea && [&regs.frame, &regs.stack].contains(&&regs.root(one.memory_base())) {
+            if one.mnemonic() == Mnemonic::Lea
+                && [&regs.frame, &regs.stack].contains(&&regs.root(RegId::from(one.memory_base())))
+            {
                 found = true;
                 break;
             }

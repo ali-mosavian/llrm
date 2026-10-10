@@ -1028,7 +1028,7 @@ pub fn explicit_selectors(
                 let addr = cell.addr.expect("a far cell has an address");
                 return Loc::Mem(Mem {
                     selector: None,
-                    addr: Some(Addr { segment: regs.far(), ..addr }),
+                    addr: Some(Addr { segment: regs.far().iced(), ..addr }),
                     ..cell.clone()
                 });
             }
@@ -3863,7 +3863,7 @@ fn _settled(
                 return Err(Unplaced(format!("selector value#{} has no register", selector.value)));
             };
             let addr = cell.addr.expect("a selected cell has an address");
-            place = Loc::Mem(Mem { addr: Some(Addr { segment: *register, ..addr }), ..cell.clone() });
+            place = Loc::Mem(Mem { addr: Some(Addr { segment: (*register).iced(), ..addr }), ..cell.clone() });
         }
     }
     if let Loc::Mem(cell) = &place {
@@ -4469,7 +4469,7 @@ mod tests {
     }
 
     fn _based_cell() -> Insn {
-        let r#where = Addr { base: RegId::SI, ..Addr::new(Space::Segment, 0x10) };
+        let r#where = Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Segment, 0x10) };
         let cell = Mem { disp_width: 2, base: Some(Held { value: 21, width: 2 }), ..Mem::new(Some(r#where), 2) };
         let what = semantics(Operation::Move, "mov", vec![held(30, 2)], vec![Loc::Mem(cell)]);
         Insn::new(0x100, Some((0x100, 0x104)), Some(what), vec![30], vec![21])
@@ -4525,7 +4525,7 @@ mod tests {
 
     #[test]
     fn test_a_based_cell_keeps_the_register_the_allocation_gave_its_base() {
-        let r#where = Addr { base: RegId::SI, ..Addr::new(Space::Literal, 0x2) };
+        let r#where = Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Literal, 0x2) };
         let cell =
             Mem { offset: 2, disp_width: 1, base: Some(Held { value: 17, width: 2 }), ..Mem::new(Some(r#where), 2) };
         let load = Insn::new(
@@ -5053,7 +5053,7 @@ mod tests {
             base: Some(Held { value: 2, width: 2 }),
             index: Some(Held { value: 3, width: 2 }),
             scale: 1,
-            ..Mem::new(Some(Addr { segment: RegId::ES, ..Addr::new(Space::Far, 0) }), 2)
+            ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let read = _load(4, 4, source, vec![1, 3]);
         let write = _instruction(

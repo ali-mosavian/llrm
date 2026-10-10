@@ -3,7 +3,7 @@
 //! width. The operands go in and come out in fixed registers, which the
 //! routine's description states.
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::asm::{self, Mode, Refusal};
 
@@ -14,14 +14,14 @@ pub struct Divide {
     pub code: Vec<u8>,
     /// The registers it reads: the dividend's low and high dwords, the
     /// divisor's low and, where the divisor is wider than a dword, high.
-    pub dividend: [Register; 2],
-    pub divisor: [Register; 2],
+    pub dividend: [RegId; 2],
+    pub divisor: [RegId; 2],
     pub wide_divisor: bool,
     /// Where the quotient's and the remainder's low and high dwords are left.
-    pub quotient: [Register; 2],
-    pub remainder: [Register; 2],
+    pub quotient: [RegId; 2],
+    pub remainder: [RegId; 2],
     /// The registers it uses, and what it changes: those and the flags.
-    pub clobbers: [Register; 4],
+    pub clobbers: [RegId; 4],
 }
 
 const CHECK: &str = include_str!("helpers/check.asm");
@@ -61,12 +61,12 @@ pub fn divide(
     Ok(Divide {
         name,
         code: asm::assembled(&lines, mode)?,
-        dividend: [Register::EAX, Register::EDX],
-        divisor: [Register::EBX, Register::ECX],
+        dividend: [RegId::EAX, RegId::EDX],
+        divisor: [RegId::EBX, RegId::ECX],
         wide_divisor,
-        quotient: [Register::EAX, Register::EDX],
-        remainder: [Register::EBX, Register::ECX],
-        clobbers: [Register::EAX, Register::EBX, Register::ECX, Register::EDX],
+        quotient: [RegId::EAX, RegId::EDX],
+        remainder: [RegId::EBX, RegId::ECX],
+        clobbers: [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX],
     })
 }
 

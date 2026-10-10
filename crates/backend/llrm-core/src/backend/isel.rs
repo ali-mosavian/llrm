@@ -3951,7 +3951,7 @@ impl Selector<'_, '_, '_> {
                 index: Some(index),
                 scale,
                 ..Mem::new(
-                    Some(Addr { segment: regs.stack_segment_register(), ..Addr::new(Space::Literal, disp) }),
+                    Some(Addr { segment: regs.stack_segment_register().iced(), ..Addr::new(Space::Literal, disp) }),
                     width,
                 )
             },
@@ -3978,7 +3978,7 @@ impl Selector<'_, '_, '_> {
                 base: Some(base),
                 offset,
                 disp_width: 2,
-                ..Mem::new(Some(Addr { segment, ..Addr::new(Space::Literal, offset) }), width)
+                ..Mem::new(Some(Addr { segment: segment.iced(), ..Addr::new(Space::Literal, offset) }), width)
             },
             // An indexed cell's displacement is a literal, as a based cell's is
             // in addressforms.
@@ -3990,7 +3990,7 @@ impl Selector<'_, '_, '_> {
                 disp_width: 2,
                 ..Mem::new(
                     Some(Addr {
-                        segment: segment.unwrap_or(Addr::new(Space::Literal, offset).segment),
+                        segment: (segment.unwrap_or(RegId::from(Addr::new(Space::Literal, offset).segment))).iced(),
                         ..Addr::new(Space::Literal, offset)
                     }),
                     width,
@@ -4003,7 +4003,7 @@ impl Selector<'_, '_, '_> {
                 base,
                 index,
                 selector: Some(selector),
-                ..Mem::new(Some(Addr { segment: regs.far(), ..Addr::new(Space::Far, offset) }), width)
+                ..Mem::new(Some(Addr { segment: regs.far().iced(), ..Addr::new(Space::Far, offset) }), width)
             },
         }
     }

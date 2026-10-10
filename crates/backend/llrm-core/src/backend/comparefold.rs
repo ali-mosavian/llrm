@@ -210,7 +210,7 @@ mod tests {
             disp_width: 2,
             base: Some(Held { value: base, width: 2 }),
             selector: Some(Held { value: selector, width: 2 }),
-            ..Mem::new(Some(Addr { segment: RegId::ES, ..Addr::new(Space::Far, 0) }), 2)
+            ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources| Semantics {
             name: Some(name.to_owned()),

@@ -1203,7 +1203,7 @@ mod tests {
         // Port of tests/test_lir.py: `_settled` looked for a Held in
         // `Mem.through`, which is a register now, so a based cell kept the old
         // id.
-        let where_ = Addr { base: RegId::SI, ..Addr::new(Space::Segment, 0x10) };
+        let where_ = Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Segment, 0x10) };
         let cell = Mem {
             through: RegId::None,
             offset: 0,

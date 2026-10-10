@@ -213,12 +213,12 @@ fn _reached(cell: &Mem) -> Option<Addr> {
         return cell.addr;
     }
     let addr = cell.addr.expect("replace(None) raises");
-    let base = if addr.base != RegId::None {
+    let base = if addr.base != RegId::None.iced() {
         addr.base
     } else if cell.through != RegId::None {
-        cell.through
+        cell.through.iced()
     } else {
-        RegId::SI
+        RegId::SI.iced()
     };
     Some(Addr { base, ..addr })
 }

@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use iced_x86::{Code, Register};
+use iced_x86::Code;
 use llrm_x86_m16::machine::BUILT_IN;
 
 use super::*;
@@ -234,8 +234,8 @@ fn test_restore_idiom_is_recognised_not_split_into_opaques() {
     };
     assert_eq!(restore.pair, 0);
     assert_eq!((restore.at, restore.end), (1, 5));
-    assert_eq!(restore.effects.defs, Some(BTreeSet::from([Register::EAX, Register::EDX])));
-    assert_eq!(restore.effects.uses, Some(BTreeSet::from([Register::EAX, Register::EDX])));
+    assert_eq!(restore.effects.defs, Some(BTreeSet::from([RegId::EAX, RegId::EDX])));
+    assert_eq!(restore.effects.uses, Some(BTreeSet::from([RegId::EAX, RegId::EDX])));
     assert_eq!(restore.effects.flags_written, Flag::NONE);
     assert_eq!(emit(&found, &nodes), code);
 }
@@ -347,7 +347,7 @@ fn test_a_barrier_is_carried_rather_than_refusing_the_body_it_sits_in() {
     assert!(!modelled(port.semantics()));
     assert_eq!(nodes.iter().map(|node| modelled(node.semantics())).collect::<Vec<_>>(), [true, false, true]);
     assert_eq!(emit(&found, &nodes), code);
-    assert_eq!(pinned(port), Some(BTreeSet::from([Register::EAX])));
+    assert_eq!(pinned(port), Some(BTreeSet::from([RegId::EAX])));
     assert_eq!(pinned(&nodes[0]), Some(BTreeSet::new()));
     assert_eq!(port.effects().loads, *ANY_MEMORY);
     assert_eq!(port.effects().stores, *ANY_MEMORY);
