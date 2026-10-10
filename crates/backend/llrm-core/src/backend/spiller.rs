@@ -1530,14 +1530,77 @@ enum Names<'a> {
     Insn(&'a Insn),
 }
 
+/// The homes an instruction names, by place among the homes, as many as it
+/// has room for: more, and it is asked of its cells.
+#[derive(Clone, Copy, Default)]
+struct Places {
+    count: u8,
+    place: [u32; Places::ROOM],
+}
+
+impl Places {
+    const ROOM: usize = 4;
+
+    fn push(
+        &mut self,
+        place: usize,
+    ) {
+        if let Some(slot) = self.place.get_mut(usize::from(self.count)) {
+            *slot = place as u32;
+        }
+        self.count = self.count.saturating_add(1);
+    }
+
+    /// Whether it may name one of the `wanted` homes (by place); true where it
+    /// names more than it has room for.
+    fn may_name(
+        &self,
+        wanted: &[bool],
+    ) -> bool {
+        usize::from(self.count) > Self::ROOM
+            || self.place[..usize::from(self.count)].iter().any(|place| wanted[*place as usize])
+    }
+}
+
 /// An instruction that names a home.
 struct Named<'a> {
     block: usize,
     at: usize,
     names: Names<'a>,
+    places: Places,
 }
 
 impl Named<'_> {
+    /// `sets`, ascending and once, in lists of the caller's that are emptied
+    /// first.
+    fn sets_into(
+        &self,
+        homes: &[i64],
+        first: u32,
+        wanted: &dyn Fn(i64) -> bool,
+        defined: &mut Vec<u32>,
+        used: &mut Vec<u32>,
+    ) {
+        defined.clear();
+        used.clear();
+        match &self.names {
+            Names::Insn(one) => {
+                for (disp, _, defines) in frame_cells(one) {
+                    if !wanted(disp) {
+                        continue;
+                    }
+                    if let Ok(place) = homes.binary_search(&disp) {
+                        if defines { &mut *defined } else { &mut *used }.push(first + place as u32);
+                    }
+                }
+            }
+        }
+        for list in [defined, used] {
+            list.sort_unstable();
+            list.dedup();
+        }
+    }
+
     /// The values it defines and reads among the homes `wanted` allows (the
     /// pseudo-value of a home is `first` and its place among `homes`).
     fn sets(
@@ -1582,14 +1645,19 @@ fn homes_kept(
         // among what they name: the others' intervals are not asked.
         let mut disps: Vec<i64> = wanted.iter().map(|home| homes[*home]).collect();
         disps.sort_unstable();
-        let tuples: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = named
-            .iter()
-            .filter_map(|one| {
-                let (defined, used) = one.sets(homes, first, &|disp| disps.binary_search(&disp).is_ok());
-                (!defined.is_empty() || !used.is_empty()).then_some((one.block, one.at, defined, used))
-            })
-            .collect();
-        crate::analysis::occurrences::Occurrences::planned(&tuples).ranges(body, index, &values)
+        let mut asked = vec![false; homes.len()];
+        for home in wanted {
+            asked[*home] = true;
+        }
+        let mut plan = crate::analysis::occurrences::Occurrences::default();
+        let (mut defined, mut used): (Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new());
+        for one in named.iter().filter(|one| one.places.may_name(&asked)) {
+            one.sets_into(homes, first, &|disp| disps.binary_search(&disp).is_ok(), &mut defined, &mut used);
+            if !defined.is_empty() || !used.is_empty() {
+                plan.plan(one.block, one.at, &defined, &used);
+            }
+        }
+        plan.ranges(body, index, &values)
     };
     let kept = body.facts.0.stash(|held: &mut HomesHeld| {
         held.0
@@ -1732,9 +1800,11 @@ fn _existing_colors_by(
             for &at in postings.frames(block_index) {
                 let one = &block.insns[at as usize];
                 let mut names = false;
+                let mut places = Places::default();
                 for (disp, width, _) in frame_cells(one) {
-                    if let Some(had) = capacities.get_mut(&disp) {
+                    if let Some((place, _, had)) = capacities.get_full_mut(&disp) {
                         *had = (*had).max(width).max(WORD);
+                        places.push(place);
                         names = true;
                     } else if frame_spills(disp) {
                         unknown = true;
@@ -1746,7 +1816,7 @@ fn _existing_colors_by(
                 // A value changes whether an instruction is a mark, and with it
                 // the slots after it: it is one made of nothing.
                 flipped |= names && one.is_meta();
-                named.push(Named { block: block_index, at: at as usize, names: Names::Insn(one) });
+                named.push(Named { block: block_index, at: at as usize, names: Names::Insn(one), places });
             }
         }
     });
@@ -6072,6 +6142,7 @@ mod tests {
                     block,
                     at,
                     names: super::Names::Insn(&body.blocks[block].insns[at]),
+                    places: super::Places { count: u8::MAX, ..Default::default() },
                 })
                 .collect()
         }
