@@ -765,3 +765,21 @@ fn nib_in_elf_keeps_the_locals_that_live_in_frame_cells() {
         assert!(text.contains(&format!("DW_AT_name\t(\"{name}\")")), "no {name}:\n{text}");
     }
 }
+
+/// CodeView 4 in a 32-bit OMF object left out every local of a function that
+/// keeps no frame register (`sum` of tests/fixtures/matrix/known.c): its
+/// BP-relative record has no EBP to be relative to, and wdump/jwlink images
+/// of -m32 programs showed no locals. The stack pointer is the same distance
+/// from the frame address over the whole body, so a register-relative record
+/// names the cell.
+#[test]
+fn cv4_names_a_local_of_a_function_without_a_frame_register_off_the_stack_pointer() {
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("known.obj");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");
+    let made = compile(&source, &["-m32", "-O0", "-g", "-fobject-format=omf"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
+    let shape = llrm_core::objectfile::cv4info::shape(&records);
+    assert!(shape.iter().any(|one| one.starts_with("REGREL add.sum:")), "{shape:#?}");
+}
