@@ -2781,10 +2781,7 @@ fn extended_constant(
         return None;
     }
     // A byte of the high half (AH) is not the low lane of its register.
-    if matches!(
-        source.register,
-        iced_x86::Register::AH | iced_x86::Register::BH | iced_x86::Register::CH | iced_x86::Register::DH
-    ) {
+    if regs.named(full32(source.register), i64::from(source.width)) != source.register {
         return None;
     }
     let value = held

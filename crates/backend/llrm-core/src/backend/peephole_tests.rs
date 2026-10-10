@@ -2475,7 +2475,8 @@ fn test_constant_knowledge_is_local_and_invalidated() {
         let result = constants(&body("constants", 0, blocks));
         assert_eq!(
             result.insns().iter().filter(|one| one.what.as_ref() == Some(&what)).count(),
-            if ["none", "extend"].contains(&interruption) { 1 } else { 2 },
+            // A movsx of the held constant is that constant again, so the later copy is redundant.
+            if ["none", "extend", "extend_write"].contains(&interruption) { 1 } else { 2 },
             "{interruption}"
         );
     }
