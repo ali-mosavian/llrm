@@ -13,5 +13,6 @@ llrm-x86 = { workspace = true }
 iced-x86 = { workspace = true }
 
 [build-dependencies]
+llrm-iselgen = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-target = { workspace = true }
