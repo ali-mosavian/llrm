@@ -702,6 +702,16 @@ impl<K: Dense, V: Clone, L: Link> Extend<(K, V)> for ShareMap<K, V, L> {
     }
 }
 
+impl<K: Dense, V, L: Link> std::ops::Index<&K> for ShareMap<K, V, L> {
+    type Output = V;
+    fn index(
+        &self,
+        key: &K,
+    ) -> &V {
+        self.get(key).expect("no entry for the key")
+    }
+}
+
 impl<K: Dense, V: PartialEq, L: Link> PartialEq for ShareMap<K, V, L> {
     fn eq(
         &self,

@@ -239,6 +239,8 @@ impl Flags {
                 (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 5 })
             }
             "-gdwarf-4" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 4 }),
+            "-gdwarf-3" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 3 }),
+            "-gdwarf-2" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 2 }),
             "-gtd" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::TurboDebugger),
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
@@ -386,7 +388,12 @@ impl Flags {
         arch: std::rc::Rc<dyn llrm_target::Target>,
         selection: &'static crate::backend::isel::Compiled,
     ) -> super::Options {
+        // The object format the target writes: what the debug writer is asked
+        // about (frame cells, ranges) is that writer's, whichever frontend it
+        // is.
+        let object_format = self.format(&*arch).map_or("omf", |format| format.name());
         super::Options {
+            object_format,
             debug_format: self.debug_format,
             pipeline: self.pipeline(),
             stack_usage: self.stack_usage,
@@ -395,6 +402,21 @@ impl Flags {
             ..super::Options::new(machine, arch, selection)
         }
     }
+}
+
+/// Writes `bytes` to `path`, or to standard output where `path` is `-`, as
+/// gcc's `-o -` does.
+pub fn write_output(
+    path: &std::path::Path,
+    bytes: impl AsRef<[u8]>,
+) -> std::io::Result<()> {
+    if path == std::path::Path::new("-") {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        out.write_all(bytes.as_ref())?;
+        return out.flush();
+    }
+    std::fs::write(path, bytes)
 }
 
 #[cfg(test)]

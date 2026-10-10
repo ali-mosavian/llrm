@@ -210,6 +210,8 @@ pub struct OperationCosts {
     /// released after it.
     pub float_release: i64,
     pub extend: i64,
+    /// A comparison held as a value (`setcc`), before it is extended.
+    pub set: i64,
     pub fill: i64,
     pub fill_cell: i64,
     /// `rep movs` as a copy sets it up (ES, the two addresses, the count) and
@@ -296,6 +298,7 @@ impl Default for OperationCosts {
             float_store: 1,
             float_release: 0,
             extend: 1,
+            set: 1,
             fill: 1,
             fill_cell: 1,
             copy: 1,

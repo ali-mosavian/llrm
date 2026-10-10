@@ -460,6 +460,7 @@ name = "llrm-omf"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-dwarf",
  "llrm-object",
  "llrm-support",
 ]
@@ -485,6 +486,7 @@ dependencies = [
  "llrm-core",
  "llrm-driver",
  "llrm-mir",
+ "llrm-object",
  "llrm-support",
  "llrm-transforms",
  "llrm-x86-m16",
@@ -592,6 +594,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-iselgen",
  "llrm-lir",
  "llrm-mir",
  "llrm-support",
@@ -620,6 +623,7 @@ name = "llrm-x86-m32"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-iselgen",
  "llrm-lir",
  "llrm-mir",
  "llrm-target",

@@ -102,6 +102,15 @@ impl Buf {
         self.u32(0);
     }
 
+    /// A 2-byte segment selector of section `section`.
+    pub fn segment(
+        &mut self,
+        section: usize,
+    ) {
+        self.relocs.push(crate::segment_reloc(self.bytes.len(), section));
+        self.u16(0);
+    }
+
     /// An address field of `width` bytes: `offset` into the section `symbol` is
     /// at `symbol_offset`.
     pub fn address(

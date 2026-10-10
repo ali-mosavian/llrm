@@ -384,7 +384,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
 
 
 def code_bytes(prog, variant):
-    """Size of the kernel's object code: the CODE-class segments (OMF) or .text (ELF), like tools/sizes.py."""
+    """Size of the kernel's code: the CODE-class segments (OMF) or .text (ELF) of its object, like tools/sizes.py, and for
+    gcc and clang the runtime members they pulled in, so that a divide they send to libgcc is counted and not left out."""
     if variant in OMF_VARIANTS:
         data = (OUT / "o" / f"{prog}.{variant}.obj").read_bytes()
         lnames, classes, sizes = [""], [], []
@@ -400,7 +401,20 @@ def code_bytes(prog, variant):
                 sizes.append(int.from_bytes(body[1:5], "little")); classes.append(lnames[body[6]])
         return sum(s for s, c in zip(sizes, classes) if c.endswith("CODE"))
     out = subprocess.run(["size", "-A", str(OUT / "b" / f"{prog}.{variant}.o")], capture_output=True, text=True).stdout
-    return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith(".text"))
+    return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith(".text")) + archive_code(prog, variant)
+
+
+def archive_code(prog, variant):
+    """The code of the archive members the link pulled in (libgcc's i64 divide), from the linker's map: runtime the program runs,
+    and no padding between sections."""
+    import re
+    path = OUT / "b" / f"{prog}.{variant}.map"
+    if not path.is_file():
+        return 0
+    total = 0
+    for match in re.finditer(r"^ (\.text\S*)\s*\n?\s+0x[0-9a-f]+\s+(0x[0-9a-f]+)\s+(\S+\.a\([^)]*\))", path.read_text(), re.M):
+        total += int(match.group(2), 16)
+    return total
 
 
 def main():

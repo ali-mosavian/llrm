@@ -150,6 +150,8 @@ fn main() -> ExitCode {
             runtime_frames,
             error_lines,
             segment_bytes,
+            // This is BC's command line: its /Zi writes BC's layout.
+            bc_codeview: true,
         },
         debug,
         syntax,

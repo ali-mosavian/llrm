@@ -779,6 +779,8 @@ pub fn selected_with<'c>(
         module,
         function,
         arch,
+        promote: arch.layout().promote,
+        in_cells: llrm_mir::dense::IdSet::new(),
         regs: Regs(arch.registers()),
         callee_facts,
         spaces: arch.layout().spaces.roles,
@@ -1262,6 +1264,12 @@ pub struct Selector<'m, 'c, 'p> {
     module: &'m Module,
     function: &'m Function,
     arch: &'c dyn llrm_target::Target,
+    /// The operations (`and.i16`) `arch` would rather run on the whole
+    /// register (its description's `promote`).
+    promote: Vec<String>,
+    /// The parameters the caller pushed: each is in its cell, which an
+    /// operation can read in place.
+    in_cells: llrm_mir::dense::IdSet<ValueId>,
     /// The register file of `arch`.
     regs: Regs,
     /// What the functions that take part leave different.
@@ -1552,7 +1560,10 @@ impl Selector<'_, '_, '_> {
                     self.unsealed = true;
                     continue;
                 }
-                Parameter::Cell(disp) => *disp,
+                Parameter::Cell(disp) => {
+                    self.in_cells.insert(parameter);
+                    *disp
+                }
                 // It arrives in registers: an instruction at entry delivers
                 // each value in its register.
                 Parameter::Registers(registers) => {

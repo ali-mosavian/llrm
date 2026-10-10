@@ -513,7 +513,51 @@ fn a_recomputation_that_comes_to_the_same_result_is_counted() {
     analyses.get::<Counted>(&module.context, &layout, function);
     let counts = crate::passes::recomputes();
     crate::passes::trace_recomputes(false);
-    assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "retarget", "same", 1)]);
+    assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "retarget", "same-untouched", 1)]);
+}
+
+/// Told apart: a rerun on a body no pass touched since the result was made
+/// (`same-untouched`: the pass invalidated and changed nothing), and one after
+/// an edit the analysis did not read (`same`). The census of x_life and
+/// nbody_fixed needed the split to say the first is under 0.5% of a compile.
+#[test]
+fn a_rerun_is_told_untouched_from_after_an_edit_that_changed_nothing_it_reads() {
+    let module = module();
+    let mut function = module.global(module.named("f").unwrap()).function().unwrap().clone();
+    let function = &mut function;
+    let layout = DataLayout::default();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    crate::passes::trace_recomputes(true);
+    analyses.get::<Counted>(&module.context, &layout, function);
+    let branch = function.terminator(function.entry().unwrap()).unwrap();
+    let at = function.instruction(branch).operands.len() - 2;
+    let target = function.instruction(branch).operands[at + 1];
+    function.set_operand(branch, at, target);
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    crate::passes::note_pass("edited");
+    analyses.get::<Counted>(&module.context, &layout, function);
+    let counts = crate::passes::recomputes();
+    crate::passes::trace_recomputes(false);
+    assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "edited", "same", 1)]);
+}
+
+/// A pass that changed what only one analysis reads gives up that one: hoist's
+/// motion invalidated everything (`none`) to let go of the dominated edges
+/// and `Bounded`, which hid the next stale-analysis bug and recomputed the
+/// rest.
+#[test]
+fn all_but_one_analysis_stand_where_a_pass_gives_up_that_one() {
+    let module = module();
+    let function = module.global(module.named("f").unwrap()).function().unwrap();
+    let layout = DataLayout::default();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    analyses.get::<Counted>(&module.context, &layout, function);
+    analyses.get::<Steady>(&module.context, &layout, function);
+    let given_up = PreservedAnalyses::all().except::<Counted>();
+    assert!(!given_up.are_all_preserved());
+    analyses.invalidate(function, &given_up);
+    assert!(analyses.cached::<Counted>().is_none(), "the analysis given up stands");
+    assert!(analyses.cached::<Steady>().is_some(), "an analysis not given up went with it");
 }
 
 /// A late pass: rewrites a branch, adds no memory operation.

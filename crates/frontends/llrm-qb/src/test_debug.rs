@@ -21,8 +21,10 @@ fn object(
         written(&directory, name, text.as_bytes());
     }
     let path = written(&directory, "debug.bas", source.as_bytes());
+    // These tests read BC's layout: its /Zi objects are their oracle.
     let frontend = qb_driver::Frontend {
         debug,
+        bc_codeview: true,
         includes: vec![directory.path().to_path_buf()],
         ..qb_driver::Frontend::new(dialect, runtime)
     };
@@ -106,8 +108,12 @@ fn a_local_is_where_its_code_keeps_it() {
     for runtime_frames in [true, false] {
         let directory = tempfile::tempdir().expect("creates a directory");
         let path = written(&directory, "local.bas", source.as_bytes());
-        let frontend =
-            qb_driver::Frontend { debug: true, runtime_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+        let frontend = qb_driver::Frontend {
+            debug: true,
+            bc_codeview: true,
+            runtime_frames,
+            ..qb_driver::Frontend::new("vbdos", "vbdos")
+        };
         let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
         // Not optimised: `k` is in its cell (promoted to a register it is left
         // out of CodeView 4, which names a cell).
@@ -145,4 +151,85 @@ fn a_name_is_spelled_as_its_whole_word() {
     let records = object("DECLARE SUB s ()\ns\nSUB s\nPRINT 1\nEND SUB\n", &[], "vbdos", "vbdos", true);
     let names: Vec<String> = cvinfo::parse(&records).procedures.into_iter().map(|one| one.name).collect();
     assert_eq!(names, ["s"]);
+}
+
+/// `-g` writes standard CodeView 4 unless `--bc-codeview` asks for BC's own
+/// layout: Open Watcom's cvpack and wdump, and a debugger that reads
+/// S_GPROC32/S_BPREL32, found BC's records invalid (`cvpack`: "invalid header
+/// detected in types") and no symbols in a linked image.
+#[test]
+fn g_writes_standard_codeview_4_by_default() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = "DECLARE SUB Square (n AS INTEGER)\nSquare 2\nEND\nSUB Square (n AS INTEGER)\nPRINT n * n\nEND SUB\n";
+    let path = written(&directory, "std.bas", source.as_bytes());
+    let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+    let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
+    let shape = llrm_core::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
+    assert!(shape.iter().any(|one| one.starts_with("PROC SQUARE ") || one.starts_with("PROC Square ")), "{shape:#?}");
+    assert!(shape.iter().any(|one| one.starts_with("PARAM ") && one.contains(".n:")), "{shape:#?}");
+}
+
+/// A STRING variable made `-g` refuse the whole compile ("CodeView 4: no
+/// primitive for BasicString"). CodeView 4 has no string; BASIC's near
+/// descriptor is a length and a pointer to the characters, so it is said as the
+/// struct it is.
+#[test]
+fn a_string_variable_is_a_struct_of_its_length_and_characters() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = "DECLARE SUB t ()\nt\nEND\nSUB t\nDIM s AS STRING\ns = \"hello\"\nPRINT s\nEND SUB\n";
+    let path = written(&directory, "str.bas", source.as_bytes());
+    let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+    let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+    // Not optimised: the variable is in its cell.
+    let codegen = llrm_core::driver::Options {
+        pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
+        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+    };
+    let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -g");
+    let shape = llrm_core::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
+    assert!(shape.iter().any(|one| one.starts_with("LOCAL T.S$:") && one.contains("struct STRING")), "{shape:#?}");
+}
+
+/// A variable of a type CodeView 4 cannot say (VBDOS's far string descriptor)
+/// is left out of the symbols; it did not refuse the compile, and the procedure
+/// stays.
+#[test]
+fn a_variable_of_a_type_codeview_cannot_say_is_left_out_not_a_refused_compile() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = "DECLARE SUB t ()\nt\nEND\nSUB t\nDIM s AS STRING\ns = \"hello\"\nPRINT s\nEND SUB\n";
+    let path = written(&directory, "far.bas", source.as_bytes());
+    let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+    let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+    let codegen = llrm_core::driver::Options {
+        pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
+        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+    };
+    let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -g");
+    let shape = llrm_core::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
+    assert!(shape.iter().any(|one| one.starts_with("PROC t ")), "{shape:#?}");
+    assert!(!shape.iter().any(|one| one.contains(".S$")), "{shape:#?}");
+}
+
+/// `-gdwarf` on a program with an array (GORILLA has them) refused the compile
+/// ("a BASIC array is its descriptor's: it has no DWARF type"). The array's
+/// variable is left out; the procedure and the other variables are written.
+#[test]
+fn dwarf_leaves_out_a_basic_array_it_cannot_say_and_compiles() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = "DECLARE SUB t ()\nt\nEND\nSUB t\nDIM grid(10) AS INTEGER\nDIM total AS INTEGER\ngrid(1) = 5\ntotal = grid(1)\nPRINT total\nEND SUB\n";
+    let path = written(&directory, "arr.bas", source.as_bytes());
+    let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+    let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+    let codegen = llrm_core::driver::Options {
+        pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
+        debug_format: llrm_object::debug::Format::Dwarf { version: 2 },
+        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+    };
+    let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -gdwarf");
+    let records = omf::parse(&bytes).expect("parses");
+    let text: String = records.iter().flat_map(|one| one.body.iter().map(|&byte| char::from(byte))).collect();
+    assert!(text.contains(".debug_info") && text.contains("TOTAL"), "the DWARF has the other variable");
+    assert!(!text.contains("GRID"), "the array is left out");
 }

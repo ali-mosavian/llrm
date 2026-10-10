@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--alternate-math]
-//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--include DIR]... [--dump DIR] [OPTIONS]
+//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them;
@@ -26,7 +26,7 @@ use super::qbstages;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -86,6 +86,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--own-frames" => {}
             "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,
+            "--bc-codeview" => frontend.bc_codeview = true,
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
@@ -126,11 +127,12 @@ pub fn main(argv: &[String]) -> i32 {
         if args.flags.assembly {
             let module = compile::assembled(&program, None, &args.codegen).map_err(|error| error.to_string())?;
             let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
-            std::fs::write(output, llrm_core::driver::basic::text(&module)?).map_err(|error| error.to_string())?;
+            llrm_core::driver::flags::write_output(&output, llrm_core::driver::basic::text(&module)?)
+                .map_err(|error| error.to_string())?;
         } else if let Some(output) = &args.flags.output {
             let bytes = compile::object_bytes(&program, &args.source, None, &args.codegen)
                 .map_err(|error| error.to_string())?;
-            llrm_core::support::debug::timed("write output", || std::fs::write(output, bytes))
+            llrm_core::support::debug::timed("write output", || llrm_core::driver::flags::write_output(output, bytes))
                 .map_err(|error| error.to_string())?;
         } else if args.dump.is_none() {
             print!("{}", codec::encode(&program, None).map_err(|error| error.0)?);

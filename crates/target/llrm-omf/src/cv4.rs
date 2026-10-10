@@ -116,6 +116,41 @@ struct Types<'a> {
 }
 
 impl Types<'_> {
+    /// `id`'s index, or none where CodeView 4 has no record for something in
+    /// it: what it makes then is undone, and the caller leaves the thing out
+    /// (gcc's way: what a debug format cannot say is left out, never a
+    /// refused compile).
+    fn tolerated(
+        &mut self,
+        id: TypeId,
+    ) -> Result<Option<u16>, Error> {
+        self.attempt(|types| types.of(id))
+    }
+
+    /// [`Types::tolerated`] of a procedure type.
+    fn tolerated_procedure(
+        &mut self,
+        id: TypeId,
+        far: bool,
+    ) -> Result<Option<u16>, Error> {
+        self.attempt(|types| types.procedure(id, far))
+    }
+
+    fn attempt(
+        &mut self,
+        made: impl FnOnce(&mut Self) -> Result<u16, Error>,
+    ) -> Result<Option<u16>, Error> {
+        let (records, index, procedures) = (self.records.clone(), self.index.clone(), self.procedures.clone());
+        match made(self) {
+            Ok(one) => Ok(Some(one)),
+            Err(Error::Unencodable(_)) => {
+                (self.records, self.index, self.procedures) = (records, index, procedures);
+                Ok(None)
+            }
+            Err(other) => Err(other),
+        }
+    }
+
     fn reserve(&mut self) -> Result<u16, Error> {
         let at = FIRST_TYPE + self.records.len();
         self.records.push(Vec::new());
@@ -209,6 +244,9 @@ impl Types<'_> {
             .ok_or_else(|| Error::Unencodable(format!("CodeView 4: type {id} is not in the model")))?
             .clone();
         let made = match one {
+            Type::Scalar(Scalar::BasicString { far }) | Type::Basic { scalar: Scalar::BasicString { far }, .. } => {
+                self.basic_string(id, far)?
+            }
             Type::Scalar(scalar) | Type::Basic { scalar, .. } => self.primitive(scalar)?,
             Type::Typedef { target, .. } => self.of(target)?,
             Type::Pointer { target, bytes, reach } => {
@@ -279,6 +317,46 @@ impl Types<'_> {
         };
         self.index[id] = Some(made);
         Ok(made)
+    }
+
+    /// BASIC's variable-length string as the near descriptor it is: a length
+    /// and a near pointer to the characters, 4 bytes in a 16-bit program and 8
+    /// in a 32-bit one.
+    fn basic_string(
+        &mut self,
+        id: TypeId,
+        far: bool,
+    ) -> Result<u16, Error> {
+        if far {
+            return refused("BASIC's far string descriptor");
+        }
+        let (length, bytes) = if self.wide { (0x75, 4) } else { (0x21, 2) };
+        let characters = self.pointer(0x70, bytes, Reach::Near, 0)?;
+        let at = self.reserve()?;
+        self.index[id] = Some(at);
+        let mut list = Vec::new();
+        for (kind, offset, name) in [(length, 0, "length"), (characters, i64::from(bytes), "data")] {
+            put16(&mut list, LF_MEMBER);
+            put16(&mut list, kind);
+            put16(&mut list, PUBLIC);
+            numeric(&mut list, offset);
+            pascal(&mut list, name)?;
+            align(&mut list);
+        }
+        let list = self.add(LF_FIELDLIST, &list)?;
+        let mut data = Vec::new();
+        put16(&mut data, 2);
+        put16(&mut data, list);
+        put16(&mut data, 0);
+        put16(&mut data, 0);
+        put16(&mut data, 0);
+        numeric(&mut data, i64::from(2 * bytes));
+        pascal(&mut data, "STRING")?;
+        while (4 + data.len()) % 4 != 0 {
+            data.push(pad(4 - (4 + data.len()) % 4));
+        }
+        self.fill(at, LF_STRUCTURE, &data);
+        Ok(at)
     }
 
     /// A record whose end is padded to the four bytes the next starts on.
@@ -518,9 +596,10 @@ impl Symbols<'_> {
         disp: i64,
     ) -> Result<(), Error> {
         let global = self.object.symbols[symbol].binding == Binding::Public;
+        let Some(made) = types.tolerated(variable.r#type)? else { return Ok(()) };
         let mut data = Vec::new();
         self.zero_address(&mut data);
-        put16(&mut data, types.of(variable.r#type)?);
+        put16(&mut data, made);
         pascal(&mut data, &variable.name)?;
         let code = match (self.wide, global) {
             (false, false) => 0x0101,
@@ -547,10 +626,28 @@ impl Symbols<'_> {
         // in a register only part of it (a register parameter, until
         // the body starts), and one the optimiser removed, have none.
         let Some(location) = variable.location.settled(scope) else { return Ok(()) };
+        // A type CodeView 4 cannot say leaves the variable out.
+        if types.tolerated(variable.r#type)?.is_none() {
+            return Ok(());
+        }
         match location {
             Location::Static { symbol, disp } => self.data(types, variable, *symbol, *disp),
             Location::Register(register) => self.register(types, variable, register),
-            Location::List(_) | Location::Constant(_) | Location::Pieces(_) | Location::Relative { .. } => Ok(()),
+            // Through the stack pointer: the register-relative record names it.
+            Location::Relative { register, disp } => {
+                let mut data = Vec::new();
+                if self.wide {
+                    put32(&mut data, narrow::<i32>(*disp, "a stack offset")? as u32);
+                } else {
+                    data.extend(narrow::<i16>(*disp, "a stack offset")?.to_le_bytes());
+                }
+                put16(&mut data, register_number(self.info, register)?);
+                put16(&mut data, types.of(variable.r#type)?);
+                pascal(&mut data, &variable.name)?;
+                self.record(if self.wide { 0x020C } else { 0x010C }, &data)?;
+                Ok(())
+            }
+            Location::List(_) | Location::Constant(_) | Location::Pieces(_) => Ok(()),
             Location::Frame { disp } => {
                 let mut data = Vec::new();
                 let frame = &self.info.frame_register;
@@ -657,7 +754,9 @@ impl Symbols<'_> {
         data.extend(end);
         let address = data.len();
         self.zero_address(&mut data);
-        put16(&mut data, types.procedure(function.r#type, function.far)?);
+        // T_NOTYPE where the procedure's type has a parameter or result
+        // CodeView 4 cannot say.
+        put16(&mut data, types.tolerated_procedure(function.r#type, function.far)?.unwrap_or(0));
         // Bit 2: it returns far.
         data.push(if function.far { 0x04 } else { 0x00 });
         pascal(&mut data, &function.name)?;
@@ -721,8 +820,9 @@ pub fn sections(
             }
             _ => continue,
         };
+        let Some(made) = types.tolerated(id)? else { continue };
         let mut data = Vec::new();
-        put16(&mut data, types.of(id)?);
+        put16(&mut data, made);
         pascal(&mut data, name)?;
         symbols.record(S_UDT, &data)?;
     }

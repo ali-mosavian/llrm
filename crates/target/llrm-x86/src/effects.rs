@@ -21,26 +21,7 @@ pub struct Effects {
     pub flags_written: u32,
 }
 
-/// What a row of `x86.instr` says of its instruction, as `build.rs` writes it
-/// out.
-#[derive(Clone, Copy, Debug)]
-pub struct Row {
-    pub reads: &'static [&'static str],
-    pub writes: &'static [&'static str],
-    /// What each dest, then each source, may be: `r`, `m`, `i`, `a` or `s`, as
-    /// `x86.instr` spells them.
-    pub kinds: &'static [&'static str],
-    /// The bits of the operation, where it has the one (`stosb`'s 8).
-    pub width: u32,
-    /// `(source, dest)`: the source is the dest's register, whatever the
-    /// semantics name.
-    pub ties: &'static [(usize, usize)],
-    /// `(is a dest, operand, root)`: the operand is that register when it is
-    /// one.
-    pub pins: &'static [(bool, usize, &'static str)],
-    pub flags_read: u32,
-    pub flags_written: u32,
-}
+pub use llrm_lir::registers::Row;
 
 /// What the table says of an instruction.
 #[derive(Clone, Debug, Eq, PartialEq)]
