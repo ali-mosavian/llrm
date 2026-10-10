@@ -7,8 +7,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
-
 use crate::backend::cpu::Profile;
 use crate::backend::peep::{self, walk::Facts};
 use crate::backend::{comparefold, farload, rmw, stepflags};
@@ -136,7 +134,7 @@ fn word_load(one: &Insn) -> Option<(u32, &ir::Mem)> {
                 && one.defines == [dest.value]
                 && !one.volatile
                 && plain(one)
-                && ir::root(source.through) != Register::ESP =>
+                && !crate::backend::registerinfo::is_stack(source.through) =>
         {
             Some((dest.value, source))
         }

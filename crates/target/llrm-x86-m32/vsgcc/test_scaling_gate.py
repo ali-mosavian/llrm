@@ -431,6 +431,19 @@ def test_an_entry_does_not_hold_up_the_summary_of_what_calls_through_a_pointer(t
     assert done.returncode == 0, done.stderr[-300:]
 
 
+def test_merging_blocks_does_not_build_the_graph_of_the_function_for_each_merge(tmp_path):
+    """callers(N) at -O2: `cfg::merged` (run by decide, rotate and lsr) built the graph of the whole function and its predecessor
+    sets, again after each merge it made: `mir decide` read 2N/N = 3.2, 3.65 (2.5 / 7.9 / 29.0 G at N=1024..4096). Each block
+    is asked of its own neighbours (the uses of its jump's target): 2.0, 2.1 (0.9 / 1.9 / 4.0 G). A step above 2.6 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 1024), ("2n", 2048)):
+        source = tmp_path / f"callers_{label}.c"
+        source.write_text("" if size == 0 else scaling.callers(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir decide", 0.0) - own["empty"].get("mir decide", 0.0) for label in ("n", "2n"))
+    assert big <= 2.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
 def test_summaries_keep_the_call_graph_when_a_body_calls_a_deeper_one(tmp_path):
     """chain(N) at -O2: each splice of a callee into its caller gives the caller calls to bodies below the callee, and the
     graph of all N bodies (components, order, readers) was made again for it: `summaries topology` read 23.8 / 107.5 Minstr at
@@ -439,3 +452,22 @@ def test_summaries_keep_the_call_graph_when_a_body_calls_a_deeper_one(tmp_path):
     source = tmp_path / "chain128.c"
     source.write_text(scaling.chain(128))
     assert gate.own_work(gate.levels_time.command("llrm", "O2", source)).get("summaries topology", 0.0) <= 30.0
+
+
+def test_interprocedural_own_work_stays_near_linear_on_the_chain_functions_and_callers_axes(tmp_path):
+    """The module-wide step did work per body that grew with the module: the declarations were compared global by global after each of
+    N bodies, the noreturn fixed point rounds took N bodies N times, and the no-recurse proof walked everything each function reaches
+    (`mir interprocedural` own, 2N/N on chain: 2.80). A doubling above 2.65, 2.15 and 2.2 fails (chain keeps what `analysis summaries`
+    leaves in it); functions and callers hold what the call graph's dense components gave them (2.01, 2.07)."""
+    limits = {"chain": (128, 2.65), "functions": (512, 2.15), "callers": (1024, 2.2)}
+    grown = {}
+    for axis, (n, limit) in limits.items():
+        own = {}
+        for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+            source = tmp_path / f"{axis}_{label}.c"
+            source.write_text("" if size == 0 else scaling.AXES[axis](size))
+            own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+        small, big = (own[label].get("mir interprocedural", 0.0) - own["empty"].get("mir interprocedural", 0.0) for label in ("n", "2n"))
+        if big > limit * small:
+            grown[axis] = f"{small:.0f} -> {big:.0f} Minstr"
+    assert not grown, grown

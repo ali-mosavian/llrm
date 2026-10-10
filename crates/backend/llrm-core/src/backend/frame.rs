@@ -273,7 +273,7 @@ impl Frame {
         let width: i64 = width.into();
         let disp = self.slot(value, width)?;
         Ok(Mem {
-            through: Register::BP,
+            through: crate::model::ir::FRAME,
             offset: 0,
             disp_width: 2,
             ..Mem::new(Some(Addr::new(Space::Frame, disp).in_slot(disp)), width as u32)

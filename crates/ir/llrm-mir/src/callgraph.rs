@@ -86,33 +86,50 @@ impl CallGraph {
 }
 
 impl CallGraph {
-    /// Whether `id` can never be entered again while it runs: it is in no cycle
-    /// of calls, and neither it nor what it reaches calls an unbounded
+    /// The functions that can never be entered again while they run: in no
+    /// cycle of calls, and neither they nor what they reach calls an unbounded
     /// pointer or a declaration that may call back (not `nocallback`, not
-    /// an intrinsic): LLVM's `addNoRecurseAttrs`.
+    /// an intrinsic): LLVM's `addNoRecurseAttrs`. Found for all at once, from
+    /// the functions that do reach one and the callers of those, not by
+    /// walking what each reaches (a chain of N reached N(N-1)/2).
     pub fn cannot_reenter(
         &self,
         module: &Module,
-        id: GlobalId,
-    ) -> bool {
-        if self.recursive(id) {
-            return false;
-        }
-        let mut over = self.reachable(id);
-        over.insert(id);
-        over.into_iter().all(|at| {
-            let global = module.global(at);
-            let Some(function) = global.function() else { return true };
-            if function.is_declaration() {
-                return Facts::of(&function.attrs).no_callback()
-                    || global
-                        .name
-                        .as_deref()
-                        .and_then(Intrinsic::named)
-                        .is_some_and(|one| !matches!(one, Intrinsic::Code | Intrinsic::Asm));
+    ) -> BTreeSet<GlobalId> {
+        let mut callers: BTreeMap<GlobalId, Vec<GlobalId>> = BTreeMap::new();
+        let mut nodes: BTreeSet<GlobalId> = self.callees.keys().copied().collect();
+        for (&caller, called) in &self.callees {
+            for &callee in called {
+                callers.entry(callee).or_default().push(caller);
+                nodes.insert(callee);
             }
-            !self.calls_unknown(at)
-        })
+        }
+        let mut reaching: BTreeSet<GlobalId> = nodes
+            .iter()
+            .copied()
+            .filter(|&at| {
+                let global = module.global(at);
+                let Some(function) = global.function() else { return false };
+                if function.is_declaration() {
+                    return !(Facts::of(&function.attrs).no_callback()
+                        || global
+                            .name
+                            .as_deref()
+                            .and_then(Intrinsic::named)
+                            .is_some_and(|one| !matches!(one, Intrinsic::Code | Intrinsic::Asm)));
+                }
+                self.calls_unknown(at)
+            })
+            .collect();
+        let mut work: Vec<GlobalId> = reaching.iter().copied().collect();
+        while let Some(at) = work.pop() {
+            for &caller in callers.get(&at).into_iter().flatten() {
+                if reaching.insert(caller) {
+                    work.push(caller);
+                }
+            }
+        }
+        self.callees.keys().copied().filter(|&id| !self.recursive(id) && !reaching.contains(&id)).collect()
     }
 }
 

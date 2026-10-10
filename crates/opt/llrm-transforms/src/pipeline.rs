@@ -495,7 +495,7 @@ fn rerun(
     };
     let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
     let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
-    analyses.invalidate(&preserved);
+    analyses.body_edited(id, &preserved);
     if declared.place(module)? > 0 {
         analyses.invalidate(&PreservedAnalyses::none());
     }

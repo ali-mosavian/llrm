@@ -5,7 +5,7 @@
 
 use std::sync::OnceLock;
 
-pub use llrm_lir::registers::{Entry, Info, RegId, class};
+pub use llrm_lir::registers::{Entry, FRAME, Info, RegId, STACK, class};
 
 static BOUND: OnceLock<&'static Info> = OnceLock::new();
 
@@ -70,6 +70,26 @@ pub fn view(
     info().view(root, bits)
 }
 
+/// Whether `register` is a view of the frame register's root.
+pub fn is_frame(register: RegId) -> bool {
+    info().is_frame(register)
+}
+
+/// Whether `register` is a view of the stack pointer's root.
+pub fn is_stack(register: RegId) -> bool {
+    info().is_stack(register)
+}
+
+/// The root of the frame register.
+pub fn frame_root() -> RegId {
+    info().frame
+}
+
+/// The root of the stack pointer.
+pub fn stack_root() -> RegId {
+    info().stack
+}
+
 /// Every integer register by `bytes` wide, by iced's number.
 pub fn entries() -> impl Iterator<Item = (RegId, &'static Entry)> {
     info().entries()
@@ -78,7 +98,6 @@ pub fn entries() -> impl Iterator<Item = (RegId, &'static Entry)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::target;
 
     /// The tables the allocator has always read (`WIDTHS`, `AT_WIDTH`, `LANES`,
     /// `NAMES`, `ir::root`) and the description's queries say the same of every
@@ -86,13 +105,16 @@ mod tests {
     /// are on their way out (row 11).
     #[test]
     fn the_description_says_what_the_hand_tables_say() {
-        for (register, width) in target::WIDTHS.iter() {
+        for (register, width) in llrm_x86::registers::WIDTHS.iter() {
             assert_eq!(bytes(*register), Some(*width), "{register:?}");
             assert_eq!(root(*register), crate::model::ir::root(*register), "{register:?}");
-            assert_eq!(lanes(*register), target::lanes(*register), "{register:?}");
-            assert_eq!(name(*register).map(str::to_owned), Some(target::name_of(*register)), "{register:?}");
+            assert_eq!(
+                name(*register).map(str::to_owned),
+                Some(format!("{register:?}").to_lowercase()),
+                "{register:?}"
+            );
         }
-        for (root_register, views) in target::AT_WIDTH.iter() {
+        for (root_register, views) in llrm_x86::registers::AT_WIDTH.iter() {
             for (width, register) in views {
                 assert_eq!(view(*root_register, *width as u32 * 8), Some(*register), "{root_register:?} at {width}");
             }
@@ -108,5 +130,18 @@ mod tests {
             assert_eq!(root(register), register);
         }
         assert_eq!((bytes(RegId::ST3), root(RegId::ST3)), (Some(10), RegId::ST3));
+    }
+
+    /// The stack and the frame are the roots the description gives those
+    /// classes, whatever view is asked about; no other register is either.
+    #[test]
+    fn the_stack_and_the_frame_are_the_roots_the_description_names() {
+        assert_eq!((stack_root(), frame_root()), (RegId::ESP, RegId::EBP));
+        assert!([RegId::SP, RegId::ESP].into_iter().all(is_stack));
+        assert!([RegId::BP, RegId::EBP].into_iter().all(is_frame));
+        for other in [RegId::AX, RegId::EAX, RegId::SI, RegId::DS, RegId::ST0] {
+            assert!(!is_stack(other) && !is_frame(other), "{other:?}");
+        }
+        assert_eq!((FRAME, STACK), (RegId::BP, RegId::SP));
     }
 }
