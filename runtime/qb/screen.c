@@ -76,6 +76,19 @@ void B_SCLS(int selector)
     cn_cls();
 }
 
+/* B$CSRL: CSRLIN, the cursor's 1-based row. */
+int B_CSRL(void)
+{
+    return cn_line() + 1;
+}
+
+/* B$FPOS: POS(x), the cursor's 1-based column; the argument is ignored. */
+int B_FPOS(int ignored)
+{
+    (void)ignored;
+    return cn_pos() + 1;
+}
+
 /* B$VWPT: VIEW PRINT top TO bottom; -1 and -1 for no bounds. */
 void B_VWPT(int top, int bottom)
 {
@@ -90,6 +103,8 @@ void B_WIDT(int columns, int rows)
 #pragma aux screen_color "@screen_color@2"
 #pragma aux screen_locate "@screen_locate@2"
 #pragma aux screen_mode "@screen_mode@2"
+#pragma aux B_CSRL "B$CSRL"
+#pragma aux B_FPOS "B$FPOS"
 #pragma aux B_SCLS "B$SCLS"
 #pragma aux B_VWPT "B$VWPT"
 #pragma aux B_WIDT "B$WIDT"

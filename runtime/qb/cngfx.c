@@ -102,6 +102,11 @@ static byte gfx_pos(void)
     return column;
 }
 
+static byte gfx_line(void)
+{
+    return row;
+}
+
 static byte gfx_width(void)
 {
     return columns;
@@ -159,7 +164,7 @@ static void gfx_size(int new_columns, int new_rows)
 
 static const Driver driver = {
     gfx_init, gfx_write, gfx_newline, gfx_erase, gfx_sync, gfx_cursor,
-    gfx_pos, gfx_width, gfx_color_set, gfx_locate, gfx_clear_text, gfx_view,
+    gfx_pos, gfx_line, gfx_width, gfx_color_set, gfx_locate, gfx_clear_text, gfx_view,
     gfx_size
 };
 

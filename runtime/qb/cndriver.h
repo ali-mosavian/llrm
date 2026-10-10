@@ -13,6 +13,7 @@ typedef struct Driver {
     void (*sync)(void);
     void (*cursor)(int visible);
     byte (*pos)(void);
+    byte (*line)(void);
     byte (*width)(void);
     void (*color)(int foreground, int background);
     void (*locate)(int row, int column, int cursor);

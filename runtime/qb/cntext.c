@@ -185,6 +185,11 @@ static byte text_pos(void)
     return column;
 }
 
+static byte text_line(void)
+{
+    return row;
+}
+
 static byte text_width(void)
 {
     return columns;
@@ -286,6 +291,6 @@ static void text_locate_cursor(int new_row, int new_column, int cursor)
 
 static const Driver text_driver = {
     text_init, text_write, text_crlf, text_erase, text_sync, text_cursor,
-    text_pos, text_width, text_color, text_locate_cursor, text_clear,
+    text_pos, text_line, text_width, text_color, text_locate_cursor, text_clear,
     text_view, text_size
 };

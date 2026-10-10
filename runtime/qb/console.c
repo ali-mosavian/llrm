@@ -71,6 +71,12 @@ static byte stream_pos(void)
     return column;
 }
 
+/* A stream has one line, as far as CSRLIN can tell. */
+static byte stream_line(void)
+{
+    return 0;
+}
+
 static byte stream_width(void)
 {
     return STREAM_WIDTH;
@@ -108,7 +114,7 @@ static void stream_size(int columns, int rows)
 
 static const Driver stream_driver = {
     stream_init, stream_write, stream_newline, stream_erase, stream_sync,
-    stream_cursor, stream_pos, stream_width, stream_color, stream_locate,
+    stream_cursor, stream_pos, stream_line, stream_width, stream_color, stream_locate,
     stream_clear, stream_view, stream_size
 };
 
@@ -137,6 +143,11 @@ void cn_mode_changed(void)
 byte cn_pos(void)
 {
     return cn_driver()->pos();
+}
+
+byte cn_line(void)
+{
+    return cn_driver()->line();
 }
 
 byte cn_width(void)
