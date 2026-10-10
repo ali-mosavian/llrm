@@ -168,6 +168,8 @@ impl Touch {
 #[cfg(test)]
 thread_local! {
     static TOUCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FITTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static RANKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn touch(
@@ -516,6 +518,8 @@ fn registrable(
     touched: &Touch,
     at: i64,
 ) -> bool {
+    #[cfg(test)]
+    FITTED.with(|count| count.set(count.get() + 1));
     if touched.reaches(at, false) || touched.reaches(at, true) {
         return false;
     }
@@ -850,6 +854,8 @@ pub fn promoted(
         // Most saved first.
         let reaching = reaching_slots(m, &slots, &seen);
         let none = Vec::new();
+        #[cfg(test)]
+        RANKED.with(|count| count.set(count.get() + 1));
         let mut ranked = slots
             .iter()
             .filter(|at| {
@@ -1499,6 +1505,32 @@ mod tests {
             reads(&out),
             reads(&body),
             "the word reads stay in memory: the les reads the slot there, a register copy would be stale"
+        );
+    }
+
+    /// `nest(d)` as the front end's pipeline hands it to isel: whether an
+    /// instruction fits a slot in a register was asked again for each loop
+    /// around it, so that the asks grew with the square of the depth. Asked
+    /// once for each instruction and slot, they grow with the nest.
+    #[test]
+    fn test_the_nest_asks_what_fits_a_slot_once_however_deep_the_loops() {
+        use crate::backend::regalloc_input::{Calls, before_phase};
+        let asked = |depth: usize| {
+            let (body, mut phases) =
+                before_phase(Calls::C, &format!("loopslots_nest{depth}.ll"), "_fn", "486", "LoopSlots");
+            super::FITTED.with(|count| count.set(0));
+            super::RANKED.with(|count| count.set(0));
+            phases[0].transform(body).expect("loop slots");
+            (super::RANKED.with(std::cell::Cell::get), super::FITTED.with(std::cell::Cell::get))
+        };
+        let ((ranked4, fitted4), (ranked8, fitted8), (ranked16, fitted16)) = (asked(4), asked(8), asked(16));
+        assert!(
+            ranked4 >= 3 && ranked8 >= 7 && ranked16 >= 15,
+            "premise: every loop of the nest but the outermost, which the function's exit bounds, is ranked ({ranked4}, {ranked8}, {ranked16})"
+        );
+        assert!(
+            fitted16 < 3 * fitted8 && fitted8 < 3 * fitted4,
+            "{fitted4}, {fitted8}, {fitted16} asks for nests 4, 8 and 16 deep"
         );
     }
 }
