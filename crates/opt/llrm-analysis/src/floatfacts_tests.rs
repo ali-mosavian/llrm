@@ -36,7 +36,7 @@ impl Parsed {
         &self,
         name: &str,
     ) -> Option<Finite> {
-        known(&self.unit(), &Calls::default(), None).get(&self.value(name)).cloned()
+        known(&self.unit(), &Calls::default()).get(&self.value(name)).cloned()
     }
 }
 
@@ -259,14 +259,25 @@ b0:
 ",
     );
     let unit = parsed.unit();
-    let memory = cells(&unit, &Calls::default());
     let load = function(&parsed.module, "f")
         .walk()
         .map(|(_, inst)| inst)
         .find(|&inst| unit.function.instruction(inst).result == Some(parsed.value("bits")))
         .unwrap();
+    let calls = Calls::default();
+    let solved = solved_with(&unit, &calls);
     let reference = MemRef::of(&unit, load).unwrap();
-    assert_eq!(consts::_cell(&memory[&load], &reference), Some(Known::new(0x40c0_0000, 32)));
+    let mut asked = consts::memory_queries(unit, &solved.integers);
+    let memory = cells_before(
+        &unit,
+        &calls,
+        &solved.integers,
+        &solved.facts,
+        consts::ReadAt::Before(load),
+        &[reference.clone()],
+        &mut asked,
+    );
+    assert_eq!(consts::_cell(&memory, &asked.resolve(&reference)), Some(Known::new(0x40c0_0000, 32)));
     assert_eq!(parsed.fact("back"), Some(integer(6)));
 }
 

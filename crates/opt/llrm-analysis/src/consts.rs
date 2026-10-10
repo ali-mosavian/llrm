@@ -44,6 +44,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use llrm_mir::context::{ConstantExpr, ConstantKind};
+use llrm_mir::dense::IdMap;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
@@ -1263,18 +1264,29 @@ pub fn load_providers(
     providers
 }
 
-/// The cells `references` hold where the body leaves `block`, each as the
-/// stores MemorySSA says reach it put it (`known` says what a store puts): the
-/// cells of one point that a caller needs, found by walks of those references
-/// alone rather than by a solve of every cell of the body.
+/// Where `cells_read` reads: the end of a block, or before an instruction.
+#[derive(Clone, Copy)]
+pub enum ReadAt {
+    End(i64),
+    Before(InstId),
+}
+
+/// The cells `references` hold at `at`, each as the stores MemorySSA says reach
+/// it put it (`known` says what a store puts): the cells of one point that a
+/// caller needs, found by walks of those references alone rather than by a
+/// solve of every cell of the body.
 pub fn cells_read(
     unit: &Unit,
     calls: &Calls,
-    known: &llrm_mir::dense::IdMap<ValueId, Known>,
-    block: i64,
+    known: &IdMap<ValueId, Known>,
+    at: ReadAt,
     references: &[MemRef],
     queries: &mut _MemoryQueries,
 ) -> Cells {
+    let ask = |graph: &memoryssa::MemorySSA, one: &MemRef| match at {
+        ReadAt::End(block) => graph.clobbers_at_end(block, one),
+        ReadAt::Before(site) => graph.clobbers_ignoring_invariance(site, one),
+    };
     let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
     let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
     let accesses = Accesses::plain(unit, calls);
@@ -1287,8 +1299,9 @@ pub fn cells_read(
         if reference.addr().is_none() || crate::memory::constant_bits(unit, &reference).is_some() {
             continue;
         }
-        let ask = |one: &MemRef| graph.clobbers_at_end(block, one);
-        let Some(provider) = provider_of(unit, &accesses, &graph, &reference, &ask) else { continue };
+        let Some(provider) = provider_of(unit, &accesses, &graph, &reference, &|one| ask(&graph, one)) else {
+            continue;
+        };
         let Some(fact) = provided(&provider, 8 * reference.width, &|site| _put(unit, site, &known)) else { continue };
         cells.extend(_fragments(&queries.resolve(&reference), &fact));
     }
