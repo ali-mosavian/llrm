@@ -898,3 +898,25 @@ fn dwarf_in_a_16_bit_omf_object_links_into_an_mz_image_that_wdump_reads() {
     let optimised = compile(&source, &["-m16", "-O2", "-gdwarf-2", "-fobject-format=omf"], &dir.join("fast.obj"));
     assert!(optimised.status.success(), "{}", String::from_utf8_lossy(&optimised.stderr));
 }
+
+/// A `long long` held in two registers on a 32-bit target (`wide` of
+/// tests/fixtures/matrix/opt.c at -O2) had no location: the value the record
+/// names is one the code never holds whole. It is the two pieces it is, EAX and
+/// EDX, each four bytes.
+#[test]
+fn a_value_in_two_registers_is_said_as_two_pieces() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("opt.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/opt.c");
+    let made = compile(&source, &["-m32", "-O2", "-gdwarf", "-fobject-format=elf"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let said = Command::new(dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    let wide = text.split("DW_AT_name\t(\"wide\")").nth(1).expect("wide is described");
+    let wide = wide.split("DW_TAG_").next().unwrap();
+    assert!(wide.contains("DW_OP_piece 0x4") && wide.matches("DW_OP_piece").count() == 2, "{wide}");
+}

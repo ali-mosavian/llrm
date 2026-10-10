@@ -862,7 +862,8 @@ pub fn selected_with<'c>(
     body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
     body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.cfa_variables = true;
-    let mut body = noted(module, function, name, &selector.ats, &selector.values, &selector.variables, body);
+    let mut body =
+        noted(module, function, name, &selector.ats, &selector.values, &selector.wides, &selector.variables, body);
     // An argument the caller pushed is in its cell from the entry.
     let named = body.named_values();
     let cells: Vec<(u32, i64, u32)> = function
@@ -1073,6 +1074,7 @@ fn noted(
     name: &str,
     ats: &IndexMap<InstId, i64>,
     values: &IndexMap<ValueId, u32>,
+    wides: &IndexMap<ValueId, (Held, Held)>,
     declared: &[(String, DebugVariable)],
     body: LirBody,
 ) -> LirBody {
@@ -1099,6 +1101,17 @@ fn noted(
     // What the records say, by where each stands.
     let mut said_at: Vec<(i64, u32, Option<(u32, u32)>, NoteValue)> = Vec::new();
     for record in function.debug_records() {
+        // A value held in two registers (an i64's dwords on a 32-bit target, a
+        // long's words on a 16-bit one) is said as the two pieces it is.
+        if let llrm_mir::DebugWhat::Value(llrm_mir::Operand::Value(one)) = record.what
+            && let Some(&(low, high)) = wides.get(&one)
+            && let Some(&at) = ats.get(&record.before)
+        {
+            let bytes = low.width;
+            said_at.push((at, record.variable.0, Some((0, bytes)), NoteValue::Value(low.value)));
+            said_at.push((at, record.variable.0, Some((bytes, high.width)), NoteValue::Value(high.value)));
+            continue;
+        }
         let (value, piece) = match record.what {
             llrm_mir::DebugWhat::Declare(_) => continue,
             llrm_mir::DebugWhat::Value(one) => (said(one), None),
