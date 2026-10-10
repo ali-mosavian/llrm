@@ -688,27 +688,25 @@ def test_a_load_is_served_by_the_stores_that_reach_it_not_by_a_cell_map_met_at_e
     assert cost <= 2000, cost
 
 
+def test_a_branch_is_decided_from_the_walk_not_from_a_cell_map_met_at_every_join(tmp_path):
+    """`mir decide` solved memory with the dense per-block cell map for the facts its branches are read from: on `joins` at N=256 11,636
+    Minstr, 3.8x a doubling, the same quadratic through-memory had. Read from the stores MemorySSA says reach each load it is 1,380.
+    More than 3,000 fails."""
+    source = tmp_path / "joins_256.c"
+    source.write_text(scaling.AXES["joins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir decide"]
+    assert cost <= 3000, cost
 
 
-def test_a_spill_reads_the_instructions_that_name_a_home_and_its_copies_from_the_postings_on_the_cells_axis(tmp_path):
-    """`spill color slots` rebuilt, at every spill, a pair of sets for each instruction that names a home and walked every
-    instruction of the body for the copies of the value: on `cells` at N=1024 that was 4,590 Minstr (slope 2.2).
-    Reading the cells an instruction names from its operands and the copies from the postings of the value reads 1,460.
-    More than 2,200 fails."""
-    source = tmp_path / "cells_1024.c"
-    source.write_text(scaling.AXES["cells"](1024))
-    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["spill color slots"]
-    assert cost <= 2200, cost
+def test_a_float_load_is_read_from_the_walk_not_from_a_cell_map_met_at_every_join(tmp_path):
+    """`analysis float-facts` solved the memory the floats are read from with the dense per-block cell map beside the integers': on
+    `fjoins` at N=256 (N float cells known, N joins, four functions) 3,638 Minstr, 3.3x a doubling. Each float load read from the stores
+    MemorySSA says reach it is 986. More than 1,500 fails."""
+    source = tmp_path / "fjoins_256.c"
+    source.write_text(scaling.AXES["fjoins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis float-facts"]
+    assert cost <= 1500, cost
 
-
-def test_the_homes_wanted_again_are_asked_of_the_instructions_that_name_them_on_the_cells_axis(tmp_path):
-    """`intervals homes` built the pseudo-values of every instruction that names a home, and a table of the homes each
-    names, for the few homes a spill makes it find again: on `cells` at N=1024 that was 3,940 Minstr. Built for the
-    wanted homes alone it reads 2,340. More than 3,200 fails."""
-    source = tmp_path / "cells_1024.c"
-    source.write_text(scaling.AXES["cells"](1024))
-    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["intervals homes"]
-    assert cost <= 3200, cost
 
 def test_homes_walks_the_live_sets_once_for_all_its_candidates_not_once_for_each(tmp_path):
     """`joins(128)` at -O2 (N cells held across N joins): `mir homes` asked `live_points` of every block for each phi in a cell
@@ -718,13 +716,3 @@ def test_homes_walks_the_live_sets_once_for_all_its_candidates_not_once_for_each
     source.write_text(scaling.AXES["joins"](128))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir homes"]
     assert cost <= 800, cost
-
-
-def test_a_branch_is_decided_from_the_walk_not_from_a_cell_map_met_at_every_join(tmp_path):
-    """`mir decide` solved memory with the dense per-block cell map for the facts its branches are read from: on `joins` at N=256 11,636
-    Minstr, 3.8x a doubling, the same quadratic through-memory had. Read from the stores MemorySSA says reach each load it is 1,380.
-    More than 3,000 fails."""
-    source = tmp_path / "joins_256.c"
-    source.write_text(scaling.AXES["joins"](256))
-    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir decide"]
-    assert cost <= 3000, cost

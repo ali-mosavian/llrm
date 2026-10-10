@@ -377,7 +377,7 @@ pub fn folds(kind: BinaryOp) -> bool {
 
 /// What this store puts in its cell, where that is a number: a float's
 /// bits too, which floatfacts supplies for a computed value.
-fn _put(
+pub fn _put(
     unit: &Unit,
     inst: InstId,
     known: &IndexMap<ValueId, Known>,
@@ -1324,9 +1324,143 @@ fn _stored_cell(
 }
 
 /// What serves a load: stores of all its bytes, or stores of each byte.
-enum Provider {
+pub enum Provider {
     Whole(Vec<InstId>),
     Bytes(Vec<Vec<(InstId, u32)>>),
+}
+
+/// The stores that serve each load `wanted` picks, found by MemorySSA walks,
+/// with the indices `unit.registers` proves constant taken into every address.
+pub fn load_providers(
+    unit: &Unit,
+    accesses: &Accesses,
+    wanted: &dyn Fn(ValueId) -> bool,
+) -> llrm_mir::dense::IdMap<ValueId, Provider> {
+    let Some(placed) = unit.registers else { return Default::default() };
+    let function = unit.function;
+    let graph = memoryssa::built(unit, accesses).with_known(_intervals(placed));
+    let mut providers: llrm_mir::dense::IdMap<ValueId, Provider> = Default::default();
+    for (_, inst) in function.walk() {
+        let Some((reference, result)) = avail::loaded_into(unit, accesses, inst) else { continue };
+        if !wanted(result) {
+            continue;
+        }
+        // An index the registers prove constant is part of the address, in
+        // the load and in each store alike.
+        let reference = _addressed(unit, &reference, placed);
+        if crate::memory::constant_bits(unit, &reference).is_some() {
+            continue;
+        }
+        let mut values = Vec::new();
+        let mut exact = true;
+        let reaching = graph.clobbers_ignoring_invariance(inst, &reference);
+        // A path to the entry that no write meets leaves every byte as it
+        // was found, so no byte is a store's.
+        if reaching.iter().any(|id| graph.access(*id).kind == memoryssa::Kind::Live) {
+            continue;
+        }
+        for id in reaching {
+            let access = graph.access(id);
+            let stored = access
+                .site
+                .filter(|_| access.kind == memoryssa::Kind::Def)
+                .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)));
+            match stored {
+                Some((site, (cell, _)))
+                    if memoryssa::same_bytes(unit, &reference, &_addressed(unit, &cell, placed)) =>
+                {
+                    values.push(site)
+                }
+                _ => {
+                    exact = false;
+                    break;
+                }
+            }
+        }
+        if exact && !values.is_empty() {
+            providers.insert(result, Provider::Whole(values));
+        } else if let Some(address) = reference.addr().filter(|_| reference.width <= 8) {
+            // Some of the bytes are another store's, or a wider one's: each
+            // byte is asked of the walk, and read from the
+            // stores that reach it.
+            let mut bytes: Vec<Vec<(InstId, u32)>> = Vec::new();
+            'bytes: for k in 0..reference.width {
+                // The byte, with the provenance moved to it.
+                let one = MemRef {
+                    disp: reference.disp + i64::from(k),
+                    width: 1,
+                    provenance: reference.provenance.as_ref().map(|found| found.shifted(i64::from(k))),
+                    ..reference.clone()
+                };
+                let mut from = Vec::new();
+                for id in graph.clobbers_ignoring_invariance(inst, &one) {
+                    let access = graph.access(id);
+                    let Some((site, (cell, _))) = access
+                        .site
+                        .filter(|_| access.kind == memoryssa::Kind::Def)
+                        .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)))
+                    else {
+                        bytes.clear();
+                        break 'bytes;
+                    };
+                    let Some(there) = _addressed(unit, &cell, placed).addr().filter(|there| there.root == address.root)
+                    else {
+                        bytes.clear();
+                        break 'bytes;
+                    };
+                    let at = address.disp + i64::from(k) - there.disp;
+                    if !(0..i64::from(cell.width)).contains(&at) {
+                        bytes.clear();
+                        break 'bytes;
+                    }
+                    from.push((site, at as u32));
+                }
+                if from.is_empty() {
+                    bytes.clear();
+                    break;
+                }
+                bytes.push(from);
+            }
+            if bytes.len() == reference.width as usize {
+                providers.insert(result, Provider::Bytes(bytes));
+            }
+        }
+    }
+    providers
+}
+
+/// What `provider`'s stores put in the `width` bits a load reads, where all
+/// agree: `put` is the number a store puts.
+pub fn provided(
+    provider: &Provider,
+    width: u32,
+    put: &dyn Fn(InstId) -> Option<Known>,
+) -> Option<Known> {
+    match provider {
+        Provider::Whole(sites) => {
+            let mut numbers = sites.iter().map(|site| put(*site));
+            let first = numbers.next()??;
+            numbers
+                .all(|one| one.as_ref().is_some_and(|one| one.n == first.n && one.width == first.width))
+                .then(|| if first.width == width { _read(Some(&first), width) } else { None })
+                .flatten()
+        }
+        Provider::Bytes(bytes) => {
+            let mut number = BigInt::from(0);
+            for (k, from) in bytes.iter().enumerate() {
+                let mut seen = BTreeSet::new();
+                for (site, at) in from {
+                    let put = put(*site).filter(|put| put.width > 8 * at)?;
+                    seen.insert((&put.n >> (8 * at)) & BigInt::from(255));
+                }
+                if seen.len() != 1 {
+                    return None;
+                }
+                number |= seen.into_iter().next().expect("one byte") << (8 * k);
+            }
+            Some(Known::new(number, width))
+        }
+    }
 }
 
 /// What is known of a body through memory: the registers' facts, then each load
@@ -1348,104 +1482,11 @@ pub fn known_walked(
     let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
     let function = unit.function;
     let plain = Accesses::plain(unit, calls);
-    // The loads' providers, with the indices `placed` proves constant taken
-    // into every address.
-    let providers_of = |accesses: &Accesses, placed: &_| -> llrm_mir::dense::IdMap<ValueId, Provider> {
-        let graph = memoryssa::built(unit, accesses).with_known(_intervals(placed));
-        let mut providers: llrm_mir::dense::IdMap<ValueId, Provider> = Default::default();
-        for (_, inst) in function.walk() {
-            let Some((reference, result)) = avail::loaded_into(unit, accesses, inst) else { continue };
-            if _width(unit, Operand::Value(result)).is_none() {
-                continue;
-            }
-            // An index the registers prove constant is part of the address, in
-            // the load and in each store alike.
-            let reference = _addressed(unit, &reference, placed);
-            if crate::memory::constant_bits(unit, &reference).is_some() {
-                continue;
-            }
-            let mut values = Vec::new();
-            let mut exact = true;
-            let reaching = graph.clobbers_ignoring_invariance(inst, &reference);
-            // A path to the entry that no write meets leaves every byte as it
-            // was found, so no byte is a store's.
-            if reaching.iter().any(|id| graph.access(*id).kind == memoryssa::Kind::Live) {
-                continue;
-            }
-            for id in reaching {
-                let access = graph.access(id);
-                let stored = access
-                    .site
-                    .filter(|_| access.kind == memoryssa::Kind::Def)
-                    .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)));
-                match stored {
-                    Some((site, (cell, _)))
-                        if memoryssa::same_bytes(unit, &reference, &_addressed(unit, &cell, placed)) =>
-                    {
-                        values.push(site)
-                    }
-                    _ => {
-                        exact = false;
-                        break;
-                    }
-                }
-            }
-            if exact && !values.is_empty() {
-                providers.insert(result, Provider::Whole(values));
-            } else if let Some(address) = reference.addr().filter(|_| reference.width <= 8) {
-                // Some of the bytes are another store's, or a wider one's: each
-                // byte is asked of the walk, and read from the
-                // stores that reach it.
-                let mut bytes: Vec<Vec<(InstId, u32)>> = Vec::new();
-                'bytes: for k in 0..reference.width {
-                    // The byte, with the provenance moved to it.
-                    let one = MemRef {
-                        disp: reference.disp + i64::from(k),
-                        width: 1,
-                        provenance: reference.provenance.as_ref().map(|found| found.shifted(i64::from(k))),
-                        ..reference.clone()
-                    };
-                    let mut from = Vec::new();
-                    for id in graph.clobbers_ignoring_invariance(inst, &one) {
-                        let access = graph.access(id);
-                        let Some((site, (cell, _))) = access
-                            .site
-                            .filter(|_| access.kind == memoryssa::Kind::Def)
-                            .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)))
-                        else {
-                            bytes.clear();
-                            break 'bytes;
-                        };
-                        let Some(there) =
-                            _addressed(unit, &cell, placed).addr().filter(|there| there.root == address.root)
-                        else {
-                            bytes.clear();
-                            break 'bytes;
-                        };
-                        let at = address.disp + i64::from(k) - there.disp;
-                        if !(0..i64::from(cell.width)).contains(&at) {
-                            bytes.clear();
-                            break 'bytes;
-                        }
-                        from.push((site, at as u32));
-                    }
-                    if from.is_empty() {
-                        bytes.clear();
-                        break;
-                    }
-                    bytes.push(from);
-                }
-                if bytes.len() == reference.width as usize {
-                    providers.insert(result, Provider::Bytes(bytes));
-                }
-            }
-        }
-        providers
-    };
+    let wanted = |result: ValueId| _width(unit, Operand::Value(result)).is_some();
     let solve = |accesses: &Accesses| {
         let mut facts = registers.clone();
         let mut placed = registers.clone();
-        let mut providers = providers_of(accesses, &placed);
+        let mut providers = load_providers(&unit.with_registers(&placed), accesses, &wanted);
         for _round in 0..4 {
             let mut changing = true;
             while changing {
@@ -1474,33 +1515,7 @@ pub fn known_walked(
                         loaded.or_else(|| {
                             let values = providers.get(&target)?;
                             let width = _width(unit, Operand::Value(target))?;
-                            match values {
-                                Provider::Whole(sites) => {
-                                    let mut numbers = sites.iter().map(|site| _put(unit, *site, &facts));
-                                    let first = numbers.next()??;
-                                    numbers
-                                        .all(|one| {
-                                            one.as_ref().is_some_and(|one| one.n == first.n && one.width == first.width)
-                                        })
-                                        .then(|| if first.width == width { _read(Some(&first), width) } else { None })
-                                        .flatten()
-                                }
-                                Provider::Bytes(bytes) => {
-                                    let mut number = BigInt::from(0);
-                                    for (k, from) in bytes.iter().enumerate() {
-                                        let mut seen = BTreeSet::new();
-                                        for (site, at) in from {
-                                            let put = _put(unit, *site, &facts).filter(|put| put.width > 8 * at)?;
-                                            seen.insert((&put.n >> (8 * at)) & BigInt::from(255));
-                                        }
-                                        if seen.len() != 1 {
-                                            return None;
-                                        }
-                                        number |= seen.into_iter().next().expect("one byte") << (8 * k);
-                                    }
-                                    Some(Known::new(number, width))
-                                }
-                            }
+                            provided(values, width, &|site| _put(unit, site, &facts))
                         })
                     } else {
                         _result(unit, inst, &facts, None)
@@ -1527,7 +1542,7 @@ pub fn known_walked(
                 break;
             }
             placed = facts.clone();
-            providers = providers_of(accesses, &placed);
+            providers = load_providers(&unit.with_registers(&placed), accesses, &wanted);
         }
         facts
     };
