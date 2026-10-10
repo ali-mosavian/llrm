@@ -104,6 +104,19 @@ def test_a_count_does_not_inherit_the_callers_llrm_variables(monkeypatch):
     assert "LLRM_CHECK_FOO" not in seen and "LLRM_BIN" in seen and "LLRM_DEBUG" in seen, seen
 
 
+def test_a_count_does_not_depend_on_the_size_of_the_callers_environment(monkeypatch):
+    """cells(224) at -O2 read 157.0 Minstr in `lir peephole`, or 168.8 with 4 bytes more environment: the bytes the caller's environment
+    adds move the stack and the allocator's first pages, so base and head measured from different worktrees (or a sourced script) gave
+    a rise on a program with no call in it. The child is given the same bytes whatever the caller's."""
+    code = "import os, sys; print(sum(len(k) + len(v) + 2 for k, v in os.environ.items()), file=sys.stderr)"
+    sizes = set()
+    for width in (0, 3, 40, 300):
+        monkeypatch.setenv("CALLERS_PADDING", "x" * width)
+        monkeypatch.setenv("LLRM_BIN", "/kept" + "b" * width)
+        sizes.add(scaling.sample([sys.executable, "-I", "-c", code], {"LLRM_DEBUG": "time"})[2].strip())
+    assert len(sizes) == 1, sizes
+
+
 def test_the_nest_axis_is_a_loop_nest_as_deep_as_it_says_and_the_gate_sizes_it():
     """gap32's recursive inlining nested loops deeply and rectwo -O2 went 65 M -> 792 M: hoist, lsr, peephole, jumps and the allocator are
     superlinear in nesting depth, which no axis measured (2N/N of a nest 16 deep is 4.3, D/c(2N) 0.44)."""
@@ -458,9 +471,9 @@ def test_summaries_keep_the_call_graph_when_a_body_calls_a_deeper_one(tmp_path):
 def test_interprocedural_own_work_stays_near_linear_on_the_chain_functions_and_callers_axes(tmp_path):
     """The module-wide step did work per body that grew with the module: the declarations were compared global by global after each of
     N bodies, the noreturn fixed point rounds took N bodies N times, and the no-recurse proof walked everything each function reaches
-    (`mir interprocedural` own, 2N/N on chain: 2.80). A doubling above 2.65, 2.15 and 2.2 fails (chain keeps what `analysis summaries`
-    leaves in it); functions and callers hold what the call graph's dense components gave them (2.01, 2.07)."""
-    limits = {"chain": (128, 2.65), "functions": (512, 2.15), "callers": (1024, 2.2)}
+    (`mir interprocedural` own, 2N/N on chain: 2.80). A doubling above 2.15 and 2.2 fails; functions and callers hold what the call
+    graph's dense components gave them (2.01, 2.07); the chain axis is the next test's."""
+    limits = {"functions": (512, 2.15), "callers": (1024, 2.2)}
     grown = {}
     for axis, (n, limit) in limits.items():
         own = {}
@@ -491,6 +504,19 @@ def test_a_step_counts_the_same_whatever_the_paths_the_compiler_is_given(tmp_pat
         command = [str(binary), *gate.levels_time.command("llrm", "O2", source)[1:]]
         counts.add(round(gate.own_work(command)["lir peephole"], 0))
     assert max(counts) - min(counts) <= 1, sorted(counts)
+
+
+def test_the_interprocedural_step_does_not_build_the_bodies_its_last_calls_took_on_the_chain_axis(tmp_path):
+    """gcc inlines the whole chain of N private functions into the one that stays and builds no other body. Here each of the N bodies was
+    built with the ones below it inlined and run through the pipeline (`mir interprocedural` own at N=256 and 512: 2,826 and 8,452 Minstr,
+    2N/N 2.99); now the bodies that stay are built, 766 and 1,836 (2.40). A doubling above 2.7, or more than 4,000 Minstr at N=512, fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 256), ("2n", 512)):
+        source = tmp_path / f"chain_{label}.c"
+        source.write_text("" if size == 0 else scaling.AXES["chain"](size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir interprocedural", 0.0) - own["empty"].get("mir interprocedural", 0.0) for label in ("n", "2n"))
+    assert big <= 2.7 * small and big <= 4000, f"{small:.0f} -> {big:.0f} Minstr"
 
 
 def test_lir_jumps_copies_a_tail_without_checking_the_whole_function_for_each_copy(tmp_path):
