@@ -268,6 +268,7 @@ fn local(stores: &str) -> String {
         "{MEMSET}define i16 @f(i16 %n, i16 %q) {{
 b0:
   %a = alloca [8 x i8]
+  %p1 = getelementptr i8, ptr %a, i16 1
   %p2 = getelementptr i8, ptr %a, i16 2
   %p4 = getelementptr i8, ptr %a, i16 4
   %p6 = getelementptr i8, ptr %a, i16 6
@@ -634,4 +635,112 @@ fn a_guarded_byte_loop_is_one_memset() {
     let (text, changed) = fill(&guarded("i8", "%n", body), TRIPS);
     assert!(changed, "{text}");
     assert!(text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 65, i16 %"), "{text}");
+}
+
+/// Constants that are not a memset, being less than the stores they would make,
+/// are stores of the widest integer: three words of -1 are a dword and a word,
+/// as gcc's `store-merging` and LLVM's `MergeConsecutiveStores` make them
+/// (lru's `bprev` and `bnext`: six word stores each at -O2, 20 bytes of its
+/// code more than clang's). Two bytes of different values are one word of both,
+/// little-endian.
+#[test]
+fn adjacent_constants_are_stores_of_the_widest_integer() {
+    let stores = |text: &str| {
+        let before = parsed(&format!("{DOS}{}", local(text)));
+        let mut module = before.clone();
+        let after = managed(&mut module, Merge);
+        assert_eq!(results(&module, BYTES), results(&before, BYTES), "{after}");
+        after
+    };
+    let words = stores("  store i16 -1, ptr %a\n  store i16 -1, ptr %p2\n  store i16 -1, ptr %p4\n");
+    assert!(words.contains("store i32 -1, ptr %a") && words.matches("store").count() == 2, "{words}");
+    assert!(!words.contains("call void @llvm.memset"), "{words}");
+    let bytes = stores("  store i8 18, ptr %a\n  store i8 52, ptr %p1\n");
+    assert!(bytes.contains("store i16 13330, ptr %a") && bytes.matches("store").count() == 1, "{bytes}");
+}
+
+/// A read between, a store that overlaps, a volatile store, and a dword that
+/// would start off its alignment keep their stores.
+#[test]
+fn constants_that_cannot_be_one_wider_store_are_kept() {
+    let kept = |text: &str, count: usize| {
+        let before = parsed(&format!("{DOS}{}", local(text)));
+        let mut module = before.clone();
+        let after = managed(&mut module, Merge);
+        assert_eq!(after.matches("store").count(), count, "{after}");
+        assert_eq!(results(&module, BYTES), results(&before, BYTES));
+    };
+    kept("  store i8 18, ptr %a\n  %x = load i8, ptr %a\n  store i8 52, ptr %p1\n", 2);
+    kept("  store i16 7, ptr %a\n  store i16 9, ptr %p2\n  store i8 1, ptr %p2\n", 3);
+    kept("  store volatile i8 18, ptr %a\n  store i8 52, ptr %p1\n", 2);
+    kept("  store i8 18, ptr %p1\n  store i8 52, ptr %p2\n", 2);
+}
+
+/// A loop of `trips` that stores `first` to `@s`'s first array and `second` to
+/// its second, and @f returns cell `%q` of both and the first of the third.
+fn two_fills(
+    trips: i32,
+    first: &str,
+    second: &str,
+    second_index: &str,
+) -> String {
+    format!(
+        "%S = type {{ [8 x i16], [8 x i16], [8 x i16] }}
+@s = global %S zeroinitializer
+
+{MEMSET}define i16 @f(i16 %n, i16 %q) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp slt i16 %i, {trips}
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %p = getelementptr inbounds %S, ptr @s, i16 0, i32 0, i16 %i
+  store i16 {first}, ptr %p
+  %r = getelementptr inbounds %S, ptr @s, i16 0, i32 1, i16 {second_index}
+  store i16 {second}, ptr %r
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %a = getelementptr %S, ptr @s, i16 0, i32 0, i16 %q
+  %b = getelementptr %S, ptr @s, i16 0, i32 1, i16 %q
+  %v = load i16, ptr %a
+  %w = load i16, ptr %b
+  %x = add i16 %v, %w
+  ret i16 %x
+}}
+"
+    )
+}
+
+const CELLS: &[&[i128]] = &[&[0, 0], &[0, 3], &[0, 6], &[0, 7]];
+
+/// Two stores a trip, to arrays that cannot meet, are a memset each by the same
+/// trips: lru's `lhead` and `ltail` (a 7-trip loop of two word stores, 42
+/// clocks, in the init of a kernel whose gcc and clang spend 8).
+#[test]
+fn a_loop_of_two_fills_to_apart_bytes_is_a_memset_each() {
+    let (text, changed) = fill(&two_fills(7, "-1", "-1", "%i"), CELLS);
+    assert!(changed);
+    assert!(
+        text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 -1, i16 14, i1 false)")
+            && text.contains("call void @llvm.memset.p0.i16(ptr %r, i8 -1, i16 14, i1 false)")
+            && !text.contains("store"),
+        "{text}"
+    );
+}
+
+/// Fills that may meet keep the loop: nine trips over eight cells run the first
+/// array into the second's bytes, and a word that is not a repeated byte is no
+/// memset.
+#[test]
+fn fills_that_may_meet_are_kept() {
+    for text in [two_fills(9, "-1", "-1", "%i"), two_fills(7, "-1", "%n", "%i")] {
+        let (after, changed) = fill(&text, CELLS);
+        assert!(!changed && !after.contains("call void @llvm.memset"), "{after}");
+    }
 }
