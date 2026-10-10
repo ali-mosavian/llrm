@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_mir::facts::Fact;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
@@ -58,8 +59,8 @@ pub trait Abi {
 /// each in its register, and its result's fields, each in its register.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Registers {
-    pub arguments: Vec<iced_x86::Register>,
-    pub results: Vec<iced_x86::Register>,
+    pub arguments: Vec<RegId>,
+    pub results: Vec<RegId>,
 }
 
 /// `module` as masm, its code in the segment `code`, selected by the 16-bit x86

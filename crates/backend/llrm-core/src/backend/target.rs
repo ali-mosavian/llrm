@@ -374,7 +374,7 @@ pub fn name_of(
     if let Some(name) = regs.name(register) {
         return name.to_owned();
     }
-    // Python's `iced_x86.Register` defines no `DontUse*` member, so those have
+    // Python's `iced_x86.RegId` defines no `DontUse*` member, so those have
     // no name here.
     let spelled = format!("{register:?}");
     if spelled.starts_with("DontUse") { (register as i64).to_string() } else { spelled.to_lowercase() }

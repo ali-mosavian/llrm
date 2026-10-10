@@ -2,9 +2,10 @@
 //! in the register the convention passed it in, from the entry until the
 //! instruction that stores it. Read back from the code, like the frame rows.
 
-use iced_x86::{Decoder, DecoderOptions, FlowControl, Mnemonic, OpKind, Register};
+use iced_x86::{Decoder, DecoderOptions, FlowControl, Mnemonic, OpKind};
+use llrm_lir::registers::RegId;
 
-fn full(register: Register) -> Register {
+fn full(register: RegId) -> RegId {
     if register.is_gpr() { register.full_register32() } else { register }
 }
 
@@ -14,8 +15,8 @@ fn full(register: Register) -> Register {
 /// bytes below it when the function starts.
 #[derive(Clone, Copy)]
 pub enum Cell {
-    Frame { register: Register, disp: i64 },
-    Stack { register: Register, entry: i64, from_cfa: i64 },
+    Frame { register: RegId, disp: i64 },
+    Stack { register: RegId, entry: i64, from_cfa: i64 },
 }
 
 /// The offset after the first instruction that stores `register` into `cell`,
@@ -25,7 +26,7 @@ pub enum Cell {
 pub fn stored(
     code: &[u8],
     cell: Cell,
-    register: Register,
+    register: RegId,
 ) -> Option<usize> {
     let mut decoder = Decoder::with_ip(32, code, 0, DecoderOptions::NONE);
     // The stack pointer's distance from the canonical frame address, where the
@@ -46,7 +47,7 @@ pub fn stored(
         let to_cell = one.mnemonic() == Mnemonic::Mov
             && one.op0_kind() == OpKind::Memory
             && full(one.memory_base()) == full(base)
-            && one.memory_index() == Register::None
+            && one.memory_index() == RegId::None
             && i64::from(one.memory_displacement32() as i32) == wanted
             && one.op1_kind() == OpKind::Register
             && full(one.op1_register()) == full(register);

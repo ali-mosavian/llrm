@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use super::*;
 use crate::model::ir::{Held, Mem};
@@ -42,8 +42,8 @@ fn loaded(body: &LirBody) -> Mem {
 /// An indexed frame cell as isel and addressforms spell it, `[bp+si-30]`:
 /// through BP, with a literal displacement.
 fn indexed_frame_cell() -> Mem {
-    let addr = Addr { segment: Register::SS, ..Addr::new(Space::Literal, -30) };
-    Mem { through: Register::BP, disp_width: 2, index: Some(Held { value: 2, width: 2 }), ..Mem::new(Some(addr), 2) }
+    let addr = Addr { segment: RegId::SS, ..Addr::new(Space::Literal, -30) };
+    Mem { through: RegId::BP, disp_width: 2, index: Some(Held { value: 2, width: 2 }), ..Mem::new(Some(addr), 2) }
 }
 
 /// UBOUND of a local REDIM array printed -1: its bounds' indexed cell was
@@ -53,7 +53,7 @@ fn test_an_indexed_frame_cell_moves_below_the_runtime_header() {
     let (framed, _) =
         _runtime_frame(&loading(indexed_frame_cell()), 46, model::RuntimeProfile::Qb45, 0, "B$ENRA").unwrap();
     let cell = loaded(&framed);
-    assert_eq!((cell.through, cell.addr.unwrap().disp), (Register::BP, -30 - 10));
+    assert_eq!((cell.through, cell.addr.unwrap().disp), (RegId::BP, -30 - 10));
 }
 
 /// The module body's frame is static data, and an indexed frame cell there
@@ -64,6 +64,6 @@ fn test_an_indexed_frame_cell_moves_into_the_static_module_frame() {
     let addr = cell.addr.unwrap();
     assert_eq!(
         (cell.through, addr.space, addr.index, addr.disp),
-        (Register::None, Space::Segment, MAIN_FRAME_ID, 46 - 30)
+        (RegId::None, Space::Segment, MAIN_FRAME_ID, 46 - 30)
     );
 }

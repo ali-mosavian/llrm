@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 
+use llrm_lir::registers::RegId;
 use llrm_mir::{MetadataId, debuginfo as di};
 use llrm_object::debug::{self as model, Info, Kind, Location, Variable};
 
@@ -54,7 +55,7 @@ pub struct Debug {
     pub return_register: String,
     /// The frame and stack registers of 32-bit code, and the bytes a call
     /// pushes (near, far): what its frame rows are read from.
-    pub frame: Option<(iced_x86::Register, iced_x86::Register, [i64; 2])>,
+    pub frame: Option<(RegId, RegId, [i64; 2])>,
     pub registers: Vec<model::Register>,
     pub types: Vec<model::Type>,
     /// Each MIR type node's type.
@@ -485,8 +486,8 @@ pub fn laid_out(
                             procedure.body.bits,
                             &super::valuetrack::Regs::new(
                                 &debug.file,
-                                debug.frame.map_or(iced_x86::Register::None, |(pointer, ..)| pointer),
-                                debug.frame.map_or(iced_x86::Register::None, |(_, stack, _)| stack),
+                                debug.frame.map_or(RegId::None, |(pointer, ..)| pointer),
+                                debug.frame.map_or(RegId::None, |(_, stack, _)| stack),
                             ),
                             rows,
                             bias,
@@ -716,7 +717,7 @@ mod tests {
     use super::super::valuetrack::Where;
     use super::stable;
 
-    fn reg(register: iced_x86::Register) -> Where {
+    fn reg(register: llrm_lir::registers::RegId) -> Where {
         Where::Place(Place::Register(register))
     }
 

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_mir::facts::Fact;
 use llrm_mir::program::SegmentLayout;
@@ -55,7 +55,7 @@ pub fn _semantics(
     Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
 }
 
-pub fn _reg(register: Register) -> Loc {
+pub fn _reg(register: RegId) -> Loc {
     Loc::Reg(ir::Reg { register, width: 2 })
 }
 
@@ -92,7 +92,7 @@ pub fn _static_frame(
 ) -> lir::LirBody {
     let regs = body.regs();
     let moved = |addr: &Addr| -> Addr {
-        let segment = if regs.is_stack_segment(addr.segment) { Register::None } else { addr.segment };
+        let segment = if regs.is_stack_segment(addr.segment) { RegId::None } else { addr.segment };
         Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, segment, ..*addr }
     };
     let variables = body
@@ -107,7 +107,7 @@ pub fn _static_frame(
         })
         .collect();
     // Through BP no longer: the data object's own address.
-    let through = |register: Register| if regs.is_frame(register) { Register::None } else { register };
+    let through = |register: RegId| if regs.is_frame(register) { RegId::None } else { register };
     let operand = |r#where: &Loc| -> Loc {
         if !r#where.in_frame() {
             return r#where.clone();
@@ -167,8 +167,8 @@ pub fn _runtime_frame(
     let serial = body.blocks.iter().flat_map(|block| &block.insns).map(|one| one.at).max().unwrap_or(0) + 1;
     let imm = |value: i64| Loc::Imm(ir::Imm { value, width: 2, address: None });
     let enter = [
-        _insn(serial, _semantics(Operation::Move, "mov", vec![_reg(Register::CX)], vec![imm(size)])),
-        _insn(serial + 1, _semantics(Operation::Move, "mov", vec![_reg(Register::BX)], vec![imm(temporary_strings)])),
+        _insn(serial, _semantics(Operation::Move, "mov", vec![_reg(RegId::CX)], vec![imm(size)])),
+        _insn(serial + 1, _semantics(Operation::Move, "mov", vec![_reg(RegId::BX)], vec![imm(temporary_strings)])),
         _insn(serial + 2, _semantics(Operation::Call, "call", vec![], vec![])),
     ];
     let leave_at = serial + 3;

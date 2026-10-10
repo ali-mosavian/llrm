@@ -18,9 +18,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iced_x86::{
-    Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind, Register,
-};
+use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind};
+use llrm_lir::registers::RegId;
 use llrm_object::debug::FrameRow;
 
 use super::masm::{Mark, Place};
@@ -51,13 +50,13 @@ pub struct Regs {
 impl Regs {
     pub fn new(
         file: &[llrm_target::registers::Register],
-        frame: Register,
-        stack: Register,
+        frame: RegId,
+        stack: RegId,
     ) -> Self {
         let roots: BTreeMap<String, String> = file.iter().map(|one| (one.name.clone(), one.root.clone())).collect();
         let general =
             file.iter().filter(|one| one.is("gpr") && one.root == one.name).map(|one| one.name.clone()).collect();
-        let named = |register: Register| {
+        let named = |register: RegId| {
             let name = format!("{register:?}").to_lowercase();
             roots.get(&name).cloned().unwrap_or(name)
         };
@@ -68,7 +67,7 @@ impl Regs {
     /// not know is itself.
     fn root(
         &self,
-        register: Register,
+        register: RegId,
     ) -> String {
         let name = format!("{register:?}").to_lowercase();
         self.roots.get(&name).cloned().unwrap_or(name)
@@ -158,7 +157,7 @@ fn cell(
     bytes: u32,
     regs: &Regs,
 ) -> Option<Held> {
-    if one.memory_index() != Register::None || one.memory_base() == Register::None {
+    if one.memory_index() != RegId::None || one.memory_base() == RegId::None {
         return None;
     }
     let row = rows.iter().rev().find(|row| row.offset <= at)?;
@@ -178,12 +177,12 @@ fn step(
     rows: &[FrameRow],
     bias: i64,
     info: &mut InstructionInfoFactory,
-    clobbers: Option<&[Register]>,
+    clobbers: Option<&[RegId]>,
     exposed: bool,
     regs: &Regs,
 ) {
     let at = one.ip() as usize;
-    let size = |kind: OpKind, register: Register| {
+    let size = |kind: OpKind, register: RegId| {
         if kind == OpKind::Register { register.size() as u32 } else { one.memory_size().size() as u32 }
     };
     let copy = one.mnemonic() == Mnemonic::Mov
@@ -194,7 +193,7 @@ fn step(
         );
     if copy {
         let (to, from) = (size(one.op0_kind(), one.op0_register()), size(one.op1_kind(), one.op1_register()));
-        let place = |kind: OpKind, register: Register, bytes: u32| match kind {
+        let place = |kind: OpKind, register: RegId, bytes: u32| match kind {
             OpKind::Register => Some(Held::Register(register)),
             _ => cell(one, rows, at, bias, bytes, regs),
         };
@@ -338,7 +337,7 @@ pub fn tracked(
     // call ending there clobbered.
     let mut defs: BTreeMap<usize, Vec<(u32, Place)>> = BTreeMap::new();
     let mut before: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
-    let mut clobbers: BTreeMap<usize, Vec<Register>> = BTreeMap::new();
+    let mut clobbers: BTreeMap<usize, Vec<RegId>> = BTreeMap::new();
     for &(at, mark) in marks {
         match mark {
             Mark::Def { tag, place } => defs.entry(at).or_default().push((tag, place)),

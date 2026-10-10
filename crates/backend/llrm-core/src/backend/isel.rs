@@ -6,10 +6,10 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
 use llrm_analysis::cfg;
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::ranges::{self, Facts};
+use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
@@ -94,7 +94,7 @@ pub enum Parameter {
     /// A `byval` aggregate: its bytes are the stack's from here up, and the
     /// parameter is their address.
     Bytes(i64),
-    Registers(Vec<Register>),
+    Registers(Vec<RegId>),
 }
 
 /// Where a function's parameters arrive and its result leaves, as its
@@ -103,12 +103,12 @@ pub enum Parameter {
 pub struct Convention {
     pub parameters: Vec<Parameter>,
     /// The registers a result leaves in, low part first.
-    pub returns: Vec<Register>,
+    pub returns: Vec<RegId>,
     /// The bytes the function pops as it returns.
     pub popped: i64,
     /// The registers its prologue may save: the convention's, but those its
     /// parameters arrive in.
-    pub saved: Vec<(Register, Register)>,
+    pub saved: Vec<(RegId, RegId)>,
 }
 
 /// How a calling convention pushes arguments and who pops them. C pushes
@@ -385,7 +385,7 @@ fn results(
     arch: &dyn llrm_target::Target,
     entry: Option<&llrm_target::calling::Convention>,
     width: u32,
-) -> Vec<Register> {
+) -> Vec<RegId> {
     entry.map_or_else(|| arch.results(width), |one| llrm_x86::calling::results(one, width))
 }
 
@@ -423,15 +423,15 @@ fn saved(
     arch: &dyn llrm_target::Target,
     entry: Option<&llrm_target::calling::Convention>,
     parameters: &[Parameter],
-    returns: &[Register],
-) -> Vec<(Register, Register)> {
+    returns: &[RegId],
+) -> Vec<(RegId, RegId)> {
     // What the function's own convention keeps, not the target's default's.
     let Some(entry) = entry else { return arch.callee_saved() };
     let kept = llrm_x86::calling::callee_saved(entry);
     if !(entry.arguments_clobbered || entry.results_clobbered) {
         return kept;
     }
-    let changed: Vec<Register> = parameters
+    let changed: Vec<RegId> = parameters
         .iter()
         .filter_map(
             |one| if let Parameter::Registers(registers) = one { Some(registers.iter().copied()) } else { None },
@@ -671,7 +671,7 @@ enum Pointer {
         index: Option<Held>,
         scale: i64,
         offset: i64,
-        segment: Option<Register>,
+        segment: Option<RegId>,
     },
     /// A near global's symbol, a displacement from it, and a register
     /// holding a variable one, times `scale`: a scaled one is a dword index.
@@ -1371,7 +1371,7 @@ pub struct Selector<'m, 'c, 'p> {
     merges: IndexMap<InstId, (bool, InstId, InstId)>,
     /// The frame starts its locals zeroed, as B$ENRA zero-fills them.
     zeroed: bool,
-    pins: IndexMap<u32, Register>,
+    pins: IndexMap<u32, RegId>,
     inputs: BTreeSet<u32>,
     /// Each call's contract and register interface, from the ABI that
     /// knows the callee.
@@ -1531,7 +1531,7 @@ impl Selector<'_, '_, '_> {
         }
         let entry = function.entry().expect("a body");
         let mut prologue = Vec::new();
-        let mut arrived: Vec<(Held, Register)> = Vec::new();
+        let mut arrived: Vec<(Held, RegId)> = Vec::new();
         for (index, (&parameter, place)) in function.parameters().iter().zip(&convention.parameters).enumerate() {
             // Only a used argument is loaded, as a DAG has no node for an
             // unused one; one `-g` names and a debug format
@@ -2787,7 +2787,7 @@ impl Selector<'_, '_, '_> {
             }
             Pointer::Frame { disp, index: None, .. } => {
                 let address = AddressRef {
-                    through: Register::BP,
+                    through: RegId::BP,
                     disp_width: 2,
                     ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
                 };
@@ -3946,7 +3946,7 @@ impl Selector<'_, '_, '_> {
             // the displacement a literal no relocation owns, through SS. A
             // dword index is the 67h form's, whose base is EBP.
             Pointer::Frame { disp, index: Some(index), scale } => Mem {
-                through: if index.width == 4 { Register::EBP } else { Register::BP },
+                through: if index.width == 4 { RegId::EBP } else { RegId::BP },
                 disp_width: 2,
                 index: Some(index),
                 scale,
@@ -4563,7 +4563,7 @@ impl Selector<'_, '_, '_> {
     fn listed(
         &self,
         effects: llrm_mir::memory::Effects,
-        disturbs: BTreeSet<Register>,
+        disturbs: BTreeSet<RegId>,
     ) -> Arc<crate::model::lir::CallMemory> {
         Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs })
     }
@@ -4917,7 +4917,7 @@ impl Selector<'_, '_, '_> {
                 let llrm_target::calling::Place::Registers(names) = place else { continue };
                 let argument = arguments[index];
                 let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
-                let registers: Vec<Register> = names.iter().map(|name| llrm_x86::calling::register(name)).collect();
+                let registers: Vec<RegId> = names.iter().map(|name| llrm_x86::calling::register(name)).collect();
                 if let [low, high] = registers[..] {
                     // A pair: an i64's dwords, a far pointer's offset and
                     // selector, or a long's words.
@@ -5002,10 +5002,10 @@ impl Selector<'_, '_, '_> {
                 // into it, as gcc does, and not stored to a
                 // cell and pushed from it.
                 if matches!(size, 4 | 8) && self.arch.object().bitness == 32 {
-                    let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+                    let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
                     let count = Loc::Imm(Imm { value: i64::from(size), width: 2, address: None });
                     out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp, count])));
-                    let top = Mem { through: Register::SP, disp_width: 0, ..Mem::new(None, size) };
+                    let top = Mem { through: RegId::SP, disp_width: 0, ..Mem::new(None, size) };
                     out.push(insn(
                         at,
                         semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(top)], vec![Loc::Held(held)]),
@@ -5125,13 +5125,13 @@ impl Selector<'_, '_, '_> {
                     .map(|name| llrm_x86::calling::register(name))
                     .map(|register| if register.is_gpr() { register.full_register32() } else { register })
                     .chain(unnamed)
-                    .collect::<BTreeSet<Register>>(),
+                    .collect::<BTreeSet<RegId>>(),
             )
         });
         let changed = changed.transpose()?;
         // What its convention says it disturbs, which a caller that keeps those
         // for its own caller saves before it.
-        let disturbs: BTreeSet<Register> = changed.clone().unwrap_or_else(|| {
+        let disturbs: BTreeSet<RegId> = changed.clone().unwrap_or_else(|| {
             let named =
                 self::entry(self.arch, convention, variadic).map(|entry| entry.clobbers(&[], None)).unwrap_or_default();
             named
@@ -5244,7 +5244,7 @@ impl Selector<'_, '_, '_> {
                 )
             }
         };
-        let whole: BTreeSet<Register> = self
+        let whole: BTreeSet<RegId> = self
             .arch
             .callee_saved()
             .into_iter()
@@ -5294,7 +5294,7 @@ impl Selector<'_, '_, '_> {
             Callee::Indirect(_) => {}
         }
         if contract.caller_cleanup > 0 {
-            let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+            let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
             let count = Loc::Imm(Imm { value: contract.caller_cleanup, width: 2, address: None });
             out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
         }
@@ -5341,7 +5341,7 @@ impl Selector<'_, '_, '_> {
         let bytes = i64::from(byval_bytes(self.module, &self.layout, self.arch, aggregate)?);
         let copy = self.layout.alloc_size(self.types(), aggregate) as i64;
         let from = self.pointer(source)?;
-        let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+        let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
         let count = Loc::Imm(Imm { value: bytes, width: if bytes > 0x7FFF { 4 } else { 2 }, address: None });
         out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp.clone(), count])));
         let base = self.fresh_held(self.address_bytes());
@@ -6313,7 +6313,7 @@ fn frame(
     disp: i64,
     width: u32,
 ) -> Mem {
-    Mem { through: Register::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), width) }
+    Mem { through: RegId::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), width) }
 }
 
 fn semantics(

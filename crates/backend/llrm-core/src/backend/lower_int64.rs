@@ -3,6 +3,8 @@
 
 use std::collections::BTreeSet;
 
+use llrm_lir::registers::RegId;
+
 use crate::abi::runtime::{self, Reg};
 
 pub(crate) fn _helper(
@@ -40,16 +42,16 @@ pub(crate) fn _helper(
 /// The runtime registers `registers` are views of, and the flags too where
 /// `flags` says so.
 pub(crate) fn runtime_registers(
-    registers: &[iced_x86::Register],
+    registers: &[RegId],
     flags: bool,
 ) -> BTreeSet<Reg> {
     let mut out: BTreeSet<Reg> = registers
         .iter()
         .map(|register| match register.full_register32() {
-            iced_x86::Register::EAX => Reg::Ax,
-            iced_x86::Register::EBX => Reg::Bx,
-            iced_x86::Register::ECX => Reg::Cx,
-            iced_x86::Register::EDX => Reg::Dx,
+            RegId::EAX => Reg::Ax,
+            RegId::EBX => Reg::Bx,
+            RegId::ECX => Reg::Cx,
+            RegId::EDX => Reg::Dx,
             other => panic!("an inline routine names {other:?}"),
         })
         .collect();

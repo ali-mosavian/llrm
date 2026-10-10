@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::LazyLock;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::abi::runtime::{self, Contract, Control};
 use crate::backend::assemble::Registers;
@@ -788,7 +788,7 @@ impl HirAbi {
 /// sets BX last and uses ES:BX at once.
 pub fn registers(name: &str) -> Option<Registers> {
     match name {
-        "B$HARY" => Some(Registers { arguments: vec![Register::BX], results: vec![Register::BX, Register::ES] }),
+        "B$HARY" => Some(Registers { arguments: vec![RegId::BX], results: vec![RegId::BX, RegId::ES] }),
         _ => None,
     }
 }

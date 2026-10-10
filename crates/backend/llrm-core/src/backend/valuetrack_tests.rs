@@ -1,4 +1,5 @@
 use iced_x86::Register::{EAX, EBP, ECX, EDX, ESP};
+use llrm_lir::registers::RegId;
 use llrm_object::debug::FrameRow;
 
 use super::{Mark, Place, Regs, Where, tracked};
@@ -13,8 +14,7 @@ fn regs() -> Regs {
 }
 
 fn rows() -> Vec<FrameRow> {
-    crate::backend::cfi::rows(&FRAMED, 32, iced_x86::Register::EBP, iced_x86::Register::ESP, 4, &[])
-        .expect("followable")
+    crate::backend::cfi::rows(&FRAMED, 32, RegId::EBP, RegId::ESP, 4, &[]).expect("followable")
 }
 
 /// Each range with the first of the places the value is in.
@@ -57,8 +57,7 @@ fn a_variable_follows_its_value_from_the_register_to_the_cell_a_move_copied_it_t
 fn a_variable_has_no_place_once_nothing_holds_its_value() {
     // push ebp; mov ebp, esp; mov eax, 5; mov eax, 6; ret
     let code = [0x55, 0x89, 0xE5, 0xB8, 5, 0, 0, 0, 0xB8, 6, 0, 0, 0, 0xC3];
-    let rows = crate::backend::cfi::rows(&code, 32, iced_x86::Register::EBP, iced_x86::Register::ESP, 4, &[])
-        .expect("followable");
+    let rows = crate::backend::cfi::rows(&code, 32, RegId::EBP, RegId::ESP, 4, &[]).expect("followable");
     let marks = [(8, Mark::Def { tag: 7, place: Place::Register(EAX) }), (8, Mark::Note(0))];
     let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks);
     assert_eq!(firsts(&found[&(1, None)]), [(8, 13, Where::Place(Place::Register(EAX)))]);
@@ -72,8 +71,7 @@ fn paths_that_join_keep_only_the_place_both_hold() {
     // 0 mov eax,5; 5 test ecx,ecx; 7 je 14; 9 mov edx,eax; 11 xor eax,eax; 13
     // nop; 14 ret
     let code = [0xB8, 5, 0, 0, 0, 0x85, 0xC9, 0x74, 0x05, 0x89, 0xC2, 0x31, 0xC0, 0x90, 0xC3];
-    let rows = crate::backend::cfi::rows(&code, 32, iced_x86::Register::EBP, iced_x86::Register::ESP, 4, &[])
-        .expect("followable");
+    let rows = crate::backend::cfi::rows(&code, 32, RegId::EBP, RegId::ESP, 4, &[]).expect("followable");
     let marks = [(5, Mark::Def { tag: 7, place: Place::Register(EAX) }), (5, Mark::Note(0))];
     let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks);
     assert_eq!(
@@ -87,8 +85,7 @@ fn paths_that_join_keep_only_the_place_both_hold() {
 fn a_call_loses_the_registers_it_clobbers_and_keeps_the_others() {
     // mov eax, 5; mov edx, eax... encoded: mov eax,5; mov ecx,5; call +0; ret
     let code = [0xB8, 5, 0, 0, 0, 0xB9, 5, 0, 0, 0, 0xE8, 0, 0, 0, 0, 0xC3];
-    let rows = crate::backend::cfi::rows(&code, 32, iced_x86::Register::EBP, iced_x86::Register::ESP, 4, &[])
-        .expect("followable");
+    let rows = crate::backend::cfi::rows(&code, 32, RegId::EBP, RegId::ESP, 4, &[]).expect("followable");
     let marks = [
         (5, Mark::Def { tag: 7, place: Place::Register(EAX) }),
         (10, Mark::Def { tag: 8, place: Place::Register(ECX) }),
@@ -114,8 +111,7 @@ fn a_cell_whose_address_went_out_is_lost_at_the_next_call() {
         0x55, 0x89, 0xE5, 0x83, 0xEC, 0x08, 0xB8, 5, 0, 0, 0, 0x89, 0x45, 0xFC, 0x8D, 0x4D, 0xFC, 0x31, 0xC0, 0xE8, 0,
         0, 0, 0, 0xC3,
     ];
-    let rows = crate::backend::cfi::rows(&code, 32, iced_x86::Register::EBP, iced_x86::Register::ESP, 4, &[])
-        .expect("followable");
+    let rows = crate::backend::cfi::rows(&code, 32, RegId::EBP, RegId::ESP, 4, &[]).expect("followable");
     let marks = [(11, Mark::Def { tag: 7, place: Place::Register(EAX) }), (11, Mark::Note(0))];
     let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks);
     assert_eq!(
@@ -132,11 +128,10 @@ fn a_cell_whose_address_went_out_is_lost_at_the_next_call() {
 fn a_value_copied_to_another_register_is_in_both_until_the_first_is_overwritten() {
     // mov eax,5; mov ebx,eax; xor eax,eax; ret
     let code = [0xB8, 5, 0, 0, 0, 0x89, 0xC3, 0x31, 0xC0, 0xC3];
-    let rows = crate::backend::cfi::rows(&code, 32, iced_x86::Register::EBP, iced_x86::Register::ESP, 4, &[])
-        .expect("followable");
+    let rows = crate::backend::cfi::rows(&code, 32, RegId::EBP, RegId::ESP, 4, &[]).expect("followable");
     let marks = [(5, Mark::Def { tag: 7, place: Place::Register(EAX) }), (5, Mark::Note(0))];
     let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks);
-    let ebx = Where::Place(Place::Register(iced_x86::Register::EBX));
+    let ebx = Where::Place(Place::Register(RegId::EBX));
     assert_eq!(
         found[&(1, None)],
         [
