@@ -142,9 +142,12 @@ pub fn propagated(
     };
 
     // The values each block makes, in the order of `recipes`, and its phis.
+    let incremental = successors.is_some();
     let mut made = IndexMap::<i64, Vec<ValueId>>::default();
-    for (value, owner) in &owners {
-        made.entry(*owner).or_default().push(*value);
+    if incremental {
+        for (value, owner) in &owners {
+            made.entry(*owner).or_default().push(*value);
+        }
     }
     let activate = |source: i64,
                     target: i64,
@@ -153,8 +156,7 @@ pub fn propagated(
                     pending: &mut VecDeque<ValueId>,
                     queued: &mut BTreeSet<ValueId>,
                     dirty: &mut BTreeSet<i64>,
-                    waiting: &mut BTreeSet<usize>,
-                    states: &IndexMap<ValueId, State>| {
+                    fresh: &mut Vec<i64>| {
         if !blocks.contains_key(&target) || edges.contains(&(source, target)) {
             return false;
         }
@@ -163,11 +165,7 @@ pub fn propagated(
         if !live.contains(&target) {
             live.add(target);
             dirty.insert(target);
-            waiting.extend(
-                here.iter()
-                    .filter(|value| states[*value] == State::Pending)
-                    .filter_map(|value| recipes.get_index_of(value)),
-            );
+            fresh.push(target);
             enqueue(here.to_vec(), live, pending, queued);
         } else {
             let phis = here.iter().copied().filter(|value| is_phi(recipes[value])).collect();
@@ -192,25 +190,30 @@ pub fn propagated(
     // The blocks whose successors are to be asked again: those just live and
     // those that read a value whose state changed. The answers of the
     // others are as they were.
-    let mut dirty: BTreeSet<i64> = live.iter().copied().collect();
+    let mut dirty: BTreeSet<i64> = if incremental { live.iter().copied().collect() } else { BTreeSet::new() };
     // The live values with no state yet, by place in `recipes`: what is left to
     // settle when the propagation stalls, kept as the states change.
-    let mut waiting: BTreeSet<usize> = recipes
-        .iter()
-        .enumerate()
-        .filter(|(_, (value, _))| live.contains(&owners[*value]) && states[*value] == State::Pending)
-        .map(|(place, _)| place)
-        .collect();
-    let mut readers = IndexMap::<ValueId, Vec<i64>>::default();
+    let mut waiting: BTreeSet<usize> = if incremental {
+        recipes
+            .iter()
+            .enumerate()
+            .filter(|(_, (value, _))| live.contains(&owners[*value]) && states[*value] == State::Pending)
+            .map(|(place, _)| place)
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    let mut readers = llrm_mir::dense::IdMap::<ValueId, Vec<i64>>::new();
     if let Some(successors) = successors {
         for block in &graph {
             for value in (successors.reads)(block.at) {
-                readers.entry(value).or_default().push(block.at);
+                readers.get_or_insert_with(value, Vec::new).push(block.at);
             }
         }
     }
     // What the evaluator saw last as facts, kept as the states change.
-    let mut known_now = knowns(&states);
+    let mut fresh = Vec::<i64>::new();
+    let mut known_now = if incremental { knowns(&states) } else { IndexMap::default() };
     let mut deferred_now = BTreeSet::<i64>::new();
     loop {
         let Some(value) = pending.pop_front() else {
@@ -235,21 +238,37 @@ pub fn propagated(
                             &mut pending,
                             &mut queued,
                             &mut dirty,
-                            &mut waiting,
-                            &states,
+                            &mut fresh,
                         );
                     }
                 }
                 deferred.extend(deferred_now.iter().copied());
+                for block in fresh.drain(..) {
+                    waiting.extend(
+                        made.get(&block)
+                            .into_iter()
+                            .flatten()
+                            .filter(|value| states[*value] == State::Pending)
+                            .filter_map(|value| recipes.get_index_of(value)),
+                    );
+                }
             }
             if !pending.is_empty() || changed {
                 continue;
             }
             let facts = knowns(&states);
-            let unresolved = std::mem::take(&mut waiting)
-                .into_iter()
-                .filter_map(|place| recipes.get_index(place).map(|(value, _)| *value))
-                .collect::<Vec<_>>();
+            let unresolved = if incremental {
+                std::mem::take(&mut waiting)
+                    .into_iter()
+                    .filter_map(|place| recipes.get_index(place).map(|(value, _)| *value))
+                    .collect::<Vec<_>>()
+            } else {
+                recipes
+                    .keys()
+                    .copied()
+                    .filter(|value| live.contains(&owners[value]) && states[value] == State::Pending)
+                    .collect::<Vec<_>>()
+            };
             for value in &unresolved {
                 states.insert(*value, State::Overdefined);
                 for &reader in readers.get(value).into_iter().flatten() {
@@ -262,18 +281,18 @@ pub fn propagated(
             }
             for at in deferred {
                 for target in blocks[&at].succ.clone() {
-                    changed |= activate(
-                        at,
-                        target,
-                        &mut live,
-                        &mut edges,
-                        &mut pending,
-                        &mut queued,
-                        &mut dirty,
-                        &mut waiting,
-                        &states,
-                    );
+                    changed |=
+                        activate(at, target, &mut live, &mut edges, &mut pending, &mut queued, &mut dirty, &mut fresh);
                 }
+            }
+            for block in fresh.drain(..) {
+                waiting.extend(
+                    made.get(&block)
+                        .into_iter()
+                        .flatten()
+                        .filter(|value| states[*value] == State::Pending)
+                        .filter_map(|value| recipes.get_index_of(value)),
+                );
             }
             if changed || !pending.is_empty() {
                 continue;
@@ -359,7 +378,7 @@ pub fn propagated(
         if merged == states[&value] {
             continue;
         }
-        if successors.is_some() {
+        if incremental {
             match &merged {
                 State::Known(fact) => {
                     known_now.insert(value, fact.clone());
@@ -369,7 +388,7 @@ pub fn propagated(
                 }
             }
         }
-        if merged != State::Pending {
+        if incremental && merged != State::Pending {
             if let Some(place) = recipes.get_index_of(&value) {
                 waiting.remove(&place);
             }
