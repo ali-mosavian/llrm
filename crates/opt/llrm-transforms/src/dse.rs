@@ -15,6 +15,7 @@ use llrm_analysis::manager::Pointers;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::observers;
+use llrm_mir::footprint::Footprint;
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 
 pub struct Dse;
@@ -22,6 +23,12 @@ pub struct Dse;
 impl FunctionPass for Dse {
     fn name(&self) -> &'static str {
         "dse"
+    }
+
+    /// A store is dead by what reads or overwrites its cell on every path after
+    /// it: memory operations (and what addresses them) and the CFG.
+    fn reads(&self) -> Footprint {
+        Footprint::MEMORY | Footprint::STRUCTURE
     }
 
     fn run(

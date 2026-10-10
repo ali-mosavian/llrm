@@ -206,6 +206,11 @@ pub struct Mark {
 }
 
 impl Mark {
+    /// How many changes the function had logged at this point.
+    pub fn position(&self) -> usize {
+        self.at
+    }
+
     /// Whether `other` is a point in the same function's history: not a copy
     /// that took its own.
     pub fn same_history(
@@ -507,6 +512,16 @@ impl Function {
     /// Where the function stands now.
     pub fn mark(&self) -> Mark {
         Mark { uid: self.lineage.uid, at: self.lineage.logged }
+    }
+
+    /// A copy to edit and put in this function's place, which carries on its
+    /// history: a mark taken of this one is a point in the copy's, and what
+    /// the copy logs follows it. For a copy that replaces the function, not
+    /// one kept beside it (`clone` is that: its edits are its own).
+    pub fn fork(&self) -> Self {
+        let mut copy = self.clone();
+        copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged };
+        copy
     }
 
     /// What changed since `mark`, in order; none where `mark` is of another

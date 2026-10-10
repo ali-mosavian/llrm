@@ -743,8 +743,101 @@ fn test_a_steps_own_work_leaves_out_the_analyses_it_computed() {
         useful: 0,
         idle_with_analyses: 0,
         useful_with_analyses: 0,
+        classified: unit.function.mark(),
+        stretches: Vec::new(),
+        unreached: 0,
     };
     run.step(&mut Asks, "asks", &mut unit, &mut analyses);
     assert!(run.idle_with_analyses > 1_000_000, "premise: the analysis cost {} ", run.idle_with_analyses);
     assert!(run.idle * 10 < run.idle_with_analyses, "own {} of {} with the analysis", run.idle, run.idle_with_analyses);
+}
+
+/// Finds nothing to do, and counts how often it was asked.
+struct Watch {
+    name: &'static str,
+    reads: llrm_mir::footprint::Footprint,
+    runs: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl llrm_mir::passes::FunctionPass for Watch {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.reads
+    }
+
+    fn run(
+        &mut self,
+        _: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        self.runs.set(self.runs.get() + 1);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// Changes the constant of @f's add, once: an arithmetic value that only a
+/// `ret` reads.
+struct Fold {
+    done: bool,
+}
+
+impl llrm_mir::passes::FunctionPass for Fold {
+    fn name(&self) -> &'static str {
+        "fold-once"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        if std::mem::replace(&mut self.done, true) {
+            return llrm_mir::passes::PreservedAnalyses::all();
+        }
+        let (_, add) = unit
+            .function
+            .walk()
+            .find(|&(_, one)| {
+                unit.function.instruction(one).opcode
+                    == llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Add)
+            })
+            .expect("an add");
+        let ty = unit.function.instruction(add).ty;
+        let operands = unit.function.instruction(add).operands.clone();
+        let two = llrm_mir::module::Operand::Constant(unit.context.int(ty, 2));
+        unit.function.set_operands(add, vec![operands[0], two]);
+        llrm_mir::passes::PreservedAnalyses::none()
+    }
+}
+
+/// A fold in one function made every pass before it run again, the whole round,
+/// though what it changed was an arithmetic value only a `ret` reads: 13.6% of
+/// x_popcount -O2's compile was passes that found nothing (decide alone 3.4 of
+/// 94 Minstr), and a late fold (`& 3` over a sum masked again) cost it x1.024.
+/// A pass says what it reads (`FunctionPass::reads`), the driver what the edits
+/// reached (`footprint::of`): decide, which reads conditions, memory and
+/// the CFG, is not run again; one that reads everything is.
+#[test]
+fn a_fold_does_not_rerun_the_passes_that_read_nothing_it_reached() {
+    use llrm_mir::footprint::Footprint;
+    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let (narrow, wide) = (std::rc::Rc::new(std::cell::Cell::new(0)), std::rc::Rc::new(std::cell::Cell::new(0)));
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![
+        Box::new(Watch {
+            name: "narrow",
+            reads: Footprint::CONTROL | Footprint::MEMORY | Footprint::STRUCTURE,
+            runs: std::rc::Rc::clone(&narrow),
+        }),
+        Box::new(Watch { name: "wide", reads: Footprint::ALL, runs: std::rc::Rc::clone(&wide) }),
+        Box::new(Fold { done: false }),
+    ];
+    crate::testing::managed(&mut module, fixed);
+    assert_eq!(wide.get(), 2, "a pass that reads everything is run again after the fold");
+    assert_eq!(narrow.get(), 1, "decide-like: the fold reached no condition, no memory and no block");
 }
