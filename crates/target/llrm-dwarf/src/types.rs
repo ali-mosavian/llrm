@@ -99,6 +99,18 @@ impl Tree<'_> {
         Ok(Value::Addr { symbol, delta: offset as i64 - base as i64 })
     }
 
+    /// `DW_AT_high_pc`: a length from DWARF 4, the address of the end before.
+    fn high_pc(
+        &self,
+        range: model::Range,
+    ) -> Result<Value, Unsupported> {
+        if self.version >= 4 {
+            Ok(Value::Len(range.length as u32))
+        } else {
+            self.address(range.section, range.offset + range.length)
+        }
+    }
+
     /// Type `index`'s DIE, which sits at `1 + index`.
     fn describe(
         &mut self,
@@ -363,25 +375,39 @@ impl Tree<'_> {
         }
     }
 
+    /// The variable's DIE, or none where its type has no DWARF form (BASIC's
+    /// array, a far pointer): it is left out, never a refused compile.
     fn variable(
         &mut self,
         one: &Variable,
         global: bool,
-    ) -> Result<usize, Unsupported> {
+    ) -> Result<Option<usize>, Unsupported> {
         let mut die = Die::new(if one.kind == Kind::Parameter { TAG_FORMAL_PARAMETER } else { TAG_VARIABLE });
         die.attrs.push((AT_NAME, Value::Str(one.name.clone())));
-        self.typed(&mut die, one.r#type)?;
+        if self.typed(&mut die, one.r#type).is_err() {
+            return Ok(None);
+        }
         if let (true, Location::Static { symbol, .. }) = (global, &one.location) {
             if self.object.symbols[*symbol].binding == Binding::Public {
                 die.attrs.push((AT_EXTERNAL, Value::Flag));
             }
         }
+        // A 16-bit program's data address is an offset in a segment.
+        if let (2, Location::Static { symbol, .. }) = (self.address, &one.location) {
+            if let llrm_object::Definition::Defined { section, .. } = self.object.symbols[*symbol].definition {
+                die.attrs.push((AT_SEGMENT, Value::ExprSegment { section }));
+            }
+        }
         // A list with no entry is a variable the optimiser removed: no location
         // says "optimized out".
+        // A place DWARF as written here cannot say (a register it has no number
+        // for) is left out the same way: gcc's rule.
         if !matches!(&one.location, Location::List(entries) if entries.is_empty()) {
-            die.attrs.push((AT_LOCATION, self.location(&one.location)?));
+            if let Ok(location) = self.location(&one.location) {
+                die.attrs.push((AT_LOCATION, location));
+            }
         }
-        Ok(self.push(die))
+        Ok(Some(self.push(die)))
     }
 
     fn scope(
@@ -391,14 +417,15 @@ impl Tree<'_> {
         blocks: &[Block],
     ) -> Result<(), Unsupported> {
         for one in variables {
-            let at = self.variable(one, false)?;
-            die.children.push(at);
+            if let Some(at) = self.variable(one, false)? {
+                die.children.push(at);
+            }
         }
         for block in blocks {
             let [range] = block.ranges[..] else { return refused("a block of several ranges is not written yet") };
             let mut inner = Die::new(TAG_LEXICAL_BLOCK);
             inner.attrs.push((AT_LOW_PC, self.address(range.section, range.offset)?));
-            inner.attrs.push((AT_HIGH_PC, Value::Len(range.length as u32)));
+            inner.attrs.push((AT_HIGH_PC, self.high_pc(range)?));
             self.scope(&mut inner, &block.variables, &block.blocks)?;
             let at = self.push(inner);
             die.children.push(at);
@@ -422,10 +449,14 @@ impl Tree<'_> {
         }
         die.attrs.push((AT_PROTOTYPED, Value::Flag));
         if let Some(Type::Procedure { result: Some(result), .. }) = self.info.types.get(one.r#type) {
-            self.typed(&mut die, *result)?;
+            // A result with no DWARF form leaves the function untyped.
+            let _ = self.typed(&mut die, *result);
+        }
+        if self.address == 2 {
+            die.attrs.push((AT_SEGMENT, Value::ExprSegment { section: range.section }));
         }
         die.attrs.push((AT_LOW_PC, self.address(range.section, range.offset)?));
-        die.attrs.push((AT_HIGH_PC, Value::Len(range.length as u32)));
+        die.attrs.push((AT_HIGH_PC, self.high_pc(range)?));
         let framed = one
             .variables
             .iter()
@@ -532,7 +563,7 @@ pub fn tree(
         [] => {}
         [range] => {
             unit.attrs.push((AT_LOW_PC, tree.address(range.section, range.offset)?));
-            unit.attrs.push((AT_HIGH_PC, Value::Len(range.length as u32)));
+            unit.attrs.push((AT_HIGH_PC, tree.high_pc(range)?));
         }
         _ => return refused("a module of several code ranges is not written yet"),
     }
@@ -571,8 +602,9 @@ pub fn tree(
         }
     }
     for global in &info.globals {
-        let at = tree.variable(global, true)?;
-        children.push(at);
+        if let Some(at) = tree.variable(global, true)? {
+            children.push(at);
+        }
     }
     for function in &info.functions {
         let at = tree.function(function)?;

@@ -17,6 +17,7 @@ pub const AT_HIGH_PC: u16 = 0x12;
 pub const AT_LANGUAGE: u16 = 0x13;
 pub const AT_PRODUCER: u16 = 0x25;
 pub const AT_LOCATION: u16 = 0x02;
+pub const AT_SEGMENT: u16 = 0x46;
 pub const AT_CONST_VALUE: u16 = 0x1c;
 pub const AT_UPPER_BOUND: u16 = 0x2f;
 pub const AT_DATA_MEMBER_LOCATION: u16 = 0x38;
@@ -55,6 +56,11 @@ pub enum Value {
     },
     /// A location list, at this offset of the section of them.
     LocList(u32),
+    /// `DW_OP_const2u` of the selector of a section: a 16-bit program's
+    /// `DW_AT_segment`.
+    ExprSegment {
+        section: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -100,7 +106,14 @@ impl Out {
     }
 }
 
-fn form(value: &Value) -> u16 {
+const DW_OP_CONST2U: u8 = 0x0A;
+
+/// Before 4 an expression is a block, a section offset is a 4-byte constant
+/// and a flag is a byte.
+fn form(
+    value: &Value,
+    version: u16,
+) -> u16 {
     match value {
         Value::Str(_) => 0x0e,
         Value::U8(_) => 0x0b,
@@ -108,17 +121,36 @@ fn form(value: &Value) -> u16 {
         Value::Len(_) => 0x06,
         Value::Udata(_) => 0x0f,
         Value::Sdata(_) => 0x0d,
-        Value::Flag => 0x19,
+        Value::Flag => {
+            if version < 4 {
+                0x0c
+            } else {
+                0x19
+            }
+        }
         Value::Ref(_) => 0x13,
         Value::Addr { .. } => 0x01,
-        Value::Line | Value::LocList(_) => 0x17,
-        Value::Expr(_) | Value::ExprAddr { .. } => 0x18,
+        Value::Line | Value::LocList(_) => {
+            if version < 4 {
+                0x06
+            } else {
+                0x17
+            }
+        }
+        Value::Expr(_) | Value::ExprAddr { .. } | Value::ExprSegment { .. } => {
+            if version < 4 {
+                0x0a
+            } else {
+                0x18
+            }
+        }
     }
 }
 
 fn size(
     value: &Value,
     address: usize,
+    version: u16,
 ) -> usize {
     match value {
         Value::Str(_) | Value::Len(_) | Value::Ref(_) | Value::Line | Value::LocList(_) => 4,
@@ -126,17 +158,29 @@ fn size(
         Value::U16(_) => 2,
         Value::Udata(one) => uleb(*one).len(),
         Value::Sdata(one) => crate::buffer::sleb(*one).len(),
-        Value::Flag => 0,
+        Value::Flag => usize::from(version < 4),
         Value::Addr { .. } => address,
-        Value::Expr(bytes) => uleb(bytes.len() as u64).len() + bytes.len(),
-        Value::ExprAddr { .. } => uleb(1 + address as u64).len() + 1 + address,
+        Value::Expr(bytes) => block(bytes.len(), version) + bytes.len(),
+        Value::ExprAddr { .. } => block(1 + address, version) + 1 + address,
+        Value::ExprSegment { .. } => block(3, version) + 3,
     }
+}
+
+/// The length that precedes an expression: a ULEB128 from 4, a byte before.
+fn block(
+    length: usize,
+    version: u16,
+) -> usize {
+    if version < 4 { 1 } else { uleb(length as u64).len() }
 }
 
 type Shape = (u16, bool, Vec<(u16, u16)>);
 
-fn shape(die: &Die) -> Shape {
-    (die.tag, !die.children.is_empty(), die.attrs.iter().map(|(at, value)| (*at, form(value))).collect())
+fn shape(
+    die: &Die,
+    version: u16,
+) -> Shape {
+    (die.tag, !die.children.is_empty(), die.attrs.iter().map(|(at, value)| (*at, form(value, version))).collect())
 }
 
 /// The unit's `.debug_info` and `.debug_abbrev`.
@@ -154,6 +198,7 @@ pub fn unit(
         code_of: vec![0; dies.len()],
         offsets: vec![0; dies.len()],
         address,
+        version: out.version,
     };
     let header = if out.version >= 5 { 12 } else { 11 };
     layout.place(&dies, 0, header);
@@ -166,7 +211,7 @@ pub fn unit(
         buf.u8(out.address);
         buf.section_offset(out.places.abbrev, 0);
     } else {
-        buf.u16(4);
+        buf.u16(out.version);
         buf.section_offset(out.places.abbrev, 0);
         buf.u8(out.address);
     }
@@ -196,6 +241,7 @@ struct Layout {
     code_of: Vec<u64>,
     offsets: Vec<usize>,
     address: usize,
+    version: u16,
 }
 
 impl Layout {
@@ -207,7 +253,7 @@ impl Layout {
         mut at: usize,
     ) -> usize {
         let die = &dies[index];
-        let key = shape(die);
+        let key = shape(die, self.version);
         let next = self.order.len() as u64 + 1;
         let code = *self.codes.entry(key.clone()).or_insert(next);
         if code == next {
@@ -215,7 +261,8 @@ impl Layout {
         }
         self.code_of[index] = code;
         self.offsets[index] = at;
-        at += uleb(code).len() + die.attrs.iter().map(|(_, value)| size(value, self.address)).sum::<usize>();
+        at += uleb(code).len()
+            + die.attrs.iter().map(|(_, value)| size(value, self.address, self.version)).sum::<usize>();
         for &child in &die.children {
             at = self.place(dies, child, at);
         }
@@ -246,19 +293,28 @@ fn write(
             Value::Len(one) => buf.u32(*one),
             Value::Udata(one) => buf.uleb(*one),
             Value::Sdata(one) => buf.sleb(*one),
-            Value::Flag => {}
+            Value::Flag => {
+                if out.version < 4 {
+                    buf.u8(1);
+                }
+            }
             Value::Ref(target) => buf.u32(offsets[*target] as u32),
             Value::Addr { symbol, delta } => buf.address(address, *symbol, *delta),
             Value::Line => buf.section_offset(out.places.line, 0),
             Value::LocList(at) => buf.section_offset(out.places.locations.expect("a section of lists"), *at),
             Value::Expr(bytes) => {
-                buf.uleb(bytes.len() as u64);
+                length(buf, bytes.len(), out.version)?;
                 buf.bytes.extend(bytes);
             }
             Value::ExprAddr { symbol, delta } => {
-                buf.uleb(1 + address as u64);
+                length(buf, 1 + address, out.version)?;
                 buf.u8(0x03);
                 buf.address(address, *symbol, *delta);
+            }
+            Value::ExprSegment { section } => {
+                length(buf, 3, out.version)?;
+                buf.u8(DW_OP_CONST2U);
+                buf.segment(*section);
             }
         }
     }
@@ -267,6 +323,19 @@ fn write(
             write(dies, codes, offsets, child, out, buf)?;
         }
         buf.u8(0);
+    }
+    Ok(())
+}
+
+fn length(
+    buf: &mut Buf,
+    bytes: usize,
+    version: u16,
+) -> Result<(), Unsupported> {
+    if version >= 4 {
+        buf.uleb(bytes as u64);
+    } else {
+        buf.u8(u8::try_from(bytes).or_else(|_| crate::refused("an expression of 256 bytes before DWARF 4"))?);
     }
     Ok(())
 }
@@ -282,18 +351,25 @@ pub fn aranges(
     buf.u16(2);
     buf.section_offset(out.places.info, 0);
     buf.u8(out.address);
-    buf.u8(0);
-    let tuple = 2 * usize::from(out.address);
-    while buf.at() % tuple != 0 {
+    // A 16-bit program's address is an offset and a segment: a tuple is the
+    // offset, the segment and the length, 2 bytes each, as Open Watcom writes
+    // it.
+    let segmented = out.address == 2;
+    buf.u8(if segmented { 2 } else { 0 });
+    let tuple = if segmented { 6 } else { 2 * usize::from(out.address) };
+    while !segmented && buf.at() % tuple != 0 {
         buf.u8(0);
     }
     let address = usize::from(out.address);
     for range in &info.code {
         let (symbol, base) = crate::anchor(object, range.section)?;
         buf.address(address, symbol, range.offset as i64 - base as i64);
+        if segmented {
+            buf.segment(range.section);
+        }
         buf.bytes.extend((range.length as u64).to_le_bytes().iter().take(address));
     }
-    buf.bytes.extend(std::iter::repeat_n(0, 2 * address));
+    buf.bytes.extend(std::iter::repeat_n(0, tuple));
     let length = buf.at() as u32 - 4;
     buf.patch32(0, length);
     Ok(buf.done())

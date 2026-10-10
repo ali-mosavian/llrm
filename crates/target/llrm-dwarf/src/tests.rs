@@ -163,31 +163,47 @@ fn a_bodys_start_and_end_are_marked_in_the_line_table() {
     assert!(program.contains(&10) && program.contains(&11), "{program:?}");
 }
 
-/// A far pointer has no DWARF type: it is refused where a variable uses it, and
-/// only there.
+/// The name of a variable is in the unit's strings if its DIE was written.
+fn names(
+    object: &Object,
+    name: &str,
+) -> bool {
+    let wanted = format!("{name}\0");
+    object
+        .sections
+        .iter()
+        .any(|one| one.name == ".debug_str" && one.image.windows(wanted.len()).any(|at| at == wanted.as_bytes()))
+}
+
+/// A far pointer has no DWARF type: the variable that has it is left out (it
+/// was a refused compile), and the others are written.
 #[test]
-fn an_unwritable_type_is_refused_where_it_is_used_and_nowhere_else() {
+fn a_variable_of_an_unwritable_type_is_left_out_and_the_others_are_written() {
     let far = Type::Pointer { target: 0, bytes: 6, reach: Reach::Far };
-    let mut used = frame("x", 8);
+    let mut used = frame("xfar", 8);
     used.r#type = 1;
-    let why = written(vec![used], vec![int(), far.clone()], Format::Default).err().expect("refused").0;
-    assert!(why.contains("far or huge pointer"), "{why}");
+    let kept = frame("xnear", 12);
+    let made = written(vec![used, kept], vec![int(), far.clone()], Format::Default).expect("written");
+    assert!(!names(&made, "xfar") && names(&made, "xnear"));
     // Nothing uses it: the unit is written without it.
     assert!(written(vec![frame("x", 8)], vec![int(), far], Format::Default).is_ok());
 }
 
-/// BASIC's array (its bounds are a descriptor's) and a register with no DWARF
-/// number are refused by name, not written as something else.
+/// BASIC's array (its bounds are a descriptor's) leaves its variable out, never
+/// written as something else; a place DWARF has no expression for (a register
+/// with no number, a static in a list) is left out of the variable, which is
+/// written with no location: a refused compile was `-g` failing a program that
+/// uses `ah` or an array (GORILLA).
 #[test]
-fn what_dwarf_cannot_say_is_refused_by_name() {
+fn what_dwarf_cannot_say_is_left_out() {
     let array = Type::Array { element: 0, bytes: None };
-    let mut basic = frame("a", 8);
+    let mut basic = frame("arr", 8);
     basic.r#type = 1;
-    assert!(written(vec![basic], vec![int(), array], Format::Default).unwrap_err().0.contains("BASIC array"));
+    let made = written(vec![basic], vec![int(), array], Format::Default).expect("written without the array");
+    assert!(!names(&made, "arr"));
     let high = Variable { name: "h".into(), r#type: 0, kind: Kind::Local, location: Location::Register("ah".into()) };
-    assert!(
-        written(vec![high], vec![int()], Format::Default).unwrap_err().0.contains("register ah has no DWARF number")
-    );
+    let kept = written(vec![high], vec![int()], Format::Default).expect("written without a location");
+    assert!(kept.sections.iter().any(|one| one.name == ".debug_str" && one.image.windows(2).any(|two| two == b"h\0")));
     // A list of one that holds neither a frame cell nor a register (a static,
     // say) has no expression here.
     let range = Range { section: 0, offset: 0, length: 4 };
@@ -197,7 +213,7 @@ fn what_dwarf_cannot_say_is_refused_by_name() {
         kind: Kind::Local,
         location: Location::List(vec![(range, Location::Static { symbol: 0, disp: 0 })]),
     };
-    assert!(written(vec![moved], vec![int()], Format::Default).unwrap_err().0.contains("holds frame cells, registers"));
+    assert!(written(vec![moved], vec![int()], Format::Default).is_ok());
 }
 
 /// A format this writer does not write is refused with which: an object cannot
@@ -206,7 +222,7 @@ fn what_dwarf_cannot_say_is_refused_by_name() {
 fn a_format_that_is_not_dwarf_is_refused() {
     assert!(written(Vec::new(), vec![int()], Format::CodeView).unwrap_err().0.contains("CodeView"));
     assert!(written(Vec::new(), vec![int()], Format::TurboDebugger).unwrap_err().0.contains("Turbo Debugger"));
-    assert!(written(Vec::new(), vec![int()], Format::Dwarf { version: 3 }).unwrap_err().0.contains("version 3"));
+    assert!(written(Vec::new(), vec![int()], Format::Dwarf { version: 1 }).unwrap_err().0.contains("version 1"));
 }
 
 /// A register is DW_OP_reg0 + its number, and a number past 31 is DW_OP_regx.

@@ -239,6 +239,8 @@ impl Flags {
                 (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 5 })
             }
             "-gdwarf-4" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 4 }),
+            "-gdwarf-3" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 3 }),
+            "-gdwarf-2" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 2 }),
             "-gtd" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::TurboDebugger),
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
