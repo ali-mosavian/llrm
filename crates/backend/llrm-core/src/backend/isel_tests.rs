@@ -5230,11 +5230,8 @@ fn test_an_i64_compare_and_convert_follow_the_native_width_not_a_dword() {
 fn test_a_wide_result_is_in_the_conventions_register_pair() {
     use llrm_target::Target;
     let pair: Vec<iced_x86::Register> = llrm_x86_m16::M16.results(8).iter().map(|one| one.full_register32()).collect();
-    let selected = selected(
-        "declare i64 @g()\ndefine i64 @f() {\n  %x = call i64 @g()\n  ret i64 %x\n}\n",
-        "f",
-    )
-    .expect("selects");
+    let selected =
+        selected("declare i64 @g()\ndefine i64 @f() {\n  %x = call i64 @g()\n  ret i64 %x\n}\n", "f").expect("selects");
     let insns = selected.body.insns();
     let delivered = insns.iter().flat_map(|one| one.delivers.iter().map(|(_, register)| *register)).collect::<Vec<_>>();
     let required = insns.iter().flat_map(|one| one.requires.iter().map(|(_, register)| *register)).collect::<Vec<_>>();
