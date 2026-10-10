@@ -180,7 +180,12 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
-WARNINGS_AS_ERRORS = "RUSTFLAGS='-D warnings'"
+WARNING_FLAGS = "-D warnings"
+WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
+# Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-c apart from the build step's and put
+# its binary over target/release/llrm-c (the inode changed after `integration`), while `torture`, `run` and the like were running it:
+# "No such file or directory: .../release/llrm-c" in torture. One set of flags, one build, one binary.
+STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS}
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
@@ -189,7 +194,7 @@ BUILD = (
 )
 # Measurements compare two revisions, so their historical base is built without
 # today's warning policy.
-MEASURE_BUILD = "cargo build --release -q --bins && cargo test --release -q --workspace --no-run"
+MEASURE_BUILD = "env -u RUSTFLAGS cargo build --release -q --bins && env -u RUSTFLAGS cargo test --release -q --workspace --no-run"
 # The shipped build (Cargo.toml `[profile.dist]`): what the creep run on main measures. Not a gate step: three minutes cold.
 DIST_BUILD = "cargo build --profile dist -q --bins"
 
@@ -375,7 +380,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     if not target:
         sys.exit("gate: CARGO_TARGET_DIR is not set")
     # The run test compares the tree before and after; a tool writing a .pyc into it meanwhile is not a leak.
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
+    env = {**os.environ, **STEP_ENV, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
     logs = Path(target) / "gate-logs"
     logs.mkdir(parents=True, exist_ok=True)
     pkgs = packages()
