@@ -1,4 +1,4 @@
-//! llrm-core generates a selector, peephole rules and effect rows for its own
+//! llrm-core generates a selector and peephole rules for its own
 //! tests behind its `fixtures` feature. A product binds a target's from the
 //! target's select crate: no other crate may switch the feature on, or the
 //! product would carry a second copy.

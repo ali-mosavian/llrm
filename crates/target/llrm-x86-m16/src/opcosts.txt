@@ -32,6 +32,7 @@ float_store = x87_store
 # Unpriced in clocks: no audited price for the 386 to the Core (x86-m32 has the 486 and P5). Bytes: [size].
 float_release = 0
 extend = movzx
+set = setcc
 fill = rep_stos + 2*push_r + 2*pop_seg + 2*mov_ri
 fill_cell = rep_stos_cell
 copy = rep_movs + 2*push_r + 2*pop_seg + 3*mov_ri
@@ -57,6 +58,7 @@ div_r16 = 6
 shift_ri = 6
 lea = 6
 movzx = 6
+setcc = 3
 mov_rr = 4
 mov_rm = 6
 mov_mr = 6

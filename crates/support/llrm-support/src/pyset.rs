@@ -243,6 +243,19 @@ impl<T: PyHash + PartialEq> FromIterator<T> for PySet<T> {
 mod tests {
     use super::*;
 
+    /// A probe ends at an `Unused` slot, so one must always exist: a set never
+    /// removes (no dummies), and `add` grows the table before `fill` reaches 3/5
+    /// of it.
+    #[test]
+    fn a_table_always_keeps_an_unused_slot_for_a_probe_to_end_at() {
+        let mut set = PySet::new();
+        for key in 0..3000i64 {
+            set.add(key);
+            assert!(set.table.iter().any(|slot| matches!(slot, Slot::Unused)), "{key} keys fill the table");
+            assert!(!set.contains(&(key + 1)), "a missing key ends at an unused slot");
+        }
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq)]
     struct Pair(i64, i64);
 
