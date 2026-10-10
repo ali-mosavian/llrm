@@ -762,7 +762,7 @@ pub fn assembled(
     names.insert((Space::Segment, i64::from(main.0)), MAIN.to_owned());
     names.insert((Space::Segment, MAIN_FRAME_ID), MAIN_FRAME.to_owned());
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
-    let segments = Segments::of(&options.machine);
+    let segments = Segments::of(&options.machine, crate::backend::target::offset_bytes(&*options.arch));
     let cpu = options.cpu()?;
     let classes = std::rc::Rc::new(crate::backend::classes::RegisterClasses::of(&*options.arch));
     let facts = crate::backend::calleefacts::CalleeFacts::none();
