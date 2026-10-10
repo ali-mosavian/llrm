@@ -53,14 +53,40 @@ pub fn tied(body: &LirBody) -> LirBody {
 
     let (_, leaving) = allocate::live(body);
     let copies = _copy_destinations(body);
+    // Of each swap's two sources, those live after it: all `_commuted` reads of
+    // liveness.
+    let lives: Vec<IndexMap<usize, BTreeSet<u32>>> = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut alive = leaving[&block.at].clone();
+            let mut live_after: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
+            for one in block.insns.iter().rev() {
+                if let Some((_, first, second)) = _swappable(one) {
+                    live_after.insert(
+                        ranges::key(one),
+                        [first, second].into_iter().filter(|value| alive.contains(value)).collect(),
+                    );
+                }
+                for value in &one.defines {
+                    alive.remove(value);
+                }
+                alive.extend(one.uses.iter().copied());
+            }
+            live_after
+        })
+        .collect();
     // `_commuted` compares a swap's two sources with the copy neighbours of its
-    // destination: the interference among those values is all it asks of, not
-    // every pair live together (quadratic in the values live at once).
+    // destination, when neither source lives on: the interference among those
+    // values is all it asks of, not every pair live together (quadratic in the
+    // values live at once), and none where no swap asks.
     let asked: BTreeSet<u32> = body
         .blocks
         .iter()
-        .flat_map(|block| &block.insns)
-        .filter_map(|one| _swappable(one))
+        .zip(&lives)
+        .flat_map(|(block, live_after)| block.insns.iter().map(move |one| (one, live_after.get(&ranges::key(one)))))
+        .filter(|(_, alive)| alive.is_some_and(BTreeSet::is_empty))
+        .filter_map(|(one, _)| _swappable(one))
         .filter_map(|(into, first, second)| {
             let neighbours = copies.get(&into)?;
             Some(neighbours.iter().copied().chain([first, second]))
@@ -82,22 +108,7 @@ pub fn tied(body: &LirBody) -> LirBody {
         }
     }
     let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut alive = leaving[&block.at].clone();
-        // Of a swap's two sources, those live after it: all `_commuted` reads.
-        let mut live_after: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
-        for one in block.insns.iter().rev() {
-            if let Some((_, first, second)) = _swappable(one) {
-                live_after.insert(
-                    ranges::key(one),
-                    [first, second].into_iter().filter(|value| alive.contains(value)).collect(),
-                );
-            }
-            for value in &one.defines {
-                alive.remove(value);
-            }
-            alive.extend(one.uses.iter().copied());
-        }
+    for (block, live_after) in body.blocks.iter().zip(&lives) {
         let nothing = BTreeSet::new();
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         for one in &block.insns {
