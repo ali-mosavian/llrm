@@ -207,11 +207,25 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
             assert_eq!(*analyses.get::<CallEffects>(&module.context, &layout, function), effects, "{at}");
             let calls: Calls =
                 effects.unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect::<IndexMap<_, _>>();
-            assert_eq!(
-                *analyses.get::<ThroughMemory>(&module.context, &layout, function),
-                Ok(consts::known(&unit, Some(&calls), None, None)),
-                "{at}"
-            );
+            let through = analyses.get::<ThroughMemory>(&module.context, &layout, function);
+            assert_eq!(*through, Ok(consts::known_walked(&unit, &calls)), "{at}");
+            // What the dense per-block cell solve knows, the walk knows (and
+            // the walk serves loads the cell map cannot, a store
+            // read as another type).
+            let dense = consts::known(&unit, Some(&calls), None, None);
+            let walked = through.as_ref().as_ref().unwrap();
+            let lacking: Vec<_> = dense
+                .iter()
+                .filter(|(value, fact)| walked.get(*value) != Some(*fact))
+                .map(|(value, fact)| (value, fact, function.value(*value).def))
+                .collect();
+            if !lacking.is_empty() {
+                for (_, inst) in function.walk().take(60) {
+                    let o = function.instruction(inst);
+                    eprintln!("MIR {:?} {:?} ty {:?} ops {:?} res {:?}", inst, o.opcode, o.ty, o.operands, o.result);
+                }
+            }
+            assert!(lacking.is_empty(), "{at}: the walk lacks {lacking:?}");
         }
     }
 }
