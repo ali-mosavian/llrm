@@ -64,8 +64,3 @@ memmove:
  pop %edi
  pop %esi
  ret
-
-# compiler-rt's divides are built with the stack protector: a canary that never differs
-.globl __stack_chk_fail
-__stack_chk_fail:
- ud2
