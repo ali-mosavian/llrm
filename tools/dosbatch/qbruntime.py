@@ -160,9 +160,16 @@ def draws_screen(name: str) -> bool:
 DEMO_BUDGET_MS = 6000
 
 
+# Probes that change screen mode many times, or play music, and take longer than the default.
+SLOW_PROBES = {"color_forms", "color_pairs", "color_ranges", "color_masks", "play_waits", "play_queue"}
+SLOW_BUDGET_MS = 600_000
+
+
 def budget(name: str) -> int | None:
     """The time a program is given, where it is not the default."""
-    return DEMO_BUDGET_MS if name.upper() in ("NIBBLES", "GORILLA") else None
+    if name.upper() in ("NIBBLES", "GORILLA"):
+        return DEMO_BUDGET_MS
+    return SLOW_BUDGET_MS if name in SLOW_PROBES else None
 
 
 def typed_input(name: str) -> bytes | None:
