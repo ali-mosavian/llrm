@@ -504,6 +504,17 @@ def test_lir_jumps_copies_a_tail_without_checking_the_whole_function_for_each_co
     assert cost <= 1500, cost
 
 
+def test_a_split_reads_the_blocks_of_its_values_range_not_the_functions(tmp_path):
+    """`split placed` on `branches` at N=1024 (3,073 blocks, a value live in 14 of them) asked every block of the function whether
+    the value is live there (`analysed`, `_whole_range`, `crossings`) and made a map of the blocks for each of its steps, for each
+    of 340 splits: 5,529 Minstr, 4x a doubling. The blocks are those the value is named in and the predecessors it is live into:
+    527."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["split placed"]
+    assert cost <= 1500, cost
+
+
 def test_copy_forwarding_does_not_clone_the_instruction_for_each_operand_it_tries(tmp_path):
     """cells(224) at -O2: `copyprop::forward_use` cloned the whole instruction (`Semantics`) before asking of each source and each
     address register whether an older copy fits, and answered no almost always: `lir peephole` read 157 to 174 Minstr (the clones
