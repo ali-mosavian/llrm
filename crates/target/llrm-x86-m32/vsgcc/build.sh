@@ -29,6 +29,6 @@ for o in O1 O2 O3 Os; do
     CS="gcc clang llrmElf"
   fi
   for c in $CS; do
-    ld -m $EMU -static -e 0 -Ttext=0x10000 --just-symbols=$O/stub.elf -o $P.$c$o.elf $P.$c$o.o $(eval echo \${RT_$c:-}) 2>$P.$c$o.lderr || echo "LINK FAIL $c$o $P: $(grep -o 'undefined reference to.*' $P.$c$o.lderr | sort -u | tr '\n' ' ')"
+    ld -m $EMU -static -e 0 -Ttext=0x10000 --just-symbols=$O/stub.elf -Map=$P.$c$o.map -o $P.$c$o.elf $P.$c$o.o $(eval echo \${RT_$c:-}) 2>$P.$c$o.lderr || echo "LINK FAIL $c$o $P: $(grep -o 'undefined reference to.*' $P.$c$o.lderr | sort -u | tr '\n' ' ')"
   done
 done

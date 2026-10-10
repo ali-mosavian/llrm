@@ -1922,7 +1922,8 @@ fn test_a_byte_parameter_passed_on_to_a_call_compiles() {
     let text = listing(&parsed(&source), "main", &O2());
     let main = between(&text, "_main proc", "_main endp");
     assert_eq!(main.matches("call far ptr _put").count(), 2, "{text}");
-    assert!(main.contains("movzx"), "{text}");
+    // The byte's extension is of a constant, so it is pushed as the constant.
+    assert!(main.contains("mov ax, 28") && main.contains("mov ax, 29") && !main.contains("movzx"), "{text}");
 }
 
 #[test]
