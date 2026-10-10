@@ -253,7 +253,7 @@ impl Indexes {
             if !was.metas && !found.added.iter().any(|at| new[*at].is_meta()) {
                 let mut slots: Vec<i64> = Vec::with_capacity(new.len());
                 let mut from = 0;
-                let mut spread = |slots: &mut Vec<i64>, count: usize, high: i64| -> bool {
+                let spread = |slots: &mut Vec<i64>, count: usize, high: i64| -> bool {
                     if count == 0 {
                         return true;
                     }
