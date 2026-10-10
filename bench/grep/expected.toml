@@ -1,4 +1,4 @@
-reason = "shrink-wrap per piece (#1323): the frame and each register kept are set up where first used and a small shared return is copied for the early exit; fib -8.0%, hanoi -8.0%, quicksort c -O2 -3.3% instructions (code +3 B), bintree/quicksort bas -0.4..-1.0%; one byte less in grep nib"
+reason = "the extension of a register holding a constant is the constant (grep nib: -3 B)"
 blessed = "2026-10-10"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 3056
 kernel_ms = 3415.6629
 
 [nib.O2]
-code_bytes = 1452
+code_bytes = 1449
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.5804
 
 [nib.Os]
-code_bytes = 1373
+code_bytes = 1370
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.6052

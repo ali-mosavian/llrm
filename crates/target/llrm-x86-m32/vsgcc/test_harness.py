@@ -13,7 +13,7 @@ RESULTS = harness.OUT / "results.jsonl"   # a run of run.sh, if there was one: r
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
-    """A work directory of its own with what these tests run: the stub and the gcc and clang objects of scroll and fib."""
+    """A work directory of its own with what these tests run: the stub and the gcc and clang objects of scroll, fib and x_ll_div."""
     import os
     import subprocess
     import sys
@@ -30,7 +30,7 @@ def built(tmp_path_factory):
     previous = harness.OUT
     harness.OUT = work
     harness.record_stub(work)
-    for prog in ("scroll", "fib"):
+    for prog in ("scroll", "fib", "x_ll_div"):
         done = subprocess.run([str(HERE / "build.sh"), prog], capture_output=True, text=True, env=env)
         assert done.returncode == 0 and "FAIL" not in done.stdout, (prog, done.stdout, done.stderr)
     yield work
@@ -45,6 +45,15 @@ def test_memmove_stand_in_copies_overlap_backwards(built):
     """The stub's memmove copied forwards: gcc/clang scroll (loops turned into memmove) reported 32636400, not 32634864."""
     for v in ("gccO2", "clangO2"):
         assert harness.run("scroll", v)["reports"] == expected("scroll")
+
+
+def test_a_divide_gcc_sends_to_libgcc_is_counted_in_its_code(built):
+    """x_ll_div read 508 B for gcc -O2 against llrm's 1,174 B (2.31x, the table's worst code row): the i64 divides gcc calls
+    are libgcc's, and the count was of its object, which leaves them out; linked, it is 1,477 B and llrm is 0.79x."""
+    import subprocess
+    obj = subprocess.run(["size", "-A", str(harness.OUT / "b" / "x_ll_div.gccO2.o")], capture_output=True, text=True).stdout
+    object_text = sum(int(l.split()[1]) for l in obj.splitlines() if l.startswith(".text"))
+    assert harness.code_bytes("x_ll_div", "gccO2") > object_text + 500, object_text
 
 
 def test_kernel_inlined_into_main_is_not_counted_as_zero(built):

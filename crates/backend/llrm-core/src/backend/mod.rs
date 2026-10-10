@@ -68,6 +68,7 @@ pub mod masm;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;
+pub mod neighbours;
 pub mod objbuild;
 pub mod overlap;
 pub mod parcopy;
