@@ -1148,6 +1148,91 @@ pub enum Provider {
     Bytes(Vec<Vec<(InstId, u32)>>),
 }
 
+/// What serves a read of `reference` (its index placed by `placed`): the stores
+/// `ask` says reach it, whole or byte by byte. None where a path meets no
+/// write.
+fn provider_of(
+    unit: &Unit,
+    accesses: &Accesses,
+    graph: &memoryssa::MemorySSA,
+    reference: &MemRef,
+    ask: &dyn Fn(&MemRef) -> BTreeSet<usize>,
+) -> Option<Provider> {
+    let placed = unit.registers.expect("a provider is found over the registers that place the indices");
+    let mut values = Vec::new();
+    let mut exact = true;
+    let reaching = ask(reference);
+    // A path to the entry that no write meets leaves every byte as it
+    // was found, so no byte is a store's.
+    if reaching.iter().any(|id| graph.access(*id).kind == memoryssa::Kind::Live) {
+        return None;
+    }
+    for id in reaching {
+        let access = graph.access(id);
+        let stored = access
+            .site
+            .filter(|_| access.kind == memoryssa::Kind::Def)
+            .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)));
+        match stored {
+            Some((site, (cell, _))) if memoryssa::same_bytes(unit, reference, &_addressed(unit, &cell, placed)) => {
+                values.push(site)
+            }
+            _ => {
+                exact = false;
+                break;
+            }
+        }
+    }
+    if exact && !values.is_empty() {
+        Some(Provider::Whole(values))
+    } else if let Some(address) = reference.addr().filter(|_| reference.width <= 8) {
+        // Some of the bytes are another store's, or a wider one's: each
+        // byte is asked of the walk, and read from the
+        // stores that reach it.
+        let mut bytes: Vec<Vec<(InstId, u32)>> = Vec::new();
+        'bytes: for k in 0..reference.width {
+            // The byte, with the provenance moved to it.
+            let one = MemRef {
+                disp: reference.disp + i64::from(k),
+                width: 1,
+                provenance: reference.provenance.as_ref().map(|found| found.shifted(i64::from(k))),
+                ..reference.clone()
+            };
+            let mut from = Vec::new();
+            for id in ask(&one) {
+                let access = graph.access(id);
+                let Some((site, (cell, _))) = access
+                    .site
+                    .filter(|_| access.kind == memoryssa::Kind::Def)
+                    .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)))
+                else {
+                    bytes.clear();
+                    break 'bytes;
+                };
+                let Some(there) = _addressed(unit, &cell, placed).addr().filter(|there| there.root == address.root)
+                else {
+                    bytes.clear();
+                    break 'bytes;
+                };
+                let at = address.disp + i64::from(k) - there.disp;
+                if !(0..i64::from(cell.width)).contains(&at) {
+                    bytes.clear();
+                    break 'bytes;
+                }
+                from.push((site, at as u32));
+            }
+            if from.is_empty() {
+                bytes.clear();
+                break;
+            }
+            bytes.push(from);
+        }
+        if bytes.len() == reference.width as usize { Some(Provider::Bytes(bytes)) } else { None }
+    } else {
+        None
+    }
+}
+
 /// The stores that serve each load `wanted` picks, found by MemorySSA walks,
 /// with the indices `unit.registers` proves constant taken into every address.
 pub fn load_providers(
@@ -1170,82 +1255,44 @@ pub fn load_providers(
         if crate::memory::constant_bits(unit, &reference).is_some() {
             continue;
         }
-        let mut values = Vec::new();
-        let mut exact = true;
-        let reaching = graph.clobbers_ignoring_invariance(inst, &reference);
-        // A path to the entry that no write meets leaves every byte as it
-        // was found, so no byte is a store's.
-        if reaching.iter().any(|id| graph.access(*id).kind == memoryssa::Kind::Live) {
-            continue;
-        }
-        for id in reaching {
-            let access = graph.access(id);
-            let stored = access
-                .site
-                .filter(|_| access.kind == memoryssa::Kind::Def)
-                .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)));
-            match stored {
-                Some((site, (cell, _)))
-                    if memoryssa::same_bytes(unit, &reference, &_addressed(unit, &cell, placed)) =>
-                {
-                    values.push(site)
-                }
-                _ => {
-                    exact = false;
-                    break;
-                }
-            }
-        }
-        if exact && !values.is_empty() {
-            providers.insert(result, Provider::Whole(values));
-        } else if let Some(address) = reference.addr().filter(|_| reference.width <= 8) {
-            // Some of the bytes are another store's, or a wider one's: each
-            // byte is asked of the walk, and read from the
-            // stores that reach it.
-            let mut bytes: Vec<Vec<(InstId, u32)>> = Vec::new();
-            'bytes: for k in 0..reference.width {
-                // The byte, with the provenance moved to it.
-                let one = MemRef {
-                    disp: reference.disp + i64::from(k),
-                    width: 1,
-                    provenance: reference.provenance.as_ref().map(|found| found.shifted(i64::from(k))),
-                    ..reference.clone()
-                };
-                let mut from = Vec::new();
-                for id in graph.clobbers_ignoring_invariance(inst, &one) {
-                    let access = graph.access(id);
-                    let Some((site, (cell, _))) = access
-                        .site
-                        .filter(|_| access.kind == memoryssa::Kind::Def)
-                        .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)))
-                    else {
-                        bytes.clear();
-                        break 'bytes;
-                    };
-                    let Some(there) = _addressed(unit, &cell, placed).addr().filter(|there| there.root == address.root)
-                    else {
-                        bytes.clear();
-                        break 'bytes;
-                    };
-                    let at = address.disp + i64::from(k) - there.disp;
-                    if !(0..i64::from(cell.width)).contains(&at) {
-                        bytes.clear();
-                        break 'bytes;
-                    }
-                    from.push((site, at as u32));
-                }
-                if from.is_empty() {
-                    bytes.clear();
-                    break;
-                }
-                bytes.push(from);
-            }
-            if bytes.len() == reference.width as usize {
-                providers.insert(result, Provider::Bytes(bytes));
-            }
+        let ask = |one: &MemRef| graph.clobbers_ignoring_invariance(inst, one);
+        if let Some(provider) = provider_of(unit, accesses, &graph, &reference, &ask) {
+            providers.insert(result, provider);
         }
     }
     providers
+}
+
+/// The cells `references` hold where the body leaves `block`, each as the
+/// stores MemorySSA says reach it put it (`known` says what a store puts): the
+/// cells of one point that a caller needs, found by walks of those references
+/// alone rather than by a solve of every cell of the body.
+pub fn cells_read(
+    unit: &Unit,
+    calls: &Calls,
+    known: &llrm_mir::dense::IdMap<ValueId, Known>,
+    block: i64,
+    references: &[MemRef],
+    queries: &mut _MemoryQueries,
+) -> Cells {
+    let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
+    let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
+    let accesses = Accesses::plain(unit, calls);
+    let known = known.iter().map(|(value, fact)| (value, fact.clone())).collect::<IndexMap<_, _>>();
+    let unit = &unit.with_registers(&known);
+    let graph = memoryssa::built(unit, &accesses).with_known(_intervals(&known));
+    let mut cells = Cells::default();
+    for reference in references {
+        let reference = _addressed(unit, reference, &known);
+        if reference.addr().is_none() || crate::memory::constant_bits(unit, &reference).is_some() {
+            continue;
+        }
+        let ask = |one: &MemRef| graph.clobbers_at_end(block, one);
+        let Some(provider) = provider_of(unit, &accesses, &graph, &reference, &ask) else { continue };
+        let Some(fact) = provided(&provider, 8 * reference.width, &|site| _put(unit, site, &known)) else { continue };
+        cells.extend(_fragments(&queries.resolve(&reference), &fact));
+    }
+    cells
 }
 
 /// What `provider`'s stores put in the `width` bits a load reads, where all

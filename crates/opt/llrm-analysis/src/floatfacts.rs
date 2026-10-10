@@ -755,11 +755,11 @@ fn _exits<'s>(
         let mut asked = consts::memory_queries(*unit, integers);
         let last = function.terminator(cfg::block(preheader)).expect("a terminated block");
         let before = if solved.cells.is_empty() {
-            cells_before(unit, calls, &solved, last)
+            cells_before(unit, calls, solved, preheader, &references, &mut asked)
         } else {
-            solved.cells[&last].clone()
+            (*solved.cells[&last]).clone()
         };
-        let initial = consts::_kills((*before).clone(), last, integers, calls, None, None, false, &mut asked);
+        let initial = consts::_kills(before, last, integers, calls, None, None, false, &mut asked);
         let Some(after) = repeated(unit, instructions(latch), &count, &initial, Some(integers), Some(&mut asked))
         else {
             continue;
@@ -890,15 +890,17 @@ fn _with_stored(
     known
 }
 
-/// The cells before each instruction as the dense solve makes them, over what
-/// `solved` learned: for a caller that needs the whole map of one point (a
-/// counted float loop's repetition, `floatloop`), and not the manager's solve.
+/// The cells `references` hold where the body leaves `block`, over what
+/// `solved` learned: for a caller that needs those of one point (a counted
+/// float loop's repetition, `floatloop`), found by walks of them alone.
 pub fn cells_before(
     unit: &Unit,
     calls: &Calls,
     solved: &Solved,
-    at: InstId,
-) -> std::rc::Rc<Cells> {
+    block: i64,
+    references: &[MemRef],
+    queries: &mut consts::_MemoryQueries,
+) -> Cells {
     let function = unit.function;
     let sources = function
         .walk()
@@ -909,19 +911,9 @@ pub fn cells_before(
             _ => None,
         })
         .collect::<llrm_mir::dense::IdSet<_>>();
-    consts::cells_solved(
-        unit,
-        calls,
-        Some(&_with_stored(unit, &solved.integers, &solved.facts, &sources)),
-        None,
-        None,
-        None,
-        None,
-    )
-    .flat
-    .get(&at)
-    .cloned()
-    .unwrap_or_default()
+    let known = _with_stored(unit, &solved.integers, &solved.facts, &sources);
+    let known = known.iter().map(|(value, fact)| (*value, fact.clone())).collect::<llrm_mir::dense::IdMap<_, _>>();
+    consts::cells_read(unit, calls, &known, block, references, queries)
 }
 
 /// `known` and `cells` in one solve, and the integers under them.
