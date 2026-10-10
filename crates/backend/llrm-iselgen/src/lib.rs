@@ -20,13 +20,16 @@ pub mod description;
 
 /// What each operand constructor may make, as `x86.instr` spells kinds,
 /// and how many arguments it takes.
-pub const CONSTRUCTORS: [(&str, &str, usize); 13] = [
+pub const CONSTRUCTORS: [(&str, &str, usize); 16] = [
     ("loaded", "m", 1),
     ("held", "r", 1),
     ("source", "ri", 1),
     ("byte", "r", 1),
     ("count", "ri", 1),
     ("narrowed", "r", 1),
+    ("promoted", "r", 1),
+    ("promoted_source", "ri", 1),
+    ("promoted_result", "r", 0),
     ("result", "r", 0),
     ("fresh", "r", 0),
     ("float", "s", 1),

@@ -512,4 +512,42 @@ mod tests {
         assert!(one >= 1_000_000, "a million iterations counted {one} instructions");
         assert!(one.abs_diff(other) * 100 <= one, "the same loop read {one} and then {other}");
     }
+
+    /// A host busy with other work stretches a step's time and leaves its
+    /// instructions: a loop read the same within 1% with a thread spinning on
+    /// every CPU (the step slopes taken in milliseconds while six gates ran
+    /// were off by up to 0.5).
+    #[test]
+    fn test_the_work_counter_does_not_move_with_the_load_on_the_host() {
+        if work_fd() < 0 {
+            return;
+        }
+        let measured = || {
+            let (clock, before) = (std::time::Instant::now(), work_now());
+            spin(3_000_000);
+            (work_now() - before, clock.elapsed())
+        };
+        let (idle, idle_time) = measured();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cpus = std::thread::available_parallelism().map_or(2, usize::from);
+        let busy: Vec<_> = (0..cpus * 2)
+            .map(|_| {
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        std::hint::spin_loop()
+                    }
+                })
+            })
+            .collect();
+        let (loaded, loaded_time) = measured();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for one in busy {
+            one.join().unwrap();
+        }
+        assert!(
+            idle.abs_diff(loaded) * 100 <= idle,
+            "the loop read {idle} instructions in {idle_time:?} idle and {loaded} in {loaded_time:?} under load"
+        );
+    }
 }

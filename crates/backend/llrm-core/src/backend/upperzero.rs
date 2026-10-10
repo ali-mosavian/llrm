@@ -35,6 +35,11 @@ pub fn bit(register: RegId) -> Option<Roots> {
     ROOTS.iter().position(|one| *one == root).map(|index| 1 << index)
 }
 
+/// Whether a dword with this value has nothing above its low word.
+fn is_word(value: i64) -> bool {
+    (0..=0xFFFF).contains(&value)
+}
+
 /// The roots whose upper half `one` sets to zero.
 fn zeroing(one: &Insn) -> Roots {
     let Some(what) = &one.what else {
@@ -53,8 +58,10 @@ fn zeroing(one: &Insn) -> Roots {
     let zeroes = match (what.op, what.name.as_deref(), what.sources.as_slice()) {
         (Operation::Extend, Some("movzx"), [Loc::Reg(Reg { width: 1 | 2, .. }) | Loc::Mem(_)]) => true,
         (_, Some("xor" | "sub"), [left, right]) => left == destination && right == destination,
-        (Operation::Move, Some("mov"), [Loc::Imm(constant)]) => {
-            constant.address.is_none() && (0..=0xFFFF).contains(&constant.value)
+        (Operation::Move, Some("mov"), [Loc::Imm(constant)]) => constant.address.is_none() && is_word(constant.value),
+        // A mask of a word clears what lies above it.
+        (Operation::Binary, Some("and"), [left, Loc::Imm(constant)]) => {
+            left == destination && constant.address.is_none() && is_word(constant.value)
         }
         _ => false,
     };
@@ -406,6 +413,35 @@ mod tests {
                 assert_ne!(zero[&crate::backend::peephole::id(insn)] & ebx, 0, "{:?}", insn.what);
             }
         }
+    }
+
+    /// `and edx, 32767` left edx's upper half unknown, so the `movzx edx, dx`
+    /// that followed a promoted word `and` stayed (quicksort -O2: three
+    /// instructions for two).
+    #[test]
+    fn test_a_word_mask_leaves_the_upper_half_zero() {
+        let edx = Loc::Reg(Reg { register: RegId::EDX, width: 4 });
+        let mask = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let body = |value| {
+            LirBody::new(
+                "mask",
+                0,
+                vec![LirBlock::new(
+                    0,
+                    vec![
+                        one(0, Operation::Binary, "and", vec![edx.clone()], vec![edx.clone(), mask(value)], None),
+                        one(1, Operation::Move, "mov", vec![edx.clone()], vec![edx.clone()], None),
+                    ],
+                )],
+                IndexMap::default(),
+                IndexMap::default(),
+            )
+        };
+        let (narrow, wide) = (body(32767), body(0x1_0000));
+        let at = |body: &LirBody| before(body)[&crate::backend::peephole::id(&body.blocks[0].insns[1])];
+        let bit = bit(RegId::EDX).unwrap();
+        assert_ne!(at(&narrow) & bit, 0, "and with a word leaves the upper half zero");
+        assert_eq!(at(&wide) & bit, 0, "and with a dword mask does not");
     }
 
     /// `xchg esi, ecx` lost both registers' zero upper halves, so a counter
