@@ -20,6 +20,9 @@ const OFFSET32: u8 = 9;
 const CHUNK: usize = 1000;
 /// relocatable, word aligned, public, 16-bit
 const ACBP: u8 = 0x48;
+/// relocatable, byte aligned, public: a DWARF section, whose modules the linker
+/// joins end to end with no padding between them
+const BYTE: u8 = 0x28;
 /// relocatable, paragraph aligned, public, 16-bit
 const PARAGRAPH: u8 = 0x68;
 /// relocatable, paragraph aligned, stack, 16-bit
@@ -84,6 +87,7 @@ fn class(section: &Section) -> &'static str {
         (Role::Bss, false) => "FAR_BSS",
         (Role::Stack, _) => "STACK",
         (Role::Debug, _) if section.name == crate::codeview::SYMBOLS => "DEBSYM",
+        (Role::Debug, _) if section.name.starts_with(".debug_") => "DWARF",
         (Role::Debug, _) => "DEBTYP",
     }
 }
@@ -271,7 +275,11 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         &object.debug,
         Some(info) if info.format == llrm_object::debug::Format::TurboDebugger
     );
-    let debug = object.debug.is_some() && !turbo;
+    let dwarf = matches!(
+        &object.debug,
+        Some(info) if matches!(info.format, llrm_object::debug::Format::Dwarf { .. })
+    );
+    let debug = object.debug.is_some() && !turbo && !dwarf;
     // Turbo Debugger's records go among the object's own; CodeView's two
     // segments are this writer's, made from the object's debug information.
     let td = match &object.debug {
@@ -282,6 +290,19 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         None => (Cow::Borrowed(object), Vec::new()),
         Some(info) if turbo => {
             (Cow::Owned(Object { debug: None, ..object.clone() }), crate::codeview::lines(object, info)?)
+        }
+        // DWARF's sections are the DWARF writer's: the same ones an ELF object
+        // holds, here segments of the class Open Watcom's -hd writes, which the
+        // linker joins and relocates.
+        Some(info) if dwarf => {
+            let mut lines = crate::codeview::lines(object, info)?;
+            if object.arch.bits() != 32 {
+                return Err(unencodable("DWARF in OMF is 32-bit code's: 16-bit addresses are a segment and an offset"));
+            }
+            let mut expanded = llrm_dwarf::expanded(object, info).map_err(|error| unencodable(error.0))?;
+
+            lines.resize(expanded.sections.len(), Vec::new());
+            (Cow::Owned(expanded), lines)
         }
         Some(info) => {
             let mut lines = crate::codeview::lines(object, info)?;
@@ -314,6 +335,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
             alignment_for(if bits == 32 { section.align.max(4) } else { section.align })
         };
         let alignment = if section.role == Role::Stack { STACK_SEGMENT } else { alignment };
+        let alignment = if class(section) == "DWARF" { BYTE } else { alignment };
         let (acbp, record) = if bits == 32 {
             (alignment | 1, omf::SEGDEF + 1)
         } else {
@@ -360,6 +382,12 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     let mut records = vec![Rc::new(omf::Record::new(omf::THEADR, string(&object.name)))];
     records.extend(td.iter().flat_map(|one| one.before.iter().cloned()));
     records.push(Rc::new(omf::Record::new(omf::LNAMES, lnames.iter().flat_map(|one| string(one)).collect())));
+    if dwarf {
+        // The linker's directive "flat addresses": the debug sections'
+        // addresses are the image's (Open Watcom's -hd objects carry
+        // it).
+        records.push(Rc::new(omf::Record::new(omf::COMENT, vec![0x80, 0xFE, b'F'])));
+    }
     if debug {
         // CodeView 4's marker: LINK /CO reads the debug information after it.
         records.push(Rc::new(omf::Record::new(omf::COMENT, vec![0x00, 0xA1, 0x01, b'C', b'V'])));
