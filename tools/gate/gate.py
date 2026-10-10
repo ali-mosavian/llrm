@@ -93,6 +93,34 @@ class Plan:
     languages: list[str] = field(default_factory=list)
 
 
+def head_state() -> tuple[str, bool]:
+    """The commit the tree is at and whether a tracked file differs from it."""
+    head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    changed = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, check=True).stdout.strip()
+    return head, bool(changed)
+
+
+def refusal(head: str, dirty: bool, expect: str | None, allow_dirty: bool) -> str | None:
+    """Why a run must not start: the checkout it was asked for is not the head, or the tree is not the head's (a gate reports on
+    a commit, and a pass on anything else names a commit that was not run)."""
+    if expect and not head.startswith(expect):
+        return f"HEAD is {head[:12]}, not the checkout asked for ({expect}): nothing was run"
+    if dirty and not allow_dirty:
+        return f"the tree differs from HEAD {head[:12]} in tracked files: commit or stash them (--allow-dirty runs it anyway, and says so)"
+    return None
+
+
+def verdict_line(tier: str, failed: list[str], cut: list[str], took: float, skipped: list[str], head: str) -> str:
+    """The last line of a run: its verdict, at the commit it ran."""
+    verdict = "FAIL: " + " ".join(failed) if failed else "PASS"
+    return (
+        f"GATE {tier} {verdict} at {head[:12]}"
+        + (f" (INCOMPLETE: {' '.join(cut)})" if cut else "")
+        + f" in {took:.0f}s"
+        + (f" (skipped: {' '.join(skipped)})" if skipped else "")
+    )
+
+
 def changed_files(base: str) -> list[str]:
     out = subprocess.run(["git", "diff", "--name-only", base, "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
     return out.split()
@@ -426,7 +454,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     if "build" in p.steps:
         report(*run_step("build", cmds["build"], logs, env, unset=unset))
         if results["build"][0]:
-            print(f"GATE {p.tier} FAIL: build")
+            print(verdict_line(p.tier, ["build"], [], time.time() - start, [], head_state()[0]))
             return 1, ["build"]
     alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
@@ -441,7 +469,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     failed = [n for n, (c, _) in results.items() if c not in (0, 77)]
     skipped = [n for n, (c, _) in results.items() if c == 77]
     cut = [n for n in failed if results[n][0] == 78]
-    print(f"GATE {p.tier} {'FAIL: ' + ' '.join(failed) if failed else 'PASS'}{' (INCOMPLETE: ' + ' '.join(cut) + ')' if cut else ''} in {time.time() - start:.0f}s" + (f" (skipped: {' '.join(skipped)})" if skipped else ""))
+    print(verdict_line(p.tier, failed, cut, time.time() - start, skipped, head_state()[0]))
     return (1 if failed else 0), failed
 
 
@@ -517,6 +545,8 @@ def main() -> int:
     ap.add_argument("--base", default="origin/main")
     ap.add_argument("--files", nargs="*")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--expect", metavar="SHA", help="refuse to run unless HEAD starts with this: the commit the run is to report on")
+    ap.add_argument("--allow-dirty", action="store_true", help="run on a tree that differs from HEAD (the verdict is then of no commit)")
     ap.add_argument("--group")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--tier", default="auto", choices=["auto", "fast", "full"])
@@ -526,6 +556,12 @@ def main() -> int:
         return watch_main(args.force)
     if args.command == "bisect":
         return bisect(args.rest[0], args.rest[1], args.rest[2:])
+    if args.command == "run":
+        head, dirty = head_state()
+        if (why := refusal(head, dirty, args.expect, args.allow_dirty)) is not None:
+            print(f"gate: {why}")
+            return 2
+        print(f"gate: HEAD {head} {'dirty (allowed)' if dirty else 'clean'}", flush=True)
     p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
     if args.steps:
         p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))
