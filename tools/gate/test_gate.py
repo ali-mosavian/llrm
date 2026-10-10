@@ -50,8 +50,15 @@ def test_lib_tests_run_in_the_changed_crate_and_its_dependents_only():
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     pkgs = gate.packages()
     assert "llrm-c" in p.packages
-    assert "llrm-mir" not in p.packages
-    assert set(p.packages) == gate.dependents(pkgs, {"llrm-c"}) | {"llrm"}
+    assert "llrm-transforms" not in p.packages
+    assert set(p.packages) == gate.dependents(pkgs, {"llrm-c"}) | {"llrm", "llrm-mir"}
+
+
+def test_a_change_in_any_crate_runs_the_lib_tests_that_read_the_sources_of_the_others():
+    """facts_rewrite's audit of the readers of nsw/nuw/inbounds is in llrm-mir, which a pass in llrm-transforms does not
+    reach as a dependent: #1324 added a reader, the gate ran no llrm-mir test, and main was red."""
+    p = gate.plan(["crates/opt/llrm-transforms/src/algebraic.rs"])
+    assert "llrm-mir" in p.packages and "lib" in p.steps
 
 
 def test_a_python_only_change_runs_the_python_tests_and_not_the_build():
