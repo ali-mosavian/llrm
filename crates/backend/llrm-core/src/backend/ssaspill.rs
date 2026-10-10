@@ -615,8 +615,10 @@ fn stated(
     }
     out.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)));
     out.extend(one.clobbers.iter().map(|register| _whole(*register)));
-    if one.what.as_ref().is_some_and(target::status_through_ax) {
-        out.insert(Register::EAX);
+    if let Some(status) =
+        classes.status_word().filter(|_| one.what.as_ref().is_some_and(target::status_through_register))
+    {
+        out.insert(_whole(status));
     }
     out.retain(|register| general.contains(register));
     out
