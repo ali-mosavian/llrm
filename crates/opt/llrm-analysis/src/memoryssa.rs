@@ -644,6 +644,8 @@ pub struct MemorySSA<'a> {
     /// the def.
     reaches: std::cell::RefCell<llrm_mir::dense::IdMap<InstId, Rc<Reach>>>,
     unit: Unit<'a>,
+    /// The state each block leaves.
+    ends: IndexMap<i64, Option<usize>>,
     /// The values that are constants, for placing an index away from a cell
     /// (`with_known`).
     known: Option<BTreeMap<ValueId, Interval>>,
@@ -722,6 +724,16 @@ impl MemorySSA<'_> {
         memory: &MemRef,
     ) -> BTreeSet<usize> {
         self.frontier(site, memory, None, None, None)
+    }
+
+    /// The possible nearest writes at the end of `block`, as a load placed
+    /// there would find them.
+    pub fn clobbers_at_end(
+        &self,
+        block: i64,
+        memory: &MemRef,
+    ) -> BTreeSet<usize> {
+        self.walked_from(Some(block), self.ends[&block], false, memory, None, None, None, true)
     }
 
     /// `clobbers` for a load that is invariant, as if it were not: the store
@@ -952,16 +964,40 @@ impl MemorySSA<'_> {
         jumping: bool,
         honor: bool,
     ) -> BTreeSet<usize> {
-        let block = self.at(site).block;
         // A load of what is written once, then never: no write changes what it
         // reads.
         let invariant =
             honor && llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
+        self.walked_from(
+            self.at(site).block,
+            self.at(site).defining,
+            invariant,
+            memory,
+            boundary,
+            edge,
+            edge_memory,
+            jumping,
+        )
+    }
+
+    /// `walked` from the memory state `defining`, which a site or the end of a
+    /// block is in.
+    fn walked_from(
+        &self,
+        block: Option<i64>,
+        defining: Option<usize>,
+        invariant: bool,
+        memory: &MemRef,
+        boundary: Option<usize>,
+        edge: Option<i64>,
+        edge_memory: Option<&MemRef>,
+        jumping: bool,
+    ) -> BTreeSet<usize> {
         let memory_span = displaced_span(memory);
         let edge_span = edge_memory.and_then(displaced_span);
         let memory_exact = exact_object(memory);
         let edge_exact = edge_memory.and_then(exact_object);
-        let mut pending = vec![self.at(site).defining];
+        let mut pending = vec![defining];
         // A fixed cell of a frame with many fixed writes: the nearest write of
         // it is the index's, past the writes `fixed` rules apart.
         if jumping
@@ -974,7 +1010,7 @@ impl MemorySSA<'_> {
             && low >= 0
             && high <= OBJECT_BYTES
             && let Some(index) = self.index_ready()
-            && let Some(above) = self.at(site).defining
+            && let Some(above) = defining
             && let Some(version) = index.at[above].as_ref()
         {
             let nearest = (low..high)
@@ -1335,7 +1371,9 @@ pub fn built<'a>(
             _ => None,
         })
         .collect();
+    let ends = outgoing.iter().map(|(block, state)| (*block, Some(resolved(&replacements, *state)))).collect();
     MemorySSA {
+        ends,
         live,
         accesses,
         sites,

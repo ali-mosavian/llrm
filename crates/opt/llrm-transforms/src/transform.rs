@@ -684,12 +684,9 @@ b0:
             .unwrap()
         };
         let (context, function) = module.function_mut("f").expect("@f");
-        let registers = llrm_analysis::consts::known(
-            &llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)),
-            None,
-            None,
-            None,
-        );
+        let registers = llrm_analysis::consts::known(&llrm_analysis::testing::with_registers(Unit::within(
+            context, &layout, function, &outer,
+        )));
         let shape = llrm_analysis::cfg::Shape::of(function);
         let changed = forwarded(
             context,

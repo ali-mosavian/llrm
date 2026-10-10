@@ -189,7 +189,7 @@ def test_loopmotion_and_the_cells_it_asks_stay_linear_in_the_loops_of_one_functi
         source.write_text("" if size == 0 else scaling.branches(size))
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     grown = {}
-    for step in ("mir loopmotion", "analysis memory-cells"):
+    for step in ("mir loopmotion",):
         small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
         if big > 2.6 * small + 5.0:
             grown[step] = f"{small:.1f} -> {big:.1f} Minstr"

@@ -274,8 +274,18 @@ fn _planned(
     };
     let before = function.terminator(preheader)?;
     let mut asked = consts::memory_queries(*unit, &solved.integers);
+    let mut references = latch_insts.iter().filter_map(|&inst| MemRef::of(unit, inst)).collect::<Vec<_>>();
+    references.extend(proof.stores.iter().map(|(reference, _)| reference.clone()));
     let initial = consts::_kills(
-        (*floatfacts::cells_before(unit, calls, solved, before)).clone(),
+        floatfacts::cells_before(
+            unit,
+            calls,
+            &solved.integers,
+            &solved.facts,
+            consts::ReadAt::End(cfg::id(preheader)),
+            &references,
+            &mut asked,
+        ),
         before,
         &solved.integers,
         calls,
