@@ -722,16 +722,15 @@ fn _proven(
             continue;
         }
         // Tested before its step at the latch, the counter against a constant
-        // is the stepped counter against that constant one step on,
-        // where the step cannot wrap (LLVM's exit count reads the test the same
-        // way): the one form the proofs below count.
+        // is the stepped counter against that constant one step on
+        // (LLVM's exit count reads the test the same way): the one form the
+        // proofs below count. For an ordered test the step must not
+        // wrap; for equality a wrapping sum is a bijection.
         let (mut bound, mut stepped, mut shifted) = (bound, stepped, false);
         if shape.posttested
             && !stepped
-            && test != IntPredicate::Ne
             && function.parent(branch) == Some(cfg::block(latch))
             && let AffineOperand::Const(limit) = &bound
-            && _promised(function, update, &step, _unsigned(test), _signed(&counter.start, facts, width).as_ref())
         {
             let unsigned = _unsigned(test);
             let (low, high) = _extent(unsigned, width);
@@ -740,7 +739,13 @@ fn _proven(
             } else {
                 _signed_value(&limit.n, width)
             } + &step;
-            if low <= moved && moved <= high {
+            if test == IntPredicate::Ne {
+                bound = AffineOperand::constant(masked(&moved, width), width);
+                (stepped, shifted) = (true, true);
+            } else if low <= moved
+                && moved <= high
+                && _promised(function, update, &step, unsigned, _signed(&counter.start, facts, width).as_ref())
+            {
                 bound = AffineOperand::constant(masked(&moved, width), width);
                 (stepped, shifted) = (true, true);
             }
