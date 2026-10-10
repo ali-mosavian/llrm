@@ -691,42 +691,26 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(Pair, Pair), Unselected> {
-        use crate::abi::runtime::Reg;
-        use crate::backend::lower_int64::{
-            _SDIV, _SDIV_CONST32, _UDIV, _UDIV_CONST32, _four_clobbers, _four_inputs, _helper,
-        };
+        use crate::backend::lower_int64::{_helper, runtime_registers};
         let dividend = self.wide(left, at, out)?;
         let dword = self.constant(right, 8).is_some_and(|bits| bits >> 32 == 0);
         let divisor = self.wide(right, at, out)?;
-        let (name, code, requires, inputs) = if dword {
-            let (name, code) = if signed { ("__I8D32", &*_SDIV_CONST32) } else { ("__U8D32", &*_UDIV_CONST32) };
-            (
-                name,
-                code,
-                vec![(dividend.0, RegId::EAX), (divisor.0, RegId::EBX), (dividend.1, RegId::EDX)],
-                std::collections::BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Dx]),
-            )
-        } else {
-            let (name, code) = if signed { ("__I8D", &*_SDIV) } else { ("__U8D", &*_UDIV) };
-            (
-                name,
-                code,
-                vec![
-                    (dividend.0, RegId::EAX),
-                    (divisor.0, RegId::EBX),
-                    (divisor.1, RegId::ECX),
-                    (dividend.1, RegId::EDX),
-                ],
-                _four_inputs(),
-            )
-        };
-        let contract = _helper(name, inputs, _four_clobbers());
+        let routine = llrm_x86::helpers::divide(signed, !dword, self.arch.object().bitness)
+            .map_err(|refused| Unselected(format!("the i64 divide: {}", refused.message)))?;
+        let name = routine.name;
+        let mut requires = vec![(dividend.0, routine.dividend[0]), (divisor.0, routine.divisor[0])];
+        if !dword {
+            requires.push((divisor.1, routine.divisor[1]));
+        }
+        requires.push((dividend.1, routine.dividend[1]));
+        let reads: Vec<RegId> = requires.iter().map(|(_, register)| *register).collect();
+        let contract = _helper(name, runtime_registers(&reads, false), runtime_registers(&routine.clobbers, true));
         let (quotient, remainder) = ((self.half(), self.half()), (self.half(), self.half()));
         let delivers = vec![
-            (quotient.0, RegId::EAX),
-            (quotient.1, RegId::EDX),
-            (remainder.0, RegId::EBX),
-            (remainder.1, RegId::ECX),
+            (quotient.0, routine.quotient[0]),
+            (quotient.1, routine.quotient[1]),
+            (remainder.0, routine.remainder[0]),
+            (remainder.1, routine.remainder[1]),
         ];
         out.push(Arc::new(Insn {
             clobbers: call_clobbers(&contract, self.segments, &self.cpu.general),
@@ -739,10 +723,7 @@ impl Selector<'_, '_, '_> {
             ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
         }));
         self.calls.insert(at, name.to_owned());
-        // The bytes are 386 code for a 16-bit segment.
-        let code =
-            if self.arch.object().bitness == 32 { crate::backend::lower_int64::flat(code) } else { code.to_vec() };
-        self.inline.insert(at, code);
+        self.inline.insert(at, routine.code);
         Ok((quotient, remainder))
     }
 

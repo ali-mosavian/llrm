@@ -439,8 +439,8 @@ target instructions directly, never generic ops that selection would re-select
   equality, `sub`+`sbb` for order;
 - division: signed by a power of two by bias and shifts; signed by a narrow divisor
   by one `idiv` or two `div`s with a sign fix; everything else, all unsigned
-  included, by the inline helper blobs (`__I8D`, `__U8D` and the 32-bit-constant
-  forms), clobbering AX BX CX DX.
+  included, by the inline routines of `llrm_x86::helpers` (assembly source, unsigned
+  and signed, and the dword-divisor forms), clobbering AX BX CX DX.
 
 `llvm.smul.fix`/`sdiv.fix` are i32 intrinsics (`imul`+`shrd`, `cdq`/`shld`/`idiv`),
 not i64 legalization. The prose is a summary: the oracle below is the spec.
