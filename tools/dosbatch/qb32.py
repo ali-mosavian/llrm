@@ -155,6 +155,51 @@ def run(names: list[str], work: Path) -> dict[str, tuple[str, bool]]:
     return found
 
 
+def probes(names: list[str], work: Path) -> dict[str, str]:
+    """Each probe of tests/qbrt (by name) on the flat target against BCOM45's own output: '' where they are the same bytes,
+    else the first difference or why it did not run."""
+    work.mkdir(parents=True, exist_ok=True)
+    sources = {name: dosbatch.ROOT / "tests" / "qbrt" / f"{name}.bas" for name in names}
+    # BCOM45's output comes from the real-mode differential run; its candidate side is not used.
+    objects, found = {}, {}
+    for name, source in sources.items():
+        pair = (work / f"{name}.qb45.obj", work / f"{name}.llrm.obj")
+        for runtime, obj in zip(("qb45", "llrm"), pair):
+            if reason := qbruntime.compile_basic(source, obj, runtime):
+                found[name] = f"real-mode compile: {reason}"
+                break
+        else:
+            objects[name] = pair
+    archive, _ = qbruntime.build(work / "archive16")
+    reference = qbruntime.differential_batch(objects, archive, work / "reference")
+    runtime = build(work / "runtime")
+    jobs, stems = [], {}
+    for at, name in enumerate(objects):
+        obj = work / f"{name}.obj"
+        if reason := compile_basic(sources[name], obj):
+            found[name] = f"compile: {reason}"
+            continue
+        try:
+            loaders = link(obj, runtime, work / f"{name}.exe", work)
+        except dosbatch.BuildError as error:
+            found[name] = f"link: {str(error)[-300:]}"
+            continue
+        stem = f"P{at:03d}"
+        stems[stem] = name
+        jobs.append(dosbatch.Job(stem, "exe", work / f"{name}.exe", files=loaders, stdin=qbruntime.typed_input(name)))
+    if jobs:
+        results = dosbatch.run(jobs, work / "run")
+        for job in jobs:
+            name = stems[job.stem]
+            if results[job.stem].status != "ok":
+                found[name] = f"run: {results[job.stem].status}"
+                continue
+            want = reference[name].reference.text.encode("latin-1")
+            got = qbruntime.raw_output(work / "run", job.stem)
+            found[name] = qbruntime.first_byte_difference(want.replace(b"\r\n", b"\n"), got.replace(b"\r\n", b"\n"))
+    return found
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", type=Path, default=None)

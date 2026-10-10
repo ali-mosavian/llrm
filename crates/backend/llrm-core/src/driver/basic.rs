@@ -888,7 +888,7 @@ pub fn assembled(
     if !handled {
         rows.clear();
     }
-    procedures.push(super::statement_table(&rows, options.arch.frame_registers()));
+    procedures.push(super::statement_table(&rows, options.arch.frame_registers(), if options.arch.layout().mode == 32 { 4 } else { 2 }));
     let mut data = Vec::new();
     for segment in &object.segments {
         data.push((segment.name.clone(), timed("data layout", || laid_out(module, segment, &names))?));

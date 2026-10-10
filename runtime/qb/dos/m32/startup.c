@@ -9,6 +9,10 @@ extern qb_init_fn *qb_xi_begin, *qb_xi_end;
 #pragma aux qb_xi_begin "qb_xi_begin"
 #pragma aux qb_xi_end "qb_xi_end"
 
+/* trap.asm: takes the divide fault. */
+extern void qb_traps(void);
+#pragma aux qb_traps "B$TRAPS"
+
 /* Runs each initializer the linked modules registered (B$Init's XI walk). */
 void qb_run_initializers(void)
 {
@@ -17,6 +21,7 @@ void qb_run_initializers(void)
     for (at = qb_xi_begin; at < qb_xi_end; at++)
         if (*at)
             (*at)();
+    qb_traps();
 }
 
 /* The room the string space and the local heap share: what the OS layer's heap will give, the most of

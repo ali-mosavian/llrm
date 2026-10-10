@@ -430,13 +430,16 @@ pub fn entry_row(
 pub fn statement_table(
     rows: &[(i64, i64, String, i64)],
     registers: llrm_target::FrameRegisters,
+    word: usize,
 ) -> masm::Procedure {
+    // A row is two words: where the statement is, and its line; the table ends with a word of 0. The word is
+    // the target's near pointer.
     let mut code: Vec<masm::InlinePart> = Vec::new();
     for (_procedure, _order, label, line) in rows {
         code.push(masm::InlinePart::Fixup("offset".into(), label.clone(), 0));
-        code.push(masm::InlinePart::Bytes((*line as u16).to_le_bytes().to_vec()));
+        code.push(masm::InlinePart::Bytes((*line as u32).to_le_bytes()[..word].to_vec()));
     }
-    code.push(masm::InlinePart::Bytes(vec![0, 0]));
+    code.push(masm::InlinePart::Bytes(vec![0; word]));
     let what = Semantics { name: Some("statement-table".to_owned()), ..Semantics::new(Operation::Call) };
     let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
     let body = lir::LirBody::new(
