@@ -4,7 +4,6 @@
 4 crates/backend/llrm-core/src/backend/arithmetic.rs
 1 crates/backend/llrm-core/src/backend/callregs.rs
 24 crates/backend/llrm-core/src/backend/classes.rs
-3 crates/backend/llrm-core/src/backend/datagroup.rs
 5 crates/backend/llrm-core/src/backend/floatalloc.rs
 3 crates/backend/llrm-core/src/backend/floatassign.rs
 1 crates/backend/llrm-core/src/backend/frame.rs
