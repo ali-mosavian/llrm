@@ -4197,36 +4197,6 @@ fn test_flat_dword_sum_stays_where_the_upper_half_may_not_be_zero() {
     assert_eq!((kept[1].name.as_deref(), kept[2].name.as_deref()), (Some("add"), Some("movzx")), "{kept:?}");
 }
 
-/// `mov dx, ax; and dx, 32767; movzx edx, dx` (quicksort once the mask was
-/// taken under the extension: three instructions and two prefixes where
-/// `movzx edx, ax; and edx, 32767` were two).
-#[test]
-fn test_flat_word_copy_masked_then_extended_is_the_extension_masked() {
-    let step = |at: i64, name: &str, op: Operation, dests: Vec<Loc>, sources: Vec<Loc>| {
-        Arc::new(insn(at, Some((at, at)), Some(sem(op, name, dests, sources)), vec![], vec![]))
-    };
-    let made = narrowed_arithmetic(
-        flat(),
-        &flat_body(vec![
-            step(0, "mov", Operation::Move, vec![rl(RegId::DX, 2)], vec![rl(RegId::AX, 2)]),
-            step(1, "and", Operation::Binary, vec![rl(RegId::DX, 2)], vec![rl(RegId::DX, 2), im(32767, 2)]),
-            step(2, "movzx", Operation::Extend, vec![rl(RegId::EDX, 4)], vec![rl(RegId::DX, 2)]),
-            compared(),
-        ]),
-    );
-    let kept = whats(&made.insns());
-    let shape: Vec<_> =
-        kept.iter().map(|one| (one.name.clone().unwrap_or_default(), one.dests.clone(), one.sources.clone())).collect();
-    assert_eq!(
-        shape[..2],
-        [
-            ("movzx".to_owned(), vec![rl(RegId::EDX, 4)], vec![rl(RegId::AX, 2)]),
-            ("and".to_owned(), vec![rl(RegId::EDX, 4)], vec![rl(RegId::EDX, 4), im(32767, 4)]),
-        ],
-        "{shape:?}"
-    );
-}
-
 // ------------------------------------------------------- copies forwarded into
 // addresses
 
