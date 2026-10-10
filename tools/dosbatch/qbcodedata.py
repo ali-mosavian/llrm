@@ -1,5 +1,6 @@
-"""Code and data of each bench program as linked, from the linker maps: BCOM45 (MS LINK), the llrm runtime on m16 (MS LINK
-with LLRMQB.LIB) and on m32 (jwlink, LE under DOS/32A).
+"""Code and data of each bench program as linked, from the linker maps: Microsoft's BC with BCOM45.LIB; llrm-qb with
+BCOM45.LIB (our compiler, Microsoft's runtime); the llrm runtime on m16 (MS LINK with LLRMQB.LIB); and on m32 (jwlink, LE
+under DOS/32A).
 
     python tools/dosbatch/qbcodedata.py [--work DIR]
 """
@@ -78,6 +79,18 @@ def m16(work: Path, sources: list[Path]) -> tuple[dict, dict]:
     return {n: ms_map(kept["ref"][s]) for n, s in names.items()}, {n: ms_map(kept["cand"][s]) for n, s in names.items()}
 
 
+def bc(work: Path, sources: list[Path]) -> dict:
+    """What BC.EXE itself makes of each source, linked with BCOM45.LIB: BC and LINK run in DOSBox on the BASIC source."""
+    jobs = []
+    for at, source in enumerate(sources):
+        head = source.read_text(encoding="latin-1").splitlines()[:6]
+        data = tuple(source.parent / one for line in head if (m := re.match(r"\s*'\s*data:\s*(.*?)\s*$", line)) for one in m.group(1).split() if not one.startswith("@"))
+        huge = any("--huge-arrays" in line for line in head)
+        jobs.append(dosbatch.Job(f"B{at:03d}", "bas", source, map=True, budget_ms=2000, files=data, switches="/O /FPi /Ah" if huge else "/O /FPi"))
+    dosbatch.run(jobs, work / "bc_run")
+    return {source.stem: ms_map(work / "bc_run" / f"{job.stem.upper()}.MAP") for source, job in zip(sources, jobs)}
+
+
 def m32(work: Path, sources: list[Path]) -> dict:
     runtime = qb32.build(work / "rt32")
     out = {}
@@ -99,11 +112,13 @@ def main() -> int:
     sources = qbruntime.milestone_sources()
     ref, cand = m16(work, sources)
     big = m32(work, sources)
-    print(f"{'program':<13}| {'BCOM45 m16':^20} | {'llrm m16':^20} | {'llrm m32':^20}")
-    print(f"{'':<13}| {'code':>6}{'data':>7}{'stack':>7} | {'code':>6}{'data':>7}{'stack':>7} | {'code':>6}{'data':>7}{'stack':>7}")
+    microsoft = bc(work, sources)
+    heads = ("BC+BCOM45 m16", "llrm-qb+BCOM45 m16", "llrm m16", "llrm m32")
+    print(f"{'program':<13}| " + " | ".join(f"{h:^20}" for h in heads))
+    print(f"{'':<13}| " + " | ".join(f"{'code':>6}{'data':>7}{'stack':>7}" for _ in heads))
     for source in sources:
         n = source.stem
-        cells = [ref[n], cand[n], big[n]]
+        cells = [microsoft[n], ref[n], cand[n], big[n]]
         print(f"{n:<13}| " + " | ".join(f"{c['code']:>6}{c['data']:>7}{c['stack']:>7}" for c in cells))
     return 0
 
