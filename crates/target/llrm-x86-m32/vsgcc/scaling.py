@@ -170,7 +170,7 @@ def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tup
         if Path(cmd[0]).name.startswith("llrm-") and Path(cmd[0]).is_file():
             (Path(here) / Path(cmd[0]).name).symlink_to(Path(cmd[0]).resolve())
             cmd = [f"./{Path(cmd[0]).name}", *cmd[1:]]
-        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, cwd=here, env=measured_environment(env))
+        done = subprocess.run([*levels_time.UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, cwd=here, env=measured_environment(env))
         if done.returncode:
             said = [l for l in (done.stderr or done.stdout).splitlines() if l and not l.startswith(("[time]", "[mir]"))]
             raise RuntimeError(f"{' '.join(cmd[-1:])}: " + " | ".join(said)[:300])
