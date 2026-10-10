@@ -243,6 +243,17 @@ pattern multiply_scaled
   call scaled(a, n)
 end
 
+# What the target would rather run on the whole register (`promote` in its datalayout.toml): the word
+# operation is run as a dword, which reads and writes what lies above the word and does not care.
+pattern arithmetic_promoted for add=add sub=sub and=and or=or xor=xor
+  match $mir(a, b)
+  when promoted
+  let x = promoted(a)
+  let y = promoted_source(b)
+  let r = promoted_result
+  emit $x86 r <- x, y
+end
+
 pattern arithmetic for add=add sub=sub and=and or=or xor=xor mul=imul
   match $mir(a, b)
   let x = held(a)
