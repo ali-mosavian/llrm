@@ -742,6 +742,10 @@ pub struct Unit<'a> {
     /// Each loop's counted proofs under `registers`, the manager's `Counted`;
     /// without them each ask proves them.
     pub counted: Option<&'a crate::induction::Counted>,
+    /// Each loop's followers of its counters (`induction::followers`), the
+    /// manager's `LoopFollowers`; without them each ask works them out of
+    /// the loop.
+    pub followers: Option<&'a crate::induction::LoopFollowers>,
     /// What the unavoidable branch edges bound at each block, under
     /// `registers`: the manager's `DominatedEdges`.
     pub edges: Option<&'a crate::ranges::EdgeStates>,
@@ -804,6 +808,7 @@ impl<'a> Unit<'a> {
             annotated: None,
             assumptions: None,
             counted: None,
+            followers: None,
             edges: None,
             bounds: None,
             exposed: None,
@@ -887,6 +892,13 @@ impl<'a> Unit<'a> {
         counted: &'a crate::induction::Counted,
     ) -> Self {
         Self { counted: Some(counted), ..self }
+    }
+
+    pub fn with_followers(
+        self,
+        followers: &'a crate::induction::LoopFollowers,
+    ) -> Self {
+        Self { followers: Some(followers), ..self }
     }
 
     pub fn with_registers(
