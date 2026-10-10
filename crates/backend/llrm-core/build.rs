@@ -48,7 +48,7 @@ fn main() {
         for path in [&patterns, &forms] {
             println!("cargo:rerun-if-changed={}", path.display());
         }
-        let generated = generator::generate(&forms_of(&forms), &patterns_of(&patterns), name)
+        let generated = generator::generate(&forms_of(&forms), &patterns_of(&patterns), name, "crate")
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         std::fs::write(out.join(format!("isel_{ident}.rs")), generated.code).unwrap();
         std::fs::write(out.join(format!("effects_{ident}.rs")), effect_rows(&forms_of(&forms)))
@@ -63,7 +63,9 @@ fn main() {
             .find_map(|line| line.strip_prefix("mode = "))
             .unwrap_or_else(|| panic!("{name}: datalayout.toml has no `mode`"));
         modes.push((ident.clone(), mode.trim().to_owned()));
-        index.push_str(&format!("pub mod {ident} {{\n    use super::*;\n    include!(concat!(env!(\"OUT_DIR\"), \"/isel_{ident}.rs\"));\n}}\n\n"));
+        index.push_str(&format!(
+            "pub mod {ident} {{\n    include!(concat!(env!(\"OUT_DIR\"), \"/isel_{ident}.rs\"));\n}}\n\n"
+        ));
         all.push(format!("&{ident}::SELECTOR"));
         peep.push_str(&peephole(
             dir,

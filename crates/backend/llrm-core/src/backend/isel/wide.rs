@@ -128,7 +128,7 @@ impl Selector<'_, '_, '_> {
     /// form of the lowest, `rest` of each above, which takes its
     /// predecessor's carry where it is not the same form. A constant operand is
     /// an immediate in each half, as the form takes one.
-    pub(super) fn wide_chain(
+    pub fn wide_chain(
         &mut self,
         m: &super::matcher::Match,
         out: &mut Vec<Arc<Insn>>,
