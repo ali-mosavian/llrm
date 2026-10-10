@@ -58,3 +58,29 @@ fn test_fib_with_the_header_copy_on_keeps_its_self_inlined_nest() {
     assert!(compares(", 2") <= 1, "{} tests of a step\n{}", compares(", 2"), function.join("\n"));
     assert!(tests >= 6, "{tests} tests of n\n{}", function.join("\n"));
 }
+
+/// `if (n == 0) return acc; ... n - 1` behind the copied guard is `do { } while
+/// (n - 1 != 0)`, which the induction count proved only for a start the guard
+/// rules out as the bound; unproven, LSR left the loop on `n` (`lea; cmp ebx,
+/// 0; jne` and a `lea` for `3n` each trip: recsum +5.3% clocks, 26009 to 30010
+/// instructions) where the loop without the copy ends on the flags of the step
+/// of `3n` (`add ebx, -3; jne`).
+#[test]
+fn test_a_loop_behind_a_guard_that_rules_out_its_bound_ends_on_the_flags_of_its_step() {
+    let source = format!("{}/bench/recsum/recsum.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    assert!(
+        lines
+            .windows(2)
+            .any(|pair| pair[0].starts_with("add ") && pair[0].ends_with(", -3") && pair[1].starts_with("jne ")),
+        "{text}"
+    );
+}
