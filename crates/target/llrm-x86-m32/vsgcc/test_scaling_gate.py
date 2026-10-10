@@ -634,3 +634,36 @@ def test_a_loop_takes_the_values_it_reads_and_the_edges_above_it_once_on_the_bra
     source.write_text(scaling.AXES["branches"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis bounded"]
     assert cost <= 1300, cost
+
+def test_interference_of_values_live_together_is_kept_as_bits_on_the_live_axis(tmp_path):
+    """On `live` at N=512 a function holds 940,000 interference pairs; the graph kept each as a tree-set node,
+    walked once per web for every instruction of the block, with three hash lookups per pair to count it: `lir coalesce` read
+    1,820 Minstr. As a bit vector per value, built by row and counted per node, it reads 860. More than 1,100 fails."""
+    source = tmp_path / "live_512.c"
+    source.write_text(scaling.AXES["live"](512))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir coalesce"]
+    assert cost <= 1100, cost
+
+
+def test_a_set_membership_test_is_not_a_scan_of_the_set_on_the_branches_axis(tmp_path):
+    """`PySet::contains` scanned its whole table, and the constant-cycle propagation asked it for every consumer of every value it settled
+    (`live.contains`): on a function of N if/else diamonds 4.0 G of its 4.5 G instructions at N=1024. `analysis registers` read
+    260 -> 527 -> 1,064 Minstr at N=256, 512, 1024 once fixed (2.0 per doubling), 5.7 G at 1,024 before (slope 1.76); `mir decide`
+    4.2 G -> 2.1 G. A doubling of `analysis registers` above 2.4 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 256), ("2n", 512)):
+        source = tmp_path / f"branches_{label}.c"
+        source.write_text("" if size == 0 else scaling.AXES["branches"](size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("analysis registers", 0.0) - own["empty"].get("analysis registers", 0.0) for label in ("n", "2n"))
+    assert big <= 2.4 * small, f"analysis registers {small:.0f} -> {big:.0f} Minstr"
+
+
+def test_a_load_looks_for_its_provider_in_the_blocks_above_it_not_among_every_load(tmp_path):
+    """`mir gvn` on `branches` at N=1024 took every load of the same bytes as a candidate for each of 7,000 sites, sorted, and
+    skipped those that do not dominate it (9.5 M candidates), and `loadjoins` compared each join load with every provider:
+    5,032 Minstr, 3.2x a doubling. The candidates are found from the site's block up the dominator tree, nearest first: 2,260."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir gvn"]
+    assert cost <= 3400, cost

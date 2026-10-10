@@ -1215,12 +1215,42 @@ fn test_the_interference_among_a_web_is_found_without_walking_the_body() {
             let of = |graph: &crate::backend::coalesce::Graph| {
                 graph
                     .get(value)
-                    .map(|near| near.intersection(&web).copied().collect::<std::collections::BTreeSet<u32>>())
+                    .map(|near| {
+                        near.iter().filter(|one| web.contains(one)).collect::<std::collections::BTreeSet<u32>>()
+                    })
                     .unwrap_or_default()
             };
             assert_eq!(of(&among), of(&whole), "seed {seed}: value#{value}");
         }
     }
+}
+
+/// The interference among a web of a few values walked every instruction of
+/// its blocks, for each of the 1,000 webs of a straight-line function (an
+/// instruction per value live: N^2). It looks at the instructions that name
+/// the web, and at parallel copies.
+#[test]
+fn test_the_interference_among_a_web_looks_only_at_the_instructions_that_name_it() {
+    use crate::analysis::intervals::intervals;
+    use crate::backend::coalesce::{_interference_among, last_visited};
+    let mut skipped = 0;
+    for seed in 0..40u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        let web: std::collections::BTreeSet<u32> = intervals(&plain, None).keys().copied().step_by(3).take(2).collect();
+        _interference_among(&plain, Some(&web));
+        let all = plain.blocks.iter().flat_map(|block| &block.insns);
+        let wanted = all
+            .clone()
+            .filter(|one| one.group.is_some() || one.defines.iter().chain(&one.uses).any(|value| web.contains(value)))
+            .count();
+        assert!(
+            last_visited() <= wanted,
+            "seed {seed}: {} instructions looked at, {wanted} name the web",
+            last_visited()
+        );
+        skipped += all.count() - last_visited();
+    }
+    assert!(skipped > 0, "premise: some instruction names none of the web");
 }
 
 /// The no-split allocation of a body the base allocation split nothing in is
@@ -1426,9 +1456,12 @@ fn test_interference_among_some_values_is_the_whole_graphs_among_them() {
             some.insert(1);
             let among = _interference_among(&body, Some(&some));
             for value in &some {
-                let expected: std::collections::BTreeSet<u32> =
-                    whole.get(value).map(|near| near.intersection(&some).copied().collect()).unwrap_or_default();
-                let found = among.get(value).cloned().unwrap_or_default();
+                let expected: std::collections::BTreeSet<u32> = whole
+                    .get(value)
+                    .map(|near| near.iter().filter(|one| some.contains(one)).collect())
+                    .unwrap_or_default();
+                let found: std::collections::BTreeSet<u32> =
+                    among.get(value).map(|near| near.iter().collect()).unwrap_or_default();
                 assert_eq!(found, expected, "seed {seed} value {value}");
             }
             assert!(among.keys().all(|one| some.contains(one)), "seed {seed}: a value outside the set has an entry");
