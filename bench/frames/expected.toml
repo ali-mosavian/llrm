@@ -1,4 +1,4 @@
-reason = "word and/or/xor run on the whole register (m32 promote, #1349) and any mask under a zero-extension is taken before it: frames nib -O2/-Os -139,000 instructions, -4 B; qlight nib -O2/-Os -4 instructions, -4 B"
+reason = "phielim renames a loop phi to its back-edge argument only where its copies would need an edge block (never an x87 value); twoaddr ties the source that does not interfere with the destination. matmul bas -O2 instructions -11.6%, nbody_fixed nib -Os instructions -3.7% (xchg chains gone) with memory operands +12%; crc bas +1 instruction, +2 bytes (one copy outside its loop)"
 blessed = "2026-10-10"
 
 [bas.O2]
@@ -31,16 +31,16 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 4832999
+instructions = 4832998
 memory_operands = 270051
-code_bytes = 191
+code_bytes = 188
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 4862999
+instructions = 4862998
 memory_operands = 270051
-code_bytes = 183
+code_bytes = 180
 data_bytes = 0
 bss_bytes = 0
 
