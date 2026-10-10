@@ -3245,7 +3245,7 @@ impl Compiler {
                     let position = self.convert(position, position_type, LONG)?;
                     self.emit_runtime_call("B$SSEK", Vec::new(), vec![file, position]);
                 }
-                Statement::Print { kind, file, using, items, .. } => {
+                Statement::Print { kind, file, using, items, span, .. } => {
                     if *kind == PrintKind::Lprint {
                         self.emit_runtime_call("B$LPRT", Vec::new(), Vec::new());
                     }
@@ -3264,11 +3264,8 @@ impl Compiler {
                         self.emit_runtime_call("B$USNG", Vec::new(), vec![format]);
                     }
                     if items.is_empty() {
-                        self.emit_runtime_call(
-                            "B$PESD",
-                            Vec::new(),
-                            vec![Operand::Constant(INTEGER, Number::Integer(0))],
-                        );
+                        let none = self.null_descriptor(*span)?;
+                        self.emit_runtime_call("B$PESD", Vec::new(), vec![none]);
                         continue;
                     }
                     for item in items {
@@ -5273,6 +5270,18 @@ impl Compiler {
         Ok(Operand::Value(far))
     }
 
+    /// The descriptor of no string. Offset 0 of the 16-bit data segment holds zeros, so BC passes 0; where there
+    /// is one space, address 0 is whatever the machine keeps there, and the empty literal's descriptor stands in.
+    fn null_descriptor(
+        &mut self,
+        span: Span,
+    ) -> Result<Operand, SemanticError> {
+        if self.options.one_space() {
+            return self.string_descriptor(&Expr::Literal(Literal::String(String::new()), span));
+        }
+        Ok(Operand::Constant(INTEGER, Number::Integer(0)))
+    }
+
     fn string_descriptor(
         &mut self,
         expression: &Expr,
@@ -5422,9 +5431,7 @@ impl Compiler {
                 // near string descriptor in AX, like the other string
                 // functions.  Keep the filesystem/heap effects on the call.
                 let argument = match &arguments[0] {
-                    Expr::Literal(Literal::String(text), _) if text.is_empty() => {
-                        Operand::Constant(INTEGER, Number::Integer(0))
-                    }
+                    Expr::Literal(Literal::String(text), span) if text.is_empty() => self.null_descriptor(*span)?,
                     expression => self.string_descriptor(expression)?,
                 };
                 let pointer_type = self.pointer_type(STRING);

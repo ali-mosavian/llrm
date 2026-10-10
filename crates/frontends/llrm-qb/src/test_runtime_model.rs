@@ -243,3 +243,23 @@ fn flat_target_string_pointers_are_not_split() {
         .count();
     assert_eq!(split, 0);
 }
+
+/// A bare PRINT passed the descriptor address 0. On the flat target that is the interrupt table: a PRINT after a
+/// loop ending in `;` wrote its garbage length and the program died. The argument is a real descriptor.
+#[test]
+fn flat_target_bare_print_passes_a_real_descriptor() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "flat.bas", b"PRINT\n");
+    let mut frontend = qb_driver::Frontend::new("qb45", "llrm");
+    (frontend.near_bytes, frontend.far_bytes) = (4, 4);
+    let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{error}"));
+    let call = program
+        .modules
+        .iter()
+        .flat_map(|module| &module.functions)
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .find(|one| one.callee.as_deref() == Some("B$PESD"))
+        .expect("a B$PESD call");
+    assert!(!matches!(call.operands[0], llrm_core::hir::model::Operand::Constant { .. }), "{:?}", call.operands);
+}
