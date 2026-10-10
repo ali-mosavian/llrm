@@ -125,6 +125,11 @@ def link(program: Path, objects: dict[str, Path], exe: Path, work: Path) -> tupl
     return dosbatch.link_target(TARGET, program, exe, work, runtime=(START_FILES, []), objects_after=tuple(closure(program, objects)))
 
 
+# A bench program is given a fixed number of cycles a millisecond: with `cycles=max` the emulated time a program takes
+# follows how busy the host is, and grep (10 MB a character at a time) ran past its budget when other jobs were running.
+BENCH_CONF = dosbatch.CONF.replace("cycles=max", "cycles=fixed 100000")
+
+
 def run(names: list[str], work: Path) -> dict[str, tuple[str, bool]]:
     """Build each bench program and the runtime for the flat target, run them in one session, and say for each how it ended
     and whether its output is the stated one; a program that did not build says why in place of the status."""
@@ -147,9 +152,7 @@ def run(names: list[str], work: Path) -> dict[str, tuple[str, bool]]:
         jobs.append(dosbatch.Job(stem, "exe", work / f"{name}.exe", files=(*loaders, *data_files(source))))
         wanted[stem] = (name, (source.parent / f"{name}.out").read_bytes())
     if jobs:
-        # grep walks 10 MB a character at a time: its emulated time is within a few seconds of the default budget, and
-        # where the linker puts the hot routines moves it past.
-        results = dosbatch.run(jobs, work / "run", budget_ms=300_000)
+        results = dosbatch.run(jobs, work / "run", conf=BENCH_CONF)
         for job in jobs:
             name, want = wanted[job.stem]
             got = qbruntime.raw_output(work / "run", job.stem)
