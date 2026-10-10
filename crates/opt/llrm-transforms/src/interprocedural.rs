@@ -427,12 +427,9 @@ fn candidates(
     llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
     llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
 ) {
-    let mut found = inline::candidates_over(
+    let found = inline::candidates_over(
         module, callees, layout, counts, private, costs, reach, threshold, recursive, addressed,
     );
-    // Held only to inline from, a body's price is what the trial finds, never
-    // its size.
-    found.retain(|id, _| module.global(*id).linkage != Linkage::AvailableExternally);
     let more: llrm_support::hash::IndexMap<GlobalId, inline::Candidate> =
         loose.map_or_else(Default::default, |loose| {
             inline::candidates_over(
