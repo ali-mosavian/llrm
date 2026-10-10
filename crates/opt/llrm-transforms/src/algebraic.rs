@@ -167,7 +167,7 @@ fn _rewritten(
         || _nonnegative_sext(context, function, inst)
         || _unsigned_power_of_two(context, function, inst)
         || _masked_extension(context, layout, function, inst)
-        || _extended_mask(context, function, inst)
+        || _extended_mask(context, layout, function, inst)
         || _casted_logic(context, function, inst)
         || _phi_of_casts(context, function, inst)
         || _duplicate_phi(function, inst)
@@ -767,6 +767,7 @@ fn _nonnegative_sext(
 /// `trunc` `_masked_extension` takes (one `movzx r32, r8` for the pair).
 fn _extended_mask(
     context: &mut Context,
+    layout: &DataLayout,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -784,6 +785,13 @@ fn _extended_mask(
         return false;
     };
     if width >= wide || width > 64 || mask >> width != 0 {
+        return false;
+    }
+    // Only a mask that is a native low part (`_masked_extension` takes it on):
+    // any other `and` of the narrow value is a copy of the register and a
+    // masked part of it, three instructions for two.
+    let low = mask.trailing_ones();
+    if !layout.legal_integer(low) || low >= width || mask != (1_u128 << low) - 1 {
         return false;
     }
     let narrow = context.types.int(width);

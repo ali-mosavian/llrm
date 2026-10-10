@@ -741,6 +741,10 @@ fn test_a_mask_under_an_extension_that_the_mask_does_not_reach_past_is_taken_bef
     // A mask that reaches past the extended value, or an extension read
     // elsewhere, stays.
     unchanged("define i32 @f(i16 %x) {\nb0:\n  %z = zext i16 %x to i32\n  %r = and i32 %z, 65792\n  ret i32 %r\n}\n");
+    // A mask that is not a native low part gains nothing: quicksort -O2 went
+    // from `movzx edx, ax; and edx, 32767` to `mov dx, ax; and dx, 32767;
+    // movzx edx, dx`, +1,024 instructions.
+    unchanged("define i32 @f(i16 %x) {\nb0:\n  %z = zext i16 %x to i32\n  %r = and i32 %z, 32767\n  ret i32 %r\n}\n");
     unchanged(
         "define i32 @f(i16 %x) {\nb0:\n  %z = zext i16 %x to i32\n  %r = and i32 %z, 255\n  %s = add i32 %r, %z\n  ret i32 %s\n}\n",
     );
