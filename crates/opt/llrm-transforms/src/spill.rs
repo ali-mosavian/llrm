@@ -13,10 +13,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::cfg;
-use llrm_analysis::liveness::{self, Liveness};
+use llrm_analysis::liveness::{self, LivePoint, Liveness};
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::{Dense, IdSet};
+use llrm_mir::dense::{Dense, IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
@@ -805,7 +805,7 @@ pub fn traffic(
 ) -> BTreeMap<ValueId, Traffic> {
     #[cfg(test)]
     TRAFFIC.with(|count| count.set(count.get() + 1));
-    TrafficBase::of(function, frequency, cells, kept).finished(function, costs, words)
+    TrafficBase::of(function, frequency, &|value| cells.get(&value).copied(), kept).finished(function, costs, words)
 }
 
 /// Every instruction's traffic added up, before the stores are made words and
@@ -814,8 +814,8 @@ pub fn traffic(
 /// function again.
 #[derive(Clone, Debug)]
 pub struct TrafficBase {
-    found: BTreeMap<ValueId, Traffic>,
-    makers: BTreeMap<ValueId, usize>,
+    found: IdMap<ValueId, Traffic>,
+    makers: IdMap<ValueId, usize>,
 }
 
 impl TrafficBase {
@@ -823,19 +823,19 @@ impl TrafficBase {
     pub fn of(
         function: &Function,
         frequency: &BTreeMap<i64, i64>,
-        cells: &BTreeMap<ValueId, ValueId>,
+        cell: &dyn Fn(ValueId) -> Option<ValueId>,
         kept: &dyn Fn(InstId) -> bool,
     ) -> Self {
-        let mut base = Self { found: BTreeMap::new(), makers: BTreeMap::new() };
+        let mut base = Self { found: IdMap::new(), makers: IdMap::new() };
         let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
         for &block in function.layout() {
             let each = often(block);
             for &inst in function.block(block).instructions() {
                 if let Some(value) = function.instruction(inst).result {
-                    *base.makers.entry(value).or_default() += 1;
+                    *base.makers.get_or_insert_with(value, || 0) += 1;
                 }
                 if kept(inst) {
-                    base.add(function, inst, each, &often, cells, 1);
+                    base.add(function, inst, each, &often, cell, 1);
                 }
             }
         }
@@ -848,18 +848,26 @@ impl TrafficBase {
         &self,
         function: &Function,
         frequency: &BTreeMap<i64, i64>,
-        cells: &BTreeMap<ValueId, ValueId>,
+        cell: &dyn Fn(ValueId) -> Option<ValueId>,
         gone: impl IntoIterator<Item = InstId>,
     ) -> Self {
         let mut base = self.clone();
         let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
         for inst in gone {
             if let Some(block) = function.parent(inst) {
-                base.add(function, inst, often(block), &often, cells, -1);
+                base.add(function, inst, often(block), &often, cell, -1);
             }
         }
         // A cell whose traffic all went is one the instructions left alone.
-        base.found.retain(|_, one| (one.stores, one.updates, one.loads) != (0, 0, 0));
+        let empty: Vec<ValueId> = base
+            .found
+            .iter()
+            .filter(|(_, one)| (one.stores, one.updates, one.loads) == (0, 0, 0))
+            .map(|(value, _)| value)
+            .collect();
+        for value in empty {
+            base.found.remove(&value);
+        }
         base
     }
 
@@ -869,12 +877,13 @@ impl TrafficBase {
         inst: InstId,
         each: i64,
         often: &dyn Fn(BlockId) -> i64,
-        cells: &BTreeMap<ValueId, ValueId>,
+        cell: &dyn Fn(ValueId) -> Option<ValueId>,
         sign: i64,
     ) {
         let found = &mut self.found;
         let instruction = function.instruction(inst);
-        let own = instruction.result.map(|value| _cell(cells, value));
+        let of = |value: ValueId| cell(value).unwrap_or(value);
+        let own = instruction.result.map(of);
         if instruction.opcode == Opcode::Phi {
             // Each edge from another cell copies into this one.
             for pair in instruction.operands.chunks(2) {
@@ -883,29 +892,29 @@ impl TrafficBase {
                     _ => each,
                 } * sign;
                 match pair[0] {
-                    Operand::Value(value) if Some(_cell(cells, value)) == own => {}
+                    Operand::Value(value) if Some(of(value)) == own => {}
                     Operand::Value(value) => {
-                        found.entry(_cell(cells, value)).or_default().loads += from;
-                        found.entry(own.expect("a phi's value")).or_default().stores += from;
+                        found.get_or_insert_with(of(value), Default::default).loads += from;
+                        found.get_or_insert_with(own.expect("a phi's value"), Default::default).stores += from;
                     }
-                    _ => found.entry(own.expect("a phi's value")).or_default().stores += from,
+                    _ => found.get_or_insert_with(own.expect("a phi's value"), Default::default).stores += from,
                 }
             }
             return;
         }
         if let Some(value) = instruction.result
-            && cells.contains_key(&value)
+            && cell(value).is_some()
         {
-            found.entry(_cell(cells, value)).or_default().updates += each * sign;
+            found.get_or_insert_with(of(value), Default::default).updates += each * sign;
             return;
         }
         for operand in &instruction.operands {
             if let Operand::Value(value) = *operand {
-                found.entry(_cell(cells, value)).or_default().loads += each * sign;
+                found.get_or_insert_with(of(value), Default::default).loads += each * sign;
             }
         }
         if let Some(cell) = own {
-            found.entry(cell).or_default().stores += each * sign;
+            found.get_or_insert_with(cell, Default::default).stores += each * sign;
         }
     }
 
@@ -917,14 +926,17 @@ impl TrafficBase {
         costs: &OperationCosts,
         words: &dyn Fn(ValueId) -> i64,
     ) -> BTreeMap<ValueId, Traffic> {
-        let mut found = self.found.clone();
-        for (value, one) in &mut found {
-            one.stores *= words(*value);
-            if self.makers.get(value) == Some(&1) {
-                one.rebuild = _rebuild(function, *value, costs);
-            }
-        }
-        found
+        self.found
+            .iter()
+            .map(|(value, one)| {
+                let mut one = *one;
+                one.stores *= words(value);
+                if self.makers.get(&value) == Some(&1) {
+                    one.rebuild = _rebuild(function, value, costs);
+                }
+                (value, one)
+            })
+            .collect()
     }
 }
 
@@ -965,35 +977,10 @@ pub struct Site {
     pub addresses: Point<ValueId>,
 }
 
-/// Each instruction's site in `block` but its phis, in order.
-pub fn sites(
-    function: &Function,
-    found: &Liveness,
-    block: BlockId,
-    room: Room,
-    across: &dyn Fn(InstId) -> i64,
-    transient: &dyn Fn(InstId, &BTreeSet<ValueId>) -> i64,
-    cells: &BTreeMap<ValueId, ValueId>,
-    counted: &dyn Fn(ValueId) -> bool,
-    segment: &dyn Fn(ValueId) -> bool,
-    addressed: &dyn Fn(ValueId) -> bool,
-) -> Vec<Site> {
-    sites_over(
-        function,
-        &liveness::live_points(function, found, block),
-        room,
-        across,
-        transient,
-        cells,
-        counted,
-        segment,
-        addressed,
-    )
-}
-
-/// `sites` of a block whose live sets are `points`.
+/// Each instruction's site in a block but its phis, in order, from the values
+/// live before and across each.
 #[allow(clippy::too_many_arguments)]
-pub fn sites_over(
+pub fn sites(
     function: &Function,
     points: &[LivePoint],
     room: Room,
@@ -1014,12 +1001,12 @@ pub fn sites_over(
         found.dedup();
         found
     };
-    let residents = |live: &BTreeSet<ValueId>| cells_of(live, &|one| counted(one) && !viewed(one));
-    let held = |live: &BTreeSet<ValueId>| cells_of(live, &|one| counted(one) && viewed(one));
-    let routed = |live: &BTreeSet<ValueId>| cells_of(live, &|one| counted(one) && !viewed(one) && addressed(one));
+    let residents = |live| cells_of(live, &|one| counted(one) && !viewed(one));
+    let held = |live| cells_of(live, &|one| counted(one) && viewed(one));
+    let routed = |live| cells_of(live, &|one| counted(one) && !viewed(one) && addressed(one));
     points
         .iter()
-        .map(|(inst, before, past)| (*inst, before, past))
+        .map(|point| (point.inst, &point.before, &point.across))
         .map(|(inst, before, past)| Site {
             inst,
             addresses: Point {
@@ -1068,8 +1055,6 @@ pub struct Pressure {
 /// so two `Pressure`s of one function are equal whatever was asked.
 #[derive(Clone, Default)]
 struct BlockPoints(std::rc::Rc<std::cell::RefCell<BTreeMap<i64, std::rc::Rc<Vec<LivePoint>>>>>);
-
-type LivePoint = (InstId, BTreeSet<ValueId>, BTreeSet<ValueId>);
 
 impl PartialEq for BlockPoints {
     fn eq(
@@ -1207,7 +1192,7 @@ impl<'a> View<'a> {
         hide: &dyn Fn(ValueId) -> bool,
     ) -> Vec<Site> {
         let (context, layout, function, room) = (self.context, self.layout, self.function, self.room);
-        sites_over(
+        sites(
             function,
             &self.pressure.points(function, block),
             room,

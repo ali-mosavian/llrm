@@ -169,8 +169,7 @@ entry:
         .flat_map(|&block| {
             sites(
                 function,
-                &found,
-                block,
+                &liveness::live_points(function, &found, block),
                 room,
                 &|_| room.across_call,
                 &|_, _| 0,
@@ -259,13 +258,23 @@ entry:
     let at = |segments: i64| {
         let room = Room { registers: 6, across_call: 2, segments, ..Room::default() };
         let block = function.layout()[0];
-        sites(function, &found, block, room, &|_| 2, &|_, _| 0, &cells, &integer, &views, &|_| false)
-            .into_iter()
-            .find(|site| matches!(
-                function.instruction(site.inst).opcode,
-                llrm_mir::opcode::Opcode::Load { .. }
-            ))
-            .expect("a load")
+        sites(
+            function,
+            &liveness::live_points(function, &found, block),
+            room,
+            &|_| 2,
+            &|_, _| 0,
+            &cells,
+            &integer,
+            &views,
+            &|_| false,
+        )
+        .into_iter()
+        .find(|site| matches!(
+            function.instruction(site.inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .expect("a load")
     };
     let held = at(3);
     assert_eq!(held.segments.residents.len(), 2, "both views are in segment registers");
@@ -296,8 +305,7 @@ fn _peak(
         .flat_map(|&block| {
             sites(
                 function,
-                &found,
-                block,
+                &liveness::live_points(function, &found, block),
                 room,
                 &|_| 2,
                 &|inst, live| transient(&module.context, &layout, function, inst, room, live),
@@ -846,12 +854,13 @@ fn test_traffic_less_some_instructions_is_the_traffic_of_the_others() {
         let cells = cells(function);
         let words = |value: ValueId| words(&module.context, &layout, function, value);
         let every = function.walk().map(|(_, inst)| inst).collect::<Vec<_>>();
-        let base = super::TrafficBase::of(function, &frequency, &cells, &|_| true);
+        let base = super::TrafficBase::of(function, &frequency, &|value| cells.get(&value).copied(), &|_| true);
         for step in 1..=4 {
             let gone: BTreeSet<InstId> = every.iter().copied().step_by(step).collect();
             let direct = traffic(function, &frequency, &cells, &costs, &|inst| !gone.contains(&inst), &words);
-            let taken_out =
-                base.without(function, &frequency, &cells, gone.iter().copied()).finished(function, &costs, &words);
+            let taken_out = base
+                .without(function, &frequency, &|value| cells.get(&value).copied(), gone.iter().copied())
+                .finished(function, &costs, &words);
             assert_eq!(taken_out, direct, "every {step}th instruction left out of\n{text}");
         }
     }

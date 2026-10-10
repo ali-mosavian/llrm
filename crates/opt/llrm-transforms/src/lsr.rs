@@ -589,10 +589,11 @@ fn _plan(
     let fixed = _fixed(view, outer, loop_, target.room, pressure, &web_values, &users, exit.as_ref(), &live);
     // The web's reads are the uses the choice replaces; each use adds its own
     // back.
-    let base =
-        base.get_or_insert_with(|| std::rc::Rc::new(spill::TrafficBase::of(function, &frequencies, &cells, &|_| true)));
+    let base = base.get_or_insert_with(|| {
+        std::rc::Rc::new(spill::TrafficBase::of(function, &frequencies, &|value| cells.get(&value).copied(), &|_| true))
+    });
     let traffic = base
-        .without(function, &frequencies, &cells, users.web.iter().copied())
+        .without(function, &frequencies, &|value| cells.get(&value).copied(), users.web.iter().copied())
         .finished(function, &target.costs, &|value| spill::words(view.context, view.layout, function, value));
     let alive = _alive(function, pressure, loop_, &sites);
     let mut keys = Vec::new();
@@ -928,9 +929,7 @@ fn _alive(
         .iter()
         .map(|site| {
             live.iter()
-                .map(|(at, points)| {
-                    (*at, points.iter().map(|(_, before, _)| before.contains(&site.one.value)).collect())
-                })
+                .map(|(at, points)| (*at, points.iter().map(|point| point.before.contains(&site.one.value)).collect()))
                 .collect()
         })
         .collect()

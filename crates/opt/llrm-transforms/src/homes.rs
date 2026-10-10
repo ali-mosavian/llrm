@@ -169,9 +169,9 @@ pub fn homed(
                         |&other| liveness::live_points(function, &found, other)
                             .into_iter()
                             .any(
-                                |(at, _, across)| across.contains(&result)
-                                    && overlaps(cell, at)
-                                    && !writes_only(function, at, Operand::Value(result)),
+                                |point| point.across.contains(&result)
+                                    && overlaps(cell, point.inst)
+                                    && !writes_only(function, point.inst, Operand::Value(result)),
                             ),
                     );
                 if !disturbed {
