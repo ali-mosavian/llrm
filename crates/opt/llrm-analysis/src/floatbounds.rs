@@ -88,7 +88,7 @@ pub fn _memory(
     inst: InstId,
     format: Format,
     memory: &Cells,
-    scoped: &IndexMap<ValueId, Interval>,
+    scoped: &crate::ranges::Intervals,
 ) -> Option<Bounds> {
     let reference = MemRef::of(unit, inst)?;
     let width = match format {

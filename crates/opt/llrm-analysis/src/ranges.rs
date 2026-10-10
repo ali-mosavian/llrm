@@ -119,17 +119,17 @@ pub fn on_edge(
     unit: &Unit,
     block: BlockId,
     successor: BlockId,
-    known: &IndexMap<ValueId, Interval>,
+    known: &Intervals,
     facts: Option<&IndexMap<ValueId, Known>>,
-) -> Result<Option<IndexMap<ValueId, Interval>>, String> {
+) -> Result<Option<Intervals>, String> {
     Ok(edge_delta(unit, block, successor, known, facts)?.map(|delta| applied(known, delta)))
 }
 
 /// `known` with `delta`'s intervals in place of its own.
 fn applied(
-    known: &IndexMap<ValueId, Interval>,
-    delta: IndexMap<ValueId, Interval>,
-) -> IndexMap<ValueId, Interval> {
+    known: &Intervals,
+    delta: Intervals,
+) -> Intervals {
     let mut result = known.clone();
     result.extend(delta);
     result
@@ -142,9 +142,9 @@ fn edge_delta(
     unit: &Unit,
     block: BlockId,
     successor: BlockId,
-    known: &IndexMap<ValueId, Interval>,
+    known: &Intervals,
     facts: Option<&IndexMap<ValueId, Known>>,
-) -> Result<Option<IndexMap<ValueId, Interval>>, String> {
+) -> Result<Option<Intervals>, String> {
     #[cfg(test)]
     EDGE_DELTAS.with(|count| count.set(count.get() + 1));
     let successors = unit.function.successors(block);
@@ -154,10 +154,10 @@ fn edge_delta(
     let empty = IndexMap::default();
     let facts = facts.unwrap_or(&empty);
     if successors.len() != 2 {
-        return Ok(Some(IndexMap::default()));
+        return Ok(Some(Intervals::default()));
     }
     let Some((condition, taken)) = branch(unit, block) else {
-        return Ok(Some(IndexMap::default()));
+        return Ok(Some(Intervals::default()));
     };
     Ok(narrowed_delta(unit, condition, successor == taken, known, facts))
 }
@@ -168,9 +168,9 @@ fn narrowed(
     unit: &Unit,
     condition: Operand,
     holds: bool,
-    known: &IndexMap<ValueId, Interval>,
+    known: &Intervals,
     facts: &IndexMap<ValueId, Known>,
-) -> Option<IndexMap<ValueId, Interval>> {
+) -> Option<Intervals> {
     narrowed_delta(unit, condition, holds, known, facts).map(|delta| applied(known, delta))
 }
 
@@ -181,9 +181,9 @@ fn narrowed_delta(
     unit: &Unit,
     condition: Operand,
     holds: bool,
-    known: &IndexMap<ValueId, Interval>,
+    known: &Intervals,
     facts: &IndexMap<ValueId, Known>,
-) -> Option<IndexMap<ValueId, Interval>> {
+) -> Option<Intervals> {
     let result = IndexMap::default();
     let Some((_, compare)) = unit.defining(condition) else {
         return Some(result);
@@ -276,9 +276,9 @@ fn _refine_through(
     unit: &Unit,
     value: ValueId,
     interval: &Interval,
-    known: &IndexMap<ValueId, Interval>,
+    known: &Intervals,
     facts: &IndexMap<ValueId, Known>,
-    result: &mut IndexMap<ValueId, Interval>,
+    result: &mut Intervals,
     depth: usize,
 ) -> Option<()> {
     let Some((inst, op)) = unit.defining(Operand::Value(value)) else { return Some(()) };
@@ -344,7 +344,7 @@ fn _unsigned_span(interval: &Interval) -> (BigInt, BigInt) {
 pub fn _operand(
     unit: &Unit,
     operand: Operand,
-    known: &IndexMap<ValueId, Interval>,
+    known: &Intervals,
     facts: &IndexMap<ValueId, Known>,
 ) -> Option<Interval> {
     let width = unit.int_bits(operand)?;
@@ -373,7 +373,7 @@ pub fn declared(
 ) -> Option<Interval> {
     match unit.function.value(value).def {
         ValueDef::Argument(_) => declared_argument(unit, value),
-        ValueDef::Instruction(inst) => _computed(unit, inst, &IndexMap::default(), &IndexMap::default()).filter(|_| {
+        ValueDef::Instruction(inst) => _computed(unit, inst, &Intervals::default(), &IndexMap::default()).filter(|_| {
             let op = unit.function.instruction(inst);
             matches!(
                 op.opcode,
@@ -419,7 +419,7 @@ fn declared_metadata(
 }
 
 /// Every parameter's stated range.
-fn declared_arguments(unit: &Unit) -> IndexMap<ValueId, Interval> {
+fn declared_arguments(unit: &Unit) -> Intervals {
     unit.function.parameters().iter().filter_map(|&value| Some((value, declared_argument(unit, value)?))).collect()
 }
 
@@ -494,7 +494,7 @@ fn computes(
 pub fn _computed(
     unit: &Unit,
     inst: InstId,
-    known: &IndexMap<ValueId, Interval>,
+    known: &Intervals,
     facts: &IndexMap<ValueId, Known>,
 ) -> Option<Interval> {
     let op = unit.function.instruction(inst);
@@ -608,7 +608,7 @@ fn _fixed_product(
     unit: &Unit,
     inst: InstId,
     width: u32,
-    known: &IndexMap<ValueId, Interval>,
+    known: &Intervals,
     facts: &IndexMap<ValueId, Known>,
 ) -> Option<Interval> {
     let operands = &unit.function.instruction(inst).operands;
@@ -649,7 +649,7 @@ pub fn _recurrence_span(
 /// join is a second way around the check. So a block starts from its sole
 /// predecessor's facts narrowed by that edge, or else from its immediate
 /// dominator's, and each edge is applied once.
-pub fn dominated_edges(unit: &Unit) -> Result<IndexMap<i64, IndexMap<ValueId, Interval>>, String> {
+pub fn dominated_edges(unit: &Unit) -> Result<IndexMap<i64, Intervals>, String> {
     dominated_edges_with(unit, &unit.registers())
 }
 
@@ -657,12 +657,12 @@ pub fn dominated_edges(unit: &Unit) -> Result<IndexMap<i64, IndexMap<ValueId, In
 pub fn dominated_edges_with(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
-) -> Result<IndexMap<i64, IndexMap<ValueId, Interval>>, String> {
+) -> Result<IndexMap<i64, Intervals>, String> {
     Ok(edges_solved(unit, facts, None)?.blocks(unit.function))
 }
 
 /// What is known of each value at a point: an interval of it.
-pub type Intervals = llrm_support::hash::SparseIdMap<ValueId, Interval>;
+pub type Intervals = llrm_mir::dense::ShareMap<ValueId, Interval>;
 
 type Scope = Rc<Intervals>;
 
@@ -707,7 +707,7 @@ impl EdgeStates {
     pub fn blocks(
         &self,
         function: &llrm_mir::module::Function,
-    ) -> IndexMap<i64, IndexMap<ValueId, Interval>> {
+    ) -> IndexMap<i64, Intervals> {
         function
             .layout()
             .iter()
@@ -835,7 +835,7 @@ fn edges(
     })
 }
 
-pub type Facts = IndexMap<i64, IndexMap<ValueId, Interval>>;
+pub type Facts = IndexMap<i64, Intervals>;
 
 /// Each block's intervals from the counted loops holding it: its counters,
 /// what the loop computes from them, narrowed by the branch edges that
@@ -944,7 +944,7 @@ impl Bounds {
     pub fn at(
         &self,
         at: i64,
-    ) -> Option<&IndexMap<ValueId, Interval>> {
+    ) -> Option<&Intervals> {
         self.blocks.get(&at).map(|scope| &**scope)
     }
 
@@ -1207,7 +1207,7 @@ pub fn bounded_solved(
         }
         let operations: Vec<InstId> = operations.into_iter().filter(|&inst| computes(unit, inst)).collect();
         // What each operation computes, from what `known` holds.
-        let closed = |mut known: IndexMap<ValueId, Interval>| {
+        let closed = |mut known: Intervals| {
             loop {
                 let before = known.len();
                 for &inst in &operations {
@@ -1379,7 +1379,7 @@ pub fn bounded_solved(
             let outer = chain.iter().take_while(|(from, _, _)| !loop_.body.contains(&graph[*from].at)).count();
             let separable = chain[outer..].iter().all(|(from, _, _)| loop_.body.contains(&graph[*from].at));
             let narrow_by =
-                |edges: &[(usize, usize, i64)], scoped: &mut IndexMap<ValueId, Interval>| -> Result<(), String> {
+                |edges: &[(usize, usize, i64)], scoped: &mut Intervals| -> Result<(), String> {
                     for &(from, _, successor) in edges {
                         if let Some(delta) =
                             edge_delta(unit, cfg::block(graph[from].at), cfg::block(successor), scoped, Some(&facts))?
@@ -1613,11 +1613,11 @@ fn inductive_boxes(
     unit: &Unit,
     loop_: &loops::Loop,
     facts: &IndexMap<ValueId, Known>,
-    known: &IndexMap<ValueId, Interval>,
-    at_entry: &dyn Fn(i64) -> IndexMap<ValueId, Interval>,
-    closed: &dyn Fn(IndexMap<ValueId, Interval>) -> IndexMap<ValueId, Interval>,
+    known: &Intervals,
+    at_entry: &dyn Fn(i64) -> Intervals,
+    closed: &dyn Fn(Intervals) -> Intervals,
     scope_at: &dyn Fn(i64, &Intervals, u64, bool) -> Result<Rc<Intervals>, String>,
-) -> Result<IndexMap<ValueId, Interval>, String> {
+) -> Result<Intervals, String> {
     const PHIS: usize = 8;
     const ROUNDS: usize = 8;
     const SIZE: usize = 512;
@@ -1625,7 +1625,7 @@ fn inductive_boxes(
     let header = cfg::block(loop_.header);
     let size: usize = loop_.body.iter().map(|&at| function.block(cfg::block(at)).instructions().len()).sum();
     if size > SIZE {
-        return Ok(IndexMap::default());
+        return Ok(Intervals::default());
     }
     // (phi, width, the entries' hull, the (latch, value) pairs coming round)
     let mut candidates = Vec::new();
@@ -1666,7 +1666,7 @@ fn inductive_boxes(
         }
     }
     candidates.truncate(PHIS);
-    let mut boxes: IndexMap<ValueId, Interval> =
+    let mut boxes: Intervals =
         candidates.iter().map(|(phi, _, hull, _)| (*phi, hull.clone())).collect();
     for _ in 0..ROUNDS {
         if boxes.is_empty() {
@@ -1714,7 +1714,7 @@ fn inductive_boxes(
             return Ok(boxes);
         }
     }
-    Ok(IndexMap::default())
+    Ok(Intervals::default())
 }
 
 /// The least box `[-2^k, 2^k)` holding `interval`, none where that is the whole
@@ -1936,12 +1936,12 @@ fn _exact_sum(
 
 /// Every value `consts` knows without solving memory, as the singleton
 /// interval an alias query reads.
-pub fn constants(unit: &Unit) -> IndexMap<ValueId, Interval> {
+pub fn constants(unit: &Unit) -> Intervals {
     intervals(&unit.registers())
 }
 
 /// Each known value as the interval of it alone.
-pub fn intervals(known: &IndexMap<ValueId, Known>) -> IndexMap<ValueId, Interval> {
+pub fn intervals(known: &IndexMap<ValueId, Known>) -> Intervals {
     known
         .iter()
         .map(|(value, fact)| (*value, Interval { low: fact.n.clone(), high: fact.n.clone(), width: fact.width }))
@@ -1949,7 +1949,7 @@ pub fn intervals(known: &IndexMap<ValueId, Known>) -> IndexMap<ValueId, Interval
 }
 
 /// Exact values computed without consulting memory.
-pub fn singletons(unit: &Unit) -> IndexMap<ValueId, Interval> {
+pub fn singletons(unit: &Unit) -> Intervals {
     let function = unit.function;
     let mut known = IndexMap::<ValueId, Interval>::default();
     let none = IndexMap::default();
