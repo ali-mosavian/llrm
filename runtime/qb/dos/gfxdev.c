@@ -262,7 +262,7 @@ const u8 QB_FAR *gd_font(unsigned height)
 
     r.rax = GET_FONT;
     r.rbx = height == 14 ? FONT_14 : height == 16 ? FONT_16 : FONT_8;
-    dev_int10(&r);
+    dev_int10r(&r);
     return (const u8 QB_FAR *)QB_REAL_POINTER(r.res, r.rbp);
 }
 

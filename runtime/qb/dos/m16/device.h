@@ -18,6 +18,8 @@ typedef struct BlockOp {
 } BlockOp;
 
 extern void dev_int10(Regs *regs);
+/* Where protected mode has to ask for a real-mode result, the interrupt run in real mode; here it is the same. */
+#define dev_int10r dev_int10
 extern void dev_int17(Regs *regs);
 extern void dev_int21(Regs *regs);
 extern void dev_outb(unsigned port, unsigned value);

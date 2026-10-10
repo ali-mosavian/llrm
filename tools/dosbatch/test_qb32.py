@@ -38,7 +38,7 @@ def test_bench_program_prints_what_it_should_on_dos32(found, name: str):
 # fixed-length string fields read the wrong registers (parameter order of B$ASSN, B$LDFS, B$GET4, B$PUT4).
 PROBES = [
     "arrays_dynamic", "divide_by_zero", "func_string", "on_error", "on_error_label", "on_error_resume",
-    "print_items", "print_terminators", "read_data", "str_slices", "string_convert", "trim_and_str",
+    "print_items", "print_terminators", "read_data", "str_slices", "string_convert", "timer_sane", "trim_and_str",
     "using_numbers",
 ]
 
@@ -94,3 +94,55 @@ def test_demo_shows_what_bcom45_shows_on_dos32(demo_pairs, tmp_path, name: str):
 
     for checkpoint in want:
         assert qbplay.differing_pixels(want[checkpoint], got[checkpoint]) <= test_qbdemos.CURSOR_PIXELS, checkpoint
+
+
+# Played on: NIBBLES's snake runs into the wall (the delay loop is calibrated on TIMER, which once ran backwards on
+# dos32 and sent the snake across the arena in two seconds), and GORILLA's players throw bananas (the font of
+# the graphics screen once came back from a protected-mode interrupt as noise). The skyline, the sparkles and
+# where the number lies are random, so a screen is compared where nothing is: the death message, and the
+# top rows' prompts of GORILLA.
+PLAYED = {
+    "NIBBLES": (
+        [(["space"], 10, "dies", None)],
+        {"dies": (0, 0, 720, 400)},
+    ),
+    "GORILLA": (
+        [
+            (["p"], 5, "prompt1", None),
+            (["4", "5", "enter"], 1, "prompt2", None),
+            (["5", "0", "enter"], 8, "prompt3", None),
+        ],
+        {"prompt1": (0, 0, 150, 30), "prompt2": (400, 0, 640, 30), "prompt3": (0, 0, 150, 30)},
+    ),
+}
+
+
+def region_difference(want: Path, got: Path, box: tuple[int, int, int, int]) -> int:
+    import qbplay  # noqa: E402
+
+    (width, _, left), (_, _, right) = qbplay.png_pixels(want), qbplay.png_pixels(got)
+    scale = width // 640
+    x0, y0, x1, y1 = (v * scale for v in box)
+    step = 3 if len(left) == width * _ * 3 else 4
+    return sum(
+        left[(y * width + x) * step : (y * width + x) * step + 3] != right[(y * width + x) * step : (y * width + x) * step + 3]
+        for y in range(y0, y1)
+        for x in range(x0, x1)
+    )
+
+
+@pytest.mark.parametrize("name", ["NIBBLES", "GORILLA"])
+def test_demo_played_looks_as_bcom45_does_on_dos32(demo_pairs, tmp_path, name: str):
+    import shutil
+
+    import test_qbdemos  # noqa: E402
+
+    reference, candidate, loaders = demo_pairs[name]
+    script = test_qbdemos.SCRIPTS[name] + PLAYED[name][0]
+    want = test_qbdemos.play(reference, tmp_path / "ref", script)
+    (tmp_path / "cand").mkdir()
+    for loader in loaders:
+        shutil.copy(loader, tmp_path / "cand" / loader.name)
+    got = test_qbdemos.play(candidate, tmp_path / "cand", script)
+    for checkpoint, box in PLAYED[name][1].items():
+        assert region_difference(want[checkpoint], got[checkpoint], box) <= test_qbdemos.CURSOR_PIXELS, checkpoint
