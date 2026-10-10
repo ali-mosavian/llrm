@@ -1042,7 +1042,8 @@ pub fn summaries(
 pub struct SummaryMemo {
     result: IndexMap<String, Summary>,
     direct: IndexMap<String, Summary>,
-    found: IndexMap<String, Visit>,
+    /// The last visit of each body, in the order of the run, with its name.
+    found: Vec<(String, Option<Visit>)>,
     known: Option<IndexMap<String, Summary>>,
     topology: Option<Rc<Topology>>,
     /// The bodies the topology was made of, in order, and their calls.
@@ -1181,13 +1182,16 @@ pub fn summaries_updating(
     // of an earlier run says what its calls to something unknown did
     // for the callbacks it had: that is worked out again.
     // A body that was edited has other facts than its last visit found.
-    // (Taken out of the memo one by one without moving the rest: it is made
-    // again below.)
     let mut last = std::mem::take(&mut memo.found);
     let mut found: Vec<Option<Visit>> = procedures
         .keys()
-        .map(|name| {
-            last.swap_remove(name).filter(|_| !dirty_names.contains(name)).map(|visit| Visit { version: None, ..visit })
+        .enumerate()
+        .map(|(at, name)| {
+            last.get_mut(at)
+                .filter(|(then, _)| then == name)
+                .and_then(|(_, visit)| visit.take())
+                .filter(|_| !dirty_names.contains(name))
+                .map(|visit| Visit { version: None, ..visit })
         })
         .collect();
     let mut version = 0;
@@ -1276,7 +1280,19 @@ pub fn summaries_updating(
             }
         }
     }
-    memo.found = procedures.keys().cloned().zip(found).filter_map(|(name, visit)| Some((name, visit?))).collect();
+    last.truncate(procedures.len());
+    for (at, (name, visit)) in procedures.keys().zip(found).enumerate() {
+        match last.get_mut(at) {
+            Some(slot) => {
+                if slot.0 != *name {
+                    slot.0.clone_from(name);
+                }
+                slot.1 = visit;
+            }
+            None => last.push((name.clone(), visit)),
+        }
+    }
+    memo.found = last;
     memo.direct = direct;
     memo.known = known.cloned();
     memo.result = result.clone();
@@ -1309,25 +1325,32 @@ fn _topology(
     whole: bool,
     dirty_names: &BTreeSet<&String>,
 ) -> Rc<Topology> {
-    if let Some(kept) = memo.topology.as_ref().filter(|_| !whole) {
-        let same = memo.made_of.len() == procedures.len()
-            && procedures.iter().zip(&memo.made_of).all(|((name, one), (then, calls))| {
-                name == then
-                    && (Rc::ptr_eq(&one.facts, calls)
-                        || dirty_names.contains(name)
-                            && one.facts.calls == calls.calls
-                            && one.facts.sites == calls.sites
-                            && one.facts.replaceable == calls.replaceable)
-            });
-        if same {
-            let kept = Rc::clone(kept);
-            // The dirty bodies' facts are the ones now held.
-            for (one, (_, calls)) in procedures.values().zip(memo.made_of.iter_mut()) {
-                if !Rc::ptr_eq(&one.facts, calls) {
-                    *calls = Rc::clone(&one.facts);
+    if let Some(mut kept) = memo.topology.take().filter(|_| !whole) {
+        let same_bodies = memo.made_of.len() == procedures.len()
+            && procedures.iter().zip(&memo.made_of).all(|((name, _), (then, _))| name == then);
+        // The bodies whose calls are not the facts last held: only the dirty
+        // ones may be.
+        let moved: Vec<usize> = if same_bodies {
+            (0..procedures.len()).filter(|at| !Rc::ptr_eq(&procedures[*at].facts, &memo.made_of[*at].1)).collect()
+        } else {
+            Vec::new()
+        };
+        if same_bodies && moved.iter().all(|at| dirty_names.contains(&memo.made_of[*at].0)) {
+            let changed: Vec<usize> = moved
+                .iter()
+                .copied()
+                .filter(|at| {
+                    let (now, then) = (&procedures[*at].facts, &memo.made_of[*at].1);
+                    now.calls != then.calls || now.sites != then.sites || now.replaceable != then.replaceable
+                })
+                .collect();
+            if changed.is_empty() || _rewired(&mut kept, procedures, result, memo, &changed) {
+                for at in moved {
+                    memo.made_of[at].1 = Rc::clone(&procedures[at].facts);
                 }
+                memo.topology = Some(Rc::clone(&kept));
+                return kept;
             }
-            return kept;
         }
     }
     let out: Vec<Vec<usize>> = procedures
@@ -1369,6 +1392,58 @@ fn _topology(
     let made = Rc::new(Topology { component, order, rank, readers, callers_of_unknown, coupled: Default::default() });
     memo.topology = Some(Rc::clone(&made));
     made
+}
+
+/// `kept` brought up to date for the bodies `changed` (whose calls are not
+/// those it was made of), where that leaves its order a valid one: each new
+/// call is of a body of an earlier component, and none of the bodies is in a
+/// cycle (taking a call out of one may split it). False where it does not, and
+/// the topology is made afresh.
+fn _rewired(
+    kept: &mut Rc<Topology>,
+    procedures: &IndexMap<String, Procedure>,
+    result: &IndexMap<String, Summary>,
+    memo: &SummaryMemo,
+    changed: &[usize],
+) -> bool {
+    let Some(held) = Rc::get_mut(kept) else { return false };
+    let targets = |procedure: &Procedure| -> BTreeSet<usize> {
+        procedure.calls.values().filter_map(|target| procedures.get_index_of(target)).collect()
+    };
+    for &at in changed {
+        if held.component[at].1 {
+            return false;
+        }
+        if targets(&procedures[at])
+            .iter()
+            .any(|to| held.component[*to] == held.component[at] || held.rank[*to] >= held.rank[at])
+        {
+            return false;
+        }
+    }
+    for &at in changed {
+        let before: BTreeSet<usize> =
+            memo.made_of[at].1.calls.values().filter_map(|target| procedures.get_index_of(target)).collect();
+        let now = targets(&procedures[at]);
+        for gone in before.difference(&now) {
+            held.readers[*gone].remove(&at);
+        }
+        for added in now.difference(&before) {
+            held.readers[*added].insert(at);
+        }
+        let procedure = &procedures[at];
+        let unknown = procedure
+            .sites
+            .iter()
+            .any(|site| procedure.calls.get(site).and_then(|target| _summary(procedure, result, target)).is_none());
+        if unknown {
+            held.callers_of_unknown.insert(at);
+        } else {
+            held.callers_of_unknown.remove(&at);
+        }
+    }
+    held.coupled = Default::default();
+    true
 }
 
 /// What a body's last visit was made from, and found: its points-to facts, from
