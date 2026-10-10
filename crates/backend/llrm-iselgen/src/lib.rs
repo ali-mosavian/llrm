@@ -3,9 +3,10 @@
 //! over MIR opcodes, types and operand kinds, and a Rust emitter per
 //! pattern. `build.rs` runs it; the selector includes what it writes.
 //!
-//! Dependency-free, so `build.rs` can include it with `#[path]`.
+//! A build-dependency of each crate that has selection patterns.
 
 pub mod automaton;
+pub mod build;
 pub mod parse;
 
 use std::fmt::Write as _;
@@ -14,7 +15,7 @@ use automaton::{Automaton, State};
 use parse::{Call, Expr, OperandPattern, Pattern, Step};
 
 /// The instruction description's reader.
-#[path = "../../../../../../target/llrm-x86/src/parse.rs"]
+#[path = "../../../target/llrm-x86/src/parse.rs"]
 pub mod description;
 
 /// What each operand constructor may make, as `x86.instr` spells kinds,
@@ -61,7 +62,7 @@ fn bindings(pattern: &Pattern) -> Vec<(String, String)> {
                 out.push((name.clone(), rust.clone()));
             }
             if let Some(nested) = &one.nested {
-                walk(&nested.operands, &|inner| format!("self.inner({rust}, {inner})"), out);
+                walk(&nested.operands, &|inner| format!("sel.inner({rust}, {inner})"), out);
             }
         }
     }
@@ -85,19 +86,19 @@ fn structure(
     for (index, one) in operands.iter().enumerate() {
         let rust = at(index);
         if !root || index >= parse::OPERANDS {
-            terms.push(format!("self.operand_is({rust}, {}, {})", names(&one.kinds), names(&one.types)));
+            terms.push(format!("sel.operand_is({rust}, {}, {})", names(&one.kinds), names(&one.types)));
         }
         if let Some(literal) = one.literal {
-            terms.push(format!("self.literal({rust}) == Some({literal})"));
+            terms.push(format!("sel.literal({rust}) == Some({literal})"));
         }
         if let Some(nested) = &one.nested {
             terms.push(format!(
-                "self.defines({rust}, &{:?}, {}, {})",
+                "sel.defines({rust}, &{:?}, {}, {})",
                 nested.opcodes,
                 names(&nested.result),
                 nested.operands.len()
             ));
-            structure(&nested.operands, &|inner| format!("self.inner({rust}, {inner})"), false, terms);
+            structure(&nested.operands, &|inner| format!("sel.inner({rust}, {inner})"), false, terms);
         }
     }
 }
@@ -133,7 +134,7 @@ impl Checker<'_> {
         let args: Vec<String> = call.args.iter().map(|one| self.argument(one)).collect::<Result<_, _>>()?;
         let lead = if prefix == "hook" { "m, out" } else { "m" };
         let args = std::iter::once(lead.to_owned()).chain(args).collect::<Vec<_>>().join(", ");
-        Ok(format!("self.{prefix}_{}({args})", call.name))
+        Ok(format!("sel.{prefix}_{}({args})", call.name))
     }
 
     /// A LIR operand: its Rust and the kinds it may be.
@@ -167,7 +168,7 @@ impl Checker<'_> {
         }
         let args: Vec<String> = args.iter().map(|one| self.argument(one)).collect::<Result<_, _>>()?;
         let args = std::iter::once("m, out".to_owned()).chain(args).collect::<Vec<_>>().join(", ");
-        Ok((format!("self.op_{name}({args})?"), kinds.to_owned()))
+        Ok((format!("sel.op_{name}({args})?"), kinds.to_owned()))
     }
 
     /// The forms of `name` whose operands take `dests` and `sources`.
@@ -221,7 +222,7 @@ fn condition(
         }
     } else {
         for name in &pattern.covers {
-            terms.push(format!("self.covered_by({}, m.inst)", checker.argument(&Expr::Name(name.clone()))?));
+            terms.push(format!("sel.covered_by({}, m.inst)", checker.argument(&Expr::Name(name.clone()))?));
         }
     }
     Ok(if terms.is_empty() { "true".into() } else { terms.join(" && ") })
@@ -255,22 +256,19 @@ fn body(checker: &mut Checker) -> Result<String, String> {
                     llrm_lir::Operation::named(&form.operation).expect("x86.instr's operations are checked")
                 );
                 let (d, s) = locals.split_at(dests.len());
-                writeln!(code, "                out.push(self.emitted(m, Operation::{operation}, {name:?}, vec![{}], vec![{}], {volatile}));", d.join(", "), s.join(", ")).unwrap();
+                writeln!(code, "                out.push(sel.emitted(m, Operation::{operation}, {name:?}, vec![{}], vec![{}], {volatile}));", d.join(", "), s.join(", ")).unwrap();
             }
             Step::Chain { first, rest, left, right } => {
                 for name in [first, rest] {
                     checker.form(name, &["r".to_owned()], &["r".to_owned(), "ri".to_owned()])?;
                 }
                 let (left, right) = (checker.argument(left)?, checker.argument(right)?);
-                writeln!(code, "                self.wide_chain(m, out, {first:?}, {rest:?}, {left}, {right})?;")
+                writeln!(code, "                sel.wide_chain(m, out, {first:?}, {rest:?}, {left}, {right})?;")
                     .unwrap();
             }
             Step::Hook(call) => writeln!(code, "                {}?;", checker.call("hook", call)?).unwrap(),
             Step::Refuse(Some(message)) => writeln!(code, "                return refuse({message:?});").unwrap(),
-            Step::Refuse(None) => {
-                writeln!(code, "                return refuse(self.function.instruction(m.inst).opcode.mnemonic());")
-                    .unwrap()
-            }
+            Step::Refuse(None) => writeln!(code, "                return refuse(sel.mnemonic(m));").unwrap(),
             Step::Nothing => {}
         }
     }
@@ -278,11 +276,13 @@ fn body(checker: &mut Checker) -> Result<String, String> {
 }
 
 /// The selector of the target `name` (`x86-m16`): its tables and a `SELECTOR`
-/// that holds them with the methods the patterns became, those named for it.
+/// that holds them with the functions the patterns became, those named for
+/// it. `core` is the path of the crate whose `backend::isel::api` they call.
 pub fn generate(
     forms_text: &str,
     patterns_text: &str,
     name: &str,
+    core: &str,
 ) -> Result<Generated, String> {
     let ident = name.replace('-', "_");
     let forms = description::parse(forms_text)?;
@@ -297,19 +297,15 @@ pub fn generate(
     let automaton = automaton::build(&patterns.patterns);
     let mut code = String::new();
     writeln!(code, "// @generated by build.rs from {name}'s patterns.isel and x86.instr.\n").unwrap();
-    writeln!(code, "const _: () = assert!(crate::backend::isel::matcher::OPERANDS == {});\n", parse::OPERANDS).unwrap();
-    writeln!(code, "pub(super) const OPCODES: [&str; {}] = {:?};", parse::OPCODES.len(), parse::OPCODES).unwrap();
-    writeln!(code, "pub(super) const TYPES: [&str; {}] = {:?};", parse::TYPES.len(), parse::TYPES).unwrap();
-    writeln!(code, "pub(super) const KINDS: [&str; {}] = {:?};", parse::KINDS.len(), parse::KINDS).unwrap();
-    writeln!(
-        code,
-        "pub(super) const COMMUTATIVE: [&str; {}] = {:?};",
-        patterns.commutative.len(),
-        patterns.commutative
-    )
-    .unwrap();
-    writeln!(code, "pub(super) const ROOT: Option<usize> = {:?};", automaton.root).unwrap();
-    writeln!(code, "pub(super) static STATES: [State; {}] = [", automaton.states.len()).unwrap();
+    writeln!(code, "use {core}::backend::isel::api::*;\n").unwrap();
+    writeln!(code, "const _: () = assert!(OPERANDS == {});\n", parse::OPERANDS).unwrap();
+    writeln!(code, "pub const OPCODES: [&str; {}] = {:?};", parse::OPCODES.len(), parse::OPCODES).unwrap();
+    writeln!(code, "pub const TYPES: [&str; {}] = {:?};", parse::TYPES.len(), parse::TYPES).unwrap();
+    writeln!(code, "pub const KINDS: [&str; {}] = {:?};", parse::KINDS.len(), parse::KINDS).unwrap();
+    writeln!(code, "pub const COMMUTATIVE: [&str; {}] = {:?};", patterns.commutative.len(), patterns.commutative)
+        .unwrap();
+    writeln!(code, "pub const ROOT: Option<usize> = {:?};", automaton.root).unwrap();
+    writeln!(code, "pub static STATES: [State; {}] = [", automaton.states.len()).unwrap();
     for state in &automaton.states {
         match state {
             State::Test { feature, edges, default } => {
@@ -339,9 +335,9 @@ pub fn generate(
             })
             .collect()
     };
-    writeln!(code, "pub(super) static GROUPS: [Option<usize>; {}] = {groups:?};", groups.len()).unwrap();
+    writeln!(code, "pub static GROUPS: [Option<usize>; {}] = {groups:?};", groups.len()).unwrap();
     let covering: Vec<bool> = patterns.patterns.iter().map(|one| !one.covers.is_empty()).collect();
-    writeln!(code, "pub(super) static COVERS: [bool; {}] = {covering:?};", covering.len()).unwrap();
+    writeln!(code, "pub static COVERS: [bool; {}] = {covering:?};", covering.len()).unwrap();
     let (mut holds, mut covers, mut costs, mut emits) = (String::new(), String::new(), String::new(), String::new());
     for (index, pattern) in patterns.patterns.iter().enumerate() {
         let mut checker = Checker { pattern, forms: &forms, bound: bindings(pattern), lets: Vec::new() };
@@ -351,7 +347,7 @@ pub fn generate(
                 .covers
                 .iter()
                 .map(|name| {
-                    checker.argument(&Expr::Name(name.clone())).map(|rust| format!("self.cover({rust}, m.inst);"))
+                    checker.argument(&Expr::Name(name.clone())).map(|rust| format!("sel.cover({rust}, m.inst);"))
                 })
                 .collect::<Result<_, _>>()?;
             writeln!(covers, "            {index} => {{\n                if !({}) {{\n                    return false;\n                }}\n                {}\n            }}", condition(&checker, true)?, marks.join(" ")).unwrap();
@@ -366,34 +362,33 @@ pub fn generate(
     writeln!(
         code,
         "
-impl Selector<'_, '_, '_> {{
-    pub(super) fn {ident}_holds(&mut self, pattern: usize, m: &Match) -> bool {{
-        match pattern {{
-{holds}            _ => unreachable!(\"no pattern {{pattern}}\"),
-        }}
+/// Whether pattern `pattern` holds at `m`.
+pub fn {ident}_holds(sel: &mut Selector, pattern: usize, m: &Match) -> bool {{
+    match pattern {{
+{holds}        _ => unreachable!(\"no pattern {{pattern}}\"),
     }}
+}}
 
-    /// The cover phase: whether a covering pattern holds here, and if so
-    /// the instructions it covers marked.
-    pub(super) fn {ident}_covers(&mut self, pattern: usize, m: &Match) -> bool {{
-        match pattern {{
-{covers}            _ => unreachable!(\"pattern {{pattern}} covers nothing\"),
-        }}
-        true
+/// The cover phase: whether a covering pattern holds here, and if so
+/// the instructions it covers marked.
+pub fn {ident}_covers(sel: &mut Selector, pattern: usize, m: &Match) -> bool {{
+    match pattern {{
+{covers}        _ => unreachable!(\"pattern {{pattern}} covers nothing\"),
     }}
+    true
+}}
 
-    pub(super) fn {ident}_cost(&mut self, pattern: usize, m: &Match) -> Result<i64, Unselected> {{
-        match pattern {{
-{costs}            _ => unreachable!(\"pattern {{pattern}} is in no group\"),
-        }}
+pub fn {ident}_cost(sel: &mut Selector, pattern: usize, m: &Match) -> Result<i64, Unselected> {{
+    match pattern {{
+{costs}        _ => unreachable!(\"pattern {{pattern}} is in no group\"),
     }}
+}}
 
-    pub(super) fn {ident}_emit(&mut self, pattern: usize, m: &Match, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {{
-        match pattern {{
-{emits}            _ => unreachable!(\"no pattern {{pattern}}\"),
-        }}
-        Ok(())
+pub fn {ident}_emit(sel: &mut Selector, pattern: usize, m: &Match, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {{
+    match pattern {{
+{emits}        _ => unreachable!(\"no pattern {{pattern}}\"),
     }}
+    Ok(())
 }}
 
 pub static SELECTOR: Compiled = Compiled {{
@@ -406,11 +401,11 @@ pub static SELECTOR: Compiled = Compiled {{
     states: &STATES,
     groups: &GROUPS,
     covers: &COVERS,
-    holds: |selector, pattern, m| selector.{ident}_holds(pattern, m),
-    covers_here: |selector, pattern, m| selector.{ident}_covers(pattern, m),
-    cost: |selector, pattern, m| selector.{ident}_cost(pattern, m),
-    emit: |selector, pattern, m, out| selector.{ident}_emit(pattern, m, out),
-    rules: &crate::backend::peep::targets::{ident}::RULES,
+    holds: {ident}_holds,
+    covers_here: {ident}_covers,
+    cost: {ident}_cost,
+    emit: {ident}_emit,
+    rules: &RULES,
 }};"
     )
     .unwrap();
@@ -426,7 +421,7 @@ mod tests {
         "add binary rm/^0,rmi 16 alu_rr - - - -/- Add_rm{w}_r{w}\nneg unary rm/^0 16 alu_rr - - - -/- Neg_rm{w}\n";
 
     fn refused(patterns: &str) -> String {
-        generate(FORMS, patterns, "test").err().expect("refused")
+        generate(FORMS, patterns, "test", "crate").err().expect("refused")
     }
 
     #[test]
@@ -451,7 +446,7 @@ mod tests {
     #[test]
     fn two_patterns_sharing_a_prefix_share_its_states() {
         let patterns = "pattern any\n  match add.i16(a, b)\n  nothing\nend\npattern zero\n  match add.i16(a, #0)\n  nothing\nend\n";
-        let generated = generate(FORMS, patterns, "test").expect("generates");
+        let generated = generate(FORMS, patterns, "test", "crate").expect("generates");
         let states = &generated.automaton.states;
         let testing = |feature: usize| {
             states.iter().filter(|one| matches!(one, State::Test { feature: f, .. } if *f == feature)).count()
@@ -467,8 +462,10 @@ mod tests {
     #[test]
     fn each_targets_selector_has_methods_named_for_it() {
         let patterns = "pattern any\n  match add.i16(a, b)\n  nothing\nend\n";
-        let (first, second) =
-            (generate(FORMS, patterns, "x86-m16").unwrap().code, generate(FORMS, patterns, "x86-m32").unwrap().code);
+        let (first, second) = (
+            generate(FORMS, patterns, "x86-m16", "crate").unwrap().code,
+            generate(FORMS, patterns, "x86-m32", "crate").unwrap().code,
+        );
         assert!(first.contains("fn x86_m16_holds(") && !first.contains("x86_m32"));
         assert!(second.contains("fn x86_m32_holds(") && second.contains("name: \"x86-m32\""));
     }

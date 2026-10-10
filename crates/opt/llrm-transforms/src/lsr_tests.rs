@@ -694,7 +694,7 @@ fn test_a_chosen_loop_is_settled() {
     let (_, twice) = reduced(&once.replace(DOS, ""));
     assert_eq!(twice, once);
     let mut module = parsed(&once);
-    assert_eq!(crate::testing::managed(&mut module, crate::rotate::Rotate), once);
+    assert_eq!(crate::testing::managed(&mut module, crate::rotate::Rotate { proven: true, copy: false }), once);
 }
 
 /// A loop whose body is two blocks.

@@ -247,7 +247,7 @@ pub fn subexpressions(
     program: Option<&ProgramProxy>,
     crossed: &std::cell::Cell<bool>,
 ) -> Result<bool, String> {
-    let doms = cfg::Dominance::of(function).dominators(function);
+    let dominance = cfg::Dominance::of(function);
     let order: IndexMap<BlockId, usize> =
         function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
 
@@ -267,7 +267,7 @@ pub fn subexpressions(
             let first = candidates
                 .iter()
                 .rev()
-                .find(|candidate| _reaches(candidate.0, candidate.1, here, index, &doms, function.layout(), block))
+                .find(|candidate| _reaches(candidate.0, candidate.1, here, index, &dominance, function.layout(), block))
                 .copied();
             let Some((at, where_, earlier)) = first else {
                 candidates.push((here, index, inst));
@@ -377,14 +377,14 @@ pub fn _reaches(
     where_: usize,
     then: usize,
     index: usize,
-    doms: &BTreeMap<i64, BTreeSet<i64>>,
+    dominance: &cfg::Dominance,
     layout: &[BlockId],
     block: BlockId,
 ) -> bool {
     if at == then {
         return where_ < index;
     }
-    doms.get(&cfg::id(block)).is_some_and(|dominating| dominating.contains(&cfg::id(layout[at])))
+    dominance.dominates(cfg::id(layout[at]), cfg::id(block))
 }
 
 thread_local! {
@@ -465,7 +465,7 @@ pub fn forwarded(
         return Ok(false);
     }
     let unit = memory::Unit::within(context, layout, function, outer).with_registers(registers).with_shape(shape);
-    let crossings = Crossings::of(function);
+    let crossings = Crossings::of(function, &shape.reaching);
     // What each block holds is a fact of the instructions `function` has now,
     // which a caller that runs this twice on one function works out once.
     let served = forwarding
@@ -503,11 +503,14 @@ struct Crossings<'f> {
     places: BTreeMap<InstId, (BlockId, i64)>,
     /// Per block, the stores among its first `n` instructions, at `n`.
     stores: BTreeMap<BlockId, Vec<u32>>,
-    reaching: std::cell::RefCell<BTreeMap<BlockId, std::rc::Rc<BTreeSet<BlockId>>>>,
+    reaching: &'f cfg::Reaching,
 }
 
 impl<'f> Crossings<'f> {
-    fn of(function: &'f Function) -> Self {
+    fn of(
+        function: &'f Function,
+        reaching: &'f cfg::Reaching,
+    ) -> Self {
         let mut places = BTreeMap::new();
         let mut stores = BTreeMap::new();
         for &block in function.layout() {
@@ -520,26 +523,7 @@ impl<'f> Crossings<'f> {
             }
             stores.insert(block, counted);
         }
-        Self { function, places, stores, reaching: Default::default() }
-    }
-
-    /// The blocks with a path to `to`, itself included.
-    fn reaching(
-        &self,
-        to: BlockId,
-    ) -> std::rc::Rc<BTreeSet<BlockId>> {
-        std::rc::Rc::clone(self.reaching.borrow_mut().entry(to).or_insert_with(|| {
-            let mut reaching = BTreeSet::from([to]);
-            let mut work = vec![to];
-            while let Some(at) = work.pop() {
-                for parent in self.function.predecessors(at) {
-                    if reaching.insert(parent) {
-                        work.push(parent);
-                    }
-                }
-            }
-            std::rc::Rc::new(reaching)
-        }))
+        Self { function, places, stores, reaching }
     }
 
     /// Whether a store lies on some path from `holder`'s definition to `load`,
@@ -566,11 +550,11 @@ impl<'f> Crossings<'f> {
         if source.0 == destination.0 {
             return source.1 >= destination.1 || stores_in(source.0, source.1 + 1, destination.1);
         }
-        let reaching = self.reaching(destination.0);
+        let reaching = self.reaching.to(function, destination.0);
         if !reaching.contains(&source.0) {
             return true;
         }
-        let mut seen = BTreeSet::new();
+        let mut seen = IdSet::new();
         let mut work = vec![source.0];
         let mut arrived = false;
         while let Some(at) = work.pop() {
@@ -1389,7 +1373,8 @@ b4:
 ",
         );
         let function = f(&mut module);
-        let crossings = Crossings::of(function);
+        let reaching = llrm_analysis::cfg::Reaching::default();
+        let crossings = Crossings::of(function, &reaching);
         let values: Vec<_> = function.walk().filter_map(|(_, inst)| function.instruction(inst).result).collect();
         let loads: Vec<_> = function
             .walk()

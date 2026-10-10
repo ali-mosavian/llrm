@@ -22,6 +22,9 @@ mod root;
 
 pub use root::root;
 
+pub mod registers;
+pub use registers::{FRAME, STACK};
+
 /// One physical register operand, at the instruction's width.
 ///
 /// Direct port of `qbopt.model.ir:Reg`.
@@ -84,7 +87,7 @@ pub struct Imm {
 /// are different addresses. (Python left the encoding fields out;
 /// that made `==` mean "the same address modulo how it is encoded", which is no
 /// answer to the question a caller asks of two operands that will be emitted.)
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct AddressRef {
     pub addr: Option<Addr>,
     pub through: iced_x86::Register,
@@ -181,6 +184,18 @@ impl Mem {
         })
     }
 
+    /// Where this cell is, as the address an `lea` of it would name.
+    pub fn address(&self) -> AddressRef {
+        AddressRef {
+            addr: self.addr,
+            through: self.through,
+            index_through: self.index_through,
+            scale: self.scale,
+            offset: self.offset,
+            disp_width: self.disp_width,
+        }
+    }
+
     pub const fn new(
         addr: Option<Addr>,
         width: u32,
@@ -234,6 +249,42 @@ pub enum Loc {
 }
 
 impl Loc {
+    /// Where an operand that names memory is, however it is spelled: a cell's
+    /// address, or the address an `lea` names. None for the rest.
+    pub fn address(&self) -> Option<AddressRef> {
+        match self {
+            Loc::Mem(cell) => Some(cell.address()),
+            Loc::Address(address) => Some(*address),
+            _ => None,
+        }
+    }
+
+    /// Whether this operand names a cell of the frame by its displacement
+    /// from the frame register (`Mem::in_frame`, `AddressRef::in_frame`).
+    pub fn in_frame(&self) -> bool {
+        match self {
+            Loc::Mem(cell) => cell.in_frame(),
+            Loc::Address(address) => address.in_frame(),
+            _ => false,
+        }
+    }
+
+    /// This operand with its address changed by `change`, the rest of a cell
+    /// as it was; an operand that names no memory as it is.
+    pub fn map_address(
+        &self,
+        change: impl FnOnce(AddressRef) -> AddressRef,
+    ) -> Loc {
+        match self {
+            Loc::Mem(cell) => {
+                let AddressRef { addr, through, index_through, scale, offset, disp_width } = change(cell.address());
+                Loc::Mem(Mem { addr, through, index_through, scale, offset, disp_width, ..cell.clone() })
+            }
+            Loc::Address(address) => Loc::Address(change(*address)),
+            other => other.clone(),
+        }
+    }
+
     /// The x87 register `st(index)`.
     pub fn st(index: u32) -> Self {
         Loc::Reg(Reg::st(index))

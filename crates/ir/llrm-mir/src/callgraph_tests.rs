@@ -121,3 +121,75 @@ b0:
     assert!(found.contains(&id(&module, "only")));
     assert!(!found.contains(&id(&module, "exported")) && !found.contains(&id(&module, "taken")));
 }
+
+/// A function is entered again only through a cycle, an unbounded pointer or a
+/// declaration that may call back; `cannot_reenter` says it of every function
+/// at once, as what each reaches would.
+#[test]
+fn test_cannot_reenter_names_the_functions_reaching_no_cycle_pointer_or_callback() {
+    let module = parse::module(
+        "declare void @callback()
+declare void @quiet() nocallback
+
+define void @leaf() {
+b0:
+  call void @quiet()
+  ret void
+}
+
+define void @middle() {
+b0:
+  call void @leaf()
+  ret void
+}
+
+define void @top() {
+b0:
+  call void @middle()
+  ret void
+}
+
+define void @calls_back() {
+b0:
+  call void @callback()
+  ret void
+}
+
+define void @above_callback() {
+b0:
+  call void @calls_back()
+  ret void
+}
+
+define void @spins(i32 %n) {
+b0:
+  call void @spins(i32 %n)
+  ret void
+}
+
+define void @above_cycle() {
+b0:
+  call void @spins(i32 0)
+  ret void
+}
+
+define void @through_pointer(ptr %p) {
+b0:
+  call void %p()
+  ret void
+}
+
+define void @above_pointer() {
+b0:
+  call void @through_pointer(ptr @leaf)
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let graph = CallGraph::new(&module);
+    let got = graph.cannot_reenter(&module);
+    let expected: std::collections::BTreeSet<_> =
+        ["leaf", "middle", "top", "above_cycle"].iter().map(|name| id(&module, name)).collect();
+    assert_eq!(got, expected);
+}

@@ -45,7 +45,7 @@ pub fn machine<'a>(
         segments,
         &crate::backend::classes::RegisterClasses::m16(),
         spilling.then(Rc::<ssaspill::Run>::default),
-        &crate::backend::peep::targets::x86_m16::RULES,
+        &crate::backend::targets::x86_m16::RULES,
         &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     )
 }

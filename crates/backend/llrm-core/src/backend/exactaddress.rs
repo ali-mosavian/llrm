@@ -150,7 +150,7 @@ fn sum_of(
         .filter(|(register, _)| *register != Register::None)
         .collect();
     let held: Vec<Held> = [cell.base, cell.index].into_iter().flatten().collect();
-    if registers.len() != held.len() || registers.iter().any(|(register, _)| !target::WIDTHS.contains_key(register)) {
+    if registers.len() != held.len() || registers.iter().any(|(register, _)| !target::integer(*register)) {
         return None;
     }
     let values: Vec<u32> = match (registers.as_slice(), held.as_slice()) {
@@ -371,7 +371,10 @@ fn rewritten(
         return None;
     }
     // A 32-bit EBP base selects SS where a 16-bit cell's register did not.
-    if address.through == Register::EBP && addr.segment == Register::None {
+    if crate::backend::registerinfo::is_frame(address.through)
+        && crate::backend::registerinfo::bytes(address.through) == Some(4)
+        && addr.segment == Register::None
+    {
         return None;
     }
     let widened = Mem {

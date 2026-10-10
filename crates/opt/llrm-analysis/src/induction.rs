@@ -29,12 +29,12 @@ use llrm_mir::types::TypeId;
 use llrm_support::hash::{HashSet, IndexMap};
 use num_bigint::BigInt;
 
-use crate::cfg;
+use crate::cfg::{self, Around};
 use crate::consts::{Known, masked};
 use crate::graph::loops::Loop;
 use crate::memory::{MemRef, Unit};
 use crate::noreturn;
-use crate::occurrence::{operations, phis};
+use crate::occurrence::{operations_in, phis};
 
 /// A recurrence's start or step: a value, or a number.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -376,19 +376,22 @@ fn _control(
     loop_: &Loop,
     leaving: bool,
 ) -> Option<_Control> {
-    let graph = cfg::graph(function);
-    let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
-    if loop_.latches.len() != 1 || !blocks.contains_key(&loop_.header) {
+    // Only the blocks the loop and what enters it name are read, not the graph
+    // of the whole body (found for each loop, that was N^2 in a function of
+    // N loops).
+    let block_of = |at: i64| cfg::Block { at, succ: cfg::successors_of(function, at) };
+    if loop_.latches.len() != 1 {
         return None;
     }
-    let latch = *blocks.get(loop_.latches.first()?)?;
-    let header = blocks[&loop_.header];
+    let latch = block_of(*loop_.latches.first()?);
+    let header = block_of(loop_.header);
     let inside = &loop_.body;
     // A latch that only jumps on, split from a critical edge, is the end of
     // the block that branches to it: that block is tested after its trip.
     let forwarded = (latch.succ.as_slice() == [header.at]).then(|| {
         let only = function.block(cfg::block(latch.at)).instructions();
-        let preds = graph.iter().filter(|block| block.succ.contains(&latch.at)).collect::<Vec<_>>();
+        let preds =
+            function.predecessors(cfg::block(latch.at)).into_iter().map(|at| block_of(cfg::id(at))).collect::<Vec<_>>();
         match (only.len(), &preds[..]) {
             (1, [pred])
                 if pred.at != header.at
@@ -396,7 +399,7 @@ fn _control(
                     && pred.succ.len() == 2
                     && pred.succ.contains(&latch.at) =>
             {
-                Some(*pred)
+                Some(pred.clone())
             }
             _ => None,
         }
@@ -407,13 +410,13 @@ fn _control(
         && function.block(cfg::block(latch.at)).instructions().len() == 1
         && header.succ.len() == 2
         && header.succ.contains(&latch.at)
-        && graph.iter().filter(|block| block.succ.contains(&latch.at)).count() == 1;
-    let (control, entered) = if let Some(Some(pred)) = forwarded {
-        (pred, vec![latch.at])
+        && function.predecessors(cfg::block(latch.at)).len() == 1;
+    let (control, entered) = if let Some(Some(pred)) = &forwarded {
+        (pred.clone(), vec![latch.at])
     } else if latch.succ.as_slice() == [header.at] {
-        (header, header.succ.iter().copied().filter(|at| inside.contains(at)).collect::<Vec<_>>())
+        (header.clone(), header.succ.iter().copied().filter(|at| inside.contains(at)).collect::<Vec<_>>())
     } else if latch.succ.contains(&header.at) {
-        (latch, vec![header.at])
+        (latch.clone(), vec![header.at])
     } else {
         return None;
     };
@@ -430,7 +433,7 @@ fn _control(
         || entered.len() != 1
         || exits.len() != 1
         || !conditional
-        || inside.iter().any(|at| blocks[at].succ.is_empty())
+        || inside.iter().any(|at| function.successors(cfg::block(*at)).is_empty())
     {
         return None;
     }
@@ -439,7 +442,7 @@ fn _control(
     let elsewhere = inside
         .iter()
         .filter(|at| **at != control.at)
-        .flat_map(|at| blocks[at].succ.iter().copied().filter(|to| !inside.contains(to)))
+        .flat_map(|at| block_of(*at).succ.into_iter().filter(|to| !inside.contains(to)))
         .collect::<BTreeSet<_>>();
     // Or, where `leaving`, go on: the count then holds as long as the loop
     // does.
@@ -447,13 +450,9 @@ fn _control(
     if !leaving && leaves {
         return None;
     }
-    let outside = graph
-        .iter()
-        .filter(|block| block.succ.contains(&header.at) && !inside.contains(&block.at))
-        .map(|block| block.at)
-        .collect::<BTreeSet<_>>();
+    let outside = loop_.entering(function);
     let preheader = match outside.first() {
-        Some(&one) if outside.len() == 1 && blocks[&one].succ.as_slice() == [header.at] => Some(one),
+        Some(&one) if outside.len() == 1 && block_of(one).succ.as_slice() == [header.at] => Some(one),
         _ => None,
     };
     Some(_Control {
@@ -766,6 +765,15 @@ fn _proven(
             let Reach::Solved { bits, .. } = &solved else { unreachable!("_solved solves") };
             let period = BigInt::from(1) << *bits;
             reach = solved;
+            // Counted from a start the branch over the entry proves is not the
+            // bound: `n == 0` skips a loop that ends at `n - 1 ==
+            // 0`, which then runs `n` trips (the `(bound - start) / step` of a
+            // loop tested after its trip is wrong only where it
+            // starts at the bound).
+            entry_guarded = shape.posttested
+                && stepped
+                && abs(&step) == BigInt::from(1)
+                && _entered(unit, &shape, &start, &bound, IntPredicate::Ne, width);
             Some(period)
         } else if test != IntPredicate::Ne && abs(&step) != BigInt::from(1) {
             // An ordered test by more than one: promised not to wrap past the
@@ -833,7 +841,85 @@ fn _entered(
     width: u32,
 ) -> bool {
     let Some(preheader) = shape.preheader else { return false };
-    crate::guards::holds(unit, preheader, test, &Scev::of(start, width), &Scev::of(bound, width))
+    let (value, limit) = (start, bound);
+    let (start, bound) = (Scev::of(start, width), Scev::of(bound, width));
+    crate::guards::holds(unit, preheader, test, &start, &bound) || _ranged(unit, preheader, value, limit, test, width)
+}
+
+/// Whether the counters of the loops around the entry put the start of a
+/// counter on the loop's side of a constant bound for good: a signed compare of
+/// `outer + c`, `outer` the counter of an enclosing counted loop, whose values
+/// the proof of that loop bounds. A guard the program no longer holds was
+/// folded on that range, and a loop entered behind it is entered all the same.
+fn _ranged(
+    unit: &Unit,
+    at: i64,
+    start: &AffineOperand,
+    bound: &AffineOperand,
+    test: IntPredicate,
+    width: u32,
+) -> bool {
+    let (AffineOperand::Value(value, _), AffineOperand::Const(limit)) = (start, bound) else { return false };
+    let function = unit.function;
+    // `start` is `outer + offset`, or `outer`.
+    let (outer, offset) = match function.value(*value).def {
+        ValueDef::Instruction(made) => {
+            let made = function.instruction(made);
+            match (&made.opcode, made.operands.as_slice()) {
+                (Opcode::Binary(BinaryOp::Add), [Operand::Value(base), other])
+                | (Opcode::Binary(BinaryOp::Add), [other, Operand::Value(base)]) => {
+                    let Some(constant) = unit.int_constant(*other) else { return false };
+                    (*base, BigInt::from(constant))
+                }
+                (Opcode::Binary(BinaryOp::Sub), [Operand::Value(base), other]) => {
+                    let Some(constant) = unit.int_constant(*other) else { return false };
+                    (*base, -BigInt::from(constant))
+                }
+                _ => (*value, BigInt::from(0)),
+            }
+        }
+        ValueDef::Argument(_) => return false,
+    };
+    let shape = unit.shape();
+    let limit = _signed_value(&limit.n, width);
+    for around in shape.loops.iter().filter(|one| one.body.contains(&at)) {
+        for proof in counted_unless_stopped(unit, around, None, false) {
+            if proof.counter.value != outer || proof.width() != width {
+                continue;
+            }
+            // Its values run from the start toward the bound: the start is the
+            // lowest (highest) of an ascending (descending) one,
+            // and the span, where the count is known, bounds the other end too.
+            let AffineOperand::Const(origin) = &proof.start else { continue };
+            let origin = _signed_value(&origin.n, width);
+            let (low, high) = match (proof.span(), proof.step > BigInt::from(0)) {
+                (Some((low, high)), _) => (low, high),
+                (None, true) => (origin.clone(), BigInt::from(1) << (width - 1)),
+                (None, false) => (-(BigInt::from(1) << (width - 1)), origin.clone()),
+            };
+            let (low, high) = (low + &offset, high + &offset);
+            let holds = match test {
+                IntPredicate::Sge => low >= limit,
+                IntPredicate::Sgt => low > limit,
+                IntPredicate::Sle => high <= limit,
+                IntPredicate::Slt => high < limit,
+                _ => false,
+            };
+            if holds {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn _signed_value(
+    n: &BigInt,
+    width: u32,
+) -> BigInt {
+    let modulus = BigInt::from(1) << width;
+    let low = mod_floor(n, &modulus);
+    if low >= (BigInt::from(1) << (width - 1)) { low - modulus } else { low }
 }
 
 /// Where a loop leaves, and after how many trips: an exiting block, and
@@ -871,22 +957,17 @@ pub fn exits(
     };
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return Vec::new() };
     let shape = unit.shape();
-    let graph = cfg::graph(function);
-    let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
+    let block_of = |at: i64| cfg::Block { at, succ: cfg::successors_of(function, at) };
     let inside = &loop_.body;
-    let outside = graph
-        .iter()
-        .filter(|block| block.succ.contains(&loop_.header) && !inside.contains(&block.at))
-        .map(|block| block.at)
-        .collect::<BTreeSet<_>>();
+    let outside = loop_.entering(function);
     let preheader = match outside.first() {
-        Some(&one) if outside.len() == 1 && blocks[&one].succ.as_slice() == [loop_.header] => Some(one),
+        Some(&one) if outside.len() == 1 && block_of(one).succ.as_slice() == [loop_.header] => Some(one),
         _ => None,
     };
     let mut exiting = inside
         .iter()
         .copied()
-        .filter(|at| blocks.get(at).is_some_and(|block| block.succ.iter().any(|to| !inside.contains(to))))
+        .filter(|at| block_of(*at).succ.iter().any(|to| !inside.contains(to)))
         .collect::<Vec<_>>();
     // Those the latch follows are in a chain: each dominates the next.
     exiting.sort_by_key(|&at| {
@@ -899,7 +980,7 @@ pub fn exits(
         .into_iter()
         .map(|at| {
             let branch = function.terminator(cfg::block(at)).expect("a terminated block");
-            let block = blocks[&at];
+            let block = block_of(at);
             let exit = block.succ.iter().copied().find(|to| !inside.contains(to)).expect("an exiting block");
             let mut found = ExitCount { block: at, branch, exit, taken: None, proofs: Vec::new() };
             let operands = &function.instruction(branch).operands;
@@ -1784,6 +1865,26 @@ pub fn basics(
 /// Where the follower advances is a branch, `i = i + 1` on some ways round
 /// and `i` on the others (quicksort's partition index), the counter still
 /// leads: `i + 1 <= j + 1`, which the counter's step does not wrap.
+/// Each loop's followers, by header: `followers` of every loop of the unit's
+/// shape, found once for the body (a block asks them of each loop around it).
+pub type LoopFollowers = IndexMap<i64, Vec<(ValueId, ValueId, AffineOperand)>>;
+
+pub fn followers_all(unit: &Unit) -> LoopFollowers {
+    unit.shape().loops.iter().map(|loop_| (loop_.header, followers(unit, loop_))).collect()
+}
+
+/// The followers of `loop_`: the manager's where the unit carries them, else
+/// worked out.
+pub fn followers_of(
+    unit: &Unit,
+    loop_: &Loop,
+) -> Vec<(ValueId, ValueId, AffineOperand)> {
+    match unit.followers.and_then(|held| held.get(&loop_.header)) {
+        Some(found) => found.clone(),
+        None => followers(unit, loop_),
+    }
+}
+
 pub fn followers(
     unit: &Unit,
     loop_: &Loop,
@@ -2488,14 +2589,7 @@ fn _recurrences(
     priced: bool,
 ) -> Users {
     let function = unit.function;
-    let walk = Walk {
-        unit,
-        loop_,
-        counters,
-        priced,
-        still: invariant(function, &loop_.body),
-        facts: unit.registers().into_owned(),
-    };
+    let walk = Walk { unit, loop_, counters, priced, still: invariant(function, &loop_.body), facts: unit.registers() };
     let mut found = Users::default();
     for counter in counters.values() {
         let Some(phi) = defining(function, counter.value) else { continue };
@@ -2520,10 +2614,9 @@ fn _recurrences(
     let mut changed = true;
     while changed {
         changed = false;
-        for (inst, block, op) in operations(function) {
+        for (inst, block, op) in operations_in(function, &loop_.body) {
             let Some(result) = op.result else { continue };
-            if !loop_.body.contains(&cfg::id(block)) || found.web.contains(&inst) || found.values.contains_key(&result)
-            {
+            if found.web.contains(&inst) || found.values.contains_key(&result) {
                 continue;
             }
             if let Some(of) = walk.fold(&found, cfg::id(block), op) {
@@ -2542,7 +2635,7 @@ struct Walk<'a> {
     counters: &'a IndexMap<ValueId, Affine>,
     priced: bool,
     still: Invariant,
-    facts: IndexMap<ValueId, Known>,
+    facts: std::borrow::Cow<'a, IndexMap<ValueId, Known>>,
 }
 
 impl Walk<'_> {

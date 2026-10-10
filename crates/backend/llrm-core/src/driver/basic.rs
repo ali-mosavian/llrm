@@ -112,21 +112,16 @@ pub fn _static_frame(
         .collect();
     // Through BP no longer: the data object's own address.
     let through =
-        |register: Register| if matches!(register, Register::BP | Register::EBP) { Register::None } else { register };
+        |register: Register| if crate::backend::registerinfo::is_frame(register) { Register::None } else { register };
     let operand = |r#where: &Loc| -> Loc {
-        match r#where {
-            Loc::Mem(mem) if mem.in_frame() => Loc::Mem(ir::Mem {
-                addr: mem.addr.map(|addr| moved(&addr)),
-                through: through(mem.through),
-                ..mem.clone()
-            }),
-            Loc::Address(address) if address.in_frame() => Loc::Address(ir::AddressRef {
-                addr: address.addr.map(|addr| moved(&addr)),
-                through: through(address.through),
-                ..address.clone()
-            }),
-            other => other.clone(),
+        if !r#where.in_frame() {
+            return r#where.clone();
         }
+        r#where.map_address(|at| ir::AddressRef {
+            addr: at.addr.map(|addr| moved(&addr)),
+            through: through(at.through),
+            ..at
+        })
     };
     let blocks = body
         .blocks
@@ -240,15 +235,10 @@ pub fn _runtime_frame(
         })
         .collect();
     let operand = |r#where: &Loc| -> Loc {
-        match r#where {
-            Loc::Mem(mem) if mem.in_frame() => {
-                Loc::Mem(ir::Mem { addr: Some(moved(&mem.addr.unwrap())), ..mem.clone() })
-            }
-            Loc::Address(address) if address.in_frame() => {
-                Loc::Address(ir::AddressRef { addr: Some(moved(&address.addr.unwrap())), ..address.clone() })
-            }
-            other => other.clone(),
+        if !r#where.in_frame() {
+            return r#where.clone();
         }
+        r#where.map_address(|at| ir::AddressRef { addr: Some(moved(&at.addr.unwrap())), ..at })
     };
     let framed: Vec<lir::LirBlock> = framed
         .into_iter()

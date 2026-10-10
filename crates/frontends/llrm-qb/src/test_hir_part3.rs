@@ -2447,7 +2447,7 @@ fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
         .1
         .attrs
         .push(llrm_mir::Attribute::Flag("nounwind".to_owned()));
-    llrm_core::backend::ehprepare::prepared(&mut emitted.module).expect("prepared");
+    llrm_core::backend::ehprepare::prepared(&mut emitted.module, llrm_x86_m16::layout().spaces.far).expect("prepared");
     let text = llrm_mir::print::module(&emitted.module);
     let handler = &text[text.find("@__main$handler(i16 %0").expect("the handler function")..];
     let handler = &handler[..handler.find("\n}\n").expect("its end")];

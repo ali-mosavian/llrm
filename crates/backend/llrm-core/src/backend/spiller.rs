@@ -263,13 +263,20 @@ pub fn materialized(
         .chain(frame_loads.keys())
         .copied()
         .collect();
-    let named: BTreeSet<usize> = postings::following(&body, |postings| {
-        relevant
-            .iter()
-            .flat_map(|value| postings.defs(*value).iter().chain(postings.uses(*value)).chain(postings.needs(*value)))
-            .map(|at| at.0 as usize)
-            .collect()
+    // The positions, in each block, of the instructions that name one.
+    let mut touching: Vec<Vec<u32>> = vec![Vec::new(); body.blocks.len()];
+    postings::following(&body, |postings| {
+        for value in &relevant {
+            for at in postings.defs(*value).iter().chain(postings.uses(*value)).chain(postings.needs(*value)) {
+                touching[at.0 as usize].push(at.1);
+            }
+        }
     });
+    for positions in &mut touching {
+        positions.sort_unstable();
+        positions.dedup();
+    }
+    let named: BTreeSet<usize> = (0..touching.len()).filter(|block| !touching[*block].is_empty()).collect();
     let mut blocks = Vec::new();
     for (block_index, block) in body.blocks.iter().enumerate() {
         if !named.contains(&block_index) && !check_postings() {
@@ -281,13 +288,19 @@ pub fn materialized(
         // Where the parallel copy being copied begins in `insns`: what its
         // moves read is made before all of them, not between two.
         let mut copy: Option<(i64, usize)> = None;
-        for original in &block.insns {
+        for (position, original) in block.insns.iter().enumerate() {
             let mut one = Arc::clone(original);
             copy = match (one.group, copy) {
                 (Some(group), Some((open, at))) if group == open => Some((open, at)),
                 (Some(group), _) => Some((group, insns.len())),
                 (None, _) => None,
             };
+            // One that names none of the values is left as it is.
+            let untouched = touching[block_index].binary_search(&(position as u32)).is_err();
+            if untouched && !check_postings() {
+                insns.push(one);
+                continue;
+            }
             if _identity(&one, &stored, frame) {
                 marked.insert(block_index);
                 identities.insert(key(&one));
@@ -453,6 +466,20 @@ pub fn materialized(
                 body.name,
                 block.at
             );
+        }
+        if check_postings() {
+            let kept: crate::support::hash::HashSet<*const Insn> = insns.iter().map(Arc::as_ptr).collect();
+            for (position, one) in block.insns.iter().enumerate() {
+                if touching[block_index].binary_search(&(position as u32)).is_err() {
+                    assert!(
+                        kept.contains(&Arc::as_ptr(one))
+                            && !identities.contains(&key(one))
+                            && !abandoned.contains(&key(one)),
+                        "{}: the instruction at {position} of block {block_index} names none of the values spilled and was changed",
+                        body.name
+                    );
+                }
+            }
         }
         blocks.push(block.with_insns(insns));
     }
@@ -1342,6 +1369,12 @@ pub fn homes_redone(body: &LirBody) -> usize {
     body.facts.0.counted("homes-redone")
 }
 
+/// An earlier body's homes are shifted only while the instructions that changed
+/// are fewer than those that name a home: past that, looking at them costs more
+/// than finding the homes again (cells N=448: 895 Minstr kept, 316 never kept;
+/// d_faces the other way).
+const FACTOR: usize = 1;
+
 /// Whether the homes' intervals of a body are worth keeping for the next:
 /// keeping them costs a fixed `FIXED` instructions a call (the state, the
 /// lookups) and `KEEP` for each block of the body, and saves, for each segment
@@ -1350,6 +1383,7 @@ pub fn homes_redone(body: &LirBody) -> usize {
 /// G (390 each) and shifted 6.1 M in 0.83 G (136 each); x_transpose, 23 calls
 /// of 41 intervals, lost 1.4 M kept (60 000 a call); a block of state is about
 /// 40.
+
 fn worth_keeping(
     blocks: usize,
     segments: usize,
@@ -1441,15 +1475,23 @@ fn homes_kept(
             state.structure.blocks.iter().zip(&state.insns).map(|((at, _, _), insns)| (*at, insns)).collect();
         let differing = ranges::differing_blocks(&blocks, body);
         let mut touched: BTreeSet<i64> = BTreeSet::new();
-        let changed = ranges::changed_runs(&blocks, &state.index, body, index, &differing, &mut |run| {
-            for one in run {
-                let key = ranges::key(one);
-                touched.extend(
-                    state.names.get(&key).into_iter().flatten().chain(now.get(&key).into_iter().flatten()).copied(),
-                );
-            }
-        });
-        if changed * 4 <= state.count + 16 {
+        let changed = ranges::changed_runs(
+            &blocks,
+            &state.index,
+            body,
+            index,
+            &differing,
+            ((state.count + 16) / 4).min((named.len() + 16) / FACTOR),
+            &mut |run| {
+                for one in run {
+                    let key = ranges::key(one);
+                    touched.extend(
+                        state.names.get(&key).into_iter().flatten().chain(now.get(&key).into_iter().flatten()).copied(),
+                    );
+                }
+            },
+        );
+        if changed * 4 <= state.count + 16 && changed * FACTOR <= named.len() + 16 {
             let shift = ranges::Shift::between(&blocks, &state.index, body, index, &differing);
             let redone: Vec<usize> = homes
                 .iter()
@@ -3949,7 +3991,11 @@ fn _encodable(
                     .available
                     .iter()
                     .copied()
-                    .filter(|one| target::WIDTHS.get(&target::named(*one, i64::from(width))) == Some(&i64::from(width)))
+                    .filter(|one| {
+                        target::width_of(target::named(*one, i64::from(width)))
+                            .filter(|_| target::integer(target::named(*one, i64::from(width))))
+                            == Some(i64::from(width))
+                    })
                     .collect(),
             )
         })
@@ -5763,14 +5809,14 @@ mod tests {
             ))
         };
         let chain = |extra_at_30: bool| {
-            let blocks: Vec<LirBlock> = (0..400i64)
+            let blocks: Vec<LirBlock> = (0..1600i64)
                 .map(|at| {
                     let insns = if at == 30 && extra_at_30 {
                         vec![nop(0x1000), nop(0x1001 + at), nop(0x2000 + at)]
                     } else {
                         vec![nop(0x1001 + at), nop(0x2000 + at)]
                     };
-                    LirBlock { succ: if at < 399 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
+                    LirBlock { succ: if at < 1599 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
                 })
                 .collect();
             LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default())
@@ -5779,14 +5825,25 @@ mod tests {
         let first = 1000u32;
         let names = |extra: bool| {
             let one = |home: usize| first + home as u32;
-            vec![
+            // A run of its own for each short life, enough of them to be worth
+            // keeping.
+            let short = (0..600usize).flat_map(|pair| {
+                let (block, home) = (400 + 2 * pair, pair % 3);
+                [
+                    (block, 0, BTreeSet::from([one(home)]), BTreeSet::new()),
+                    (block + 1, 0, BTreeSet::new(), BTreeSet::from([one(home)])),
+                ]
+            });
+            let mut named = vec![
                 (5, 0, BTreeSet::from([one(0)]), BTreeSet::new()),
                 (350, 1, BTreeSet::new(), BTreeSet::from([one(0)])),
                 (10, 0, BTreeSet::from([one(1)]), BTreeSet::new()),
                 (300, 1, BTreeSet::new(), BTreeSet::from([one(1)])),
                 (30, usize::from(extra), BTreeSet::from([one(2)]), BTreeSet::new()),
                 (380, 1, BTreeSet::new(), BTreeSet::from([one(2)])),
-            ]
+            ];
+            named.extend(short);
+            named
         };
         let sorted = |mut named: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)>| {
             named.sort_by_key(|(block, at, _, _)| (*block, *at));
@@ -5814,6 +5871,117 @@ mod tests {
         let afresh =
             crate::analysis::occurrences::Occurrences::planned(&sorted(names(true))).ranges(&after, &index, &values);
         assert!(kept == afresh, "the kept intervals differ from finding them afresh");
+    }
+
+    /// A rewrite's edited block was compared with its parent by looking up
+    /// every instruction of both in a hash (`facts intervals`, `intervals
+    /// homes`: 380 + 71 Minstr became 625 + 74 on cells N=224). The
+    /// instructions it kept are the same allocations, so runs of them are
+    /// found by pointer; every run must hold one instruction in both, in
+    /// order, and a list edited by insertions and removals alone has every
+    /// instruction it shares in a run.
+    /// The postings of a long block were made again, entry by entry, after
+    /// every spill: 2978 of cells N=448's 28 700 Minstr. They are patched
+    /// from what the rewrite changed, and must be what working them out
+    /// gives, for insertions, removals and moves, and for values the edit
+    /// adds and drops.
+    #[test]
+    fn test_the_postings_of_a_long_edited_block_are_those_of_working_them_out() {
+        use crate::model::ir::Semantics;
+        use crate::model::lir::{Insn, LirBlock};
+        let make = |at: i64, defines: Vec<u32>, uses: Vec<u32>| {
+            Arc::new(Insn::new(
+                at,
+                Some((at, at)),
+                Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }),
+                defines,
+                uses,
+            ))
+        };
+        let mut seed = 11u64;
+        let mut next = |bound: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % bound
+        };
+        let mut insns: Vec<Arc<Insn>> =
+            (0..120).map(|at| make(at, vec![at as u32 % 9], vec![(at as u32 * 7) % 11, at as u32 % 5])).collect();
+        let block = |insns: &[Arc<Insn>]| LirBlock::new(0, insns.to_vec());
+        let mut body = LirBody::new("long", 0, vec![block(&insns)], IndexMap::default(), IndexMap::default());
+        crate::backend::postings::following(&body, |_| ());
+        for round in 0..200 {
+            for _ in 0..1 + next(6) {
+                let at = next(insns.len());
+                match next(4) {
+                    0 => insns.insert(at, make(1000 + round, vec![20 + next(4) as u32], vec![next(12) as u32])),
+                    1 if insns.len() > 60 => {
+                        insns.remove(at);
+                    }
+                    2 => insns[at] = make(2000 + round, vec![next(9) as u32], vec![next(30) as u32]),
+                    _ => {
+                        let moved = insns.remove(at);
+                        insns.insert(next(insns.len() + 1), moved);
+                    }
+                }
+            }
+            body = body.with_blocks(vec![block(&insns)]);
+            crate::backend::postings::following(&body, |found| {
+                assert!(
+                    *found == crate::backend::postings::Postings::of(&body),
+                    "round {round}: the patched postings differ from working them out"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn test_the_instructions_two_lists_share_are_found_by_pointer() {
+        use crate::analysis::intervals::aligned;
+        use crate::model::ir::Semantics;
+        use crate::model::lir::Insn;
+        let nop = |at: i64| {
+            Arc::new(Insn::new(
+                at,
+                Some((at, at)),
+                Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }),
+                vec![],
+                vec![],
+            ))
+        };
+        let mut seed = 7u64;
+        let mut next = |bound: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % bound
+        };
+        for round in 0..200 {
+            let old: Vec<Arc<Insn>> = (0..20 + next(60)).map(|at| nop(at as i64)).collect();
+            let mut new = old.clone();
+            for _ in 0..next(12) {
+                let at = next(new.len() + 1);
+                match next(3) {
+                    0 => new.insert(at, nop(1000 + at as i64)),
+                    1 if !new.is_empty() => {
+                        new.remove(at.min(new.len() - 1));
+                    }
+                    _ if !new.is_empty() => {
+                        let moved = new.remove(at.min(new.len() - 1));
+                        new.insert(next(new.len() + 1), moved);
+                    }
+                    _ => {}
+                }
+            }
+            let runs = aligned(&old, &new).expect("alike").runs;
+            let mut covered = 0;
+            let mut after_old = 0;
+            for (i, j, len) in &runs {
+                assert!(*i >= after_old, "round {round}: runs out of order");
+                for k in 0..*len {
+                    assert!(Arc::ptr_eq(&old[i + k], &new[j + k]), "round {round}: a run holds different instructions");
+                }
+                (after_old, covered) = (i + len, covered + len);
+            }
+            let shared = old.iter().filter(|one| new.iter().any(|other| Arc::ptr_eq(one, other))).count();
+            assert_eq!(covered, shared, "round {round}: an instruction both lists hold is in no run");
+        }
     }
 
     #[test]

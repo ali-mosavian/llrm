@@ -19,8 +19,8 @@ use crate::support::pyrepr::Repr;
 
 /// What LIR calls the frame register and the stack pointer, whatever the
 /// target: `spelled` gives each its own.
-const FRAME: Register = Register::BP;
-const STACK: Register = Register::SP;
+const FRAME: Register = ir::FRAME;
+const STACK: Register = ir::STACK;
 
 /// `SIZES`.
 pub static SIZES: LazyLock<IndexMap<u32, &'static str>> =
@@ -809,7 +809,7 @@ fn built(
                                 moved_return(
                                     popped.value,
                                     procedure.registers.slot,
-                                    procedure.registers.spelled(Register::SP),
+                                    procedure.registers.spelled(ir::STACK),
                                 )
                                 .into_iter()
                                 .map(Item::Semantics),
@@ -1213,32 +1213,26 @@ fn through_stack(
         Some(addr) if addr.space == Space::Literal => (through == FRAME || through == pointer) && !(free && valued),
         _ => false,
     };
-    match place {
-        Loc::Reg(one) if is_pointer(one.register) => None,
-        Loc::Mem(cell) if is_pointer(cell.index_through) => None,
-        Loc::Mem(cell) if based(cell.through, &cell.addr, cell.base.is_some()) => {
-            let addr = cell.addr.as_ref()?;
-            Some(Loc::Mem(ir::Mem {
-                through: STACK,
-                addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr.clone() }),
-                disp_width: 0,
-                ..cell.clone()
-            }))
-        }
-        Loc::Mem(cell) if is_pointer(cell.through) => None,
-        Loc::Address(address) if is_pointer(address.index_through) => None,
-        Loc::Address(address) if based(address.through, &address.addr, false) => {
-            let addr = address.addr.as_ref()?;
-            Some(Loc::Address(ir::AddressRef {
-                through: STACK,
-                addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr.clone() }),
-                disp_width: 0,
-                ..address.clone()
-            }))
-        }
-        Loc::Address(address) if is_pointer(address.through) => None,
-        other => Some(other.clone()),
+    if matches!(place, Loc::Reg(one) if is_pointer(one.register)) {
+        return None;
     }
+    let Some(at) = place.address() else { return Some(place.clone()) };
+    if is_pointer(at.index_through) {
+        return None;
+    }
+    // A cell with a base value is that register's, even when it was given the
+    // frame register.
+    let valued = matches!(place, Loc::Mem(cell) if cell.base.is_some());
+    if based(at.through, &at.addr, valued) {
+        let addr = at.addr?;
+        return Some(place.map_address(|one| ir::AddressRef {
+            through: STACK,
+            addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr }),
+            disp_width: 0,
+            ..one
+        }));
+    }
+    (!is_pointer(at.through)).then(|| place.clone())
 }
 
 /// `item` with the frame register and stack pointer LIR calls BP and SP as the
@@ -1261,17 +1255,11 @@ fn spelled(
             let spelled = register(one.register);
             Loc::Reg(ir::Reg { register: spelled, width: spelled.size() as u32 })
         }
-        Loc::Mem(cell) => Loc::Mem(ir::Mem {
-            through: framed(cell.through, cell.addr, cell.index_through),
-            index_through: register(cell.index_through),
-            ..cell.clone()
+        other => other.map_address(|at| ir::AddressRef {
+            through: framed(at.through, at.addr, at.index_through),
+            index_through: register(at.index_through),
+            ..at
         }),
-        Loc::Address(address) => Loc::Address(ir::AddressRef {
-            through: framed(address.through, address.addr, address.index_through),
-            index_through: register(address.index_through),
-            ..address.clone()
-        }),
-        other => other.clone(),
     };
     match item {
         Item::Semantics(what) => Item::Semantics(Semantics {
@@ -1446,19 +1434,13 @@ pub fn _roots(body: &lir::LirBody) -> BTreeSet<Register> {
     for one in body.insns() {
         let Some(what) = &one.what else { continue };
         for r#where in what.dests.iter().chain(&what.sources) {
-            match r#where {
-                Loc::Reg(ir::Reg { register, .. }) => {
-                    found.insert(ir::root(*register));
-                }
-                Loc::Mem(ir::Mem { through, index_through, .. }) => {
-                    found.extend([*through, *index_through].map(ir::root));
-                }
-                // `lea` of a cell reads the register the cell is addressed
-                // through as much as a load of it does.
-                Loc::Address(ir::AddressRef { through, index_through: index, .. }) => {
-                    found.extend([*through, *index].map(ir::root));
-                }
-                _ => {}
+            if let Loc::Reg(ir::Reg { register, .. }) = r#where {
+                found.insert(ir::root(*register));
+            }
+            // `lea` of a cell reads the register the cell is addressed through
+            // as much as a load of it does.
+            if let Some(at) = r#where.address() {
+                found.extend([at.through, at.index_through].map(ir::root));
             }
         }
     }

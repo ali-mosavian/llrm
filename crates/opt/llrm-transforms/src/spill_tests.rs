@@ -1,6 +1,6 @@
 //! The spill model's facts, each on the smallest function that shows it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::testing::DOS;
 use llrm_analysis::{cfg, liveness};
@@ -169,8 +169,7 @@ entry:
         .flat_map(|&block| {
             sites(
                 function,
-                &found,
-                block,
+                &liveness::live_points(function, &found, block),
                 room,
                 &|_| room.across_call,
                 &|_, _| 0,
@@ -259,13 +258,23 @@ entry:
     let at = |segments: i64| {
         let room = Room { registers: 6, across_call: 2, segments, ..Room::default() };
         let block = function.layout()[0];
-        sites(function, &found, block, room, &|_| 2, &|_, _| 0, &cells, &integer, &views, &|_| false)
-            .into_iter()
-            .find(|site| matches!(
-                function.instruction(site.inst).opcode,
-                llrm_mir::opcode::Opcode::Load { .. }
-            ))
-            .expect("a load")
+        sites(
+            function,
+            &liveness::live_points(function, &found, block),
+            room,
+            &|_| 2,
+            &|_, _| 0,
+            &cells,
+            &integer,
+            &views,
+            &|_| false,
+        )
+        .into_iter()
+        .find(|site| matches!(
+            function.instruction(site.inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .expect("a load")
     };
     let held = at(3);
     assert_eq!(held.segments.residents.len(), 2, "both views are in segment registers");
@@ -296,8 +305,7 @@ fn _peak(
         .flat_map(|&block| {
             sites(
                 function,
-                &found,
-                block,
+                &liveness::live_points(function, &found, block),
                 room,
                 &|_| 2,
                 &|inst, live| transient(&module.context, &layout, function, inst, room, live),
@@ -729,4 +737,144 @@ fn pressure_answers_what_is_counted_and_addressed_by_bit() {
     let addressed: &llrm_mir::dense::IdSet<ValueId> = &pressure.addressed;
     assert!(counted.len() > 0, "an integer value is counted");
     assert!(addressed.len() <= counted.len() + function.value_count());
+}
+
+/// N values read before a call and used after it, so all N are live across it.
+fn across_a_call(n: usize) -> String {
+    let loads: String =
+        (0..n).map(|at| format!("  %v{at} = load i16, ptr getelementptr (i16, ptr @cells, i16 {at})\n")).collect();
+    let sums: String = (0..n)
+        .map(|at| {
+            format!("  %s{at} = add i16 {}, %v{at}\n", if at == 0 { "0".to_owned() } else { format!("%s{}", at - 1) })
+        })
+        .collect();
+    format!(
+        "@cells = global [{n} x i16] zeroinitializer\ndeclare void @g()\n\ndefine i16 @f() {{\nb0:\n{loads}  call void @g()\n{sums}  ret i16 %s{}\n}}\n",
+        n - 1
+    )
+}
+
+fn forecast_of(
+    text: &str,
+    room: Room,
+    swept: bool,
+) -> (i64, Vec<ValueId>, i64) {
+    let module = module(text);
+    let function = self::function(&module);
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
+    let across = |_: InstId| room.across_call;
+    let costs = OperationCosts { load: 3, store: 5, ..OperationCosts::default() };
+    let frequency = function.layout().iter().map(|&block| (cfg::id(block), 256)).collect();
+    let view = View::of(&module.context, &layout, function, room, &across);
+    let found = if swept {
+        view.forecast(&costs, &frequency)
+    } else {
+        // The points of every site, each with its residents listed.
+        let traffic = traffic(function, &frequency, &cells(function), &costs, &|_| true, &|value| {
+            words(&module.context, &layout, function, value)
+        });
+        let points = function.layout().iter().flat_map(|&block| view.sites(block, &|_| false)).flat_map(Site::points);
+        forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(&costs)))
+    };
+    (found.cost, found.spilled.iter().collect(), found.peak)
+}
+
+/// The sweep over the live set must give what the points of every site give:
+/// the same spills, cost and peak, at every room.
+#[test]
+fn test_the_swept_forecast_is_what_the_points_give() {
+    for text in [COUNTED.to_owned(), across_a_call(12), across_a_call(40)] {
+        for registers in [0, 1, 2, 4, 6, 12] {
+            let room = Room { registers, across_call: registers.min(3), ..Room::default() };
+            assert_eq!(
+                forecast_of(&text, room, true),
+                forecast_of(&text, room, false),
+                "{registers} registers\n{text}"
+            );
+        }
+    }
+}
+
+/// A forecast copied the live set at every instruction: with N values live
+/// across a call, N^2 cells (x_fir-like kernels were fine, `live` at N=1024
+/// spent 1.9 s of a 2.7 s compile in gvn pricing). The cells handled grow with
+/// what changes at an instruction.
+#[test]
+fn test_the_forecast_handles_cells_in_proportion_to_what_changes() {
+    let handled = |n: usize| {
+        super::TOUCHED.with(|touched| touched.set(0));
+        let room = Room { registers: 6, across_call: 3, ..Room::default() };
+        forecast_of(&across_a_call(n), room, true);
+        super::TOUCHED.with(|touched| touched.get())
+    };
+    let (small, large) = (handled(100), handled(200));
+    assert!(large < 3 * small, "{small} cells handled for 100 values live across a call, {large} for 200");
+}
+
+/// `gepoffset` makes the instructions of a split to price them and erases them
+/// when it does not pay, reporting no change: the pressure the manager held
+/// then differed from a fresh one (`LLRM_CHECK_PRESERVED`, qcport/weapons -Os,
+/// #1226) because it counted the ids of values nothing defines any more.
+#[test]
+fn pressure_is_the_same_after_an_instruction_is_made_and_erased() {
+    use llrm_mir::edit::Position;
+    use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+    let mut module = module(COUNTED);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let before = Pressure::of(context, function, 0);
+    let ret =
+        function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).opcode == Opcode::Ret).unwrap();
+    let ty = context.types.int(16);
+    let made = function.create_instruction(
+        Opcode::Binary(BinaryOp::Add),
+        ty,
+        vec![function.instruction(ret).operands[0]; 2],
+        Flags::default(),
+        None,
+    );
+    function.insert(made, Position::Before(ret)).expect("a position");
+    function.erase(made).expect("nothing reads it");
+    assert_eq!(Pressure::of(context, function, 0), before, "a value made and erased changed the pressure");
+}
+
+/// Every loop of a function added up the function's traffic again, with its
+/// own instructions left out (`mir lsr` on `branches` spent half its time
+/// there); the sum is made once and each loop's instructions taken out of it.
+/// What is left is what adding up the others gives.
+#[test]
+fn test_traffic_less_some_instructions_is_the_traffic_of_the_others() {
+    for text in [COUNTED.to_owned(), across_a_call(12)] {
+        let module = module(&text);
+        let function = function(&module);
+        let layout =
+            llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
+        let costs = OperationCosts { load: 3, store: 5, memory_update: 7, ..OperationCosts::default() };
+        let frequency: BTreeMap<i64, i64> =
+            function.layout().iter().enumerate().map(|(at, &block)| (cfg::id(block), 1 + at as i64)).collect();
+        let cells = cells(function);
+        let words = |value: ValueId| words(&module.context, &layout, function, value);
+        let every = function.walk().map(|(_, inst)| inst).collect::<Vec<_>>();
+        let base = std::rc::Rc::new(super::TrafficBase::of(
+            function,
+            &frequency,
+            &|value| cells.get(&value).copied(),
+            &|_| true,
+        ));
+        for step in 1..=4 {
+            let gone: BTreeSet<InstId> = every.iter().copied().step_by(step).collect();
+            let direct = traffic(function, &frequency, &cells, &costs, &|inst| !gone.contains(&inst), &words);
+            let taken_out =
+                base.without(function, &frequency, &|value| cells.get(&value).copied(), gone.iter().copied());
+            let asked =
+                direct.keys().copied().chain(every.iter().filter_map(|&inst| function.instruction(inst).result));
+            for value in asked {
+                let want = direct.get(&value).copied().unwrap_or_default();
+                assert_eq!(
+                    taken_out.of(function, &costs, &words, value),
+                    want,
+                    "{value:?} with every {step}th instruction left out of\n{text}"
+                );
+            }
+        }
+    }
 }

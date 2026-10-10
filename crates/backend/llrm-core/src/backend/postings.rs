@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::model::ir::{Loc, Space};
-use crate::model::lir::{Insn, LirBody};
+use crate::model::lir::{Insn, Insns, LirBody};
 use crate::support::hash::HashMap;
 
 /// An instruction by its block's position in the body and its own in the block.
@@ -83,22 +83,7 @@ impl Postings {
         block: u32,
         insns: &[Arc<Insn>],
     ) {
-        let framed = |one: &Insn| {
-            one.what
-                .as_ref()
-                .is_some_and(
-                    |what| what.dests
-                        .iter()
-                        .chain(&what.sources)
-                        .any(
-                            |operand| matches!(
-                                operand,
-                                Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)
-                            ),
-                        ),
-                )
-        };
-        let list = insns.iter().enumerate().filter(|(_, one)| framed(one)).map(|(at, _)| at as u32).collect();
+        let list = insns.iter().enumerate().filter(|(_, one)| is_framed(one)).map(|(at, _)| at as u32).collect();
         if self.frames.len() <= block as usize {
             self.frames.resize(block as usize + 1, Vec::new());
         }
@@ -120,9 +105,15 @@ impl Postings {
     fn replaced(
         &mut self,
         block: u32,
-        old: &[Arc<Insn>],
-        new: &[Arc<Insn>],
+        old: &Insns,
+        new: &Insns,
     ) {
+        if old.len().max(new.len()) > LONG {
+            if let Some(found) = crate::analysis::intervals::aligned_insns(old, new) {
+                self.patched(block, new, &found);
+                return;
+            }
+        }
         let mut touched: Vec<u32> = old
             .iter()
             .chain(new)
@@ -154,10 +145,116 @@ impl Postings {
     }
 }
 
+/// Whether `one` has a frame cell among its operands.
+fn is_framed(one: &Insn) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.dests
+                .iter()
+                .chain(&what.sources)
+                .any(
+                    |operand| matches!(
+                        operand,
+                        Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)
+                    ),
+                ),
+        )
+}
+
+/// Blocks this long are patched from what a rewrite changed in them, found by
+/// pointer; shorter ones are made again.
+const LONG: usize = 48;
+
+impl Postings {
+    /// Block `block` as `found` says `new` differs from what it was: the
+    /// entries of the instructions it kept are moved to their new positions,
+    /// those of the ones it removed dropped, and those of the ones it added
+    /// put in. The cost is the block's entries, not a hash insert for each.
+    fn patched(
+        &mut self,
+        block: u32,
+        new: &[Arc<Insn>],
+        found: &crate::analysis::intervals::Aligned,
+    ) {
+        // Where each position the block had is now: `GONE` for one removed.
+        const GONE: u32 = u32::MAX;
+        let mut to_new = vec![GONE; found.len_old];
+        for (from, now, len) in &found.runs {
+            for k in 0..*len {
+                to_new[from + k] = (now + k) as u32;
+            }
+        }
+        let moved_to = |at: u32| -> Option<u32> { Some(to_new[at as usize]).filter(|now| *now != GONE) };
+        let runs = &found.runs;
+        // A run of one that was moved puts entries out of order.
+        let in_order = runs.windows(2).all(|pair| pair[0].1 + pair[0].2 <= pair[1].1);
+        let mut added: [HashMap<u32, Vec<u32>>; 3] = Default::default();
+        let mut framed_new = Vec::new();
+        for &at in &found.added {
+            let one = &new[at as usize];
+            for value in &one.defines {
+                added[0].entry(*value).or_default().push(at as u32);
+            }
+            for value in &one.uses {
+                added[1].entry(*value).or_default().push(at as u32);
+            }
+            for (held, _) in &one.requires {
+                added[2].entry(held.value).or_default().push(at as u32);
+            }
+            if is_framed(one) {
+                framed_new.push(at as u32);
+            }
+        }
+        if self.frames.len() <= block as usize {
+            self.frames.resize(block as usize + 1, Vec::new());
+        }
+        let frames = &mut self.frames[block as usize];
+        *frames = frames.iter().filter_map(|at| moved_to(*at)).chain(framed_new).collect();
+        frames.sort_unstable();
+        for (map, added) in [&mut self.defs, &mut self.uses, &mut self.needs].into_iter().zip(added) {
+            let mut emptied = false;
+            for (value, list) in map.iter_mut() {
+                let from = list.partition_point(|at| at.0 < block);
+                let to = list.partition_point(|at| at.0 <= block);
+                let put = added.get(value);
+                if from == to && put.is_none() {
+                    continue;
+                }
+                if put.is_none() && in_order && list[from..to].iter().all(|(_, at)| to_new[*at as usize] != GONE) {
+                    for entry in &mut list[from..to] {
+                        entry.1 = to_new[entry.1 as usize];
+                    }
+                    continue;
+                }
+                let mut here: Vec<At> = list[from..to]
+                    .iter()
+                    .filter_map(|(_, at)| moved_to(*at))
+                    .chain(put.into_iter().flatten().copied())
+                    .map(|at| (block, at))
+                    .collect();
+                if !in_order || put.is_some() {
+                    here.sort_unstable();
+                }
+                emptied |= here.is_empty();
+                list.splice(from..to, here);
+            }
+            for (value, put) in &added {
+                if !map.contains_key(value) {
+                    map.insert(*value, put.iter().map(|at| (block, *at)).collect());
+                }
+            }
+            if emptied {
+                map.retain(|_, list| !list.is_empty());
+            }
+        }
+    }
+}
+
 /// The body the postings were made of, held so that an instruction's address is
 /// not reused while it is compared with.
 struct Followed {
-    blocks: Vec<(i64, Vec<Arc<Insn>>)>,
+    blocks: Vec<(i64, Insns)>,
     found: Postings,
 }
 
@@ -211,7 +308,7 @@ pub fn following<R>(
             if !same_shape {
                 REDONE.with(|redone| redone.set(redone.get() + body.blocks.len()));
                 *state = Some(Followed {
-                    blocks: body.blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect(),
+                    blocks: body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect(),
                     found: Postings::of(body),
                 });
             } else {
@@ -224,7 +321,7 @@ pub fn following<R>(
                     }
                     REDONE.with(|redone| redone.set(redone.get() + 1));
                     held.found.replaced(block as u32, before, &one.insns);
-                    *before = one.insns.to_vec();
+                    *before = one.insns.clone();
                 }
             }
             if check() {

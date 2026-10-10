@@ -28,6 +28,9 @@ def modes() -> dict[str, int]:
     """Each target's gcc `-m` number, from its `datalayout.toml`: the one place that says."""
     found = {}
     for crate in sorted((ROOT / "crates" / "target").glob("llrm-x86-m*")):
+        # A select crate (llrm-x86-m16-select) holds generated code, not a description.
+        if not (crate / "src" / "machines" / "datalayout.toml").is_file():
+            continue
         with open(crate / "src" / "machines" / "datalayout.toml", "rb") as text:
             found[crate.name.removeprefix("llrm-")] = tomllib.load(text)["mode"]
     return found

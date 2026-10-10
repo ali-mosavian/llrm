@@ -727,16 +727,11 @@ fn cost(
 
 /// The frame operands a one-byte displacement does not reach.
 fn far_frame(body: &LirBody) -> usize {
-    use crate::model::ir::Loc;
     body.insns()
         .iter()
         .filter_map(|one| one.what.as_ref())
         .flat_map(|what| what.dests.iter().chain(&what.sources))
-        .filter_map(|place| match place {
-            Loc::Mem(cell) => cell.addr,
-            Loc::Address(address) => address.addr,
-            _ => None,
-        })
+        .filter_map(|place| place.address().and_then(|one| one.addr))
         .filter(|addr| addr.space == Space::Frame && !(-128..128).contains(&addr.disp))
         .count()
 }

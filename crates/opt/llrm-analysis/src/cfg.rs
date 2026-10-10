@@ -1,10 +1,12 @@
 //! A function's blocks as `graph` walks them: each block by its id,
 //! in layout order, the entry first.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::dominators::DominatorTree;
 use llrm_mir::loops::LoopInfo;
 use llrm_mir::module::{BlockId, Function, Operand};
@@ -47,6 +49,80 @@ pub fn graph(function: &Function) -> Vec<Block> {
         .iter()
         .map(|&block| Block { at: id(block), succ: function.successors(block).into_iter().map(id).collect() })
         .collect()
+}
+
+/// The ids of the blocks `at` names, from its terminator: one block's
+/// successors, without the graph of the whole body (LLVM's `successors(BB)`,
+/// gcc's `bb->succs`).
+pub fn successors_of(
+    function: &Function,
+    at: i64,
+) -> Vec<i64> {
+    function.successors(block(at)).into_iter().map(id).collect()
+}
+
+/// The blocks that name `at`, from the users of the block (LLVM's
+/// `predecessors(BB)`, gcc's `bb->preds`).
+pub fn predecessors_of(
+    function: &Function,
+    at: i64,
+) -> BTreeSet<i64> {
+    function.predecessors(block(at)).into_iter().map(id).collect()
+}
+
+/// What a loop asks of the body around it, from its own blocks and the users of
+/// its header (LLVM's `Loop::getLoopPredecessor`, `getExitEdges`,
+/// `getLoopPreheader`; gcc's `loop_preheader_edge` and `get_loop_exit_edges`),
+/// not from the graph of the whole body: found for each loop of a function of N
+/// loops that was N^2.
+pub trait Around {
+    /// The blocks outside the loop that name its header: where it is entered
+    /// from.
+    fn entering(
+        &self,
+        function: &Function,
+    ) -> BTreeSet<i64>;
+
+    /// The edges leaving the loop, as (from, to), in the order of its blocks.
+    fn exits(
+        &self,
+        function: &Function,
+    ) -> Vec<(i64, i64)>;
+
+    /// The one block entering the loop that only goes to its header.
+    fn preheader(
+        &self,
+        function: &Function,
+    ) -> Option<i64>;
+}
+
+impl Around for Loop {
+    fn entering(
+        &self,
+        function: &Function,
+    ) -> BTreeSet<i64> {
+        predecessors_of(function, self.header).into_iter().filter(|at| !self.body.contains(at)).collect()
+    }
+
+    fn exits(
+        &self,
+        function: &Function,
+    ) -> Vec<(i64, i64)> {
+        self.body
+            .iter()
+            .flat_map(|&from| successors_of(function, from).into_iter().map(move |to| (from, to)))
+            .filter(|(_, to)| !self.body.contains(to))
+            .collect()
+    }
+
+    fn preheader(
+        &self,
+        function: &Function,
+    ) -> Option<i64> {
+        let entering = self.entering(function);
+        let [one] = entering.iter().copied().collect::<Vec<_>>()[..] else { return None };
+        (successors_of(function, one) == [self.header]).then_some(one)
+    }
 }
 
 /// `Dominators` as the graph walks read it: over block ids, and nothing
@@ -107,6 +183,33 @@ impl Dominance {
             found
         };
         function.layout().iter().map(|&one| (id(one), above(id(one)))).collect()
+    }
+
+    /// How many blocks dominate each, itself among them (`dominators`' set
+    /// sizes): none for an unreachable block.
+    pub fn depths(
+        &self,
+        function: &Function,
+    ) -> BTreeMap<i64, usize> {
+        let mut found = BTreeMap::<i64, usize>::new();
+        for &start in function.layout() {
+            let mut path = Vec::new();
+            let mut next = self.reachable(id(start)).then_some(id(start));
+            let mut base = 0;
+            while let Some(one) = next {
+                if let Some(&known) = found.get(&one) {
+                    base = known;
+                    break;
+                }
+                path.push(one);
+                next = self.immediate(one);
+            }
+            for (below, one) in path.into_iter().rev().enumerate() {
+                found.insert(one, base + below + 1);
+            }
+            found.entry(id(start)).or_insert(0);
+        }
+        found
     }
 
     pub fn immediate_dominators(
@@ -208,6 +311,66 @@ pub fn natural(
 pub struct Shape {
     pub dominance: Dominance,
     pub loops: Vec<Loop>,
+    pub reaching: Reaching,
+}
+
+/// Which blocks have a path to a given block, found for a block when asked and
+/// kept: a pass that asks of few blocks pays for few, and one that asks of
+/// every block for a closure over the graph once, in bits. The graph is read
+/// from the function at the first ask, so a shape nobody asks of pays nothing.
+#[derive(Clone, Debug, Default)]
+pub struct Reaching {
+    predecessors: std::cell::OnceCell<Rc<IdMap<BlockId, Vec<BlockId>>>>,
+    found: Rc<RefCell<IdMap<BlockId, Rc<IdSet<BlockId>>>>>,
+}
+
+/// What it holds is a cache of its function's graph, which the rest of the
+/// shape already says: two shapes of one function are equal whatever was asked.
+impl PartialEq for Reaching {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Reaching {
+    /// The blocks of `function` with a path to `to`, itself included;
+    /// `function` is the one this shape is of.
+    pub fn to(
+        &self,
+        function: &Function,
+        to: BlockId,
+    ) -> Rc<IdSet<BlockId>> {
+        if let Some(found) = self.found.borrow().get(&to) {
+            return Rc::clone(found);
+        }
+        let predecessors = self
+            .predecessors
+            .get_or_init(
+                || {
+                    let mut predecessors = IdMap::<BlockId, Vec<BlockId>>::new();
+                    for &block in function.layout() {
+                        predecessors.insert(block, function.predecessors(block));
+                    }
+                    Rc::new(predecessors)
+                },
+            );
+        let mut reaching = IdSet::new();
+        reaching.insert(to);
+        let mut work = vec![to];
+        while let Some(at) = work.pop() {
+            for &parent in predecessors.get(&at).into_iter().flatten() {
+                if reaching.insert(parent) {
+                    work.push(parent);
+                }
+            }
+        }
+        let reaching = Rc::new(reaching);
+        self.found.borrow_mut().insert(to, Rc::clone(&reaching));
+        reaching
+    }
 }
 
 thread_local! {
@@ -226,7 +389,7 @@ impl Shape {
         DERIVED.with(|count| count.set(count.get() + 1));
         let dominance = Dominance::of(function);
         let loops = natural(function, &LoopInfo::new(function, dominance.tree()));
-        Self { dominance, loops }
+        Self { dominance, loops, reaching: Reaching::default() }
     }
 }
 
@@ -243,7 +406,7 @@ impl Analysis for Shape {
         DERIVED.with(|count| count.set(count.get() + 1));
         let dominance = Dominance::new(analyses.get::<Dominators>(context, layout, function));
         let loops = natural(function, &analyses.get::<Loops>(context, layout, function));
-        Shape { dominance, loops }
+        Shape { dominance, loops, reaching: Reaching::default() }
     }
 
     const READS_OUTER: bool = false;
@@ -364,6 +527,108 @@ dead:
                 Block { at: b3, succ: vec![] },
                 Block { at: dead, succ: vec![b2] },
             ]
+        );
+    }
+
+    /// Every pass that asked whether one block dominates another built every
+    /// block's whole set of dominators (a set a block deep in a chain of N
+    /// diamonds, N^2 entries): 39% of `mir gvn` at `branches` N=512. The answer
+    /// is `dominates`, and the count of a set is `depths`; both must give what
+    /// the sets did, unreachable blocks included.
+    #[test]
+    fn test_dominates_and_depths_are_what_the_dominator_sets_give() {
+        let module = parsed(
+            "define void @f(i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br i1 %d, label %b3, label %b4
+
+b3:
+  br label %b5
+
+b4:
+  br label %b5
+
+b5:
+  br i1 %d, label %b5, label %b6
+
+b6:
+  ret void
+
+dead:
+  br label %b6
+}
+",
+        );
+        let function = function(&module, "f");
+        let dominance = Dominance::of(function);
+        let sets = dominance.dominators(function);
+        let depths = dominance.depths(function);
+        assert!(sets.values().any(|set| set.is_empty()), "the premise: a block the entry does not reach");
+        for &below in function.layout() {
+            assert_eq!(depths[&id(below)], sets[&id(below)].len(), "depth of {}", id(below));
+            for &above in function.layout() {
+                assert_eq!(
+                    dominance.dominates(id(above), id(below)),
+                    sets[&id(below)].contains(&id(above)),
+                    "{} over {}",
+                    id(above),
+                    id(below)
+                );
+            }
+        }
+    }
+
+    /// The blocks with a path to a block, as a pass that follows predecessors
+    /// finds them, kept for the next ask.
+    #[test]
+    fn test_reaching_is_the_blocks_with_a_path_to_a_block() {
+        let module = parsed(
+            "define void @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  br i1 %c, label %b3, label %b4
+
+b4:
+  ret void
+
+dead:
+  br label %b4
+}
+",
+        );
+        let function = function(&module, "f");
+        let shape = Shape::of(function);
+        let at = |name: &str| {
+            function.layout().iter().copied().find(|&b| function.block(b).name.as_deref() == Some(name)).unwrap()
+        };
+        let names = |reaching: &IdSet<BlockId>| {
+            function
+                .layout()
+                .iter()
+                .filter(|&&b| reaching.contains(&b))
+                .map(|&b| function.block(b).name.clone().unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&shape.reaching.to(function, at("b1"))), ["b0", "b1"]);
+        assert_eq!(names(&shape.reaching.to(function, at("b3"))), ["b0", "b1", "b2", "b3"]);
+        assert_eq!(names(&shape.reaching.to(function, at("b4"))), ["b0", "b1", "b2", "b3", "b4", "dead"]);
+        assert!(
+            std::rc::Rc::ptr_eq(&shape.reaching.to(function, at("b3")), &shape.reaching.to(function, at("b3"))),
+            "asked twice, found once"
         );
     }
 }

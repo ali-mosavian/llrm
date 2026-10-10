@@ -29,6 +29,7 @@ use llrm_analysis::manager::Registers;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
@@ -231,7 +232,17 @@ impl Analysis for Products {
     }
 }
 
-/// Each loop's counters chosen, innermost first; whether any changed.
+/// What the function as it stands gives every loop, each worked out when first
+/// asked: the instructions' traffic, the frame objects, the far views.
+#[derive(Default)]
+struct Whole {
+    traffic: Option<std::rc::Rc<spill::TrafficBase>>,
+    frames: Option<std::rc::Rc<IdSet<ValueId>>>,
+    views: Option<std::rc::Rc<IdSet<ValueId>>>,
+}
+
+/// Each loop's counters chosen, innermost first; what the changes left, none
+/// where nothing changed.
 pub fn reduced(
     unit: &mut Unit,
     analyses: &mut Analyses,
@@ -248,6 +259,9 @@ pub fn reduced(
     };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
+    // What is true of the function as it stands, worked out once: each loop
+    // reads from it (and takes its own instructions out of the traffic).
+    let mut whole = Whole::default();
     // What is known of the function is the manager's, kept until a loop is
     // changed (and then it is `applied` that declares nothing kept).
     loop {
@@ -264,7 +278,7 @@ pub fn reduced(
             let pressure = analyses.get::<spill::Pressure>(unit.context, unit.layout, unit.function);
             let (context, layout, function) = (&*unit.context, unit.layout, &*unit.function);
             let mut products = || analyses.get::<Products>(context, layout, function);
-            _plan(&view, outer, &loop_, &target, &pressure, &mut products)
+            _plan(&view, outer, &loop_, &target, &pressure, &mut products, &mut whole)
         };
         let Some(plan) = plan else { continue };
         // A loop with another way out was never counted before: its choice is
@@ -281,7 +295,8 @@ pub fn reduced(
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        whole = Whole::default();
         if let Some((before, Some(kept))) = saved {
             dead::dead(unit.context, outer.callees(), unit.function);
             let moved_price = _function_price(unit, &*analyses, outer, &target);
@@ -442,8 +457,10 @@ struct Problem<'a> {
     /// What the loop keeps in registers before each of its instructions,
     /// and across each call, by block, whatever is chosen.
     fixed: BTreeMap<i64, Vec<spill::Site>>,
-    /// The spill traffic of what `fixed` keeps.
-    traffic: BTreeMap<ValueId, Traffic>,
+    /// The spill traffic of what `fixed` keeps, priced for the values asked.
+    traffic: spill::TrafficLess,
+    function: &'a Function,
+    words: Box<dyn Fn(ValueId) -> i64 + 'a>,
     /// `total` of each set asked: the search asks the same set again from the
     /// other start and from each step's neighbours.
     totals: std::cell::RefCell<llrm_support::hash::HashMap<BTreeSet<usize>, Option<i64>>>,
@@ -459,9 +476,9 @@ struct Problem<'a> {
     live: BTreeSet<ValueId>,
     /// Frame objects: their addresses are the frame's register and a
     /// displacement.
-    frames: BTreeSet<ValueId>,
+    frames: std::rc::Rc<IdSet<ValueId>>,
     /// Far views of a segment: held in a segment register, not a general one.
-    views: BTreeSet<ValueId>,
+    views: std::rc::Rc<IdSet<ValueId>>,
 }
 
 fn _preheader(
@@ -487,6 +504,7 @@ fn _plan(
     target: &Target,
     pressure: &spill::Pressure,
     products: &mut dyn FnMut() -> std::rc::Rc<Option<std::collections::BTreeMap<i64, i64>>>,
+    whole: &mut Whole,
 ) -> Option<Plan> {
     let function = view.function;
     let preheader = _preheader(function, loop_)?;
@@ -584,23 +602,26 @@ fn _plan(
     let fixed = _fixed(view, outer, loop_, target.room, pressure, &web_values, &users, exit.as_ref(), &live);
     // The web's reads are the uses the choice replaces; each use adds its own
     // back.
-    let kept = |inst: InstId| !users.web.contains(&inst);
-    let traffic = spill::traffic(function, &frequencies, &cells, &target.costs, &kept, &|value| {
-        spill::words(view.context, view.layout, function, value)
+    let base = whole.traffic.get_or_insert_with(|| {
+        std::rc::Rc::new(spill::TrafficBase::of(function, &frequencies, &|value| cells.get(&value).copied(), &|_| true))
     });
-    let alive = _alive(function, pressure.found(), loop_, &sites);
+    let traffic = base.without(function, &frequencies, &|value| cells.get(&value).copied(), users.web.iter().copied());
+    let alive = _alive(function, pressure, loop_, &sites);
     let mut keys = Vec::new();
     let latch_block = cfg::block(latch);
     // The most backedges: the counted exit's, or what an in-bounds access
     // allows.
     let most = exit.as_ref().map(|exit| exit.most.clone()).or_else(|| induction::inbounds_backedges(view, loop_));
+    let frames = std::rc::Rc::clone(whole.frames.get_or_insert_with(|| std::rc::Rc::new(_frames(view.function))));
     let fits = sites
         .iter()
         .map(|site| {
             candidates
                 .iter()
                 .enumerate()
-                .map(|(index, one)| _priced(view, target, site, index, one, latch_block, most.as_ref(), &mut keys))
+                .map(|(index, one)| {
+                    _priced(view, target, &frames, site, index, one, latch_block, most.as_ref(), &mut keys)
+                })
                 .collect()
         })
         .collect();
@@ -624,6 +645,8 @@ fn _plan(
         keys,
         fixed,
         traffic,
+        function,
+        words: Box::new(|value| spill::words(view.context, view.layout, function, value)),
         totals: Default::default(),
         alive,
         latch: frequency(cfg::block(latch)),
@@ -631,8 +654,8 @@ fn _plan(
         entry: frequency(preheader),
         frequencies: frequencies.clone(),
         live,
-        frames: _frames(view.function),
-        views: _views(view),
+        frames,
+        views: std::rc::Rc::clone(whole.views.get_or_insert_with(|| std::rc::Rc::new(_views(view)))),
     };
     let current = problem
         .candidates
@@ -902,7 +925,7 @@ fn _fixed(
 /// Where each site's value is live in the loop, before each instruction.
 fn _alive(
     function: &Function,
-    found: &liveness::Liveness,
+    pressure: &spill::Pressure,
     loop_: &Loop,
     sites: &[Site],
 ) -> Vec<BTreeMap<i64, Vec<bool>>> {
@@ -915,20 +938,14 @@ fn _alive(
         .map(|&at| {
             #[cfg(test)]
             LIVE_POINTS.with(|count| count.set(count.get() + 1));
-            (
-                at,
-                liveness::live_points(function, found, cfg::block(at))
-                    .into_iter()
-                    .map(|(_, before, _)| before)
-                    .collect::<Vec<_>>(),
-            )
+            (at, pressure.points(function, cfg::block(at)))
         })
         .collect();
     sites
         .iter()
         .map(|site| {
             live.iter()
-                .map(|(at, points)| (*at, points.iter().map(|before| before.contains(&site.one.value)).collect()))
+                .map(|(at, points)| (*at, points.iter().map(|point| point.before.contains(&site.one.value)).collect()))
                 .collect()
         })
         .collect()
@@ -1063,7 +1080,7 @@ fn _candidates(
 const _SPLIT_TERMS: usize = 3;
 
 /// The function's frame objects, whose addresses need no register of their own.
-fn _frames(function: &Function) -> BTreeSet<ValueId> {
+fn _frames(function: &Function) -> IdSet<ValueId> {
     function
         .walk()
         .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
@@ -1072,7 +1089,7 @@ fn _frames(function: &Function) -> BTreeSet<ValueId> {
 }
 
 /// The function's far views of a segment, which the segment registers hold.
-fn _views(view: &memory::Unit) -> BTreeSet<ValueId> {
+fn _views(view: &memory::Unit) -> IdSet<ValueId> {
     let function = view.function;
     function
         .walk()
@@ -1327,6 +1344,7 @@ fn _interned(
 fn _priced(
     view: &memory::Unit,
     target: &Target,
+    frames: &IdSet<ValueId>,
     site: &Site,
     index: usize,
     candidate: &Candidate,
@@ -1370,7 +1388,6 @@ fn _priced(
     }
     let costs = &target.costs;
     // A constant pointer is a displacement; any other base a register.
-    let frames = _frames(view.function);
     let pointer_base = |fit: &Fit| {
         matches!(
             fit.base,
@@ -1640,7 +1657,7 @@ impl Problem<'_> {
         let read = reads.get(&one).copied().unwrap_or(0);
         let traffic = match one {
             Resident::Value(value) => {
-                let kept = self.traffic.get(&value).copied().unwrap_or_default();
+                let kept = self.traffic.of(self.function, &self.target.costs, &*self.words, value);
                 Traffic { loads: kept.loads + read, ..kept }
             }
             // Stepped in place each trip; a new one's start stored on entry.
@@ -2287,7 +2304,7 @@ fn _applied(
     )
     .expect("a pre-tested loop");
     let shape = rotate::_shape(function, &plan.loop_).expect("a rotatable loop");
-    rotate::_rotate(context, function, &shape, Some(Operand::Value(guard))).expect("a rotation");
+    rotate::_rotate(context, function, &shape, Some((Operand::Value(guard), true))).expect("a rotation");
     crate::cfg::merged(function);
     // The guard also reaches the exit: the loop leaves through its own block
     // again.

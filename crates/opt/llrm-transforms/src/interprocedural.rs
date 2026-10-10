@@ -21,7 +21,6 @@
 //! The old module had no tests of its own.
 
 use std::collections::BTreeSet;
-use std::rc::Rc;
 
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::cfg::Shape;
@@ -57,6 +56,30 @@ fn callees(
         );
     }
     held
+}
+
+/// `edit` run on `module`, and every body it changed said to have: a pass that
+/// rewrites the calls of a function it changes (its callers) reports the
+/// function, and the callers' analyses were read as they stood before
+/// (`ModuleAnalyses::function` brings them up to date, and
+/// `LLRM_CHECK_UNREPORTED` fails the read).
+fn reporting<T>(
+    module: &mut Module,
+    modules: &mut ModuleAnalyses,
+    edit: impl FnOnce(&mut Module) -> T,
+) -> T {
+    let before: Vec<(GlobalId, llrm_mir::module::Mark)> = module
+        .functions()
+        .filter(|(_, _, body)| !body.is_declaration())
+        .map(|(id, _, body)| (id, body.mark()))
+        .collect();
+    let out = edit(module);
+    for (id, mark) in before {
+        if module.global(id).function().map(llrm_mir::module::Function::mark) != Some(mark) {
+            modules.changed(id);
+        }
+    }
+    out
 }
 
 /// `module`'s declarations to declare into: the module's own `Declarations`,
@@ -115,6 +138,10 @@ pub struct Interprocedural {
     /// it comes to no more bytes, less what the clocks it saves buy at this
     /// many thousandths of a clock a byte; None weighs the clocks alone.
     pub rate: Option<i64>,
+    /// Runs the pipeline over a copy of a callee that is in no module, for the
+    /// constants a site passes: what its copy there would come to.
+    pub specialise:
+        Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, llrm_mir::module::Function) -> llrm_mir::module::Function>,
     /// Whether what a body's callers pass is stated as a range on its
     /// parameters (gcc's `-fipa-vrp`, -O2 and up).
     pub ranges: bool,
@@ -131,6 +158,7 @@ impl ProgramPass for Interprocedural {
         analyses: &mut ProgramAnalyses,
     ) -> Result<(), String> {
         let pipeline = &mut self.pipeline;
+        let specialise = &mut self.specialise;
         let costs = if self.rate.is_some() { program.target.size_costs() } else { program.target.costs() };
         let clocks = program.target.costs();
         let loose = self.rate.map(|_| &clocks);
@@ -154,6 +182,7 @@ impl ProgramPass for Interprocedural {
                 pipeline(module, analyses, id, stage);
                 Ok(())
             },
+            &mut |module, analyses, function| Ok(specialise(module, analyses, function)),
             &mut |_, _, _| Ok(()),
         )?;
         self.proved = Some(proved);
@@ -244,8 +273,9 @@ fn unexported(program: &Program) -> BTreeSet<Defined> {
 }
 
 /// The calls to inline: those `costs` admits and, tuned for size, those `loose`
-/// (the clocks) does too, which `grew` then checks against what they leave: a
-/// body that folds on known addresses is nothing the byte price can see.
+/// (the clocks) does too, which the estimate then checks against what the copy
+/// comes to once its constants are known: a body that folds on known actuals is
+/// nothing the byte price can see.
 fn candidates(
     module: &Module,
     callees: &llrm_mir::memory::Callees,
@@ -256,20 +286,39 @@ fn candidates(
     loose: Option<&OperationCosts>,
     reach: i64,
     threshold: inline::Threshold,
+    recursive: &BTreeSet<GlobalId>,
+    addressed: &BTreeSet<GlobalId>,
 ) -> (
     llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
     llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
 ) {
-    let mut found = inline::candidates(module, callees, layout, counts, private, costs, reach, threshold);
+    let mut found = inline::candidates_over(
+        module, callees, layout, counts, private, costs, reach, threshold, recursive, addressed,
+    );
     // Held only to inline from, a body's price is what the trial finds, never
     // its size.
     found.retain(|id, _| module.global(*id).linkage != Linkage::AvailableExternally);
-    let more = loose.map_or_else(Default::default, |loose| {
-        inline::candidates(module, callees, layout, counts, private, loose, reach, threshold)
+    let more: llrm_support::hash::IndexMap<GlobalId, inline::Candidate> =
+        loose.map_or_else(Default::default, |loose| {
+            inline::candidates_over(
+                module, callees, layout, counts, private, loose, reach, threshold, recursive, addressed,
+            )
             .into_iter()
             .filter(|(id, _)| !found.contains_key(id))
             .collect()
-    });
+        });
+    // A callee at many sites is not tried: its copies add up, and a caller's
+    // gain from one is no tolerance for so many (savegame.c's took 4x the
+    // compile time; part.c's `_part_rand` at 35 sites came to 13% more bytes).
+    // A body held only to inline from is small and meant to be copied
+    // everywhere.
+    let more = more
+        .into_iter()
+        .filter(|(id, _)| {
+            counts.get(id).copied().unwrap_or(0) <= TRIED_SITES
+                || module.global(*id).linkage == Linkage::AvailableExternally
+        })
+        .collect();
     (found, more)
 }
 
@@ -301,8 +350,8 @@ fn constant_sites(
 /// What of a body's size the byte estimate may be off by: 28% in the median
 /// over QCport's 532 functions (calibration of `bytes_in_code`), taken as a
 /// quarter. A change in bytes within it of the body copied is the estimate's
-/// noise, and what the clocks admitted stays. The most sites of a callee that
-/// are tried.
+/// noise, and what the clocks admitted stays.
+/// The most sites of a callee that are tried.
 const TRIED_SITES: i64 = 4;
 
 const ESTIMATE_ERROR: (i64, i64) = (1, 4);
@@ -334,111 +383,75 @@ fn allowance(
     if rate <= 0 { 0 } else { 1000 * sites * inline::call_overhead(clocks, arguments) / rate }
 }
 
-/// The constant `sites` of `caller` the clocks admit and the bytes do not,
-/// inlined, and put back where `caller` then comes to more bytes (`grew`).
-/// Whether any stayed.
-fn tried_sites<E: From<String>>(
-    module: &mut Module,
-    modules: &mut ModuleAnalyses,
-    layout: &llrm_mir::datalayout::DataLayout,
-    private: &BTreeSet<GlobalId>,
-    recursive: &BTreeSet<GlobalId>,
-    bases: &llrm_support::hash::IndexMap<GlobalId, i64>,
-    caller: GlobalId,
-    sites: &llrm_support::hash::IndexMap<llrm_mir::module::InstId, inline::Candidate>,
-    refused: &mut BTreeSet<(GlobalId, llrm_mir::module::InstId)>,
+/// What a callee comes to once the constants a site passes are known and the
+/// pipeline has run over it alone, by (callee, its body's state, the
+/// constants): one fact for every site that passes them, and for any later
+/// decision about a copy for them.
+#[derive(Default)]
+pub(crate) struct Specialisations {
+    sizes: llrm_support::hash::HashMap<
+        (GlobalId, llrm_mir::module::Mark, Vec<Option<llrm_mir::context::ConstantId>>),
+        Option<i64>,
+    >,
+}
+
+/// Runs the pipeline over a function that is in no module, in `module`'s
+/// context: what a copy specialised for its constants comes to.
+pub(crate) type Specialiser<'a, E> = &'a mut dyn FnMut(
+    &mut Module,
+    &mut ModuleAnalyses,
+    llrm_mir::module::Function,
+) -> Result<llrm_mir::module::Function, E>;
+
+impl Specialisations {
+    /// `callee`'s bytes (priced by `costs`) with `constants` for its
+    /// parameters.
+    fn bytes<E: From<String>>(
+        &mut self,
+        module: &mut Module,
+        modules: &mut ModuleAnalyses,
+        callee: GlobalId,
+        constants: &[Option<llrm_mir::context::ConstantId>],
+        costs: &OperationCosts,
+        specialised: Specialiser<E>,
+    ) -> Result<Option<i64>, E> {
+        let Some(body) = module.global(callee).function() else { return Ok(None) };
+        let key = (callee, body.mark(), constants.to_vec());
+        if let Some(found) = self.sizes.get(&key) {
+            return Ok(*found);
+        }
+        let mut copy = body.clone();
+        for (&parameter, constant) in body.parameters().iter().zip(constants) {
+            if let Some(constant) = constant {
+                copy.replace_value(parameter, llrm_mir::module::Operand::Constant(*constant));
+            }
+        }
+        let copy = specialised(module, modules, copy)?;
+        let size = inline::size_of(module, &callees(modules, module), &copy, costs);
+        self.sizes.insert(key, size);
+        Ok(size)
+    }
+}
+
+/// What a call to `callee` costs in `costs` that a copy of its body does not:
+/// the call, each argument pushed, and the return the copy has no use for.
+fn call_bytes(
+    module: &Module,
+    callee: GlobalId,
     costs: &OperationCosts,
-    credit: (&OperationCosts, i64),
-    stage: &str,
-    reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
-) -> Result<bool, E> {
-    let mut stayed = false;
-    // One site at a time, and one that was put back is not tried again: it is
-    // the same call in the same body every round (mdl_ai.c re-ran its
-    // pipeline some 600 times for 20 sites).
-    let untried: Vec<_> = sites.iter().filter(|(site, _)| !refused.contains(&(caller, **site))).collect();
-    for (&site, candidate) in untried {
-        let counts = inline::call_counts(module);
-        let kept = module.global(caller).function().expect("a procedure").clone();
-        let before = inline::size(module, &callees(modules, module), caller, costs);
-        let bought = llrm_mir::memory::callee(&module.context, &kept, site)
-            .map_or(0, |callee| allowance(module, callee, 1, credit.0, credit.1));
-        let mut declared = declared(modules, module);
-        let (context, function) = function_mut(module, caller);
-        let by = inline::Caller {
-            layout,
-            recursive: recursive.contains(&caller),
-            base: bases.get(&caller).copied().unwrap_or(0),
-        };
-        let one = llrm_support::hash::IndexMap::from_iter([(site, candidate.clone())]);
-        let spliced = inline::expanded(context, function, &by, &Default::default(), Some(&one), &mut declared)
-            .map_err(E::from)?;
-        placed(&mut declared, modules, module).map_err(E::from)?;
-        if !spliced {
-            refused.insert((caller, site));
-            continue;
-        }
-        modules.changed(caller);
-        modules.invalidate(&PreservedAnalyses::none());
-        reoptimised(module, modules, caller, stage)?;
-        let sorry = before.is_some_and(|before| {
-            grew(module, &callees(modules, module), caller, &counts, private, costs, before, bought)
-        });
-        llrm_support::debug!(
-            "trial",
-            "site caller {} before {:?} bought {bought} -> {}",
-            module.global(caller).name.as_deref().unwrap_or("?"),
-            before,
-            if sorry { "refused" } else { "kept" }
-        );
-        if sorry {
-            *function_mut(module, caller).1 = kept;
-            modules.changed(caller);
-            modules.invalidate(&PreservedAnalyses::none());
-            refused.insert((caller, site));
-        } else {
-            stayed = true;
-        }
-    }
-    Ok(stayed)
+) -> i64 {
+    let arguments = module.global(callee).function().map_or(0, |body| module.signature(body.ty).1.len());
+    inline::call_overhead(costs, arguments)
 }
 
-/// A callee trial that was refused, and the state it was made in: the same
-/// trial in the same state is refused again, so it is not made again (host.c: 3
-/// trials, each made in five rounds, and a trial is 37% of the compile). The
-/// state is the bodies it spliced and grew, the calls of the whole module, and
-/// the module analyses the pipeline of a body reads of the rest.
-pub struct RefusedTrial {
-    callees: Vec<GlobalId>,
-    bodies: Vec<(GlobalId, llrm_mir::module::Function)>,
-    counts: inline::Counter,
-    outer: Rc<llrm_mir::passes::Outer>,
-}
-
-impl RefusedTrial {
-    fn is_state(
-        &self,
-        module: &Module,
-        callees: &[GlobalId],
-        bodies: &[GlobalId],
-        counts: &inline::Counter,
-        outer: &Rc<llrm_mir::passes::Outer>,
-    ) -> bool {
-        self.callees == callees
-            && Rc::ptr_eq(&self.outer, outer)
-            && self.counts == *counts
-            && self.bodies.len() == bodies.len()
-            && self
-                .bodies
-                .iter()
-                .zip(bodies)
-                .all(|((id, body), at)| id == at && module.global(*id).function() == Some(body))
-    }
-}
-
-/// Each of `more`, the callees the clocks admit and the bytes do not, tried
-/// (`trial`). Whether any stayed.
-fn tried_callees<E: From<String>>(
+/// Each of `more`, the callees the clocks admit and the bytes do not, inlined
+/// at every call of them where the callers, with each copy as the pipeline over
+/// it alone leaves it for the constants its site passes, and the callee that
+/// goes, come to no more than the estimate's error of the body copied. The
+/// callers that took one are put through the pipeline once, after all of them
+/// (a callee at a time, a caller with many of them ran it that many times).
+/// Whether any did.
+fn estimated_callees<E: From<String>>(
     module: &mut Module,
     modules: &mut ModuleAnalyses,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -446,256 +459,258 @@ fn tried_callees<E: From<String>>(
     recursive: &BTreeSet<GlobalId>,
     bases: &llrm_support::hash::IndexMap<GlobalId, i64>,
     more: &llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
+    counts: &inline::Counter,
     costs: &OperationCosts,
     credit: (&OperationCosts, i64),
-    refused_trials: &mut Vec<RefusedTrial>,
+    memo: &mut Specialisations,
+    specialised: Specialiser<E>,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
-    let mut stayed = false;
-    let mut refused = llrm_support::hash::IndexMap::default();
-    for (callee, candidate) in more {
-        if trial(
-            module,
-            modules,
-            layout,
-            private,
-            recursive,
-            bases,
-            &[(*callee, candidate)],
-            None,
-            costs,
-            credit,
-            refused_trials,
-            reoptimised,
-        )? {
-            stayed = true;
-        } else {
-            refused.insert(*callee, candidate);
+    type Calls = Vec<(GlobalId, Vec<Option<llrm_mir::context::ConstantId>>)>;
+    // Every direct call of each, in the callers that are not it: one scan.
+    let mut calls: llrm_support::hash::IndexMap<GlobalId, Calls> = more.keys().map(|one| (*one, Vec::new())).collect();
+    for (caller, _, body) in module.functions().filter(|(_, _, body)| !body.is_declaration()) {
+        let mut constants = None;
+        for (_, inst) in body.walk() {
+            let Some(callee) = llrm_mir::memory::callee(&module.context, body, inst).filter(|one| *one != caller)
+            else {
+                continue;
+            };
+            let Some(list) = calls.get_mut(&callee) else { continue };
+            let constants = constants
+                .get_or_insert_with(|| llrm_analysis::interprocedural::current_call_constants(&module.context, body));
+            list.push((caller, constants.get(&inst).cloned().unwrap_or_default()));
         }
     }
-    // Callees that feed one another (a constructor and what reads its result)
-    // pay together, not alone: each alone leaves the other's call holding
-    // what the pair would fold.
-    if refused.len() > 1 {
-        let together: Vec<_> = refused.iter().map(|(callee, candidate)| (*callee, *candidate)).collect();
-        stayed |= trial(
-            module,
-            modules,
+    let mut touched: BTreeSet<GlobalId> = BTreeSet::new();
+    let mut accepted: llrm_support::hash::IndexMap<GlobalId, inline::Candidate> = Default::default();
+    for (&callee, candidate) in more {
+        let sites = counts.get(&callee).copied().unwrap_or(0);
+        let calls = &calls[&callee];
+        if sites == 0 || calls.is_empty() || recursive.contains(&callee) {
+            continue;
+        }
+        let Some(own) = inline::size(module, &callees(modules, module), callee, costs) else { continue };
+        let mut grown = 0;
+        let mut priced = true;
+        for (_, constants) in calls {
+            match memo.bytes(module, modules, callee, constants, costs, specialised)? {
+                Some(copy) => grown += copy - call_bytes(module, callee, costs),
+                None => priced = false,
+            }
+        }
+        if !priced {
+            continue;
+        }
+        let gone = if private.contains(&callee) && calls.len() as i64 == sites { own } else { 0 };
+        let allowed = allowance(module, callee, calls.len() as i64, credit.0, credit.1);
+        let stays_now = stays(grown, gone, 0, own, allowed);
+        llrm_support::debug!(
+            "trial",
+            "estimate callee {} sites {} grown {grown} gone {gone} moved {own} allowed {allowed} -> {}",
+            module.global(callee).name.as_deref().unwrap_or("?"),
+            calls.len(),
+            if stays_now { "kept" } else { "refused" }
+        );
+        if !stays_now {
+            continue;
+        }
+        accepted.insert(callee, candidate.clone());
+        touched.extend(calls.iter().map(|(caller, _)| *caller));
+    }
+    // A caller at a time, each through the pipeline before the next is spliced
+    // into: two callers with the same callee spliced and not yet optimised made
+    // the GlobalsAA that the first one's pipeline asks work for minutes
+    // (qb-runtime's i8out.c: 1 s to not finishing).
+    let mut stayed = false;
+    for &caller in &touched {
+        let by = inline::Caller {
             layout,
-            private,
-            recursive,
-            bases,
-            &together,
-            None,
-            costs,
-            credit,
-            refused_trials,
-            reoptimised,
-        )?;
+            recursive: recursive.contains(&caller),
+            base: bases.get(&caller).copied().unwrap_or(0),
+        };
+        let mut declared = declared(modules, module);
+        let (context, function) = function_mut(module, caller);
+        let spliced =
+            inline::expanded_all(context, function, &by, &accepted, None, &mut declared).map_err(E::from)? > 0;
+        placed(&mut declared, modules, module).map_err(E::from)?;
+        if spliced {
+            modules.changed(caller);
+            modules.invalidate(&PreservedAnalyses::none());
+            reoptimised(module, modules, caller, "inline-estimate.")?;
+            stayed = true;
+        }
     }
     Ok(stayed)
 }
 
-/// `callees` inlined at every direct call of them in `module`, where the
-/// callers and what goes with them come to fewer bytes than before (priced by
-/// `costs`): the callers re-run through the pipeline, and put back as they were
-/// where they do not.
-fn trial<E: From<String>>(
+/// The constant `sites` of `caller` the clocks admit and the bytes do not,
+/// inlined where the copy, as the pipeline over it alone leaves it for the
+/// constants its site passes, adds no more than the call it replaces and what
+/// the clocks saved pay (the callee that goes with its last call counted).
+/// Whether any was.
+fn estimated_sites<E: From<String>>(
     module: &mut Module,
     modules: &mut ModuleAnalyses,
     layout: &llrm_mir::datalayout::DataLayout,
     private: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
     bases: &llrm_support::hash::IndexMap<GlobalId, i64>,
-    callees: &[(GlobalId, &inline::Candidate)],
-    only: Option<GlobalId>,
+    caller: GlobalId,
+    sites: &llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, inline::Candidate>,
+    counts: &inline::Counter,
     costs: &OperationCosts,
     credit: (&OperationCosts, i64),
-    refused_trials: &mut Vec<RefusedTrial>,
+    memo: &mut Specialisations,
+    specialised: Specialiser<E>,
+    reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
+) -> Result<(bool, llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, inline::Candidate>), E> {
+    let mut chosen: llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, inline::Candidate> = Default::default();
+    let mut left: llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, inline::Candidate> = Default::default();
+    let constants = {
+        let body = module.global(caller).function().expect("a procedure");
+        llrm_analysis::interprocedural::current_call_constants(&module.context, body)
+    };
+    for (&site, candidate) in sites {
+        let body = module.global(caller).function().expect("a procedure");
+        let Some(callee) = llrm_mir::memory::callee(&module.context, body, site) else { continue };
+        let known = constants.get(&site).cloned().unwrap_or_default();
+        let Some(copy) = memo.bytes(module, modules, callee, &known, costs, specialised)? else { continue };
+        let own = inline::size(module, &callees(modules, module), callee, costs).unwrap_or(0);
+        let gone = if private.contains(&callee) && counts.get(&callee).copied() == Some(1) { own } else { 0 };
+        let bought = allowance(module, callee, 1, credit.0, credit.1);
+        let stays_now = copy - call_bytes(module, callee, costs) - gone <= bought;
+        llrm_support::debug!(
+            "trial",
+            "estimate site caller {} callee {} copy {copy} gone {gone} bought {bought} -> {}",
+            module.global(caller).name.as_deref().unwrap_or("?"),
+            module.global(callee).name.as_deref().unwrap_or("?"),
+            if stays_now { "kept" } else { "refused" }
+        );
+        if stays_now {
+            chosen.insert(site, candidate.clone());
+        } else {
+            left.insert(site, candidate.clone());
+        }
+    }
+    if chosen.is_empty() {
+        return Ok((false, left));
+    }
+    let by = inline::Caller {
+        layout,
+        recursive: recursive.contains(&caller),
+        base: bases.get(&caller).copied().unwrap_or(0),
+    };
+    let mut declared = declared(modules, module);
+    let (context, function) = function_mut(module, caller);
+    let spliced = inline::expanded_all(context, function, &by, &Default::default(), Some(&chosen), &mut declared)
+        .map_err(E::from)?
+        > 0;
+    placed(&mut declared, modules, module).map_err(E::from)?;
+    if spliced {
+        modules.changed(caller);
+        modules.invalidate(&PreservedAnalyses::none());
+        reoptimised(module, modules, caller, "inline-estimate.")?;
+    }
+    Ok((spliced, left))
+}
+
+/// The sites of `caller` the estimates refused, spliced together, the caller
+/// put through the pipeline once, and kept where it comes to no more (`stays`,
+/// as the callee trials judged). What a site alone shows no gain for can pay
+/// beside its neighbours: one call's result folding another's (B$FMID into
+/// B$FASC), the memory the caller has just stored to, the code a copy shrinks
+/// into. The pipeline over the caller costs the same whichever sites it holds,
+/// so one trial a caller a round is the caller's size, where a trial of each
+/// site was its size by the sites. A set that does not pay is not tried again
+/// in that body (mdl_ai.c re-ran its pipeline some 600 times for 20 sites).
+/// Whether the sites were spliced.
+fn together_trial<E: From<String>>(
+    module: &mut Module,
+    modules: &mut ModuleAnalyses,
+    layout: &llrm_mir::datalayout::DataLayout,
+    private: &BTreeSet<GlobalId>,
+    recursive: &BTreeSet<GlobalId>,
+    bases: &llrm_support::hash::IndexMap<GlobalId, i64>,
+    caller: GlobalId,
+    sites: &llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, inline::Candidate>,
+    counts: &inline::Counter,
+    costs: &OperationCosts,
+    credit: (&OperationCosts, i64),
+    refused: &mut BTreeSet<(GlobalId, llrm_mir::module::InstId)>,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
-    let reaches = |function: &llrm_mir::module::Function, module: &Module| {
-        function
-            .walk()
-            .any(
-                |(_, inst)| llrm_mir::memory::callee(&module.context, function, inst)
-                    .is_some_and(|one| callees.iter().any(|(callee, _)| *callee == one)),
-            )
-    };
-    let callers: Vec<GlobalId> = module
-        .functions()
-        .filter(|(_, _, function)| !function.is_declaration())
-        .filter(|(_, _, function)| reaches(function, module))
-        .map(|(id, _, _)| id)
-        .filter(|id| callees.iter().all(|(callee, _)| id != callee) && only.is_none_or(|one| one == *id))
-        .collect();
-    // Every call re-runs a caller's pipeline: a callee at many sites is not
-    // tried (savegame.c's took 4x the compile time), and an estimate's
-    // noise over so many copies is no tolerance.
-    let counts = inline::call_counts(module);
-    let sites: Vec<i64> = callees.iter().map(|(callee, _)| counts.get(callee).copied().unwrap_or(0)).collect();
-    // Bodies held only to inline from are small and meant to be copied
-    // everywhere: every site is spliced and a caller's pipeline runs once,
-    // not after each, so the sites do not cost compile time.
-    let held = callees.iter().all(|(callee, _)| module.global(*callee).linkage == Linkage::AvailableExternally);
-    if !held && sites.iter().any(|&count| count > TRIED_SITES) {
+    let chosen: llrm_support::hash::IndexMap<_, _> =
+        sites.iter().filter(|(site, _)| !refused.contains(&(caller, **site))).map(|(s, c)| (*s, c.clone())).collect();
+    if chosen.is_empty() {
         return Ok(false);
     }
-    // Nothing of such a body goes with its last call, so each caller is judged
-    // on its own.
-    if held && only.is_none() {
-        let mut stayed = false;
-        for &caller in &callers {
-            stayed |= trial(
-                module,
-                modules,
-                layout,
-                private,
-                recursive,
-                bases,
-                callees,
-                Some(caller),
-                costs,
-                credit,
-                refused_trials,
-                reoptimised,
-            )?;
-        }
-        return Ok(stayed);
-    }
-    // The same trial in the same state is refused again.
-    let ids: Vec<GlobalId> = callees.iter().map(|(callee, _)| *callee).collect();
-    let bodies: Vec<GlobalId> = callers.iter().copied().chain(ids.iter().copied()).collect();
-    let outer = modules.outer(module);
-    let known = refused_trials.iter().any(|one| one.is_state(module, &ids, &bodies, &counts, &outer));
-    let checking = llrm_support::env_set("LLRM_CHECK_TRIALS");
-    if known && !checking {
+    let kept = module.global(caller).function().expect("a procedure").clone();
+    let before = inline::size(module, &callees(modules, module), caller, costs);
+    let by = inline::Caller {
+        layout,
+        recursive: recursive.contains(&caller),
+        base: bases.get(&caller).copied().unwrap_or(0),
+    };
+    let mut declared = declared(modules, module);
+    let (context, function) = function_mut(module, caller);
+    let spliced = inline::expanded_all(context, function, &by, &Default::default(), Some(&chosen), &mut declared)
+        .map_err(E::from)?
+        > 0;
+    placed(&mut declared, modules, module).map_err(E::from)?;
+    if !spliced {
+        refused.extend(chosen.keys().map(|site| (caller, *site)));
         return Ok(false);
     }
-    let sizes = |modules: &mut ModuleAnalyses, module: &Module| {
-        let held = self::callees(modules, module);
-        callers.iter().map(|&id| inline::size(module, &held, id, costs)).sum::<Option<i64>>()
-    };
-    let effects = self::callees(modules, module);
-    let owns: Option<Vec<i64>> =
-        callees.iter().map(|(callee, _)| inline::size(module, &effects, *callee, costs)).collect();
-    let (Some(before), Some(owns)) = (sizes(modules, module), owns) else { return Ok(false) };
-    let kept: Vec<(GlobalId, llrm_mir::module::Function)> =
-        callers.iter().map(|&id| (id, module.global(id).function().expect("a procedure").clone())).collect();
-    let available: llrm_support::hash::IndexMap<GlobalId, inline::Candidate> =
-        callees.iter().map(|(callee, candidate)| (*callee, (*candidate).clone())).collect();
-    let mut done = false;
-    for &id in &callers {
-        let by =
-            inline::Caller { layout, recursive: recursive.contains(&id), base: bases.get(&id).copied().unwrap_or(0) };
-        // One site a time, as the rounds do, the body through the pipeline
-        // after each.
-        let mut spliced = false;
-        loop {
-            let mut declared = declared(modules, module);
-            let (context, function) = function_mut(module, id);
-            let more = inline::expanded(context, function, &by, &available, None, &mut declared).map_err(E::from)?;
-            placed(&mut declared, modules, module).map_err(E::from)?;
-            if !more {
-                break;
+    modules.changed(caller);
+    modules.invalidate(&PreservedAnalyses::none());
+    reoptimised(module, modules, caller, "inline-trial.")?;
+    let callees_of: BTreeSet<GlobalId> =
+        chosen.keys().filter_map(|site| llrm_mir::memory::callee(&module.context, &kept, *site)).collect();
+    // The calls of each in the module after: what they were, less this caller's
+    // before and plus its now (a scan of the one body, not of the module).
+    let in_body = |function: &llrm_mir::module::Function| {
+        let mut found: llrm_support::hash::HashMap<GlobalId, i64> = llrm_support::hash::HashMap::default();
+        for (_, inst) in function.walk() {
+            if let Some(callee) =
+                llrm_mir::memory::callee(&module.context, function, inst).filter(|one| callees_of.contains(one))
+            {
+                *found.entry(callee).or_insert(0) += 1;
             }
-            spliced = true;
         }
-        // Every site spliced, the body through the pipeline once: the way gcc
-        // and LLVM inline, and a trial of a callee at several sites ran
-        // the pipeline once for each (host.c -6.6%, QCport -2.2%; the code of
-        // every program measured the same).
-        if spliced {
-            modules.changed(id);
-            modules.invalidate(&PreservedAnalyses::none());
-            reoptimised(module, modules, id, "inline-trial.")?;
+        found
+    };
+    let (before_calls, after_calls) = (in_body(&kept), in_body(module.global(caller).function().expect("a procedure")));
+    let held = callees(modules, module);
+    let (mut moved, mut gone, mut allowed) = (0, 0, 0);
+    for callee in callees_of {
+        let own = inline::size(module, &held, callee, costs).unwrap_or(0);
+        moved += own;
+        let was = counts.get(&callee).copied().unwrap_or(0);
+        let left =
+            was - before_calls.get(&callee).copied().unwrap_or(0) + after_calls.get(&callee).copied().unwrap_or(0);
+        if private.contains(&callee) && was > 0 && left == 0 {
+            gone += own;
         }
-        done |= spliced;
+        allowed += allowance(module, callee, was - left, credit.0, credit.1);
     }
-    if !done {
-        return Ok(false);
-    }
-    let now = inline::call_counts(module);
-    let gone: i64 = callees
-        .iter()
-        .zip(&owns)
-        .filter(|((callee, _), _)| private.contains(callee) && !now.contains_key(callee))
-        .map(|(_, own)| own)
-        .sum();
-    let moved: i64 = owns.iter().sum();
-    let allowed: i64 = callees
-        .iter()
-        .zip(&sites)
-        .map(|((callee, _), &count)| {
-            allowance(module, *callee, count - now.get(callee).copied().unwrap_or(0), credit.0, credit.1)
-        })
-        .sum();
-    llrm_support::debug!(
-        "inline",
-        "trial of {}: {before} bytes before, {:?} after, {gone} gone",
-        callees
-            .iter()
-            .map(|(callee, _)| module.global(*callee).name.as_deref().unwrap_or("?"))
-            .collect::<Vec<_>>()
-            .join(" + "),
-        sizes(modules, module)
-    );
-    let stays_now = sizes(modules, module).is_some_and(|after| stays(after, gone, before, moved, allowed));
+    let after = inline::size(module, &held, caller, costs);
+    let stays_now = before.zip(after).is_some_and(|(before, after)| stays(after, gone, before, moved, allowed));
     llrm_support::debug!(
         "trial",
-        "callee {} callers {} sites {:?} held {held} before {before} after {:?} gone {gone} moved {moved} allowed {allowed} -> {}",
-        callees
-            .iter()
-            .map(|(callee, _)| module.global(*callee).name.as_deref().unwrap_or("?"))
-            .collect::<Vec<_>>()
-            .join("+"),
-        callers.len(),
-        sites,
-        sizes(modules, module),
+        "together caller {} sites {} before {before:?} after {after:?} gone {gone} moved {moved} allowed {allowed} -> {}",
+        module.global(caller).name.as_deref().unwrap_or("?"),
+        chosen.len(),
         if stays_now { "kept" } else { "refused" }
     );
     if stays_now {
-        assert!(!known, "a trial refused in this state was kept the second time");
         return Ok(true);
     }
-    let mut state: Vec<(GlobalId, llrm_mir::module::Function)> = Vec::new();
-    for (id, function) in kept {
-        state.push((id, function.clone()));
-        *function_mut(module, id).1 = function;
-        modules.changed(id);
-    }
+    *function_mut(module, caller).1 = kept;
+    modules.changed(caller);
     modules.invalidate(&PreservedAnalyses::none());
-    if !known {
-        state
-            .extend(ids.iter().map(|&callee| (callee, module.global(callee).function().expect("a procedure").clone())));
-        refused_trials.push(RefusedTrial { callees: ids, bodies: state, counts, outer });
-    }
+    refused.extend(chosen.keys().map(|site| (caller, *site)));
     Ok(false)
-}
-
-/// Whether `id`, after inlining and the pipeline, comes to more than it did
-/// (`before`), less the callees nothing calls now and nothing outside reaches,
-/// which go.
-fn grew(
-    module: &Module,
-    callees: &llrm_mir::memory::Callees,
-    id: GlobalId,
-    counts: &inline::Counter,
-    private: &BTreeSet<GlobalId>,
-    costs: &OperationCosts,
-    before: i64,
-    allowance: i64,
-) -> bool {
-    let Some(after) = inline::size(module, callees, id, costs) else { return false };
-    let now = inline::call_counts(module);
-    let gone: i64 = counts
-        .iter()
-        .filter(|(callee, was)| {
-            **was > 0 && private.contains(*callee) && now.get(*callee).copied().unwrap_or(0) == 0 && **callee != id
-        })
-        .filter_map(|(&callee, _)| inline::size(module, callees, callee, costs))
-        .sum();
-    after - gone > before + allowance
 }
 
 /// Module `at`'s procedures every caller of which is in the module: no
@@ -737,9 +752,23 @@ pub fn optimized<E: From<String>>(
     reach: i64,
     threshold: inline::Threshold,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
+    specialised: Specialiser<E>,
     spliced: &mut dyn FnMut(&Module, GlobalId, &str) -> Result<(), E>,
 ) -> Result<Proved, E> {
-    optimized_with::<E>(program, modules, roots, costs, loose, rate, reach, threshold, true, reoptimised, spliced)
+    optimized_with::<E>(
+        program,
+        modules,
+        roots,
+        costs,
+        loose,
+        rate,
+        reach,
+        threshold,
+        true,
+        reoptimised,
+        specialised,
+        spliced,
+    )
 }
 
 pub fn optimized_with<E: From<String>>(
@@ -753,6 +782,7 @@ pub fn optimized_with<E: From<String>>(
     threshold: inline::Threshold,
     ranges: bool,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
+    specialised: Specialiser<E>,
     spliced: &mut dyn FnMut(&Module, GlobalId, &str) -> Result<(), E>,
 ) -> Result<Proved, E> {
     let count = program.modules.len();
@@ -763,7 +793,7 @@ pub fn optimized_with<E: From<String>>(
         for &id in bodies {
             analyses.changed(id);
         }
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate_bodies(&PreservedAnalyses::none());
     };
 
     // Inline only after each independent body has reached its local fixed
@@ -781,14 +811,16 @@ pub fn optimized_with<E: From<String>>(
                 .collect()
         })
         .collect();
-    let mut refused: BTreeSet<(GlobalId, llrm_mir::module::InstId)> = BTreeSet::new();
-    let mut refused_trials: Vec<RefusedTrial> = Vec::new();
+    let mut specialisations = Specialisations::default();
+    let mut refused_together: BTreeSet<(GlobalId, llrm_mir::module::InstId)> = BTreeSet::new();
     let mut inline_round = 0;
     loop {
         let mut changed = false;
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
+            let recursive = inline::recursive(module);
+            let addressed = llrm_mir::callgraph::addressed(module);
             let (available, more) = candidates(
                 module,
                 &callees(&mut modules[at], module),
@@ -799,8 +831,30 @@ pub fn optimized_with<E: From<String>>(
                 loose,
                 reach,
                 threshold,
+                &recursive,
+                &addressed,
             );
-            let recursive = inline::recursive(module);
+            // What only the clocks admit of a callee stays where its copies,
+            // as the pipeline over each alone leaves them, come to no more.
+            if loose.is_some()
+                && estimated_callees(
+                    module,
+                    &mut modules[at],
+                    &program.layout,
+                    &private[at],
+                    &recursive,
+                    &bases[at],
+                    &more,
+                    &counts,
+                    costs,
+                    (loose.unwrap_or(costs), rate),
+                    &mut specialisations,
+                    specialised,
+                    reoptimised,
+                )?
+            {
+                changed = true;
+            }
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
@@ -833,10 +887,12 @@ pub fn optimized_with<E: From<String>>(
                     changed = true;
                     inline_round += 1;
                 }
-                // What only the clocks admit stays only where it comes to no
-                // more.
-                if loose.is_some()
-                    && tried_sites(
+                // What only the clocks admit stays where the copy, with the
+                // constants its site passes, comes to no more;
+                // and what that refuses is tried with its
+                // neighbours, together, once.
+                if loose.is_some() {
+                    let (stayed, mut together) = estimated_sites(
                         module,
                         &mut modules[at],
                         &program.layout,
@@ -845,32 +901,43 @@ pub fn optimized_with<E: From<String>>(
                         &bases[at],
                         id,
                         &constant_more,
-                        &mut refused,
+                        &counts,
                         costs,
                         (loose.unwrap_or(costs), rate),
-                        "inline-trial.",
+                        &mut specialisations,
+                        specialised,
                         reoptimised,
-                    )?
-                {
-                    changed = true;
+                    )?;
+                    if stayed {
+                        changed = true;
+                    } else {
+                        let body = module.global(id).function().expect("a procedure");
+                        for (_, inst) in body.walk() {
+                            if let Some(candidate) = llrm_mir::memory::callee(&module.context, body, inst)
+                                .and_then(|callee| more.get(&callee))
+                            {
+                                together.entry(inst).or_insert_with(|| candidate.clone());
+                            }
+                        }
+                        if together_trial(
+                            module,
+                            &mut modules[at],
+                            &program.layout,
+                            &private[at],
+                            &recursive,
+                            &bases[at],
+                            id,
+                            &together,
+                            &counts,
+                            costs,
+                            (loose.unwrap_or(costs), rate),
+                            &mut refused_together,
+                            reoptimised,
+                        )? {
+                            changed = true;
+                        }
+                    }
                 }
-            }
-            if loose.is_some()
-                && tried_callees(
-                    module,
-                    &mut modules[at],
-                    &program.layout,
-                    &private[at],
-                    &recursive,
-                    &bases[at],
-                    &more,
-                    costs,
-                    (loose.unwrap_or(costs), rate),
-                    &mut refused_trials,
-                    reoptimised,
-                )?
-            {
-                changed = true;
             }
         }
         if !changed {
@@ -886,7 +953,9 @@ pub fn optimized_with<E: From<String>>(
         _ => (costs, true),
     };
     for at in 0..count {
-        for id in crate::argpromotion::promoted(&mut program.modules[at], &program.layout, priced, bytes) {
+        for id in reporting(&mut program.modules[at], &mut modules[at], |module| {
+            crate::argpromotion::promoted(module, &program.layout, priced, bytes)
+        }) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "promote.")?;
         }
@@ -894,7 +963,9 @@ pub fn optimized_with<E: From<String>>(
 
     // A far pointer every call fills from DGROUP is passed as its offset.
     for at in 0..count {
-        for id in crate::narrowspace::narrowed(&mut program.modules[at], &program.layout, program.target.spaces()) {
+        for id in reporting(&mut program.modules[at], &mut modules[at], |module| {
+            crate::narrowspace::narrowed(module, &program.layout, program.target.spaces())
+        }) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "narrow.")?;
         }
@@ -963,15 +1034,17 @@ pub fn optimized_with<E: From<String>>(
         // and the calls go to the copy.
         let mut cloned_now = false;
         for at in 0..count {
-            let made = crate::ipacp::cloned(
-                &mut program.modules[at],
-                &program.layout,
-                &procedures[at],
-                &private[at],
-                costs,
-                threshold.cp_clone,
-                &mut cloning,
-            );
+            let made = reporting(&mut program.modules[at], &mut modules[at], |module| {
+                crate::ipacp::cloned(
+                    module,
+                    &program.layout,
+                    &procedures[at],
+                    &private[at],
+                    costs,
+                    threshold.cp_clone,
+                    &mut cloning,
+                )
+            });
             for &id in &made.added {
                 let size = inline::operations(program.modules[at].global(id).function().expect("a procedure"));
                 procedures[at].push(id);
@@ -995,6 +1068,8 @@ pub fn optimized_with<E: From<String>>(
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
+            let recursive = inline::recursive(module);
+            let addressed = llrm_mir::callgraph::addressed(module);
             let (available, more) = candidates(
                 module,
                 &callees(&mut modules[at], module),
@@ -1005,8 +1080,30 @@ pub fn optimized_with<E: From<String>>(
                 loose,
                 reach,
                 threshold,
+                &recursive,
+                &addressed,
             );
-            let recursive = inline::recursive(module);
+            // What only the clocks admit of a callee stays where its copies,
+            // as the pipeline over each alone leaves them, come to no more.
+            if loose.is_some()
+                && estimated_callees(
+                    module,
+                    &mut modules[at],
+                    &program.layout,
+                    &private[at],
+                    &recursive,
+                    &bases[at],
+                    &more,
+                    &counts,
+                    costs,
+                    (loose.unwrap_or(costs), rate),
+                    &mut specialisations,
+                    specialised,
+                    reoptimised,
+                )?
+            {
+                inlined = true;
+            }
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
                 let current = facts::current_call_constants(&module.context, caller);
@@ -1036,10 +1133,12 @@ pub fn optimized_with<E: From<String>>(
                     reoptimised(module, &mut modules[at], id, &format!("ipa-inline{argument_round}."))?;
                     inlined = true;
                 }
-                // What only the clocks admit stays only where it comes to no
-                // more.
-                if loose.is_some()
-                    && tried_sites(
+                // What only the clocks admit stays where the copy, with the
+                // constants its site passes, comes to no more;
+                // and what that refuses is tried with its
+                // neighbours, together, once.
+                if loose.is_some() {
+                    let (stayed, mut together) = estimated_sites(
                         module,
                         &mut modules[at],
                         &program.layout,
@@ -1048,32 +1147,43 @@ pub fn optimized_with<E: From<String>>(
                         &bases[at],
                         id,
                         &constant_more,
-                        &mut refused,
+                        &counts,
                         costs,
                         (loose.unwrap_or(costs), rate),
-                        "ipa-inline-trial.",
+                        &mut specialisations,
+                        specialised,
                         reoptimised,
-                    )?
-                {
-                    inlined = true;
+                    )?;
+                    if stayed {
+                        inlined = true;
+                    } else {
+                        let body = module.global(id).function().expect("a procedure");
+                        for (_, inst) in body.walk() {
+                            if let Some(candidate) = llrm_mir::memory::callee(&module.context, body, inst)
+                                .and_then(|callee| more.get(&callee))
+                            {
+                                together.entry(inst).or_insert_with(|| candidate.clone());
+                            }
+                        }
+                        if together_trial(
+                            module,
+                            &mut modules[at],
+                            &program.layout,
+                            &private[at],
+                            &recursive,
+                            &bases[at],
+                            id,
+                            &together,
+                            &counts,
+                            costs,
+                            (loose.unwrap_or(costs), rate),
+                            &mut refused_together,
+                            reoptimised,
+                        )? {
+                            inlined = true;
+                        }
+                    }
                 }
-            }
-            if loose.is_some()
-                && tried_callees(
-                    module,
-                    &mut modules[at],
-                    &program.layout,
-                    &private[at],
-                    &recursive,
-                    &bases[at],
-                    &more,
-                    costs,
-                    (loose.unwrap_or(costs), rate),
-                    &mut refused_trials,
-                    reoptimised,
-                )?
-            {
-                inlined = true;
             }
         }
         if inlined {
@@ -1097,7 +1207,7 @@ pub fn optimized_with<E: From<String>>(
     }
     // What the constants and ranges left unread is not pushed.
     for at in 0..count {
-        for id in crate::deadargs::removed(&mut program.modules[at]) {
+        for id in reporting(&mut program.modules[at], &mut modules[at], crate::deadargs::removed) {
             edited(&mut modules[at], &[id]);
             // A body with fewer values to carry is another body to the loop
             // passes and the recursion's.
@@ -1274,6 +1384,7 @@ pub fn stamped(
     let mut changed = Vec::new();
     let graph = analyses.get::<CallGraphAnalysis>(module);
     let callees = llrm_mir::memory::callees(module);
+    let never_reentered = graph.cannot_reenter(module);
     for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(
@@ -1313,7 +1424,7 @@ pub fn stamped(
                     Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
                 ),
             );
-        let norecurse = graph.cannot_reenter(module, id);
+        let norecurse = never_reentered.contains(&id);
         // The language's word that its loops end holds where nothing a loop
         // that never ended could be seen by.
         let unobserved = !volatile

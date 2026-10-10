@@ -199,10 +199,21 @@ impl PartialEq for Lineage {
 }
 
 /// A point in one function's history, to ask what changed since.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Mark {
     uid: u64,
     at: usize,
+}
+
+impl Mark {
+    /// Whether `other` is a point in the same function's history: not a copy
+    /// that took its own.
+    pub fn same_history(
+        self,
+        other: Mark,
+    ) -> bool {
+        self.uid == other.uid
+    }
 }
 
 /// A function: its values, instructions and blocks in arenas whose ids are

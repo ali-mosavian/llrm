@@ -489,3 +489,24 @@ b:
         assert_eq!(constant_returns(&module).keys().copied().collect::<BTreeSet<_>>(), exact, "{linkage}");
     }
 }
+
+/// A chain of callees is settled by following the callers of what stops being
+/// terminal; the answer is what the rounds of every body would reach.
+#[test]
+fn test_noreturn_follows_a_long_chain_to_where_it_ends() {
+    let chain = |last: &str| {
+        let mut text = format!("define internal void @f0() {{\nb:\n  {last}\n}}\n");
+        for at in 1..200 {
+            text.push_str(&format!(
+                "\ndefine internal void @f{at}() {{\nb:\n  call void @f{}()\n  ret void\n}}\n",
+                at - 1
+            ));
+        }
+        text
+    };
+    let all = |module: &Module| module.functions().map(|(id, _, _)| id).collect::<BTreeSet<_>>();
+    let ends = parsed(&chain("br label %b"));
+    assert_eq!(noreturn_procedures(&ends, &ends.declarations(), &all(&ends)), all(&ends));
+    let returns = parsed(&chain("ret void"));
+    assert_eq!(noreturn_procedures(&returns, &returns.declarations(), &all(&returns)), BTreeSet::new());
+}

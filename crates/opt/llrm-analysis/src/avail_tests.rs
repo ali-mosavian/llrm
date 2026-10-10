@@ -605,3 +605,52 @@ fn a_load_is_compared_with_the_groups_that_share_its_bytes_not_with_every_group(
     assert_eq!(found.len(), 40, "each second load of a cell takes the first");
     assert!(compared <= 3 * 80, "{compared} group comparisons for 80 loads of 40 cells");
 }
+
+/// Two cells of one frame whose bytes miss are settled by their displacements,
+/// however many writes a walk passes.
+#[test]
+fn a_cell_is_apart_from_a_write_of_other_bytes_of_its_frame_by_displacement() {
+    let stores: String = (0..120)
+        .map(|at| format!("  store i16 %v, ptr getelementptr inbounds (i8, ptr @big, i16 {})\n", at * 2))
+        .collect();
+    let loads: String = (0..120)
+        .map(|at| format!("  %x{at} = load i16, ptr getelementptr inbounds (i8, ptr @big, i16 {})\n", at * 2))
+        .collect();
+    let parsed = Parsed::new(&format!(
+        "@big = global [400 x i8] zeroinitializer\n\ndefine i16 @f(i16 %v) {{\nb0:\n{stores}{loads}  ret i16 %x0\n}}\n"
+    ));
+    let unit = parsed.unit();
+    crate::memoryssa::SLOW_CLOBBERS.with(|asked| asked.set(0));
+    let found = forwarded(&unit, &Calls::default());
+    let slow = crate::memoryssa::SLOW_CLOBBERS.with(|asked| asked.get());
+    assert_eq!(found.len(), 120, "every load takes its store's value");
+    assert!(slow < 240, "{slow} comparisons of cells whose bytes miss, by the full rules");
+}
+
+/// `stages` diamonds, one arm of each calling @h, then two loads of @g: the
+/// second is served by the first, and the loads before it are all clobbered
+/// by a call between.
+fn stages_of_loads(stages: usize) -> String {
+    let mut text = String::from("define i16 @f(i1 %c) {\nb0:\n  br label %s0\n\n");
+    for at in 0..stages {
+        text += &format!(
+            "s{at}:\n  br i1 %c, label %t{at}, label %j{at}\n\nt{at}:\n  call void @anything()\n  br label %j{at}\n\nj{at}:\n  %a{at} = load i16, ptr {CELL}\n  %b{at} = load i16, ptr {CELL}\n  br label %s{}\n\n",
+            at + 1
+        );
+    }
+    text + &format!("s{stages}:\n  ret i16 %b{}\n}}\n", stages - 1)
+}
+
+/// A load tried every load of its bytes before it, earliest first, each by a
+/// walk that fails at the call between: N^2 walks for N stages (`branches` at
+/// N=512 made 165,162, a third of `mir gvn`). The nearest is tried first.
+#[test]
+fn test_a_load_tries_the_nearest_load_of_its_bytes_first() {
+    let parsed = Parsed::new(&stages_of_loads(40));
+    let unit = parsed.unit();
+    crate::memoryssa::UNCHANGED.with(|asked| asked.set(0));
+    let found = forwarded(&unit, &Calls::default());
+    let asked = crate::memoryssa::UNCHANGED.with(|asked| asked.get());
+    assert!(found.len() >= 40, "each second load is served by the first: {}", found.len());
+    assert!(asked < 10 * 40, "{asked} walks for 80 loads in 40 stages");
+}

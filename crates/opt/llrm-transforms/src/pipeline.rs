@@ -67,6 +67,9 @@ pub struct Options {
     pub fill: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
+    /// Loops not proven to run are entered behind a copy of their test, before
+    /// the loop passes (gcc's `-ftree-ch`; not at -Os).
+    pub copy_headers: bool,
     /// Code size outranks speed where they conflict: -Os and -Oz. (Whether a
     /// complete copy of a loop may grow the code is `limits.grows`, which
     /// gcc lets only -O3 do.)
@@ -105,6 +108,7 @@ impl Default for Options {
             fill: true,
             sibcalls: true,
             unswitch: false,
+            copy_headers: false,
             for_size: false,
             search: true,
             routes: true,
@@ -367,6 +371,25 @@ pub fn recorded(
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
+        specialise: {
+            let mut alone = Fixed::new(&Applied { dump: None, ..applied.clone() });
+            Box::new(move |module, analyses, mut function| {
+                let layout = analyses.program().layout.clone();
+                let outer = analyses.outer_held(module);
+                let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
+                let Module { context, metadata, .. } = &mut *module;
+                let mut unit = Unit {
+                    context,
+                    layout: &layout,
+                    function: &mut function,
+                    id: None,
+                    metadata,
+                    declared: &mut declared,
+                };
+                alone.run(&mut unit, &mut Analyses::new(std::rc::Rc::clone(&outer)));
+                function
+            })
+        },
         proved: None,
         inline: applied.options.inline,
         ranges: applied.options.ipa_ranges,
@@ -387,6 +410,16 @@ pub fn recorded(
     // summaries it made there.
     manager.freeze::<Summaries>();
     manager.freeze::<GlobalsAA>();
+    // gcc's `pass_ch` (passes.def:232, in `pass_all_optimizations`) runs after
+    // `pass_ipa_inline`: the inliner sizes a body before its header is copied.
+    // The loops it guards are re-simplified for the passes that follow. Not at
+    // -Os (`optimize_loop_for_size_p`): there only a loop proven to run is
+    // entered at its body, which the last `Rotate` does.
+    if applied.options.copy_headers && !applied.options.prefers_size() {
+        manager.add(rotate::Rotate { proven: false, copy: true });
+        manager.add(loopsimplify::LoopSimplify);
+        manager.add(lcssa::LoopClosedSSA);
+    }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
     if applied.options.wanted("fixednarrow") {
@@ -410,11 +443,14 @@ pub fn recorded(
     }
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
-    manager.add(rotate::Rotate);
+    manager.add(rotate::Rotate { proven: true, copy: false });
     // After the loop passes: the cycles it makes between the cases are no
     // natural loop. LLVM's DFAJumpThreading, gcc's FSM threader.
     if applied.options.wanted("jumpthread") {
-        manager.add(jumpthread::JumpThread { size: applied.options.prefers_size() });
+        manager.add(jumpthread::JumpThread {
+            size: applied.options.prefers_size(),
+            correlated: applied.options.copy_headers,
+        });
     }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
@@ -459,7 +495,7 @@ fn rerun(
     };
     let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
     let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
-    analyses.invalidate(&preserved);
+    analyses.body_edited(id, &preserved);
     if declared.place(module)? > 0 {
         analyses.invalidate(&PreservedAnalyses::none());
     }
@@ -738,10 +774,13 @@ impl Run {
             );
         }
         if preserved.are_all_preserved() {
+            // Every result stands, as the body is now (it may have edited and
+            // put back).
+            analyses.vouch(unit.function);
             return false;
         }
         llrm_mir::passes::note_pass(pass.name());
-        llrm_mir::passes::spanned("invalidate", || analyses.invalidate(&preserved));
+        llrm_mir::passes::spanned("invalidate", || analyses.invalidate(unit.function, &preserved));
         analyses.check_kept(pass.name(), unit.context, unit.layout, unit.function);
         self.changed(stage, unit, analyses);
         true
@@ -754,7 +793,7 @@ impl Run {
         analyses: &mut Analyses,
     ) {
         if cfg::_unreachable(unit.context, unit.function) {
-            analyses.invalidate(&PreservedAnalyses::none());
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
             self.changed("unreachable", unit, analyses);
         }
     }

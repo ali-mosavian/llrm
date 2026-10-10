@@ -128,7 +128,7 @@ impl Selector<'_, '_, '_> {
     /// form of the lowest, `rest` of each above, which takes its
     /// predecessor's carry where it is not the same form. A constant operand is
     /// an immediate in each half, as the form takes one.
-    pub(super) fn wide_chain(
+    pub fn wide_chain(
         &mut self,
         m: &super::matcher::Match,
         out: &mut Vec<Arc<Insn>>,
@@ -729,8 +729,8 @@ impl Selector<'_, '_, '_> {
             (remainder.1, Register::ECX),
         ];
         out.push(Arc::new(Insn {
-            clobbers: call_clobbers(&contract, self.segments),
-            clobbers_high: call_clobbered_high(&contract, self.segments),
+            clobbers: call_clobbers(&contract, self.segments, &self.cpu.general),
+            clobbers_high: call_clobbered_high(&contract, self.segments, &self.cpu.general),
             uses: requires.iter().map(|(held, _)| held.value).collect(),
             requires,
             defines: delivers.iter().map(|(held, _)| held.value).collect(),

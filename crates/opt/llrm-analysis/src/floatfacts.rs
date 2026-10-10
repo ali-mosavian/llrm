@@ -923,7 +923,7 @@ pub fn solved_over(
     while changed {
         changed = false;
         if reshadow {
-            memory = consts::cells(
+            memory = consts::cells_solved(
                 unit,
                 calls,
                 Some(&_with_stored(unit, &integers, &facts, &sources)),
@@ -931,7 +931,10 @@ pub fn solved_over(
                 None,
                 None,
                 None,
-            );
+                None,
+                false,
+            )
+            .flat;
             reshadow = false;
         }
         let mut learned = |value: ValueId, fact: Finite, facts: &mut IndexMap<ValueId, Finite>| {

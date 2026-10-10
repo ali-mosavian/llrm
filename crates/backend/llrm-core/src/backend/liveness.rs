@@ -33,13 +33,16 @@ pub fn _terminator(what: Option<&Semantics>) -> bool {
 // dead final write to either register must remain removable.  Treating them as
 // semantic return inputs retained one-use loads and other dead computations
 // immediately before an epilogue.
-pub const _RETURN_STATE: [Register; 5] = [Register::EBP, Register::ESP, Register::DS, Register::SS, Register::CS];
+pub fn _return_state() -> [Register; 5] {
+    use crate::backend::registerinfo::{frame_root, stack_root};
+    [frame_root(), stack_root(), Register::DS, Register::SS, Register::CS]
+}
 
 /// Every lane a body can name. "Dead" here means every lane but the live ones.
 pub fn _universe() -> Lanes {
     let mut lanes = _flag_lanes(0xFFFF_FFFF);
-    for register in target::WIDTHS.keys().chain(target::SEGMENTS.iter()) {
-        lanes.extend(_lanes(*register));
+    for register in target::integer_registers().chain(target::SEGMENTS.iter().copied()) {
+        lanes.extend(_lanes(register));
     }
     lanes
 }
@@ -190,7 +193,7 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
         // Nothing runs after it: it reads explicit results and only the
         // architectural state its generated epilogue itself needs.
         let mut reads: Lanes = one.requires.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
-        for register in _RETURN_STATE {
+        for register in _return_state() {
             reads.extend(_lanes(register));
         }
         let writes = _universe().minus(&reads);
@@ -202,7 +205,7 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
     let mut reads: Lanes = one.requires.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
     // A callee runs on the caller's frame chain, stack and data group.
     if one.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
-        for register in _RETURN_STATE {
+        for register in _return_state() {
             reads.extend(_lanes(register));
         }
     }
@@ -210,18 +213,13 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
     // are still real reads. In particular an indirect `call bx` reads BX
     // before the calling convention clobbers it.
     for source in one.what.as_ref().map_or(&[][..], |what| what.sources.as_slice()) {
-        match source {
-            Loc::Reg(source) => reads.extend(_lanes(source.register)),
-            Loc::Mem(source) => {
-                reads.extend(_lanes(source.through));
-                reads.extend(_lanes(source.index_through));
-                // `selector` is a `Held`, never an `ir.Reg`.
-            }
-            Loc::Address(source) => {
-                reads.extend(_lanes(source.through));
-                reads.extend(_lanes(source.index_through));
-            }
-            _ => {}
+        if let Loc::Reg(source) = source {
+            reads.extend(_lanes(source.register));
+        }
+        // `selector` is a `Held`, never an `ir.Reg`.
+        if let Some(at) = source.address() {
+            reads.extend(_lanes(at.through));
+            reads.extend(_lanes(at.index_through));
         }
     }
     let mut writes: Lanes = one.delivers.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();

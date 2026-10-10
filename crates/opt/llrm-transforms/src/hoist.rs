@@ -39,7 +39,6 @@ use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, P
 use llrm_mir::types::Type;
 
 use crate::profit::{self, OperationCosts};
-use crate::transform::_undisturbed;
 
 /// `size`: price a run in bytes, every block once (-Os), not in executed work.
 pub struct Hoist {
@@ -104,6 +103,8 @@ pub fn hoisted(
     // or value changes.
     let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
     let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+    // The price of the function as it stands, when the last motion priced it.
+    let mut held = None;
     let mut changed = false;
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
@@ -114,7 +115,7 @@ pub fn hoisted(
         }
         let before = unit.function.terminator(cfg::block(into)).expect("a terminator");
         let run = match &frequency {
-            Some(frequency) => _affordable(unit, &outer, run, before, into, &costs, room, frequency),
+            Some(frequency) => _affordable(unit, &outer, run, before, into, &costs, room, frequency, &mut held),
             None => run,
         };
         if run.is_empty() {
@@ -143,10 +144,13 @@ fn _affordable(
     costs: &OperationCosts,
     room: crate::spill::Room,
     frequency: &std::collections::BTreeMap<i64, i64>,
+    held: &mut Option<i64>,
 ) -> Vec<InstId> {
     let price =
         |function: &Function| profit::motion_price(unit.context, unit.layout, outer, function, costs, room, frequency);
-    let Some(kept) = price(unit.function) else { return run };
+    // A run that is let go leaves the function as the clone priced it, whose
+    // price is then the next loop's `kept`.
+    let Some(kept) = held.take().or_else(|| price(unit.function)) else { return run };
     while !run.is_empty() {
         let mut hoisted = unit.function.clone();
         for &inst in &run {
@@ -182,12 +186,20 @@ fn _affordable(
         let moved = work
             + forecast.cost
             + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);
-        let cells = crate::spill::cells(&hoisted);
-        let traffic = crate::spill::traffic(&hoisted, frequency, &cells, costs, &|_| true, &|value| {
-            crate::spill::words(unit.context, unit.layout, &hoisted, value)
-        });
+        // Asked of the values the spill model spills that cross the loop, which
+        // are none in most loops: the traffic of every cell of the
+        // function is not found until one is asked.
+        let traffic = std::cell::OnceCell::new();
+        let traffic = || {
+            traffic.get_or_init(|| {
+                let cells = crate::spill::cells(&hoisted);
+                crate::spill::traffic(&hoisted, frequency, &cells, costs, &|_| true, &|value| {
+                    crate::spill::words(unit.context, unit.layout, &hoisted, value)
+                })
+            })
+        };
         let free = |value: ValueId| {
-            _displacement(&hoisted, value) || traffic.get(&value).is_some_and(|one| one.rebuild.is_some())
+            _displacement(&hoisted, value) || traffic().get(&value).is_some_and(|one| one.rebuild.is_some())
         };
         let crossing = _crossed_values(&hoisted, &run)
             .into_iter()
@@ -196,7 +208,7 @@ fn _affordable(
         let uncounted: i64 = crossing
             .iter()
             .filter(|&&value| free(value))
-            .filter_map(|value| traffic.get(value))
+            .filter_map(|value| traffic().get(value))
             .map(|one| one.price(costs))
             .sum();
         for value in forecast.spilled.iter() {
@@ -217,6 +229,7 @@ fn _affordable(
             forecast.spilled
         );
         if moved - uncounted <= kept {
+            *held = Some(work + forecast.cost);
             return run;
         }
         let mut stay: BTreeSet<ValueId> = crossing.into_iter().filter(|&value| !free(value)).collect();
@@ -382,11 +395,13 @@ pub fn _invariant_run(
     // it has moved: asked of each once, not once a round.
     let mut movable: llrm_mir::dense::IdMap<InstId, bool> = llrm_mir::dense::IdMap::new();
     let mut made: BTreeSet<ValueId> = BTreeSet::new();
+    let writers = llrm_analysis::memoryssa::Writers::of(accesses, &insts);
     loop {
         let mut grew = false;
         for &inst in &insts {
             if taken.contains(&inst)
-                || !*movable.get_or_insert_with(inst, || _movable(unit, inst, &insts, accesses, Some(outer.program())))
+                || !*movable
+                    .get_or_insert_with(inst, || _movable(unit, inst, &writers, accesses, Some(outer.program())))
             {
                 continue;
             }
@@ -426,7 +441,7 @@ pub fn _invariant_run(
 fn _movable(
     unit: &passes::Unit,
     inst: InstId,
-    insts: &[InstId],
+    writers: &llrm_analysis::memoryssa::Writers,
     accesses: &Accesses,
     program: Option<&llrm_mir::program::ProgramProxy>,
 ) -> bool {
@@ -445,7 +460,7 @@ fn _movable(
         // slice's length, read past a store through its data pointer.
         Opcode::Load { volatile: false, .. } => {
             llrm_mir::memory::invariant_load(unit.context, unit.layout, unit.function, inst)
-                || _undisturbed(inst, insts, accesses, program)
+                || accesses.references.get(&inst).is_some_and(|read| writers.spare(accesses, program, read))
         }
         _ => false,
     }

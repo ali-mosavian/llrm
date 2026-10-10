@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::{FlowControl, Register, RflagsBits};
-use llrm_x86_m16::instructions;
+use llrm_x86::parse;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::backend::classes::RegisterClasses;
@@ -109,7 +109,7 @@ impl Peephole {
         Self::with_rules(
             frame,
             cpu,
-            &peep::targets::x86_m16::RULES,
+            &crate::backend::targets::x86_m16::RULES,
             llrm_x86_m16::PRESERVED.iter().map(|(whole, _)| *whole).collect(),
             RegisterClasses::m16(),
         )
@@ -145,10 +145,9 @@ impl Peephole {
                 return body;
             }
             for arg in what.sources.iter().chain(&what.dests) {
-                let (address, through) = match arg {
-                    Loc::Mem(cell) => (cell.addr, Some(cell.through)),
-                    Loc::Address(cell) => (cell.addr, Some(cell.through)),
-                    Loc::Imm(value) => (value.address, None),
+                let (address, through) = match (arg.address(), arg) {
+                    (Some(one), _) => (one.addr, Some(one.through)),
+                    (None, Loc::Imm(value)) => (value.address, None),
                     _ => continue,
                 };
                 if address.is_none() && through.is_some() {
@@ -1441,8 +1440,8 @@ fn _loaded_scaled_add<'a>(
     };
     if temporary.width != total.width
         || ![2, 4].contains(&temporary.width)
-        || !target::WIDTHS.contains_key(&temporary.register)
-        || !target::WIDTHS.contains_key(&total.register)
+        || !target::integer(temporary.register)
+        || !target::integer(total.register)
         || ir::root(temporary.register) == ir::root(total.register)
         || ir::root(temporary.register) == Register::ESP
         || load.defines.len() != 1
@@ -2159,7 +2158,7 @@ static _BRANCH_READS: LazyLock<HashMap<String, u32>> = LazyLock::new(|| {
         .filter_map(|code| {
             let name = format!("{:?}", code.mnemonic()).to_lowercase();
             let condition = name.strip_prefix('j')?;
-            instructions::parse::CONDITIONS.contains(&condition).then_some(())?;
+            parse::CONDITIONS.contains(&condition).then_some(())?;
             Some((name, iced_x86::Instruction::with_branch(code, 0).ok()?.rflags_read()))
         })
         .collect()
@@ -2547,7 +2546,7 @@ pub fn zeroes(body: &LirBody) -> LirBody {
                         if flags_dead
                             && dest.width == *width
                             && [2, 4].contains(width)
-                            && target::WIDTHS.contains_key(&dest.register)
+                            && target::integer(dest.register)
                             && one.symbol != Some(true)
                         {
                             let dest = *dest;
@@ -2663,13 +2662,13 @@ pub fn constants(body: &LirBody) -> LirBody {
                         Loc::Imm(source) => Some(source.width),
                         _ => None,
                     };
-                    if target::WIDTHS.contains_key(&dest.register) && source_width == Some(dest.width) {
+                    if target::integer(dest.register) && source_width == Some(dest.width) {
                         match source {
                             Loc::Imm(source) if source.address.is_none() => {
                                 candidate =
                                     Some((*dest, Known::Value(source.value & ((1i64 << (dest.width * 8)) - 1))));
                             }
-                            Loc::Reg(source) if target::WIDTHS.contains_key(&source.register) => {
+                            Loc::Reg(source) if target::integer(source.register) => {
                                 let value = *held
                                     .entry(*source)
                                     .or_insert_with(

@@ -19,7 +19,7 @@ use crate::support::pyrepr::Repr;
 
 /// The 16-bit x86 rules, as the phase takes them by default.
 fn rules() -> &'static crate::backend::peep::Rules {
-    &crate::backend::peep::targets::x86_m16::RULES
+    &crate::backend::targets::x86_m16::RULES
 }
 
 fn r(
@@ -4097,7 +4097,7 @@ fn test_a_dword_copy_and_add_are_priced_with_their_operand_size_prefixes() {
 // extensions
 
 fn flat() -> &'static crate::backend::peep::Rules {
-    &crate::backend::peep::targets::x86_m32::RULES
+    &crate::backend::targets::x86_m32::RULES
 }
 
 fn word_load(into: Register) -> Arc<Insn> {
@@ -4381,11 +4381,11 @@ fn test_a_body_is_encoded_in_its_own_mode() {
 /// its own needs no copy of them.
 #[test]
 fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
-    let rows: Vec<_> = instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
+    let rows: Vec<_> = llrm_x86_m16::instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
     assert_eq!(rows.len(), 16);
     for form in rows {
         let branch = Semantics { name: Some(form.name.clone()), ..Semantics::new(Operation::Branch) };
-        let wanted = _flag_lanes(instructions::flags(form).expect("a jump reads flags").0);
+        let wanted = _flag_lanes(llrm_x86_m16::instructions::flags(form).expect("a jump reads flags").0);
         assert_eq!(_branch_reads(&branch), wanted, "{}", form.name);
     }
 }

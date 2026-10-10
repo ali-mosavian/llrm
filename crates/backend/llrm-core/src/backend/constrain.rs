@@ -530,6 +530,33 @@ pub fn required_in(
     out
 }
 
+/// `required_in` of the blocks at `positions`, where `body` is `before` with
+/// some instructions added: a kept instruction wants what it wanted, which the
+/// caller has, so only the added ones are looked at (a block made over is
+/// looked at whole).
+pub fn required_added(
+    body: &LirBody,
+    before: &LirBody,
+    classes: &RegisterClasses,
+    positions: &[usize],
+) -> IndexMap<u32, Register> {
+    let mut out: IndexMap<u32, Register> = IndexMap::default();
+    for at in positions {
+        let (old, new) = (&before.blocks[*at].insns, &body.blocks[*at].insns);
+        let added: Vec<usize> = match crate::analysis::intervals::aligned_insns(old, new) {
+            Some(found) => found.added.clone(),
+            None => (0..new.len()).collect(),
+        };
+        for one in added.iter().map(|q| &new[*q]) {
+            for wanted in _wanted(one, classes) {
+                out.insert(wanted.value, wanted.register);
+            }
+            out.extend(_delivered(one));
+        }
+    }
+    out
+}
+
 /// Split address-class occurrences from an otherwise general value.
 pub fn addressed(
     body: &LirBody,

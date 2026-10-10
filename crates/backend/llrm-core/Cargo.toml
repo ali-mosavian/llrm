@@ -9,7 +9,6 @@ description = "llrm's HIR, MIR, optimizer, x86 backend, OMF object support and B
 llrm-support = { workspace = true }
 llrm-target = { workspace = true }
 llrm-x86 = { workspace = true }
-llrm-x86-m16 = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-dwarf = { workspace = true }
 llrm-coff = { workspace = true }
@@ -38,6 +37,7 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 
 [build-dependencies]
+llrm-iselgen = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-peepgen = { workspace = true }
 llrm-support = { workspace = true }
@@ -46,8 +46,14 @@ llrm-support = { workspace = true }
 # testing, for the other crates' tests
 default = ["testing"]
 testing = ["llrm-omf/testing"]
+# The m16 and m32 selectors, peephole rules and effect rows, generated here from
+# their definition directories for this crate's own tests (a product binds a
+# target's from its select crate; see docs/targets.md, row 19b).
+fixtures = []
 
 [dev-dependencies]
+llrm-core = { path = ".", features = ["fixtures"] }
+llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 llrm-omf = { workspace = true, features = ["testing"] }
 regex = { workspace = true }

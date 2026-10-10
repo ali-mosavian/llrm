@@ -594,15 +594,26 @@ fn memory_providers(
             );
         }
         candidates.sort_unstable();
-        for at in candidates {
+        // Nearest first: a walk from the load stops at the first value that
+        // holds, and the loads before it, each a walk to fail, are not tried.
+        // Every candidate holds the same bytes, so the one a chain of served
+        // loads ends in is the same. A candidate whose walk finds a write
+        // fails every load that dominates it too: the write lies on a path
+        // from the farther one through the nearer, so those are not walked.
+        let mut failed: Vec<InstId> = Vec::new();
+        for at in candidates.into_iter().rev() {
             let (source, (loaded, value)) = &loads[at];
-            if available(*source, site)
-                && serves(unit, Operand::Value(*value), result)
-                && graph.unchanged(*source, site, loaded)
+            if !available(*source, site)
+                || !serves(unit, Operand::Value(*value), result)
+                || failed.iter().any(|&nearer| available(*source, nearer))
             {
+                continue;
+            }
+            if graph.unchanged(*source, site, loaded) {
                 found.push(Forward { at: site, value: Operand::Value(*value) });
                 break;
             }
+            failed.push(*source);
         }
     }
     found

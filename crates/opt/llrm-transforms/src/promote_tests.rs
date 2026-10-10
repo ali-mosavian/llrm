@@ -795,3 +795,34 @@ fn a_promoted_variable_is_named_by_the_value_of_each_store_and_the_phi_that_join
         .expect("a phi");
     assert!(values.contains(&format!("#dbg_value(i16 {phi}, !0)").as_str()), "{phi} in {text}");
 }
+
+/// Four locals read and written by `n` statements: `n` accesses of each cell.
+fn straight_line(n: usize) -> String {
+    let mut text = String::from("define i32 @f(i32 %a0) {\nb0:\n");
+    for local in 0..4 {
+        text += &format!("  %s{local} = alloca i32\n  store i32 %a0, ptr %s{local}\n");
+    }
+    for at in 0..n {
+        let (from, to) = (at % 4, (at + 1) % 4);
+        text += &format!(
+            "  %l{at} = load i32, ptr %s{from}\n  %m{at} = add i32 %l{at}, {at}\n  store i32 %m{at}, ptr %s{to}\n"
+        );
+    }
+    text + "  %r = load i32, ptr %s0\n  ret i32 %r\n}\n"
+}
+
+/// Each pair of accesses of one object was compared: `straight` at N=2048 spent
+/// 345 Minstr of 6.9 G in `mir sroa` (3.4x, 3.6x, 3.8x per doubling) on four
+/// locals whose every access is the same leaf. A leaf is compared once.
+#[test]
+fn test_accesses_of_one_leaf_are_not_compared_with_each_other() {
+    let compared = |n: usize| {
+        super::PAIRS.with(|asked| asked.set(0));
+        let mut module = module(&straight_line(n));
+        promote_all(&mut module, false).unwrap();
+        assert_eq!(loads(&module), 0, "every local is promoted");
+        super::PAIRS.with(|asked| asked.get())
+    };
+    assert_eq!(compared(40), 0);
+    assert_eq!(compared(400), 0);
+}

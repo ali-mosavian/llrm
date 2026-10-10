@@ -64,6 +64,8 @@ impl Function {
         at: Use,
     ) {
         if let Some(uses) = self.uses_of(operand) {
+            #[cfg(test)]
+            USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
             uses.retain(|one| *one != at);
         }
     }
@@ -571,13 +573,31 @@ impl Function {
                 return Err(format!("instruction {}'s result still has a user, {}", inst.0, user.user.0));
             }
         }
+        // Each operand's uses are filtered once, not once for each use of it
+        // that goes: a value used by k of the instructions was O(k) a use.
+        let mut operands: Vec<Operand> = Vec::new();
+        let mut seen_values = crate::dense::IdSet::<ValueId>::new();
+        let mut seen_blocks = crate::dense::IdSet::<BlockId>::new();
         for &inst in &insts {
-            let operands = self.instructions[inst.0 as usize].operands.clone();
-            for (index, operand) in operands.into_iter().enumerate() {
-                self.remove_use(operand, Use { user: inst, index: index as u32 });
+            for &operand in &self.instructions[inst.0 as usize].operands {
+                let first = match operand {
+                    Operand::Value(value) => seen_values.insert(value),
+                    Operand::Block(block) => seen_blocks.insert(block),
+                    Operand::Constant(_) => false,
+                };
+                if first {
+                    operands.push(operand);
+                }
             }
             if let Some(result) = self.instruction(inst).result {
                 self.forget_debug_value(result);
+            }
+        }
+        for operand in operands {
+            if let Some(uses) = self.uses_of(operand) {
+                #[cfg(test)]
+                USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
+                uses.retain(|one| !gone.contains(&one.user));
             }
         }
         let mut blocks: Vec<BlockId> = insts.iter().filter_map(|&inst| self.parent(inst)).collect();
@@ -907,4 +927,5 @@ thread_local! {
     /// Instructions of a block looked over to take instructions out of it: the
     /// cost of erasing, which was a scan of the block per instruction erased.
     pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

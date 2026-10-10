@@ -62,12 +62,24 @@ pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
     out
 }
 
-#[cfg(test)]
-mod generator;
 mod matcher;
+
+/// What a target's generated selector is written against: the selector it
+/// drives, the match it is asked about, the automaton's state, and what it
+/// emits.
+pub mod api {
+    pub use std::sync::Arc;
+
+    pub use super::matcher::{Compiled, Match, OPERANDS, State};
+    pub use super::{Selector, Unselected, refuse};
+    pub use crate::model::ir::Operation;
+    pub use crate::model::lir::Insn;
+}
 mod unwind;
 
-pub use matcher::{Compiled, selector};
+pub use matcher::Compiled;
+#[cfg(feature = "fixtures")]
+pub use matcher::selector;
 #[cfg(test)]
 pub(crate) use matcher::{HOOKED, m16};
 mod expand;
@@ -635,7 +647,7 @@ fn dword_indexed(
         })
 }
 
-fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
+pub fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(what.into()))
 }
 
@@ -1244,7 +1256,7 @@ fn entry_stores_unlined(
     body.with_blocks(blocks)
 }
 
-struct Selector<'m, 'c, 'p> {
+pub struct Selector<'m, 'c, 'p> {
     module: &'m Module,
     function: &'m Function,
     arch: &'c dyn llrm_target::Target,
@@ -5060,7 +5072,8 @@ impl Selector<'_, '_, '_> {
             let names = entry.clobbers(&placement.used, result);
             // The selectors the description names no more than a contract does
             // (FS, GS) are as much the callee's to use.
-            let unnamed = crate::backend::callregs::unnamed_selectors_clobbered(&contract, self.segments);
+            let unnamed =
+                crate::backend::callregs::unnamed_selectors_clobbered(&contract, self.segments, &self.cpu.general);
             Ok::<_, Unselected>(
                 names
                     .iter()
@@ -5193,7 +5206,7 @@ impl Selector<'_, '_, '_> {
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
             call: Some(self.listed(effects, disturbs)),
-            clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
+            clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments, &self.cpu.general)),
             clobbers_high: match &placed {
                 _ if known.is_some() => known.clone().unwrap_or_default(),
                 // What the convention keeps only the pushed part of (a 16-bit
@@ -5203,7 +5216,7 @@ impl Selector<'_, '_, '_> {
                     .filter(|(full, pushed)| full != pushed)
                     .map(|(full, _)| full)
                     .collect(),
-                None => call_clobbered_high_keeping(&contract, self.segments, &whole),
+                None => call_clobbered_high_keeping(&contract, self.segments, &self.cpu.general, &whole),
             },
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
