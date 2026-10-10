@@ -352,6 +352,7 @@ fn free(
     m: u32,
     roots: &[Register],
     body: &LirBody,
+    effects: &[Vec<Option<liveness::Effect>>],
     one: &Loop,
     index: &BTreeMap<i64, usize>,
     live_into: &IndexMap<i64, Lanes>,
@@ -366,7 +367,7 @@ fn free(
             let block = &body.blocks[index[at]];
             let mut reloaded = None;
             for (position, insn) in block.insns.iter().enumerate() {
-                let Some(effect) = liveness::effect(body.bits, insn) else {
+                let Some(effect) = &effects[index[at]][position] else {
                     continue 'roots;
                 };
                 if effect.reads.is_disjoint(&lanes) && effect.writes.is_disjoint(&lanes) {
@@ -378,7 +379,7 @@ fn free(
                 if let Some(from) = reload_of(m, insn, root) {
                     reloaded = Some(from);
                     folded.push((index[at], position, from));
-                } else if let Some(from) = reloaded.filter(|_| reads_plainly(m, insn, root, &effect)) {
+                } else if let Some(from) = reloaded.filter(|_| reads_plainly(m, insn, root, effect)) {
                     folded.push((index[at], position, from));
                 } else {
                     continue 'roots;
@@ -484,7 +485,7 @@ fn rewritten(
 fn reaching_slots(
     m: u32,
     slots: &BTreeSet<i64>,
-    seen: &[(usize, usize, &Arc<Insn>, Touch)],
+    seen: &[(usize, usize, &Arc<Insn>, &Touch)],
 ) -> BTreeMap<i64, Vec<usize>> {
     let mut by_slot: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
     for (i, (_, _, _, touched)) in seen.iter().enumerate() {
@@ -608,22 +609,42 @@ fn invariant(
 /// out once for the loop, where `invariant` asked it again for every register.
 fn writes_of<'a>(
     body: &'a LirBody,
+    may_writes: &[Vec<Option<Lanes>>],
     one: &Loop,
     index: &BTreeMap<i64, usize>,
 ) -> Option<Vec<(&'a Arc<Insn>, Lanes)>> {
     let mut out = Vec::new();
     for at in &one.body {
-        for insn in &body.blocks[index[at]].insns {
-            let effect = liveness::effect(body.bits, insn)?;
-            // A `rep movs` steps si and di only if it runs: a conditional
-            // write, but one that makes the register unfit to hold
-            // its value from one trip to the next.
-            let may_write = peephole::_register_effects(body.bits, insn, true, false)
-                .map_or(effect.writes, |(_, writes)| effect.writes.or(&writes));
-            out.push((insn, may_write));
+        for (insn, may_write) in body.blocks[index[at]].insns.iter().zip(&may_writes[index[at]]) {
+            out.push((insn, may_write.clone()?));
         }
     }
     Some(out)
+}
+
+/// What each instruction may write, or none where its effect is not known:
+/// worked out once for the body, not once for each loop around the instruction.
+fn may_writes(body: &LirBody) -> Vec<Vec<Option<Lanes>>> {
+    body.blocks
+        .iter()
+        .map(|block| {
+            block
+                .insns
+                .iter()
+                .map(|insn| {
+                    let effect = liveness::effect(body.bits, insn)?;
+                    // A `rep movs` steps si and di only if it runs: a
+                    // conditional write, but one that makes
+                    // the register unfit to hold
+                    // its value from one trip to the next.
+                    Some(
+                        peephole::_register_effects(body.bits, insn, true, false)
+                            .map_or(effect.writes, |(_, writes)| effect.writes.or(&writes)),
+                    )
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Whether `one` cannot write the frame cell at `at`: it writes memory only
@@ -683,6 +704,7 @@ pub fn hoisted(
     let mut found = loops::loops(graph, Some(body.entry));
     found.sort_by_key(|one| one.body.len());
     let mut taken = BTreeSet::<i64>::new();
+    let written = may_writes(body);
     for one in &found {
         if one.body.iter().any(|at| taken.contains(at)) {
             continue;
@@ -693,7 +715,7 @@ pub fn hoisted(
         }
         let roots =
             available.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
-        let Some(writes) = writes_of(body, one, &index) else { continue };
+        let Some(writes) = writes_of(body, &written, one, &index) else { continue };
         let touches = std::cell::OnceCell::new();
         let moved = roots
             .filter_map(|root| {
@@ -772,6 +794,17 @@ pub fn promoted(
     let busy = Frequency::of(body);
     let mut blocks = body.blocks.clone();
     let mut taken = BTreeSet::<i64>::new();
+    // How each instruction reaches the frame, worked out once, not once for
+    // each loop it is in: a nest of d loops asked every instruction of the
+    // innermost d times.
+    let effects: Vec<Vec<Option<liveness::Effect>>> = body
+        .blocks
+        .iter()
+        .map(|block| block.insns.iter().map(|insn| liveness::effect(body.bits, insn)).collect())
+        .collect();
+    let fits = RefCell::new(BTreeMap::<(usize, usize, i64), bool>::new());
+    let touches: Vec<Vec<Touch>> =
+        body.blocks.iter().map(|block| block.insns.iter().map(|insn| touch(m, insn)).collect()).collect();
     for one in &found {
         if one.body.iter().any(|at| taken.contains(at)) {
             continue;
@@ -780,10 +813,10 @@ pub fn promoted(
         // each slot asks of the instructions that reach it, not of all
         // of them (a loop of d nested levels asked d slots of d levels'
         // instructions, d times over).
-        let mut seen: Vec<(usize, usize, &Arc<Insn>, Touch)> = Vec::new();
+        let mut seen: Vec<(usize, usize, &Arc<Insn>, &Touch)> = Vec::new();
         for block in &one.body {
             for (position, insn) in body.blocks[index[block]].insns.iter().enumerate() {
-                seen.push((index[block], position, insn, touch(m, insn)));
+                seen.push((index[block], position, insn, &touches[index[block]][position]));
             }
         }
         let (mut slots, mut other, mut traps) = (BTreeSet::new(), false, false);
@@ -809,7 +842,7 @@ pub fn promoted(
         {
             continue;
         }
-        let registers = free(m, available, body, one, &index, &live_into, &exits);
+        let registers = free(m, available, body, &effects, one, &index, &live_into, &exits);
         let reloads = registers
             .iter()
             .flat_map(|(_, hold)| folds(hold).iter().map(|(block, position, _)| (*block, *position)))
@@ -825,14 +858,25 @@ pub fn promoted(
                     .unwrap_or(&none)
                     .iter()
                     .all(
-                        |i| registrable(
-                            m,
-                            body.bits,
-                            *available.last().expect("a register to hold a slot"),
-                            seen[*i].2,
-                            &seen[*i].3,
-                            **at,
-                        ),
+                        |i| {
+                            // Whether an instruction still encodes with the
+                            // slot in a register does not depend on the loop:
+                            // asked once for each instruction and slot, not
+                            // once for each loop around it.
+                            *fits
+                                .borrow_mut()
+                                .entry((seen[*i].0, seen[*i].1, **at))
+                                .or_insert_with(
+                                    || registrable(
+                                        m,
+                                        body.bits,
+                                        *available.last().expect("a register to hold a slot"),
+                                        seen[*i].2,
+                                        seen[*i].3,
+                                        **at,
+                                    ),
+                                )
+                        },
                     )
             })
             .map(|at| {
