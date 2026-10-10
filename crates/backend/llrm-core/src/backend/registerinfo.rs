@@ -1,0 +1,98 @@
+//! The register file as the target description states it (`registers.regs`),
+//! asked through queries, as LLVM's generated `MCRegisterInfo` is: the width,
+//! root, lane and name of a register, and the view of a root at a
+//! width. A `RegId` is iced's `Register` until the newtype (row 11).
+
+pub type RegId = iced_x86::Register;
+
+/// One register of the file.
+#[derive(Clone, Copy, Debug)]
+pub struct Entry {
+    pub name: &'static str,
+    pub bits: u32,
+    pub root: RegId,
+    /// The bit offset inside the root.
+    pub lane: u32,
+}
+
+include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
+
+/// The file's entry for `register`, if the description lists it.
+pub fn get(register: RegId) -> Option<&'static Entry> {
+    TABLE.get(register as usize).and_then(Option::as_ref)
+}
+
+/// Whether the description lists `register`.
+pub fn known(register: RegId) -> bool {
+    get(register).is_some()
+}
+
+/// The width of `register`, in bytes.
+pub fn bytes(register: RegId) -> Option<i64> {
+    get(register).map(|one| i64::from(one.bits / 8))
+}
+
+/// The register `register` is a view of (itself for a root, and for one the
+/// description does not list).
+pub fn root(register: RegId) -> RegId {
+    get(register).map_or(register, |one| one.root)
+}
+
+/// Which of a root's four bytes `register` names, one bit each: the lane mask.
+pub fn lanes(register: RegId) -> i64 {
+    get(register).map_or(0b1111, |one| {
+        let width = (one.bits / 8).min(4);
+        ((1_i64 << width) - 1) << (one.lane / 8)
+    })
+}
+
+/// `register`'s own name, lowercase.
+pub fn name(register: RegId) -> Option<&'static str> {
+    get(register).map(|one| one.name)
+}
+
+/// The register of `root` that is `bits` wide: the first by iced's number where
+/// several share it (AL and AH are both EAX's byte; AL is the one named).
+pub fn view(
+    root: RegId,
+    bits: u32,
+) -> Option<RegId> {
+    let at = TABLE.iter().position(|one| one.is_some_and(|one| one.root == root && one.bits == bits))?;
+    RegId::values().find(|one| *one as usize == at)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::target;
+
+    /// The tables the allocator has always read (`WIDTHS`, `AT_WIDTH`, `LANES`,
+    /// `NAMES`, `ir::root`) and the description's queries say the same of every
+    /// register the tables list: the description is the source and the tables
+    /// are on their way out (row 11).
+    #[test]
+    fn the_description_says_what_the_hand_tables_say() {
+        for (register, width) in target::WIDTHS.iter() {
+            assert_eq!(bytes(*register), Some(*width), "{register:?}");
+            assert_eq!(root(*register), crate::model::ir::root(*register), "{register:?}");
+            assert_eq!(lanes(*register), target::lanes(*register), "{register:?}");
+            assert_eq!(name(*register).map(str::to_owned), Some(target::name_of(*register)), "{register:?}");
+        }
+        for (root_register, views) in target::AT_WIDTH.iter() {
+            for (width, register) in views {
+                assert_eq!(view(*root_register, *width as u32 * 8), Some(*register), "{root_register:?} at {width}");
+            }
+        }
+    }
+
+    /// A register the description does not list is its own root: the segment
+    /// registers and the extended ones.
+    #[test]
+    fn a_register_the_description_omits_is_its_own() {
+        for register in [RegId::DS, RegId::R8, RegId::XMM0] {
+            assert!(!known(register));
+            assert_eq!(root(register), register);
+        }
+        assert_eq!((bytes(RegId::ST3), root(RegId::ST3)), (Some(10), RegId::ST3));
+    }
+}
