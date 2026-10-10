@@ -100,12 +100,17 @@ B$COPY          proc    public
                 pop     es
                 mov     di, ax
                 mov     si, dx
-                mov     bx, cx
                 cld
+                mov     ax, di
+                sub     ax, si
+                cmp     ax, 4
+                jb      @F                      ;; `to` 0 to 3 above `from`: byte by byte, as a loop would
+                mov     bx, cx
                 shr     cx, 2
                 rep     movsd
                 mov     cx, bx
                 and     cx, 3
+@@:
                 rep     movsb
                 pop     es
                 pop     di

@@ -90,10 +90,16 @@ B$COPY          proc
                 mov     esi, edx
                 mov     ecx, ebx
                 cld
+                mov     eax, edi
+                sub     eax, esi
+                cmp     eax, 4
+                jb      @F                      ;; `to` 0 to 3 above `from`: byte by byte, as a loop would
+                mov     eax, ecx
                 shr     ecx, 2
                 rep     movsd
-                mov     ecx, ebx
+                mov     ecx, eax
                 and     ecx, 3
+@@:
                 rep     movsb
                 pop     edi
                 pop     esi
