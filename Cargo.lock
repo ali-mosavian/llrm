@@ -461,6 +461,7 @@ name = "llrm-omf"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-dwarf",
  "llrm-object",
  "llrm-support",
 ]

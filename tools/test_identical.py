@@ -48,3 +48,16 @@ def test_levels_given_on_the_command_line_are_not_read_as_options(tmp_path, monk
     fake.chmod(0o755)
     done = subprocess.run([sys.executable, str(HERE / "identical.py"), str(fake), str(fake), "--levels=-O2,-Os", "--programs-only"], capture_output=True, text=True, env={**__import__("os").environ, "CARGO_TARGET_DIR": str(tmp_path)})
     assert "usage:" not in done.stderr and "objects compared" in done.stdout, done.stderr[-300:] + done.stdout[-300:]
+
+
+# Oracles the corpus run does not set yet: a new one is added to identical.CHECKS, not here.
+NOT_RUN = frozenset("CALLBACKS CLASSES CLOBBERED CLOBBERS COALESCE COLORS COUNTED CYCLES DATAFLOW EFFECT FACTS FOLDS FRAME INITIALIZED INTERVALS MODULES NEEDS OCCUPIED OCCURRENCES OVERLAPPING POINTVALUES RANGES REQUIRED SCOPES SHAPE SIMULATION THRASH UNCHANGED".split())
+
+
+def test_a_new_oracle_is_run_on_the_corpus():
+    """LLRM_CHECK_BYTES and LLRM_CHECK_GROUPS (gvn, #1342) were merged but not in identical.CHECKS: 524/0 was said of a run that never
+    asked them. An LLRM_CHECK_ oracle in the source is in CHECKS, or in NOT_RUN above, which only shrinks."""
+    import re
+    names = {m for path in (HERE.parent / "crates").rglob("*.rs") for m in re.findall(r'env_set\("LLRM_CHECK_([A-Z_0-9]+)"\)', path.read_text())}
+    assert not names - set(identical.CHECKS) - NOT_RUN, sorted(names - set(identical.CHECKS) - NOT_RUN)
+    assert not NOT_RUN & set(identical.CHECKS), sorted(NOT_RUN & set(identical.CHECKS))
