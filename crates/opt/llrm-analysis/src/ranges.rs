@@ -653,7 +653,200 @@ pub fn dominated_edges_with(
 }
 
 /// What is known of each value at a point: an interval of it.
-pub type Intervals = llrm_mir::dense::ShareMap<ValueId, Interval>;
+/// What is known of each value: a sorted run of shared intervals while few are
+/// known, a tree of shared nodes (`ShareMap`) past `FEW`. A scope of a few
+/// values is copied by a few pointers, which a tree of nodes costs more to
+/// write; a block's scope in a function of many blocks is not copied at all.
+#[derive(Clone, Debug)]
+pub enum Intervals {
+    Few(Vec<(ValueId, Rc<Interval>)>),
+    Many(llrm_mir::dense::ShareMap<ValueId, Interval>),
+}
+
+/// Intervals held in a run before they go to a tree.
+const FEW: usize = 64;
+
+impl Default for Intervals {
+    fn default() -> Self {
+        Self::Few(Vec::new())
+    }
+}
+
+impl PartialEq for Intervals {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        match (self, other) {
+            (Self::Many(one), Self::Many(two)) => one == two,
+            _ => self.len() == other.len() && self.iter().zip(other.iter()).all(|(one, two)| one == two),
+        }
+    }
+}
+
+pub enum IntervalIter<'a> {
+    Few(std::slice::Iter<'a, (ValueId, Rc<Interval>)>),
+    Many(std::vec::IntoIter<(ValueId, &'a Interval)>),
+}
+
+impl<'a> Iterator for IntervalIter<'a> {
+    type Item = (ValueId, &'a Interval);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Few(run) => run.next().map(|(value, interval)| (*value, &**interval)),
+            Self::Many(tree) => tree.next(),
+        }
+    }
+}
+
+impl Intervals {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Few(run) => run.len(),
+            Self::Many(tree) => tree.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn place(
+        run: &[(ValueId, Rc<Interval>)],
+        value: &ValueId,
+    ) -> Result<usize, usize> {
+        run.binary_search_by(|(at, _)| llrm_mir::dense::Dense::index(*at).cmp(&llrm_mir::dense::Dense::index(*value)))
+    }
+
+    pub fn get(
+        &self,
+        value: &ValueId,
+    ) -> Option<&Interval> {
+        match self {
+            Self::Few(run) => Self::place(run, value).ok().map(|at| &*run[at].1),
+            Self::Many(tree) => tree.get(value),
+        }
+    }
+
+    pub fn contains_key(
+        &self,
+        value: &ValueId,
+    ) -> bool {
+        self.get(value).is_some()
+    }
+
+    pub fn get_mut(
+        &mut self,
+        value: &ValueId,
+    ) -> Option<&mut Interval> {
+        match self {
+            Self::Few(run) => Self::place(run, value).ok().map(|at| Rc::make_mut(&mut run[at].1)),
+            Self::Many(tree) => tree.get_mut(value),
+        }
+    }
+
+    /// The interval `value` had, as it was held.
+    pub fn replace(
+        &mut self,
+        value: ValueId,
+        interval: Interval,
+    ) -> Option<Rc<Interval>> {
+        match self {
+            Self::Few(run) => match Self::place(run, &value) {
+                Ok(at) => Some(std::mem::replace(&mut run[at].1, Rc::new(interval))),
+                Err(at) => {
+                    if run.len() < FEW {
+                        run.insert(at, (value, Rc::new(interval)));
+                    } else {
+                        let mut tree: llrm_mir::dense::ShareMap<ValueId, Interval> =
+                            run.iter().map(|(value, interval)| (*value, (**interval).clone())).collect();
+                        tree.insert(value, interval);
+                        *self = Self::Many(tree);
+                    }
+                    None
+                }
+            },
+            Self::Many(tree) => tree.insert(value, interval).map(Rc::new),
+        }
+    }
+
+    pub fn insert(
+        &mut self,
+        value: ValueId,
+        interval: Interval,
+    ) -> Option<Interval> {
+        self.replace(value, interval).map(|old| Rc::try_unwrap(old).unwrap_or_else(|shared| (*shared).clone()))
+    }
+
+    pub fn remove(
+        &mut self,
+        value: &ValueId,
+    ) -> Option<Interval> {
+        match self {
+            Self::Few(run) => Self::place(run, value)
+                .ok()
+                .map(|at| Rc::try_unwrap(run.remove(at).1).unwrap_or_else(|shared| (*shared).clone())),
+            Self::Many(tree) => tree.remove(value),
+        }
+    }
+
+    /// The pairs, ascending by value.
+    pub fn iter(&self) -> IntervalIter<'_> {
+        match self {
+            Self::Few(run) => IntervalIter::Few(run.iter()),
+            Self::Many(tree) => IntervalIter::Many(tree.iter().collect::<Vec<_>>().into_iter()),
+        }
+    }
+}
+
+impl FromIterator<(ValueId, Interval)> for Intervals {
+    fn from_iter<I: IntoIterator<Item = (ValueId, Interval)>>(pairs: I) -> Self {
+        let mut found = Self::default();
+        found.extend(pairs);
+        found
+    }
+}
+
+impl Extend<(ValueId, Interval)> for Intervals {
+    fn extend<I: IntoIterator<Item = (ValueId, Interval)>>(
+        &mut self,
+        pairs: I,
+    ) {
+        for (value, interval) in pairs {
+            self.replace(value, interval);
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Intervals {
+    type Item = (ValueId, &'a Interval);
+    type IntoIter = IntervalIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl IntoIterator for Intervals {
+    type Item = (ValueId, Interval);
+    type IntoIter = std::vec::IntoIter<(ValueId, Interval)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter().map(|(value, interval)| (value, interval.clone())).collect::<Vec<_>>().into_iter()
+    }
+}
+
+impl std::ops::Index<&ValueId> for Intervals {
+    type Output = Interval;
+
+    fn index(
+        &self,
+        value: &ValueId,
+    ) -> &Interval {
+        self.get(value).expect("an interval known of the value")
+    }
+}
 
 type Scope = Rc<Intervals>;
 
@@ -928,7 +1121,7 @@ struct Prefixes {
 
 /// `bounded`'s facts at each block, as the solve left them: those the counted
 /// loops give (`within`), and those with the edges' facts where a block is in
-/// none (`blocks`). A block that did not change shares its map with the solve
+/// none (`edges`). A block that did not change shares its map with the solve
 /// before.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Bounds {
@@ -937,7 +1130,6 @@ pub struct Bounds {
     /// starts from.
     edges: IndexMap<i64, Scope>,
     within: IndexMap<i64, Scope>,
-    blocks: IndexMap<i64, Scope>,
     /// The blocks two loops' facts contradict each other at: none executes
     /// them.
     dead: BTreeSet<i64>,
@@ -960,12 +1152,16 @@ impl Bounds {
         &self,
         at: i64,
     ) -> Option<&Intervals> {
-        self.blocks.get(&at).map(|scope| &**scope)
+        self.within.get(&at).or_else(|| self.edges.get(&at)).map(|scope| &**scope)
     }
 
     /// As `bounded` gives them.
     pub fn facts(&self) -> Facts {
-        self.blocks.iter().map(|(at, scope)| (*at, (**scope).clone())).collect()
+        self.within
+            .iter()
+            .chain(self.edges.iter().filter(|(at, _)| !self.within.contains_key(*at)))
+            .map(|(at, scope)| (*at, (**scope).clone()))
+            .collect()
     }
 }
 
@@ -1213,18 +1409,15 @@ pub fn bounded_solved(
         // value above it. A loop that took them all made its blocks' maps as
         // large as the body above it, quadratic in the branches before it.
         let header_scope = shape.dominance.immediate(loop_.header).map(at_entry).unwrap_or_default();
-        let read: std::collections::BTreeSet<ValueId> = in_layout
-            .iter()
-            .flat_map(|&block| function.block(block).instructions().iter())
-            .flat_map(|&inst| function.instruction(inst).operands.iter())
-            .filter_map(|operand| if let Operand::Value(value) = operand { Some(*value) } else { None })
-            .collect();
-        for value in read {
-            if outside(value)
-                && !known.contains_key(&value)
-                && let Some(interval) = header_scope.get(&value)
-            {
-                known.insert(value, interval.clone());
+        for &inst in in_layout.iter().flat_map(|&block| function.block(block).instructions().iter()) {
+            for operand in &function.instruction(inst).operands {
+                if let Operand::Value(value) = *operand
+                    && outside(value)
+                    && !known.contains_key(&value)
+                    && let Some(interval) = header_scope.get(&value)
+                {
+                    known.insert(value, interval.clone());
+                }
             }
         }
         let operations = in_layout
@@ -1262,7 +1455,7 @@ pub fn bounded_solved(
         };
         // Each operation of the loop in `scoped`'s terms, once: it narrows its
         // result by what its operands give, until none changes.
-        let apply = |scoped: &mut Intervals, inst: InstId| -> Option<(ValueId, Option<Interval>)> {
+        let apply = |scoped: &mut Intervals, inst: InstId| -> Option<(ValueId, Option<Rc<Interval>>)> {
             #[cfg(test)]
             OPS_APPLIED.with(|count| count.set(count.get() + 1));
             let mut interval = _computed(unit, inst, scoped, facts)?;
@@ -1274,19 +1467,19 @@ pub fn bounded_solved(
                 }
                 interval = Interval { low, high, width: interval.width };
             }
-            Some((result, scoped.insert(result, interval)))
+            Some((result, scoped.replace(result, interval)))
         };
         // Every operation, swept in order until a sweep changes nothing.
         let sweep = |mut scoped: Intervals| {
             loop {
                 // What each value set in this sweep held before it.
-                let mut before = IndexMap::<ValueId, Option<Interval>>::default();
+                let mut before = IndexMap::<ValueId, Option<Rc<Interval>>>::default();
                 for &inst in &operations {
                     if let Some((result, previous)) = apply(&mut scoped, inst) {
                         before.entry(result).or_insert(previous);
                     }
                 }
-                if before.iter().all(|(value, was)| scoped.get(value) == was.as_ref()) {
+                if before.iter().all(|(value, was)| scoped.get(value) == was.as_deref()) {
                     return scoped;
                 }
             }
@@ -1322,7 +1515,7 @@ pub fn bounded_solved(
                 .collect();
             while let Some(place) = queue.pop_first() {
                 if let Some((result, previous)) = apply(scoped, operations[place])
-                    && previous.as_ref() != scoped.get(&result)
+                    && previous.as_deref() != scoped.get(&result)
                 {
                     queue.extend(touching.get(&result).into_iter().flatten().copied());
                 }
@@ -1670,11 +1863,7 @@ pub fn bounded_solved(
             }
         }
     }
-    let within = result.clone();
-    for (at, known) in &edges_above {
-        result.entry(*at).or_insert_with(|| Rc::clone(known));
-    }
-    Ok(Bounds { headers, edges: edges_above, within, blocks: result, dead })
+    Ok(Bounds { headers, edges: edges_above, within: result, dead })
 }
 
 #[cfg(test)]
