@@ -596,6 +596,37 @@ no:
     assert!(kept.contains("xor"), "{kept}");
 }
 
+/// A recursion inlined into itself tests `n - 1 == 0`, then `n - 2 == 0`: each
+/// is `n == k`, and the differences each level held (and spilled) are dead.
+/// InstCombine's `foldICmpAddConstant`, gcc's `fold_comparison`: a wrapping sum
+/// is a bijection, so equality needs no flag, and the sum's other readers do
+/// not matter.
+#[test]
+fn test_a_compare_of_a_sum_with_a_constant_is_a_compare_of_the_term() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  %a = sub nsw i16 %n, 1
+  %b = add i16 %a, 5
+  %z = icmp eq i16 %a, 0
+  br i1 %z, label %yes, label %no
+yes:
+  ret i16 %b
+no:
+  %w = icmp ne i16 %b, 9
+  %e = zext i1 %w to i16
+  ret i16 %e
+}
+";
+    let inputs: Vec<Vec<i128>> = [0, 1, 2, 4, 5, 65535, 32767].iter().map(|&n| vec![n]).collect();
+    let printed = checked(text, &inputs);
+    assert!(
+        printed.contains("icmp eq i16 %n, 1")
+            && printed.contains("icmp ne i16 %n, 5")
+            && !printed.contains("icmp eq i16 %a"),
+        "{printed}"
+    );
+}
+
 /// Nib's `if !(a < b)`: the compare sign-extended to a byte, complemented and
 /// tested against zero, and the same through `zext` and `xor 1`. One compare
 /// of the inverse predicate, where it cost `setl; neg; xor; jne` and hid the

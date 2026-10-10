@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::intervals as ranges;
@@ -514,12 +514,12 @@ struct Machine<'a> {
     file: File,
     /// The data segment register, which an instruction that needs the data
     /// group takes from the selectors.
-    data: Register,
+    data: RegId,
     /// The file's registers (whole, as the allocator names them).
-    general: BTreeSet<Register>,
-    pools: BTreeSet<BTreeSet<Register>>,
+    general: BTreeSet<RegId>,
+    pools: BTreeSet<BTreeSet<RegId>>,
     /// The registers with byte halves.
-    bytes: BTreeSet<Register>,
+    bytes: BTreeSet<RegId>,
 }
 
 impl<'a> Machine<'a> {
@@ -529,14 +529,14 @@ impl<'a> Machine<'a> {
         segments: &Segments,
         classes: &'a RegisterClasses,
     ) -> Self {
-        let general: BTreeSet<Register> = match file {
+        let general: BTreeSet<RegId> = match file {
             File::General => classes.available.iter().map(|one| _whole(*one)).collect(),
             File::Selector => segments.selectors.iter().copied().collect(),
         };
-        let pools: BTreeSet<BTreeSet<Register>> = confined
+        let pools: BTreeSet<BTreeSet<RegId>> = confined
             .values()
             .map(|class| {
-                class.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect::<BTreeSet<Register>>()
+                class.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect::<BTreeSet<RegId>>()
             })
             .filter(|class| !class.is_empty() && class.len() < general.len())
             .collect();
@@ -570,7 +570,7 @@ impl<'a> Machine<'a> {
     fn class(
         &self,
         value: u32,
-    ) -> Option<BTreeSet<Register>> {
+    ) -> Option<BTreeSet<RegId>> {
         self.confined
             .get(&value)
             .map(|class| class.iter().map(|one| _whole(*one)).filter(|one| self.general.contains(one)).collect())
@@ -606,17 +606,19 @@ impl<'a> Machine<'a> {
 /// clobbers.
 fn stated(
     one: &Insn,
-    general: &BTreeSet<Register>,
+    general: &BTreeSet<RegId>,
     classes: &RegisterClasses,
-) -> BTreeSet<Register> {
-    let mut out: BTreeSet<Register> = BTreeSet::new();
+) -> BTreeSet<RegId> {
+    let mut out: BTreeSet<RegId> = BTreeSet::new();
     if let Some(what) = &one.what {
         out.extend(classes.requirements(what).values().map(|register| _whole(*register)));
     }
     out.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)));
     out.extend(one.clobbers.iter().map(|register| _whole(*register)));
-    if one.what.as_ref().is_some_and(target::status_through_ax) {
-        out.insert(Register::EAX);
+    if let Some(status) =
+        classes.status_word().filter(|_| one.what.as_ref().is_some_and(target::status_through_register))
+    {
+        out.insert(_whole(status));
     }
     out.retain(|register| general.contains(register));
     out
@@ -1155,10 +1157,10 @@ fn reload_price(
     }
     let Some(what) = remakes.get(&value).and_then(|one| one.what.as_ref()) else { return prices.load };
     let mut held: crate::backend::select::HeldMap = IndexMap::default();
-    held.insert(value, Register::ES);
+    held.insert(value, RegId::ES);
     for place in what.sources.iter().chain(&what.dests) {
         for used in crate::model::ir::values(place) {
-            held.entry(used.value).or_insert(Register::BX);
+            held.entry(used.value).or_insert(RegId::BX);
         }
     }
     crate::backend::select::priced_in(bits, what, 0, None, false, false, Some(&held))
@@ -1542,7 +1544,7 @@ fn simulated(
             }
             // A register a value of this instruction sits in is that value's,
             // not one more.
-            let mut covered: BTreeSet<Register> =
+            let mut covered: BTreeSet<RegId> =
                 one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)).collect();
             if let Some(what) = &one.what {
                 for (place, register) in machine.classes.requirements(what) {
@@ -2406,9 +2408,9 @@ mod tests {
     /// its palette loop reloaded two addresses every iteration.
     #[test]
     fn test_two_base_only_values_fit_while_one_acts() {
-        let bx = BTreeSet::from([Register::EBX]);
+        let bx = BTreeSet::from([RegId::EBX]);
         let confined: Classes =
-            [(1, bx.clone()), (2, bx), (3, BTreeSet::from([Register::ESI, Register::EDI]))].into_iter().collect();
+            [(1, bx.clone()), (2, bx), (3, BTreeSet::from([RegId::ESI, RegId::EDI]))].into_iter().collect();
         let classes = crate::backend::classes::RegisterClasses::m16();
         let machine = Machine::of(&confined, File::General, &target::BUILT_IN, &classes);
         let held: BTreeSet<u32> = [1, 2, 3].into_iter().collect();

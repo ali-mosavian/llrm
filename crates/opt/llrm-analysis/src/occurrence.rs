@@ -24,6 +24,21 @@ pub fn operations(function: &Function) -> impl Iterator<Item = (InstId, BlockId,
     instructions(function, false)
 }
 
+/// Enumerate the operations of the blocks `inside` (by `cfg::id`), phis aside,
+/// in block-id order: the walk of a loop costs the loop, not the function.
+pub fn operations_in<'a>(
+    function: &'a Function,
+    inside: &'a std::collections::BTreeSet<i64>,
+) -> impl Iterator<Item = (InstId, BlockId, &'a Instruction)> {
+    inside
+        .iter()
+        .map(|&at| crate::cfg::block(at))
+        .flat_map(move |block| {
+            function.block(block).instructions().iter().map(move |&inst| (inst, block, function.instruction(inst)))
+        })
+        .filter(|(_, _, instruction)| instruction.opcode != Opcode::Phi)
+}
+
 /// Enumerate every phi in layout/block order.
 pub fn phis(function: &Function) -> impl Iterator<Item = (InstId, BlockId, &Instruction)> {
     instructions(function, true)

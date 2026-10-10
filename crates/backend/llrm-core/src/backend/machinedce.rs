@@ -10,8 +10,6 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
-
 use crate::backend::liveness;
 use crate::backend::peephole::id;
 use crate::model::ir::{Loc, Operation, Space};
@@ -29,9 +27,6 @@ const _PURE: [Operation; 9] = [
     Operation::Funnel,
     Operation::Extend,
 ];
-const _STATEFUL_REGISTERS: [Register; 6] =
-    [Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS];
-
 fn _relocated(where_: &Loc) -> bool {
     match where_ {
         Loc::Imm(one) => one.address.is_some(),
@@ -44,7 +39,7 @@ fn _relocated(where_: &Loc) -> bool {
 fn _stateful_destination(where_: &Loc) -> bool {
     matches!(
         where_,
-        Loc::Reg(one) if one.register.full_register32() == Register::ESP || _STATEFUL_REGISTERS.contains(&one.register)
+        Loc::Reg(one) if crate::backend::registerinfo::is_stack(one.register) || crate::backend::registerinfo::is_segment(one.register)
     )
 }
 
@@ -147,7 +142,7 @@ pub fn eliminated(body: LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::eliminated;
     use crate::model::ir::{Imm, Loc, Mem, Operation, Reg, Semantics};
@@ -163,14 +158,14 @@ mod tests {
         Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
     }
 
-    fn reg(register: Register) -> Loc {
+    fn reg(register: RegId) -> Loc {
         Loc::Reg(Reg { register, width: 2 })
     }
 
     fn _mov(
         at: i64,
         value: u32,
-        register: Register,
+        register: RegId,
     ) -> Arc<Insn> {
         Arc::new(Insn::new(
             at,
@@ -215,8 +210,8 @@ mod tests {
     #[test]
     fn test_dead_register_definition_is_eliminated_across_a_cfg_edge() {
         // An allocated result overwritten on every successor used to survive.
-        let dead = _mov(0, 1, Register::AX);
-        let overwrite = _mov(5, 2, Register::AX);
+        let dead = _mov(0, 1, RegId::AX);
+        let overwrite = _mov(5, 2, RegId::AX);
         let result =
             eliminated(body(vec![block(0, vec![Arc::clone(&dead)], vec![5]), block(5, vec![overwrite], vec![])]));
         let first = result.blocks.iter().find(|block| block.at == 0).unwrap();
@@ -226,17 +221,17 @@ mod tests {
 
     #[test]
     fn test_definition_live_on_one_successor_is_kept() {
-        let definition = _mov(0, 1, Register::AX);
+        let definition = _mov(0, 1, RegId::AX);
         let read = Arc::new(Insn::new(
             10,
             Some((10, 12)),
-            what(Operation::Move, "mov", vec![reg(Register::BX)], vec![reg(Register::AX)]),
+            what(Operation::Move, "mov", vec![reg(RegId::BX)], vec![reg(RegId::AX)]),
             vec![3],
             vec![1],
         ));
         let result = eliminated(body(vec![
             block(0, vec![Arc::clone(&definition)], vec![5, 10]),
-            block(5, vec![_mov(5, 2, Register::AX)], vec![]),
+            block(5, vec![_mov(5, 2, RegId::AX)], vec![]),
             block(10, vec![read], vec![]),
         ]));
         assert_eq!(result.blocks[0].insns[0].what, definition.what);
@@ -247,7 +242,7 @@ mod tests {
         let first = Arc::new(Insn::new(
             0,
             Some((0, 2)),
-            what(Operation::Compare, "cmp", vec![], vec![reg(Register::AX), reg(Register::BX)]),
+            what(Operation::Compare, "cmp", vec![], vec![reg(RegId::AX), reg(RegId::BX)]),
             vec![1],
             vec![],
         ));
@@ -269,8 +264,8 @@ mod tests {
             what(
                 Operation::Binary,
                 "add",
-                vec![reg(Register::AX)],
-                vec![reg(Register::AX), Loc::Imm(Imm { value: 1, width: 2, address: None })],
+                vec![reg(RegId::AX)],
+                vec![reg(RegId::AX), Loc::Imm(Imm { value: 1, width: 2, address: None })],
             ),
             vec![1],
             vec![],
@@ -294,7 +289,7 @@ mod tests {
             what(
                 Operation::Move,
                 "mov",
-                vec![reg(Register::BX)],
+                vec![reg(RegId::BX)],
                 vec![Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 8)), 2))],
             ),
             vec![1],
@@ -302,7 +297,7 @@ mod tests {
         ));
         let result = eliminated(body(vec![
             block(0, vec![Arc::clone(&load)], vec![5]),
-            block(5, vec![_mov(5, 2, Register::BX)], vec![]),
+            block(5, vec![_mov(5, 2, RegId::BX)], vec![]),
         ]));
         assert_eq!(result.blocks[0].insns[0].what.as_ref().unwrap().op, Operation::Nothing);
     }
@@ -315,15 +310,15 @@ mod tests {
             what(
                 Operation::Move,
                 "mov",
-                vec![reg(Register::AX)],
-                vec![Loc::Mem(Mem { through: Register::BX, ..Mem::new(None, 2) })],
+                vec![reg(RegId::AX)],
+                vec![Loc::Mem(Mem { through: RegId::BX, ..Mem::new(None, 2) })],
             ),
             vec![1],
             vec![],
         ));
         let result = eliminated(body(vec![
             block(0, vec![Arc::clone(&load)], vec![5]),
-            block(5, vec![_mov(5, 2, Register::AX)], vec![]),
+            block(5, vec![_mov(5, 2, RegId::AX)], vec![]),
         ]));
         assert_eq!(result.blocks[0].insns[0].what, load.what);
     }
@@ -338,8 +333,8 @@ mod tests {
             what(
                 Operation::Binary,
                 "add",
-                vec![reg(Register::SP)],
-                vec![reg(Register::SP), Loc::Imm(Imm { value: 4, width: 2, address: None })],
+                vec![reg(RegId::SP)],
+                vec![reg(RegId::SP), Loc::Imm(Imm { value: 4, width: 2, address: None })],
             ),
             vec![],
             vec![],
@@ -347,7 +342,7 @@ mod tests {
         let compare = Arc::new(Insn::new(
             3,
             Some((3, 5)),
-            what(Operation::Compare, "cmp", vec![], vec![reg(Register::AX), reg(Register::BX)]),
+            what(Operation::Compare, "cmp", vec![], vec![reg(RegId::AX), reg(RegId::BX)]),
             vec![1],
             vec![],
         ));

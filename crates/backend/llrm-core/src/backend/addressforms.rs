@@ -82,7 +82,10 @@ pub fn promote(
             out[&at][index] = Arc::new(changed);
             continue;
         }
-        if what.op != Operation::Move || !matches!(what.name.as_deref(), Some("les" | "lfs" | "lgs")) || position != 0 {
+        if what.op != Operation::Move
+            || !what.name.as_deref().is_some_and(crate::backend::registerinfo::loads_a_selector)
+            || position != 0
+        {
             let spelled = match what.name.as_deref() {
                 Some(name) if !name.is_empty() => name.to_owned(),
                 _ => what.op.to_string(),

@@ -85,8 +85,9 @@ pub fn assembled_by(
     arch: &dyn llrm_target::Target,
 ) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
-    let module = &*timed("mir near code", || crate::backend::nearcode::placed(module));
-    let mut names = timed("global names", || globals::names(module, &|name| abi.linked(name)))?;
+    let module = &*timed("mir near code", || crate::backend::nearcode::placed(module, &arch.layout().spaces.roles));
+    let mut names =
+        timed("global names", || globals::names(module, &arch.layout().spaces.roles, &|name| abi.linked(name)))?;
     names.extend(crate::hir::symbols::symbol_names());
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();

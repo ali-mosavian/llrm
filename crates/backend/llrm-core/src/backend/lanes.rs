@@ -2,17 +2,17 @@
 //! bitmask.
 //!
 //! Every lane a body can name is a byte of a general register root, a byte of
-//! a segment register, or a flag bit against `Register::None`: 72 in all. Bit
-//! `i` is the `i`-th lane in `(Register, u32)` order, so iteration visits lanes
+//! a segment register, or a flag bit against `RegId::None`: 72 in all. Bit
+//! `i` is the `i`-th lane in `(RegId, u32)` order, so iteration visits lanes
 //! in the order a `BTreeSet<Lane>` would.
 
 use std::fmt;
 use std::sync::LazyLock;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
-/// One byte of a register root, or one flag bit against `Register::None`.
-pub type Lane = (Register, u32);
+/// One byte of a register root, or one flag bit against `RegId::None`.
+pub type Lane = (RegId, u32);
 
 const REGISTERS: usize = 256;
 
@@ -25,7 +25,7 @@ struct Table {
 }
 
 static TABLE: LazyLock<Table> = LazyLock::new(|| {
-    let mut lanes: Vec<Lane> = (0..32).map(|bit| (Register::None, bit)).collect();
+    let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
     for root in llrm_x86::registers::ROOTS {
         lanes.extend((0..4).map(|byte| (root, byte)));
     }
@@ -33,7 +33,7 @@ static TABLE: LazyLock<Table> = LazyLock::new(|| {
         lanes.extend((0..2).map(|byte| (segment, byte)));
     }
     lanes.sort();
-    assert!(lanes.len() <= 128 && (0..32).all(|bit| lanes[bit as usize] == (Register::None, bit)));
+    assert!(lanes.len() <= 128 && (0..32).all(|bit| lanes[bit as usize] == (RegId::None, bit)));
     let (mut first, mut count) = ([0_u8; REGISTERS], [0_u8; REGISTERS]);
     for (bit, (register, _)) in lanes.iter().enumerate() {
         let slot = *register as usize;
@@ -59,7 +59,7 @@ impl Lanes {
         Self(0)
     }
 
-    /// The flag lanes of an rflags mask. `Register::None` sorts first, so flag
+    /// The flag lanes of an rflags mask. `RegId::None` sorts first, so flag
     /// bit `i` is lane bit `i`.
     pub fn flags(mask: u32) -> Self {
         Self(u128::from(mask))
@@ -303,14 +303,14 @@ mod tests {
 
     #[test]
     fn test_lanes_iterate_and_compare_as_a_btreeset_does() {
-        assert_eq!(Lanes::flags(0b101), Lanes::from([(Register::None, 0), (Register::None, 2)]));
+        assert_eq!(Lanes::flags(0b101), Lanes::from([(RegId::None, 0), (RegId::None, 2)]));
         let every: Vec<Lane> = TABLE.lanes.clone();
         let picks: Vec<Vec<Lane>> = vec![
             vec![],
             every.clone(),
             every.iter().copied().step_by(3).collect(),
             every.iter().copied().rev().step_by(5).collect(),
-            vec![(Register::GS, 1), (Register::None, 0), (Register::EAX, 3)],
+            vec![(RegId::GS, 1), (RegId::None, 0), (RegId::EAX, 3)],
         ];
         for one in &picks {
             let (set, tree): (Lanes, BTreeSet<Lane>) = (one.iter().collect(), one.iter().copied().collect());

@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
@@ -21,7 +21,7 @@ use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::{HashMap, IndexMap};
 
 /// The roots a general register names, one bit each.
-pub const ROOTS: [Register; 7] = llrm_x86::registers::ROOTS;
+pub const ROOTS: [RegId; 7] = llrm_x86::registers::ROOTS;
 
 /// A set of roots, one bit per `ROOTS` entry.
 pub type Roots = u8;
@@ -29,7 +29,7 @@ pub type Roots = u8;
 const ALL: Roots = (1 << ROOTS.len()) - 1;
 
 /// The bit of `register`'s root, if it has one here.
-pub fn bit(register: Register) -> Option<Roots> {
+pub fn bit(register: RegId) -> Option<Roots> {
     let root = crate::model::ir::root(register);
     ROOTS.iter().position(|one| *one == root).map(|index| 1 << index)
 }
@@ -248,7 +248,7 @@ pub(crate) fn unheld(one: &Insn) -> Roots {
     let Some(what) = &one.what else {
         return 0;
     };
-    let wide = |register: Register, held: bool| {
+    let wide = |register: RegId, held: bool| {
         if !held && target::width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 }
     };
     what.dests
@@ -338,7 +338,7 @@ pub fn established(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::{before, bit};
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
@@ -362,7 +362,7 @@ mod tests {
         // A `jmp` decoded as unknown lost every root, so no loop kept the
         // preheader's `movzx`.
         let (ebx, bx) =
-            (Loc::Reg(Reg { register: Register::EBX, width: 4 }), Loc::Reg(Reg { register: Register::BX, width: 2 }));
+            (Loc::Reg(Reg { register: RegId::EBX, width: 4 }), Loc::Reg(Reg { register: RegId::BX, width: 2 }));
         let word = || Loc::Imm(Imm { value: 5, width: 2, address: None });
         let entry = LirBlock {
             succ: vec![1],
@@ -390,7 +390,7 @@ mod tests {
 
         let zero = before(&body);
 
-        let ebx = bit(Register::EBX).unwrap();
+        let ebx = bit(RegId::EBX).unwrap();
         for block in &body.blocks[1..] {
             for insn in &block.insns {
                 assert_ne!(zero[&crate::backend::peephole::id(insn)] & ebx, 0, "{:?}", insn.what);
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn test_an_exchange_swaps_the_zero_upper_halves() {
         let (ecx, esi) =
-            (Loc::Reg(Reg { register: Register::ECX, width: 4 }), Loc::Reg(Reg { register: Register::ESI, width: 4 }));
+            (Loc::Reg(Reg { register: RegId::ECX, width: 4 }), Loc::Reg(Reg { register: RegId::ESI, width: 4 }));
         let two = Loc::Imm(Imm { value: 2, width: 4, address: None });
         let entry = LirBlock::new(
             0,
@@ -426,7 +426,7 @@ mod tests {
         let zero = before(&body);
 
         let id = |at: usize| crate::backend::peephole::id(&body.blocks[0].insns[at]);
-        assert_ne!(zero[&id(2)] & bit(Register::ESI).unwrap(), 0);
-        assert_eq!(zero[&id(2)] & bit(Register::ECX).unwrap(), 0);
+        assert_ne!(zero[&id(2)] & bit(RegId::ESI).unwrap(), 0);
+        assert_eq!(zero[&id(2)] & bit(RegId::ECX).unwrap(), 0);
     }
 }

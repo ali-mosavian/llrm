@@ -624,7 +624,8 @@ fn test_initializers_are_bytes_and_relocations() {
 @rec = internal global { i8, i16, ptr, ptr addrspace(1), i16, ptr addrspace(2), ptr addrspace(1) } { i8 7, i16 -2, ptr getelementptr (i8, ptr @rec, i16 3), ptr addrspace(1) @far, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @far, i16 1) to i16), ptr addrspace(2) addrspacecast (ptr addrspace(1) @far to ptr addrspace(2)), ptr addrspace(1) addrspacecast (ptr getelementptr (i8, ptr @rec, i16 1) to ptr addrspace(1)) }
 ";
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
-    let names = crate::backend::globals::names(&module, &|name| qb().linked(name)).expect("names");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
     let rec = module.named("rec").expect("@rec");
     let pointer = |name: &str, offset, far| {
         Datum::Pointer(Pointer { name: name.to_owned(), offset, far, bytes: if far { 4 } else { 2 } })
@@ -5221,4 +5222,18 @@ fn test_an_i64_compare_and_convert_follow_the_native_width_not_a_dword() {
         .err();
         assert!(format!("{refused:?}").contains("not half its width"), "{body}: {refused:?}");
     }
+}
+
+/// An i64 result is delivered and returned in the registers the convention
+/// states for 8 bytes, not a pair isel names.
+#[test]
+fn test_a_wide_result_is_in_the_conventions_register_pair() {
+    use llrm_target::Target;
+    let pair: Vec<iced_x86::Register> = llrm_x86_m16::M16.results(8).iter().map(|one| one.full_register32()).collect();
+    let selected =
+        selected("declare i64 @g()\ndefine i64 @f() {\n  %x = call i64 @g()\n  ret i64 %x\n}\n", "f").expect("selects");
+    let insns = selected.body.insns();
+    let delivered = insns.iter().flat_map(|one| one.delivers.iter().map(|(_, register)| *register)).collect::<Vec<_>>();
+    let required = insns.iter().flat_map(|one| one.requires.iter().map(|(_, register)| *register)).collect::<Vec<_>>();
+    assert_eq!((delivered, required), (pair.clone(), pair));
 }

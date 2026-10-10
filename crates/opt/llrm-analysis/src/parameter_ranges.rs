@@ -166,7 +166,8 @@ pub fn stamp(
             for (own, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
                 // A body none has called yet, or only itself: what it passes is
                 // not known, so not counted, until it is.
-                let waiting = seen.iter().any(|(&(one, _), now)| one == (at, own) && *now == Seen::Nothing);
+                let waiting =
+                    seen.range(((at, own), 0)..=((at, own), usize::MAX)).any(|(_, now)| *now == Seen::Nothing);
                 let calls: Vec<_> = function
                     .walk()
                     .filter(|&(_, inst)| {

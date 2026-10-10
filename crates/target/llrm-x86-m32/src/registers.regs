@@ -10,7 +10,7 @@
 #            reads the low bytes), one at another lane has none. `-` for none.
 #   codeview CV_HREG_e (llvm's CodeViewRegisters.def); `-` for none.
 #
-# Classes: reserved (never allocated: esp, ebp, es), gpr (allocatable value), byte (has an 8-bit view), base (an address
+# Classes: int (an integer register: the 8, 16 and 32-bit views the width tables name), reserved (never allocated: esp, ebp, es), gpr (allocatable value), byte (has an 8-bit view), base (an address
 # base: any GPR), index (an address index: any GPR but ESP), frame, stack, positional (the register is a
 # position in a stack, st(i): an exchange of it is an effect and it is no register a pass renames or removes).
 # Kind letter `r` is gpr, `s` is x87. Allocation order is file order: the
@@ -19,34 +19,43 @@
 # allocatable; it equals DS (`string_segment` in datalayout.toml). FS and GS
 # are never described.
 #
+# @scratch: the words a pass may borrow for a moment, most preferred first (gcc's REG_ALLOC_ORDER): a
+# register the result is not left in comes last.
+@scratch cx dx bx ax
+#
 # name  bits root lane classes dwarf codeview
-eax     32   eax  0    gpr,byte,base,index  0  17
-ecx     32   ecx  0    gpr,byte,base,index  1  18
-edx     32   edx  0    gpr,byte,base,index  2  19
-ebx     32   ebx  0    gpr,byte,base,index  3  20
-esi     32   esi  0    gpr,base,index  6  23
-edi     32   edi  0    gpr,base,index  7  24
-ebp     32   ebp  0    reserved,frame,base,index  5  22
-esp     32   esp  0    reserved,stack,base  4  21
+eax     32   eax  0    gpr,byte,base,index,int  0  17
+ecx     32   ecx  0    gpr,byte,base,index,int  1  18
+edx     32   edx  0    gpr,byte,base,index,int  2  19
+ebx     32   ebx  0    gpr,byte,base,index,int  3  20
+esi     32   esi  0    gpr,base,index,int  6  23
+edi     32   edi  0    gpr,base,index,int  7  24
+ebp     32   ebp  0    reserved,frame,base,index,int  5  22
+esp     32   esp  0    reserved,stack,base,int  4  21
 # The return address call frame information names (DWARF column 8); no code reaches it as a register.
 eip     32   eip  0    pc  8  -
-ax      16   eax  0    -  0  9
-cx      16   ecx  0    -  1  10
-dx      16   edx  0    -  2  11
-bx      16   ebx  0    -  3  12
-si      16   esi  0    -  6  15
-di      16   edi  0    -  7  16
-bp      16   ebp  0    -  5  14
-sp      16   esp  0    -  4  13
-al      8    eax  0    -  0  1
-cl      8    ecx  0    -  1  2
-dl      8    edx  0    -  2  3
-bl      8    ebx  0    -  3  4
-ah      8    eax  8    -  -  5
-ch      8    ecx  8    -  -  6
-dh      8    edx  8    -  -  7
-bh      8    ebx  8    -  -  8
-es      16   es   0    reserved,string_segment  40  25
+ax      16   eax  0    int  0  9
+cx      16   ecx  0    int  1  10
+dx      16   edx  0    int  2  11
+bx      16   ebx  0    int  3  12
+si      16   esi  0    int  6  15
+di      16   edi  0    int  7  16
+bp      16   ebp  0    int  5  14
+sp      16   esp  0    int  4  13
+al      8    eax  0    int  0  1
+cl      8    ecx  0    int  1  2
+dl      8    edx  0    int  2  3
+bl      8    ebx  0    int  3  4
+ah      8    eax  8    int  -  5
+ch      8    ecx  8    int  -  6
+dh      8    edx  8    int  -  7
+bh      8    ebx  8    int  -  8
+es      16   es   0    segment,reserved,string_segment  40  25
+cs      16   cs   0    segment,reserved,code_segment  41  26
+ss      16   ss   0    segment,reserved,stack_segment  42  27
+ds      16   ds   0    segment,reserved,data_segment  43  28
+fs      16   fs   0    segment,reserved  44  29
+gs      16   gs   0    segment,reserved  45  30
 st0     80   st0 0    x87,positional  11  128
 st1     80   st1 0    x87,positional  12  129
 st2     80   st2 0    x87,positional  13  130

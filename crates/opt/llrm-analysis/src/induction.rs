@@ -29,12 +29,12 @@ use llrm_mir::types::TypeId;
 use llrm_support::hash::{HashSet, IndexMap};
 use num_bigint::BigInt;
 
-use crate::cfg;
+use crate::cfg::{self, Around};
 use crate::consts::{Known, masked};
 use crate::graph::loops::Loop;
 use crate::memory::{MemRef, Unit};
 use crate::noreturn;
-use crate::occurrence::{operations, phis};
+use crate::occurrence::{operations_in, phis};
 
 /// A recurrence's start or step: a value, or a number.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -385,8 +385,7 @@ fn _control(
     // Only the blocks the loop and what enters it name are read, not the graph
     // of the whole body (found for each loop, that was N^2 in a function of
     // N loops).
-    let block_of =
-        |at: i64| cfg::Block { at, succ: function.successors(cfg::block(at)).into_iter().map(cfg::id).collect() };
+    let block_of = |at: i64| cfg::Block { at, succ: cfg::successors_of(function, at) };
     if loop_.latches.len() != 1 {
         return None;
     }
@@ -457,12 +456,7 @@ fn _control(
     if !leaving && leaves {
         return None;
     }
-    let outside = function
-        .predecessors(cfg::block(header.at))
-        .into_iter()
-        .map(cfg::id)
-        .filter(|at| !inside.contains(at))
-        .collect::<BTreeSet<_>>();
+    let outside = loop_.entering(function);
     let preheader = match outside.first() {
         Some(&one) if outside.len() == 1 && block_of(one).succ.as_slice() == [header.at] => Some(one),
         _ => None,
@@ -994,15 +988,9 @@ pub fn exits(
     };
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return Vec::new() };
     let shape = unit.shape();
-    let block_of =
-        |at: i64| cfg::Block { at, succ: function.successors(cfg::block(at)).into_iter().map(cfg::id).collect() };
+    let block_of = |at: i64| cfg::Block { at, succ: cfg::successors_of(function, at) };
     let inside = &loop_.body;
-    let outside = function
-        .predecessors(cfg::block(loop_.header))
-        .into_iter()
-        .map(cfg::id)
-        .filter(|at| !inside.contains(at))
-        .collect::<BTreeSet<_>>();
+    let outside = loop_.entering(function);
     let preheader = match outside.first() {
         Some(&one) if outside.len() == 1 && block_of(one).succ.as_slice() == [loop_.header] => Some(one),
         _ => None,
@@ -1908,6 +1896,26 @@ pub fn basics(
 /// Where the follower advances is a branch, `i = i + 1` on some ways round
 /// and `i` on the others (quicksort's partition index), the counter still
 /// leads: `i + 1 <= j + 1`, which the counter's step does not wrap.
+/// Each loop's followers, by header: `followers` of every loop of the unit's
+/// shape, found once for the body (a block asks them of each loop around it).
+pub type LoopFollowers = IndexMap<i64, Vec<(ValueId, ValueId, AffineOperand)>>;
+
+pub fn followers_all(unit: &Unit) -> LoopFollowers {
+    unit.shape().loops.iter().map(|loop_| (loop_.header, followers(unit, loop_))).collect()
+}
+
+/// The followers of `loop_`: the manager's where the unit carries them, else
+/// worked out.
+pub fn followers_of(
+    unit: &Unit,
+    loop_: &Loop,
+) -> Vec<(ValueId, ValueId, AffineOperand)> {
+    match unit.followers.and_then(|held| held.get(&loop_.header)) {
+        Some(found) => found.clone(),
+        None => followers(unit, loop_),
+    }
+}
+
 pub fn followers(
     unit: &Unit,
     loop_: &Loop,
@@ -2612,14 +2620,7 @@ fn _recurrences(
     priced: bool,
 ) -> Users {
     let function = unit.function;
-    let walk = Walk {
-        unit,
-        loop_,
-        counters,
-        priced,
-        still: invariant(function, &loop_.body),
-        facts: unit.registers().into_owned(),
-    };
+    let walk = Walk { unit, loop_, counters, priced, still: invariant(function, &loop_.body), facts: unit.registers() };
     let mut found = Users::default();
     for counter in counters.values() {
         let Some(phi) = defining(function, counter.value) else { continue };
@@ -2644,10 +2645,9 @@ fn _recurrences(
     let mut changed = true;
     while changed {
         changed = false;
-        for (inst, block, op) in operations(function) {
+        for (inst, block, op) in operations_in(function, &loop_.body) {
             let Some(result) = op.result else { continue };
-            if !loop_.body.contains(&cfg::id(block)) || found.web.contains(&inst) || found.values.contains_key(&result)
-            {
+            if found.web.contains(&inst) || found.values.contains_key(&result) {
                 continue;
             }
             if let Some(of) = walk.fold(&found, cfg::id(block), op) {
@@ -2666,7 +2666,7 @@ struct Walk<'a> {
     counters: &'a IndexMap<ValueId, Affine>,
     priced: bool,
     still: Invariant,
-    facts: IndexMap<ValueId, Known>,
+    facts: std::borrow::Cow<'a, IndexMap<ValueId, Known>>,
 }
 
 impl Walk<'_> {

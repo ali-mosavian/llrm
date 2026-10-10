@@ -24,6 +24,7 @@ use crate::backend::callregs::{call_clobbered_high_keeping, call_clobbers};
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::peep;
+use crate::backend::registerinfo::segments;
 use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -2822,7 +2823,7 @@ impl Selector<'_, '_, '_> {
         }
         let segment = match self.types().get(ty) {
             Type::Pointer(space) if *space == self.spaces.data => None,
-            Type::Pointer(space) if *space == self.spaces.stack => Some(Register::SS),
+            Type::Pointer(space) if *space == self.spaces.stack => Some(segments::stack()),
             _ => return refuse(format!("an access through a {}", self.types().display(ty))),
         };
         let width = self.width(ty)?;
@@ -2907,7 +2908,7 @@ impl Selector<'_, '_, '_> {
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
             .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
-        if self.module.global(global).address_space != 0 {
+        if self.module.global(global).address_space != self.spaces.near {
             let Some(block) = self.current else { return refuse("a far global outside a block") };
             // A carried pointer is canonical: whole 64K strides of its offset
             // are in the selector, so a constant past 64K is a
@@ -3933,7 +3934,7 @@ impl Selector<'_, '_, '_> {
                 disp_width: 2,
                 index: Some(index),
                 scale,
-                ..Mem::new(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, disp) }), width)
+                ..Mem::new(Some(Addr { segment: segments::stack(), ..Addr::new(Space::Literal, disp) }), width)
             },
             Pointer::Global { space, index, offset, base, scale: 1, plus } => Mem {
                 disp_width: 2,
@@ -3983,7 +3984,7 @@ impl Selector<'_, '_, '_> {
                 base,
                 index,
                 selector: Some(selector),
-                ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, offset) }), width)
+                ..Mem::new(Some(Addr { segment: segments::far(), ..Addr::new(Space::Far, offset) }), width)
             },
         }
     }
@@ -4133,7 +4134,7 @@ impl Selector<'_, '_, '_> {
                         Operand::Value(value) if matches!(self.function.value(value).def, ValueDef::Instruction(def) if matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. }))
                     );
                     let segment = if framed {
-                        Loc::Reg(Reg { register: Register::SS, width: 2 })
+                        Loc::Reg(Reg { register: segments::stack(), width: 2 })
                     } else {
                         let (space, index) = crate::hir::symbols::DGROUP;
                         Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
@@ -4144,7 +4145,7 @@ impl Selector<'_, '_, '_> {
                 (CastOp::AddrSpaceCast, Type::Pointer(space)) if space == self.spaces.stack => {
                     let offset = self.held(operand, from, at, out)?;
                     let selector = self.fresh_held(2);
-                    out.push(mov(selector, Loc::Reg(Reg { register: Register::SS, width: 2 })));
+                    out.push(mov(selector, Loc::Reg(Reg { register: segments::stack(), width: 2 })));
                     (Some(offset), selector)
                 }
                 (CastOp::AddrSpaceCast, Type::Pointer(2)) => (None, self.held(operand, from, at, out)?),
@@ -4462,9 +4463,12 @@ impl Selector<'_, '_, '_> {
             let held = self.float(value, at, out)?;
             out.push(insn(at, semantics(Operation::FloatStore, "", vec![], vec![Loc::Held(held)])));
         } else if let Some(&value) = operands.first().filter(|&&one| self.is_wide(type_of(one))) {
-            // edx:eax.
+            // The convention's pair, low half first.
             let (low, high) = self.wide(value, at, out)?;
-            one.requires = vec![(low, Register::EAX), (high, Register::EDX)];
+            let [low_register, high_register] = convention.returns[..] else {
+                return refuse("a wide result the convention has no register pair for");
+            };
+            one.requires = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
             one.uses = vec![low.value, high.value];
         } else if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
             // One register holds both, offset low and selector high: the dword
@@ -5149,7 +5153,11 @@ impl Selector<'_, '_, '_> {
             float = Some(Held { value: self.value(value), width: FLOAT });
         } else if let Some(value) = instruction.result.filter(|_| self.is_wide(instruction.ty)) {
             let (low, high) = (self.fresh_held(4), self.fresh_held(4));
-            delivers = vec![(low, Register::EAX), (high, Register::EDX)];
+            let [low_register, high_register] = results(self.arch, self::entry(self.arch, convention, variadic), 8)[..]
+            else {
+                return refuse(format!("@{name}'s wide result"));
+            };
+            delivers = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
             self.wides.insert(value, (low, high));
         } else if let Some(value) = instruction.result.filter(|_| self.is_far(instruction.ty)) {
             match results(self.arch, self::entry(self.arch, convention, variadic), 4)[..] {
@@ -5297,7 +5305,7 @@ impl Selector<'_, '_, '_> {
         out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp.clone(), count])));
         let base = self.fresh_held(self.address_bytes());
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(base)], vec![sp])));
-        let to = Pointer::Based { base, index: None, scale: 1, offset: 0, segment: Some(Register::SS) };
+        let to = Pointer::Based { base, index: None, scale: 1, offset: 0, segment: Some(segments::stack()) };
         self.copied(to, from, Some(copy), None, false, false, at, out)?;
         Ok(bytes)
     }
@@ -5459,9 +5467,9 @@ impl Selector<'_, '_, '_> {
         let source_segment = match from {
             Pointer::Far { selector, .. } => Loc::Held(selector),
             Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. } => {
-                Loc::Reg(Reg { register: Register::SS, width: 2 })
+                Loc::Reg(Reg { register: segments::stack(), width: 2 })
             }
-            _ => Loc::Reg(Reg { register: Register::DS, width: 2 }),
+            _ => Loc::Reg(Reg { register: segments::data(), width: 2 }),
         };
         // A near destination's selector is made just ahead of the first move,
         // so that it is live across nothing else.
@@ -5871,7 +5879,7 @@ impl Selector<'_, '_, '_> {
             pointer,
             Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. }
         ) {
-            Loc::Reg(Reg { register: Register::SS, width: 2 })
+            Loc::Reg(Reg { register: segments::stack(), width: 2 })
         } else {
             let (space, index) = crate::hir::symbols::DGROUP;
             Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })

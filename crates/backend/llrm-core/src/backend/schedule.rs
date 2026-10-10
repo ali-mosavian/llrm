@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::peephole::{_lanes, _register_effects, Lanes};
@@ -23,8 +23,12 @@ use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 
-const _GENERAL: [Register; 7] =
-    [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
+/// An integer register the schedule may reason about: any but the stack
+/// pointer's.
+fn _general(register: RegId) -> bool {
+    crate::backend::registerinfo::in_class(register, crate::backend::registerinfo::class::INT)
+        && !crate::backend::registerinfo::is_stack(register)
+}
 
 /// Hide measured dependency latency where the complete hardware state is known.
 pub struct Scheduler {
@@ -102,7 +106,7 @@ pub fn _safe(
     {
         return None;
     }
-    let mut registers: Vec<Register> = what
+    let mut registers: Vec<RegId> = what
         .dests
         .iter()
         .chain(&what.sources)
@@ -113,15 +117,14 @@ pub fn _safe(
         .collect();
     if what.op == Operation::Address {
         let Loc::Address(address) = &what.sources[0] else { unreachable!("checked above") };
-        registers.extend(
-            [address.through, address.index_through].into_iter().filter(|register| *register != Register::None),
-        );
+        registers
+            .extend([address.through, address.index_through].into_iter().filter(|register| *register != RegId::None));
     }
-    if registers.iter().any(|register| !_GENERAL.contains(&register.full_register32())) {
+    if registers.iter().any(|register| !_general(*register)) {
         return None;
     }
     let (reads, writes) = _register_effects(bits, one, false, true)?;
-    if reads.union(&writes).any(|lane| lane.0 != Register::None && !_lanes(lane.0).contains(lane)) {
+    if reads.union(&writes).any(|lane| lane.0 != RegId::None && !_lanes(lane.0).contains(lane)) {
         return None;
     }
     Some((reads, writes))
@@ -204,17 +207,15 @@ pub fn _partial_merge_delay(
     }
     let before = window[producer].what.as_ref().expect("a safe form has semantics");
     let after = window[consumer].what.as_ref().expect("a safe form has semantics");
-    let partial: BTreeSet<Register> = before
+    let partial: BTreeSet<RegId> = before
         .dests
         .iter()
         .filter_map(|r#where| match r#where {
-            Loc::Reg(reg) if reg.width < 4 && _GENERAL.contains(&reg.register.full_register32()) => {
-                Some(reg.register.full_register32())
-            }
+            Loc::Reg(reg) if reg.width < 4 && _general(reg.register) => Some(reg.register.full_register32()),
             _ => None,
         })
         .collect();
-    let wide: BTreeSet<Register> = after
+    let wide: BTreeSet<RegId> = after
         .sources
         .iter()
         .filter_map(|r#where| match r#where {

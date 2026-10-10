@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::nativeframe::{self, Plan};
 use crate::model::ir::{Addr, Loc, Mem, Operation, Space};
@@ -75,7 +75,7 @@ pub struct Frame {
     pub floor: i64,
     pub slots: IndexMap<SlotKey, i64>,
     pub native: Option<Plan>,
-    pub native_pins: IndexMap<u32, Register>,
+    pub native_pins: IndexMap<u32, RegId>,
     // Capacity belongs to the stack object, not to whichever virtual value
     // first received it.
     pub capacities: IndexMap<i64, i64>,
@@ -273,7 +273,7 @@ impl Frame {
         let width: i64 = width.into();
         let disp = self.slot(value, width)?;
         Ok(Mem {
-            through: Register::BP,
+            through: crate::model::ir::FRAME,
             offset: 0,
             disp_width: 2,
             ..Mem::new(Some(Addr::new(Space::Frame, disp).in_slot(disp)), width as u32)
@@ -314,12 +314,8 @@ pub fn of(
                 (Operation::Call, _, _)
                     if calls.and_then(|calls| calls.get(&one.at)).map(String::as_str) == Some(ENTER) =>
                 {
-                    let sizes: Vec<u32> = one
-                        .requires
-                        .iter()
-                        .filter(|(_, reg)| *reg == Register::CX)
-                        .map(|(held, _)| held.value)
-                        .collect();
+                    let sizes: Vec<u32> =
+                        one.requires.iter().filter(|(_, reg)| *reg == RegId::CX).map(|(held, _)| held.value).collect();
                     if sizes.len() != 1 || !constants.contains_key(&sizes[0]) {
                         return Err(Refused("runtime frame size is not a known constant".to_owned()));
                     }
@@ -352,8 +348,6 @@ pub fn of(
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
-
     use super::{Refused, of};
     use crate::model::ir::{Addr, AddressRef, Held, Imm, Loc, Operation, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -376,7 +370,7 @@ mod tests {
     #[test]
     fn test_entry_frame_size_comes_from_cx_not_call_arity() {
         // COM_CHECK_ARGS spilled at BP-2, corrupting FindFrame's linked list.
-        use Register::{AX, BX, CX, DI, DX, SI};
+        use iced_x86::Register::{AX, BX, CX, DI, DX, SI};
         for registers in [vec![CX], vec![BX, CX], vec![AX, BX, CX, DX, SI, DI]] {
             let size = Held { value: 100, width: 2 };
             let init = Insn::new(

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::Profile;
@@ -46,7 +46,7 @@ fn bytes(
 pub fn shared(
     body: &LirBody,
     cpu: &Profile,
-    saved: &[Register],
+    saved: &[RegId],
     classes: &RegisterClasses,
 ) -> LirBody {
     if !cpu.size {
@@ -56,7 +56,7 @@ pub fn shared(
     // the body names (`masm::_frame_parts`): one it does not name would be
     // pushed and popped for the run.
     let used = masm::_roots(body);
-    let scratch: Vec<Register> =
+    let scratch: Vec<RegId> =
         classes.available.iter().copied().filter(|one| !saved.contains(one) || used.contains(one)).collect();
     let exits = liveness::dead_at_exit(body);
     let flags_out = _flags_live_out(body);
@@ -99,7 +99,7 @@ fn shared_run(
     bits: u32,
     run: &[Arc<Insn>],
     value: i64,
-    scratch: &[Register],
+    scratch: &[RegId],
     dead: &DeadAfter,
     flags_dead: &crate::support::hash::HashSet<usize>,
 ) -> Option<Vec<Arc<Insn>>> {
@@ -110,7 +110,7 @@ fn shared_run(
         .iter()
         .filter_map(|one| _register_effects(bits, one, false, true))
         .fold(Lanes::new(), |all, (reads, _)| all.or(&reads));
-    let named = |width: u32, full: Register| -> Option<Reg> {
+    let named = |width: u32, full: RegId| -> Option<Reg> {
         let register = target::named(full, i64::from(width));
         (target::width_of(register) == Some(i64::from(width))).then_some(Reg { register, width })
     };

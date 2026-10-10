@@ -9,10 +9,11 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::abi::machine::Machine;
 use crate::backend::classes::RegisterClasses;
+use crate::backend::registerinfo;
 use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::support::hash::IndexMap;
 use crate::support::pyset::PySet;
@@ -22,12 +23,12 @@ use crate::support::pyset::PySet;
 /// Where an operand has to live: one register, or any of a set.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Need {
-    pub r#where: BTreeSet<Register>,
+    pub r#where: BTreeSet<RegId>,
 }
 
 impl Need {
     /// The register, where there is only one it can be.
-    pub fn fixed(&self) -> Option<Register> {
+    pub fn fixed(&self) -> Option<RegId> {
         if self.r#where.len() == 1 { self.r#where.iter().next().copied() } else { None }
     }
 }
@@ -51,7 +52,7 @@ impl Occurrence {
     }
 }
 
-fn _root(register: Register) -> Register {
+fn _root(register: RegId) -> RegId {
     ir::root(register)
 }
 
@@ -91,14 +92,14 @@ pub fn pushed_width(place: &Loc) -> Option<u32> {
 /// The width `pop` fills this place at: what `push` carries, but not `cs`.
 pub fn popped_width(place: &Loc) -> Option<u32> {
     match place {
-        Loc::Reg(reg) if reg.register == Register::CS => None,
+        Loc::Reg(reg) if registerinfo::is_code_segment(reg.register) => None,
         other => pushed_width(other),
     }
 }
 
-/// Whether an x87 comparison reaches the flags through AX: `fnstsw ax; sahf`
-/// follows it, so nothing may live in AX across it.
-pub fn status_through_ax(what: &Semantics) -> bool {
+/// Whether an x87 comparison reaches the flags through the status-word
+/// register (`fnstsw`, then `sahf`): nothing may live there across it.
+pub fn status_through_register(what: &Semantics) -> bool {
     what.op == Operation::Compare
         && what.sources.iter().any(|one| positional_place(one) || matches!(one, Loc::Held(held) if held.width == 10))
 }
@@ -107,7 +108,7 @@ pub fn status_through_ax(what: &Semantics) -> bool {
 ///
 /// `add ax,[c]` is one register at two moments; x86 says so by naming the
 /// same operand twice.
-pub fn tied(what: &Semantics) -> Option<Register> {
+pub fn tied(what: &Semantics) -> Option<RegId> {
     if _on_the_stack(what) || what.dests.is_empty() || what.sources.is_empty() {
         return None;
     }
@@ -124,7 +125,7 @@ pub fn tied(what: &Semantics) -> Option<Register> {
 pub fn reads(
     what: &Semantics,
     classes: &RegisterClasses,
-) -> IndexMap<Register, Need> {
+) -> IndexMap<RegId, Need> {
     let mut out = IndexMap::default();
     for (r#where, register) in classes.requirements(what) {
         if r#where.side == "source" {
@@ -140,7 +141,7 @@ pub fn reads(
             _ => (None, None, None),
         };
         for r#where in [through, index_through, base].into_iter().flatten() {
-            if r#where != Register::None {
+            if r#where != RegId::None {
                 out.insert(_root(r#where), Need { r#where: classes.addressing.iter().map(|x| _root(*x)).collect() });
             }
         }
@@ -152,7 +153,7 @@ pub fn reads(
 pub fn writes(
     what: &Semantics,
     classes: &RegisterClasses,
-) -> IndexMap<Register, Need> {
+) -> IndexMap<RegId, Need> {
     let mut out = IndexMap::default();
     if _on_the_stack(what) {
         return out;
@@ -165,36 +166,56 @@ pub fn writes(
     out
 }
 
-pub static WIDE: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::DWORDS.into_iter().collect());
-pub static NARROW: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::WORDS.into_iter().collect());
+pub static WIDE: LazyLock<PySet<RegId>> = LazyLock::new(|| integer_of(4).into_iter().collect());
+pub static NARROW: LazyLock<PySet<RegId>> = LazyLock::new(|| integer_of(2).into_iter().collect());
 // The byte halves. BC reaches for them to clear a high byte and to read one
 // byte of an array.
-pub static BYTE: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::BYTES.into_iter().collect());
+pub static BYTE: LazyLock<PySet<RegId>> = LazyLock::new(|| integer_of(1).into_iter().collect());
 
-// The width each register names, and the register file at each width: the
-// architecture's.
-pub use llrm_x86::registers::{AT_WIDTH, WIDTHS};
+/// The integer registers `bytes` wide, by iced's number.
+fn integer_of(bytes: i64) -> Vec<RegId> {
+    let mut found: Vec<RegId> = registerinfo::entries()
+        .filter(|(_, one)| one.classes & registerinfo::class::INT != 0 && i64::from(one.bits / 8) == bytes)
+        .map(|(register, _)| register)
+        .collect();
+    found.sort_by_key(|one| *one as usize);
+    found.dedup();
+    found
+}
+
+/// Every integer register (the 8, 16 and 32-bit views), wide ones first, each
+/// width by iced's number: the order the allocator's tables have always been
+/// walked in.
+pub fn integer_registers() -> impl Iterator<Item = RegId> {
+    static ALL: LazyLock<Vec<RegId>> = LazyLock::new(|| [4, 2, 1].into_iter().flat_map(integer_of).collect());
+    ALL.iter().copied()
+}
+
+/// Whether `register` is an integer register: one the tables name by width.
+pub fn integer(register: RegId) -> bool {
+    registerinfo::in_class(register, registerinfo::class::INT)
+}
 
 /// The same register named at the width an operand needs.
 pub fn named(
-    register: Register,
+    register: RegId,
     width: i64,
-) -> Register {
-    AT_WIDTH.get(&ir::root(register)).and_then(|widths| widths.get(&width)).copied().unwrap_or(register)
+) -> RegId {
+    registerinfo::view(registerinfo::root(register), width as u32 * 8).unwrap_or(register)
 }
 
 /// The registers an operand may take, in the order to try them.
 ///
 /// LLVM's `AllocationOrder`. `None` means the operand said nothing.
 pub fn order(
-    r#where: Option<&BTreeSet<Register>>,
+    r#where: Option<&BTreeSet<RegId>>,
     segments: &Segments,
     classes: &RegisterClasses,
-) -> Vec<Register> {
+) -> Vec<RegId> {
     let Some(r#where) = r#where else {
         return classes.available.clone();
     };
-    let wanted: BTreeSet<Register> = r#where.iter().map(|one| ir::root(*one)).collect();
+    let wanted: BTreeSet<RegId> = r#where.iter().map(|one| ir::root(*one)).collect();
     if !wanted.is_empty() && wanted.is_subset(&SEGMENTS) {
         return segments.selectors.iter().copied().filter(|one| wanted.contains(one)).collect();
     }
@@ -202,8 +223,11 @@ pub fn order(
 }
 
 // The segment registers. Operands, not allocatable.
-pub static SEGMENTS: LazyLock<BTreeSet<Register>> = LazyLock::new(|| {
-    BTreeSet::from([Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS])
+pub static SEGMENTS: LazyLock<BTreeSet<RegId>> = LazyLock::new(|| {
+    registerinfo::entries()
+        .filter(|(_, one)| one.classes & registerinfo::class::SEGMENT != 0)
+        .map(|(id, _)| id)
+        .collect()
 });
 
 /// The segment registers as the machine's program model assigns them.
@@ -213,25 +237,54 @@ pub struct Segments {
     /// the program model does not reserve. Where the stack reaches the data
     /// group, the data segment register is free between the points that need
     /// it (`needs_data_group`), so it comes last.
-    pub selectors: Vec<Register>,
+    pub selectors: Vec<RegId>,
     /// The one every access without a prefix reads.
-    pub data: Register,
+    pub data: RegId,
     /// The one that reaches the data group while `data` holds something
     /// else: the stack's, where the stack lives in the data group.
-    pub through: Option<Register>,
+    pub through: Option<RegId>,
     /// The selector stride a huge pointer takes per carried 64K, as a shift:
     /// the machine's (`Machine::huge_shift`), where it states one.
     pub huge_shift: Option<u32>,
+    /// The bytes of a pair space's offset: the width of a register an address
+    /// is held in (`registerinfo::holds_a_segment_offset`).
+    pub offset_bytes: i64,
 }
 
 impl Segments {
-    pub fn of(machine: &Machine) -> Self {
+    /// The register an access without a prefix reads.
+    fn data_register() -> RegId {
+        registerinfo::data_segment().expect("the target's register file names no data segment")
+    }
+
+    /// Every segment register, the order a selector is placed in: the far
+    /// pointer's, then the ones with no meaning of their own, then the data,
+    /// stack and code ones.
+    fn preference() -> Vec<RegId> {
+        let meant = [registerinfo::data_segment(), registerinfo::stack_segment(), registerinfo::code_segment()];
+        let far = registerinfo::far_segment();
+        far.into_iter()
+            .chain(SEGMENTS.iter().copied().filter(|one| Some(*one) != far && !meant.contains(&Some(*one))))
+            .chain(meant.into_iter().flatten())
+            .collect()
+    }
+
+    pub fn of(
+        machine: &Machine,
+        offset_bytes: i64,
+    ) -> Self {
         // A flat machine has no selector to place: DS is only what string
         // operations read.
         let Some(segments) = machine.segments.as_ref() else {
-            return Self { selectors: Vec::new(), data: Register::DS, through: None, huge_shift: None };
+            return Self {
+                selectors: Vec::new(),
+                data: Self::data_register(),
+                through: None,
+                huge_shift: None,
+                offset_bytes,
+            };
         };
-        let named = |one: &Register, name: &String| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one]);
+        let named = |one: &RegId, name: &String| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one]);
         let register = |name: &String| {
             *crate::backend::select::SEGMENTS
                 .keys()
@@ -243,24 +296,33 @@ impl Segments {
             reserved.push(&segments.data);
         }
         Self {
-            selectors: [Register::ES, Register::FS, Register::GS, Register::DS, Register::SS, Register::CS]
+            selectors: Self::preference()
                 .into_iter()
                 .filter(|one| !reserved.iter().any(|name| named(one, name)))
                 .collect(),
             data: register(&segments.data),
             through: segments.stack_is_data.then(|| register(&segments.stack)),
             huge_shift: machine.huge_shift(),
+            offset_bytes,
         }
     }
 }
 
+/// The bytes of the offset of the target's far pointer: what a register an
+/// address is held in is wide in a segmented program.
+pub fn offset_bytes(arch: &dyn llrm_target::Target) -> i64 {
+    let layout = arch.layout();
+    let parsed = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout).expect("a target's datalayout parses");
+    i64::from(parsed.offset_bits(layout.spaces.roles.far) / 8)
+}
+
 /// The built-in machine's, for the tests of this crate.
 #[cfg(test)]
-pub static BUILT_IN: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BUILT_IN));
+pub static BUILT_IN: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BUILT_IN, 2));
 
 /// The segment registers of `machine::BASIC`, for the tests of this crate.
 #[cfg(test)]
-pub static BASIC: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BASIC));
+pub static BASIC: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BASIC, 2));
 
 /// Whether `one` needs the data segment register to hold the data group: it
 /// calls, returns, traps or is opaque; it is an x87 instruction, whose
@@ -312,19 +374,20 @@ fn named_for_data_group(name: &str) -> bool {
         .any(|one| bare.starts_with(one))
         || name.starts_with('f')
 }
-// One far load per selector: its selector result is in the class, not pinned,
-// and the rewriter spells the instruction for the register it was given.
-pub static FAR_LOADS: LazyLock<IndexMap<Register, &'static str>> = LazyLock::new(|| {
-    IndexMap::from_iter([(Register::ES, "les"), (Register::FS, "lfs"), (Register::GS, "lgs"), (Register::DS, "lds")])
-});
-
+// One far load per selector register, as the register file states: its
+// selector result is in the class, not pinned, and the rewriter spells the
+// instruction for the register it was given.
 pub fn far_load(what: &Semantics) -> bool {
     what.op == Operation::Move
-        && what.name.as_deref().is_some_and(|name| FAR_LOADS.values().any(|one| *one == name))
+        && what.name.as_deref().is_some_and(|name| registerinfo::loaded_by(name).is_some())
         && what.dests.len() == 2
 }
 
-include!(concat!(env!("OUT_DIR"), "/positional.rs"));
+/// Whether the register is a position in a stack, where an exchange is an
+/// effect and no pass may rename or drop it: the description's class.
+pub fn positional(register: RegId) -> bool {
+    crate::backend::registerinfo::in_class(register, crate::backend::registerinfo::class::POSITIONAL)
+}
 
 /// Whether the operand is a positional register.
 pub fn positional_place(place: &Loc) -> bool {
@@ -332,45 +395,28 @@ pub fn positional_place(place: &Loc) -> bool {
 }
 
 /// Whether this is a register this target describes at all.
-pub fn known(register: Register) -> bool {
-    WIDTHS.contains_key(&register) || SEGMENTS.contains(&register)
+pub fn known(register: RegId) -> bool {
+    integer(register) || SEGMENTS.contains(&register)
 }
 
 /// How wide this register is, or None where the target does not say.
-pub fn width_of(register: Register) -> Option<i64> {
-    if SEGMENTS.contains(&register) { Some(2) } else { WIDTHS.get(&register).copied() }
+pub fn width_of(register: RegId) -> Option<i64> {
+    if SEGMENTS.contains(&register) { Some(2) } else { registerinfo::bytes(register).filter(|_| integer(register)) }
 }
 
 // ------------------------------------------------------------ subregisters
 
-// Which bytes of its root each register is, as a mask: LLVM's lane masks,
-// with four lanes. `ir.ROOT` answers "same register file entry", not "same
-// bytes", and al and ah are where those differ.
-pub static LANES: LazyLock<IndexMap<Register, i64>> = LazyLock::new(|| {
-    let mut lanes = IndexMap::default();
-    for (_row, _mask) in [(&*WIDE, 0b1111), (&*NARROW, 0b0011)] {
-        for _one in _row.iter() {
-            lanes.insert(*_one, _mask);
-        }
-    }
-    for _one in BYTE.iter() {
-        let high = [Register::AH, Register::CH, Register::DH, Register::BH].contains(_one);
-        lanes.insert(*_one, if high { 0b0010 } else { 0b0001 });
-    }
-    lanes
-});
-
 /// Which bytes of its root this register names.
-pub fn lanes(register: Register) -> i64 {
-    LANES.get(&register).copied().unwrap_or(0b1111)
+pub fn lanes(register: RegId) -> i64 {
+    registerinfo::lanes(register)
 }
 
 /// Whether writing one can be seen by reading the other.
 ///
 /// The same root is not enough: al and ah share eax and share no byte.
 pub fn overlaps(
-    one: Register,
-    other: Register,
+    one: RegId,
+    other: RegId,
 ) -> bool {
     if ir::root(one) != ir::root(other) {
         return false;
@@ -378,22 +424,15 @@ pub fn overlaps(
     lanes(one) & lanes(other) != 0
 }
 
-// Each register by the name a human writes, which is what runtime.py's own
-// contracts are keyed on. Python's `iced_x86.Register` defines no
-// `DontUse*` member, so those have no name here either.
-pub static NAMES: LazyLock<IndexMap<Register, String>> = LazyLock::new(|| {
-    let mut names: Vec<(String, Register)> = Register::values()
-        .map(|register| (format!("{register:?}").to_uppercase(), register))
-        .filter(|(name, _)| !name.starts_with("DONTUSE"))
-        .collect();
-    // `dir(Register)` is sorted by name.
-    names.sort();
-    names.into_iter().map(|(name, register)| (register, name.to_lowercase())).collect()
-});
-
 /// This register's own name, lowercase.
-pub fn name_of(register: Register) -> String {
-    NAMES.get(&register).cloned().unwrap_or_else(|| (register as i64).to_string())
+pub fn name_of(register: RegId) -> String {
+    if let Some(name) = registerinfo::name(register) {
+        return name.to_owned();
+    }
+    // Python's `iced_x86.Register` defines no `DontUse*` member, so those have
+    // no name here.
+    let spelled = format!("{register:?}");
+    if spelled.starts_with("DontUse") { (register as i64).to_string() } else { spelled.to_lowercase() }
 }
 
 #[cfg(test)]
@@ -466,8 +505,8 @@ mod tests {
 
     /// What the allocator may hand out for an operand that reaches memory: the
     /// addressing registers it holds values in.
-    fn bases(classes: &RegisterClasses) -> Vec<Register> {
-        let addressing: BTreeSet<Register> = classes.addressing.iter().map(|x| ir::root(*x)).collect();
+    fn bases(classes: &RegisterClasses) -> Vec<RegId> {
+        let addressing: BTreeSet<RegId> = classes.addressing.iter().map(|x| ir::root(*x)).collect();
         classes.available.iter().copied().filter(|one| addressing.contains(one)).collect()
     }
 
@@ -478,7 +517,7 @@ mod tests {
     fn test_a_flat_machine_has_no_selector_to_place() {
         let flat =
             Machine::parse("addressing = \"flat\"\nsegment_end_faults = false\nfar_bss = false\n", "486").unwrap();
-        let segments = Segments::of(&flat);
+        let segments = Segments::of(&flat, 4);
         assert!(segments.selectors.is_empty() && segments.through.is_none() && segments.huge_shift.is_none());
     }
 
@@ -486,8 +525,8 @@ mod tests {
     /// new frame rule changes one place.
     #[test]
     fn test_the_allocators_bases_are_the_encodable_ones_but_the_frame() {
-        let encodable: BTreeSet<Register> = llrm_x86_m16::ENCODABLE_BASES.into_iter().collect();
-        let held: BTreeSet<Register> = encodable.iter().copied().filter(|&one| one != llrm_x86_m16::FRAME).collect();
+        let encodable: BTreeSet<RegId> = llrm_x86_m16::ENCODABLE_BASES.into_iter().collect();
+        let held: BTreeSet<RegId> = encodable.iter().copied().filter(|&one| one != llrm_x86_m16::FRAME).collect();
         assert_eq!(RegisterClasses::m16().word_bases, held);
         assert!(crate::backend::select::_WORD_BASES.iter().all(|one| encodable.contains(one)));
     }
@@ -505,7 +544,7 @@ mod tests {
     #[test]
     fn test_the_spill_models_address_registers_are_the_allocators() {
         use llrm_mir::target::Machine;
-        let restricted: BTreeSet<Register> = {
+        let restricted: BTreeSet<RegId> = {
             let classes = RegisterClasses::m16();
             classes.word_bases.union(&classes.word_indexes).copied().collect()
         };
@@ -528,34 +567,34 @@ mod tests {
         let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
         assert_eq!(
             (at("source", 0), at("source", 1), at("source", 2)),
-            (Some(Register::ECX), Some(Register::ESI), Some(Register::EDI))
+            (Some(RegId::ECX), Some(RegId::ESI), Some(RegId::EDI))
         );
-        assert_eq!((at("source", 3), at("source", 4)), (Some(Register::FS), Some(Register::ES)));
+        assert_eq!((at("source", 3), at("source", 4)), (Some(RegId::FS), Some(RegId::ES)));
         assert_eq!(
             (at("dest", 1), at("dest", 2), at("dest", 3)),
-            (Some(Register::ESI), Some(Register::EDI), Some(Register::ECX))
+            (Some(RegId::ESI), Some(RegId::EDI), Some(RegId::ECX))
         );
         let single = semantics(
             Operation::Copy,
             "movsw",
             vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6)],
-            vec![held(2), held(3), reg(Register::DS, 2), held(8)],
+            vec![held(2), held(3), reg(RegId::DS, 2), held(8)],
         );
         let wanted = RegisterClasses::m16().requirements(&single);
         let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
         assert_eq!(
             (at("source", 0), at("source", 1), at("source", 2), at("source", 3)),
-            (Some(Register::ESI), Some(Register::EDI), None, Some(Register::ES))
+            (Some(RegId::ESI), Some(RegId::EDI), None, Some(RegId::ES))
         );
         assert_eq!(at("dest", 3), None);
         assert!(
-            reads(&repeated, &crate::backend::classes::RegisterClasses::m16()).contains_key(&Register::ECX)
-                && writes(&repeated, &crate::backend::classes::RegisterClasses::m16()).contains_key(&Register::ECX)
+            reads(&repeated, &crate::backend::classes::RegisterClasses::m16()).contains_key(&RegId::ECX)
+                && writes(&repeated, &crate::backend::classes::RegisterClasses::m16()).contains_key(&RegId::ECX)
         );
     }
 
     fn reg(
-        register: Register,
+        register: RegId,
         width: u32,
     ) -> Loc {
         Loc::Reg(ir::Reg { register, width })
@@ -573,13 +612,13 @@ mod tests {
     /// `add ax,[c]` is ax at two moments, not two places.
     #[test]
     fn test_lir_says_a_two_address_operand_is_one_register() {
-        let ax = reg(Register::AX, 2);
+        let ax = reg(RegId::AX, 2);
         let cell = Loc::Mem(ir::Mem::new(None, 2));
 
         let what = semantics(Operation::Binary, "add", vec![ax.clone()], vec![ax.clone(), cell.clone()]);
-        assert_eq!(tied(&what), Some(Register::EAX), "the destination and the first source are one register");
+        assert_eq!(tied(&what), Some(RegId::EAX), "the destination and the first source are one register");
 
-        let apart = semantics(Operation::Binary, "add", vec![ax.clone()], vec![reg(Register::BX, 2), cell]);
+        let apart = semantics(Operation::Binary, "add", vec![ax.clone()], vec![reg(RegId::BX, 2), cell]);
         assert_eq!(tied(&apart), None, "and a three-operand form ties nothing");
 
         let st = Loc::st(0);
@@ -591,19 +630,19 @@ mod tests {
     /// slot and is also the frame pointer.
     #[test]
     fn test_the_requirements_table_says_what_the_encoding_permits() {
-        assert!(RegisterClasses::m16().addressing.contains(&Register::BP), "a frame slot is reached through bp");
-        assert!(!RegisterClasses::m16().addressing.contains(&Register::DX), "`[dx+0Ah]` has no encoding");
+        assert!(RegisterClasses::m16().addressing.contains(&RegId::BP), "a frame slot is reached through bp");
+        assert!(!RegisterClasses::m16().addressing.contains(&RegId::DX), "`[dx+0Ah]` has no encoding");
         let classes = RegisterClasses::m16();
         assert!(!bases(&classes).is_empty(), "and the assignable set is not empty");
         assert!(bases(&classes).iter().all(|one| classes.available.contains(one)));
-        assert!(!bases(&classes).iter().any(|one| *one == Register::EBP), "bp is the frame pointer");
+        assert!(!bases(&classes).iter().any(|one| *one == RegId::EBP), "bp is the frame pointer");
     }
 
     /// al and ah share eax and share no byte.
     #[test]
     fn test_segment_registers_follow_the_machine() {
-        assert_eq!(BUILT_IN.selectors, [Register::ES, Register::FS, Register::GS]);
-        assert_eq!((BUILT_IN.data, BUILT_IN.through), (Register::DS, None));
+        assert_eq!(BUILT_IN.selectors, [RegId::ES, RegId::FS, RegId::GS]);
+        assert_eq!((BUILT_IN.data, BUILT_IN.through), (RegId::DS, None));
         let joined = crate::abi::machine::Machine {
             segments: llrm_x86_m16::machine::BUILT_IN
                 .segments
@@ -611,17 +650,17 @@ mod tests {
                 .map(|segments| crate::abi::machine::Segments { stack_is_data: true, ..segments }),
             ..llrm_x86_m16::machine::BUILT_IN.clone()
         };
-        let joined = Segments::of(&joined);
-        assert_eq!(joined.selectors, [Register::ES, Register::FS, Register::GS, Register::DS]);
-        assert_eq!((joined.data, joined.through), (Register::DS, Some(Register::SS)));
+        let joined = Segments::of(&joined, 2);
+        assert_eq!(joined.selectors, [RegId::ES, RegId::FS, RegId::GS, RegId::DS]);
+        assert_eq!((joined.data, joined.through), (RegId::DS, Some(RegId::SS)));
     }
 
     #[test]
     fn test_a_register_names_which_bytes_of_its_root_it_is() {
-        assert!(!overlaps(Register::AL, Register::AH));
-        assert!(overlaps(Register::AL, Register::AX));
-        assert!(overlaps(Register::AH, Register::EAX));
-        assert!(!overlaps(Register::AL, Register::BL));
+        assert!(!overlaps(RegId::AL, RegId::AH));
+        assert!(overlaps(RegId::AL, RegId::AX));
+        assert!(overlaps(RegId::AH, RegId::EAX));
+        assert!(!overlaps(RegId::AL, RegId::BL));
     }
 
     /// QCport's pl_game_reset selected LES before allocation, but the selector
@@ -678,7 +717,7 @@ mod tests {
             Operation::Copy,
             "movsd",
             vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6)],
-            vec![held(1), held(2), Loc::Reg(ir::Reg { register: Register::DS, width: 2 }), held(3)],
+            vec![held(1), held(2), Loc::Reg(ir::Reg { register: RegId::DS, width: 2 }), held(3)],
         );
         let body = LirBody::new(
             "string",
@@ -708,29 +747,35 @@ mod tests {
             Operation::FloatLoad,
             "fld",
             vec![Loc::st(0)],
-            vec![Loc::Mem(ir::Mem { through: Register::SI, ..ir::Mem::new(None, 4) })],
+            vec![Loc::Mem(ir::Mem { through: RegId::SI, ..ir::Mem::new(None, 4) })],
         );
-        let want: BTreeSet<Register> = RegisterClasses::m16().addressing.iter().map(|x| ir::root(*x)).collect();
-        assert_eq!(reads(&what, &crate::backend::classes::RegisterClasses::m16())[&Register::ESI].r#where, want);
+        let want: BTreeSet<RegId> = RegisterClasses::m16().addressing.iter().map(|x| ir::root(*x)).collect();
+        assert_eq!(reads(&what, &crate::backend::classes::RegisterClasses::m16())[&RegId::ESI].r#where, want);
     }
 
     /// The set-ordered tables, `NAMES` and `name_of`, as CPython builds them.
     #[test]
     #[allow(deprecated)]
     fn tables_match_python() {
-        let values = |pairs: Vec<(Register, i64)>| pairs.into_iter().map(|(k, v)| (k as i64, v)).collect::<Vec<_>>();
         let rows = [37, 38, 39, 40, 41, 42, 43, 44, 21, 22, 23, 24, 25, 26, 27, 28, 1, 2, 3, 4, 5, 6, 7, 8];
-        let widths: Vec<i64> = WIDTHS.keys().map(|one| *one as i64).collect();
-        assert_eq!(widths, rows);
-        let lanes = values(LANES.iter().map(|(k, v)| (*k, *v)).collect());
+        let walked: Vec<i64> = integer_registers().map(|one| one as i64).collect();
+        assert_eq!(walked, rows);
         let masks = [15, 15, 15, 15, 15, 15, 15, 15, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 2, 2, 2, 2];
-        assert_eq!(lanes, rows.into_iter().zip(masks).collect::<Vec<_>>());
-        let at_width: Vec<(i64, Vec<(i64, i64)>)> = AT_WIDTH
+        let lanes_of: Vec<(i64, i64)> = integer_registers().map(|one| (one as i64, lanes(one))).collect();
+        assert_eq!(lanes_of, rows.into_iter().zip(masks).collect::<Vec<_>>());
+        let by_root: Vec<(i64, Vec<(i64, i64)>)> = rows[..8]
             .iter()
-            .map(|(root, widths)| (*root as i64, widths.iter().map(|(w, r)| (*w, *r as i64)).collect()))
+            .map(|root| {
+                let root = RegId::values().find(|one| *one as i64 == *root).unwrap();
+                let views = [4_i64, 2, 1]
+                    .into_iter()
+                    .filter_map(|width| registerinfo::view(root, width as u32 * 8).map(|one| (width, one as i64)))
+                    .collect();
+                (root as i64, views)
+            })
             .collect();
         assert_eq!(
-            at_width,
+            by_root,
             [
                 (37, vec![(4, 37), (2, 21), (1, 1)]),
                 (38, vec![(4, 38), (2, 22), (1, 2)]),
@@ -742,14 +787,14 @@ mod tests {
                 (44, vec![(4, 44), (2, 28)]),
             ]
         );
-        assert_eq!(bases(&RegisterClasses::m16()), [Register::EBX, Register::ESI, Register::EDI]);
+        assert_eq!(bases(&RegisterClasses::m16()), [RegId::EBX, RegId::ESI, RegId::EDI]);
         let python = "none al cl dl bl ah ch dh bh spl bpl sil dil r8l r9l r10l r11l r12l r13l r14l r15l ax cx dx bx sp bp si di r8w r9w r10w r11w r12w r13w r14w r15w eax ecx edx ebx esp ebp esi edi r8d r9d r10d r11d r12d r13d r14d r15d rax rcx rdx rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15 eip rip es cs ss ds fs gs xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7 xmm8 xmm9 xmm10 xmm11 xmm12 xmm13 xmm14 xmm15 xmm16 xmm17 xmm18 xmm19 xmm20 xmm21 xmm22 xmm23 xmm24 xmm25 xmm26 xmm27 xmm28 xmm29 xmm30 xmm31 ymm0 ymm1 ymm2 ymm3 ymm4 ymm5 ymm6 ymm7 ymm8 ymm9 ymm10 ymm11 ymm12 ymm13 ymm14 ymm15 ymm16 ymm17 ymm18 ymm19 ymm20 ymm21 ymm22 ymm23 ymm24 ymm25 ymm26 ymm27 ymm28 ymm29 ymm30 ymm31 zmm0 zmm1 zmm2 zmm3 zmm4 zmm5 zmm6 zmm7 zmm8 zmm9 zmm10 zmm11 zmm12 zmm13 zmm14 zmm15 zmm16 zmm17 zmm18 zmm19 zmm20 zmm21 zmm22 zmm23 zmm24 zmm25 zmm26 zmm27 zmm28 zmm29 zmm30 zmm31 k0 k1 k2 k3 k4 k5 k6 k7 bnd0 bnd1 bnd2 bnd3 cr0 cr1 cr2 cr3 cr4 cr5 cr6 cr7 cr8 cr9 cr10 cr11 cr12 cr13 cr14 cr15 dr0 dr1 dr2 dr3 dr4 dr5 dr6 dr7 dr8 dr9 dr10 dr11 dr12 dr13 dr14 dr15 st0 st1 st2 st3 st4 st5 st6 st7 mm0 mm1 mm2 mm3 mm4 mm5 mm6 mm7 tr0 tr1 tr2 tr3 tr4 tr5 tr6 tr7 tmm0 tmm1 tmm2 tmm3 tmm4 tmm5 tmm6 tmm7";
-        let rust: Vec<String> = Register::values().take(249).map(name_of).collect();
+        let rust: Vec<String> = RegId::values().take(249).map(name_of).collect();
         assert_eq!(rust.join(" "), python);
-        assert_eq!(name_of(Register::DontUse0), "249");
+        assert_eq!(name_of(RegId::DontUse0), "249");
     }
 
-    fn pins(what: &Semantics) -> Vec<(String, usize, Register)> {
+    fn pins(what: &Semantics) -> Vec<(String, usize, RegId)> {
         RegisterClasses::m16()
             .requirements(what)
             .into_iter()
@@ -781,10 +826,10 @@ mod tests {
         assert_eq!(
             pins(&what),
             [
-                ("dest".into(), 0, Register::EAX),
-                ("dest".into(), 1, Register::EDX),
-                ("source".into(), 0, Register::EDX),
-                ("source".into(), 1, Register::EAX)
+                ("dest".into(), 0, RegId::EAX),
+                ("dest".into(), 1, RegId::EDX),
+                ("source".into(), 0, RegId::EDX),
+                ("source".into(), 1, RegId::EAX)
             ]
         );
         let narrow = semantics(Operation::Divide, "div", vec![held(1)], vec![held(3), held(4)]);
@@ -805,14 +850,14 @@ mod tests {
         assert_eq!(
             pins(&what),
             [
-                ("source".into(), 0, Register::ECX),
-                ("source".into(), 1, Register::ESI),
-                ("source".into(), 2, Register::EDI),
-                ("source".into(), 3, Register::FS),
-                ("source".into(), 4, Register::ES),
-                ("dest".into(), 1, Register::ESI),
-                ("dest".into(), 2, Register::EDI),
-                ("dest".into(), 3, Register::ECX),
+                ("source".into(), 0, RegId::ECX),
+                ("source".into(), 1, RegId::ESI),
+                ("source".into(), 2, RegId::EDI),
+                ("source".into(), 3, RegId::FS),
+                ("source".into(), 4, RegId::ES),
+                ("dest".into(), 1, RegId::ESI),
+                ("dest".into(), 2, RegId::EDI),
+                ("dest".into(), 3, RegId::ECX),
             ]
         );
     }
@@ -822,7 +867,7 @@ mod tests {
     #[test]
     fn test_a_shift_by_cl_pins_the_count() {
         let by = |count: Loc| semantics(Operation::Binary, "shl", vec![held(1)], vec![held(1), count]);
-        assert_eq!(pins(&by(held(2))), [("source".into(), 1, Register::ECX)]);
+        assert_eq!(pins(&by(held(2))), [("source".into(), 1, RegId::ECX)]);
         assert!(pins(&by(Loc::Imm(ir::Imm { value: 3, width: 1, address: None }))).is_empty());
     }
 
@@ -833,11 +878,11 @@ mod tests {
         count: Loc,
         name: &str,
     ) -> Semantics {
-        let low = Loc::Reg(ir::Reg { register: Register::EAX, width: 4 });
+        let low = Loc::Reg(ir::Reg { register: RegId::EAX, width: 4 });
         Semantics {
             name: Some(name.to_owned()),
             dests: vec![low.clone()],
-            sources: vec![low, Loc::Reg(ir::Reg { register: Register::EDX, width: 4 }), count],
+            sources: vec![low, Loc::Reg(ir::Reg { register: RegId::EDX, width: 4 }), count],
             ..Semantics::new(Operation::Funnel)
         }
     }
@@ -850,7 +895,7 @@ mod tests {
     }
 
     fn rg(
-        register: Register,
+        register: RegId,
         width: u32,
     ) -> Loc {
         Loc::Reg(ir::Reg { register, width })
@@ -858,14 +903,14 @@ mod tests {
 
     #[test]
     fn test_a_funnel_shift_is_two_address_in_its_low_half() {
-        assert_eq!(tied(&funnel_of(imm(16, 1), "shrd")), Some(Register::EAX));
+        assert_eq!(tied(&funnel_of(imm(16, 1), "shrd")), Some(RegId::EAX));
     }
 
     #[test]
     fn test_a_funnel_shift_by_a_register_takes_its_count_in_cl() {
-        let dynamic = reads(&funnel_of(rg(Register::CL, 1), "shrd"), &RegisterClasses::m16());
-        assert!(dynamic.get(&Register::ECX).is_some_and(|need| need.fixed() == Some(Register::ECX)));
-        assert!(!reads(&funnel_of(imm(16, 1), "shrd"), &RegisterClasses::m16()).contains_key(&Register::EAX));
+        let dynamic = reads(&funnel_of(rg(RegId::CL, 1), "shrd"), &RegisterClasses::m16());
+        assert!(dynamic.get(&RegId::ECX).is_some_and(|need| need.fixed() == Some(RegId::ECX)));
+        assert!(!reads(&funnel_of(imm(16, 1), "shrd"), &RegisterClasses::m16()).contains_key(&RegId::EAX));
         assert!(
             writes(&funnel_of(imm(16, 1), "shrd"), &RegisterClasses::m16()).is_empty(),
             "shrd writes only what it names"
@@ -877,8 +922,8 @@ mod tests {
     fn test_a_signed_word_extension_pins_no_register() {
         let what = Semantics {
             name: Some("movsx".to_owned()),
-            dests: vec![rg(Register::EBX, 4)],
-            sources: vec![rg(Register::SI, 2)],
+            dests: vec![rg(RegId::EBX, 4)],
+            sources: vec![rg(RegId::SI, 2)],
             ..Semantics::new(Operation::Extend)
         };
         assert!(RegisterClasses::m16().requirements(&what).is_empty());
@@ -893,9 +938,9 @@ mod positional_tests {
     /// eight stack registers, no general register and no segment register.
     #[test]
     fn test_positional_is_the_stack_registers_the_descriptions_name() {
-        let stack: Vec<Register> = Register::values().filter(|one| positional(*one)).collect();
+        let stack: Vec<RegId> = RegId::values().filter(|one| positional(*one)).collect();
         assert_eq!(stack.len(), 8);
         assert!(stack.iter().all(|one| one.is_st()));
-        assert!(![Register::EAX, Register::AL, Register::DS, Register::None].iter().any(|one| positional(*one)));
+        assert!(![RegId::EAX, RegId::AL, RegId::DS, RegId::None].iter().any(|one| positional(*one)));
     }
 }

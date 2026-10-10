@@ -17,7 +17,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_mir::callgraph::{CallGraph, direct_only};
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::Module;
@@ -29,10 +29,10 @@ use crate::model::lir::LirBody;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Written {
     /// The registers it wrote and did not save and restore.
-    pub whole: BTreeSet<Register>,
+    pub whole: BTreeSet<RegId>,
     /// The registers it saved by their low half alone (a 16-bit push of a
     /// 32-bit register) and wrote: their upper half is lost.
-    pub high: BTreeSet<Register>,
+    pub high: BTreeSet<RegId>,
 }
 
 /// The functions of one module that take part in interprocedural register use,
@@ -126,7 +126,7 @@ impl CalleeFacts {
 /// The registers `body` writes, by their roots (a write of AX is a write of
 /// EAX): its destinations, the registers it pins values in and takes results
 /// from, and what its calls disturb.
-pub fn written_by(body: &LirBody) -> BTreeSet<Register> {
+pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
     let mut found = BTreeSet::new();
     for one in body.insns() {
         if let Some(what) = &one.what {

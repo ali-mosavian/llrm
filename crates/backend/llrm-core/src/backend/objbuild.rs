@@ -1002,7 +1002,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::*;
     use crate::model::ir::Addr;
@@ -1069,7 +1069,7 @@ mod tests {
         }
     }
 
-    fn reg(register: Register) -> Loc {
+    fn reg(register: RegId) -> Loc {
         Loc::Reg(ir::Reg { register, width: 2 })
     }
 
@@ -1202,7 +1202,7 @@ mod tests {
         let load = semantics(
             Operation::Move,
             "mov",
-            vec![reg(Register::AX)],
+            vec![reg(RegId::AX)],
             vec![Loc::Mem(ir::Mem::new(Some(Addr { index: 7, ..Addr::new(Space::External, 0) }), 2))],
         );
         let call = semantics(Operation::Call, "call", vec![], vec![]);
@@ -1282,9 +1282,9 @@ mod tests {
     /// module and inline code: text and object bytes as Python writes them.
     #[test]
     fn test_rich_module_matches_python() {
-        let ax = reg(Register::AX);
+        let ax = reg(RegId::AX);
         let cell = Loc::Mem(ir::Mem::new(Some(Addr { index: 1, ..Addr::new(Space::Segment, 2) }), 2));
-        let frame = Loc::Mem(ir::Mem { through: Register::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, 6)), 2) });
+        let frame = Loc::Mem(ir::Mem { through: RegId::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, 6)), 2) });
         let first = vec![
             insn(1, semantics(Operation::Move, "mov", vec![ax.clone()], vec![frame])),
             insn(2, semantics(Operation::Compare, "cmp", vec![], vec![ax.clone(), imm(3, None)])),
@@ -1293,19 +1293,19 @@ mod tests {
         let table = Some(Addr { index: 1, ..Addr::new(Space::Segment, 4) });
         let second = vec![
             insn(10, semantics(Operation::Move, "mov", vec![cell], vec![ax.clone()])),
-            insn(11, semantics(Operation::Move, "mov", vec![reg(Register::BX)], vec![imm(0, table)])),
+            insn(11, semantics(Operation::Move, "mov", vec![reg(RegId::BX)], vec![imm(0, table)])),
             insn(12, semantics(Operation::Call, "call", vec![], vec![])),
             insn(13, targeted(Operation::Jump, "jmp", 1)),
         ];
         let group = Some(Addr { index: 1, ..Addr::new(Space::Group, 0) });
         let third = vec![
             insn(20, semantics(Operation::Call, "call", vec![], vec![])),
-            insn(21, semantics(Operation::Move, "mov", vec![reg(Register::ES)], vec![imm(0, group)])),
+            insn(21, semantics(Operation::Move, "mov", vec![reg(RegId::ES)], vec![imm(0, group)])),
             insn(22, semantics(Operation::Return, "", vec![], vec![])),
         ];
         let f = body("f", vec![block(1, first, vec![10, 20]), block(10, second, vec![1]), block(20, third, vec![])]);
         let helper = vec![
-            insn(1, semantics(Operation::Move, "mov", vec![reg(Register::SI)], vec![ax])),
+            insn(1, semantics(Operation::Move, "mov", vec![reg(RegId::SI)], vec![ax])),
             insn(2, semantics(Operation::Return, "ret", vec![], vec![])),
         ];
         let inline = vec![
@@ -1398,14 +1398,14 @@ mod tests {
         let cell = ir::Mem {
             addr: Some(Addr { index: 3, ..Addr::new(Space::Segment, 1280) }),
             index: Some(ir::Held { value: 1, width: 4 }),
-            index_through: Register::ESI,
+            index_through: RegId::ESI,
             scale: 2,
             ..ir::Mem::new(None, 2)
         };
         let what = semantics(
             Operation::Move,
             "mov",
-            vec![Loc::Reg(ir::Reg { register: Register::CX, width: 2 })],
+            vec![Loc::Reg(ir::Reg { register: RegId::CX, width: 2 })],
             vec![Loc::Mem(cell)],
         );
         let names = IndexMap::from_iter([((Space::Segment, 3), "S%".to_owned())]);

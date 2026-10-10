@@ -80,7 +80,6 @@ fn planned(
     function: &Function,
     loop_: &Loop,
 ) -> Option<Plan> {
-    let graph = cfg::graph(function);
     let header = cfg::block(loop_.header);
     let outside: Vec<BlockId> =
         function.predecessors(header).into_iter().filter(|one| !loop_.body.contains(&cfg::id(*one))).collect();
@@ -115,7 +114,6 @@ fn planned(
             return None;
         }
     }
-    let _ = graph;
     // Each value a loop block defines is used outside the loop only by the
     // exit's phis, which the new edge can supply.
     let in_loop = |value| match function.value(value).def {

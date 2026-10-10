@@ -375,7 +375,7 @@ pub fn recorded(
             let mut alone = Fixed::new(&Applied { dump: None, ..applied.clone() });
             Box::new(move |module, analyses, mut function| {
                 let layout = analyses.program().layout.clone();
-                let outer = analyses.outer(module);
+                let outer = analyses.outer_held(module);
                 let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
                 let Module { context, metadata, .. } = &mut *module;
                 let mut unit = Unit {
@@ -500,7 +500,7 @@ fn rerun(
     };
     let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
     let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
-    analyses.invalidate(&preserved);
+    analyses.body_edited(id, &preserved);
     if declared.place(module)? > 0 {
         analyses.invalidate(&PreservedAnalyses::none());
     }
