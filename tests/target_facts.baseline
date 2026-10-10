@@ -7,7 +7,7 @@
 3 crates/backend/llrm-core/src/backend/floatassign.rs
 1 crates/backend/llrm-core/src/backend/frame.rs
 15 crates/backend/llrm-core/src/backend/inline_asm.rs
-22 crates/backend/llrm-core/src/backend/isel.rs
+18 crates/backend/llrm-core/src/backend/isel.rs
 11 crates/backend/llrm-core/src/backend/isel/wide.rs
 3 crates/backend/llrm-core/src/backend/loopslots.rs
 13 crates/backend/llrm-core/src/backend/masm.rs
