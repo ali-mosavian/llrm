@@ -103,12 +103,20 @@ pub fn cloned(
     for &id in procedures {
         let Some(caller) = module.global(id).function() else { continue };
         let constants = facts::current_call_constants(&module.context, caller);
+        // The frequencies only of a caller with a call worth asking of: below
+        // -O3 one that leaves an actual unknown.
+        let asked = |known: &[Option<ConstantId>]| {
+            !known.iter().all(Option::is_none) && (full || !known.iter().all(Option::is_some))
+        };
+        if !constants.values().any(|known| asked(known)) {
+            continue;
+        }
         let frequency =
             profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None).unwrap_or_default();
         for (block, at) in caller.walk() {
             let Some(name) = llrm_mir::memory::callee(&module.context, caller, at) else { continue };
             let known = constants.get(&at).map_or(&[][..], Vec::as_slice);
-            if known.iter().all(Option::is_none) {
+            if !asked(known) {
                 continue;
             }
             groups
@@ -143,8 +151,11 @@ pub fn cloned(
         // GCC clones only for a hot call (`ipcp_cloning_candidate_p`: "no hot
         // calls"): one in a function that runs once, `main`, is hot
         // only in a loop (`cgraph_edge::maybe_hot_p`: frequency 1.5 or more).
-        let hot =
-            sites.iter().any(|&(caller, _, frequency)| !runs_once(module, caller) || frequency * 2 >= profit::UNIT * 3);
+        // Below -O3 a call in a loop only: a clone is code and compile time for
+        // calls that run once.
+        let hot = sites
+            .iter()
+            .any(|&(caller, _, frequency)| (full && !runs_once(module, caller)) || frequency * 2 >= profit::UNIT * 3);
         if !hot {
             llrm_support::debug!("ipa-cp", "{}: no hot calls", module.global(name).name.as_deref().unwrap_or("?"));
             continue;
