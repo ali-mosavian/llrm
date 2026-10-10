@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::peephole::{_lanes, _register_effects, Lanes};
@@ -25,9 +26,11 @@ use crate::support::hash::IndexMap;
 
 /// An integer register the schedule may reason about: any but the stack
 /// pointer's.
-fn _general(register: RegId) -> bool {
-    crate::backend::registerinfo::in_class(register, crate::backend::registerinfo::class::INT)
-        && !crate::backend::registerinfo::is_stack(register)
+fn _general(
+    regs: Regs,
+    register: RegId,
+) -> bool {
+    regs.in_class(register, llrm_lir::registers::class::INT) && !regs.is_stack(register)
 }
 
 /// Hide measured dependency latency where the complete hardware state is known.
@@ -65,6 +68,7 @@ impl LIRTransform for Scheduler {
 /// is a proof boundary, not a list of currently inconvenient cases: every
 /// form left inside has only GPR/flag state represented by `_effects`.
 pub fn _safe(
+    regs: Regs,
     bits: u32,
     one: &Insn,
 ) -> Option<(Lanes, Lanes)> {
@@ -120,11 +124,11 @@ pub fn _safe(
         registers
             .extend([address.through, address.index_through].into_iter().filter(|register| *register != RegId::None));
     }
-    if registers.iter().any(|register| !_general(*register)) {
+    if registers.iter().any(|register| !_general(regs, *register)) {
         return None;
     }
-    let (reads, writes) = _register_effects(bits, one, false, true)?;
-    if reads.union(&writes).any(|lane| lane.0 != RegId::None && !_lanes(lane.0).contains(lane)) {
+    let (reads, writes) = _register_effects(regs, bits, one, false, true)?;
+    if reads.union(&writes).any(|lane| lane.0 != RegId::None && !_lanes(regs, lane.0).contains(lane)) {
         return None;
     }
     Some((reads, writes))
@@ -197,6 +201,7 @@ pub fn _latency(
 /// dependency.  The narrow operand check is intentionally syntactic: this
 /// post-allocation phase knows exact physical roots, not source values.
 pub fn _partial_merge_delay(
+    regs: Regs,
     window: &[Arc<Insn>],
     producer: usize,
     consumer: usize,
@@ -211,7 +216,7 @@ pub fn _partial_merge_delay(
         .dests
         .iter()
         .filter_map(|r#where| match r#where {
-            Loc::Reg(reg) if reg.width < 4 && _general(reg.register) => Some(reg.register.full_register32()),
+            Loc::Reg(reg) if reg.width < 4 && _general(regs, reg.register) => Some(reg.register.full_register32()),
             _ => None,
         })
         .collect();
@@ -247,11 +252,12 @@ pub fn _partial_merge_delay(
 pub type Graph = (Vec<(Lanes, Lanes)>, Vec<BTreeSet<usize>>, Vec<BTreeSet<usize>>);
 
 pub fn _graph(
+    regs: Regs,
     bits: u32,
     window: &[Arc<Insn>],
 ) -> Graph {
     let effects: Vec<(Lanes, Lanes)> =
-        window.iter().map(|one| _safe(bits, one).expect("every window occurrence is safe")).collect();
+        window.iter().map(|one| _safe(regs, bits, one).expect("every window occurrence is safe")).collect();
     let mut needs: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); window.len()];
     let mut users: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); window.len()];
     for (left, (reads, writes)) in effects.iter().enumerate() {
@@ -308,11 +314,12 @@ pub fn _pair_class(
 
 /// Issue independent audited U/V pairs in an in-order Pentium listing.
 pub fn _pentium_ordered(
+    regs: Regs,
     bits: u32,
     window: &[Arc<Insn>],
     cpu: &Profile,
 ) -> Vec<Arc<Insn>> {
-    let (_effects, mut needs, users) = _graph(bits, window);
+    let (_effects, mut needs, users) = _graph(regs, bits, window);
     let mut ready_at = vec![0_i64; window.len()];
     let mut left: BTreeSet<usize> = (0..window.len()).collect();
     let mut emitted: Vec<Arc<Insn>> = Vec::new();
@@ -349,7 +356,7 @@ pub fn _pentium_ordered(
         let done = clock + _latency(&window[first], cpu);
         for user in &users[first] {
             needs[*user].remove(&first);
-            ready_at[*user] = ready_at[*user].max(done + _partial_merge_delay(window, first, *user, cpu));
+            ready_at[*user] = ready_at[*user].max(done + _partial_merge_delay(regs, window, first, *user, cpu));
         }
 
         // The V slot may only receive a fully pairable form.  Its dependencies
@@ -364,7 +371,7 @@ pub fn _pentium_ordered(
             let done = clock + _latency(&window[second], cpu);
             for user in &users[second] {
                 needs[*user].remove(&second);
-                ready_at[*user] = ready_at[*user].max(done + _partial_merge_delay(window, second, *user, cpu));
+                ready_at[*user] = ready_at[*user].max(done + _partial_merge_delay(regs, window, second, *user, cpu));
             }
         }
         clock += 1;
@@ -374,11 +381,12 @@ pub fn _pentium_ordered(
 
 /// List-schedule one side-effect-free window by lanes and measured latency.
 pub fn _ordered(
+    regs: Regs,
     bits: u32,
     window: &[Arc<Insn>],
     cpu: &Profile,
 ) -> Vec<Arc<Insn>> {
-    let (_effects, mut needs, users) = _graph(bits, window);
+    let (_effects, mut needs, users) = _graph(regs, bits, window);
     let mut ready_at = vec![0_i64; window.len()];
     let mut left: BTreeSet<usize> = (0..window.len()).collect();
     let mut emitted: Vec<Arc<Insn>> = Vec::new();
@@ -407,7 +415,7 @@ pub fn _ordered(
         let done = clock + _latency(&window[chosen], cpu);
         for user in &users[chosen] {
             needs[*user].remove(&chosen);
-            ready_at[*user] = ready_at[*user].max(done + _partial_merge_delay(window, chosen, *user, cpu));
+            ready_at[*user] = ready_at[*user].max(done + _partial_merge_delay(regs, window, chosen, *user, cpu));
         }
         // The listing has no explicit no-ops.  One issue slot was consumed;
         // skipped cycles represent hardware waiting for a dependency.
@@ -424,6 +432,7 @@ pub fn scheduled<'a>(
     body: &LirBody,
     cpu: impl Into<ProfileOrName<'a>>,
 ) -> Result<LirBody, String> {
+    let regs = body.regs();
     let target = targets::profile(cpu)?;
     // 386/486 are in-order.  P5's U/V pairing is its own audited profile
     // property rather than an inference from issue width.
@@ -439,9 +448,9 @@ pub fn scheduled<'a>(
         let flush = |window: &mut Vec<Arc<Insn>>, out: &mut Vec<Arc<Insn>>, changed: &mut bool| {
             if !window.is_empty() {
                 let ordered = if target.pentium_pairing {
-                    _pentium_ordered(body.bits, window, target)
+                    _pentium_ordered(regs, body.bits, window, target)
                 } else {
-                    _ordered(body.bits, window, target)
+                    _ordered(regs, body.bits, window, target)
                 };
                 *changed |= ordered != *window;
                 out.extend(ordered);
@@ -450,7 +459,7 @@ pub fn scheduled<'a>(
         };
 
         for one in &block.insns {
-            if _safe(body.bits, one).is_none() {
+            if _safe(regs, body.bits, one).is_none() {
                 flush(&mut window, &mut out, &mut changed);
                 out.push(Arc::clone(one));
             } else {

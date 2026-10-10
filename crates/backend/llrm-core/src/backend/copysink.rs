@@ -13,6 +13,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use llrm_lir::registers::Regs;
+
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops as loopy;
 use crate::backend::liveness::{_backwards, _declared, _terminator, _universe};
@@ -53,6 +55,7 @@ pub fn copy_of(one: &Insn) -> Option<(Reg, Reg)> {
 
 /// Whether `one` reads (or writes) any of `lanes`, conservatively.
 pub fn touches(
+    regs: Regs,
     bits: u32,
     one: &Insn,
     lanes: &Lanes,
@@ -61,9 +64,9 @@ pub fn touches(
     if _terminator(one.what.as_ref()) {
         return false;
     }
-    let mut effects = _register_effects(bits, one, true, true);
+    let mut effects = _register_effects(regs, bits, one, true, true);
     if effects.is_none() {
-        effects = _declared(one);
+        effects = _declared(regs, one);
     }
     let Some(effects) = effects else {
         return true;
@@ -116,6 +119,7 @@ fn _between(
 /// The exit is left out: a lane only the exit reads is what the sunk copy is
 /// for, and a lane a nested loop reads again is not.
 fn _round(
+    regs: Regs,
     bits: u32,
     at_of: &IndexMap<i64, &LirBlock>,
     inside: &BTreeSet<i64>,
@@ -129,13 +133,14 @@ fn _round(
         |at, into| {
             at_of[&at].succ.iter().filter(|to| inside.contains(to)).flat_map(|to| into[to].iter().copied()).collect()
         },
-        |at, after| _backwards(bits, at_of[&at], after.clone(), universe),
+        |at, after| _backwards(regs, bits, at_of[&at], after.clone(), universe),
     )
     .output
 }
 
 /// `body` with each such copy moved from inside its loop to the exit.
 pub fn sunk(body: &LirBody) -> LirBody {
+    let regs = body.regs();
     // `loops.loops` reads only `at` and `succ`.
     let graph = &body.blocks;
     let found = loopy::loops(&graph, Some(body.entry));
@@ -143,7 +148,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
         return body.clone();
     }
     let dominance = loopy::dominance(&graph, Some(body.entry));
-    let universe = _universe();
+    let universe = _universe(regs);
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut predecessors: IndexMap<i64, Vec<i64>> = at_of.keys().map(|at| (*at, Vec::new())).collect();
     for block in &body.blocks {
@@ -172,7 +177,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
         if !at_of.contains_key(&exit_at) || predecessors[&exit_at] != [source_at] {
             continue;
         }
-        let round_into = _round(body.bits, &at_of, &inside, &universe);
+        let round_into = _round(regs, body.bits, &at_of, &inside, &universe);
         // Every way out runs the copy first: a loop left from its header
         // before any trip never ran its latch.
         for block in inside.iter().map(|at| at_of[at]).filter(|block| dominance.dominates(block.at, source_at)) {
@@ -184,7 +189,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 if removed.contains(&id(one)) {
                     continue;
                 }
-                let (written, read) = (_lanes(dest.register), _lanes(register.register));
+                let (written, read) = (_lanes(regs, dest.register), _lanes(regs, register.register));
                 if written.is_empty() || read.is_empty() || !written.is_disjoint(&read) {
                     continue;
                 }
@@ -198,7 +203,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
                     .flat_map(|to| round_into[to].iter().copied())
                     .collect();
                 let rest_of_block = block.with_insns(block.insns[index + 1..].to_vec());
-                if !written.is_disjoint(&_backwards(body.bits, &rest_of_block, after, &universe)) {
+                if !written.is_disjoint(&_backwards(regs, body.bits, &rest_of_block, after, &universe)) {
                     continue;
                 }
                 let Some(rest) = _between(&at_of, &inside, block.at, source_at) else {
@@ -207,10 +212,9 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 let later: Vec<&Arc<Insn>> =
                     block.insns[index + 1..].iter().chain(rest.iter().flat_map(|at| at_of[at].insns.iter())).collect();
                 let both: Lanes = written.or(&read);
-                if later
-                    .iter()
-                    .any(|other| touches(body.bits, other, &both, false) || touches(body.bits, other, &written, true))
-                {
+                if later.iter().any(|other| {
+                    touches(regs, body.bits, other, &both, false) || touches(regs, body.bits, other, &written, true)
+                }) {
                     continue;
                 }
                 removed.insert(id(one));

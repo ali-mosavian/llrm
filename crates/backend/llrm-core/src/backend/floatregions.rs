@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use llrm_lir::registers::Regs;
+
 use crate::backend::frame as frames;
 use crate::model::ir::Operation;
 use crate::model::lir::Insn;
@@ -59,10 +61,13 @@ impl std::error::Error for Raised {}
 
 /// Whether the x87 stack cannot be assumed to survive this instruction.
 #[must_use]
-pub fn boundary(one: &Insn) -> bool {
+pub fn boundary(
+    regs: Regs,
+    one: &Insn,
+) -> bool {
     let Some(what) = &one.what else {
         return true;
     };
     matches!(what.op, Operation::Call | Operation::Barrier)
-        || what.sources.iter().chain(&what.dests).any(crate::backend::target::positional_place)
+        || what.sources.iter().chain(&what.dests).any(|place| crate::backend::target::positional_place(regs, place))
 }

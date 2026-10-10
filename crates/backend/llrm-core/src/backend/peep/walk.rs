@@ -7,6 +7,8 @@
 use std::cell::OnceCell;
 use std::sync::Arc;
 
+use llrm_lir::registers::Regs;
+
 use crate::backend::cpu::Profile;
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{self, Counter, DeadAfter, id};
@@ -285,6 +287,8 @@ impl<'a> Window<'a> {
 pub struct Facts<'a> {
     pub body: Option<&'a LirBody>,
     pub cpu: Option<&'a Profile>,
+    /// The register file of the target the walked code is for.
+    pub regs: Regs,
     /// How many times each value is read, where the caller counted.
     counts: Option<&'a Counter>,
     exits: OnceCell<IndexMap<i64, Lanes>>,
@@ -304,6 +308,7 @@ impl<'a> Facts<'a> {
         Self {
             body: Some(body),
             cpu,
+            regs: body.regs(),
             counts: None,
             exits: OnceCell::new(),
             flags_out: OnceCell::new(),
@@ -317,10 +322,12 @@ impl<'a> Facts<'a> {
     pub fn counted(
         counts: &'a Counter,
         bits: u32,
+        regs: Regs,
     ) -> Self {
         Self {
             body: None,
             cpu: None,
+            regs,
             counts: Some(counts),
             exits: OnceCell::new(),
             flags_out: OnceCell::new(),
@@ -389,6 +396,11 @@ impl<'a> Cx<'a> {
         Self { facts, block, insns, dead: OnceCell::new(), places: OnceCell::new() }
     }
 
+    /// The register file of the target the walked code is for.
+    pub fn regs(&self) -> Regs {
+        self.facts.regs
+    }
+
     fn block(&self) -> &'a LirBlock {
         self.block.expect("a group reading liveness walks a block")
     }
@@ -397,6 +409,7 @@ impl<'a> Cx<'a> {
     /// block as found.
     pub fn dead_after(
         &self,
+        regs: Regs,
         one: &Arc<Insn>,
     ) -> Lanes {
         let dead = self
@@ -404,7 +417,7 @@ impl<'a> Cx<'a> {
             .get_or_init(
                 || {
                     let exits = self.facts.exits.get_or_init(|| liveness::dead_at_exit(self.facts.body()));
-                    regthrash::_dead_after(self.facts.bits, self.block(), exits[&self.block().at])
+                    regthrash::_dead_after(regs, self.facts.bits, self.block(), exits[&self.block().at])
                 },
             );
         dead[&id(one)]

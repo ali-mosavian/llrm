@@ -528,6 +528,7 @@ name = "llrm-target"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-lir",
  "llrm-mir",
  "toml",
 ]

@@ -51,6 +51,10 @@ fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::targ
 }
 
 impl llrm_target::Target for M16 {
+    fn registers(&self) -> &'static llrm_lir::registers::Info {
+        &REGISTER_INFO
+    }
+
     fn register_capacity(&self) -> i64 {
         GENERAL.len() as i64
     }

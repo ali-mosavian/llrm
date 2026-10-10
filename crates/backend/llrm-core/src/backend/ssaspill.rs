@@ -529,6 +529,7 @@ impl<'a> Machine<'a> {
         segments: &Segments,
         classes: &'a RegisterClasses,
     ) -> Self {
+        let regs = segments.registers;
         let general: BTreeSet<RegId> = match file {
             File::General => classes.available.iter().map(|one| _whole(*one)).collect(),
             File::Selector => segments.selectors.iter().copied().collect(),
@@ -547,7 +548,7 @@ impl<'a> Machine<'a> {
             data: segments.data,
             general,
             pools,
-            bytes: target::BYTE.iter().map(|one| _whole(*one)).collect(),
+            bytes: regs.integer_of(1).iter().map(|one| _whole(*one)).collect(),
         }
     }
 
@@ -609,14 +610,16 @@ fn stated(
     general: &BTreeSet<RegId>,
     classes: &RegisterClasses,
 ) -> BTreeSet<RegId> {
+    let regs = classes.registers;
     let mut out: BTreeSet<RegId> = BTreeSet::new();
     if let Some(what) = &one.what {
         out.extend(classes.requirements(what).values().map(|register| _whole(*register)));
     }
     out.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)));
     out.extend(one.clobbers.iter().map(|register| _whole(*register)));
-    if let Some(status) =
-        classes.status_word().filter(|_| one.what.as_ref().is_some_and(target::status_through_register))
+    if let Some(status) = classes
+        .status_word()
+        .filter(|_| one.what.as_ref().is_some_and(|what| target::status_through_register(regs, what)))
     {
         out.insert(_whole(status));
     }
@@ -635,9 +638,10 @@ pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
 /// Values no general register holds: x87 values and wider ones, and every phi
 /// web they join.
 pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
+    let regs = body.regs();
     let mut out: BTreeSet<u32> = BTreeSet::new();
     for one in body.insns() {
-        if one.what.as_ref().is_some_and(|what| target::_on_the_stack(what) || what.op.is_x87()) {
+        if one.what.as_ref().is_some_and(|what| target::_on_the_stack(regs, what) || what.op.is_x87()) {
             out.extend(one.uses.iter().chain(&one.defines).copied());
         }
         // A value no general register holds: a float, whatever reads it.

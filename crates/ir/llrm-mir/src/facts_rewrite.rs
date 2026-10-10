@@ -36,9 +36,14 @@
 //! never hoisted); `induction::inbounds_backedges` requires the access to
 //! dominate the latch; `memory` and `pointerfacts` conclude only that a GEP's
 //! result is in its base's object; `gepoffset` rewrites `sext (add nsw ..)` at
-//! the add; `isel` prices a wrapping add. `ranges`, `guards`, `consts` and
-//! value tracking read no flag. The test below lists the files that name a
-//! no-wrap or inbounds flag, so a new reader is checked before it is added.
+//! the add; `isel` prices a wrapping add; `algebraic::_offset_compared` reads
+//! the flag of a sum to fold a compare of it (`icmp P (x + c1), c2` is `icmp P
+//! x, c2 - c1` where the sum cannot wrap): the compare is a user of the sum, so
+//! the sum ran wherever the compare does, the new compare is made in the old
+//! one's place, and where the sum would have wrapped it is poison and either
+//! answer stands. `ranges`, `guards`, `consts` and value tracking read no flag.
+//! The test below lists the files that name a no-wrap or inbounds flag, so a
+//! new reader is checked before it is added.
 
 use crate::facts::{Bounds, Effect, Fact, Facts};
 
@@ -180,8 +185,16 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 7] =
-            ["induction.rs", "memory.rs", "gepoffset.rs", "isel.rs", "interpret.rs", "mir.rs", "pointerfacts.rs"];
+        const CHECKED: [&str; 8] = [
+            "algebraic.rs",
+            "induction.rs",
+            "memory.rs",
+            "gepoffset.rs",
+            "isel.rs",
+            "interpret.rs",
+            "mir.rs",
+            "pointerfacts.rs",
+        ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
             ["no_signed_wrap()", "no_unsigned_wrap()", "in_bounds()", "Flags::NSW", "Flags::NUW", "Flags::INBOUNDS"];

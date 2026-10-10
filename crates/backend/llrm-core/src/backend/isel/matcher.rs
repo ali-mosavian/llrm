@@ -482,8 +482,9 @@ impl Selector<'_, '_, '_> {
         _: &mut Vec<Arc<Insn>>,
         pointer: Operand,
     ) -> Result<Loc, Unselected> {
+        let regs = self.regs();
         let pointer = self.pointer(pointer)?;
-        Ok(Loc::Mem(Self::memory(pointer, self.size(self.accessed(m))?)))
+        Ok(Loc::Mem(Self::memory(regs, pointer, self.size(self.accessed(m))?)))
     }
 
     /// The cell the load defining `value` reads.
@@ -493,9 +494,10 @@ impl Selector<'_, '_, '_> {
         _: &mut Vec<Arc<Insn>>,
         value: Operand,
     ) -> Result<Loc, Unselected> {
+        let regs = self.regs();
         let loaded = self.function.instruction(self.definition(value).expect("a load"));
         let pointer = self.pointer(loaded.operands[0])?;
-        Ok(Loc::Mem(Self::memory(pointer, self.size(loaded.ty)?)))
+        Ok(Loc::Mem(Self::memory(regs, pointer, self.size(loaded.ty)?)))
     }
 
     /// The cell an integer load or store reaches: its register's bytes.
@@ -505,8 +507,9 @@ impl Selector<'_, '_, '_> {
         _: &mut Vec<Arc<Insn>>,
         pointer: Operand,
     ) -> Result<Loc, Unselected> {
+        let regs = self.regs();
         let width = self.width(self.accessed(m))?;
-        Ok(Loc::Mem(Self::memory(self.pointer(pointer)?, width)))
+        Ok(Loc::Mem(Self::memory(regs, self.pointer(pointer)?, width)))
     }
 
     pub fn op_imm(
@@ -881,6 +884,7 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
         pointer: Operand,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let pointer = self.pointer(pointer)?;
         let mut made: IndexMap<i64, Held> = IndexMap::default();
         let mut halves = self.words[&m.inst].clone();
@@ -889,7 +893,7 @@ impl Selector<'_, '_, '_> {
             let held = Held { value: self.value(result), width: 2 };
             let source = match made.get(&offset) {
                 Some(&earlier) => Loc::Held(earlier),
-                None => Loc::Mem(Self::memory(pointer.moved(offset), 2)),
+                None => Loc::Mem(Self::memory(regs, pointer.moved(offset), 2)),
             };
             made.entry(offset).or_insert(held);
             out.push(insn(m.at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![source])));
@@ -927,6 +931,7 @@ impl Selector<'_, '_, '_> {
         constant: Operand,
         pointer: Operand,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let (pointer, size) = (self.pointer(pointer)?, self.size(self.type_of(constant))?);
         let Operand::Constant(id) = constant else { unreachable!("a constant") };
         let ConstantKind::Float(bits) = self.module.context.get(id).kind else {
@@ -942,7 +947,7 @@ impl Selector<'_, '_, '_> {
                 let what = semantics(
                     Operation::Move,
                     "mov",
-                    vec![Loc::Mem(Self::memory(pointer.moved(by as i64), width))],
+                    vec![Loc::Mem(Self::memory(regs, pointer.moved(by as i64), width))],
                     vec![Loc::Imm(Imm { value, width, address: None })],
                 );
                 out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
@@ -953,13 +958,13 @@ impl Selector<'_, '_, '_> {
         let low = semantics(
             Operation::Move,
             "mov",
-            vec![Loc::Mem(Self::memory(pointer, 4))],
+            vec![Loc::Mem(Self::memory(regs, pointer, 4))],
             vec![Loc::Imm(Imm { value: bits as u32 as i64, width: 4, address: None })],
         );
         let what = if size == 8 {
             out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, low) }));
             let high = Loc::Imm(Imm { value: (bits >> 32) as u32 as i64, width: 4, address: None });
-            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(4), 4))], vec![high])
+            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, pointer.moved(4), 4))], vec![high])
         } else {
             low
         };
@@ -975,6 +980,7 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
         pointer: Operand,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let pointer = self.pointer(pointer)?;
         let halves = self.wide_halves()?;
         let held = [self.fresh_held(halves[0].bytes), self.fresh_held(halves[1].bytes)];
@@ -983,7 +989,7 @@ impl Selector<'_, '_, '_> {
                 Operation::Move,
                 "mov",
                 vec![Loc::Held(held)],
-                vec![Loc::Mem(Self::memory(pointer.moved(half.offset), half.bytes))],
+                vec![Loc::Mem(Self::memory(regs, pointer.moved(half.offset), half.bytes))],
             );
             out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
         }
@@ -999,13 +1005,14 @@ impl Selector<'_, '_, '_> {
         value: Operand,
         pointer: Operand,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let (low, high) = self.wide(value, m.at, out)?;
         let pointer = self.pointer(pointer)?;
         for (half, held) in self.wide_halves()?.iter().zip([low, high]) {
             let what = semantics(
                 Operation::Move,
                 "mov",
-                vec![Loc::Mem(Self::memory(pointer.moved(half.offset), half.bytes))],
+                vec![Loc::Mem(Self::memory(regs, pointer.moved(half.offset), half.bytes))],
                 vec![Loc::Held(held)],
             );
             out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
@@ -1032,6 +1039,7 @@ impl Selector<'_, '_, '_> {
         value: Operand,
         pointer: Operand,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let words = match self.far_words(value)? {
             Some(words) => words,
             None => self.far(value, m.at, out).map(|(offset, selector)| [Loc::Held(offset), Loc::Held(selector)])?,
@@ -1039,7 +1047,7 @@ impl Selector<'_, '_, '_> {
         let pointer = self.pointer(pointer)?;
         for (word, by) in words.into_iter().zip([0, 2]) {
             let what =
-                semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by), 2))], vec![word]);
+                semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, pointer.moved(by), 2))], vec![word]);
             out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
         }
         Ok(())
