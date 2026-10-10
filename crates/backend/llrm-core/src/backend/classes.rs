@@ -137,7 +137,10 @@ impl RegisterClasses {
         let forms = self.pins.get("fnstsw")?;
         let (_, _, _, pins) =
             forms.iter().find(|(op, dests, sources, _)| *op == "barrier" && *dests == 1 && *sources == 0)?;
-        pins.iter().find(|(side, index, _)| matches!(side, Side::Dest) && *index == 0).map(|(_, _, register)| *register)
+        let (_, _, register) = pins.iter().find(|(side, index, _)| matches!(side, Side::Dest) && *index == 0)?;
+        // The status word is 16 bits whatever width the form pins its register
+        // at.
+        crate::backend::registerinfo::view(crate::backend::registerinfo::root(*register), 16)
     }
 
     /// Every operand this instruction requires in one particular register.
