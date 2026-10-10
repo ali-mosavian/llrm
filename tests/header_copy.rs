@@ -49,8 +49,14 @@ fn test_fib_with_the_header_copy_on_keeps_its_self_inlined_nest() {
         .skip_while(|line| !line.starts_with("_fib proc"))
         .take_while(|line| !line.starts_with("_fib endp"))
         .collect();
-    let tests = function.iter().filter(|line| line.trim().starts_with("cmp ") && line.trim().ends_with(", 2")).count();
-    assert!(tests >= 6, "{tests} tests of n < 2\n{}", function.join("\n"));
+    let compares = |bound: &str| {
+        function.iter().filter(|line| line.trim().starts_with("cmp ") && line.trim().ends_with(bound)).count()
+    };
+    // The copied test reads the counter, not a step computed beside its update:
+    // `cmp n, 3`, not `lea t, [n-1]; cmp t, 2`.
+    let tests = compares(", 3") + compares(", 4");
+    assert!(compares(", 2") <= 1, "{} tests of a step\n{}", compares(", 2"), function.join("\n"));
+    assert!(tests >= 6, "{tests} tests of n\n{}", function.join("\n"));
 }
 
 /// `if (n == 0) return acc; ... n - 1` behind the copied guard is `do { } while
