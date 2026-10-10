@@ -263,3 +263,26 @@ fn flat_target_bare_print_passes_a_real_descriptor() {
         .expect("a B$PESD call");
     assert!(!matches!(call.operands[0], llrm_core::hir::model::Operand::Constant { .. }), "{:?}", call.operands);
 }
+
+/// VARSEG and VARPTR split an address into a paragraph and a nibble: on a flat target above 1 MB that reached the
+/// wrong memory. Where there is one space VARPTR is the whole address, as wide as a pointer, and VARSEG is 0.
+#[test]
+fn flat_target_varptr_is_a_whole_address() {
+    let source = "x% = 1\nDEF SEG = VARSEG(x%)\nPRINT PEEK(VARPTR(x%))\n";
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "flat.bas", source.as_bytes());
+    let mut frontend = qb_driver::Frontend::new("qb45", "llrm");
+    (frontend.near_bytes, frontend.far_bytes) = (4, 4);
+    let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{error}"));
+    let module = &program.modules[0];
+    let function = module.functions.iter().find(|one| one.name == "__main").expect("the main code");
+    let offset = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find(|one| one.op == llrm_core::hir::model::Op::PointerOffset)
+        .expect("a VARPTR");
+    let value = function.values.iter().find(|one| one.id == offset.results[0]).expect("its value");
+    let width = module.types.iter().find(|one| one.id == value.r#type).expect("its type").width;
+    assert_eq!(width, 4, "VARPTR is not a whole address");
+}

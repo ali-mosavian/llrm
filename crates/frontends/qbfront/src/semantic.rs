@@ -3754,16 +3754,10 @@ impl Compiler {
                         if arguments.len() != 2 {
                             return self.fail("POKE expects an offset and byte value");
                         }
-                        let offset = self.unsigned_word(&arguments[0])?;
+                        let offset = self.address_word(&arguments[0])?;
                         let (value, value_type) = self.expression(&arguments[1])?;
                         let value = self.convert(value, value_type, BYTE)?;
-                        let segment_place = self.def_segment_place();
-                        let segment = self.value(INTEGER);
-                        self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
-                        self.tag_last(Tag::ReadSegment);
-                        let pointer_type = self.far_pointer_type(BYTE);
-                        let pointer = self.value(pointer_type);
-                        self.emit("concat", vec![pointer], vec![Operand::Value(segment), offset]);
+                        let pointer = self.segment_pointer(offset);
                         self.emit(
                             "store",
                             Vec::new(),
@@ -6637,13 +6631,19 @@ impl Compiler {
         ) {
             let (place, type_id) = self.destination(&arguments[0])?;
             let pointer = self.far_address(place, type_id);
-            let result = self.value(INTEGER);
+            // One space: an address is as wide as a pointer, and the segment is always 0.
+            let result_type = if self.options.one_space() && intrinsic.lowering == Lowering::PointerOffset {
+                integer_type(self.options.near(), true)
+            } else {
+                INTEGER
+            };
+            let result = self.value(result_type);
             self.emit(
                 if intrinsic.lowering == Lowering::PointerSegment { "pointer_segment" } else { "pointer_offset" },
                 vec![result],
                 vec![Operand::Value(pointer)],
             );
-            return Ok(Some((Operand::Value(result), INTEGER)));
+            return Ok(Some((Operand::Value(result), result_type)));
         }
         if matches!(intrinsic.lowering, Lowering::Abs | Lowering::Sqrt) {
             let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
@@ -6898,14 +6898,8 @@ impl Compiler {
             return Ok(Some((result, INTEGER)));
         }
         if intrinsic.lowering == Lowering::Peek {
-            let segment_place = self.def_segment_place();
-            let offset = self.unsigned_word(&arguments[0])?;
-            let segment = self.value(INTEGER);
-            self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
-            self.tag_last(Tag::ReadSegment);
-            let pointer_type = self.far_pointer_type(BYTE);
-            let pointer = self.value(pointer_type);
-            self.emit("concat", vec![pointer], vec![Operand::Value(segment), offset]);
+            let offset = self.address_word(&arguments[0])?;
+            let pointer = self.segment_pointer(offset);
             let byte = self.value(BYTE);
             self.emit(
                 "load",
@@ -7116,6 +7110,40 @@ impl Compiler {
     /// target can see which device it names.
     /// An address or port, as QB's I4toU2 (qb/ir/exio.asm) takes it: coerced
     /// to LONG, then its low word, if the high word is all zeros or all ones.
+    /// An address a program names to PEEK, POKE, BLOAD or BSAVE: the offset of a segment:offset pair, a word; where
+    /// there is one space the whole address, as wide as a pointer.
+    fn address_word(
+        &mut self,
+        expression: &Expr,
+    ) -> Result<Operand, SemanticError> {
+        if !self.options.one_space() {
+            return self.unsigned_word(expression);
+        }
+        let (value, type_id) = self.expression(expression)?;
+        let (value, type_id) = if matches!(type_id, SINGLE | DOUBLE) {
+            (self.convert(value, type_id, LONG)?, LONG)
+        } else {
+            (value, type_id)
+        };
+        self.convert(value, type_id, integer_type(self.options.near(), true))
+    }
+
+    /// The byte pointer an address names: the offset from DEF SEG's paragraph.
+    fn segment_pointer(
+        &mut self,
+        offset: Operand,
+    ) -> u32 {
+        let segment_place = self.def_segment_place();
+        let segment = self.value(INTEGER);
+        self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
+        self.tag_last(Tag::ReadSegment);
+        let segment = Operand::Value(segment);
+        let pointer_type = self.far_pointer_type(BYTE);
+        let pointer = self.value(pointer_type);
+        self.emit("concat", vec![pointer], vec![segment, offset]);
+        pointer
+    }
+
     fn unsigned_word(
         &mut self,
         expression: &Expr,
@@ -7167,7 +7195,7 @@ impl Compiler {
                 return self.fail("BSAVE expects a path, offset, and length");
             };
             let path = self.string_descriptor(path)?;
-            let offset = self.unsigned_word(offset)?;
+            let offset = self.address_word(offset)?;
             let length = self.unsigned_word(length)?;
             self.emit_runtime_call("B$BSAV", Vec::new(), vec![path, offset, length]);
             self.tag_last(Tag::ReadSegment);
@@ -7176,7 +7204,7 @@ impl Compiler {
 
         let (path, offset, supplied) = match arguments {
             [path] => (path, Operand::Constant(INTEGER, Number::Integer(0)), 0),
-            [path, offset] => (path, self.unsigned_word(offset)?, 1),
+            [path, offset] => (path, self.address_word(offset)?, 1),
             _ => return self.fail("BLOAD expects a path and optional offset"),
         };
         let path = self.string_descriptor(path)?;

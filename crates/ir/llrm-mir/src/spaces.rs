@@ -26,10 +26,6 @@ pub struct Spaces {
     /// segments a huge pointer steps through. None where the target has no
     /// segments.
     pub segment_bytes: Option<u64>,
-    /// Where real-mode memory is in a target with no selectors of its own: the address segment 0, offset 0 is at.
-    /// A frontend whose program holds segment:offset pairs (BASIC's DEF SEG, VARSEG) means this memory by them,
-    /// `base + segment * 16 + offset`. None where the target has selectors, or no such window.
-    pub real_mode_base: Option<u64>,
 }
 
 impl Default for Spaces {
@@ -42,7 +38,7 @@ impl Spaces {
     /// One space, none of the others: a target with no segments, and the one a
     /// pass is given when no target is named.
     pub const FLAT: Self =
-        Self { near: 0, far: 0, data: 0, stack: 0, segment: None, huge: None, fixed: None, segment_bytes: None, real_mode_base: None };
+        Self { near: 0, far: 0, data: 0, stack: 0, segment: None, huge: None, fixed: None, segment_bytes: None };
 
     /// Whether `far` is the `near` space: the target is flat, and a far or huge
     /// pointer is a near one.

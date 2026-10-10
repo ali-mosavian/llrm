@@ -788,7 +788,9 @@ fn _function(
                     || (instruction.op == model::Op::PointerSegment && pointer.width != 4)
                     || (instruction.op == model::Op::PointerOffset && !matches!(pointer.width, 2 | 4))
                     || result.kind != model::TypeKind::Integer
-                    || result.width != 2
+                    // A whole address, as wide as the pointer, where there is one space.
+                    || !(result.width == 2
+                        || (instruction.op == model::Op::PointerOffset && result.width == pointer.width))
                 {
                     invalid!("{prefix}: pointer projection cannot produce INTEGER");
                 }
@@ -802,11 +804,11 @@ fn _function(
                 if high.kind != model::TypeKind::Integer
                     || low.kind != model::TypeKind::Integer
                     || high.width != 2
-                    || low.width != 2
+                    || !matches!(low.width, 2 | 4)
                     || result.kind != model::TypeKind::Pointer
                     || result.width != 4
                 {
-                    invalid!("{prefix}: pointer concat is not INTEGER:INTEGER to 16:16");
+                    invalid!("{prefix}: pointer concat is not INTEGER:INTEGER to 16:16, or INTEGER:LONG to a flat pointer");
                 }
             }
             for operand in &instruction.operands {

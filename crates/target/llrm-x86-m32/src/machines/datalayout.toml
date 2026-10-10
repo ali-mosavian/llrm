@@ -18,9 +18,6 @@ near = 0
 far = 0
 data = 0
 stack = 0
-# Real-mode memory under the extender: the address segment 0, offset 0 is at, so a segment:offset pair (BASIC's
-# DEF SEG, VARSEG) is the address base + segment * 16 + offset.
-real_mode_base = 0
 
 [pointers]
 4 = "near"
