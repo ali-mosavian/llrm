@@ -24,6 +24,7 @@ impl FunctionCompiler<'_> {
                 bits: self.types.code_bits,
                 segmented: self.types.sizes.segmented,
                 address_bytes: self.types.sizes.near,
+                wide: false,
             },
         )
         .map_err(|refused| Diagnostic::new(asm.lines[refused.line].1, refused.message))?;
