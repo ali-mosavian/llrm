@@ -1,4 +1,4 @@
-use iced_x86::Register::{EBP, ESI, ESP};
+use iced_x86::Register::{BP, EBP, ESI, ESP, SP};
 use llrm_object::debug::FrameRow;
 
 use super::rows;
@@ -104,4 +104,18 @@ fn a_push_of_a_register_written_since_entry_is_no_save() {
     // mov esi, 1; push esi; add esp, 4; ret
     let code = [0xBE, 1, 0, 0, 0, 0x56, 0x83, 0xC4, 0x04, 0xC3];
     assert!(of(&code, &[]).unwrap().iter().all(|one| one.saved.is_empty()));
+}
+
+/// `push bp; mov bp, sp; sub sp, 8; leave; retf` in 16-bit code: the frame
+/// register and the stack pointer are BP and SP, which the operands widen to
+/// EBP and ESP; `leave` pops a word, not a dword. The frame address stayed the
+/// stack pointer's plus six after `mov` and was minus two at the `retf`, so a
+/// 16-bit function's frame description was wrong from its first row.
+#[test]
+fn a_16_bit_frame_is_followed_in_words() {
+    let code = [0x55, 0x89, 0xE5, 0x83, 0xEC, 0x08, 0xC9, 0xCB];
+    assert_eq!(
+        rows(&code, 16, BP, SP, 4, &[]).unwrap(),
+        [row(0, "sp", 4, &[]), row(1, "sp", 6, &[("bp", -6)]), row(3, "bp", 6, &[("bp", -6)]), row(7, "sp", 4, &[])]
+    );
 }

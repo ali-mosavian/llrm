@@ -882,6 +882,9 @@ fn dwarf_in_a_16_bit_omf_object_links_into_an_mz_image_that_wdump_reads() {
         "DW_AT_name                    sum",
         "DW_AT_segment",
         "SET_SEGMENT",
+        // The frame description: without it a debugger cannot know the frame
+        // address its DW_OP_call_frame_cfa and DW_OP_fbreg start from.
+        "\".debug_frame\"",
     ] {
         assert!(text.contains(wanted), "no {wanted:?}:\n{text}");
     }

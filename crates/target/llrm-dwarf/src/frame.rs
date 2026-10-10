@@ -25,8 +25,19 @@ const CIE_VERSION: u8 = 4;
 /// What a CIE's id field holds in `.debug_frame`.
 const CIE_ID: u32 = 0xFFFF_FFFF;
 /// Every offset a register is saved at is a multiple of this, below the frame
-/// address.
-const DATA_ALIGNMENT: i64 = -4;
+/// address: a stack slot, 4 bytes in a 32-bit program, 2 in a 16-bit one.
+fn data_alignment(address: usize) -> i64 {
+    -(address as i64)
+}
+
+/// Where the return address is below the frame address, in slots: the whole
+/// entry offset (a far call pushes a segment too).
+fn returns(
+    entry: &FrameRow,
+    address: usize,
+) -> u64 {
+    entry.cfa_offset as u64 / address as u64
+}
 
 fn number(
     info: &Info,
@@ -45,6 +56,7 @@ fn changes(
     buf: &mut Buf,
     from: &FrameRow,
     to: &FrameRow,
+    alignment: i64,
 ) -> Result<(), Unsupported> {
     if (&from.cfa_register, from.cfa_offset) != (&to.cfa_register, to.cfa_offset) {
         if from.cfa_register == to.cfa_register {
@@ -66,7 +78,7 @@ fn changes(
                 return refused(format!("register {register} is past the short form of DW_CFA_offset"));
             }
             buf.u8(DW_CFA_OFFSET | register as u8);
-            buf.uleb((at / DATA_ALIGNMENT) as u64);
+            buf.uleb((at / alignment) as u64);
         }
     }
     for (register, _) in &from.saved {
@@ -126,13 +138,13 @@ pub fn section(
     // A 16-bit program's frame descriptions name the segment their code is in.
     buf.u8(if address == 2 { 2 } else { 0 });
     buf.uleb(1);
-    buf.sleb(DATA_ALIGNMENT);
+    buf.sleb(data_alignment(address));
     buf.uleb(return_column);
     buf.u8(DW_CFA_DEF_CFA);
     buf.uleb(number(info, &entry.cfa_register)?);
     buf.uleb(entry.cfa_offset as u64);
     buf.u8(DW_CFA_OFFSET | return_column as u8);
-    buf.uleb(1);
+    buf.uleb(returns(entry, address));
     while buf.at() % address != 0 {
         buf.u8(0);
     }
@@ -157,11 +169,19 @@ pub fn section(
         buf.address(address, symbol, range.offset as i64 - base as i64);
         buf.bytes.extend((range.length as u64).to_le_bytes().iter().take(address));
         let mut state = &initial;
+        // A function called the other way (near, far) has its return address
+        // elsewhere than the CIE says.
+        if let Some(first) =
+            function.frame.first().filter(|first| returns(first, address) != returns(&initial, address))
+        {
+            buf.u8(DW_CFA_OFFSET | return_column as u8);
+            buf.uleb(returns(first, address));
+        }
         for row in &function.frame {
             if row.offset > 0 || state != row {
                 advance(&mut buf, row.offset - state.offset.min(row.offset));
             }
-            changes(info, &mut buf, state, row)?;
+            changes(info, &mut buf, state, row, data_alignment(address))?;
             state = row;
         }
         while buf.at() % address != 0 {

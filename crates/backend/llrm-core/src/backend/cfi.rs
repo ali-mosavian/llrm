@@ -45,6 +45,16 @@ fn name(register: Register) -> String {
     format!("{register:?}").to_lowercase()
 }
 
+/// A register saved, as the code's width spells it: a 16-bit program pushes
+/// `si`, which `full` widened to `esi` (the i386 number is not the 16-bit one).
+fn spelled(
+    bits: u32,
+    register: Register,
+) -> String {
+    let spelled = name(register);
+    if bits == 16 && register.is_gpr32() { spelled.trim_start_matches('e').to_owned() } else { spelled }
+}
+
 /// The rows of the function whose bytes are `code`, entered with the frame
 /// address `entry` bytes past the stack pointer (the return address). `frame`
 /// is the register the code keeps its frame in, `stack` the stack pointer;
@@ -88,7 +98,7 @@ pub fn rows(
         }
         let one = decode(at)?;
         states.insert(at, (one, state.clone()));
-        let after = step(&one, state, frame, stack, pops, &mut info)?;
+        let after = step(&one, state, bits, full(frame), full(stack), pops, &mut info)?;
         let next = at + one.len();
         let jump = (matches!(one.op0_kind(), OpKind::NearBranch32 | OpKind::NearBranch16))
             .then(|| one.near_branch_target() as usize);
@@ -117,7 +127,7 @@ pub fn rows(
             offset: at,
             cfa_register: name(if state.base == Base::Stack { stack } else { frame }),
             cfa_offset: if state.base == Base::Stack { state.stack } else { state.frame },
-            saved: state.saved.iter().map(|&(register, below)| (name(register), -below)).collect(),
+            saved: state.saved.iter().map(|&(register, below)| (spelled(bits, register), -below)).collect(),
         };
         if out.last().is_none_or(|last| {
             (&last.cfa_register, last.cfa_offset, &last.saved) != (&row.cfa_register, row.cfa_offset, &row.saved)
@@ -132,6 +142,7 @@ pub fn rows(
 fn step(
     one: &Instruction,
     mut state: State,
+    bits: u32,
     frame: Register,
     stack: Register,
     pops: &[(usize, i64)],
@@ -200,8 +211,11 @@ fn step(
             // MOV esp, ebp; POP ebp.
             state.stack = state.frame;
             state.base = Base::Stack;
-            state.stack -= 4;
-            state.saved.retain(|&(register, below)| !(register == full(frame) && below == state.stack + 4));
+            // The frame register comes back off the stack: a word of the code's
+            // width.
+            let word = i64::from(bits / 8);
+            state.stack -= word;
+            state.saved.retain(|&(register, below)| !(register == full(frame) && below == state.stack + word));
             state.changed.retain(|one| *one != full(frame));
             return Ok(state);
         }
