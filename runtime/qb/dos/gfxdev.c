@@ -633,12 +633,7 @@ static void (*const dots[KINDS][2])(const GdFill *fill, unsigned x, unsigned y) 
     { packed2_dot, packed2_dot }
 };
 
-/* WORKAROUND M32-FRAMEBASE (remove when target-neutral's fix lands).
-   Lines: the loops of fill.asm, one for each kind of mode, with Bresenham's terms here.  The terms are kept in one static
-   structure: the m32 compiler took the address of a local one with a 16-bit base register in these functions
-   (`lea eax, [bx-52]`). */
-static FillLine line;
-
+/* Lines: the loops of fill.asm, one for each kind of mode, with Bresenham's terms here. */
 static void line_terms(FillLine *line, unsigned dx, unsigned dy)
 {
     int major = (int)(dx > dy ? dx : dy), minor = (int)(dx > dy ? dy : dx);
@@ -652,6 +647,8 @@ static void line_terms(FillLine *line, unsigned dx, unsigned dy)
 
 static void linear_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y)
 {
+    FillLine line;
+
     (void)fill;
     line_terms(&line, dx, dy);
     line.dst = pixel_at(x, y);
@@ -662,6 +659,8 @@ static void linear_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx,
 
 static void packed_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y, unsigned bits)
 {
+    FillLine line;
+
     line_terms(&line, dx, dy);
     line.dst = packed_row(y) + (x * bits >> 3);
     line.bit = x % (8 / bits);
@@ -690,6 +689,8 @@ static void packed2_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx
 
 static void planar_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y)
 {
+    FillLine line;
+
     line_terms(&line, dx, dy);
     line.dst = byte_of(x, y);
     line.bit = 0x80 >> (x & 7);
