@@ -36,8 +36,8 @@ void file_print_to(Fdb *fdb);
 void B_DSKI(short channel);
 int B_FEOF(short channel);
 int B_FREF(void);
-void B_GET4(short channel, long record, short length, qb_data_ptr data);
-void B_PUT4(short channel, long record, short length, qb_data_ptr data);
+void B_GET4(short channel, long record, qb_data_ptr data, short length);
+void B_PUT4(short channel, long record, qb_data_ptr data, short length);
 void B_SSEK(short channel, long position);
 
 #endif

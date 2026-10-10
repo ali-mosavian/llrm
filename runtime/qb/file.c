@@ -265,13 +265,13 @@ static void position_at(Fdb *fdb, long position)
 }
 
 /* B$GET4, B$PUT4: GET and PUT with a record number or byte position. */
-void B_GET4(short channel, long record, short length, qb_data_ptr data)
+void B_GET4(short channel, long record, qb_data_ptr data, short length)
 {
     position_at(open_fdb(channel), record);
     B_GET3(channel, data, length);
 }
 
-void B_PUT4(short channel, long record, short length, qb_data_ptr data)
+void B_PUT4(short channel, long record, qb_data_ptr data, short length)
 {
     position_at(open_fdb(channel), record);
     B_PUT3(channel, data, length);

@@ -5,7 +5,7 @@
 
 /* B$ASSN: the `source_length` bytes at `source` into the `length` bytes at
    `target`: cut to fit, or padded with blanks. */
-void B_ASSN(short source_length, short length, qb_data_ptr source, qb_data_ptr target)
+void B_ASSN(qb_data_ptr source, short source_length, qb_data_ptr target, short length)
 {
     char *to = QB_NEAR_OF(target);
     const char *from = QB_NEAR_OF(source);
@@ -17,7 +17,7 @@ void B_ASSN(short source_length, short length, qb_data_ptr source, qb_data_ptr t
 }
 
 /* B$LDFS: the `length` bytes at `field` as a temporary string. */
-SD *B_LDFS(short length, qb_data_ptr field)
+SD *B_LDFS(qb_data_ptr field, short length)
 {
     char *data;
     SD *result = str_tmp(length, &data);
