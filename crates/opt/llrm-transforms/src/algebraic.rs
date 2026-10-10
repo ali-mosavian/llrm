@@ -319,12 +319,6 @@ fn _shifted_compare(
     }
     let (left, right) = (instruction.operands[0], instruction.operands[1]);
     let Some(compared) = _integer(context, right) else { return false };
-    // A test of a value against zero is a flags test of the value itself, and
-    // the exit a counted loop's step is tested by: kept on the step
-    // (x_insertion's `j - 1 >= 0` is `add ebp, -4; je`).
-    if compared == 0 {
-        return false;
-    }
     let Some(sum) = _definition(function, left) else { return false };
     let Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Sub)) = function.instruction(sum).opcode else { return false };
     let wrap = if signed { Flags::NSW } else { Flags::NUW };

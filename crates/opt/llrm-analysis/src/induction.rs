@@ -135,6 +135,11 @@ pub struct CountedLoop {
     pub step: BigInt,
     pub posttested: bool,
     pub stepped: bool,
+    /// The latch compare reads the counter before its step, and `bound` is the
+    /// one a compare of the stepped counter would test: `phi >= 1` is
+    /// `update >= 0` for a step of -1. The count and `stepped` are those of
+    /// that compare.
+    pub shifted: bool,
     /// Some other exit stops the program; `count` is the trips when it goes on.
     pub stops: bool,
     /// Another exit goes on, to code that returns (only where `counted_leaving`
@@ -178,6 +183,7 @@ impl CountedLoop {
     pub fn rises_unsigned_after(&self) -> bool {
         self.posttested
             && self.stepped
+            && !self.shifted
             && self.entry_guarded
             && matches!(self.reach, Reach::Distance)
             && self.test == IntPredicate::Ult
@@ -721,6 +727,30 @@ fn _proven(
         if !(test == IntPredicate::Ne || (_ascending(test) && step > zero) || (_descending(test) && step < zero)) {
             continue;
         }
+        // Tested before its step at the latch, the counter against a constant
+        // is the stepped counter against that constant one step on,
+        // where the step cannot wrap (LLVM's exit count reads the test the same
+        // way): the one form the proofs below count.
+        let (mut bound, mut stepped, mut shifted) = (bound, stepped, false);
+        if shape.posttested
+            && !stepped
+            && test != IntPredicate::Ne
+            && function.parent(branch) == Some(cfg::block(latch))
+            && let AffineOperand::Const(limit) = &bound
+            && _promised(function, update, &step, _unsigned(test), _signed(&counter.start, facts, width).as_ref())
+        {
+            let unsigned = _unsigned(test);
+            let (low, high) = _extent(unsigned, width);
+            let moved = if unsigned {
+                mod_floor(&limit.n, &(BigInt::from(1) << width))
+            } else {
+                _signed_value(&limit.n, width)
+            } + &step;
+            if low <= moved && moved <= high {
+                bound = AffineOperand::constant(masked(&moved, width), width);
+                (stepped, shifted) = (true, true);
+            }
+        }
         let start = counter.start.clone();
         let limit = _constant(&bound, facts, width);
         let counted_from = |start: &AffineOperand| {
@@ -824,6 +854,7 @@ fn _proven(
             step,
             posttested: shape.posttested,
             stepped,
+            shifted,
             stops: shape.stops,
             leaves: shape.leaves,
             entry_guarded,
