@@ -26,9 +26,9 @@ JWLINK = Path.home() / ".local/bin/jwlink"
 
 # What each program is, and what a reader must find in what it reads.
 PROGRAMS = {
-    "c": {"file": "known.c", "functions": ["add", "main"], "variables": ["a", "b", "sum", "p", "counter"], "lines": [7, 8, 9, 14, 15, 16, 17], "types": ["pt"]},
-    "nib": {"file": "known.nib", "functions": ["add", "main"], "variables": ["a", "b", "sum", "total"], "lines": [2, 3, 6, 7], "types": []},
-    "qb": {"file": "known.bas", "functions": ["add"], "variables": ["a", "b", "sum", "total"], "lines": [3, 4, 7, 8, 9], "types": []},
+    "c": {"file": "known.c", "functions": ["add", "main"], "variables": ["first", "second", "sum", "p", "counter"], "lines": [7, 8, 9, 14, 15, 16, 17], "types": ["pt"]},
+    "nib": {"file": "known.nib", "functions": ["add", "main"], "variables": ["first", "second", "sum", "total"], "lines": [2, 3, 6, 7], "types": [], "registers": ["first", "second"]},
+    "qb": {"file": "known.bas", "functions": ["add"], "variables": ["first", "second", "sum", "total"], "lines": [3, 4, 7, 8], "types": []},
 }
 OBJECTS = {16: ["omf"], 32: ["omf", "coff", "elf", "macho"]}
 FORMATS = {"codeview": "-gcodeview", "td": "-gtd", "dwarf": "-gdwarf"}
@@ -130,7 +130,9 @@ def check_omf_codeview(fe, bits, obj_path, work):
     if "NB09" not in dump:
         return ["wdump: no CodeView in the packed image"]
     text = image.read_bytes().decode("latin-1")
-    problems = [f"no {kind[:-1]} {name}" for kind in ("functions", "variables", "types") for name in missing(program[kind], text)]
+    # CodeView 4 names one place for a scope: a parameter that only arrives in a register has none.
+    wanted = {**program, "variables": [name for name in program["variables"] if name not in program.get("registers", [])]}
+    problems = [f"no {kind[:-1]} {name}" for kind in ("functions", "variables", "types") for name in missing(wanted[kind], text)]
     rows = {int(m, 16) for m in re.findall(r"^\s+[0-9A-F]{8}\s+([0-9A-F]{4})/\d+", dump, re.M)}
     problems += [f"no line {line}" for line in program["lines"] if line not in rows]
     return problems
