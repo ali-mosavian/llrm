@@ -118,11 +118,12 @@ pub fn wrapped(
     // would run each trip. None where that is the entry.
     let home_of = |uses: &[i64]| -> Option<i64> {
         let mut home = *uses.first()?;
+        // The home only rises, so the climb is the depth of the first use in
+        // all, not a chain of its ancestors for each use.
         for &other in &uses[1..] {
-            home = above(home)
-                .into_iter()
-                .find(|&candidate| from_entry.dominates(candidate, other))
-                .expect("the entry dominates every block");
+            while !from_entry.dominates(home, other) {
+                home = idom[&home].expect("the entry dominates every block");
+            }
         }
         while home != body.entry && cycles.iter().any(|one| one.body.contains(&home)) {
             home = idom[&home].expect("a block below the entry has a dominator");
