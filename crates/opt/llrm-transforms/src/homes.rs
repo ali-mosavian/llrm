@@ -254,7 +254,7 @@ impl<'a> Scan<'a> {
             liveness::each_across(self.function, &self.found, block, &mut |inst, across| {
                 for (at, candidate) in candidates.iter().enumerate() {
                     if !disturbed[at]
-                        && across.contains(&candidate.result)
+                        && across(candidate.result)
                         && self.overlaps(candidate.cell, inst)
                         && !writes_only(self.function, inst, Operand::Value(candidate.result))
                     {

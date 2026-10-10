@@ -169,16 +169,16 @@ pub fn live_points(
     points
 }
 
-/// `f(instruction, live across it)` for each instruction of `block` but its
-/// phis, last first, over one set changed as the walk goes: `live_points`
-/// copies the live set twice for each instruction, and a caller that asked it
-/// of every block for each of many values paid the live set's size times the
-/// function's for each (`homes` on N cells and N joins: cubic).
+/// `f(instruction, whether a value is live across it)` for each instruction of
+/// `block` but its phis, last first, over one set changed as the walk goes:
+/// `live_points` copies the live set twice for each instruction, and a caller
+/// that asked it of every block for each of many values paid the live set's
+/// size times the function's for each (`homes` on N cells and N joins: cubic).
 pub fn each_across(
     function: &Function,
     found: &Liveness,
     block: BlockId,
-    f: &mut dyn FnMut(InstId, &BTreeSet<ValueId>),
+    f: &mut dyn FnMut(InstId, &dyn Fn(ValueId) -> bool),
 ) {
     let mut alive = found.live_out[&id(block)].clone();
     for &inst in function.block(block).instructions().iter().rev() {
@@ -189,7 +189,7 @@ pub fn each_across(
         if let Some(one) = op.result {
             alive.remove(&one);
         }
-        f(inst, &alive);
+        f(inst, &|value| alive.contains(&value));
         alive.extend(reads(op));
     }
 }
