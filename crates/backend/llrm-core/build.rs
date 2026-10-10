@@ -21,8 +21,6 @@ fn main() {
         build::rule_groups(&std::fs::read_to_string("src/backend/peep/groups.list").expect("peep/groups.list"));
     std::fs::write(out.join("peep_rules.rs"), rules_type(&groups)).unwrap();
     let mut index = String::new();
-    let mut effects = String::new();
-    let mut modes: Vec<(String, String)> = Vec::new();
     let mut peep = String::new();
     let mut all = Vec::new();
     // Without the fixtures feature nothing is generated for a target: the
@@ -30,15 +28,11 @@ fn main() {
     for dir in targets.iter().filter(|_| fixtures) {
         let built = build::target(dir, &family, &groups, "crate", &out);
         let ident = &built.ident;
-        effects.push_str(&format!(
-            "pub mod {ident} {{\n    include!(concat!(env!(\"OUT_DIR\"), \"/effects_{ident}.rs\"));\n}}\n\n"
-        ));
         index.push_str(&format!(
             "pub mod {ident} {{\n    use crate::backend::targets::{ident}::RULES;\n\n    include!(concat!(env!(\"OUT_DIR\"), \"/isel_{ident}.rs\"));\n}}\n\n"
         ));
         all.push(format!("&{ident}::SELECTOR"));
         peep.push_str(&built.rules);
-        modes.push((built.ident.clone(), built.mode.clone()));
     }
     std::fs::write(out.join("peep_targets.rs"), peep).unwrap();
     index.push_str(&format!(
@@ -47,14 +41,6 @@ fn main() {
         all.join(", ")
     ));
     std::fs::write(out.join("selectors.rs"), index).unwrap();
-    // The table of the target whose code is `bits` bits, by what its
-    // description says.
-    effects.push_str("pub fn rows_for(bits: u32) -> Option<crate::backend::effects::Rows> {\n");
-    for (ident, mode) in &modes {
-        effects.push_str(&format!("    if bits == {mode} {{\n        return Some({ident}::rows);\n    }}\n"));
-    }
-    effects.push_str("    None\n}\n");
-    std::fs::write(out.join("effects.rs"), effects).unwrap();
 }
 
 /// `peep::Rules`, `Rules::NONE` and the group names, from the list.

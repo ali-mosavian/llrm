@@ -1,6 +1,7 @@
 //! The 16-bit x86 target: what its instructions cost, as `Dos` prices them
 //! for the passes, and the machine description a program is built for.
 
+include!(concat!(env!("OUT_DIR"), "/effects.rs"));
 include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
 
 pub mod cycles;
