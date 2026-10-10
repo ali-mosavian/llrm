@@ -892,17 +892,31 @@ fn _entered(
         }
     };
     let (start, bound) = (Scev::of(start, width), Scev::of(bound, width));
-    let expanded: Vec<crate::guards::Guard> = crate::guards::guards(unit, preheader)
-        .into_iter()
-        .map(|guard| crate::guards::Guard {
-            predicate: guard.predicate,
-            left: anchor(&guard.left),
-            right: anchor(&guard.right),
-        })
-        .collect();
-    crate::guards::holds(unit, preheader, test, &start, &bound)
-        || expanded.iter().any(|guard| crate::guards::implies(guard, test, &anchor(&start), &anchor(&bound)))
+    if crate::guards::holds(unit, preheader, test, &start, &bound)
         || _ranged(unit, preheader, value, limit, test, width)
+    {
+        return true;
+    }
+    // Only an equality test reads the guards at an offset (`a != 1` proves `a -
+    // 1 != 0`), and only where the ones above do not prove it as they
+    // stand.
+    matches!(test, IntPredicate::Eq | IntPredicate::Ne) && {
+        let (start, bound) = (anchor(&start), anchor(&bound));
+        crate::guards::guards(unit, preheader)
+            .into_iter()
+            .any(
+                |guard| crate::guards::implies(
+                    &crate::guards::Guard {
+                        predicate: guard.predicate,
+                        left: anchor(&guard.left),
+                        right: anchor(&guard.right),
+                    },
+                    test,
+                    &start,
+                    &bound,
+                ),
+            )
+    }
 }
 
 /// Whether the counters of the loops around the entry put the start of a

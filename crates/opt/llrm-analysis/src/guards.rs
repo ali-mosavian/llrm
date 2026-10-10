@@ -439,11 +439,20 @@ pub fn implies(
     }
     // Equality is the same at any offset: a wrapping sum is a bijection, so `a
     // != 1` proves `a - 1 != 0` (LLVM's isKnownPredicate compares the two
-    // sides' difference).
+    // sides' difference). Sides that differ only in their constants, so that no
+    // difference is built for the many guards a question meets.
     let equality = |one: IntPredicate| matches!(one, IntPredicate::Eq | IntPredicate::Ne);
     if equality(guard.predicate) && equality(predicate) && _stronger(guard.predicate, predicate) {
-        let (given, asked) = (guard.left.minus(&guard.right), left.minus(right));
-        return given == asked || given == asked.times(&BigInt::from(-1));
+        let modulus = BigInt::from(1) << left.width;
+        let wrapped = |n: BigInt| ((n % &modulus) + &modulus) % &modulus;
+        let given = wrapped(&guard.left.constant - &guard.right.constant);
+        let asked = wrapped(&left.constant - &right.constant);
+        if guard.left.terms == left.terms && guard.right.terms == right.terms {
+            return given == asked;
+        }
+        if guard.left.terms == right.terms && guard.right.terms == left.terms {
+            return given == wrapped(-asked);
+        }
     }
     false
 }
