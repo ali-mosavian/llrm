@@ -6,7 +6,7 @@
 #include "nhstutil.h"
 
 typedef struct Seed {
-    int x, y;
+    short x, y;
 } Seed;
 
 static Seed *seeds;
@@ -54,11 +54,16 @@ void B_PAIN(short fill, short border)
     byte edge = border == -1 ? paint : gfx_color(border);
     char *space;
     SD *held;
+    unsigned bytes;
 
     seed_count = 0;
     if (!open_pixel(gfx_x1, gfx_y1, edge))
         return;
-    seed_room = str_free_bytes() / sizeof(Seed);
+    /* The queue is one string, whose length is a word, whatever the free room. */
+    bytes = str_free_bytes();
+    if (bytes > SD_MAX_LENGTH)
+        bytes = SD_MAX_LENGTH;
+    seed_room = bytes / sizeof(Seed);
     held = str_tmp(seed_room * sizeof(Seed), &space);
     seeds = (Seed *)space;
     push(gfx_x1, gfx_y1);

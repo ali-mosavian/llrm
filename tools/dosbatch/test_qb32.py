@@ -37,7 +37,7 @@ def test_bench_program_prints_what_it_should_on_dos32(found, name: str):
 # nothing (descriptor pointer cut to 4 bits), a bare PRINT after a loop killed the program (descriptor address 0),
 # fixed-length string fields read the wrong registers (parameter order of B$ASSN, B$LDFS, B$GET4, B$PUT4).
 PROBES = [
-    "arrays_dynamic", "divide_by_zero", "func_string", "on_error", "on_error_label", "on_error_resume",
+    "arrays_dynamic", "divide_by_zero", "func_string", "gfx_sun", "on_error", "on_error_label", "on_error_resume",
     "print_items", "print_terminators", "read_data", "str_slices", "string_convert", "timer_sane", "trim_and_str",
     "using_numbers",
 ]
