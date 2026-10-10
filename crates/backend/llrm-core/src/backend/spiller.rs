@@ -961,7 +961,7 @@ fn siblings_over(
             let among = |graph: &coalesce::Graph| {
                 graph
                     .get(value)
-                    .map(|near| near.intersection(&wanted).copied().collect::<BTreeSet<u32>>())
+                    .map(|near| near.iter().filter(|one| wanted.contains(one)).collect::<BTreeSet<u32>>())
                     .unwrap_or_default()
             };
             assert!(
