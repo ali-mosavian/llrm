@@ -840,6 +840,9 @@ fn native_contract(
     pushed: i64,
     family: model::RuntimeProfile,
 ) -> Contract {
+    // A routine that keeps BASIC's pushes pops its whole block, however many words the call pushes, so
+    // the words beyond its declaration are not the caller's to remove.
+    let pops = pops || runtime::semantics::keeps_stack_abi(name);
     let found = runtime::per_call(&IndexMap::from_iter([(0, name.to_owned())]), family.tables(), &BTreeSet::new())
         .swap_remove(&0)
         .expect("one call in, one contract out");

@@ -37,9 +37,7 @@ BlockOp         ends
 ;; software interrupt, with the registers of the Regs at si
 CALLINT         macro   vector:req
 
-                push    bx
-                push    si
-                push    bp
+                pushad                          ;; the BIOS and DOS keep what they like of the registers
                 push    es
                 mov     si, ax
                 push    si
@@ -59,9 +57,7 @@ CALLINT         macro   vector:req
                 pushf
                 pop     W [si].Regs.rflags
                 pop     es
-                pop     bp
-                pop     si
-                pop     bx
+                popad
                 ret
                 endm
 
