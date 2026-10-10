@@ -324,7 +324,11 @@ pub fn far_load(what: &Semantics) -> bool {
         && what.dests.len() == 2
 }
 
-include!(concat!(env!("OUT_DIR"), "/positional.rs"));
+/// Whether the register is a position in a stack, where an exchange is an
+/// effect and no pass may rename or drop it: the description's class.
+pub fn positional(register: Register) -> bool {
+    crate::backend::registerinfo::in_class(register, crate::backend::registerinfo::class::POSITIONAL)
+}
 
 /// Whether the operand is a positional register.
 pub fn positional_place(place: &Loc) -> bool {

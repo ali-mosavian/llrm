@@ -152,6 +152,7 @@ pub mod select {
     }
 }
 pub mod regclass;
+pub mod registerinfo;
 pub mod sharedstores;
 pub mod spiller;
 pub mod spillforward;
