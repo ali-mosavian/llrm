@@ -111,7 +111,15 @@ fn _decided(
 /// Each block whose terminator's way is known, with that way.
 fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
-    let facts = consts::known(unit, Some(&Calls::default()), None, None);
+    let calls = Calls::default();
+    let facts = consts::known_walked(unit, &calls);
+    if llrm_support::env_set("LLRM_CHECK_FACTS") {
+        let dense = consts::known(unit, Some(&calls), None, None);
+        assert!(
+            dense.iter().all(|(value, fact)| facts.get(value) == Some(fact)),
+            "decide's walked facts lack one the dense solve derives"
+        );
+    }
     // Points-to only for a pointer compared with null, as LLVM asks
     // isKnownNonZero of one value rather than solving every pointer.
     let pointers = std::cell::OnceCell::new();
