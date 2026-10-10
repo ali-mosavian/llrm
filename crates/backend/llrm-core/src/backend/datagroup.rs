@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::backend::target::{self, Segments};
 use crate::model::ir::{self, Loc, Operation, Semantics};
@@ -50,6 +51,7 @@ pub fn restored(
     data_free: bool,
     segments: &Segments,
 ) -> LirBody {
+    let regs = body.regs();
     let data = segments.data;
     let Some(through) = segments.through else {
         return body.clone();
@@ -63,7 +65,7 @@ pub fn restored(
     loop {
         let mut changed = false;
         for (index, block) in body.blocks.iter().enumerate() {
-            let out = _walk(&block.insns, dirty[index], data, through, segments.offset_bytes, None);
+            let out = _walk(regs, &block.insns, dirty[index], data, through, segments.offset_bytes, None);
             for next in &block.succ {
                 let next = at[next];
                 if out && !dirty[next] {
@@ -79,7 +81,7 @@ pub fn restored(
     let mut out = body.clone();
     for (index, block) in body.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insns.len());
-        let left = _walk(&block.insns, dirty[index], data, through, segments.offset_bytes, Some(&mut insns));
+        let left = _walk(regs, &block.insns, dirty[index], data, through, segments.offset_bytes, Some(&mut insns));
         if left && block.succ.is_empty() {
             let last = insns.last().cloned();
             let position = if last.as_ref().is_some_and(|one| _leaves(one)) { insns.len() - 1 } else { insns.len() };
@@ -95,6 +97,7 @@ pub fn restored(
 /// Walk `insns` from `dirty`, returning whether the register may hold
 /// something else after them; into `out`, the rewritten instructions.
 fn _walk(
+    regs: Regs,
     insns: &[Arc<Insn>],
     mut dirty: bool,
     data: RegId,
@@ -110,7 +113,7 @@ fn _walk(
             dirty = false;
         }
         if let Some(out) = out.as_deref_mut() {
-            out.push(if dirty { _through(one, through, offset_bytes) } else { Arc::clone(one) });
+            out.push(if dirty { _through(regs, one, through, offset_bytes) } else { Arc::clone(one) });
         }
         if _writes_data(one, data) {
             dirty = true;
@@ -165,6 +168,7 @@ fn _restore(
 /// `one`, with each access that would read the data group through the data
 /// segment register reaching it through `through` instead.
 fn _through(
+    regs: Regs,
     one: &Arc<Insn>,
     through: RegId,
     offset_bytes: i64,
@@ -173,7 +177,7 @@ fn _through(
         return Arc::clone(one);
     };
     let moved = |place: &Loc| match place {
-        Loc::Mem(cell) => _prefixed(cell, through, offset_bytes).map(Loc::Mem),
+        Loc::Mem(cell) => _prefixed(regs, cell, through, offset_bytes).map(Loc::Mem),
         _ => None,
     };
     if !what.dests.iter().chain(&what.sources).any(|place| moved(place).is_some()) {
@@ -189,14 +193,14 @@ fn _through(
 /// register would supply its segment: no prefix, and no base that selects
 /// the stack segment itself.
 fn _prefixed(
+    regs: Regs,
     cell: &ir::Mem,
     through: RegId,
     offset_bytes: i64,
 ) -> Option<ir::Mem> {
-    let stack_based =
-        |base: RegId| crate::backend::registerinfo::is_frame(base) || crate::backend::registerinfo::is_stack(base);
+    let stack_based = |base: RegId| regs.is_frame(base) || regs.is_stack(base);
     let Some(addr) = cell.addr else {
-        if cell.index.is_some() || !crate::backend::registerinfo::holds_a_segment_offset(cell.through, offset_bytes) {
+        if cell.index.is_some() || !regs.holds_a_segment_offset(cell.through, offset_bytes) {
             return None;
         }
         let addr = Addr { space: Space::Literal, disp: cell.offset, index: 0, base: cell.through, segment: through };

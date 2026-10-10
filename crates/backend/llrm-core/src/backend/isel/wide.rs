@@ -167,6 +167,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
+        let regs = self.regs();
         let instruction = self.function.instruction(inst);
         let (operand, to) = (instruction.operands[0], instruction.ty);
         let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
@@ -180,7 +181,7 @@ impl Selector<'_, '_, '_> {
                     semantics(
                         Operation::Move,
                         "mov",
-                        vec![Loc::Mem(Self::memory(cell.moved(half.offset), half.bytes))],
+                        vec![Loc::Mem(Self::memory(regs, cell.moved(half.offset), half.bytes))],
                         vec![Loc::Held(held)],
                     ),
                     at,
@@ -202,7 +203,7 @@ impl Selector<'_, '_, '_> {
                         Operation::Move,
                         "mov",
                         vec![Loc::Held(held)],
-                        vec![Loc::Mem(Self::memory(cell.moved(half.offset), half.bytes))],
+                        vec![Loc::Mem(Self::memory(regs, cell.moved(half.offset), half.bytes))],
                     ),
                     at,
                     out,
@@ -226,7 +227,7 @@ impl Selector<'_, '_, '_> {
                         semantics(
                             Operation::Move,
                             "mov",
-                            vec![Loc::Mem(Self::memory(cell.moved(place.offset), place.bytes))],
+                            vec![Loc::Mem(Self::memory(regs, cell.moved(place.offset), place.bytes))],
                             vec![part],
                         ),
                         at,

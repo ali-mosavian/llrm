@@ -6,12 +6,16 @@ use iced_x86::Register;
 use iced_x86::{Decoder, DecoderOptions, FlowControl, InstructionInfoFactory, Mnemonic, OpAccess, OpKind};
 use llrm_core::backend::lanes::Lanes;
 use llrm_core::backend::peephole::{_effects_by_table, _flag_lanes, _lanes, _moved_by, _moved_lanes};
-use llrm_core::backend::target::named as named_register;
 use llrm_core::model::lir::Insn;
 use llrm_lir::{Addr, AddressRef, Imm, Loc, Mem, Reg, Semantics, Space};
 use llrm_target::Target;
 use llrm_x86::effects::root;
 use llrm_x86_m16::instructions::parse::{self, Form, Side};
+
+/// The register file of the target whose code is `bits` bits.
+fn regs_of(bits: u32) -> llrm_lir::registers::Regs {
+    llrm_lir::registers::Regs(if bits == 32 { &llrm_x86_m32::REGISTER_INFO } else { &llrm_x86_m16::REGISTER_INFO })
+}
 
 /// The machine instructions `what` encodes to.
 fn decoded(
@@ -36,15 +40,16 @@ fn by_decoding(
     flags: bool,
 ) -> Option<(Lanes, Lanes)> {
     let instructions = decoded(bits, what)?;
+    let regs = regs_of(bits);
     let mut reads: Lanes = one
         .requires
         .iter()
-        .flat_map(|(held, register)| _lanes(named_register(*register, i64::from(held.width))))
+        .flat_map(|(held, register)| _lanes(regs, regs.named(*register, i64::from(held.width))))
         .collect();
     let mut writes: Lanes = one
         .delivers
         .iter()
-        .flat_map(|(held, register)| _lanes(named_register(*register, i64::from(held.width))))
+        .flat_map(|(held, register)| _lanes(regs, regs.named(*register, i64::from(held.width))))
         .collect();
     let mut info = InstructionInfoFactory::new();
     for insn in &instructions {
@@ -60,7 +65,7 @@ fn by_decoding(
             info.info(insn).used_registers().iter().map(|access| (access.register(), access.access())).collect();
         for (register, access) in &used {
             if READS.contains(access) {
-                let read: Lanes = _lanes(*register).minus(&writes);
+                let read: Lanes = _lanes(regs, *register).minus(&writes);
                 reads.extend(read);
             }
         }
@@ -68,14 +73,14 @@ fn by_decoding(
             if [OpAccess::Write, OpAccess::ReadWrite].contains(access)
                 || may_write && [OpAccess::CondWrite, OpAccess::ReadCondWrite].contains(access)
             {
-                writes.extend(_lanes(*register));
+                writes.extend(_lanes(regs, *register));
             }
         }
         // `rep` counts its register down to where it stops, which iced calls a
         // conditional write.
         if insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix() {
             for (register, _) in used.iter().filter(|(register, _)| register.full_register32() == Register::ECX) {
-                writes.extend(_lanes(*register));
+                writes.extend(_lanes(regs, *register));
             }
         }
     }
@@ -99,7 +104,7 @@ fn moved_by_decoding(
         }
         _ => return None,
     };
-    _moved_by(shift)
+    _moved_by(regs_of(bits), shift)
 }
 
 /// Whether the encoder has no bytes for `what`.
@@ -194,7 +199,6 @@ fn operand(
 
 #[test]
 fn the_table_gives_the_effects_the_decoder_does() {
-    llrm_core::backend::registerinfo::bind(&llrm_x86_m16::REGISTER_INFO);
     let mut checked = 0;
     let mut refused = 0;
     let mut shifts = 0;
@@ -257,7 +261,8 @@ fn the_table_gives_the_effects_the_decoder_does() {
                         let one = Insn::new(0, None, None, vec![], vec![]);
                         let with = Insn::new(0, None, Some(what.clone()), vec![], vec![]);
                         shifts += usize::from(moved_by_decoding(bits, &what).is_some());
-                        let (moved, decoded) = (_moved_lanes(bits, &with), moved_by_decoding(bits, &what));
+                        let (moved, decoded) =
+                            (_moved_lanes(regs_of(bits), bits, &with), moved_by_decoding(bits, &what));
                         if moved != decoded && !(decoded.is_none() && refused_by_encoder(bits, &what)) {
                             wrong.push(format!(
                                 "x86.instr:{} {} w{width} m{bits}: moved lanes differ: {what:?}",
@@ -266,7 +271,8 @@ fn the_table_gives_the_effects_the_decoder_does() {
                         }
                         for (may_write, flags) in [(false, false), (false, true), (true, false), (true, true)] {
                             let by_decoding = by_decoding(bits, &one, &what, may_write, flags);
-                            let Some(by_table) = _effects_by_table(bits, &one, &what, may_write, flags) else {
+                            let Some(by_table) = _effects_by_table(regs_of(bits), bits, &one, &what, may_write, flags)
+                            else {
                                 unanswered.push(format!("{} {}", form.operation, form.name));
                                 continue;
                             };
@@ -308,7 +314,6 @@ fn the_table_gives_the_effects_the_decoder_does() {
 /// name.
 #[test]
 fn the_table_follows_the_encoder_into_what_it_lowers_to() {
-    llrm_core::backend::registerinfo::bind(&llrm_x86_m16::REGISTER_INFO);
     let reg = |register, width| Loc::Reg(Reg { register, width });
     let imm = Loc::Imm(Imm {
         value: 0,
@@ -349,7 +354,7 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
             let one = Insn::new(0, None, None, vec![], vec![]);
             for (may_write, flags) in [(false, false), (false, true), (true, false), (true, true)] {
                 let Some(by_decoding) = by_decoding(bits, &one, what, may_write, flags) else { continue };
-                let by_table = _effects_by_table(bits, &one, what, may_write, flags);
+                let by_table = _effects_by_table(regs_of(bits), bits, &one, what, may_write, flags);
                 assert_eq!(by_table, Some(Some(by_decoding)), "m{bits} {what:?}");
                 checked += 1;
             }

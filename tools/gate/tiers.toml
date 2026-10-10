@@ -37,6 +37,12 @@ paths = ["**/*.rs", "rustfmt.toml", "tools/fmt.sh", "tools/rfmt-post/**"]
 [plain]
 paths = ["rustfmt.toml", "tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "toolchain/**", "crates/**"]
 
+# Crates whose own tests read other crates' sources. A change to what they read runs them, though they depend on none of it.
+[[reads]]
+package = "llrm-mir"
+why = "facts_rewrite lists every source file that reads an nsw/nuw/inbounds flag, and fails on one nobody audited"
+paths = ["crates/**/*.rs"]
+
 # Heavy steps (> 15 s on the loaded host): fast runs one only when a changed path matches its owners.
 [[heavy]]
 step = "turbo"

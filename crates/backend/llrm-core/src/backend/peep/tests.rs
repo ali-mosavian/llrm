@@ -49,7 +49,7 @@ fn folded(
     super::rewritten_insns(
         crate::backend::targets::x86_m16::RULES.memory_arguments,
         &[Arc::new(load), Arc::new(crossed), Arc::new(push)],
-        &Facts::counted(&counts, 16),
+        &Facts::counted(&counts, 16, crate::backend::registerinfo::test_regs()),
     )
 }
 
@@ -119,7 +119,7 @@ fn a_folded_value_defined_twice_is_refused() {
     super::rewritten_insns(
         crate::backend::targets::x86_m16::RULES.memory_arguments,
         &[load(0), push, load(2)],
-        &Facts::counted(&counts, 16),
+        &Facts::counted(&counts, 16, crate::backend::registerinfo::test_regs()),
     );
 }
 
@@ -143,7 +143,7 @@ fn a_target_without_rules_leaves_the_code_alone() {
         vec![1],
     ));
     let counts: IndexMap<u32, i64> = IndexMap::from_iter([(1, 1)]);
-    let facts = Facts::counted(&counts, 16);
+    let facts = Facts::counted(&counts, 16, crate::backend::registerinfo::test_regs());
     let insns = [load, push];
     assert_eq!(super::rewritten_insns(None, &insns, &facts).len(), 2);
     assert_eq!(super::rewritten_insns(super::Rules::NONE.memory_arguments, &insns, &facts).len(), 2);
