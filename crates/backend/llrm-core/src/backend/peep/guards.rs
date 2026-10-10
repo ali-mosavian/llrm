@@ -273,7 +273,7 @@ pub fn register_width(
     _: &Cx,
     one: Reg,
 ) -> bool {
-    target::WIDTHS.get(&one.register) == Some(&i64::from(one.width))
+    target::integer(one.register) && target::width_of(one.register) == Some(i64::from(one.width))
 }
 
 /// A general register.
@@ -281,7 +281,7 @@ pub fn register_named(
     _: &Cx,
     one: Reg,
 ) -> bool {
-    target::WIDTHS.contains_key(&one.register)
+    target::integer(one.register)
 }
 
 pub fn stack_or_frame(

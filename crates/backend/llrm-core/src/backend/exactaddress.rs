@@ -150,7 +150,7 @@ fn sum_of(
         .filter(|(register, _)| *register != Register::None)
         .collect();
     let held: Vec<Held> = [cell.base, cell.index].into_iter().flatten().collect();
-    if registers.len() != held.len() || registers.iter().any(|(register, _)| !target::WIDTHS.contains_key(register)) {
+    if registers.len() != held.len() || registers.iter().any(|(register, _)| !target::integer(*register)) {
         return None;
     }
     let values: Vec<u32> = match (registers.as_slice(), held.as_slice()) {

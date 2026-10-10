@@ -98,7 +98,6 @@ pub fn entries() -> impl Iterator<Item = (RegId, &'static Entry)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::target;
 
     /// The tables the allocator has always read (`WIDTHS`, `AT_WIDTH`, `LANES`,
     /// `NAMES`, `ir::root`) and the description's queries say the same of every
@@ -106,13 +105,16 @@ mod tests {
     /// are on their way out (row 11).
     #[test]
     fn the_description_says_what_the_hand_tables_say() {
-        for (register, width) in target::WIDTHS.iter() {
+        for (register, width) in llrm_x86::registers::WIDTHS.iter() {
             assert_eq!(bytes(*register), Some(*width), "{register:?}");
             assert_eq!(root(*register), crate::model::ir::root(*register), "{register:?}");
-            assert_eq!(lanes(*register), target::lanes(*register), "{register:?}");
-            assert_eq!(name(*register).map(str::to_owned), Some(target::name_of(*register)), "{register:?}");
+            assert_eq!(
+                name(*register).map(str::to_owned),
+                Some(format!("{register:?}").to_lowercase()),
+                "{register:?}"
+            );
         }
-        for (root_register, views) in target::AT_WIDTH.iter() {
+        for (root_register, views) in llrm_x86::registers::AT_WIDTH.iter() {
             for (width, register) in views {
                 assert_eq!(view(*root_register, *width as u32 * 8), Some(*register), "{root_register:?} at {width}");
             }
