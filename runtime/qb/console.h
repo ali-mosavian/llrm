@@ -16,6 +16,8 @@ byte cn_pos(void);
 /* The cursor's 0-based row. */
 byte cn_line(void);
 byte cn_width(void);
+/* Output goes to the screen again: a statement that wrote to a file has ended. */
+void cn_reset_output(void);
 /* Writes `n` bytes of `s`, a character at a time as B$OUTCNT does. */
 void cn_write(const char *s, unsigned n);
 void cn_putc(char c);

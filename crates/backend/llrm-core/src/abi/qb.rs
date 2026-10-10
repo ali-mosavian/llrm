@@ -403,6 +403,34 @@ fn _contract_keeping(
             ),
         ));
     }
+    if (name == "B$FEOF" || name == "B$DSKI") && pushed == 2 {
+        return Ok(returns(
+            2,
+            format!(
+                "{evidence} QB45 rt/dvstmt.asm B$FEOF (0073..009a) and rt/inpdsk.asm B$DSKI \
+                 (0016..0060) read the one file-number word at [BP+6] and return with RETF 2. \
+                 Device and error effects remain conservative."
+            ),
+        ));
+    }
+    if name == "B$FRI2" && pushed == 2 {
+        return Ok(returns(
+            2,
+            format!(
+                "{evidence} stfree.asm FRE selectors join POP SI/BP / RETF 2 after reading \
+                 the one selector word. Heap compaction and error effects remain conservative."
+            ),
+        ));
+    }
+    if name == "B$FCMD" && pushed == 0 {
+        return Ok(returns(
+            0,
+            format!(
+                "{evidence} COMMAND$ takes no argument: each shipped library's B$FCMD returns \
+                 with nothing popped and its answer in AX."
+            ),
+        ));
+    }
     if (name == "B$GET4" || name == "B$PUT4") && pushed == 12 {
         return Ok(returns(
             12,

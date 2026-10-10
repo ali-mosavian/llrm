@@ -26,5 +26,9 @@ void qb_dispatch(byte slot);
 byte qb_rt_inited(void);
 
 extern const char *qb_input_line;
+/* The file INPUT # or LINE INPUT # reads (B$DSKI chose it), and file.c's way to
+   take its next line: set when the program has files. */
+extern void *qb_input_file;
+extern const char *(*qb_input_file_line)(void *file);
 
 #endif

@@ -54,6 +54,8 @@ static const char *item_start(ModuleData **data)
 {
     const char *text;
 
+    if (qb_input_file && !qb_input_line)
+        qb_input_line = qb_input_file_line(qb_input_file);
     if (qb_input_line) {
         *data = NULL;
         return qb_input_line;

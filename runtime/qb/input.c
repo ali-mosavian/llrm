@@ -146,6 +146,17 @@ void B_LNIN(SD *prompt, qb_data_ptr destination, int fixed, int newline)
     unsigned length = 0;
 
     (void)fixed;
+    if (qb_input_file) {
+        const char *from = qb_input_file_line(qb_input_file);
+
+        qb_input_file = 0;
+        for (; from[length]; length++)
+            ;
+        item = str_tmp(length, &text);
+        copy_bytes(text, from, length);
+        str_assign(item, QB_NEAR_OF(destination));
+        return;
+    }
     if (prompt) {
         cn_write(prompt->ptr, prompt->len);
         str_tmp_free(prompt);

@@ -56,3 +56,5 @@ void __cdecl qb_start(void)
 /* Where the next item of a line of INPUT is, while one is waiting (input.c and
    read.c share it without calling each other). */
 const char *qb_input_line;
+void *qb_input_file;
+const char *(*qb_input_file_line)(void *file);

@@ -20,10 +20,18 @@ static int room(unsigned len)
     return 0;
 }
 
+/* Set by B$WRIT: the statement is WRITE, which quotes strings, leaves numbers
+   without blanks and puts a comma after every item. */
+static byte writing;
+
 static void terminate(enum Terminator end)
 {
     if (end == EOL) {
         cn_crlf();
+        writing = 0;
+        cn_reset_output();
+    } else if (writing) {
+        cn_putc(',');
     } else if (end == COMMA) {
         byte pad = ZONE - cn_pos() % ZONE;
 
@@ -37,9 +45,17 @@ const UsingOps *using_ops;
 
 void print_numeral(char *text, unsigned length, enum Terminator end)
 {
-    text[length++] = ' ';
-    room(length);
-    cn_write(text, length);
+    if (writing) {
+        if (*text == ' ') {
+            text++;
+            length--;
+        }
+        cn_write(text, length);
+    } else {
+        text[length++] = ' ';
+        room(length);
+        cn_write(text, length);
+    }
     terminate(end);
 }
 
@@ -68,8 +84,14 @@ static void string(SD *sd, enum Terminator end)
         using_item_end(end);
         return;
     }
-    room(sd->len);
-    cn_write(sd->ptr, sd->len);
+    if (writing) {
+        cn_putc('"');
+        cn_write(sd->ptr, sd->len);
+        cn_putc('"');
+    } else {
+        room(sd->len);
+        cn_write(sd->ptr, sd->len);
+    }
     str_tmp_free(sd);
     terminate(end);
 }
@@ -92,11 +114,21 @@ void B_FTAB(int column)
 }
 #pragma aux B_FTAB "B$FTAB"
 
+/* B$WRIT: the start of a WRITE statement. */
+void B_WRIT(void)
+{
+    writing = 1;
+}
+#pragma aux B_WRIT "B$WRIT"
+
 /* B$PEOS: the end of a PRINT that ended with a separator, and of an INPUT.  The
    console is written as each item is, so there is nothing to flush. */
 void B_PEOS(void)
 {
     qb_input_line = 0;
+    qb_input_file = 0;
+    writing = 0;
+    cn_reset_output();
     if (using_ops)
         using_ops->end(0);
 }

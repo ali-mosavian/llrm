@@ -15,6 +15,7 @@ const Driver *cn_gfx_driver;
 byte cn_graphics;
 static const Driver stream_driver;
 static const Driver *driver;
+static const Driver *redirected;   /* PRINT #n: the file driver, until the statement ends */
 static byte column;
 static char pending[CHUNK];
 static unsigned used;
@@ -120,6 +121,8 @@ static const Driver stream_driver = {
 
 const Driver *cn_driver(void)
 {
+    if (redirected)
+        return redirected;
     if (!driver) {
         if (!dev_stdout_is_screen())
             driver = &stream_driver;
@@ -132,6 +135,17 @@ const Driver *cn_driver(void)
         driver->init();
     }
     return driver;
+}
+
+/* PRINT # sends the statement's output to a file's driver, which it ends. */
+void cn_redirect(const Driver *to)
+{
+    redirected = to;
+}
+
+void cn_reset_output(void)
+{
+    redirected = 0;
 }
 
 /* The screen mode changed: the next output looks again. */

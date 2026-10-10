@@ -21,6 +21,7 @@ typedef struct Fdb {
     short handle;         /* the OS's */
     byte mode;            /* an enum FileMode */
     byte flags;
+    byte column;          /* where the next byte of PRINT # goes on its line */
     unsigned record_length;   /* RANDOM's record, INPUT's and OUTPUT's buffer */
 } Fdb;
 
@@ -30,5 +31,12 @@ void file_close(const int *channels, unsigned count);
 void B_GET3(int channel, qb_data_ptr record, int length);
 void B_PUT3(int channel, qb_data_ptr record, int length);
 long B_FLOF(int channel);
+void B_CHOU(int channel);
+void B_DSKI(int channel);
+int B_FEOF(int channel);
+int B_FREF(void);
+void B_GET4(int channel, long record, int length, qb_data_ptr data);
+void B_PUT4(int channel, long record, int length, qb_data_ptr data);
+void B_SSEK(int channel, long position);
 
 #endif

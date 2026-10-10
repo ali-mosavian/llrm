@@ -207,8 +207,10 @@ static void using_end(int newline)
 {
     literal();
     using_ops = 0;
-    if (newline)
+    if (newline) {
         cn_crlf();
+        cn_reset_output();
+    }
 }
 
 /* Leading zeros so that every digit before the point is in the text. */
