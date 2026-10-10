@@ -99,6 +99,14 @@ impl LowWord for &Imm {
     }
 }
 
+/// A word immediate as the dword with the same low word and zeros above.
+pub fn widen_unsigned(
+    _regs: Regs,
+    one: &Imm,
+) -> Loc {
+    Loc::Imm(Imm { value: one.value & 0xFFFF, width: 4, address: None })
+}
+
 /// An immediate's high word.
 pub fn high_word(
     _regs: Regs,

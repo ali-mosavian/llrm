@@ -23,6 +23,17 @@ rule narrowed_immediate_arithmetic
     rewrite @0: =@0 low_word(d), low_word(d), low_word(s) {defines: @1.defines, uses: joined_uses(@0, @1), widths: joined_widths(@0, @1)} ;
             anchor @1 {defines: [], uses: []}
 
+// A word copy masked and then zero-extended is the extension of the source masked as a dword: the
+// word `and` costs a prefix and a copy besides, and the extension of its result a third instruction.
+// The flags are the word's, so none may be read after.
+rule widened_masked_copy
+    match   mov d:reg16, s:reg16 ; and d, d, i:imm16 ; movzx e:reg32, d
+    when    free(@0, widening), free(@1, widening), free(@2, widening), same_root(d, e), !same_root(d, s),
+            dead(@2, CF), dead(@2, ZF), dead(@2, SF), dead(@2, OF), dead(@2, PF), dead(@2, AF), encodable($0)
+    rewrite @0: movzx e, s {defines: @2.defines, uses: @0.uses, widths: joined_widths(@0, @2)} ;
+            @1: and e, e, widen_unsigned(i) {defines: @2.defines, uses: @2.defines, widths: joined_widths(@0, @2)} ;
+            anchor @2 {defines: [], uses: []}
+
 
 // A word copy of a register whose upper half is zero, into one whose upper half nothing reads, is the
 // dword copy: no prefix, and the upper half is zero for what follows.
