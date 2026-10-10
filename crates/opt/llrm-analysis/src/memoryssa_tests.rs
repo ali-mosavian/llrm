@@ -119,6 +119,21 @@ fn test_each_join_edge_retains_its_own_stored_value() {
     }
 }
 
+/// What a cell holds where a block ends, asked of the block (a counted float
+/// loop's preheader ends in a branch no access stands for): the live state
+/// before any store, the block's own store after it, both arms at the join.
+#[test]
+fn test_the_end_of_a_block_is_asked_of_the_block() {
+    let parsed = diamond();
+    let unit = parsed.unit();
+    let graph = graph(&unit);
+    let memory = cell(&unit, site(&unit, "b3", 0));
+    let id = |name: &str| graph.at(site(&unit, name, 0)).id;
+    assert_eq!(graph.clobbers_at_end(at(&unit, "b0"), &memory), BTreeSet::from([graph.live.id]));
+    assert_eq!(graph.clobbers_at_end(at(&unit, "b1"), &memory), BTreeSet::from([id("b1")]));
+    assert_eq!(graph.clobbers_at_end(at(&unit, "b3"), &memory), BTreeSet::from([id("b1"), id("b2")]));
+}
+
 #[test]
 fn test_a_load_uses_the_nearest_memory_definition() {
     let parsed = written(&format!("store i16 1, ptr {CELL}"));
