@@ -843,7 +843,29 @@ fn test_readonly_array_borrow_keeps_payload_initialization_visible_to_callee() {
 
     assert!(main.contains("call _sum"), "premise: the call stays\n{main}");
 
-    assert!((1..7).all(|value| main.contains(&format!(", {value}"))));
+    let stored = stored_constants(main);
+    assert!((1..7).all(|value| stored.contains(&value)), "{main}");
+}
+
+/// The constants the listing stores to memory, a dword store of two adjacent
+/// words (`store-merging`) as the words it is made of.
+fn stored_constants(listing: &str) -> BTreeSet<i64> {
+    let mut found = BTreeSet::new();
+    for line in listing.lines() {
+        let Some(captured) =
+            Regex::new(r"mov (word|dword) ptr \[[^\]]*\](?:\+\d+)?, (-?\d+)\s*$").unwrap().captures(line)
+        else {
+            continue;
+        };
+        let value: i64 = captured[2].parse().unwrap();
+        if &captured[1] == "dword" {
+            found.insert(value & 0xFFFF);
+            found.insert((value >> 16) & 0xFFFF);
+        } else {
+            found.insert(value);
+        }
+    }
+    found
 }
 
 #[test]
@@ -899,11 +921,7 @@ fn test_three_array_initializer_keeps_the_fixed_frame_address_component() {
     kept.pipeline.inline = llrm_transforms::inline::Threshold::none();
     let assembly = listing(&parsed(&fixture("sum_three.nib")), "main", &kept);
     let main = between(&assembly, "_main proc far", "call _sum_three");
-    let stored: BTreeSet<i64> = Regex::new(r"mov word ptr \[bp-\d+\], (\d+)\n")
-        .unwrap()
-        .captures_iter(main)
-        .map(|found| found[1].parse().unwrap())
-        .collect();
+    let stored = stored_constants(main);
     let elements = [1, 2, 3, 4, 10, 20, 30, 40, 100, 200, 300, 400];
 
     assert!(elements.iter().all(|one| stored.contains(one)), "{main}");
