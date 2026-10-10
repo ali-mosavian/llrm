@@ -26,18 +26,26 @@ static int outside(const Point *p)
          | (p->y < 0) << 2 | (p->y >= (long)gfx_current->height) << 3;
 }
 
-/* The other coordinate of the line `from` to `to` where `along` is `edge`:
-   from's, plus the line's slope times the way along, the whole part by integer
-   division and the rest rounded to the nearest (a half going away from 0). */
+/* The other coordinate of the line from (`along_from`, `other_from`) to
+   (`along_to`, `other_to`) where the first coordinate is `edge`: the exact
+   value, rounded to the nearest whole number, a half going away from 0 from the
+   offset it is measured from. */
 static long cut(long along_from, long other_from, long along_to, long other_to, long edge)
 {
-    long run = along_to - along_from, rise = other_to - other_from;
-    long reach = edge - along_from, whole = rise / run, rest = rise % run;
-    long part = rest * reach * 2 / run;
+    long numerator = (other_to - other_from) * (edge - along_from);
+    long denominator = along_to - along_from;
+    long twice, sign = 1;
 
-    if (part >= 0)
-        part++;
-    return other_from + whole * reach + (part >> 1);
+    if (denominator < 0) {
+        denominator = -denominator;
+        numerator = -numerator;
+    }
+    if (numerator < 0) {
+        numerator = -numerator;
+        sign = -1;
+    }
+    twice = (2 * numerator + denominator) / (2 * denominator);
+    return other_from + sign * twice;
 }
 
 /* Cuts the line to the screen by moving the end that is outside onto the edge

@@ -46,11 +46,9 @@ typedef struct Circle {
     int arc;
     unsigned long from, to; /* counts round the circle, from <= to */
     byte outside;           /* the arc is what lies outside from..to */
-    byte spokes;            /* SPOKE_*: the lines to the centre still to draw, or drawn */
+    byte spoke_from, spoke_to;     /* a line from that end of the arc to the centre */
+    byte drawn_from, drawn_to;     /* and whether it has been drawn */
 } Circle;
-
-/* Where a spoke is drawn from, in the order the arc's two ends are met. */
-enum { SPOKE_FROM = 1, FROM_DONE = 2, SPOKE_TO = 128, TO_DONE = 64 };
 
 static const double pi = 3.141592653589793;
 
@@ -85,9 +83,9 @@ static unsigned long count_of(const Circle *c, double angle)
    of an arc that has a line to the centre starts that line, and is not plotted
    itself; the other points are plotted if they are between the ends (or
    outside them, for an arc that runs through 0). */
-static void spoke(Circle *c, int x, int y, byte done)
+static void spoke(Circle *c, int x, int y, byte *drawn)
 {
-    c->spokes |= done;
+    *drawn = 1;
     gfx_x1 = x;
     gfx_y1 = y;
     gfx_x2 = c->cx;
@@ -103,17 +101,17 @@ static void plot(Circle *c, long x, long y, unsigned long count)
 
     if (c->arc) {
         if (count == c->from) {
-            if (c->spokes & SPOKE_FROM) {
-                if (!(c->spokes & FROM_DONE))
-                    spoke(c, px, py, FROM_DONE);
+            if (c->spoke_from) {
+                if (!c->drawn_from)
+                    spoke(c, px, py, &c->drawn_from);
                 return;
             }
             endpoint = 1;
         } else if (count > c->from) {
             if (count == c->to) {
-                if (c->spokes & SPOKE_TO) {
-                    if (!(c->spokes & TO_DONE))
-                        spoke(c, px, py, TO_DONE);
+                if (c->spoke_to) {
+                    if (!c->drawn_to)
+                        spoke(c, px, py, &c->drawn_to);
                     return;
                 }
                 endpoint = 1;
@@ -194,7 +192,9 @@ void B_CIRC(float radius, int color)
     if (has_end)
         to = turn(end_angle, &spoke_to);
     has_start = has_end = has_aspect = 0;
-    c.spokes = (spoke_from ? SPOKE_FROM : 0) | (spoke_to ? SPOKE_TO : 0);
+    c.spoke_from = (byte)spoke_from;
+    c.spoke_to = (byte)spoke_to;
+    c.drawn_from = c.drawn_to = 0;
     c.outside = 0;
     if (arc) {
         /* no end angle is an end past every count */
@@ -207,11 +207,11 @@ void B_CIRC(float radius, int color)
             first = last;
             last = swap;
             c.outside = 1;
-            if (c.spokes && c.spokes != (SPOKE_FROM | SPOKE_TO))
-                c.spokes ^= SPOKE_FROM | SPOKE_TO;
+            c.spoke_from = (byte)spoke_to;     /* the ends change places */
+            c.spoke_to = (byte)spoke_from;
         }
-        if (first == last && c.spokes)
-            c.spokes = SPOKE_FROM | SPOKE_TO;
+        if (first == last && (c.spoke_from || c.spoke_to))
+            c.spoke_from = c.spoke_to = 1;
         c.from = first;
         c.to = last;
     }
