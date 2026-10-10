@@ -47,7 +47,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `narrow.` (narrowspace) | x | on | on | on | on | on |
 | `ipa<N>.` (constant returns) | x | on | on | on | on | on |
 | `ipa-args` (constant parameters) | x | on | on | on | on | on |
-| `ipa-cp.` (clone for constants, growth allowed) | x | x | x | on | on | x |
+| `ipa-cp.` (clone for constants, growth allowed) | x | x | not recursive | on | on | x |
 | `ipa-range` | x | x | on | on | on | x |
 | `ipa-deadargs` | x | on | on | on | on | on |
 | `ipa-recursive`: body budget, operations (m32 / m16); depth 8, size 450 | x | 2 / 3 | 6 / 9 | 6 / 10 | 6 / 10 | 2 / 3 |
@@ -130,7 +130,8 @@ Sources read:
 | `unroll` / `unroll-loops` | complete unrolling (`cunroll`) is in the loop passes at every level with loop optimisation; it may *grow* the code only with `-O3`, `-funroll-loops` or `-fpeel-loops` (`opts.cc` [1311-1316](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L1311-L1316), `flag_cunroll_grow_size`) | -O1 and up; may grow at -O3 | -O1 and up, may grow at -O3 ([`limits.grows`](../crates/opt/llrm-analysis/src/peelsize.rs#L83)) |
 | `peel` / `peel-loops` | `-fpeel-loops` | -O3 ([679](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L679)) | -O3 |
 | `unswitch` / `unswitch-loops` | `-funswitch-loops` | -O3 ([685](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L685)) | -O3 |
-| `inline.cp_clone` / `ipa-cp-clone` | `-fipa-cp-clone` | -O3 ([676](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L676)) | -O3: `ipacp` copies a function for the constants a hot call passes |
+| `inline.cp_clone` / `ipa-cp-clone` | `-fipa-cp-clone` | -O3 ([676](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L676)); at -O2 `ipcp_cloning_candidate_p` returns "-fipa-cp-clone disabled" | -O3: `ipacp` copies a function for the constants a hot call passes. **-O2 too, a step beyond gcc's:** the same copies, under gcc's limits below (evaluation threshold, unit growth, hot call), for a function that does not call itself; x_dct at -O2 is 181,973 clocks without (gcc -O2 213,523, clang 120,786), 139,732 with |
+| `inline.cp_recursive` | (`ipa-cp-max-recursive-depth`) | -O3 | -O3 and up: a recursive function is cloned to the depth below (`queens` eight deep). Not at -O2: -O2's inliner does not take the chain of clones, and `queens` read +1.0 KB and +3% clocks for them |
 | (`program_parameters`) | `-fipa-cp` | -O2 ([629](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L629)) | every level above -O0: a constant every call passes is the parameter's value |
 | `ipa_ranges` / `ipa-vrp` | `-fipa-vrp` | -O2 ([633](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L633)) | -O2 and up; off at -O1 since 2026-10-10 (compile -1.0% on bench + QCport, code +0.00% geomean) |
 | (`bounded`, the range analysis) | `-ftree-vrp` | -O2 ([649](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L649)) | every level above -O0, -O1 too: 447 M of d_faces' 34 G at -O1. Not an on/off gate: lsr, indvars, decide and hoist read it, so the plan is to make it demand-driven |
