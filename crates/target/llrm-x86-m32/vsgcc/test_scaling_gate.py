@@ -606,6 +606,16 @@ def test_hoist_prices_a_run_by_what_it_moves_not_by_a_clone_of_the_function(tmp_
     assert cost <= 900, cost
 
 
+def test_interference_of_values_live_together_is_kept_as_bits_on_the_live_axis(tmp_path):
+    """On `live` at N=512 a function holds 940,000 interference pairs; the graph kept each as a tree-set node,
+    walked once per web for every instruction of the block, with three hash lookups per pair to count it: `lir coalesce` read
+    1,820 Minstr. As a bit vector per value, built by row and counted per node, it reads 860. More than 1,100 fails."""
+    source = tmp_path / "live_512.c"
+    source.write_text(scaling.AXES["live"](512))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir coalesce"]
+    assert cost <= 1100, cost
+
+
 def test_a_set_membership_test_is_not_a_scan_of_the_set_on_the_branches_axis(tmp_path):
     """`PySet::contains` scanned its whole table, and the constant-cycle propagation asked it for every consumer of every value it settled
     (`live.contains`): on a function of N if/else diamonds 4.0 G of its 4.5 G instructions at N=1024. `analysis registers` read

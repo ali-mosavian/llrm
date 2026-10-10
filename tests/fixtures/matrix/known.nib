@@ -1,5 +1,5 @@
-fn add(a: i16, b: i16) -> i16:
-    let sum: i16 = a + b
+fn add(first: i16, second: i16) -> i16:
+    let sum: i16 = first + second
     return sum
 
 fn main() -> i16:

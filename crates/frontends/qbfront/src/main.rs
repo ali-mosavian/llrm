@@ -162,6 +162,8 @@ fn main() -> ExitCode {
             segment_bytes,
             near_bytes,
             far_bytes,
+            // This is BC's command line: its /Zi writes BC's layout.
+            bc_codeview: true,
         },
         debug,
         syntax,

@@ -550,7 +550,21 @@ impl Symbols<'_> {
         match location {
             Location::Static { symbol, disp } => self.data(types, variable, *symbol, *disp),
             Location::Register(register) => self.register(types, variable, register),
-            Location::List(_) | Location::Constant(_) | Location::Pieces(_) | Location::Relative { .. } => Ok(()),
+            // Through the stack pointer: the register-relative record names it.
+            Location::Relative { register, disp } => {
+                let mut data = Vec::new();
+                if self.wide {
+                    put32(&mut data, narrow::<i32>(*disp, "a stack offset")? as u32);
+                } else {
+                    data.extend(narrow::<i16>(*disp, "a stack offset")?.to_le_bytes());
+                }
+                put16(&mut data, register_number(self.info, register)?);
+                put16(&mut data, types.of(variable.r#type)?);
+                pascal(&mut data, &variable.name)?;
+                self.record(if self.wide { 0x020C } else { 0x010C }, &data)?;
+                Ok(())
+            }
+            Location::List(_) | Location::Constant(_) | Location::Pieces(_) => Ok(()),
             Location::Frame { disp } => {
                 let mut data = Vec::new();
                 let frame = &self.info.frame_register;

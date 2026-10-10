@@ -64,6 +64,8 @@ pub struct Frontend {
     pub runtime_frames: bool,
     /// Errors in a module handler report their BASIC line: `--error-lines`.
     pub error_lines: bool,
+    /// `-g` in BC's CodeView layout, not standard CodeView 4: `--bc-codeview`.
+    pub bc_codeview: bool,
     /// The most bytes the target's data segment holds: its description's, set
     /// by the CLI that bound the target.
     pub segment_bytes: Option<usize>,
@@ -95,6 +97,7 @@ impl Frontend {
             array_merging: false,
             runtime_frames: false,
             error_lines: false,
+            bc_codeview: false,
             segment_bytes: None,
             near_bytes: 0,
             far_bytes: 0,
@@ -137,6 +140,7 @@ fn _options(
             segment_bytes: frontend.segment_bytes,
             near_bytes: frontend.near_bytes,
             far_bytes: frontend.far_bytes,
+            bc_codeview: frontend.bc_codeview,
         },
         debug: frontend.debug,
         syntax: false,
