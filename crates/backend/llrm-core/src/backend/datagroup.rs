@@ -193,7 +193,7 @@ fn _prefixed(
     let stack_based =
         |base: Register| crate::backend::registerinfo::is_frame(base) || crate::backend::registerinfo::is_stack(base);
     let Some(addr) = cell.addr else {
-        if cell.index.is_some() || !matches!(cell.through, Register::SI | Register::DI | Register::BX) {
+        if cell.index.is_some() || !crate::backend::registerinfo::holds_a_segment_offset(cell.through) {
             return None;
         }
         let addr = Addr { space: Space::Literal, disp: cell.offset, index: 0, base: cell.through, segment: through };
