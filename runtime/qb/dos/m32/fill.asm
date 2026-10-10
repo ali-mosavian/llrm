@@ -45,6 +45,12 @@ B$FSEL          proc
                 movzx   eax, dl
                 imul    eax, 01010101h
                 mov     dword ptr [dword_imm], eax
+                mov     dword ptr [set_pattern], eax
+                mov     byte ptr [set_flag], 0
+                test    ebx, ebx
+                jnz     @F
+                mov     byte ptr [set_flag], 1
+@@:
                 mov     byte ptr [byte_imm], dl
                 jmp     short @F                ;; the patched bytes are not in the prefetch queue
 @@:
@@ -62,6 +68,7 @@ B$FBOX          proc
                 push    esi
                 push    edi
                 push    ebp
+                cld
                 mov     ebx, eax
                 mov     esi, [ebx].FillBox.dst
                 mov     ebp, [ebx].FillBox.rows
@@ -77,6 +84,8 @@ B$FBOX          proc
                 inc     edi
 @@:
                 mov     ecx, [ebx].FillBox.middle
+                cmp     [set_flag], 0
+                jne     @@set
                 mov     edx, ecx
                 shr     ecx, 2
                 jz      @@tail
@@ -95,6 +104,15 @@ byte_imm        db      0
                 inc     edi
                 dec     edx
                 jnz     @@bytes
+                jmp     short @@right
+@@set:                                          ;; a set is UGL's hlinef: dwords, then the bytes left
+                mov     eax, [set_pattern]
+                mov     edx, ecx
+                shr     ecx, 2
+                rep     stosd
+                mov     ecx, edx
+                and     ecx, 3
+                rep     stosb
 @@right:
                 cmp     [ebx].FillBox.edges, 0
                 je      @F
@@ -120,6 +138,8 @@ byte_imm        db      0
 B$FBOX          endp
 
 ;; the opcode and the mod/rm of each operation, for a dword and for a byte
+set_pattern     dd      0
+set_flag        db      0
 dword_ops       dw      07C7h, 2781h, 0F81h, 3781h
 byte_ops        dw      07C6h, 2780h, 0F80h, 3780h
                 end

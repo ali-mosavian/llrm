@@ -43,6 +43,13 @@ B$FSEL          proc    public
                 movzx   eax, dl
                 imul    eax, 01010101h
                 mov     dword ptr cs:[dword_imm], eax
+                mov     dword ptr cs:[set_pattern], eax
+                mov     al, 0
+                cmp     bx, 0
+                jne     @F
+                mov     al, 1
+@@:
+                mov     byte ptr cs:[set_flag], al
                 mov     byte ptr cs:[byte_imm], dl
                 jmp     short @F                ;; the patched bytes are not in the prefetch queue
 @@:
@@ -58,6 +65,7 @@ B$FBOX          proc    public
                 push    di
                 push    bp
                 push    es
+                cld
                 mov     bx, ax
                 les     si, [bx].FillBox.dst
                 mov     bp, [bx].FillBox.rows
@@ -73,6 +81,8 @@ B$FBOX          proc    public
                 inc     di
 @@:
                 mov     cx, [bx].FillBox.middle
+                cmp     cs:set_flag, 0
+                jne     @@set
                 mov     dx, cx
                 shr     cx, 2
                 jz      @@tail
@@ -91,6 +101,15 @@ byte_imm        db      0
                 inc     di
                 dec     dx
                 jnz     @@bytes
+                jmp     short @@right
+@@set:                                          ;; a set is UGL's hlinef: dwords, then the bytes left
+                mov     eax, cs:set_pattern
+                mov     dx, cx
+                shr     cx, 2
+                rep     stosd
+                mov     cx, dx
+                and     cx, 3
+                rep     stosb
 @@right:
                 cmp     [bx].FillBox.edges, 0
                 je      @F
@@ -115,6 +134,8 @@ byte_imm        db      0
 B$FBOX          endp
 
 ;; the opcode and the mod/rm of each operation, for a dword and for a byte
+set_pattern     dd      0
+set_flag        db      0
 dword_ops       dw      05C7h, 2581h, 0D81h, 3581h
 byte_ops        dw      05C6h, 2580h, 0D80h, 3580h
                 end
