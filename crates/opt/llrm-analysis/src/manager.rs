@@ -160,7 +160,7 @@ impl ModuleAnalysis for Summaries {
             None => None,
         };
         let declarations = analyses.get::<Declarations>(module);
-        let shapes = bodies(module).map(|(id, _)| (id, analyses.function::<Shape>(module, id))).collect();
+        let marks: IndexMap<GlobalId, Mark> = bodies(module).map(|(id, function)| (id, function.mark())).collect();
         // What a body's calls and exposed frames are depends on the body and
         // the declarations: kept while neither moved.
         let scratch = analyses.from_scratch();
@@ -170,9 +170,21 @@ impl ModuleAnalysis for Summaries {
         } else {
             std::mem::take(&mut memo.facts)
         };
+        // A body's shape is of its body alone: the one kept with its facts
+        // stands while its history is where they left it.
+        let shapes: IndexMap<GlobalId, Rc<Shape>> = bodies(module)
+            .map(|(id, _)| {
+                let held = kept.get(&id).filter(|one| one.mark == marks[&id]).and_then(|one| one.shape.clone());
+                (id, held.unwrap_or_else(|| analyses.function::<Shape>(module, id)))
+            })
+            .collect();
+        let memo = analyses.memo::<SummariesMemo>();
         // The calls were found under the globals' facts of the run before:
         // other facts, the calls are found again.
-        let mut body_facts = body_facts(module, &program.layout, program.target.spaces(), kept);
+        let mut body_facts = body_facts(module, &program.layout, program.target.spaces(), kept, &marks);
+        for (id, one) in body_facts.iter_mut() {
+            one.shape = Some(Rc::clone(&shapes[id]));
+        }
         if !memo.globals.as_ref().is_some_and(|then| Rc::ptr_eq(then, &globals_held)) {
             body_facts.values_mut().for_each(|one| (one.calls, one.values) = (None, None));
         }
@@ -183,7 +195,6 @@ impl ModuleAnalysis for Summaries {
         // globals' facts and the declarations, either is the same result as
         // then or the whole is worked out again.
         let memo = analyses.memo::<SummariesMemo>();
-        let marks: IndexMap<GlobalId, Mark> = bodies(module).map(|(id, function)| (id, function.mark())).collect();
         let dirty = memo
             .globals
             .as_ref()
@@ -216,7 +227,6 @@ impl ModuleAnalysis for Summaries {
         counted("summaries updated", dirty.is_some());
         let found = alias::summaries_updating(&procedures, known.as_ref(), &mut memo.summaries, dirty.as_ref());
         memo.marks = marks;
-        memo.facts = body_facts.clone();
         memo.globals = Some(Rc::clone(&globals_held));
         memo.declarations = Some(declarations);
         if llrm_support::env_set("LLRM_CHECK_MODULES") {
@@ -237,6 +247,8 @@ impl ModuleAnalysis for Summaries {
                 );
             }
         }
+        drop(procedures);
+        memo.facts = body_facts;
         found
     }
 }
@@ -262,6 +274,7 @@ fn bodies(module: &Module) -> impl Iterator<Item = (GlobalId, &Function)> {
 struct BodyFacts {
     mark: Mark,
     exposed: Rc<BTreeSet<ValueId>>,
+    shape: Option<Rc<Shape>>,
     calls: Option<Rc<alias::CallFacts>>,
     /// Where each pointer points, found once for the direct summary, each
     /// call's and the calls' facts, which all ask it; under the globals' facts
@@ -277,10 +290,11 @@ fn body_facts(
     layout: &DataLayout,
     spaces: llrm_mir::spaces::Spaces,
     mut kept: IndexMap<GlobalId, BodyFacts>,
+    marks: &IndexMap<GlobalId, Mark>,
 ) -> IndexMap<GlobalId, BodyFacts> {
     bodies(module)
         .map(|(id, function)| {
-            let mark = function.mark();
+            let mark = marks[&id].clone();
             let facts = match kept.swap_remove(&id) {
                 Some(then) if then.mark == mark => then,
                 _ => BodyFacts {
@@ -288,6 +302,7 @@ fn body_facts(
                     exposed: Rc::new(crate::memory::exposed_frames(
                         &Unit::of(module, layout, function).with_spaces(spaces),
                     )),
+                    shape: None,
                     calls: None,
                     values: None,
                 },
@@ -407,7 +422,10 @@ impl ProgramAnalysis for ProgramSummaries {
         let mut exposures: Vec<IndexMap<GlobalId, BodyFacts>> = program
             .modules
             .iter()
-            .map(|module| body_facts(module, &program.layout, program.target.spaces(), IndexMap::default()))
+            .map(|module| {
+                let marks = bodies(module).map(|(id, function)| (id, function.mark())).collect();
+                body_facts(module, &program.layout, program.target.spaces(), IndexMap::default(), &marks)
+            })
             .collect();
         let globals = (0..count)
             .map(|at| {

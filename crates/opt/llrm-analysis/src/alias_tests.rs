@@ -948,8 +948,8 @@ fn a_body_in_no_cycle_of_calls_is_visited_once() {
 
 /// Every inline splice worked the summaries of the whole module out again
 /// (host.c: 72 runs, 20.8 s of 35.8 s). After one body is edited only it and
-/// what reads it are visited and made again, and the result is what a whole run
-/// makes.
+/// what reads it, as far as a summary came out other than it was, are visited,
+/// and the result is what a whole run makes.
 #[test]
 fn an_edit_visits_the_edited_body_and_its_callers_only() {
     let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
@@ -964,11 +964,12 @@ fn an_edit_visits_the_edited_body_and_its_callers_only() {
         super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["f".to_owned()]))).unwrap();
     assert_eq!((super::visits() - visits, super::direct_runs() - direct), (1, 1), "only f is made again");
     assert_eq!(again, whole);
-    // Editing `callee` is read by `f`.
+    // `callee` is edited and comes out as it was: `f`, which reads it, is not
+    // visited.
     let (visits, direct) = (super::visits(), super::direct_runs());
     let again =
         super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["callee".to_owned()]))).unwrap();
-    assert_eq!((super::visits() - visits, super::direct_runs() - direct), (2, 1), "callee, and f which reads it");
+    assert_eq!((super::visits() - visits, super::direct_runs() - direct), (1, 1), "callee alone");
     assert_eq!(again, whole);
 }
 

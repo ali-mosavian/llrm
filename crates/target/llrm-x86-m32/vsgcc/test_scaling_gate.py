@@ -1,11 +1,15 @@
 """scaling_gate.py: a pass gone quadratic reads as 2N/N = 4, a linear one as 2, and neither direction of change passes unseen."""
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 import scaling
+import programs
 import scaling_gate as gate
+import wrap
 
 REQUIRES = ["perf"]  # the gate leaves this file out where `perf stat` reads no count
 STAND_IN = "import sys; n = len(open(sys.argv[1]).read().splitlines()); sum(range({work}))"
@@ -336,6 +340,20 @@ def test_counted_stays_below_cubic_in_the_loops_of_one_function(tmp_path):
     assert big <= 2.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
 
 
+def test_summaries_do_not_work_out_every_caller_of_an_edited_body_again(tmp_path):
+    """chain(N) at -O2: an edited body started its whole chain of callers again from nothing (`summaries_updating`'s closure), so
+    each of the run's ~N edits visited ~N bodies: `summaries visit` read 2N/N = 3.5, 3.7 (8.7 / 30.6 / 114 Minstr at N=32..128).
+    A body is visited again from what it reads, and its readers where its summary came out other than it was (gcc's summaries
+    stop where one does not change): 2.2, 2.2 (2.6 / 5.9 / 12.8). A step above 2.7 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 64), ("2n", 128)):
+        source = tmp_path / f"chain_{label}.c"
+        source.write_text("" if size == 0 else scaling.chain(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("summaries visit", 0.0) - own["empty"].get("summaries visit", 0.0) for label in ("n", "2n"))
+    assert big <= 2.7 * small + 2.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
 def test_decide_does_not_work_out_a_loop_for_each_block_in_it(tmp_path):
     """nest(N) at -O2: `Given::holds` worked out the followers of each counter of every loop around the block (a scan of the loop's
     values) for each block it was asked of, `mir decide` read 2N/N = 5.5 and 6.6 (160 / 874 / 5799 Minstr at N=32..128, 10% of the
@@ -384,3 +402,28 @@ def test_lsr_does_not_add_up_the_function_or_rebuild_its_graph_for_each_loop(tmp
         source.write_text(scaling.AXES[axis](n))
         costs[axis] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir lsr"]
     assert costs["branches"] <= 900 and costs["nest"] <= 7500, costs
+
+
+def test_an_entry_does_not_hold_up_the_summary_of_what_calls_through_a_pointer(tmp_path):
+    """An address-taken function is an entry, and `main` calls it through a pointer: the two feed each other. Bringing the
+    summaries up to date kept `main`'s from before the entry's was lowered (the callbacks, which `main` is part of, did not
+    move), and `LLRM_CHECK_MODULES` found them differing from a whole run: it died on x_strlen at -O2."""
+    source = tmp_path / "x_strlen.c"
+    source.write_text(wrap.wrapped("x_strlen", programs.sources()["x_strlen"].read_text()))
+    done = subprocess.run(
+        [*gate.levels_time.command("llrm", "O2", source), *programs.LLRM_FLAGS],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "LLRM_CHECK_MODULES": "1"},
+    )
+    assert done.returncode == 0, done.stderr[-300:]
+
+
+def test_summaries_keep_the_call_graph_when_a_body_calls_a_deeper_one(tmp_path):
+    """chain(N) at -O2: each splice of a callee into its caller gives the caller calls to bodies below the callee, and the
+    graph of all N bodies (components, order, readers) was made again for it: `summaries topology` read 23.8 / 107.5 Minstr at
+    N=64 / 128 (457 at 256). A new call to a body of an earlier component leaves the order valid, and the graph is brought up
+    to date for that body alone: 2.6 / 8.0. Above 30 Minstr at N=128 fails."""
+    source = tmp_path / "chain128.c"
+    source.write_text(scaling.chain(128))
+    assert gate.own_work(gate.levels_time.command("llrm", "O2", source)).get("summaries topology", 0.0) <= 30.0
