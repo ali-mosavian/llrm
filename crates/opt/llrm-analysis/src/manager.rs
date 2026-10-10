@@ -55,6 +55,7 @@ impl<'a> Unit<'a> {
             annotated: None,
             assumptions: None,
             counted: None,
+            followers: None,
             edges: None,
             bounds: None,
             exposed: None,
@@ -821,6 +822,34 @@ impl Analysis for AssumptionCache {
     }
 }
 
+/// Each loop's followers of its counters, under `Registers`:
+/// `induction::followers_all`.
+pub struct Followers;
+
+impl Analysis for Followers {
+    type Result = induction::LoopFollowers;
+    const NAME: &'static str = "followers";
+
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        induction::followers_all(
+            &Unit::within(context, layout, function, analyses.outer())
+                .with_shape(&shape)
+                .with_assumptions(&assumptions)
+                .with_registers(&registers)
+                .with_exposed(&exposed),
+        )
+    }
+}
+
 /// Each loop's counted proofs, under `Registers`: `induction::counted_all`.
 pub struct Counted;
 
@@ -1332,6 +1361,7 @@ pub struct Held {
     pointers: Option<Rc<<Pointers as Analysis>::Result>>,
     annotated: Option<Rc<<Annotated as Analysis>::Result>>,
     counted: Option<Rc<<Counted as Analysis>::Result>>,
+    followers: Option<Rc<<Followers as Analysis>::Result>>,
     bounded: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
@@ -1352,6 +1382,7 @@ impl Held {
             annotated: alias.then(|| analyses.get::<Annotated>(context, layout, function)),
             // Annotated has proved them already.
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
+            followers: alias.then(|| analyses.get::<Followers>(context, layout, function)),
             bounded: None,
         }
     }
@@ -1391,6 +1422,9 @@ impl Held {
         }
         if let Some(counted) = self.counted.as_deref() {
             unit = unit.with_counted(counted);
+        }
+        if let Some(followers) = self.followers.as_deref() {
+            unit = unit.with_followers(followers);
         }
         if let Some(Ok(bounds)) = self.bounded.as_deref() {
             unit = unit.with_bounds(bounds);
