@@ -12,9 +12,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
-use llrm_support::hash::{HashMap, HashSet};
+use llrm_support::hash::HashMap;
 
 use crate::cfg::id;
 
@@ -279,19 +280,25 @@ thread_local! {
 pub fn live(function: &Function) -> Liveness {
     SOLVES.with(|solves| solves.set(solves.get() + 1));
     let layout = function.layout();
-    let at_index: HashMap<BlockId, usize> =
-        layout.iter().enumerate().map(|(position, &block)| (block, position)).collect();
+    let mut at_index = IdMap::<BlockId, usize>::new();
+    for (position, &block) in layout.iter().enumerate() {
+        at_index.insert(block, position);
+    }
     let blocks: Vec<(Vec<&Instruction>, Vec<&Instruction>)> =
         layout.iter().map(|&block| split(function, block)).collect();
-    let mut op_defines: Vec<HashSet<ValueId>> =
-        blocks.iter().map(|(_, ops)| ops.iter().filter_map(|op| op.result).collect()).collect();
-    let phi_defines: Vec<HashSet<ValueId>> =
-        blocks.iter().map(|(phis, _)| phis.iter().filter_map(|phi| phi.result).collect()).collect();
-    let mut exposed: Vec<BTreeSet<ValueId>> = layout.iter().map(|&block| _exposed(function, block)).collect();
-    if !layout.is_empty() {
-        let arriving = entry_values(function);
-        exposed[0].retain(|value| !arriving.contains(value));
-        op_defines[0].extend(arriving);
+    // Where each value is made: a block's position, and whether by a phi. The
+    // values the caller supplies are made at the entry.
+    let mut made = IdMap::<ValueId, (usize, bool)>::new();
+    for (position, (phis, ops)) in blocks.iter().enumerate() {
+        for (instruction, phi) in phis.iter().map(|one| (one, true)).chain(ops.iter().map(|one| (one, false))) {
+            if let Some(result) = instruction.result {
+                made.insert(result, (position, phi));
+            }
+        }
+    }
+    let arriving = entry_values(function);
+    for &value in &arriving {
+        made.insert(value, (0, false));
     }
     let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); layout.len()];
     for (position, &block) in layout.iter().enumerate() {
@@ -301,10 +308,11 @@ pub fn live(function: &Function) -> Liveness {
             }
         }
     }
-    let mut live_in = vec![BTreeSet::new(); layout.len()];
-    let mut live_out = vec![BTreeSet::new(); layout.len()];
-    // The phis' results live once the phis have run.
-    let mut phis_live = vec![BTreeSet::new(); layout.len()];
+    // `after` is what is live once a block's phis have run; the phis' own
+    // results come out of it at the end.
+    let empty = || layout.iter().map(|&block| (id(block), Default::default())).collect();
+    let mut found = Liveness { live_in: empty(), live_out: empty() };
+    let key = |position: usize| id(layout[position]);
 
     enum Reach {
         /// Live once `block`'s phis have run.
@@ -313,23 +321,28 @@ pub fn live(function: &Function) -> Liveness {
         Out(usize, ValueId),
     }
     let mut pending = Vec::new();
-    for (position, values) in exposed.iter().enumerate() {
-        pending.extend(values.iter().map(|&value| Reach::After(position, value)));
+    for (position, &block) in layout.iter().enumerate() {
+        for value in _exposed(function, block) {
+            if position != 0 || !arriving.contains(&value) {
+                pending.push(Reach::After(position, value));
+            }
+        }
     }
     while let Some(reach) = pending.pop() {
         #[cfg(test)]
         STEPS.with(|steps| steps.set(steps.get() + 1));
         match reach {
             Reach::Out(position, value) => {
-                if live_out[position].insert(value) && !op_defines[position].contains(&value) {
+                let by_op = made.get(&value).is_some_and(|&(at, phi)| at == position && !phi);
+                if found.live_out.get_mut(&key(position)).expect("a block").insert(value) && !by_op {
                     pending.push(Reach::After(position, value));
                 }
             }
             Reach::After(position, value) => {
-                if phi_defines[position].contains(&value) {
-                    if !phis_live[position].insert(value) {
-                        continue;
-                    }
+                if !found.live_in.get_mut(&key(position)).expect("a block").insert(value) {
+                    continue;
+                }
+                if made.get(&value).is_some_and(|&(at, phi)| at == position && phi) {
                     // Each edge brings the phi's arm from its own block.
                     for phi in blocks[position].0.iter().filter(|phi| phi.result == Some(value)) {
                         for &from in &predecessors[position] {
@@ -338,16 +351,18 @@ pub fn live(function: &Function) -> Liveness {
                             }
                         }
                     }
-                } else if live_in[position].insert(value) {
+                } else {
                     pending.extend(predecessors[position].iter().map(|&from| Reach::Out(from, value)));
                 }
             }
         }
     }
-    let sets = |found: Vec<BTreeSet<ValueId>>| -> BTreeMap<i64, BTreeSet<ValueId>> {
-        layout.iter().zip(found).map(|(&block, set)| (id(block), set)).collect()
-    };
-    let found = Liveness { live_in: sets(live_in), live_out: sets(live_out) };
+    for (position, (phis, _)) in blocks.iter().enumerate() {
+        let after = found.live_in.get_mut(&key(position)).expect("a block");
+        for result in phis.iter().filter_map(|phi| phi.result) {
+            after.remove(&result);
+        }
+    }
     #[cfg(test)]
     assert_eq!(found, live_dense(function), "liveness from the uses is not the bit-set fixed point");
     found
