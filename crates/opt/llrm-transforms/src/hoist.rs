@@ -151,21 +151,65 @@ fn _affordable(
     // A run that is let go leaves the function as the clone priced it, whose
     // price is then the next loop's `kept`.
     let Some(kept) = held.take().or_else(|| price(unit.function)) else { return run };
+    // Where no register is priced the price is the work alone, a sum over the
+    // instructions each at its block's frequency: moving `run` changes it by
+    // what each costs at the preheader's frequency less at its own. The
+    // function is not cloned and priced again for each loop (the square of the
+    // loops: 2.3 G of hoist on `branches` at N=1024, 4x a doubling).
+    let unpriced = !room.priced();
     while !run.is_empty() {
-        let mut hoisted = unit.function.clone();
-        for &inst in &run {
-            hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
-        }
-        // The price of `hoisted` is its work and the forecast below, which is
-        // found once (it was found twice: 41% of hoist on a 16-deep
+        let moved = (!unpriced || cfg!(test)).then(|| {
+            let mut hoisted = unit.function.clone();
+            for &inst in &run {
+                hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
+            }
+            hoisted
+        });
+        // The price of the moved function is its work and the forecast below,
+        // which is found once (it was found twice: 41% of hoist on a 16-deep
         // nest, where the loops' passes cost 6 G).
-        let Some(work) = profit::weighted(unit.context, unit.layout, &hoisted, outer.callees(), costs, frequency)
-        else {
-            return run;
+        let work = if unpriced {
+            let at = frequency.get(&into).copied().unwrap_or(1);
+            let by: Option<i64> = run
+                .iter()
+                .map(|&inst| {
+                    let from = unit.function.parent(inst).map_or(1, |block| frequency[&cfg::id(block)]);
+                    profit::operation(unit.context, unit.layout, unit.function, outer.callees(), inst, costs)
+                        .map(|price| price * (at - from))
+                })
+                .sum();
+            let Some(by) = by else { return run };
+            #[cfg(test)]
+            assert_eq!(
+                profit::weighted(
+                    unit.context,
+                    unit.layout,
+                    moved.as_ref().expect("cloned under test"),
+                    outer.callees(),
+                    costs,
+                    frequency
+                ),
+                Some(kept + by),
+                "the work of the moved function is not the kept work and what each instruction's move changes"
+            );
+            kept + by
+        } else {
+            let Some(work) = profit::weighted(
+                unit.context,
+                unit.layout,
+                moved.as_ref().expect("cloned where priced"),
+                outer.callees(),
+                costs,
+                frequency,
+            ) else {
+                return run;
+            };
+            work
         };
+        let hoisted = moved.as_ref().unwrap_or(unit.function);
         // A floating value held across the loop is released after it, once for
         // each time the loop is entered.
-        let floats: BTreeSet<ValueId> = _crossed_values(&hoisted, &run)
+        let floats: BTreeSet<ValueId> = _crossed_values(hoisted, &run)
             .into_iter()
             .filter(|&value| matches!(
                 unit.context.types.get(hoisted.value(value).ty),
@@ -175,10 +219,10 @@ fn _affordable(
         let Some(forecast) = profit::spill_forecast(
             unit.context,
             unit.layout,
-            &hoisted,
+            hoisted,
             costs,
             room,
-            &|inst| crate::spill::kept_across(outer, unit.context, &hoisted, inst),
+            &|inst| crate::spill::kept_across(outer, unit.context, hoisted, inst),
             frequency,
         ) else {
             return run;
@@ -192,16 +236,16 @@ fn _affordable(
         let traffic = std::cell::OnceCell::new();
         let traffic = || {
             traffic.get_or_init(|| {
-                let cells = crate::spill::cells(&hoisted);
-                crate::spill::traffic(&hoisted, frequency, &cells, costs, &|_| true, &|value| {
-                    crate::spill::words(unit.context, unit.layout, &hoisted, value)
+                let cells = crate::spill::cells(hoisted);
+                crate::spill::traffic(hoisted, frequency, &cells, costs, &|_| true, &|value| {
+                    crate::spill::words(unit.context, unit.layout, hoisted, value)
                 })
             })
         };
         let free = |value: ValueId| {
-            _displacement(&hoisted, value) || traffic().get(&value).is_some_and(|one| one.rebuild.is_some())
+            _displacement(hoisted, value) || traffic().get(&value).is_some_and(|one| one.rebuild.is_some())
         };
-        let crossing = _crossed_values(&hoisted, &run)
+        let crossing = _crossed_values(hoisted, &run)
             .into_iter()
             .filter(|value| forecast.spilled.contains(value))
             .collect::<BTreeSet<_>>();
@@ -238,6 +282,8 @@ fn _affordable(
             stay.extend(floats);
         }
         if stay.is_empty() {
+            // Nothing moves: the function is as it was priced.
+            *held = Some(kept);
             return Vec::new();
         }
         // What reads a value that stays cannot leave before it.
@@ -274,6 +320,8 @@ fn _affordable(
         }
         run.retain(|&inst| unit.function.instruction(inst).result.is_none_or(|result| !stay.contains(&result)));
     }
+    // Everything stayed: the function is as it was priced.
+    *held = Some(kept);
     run
 }
 
