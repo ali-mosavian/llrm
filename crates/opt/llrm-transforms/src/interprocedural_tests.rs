@@ -1414,7 +1414,7 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[-3]];
     let cloned = |clone: bool| {
         let mut module = parsed(TWO_CONTEXTS);
-        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: clone, ..Threshold::none() });
+        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: clone, cp_full: clone, ..Threshold::none() });
         assert_eq!(results(&module, inputs), results(&parsed(TWO_CONTEXTS), inputs), "{}", printed(&module));
         (module.named("g.constprop.1").is_some(), module.named("g.constprop.2").is_some())
     };
