@@ -321,3 +321,18 @@ def test_counted_stays_below_cubic_in_the_loops_of_one_function(tmp_path):
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     small, big = (own[label].get("analysis counted", 0.0) - own["empty"].get("analysis counted", 0.0) for label in ("n", "2n"))
     assert big <= 2.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_decide_does_not_work_out_a_loop_for_each_block_in_it(tmp_path):
+    """nest(N) at -O2: `Given::holds` worked out the followers of each counter of every loop around the block (a scan of the loop's
+    values) for each block it was asked of, `mir decide` read 2N/N = 5.5 and 6.6 (160 / 874 / 5799 Minstr at N=32..128, 10% of the
+    compile). A loop's followers are the loop's: the manager holds them (`Followers`), as it holds its counted proofs. It reads
+    3.1, 3.7 (71 / 220 / 814). A step above 4.2 (slope 2.07) fails; a few Minstr of start-up are allowed."""
+    n = 32
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"nest_{label}.c"
+        source.write_text("" if size == 0 else scaling.nest(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir decide", 0.0) - own["empty"].get("mir decide", 0.0) for label in ("n", "2n"))
+    assert big <= 4.2 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"

@@ -1868,6 +1868,26 @@ pub fn basics(
 /// Where the follower advances is a branch, `i = i + 1` on some ways round
 /// and `i` on the others (quicksort's partition index), the counter still
 /// leads: `i + 1 <= j + 1`, which the counter's step does not wrap.
+/// Each loop's followers, by header: `followers` of every loop of the unit's
+/// shape, found once for the body (a block asks them of each loop around it).
+pub type LoopFollowers = IndexMap<i64, Vec<(ValueId, ValueId, AffineOperand)>>;
+
+pub fn followers_all(unit: &Unit) -> LoopFollowers {
+    unit.shape().loops.iter().map(|loop_| (loop_.header, followers(unit, loop_))).collect()
+}
+
+/// The followers of `loop_`: the manager's where the unit carries them, else
+/// worked out.
+pub fn followers_of(
+    unit: &Unit,
+    loop_: &Loop,
+) -> Vec<(ValueId, ValueId, AffineOperand)> {
+    match unit.followers.and_then(|held| held.get(&loop_.header)) {
+        Some(found) => found.clone(),
+        None => followers(unit, loop_),
+    }
+}
+
 pub fn followers(
     unit: &Unit,
     loop_: &Loop,
