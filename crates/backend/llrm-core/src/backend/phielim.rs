@@ -61,6 +61,9 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let successors: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.succ.len())).collect();
     let widths = _widths(body);
+    // Renaming a phi whose copies the predecessor could hold saves nothing
+    // (only an edge block); an x87 value has no copy to save.
+    let floating = crate::backend::ssaspill::floating(body);
 
     let once = _read_once(body);
     // One per predecessor->successor edge. Every move a phi becomes on
@@ -97,7 +100,11 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                 // it define the phi's result outright says what the phi said.
                 if edges.iter().all(|&(w, v)| {
                     _defined_in(at_of[&w], v)
-                        && (once.get(&v).copied() == Some(1) || _read_past_loop(&at_of, block.at, w, v))
+                        && (once.get(&v).copied() == Some(1)
+                            || !floating.contains(&phi.result)
+                                && (_observed(body, &at_of, w, block.at, phi.result)
+                                    || _observed(body, &at_of, w, block.at, v))
+                                && _read_past_loop(&at_of, block.at, w, v))
                         && _defined_in_place(at_of[&w], v, phi.result)
                         && !_live_after(&at_of, block.at, w, v, phi.result)
                 }) {

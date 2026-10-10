@@ -88,7 +88,8 @@ pub fn tied(body: &LirBody) -> LirBody {
         .filter(|(_, alive)| alive.is_some_and(BTreeSet::is_empty))
         .filter_map(|(one, _)| _swappable(one))
         .filter_map(|(into, first, second)| {
-            Some(copies.get(&into).into_iter().flatten().copied().chain([into, first, second]))
+            let neighbours = copies.get(&into)?;
+            Some(neighbours.iter().copied().chain([into, first, second]))
         })
         .flatten()
         .collect();
