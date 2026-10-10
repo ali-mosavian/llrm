@@ -776,7 +776,7 @@ impl Run {
         if preserved.are_all_preserved() {
             // Every result stands, as the body is now (it may have edited and
             // put back).
-            analyses.invalidate(unit.function, &preserved);
+            analyses.vouch(unit.function);
             return false;
         }
         llrm_mir::passes::note_pass(pass.name());

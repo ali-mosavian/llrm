@@ -707,12 +707,8 @@ trait Cached {
         preserved: &PreservedAnalyses,
     ) -> bool;
     fn incremental(&self) -> bool;
-    /// The function's history when the result was derived, or last vouched for.
+    /// The function's history when the result was derived.
     fn mark(&self) -> crate::module::Mark;
-    fn stamp(
-        &mut self,
-        mark: crate::module::Mark,
-    );
 }
 
 struct Entry<A: Analysis> {
@@ -756,13 +752,6 @@ impl<A: Analysis> Cached for Entry<A> {
     fn mark(&self) -> crate::module::Mark {
         self.mark
     }
-
-    fn stamp(
-        &mut self,
-        mark: crate::module::Mark,
-    ) {
-        self.mark = mark;
-    }
 }
 
 /// One function's cached analyses, and what they may read of its module.
@@ -771,6 +760,10 @@ pub struct Analyses {
     /// Results invalidated that `update` may bring up to date.
     kept: HashMap<TypeId, Box<dyn Cached>>,
     evicted: HashMap<TypeId, Box<dyn Cached>>,
+    /// The history of the function when a pass last vouched for what it kept
+    /// (`invalidate`): a result derived before and held is as true now as
+    /// then.
+    vouched: Option<crate::module::Mark>,
     outer: Rc<Outer>,
 }
 
@@ -831,7 +824,7 @@ fn check_replay() -> bool {
 
 impl Analyses {
     pub fn new(outer: Rc<Outer>) -> Self {
-        Self { cache: HashMap::default(), kept: HashMap::default(), evicted: HashMap::default(), outer }
+        Self { cache: HashMap::default(), kept: HashMap::default(), evicted: HashMap::default(), vouched: None, outer }
     }
 
     /// An empty cache over the same module and target, for another body.
@@ -977,8 +970,16 @@ impl Analyses {
         preserved: &PreservedAnalyses,
     ) {
         self.drop_unpreserved(preserved);
-        let now = function.mark();
-        self.cache.values_mut().for_each(|entry| entry.stamp(now));
+        self.vouched = Some(function.mark());
+    }
+
+    /// Every result held stands, as `function` is now: a pass that edited and
+    /// put back, or that changed nothing.
+    pub fn vouch(
+        &mut self,
+        function: &Function,
+    ) {
+        self.vouched = Some(function.mark());
     }
 
     fn drop_unpreserved(
@@ -1010,6 +1011,11 @@ impl Analyses {
         function: &Function,
     ) {
         let now = function.mark();
+        if self.vouched == Some(now) {
+            // Every result held was vouched for at this history, or derived at
+            // it.
+            return;
+        }
         let behind: Vec<TypeId> =
             self.cache.iter().filter(|(_, entry)| entry.mark() != now).map(|(key, _)| *key).collect();
         for key in behind {
