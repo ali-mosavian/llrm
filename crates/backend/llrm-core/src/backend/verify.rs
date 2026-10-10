@@ -6,6 +6,7 @@ use std::fmt;
 
 use llrm_lir::registers::RegId;
 
+use crate::backend::peephole::is_frame_base;
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::lir::{LirBlock, LirBody};
 
@@ -35,6 +36,7 @@ pub fn verify_for(
     let mut out = verify(body, in_ssa);
     if spaces.far_is_near() && spaces.segment_bytes.is_none() {
         out.extend(_flat(body));
+        out.extend(_wide_addresses(body));
     }
     out
 }
@@ -190,6 +192,33 @@ fn _spans(body: &LirBody) -> Vec<String> {
                     break;
                 }
                 claimed.insert(byte, one.at);
+            }
+        }
+    }
+    out
+}
+
+/// In flat code a base or an index is as wide as the target's addresses: the
+/// frame register's width. The frame and stack bases the frame layout resolves
+/// are no register read.
+fn _wide_addresses(body: &LirBody) -> Vec<String> {
+    let regs = body.regs();
+    let wide = regs.width_of(regs.frame).unwrap_or(0);
+    let mut out = vec![];
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        let Some(what) = &one.what else { continue };
+        for at in what.dests.iter().chain(&what.sources).filter_map(Loc::address) {
+            for (register, framed) in [
+                (at.through, is_frame_base(regs, at.addr, at.through) || regs.is_stack(at.through)),
+                (at.index_through, false),
+            ] {
+                if register != RegId::None && !framed && regs.width_of(register).is_some_and(|width| width < wide) {
+                    out.push(format!(
+                        "{:#06x} addresses through {}, narrower than this target's {wide}-byte addresses",
+                        one.at,
+                        regs.name(register).unwrap_or("?")
+                    ));
+                }
             }
         }
     }

@@ -4652,3 +4652,24 @@ fn the_lanes_of_a_register_are_the_descriptions() {
             && _lanes(regs, RegId::XMM0).is_empty()
     );
 }
+
+/// `lea eax, [bx-52]` took a local's address after `mov ebp, ebx`: a frame
+/// cell's base was renamed with the frame register's copy.
+#[test]
+fn a_frame_cells_base_is_not_renamed_with_a_copy_of_the_frame_register() {
+    let regs = crate::backend::registerinfo::test_regs();
+    let frame = Addr::new(Space::Frame, -52);
+    let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(Some(frame), 4) });
+    assert_eq!(_register_operand(regs, &cell, RegId::BP, RegId::BX), cell);
+    let address = Loc::Address(AddressRef {
+        addr: Some(frame),
+        through: RegId::BP,
+        index_through: RegId::None,
+        scale: 1,
+        offset: 0,
+        disp_width: 2,
+    });
+    assert_eq!(_register_operand(regs, &address, RegId::BP, RegId::BX), address);
+    let pointer = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(None, 4) });
+    assert_eq!(_register_operand(regs, &pointer, RegId::BP, RegId::BX).address().map(|at| at.through), Some(RegId::BX));
+}

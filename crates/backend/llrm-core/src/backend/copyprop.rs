@@ -14,7 +14,7 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
-use crate::backend::peephole::{_lanes, _register_effects, _register_effects_of_what, Lane, Lanes, id};
+use crate::backend::peephole::{_lanes, _register_effects, _register_effects_of_what, Lane, Lanes, id, is_frame_base};
 use crate::backend::select;
 use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
@@ -410,7 +410,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                     let place = if side { &current.dests[index] } else { &current.sources[index] };
                     let Some(at) = place.address() else { continue };
                     let register = if through { at.through } else { at.index_through };
-                    if register == RegId::None {
+                    if register == RegId::None || (through && is_frame_base(regs, at.addr, register)) {
                         continue;
                     }
                     let put = |replacement: RegId| {
