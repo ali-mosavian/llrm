@@ -1378,7 +1378,7 @@ impl Compiler {
             numbered_lines: BTreeMap::new(),
             debug: llrm_hir::debug::Builder::for_language(
                 llrm_hir::model::DebugLanguage::Basic,
-                llrm_hir::model::DebugDialect::Bc,
+                llrm_hir::model::DebugDialect::Cv4,
             ),
             debug_structures: BTreeMap::new(),
             load_lines: BTreeMap::new(),
