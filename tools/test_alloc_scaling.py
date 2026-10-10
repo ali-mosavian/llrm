@@ -160,3 +160,20 @@ def test_a_rewrite_that_changes_most_instructions_finds_the_homes_afresh():
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["intervals homes"] < 700, f"cells N=448 -O2: intervals homes cost {run['intervals homes']} Minstr (700 allowed; 895 before): {run}"
+
+
+def test_a_rewrite_patches_the_numbering_and_keeps_the_intervals_it_did_not_change():
+    """Each rewrite renumbered the whole body and moved and weighed every live interval: `facts slots` + `facts intervals` were
+    459 + 1604 Minstr on `cells` at N=448 (one block, 874 rewrites changing ~70 instructions each, 1500 live values). Slots are
+    stable keys (SlotIndexes), a rewrite's added instructions take slots between their neighbours', an untouched interval is the
+    same one, and a weight is worked out when read."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    spent = run["facts slots"] + run["facts intervals"]
+    assert spent < 450, f"cells N=448 -O2: facts slots + facts intervals cost {spent} Minstr (450 allowed; 2063 before): {run}"

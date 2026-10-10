@@ -60,7 +60,7 @@ pub fn classes_with(
 /// gives `classes`, which reads them for its `[word+word]` roles and would
 /// number the body and find both again.
 pub struct Found<'a> {
-    pub live: &'a IndexMap<u32, ranges::Interval>,
+    pub live: &'a dyn crate::backend::live::Ranges,
     pub masks: &'a crate::backend::allocate::Masks,
 }
 
@@ -590,7 +590,7 @@ fn _word_address_roles(
             let numbered = ranges::indexed(body);
             own_live = ranges::intervals(body, Some(&numbered));
             own_masks = _masks(body, &numbered, segments);
-            (&own_live, &own_masks)
+            (&own_live as &dyn crate::backend::live::Ranges, &own_masks)
         }
     };
     let word_base = *registers.word_bases.iter().next().expect("one word base");
@@ -598,7 +598,7 @@ fn _word_address_roles(
     let base_penalty = |values: &BTreeSet<u32>| -> i64 {
         values
             .iter()
-            .filter_map(|value| live.get(value))
+            .filter_map(|value| live.range(*value))
             .map(|interval| i64::from(_clobbered(interval, word_base, &masks, 2)))
             .sum()
     };

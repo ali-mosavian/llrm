@@ -1544,14 +1544,16 @@ fn test_fold_prices_are_what_the_per_instruction_lookup_gave() {
                         }
                     }
                 }
+                let numbered = crate::analysis::intervals::indexed(&body);
                 let mut expected = live.clone();
                 for (value, found) in &free {
                     if let Some(one) = expected.get_mut(value).filter(|one| one.weight != f64::INFINITY) {
-                        one.weight =
-                            (one.weight - found / (one.size() + crate::analysis::intervals::GRACE) as f64).max(0.0);
+                        one.weight = (one.weight
+                            - found / (one.size(&numbered) + crate::analysis::intervals::GRACE) as f64)
+                            .max(0.0);
                     }
                 }
-                let priced = _fold_priced(&body, live, profile, &busy);
+                let priced = _fold_priced(&body, live, profile, &busy, &numbered);
                 assert!(priced.iter().eq(expected.iter()), "seed {seed} on {cpu}");
             }
         }
@@ -1852,4 +1854,137 @@ fn test_a_value_live_through_blocks_is_one_segment() {
             }
         }
     }
+}
+
+/// Slots are spaced `GAP` apart so a rewrite can add an instruction without
+/// moving the others; what the code reads of them is `uniform`, which must be
+/// the consecutive numbering's, point for point.
+#[test]
+fn test_the_spaced_numbering_is_the_consecutive_one_under_uniform() {
+    use crate::analysis::frequency::Frequency;
+    use crate::analysis::intervals::{indexed, indexed_consecutive, intervals_where};
+    for seed in 0..40u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        let (spaced, consecutive) = (indexed(&plain), indexed_consecutive(&plain));
+        for (key, slot) in &spaced.at {
+            assert_eq!(spaced.uniform(*slot), consecutive.at[key], "seed {seed}: an instruction's slot");
+        }
+        for (block, (first, last)) in &spaced.span {
+            let (was_first, was_last) = consecutive.span[block];
+            assert_eq!(
+                (spaced.uniform(*first), spaced.uniform(*last)),
+                (was_first, was_last),
+                "seed {seed}: block {block}"
+            );
+        }
+        let busy = Frequency::of(&plain);
+        let (new, old) = (
+            intervals_where(&plain, &spaced, &busy, &|_| true),
+            intervals_where(&plain, &consecutive, &busy, &|_| true),
+        );
+        assert_eq!(new.len(), old.len(), "seed {seed}");
+        for (value, one) in &new {
+            let was = &old[value];
+            let mapped: Vec<(i64, i64)> =
+                one.segments.iter().map(|s| (spaced.uniform(s.start), spaced.uniform(s.end))).collect();
+            let expected: Vec<(i64, i64)> = was.segments.iter().map(|s| (s.start, s.end)).collect();
+            assert_eq!(mapped, expected, "seed {seed}: value {value}");
+        }
+    }
+}
+
+/// The numbering a rewrite leaves is the old one with the instructions it added
+/// put between their neighbours' slots (LLVM's `SlotIndexes`): under `uniform`
+/// every point is where a fresh consecutive numbering of the new body puts it,
+/// however many instructions went in or out; and where a gap has no
+/// room left the patch says so, for a fresh numbering to answer.
+#[test]
+fn test_a_patched_numbering_is_the_consecutive_one_under_uniform() {
+    use crate::analysis::intervals::{indexed, indexed_consecutive};
+    let mut patched_any = false;
+    for seed in 0..60u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        let mut numbering = indexed(&plain);
+        let mut current = plain.clone();
+        let mut next = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let mut random = |bound: usize| {
+            next = next.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (next >> 33) as usize % bound
+        };
+        for _ in 0..12 {
+            let mut blocks = current.blocks.clone();
+            let at = random(blocks.len());
+            let mut insns: Vec<std::sync::Arc<crate::model::lir::Insn>> = blocks[at].insns.to_vec();
+            for _ in 0..1 + random(3) {
+                match random(3) {
+                    0 if !insns.is_empty() => {
+                        let one = (*insns[random(insns.len())]).clone();
+                        insns.insert(random(insns.len() + 1), std::sync::Arc::new(one));
+                    }
+                    1 if insns.len() > 1 => {
+                        insns.remove(random(insns.len()));
+                    }
+                    _ if !insns.is_empty() => {
+                        let place = random(insns.len());
+                        insns[place] = std::sync::Arc::new((*insns[place]).clone());
+                    }
+                    _ => {}
+                }
+            }
+            blocks[at].insns = insns.into();
+            let edited = current.with_blocks(blocks);
+            let Some(patched) = numbering.patched(&current, &edited) else {
+                numbering = indexed(&edited);
+                current = edited;
+                continue;
+            };
+            patched_any = true;
+            let whole = indexed_consecutive(&edited);
+            assert_eq!(patched.at.len(), whole.at.len(), "seed {seed}: the instructions numbered");
+            for (insn, slot) in &patched.at {
+                assert_eq!(patched.uniform(*slot), whole.at[insn], "seed {seed}: an instruction's slot");
+            }
+            for (block, (first, last)) in &patched.span {
+                assert_eq!(
+                    (patched.uniform(*first), patched.uniform(*last)),
+                    whole.span[block],
+                    "seed {seed}: block {block}"
+                );
+            }
+            assert_eq!(patched.epoch, numbering.epoch, "seed {seed}: a patch is of the same numbering");
+            numbering = patched;
+            current = edited;
+        }
+    }
+    assert!(patched_any, "no edit was patched");
+}
+
+/// A gap halves with each instruction added in it: after 20 added at one point
+/// the next has no room and the numbering must be made afresh, not patched into
+/// slots that collide.
+#[test]
+fn test_a_gap_with_no_room_left_is_answered_by_a_fresh_numbering() {
+    use crate::analysis::intervals::indexed;
+    let (plain, _) = body(3, &Shape { pool: 8, ops: 12 });
+    let mut numbering = indexed(&plain);
+    let mut current = plain;
+    let mut refused = false;
+    for round in 0..40 {
+        let mut blocks = current.blocks.clone();
+        let mut insns: Vec<std::sync::Arc<crate::model::lir::Insn>> = blocks[0].insns.to_vec();
+        let copy = std::sync::Arc::new((*insns[1]).clone());
+        insns.insert(1, copy);
+        blocks[0].insns = insns.into();
+        let edited = current.with_blocks(blocks);
+        match numbering.patched(&current, &edited) {
+            Some(patched) => numbering = patched,
+            None => {
+                refused = true;
+                numbering = indexed(&edited);
+                assert!(round >= 15, "a gap of 2^20 ran out after only {round} instructions");
+            }
+        }
+        current = edited;
+    }
+    assert!(refused, "40 instructions in one gap were all patched");
 }

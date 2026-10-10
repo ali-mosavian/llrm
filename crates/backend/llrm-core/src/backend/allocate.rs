@@ -18,6 +18,7 @@ use crate::analysis::intervals::{self as ranges, Indexes, Interval};
 use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
+use crate::backend::live::LiveRanges;
 use crate::backend::liveunion::{LiveUnion, Overlaps};
 use crate::backend::target::{self, Segments};
 use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit};
@@ -993,7 +994,7 @@ impl Claims {
     fn by(
         &mut self,
         wanted: &IndexMap<u32, Register>,
-        live: &IndexMap<u32, Interval>,
+        live: &LiveRanges,
         value: u32,
         mine: &Interval,
         placed: &IndexMap<u32, Register>,
@@ -1075,8 +1076,10 @@ pub fn rewritten(
 
 /// What the allocator knows of a body, recomputed whenever it rewrites it.
 struct Facts {
-    index: Indexes,
-    live: IndexMap<u32, Interval>,
+    index: Arc<Indexes>,
+    live: Arc<LiveRanges>,
+    /// What a body's fold discounts save, by value.
+    folds: Arc<IndexMap<u32, f64>>,
     masks: Masks,
     widths: IndexMap<u32, u32>,
     confined: Classes,
@@ -1096,41 +1099,85 @@ impl Facts {
         unspillable: &BTreeSet<u32>,
         protected: &BTreeSet<u32>,
         busy: &Frequency,
-        prior: Option<(&Facts, &ranges::Changes)>,
+        prior: Option<(&Facts, &ranges::Changes, &LirBody)>,
     ) -> Self {
         let _span = llrm_support::debug::span("regalloc facts");
-        let index = llrm_support::debug::timed("facts slots", || ranges::indexed(body));
-        let base = llrm_support::debug::timed("facts intervals", || ranges::intervals_over(body, Some(&index), busy));
-        let (base, siblings) = llrm_support::debug::timed("facts sibling prices", || match prior {
-            Some((before, changes)) => {
-                let whole = llrm_support::env_set("LLRM_CHECK_FACTS").then(|| base.clone());
-                let (found, siblings) = _sibling_priced_after(&before.siblings, body, base, busy, changes);
-                if let Some(whole) = whole {
-                    assert!(
-                        found == _sibling_priced(body, whole, busy).0,
-                        "{}: the sibling prices kept from the body before differ",
-                        body.name
-                    );
+        let index = llrm_support::debug::timed("facts slots", || {
+            let patched = prior.and_then(|(held, _, was)| held.index.patched(was, body));
+            if let Some(found) = &patched {
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                    let whole = ranges::indexed_consecutive(body);
+                    for (insn, slot) in &found.at {
+                        assert_eq!(found.uniform(*slot), whole.at[insn], "{}: an instruction's slot", body.name);
+                    }
+                    for (block, (first, last)) in &found.span {
+                        assert_eq!(
+                            (found.uniform(*first), found.uniform(*last)),
+                            whole.span[block],
+                            "{}: block {block}",
+                            body.name
+                        );
+                    }
+                    assert_eq!(found.at.len(), whole.at.len(), "{}: the instructions numbered", body.name);
                 }
-                (found, siblings)
             }
-            None => _sibling_priced(body, base, busy),
+            Arc::new(patched.unwrap_or_else(|| ranges::indexed(body)))
         });
-        let mut live = llrm_support::debug::timed("facts fold prices", || _fold_priced(body, base, profile, busy));
-        // A spiller product lives for one use: a spill gains nothing.
-        for one in unspillable {
-            if let Some(interval) = live.get_mut(one) {
-                interval.weight = INF;
+        let live = llrm_support::debug::timed("facts intervals", || {
+            let kept = prior.filter(|(held, changes, _)| {
+                held.index.epoch == index.epoch && changes.touched.len() * 3 <= held.live.len() + 16
+            });
+            match kept {
+                Some((held, changes, _)) => {
+                    let (again, totals) = ranges::worked_among(body, &index, busy, &changes.touched);
+                    held.live.edited(&changes.touched, again, totals, Arc::clone(&index))
+                }
+                None => {
+                    let (all, total) = ranges::worked_out_with_totals(body, &index, busy, &|_| true);
+                    LiveRanges::new(all, Arc::clone(&index), total)
+                }
             }
-        }
-        for one in protected {
-            if let Some(interval) = live.get_mut(one) {
-                interval.weight = INF;
+        });
+        let siblings = llrm_support::debug::timed("facts sibling prices", || match prior {
+            Some((before, changes, _)) if before.index.epoch == index.epoch => {
+                _sibling_free_after(&before.siblings, body, &live, busy, changes)
+            }
+            _ => _sibling_free(body, &live, busy),
+        });
+        let folds = llrm_support::debug::timed("facts fold prices", || match prior {
+            Some((before, changes, _)) if before.index.epoch == index.epoch => {
+                Arc::new(_fold_free_after(&before.folds, body, profile, busy, &changes.touched))
+            }
+            _ => Arc::new(_fold_free(body, profile, busy)),
+        });
+        // A spiller product lives for one use: a spill gains nothing.
+        let pinned: BTreeSet<u32> = unspillable.iter().chain(protected).copied().collect();
+        let live = Arc::new(live.priced(Arc::clone(&siblings.free), Arc::clone(&folds), pinned));
+        crate::backend::live::hold(body, &live);
+        if llrm_support::env_set("LLRM_CHECK_FACTS") {
+            let (base, _) = ranges::worked_out_with_totals(body, &index, busy, &|_| true);
+            let (mut whole, _) = _sibling_priced(body, base, busy, &index);
+            whole = _fold_priced(body, whole, profile, busy, &index);
+            for one in unspillable.iter().chain(protected) {
+                if let Some(interval) = whole.get_mut(one) {
+                    interval.weight = INF;
+                }
+            }
+            assert_eq!(whole.len(), live.len(), "{}: the values live", body.name);
+            for (value, interval) in &whole {
+                let kept = live.get(value).unwrap_or_else(|| panic!("{}: value {value} has no interval", body.name));
+                assert_eq!(kept.segments, interval.segments, "{}: where value {value} is live", body.name);
+                assert_eq!(
+                    live.weight(*value).to_bits(),
+                    interval.weight.to_bits(),
+                    "{}: what spilling value {value} costs",
+                    body.name
+                );
             }
         }
         let masks = llrm_support::debug::timed("facts masks", || _masks(body, &index, segments));
         let widths = llrm_support::debug::timed("facts widths", || match prior {
-            Some((before, changes)) => {
+            Some((before, changes, _)) => {
                 let found = _widest_after(&before.widths, body, &changes.touched);
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(found == _widest(body), "{}: the widths kept from the body before differ", body.name);
@@ -1142,7 +1189,7 @@ impl Facts {
         let (scan, confined) = llrm_support::debug::timed("facts classes", || {
             let given = crate::backend::regclass::Found { live: &live, masks: &masks };
             let scan = llrm_support::debug::timed("classes scan", || match prior {
-                Some((before, changes)) => before.scan.after(&changes.gone, &changes.added, registers, segments),
+                Some((before, changes, _)) => before.scan.after(&changes.gone, &changes.added, registers, segments),
                 None => crate::backend::regclass::Scan::of(body, registers, segments),
             });
             let found = scan.classes(body, protected, segments, registers, &given);
@@ -1155,7 +1202,7 @@ impl Facts {
             (scan, found)
         });
         let hints = llrm_support::debug::timed("facts hints", || match prior {
-            Some((before, changes)) => {
+            Some((before, changes, _)) => {
                 let found = _copy_hints_after(&before.hints, body, &changes.touched);
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(found == _copy_hints(body), "{}: the hints kept from the body before differ", body.name);
@@ -1164,7 +1211,7 @@ impl Facts {
             }
             None => _copy_hints(body),
         });
-        Self { index, live, masks, widths, confined, hints, scan, siblings }
+        Self { index, live, folds, masks, widths, confined, hints, scan, siblings }
     }
 }
 
@@ -1296,10 +1343,11 @@ fn _allocated(
 
     let wide = classes.available.len();
     let queued = |value: u32,
-                  live: &IndexMap<u32, Interval>,
+                  live: &LiveRanges,
                   stage: &IndexMap<u32, Stage>,
                   fixed: &IndexMap<u32, Register>,
-                  confined: &Classes| {
+                  confined: &Classes,
+                  index: &Indexes| {
         // A value that only some registers can hold goes first, as LLVM's
         // register class priority puts it: the wide ones fit around it.
         Reverse(Queued(
@@ -1309,13 +1357,16 @@ fn _allocated(
                 stage.get(&value).copied().unwrap_or(Stage::Assign),
                 confined.get(&value).map(BTreeSet::len),
                 wide,
+                index,
             ),
             value,
         ))
     };
 
-    let mut queue: BinaryHeap<Reverse<Queued>> =
-        _values(&body).into_iter().map(|one| queued(one, &facts.live, &stage, &fixed, &facts.confined)).collect();
+    let mut queue: BinaryHeap<Reverse<Queued>> = _values(&body)
+        .into_iter()
+        .map(|one| queued(one, &facts.live, &stage, &fixed, &facts.confined, &facts.index))
+        .collect();
     // How many entries each value has in the queue.
     let mut waiting: IndexMap<u32, usize> = IndexMap::default();
     for Reverse(Queued(_, _, one)) in &queue {
@@ -1391,7 +1442,7 @@ fn _allocated(
         }
 
         // An unspillable range has no fallback, so it may evict at any stage.
-        if at == Stage::Assign || mine.weight == INF {
+        if at == Stage::Assign || facts.live.weight(value) == INF {
             let movable = |other: u32, register: Register| -> bool {
                 if fixed.contains_key(&other) {
                     return false;
@@ -1435,7 +1486,7 @@ fn _allocated(
                     r#where.shift_remove(&one);
                     cascades.insert(one, cascades[&value]);
                     stage.insert(one, Stage::Assign);
-                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined));
+                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined, &facts.index));
                     *waiting.entry(one).or_insert(0) += 1;
                 }
                 r#where.insert(value, got);
@@ -1445,13 +1496,13 @@ fn _allocated(
             }
             if at == Stage::Assign {
                 stage.insert(value, Stage::Split);
-                queue.push(queued(value, &facts.live, &stage, &fixed, &facts.confined));
+                queue.push(queued(value, &facts.live, &stage, &fixed, &facts.confined, &facts.index));
                 *waiting.entry(value).or_insert(0) += 1;
                 continue;
             }
         }
 
-        let bound = fixed.contains_key(&value) || mine.weight == INF;
+        let bound = fixed.contains_key(&value) || facts.live.weight(value) == INF;
         // `trySplit`, carved at once: the pieces and the rest compete again.
         let mut rewritten: Option<Vec<u32>> = None;
         // The body as it was before this round rewrote it.
@@ -1560,6 +1611,7 @@ fn _allocated(
                 union: &mut union,
                 r#where: &mut r#where,
                 live: &facts.live,
+                index: &facts.index,
                 masks: &facts.masks,
                 order: &choices,
                 width: &wide,
@@ -1608,7 +1660,7 @@ fn _allocated(
                     union.remove(_whole(got), one, &facts.live);
                     r#where.shift_remove(&one);
                     stage.insert(one, Stage::Spill);
-                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined));
+                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined, &facts.index));
                     *waiting.entry(one).or_insert(0) += 1;
                 }
                 r#where.insert(value, got);
@@ -1616,7 +1668,7 @@ fn _allocated(
                 stage.insert(value, Stage::Done);
                 continue;
             }
-            cost += mine.weight;
+            cost += facts.live.weight(value);
             stage.insert(value, Stage::Done);
             match rewrite.as_deref_mut() {
                 None => {
@@ -1677,7 +1729,7 @@ fn _allocated(
             &unspillable,
             protected,
             &llrm_support::debug::timed("regalloc frequency", || Frequency::of(&body)),
-            changes.as_ref().map(|changes| (&facts, changes)),
+            changes.as_ref().zip(before.as_ref()).map(|(changes, was)| (&facts, changes, was)),
         );
         // What is done of the rewrite besides its facts: the pins, the placed
         // values it disturbs, the queue.
@@ -1732,7 +1784,7 @@ fn _allocated(
         llrm_support::debug::timed("after queue", || {
             for one in facts.live.keys().copied().filter(|one| !r#where.contains_key(one) && !spilled.contains(one)) {
                 if changed.contains(&one) || waiting.get(&one).copied().unwrap_or(0) == 0 {
-                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined));
+                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined, &facts.index));
                     *waiting.entry(one).or_insert(0) += 1;
                 }
             }
@@ -1789,7 +1841,7 @@ thread_local! {
 
 /// What recoloring reads of a finished assignment.
 struct Settled<'a> {
-    live: &'a IndexMap<u32, Interval>,
+    live: &'a LiveRanges,
     masks: &'a Masks,
     widths: &'a IndexMap<u32, u32>,
     hints: &'a IndexMap<u32, Vec<u32>>,
@@ -1904,19 +1956,21 @@ fn _queue_priority(
     at: Stage,
     class: Option<usize>,
     wide: usize,
+    index: &Indexes,
 ) -> f64 {
     let narrow = class.map_or(0, |registers| wide.saturating_sub(registers));
-    _priority(one, at) + narrow as f64 * 1e9
+    _priority(one, at, index) + narrow as f64 * 1e9
 }
 
 /// Where this range sits in the queue. Larger first, as LLVM does.
 fn _priority(
     one: Option<&Interval>,
     at: Stage,
+    index: &Indexes,
 ) -> f64 {
     match one {
         None => 0.0,
-        Some(one) => one.size() as f64 + if at != Stage::Assign { 1e6 } else { 0.0 },
+        Some(one) => one.size(index) as f64 + if at != Stage::Assign { 1e6 } else { 0.0 },
     }
 }
 
@@ -2223,7 +2277,7 @@ fn _free(
     one: &Interval,
     order: &[Register],
     union: &LiveUnion,
-    live: &IndexMap<u32, Interval>,
+    live: &LiveRanges,
     masks: &Masks,
     width: u32,
 ) -> Option<Register> {
@@ -2244,7 +2298,7 @@ fn _evict(
     one: &Interval,
     order: &[Register],
     union: &LiveUnion,
-    live: &IndexMap<u32, Interval>,
+    live: &LiveRanges,
     masks: &Masks,
     movable: &dyn Fn(u32, Register) -> bool,
     protected: &BTreeSet<u32>,
@@ -2269,16 +2323,16 @@ fn _evict(
         if let Some(cascade) = cascade {
             if victims.iter().any(|other| {
                 cascades.and_then(|found| found.get(other)).copied().unwrap_or(0) >= cascade
-                    && !(one.weight == INF && live[other].weight < INF)
+                    && !(live.weight(one.value) == INF && live.weight(*other) < INF)
             }) {
                 continue;
             }
         }
         let mut bill = 0.0;
         for other in &victims {
-            bill += if movable(*other, *register) { 0.0 } else { live[other].weight };
+            bill += if movable(*other, *register) { 0.0 } else { live.weight(*other) };
         }
-        if bill >= one.weight {
+        if bill >= live.weight(one.value) {
             continue;
         }
         if best.as_ref().is_none_or(|found| bill < found.0) {
@@ -2298,7 +2352,7 @@ fn _forced(
     one: &Interval,
     order: &[Register],
     union: &LiveUnion,
-    live: &IndexMap<u32, Interval>,
+    live: &LiveRanges,
     masks: &Masks,
     hard: &dyn Fn(u32) -> bool,
     width: u32,
@@ -2312,7 +2366,7 @@ fn _forced(
         if victims.iter().any(|other| hard(*other)) {
             continue;
         }
-        let bill: f64 = victims.iter().map(|other| live[other].weight).sum();
+        let bill: f64 = victims.iter().map(|other| live.weight(*other)).sum();
         if best.as_ref().is_none_or(|found| bill < found.0) {
             best = Some((bill, *register, victims));
         }
@@ -2351,7 +2405,8 @@ pub fn last_resorts() -> usize {
 pub struct Coloring<'a> {
     pub union: &'a mut LiveUnion,
     pub r#where: &'a mut IndexMap<u32, Register>,
-    pub live: &'a IndexMap<u32, Interval>,
+    pub live: &'a LiveRanges,
+    pub index: &'a Indexes,
     pub masks: &'a Masks,
     /// Each value's registers, in the order it tries them.
     pub order: &'a dyn Fn(u32) -> Vec<Register>,
@@ -2424,7 +2479,7 @@ impl Coloring<'_> {
                 continue;
             }
             // Largest first, as the allocator's queue orders them.
-            holders.sort_by_key(|other| Reverse(self.live[other].size()));
+            holders.sort_by_key(|other| Reverse(self.live[other].size(self.index)));
             let entry = self.stack.len();
             let session = recolored.clone();
             for other in &holders {
@@ -2906,7 +2961,7 @@ fn _min(
 #[derive(Clone, Default)]
 struct Siblings {
     impure: crate::support::hash::HashMap<u32, u32>,
-    free: IndexMap<u32, f64>,
+    free: Arc<IndexMap<u32, f64>>,
 }
 
 /// The values an instruction makes impure.
@@ -2935,31 +2990,34 @@ fn _impure_names(one: &Insn) -> Vec<u32> {
 /// both, if neither is impure and their intervals do not overlap.
 fn _freed(
     siblings: &Siblings,
-    live: &IndexMap<u32, Interval>,
+    live: &impl crate::backend::live::Ranges,
     (into, out_of): (u32, u32),
 ) -> bool {
     !(siblings.impure.contains_key(&into)
         || siblings.impure.contains_key(&out_of)
-        || live.get(&into).zip(live.get(&out_of)).is_some_and(|(one, other)| one.overlaps(other)))
+        || live.range(into).zip(live.range(out_of)).is_some_and(|(one, other)| one.overlaps(other)))
 }
 
 fn _price_free(
     live: &mut IndexMap<u32, Interval>,
     free: &IndexMap<u32, f64>,
+    index: &Indexes,
 ) {
     for (value, found) in free {
         if let Some(one) = live.get_mut(value) {
-            one.weight = _max(0.0, one.weight - found / one.spill_size() as f64);
+            one.weight = _max(0.0, one.weight - found / one.spill_size(index) as f64);
         }
     }
 }
 
-/// Intervals whose copies to a value they could share a slot with cost nothing.
-fn _sibling_priced(
+/// What the copies of a body to a value they could share a slot with save,
+/// value by value: the values that are impure (named by an instruction that is
+/// not a plain move) and the references of the rest.
+fn _sibling_free(
     body: &LirBody,
-    live: IndexMap<u32, Interval>,
+    live: &impl crate::backend::live::Ranges,
     busy: &Frequency,
-) -> (IndexMap<u32, Interval>, Siblings) {
+) -> Siblings {
     let mut siblings = Siblings::default();
     let mut moves: Vec<(i64, (u32, u32))> = Vec::new();
     for block in &body.blocks {
@@ -2978,29 +3036,42 @@ fn _sibling_priced(
             }
         }
     }
+    let mut free: IndexMap<u32, f64> = IndexMap::default();
     for (at, pair) in moves {
-        if _freed(&siblings, &live, pair) {
+        if _freed(&siblings, live, pair) {
             let each = busy.block(at);
             for value in [pair.0, pair.1] {
-                *siblings.free.entry(value).or_insert(0.0) += each;
+                *free.entry(value).or_insert(0.0) += each;
             }
         }
     }
-    let mut live = live;
-    _price_free(&mut live, &siblings.free);
-    (live, siblings)
+    siblings.free = Arc::new(free);
+    siblings
 }
 
-/// `_sibling_priced` of the body a rewrite made from one whose siblings were
-/// `held`: the values the changed instructions name, and the other sides of
-/// their copies, are priced again from where they occur; the rest stand.
-fn _sibling_priced_after(
-    held: &Siblings,
+/// Intervals whose copies to a value they could share a slot with cost nothing.
+fn _sibling_priced(
     body: &LirBody,
     live: IndexMap<u32, Interval>,
     busy: &Frequency,
-    changes: &ranges::Changes,
+    index: &Indexes,
 ) -> (IndexMap<u32, Interval>, Siblings) {
+    let siblings = _sibling_free(body, &live, busy);
+    let mut live = live;
+    _price_free(&mut live, &siblings.free, index);
+    (live, siblings)
+}
+
+/// `_sibling_free` of the body a rewrite made from one whose siblings were
+/// `held`: the values the changed instructions name, and the other sides of
+/// their copies, are priced again from where they occur; the rest stand.
+fn _sibling_free_after(
+    held: &Siblings,
+    body: &LirBody,
+    live: &impl crate::backend::live::Ranges,
+    busy: &Frequency,
+    changes: &ranges::Changes,
+) -> Siblings {
     let mut siblings = held.clone();
     let mut affected: crate::support::hash::HashSet<u32> = changes.touched.clone();
     for (one, put) in changes.gone.iter().map(|one| (one, false)).chain(changes.added.iter().map(|one| (one, true))) {
@@ -3029,8 +3100,9 @@ fn _sibling_priced_after(
         partners
     });
     affected.extend(partners);
+    let mut free = (*siblings.free).clone();
     for value in &affected {
-        siblings.free.swap_remove(value);
+        free.swap_remove(value);
     }
     crate::backend::postings::following(body, |postings| {
         for value in &affected {
@@ -3044,15 +3116,14 @@ fn _sibling_priced_after(
                 else {
                     continue;
                 };
-                if _freed(&siblings, &live, pair) {
-                    *siblings.free.entry(*value).or_insert(0.0) += busy.block(block.at);
+                if _freed(&siblings, live, pair) {
+                    *free.entry(*value).or_insert(0.0) += busy.block(block.at);
                 }
             }
         }
     });
-    let mut live = live;
-    _price_free(&mut live, &siblings.free);
-    (live, siblings)
+    siblings.free = Arc::new(free);
+    siblings
 }
 
 /// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
@@ -3251,13 +3322,14 @@ pub(crate) fn _fold_discount(
     _max(0.0, _min(1.0, 1.0 - remainder as f64 / load as f64))
 }
 
-/// Discount reads by the target-specific saving from folding them.
-pub(crate) fn _fold_priced(
+/// What folding the reads of each value saves, by value: the discount of every
+/// instruction that folds its second source, once for each time it reads the
+/// value, weighted by how often its block runs.
+fn _fold_free(
     body: &LirBody,
-    live: IndexMap<u32, Interval>,
     profile: &Profile,
     busy: &Frequency,
-) -> IndexMap<u32, Interval> {
+) -> IndexMap<u32, f64> {
     let discounts = FoldDiscounts::of(profile);
     let check = llrm_support::env_set("LLRM_CHECK_FOLDS");
     let mut free: IndexMap<u32, f64> = IndexMap::default();
@@ -3285,10 +3357,58 @@ pub(crate) fn _fold_priced(
             }
         }
     }
+    free
+}
+
+/// `_fold_free` of the body a rewrite made from one whose was `held`: only a
+/// value a changed instruction names can have a different sum, worked out again
+/// from where it is read, in the order the whole body adds it.
+fn _fold_free_after(
+    held: &IndexMap<u32, f64>,
+    body: &LirBody,
+    profile: &Profile,
+    busy: &Frequency,
+    touched: &crate::support::hash::HashSet<u32>,
+) -> IndexMap<u32, f64> {
+    let discounts = FoldDiscounts::of(profile);
+    let mut free = held.clone();
+    for value in touched {
+        free.swap_remove(value);
+    }
+    crate::backend::postings::following(body, |postings| {
+        for value in touched {
+            let mut at: Vec<crate::backend::postings::At> = postings.uses(*value).to_vec();
+            at.sort_unstable();
+            for at in at {
+                let block = &body.blocks[at.0 as usize];
+                let one = &block.insns[at.1 as usize];
+                let discount = discounts.of_insn(one);
+                if discount == 0.0 {
+                    continue;
+                }
+                let Some((_, right)) = spiller::folded_pair(one, true) else { continue };
+                if right.value == *value {
+                    *free.entry(*value).or_insert(0.0) += busy.block(block.at) * discount;
+                }
+            }
+        }
+    });
+    free
+}
+
+/// Discount reads by the target-specific saving from folding them.
+pub(crate) fn _fold_priced(
+    body: &LirBody,
+    live: IndexMap<u32, Interval>,
+    profile: &Profile,
+    busy: &Frequency,
+    index: &Indexes,
+) -> IndexMap<u32, Interval> {
+    let free = _fold_free(body, profile, busy);
     let mut live = live;
     for (value, found) in &free {
         if let Some(one) = live.get_mut(value).filter(|one| one.weight != INF) {
-            one.weight = _max(0.0, one.weight - found / one.spill_size() as f64);
+            one.weight = _max(0.0, one.weight - found / one.spill_size(index) as f64);
         }
     }
     live
@@ -4286,22 +4406,22 @@ mod tests {
         let span = |end: i64| Interval::new(1, vec![Segment { start: 0, end }]);
         let (short, long) = (span(4), span(400));
         assert!(
-            _queue_priority(Some(&short), Stage::Assign, Some(4), 6)
-                > _queue_priority(Some(&long), Stage::Assign, Some(6), 6)
+            _queue_priority(Some(&short), Stage::Assign, Some(4), 6, &Indexes::plain())
+                > _queue_priority(Some(&long), Stage::Assign, Some(6), 6, &Indexes::plain())
         );
         assert!(
-            _queue_priority(Some(&short), Stage::Assign, None, 6)
-                < _queue_priority(Some(&long), Stage::Assign, None, 6),
+            _queue_priority(Some(&short), Stage::Assign, None, 6, &Indexes::plain())
+                < _queue_priority(Some(&long), Stage::Assign, None, 6, &Indexes::plain()),
             "no class: longest first"
         );
         assert!(
-            _queue_priority(Some(&long), Stage::Assign, Some(4), 6)
-                > _queue_priority(Some(&short), Stage::Assign, Some(4), 6),
+            _queue_priority(Some(&long), Stage::Assign, Some(4), 6, &Indexes::plain())
+                > _queue_priority(Some(&short), Stage::Assign, Some(4), 6, &Indexes::plain()),
             "one class: longest first"
         );
         assert!(
-            _queue_priority(Some(&short), Stage::Assign, Some(1), 6)
-                > _queue_priority(Some(&short), Stage::Assign, Some(4), 6),
+            _queue_priority(Some(&short), Stage::Assign, Some(1), 6, &Indexes::plain())
+                > _queue_priority(Some(&short), Stage::Assign, Some(4), 6, &Indexes::plain()),
             "the fewer registers, the sooner"
         );
     }
@@ -4316,7 +4436,7 @@ mod tests {
             &incoming,
             &[Register::DI],
             &union,
-            &live,
+            &LiveRanges::stated(live.clone()),
             &Masks::default(),
             &|_, _| false,
             &values(&[1]),
@@ -4346,7 +4466,8 @@ mod tests {
         let mut coloring = Coloring {
             union: &mut union,
             r#where: &mut placed,
-            live: &live,
+            live: &LiveRanges::stated(live.clone()),
+            index: &Indexes::plain(),
             masks: &Masks::default(),
             order: &choices,
             width: &|_| 2,
@@ -4381,7 +4502,8 @@ mod tests {
         let mut coloring = Coloring {
             union: &mut union,
             r#where: &mut placed,
-            live: &live,
+            live: &LiveRanges::stated(live.clone()),
+            index: &Indexes::plain(),
             masks: &Masks::default(),
             order: &choices,
             width: &|_| 4,
@@ -4453,7 +4575,8 @@ mod tests {
         let mut coloring = Coloring {
             union: &mut union,
             r#where: &mut placed,
-            live: &live,
+            live: &LiveRanges::stated(live.clone()),
+            index: &Indexes::plain(),
             masks: &Masks::default(),
             order: &choices,
             width: &|_| 2,

@@ -50,14 +50,20 @@ impl Interval {
     }
 
     /// How many slots this value is live for, which is not its span.
-    pub fn size(&self) -> i64 {
-        self.segments.iter().map(|one| one.end - one.start).sum()
+    pub fn size(
+        &self,
+        index: &Indexes,
+    ) -> i64 {
+        self.segments.iter().map(|one| index.uniform(one.end) - index.uniform(one.start)).sum()
     }
 
     /// What spilling this value is divided by: how many slots it is live for,
     /// and the grace every value has.
-    pub fn spill_size(&self) -> i64 {
-        self.size() + GRACE
+    pub fn spill_size(
+        &self,
+        index: &Indexes,
+    ) -> i64 {
+        self.size(index) + GRACE
     }
 
     pub fn overlaps(
@@ -87,6 +93,12 @@ pub fn key(one: &Arc<Insn>) -> usize {
 }
 
 /// Every instruction's slot number, and every block's span.
+///
+/// Slots are stable keys, spaced `GAP` apart as LLVM's `SlotIndexes` are, not
+/// consecutive: an instruction a rewrite adds can take a slot between its
+/// neighbours' without moving theirs. What the code reads as a count of
+/// instructions (a value's size, which prices its spill) is `uniform`, the
+/// number the consecutive numbering this replaced gave the same point.
 #[derive(Clone, Debug)]
 pub struct Indexes {
     // id(insn) -> the instruction's first slot
@@ -94,7 +106,39 @@ pub struct Indexes {
     pub span: IndexMap<i64, (i64, i64)>, // block address -> [first, last)
     // block addresses, in the order they are numbered
     pub order: Vec<i64>,
+    placed: Vec<Arc<Placed>>,
+    /// The uniform number of each block's top.
+    bases: Vec<i64>,
+    /// Which numbering this is of: a patch keeps it, a fresh numbering takes
+    /// another, and an interval made against one holds for every patch of
+    /// it.
+    pub epoch: u64,
+    /// A numbering made by hand for a test: slots are their own uniform
+    /// numbers.
+    plain: bool,
 }
+
+/// What `Indexes` keeps of a block to turn a slot into a position and a
+/// uniform number.
+#[derive(Clone, Debug)]
+struct Placed {
+    first: i64,
+    last: i64,
+    /// The slot of each instruction that takes one, ascending.
+    slots: Vec<i64>,
+    /// The slot of each instruction (a meta one has that of the next that takes
+    /// one).
+    all: Vec<i64>,
+    /// Whether any instruction of the block takes no slot.
+    metas: bool,
+}
+
+/// The distance between the slots of two instructions in a fresh numbering:
+/// room for 2^20 instructions to be added between them, one at a time halving.
+pub const GAP: i64 = 1 << 20;
+
+/// The next number a fresh numbering takes for its `epoch`.
+static EPOCHS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Where an instruction writes, given where it reads: the second of the two
 /// slots it holds.
@@ -103,6 +147,20 @@ pub fn def_point(slot: i64) -> i64 {
 }
 
 impl Indexes {
+    /// The numbering of a hand-made test, where a slot is its own uniform
+    /// number.
+    pub fn plain() -> Self {
+        Self {
+            at: IndexMap::default(),
+            span: IndexMap::default(),
+            order: Vec::new(),
+            placed: Vec::new(),
+            bases: Vec::new(),
+            epoch: 0,
+            plain: true,
+        }
+    }
+
     /// Where the instruction at `position` in `block` ends: the point its two
     /// slots end at, which is where the next instruction (or the block's
     /// end) begins. A segment that ends here touches one that starts at the
@@ -112,7 +170,18 @@ impl Indexes {
         block: &LirBlock,
         position: usize,
     ) -> i64 {
-        self.slot(block, position) + PER_INSN
+        let placed = &self.placed[self.block_at(block.at)];
+        // The next that takes a slot, or the end: what `slot + PER_INSN` was.
+        let ordinal = placed.slots.partition_point(|slot| *slot < self.slot(block, position));
+        let own = placed.slots.get(ordinal).is_some_and(|slot| *slot == self.slot(block, position));
+        placed.slots.get(ordinal + usize::from(own)).copied().unwrap_or(placed.last)
+    }
+
+    fn block_at(
+        &self,
+        at: i64,
+    ) -> usize {
+        self.span.get_index_of(&at).expect("a numbered block")
     }
 
     /// The slot of the instruction at `position` in `block`, or the block's end
@@ -132,14 +201,188 @@ impl Indexes {
         block: &LirBlock,
         slot: i64,
     ) -> i64 {
-        let (first, last) = self.span[&block.at];
-        if slot < first + PER_INSN {
-            return -1;
-        }
-        if slot >= last {
+        let placed = &self.placed[self.block_at(block.at)];
+        if slot >= placed.last {
             return block.insns.len() as i64;
         }
-        block.insns.iter().rposition(|one| self.at[&key(one)] <= slot).map_or(-1, |at| at as i64)
+        placed.all.partition_point(|one| *one <= slot) as i64 - 1
+    }
+
+    /// This numbering of the body `before`, made the numbering of `body`, a
+    /// rewrite of it: an instruction the rewrite kept keeps its slot, one
+    /// it added takes a slot between its neighbours' (LLVM's
+    /// `SlotIndexes::insertMachineInstrInMaps`), one it removed gives its up.
+    /// None where that cannot be: a block added or moved, an instruction
+    /// moved, or a gap with no room left, which a fresh numbering
+    /// (another `epoch`) answers.
+    pub fn patched(
+        &self,
+        before: &LirBody,
+        body: &LirBody,
+    ) -> Option<Indexes> {
+        if self.plain
+            || before.blocks.len() != body.blocks.len()
+            || self.placed.len() != body.blocks.len()
+            || before.blocks.iter().zip(&body.blocks).any(|(one, two)| one.at != two.at)
+        {
+            return None;
+        }
+        let mut changed = Vec::new();
+        for (position, (old, new)) in before.blocks.iter().zip(&body.blocks).enumerate() {
+            if old.insns.same_insns(&new.insns) {
+                continue;
+            }
+            let found = aligned_insns(&old.insns, &new.insns)?;
+            if !found.runs.windows(2).all(|pair| pair[0].1 + pair[0].2 <= pair[1].1) {
+                return None;
+            }
+            changed.push((position, found));
+        }
+        let mut at = self.at.clone();
+        for (position, found) in &changed {
+            for gone in &found.gone {
+                at.swap_remove(&key(&before.blocks[*position].insns[*gone]));
+            }
+        }
+        let mut placed = self.placed.clone();
+        for (position, found) in &changed {
+            let (old, new) = (&before.blocks[*position].insns, &body.blocks[*position].insns);
+            let was = &self.placed[*position];
+            // A block with no instruction that takes no slot: its slots are
+            // copied, run by run, with the added ones put between.
+            if !was.metas && !found.added.iter().any(|at| new[*at].is_meta()) {
+                let mut slots: Vec<i64> = Vec::with_capacity(new.len());
+                let mut from = 0;
+                let mut spread = |slots: &mut Vec<i64>, count: usize, high: i64| -> bool {
+                    if count == 0 {
+                        return true;
+                    }
+                    let low = slots.last().copied().unwrap_or(was.first);
+                    let step = (high - low) / (count as i64 + 1) & !1;
+                    if step < PER_INSN {
+                        return false;
+                    }
+                    slots.extend((0..count as i64).map(|number| low + step * (number + 1)));
+                    true
+                };
+                for (old_at, new_at, length) in &found.runs {
+                    if !spread(&mut slots, new_at - from, was.all[*old_at]) {
+                        return None;
+                    }
+                    slots.extend_from_slice(&was.all[*old_at..old_at + length]);
+                    from = new_at + length;
+                }
+                if !spread(&mut slots, new.len() - from, was.last) {
+                    return None;
+                }
+                for position in found.added.iter().copied() {
+                    at.insert(key(&new[position]), slots[position]);
+                }
+                placed[*position] =
+                    Arc::new(Placed { first: was.first, last: was.last, all: slots.clone(), slots, metas: false });
+                continue;
+            }
+            // The slot each kept instruction that takes one keeps.
+            let mut kept: Vec<Option<i64>> = vec![None; new.len()];
+            for (from, to, length) in &found.runs {
+                for step in 0..*length {
+                    if !old[from + step].is_meta() {
+                        kept[to + step] = Some(was.all[from + step]);
+                    }
+                }
+            }
+            // The rest of those that take one go between the kept neighbours.
+            let taking: Vec<usize> = (0..new.len()).filter(|at| !new[*at].is_meta()).collect();
+            let mut slots: Vec<i64> = Vec::with_capacity(taking.len());
+            let mut run = 0;
+            while run < taking.len() {
+                if let Some(slot) = kept[taking[run]] {
+                    if slots.last().is_some_and(|before| *before >= slot) {
+                        return None;
+                    }
+                    slots.push(slot);
+                    run += 1;
+                    continue;
+                }
+                let mut end = run;
+                while end < taking.len() && kept[taking[end]].is_none() {
+                    end += 1;
+                }
+                let low = slots.last().copied().unwrap_or(was.first);
+                let high = taking.get(end).map_or(was.last, |at| kept[*at].expect("kept"));
+                let step = (high - low) / (end - run + 1) as i64 & !1;
+                if step < PER_INSN {
+                    return None;
+                }
+                for number in 0..end - run {
+                    slots.push(low + step * (number as i64 + 1));
+                }
+                run = end;
+            }
+            if slots.windows(2).any(|pair| pair[0] >= pair[1]) || slots.last().is_some_and(|slot| *slot >= was.last) {
+                return None;
+            }
+            // A meta instruction has the slot of the next that takes one, or
+            // the end.
+            let mut all = Vec::with_capacity(new.len());
+            let mut ordinal = 0;
+            for one in new.iter() {
+                let slot = slots.get(ordinal).copied().unwrap_or(was.last);
+                all.push(slot);
+                if !one.is_meta() {
+                    ordinal += 1;
+                }
+            }
+            // Only an instruction added, or one that takes no slot (whose slot
+            // is its neighbour's), is written.
+            let mut written = |position: usize| match at.get_mut(&key(&new[position])) {
+                Some(held) => *held = all[position],
+                None => {
+                    at.insert(key(&new[position]), all[position]);
+                }
+            };
+            for position in found.added.iter().copied() {
+                written(position);
+            }
+            for position in (0..new.len()).filter(|at| new[*at].is_meta() && found.added.binary_search(at).is_err()) {
+                written(position);
+            }
+            let metas = slots.len() != new.len();
+            placed[*position] = Arc::new(Placed { first: was.first, last: was.last, slots, all, metas });
+        }
+        let mut bases = Vec::with_capacity(placed.len());
+        let mut base = 0;
+        for block in &placed {
+            bases.push(base);
+            base += PER_INSN + PER_INSN * block.slots.len() as i64;
+        }
+        Some(Indexes {
+            at,
+            span: self.span.clone(),
+            order: self.order.clone(),
+            placed,
+            bases,
+            epoch: self.epoch,
+            plain: false,
+        })
+    }
+
+    /// The number the consecutive numbering gave the point `slot`: two for each
+    /// block's top and for each instruction that takes a slot before it.
+    pub fn uniform(
+        &self,
+        slot: i64,
+    ) -> i64 {
+        if self.plain {
+            return slot;
+        }
+        let at = self.placed.partition_point(|placed| placed.first <= slot).saturating_sub(1);
+        let (placed, base) = (&self.placed[at], self.bases[at]);
+        let before = placed.slots.partition_point(|one| *one <= slot);
+        match before.checked_sub(1) {
+            None => base + (slot - placed.first).min(PER_INSN),
+            Some(k) => base + PER_INSN + PER_INSN * k as i64 + (slot - placed.slots[k]).min(PER_INSN),
+        }
     }
 }
 
@@ -150,22 +393,68 @@ pub fn indexed(body: &LirBody) -> Indexes {
     let mut at =
         IndexMap::with_capacity_and_hasher(body.blocks.iter().map(|block| block.insns.len()).sum(), Default::default());
     let mut span = IndexMap::with_capacity_and_hasher(body.blocks.len(), Default::default());
+    let mut placed = Vec::with_capacity(body.blocks.len());
+    let mut bases = Vec::with_capacity(body.blocks.len());
+    let (mut first, mut base) = (0, 0);
+    for block in &body.blocks {
+        let taking = block.insns.iter().filter(|one| !one.is_meta()).count();
+        let last = first + GAP * (taking as i64 + 1);
+        let (mut slots, mut all) = (Vec::with_capacity(taking), Vec::with_capacity(block.insns.len()));
+        for one in &block.insns {
+            // A meta instruction takes no slot, as LLVM's SlotIndexes skip
+            // debug instructions: a range across one is no longer.
+            let slot = first + GAP * (slots.len() as i64 + 1);
+            at.insert(key(one), slot);
+            all.push(slot);
+            if !one.is_meta() {
+                slots.push(slot);
+            }
+        }
+        span.insert(block.at, (first, last));
+        let metas = slots.len() != block.insns.len();
+        placed.push(Arc::new(Placed { first, last, slots, all, metas }));
+        bases.push(base);
+        first = last;
+        // A phi's result is defined before the block's first instruction.
+        base += PER_INSN + PER_INSN * taking as i64;
+    }
+    Indexes {
+        at,
+        span,
+        order: body.blocks.iter().map(|block| block.at).collect(),
+        placed,
+        bases,
+        epoch: EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        plain: false,
+    }
+}
+
+/// `indexed` as it was before slots were spaced: consecutive, two to an
+/// instruction. What the gapped numbering is held to by its `uniform`.
+pub fn indexed_consecutive(body: &LirBody) -> Indexes {
+    let mut at = IndexMap::default();
+    let mut span = IndexMap::default();
     let mut next_slot = 0;
     for block in &body.blocks {
         let first = next_slot;
-        // A phi's result is defined before the block's first instruction.
         next_slot += PER_INSN;
         for one in &block.insns {
             at.insert(key(one), next_slot);
-            // A meta instruction takes no slot, as LLVM's SlotIndexes skip
-            // debug instructions: a range across one is no longer.
             if !one.is_meta() {
                 next_slot += PER_INSN;
             }
         }
         span.insert(block.at, (first, next_slot));
     }
-    Indexes { at, span, order: body.blocks.iter().map(|block| block.at).collect() }
+    Indexes {
+        at,
+        span,
+        order: body.blocks.iter().map(|block| block.at).collect(),
+        placed: Vec::new(),
+        bases: Vec::new(),
+        epoch: 0,
+        plain: true,
+    }
 }
 
 /// The numberings made, most recent first, each with the blocks' instructions
@@ -366,6 +655,30 @@ pub fn changes(
         }
     }
     found.touched = found.gone.iter().chain(&found.added).flat_map(|insn| names(insn)).collect();
+    // A parallel copy's moves are all read and written at its last, which a
+    // change to any of them moves: the values of the moves it keeps are
+    // touched too.
+    for (one, two) in before.blocks.iter().zip(&after.blocks) {
+        if one.insns.same_insns(&two.insns) {
+            continue;
+        }
+        for (insns, shows) in [(&one.insns, &found.gone), (&two.insns, &found.added)] {
+            for member in shows.iter() {
+                let Some(group) = member.group else { continue };
+                if let Some(at) = insns.iter().position(|insn| Arc::ptr_eq(insn, member)) {
+                    let mut from = at;
+                    while from > 0 && insns[from - 1].group == Some(group) {
+                        from -= 1;
+                    }
+                    let mut to = at + 1;
+                    while to < insns.len() && insns[to].group == Some(group) {
+                        to += 1;
+                    }
+                    found.touched.extend(insns[from..to].iter().flat_map(|insn| names(insn)));
+                }
+            }
+        }
+    }
     Some(found)
 }
 
@@ -855,8 +1168,14 @@ fn updated(
     if changed * 4 > held.count + 16 || touched.len() * 3 > held.answer.len() + 16 {
         return None;
     }
-    let shift = Shift::between(&blocks, &held.index, body, index, &differing);
-    let (start, end) = (|slot| shift.start(slot), |slot| shift.end(slot));
+    // Slots a rewrite kept are the same slots in a numbering patched from the
+    // one the answer was made against.
+    let shift =
+        (held.index.epoch != index.epoch).then(|| Shift::between(&blocks, &held.index, body, index, &differing));
+    let (start, end) = (
+        |slot| shift.as_ref().map_or(slot, |shift| shift.start(slot)),
+        |slot| shift.as_ref().map_or(slot, |shift| shift.end(slot)),
+    );
     let again = llrm_support::debug::timed("intervals among", || worked_among(body, index, busy, &touched));
     let mut answer: IndexMap<u32, Interval> = IndexMap::default();
     let mut totals: IndexMap<u32, f64> = IndexMap::default();
@@ -870,7 +1189,7 @@ fn updated(
         moved.weight = match held.totals.get(value) {
             Some(total) => {
                 totals.insert(*value, *total);
-                *total / (moved.size() + GRACE) as f64
+                *total / (moved.size(index) + GRACE) as f64
             }
             None => 0.0,
         };
@@ -891,7 +1210,7 @@ fn updated(
 /// and the intervals are found from those (`intervals_by_occurrences`) where
 /// the walk would take the body's liveness whole and walk every block. For a
 /// body with phis, whose arguments are read in other blocks, the walk.
-fn worked_among(
+pub(crate) fn worked_among(
     body: &LirBody,
     index: &Indexes,
     busy: &Frequency,
@@ -965,7 +1284,7 @@ fn worked_out_by(
 
 /// `worked_out_by`, and what each value's references weigh before they are
 /// divided by its size.
-fn worked_out_with_totals(
+pub(crate) fn worked_out_with_totals(
     body: &LirBody,
     index: &Indexes,
     busy: &Frequency,
@@ -974,7 +1293,7 @@ fn worked_out_with_totals(
     body.facts.0.bump("intervals-worked");
     let ranges = _ranges(body, index, keep);
     let totals = llrm_support::debug::timed("intervals weights", || _totals(body, busy, keep));
-    let weight = divided(&totals, &ranges);
+    let weight = divided(&totals, &ranges, index);
     let answer = ranges
         .into_iter()
         .map(|(value, one)| {
@@ -1263,13 +1582,7 @@ fn _walked_at(
         if let Some(given) = given {
             starts.extend_from_slice(&given[block_index]);
         } else {
-            let mut next = first + PER_INSN;
-            for one in &block.insns {
-                starts.push(next);
-                if !one.is_meta() {
-                    next += PER_INSN;
-                }
-            }
+            starts.extend(block.insns.iter().map(|one| index.at[&key(one)]));
         }
         alive.clear();
         for one in live.leaving(block.at).filter(|one| keep(*one)) {
@@ -1468,13 +1781,14 @@ fn _weights(
     body: &LirBody,
     busy: &Frequency,
     ranges: &IndexMap<u32, Interval>,
+    index: &Indexes,
     keep: &impl Fn(u32) -> bool,
 ) -> IndexMap<u32, f64> {
-    divided(&_totals(body, busy, keep), ranges)
+    divided(&_totals(body, busy, keep), ranges, index)
 }
 
 /// `references weighted by block frequency`, before the division.
-fn _totals(
+pub(crate) fn _totals(
     body: &LirBody,
     busy: &Frequency,
     keep: &impl Fn(u32) -> bool,
@@ -1494,12 +1808,13 @@ fn _totals(
 pub(crate) fn divided(
     total: &IndexMap<u32, f64>,
     ranges: &IndexMap<u32, Interval>,
+    index: &Indexes,
 ) -> IndexMap<u32, f64> {
     total
         .iter()
         .map(|(value, found)| {
             let size = match ranges.get(value) {
-                Some(one) => one.size() + GRACE,
+                Some(one) => one.size(index) + GRACE,
                 None => GRACE,
             };
             (*value, *found / size as f64)

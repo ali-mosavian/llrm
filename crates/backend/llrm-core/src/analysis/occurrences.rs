@@ -264,7 +264,7 @@ impl Occurrences {
             }
         }
         let ranges = intervals::intervals_by_occurrences(body, index, &self.values(), &self.occurrences());
-        let weight = intervals::divided(&totals, &ranges);
+        let weight = intervals::divided(&totals, &ranges, index);
         let answer = ranges
             .into_iter()
             .map(|(value, one)| {

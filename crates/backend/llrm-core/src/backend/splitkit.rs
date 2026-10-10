@@ -1813,7 +1813,7 @@ mod tests {
         let third = index.at[&intervals::key(&body.blocks[0].insns[2])];
         assert_eq!(
             piece.segments(&body, &index),
-            vec![intervals::Segment { start: third, end: third + intervals::PER_INSN }]
+            vec![intervals::Segment { start: third, end: index.window_end(&body.blocks[0], 2) }]
         );
         assert_eq!(index.position(&body.blocks[0], third + 1), 2);
     }
@@ -1871,7 +1871,7 @@ mod tests {
         let index = intervals::indexed(&body);
         let live = crate::backend::allocate::live(&body);
         let bundles = crate::backend::spillplacement::bundles(&body);
-        let slot = |block: i64, position: i64| index.span[&block].0 + intervals::PER_INSN * (position + 1);
+        let slot = |block: i64, position: i64| index.span[&block].0 + intervals::GAP * (position + 1);
         // Taken between the two definitions before the loop, and after the read
         // behind it.
         let taken = vec![
@@ -1929,7 +1929,7 @@ mod tests {
         );
         let index = intervals::indexed(&body);
         let live = crate::backend::allocate::live(&body);
-        let slot = |position: i64| index.span[&0].0 + intervals::PER_INSN * (position + 1);
+        let slot = |position: i64| index.span[&0].0 + intervals::GAP * (position + 1);
         let taken = vec![intervals::Segment { start: slot(3), end: slot(5) }];
         let masks = crate::backend::allocate::Masks::default();
         let occupied = super::Occupied::new(IndexMap::from_iter([(Register::EAX, taken)]), &masks);

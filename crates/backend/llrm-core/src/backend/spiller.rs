@@ -641,8 +641,14 @@ fn _short_update_runs_whole(
     frame: &mut Frame,
     fresh: u32,
 ) -> Result<(LirBody, u32), Error> {
-    let index = ranges::indexed_shared(body);
-    let live = ranges::intervals_shared(body, Some(&index));
+    let (index, live) = match crate::backend::live::held(body) {
+        Some(held) => (Arc::clone(held.index()), Shared::Held(held)),
+        None => {
+            let index = ranges::indexed_shared(body);
+            let live = Shared::Worked(ranges::intervals_shared(body, Some(&index)));
+            (index, live)
+        }
+    };
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -661,7 +667,7 @@ fn _short_update_runs_whole(
             let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
             let eligible = stored.contains(&into)
                 && !stored.contains(&outof)
-                && !live[&outof].segments.iter().any(|segment| segment.overlaps(&after))
+                && !live.get(&outof).expect("live").segments.iter().any(|segment| segment.overlaps(&after))
                 && first.covers == Some((first.at, first.at))
                 && second.group.is_none()
                 && second.what.as_ref().is_some_and(|what| {
@@ -721,8 +727,14 @@ fn _local_updates_whole(
     frame: &mut Frame,
     mut fresh: u32,
 ) -> Result<(LirBody, u32), Error> {
-    let index = ranges::indexed_shared(body);
-    let live = ranges::intervals_shared(body, Some(&index));
+    let (index, live) = match crate::backend::live::held(body) {
+        Some(held) => (Arc::clone(held.index()), Shared::Held(held)),
+        None => {
+            let index = ranges::indexed_shared(body);
+            let live = Shared::Worked(ranges::intervals_shared(body, Some(&index)));
+            (index, live)
+        }
+    };
     let register_only = |one: &Insn| {
         one.group.is_none()
             && one.requires.is_empty()
@@ -769,7 +781,7 @@ fn _local_updates_whole(
             };
             let slot = index.at[&key(&insns[last])];
             let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
-            let kept = live[&value].segments.iter().any(|segment| segment.overlaps(&after));
+            let kept = live.get(&value).expect("live").segments.iter().any(|segment| segment.overlaps(&after));
             // Worth it when it saves a memory operand: the update's own
             // and each read's, against one reload and perhaps one store.
             if reads.len() + 1 <= 1 + usize::from(kept) {
@@ -1251,8 +1263,51 @@ pub fn made_for_homes() -> usize {
 /// The intervals `_existing_colors` reads: the body's own, as remembered and
 /// shared, and the homes' beside them.
 struct Lives {
-    shared: Option<std::sync::Arc<IndexMap<u32, Interval>>>,
+    shared: Option<Shared>,
     own: IndexMap<u32, Interval>,
+}
+
+/// The body's intervals: the allocator's, where it holds them for this body,
+/// else worked out and remembered.
+enum Shared {
+    Held(std::sync::Arc<crate::backend::live::LiveRanges>),
+    Worked(std::sync::Arc<IndexMap<u32, Interval>>),
+}
+
+impl Shared {
+    fn of(
+        body: &LirBody,
+        index: Option<&ranges::Indexes>,
+    ) -> Self {
+        match crate::backend::live::held(body) {
+            Some(live) => Self::Held(live),
+            None => Self::Worked(ranges::intervals_shared(body, index)),
+        }
+    }
+
+    fn get(
+        &self,
+        value: &u32,
+    ) -> Option<&Interval> {
+        match self {
+            Self::Held(live) => live.get(value),
+            Self::Worked(map) => map.get(value),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Held(live) => live.len(),
+            Self::Worked(map) => map.len(),
+        }
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = (&u32, &Interval)> + '_> {
+        match self {
+            Self::Held(live) => Box::new(live.iter()),
+            Self::Worked(map) => Box::new(map.iter()),
+        }
+    }
 }
 
 impl Lives {
@@ -1576,7 +1631,7 @@ fn _existing_colors_by(
     let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
     homes.sort_unstable();
     if homes.is_empty() {
-        return (Vec::new(), Lives { shared: Some(ranges::intervals_shared(body, None)), own: IndexMap::default() });
+        return (Vec::new(), Lives { shared: Some(Shared::of(body, None)), own: IndexMap::default() });
     }
     let first = u32::MAX - homes.len() as u32;
     let pseudo: IndexMap<i64, u32> =
@@ -1692,7 +1747,11 @@ fn _existing_colors_by(
         // are walked in a body of the instructions that name them alone
         // (whole parallel copies, which share a point), at the slots they have
         // in the body.
-        shared = ranges::indexed_shared(body);
+        // The numbering the allocator's intervals of this body are in, where it
+        // holds them.
+        shared = crate::backend::live::held(body)
+            .map(|held| Arc::clone(held.index()))
+            .unwrap_or_else(|| ranges::indexed_shared(body));
         index = &*shared;
         let homes_found =
             llrm_support::debug::timed("intervals homes", || homes_kept(body, &shared, &named, &homes, first));
@@ -1704,7 +1763,7 @@ fn _existing_colors_by(
                 body.name
             );
         }
-        live = Lives { shared: Some(ranges::intervals_shared(body, None)), own: homes_found };
+        live = Lives { shared: Some(Shared::of(body, None)), own: homes_found };
     }
     let end = index.span.values().map(|(_first, last)| *last).max().unwrap_or(1);
     let mut colors = Vec::new();
