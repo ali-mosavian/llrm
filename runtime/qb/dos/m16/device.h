@@ -18,6 +18,7 @@ typedef struct BlockOp {
 } BlockOp;
 
 extern void dev_int10(Regs *regs);
+extern void dev_int17(Regs *regs);
 extern void dev_int21(Regs *regs);
 extern void dev_outb(unsigned port, unsigned value);
 extern void dev_outw(unsigned port, unsigned word);
@@ -28,6 +29,7 @@ extern void dev_atan2(const double *y, const double *x, double *out);
 extern void dev_sincos(const double *angle, double *sine, double *cosine);
 
 #pragma aux dev_int10 "B$INT10"
+#pragma aux dev_int17 "B$INT17"
 #pragma aux dev_int21 "B$INT21"
 #pragma aux dev_outb "B$OUTB"
 #pragma aux dev_outw "B$OUTW"
@@ -39,6 +41,8 @@ extern void dev_sincos(const double *angle, double *sine, double *cosine);
 
 /* Whether standard output is the screen and not a file or a pipe. */
 int dev_stdout_is_screen(void);
+/* Whether the printer is there and ready. */
+int dev_printer_ready(void);
 /* The time of day in hundredths of a second since midnight. */
 long dev_clock(void);
 /* A tone of `hertz` until the next call; 0 is silence. */

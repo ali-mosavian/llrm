@@ -1,4 +1,4 @@
-;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT
 ;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m16, real-mode DOS
 ;;
 ;; args: the interface of runtime/shared/interface.toml, in cdecl16: arguments in word slots from [bp+6],
@@ -19,8 +19,9 @@
 ;; definition the file holds every group.
 G_CORE          equ     1
 G_CONSOLE       equ     2
+G_PROCESS       equ     4
 ifndef OS_GROUPS
-OS_GROUPS       equ     3
+OS_GROUPS       equ     7
 endif
 
 if OS_GROUPS and G_CORE
@@ -36,6 +37,13 @@ endif
 if OS_GROUPS and G_CONSOLE
 public LL$CONSOLE_READ_KEY
 public LL$CONSOLE_KEY_READY
+endif
+if OS_GROUPS and G_PROCESS
+public LL$COMMAND_LINE
+public LL$ENVIRONMENT
+if (OS_GROUPS and G_CORE) eq 0
+extrn LL$PSP:word
+endif
 endif
 if OS_GROUPS and G_CORE
 public LL$MORE
@@ -423,6 +431,109 @@ LL$EXIT         proc    far
                 mov     ah, DOS_EXIT
                 int     DOS_INT
 LL$EXIT         endp
+endif
+
+if OS_GROUPS and G_PROCESS
+;; The program's PSP holds its command tail (length at 80h, text from 81h) and the environment's
+;; paragraph (at 2Ch); the environment is NUL-ended strings ended by one more NUL.
+PSP_ENVIRONMENT equ     2Ch
+PSP_TAIL        equ     80h
+
+;;::::::::::::::
+;; LL$COMMAND_LINE(data: *far mut u8, max: u16) -> i16: the command tail without its leading blanks,
+;; at most `max` bytes of it, and the length copied.
+LL$COMMAND_LINE proc    far
+                push    bp
+                mov     bp, sp
+                push    si
+                push    di
+                push    ds
+                push    es
+                les     di, [bp+6]
+                mov     cx, [bp+10]
+                mov     ds, LL$PSP
+                mov     si, PSP_TAIL
+                lodsb
+                xor     ah, ah
+                mov     bx, ax                  ;; the tail's length
+skip_blank:
+                test    bx, bx
+                jz      short tail_copy
+                cmp     byte ptr [si], ' '
+                jne     short tail_copy
+                inc     si
+                dec     bx
+                jmp     short skip_blank
+tail_copy:
+                cmp     bx, cx
+                jbe     short tail_fits
+                mov     bx, cx
+tail_fits:
+                mov     cx, bx
+                mov     ax, bx
+                rep     movsb
+                pop     es
+                pop     ds
+                pop     di
+                pop     si
+                pop     bp
+                retf
+LL$COMMAND_LINE endp
+
+;;::::::::::::::
+;; LL$ENVIRONMENT(index: u16, data: *far mut u8, max: u16) -> i16: the `index`th string of the
+;; environment (from 0), at most `max` bytes of it, and its length; -1 past the last.
+LL$ENVIRONMENT  proc    far
+                push    bp
+                mov     bp, sp
+                push    si
+                push    di
+                push    ds
+                push    es
+                mov     ds, LL$PSP
+                mov     ax, ds:[PSP_ENVIRONMENT]
+                mov     ds, ax
+                xor     si, si
+                mov     cx, [bp+6]
+next_string:
+                cmp     byte ptr [si], 0
+                je      short no_string         ;; the closing NUL: past the last
+                jcxz    short found
+                dec     cx
+skip_string:
+                lodsb
+                test    al, al
+                jnz     short skip_string
+                jmp     short next_string
+found:
+                mov     bx, si
+measure:
+                lodsb
+                test    al, al
+                jnz     short measure
+                dec     si
+                sub     si, bx                  ;; its length
+                mov     ax, si
+                mov     si, bx
+                les     di, [bp+8]
+                mov     cx, [bp+12]
+                cmp     ax, cx
+                jbe     short string_fits
+                mov     ax, cx
+string_fits:
+                mov     cx, ax
+                rep     movsb
+                jmp     short environment_done
+no_string:
+                mov     ax, -1
+environment_done:
+                pop     es
+                pop     ds
+                pop     di
+                pop     si
+                pop     bp
+                retf
+LL$ENVIRONMENT  endp
 endif
 
 end

@@ -122,3 +122,18 @@ name = "block_resize"
 doc = "Resizes the memory block that starts at paragraph `segment` to `paragraphs`, or to the most there is, and returns the paragraphs it now has."
 args = [["segment", "usize"], ["paragraphs", "usize"]]
 returns = "usize"
+
+# The program's command line and environment, where the operating system has them.
+[[op]]
+group = "process"
+name = "command_line"
+doc = "The command tail the program was started with, without its leading blank, copied to `data` (at most `max` bytes); its length."
+args = [["data", "bytes_mut"], ["max", "usize"]]
+returns = "isize"
+
+[[op]]
+group = "process"
+name = "environment"
+doc = "The `index`th (from 0) string of the environment, NAME=VALUE, copied to `data` (at most `max` bytes); its length, or -1 past the last."
+args = [["index", "usize"], ["data", "bytes_mut"], ["max", "usize"]]
+returns = "isize"

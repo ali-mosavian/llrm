@@ -18,6 +18,7 @@ extern int cur_level;
 
 void str_init(char *first, char *end);
 void str_compact(void);
+uword str_free_bytes(void);
 
 /* The heap trades room with string space. */
 uword str_give_tail(void);

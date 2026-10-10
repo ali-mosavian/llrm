@@ -93,6 +93,17 @@ void fh_free(FHD *owner)
     owner->data_seg = 0;
 }
 
+/* The bytes of far heap nothing holds. */
+unsigned long fh_free_bytes(void)
+{
+    const FHD *entry;
+    unsigned long paras = 0;
+
+    for (entry = &top; entry != &bottom; entry = next_of(entry))
+        paras += room_below(entry);
+    return paras << 4;
+}
+
 /* The paragraphs DGROUP takes, up to the top of the local heap. */
 static u16 heap_paragraphs(void)
 {

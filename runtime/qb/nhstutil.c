@@ -149,6 +149,13 @@ static StrEntry *fit(uword bytes)
     return found;
 }
 
+/* The bytes of string space nothing holds, once the strings are packed. */
+uword str_free_bytes(void)
+{
+    str_compact();
+    return at_end(str_free) ? 0 : free_data(str_free);
+}
+
 /* B$STCPCT: slide every string down over the free entries, so the free room is
    one entry at the end. */
 void str_compact(void)

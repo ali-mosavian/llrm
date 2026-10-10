@@ -1,4 +1,4 @@
-;; name: B$INT10, B$INT21
+;; name: B$INT10, B$INT17, B$INT21
 ;; desc: software interrupts
 ;;
 ;; args: ax:ptr Regs | the interrupt, with the registers from Regs
@@ -71,6 +71,13 @@ B$INT10         proc    public
 
                 CALLINT 10h
 B$INT10         endp
+
+;;::::::::::::::
+;; B$INT17 (ax: regs)
+B$INT17         proc    public
+
+                CALLINT 17h
+B$INT17         endp
 
 ;;::::::::::::::
 ;; B$INT21 (ax: regs)

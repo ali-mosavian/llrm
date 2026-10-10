@@ -32,6 +32,7 @@ void B_GET3(int channel, qb_data_ptr record, int length);
 void B_PUT3(int channel, qb_data_ptr record, int length);
 long B_FLOF(int channel);
 void B_CHOU(int channel);
+void file_print_to(Fdb *fdb);
 void B_DSKI(int channel);
 int B_FEOF(int channel);
 int B_FREF(void);

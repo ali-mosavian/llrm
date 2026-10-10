@@ -353,6 +353,13 @@ static const Driver file_driver = {
     file_view, file_size
 };
 
+/* LPRINT: the statement's output goes to this file, a printer's. */
+void file_print_to(Fdb *fdb)
+{
+    out_fdb = fdb;
+    cn_redirect(&file_driver);
+}
+
 /* B$CHOU: PRINT # or WRITE # channel (0: the screen). */
 void B_CHOU(int channel)
 {
@@ -407,6 +414,7 @@ void B_DSKI(int channel)
    (rtterm.c). */
 static void close_all(void)
 {
+    buffer_release();
     file_close(NULL, 0);
 }
 
