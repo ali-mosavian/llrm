@@ -469,3 +469,15 @@ def test_a_failed_step_keeps_its_log_past_the_next_run_of_the_step(tmp_path):
     assert (tmp_path / "probe.log").read_text() == "fine\n"
     assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 77
     assert not (tmp_path / "skipped.failed.log").exists()
+
+
+def test_the_lib_step_runs_tests_in_a_random_order_that_a_seed_repeats(monkeypatch):
+    """llrm-c's m16 tests failed at random (29 of 136) when an m32 test bound the register file first: the plain order never
+    showed it. The lib step shuffles, each binary prints its seed, and LLRM_SHUFFLE_SEED repeats one."""
+    cfg, pkgs = gate.load(), gate.packages()
+    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
+    monkeypatch.delenv("LLRM_SHUFFLE_SEED", raising=False)
+    command = gate.commands(p, cfg, pkgs)["lib"]
+    assert "RUSTC_BOOTSTRAP=1" in command and command.endswith("-Zunstable-options --shuffle"), command
+    monkeypatch.setenv("LLRM_SHUFFLE_SEED", "42")
+    assert gate.commands(p, cfg, pkgs)["lib"].endswith("-Zunstable-options --shuffle-seed 42")
