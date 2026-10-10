@@ -1680,8 +1680,9 @@ fn a_pointer_loaded_from_a_local_descriptor_still_reaches_its_array() {
         "fn main() -> i16:\n    let values: i16[3] = [7, 8, 9]\n    for (i, x) in enumerate(values):\n        print(f\"{i}: {x}\")\n    return 0\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("Os"), llrm_target::Target::default_cpu(&llrm_x86_m16::M16));
-    for value in [", 7", ", 8", ", 9"] {
-        assert!(text.contains(value), "{value} is never stored:\n{text}");
+    let stored = stored_constants(&text);
+    for value in [7, 8, 9] {
+        assert!(stored.contains(&value), "{value} is never stored:\n{text}");
     }
 }
 
