@@ -1592,6 +1592,25 @@ fn _unread_bits(
     analyses: &mut Analyses,
     edited: bool,
 ) -> bool {
+    // A value that is gone reads nothing: what only it read is unread in turn,
+    // so a stage of a reversal at a time, until none is left, not a round
+    // of every rule for each.
+    let mut changed = false;
+    let mut edited = edited;
+    while _unread_bits_once(context, layout, function, analyses, edited) {
+        changed = true;
+        edited = true;
+    }
+    changed
+}
+
+fn _unread_bits_once(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    edited: bool,
+) -> bool {
     // What can have a read bit cleared or every read bit known zero: a mask, a
     // shift by a constant (a run of its bits is zero) or a zero extension;
     // the rest is asked of `known_zero` only once something reads less than
@@ -1632,6 +1651,11 @@ fn _unread_bits(
         let Some(&bits) = read.get(&result) else { continue };
         let width = context.types.int_bits(instruction.ty).expect("an integer");
         let all = if width == 128 { u128::MAX } else { (1_u128 << width) - 1 };
+        // Every bit read: nothing is gone but what an all-ones mask or a zero
+        // `or` states.
+        if bits == all {
+            continue;
+        }
         let zero = llrm_mir::valuetracking::known_zero(context, function, Operand::Value(result)) & all;
         let (opcode, operands) = (instruction.opcode.clone(), instruction.operands.clone());
         let replacement = if bits & !zero == 0 {
