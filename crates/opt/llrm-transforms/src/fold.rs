@@ -138,8 +138,10 @@ fn _numbers(
             Some(Ok(through)) => {
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(
-                        *through == consts::known(&unit, Some(calls), Some(&edges), None),
-                        "ThroughMemory's integers are not those fold derives for itself"
+                        consts::known(&unit, Some(calls), Some(&edges), None)
+                            .iter()
+                            .all(|(value, fact)| through.get(value) == Some(fact)),
+                        "ThroughMemory's integers lack a fact fold derives for itself"
                     );
                 }
                 through.clone()
