@@ -11,7 +11,7 @@ use iced_x86::Register;
 
 use crate::backend::cpu::Profile;
 use crate::backend::peep::{self, walk::Facts};
-use crate::backend::{comparefold, farload, rmw};
+use crate::backend::{comparefold, farload, rmw, stepflags};
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::lir::{self, Insn, LirBlock};
 use crate::support::hash::IndexMap;
@@ -41,6 +41,9 @@ pub(super) fn combined(
     let made: IndexMap<i64, Vec<Arc<Insn>>> =
         made.into_iter().map(|(at, insns)| (at, comparefold::selected(&insns, &uses, &exposed))).collect();
     let uses = recount(&made, &blocks);
+    // A step of a compared value sets the compare's flags.
+    let made: IndexMap<i64, Vec<Arc<Insn>>> =
+        made.into_iter().map(|(at, insns)| (at, stepflags::selected(&insns))).collect();
     // x86 can express a C read-modify-write update in one memory operand.
     let made: IndexMap<i64, Vec<Arc<Insn>>> =
         made.into_iter().map(|(at, insns)| (at, rmw::selected(&insns, &uses))).collect();
