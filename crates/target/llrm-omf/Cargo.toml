@@ -8,6 +8,7 @@ description = "llrm's OMF records, object modules and CodeView debug info"
 [dependencies]
 llrm-support = { workspace = true }
 llrm-object = { workspace = true }
+llrm-dwarf = { workspace = true }
 iced-x86 = { workspace = true }
 
 [features]
