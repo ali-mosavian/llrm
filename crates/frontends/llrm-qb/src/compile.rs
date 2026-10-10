@@ -478,7 +478,8 @@ fn rich_assembled(
         ("COMMON", vec![]),
         (
             "BC_DATA",
-            [vec![datum(masm::Datum::Bytes(vec![0; 6]))], placed.swap_remove("BC_DATA").unwrap_or_default()].concat(),
+            [vec![datum(masm::Datum::Bytes(vec![0; module_data_bytes(near_bytes as usize)]))], placed.swap_remove("BC_DATA").unwrap_or_default()]
+                .concat(),
         ),
         ("NMALLOC", vec![]),
         ("ENMALLOC", vec![]),
@@ -490,10 +491,12 @@ fn rich_assembled(
             "BC_SA",
             vec![
                 label("$QB$SA"),
+                // The module's address as the target holds it: an offset and a segment where it has both, else
+                // an address.
                 datum(masm::Datum::Pointer(masm::Pointer {
                     name: basic::HEADER.into(),
                     offset: 0,
-                    far: true,
+                    far: far_bytes != near_bytes,
                     bytes: far_bytes,
                 })),
             ],
@@ -578,6 +581,13 @@ pub fn assembled(
         return emission("one OMF object represents exactly one QB module");
     }
     rich_assembled(program, codegen)
+}
+
+/// The module's data area the runtime keeps at the start of BC_DATA: a C struct of a flag, an unused byte,
+/// the READ cursor and the ON ERROR handler's address, the last two as wide as a near pointer: QB's six
+/// bytes where that is two.
+fn module_data_bytes(near_bytes: usize) -> usize {
+    2usize.next_multiple_of(near_bytes) + 2 * near_bytes
 }
 
 /// Emit a complete fresh BASIC-envelope OMF object.

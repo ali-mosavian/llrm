@@ -2,7 +2,8 @@
    the layout. */
 #include "nhstutil.h"
 
-enum { NUMTEMPS = 20, WORD = 2 };
+/* An entry is a header of one word, then its data; WORD is that word, QB's two bytes where a near pointer is two. */
+enum { NUMTEMPS = 20, WORD = sizeof(uword) };
 
 typedef struct StrEntry {
     uword header;
@@ -31,9 +32,10 @@ static void corrupt(void)
     qb_error(FE_CORRUPT);
 }
 
+/* A string takes whole words, so the entries (and the owner pointers in their headers) stay aligned. */
 static uword even(uword n)
 {
-    return (n + 1) & ~1u;
+    return (n + WORD - 1) & ~(uword)(WORD - 1);
 }
 
 static int is_free(const StrEntry *entry)

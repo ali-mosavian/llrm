@@ -62,7 +62,7 @@ void *lh_data(LhEntry *entry)
 
 static uword entry_size(uword bytes)
 {
-    return (HEADER + bytes + FOOTER + 1) & ~1u;
+    return (HEADER + bytes + FOOTER + sizeof(uword) - 1) & ~(uword)(sizeof(uword) - 1);
 }
 
 static void zero(LhEntry *entry)

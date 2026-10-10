@@ -506,6 +506,10 @@ fn written_basic_inner(
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let object = objbuild::object_of(module, name, segments, &symbols, &externs).map_err(|error| error.to_string())?;
     let emitted = llrm_omf::write::write(&object).map_err(|error| error.to_string())?;
+    // QB's classes and combine modes shape a real-mode link; a flat object keeps the ones its writer gave.
+    if module.object.bitness != 16 {
+        return Ok(emitted);
+    }
     _basic_segment_classes(&emitted, &module.code)
 }
 
