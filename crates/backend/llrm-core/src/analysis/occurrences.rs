@@ -191,7 +191,7 @@ impl Occurrences {
         self.by_value.values().flatten().map(|made| made.place).chain(self.required.iter().copied()).collect()
     }
 
-    fn occurrences(&self) -> IndexMap<u32, Vec<intervals::Occurrence>> {
+    pub(crate) fn occurrences(&self) -> IndexMap<u32, Vec<intervals::Occurrence>> {
         self.by_value
             .iter()
             .map(|(value, named)| (*value, named.iter().map(|made| (made.place, made.defined, made.used)).collect()))

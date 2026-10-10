@@ -328,6 +328,19 @@ pub fn live_rows_among(
     values: &[u32],
     places: &IndexMap<u32, Vec<ranges::Occurrence>>,
 ) -> WebRows {
+    live_rows_within(body, values, places, usize::MAX).expect("no budget to run out of")
+}
+
+/// `live_rows_among`, given up (None) once the values have been followed
+/// through more than `budget` blocks in all: where the values are live in most
+/// blocks the rows of bits are the cheaper way.
+pub fn live_rows_within(
+    body: &LirBody,
+    values: &[u32],
+    places: &IndexMap<u32, Vec<ranges::Occurrence>>,
+    budget: usize,
+) -> Option<WebRows> {
+    let mut spent = 0usize;
     let count = body.blocks.len();
     let graph = crate::analysis::graph::Graph::of(body);
     let predecessors = &graph.parents;
@@ -380,6 +393,10 @@ pub fn live_rows_among(
                 }
             }
         }
+        spent += reached.len() + live_out.len();
+        if spent > budget {
+            return None;
+        }
         for &block_index in &reached {
             if in_mark[block_index] == turn {
                 into[block_index].push(value);
@@ -389,7 +406,7 @@ pub fn live_rows_among(
             out[block_index].push(value);
         }
     }
-    WebRows { graph, into, out, numbered }
+    Some(WebRows { graph, into, out, numbered })
 }
 
 /// Whether a value is live at the entry or exit of a block: what a caller that
@@ -455,6 +472,10 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
     live_rows_by(body, |_| true)
 }
 
+/// Blocks from which following values may beat the rows of bits: below it a row
+/// is a few words, and finding the occurrences costs more than solving them.
+const WEB_BLOCKS: usize = 256;
+
 /// `live_rows` of the values `keep` says only: each is live where it is as in
 /// the whole, the others are not numbered, so a caller that asks of a few
 /// values pays for rows of those.
@@ -466,10 +487,27 @@ pub fn live_rows_by(
     // it is written, so the work is the size of the live ranges and not the
     // blocks times the values (gcc's `calculate_live_on_exit`, LLVM's
     // `LiveVariables`). A body with phis is solved over the rows.
-    if body.blocks.iter().all(|block| block.phis.is_empty())
+    if body.blocks.len() >= WEB_BLOCKS
+        && body.blocks.iter().all(|block| block.phis.is_empty())
         && let Some(web) = {
             body.facts.0.bump("live-rows-walks");
-            crate::analysis::occurrences::Occurrences::scan(body, &keep).rows(body)
+            let found = crate::analysis::occurrences::Occurrences::scan(body, &keep);
+            let values = found.values();
+            let places = found.occurrences();
+            // The rows cost a word of bits for each block and sixty-four
+            // values; following the values costs about a step for each value
+            // and each block between its first and last occurrence. Few blocks
+            // and many values (a straight line of cells) are the rows'.
+            let rows = body.blocks.len() * (values.len() / 64 + 1);
+            let steps = values.len()
+                + places
+                    .values()
+                    .map(|named| {
+                        let blocks = named.iter().map(|one| (one.0).0);
+                        blocks.clone().max().unwrap_or(0) - blocks.min().unwrap_or(0) + 1
+                    })
+                    .sum::<usize>();
+            (steps <= rows).then(|| live_rows_among(body, &values, &places))
         }
     {
         let found = LiveRows(Found::Web(web));
