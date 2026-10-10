@@ -254,6 +254,22 @@ fn procedures(
     defined(program).filter(|&(one, _)| one == at).map(|(_, id)| id).collect()
 }
 
+/// `procedures` with each before the functions it calls: a function that takes
+/// its callees' bodies in goes first, and the ones it took are then called by
+/// none.
+fn callers_first(
+    module: &Module,
+    procedures: &[GlobalId],
+) -> Vec<GlobalId> {
+    let mut order = CallGraph::new(module).bottom_up();
+    order.reverse();
+    let wanted: BTreeSet<GlobalId> = procedures.iter().copied().collect();
+    let mut placed: BTreeSet<GlobalId> = BTreeSet::new();
+    let mut out: Vec<GlobalId> = order.into_iter().filter(|id| wanted.contains(id) && placed.insert(*id)).collect();
+    out.extend(procedures.iter().copied().filter(|id| !placed.contains(id)));
+    out
+}
+
 /// The functions nothing reaches any more (private, not addressed, not a root,
 /// called by neither call nor invoke) lose their bodies, and with them the
 /// functions only they called: gcc removes an unreachable node from
@@ -998,7 +1014,8 @@ pub fn optimized_with<E: From<String>>(
             // private function whose last call was inlined is never built.
             let mut live = reference_counts(module);
             let reachable_by_pointer: BTreeSet<GlobalId> = addressed.union(&listed(module)).copied().collect();
-            for &id in &procedures[at] {
+            let order = if ahead { procedures[at].clone() } else { callers_first(module, &procedures[at]) };
+            for id in order {
                 let unreached = private[at].contains(&id)
                     && !reachable_by_pointer.contains(&id)
                     && !roots.contains(&(at, id))
