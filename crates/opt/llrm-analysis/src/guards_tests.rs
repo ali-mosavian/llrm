@@ -196,3 +196,24 @@ fn test_the_guards_of_a_block_are_found_once_for_all_asked_of_it() {
     }
     assert_eq!(found() - before, 1, "the block's guards were found more than once");
 }
+
+/// A branch asked about climbed every dominator above it for guards: `branches`
+/// at N=1024 had 60 on average and `mir decide` spent half its 7.8 G in
+/// reading them (the square of the branches). The guards of a block come from
+/// the nearest `MAX_DOMINATORS`.
+#[test]
+fn test_the_guards_of_a_block_come_from_its_nearest_dominators() {
+    let mut text = String::from(
+        "define i16 @f(i16 %n, i16 %len) {\nentry:\n  %fits = icmp ult i16 %n, %len\n  br i1 %fits, label %b0, label %done\n",
+    );
+    let chain = super::MAX_DOMINATORS * 2;
+    for at in 0..chain {
+        text += &format!("b{at}:\n  %c{at} = icmp ne i16 %n, {at}\n  br i1 %c{at}, label %b{}, label %done\n", at + 1);
+    }
+    text += &format!("b{chain}:\n  br label %done\ndone:\n  ret i16 0\n}}\n");
+    let parsed = Parsed::new(&text);
+    let unit = parsed.unit();
+    let last = block_named(&parsed, &format!("b{chain}"));
+    let found = guards(&unit, last);
+    assert!(!found.is_empty() && found.len() <= super::MAX_DOMINATORS + 1, "{} guards", found.len());
+}
