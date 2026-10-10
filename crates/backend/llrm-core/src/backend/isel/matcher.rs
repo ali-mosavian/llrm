@@ -437,6 +437,42 @@ impl Selector<'_, '_, '_> {
         Ok(Loc::Held(Held { width: to, ..held }))
     }
 
+    /// Held, read at the native width: an operation the target runs there
+    /// (`promote`) reads what the narrow value left above it and does not care.
+    pub fn op_promoted(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+        operand: Operand,
+    ) -> Result<Loc, Unselected> {
+        let held = self.held(operand, self.type_of(operand), m.at, out)?;
+        Ok(Loc::Held(Held { width: self.native_width(), ..held }))
+    }
+
+    /// As `source`, a register at the native width or an immediate.
+    pub fn op_promoted_source(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+        operand: Operand,
+    ) -> Result<Loc, Unselected> {
+        Ok(match self.source(operand, self.type_of(operand), m.at, out)? {
+            Loc::Held(held) => Loc::Held(Held { width: self.native_width(), ..held }),
+            Loc::Imm(imm) => Loc::Imm(Imm { width: self.native_width(), ..imm }),
+            other => other,
+        })
+    }
+
+    /// The result, written at the native width.
+    pub fn op_promoted_result(
+        &mut self,
+        m: &Match,
+        _: &mut Vec<Arc<Insn>>,
+    ) -> Result<Loc, Unselected> {
+        let instruction = self.function.instruction(m.inst);
+        Ok(Loc::Held(Held { value: self.value(instruction.result.expect("a result")), width: self.native_width() }))
+    }
+
     pub fn op_result(
         &mut self,
         m: &Match,
@@ -523,6 +559,48 @@ impl Selector<'_, '_, '_> {
     }
 
     // Predicates.
+
+    /// Whether the target would rather run this operation, at its width, on
+    /// the whole register (`promote`).
+    pub fn is_promoted(
+        &self,
+        m: &Match,
+    ) -> bool {
+        let instruction = self.function.instruction(m.inst);
+        let Some(bits) = self.types().int_bits(instruction.ty) else { return false };
+        // Not where a load nothing else reads can be the operation's memory
+        // operand (the other is a register, not a constant), or its cell is
+        // updated in place (a store is the only reader of the result): the word
+        // operation does that, the dword operation cannot (LLVM's
+        // `IsDesirableToPromoteOp`: `MayFoldLoad`, `IsFoldableRMW`).
+        let loaded = |operand: Operand| {
+            let Operand::Value(value) = operand else { return false };
+            let sole = matches!(self.function.users(value), [only] if only.user == m.inst);
+            sole && match self.function.value(value).def {
+                ValueDef::Instruction(inst) => matches!(self.function.instruction(inst).opcode, Opcode::Load { .. }),
+                ValueDef::Argument(_) => self.in_cells.contains(&value),
+            }
+        };
+        let width = bits / 8;
+        let registers = instruction.operands.iter().filter(|operand| self.constant(**operand, width).is_none()).count();
+        let stored = instruction
+            .result
+            .is_some_and(
+                |result| matches!(
+                    self.function.users(result),
+                    [only] if matches!(self.function.instruction(only.user).opcode, Opcode::Store { .. })
+                ),
+            );
+        let foldable = instruction.operands.iter().any(|operand| loaded(*operand)) && (registers >= 2 || stored);
+        bits < self.native_width() * 8
+            && self.promote.iter().any(|one| *one == format!("{}.i{bits}", instruction.opcode.mnemonic()))
+            && !foldable
+    }
+
+    /// The bytes of the widest integer the target computes natively.
+    fn native_width(&self) -> u32 {
+        self.layout.largest_legal_integer() / 8
+    }
 
     pub fn is_selected_elsewhere(
         &self,
