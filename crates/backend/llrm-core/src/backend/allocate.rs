@@ -156,14 +156,23 @@ pub type Live = IndexMap<i64, BTreeSet<u32>>;
 /// in one array, the fixed point a worklist over the rows. No set is built but
 /// the answer.
 pub fn live(body: &LirBody) -> (Live, Live) {
-    let dense = live_rows(body);
-    (dense.sets(&dense.into), dense.sets(&dense.out))
+    let rows = live_rows(body);
+    (rows.sets(true), rows.sets(false))
 }
 
 /// What is live at each block's entry and exit as the fixed point leaves it:
 /// rows of bits, which a reader that only walks the values need not turn into
 /// sets.
-pub struct LiveRows {
+pub struct LiveRows(Found);
+
+enum Found {
+    /// Rows of bits, one for each block: the fixed point over every value.
+    Dense(DenseRows),
+    /// The values each block has live, found from where the values occur.
+    Web(WebRows),
+}
+
+struct DenseRows {
     numbered: Vec<u32>,
     words: usize,
     position: IndexMap<i64, usize>,
@@ -175,25 +184,55 @@ pub struct LiveRows {
 impl LiveRows {
     /// How many values the rows number.
     pub fn numbered(&self) -> usize {
-        self.numbered.len()
+        match &self.0 {
+            Found::Dense(dense) => dense.numbered.len(),
+            Found::Web(web) => web.numbered(),
+        }
     }
 
     /// The values live at the entry of the block at `at`, in order.
     pub fn entering(
         &self,
         at: i64,
-    ) -> impl Iterator<Item = u32> + '_ {
-        self.values(&self.into, self.position[&at])
+    ) -> Box<dyn Iterator<Item = u32> + '_> {
+        match &self.0 {
+            Found::Dense(dense) => Box::new(dense.values(&dense.into, dense.position[&at])),
+            Found::Web(web) => Box::new(web.entering(at)),
+        }
     }
 
     /// The values live at the exit of the block at `at`, in order.
     pub fn leaving(
         &self,
         at: i64,
-    ) -> impl Iterator<Item = u32> + '_ {
-        self.values(&self.out, self.position[&at])
+    ) -> Box<dyn Iterator<Item = u32> + '_> {
+        match &self.0 {
+            Found::Dense(dense) => Box::new(dense.values(&dense.out, dense.position[&at])),
+            Found::Web(web) => Box::new(web.leaving(at)),
+        }
     }
 
+    /// Each block's entry (`entering`) or exit values, as sets, in the order of
+    /// the blocks.
+    fn sets(
+        &self,
+        entering: bool,
+    ) -> Live {
+        match &self.0 {
+            Found::Dense(dense) => dense.sets(if entering { &dense.into } else { &dense.out }),
+            Found::Web(web) => web
+                .graph
+                .position
+                .keys()
+                .map(|&block| {
+                    (block, if entering { web.entering(block).collect() } else { web.leaving(block).collect() })
+                })
+                .collect(),
+        }
+    }
+}
+
+impl DenseRows {
     fn holds(
         &self,
         rows: &[u64],
@@ -289,6 +328,19 @@ pub fn live_rows_among(
     values: &[u32],
     places: &IndexMap<u32, Vec<ranges::Occurrence>>,
 ) -> WebRows {
+    live_rows_within(body, values, places, usize::MAX).expect("no budget to run out of")
+}
+
+/// `live_rows_among`, given up (None) once the values have been followed
+/// through more than `budget` blocks in all: where the values are live in most
+/// blocks the rows of bits are the cheaper way.
+pub fn live_rows_within(
+    body: &LirBody,
+    values: &[u32],
+    places: &IndexMap<u32, Vec<ranges::Occurrence>>,
+    budget: usize,
+) -> Option<WebRows> {
+    let mut spent = 0usize;
     let count = body.blocks.len();
     let graph = crate::analysis::graph::Graph::of(body);
     let predecessors = &graph.parents;
@@ -341,6 +393,10 @@ pub fn live_rows_among(
                 }
             }
         }
+        spent += reached.len() + live_out.len();
+        if spent > budget {
+            return None;
+        }
         for &block_index in &reached {
             if in_mark[block_index] == turn {
                 into[block_index].push(value);
@@ -350,7 +406,7 @@ pub fn live_rows_among(
             out[block_index].push(value);
         }
     }
-    WebRows { graph, into, out, numbered }
+    Some(WebRows { graph, into, out, numbered })
 }
 
 /// Whether a value is live at the entry or exit of a block: what a caller that
@@ -375,7 +431,10 @@ impl LiveAt for LiveRows {
         block: i64,
         value: u32,
     ) -> bool {
-        self.holds(&self.into, block, value)
+        match &self.0 {
+            Found::Dense(dense) => dense.holds(&dense.into, block, value),
+            Found::Web(web) => web.live_in(block, value),
+        }
     }
 
     fn live_out(
@@ -383,7 +442,10 @@ impl LiveAt for LiveRows {
         block: i64,
         value: u32,
     ) -> bool {
-        self.holds(&self.out, block, value)
+        match &self.0 {
+            Found::Dense(dense) => dense.holds(&dense.out, block, value),
+            Found::Web(web) => web.live_out(block, value),
+        }
     }
 }
 
@@ -410,6 +472,15 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
     live_rows_by(body, |_| true)
 }
 
+/// Blocks below which the rows are a few words each and are always the way.
+const WEB_BLOCKS: usize = 256;
+
+/// Words in the rows of bits (blocks times the words of the largest value
+/// number) from which following values may beat them: below it solving the
+/// rows costs less than finding where the values occur (d_faces' largest
+/// body has 9,000).
+const WEB_ROWS: usize = 65_536;
+
 /// `live_rows` of the values `keep` says only: each is live where it is as in
 /// the whole, the others are not numbered, so a caller that asks of a few
 /// values pays for rows of those.
@@ -417,10 +488,70 @@ pub fn live_rows_by(
     body: &LirBody,
     keep: impl Fn(u32) -> bool,
 ) -> LiveRows {
-    body.facts.0.bump("live-rows-walks");
-    // Every value the body names, numbered by order. Ids can be far apart, so
-    // the number of a value is found by a table over the ids where they are
-    // dense enough, else by search.
+    // Each value is followed from where it occurs up the predecessors to where
+    // it is written, so the work is the size of the live ranges and not the
+    // blocks times the values (gcc's `calculate_live_on_exit`, LLVM's
+    // `LiveVariables`). A body with phis is solved over the rows.
+    let mut numbered = None;
+    if body.blocks.len() >= WEB_BLOCKS && body.blocks.iter().all(|block| block.phis.is_empty()) {
+        let values = numbered_by(body, &keep);
+        let rows = body.blocks.len() * (values.len() / 64 + 1);
+        if rows >= WEB_ROWS {
+            body.facts.0.bump("live-rows-walks");
+            let found = crate::analysis::occurrences::Occurrences::scan(body, &keep);
+            let places = found.occurrences();
+            // Following the values costs about a step for each value and each
+            // block between its first and last occurrence; few blocks and many
+            // values (a straight line of cells) are the rows'.
+            let steps = values.len()
+                + places
+                    .values()
+                    .map(|named| {
+                        let blocks = named.iter().map(|one| (one.0).0);
+                        blocks.clone().max().unwrap_or(0) - blocks.min().unwrap_or(0) + 1
+                    })
+                    .sum::<usize>();
+            if steps <= rows {
+                let found = LiveRows(Found::Web(live_rows_among(body, &found.values(), &places)));
+                if llrm_support::env_set("LLRM_CHECK_LIVE") {
+                    let walk = live_rows_dense(body, &keep);
+                    for block in &body.blocks {
+                        assert!(
+                            found.entering(block.at).eq(walk.entering(block.at))
+                                && found.leaving(block.at).eq(walk.leaving(block.at))
+                                && found.numbered() == walk.numbered(),
+                            "{}: the liveness found from the occurrences differs from the rows in block {:#x}",
+                            body.name,
+                            block.at
+                        );
+                    }
+                }
+                return found;
+            }
+        }
+        numbered = Some(values);
+    }
+    if let Some(numbered) = numbered {
+        return live_rows_numbered(body, keep, numbered);
+    }
+    live_rows_dense(body, keep)
+}
+
+/// `live_rows_by` solved over rows of bits for every block: the oracle for the
+/// walk from the occurrences, and what a body with phis is solved by.
+pub fn live_rows_dense(
+    body: &LirBody,
+    keep: impl Fn(u32) -> bool,
+) -> LiveRows {
+    let numbered = numbered_by(body, &keep);
+    live_rows_numbered(body, keep, numbered)
+}
+
+/// Every value `keep` says that the body names, ascending.
+fn numbered_by(
+    body: &LirBody,
+    keep: &impl Fn(u32) -> bool,
+) -> Vec<u32> {
     let mut numbered: Vec<u32> = Vec::new();
     for block in &body.blocks {
         numbered.extend(
@@ -436,6 +567,19 @@ pub fn live_rows_by(
     }
     numbered.sort_unstable();
     numbered.dedup();
+    numbered
+}
+
+/// `live_rows_dense` of the values `numbered`, which `keep` says.
+fn live_rows_numbered(
+    body: &LirBody,
+    keep: impl Fn(u32) -> bool,
+    numbered: Vec<u32>,
+) -> LiveRows {
+    body.facts.0.bump("live-rows-walks");
+    // Every value the body names, numbered by order. Ids can be far apart, so
+    // the number of a value is found by a table over the ids where they are
+    // dense enough, else by search.
     let largest = numbered.last().copied().unwrap_or(0) as usize;
     let table: Option<Vec<u32>> = (largest <= 8 * numbered.len() + 64).then(|| {
         let mut table = vec![u32::MAX; largest + 1];
@@ -562,7 +706,14 @@ pub fn live_rows_by(
             *word |= bits;
         }
     }
-    LiveRows { numbered, words, position, blocks: body.blocks.iter().map(|block| block.at).collect(), into, out }
+    LiveRows(Found::Dense(DenseRows {
+        numbered,
+        words,
+        position,
+        blocks: body.blocks.iter().map(|block| block.at).collect(),
+        into,
+        out,
+    }))
 }
 
 /// `live` as it was written over sorted sets, which the tests hold the dense
