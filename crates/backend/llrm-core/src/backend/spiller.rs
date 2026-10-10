@@ -1515,12 +1515,14 @@ fn frame_cells(one: &Insn) -> impl Iterator<Item = (i64, u32, bool)> + '_ {
         let addr = cell.addr?;
         (addr.space == Space::Frame).then_some((addr.disp, cell.width, defines))
     };
-    one.what.iter().flat_map(move |what| {
-        what.dests
-            .iter()
-            .filter_map(move |operand| cell(operand, true))
-            .chain(what.sources.iter().filter_map(move |operand| cell(operand, false)))
-    })
+    one.what
+        .iter()
+        .flat_map(
+            move |what| what.dests
+                .iter()
+                .filter_map(move |operand| cell(operand, true))
+                .chain(what.sources.iter().filter_map(move |operand| cell(operand, false))),
+        )
 }
 
 /// What names a home: an instruction, by the frame cells it names.
@@ -1751,8 +1753,14 @@ fn _existing_colors_by(
     if llrm_support::env_set("LLRM_CHECK_NAMED") {
         // The body read whole, instruction by instruction.
         let mut walked: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
-        let (mut walked_capacities, mut walked_unknown, mut walked_flipped) =
-            (homes.iter().map(|home| (*home, frame.capacities.get(home).map_or(WORD, |one| *one as u32))).collect::<IndexMap<i64, u32>>(), false, false);
+        let (mut walked_capacities, mut walked_unknown, mut walked_flipped) = (
+            homes
+                .iter()
+                .map(|home| (*home, frame.capacities.get(home).map_or(WORD, |one| *one as u32)))
+                .collect::<IndexMap<i64, u32>>(),
+            false,
+            false,
+        );
         for (block_index, block) in body.blocks.iter().enumerate() {
             for (at, one) in block.insns.iter().enumerate() {
                 let Some(what) = &one.what else { continue };
@@ -1772,9 +1780,16 @@ fn _existing_colors_by(
                     }
                     None
                 };
-                let framed = what.dests.iter().chain(&what.sources).any(
-                    |operand| matches!(operand, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)),
-                );
+                let framed = what
+                    .dests
+                    .iter()
+                    .chain(&what.sources)
+                    .any(
+                        |operand| matches!(
+                            operand,
+                            Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)
+                        ),
+                    );
                 if !framed {
                     continue;
                 }
@@ -1795,7 +1810,10 @@ fn _existing_colors_by(
             })
             .collect();
         assert!(
-            carried == walked && capacities == walked_capacities && unknown == walked_unknown && flipped == walked_flipped,
+            carried == walked
+                && capacities == walked_capacities
+                && unknown == walked_unknown
+                && flipped == walked_flipped,
             "{}: the instructions that name a home, carried from the body this one was made from, differ from reading the body whole",
             body.name
         );
@@ -6058,8 +6076,13 @@ mod tests {
                 .collect()
         }
         let before = chain(false);
-        let first_found =
-            super::homes_kept(&before, &ranges::indexed_shared(&before), &named_in(&before, sorted(names(false))), &homes, first);
+        let first_found = super::homes_kept(
+            &before,
+            &ranges::indexed_shared(&before),
+            &named_in(&before, sorted(names(false))),
+            &homes,
+            first,
+        );
         assert_eq!(first_found.len(), 3, "premise: all three homes are live somewhere");
         // A spill puts an instruction in block 30, which names the third home.
         let mut after = before.clone();
@@ -6072,7 +6095,13 @@ mod tests {
                 .collect(),
         );
         let redone = super::homes_redone(&after);
-        let kept = super::homes_kept(&after, &ranges::indexed_shared(&after), &named_in(&after, sorted(names(true))), &homes, first);
+        let kept = super::homes_kept(
+            &after,
+            &ranges::indexed_shared(&after),
+            &named_in(&after, sorted(names(true))),
+            &homes,
+            first,
+        );
         assert_eq!(super::homes_redone(&after) - redone, 1, "the homes the change does not name were found again");
         let index = ranges::indexed_shared(&after);
         let values: Vec<u32> = (first..first + 3).collect();
