@@ -259,8 +259,11 @@ pub fn wrapped(
     Some(Wrap { opens, closes, wrapped: homes.keys().copied().collect(), depth })
 }
 
-/// The most instructions copied to give early paths a tail of their own: gcc's
-/// `max-grow-copy-bb-insns` (params.opt), the budget of its `copy_bb_p`.
+/// The most instructions in a tail copied to give early paths one of their own:
+/// gcc's `try_shrink_wrapping` copies a block of at most
+/// `max-grow-copy-bb-insns` (8, params.opt:529) unconditional jumps' length
+/// (shrink-wrap.cc:781-782, `can_dup_for_shrink_wrapping`); a jump is one
+/// instruction here.
 const MAX_GROW: usize = 8;
 /// The least `worth` (a thousand a piece) that pays for the copies: three
 /// pieces, six instructions off the early path.
@@ -280,7 +283,6 @@ pub fn tails_split(
 ) -> LirBody {
     let mut best = body.clone();
     let mut score: Option<usize> = None;
-    let mut budget = MAX_GROW;
     'again: loop {
         let parents = crate::backend::jumps::_predecessors(&best.blocks);
         for tail in &best.blocks {
@@ -289,12 +291,11 @@ pub fn tails_split(
                 .insns
                 .last()
                 .is_some_and(|last| last.what.as_ref().is_some_and(|what| what.op == ir::Operation::Return));
-            let copied = tail.insns.len() * ways.saturating_sub(1);
             if tail.at == best.entry
                 || ways < 2
                 || !returns
                 || !tail.phis.is_empty()
-                || copied > budget
+                || tail.insns.len() > MAX_GROW
                 || tail.insns.iter().any(|one| one.arrival())
             {
                 continue;
@@ -308,7 +309,6 @@ pub fn tails_split(
             if now > before && now >= WORTH {
                 best = made;
                 score = Some(now);
-                budget -= copied;
                 continue 'again;
             }
         }
