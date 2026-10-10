@@ -5,6 +5,7 @@
 j{cc}     branch     -/-                -          jcc          -                       -       -       cc/-            J{cc}_rel32_32
 jmp       jump       -/-                -          jmp_short    -                       -       -       -/-             Jmp_rel32_32
 call      call       -/-                -          call_near    -                       -       -       -/-             Call_rel32_32
+call      call       -/rm               32         call_near    -                       -       -       -/-             Call_rm32
 # String operations name no segment: DS and ES are the one flat segment.
 stosb     fill       m,r/r,r            8          rep_stos     s0=ax,s1=di,d1=di       es,-ax,ax*  -       DF/-            Stosb_m8_AL
 stosw     fill       m,r/r,r            16         rep_stos     s0=ax,s1=di,d1=di       es,-ax,ax*  -       DF/-            Stosw_m16_AX
