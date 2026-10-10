@@ -4,13 +4,15 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::backend::registerinfo::segments;
+use llrm_lir::registers::Regs;
+
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn};
 use crate::support::hash::{IndexMap, IndexSet};
 
 /// Select private `mov offset,[p]; mov selector,[p+2]` pairs as `les`.
 pub fn selected(
+    regs: Regs,
     insns: &[Arc<Insn>],
     selectors: &BTreeSet<u32>,
 ) -> Vec<Arc<Insn>> {
@@ -21,7 +23,7 @@ pub fn selected(
             continue;
         }
         let second = &insns[at + 1];
-        let Some(joined) = _pair(first, second, selectors) else {
+        let Some(joined) = _pair(regs, first, second, selectors) else {
             continue;
         };
         made.insert(at, joined);
@@ -47,6 +49,7 @@ pub fn selected(
 }
 
 fn _pair(
+    regs: Regs,
     first: &Insn,
     second: &Insn,
     selectors: &BTreeSet<u32>,
@@ -102,9 +105,7 @@ fn _pair(
     // segment register the selector is given.
     let what = Semantics {
         name: Some(
-            crate::backend::registerinfo::load_form(segments::far())
-                .expect("a target with a far segment states the load that fills it")
-                .to_owned(),
+            regs.load_form(regs.far()).expect("a target with a far segment states the load that fills it").to_owned(),
         ),
         dests: vec![Loc::Held(first_dest), Loc::Held(second_dest)],
         sources: vec![Loc::Mem(Mem { width: 4, ..first_cell })],
@@ -214,6 +215,7 @@ mod tests {
 
     #[test]
     fn test_adjacent_words_are_one_far_load_only_when_the_high_word_is_a_selector() {
+        let regs = crate::backend::registerinfo::test_regs();
         // qcport's dynamic far-struct fields emitted two loads per far pointer.
         let cell = |disp: i64| Mem {
             base: Some(ir::Held { value: 10, width: 2 }),
@@ -227,7 +229,7 @@ mod tests {
             load(2, 2, second_cell.clone(), values(&second_cell)),
         ];
 
-        let selected = selected(&original, &BTreeSet::from([2]));
+        let selected = selected(regs, &original, &BTreeSet::from([2]));
 
         assert_eq!(selected[0].what.as_ref().unwrap().name.as_deref(), Some("les"));
         let Loc::Mem(source) = &selected[0].what.as_ref().unwrap().sources[0] else { panic!() };
@@ -236,11 +238,12 @@ mod tests {
         assert_eq!(selected[1].what.as_ref().unwrap().op, Operation::Nothing);
         // Adjacent words whose high one is a number, not a selector, stay two
         // loads.
-        assert_eq!(super::selected(&original, &BTreeSet::new()), original);
+        assert_eq!(super::selected(regs, &original, &BTreeSet::new()), original);
     }
 
     #[test]
     fn test_fixed_far_pointer_load_defers_fusion_until_after_allocation() {
+        let regs = crate::backend::registerinfo::test_regs();
         // indexed.lru_use's fixed parameter pair became an eager LES.
         let load = |at: i64, value: u32, displacement: i64| {
             load(at, value, Mem::new(Some(Addr::new(Space::Frame, displacement)), 2), Vec::new())
@@ -248,6 +251,6 @@ mod tests {
 
         let original = vec![load(1, 1, 4), load(2, 2, 6)];
 
-        assert_eq!(selected(&original, &BTreeSet::from([2])), original);
+        assert_eq!(selected(regs, &original, &BTreeSet::from([2])), original);
     }
 }

@@ -49,15 +49,7 @@ pub fn materialized(
     body: &LirBody,
     frame: &mut Frame,
 ) -> Result<LirBody, frames::Refused> {
-    materialized_for(body, frame, crate::backend::registerinfo::far_segment().is_some())
-}
-
-/// `materialized` for a target that has far pointers (`far`) or does not.
-fn materialized_for(
-    body: &LirBody,
-    frame: &mut Frame,
-    far: bool,
-) -> Result<LirBody, frames::Refused> {
+    let far = body.regs().far_segment.is_some();
     let mut slot = None;
     let mut out = body.clone();
     for block in &mut out.blocks {
@@ -215,9 +207,12 @@ mod tests {
     }
 
     /// Where the target has no far segment a dword target is a near pointer:
-    /// the call stays as it was.
+    /// Compiles for two targets, taken turns in one thread, each ask the
+    /// register file of their own body: a dword call target is a far pointer
+    /// in m16 and a near one in m32. A process-wide file answered both alike
+    /// (29 of llrm-c's m16 tests failed when an m32 compile bound first).
     #[test]
-    fn a_dword_target_where_the_target_has_no_far_segment_is_not_a_far_pointer() {
+    fn a_dword_call_target_is_far_or_near_by_the_register_file_of_its_own_body() {
         let call = Arc::new(Insn::new(
             4,
             Some((4, 7)),
@@ -230,9 +225,22 @@ mod tests {
             vec![],
             vec![5],
         ));
-        let body =
-            LirBody::new("near", 0, vec![LirBlock::new(0, vec![call])], IndexMap::default(), IndexMap::default());
-        let out = super::materialized_for(&body, &mut Frame::new(-16), false).unwrap();
-        assert_eq!(out.insns().len(), 1);
+        for (info, calls_made) in [
+            (&llrm_x86_m16::REGISTER_INFO, 2),
+            (&llrm_x86_m32::REGISTER_INFO, 1),
+            (&llrm_x86_m16::REGISTER_INFO, 2),
+            (&llrm_x86_m32::REGISTER_INFO, 1),
+        ] {
+            let mut body = LirBody::new(
+                "f",
+                0,
+                vec![LirBlock::new(0, vec![Arc::clone(&call)])],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.registers = Some(llrm_lir::registers::Regs(info));
+            let out = super::materialized(&body, &mut Frame::new(-16)).unwrap();
+            assert_eq!(out.insns().len(), calls_made, "{:?}", out.insns());
+        }
     }
 }

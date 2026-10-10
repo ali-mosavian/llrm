@@ -30,6 +30,7 @@ MODULES = ("host", "render", "model", "game", "sound", "ui")
 
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
+import levels_time  # noqa: E402
 import llrmbin  # noqa: E402
 import programs  # noqa: E402
 import wrap  # noqa: E402
@@ -43,7 +44,7 @@ def instructions(command: list[str]) -> int:
     """User-space instructions `command` retires, children included. The compiler must succeed."""
     with tempfile.NamedTemporaryFile("r", dir=SCRATCH) as out:
         env = {k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k == "LLRM_BIN"}  # LLRM_VERIFY adds checking work
-        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", out.name, "--", *command], capture_output=True, text=True, env=env)
+        done = subprocess.run([*levels_time.UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u", "-o", out.name, "--", *command], capture_output=True, text=True, env=env)
         counts = [line.split(",") for line in out.read().splitlines() if "instructions" in line]
     if done.returncode:
         raise SystemExit(f"{' '.join(command[-3:])}: exit {done.returncode}\n{done.stderr[-400:]}")

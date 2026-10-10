@@ -2376,3 +2376,38 @@ fn test_a_loops_blocks_are_walked_for_liveness_once_not_once_a_use() {
     assert!(printed.contains("define"), "{printed}");
     assert!(walked <= 2, "{walked} block walks for a loop of one block and {uses} uses");
 }
+
+/// A latch test of the counter before its step, with the step live anyway (here
+/// it is summed), is the test of the step: `i == 1` is `i - 1 == 0`. Left on
+/// the counter, both are live through the trip: hanoi's nest (`-ftree-ch`, the
+/// equality fold of `n - 1 == 0`) spilled both at each of its eight levels,
+/// 136456 clocks against 122326. LLVM's `OptimizeLoopTermCond`.
+#[test]
+fn test_a_latch_test_of_the_counter_reads_the_step_that_is_live_anyway() {
+    let text = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  %g = icmp eq i16 %n, 0
+  br i1 %g, label %b4, label %b1
+
+b1:
+  br label %b2
+
+b2:
+  %i = phi i16 [ %n, %b1 ], [ %next, %b2 ]
+  %acc = phi i16 [ 0, %b1 ], [ %sum, %b2 ]
+  %next = sub nsw i16 %i, 1
+  %mix = add i16 %next, %k
+  %sum = add i16 %acc, %mix
+  %c = icmp eq i16 %i, 1
+  br i1 %c, label %b3, label %b2
+
+b3:
+  ret i16 %sum
+
+b4:
+  ret i16 0
+}
+";
+    let printed = same(text, &[&[1, 3], &[2, 3], &[5, -4], &[9, 0]]);
+    assert!(readers(&printed, "%i").iter().all(|line| !line.contains("icmp")), "{printed}");
+}

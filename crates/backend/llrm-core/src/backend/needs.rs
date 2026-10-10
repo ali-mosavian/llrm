@@ -10,6 +10,8 @@
 //! `LLRM_CHECK_NEEDS` runs a skipped pass anyway and asserts it changed
 //! nothing.
 
+use llrm_lir::registers::Regs;
+
 use crate::backend::{exactaddress, upperzero};
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{Insn, Insns, LirBody};
@@ -28,7 +30,10 @@ pub const EXACT_CELL: u8 = 8;
 pub const BASED: u8 = 16;
 
 /// The bits `one` has.
-fn of(one: &Insn) -> u8 {
+fn of(
+    regs: Regs,
+    one: &Insn,
+) -> u8 {
     let mut bits = 0;
     if one.inserted() && !one.defines.is_empty() {
         bits |= INSERTED;
@@ -48,7 +53,7 @@ fn of(one: &Insn) -> u8 {
             bits |= BASED;
         }
         if what.dests.iter().chain(&what.sources).any(|operand| matches!(operand, Loc::Mem(_))) {
-            if upperzero::unheld(one) != 0 {
+            if upperzero::unheld(regs, one) != 0 {
                 bits |= UNHELD;
             }
             if exactaddress::cell_of(one).is_some() {
@@ -90,6 +95,7 @@ impl Contents {
         body: &LirBody,
         needs: u8,
     ) -> bool {
+        let regs = body.regs();
         let same = self.blocks.len() == body.blocks.len()
             && self.blocks.iter().zip(&body.blocks).all(|((held, _), block)| held.same_as(&block.insns));
         if !same {
@@ -100,7 +106,7 @@ impl Contents {
                 .enumerate()
                 .map(|(at, block)| match was.get(at) {
                     Some((held, bits)) if held.same_as(&block.insns) => (held.clone(), *bits),
-                    _ => (block.insns.clone(), block.insns.iter().fold(0, |bits, one| bits | of(one))),
+                    _ => (block.insns.clone(), block.insns.iter().fold(0, |bits, one| bits | of(regs, one))),
                 })
                 .collect();
         }
