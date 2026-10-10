@@ -124,6 +124,13 @@ pub fn loads_a_selector(form: &str) -> bool {
     loaded_by(form).is_some_and(|segment| !is_data_segment(segment))
 }
 
+/// The segment an address through `base` reads without a prefix: the stack's
+/// through the stack pointer or the frame register, the data segment's
+/// through any other. None where the target has no segments.
+pub fn default_segment(base: RegId) -> Option<RegId> {
+    if is_stack(base) || is_frame(base) { stack_segment() } else { data_segment() }
+}
+
 pub fn is_segment(register: RegId) -> bool {
     in_class(register, class::SEGMENT)
 }
@@ -245,5 +252,18 @@ mod tests {
         }
         assert_eq!((load_form(RegId::CS), loaded_by("mov")), (None, None));
         assert!(loads_a_selector("les") && !loads_a_selector("lds") && !loads_a_selector("mov"));
+    }
+
+    /// An address through the stack or frame register reads the stack segment
+    /// and any other the data segment: what the text of an address leaves
+    /// unprefixed.
+    #[test]
+    fn an_address_reads_the_segment_its_base_implies() {
+        for base in [RegId::BP, RegId::EBP, RegId::SP, RegId::ESP] {
+            assert_eq!(default_segment(base), Some(RegId::SS), "{base:?}");
+        }
+        for base in [RegId::BX, RegId::SI, RegId::EDI, RegId::None] {
+            assert_eq!(default_segment(base), Some(RegId::DS), "{base:?}");
+        }
     }
 }
