@@ -30,9 +30,9 @@ use llrm_analysis::{cfg, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, MetadataNode, MetadataOperand, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
-use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
+use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, PreservedAnalyses};
 
 use crate::lcssa::{arms, from_arms};
 
@@ -63,7 +63,7 @@ impl FunctionPass for Rotate {
         if self.proven && llrm_support::debug::enabled("census") {
             census(unit.context, unit.layout, unit.function, unit.id, analyses);
         }
-        match entered(unit.context, unit.layout, unit.function, analyses, self.proven, self.copy) {
+        match entered(unit.context, unit.layout, unit.function, unit.declared, analyses, self.proven, self.copy) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("rotate: {error}"),
@@ -77,13 +77,14 @@ pub fn entered(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
+    declared: &mut Declared,
     analyses: &Analyses,
     proven: bool,
     copy: bool,
 ) -> Result<bool, String> {
     let mut done: llrm_mir::dense::IdSet<BlockId> = llrm_mir::dense::IdSet::new();
     while proven && rotated(context, layout, function, analyses, &mut done)? {}
-    while copy && copied(context, layout, function, analyses, &mut done)? {}
+    while copy && copied(context, layout, function, declared, analyses, &mut done)? {}
     if done.is_empty() {
         return Ok(false);
     }
@@ -373,6 +374,7 @@ pub fn copied(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
+    declared: &mut Declared,
     analyses: &Analyses,
     done: &mut llrm_mir::dense::IdSet<BlockId>,
 ) -> Result<bool, String> {
@@ -405,11 +407,51 @@ pub fn copied(
         let Some(guard) = _copy_test(function, &shape) else {
             continue;
         };
+        let weights = function
+            .instruction(function.terminator(shape.header).expect("a terminated header"))
+            .metadata
+            .iter()
+            .find(|(kind, _)| kind == "prof")
+            .map(|(_, node)| *node);
         _rotate(context, function, &shape, Some(guard))?;
+        _weighed(context, declared, function, &shape, weights, guard.1);
         done.insert(shape.first);
         return Ok(true);
     }
     Ok(false)
+}
+
+/// The guard the copy left in the preheader is taken as the header's test is:
+/// the weights it declares, else the loop heuristic's (`branchprob::LOOP`)
+/// for staying in against leaving. gcc's header copying duplicates the test's
+/// edge probabilities and LLVM's `LoopRotate` puts its weights on the guard
+/// (`updateBranchWeights`); left to be guessed again from structure, the
+/// guard outside the loop is a branch like any other and the way into the
+/// loop is laid out as the unlikely one.
+fn _weighed(
+    context: &mut Context,
+    declared: &mut Declared,
+    function: &mut Function,
+    shape: &Shape,
+    weights: Option<llrm_mir::module::MetadataId>,
+    exits_on_true: bool,
+) {
+    let guard = function.terminator(shape.preheader).expect("a terminated preheader");
+    let node = weights.unwrap_or_else(|| {
+        let word = context.types.int(32);
+        let weight = |context: &mut Context, n: f64| MetadataOperand::Constant(context.int(word, n as i128));
+        let (staying, leaving) = llrm_analysis::branchprob::LOOP;
+        let (first, second) = if exits_on_true { (leaving, staying) } else { (staying, leaving) };
+        declared.node(MetadataNode {
+            distinct: false,
+            operands: vec![
+                MetadataOperand::String("branch_weights".to_owned()),
+                weight(context, first),
+                weight(context, second),
+            ],
+        })
+    });
+    function.annotate(guard, "prof", node);
 }
 
 /// The header's test computed in the preheader, on what the header's phis read
