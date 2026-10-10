@@ -194,6 +194,19 @@ MEASURE_BUILD = "cargo build --release -q --bins && cargo test --release -q --wo
 DIST_BUILD = "cargo build --profile dist -q --bins"
 
 
+# A lib test that depends on the order tests run in passes in the plain order and fails when the threads start in
+# another (llrm-c's m16 tests, 29 of 136, when an m32 test bound the register file first). The lib step runs the
+# tests in a random order; each test binary prints its seed ("running 136 tests (shuffle seed: N)", kept in the
+# failed step's log), and LLRM_SHUFFLE_SEED=N repeats that order. libtest reads RUSTC_BOOTSTRAP when it runs, not
+# when it is built: the build is not redone.
+SHUFFLED = "RUSTC_BOOTSTRAP=1"
+
+
+def shuffle() -> str:
+    seed = os.environ.get("LLRM_SHUFFLE_SEED")
+    return f"--shuffle-seed {int(seed)}" if seed else "--shuffle"
+
+
 # Commands. Each runs under bash in the repo root with CARGO_TARGET_DIR set.
 def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str] = frozenset(), skip_py: tuple[str, ...] = ()) -> dict[str, str]:
     scope = "--workspace" if p.packages is None else " ".join(f"-p {n}" for n in p.packages)
@@ -213,7 +226,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     )
     steps = {
         "build": BUILD,
-        "lib": f"{cargo} {libs} --lib" if libs else "true",
+        "lib": f"{SHUFFLED} {cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
         "doc": f"{cargo} {libs} --doc" if libs else "true",
         "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",

@@ -327,7 +327,40 @@ pub fn live_rows_among(
     values: &[u32],
     places: &IndexMap<u32, Vec<ranges::Occurrence>>,
 ) -> WebRows {
-    live_rows_within(body, values, places, usize::MAX).expect("no budget to run out of")
+    live_rows_within(body, values, places, &Phis::default(), usize::MAX).expect("no budget to run out of")
+}
+
+/// Where the phis of a body define and read the values asked of: the blocks (by
+/// position) that define each as a phi's result, and the predecessors (by
+/// position) that hand it to a phi, at their ends.
+#[derive(Default)]
+pub struct Phis {
+    defined: IndexMap<u32, Vec<usize>>,
+    handed: IndexMap<u32, Vec<usize>>,
+}
+
+impl Phis {
+    fn of(
+        body: &LirBody,
+        keep: &impl Fn(u32) -> bool,
+    ) -> Self {
+        let graph = crate::analysis::graph::Graph::of(body);
+        let mut found = Self::default();
+        for (at, block) in body.blocks.iter().enumerate() {
+            for phi in &block.phis {
+                if keep(phi.result) {
+                    found.defined.entry(phi.result).or_default().push(at);
+                }
+                for (from, value) in &phi.incoming {
+                    // A predecessor the body does not hold hands nothing.
+                    if let Some(&from) = graph.position.get(from).filter(|_| keep(*value)) {
+                        found.handed.entry(*value).or_default().push(from);
+                    }
+                }
+            }
+        }
+        found
+    }
 }
 
 /// `live_rows_among`, given up (None) once the values have been followed
@@ -337,6 +370,7 @@ pub fn live_rows_within(
     body: &LirBody,
     values: &[u32],
     places: &IndexMap<u32, Vec<ranges::Occurrence>>,
+    phis: &Phis,
     budget: usize,
 ) -> Option<WebRows> {
     let mut spent = 0usize;
@@ -353,7 +387,14 @@ pub fn live_rows_within(
     let mut turn = 0u32;
     let mut numbered = 0;
     for &value in values {
-        let Some(found) = places.get(&value).filter(|found| !found.is_empty()) else { continue };
+        let found = places.get(&value).map(Vec::as_slice).unwrap_or_default();
+        let (defined_by, handed_by) = (
+            phis.defined.get(&value).map(Vec::as_slice).unwrap_or_default(),
+            phis.handed.get(&value).map(Vec::as_slice).unwrap_or_default(),
+        );
+        if found.is_empty() && defined_by.is_empty() && handed_by.is_empty() {
+            continue;
+        }
         numbered += 1;
         turn += 1;
         let mut reached: Vec<usize> = Vec::new();
@@ -372,6 +413,15 @@ pub fn live_rows_within(
                 written_mark[block_index] = turn;
             }
         }
+        // A phi's result is written before the block's first instruction.
+        for &block_index in defined_by {
+            if run_mark[block_index] != turn {
+                run_mark[block_index] = turn;
+                reached.push(block_index);
+            }
+            first_run[block_index] = (0, true, false);
+            written_mark[block_index] = turn;
+        }
         for &block_index in &reached {
             if first_run[block_index].2 {
                 in_mark[block_index] = turn;
@@ -379,6 +429,19 @@ pub fn live_rows_within(
             }
         }
         let mut live_out: Vec<usize> = Vec::new();
+        // A phi's argument is read at the end of the predecessor it comes from,
+        // and live into it unless that block writes the value first.
+        for &from in handed_by {
+            if out_mark[from] != turn {
+                out_mark[from] = turn;
+                live_out.push(from);
+            }
+            if run_mark[from] != turn && in_mark[from] != turn {
+                in_mark[from] = turn;
+                reached.push(from);
+                work.push(from);
+            }
+        }
         while let Some(block_index) = work.pop() {
             for &before in &predecessors[block_index] {
                 if out_mark[before] != turn {
@@ -491,11 +554,14 @@ pub fn live_rows_by(
     // it is written, so the work is the size of the live ranges and not the
     // blocks times the values (gcc's `calculate_live_on_exit`, LLVM's
     // `LiveVariables`). A body with phis is solved over the rows.
+    // Under the check every body is followed, so that the walk is held to the
+    // rows on all of them.
+    let checking = llrm_support::env_set("LLRM_CHECK_LIVE");
     let mut numbered = None;
-    if body.blocks.len() >= WEB_BLOCKS && body.blocks.iter().all(|block| block.phis.is_empty()) {
+    if checking || body.blocks.len() >= WEB_BLOCKS {
         let values = numbered_by(body, &keep);
         let rows = body.blocks.len() * (values.len() / 64 + 1);
-        if rows >= WEB_ROWS {
+        if checking || rows >= WEB_ROWS {
             body.facts.0.bump("live-rows-walks");
             let found = crate::analysis::occurrences::Occurrences::scan(body, &keep);
             let places = found.occurrences();
@@ -510,8 +576,10 @@ pub fn live_rows_by(
                         blocks.clone().max().unwrap_or(0) - blocks.min().unwrap_or(0) + 1
                     })
                     .sum::<usize>();
-            if steps <= rows {
-                let found = LiveRows(Found::Web(live_rows_among(body, &found.values(), &places)));
+            if checking || steps <= rows {
+                let web = live_rows_within(body, &values, &places, &Phis::of(body, &keep), usize::MAX)
+                    .expect("no budget to run out of");
+                let found = LiveRows(Found::Web(web));
                 if llrm_support::env_set("LLRM_CHECK_LIVE") {
                     let walk = live_rows_dense(body, &keep);
                     for block in &body.blocks {

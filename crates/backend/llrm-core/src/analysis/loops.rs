@@ -153,6 +153,16 @@ impl Dominance {
         self.ats.binary_search(&at).ok()
     }
 
+    /// The nearest block that strictly dominates `at`; none for the entry and
+    /// for a block the entry does not reach.
+    pub fn immediate(
+        &self,
+        at: i64,
+    ) -> Option<i64> {
+        let slot = self.slot(at)?;
+        (self.enter[slot] != NONE && self.idom[slot] != NONE).then(|| self.ats[self.idom[slot] as usize])
+    }
+
     /// Whether the entry reaches `at`: only then does anything dominate it.
     pub fn reachable(
         &self,
@@ -504,6 +514,27 @@ pub fn depth<N: Node>(
 /// The nearest strict dominator is the one with the most dominators of its
 /// own.
 pub fn immediate_dominators<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, Option<i64>> {
+    // The tree `dominance` found already says it; naming every block's
+    // dominators to pick the one with the most was the square of the blocks
+    // on a chain of them.
+    let tree = dominance(blocks, entry);
+    let found = blocks.iter().map(|block| (block.at(), tree.immediate(block.at()))).collect();
+    #[cfg(test)]
+    assert_eq!(
+        found,
+        immediate_dominators_named(blocks, entry),
+        "the tree's immediate dominators are not the named ones"
+    );
+    found
+}
+
+/// `immediate_dominators` from the sets of dominators, the oracle for the
+/// tree's.
+#[cfg(test)]
+fn immediate_dominators_named<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
 ) -> BTreeMap<i64, Option<i64>> {
