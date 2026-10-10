@@ -12,6 +12,7 @@ typedef struct GfxMode {
     unsigned width, height;
     byte cell_height;      /* of a text character */
     double aspect;         /* height of a pixel over its width, times 1 */
+    byte foreground_only;  /* COLOR takes no background (the VGA modes) */
 } GfxMode;
 
 extern const GfxMode *gfx_current;
@@ -27,6 +28,9 @@ void gfx_screen(int mode);
 /* The background is colour 0 made to look like another: the palette's first
    entry is given the colour of that attribute (the adapter's default one). */
 void gfx_set_background(byte color);
+/* COLOR: the foreground and background, either -1 to leave it; a background
+   where the mode takes none is an error. */
+void gfx_set_colors(int foreground, int background);
 
 /* A colour argument: -1 is the foreground; out of range is an error. */
 byte gfx_color(int color);
@@ -36,6 +40,10 @@ void gfx_plot(int x, int y, byte color, byte operation);
 void gfx_hspan(int x1, int x2, int y, byte color, byte operation);
 /* The colour of a pixel, or -1 outside the screen. */
 int gfx_pixel(int x, int y);
+/* From pixel `x` (on the screen) toward `last`, which may be off it, the first
+   pixel on the screen that is of colour `c1` or `c2` (`match` 1) or of neither
+   (`match` 0); -1 when there is none. */
+int gfx_search(int x, int last, int y, unsigned c1, unsigned c2, int match);
 /* Clears the screen to the background. */
 void gfx_clear(void);
 

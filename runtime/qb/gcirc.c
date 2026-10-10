@@ -44,8 +44,13 @@ typedef struct Circle {
     long points;            /* n: of an octant */
     byte color;
     int arc;
-    long from, to;          /* counts round the circle */
+    unsigned long from, to; /* counts round the circle, from <= to */
+    byte outside;           /* the arc is what lies outside from..to */
+    byte spokes;            /* SPOKE_*: the lines to the centre still to draw, or drawn */
 } Circle;
+
+/* Where a spoke is drawn from, in the order the arc's two ends are met. */
+enum { SPOKE_FROM = 1, FROM_DONE = 2, SPOKE_TO = 128, TO_DONE = 64 };
 
 static const double pi = 3.141592653589793;
 
@@ -60,7 +65,7 @@ static long scaled(const Circle *c, long offset)
 
 /* How far round the circle an angle is, in counts: the octant it is in gives a
    base, and the sine or cosine of the angle the distance from it. */
-static long count_of(const Circle *c, double angle)
+static unsigned long count_of(const Circle *c, double angle)
 {
     double sine, cosine, along;
     int octant = (int)(angle * 4 / pi);
@@ -73,29 +78,58 @@ static long count_of(const Circle *c, double angle)
         along = -along;
     if (octant == 1 || octant == 3 || octant == 5 || octant == 7)
         along = -along;
-    return (long)(along + base + 0.5);
+    return (unsigned long)(along + base + 0.5);
 }
 
-static int wanted(const Circle *c, long count)
+/* A point of the rim, which has `count` round the circle.  The point at one end
+   of an arc that has a line to the centre starts that line, and is not plotted
+   itself; the other points are plotted if they are between the ends (or
+   outside them, for an arc that runs through 0). */
+static void spoke(Circle *c, int x, int y, byte done)
 {
-    if (!c->arc)
-        return 1;
-    if (c->from <= c->to)
-        return count >= c->from && count <= c->to;
-    return count >= c->from || count <= c->to;
+    c->spokes |= done;
+    gfx_x1 = x;
+    gfx_y1 = y;
+    gfx_x2 = c->cx;
+    gfx_y2 = c->cy;
+    gfx_line_between(c->color, -1, 0);
 }
 
-static void plot(const Circle *c, long x, long y, long count)
+static void plot(Circle *c, long x, long y, unsigned long count)
 {
-    if (wanted(c, count))
-        gfx_plot(c->cx + (int)(c->scale_x ? scaled(c, x) : x),
-                 c->cy + (int)(c->scale_x ? y : scaled(c, y)), c->color,
-                 OP_SET);
+    int px = c->cx + (int)(c->scale_x ? scaled(c, x) : x);
+    int py = c->cy + (int)(c->scale_x ? y : scaled(c, y));
+    int between = 0, endpoint = 0;
+
+    if (c->arc) {
+        if (count == c->from) {
+            if (c->spokes & SPOKE_FROM) {
+                if (!(c->spokes & FROM_DONE))
+                    spoke(c, px, py, FROM_DONE);
+                return;
+            }
+            endpoint = 1;
+        } else if (count > c->from) {
+            if (count == c->to) {
+                if (c->spokes & SPOKE_TO) {
+                    if (!(c->spokes & TO_DONE))
+                        spoke(c, px, py, TO_DONE);
+                    return;
+                }
+                endpoint = 1;
+            } else {
+                between = count < c->to;
+            }
+        }
+        if (!endpoint && between == c->outside)
+            return;
+    }
+    gfx_plot(px, py, c->color, OP_SET);
 }
 
 /* The eight points of a circle point (x, y), with y the count in its octant:
    the octants run counterclockwise from the right, the screen's y down. */
-static void octants(const Circle *c, long x, long y)
+static void octants(Circle *c, long x, long y)
 {
     long n = c->points;
 
@@ -109,7 +143,7 @@ static void octants(const Circle *c, long x, long y)
     plot(c, x, y, 8 * n - y);
 }
 
-static void rim(const Circle *c)
+static void rim(Circle *c)
 {
     long x = c->radius, y = 0, sum = 1 - c->radius;
 
@@ -124,22 +158,6 @@ static void rim(const Circle *c)
         sum += 2 * y + 3;
         y++;
     }
-}
-
-/* A line from the centre to the arc's end at `count`. */
-static void spoke(const Circle *c, double angle)
-{
-    double sine, cosine;
-    long dx, dy;
-
-    dev_sincos(&angle, &sine, &cosine);
-    dx = (long)(c->radius * cosine + (cosine < 0 ? -0.5 : 0.5));
-    dy = (long)(c->radius * sine + (sine < 0 ? -0.5 : 0.5));
-    gfx_x1 = c->cx;
-    gfx_y1 = c->cy;
-    gfx_x2 = c->cx + (int)(c->scale_x ? scaled(c, dx) : dx);
-    gfx_y2 = c->cy - (int)(c->scale_x ? dy : scaled(c, dy));
-    gfx_line_between(c->color, -1, 0);
 }
 
 /* An angle as the circle takes it: not past a turn. */
@@ -159,7 +177,7 @@ void B_CIRC(float radius, int color)
     Circle c;
     double ratio = has_aspect ? aspect_ratio : gfx_current->aspect;
     double from = 0, to = 2 * pi;
-    int spoke_from = 0, spoke_to = 0, arc = has_start || has_end;
+    int spoke_from = 0, spoke_to = 0, arc = has_start || has_end, has_to = has_end;
 
     c.color = gfx_color(color);
     if (radius < 0 || ratio <= 0)
@@ -176,15 +194,28 @@ void B_CIRC(float radius, int color)
     if (has_end)
         to = turn(end_angle, &spoke_to);
     has_start = has_end = has_aspect = 0;
+    c.spokes = (spoke_from ? SPOKE_FROM : 0) | (spoke_to ? SPOKE_TO : 0);
+    c.outside = 0;
     if (arc) {
-        c.from = count_of(&c, from);
-        c.to = count_of(&c, to);
+        /* no end angle is an end past every count */
+        unsigned long first = count_of(&c, from);
+        unsigned long last = has_to ? count_of(&c, to) : 0xFFFFUL;
+
+        if (last < first) {
+            unsigned long swap = first;
+
+            first = last;
+            last = swap;
+            c.outside = 1;
+            if (c.spokes && c.spokes != (SPOKE_FROM | SPOKE_TO))
+                c.spokes ^= SPOKE_FROM | SPOKE_TO;
+        }
+        if (first == last && c.spokes)
+            c.spokes = SPOKE_FROM | SPOKE_TO;
+        c.from = first;
+        c.to = last;
     }
     rim(&c);
-    if (spoke_from)
-        spoke(&c, from);
-    if (spoke_to)
-        spoke(&c, to);
 }
 #pragma aux B_CSTT "B$CSTT"
 #pragma aux B_CSTO "B$CSTO"

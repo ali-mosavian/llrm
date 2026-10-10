@@ -1,5 +1,6 @@
 /* The screen statements (QB rt/gwscr.asm B$COLR, B$LOCT, B$CSCN; rt/gwscreen
    B$SCLS, B$WIDT; prview B$VWPT). */
+#include "cndriver.h"
 #include "console.h"
 
 enum { COLOR_ARGUMENTS = 3, LOCATE_ARGUMENTS = 5 };
@@ -13,6 +14,9 @@ void (*const screen_needs_text)(void) = cn_text_xinit;
 
 /* Set by gfx.c's initializer when the program has the graphics screen. */
 void (*screen_set_mode)(int mode);
+/* The graphics screen's COLOR, which is the screen's own wherever a program has
+   it, and does not need the text drawn on it. */
+void (*screen_set_colors)(int foreground, int background);
 
 /* A statement's arguments from the block BASIC pushed: the count of words, then
    for each argument (the last at the lowest address) a flag and, only if the
@@ -42,7 +46,10 @@ void screen_color(const int *block)
     int value[COLOR_ARGUMENTS];
 
     arguments(block, value, COLOR_ARGUMENTS);
-    cn_color(value[0], value[1]);
+    if (cn_graphics && screen_set_colors)
+        screen_set_colors(value[0], value[1]);
+    else
+        cn_color(value[0], value[1]);
 }
 
 /* B$LOCT's block: LOCATE row, column, cursor, start, stop. */

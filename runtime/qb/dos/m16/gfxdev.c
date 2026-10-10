@@ -14,9 +14,12 @@ enum {
     GC_PORT = 0x3CE,
     GC_DATA_ROTATE = 3,
     GC_READ_MAP = 4,
+    GC_COLOR_COMPARE = 2,
     GC_MODE = 5,
+    GC_DONT_CARE = 7,
     GC_BIT_MASK = 8,
     WRITE_MODE_1 = 1,
+    READ_MODE_1 = 8,
     WRITE_MODE_2 = 2,
     FUNCTION_SHIFT = 3,
     PLANES = 4,
@@ -127,6 +130,56 @@ unsigned gd_read(unsigned x, unsigned y)
         color = color << 1 | ((*at & bit) != 0);
     }
     return color;
+}
+
+/* The pixels of the byte at `at` that are of colour `color`, a bit each, by the
+   graphics controller's colour compare: one read for eight pixels. */
+static unsigned equal_to(Video *at, unsigned color)
+{
+    controller(GC_COLOR_COMPARE, color);
+    return *at;
+}
+
+int gd_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match)
+{
+    int step = last >= x ? 1 : -1;
+
+    controller(GC_DONT_CARE, 0x0F);
+    controller(GC_MODE, READ_MODE_1 | WRITE_MODE_2);
+    for (;;) {
+        int base = x & ~7;
+        int last_here = (last & ~7) == base;
+        unsigned in = step > 0 ? 0xFF >> (x & 7) : 0xFF << (7 - (x & 7)) & 0xFF;
+        Video *at = byte_of(x, y);
+        unsigned found = equal_to(at, c1);
+
+        if (c2 != c1)
+            found |= equal_to(at, c2);
+        if (!match)
+            found = ~found;
+        if (last_here)
+            in &= step > 0 ? 0xFF << (7 - (last & 7)) & 0xFF : 0xFF >> (last & 7);
+        found &= in;
+        if (found) {
+            int bit = 0;
+
+            if (step > 0) {
+                while (!(found << bit & 0x80))
+                    bit++;
+            } else {
+                while (!(found >> bit & 1))
+                    bit++;
+                bit = 7 - bit;
+            }
+            controller(GC_MODE, WRITE_MODE_2);
+            return base + bit;
+        }
+        if (last_here)
+            break;
+        x = step > 0 ? base + 8 : base - 1;
+    }
+    controller(GC_MODE, WRITE_MODE_2);
+    return -1;
 }
 
 void gd_move_rows(unsigned to, unsigned from, unsigned count)

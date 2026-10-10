@@ -112,16 +112,6 @@ static byte gfx_width(void)
     return columns;
 }
 
-static void gfx_color_set(int foreground, int background)
-{
-    if (foreground > 31 || background > 15)
-        qb_error(BE_ILLFUN);
-    if (foreground >= 0)
-        gfx_foreground = foreground & 15;
-    if (background >= 0)
-        gfx_set_background(background & 15);
-}
-
 static void gfx_locate(int new_row, int new_column, int cursor)
 {
     (void)cursor;
@@ -164,7 +154,7 @@ static void gfx_size(int new_columns, int new_rows)
 
 static const Driver driver = {
     gfx_init, gfx_write, gfx_newline, gfx_erase, gfx_sync, gfx_cursor,
-    gfx_pos, gfx_line, gfx_width, gfx_color_set, gfx_locate, gfx_clear_text, gfx_view,
+    gfx_pos, gfx_line, gfx_width, gfx_set_colors, gfx_locate, gfx_clear_text, gfx_view,
     gfx_size
 };
 

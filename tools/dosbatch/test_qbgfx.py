@@ -17,7 +17,10 @@ import qbplay  # noqa: E402
 
 PROBES = sorted((dosbatch.ROOT / "tests" / "qbrt").glob("gfx_*.bas"))
 SETTLE_SECONDS = 2
-GRAPHICS_MODE = 0x10   # SCREEN 9: what the probes draw in
+# Probes that draw for longer than that before they wait.
+SETTLE = {"gfx_paint_sweep": 10, "gfx_paint_rules": 6}
+GRAPHICS_MODE = 0x10   # SCREEN 9: what the probes draw in, unless the name says
+BIOS_MODES = {"gfx_screen7": 0x0D, "gfx_screen8": 0x0E, "gfx_screen12": 0x12, "gfx_screen13": 0x13, "gfx_screen1": 4, "gfx_screen2": 6}
 
 
 @pytest.fixture(scope="module")
@@ -33,7 +36,7 @@ ENDS_IN_TEXT = {"gfx_back_to_text"}
 TEXT_SECONDS = 6
 
 
-def screenshot(exe: Path, work: Path, text: bool) -> Path:
+def screenshot(exe: Path, work: Path, text: bool, mode: int = GRAPHICS_MODE, settle: float = SETTLE_SECONDS) -> Path:
     work.mkdir(exist_ok=True)
     shutil.copy(exe, work / "P.EXE")
     session = qbplay.Session(work)
@@ -42,8 +45,8 @@ def screenshot(exe: Path, work: Path, text: bool) -> Path:
         if text:
             time.sleep(TEXT_SECONDS)
         else:
-            session.wait_for_mode(GRAPHICS_MODE)
-            time.sleep(SETTLE_SECONDS)
+            session.wait_for_mode(mode)
+            time.sleep(settle)
         session.shot(work / "shot.png")
     finally:
         session.close()
@@ -53,6 +56,8 @@ def screenshot(exe: Path, work: Path, text: bool) -> Path:
 @pytest.mark.parametrize("name", [path.stem for path in PROBES])
 def test_graphics_probe_has_no_pixel_different_from_bcom45(programs, tmp_path, name: str):
     reference, candidate = programs[name]
-    want = screenshot(reference, tmp_path / "ref", name in ENDS_IN_TEXT)
-    got = screenshot(candidate, tmp_path / "cand", name in ENDS_IN_TEXT)
+    mode = BIOS_MODES.get(name, GRAPHICS_MODE)
+    settle = SETTLE.get(name, SETTLE_SECONDS)
+    want = screenshot(reference, tmp_path / "ref", name in ENDS_IN_TEXT, mode, settle)
+    got = screenshot(candidate, tmp_path / "cand", name in ENDS_IN_TEXT, mode, settle)
     assert qbplay.differing_pixels(want, got) == 0

@@ -16,6 +16,10 @@ void gd_plot(unsigned x, unsigned y, unsigned color, unsigned operation);
 void gd_span(unsigned x, unsigned count, unsigned y, unsigned color,
              unsigned operation);
 unsigned gd_read(unsigned x, unsigned y);
+/* From pixel `x` toward `last` (either way, both on the screen), the first
+   pixel that is of colour `c1` or `c2` (`match` 1) or of neither (`match` 0),
+   or -1 when there is none. */
+int gd_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match);
 /* Copies whole rows of pixels, the first first, so that moving up over itself
    is right. */
 void gd_move_rows(unsigned to, unsigned from, unsigned count);

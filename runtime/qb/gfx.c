@@ -7,9 +7,10 @@
 enum { MAX_COLOR = 15, DEFAULT_FOREGROUND = 15, TEXT_MODE = 3 };
 
 static const GfxMode modes[] = {
-    {7, 0x0D, 320, 200, 8, 5.0 / 6.0},
-    {8, 0x0E, 640, 200, 8, 5.0 / 12.0},
-    {9, 0x10, 640, 350, 14, 35.0 / 48.0}
+    {7, 0x0D, 320, 200, 8, 5.0 / 6.0, 0},
+    {8, 0x0E, 640, 200, 8, 5.0 / 12.0, 0},
+    {9, 0x10, 640, 350, 14, 35.0 / 48.0, 0},
+    {12, 0x12, 640, 480, 16, 1.0, 1}
 };
 
 const GfxMode *gfx_current;
@@ -64,6 +65,17 @@ void gfx_screen(int mode)
     qb_error(BE_ILLFUN);
 }
 
+void gfx_set_colors(int foreground, int background)
+{
+    if (foreground > 31 || background > 15
+        || (background >= 0 && gfx_current->foreground_only))
+        qb_error(BE_ILLFUN);
+    if (foreground >= 0)
+        gfx_foreground = foreground & 15;
+    if (background >= 0)
+        gfx_set_background(background & 15);
+}
+
 byte gfx_color(int color)
 {
     if (color == -1)
@@ -105,6 +117,17 @@ int gfx_pixel(int x, int y)
         || (unsigned)y >= gfx_current->height)
         return -1;
     return gd_read(x, y);
+}
+
+int gfx_search(int x, int last, int y, unsigned c1, unsigned c2, int match)
+{
+    int edge = (int)gfx_current->width - 1;
+
+    if (last < 0)
+        last = 0;
+    else if (last > edge)
+        last = edge;
+    return gd_search(x, last, y, c1, c2, match);
 }
 
 /* A coordinate given as a SINGLE, rounded to the nearest pixel, a half going to
@@ -192,6 +215,7 @@ void B_PAL2(int attribute, long color)
 
 /* SCREEN is taken here once a program has this linked (screen.c). */
 extern void (*screen_set_mode)(int mode);
+extern void (*screen_set_colors)(int foreground, int background);
 
 /* The graphics screen's text driver goes with it. */
 extern void cn_gfx_xinit(void);
@@ -210,6 +234,7 @@ static Comp gfx_comp = { 0, C_GR, { 0, 0, 0, 0, 0, gfx_term } };
 void gfx_xinit(void)
 {
     screen_set_mode = gfx_screen;
+    screen_set_colors = gfx_set_colors;
     qb_comp_add(&gfx_comp);
 }
 
