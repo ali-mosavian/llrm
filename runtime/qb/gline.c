@@ -121,7 +121,7 @@ static void line(int x1, int y1, int x2, int y2, byte color, int solid)
         GdFill fill;
 
         gd_fill_select(&fill, color, OP_SET);
-        fill.span(&fill, (unsigned)x, (unsigned)(last.x - first.x + 1), (unsigned)y);
+        fill.box(&fill, (unsigned)x, (unsigned)y, (unsigned)(last.x - first.x + 1), 1);
         return;
     }
     decision = 4 * minor - major;
@@ -151,7 +151,7 @@ static void line(int x1, int y1, int x2, int y2, byte color, int solid)
 void gfx_line_between(int color, int style, int how)
 {
     byte c = gfx_color(color);
-    int solid = style == SOLID, y;
+    int solid = style == SOLID;
 
     pattern = (unsigned)style;
     phase = 0;
@@ -162,8 +162,7 @@ void gfx_line_between(int color, int style, int how)
         if (!gfx_clip_box(&left, &top, &right, &bottom))
             return;
         gd_fill_select(&fill, c, OP_SET);
-        for (y = top; y <= bottom; y++)
-            fill.span(&fill, (unsigned)left, (unsigned)(right - left + 1), (unsigned)y);
+        fill.box(&fill, (unsigned)left, (unsigned)top, (unsigned)(right - left + 1), (unsigned)(bottom - top + 1));
     } else if (how == BOX) {
         /* the edges in QB's order: bottom, top, right, left */
         line(gfx_x1, gfx_y2, gfx_x2, gfx_y2, c, solid);

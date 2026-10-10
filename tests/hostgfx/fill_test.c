@@ -1,4 +1,4 @@
-/* The span fills of runtime/qb/dos/gfxdev.c against the pixel plot, on the host: for the 256-colour and the two CGA modes, every
+/* The box fills of runtime/qb/dos/gfxdev.c against the pixel plot, on the host: for the 256-colour and the two CGA modes, every
    operation, random colours, rows and spans over random video memory.  Exits 0, or 1 with the case that differed.  (The planar
    modes need a model of the graphics controller: the screens of tests/qbrt/gfx_*.bas, against BCOM45's, are theirs.) */
 #include <stdio.h>
@@ -35,9 +35,9 @@ int main(void)
 
     for (unsigned m = 0; m < 3; m++) {
         gd_set_mode(modes[m].mode);
-        for (unsigned round = 0; round < 20000; round++) {
+        for (unsigned round = 0; round < 6000; round++) {
             unsigned x = next() % modes[m].width, y = next() % 200, color = next() % modes[m].colors, op = next() % 4;
-            unsigned count = 1 + next() % (modes[m].width - x);
+            unsigned count = 1 + next() % (modes[m].width - x), rows = 1 + next() % (200 - y);
             static unsigned char before[0x10000], after[0x10000];
             unsigned char *ram = modes[m].mode == 0x13 ? vga_ram : cga_ram;
             unsigned size = modes[m].mode == 0x13 ? 64000 : 16384;
@@ -46,14 +46,15 @@ int main(void)
             for (unsigned i = 0; i < size; i++)
                 ram[i] = (unsigned char)next();
             memcpy(before, ram, size);
-            for (unsigned i = 0; i < count; i++)
-                gd_plot(x + i, y, color, op);
+            for (unsigned r = 0; r < rows; r++)
+                for (unsigned i = 0; i < count; i++)
+                    gd_plot(x + i, y + r, color, op);
             memcpy(after, ram, size);
             memcpy(ram, before, size);
             gd_fill_select(&fill, color, op);
-            fill.span(&fill, x, count, y);
+            fill.box(&fill, x, y, count, rows);
             if (memcmp(ram, after, size)) {
-                fprintf(stderr, "mode %u op %u color %u x %u count %u y %u\n", modes[m].mode, op, color, x, count, y);
+                fprintf(stderr, "mode %u op %u color %u x %u count %u y %u rows %u\n", modes[m].mode, op, color, x, count, y, rows);
                 return 1;
             }
         }

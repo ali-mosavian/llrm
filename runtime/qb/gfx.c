@@ -37,12 +37,10 @@ void gfx_set_background(byte color)
 
 void gfx_clear(void)
 {
-    unsigned y;
     GdFill fill;
 
     gd_fill_select(&fill, 0, OP_SET);
-    for (y = 0; y < gfx_current->height; y++)
-        fill.span(&fill, 0, gfx_current->width, y);
+    fill.box(&fill, 0, 0, gfx_current->width, gfx_current->height);
 }
 
 void gfx_screen(int mode)

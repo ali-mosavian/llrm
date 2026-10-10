@@ -74,7 +74,7 @@ void B_PAIN(short fill, short border)
         left = left < 0 ? 0 : left + 1;
         right = gfx_search(seed.x, (int)gfx_current->width - 1, seed.y, edge, edge, 1);
         right = right < 0 ? (int)gfx_current->width - 1 : right - 1;
-        painter.span(&painter, (unsigned)left, (unsigned)(right - left + 1), (unsigned)seed.y);
+        painter.box(&painter, (unsigned)left, (unsigned)seed.y, (unsigned)(right - left + 1), 1);
         seed_row(left, right, seed.y - 1, edge, paint);
         seed_row(left, right, seed.y + 1, edge, paint);
     }

@@ -18,11 +18,12 @@ void gd_cga_color(unsigned background, unsigned palette);
 void gd_palette_mix(unsigned index, unsigned red, unsigned green, unsigned blue);
 
 void gd_plot(unsigned x, unsigned y, unsigned color, unsigned operation);
-/* A fill of rows of pixels: the routine for the mode and the operation, chosen once with gd_fill_select and run on each
-   row of a primitive, `count` pixels from `x` of row `y`, already clipped to the screen. */
+/* A fill of a box of pixels: the routine for the mode and the operation, chosen once with gd_fill_select and run on a box
+   of `rows` rows of `count` pixels from `x` and row `y`, already clipped to the screen. */
 typedef struct GdFill {
-    void (*span)(const struct GdFill *fill, unsigned x, unsigned count, unsigned y);
-    unsigned color, pattern;
+    void (*box)(const struct GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows);
+    unsigned color;
+    u32 pattern;
 } GdFill;
 void gd_fill_select(GdFill *fill, unsigned color, unsigned operation);
 unsigned gd_read(unsigned x, unsigned y);
