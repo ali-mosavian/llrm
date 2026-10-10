@@ -1048,14 +1048,67 @@ fn grows_within_limits(
 ) -> bool {
     let callee_size = semantic_count(callee);
     let base = if caller.base > 0 { caller.base } else { own };
-    let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
     let after = own + callee_size;
     // A body moved into a caller already past the knee is the merge that costs
     // most: that caller does not grow by one.
     if moved && after >= callee_size && after > ALLOCATION_KNEE && own > ALLOCATION_KNEE {
         return false;
     }
-    !(after >= callee_size && after > LARGE_FUNCTION && after > limit)
+    within_function_limits(own, base, callee_size, LARGE_FUNCTION)
+}
+
+/// gcc's `caller_growth_limits` (ipa-inline.cc L170-190): a function of `own`
+/// operations grown by a body of `callee_size`, whose size before any inlining
+/// was `base`, stays within the larger of `large` operations and `base`'s (or
+/// the callee's) growth by `large-function-growth` (params.opt:369-370, 100%).
+fn within_function_limits(
+    own: i64,
+    base: i64,
+    callee_size: i64,
+    large: i64,
+) -> bool {
+    let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
+    let after = own + callee_size;
+    !(after >= callee_size && after > large && after > limit)
+}
+
+/// gcc's `large-function-insns` (params.opt:373-374): where its own limit on a
+/// function begins, against `LARGE_FUNCTION`, the knee of our allocator.
+const GCC_LARGE_FUNCTION: i64 = 2700;
+/// gcc's `inline-unit-growth` (params.opt:209-210), percent.
+const UNIT_GROWTH: i64 = 40;
+/// gcc's `large-unit-insns` (params.opt:385-386): a unit smaller than this is
+/// allowed to grow as if it had this many.
+const LARGE_UNIT: i64 = 10_000;
+
+/// A unit's operations as inlining began and as it stands: gcc's
+/// `compute_max_insns` (ipa-inline.cc L1801-1809), the bound the inline heap's
+/// loop holds the unit's growth to (L2210).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnitSize {
+    pub initial: i64,
+    pub now: i64,
+}
+
+impl UnitSize {
+    /// The unit `modules` make.
+    pub fn of(modules: &[Module]) -> Self {
+        let size = modules
+            .iter()
+            .flat_map(|module| module.functions())
+            .filter(|(_, _, function)| !function.is_declaration())
+            .map(|(_, _, function)| semantic_count(function))
+            .sum();
+        Self { initial: size, now: size }
+    }
+
+    /// Whether the unit may grow by `growth` operations.
+    pub fn admits(
+        &self,
+        growth: i64,
+    ) -> bool {
+        self.now + growth <= self.initial.max(LARGE_UNIT) * (100 + UNIT_GROWTH) / 100
+    }
 }
 
 /// Whether `operand` is an object the program owns: a variable, a frame object,
@@ -1103,8 +1156,9 @@ const RECURSIVE_PROBABILITY: i64 = 10;
 /// breadth first and each copy's own calls in turn, while a call is likelier
 /// than `RECURSIVE_PROBABILITY` percent of the function's calls, is no deeper
 /// than `RECURSIVE_DEPTH`, and the function stays under `RECURSIVE_SIZE`; the
-/// copies made. A function that allocates stack is left alone: each level would
-/// add its frame.
+/// copies made, and under gcc's function and unit growth limits. A function
+/// that allocates stack is left alone: each level would add its frame, which
+/// `large-stack-frame-growth` (params.opt:381-382) bounds in gcc.
 pub fn inlined_into_itself(
     id: GlobalId,
     function: &mut Function,
@@ -1112,6 +1166,7 @@ pub fn inlined_into_itself(
     budget: i64,
     frequencies: &dyn Fn(&Context, &Function) -> std::collections::BTreeMap<i64, i64>,
     context: &mut Context,
+    unit: &mut UnitSize,
 ) -> usize {
     let own = |function: &Function, context: &Context| -> Vec<InstId> {
         function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst) == Some(id)).collect()
@@ -1143,6 +1198,14 @@ pub fn inlined_into_itself(
         if semantic_count(function) + semantic_count(original) >= RECURSIVE_SIZE {
             break;
         }
+        // The limits every inline is held to (`can_inline_edge_by_limits_p`,
+        // forced for a recursive copy): the function's growth, as gcc's
+        // `caller_growth_limits` and the unit's.
+        let copy = semantic_count(original);
+        if !within_function_limits(semantic_count(function), copy, copy, GCC_LARGE_FUNCTION) || !unit.admits(copy - 1) {
+            break;
+        }
+        unit.now += copy - 1;
         let at = depth.get(&call).copied().unwrap_or(1);
         let before: BTreeSet<InstId> = own(function, context).into_iter().collect();
         splice(context, function, call, original);
