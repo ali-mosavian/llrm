@@ -6138,7 +6138,7 @@ mod tests {
         let naming = |at: i64, defined: &BTreeSet<u32>, used: &BTreeSet<u32>| {
             let cell = |values: &BTreeSet<u32>| {
                 let home = homes[(*values.iter().next().expect("a home") - first) as usize];
-                Loc::Mem(mem(Addr::new(Space::Frame, home), 2, Register::BP, home, 1))
+                Loc::Mem(mem(Addr::new(Space::Frame, home), 2, RegId::BP, home, 1))
             };
             let what = if defined.is_empty() {
                 semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell(used)])
