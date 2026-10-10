@@ -197,13 +197,13 @@ def differential_batch(
             for at, (name, job) in enumerate(pairs)
         }
 
-    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0], objects=pair[2:], screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n))) for n, pair in objects.items()])
+    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0], objects=extras(pair[2:], False), screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n))) for n, pair in objects.items()])
     candidate = session(
         [
             (
                 n,
                 dosbatch.Job(
-                    names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive, objects=pair[2:], screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n)
+                    names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive, objects=extras(pair[2:], True), screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n)
                 ),
             )
             for n, pair in objects.items()
@@ -241,22 +241,36 @@ def frontend_flags(source: Path) -> list[str]:
     return []
 
 
-def linked_objects(source: Path, work: Path) -> tuple[Path, ...]:
-    """The objects a source's `' link:` line names, built here: a .nib library by llrm-nib."""
+def linked_objects(source: Path, work: Path, runtime: str = "qb45") -> tuple[Path, ...]:
+    """The objects a source's `' link:` line names, built here: a .nib library by llrm-nib, for the runtime
+    (`qb45` or `llrm`) the program is built for."""
     made = []
     for line in source.read_text(encoding="latin-1").splitlines()[:5]:
         if not line.startswith("' link:"):
             continue
         for name in line.split()[2:]:
             library = source.parent / name
-            obj = work / f"{library.stem}.obj"
+            obj = work / f"{library.stem}.{runtime}.obj"
             done = subprocess.run(
-                [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2"], capture_output=True, text=True
+                [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2", f"--basic-runtime={runtime}"],
+                capture_output=True,
+                text=True,
             )
             if done.returncode != 0:
                 raise dosbatch.BuildError(f"{name}: {(done.stderr or done.stdout).strip()[-600:]}")
             made.append(obj)
     return tuple(made)
+
+
+def linked_pairs(source: Path, work: Path) -> tuple[tuple[Path, Path], ...]:
+    """The libraries a source names, each built for BCOM45 and for the llrm runtime: (qb45, llrm) objects."""
+    return tuple(zip(linked_objects(source, work, "qb45"), linked_objects(source, work, "llrm")))
+
+
+def extras(items: tuple, candidate: bool) -> tuple[Path, ...]:
+    """The objects a build links besides its program's: an item is one object, or a (reference, candidate)
+    pair for a library built for each runtime."""
+    return tuple((one[candidate] if isinstance(one, tuple) else one) for one in items)
 
 
 def compile_basic(source: Path, obj: Path, runtime: str) -> str | None:

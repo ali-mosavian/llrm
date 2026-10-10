@@ -30,16 +30,14 @@ def results(tmp_path_factory):
         for runtime, obj in zip(("qb45", "llrm"), pair):
             error = qbruntime.compile_basic(source, obj, runtime)
             assert error is None, error
-        objects[name] = (*pair, *qbruntime.linked_objects(source, work))
+        objects[name] = (*pair, *qbruntime.linked_pairs(source, work))
     archive, _ = qbruntime.build(work / "archive")
     return qbruntime.differential_batch(objects, archive, work / "differential")
 
 
 # Programs that wait for something outside the runtime.  Strict: one that starts
 # to pass must leave this table.
-WAITING = {
-    "scores": "the Nib adapter calls B$SCPY with pascal16, not llrm's convention",
-}
+WAITING: dict[str, str] = {}
 
 
 def case(name: str):
@@ -70,7 +68,7 @@ def demos(tmp_path_factory):
         for runtime, obj in zip(("qb45", "llrm"), pair):
             error = qbruntime.compile_basic(source, obj, runtime)
             assert error is None, error
-        objects[name] = (*pair, *qbruntime.linked_objects(source, work))
+        objects[name] = (*pair, *qbruntime.linked_pairs(source, work))
     archive, _ = qbruntime.build(work / "archive")
     return qbruntime.differential_batch(objects, archive, work / "differential")
 
@@ -124,7 +122,7 @@ def test_every_runtime_entry_is_called_by_a_probe_under_llrm(tmp_path_factory):
         obj = work / f"{name}.obj"
         assert qbruntime.compile_basic(source, obj, "llrm") is None
         called |= symbols(obj, 0x8C)
-        for library in qbruntime.linked_objects(source, work):
+        for library in qbruntime.linked_objects(source, work, "llrm"):
             called |= symbols(library, 0x8C)
     assert exported
     assert sorted(exported - called) == []

@@ -164,18 +164,26 @@ def built_pairs(sources: dict[str, Path], work: Path) -> dict[str, tuple[Path, P
         for runtime, obj in zip(("qb45", "llrm"), pair):
             error = qbruntime.compile_basic(source, obj, runtime)
             assert error is None, error
-        objects[name] = (*pair, *qbruntime.linked_objects(source, work))
+        objects[name] = (*pair, *qbruntime.linked_pairs(source, work))
     archive, _ = qbruntime.build(work / "archive")
     exes: dict[str, list[Path | None]] = {name: [None, None] for name in objects}
     for tag, runtime in (("ref", "bcom45"), ("cand", "llrmqb")):
         jobs = []
-        for at, (reference, candidate, *more) in enumerate(objects.values()):
+        for at, (reference, candidate, *pairs) in enumerate(objects.values()):
             stem = f"J{at:03d}"
             if tag == "ref":
-                jobs.append(dosbatch.Job(stem, "obj", reference, objects=tuple(more), budget_ms=200))
+                jobs.append(dosbatch.Job(stem, "obj", reference, objects=qbruntime.extras(tuple(pairs), False), budget_ms=200))
             else:
                 jobs.append(
-                    dosbatch.Job(stem, "obj", candidate, runtime=runtime, runtime_file=archive, objects=tuple(more), budget_ms=200)
+                    dosbatch.Job(
+                        stem,
+                        "obj",
+                        candidate,
+                        runtime=runtime,
+                        runtime_file=archive,
+                        objects=qbruntime.extras(tuple(pairs), True),
+                        budget_ms=200,
+                    )
                 )
         run = work / f"link_{tag}"
         dosbatch.run(jobs, run)
