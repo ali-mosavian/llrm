@@ -165,44 +165,35 @@ static unsigned equal_to(Video *at, unsigned color)
 
 static int planar_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match)
 {
-    int step = last >= x ? 1 : -1;
+    int back = last < x;
+    unsigned first_byte = (unsigned)x >> 3, last_byte = (unsigned)last >> 3;
+    FillScan scan;
 
+    scan.at = byte_of(x, y);
+    scan.count = (back ? first_byte - last_byte : last_byte - first_byte) + 1;
+    scan.c1 = c1;
+    scan.c2 = c2;
+    scan.flags = (match ? 1 : 0) | (back ? 2 : 0);
+    scan.first = back ? 0xFF << (7 - (x & 7)) & 0xFF : 0xFF >> (x & 7);
+    scan.last = back ? 0xFF >> (last & 7) : 0xFF << (7 - (last & 7)) & 0xFF;
     controller(GC_DONT_CARE, 0x0F);
     controller(GC_MODE, READ_MODE_1 | WRITE_MODE_2);
-    for (;;) {
-        int base = x & ~7;
-        int last_here = (last & ~7) == base;
-        unsigned in = step > 0 ? 0xFF >> (x & 7) : 0xFF << (7 - (x & 7)) & 0xFF;
-        Video *at = byte_of(x, y);
-        unsigned found = equal_to(at, c1);
-
-        if (c2 != c1)
-            found |= equal_to(at, c2);
-        if (!match)
-            found = ~found;
-        if (last_here)
-            in &= step > 0 ? 0xFF << (7 - (last & 7)) & 0xFF : 0xFF >> (last & 7);
-        found &= in;
-        if (found) {
-            int bit = 0;
-
-            if (step > 0) {
-                while (!(found << bit & 0x80))
-                    bit++;
-            } else {
-                while (!(found >> bit & 1))
-                    bit++;
-                bit = 7 - bit;
-            }
-            controller(GC_MODE, WRITE_MODE_2);
-            return base + bit;
-        }
-        if (last_here)
-            break;
-        x = step > 0 ? base + 8 : base - 1;
-    }
+    dev_scan_planar(&scan);
     controller(GC_MODE, WRITE_MODE_2);
-    return -1;
+    if (scan.found < 0)
+        return -1;
+    {
+        unsigned bit = 0;
+
+        if (back) {
+            while (!(scan.hits >> bit & 1))
+                bit++;
+            return (int)((first_byte - (unsigned)scan.found) * 8 + 7 - bit);
+        }
+        while (!(scan.hits << bit & 0x80))
+            bit++;
+        return (int)((first_byte + (unsigned)scan.found) * 8 + bit);
+    }
 }
 
 static void planar_move_rows(unsigned to, unsigned from, unsigned count)
@@ -276,16 +267,15 @@ static unsigned linear_read(unsigned x, unsigned y)
 static int linear_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match)
 {
     int step = last >= x ? 1 : -1;
-    Video *at = pixel_at(x, y);
+    FillScan scan;
 
-    for (;; x += step, at += step) {
-        int is = *at == c1 || *at == c2;
-
-        if (is == match)
-            return x;
-        if (x == last)
-            return -1;
-    }
+    scan.at = pixel_at(x, y);
+    scan.count = (unsigned)(step > 0 ? last - x : x - last) + 1;
+    scan.c1 = c1;
+    scan.c2 = c2;
+    scan.flags = (match ? 1 : 0) | (step < 0 ? 2 : 0);
+    dev_scan_linear(&scan);
+    return scan.found < 0 ? -1 : x + step * scan.found;
 }
 
 static void linear_move_rows(unsigned to, unsigned from, unsigned count)
@@ -374,32 +364,40 @@ static unsigned packed_read(unsigned x, unsigned y, unsigned bits)
     return *(packed_row(y) + (x * bits >> 3)) >> packed_shift(x, bits) & ((1u << bits) - 1);
 }
 
+/* The CGA modes' scan, a byte of pixels at a time (B$FSCC): the masks of the pixels of the first and the last byte that are in range
+   go to the kernel, which gives the first byte with a wanted pixel in range and which pixels of it, and the first of those, from
+   the left going right and from the right going left, is the pixel. */
 static int packed_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match, unsigned bits)
 {
-    int step = last >= x ? 1 : -1;
-    Video *row = packed_row(y);
-    unsigned mask = (1u << bits) - 1, per = 8 / bits;
-    unsigned all1 = (c1 & mask) * (0xFF / mask), all2 = (c2 & mask) * (0xFF / mask);
+    int back = last < x;
+    unsigned per = 8 / bits, all = bits == 2 ? 0x55 : 0xFF, mask = (1u << bits) - 1;
+    unsigned first_byte = (unsigned)x * bits >> 3, last_byte = (unsigned)last * bits >> 3;
+    unsigned k0 = (unsigned)x % per, kl = (unsigned)last % per, k, base;
+    FillScan scan;
 
-    for (;; x += step) {
-        unsigned from = (unsigned)x * bits, byte = row[from >> 3];
-        unsigned shift = 8 - bits - (from & 7), color = byte >> shift & mask;
-
-        if ((color == c1 || color == c2) == match)
-            return x;
-        if (x == last)
-            return -1;
-        if (!match && (byte == all1 || byte == all2)) {
-            /* every pixel of this byte is one of the two: none of the rest of it is the one wanted */
-            int rest = step > 0 ? (int)(shift / bits) : (int)(per - 1 - shift / bits), left = last > x ? last - x : x - last;
-
-            if (rest > left)
-                rest = left;
-            x += step * rest;
-            if (x == last)
-                return -1;
-        }
+    scan.at = packed_row(y) + first_byte;
+    scan.count = (back ? first_byte - last_byte : last_byte - first_byte) + 1;
+    scan.c1 = (c1 & mask) * (0xFF / mask);
+    scan.c2 = (c2 & mask) * (0xFF / mask);
+    scan.flags = (match ? 1 : 0) | (back ? 2 : 0) | (bits == 2 ? 4 : 0);
+    scan.first = back ? all & (0xFF << ((per - 1 - k0) * bits)) & 0xFF : all & (0xFF >> (k0 * bits));
+    scan.last = back ? all & (0xFF >> (kl * bits)) : all & (0xFF << ((per - 1 - kl) * bits)) & 0xFF;
+    scan.middle = all;
+    dev_scan_packed(&scan);
+    if (scan.found < 0)
+        return -1;
+    if (back) {
+        base = (first_byte - (unsigned)scan.found) * per;
+        for (k = per; k--;)
+            if (scan.hits & 1u << ((per - 1 - k) * bits))
+                return (int)(base + k);
+    } else {
+        base = (first_byte + (unsigned)scan.found) * per;
+        for (k = 0; k < per; k++)
+            if (scan.hits & 1u << ((per - 1 - k) * bits))
+                return (int)(base + k);
     }
+    return -1;
 }
 
 static void packed_move_rows(unsigned to, unsigned from, unsigned count)

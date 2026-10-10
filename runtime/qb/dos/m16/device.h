@@ -46,6 +46,17 @@ typedef struct FillXfer {
     int step;
     unsigned bank;
 } FillXfer;
+/* A scan for the first pixel (or planar byte of pixels) that is of colour `c1` or `c2` (`flags` bit 0) or of neither (bit 0 clear), from
+   `at` forwards or, `flags` bit 1, backwards, over `count` of them (fill.asm).  Planar: `first` and `last` are the masks of the pixels
+   to take in the first and last byte, `middle` in the others, and for CGA (`flags` bit 2 for 2-bit pixels) `c1` and `c2` are the byte
+   with the colour in every pixel and the masks have a bit for each pixel (its low bit if 2).  Out: `found` the index of the one (a byte, and
+   `hits` the pixels of it), -1 if none. */
+typedef struct FillScan {
+    void QB_FAR *at;
+    unsigned count, c1, c2, flags, first, last, middle;
+    int found;
+    unsigned hits;
+} FillScan;
 
 extern void dev_int10(Regs *regs);
 /* Where protected mode has to ask for a real-mode result, the interrupt run in real mode; here it is the same. */
@@ -65,6 +76,9 @@ extern void dev_line_linear(FillLine *line);
 extern void dev_line_packed(FillLine *line);
 extern void dev_line_planar(FillLine *line);
 extern void dev_get_rows(FillXfer *xfer);
+extern void dev_scan_linear(FillScan *scan);
+extern void dev_scan_planar(FillScan *scan);
+extern void dev_scan_packed(FillScan *scan);
 extern void dev_put_select(unsigned how);
 extern void dev_put_rows(FillXfer *xfer);
 extern void dev_put_planar(FillXfer *xfer);
@@ -87,6 +101,9 @@ extern void dev_sincos(const double *angle, double *sine, double *cosine);
 #pragma aux dev_line_packed "B$FLIC"
 #pragma aux dev_line_planar "B$FLIP"
 #pragma aux dev_get_rows "B$FGET"
+#pragma aux dev_scan_linear "B$FSCL"
+#pragma aux dev_scan_planar "B$FSCP"
+#pragma aux dev_scan_packed "B$FSCC"
 #pragma aux dev_put_select "B$FPSEL"
 #pragma aux dev_put_rows "B$FPUC"
 #pragma aux dev_put_planar "B$FPUP"

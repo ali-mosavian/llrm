@@ -107,6 +107,53 @@ void dev_put_select(unsigned how) { (void)how; }
 void dev_put_rows(FillXfer *xfer) { (void)xfer; }
 void dev_put_planar(FillXfer *xfer) { (void)xfer; }
 
+/* B$FSCL in C; the planar scan is the controller's and not modelled. */
+void dev_scan_linear(FillScan *scan)
+{
+    unsigned char *at = scan->at;
+    int step = scan->flags & 2 ? -1 : 1;
+
+    scan->found = -1;
+    for (unsigned i = 0; i < scan->count; i++, at += step) {
+        int is = *at == scan->c1 || *at == scan->c2;
+
+        if (is == (int)(scan->flags & 1)) {
+            scan->found = (int)i;
+            return;
+        }
+    }
+}
+void dev_scan_planar(FillScan *scan) { scan->found = -1; }
+
+/* B$FSCC in C, a pixel at a time: the bytes of `count` from `at`, the slots of a byte masked by first, middle and last. */
+void dev_scan_packed(FillScan *scan)
+{
+    unsigned char *at = scan->at;
+    unsigned bits = scan->flags & 4 ? 2 : 1, per = 8 / bits, pix = (1u << bits) - 1;
+    int step = scan->flags & 2 ? -1 : 1;
+
+    scan->found = -1;
+    scan->hits = 0;
+    for (unsigned i = 0; i < scan->count; i++, at += step) {
+        unsigned mask = i == 0 ? scan->first : scan->middle, hits = 0;
+
+        if (i == scan->count - 1)
+            mask &= scan->last;
+        for (unsigned k = 0; k < per; k++) {
+            unsigned slot = 1u << ((per - 1 - k) * bits), v = *at >> ((per - 1 - k) * bits) & pix;
+            int is = v == (scan->c1 & pix) || v == (scan->c2 & pix);
+
+            if ((mask & slot) && is == (int)(scan->flags & 1))
+                hits |= slot;
+        }
+        if (hits) {
+            scan->found = (int)i;
+            scan->hits = hits;
+            return;
+        }
+    }
+}
+
 /* B$FGET in C. */
 void dev_get_rows(FillXfer *xfer)
 {

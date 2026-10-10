@@ -221,6 +221,32 @@ int main(void)
                             return 0;
                         }
             }
+            /* and a search along a row of few colours, either way, both ways of matching, against a pixel at a time */
+            {
+                unsigned sy = next() % REGION_H, i, fewer = colors[m] < 3 ? colors[m] : 3;
+                unsigned c1 = next() % fewer, c2 = next() % fewer;
+                int sx = next() % REGION_W, sl = next() % REGION_W, want = -1, got, px, match = next() & 1, step = sl >= sx ? 1 : -1;
+
+                if (next() % 3 == 0)
+                    c2 = c1;
+                for (i = 0; i < REGION_W; i++)
+                    gd_plot(i, sy, next() % 4 ? c1 : next() % fewer, 0);
+                for (px = sx;; px += step) {
+                    unsigned pc = gd_read(px, sy);
+
+                    if ((pc == c1 || pc == c2) == match) {
+                        want = px;
+                        break;
+                    }
+                    if (px == sl)
+                        break;
+                }
+                got = gd_search(sx, sl, sy, c1, c2, match);
+                if (got != want) {
+                    report((long)modes[m] * 1000000L + (long)(sx + sy * 100) + 55000L + (match ? 1000L : 0));
+                    return 0;
+                }
+            }
             /* and a few dots of the same fill: the pixel as the operation says, its neighbours as they were */
             for (x = 0; x < 6; x++) {
                 unsigned dx = 1 + next() % (REGION_W - 2), dy = next() % REGION_H;

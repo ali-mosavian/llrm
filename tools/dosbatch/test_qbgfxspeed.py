@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent / "gfxbench"))
 import qbruntime  # noqa: E402
 
 LIMITS = {
-    1: {"box-filled": 1000, "paint": 1800, "print-scroll": 20000, "line-long": 700, "circle": 700, "get-put": 2500},
+    1: {"box-filled": 1000, "paint": 900, "print-scroll": 20000, "line-long": 700, "circle": 700, "get-put": 2500},
     13: {"box-filled": 600, "line-long": 450, "get-put": 4000},
 }
 

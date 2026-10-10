@@ -22,6 +22,9 @@
                 public  B$FLIC
                 public  B$FLIP
                 public  B$FGET
+                public  B$FSCL
+                public  B$FSCP
+                public  B$FSCC
                 public  B$FPSEL
                 public  B$FPUC
                 public  B$FPUP
@@ -64,6 +67,19 @@ FillXfer        struc
                 step            dword   ?
                 bank            dword   ?
 FillXfer        ends
+
+FillScan        struc
+                at              dword   ?
+                count           dword   ?
+                c1              dword   ?
+                c2              dword   ?
+                flags           dword   ?
+                first           dword   ?
+                last            dword   ?
+                middle          dword   ?
+                found           dword   ?
+                hits            dword   ?
+FillScan        ends
 
 .code
 ;;::::::::::::::
@@ -886,6 +902,326 @@ B$FPUP          endp
 put_mids        dw      1788h, 1720h, 1708h, 1730h, 1788h        ;; mov, and, or, xor [edi], dl; PRESET is a mov of the inverted
 put_edges       dd      put_pset, put_and, put_or, put_xor, put_preset
 put_edge_v      dd      0
+
+;;::::::::::::::
+;; B$FSCL (eax: ptr FillScan): the 256-colour mode's scan, by the string instructions: `repne scasb` finds a colour, `repe scasb` skips one
+B$FSCL          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    esi
+                push    edi
+                push    ebp
+                push    eax
+                mov     ebx, eax
+                mov     edi, [ebx].FillScan.at
+                mov     ebp, [ebx].FillScan.count
+                mov     esi, [ebx].FillScan.flags
+                mov     al, byte ptr [ebx].FillScan.c1
+                mov     ah, byte ptr [ebx].FillScan.c2
+                mov     edx, edi                ;; the start
+                mov     ebx, 1                  ;; the way a pixel is stepped
+                cld
+                test    esi, 2
+                jz      @F
+                std
+                mov     ebx, -1
+@@:
+                mov     ecx, ebp
+                test    esi, 1
+                jnz     @@match
+                mov     esi, ebx
+                neg     esi                     ;; back to the pixel just tested
+@@skip:                                         ;; the first pixel that is neither colour, the colour skipped and the other swapped
+                repe    scasb
+                je      @@none
+                cmp     [edi + esi], ah
+                jne     @@hit0
+                xchg    al, ah
+                jmp     @@skip
+@@hit0:
+                mov     eax, ebp
+                sub     eax, ecx
+                dec     eax
+                jmp     @@done
+@@match:                                        ;; the first pixel of c1 or of c2
+                repne   scasb
+                jne     @@no1
+                mov     esi, ebp
+                sub     esi, ecx
+                dec     esi                     ;; where c1 is
+                cmp     al, ah
+                je      @@got1
+                test    esi, esi
+                jz      @@got1
+                mov     edi, edx
+                mov     ecx, esi
+                mov     al, ah
+                repne   scasb
+                jne     @@got1
+                mov     eax, esi
+                sub     eax, ecx
+                dec     eax
+                jmp     @@done
+@@got1:
+                mov     eax, esi
+                jmp     @@done
+@@no1:
+                cmp     al, ah
+                je      @@none
+                mov     edi, edx
+                mov     ecx, ebp
+                mov     al, ah
+                repne   scasb
+                jne     @@none
+                mov     eax, ebp
+                sub     eax, ecx
+                dec     eax
+                jmp     @@done
+@@none:
+                mov     eax, -1
+@@done:
+                cld
+                pop     ebx
+                mov     [ebx].FillScan.found, eax
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FSCL          endp
+
+;;::::::::::::::
+;; B$FSCP (eax: ptr FillScan): the planar modes' scan, a byte of eight pixels at a time by the controller's colour compare (read mode 1,
+;; set up by the caller): one `out` and one read tell which of the eight are of a colour
+B$FSCP          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    esi
+                push    edi
+                push    ebp
+                mov     ebx, eax
+                mov     edi, [ebx].FillScan.at
+                mov     cl, byte ptr [ebx].FillScan.count
+                mov     esi, [ebx].FillScan.c1
+                shl     esi, 8
+                or      esi, 2                  ;; the colour compare register, then the colour
+                mov     ebp, [ebx].FillScan.c2
+                shl     ebp, 8
+                or      ebp, 2
+                mov     edx, 3CEh
+@@byte:
+                mov     eax, esi
+                out     dx, ax
+                mov     ch, [edi]
+                cmp     esi, ebp
+                je      @F
+                mov     eax, ebp
+                out     dx, ax
+                or      ch, [edi]
+@@:
+                test    byte ptr [ebx].FillScan.flags, 1
+                jnz     @F
+                not     ch
+@@:
+                and     ch, byte ptr [ebx].FillScan.first
+                mov     byte ptr [ebx].FillScan.first, 0FFh
+                cmp     cl, 1
+                jne     @F
+                and     ch, byte ptr [ebx].FillScan.last
+@@:
+                test    ch, ch
+                jnz     @@hit
+                test    byte ptr [ebx].FillScan.flags, 2
+                jnz     @@back
+                inc     edi
+                jmp     @@next
+@@back:
+                dec     edi
+@@next:
+                dec     cl
+                jnz     @@byte
+                mov     [ebx].FillScan.found, -1
+                mov     [ebx].FillScan.hits, 0
+                jmp     @@done
+@@hit:
+                movzx   eax, cl
+                neg     eax
+                add     eax, [ebx].FillScan.count
+                mov     [ebx].FillScan.found, eax
+                movzx   eax, ch
+                mov     [ebx].FillScan.hits, eax
+@@done:
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FSCP          endp
+
+
+;; the pixels of the byte at [edi] that are wanted, a bit for each slot, under the mask `maskop`; ZF set if none
+BYTEHIT         macro   maskop
+                local   one, both, keep
+                mov     al, [edi]
+                mov     ah, al
+                xor     al, dl
+                xor     ah, dh
+                test    esi, 4
+                jz      one
+                mov     ch, al
+                shr     ch, 1
+                or      al, ch
+                not     al
+                mov     ch, ah
+                shr     ch, 1
+                or      ah, ch
+                not     ah
+                jmp     both
+one:
+                not     al
+                not     ah
+both:
+                or      al, ah
+                test    esi, 1
+                jnz     keep
+                not     al
+keep:
+                and     al, maskop
+                endm
+
+;;::::::::::::::
+;; B$FSCC (eax: ptr FillScan): the CGA modes' scan, a byte at a time: the pixels of a byte equal to a colour show as bits of the byte xor the
+;; colour's pattern.  The first and last byte are taken under their masks; the ones between, for one colour, by a short loop that
+;; only says whether some pixel of the byte is wanted, and the byte it stops at is taken as the others are
+B$FSCC          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    esi
+                push    edi
+                push    ebp
+                mov     ebx, eax
+                mov     edi, [ebx].FillScan.at
+                mov     cl, byte ptr [ebx].FillScan.count
+                mov     dl, byte ptr [ebx].FillScan.c1
+                mov     dh, byte ptr [ebx].FillScan.c2
+                mov     esi, [ebx].FillScan.flags
+                mov     ebp, 1
+                test    esi, 2
+                jz      @F
+                mov     ebp, -1
+@@:
+                cmp     cl, 1
+                jne     @@several
+                BYTEHIT byte ptr [ebx].FillScan.first
+                and     al, byte ptr [ebx].FillScan.last
+                jnz     @@hit
+                jmp     @@none
+@@several:
+                BYTEHIT byte ptr [ebx].FillScan.first
+                jnz     @@hit
+                add     edi, ebp
+                dec     cl
+                cmp     cl, 1
+                je      @@lastbyte
+                dec     cl                      ;; the bytes between
+                cmp     dl, dh
+                jne     @@twocolours
+                test    esi, 4
+                jz      @@onebit
+                test    esi, 1
+                jz      @@skipequal2
+@@findequal2:                                   ;; 2-bit pixels, a pixel of the colour: some pixel of the byte xor the pattern is 00
+                mov     al, [edi]
+                xor     al, dl
+                mov     ch, al
+                shr     ch, 1
+                or      al, ch
+                and     al, 55h
+                cmp     al, 55h
+                jne     @@mid
+                add     edi, ebp
+                dec     cl
+                jnz     @@findequal2
+                jmp     @@lastbyte
+@@skipequal2:                                   ;; 2-bit pixels, a pixel that is not: some pixel of the byte xor the pattern is not 00
+                mov     al, [edi]
+                xor     al, dl
+                mov     ch, al
+                shr     ch, 1
+                or      al, ch
+                test    al, 55h
+                jnz     @@mid
+                add     edi, ebp
+                dec     cl
+                jnz     @@skipequal2
+                jmp     @@lastbyte
+@@onebit:
+                test    esi, 1
+                jz      @@skipequal1
+@@findequal1:
+                mov     al, [edi]
+                xor     al, dl
+                cmp     al, 0FFh
+                jne     @@mid
+                add     edi, ebp
+                dec     cl
+                jnz     @@findequal1
+                jmp     @@lastbyte
+@@skipequal1:
+                mov     al, [edi]
+                xor     al, dl
+                jnz     @@mid
+                add     edi, ebp
+                dec     cl
+                jnz     @@skipequal1
+                jmp     @@lastbyte
+@@twocolours:
+                BYTEHIT byte ptr [ebx].FillScan.middle
+                jnz     @@hit
+                add     edi, ebp
+                dec     cl
+                jnz     @@twocolours
+                jmp     @@lastbyte
+@@mid:
+                BYTEHIT byte ptr [ebx].FillScan.middle
+                jnz     @@hit
+                add     edi, ebp                ;; (the loops say a wanted pixel is here)
+                dec     cl
+                jmp     @@lastbyte
+@@lastbyte:
+                BYTEHIT byte ptr [ebx].FillScan.last
+                jnz     @@hit
+@@none:
+                mov     [ebx].FillScan.found, -1
+                mov     [ebx].FillScan.hits, 0
+                jmp     @@done
+@@hit:
+                movzx   eax, al
+                mov     [ebx].FillScan.hits, eax
+                mov     eax, edi
+                sub     eax, [ebx].FillScan.at
+                imul    eax, ebp
+                mov     [ebx].FillScan.found, eax
+@@done:
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FSCC          endp
+
 set_pattern     dd      0
 set_flag        db      0
 dword_ops       dw      07C7h, 2781h, 0F81h, 3781h
