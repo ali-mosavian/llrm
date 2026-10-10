@@ -1471,7 +1471,7 @@ pub fn _instruction(
         };
         let segmented = what.sources.len() == if counted { 5 } else { 4 };
         return Ok(vec![match what.sources.get(what.sources.len().wrapping_sub(2)).filter(|_| segmented) {
-            Some(Loc::Reg(one)) if one.register != Register::DS => {
+            Some(Loc::Reg(one)) if !crate::backend::registerinfo::is_data_segment(one.register) => {
                 format!(
                     "{rep}movs {size} ptr es:[di], {size} ptr {}:[si]",
                     format!("{:?}", one.register).to_lowercase()
@@ -1591,7 +1591,7 @@ pub fn _code(parts: &[InlinePart]) -> Vec<String> {
 pub fn _segment(r#where: &Loc) -> bool {
     matches!(
         r#where,
-        Loc::Reg(ir::Reg { register: Register::ES | Register::DS | Register::SS | Register::FS | Register::GS, .. })
+        Loc::Reg(one) if crate::backend::registerinfo::is_segment(one.register) && !crate::backend::registerinfo::is_code_segment(one.register)
     )
 }
 

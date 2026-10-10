@@ -90,7 +90,8 @@ pub fn _static_frame(
     size: i64,
 ) -> lir::LirBody {
     let moved = |addr: &Addr| -> Addr {
-        let segment = if addr.segment == Register::SS { Register::None } else { addr.segment };
+        let segment =
+            if crate::backend::registerinfo::is_stack_segment(addr.segment) { Register::None } else { addr.segment };
         Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, segment, ..*addr }
     };
     let variables = body

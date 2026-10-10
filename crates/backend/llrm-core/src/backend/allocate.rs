@@ -19,6 +19,7 @@ use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
 use crate::backend::liveunion::{LiveUnion, Overlaps};
+use crate::backend::registerinfo::segments;
 use crate::backend::target::{self, Segments};
 use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -788,7 +789,7 @@ pub fn explicit_selectors(
                 if let Loc::Mem(cell) = place {
                     if let Some(selector) = cell.selector {
                         if confined.get(&selector.value) != Some(&selectors)
-                            || !target::SEGMENTS.contains(pinned.get(&selector.value).unwrap_or(&Register::ES))
+                            || !target::SEGMENTS.contains(pinned.get(&selector.value).unwrap_or(&segments::far()))
                         {
                             conflicted.insert(selector.value);
                         }
@@ -807,7 +808,7 @@ pub fn explicit_selectors(
                 let addr = cell.addr.expect("a far cell has an address");
                 return Loc::Mem(Mem {
                     selector: None,
-                    addr: Some(Addr { segment: Register::ES, ..addr }),
+                    addr: Some(Addr { segment: segments::far(), ..addr }),
                     ..cell.clone()
                 });
             }
@@ -842,7 +843,7 @@ pub fn explicit_selectors(
                 ..what.clone()
             };
             let requires: IndexSet<(Held, Register)> =
-                one.requires.iter().copied().chain(named.iter().map(|held| (*held, Register::ES))).collect();
+                one.requires.iter().copied().chain(named.iter().map(|held| (*held, segments::far()))).collect();
             let uses: IndexSet<u32> = one.uses.iter().copied().chain(named.iter().map(|held| held.value)).collect();
             let mut made = (**one).clone();
             made.what = Some(what);

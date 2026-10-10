@@ -90,6 +90,67 @@ pub fn stack_root() -> RegId {
     info().stack
 }
 
+/// The segment register an address space of a pair kind means, `None` where
+/// the target has no segments.
+pub fn data_segment() -> Option<RegId> {
+    info().data_segment
+}
+
+pub fn stack_segment() -> Option<RegId> {
+    info().stack_segment
+}
+
+pub fn code_segment() -> Option<RegId> {
+    info().code_segment
+}
+
+/// The one a far pointer's selector is loaded into.
+pub fn far_segment() -> Option<RegId> {
+    info().far_segment
+}
+
+/// Whether `register` is a segment register.
+pub fn is_segment(register: RegId) -> bool {
+    in_class(register, class::SEGMENT)
+}
+
+pub fn is_data_segment(register: RegId) -> bool {
+    data_segment() == Some(register)
+}
+
+pub fn is_stack_segment(register: RegId) -> bool {
+    stack_segment() == Some(register)
+}
+
+pub fn is_code_segment(register: RegId) -> bool {
+    code_segment() == Some(register)
+}
+
+/// The segment registers for code that exists only where the target has
+/// address spaces of a pair kind: a target without them never reaches it.
+pub mod segments {
+    use super::RegId;
+
+    fn named(
+        role: Option<RegId>,
+        what: &str,
+    ) -> RegId {
+        role.unwrap_or_else(|| panic!("the target's register file names no {what} segment"))
+    }
+
+    pub fn data() -> RegId {
+        named(super::data_segment(), "data")
+    }
+
+    pub fn stack() -> RegId {
+        named(super::stack_segment(), "stack")
+    }
+
+    pub fn far() -> RegId {
+        named(super::far_segment(), "far")
+    }
+}
+
 /// Every integer register by `bytes` wide, by iced's number.
 pub fn entries() -> impl Iterator<Item = (RegId, &'static Entry)> {
     info().entries()
@@ -121,11 +182,11 @@ mod tests {
         }
     }
 
-    /// A register the description does not list is its own root: the segment
-    /// registers and the extended ones.
+    /// A register the description does not list is its own root: the extended
+    /// ones.
     #[test]
     fn a_register_the_description_omits_is_its_own() {
-        for register in [RegId::DS, RegId::R8, RegId::XMM0] {
+        for register in [RegId::R8, RegId::XMM0] {
             assert!(!known(register));
             assert_eq!(root(register), register);
         }
@@ -143,5 +204,18 @@ mod tests {
             assert!(!is_stack(other) && !is_frame(other), "{other:?}");
         }
         assert_eq!((FRAME, STACK), (RegId::BP, RegId::SP));
+    }
+
+    /// The segment each address space of a pair kind means is the register the
+    /// description gives that class (m16's default); any other segment is none.
+    #[test]
+    fn the_segments_are_the_registers_the_description_names() {
+        assert_eq!(
+            (data_segment(), stack_segment(), code_segment(), far_segment()),
+            (Some(RegId::DS), Some(RegId::SS), Some(RegId::CS), Some(RegId::ES))
+        );
+        assert!([RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS].into_iter().all(is_segment));
+        assert!(![RegId::AX, RegId::EBP, RegId::ST0].into_iter().any(is_segment));
+        assert!(!is_stack_segment(RegId::DS) && !is_data_segment(RegId::FS) && !is_code_segment(RegId::None));
     }
 }

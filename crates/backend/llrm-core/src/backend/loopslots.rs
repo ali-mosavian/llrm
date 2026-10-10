@@ -717,8 +717,14 @@ pub fn hoisted(
         if entries.is_empty() || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header]) {
             continue;
         }
-        let roots =
-            available.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
+        let roots = available
+            .iter()
+            .chain(
+                target::SEGMENTS.iter().filter(|one| {
+                    !crate::backend::registerinfo::is_code_segment(**one)
+                        && !crate::backend::registerinfo::is_stack_segment(**one)
+                }),
+            );
         let Some(writes) = writes_of(body, &written, one, &index) else { continue };
         let touches = std::cell::OnceCell::new();
         let moved = roots

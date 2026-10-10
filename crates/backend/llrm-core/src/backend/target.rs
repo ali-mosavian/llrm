@@ -92,7 +92,7 @@ pub fn pushed_width(place: &Loc) -> Option<u32> {
 /// The width `pop` fills this place at: what `push` carries, but not `cs`.
 pub fn popped_width(place: &Loc) -> Option<u32> {
     match place {
-        Loc::Reg(reg) if reg.register == Register::CS => None,
+        Loc::Reg(reg) if registerinfo::is_code_segment(reg.register) => None,
         other => pushed_width(other),
     }
 }
@@ -224,7 +224,10 @@ pub fn order(
 
 // The segment registers. Operands, not allocatable.
 pub static SEGMENTS: LazyLock<BTreeSet<Register>> = LazyLock::new(|| {
-    BTreeSet::from([Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS])
+    registerinfo::entries()
+        .filter(|(_, one)| one.classes & registerinfo::class::SEGMENT != 0)
+        .map(|(id, _)| id)
+        .collect()
 });
 
 /// The segment registers as the machine's program model assigns them.
@@ -246,11 +249,28 @@ pub struct Segments {
 }
 
 impl Segments {
+    /// The register an access without a prefix reads.
+    fn data_register() -> Register {
+        registerinfo::data_segment().expect("the target's register file names no data segment")
+    }
+
+    /// Every segment register, the order a selector is placed in: the far
+    /// pointer's, then the ones with no meaning of their own, then the data,
+    /// stack and code ones.
+    fn preference() -> Vec<Register> {
+        let meant = [registerinfo::data_segment(), registerinfo::stack_segment(), registerinfo::code_segment()];
+        let far = registerinfo::far_segment();
+        far.into_iter()
+            .chain(SEGMENTS.iter().copied().filter(|one| Some(*one) != far && !meant.contains(&Some(*one))))
+            .chain(meant.into_iter().flatten())
+            .collect()
+    }
+
     pub fn of(machine: &Machine) -> Self {
         // A flat machine has no selector to place: DS is only what string
         // operations read.
         let Some(segments) = machine.segments.as_ref() else {
-            return Self { selectors: Vec::new(), data: Register::DS, through: None, huge_shift: None };
+            return Self { selectors: Vec::new(), data: Self::data_register(), through: None, huge_shift: None };
         };
         let named = |one: &Register, name: &String| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one]);
         let register = |name: &String| {
@@ -264,7 +284,7 @@ impl Segments {
             reserved.push(&segments.data);
         }
         Self {
-            selectors: [Register::ES, Register::FS, Register::GS, Register::DS, Register::SS, Register::CS]
+            selectors: Self::preference()
                 .into_iter()
                 .filter(|one| !reserved.iter().any(|name| named(one, name)))
                 .collect(),

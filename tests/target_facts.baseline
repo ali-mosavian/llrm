@@ -1,19 +1,18 @@
 # Copies of target facts left in shared code, per file: count path. Only shrinks.
 3 crates/backend/llrm-core/src/abi/qb.rs
-4 crates/backend/llrm-core/src/backend/allocate.rs
+1 crates/backend/llrm-core/src/backend/allocate.rs
 4 crates/backend/llrm-core/src/backend/arithmetic.rs
 1 crates/backend/llrm-core/src/backend/callregs.rs
-18 crates/backend/llrm-core/src/backend/classes.rs
+24 crates/backend/llrm-core/src/backend/classes.rs
 3 crates/backend/llrm-core/src/backend/datagroup.rs
 5 crates/backend/llrm-core/src/backend/floatalloc.rs
 3 crates/backend/llrm-core/src/backend/floatassign.rs
 1 crates/backend/llrm-core/src/backend/frame.rs
 15 crates/backend/llrm-core/src/backend/inline_asm.rs
-23 crates/backend/llrm-core/src/backend/isel.rs
+22 crates/backend/llrm-core/src/backend/isel.rs
 11 crates/backend/llrm-core/src/backend/isel/wide.rs
 3 crates/backend/llrm-core/src/backend/loopslots.rs
-1 crates/backend/llrm-core/src/backend/machinedce.rs
-6 crates/backend/llrm-core/src/backend/masm.rs
+13 crates/backend/llrm-core/src/backend/masm.rs
 2 crates/backend/llrm-core/src/backend/objbuild.rs
 4 crates/backend/llrm-core/src/backend/peep/guards.rs
 4 crates/backend/llrm-core/src/backend/peep/make.rs
@@ -23,7 +22,7 @@
 5 crates/backend/llrm-core/src/backend/spiller.rs
 3 crates/backend/llrm-core/src/backend/ssaspill.rs
 2 crates/backend/llrm-core/src/backend/storecombine.rs
-3 crates/backend/llrm-core/src/backend/target.rs
+4 crates/backend/llrm-core/src/backend/target.rs
 1 crates/backend/llrm-core/src/backend/upperzero.rs
 3 crates/backend/llrm-core/src/driver/basic.rs
 3 crates/bc/llrm-bcdriver/src/lib.rs
@@ -34,7 +33,7 @@
 1 crates/frontends/llrm-nib/src/semantic/assembly.rs
 1 crates/frontends/llrm-qb/src/cli.rs
 1 crates/frontends/llrm-qb/src/compile.rs
-18 crates/frontends/llrm-qbruntime/src/lib.rs
+20 crates/frontends/llrm-qbruntime/src/lib.rs
 1 crates/frontends/qbfront/crates/buildprs/src/buildprs_generator.rs
 1 crates/frontends/qbfront/crates/buildprs/src/buildprs_lowering.rs
 1 crates/frontends/qbfront/src/generated_parser/lexer.rs

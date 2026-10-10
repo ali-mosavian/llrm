@@ -11,26 +11,49 @@ pub type RegId = Register;
 
 /// The classes a description may give a register, one bit each, in this order.
 /// A name not here is refused where the table is generated.
-pub const CLASSES: [&str; 12] =
-    ["base", "byte", "frame", "gpr", "index", "int", "pc", "positional", "reserved", "stack", "string_segment", "x87"];
+pub const CLASSES: [&str; 17] = [
+    "base",
+    "byte",
+    "code_segment",
+    "data_segment",
+    "far_segment",
+    "frame",
+    "gpr",
+    "index",
+    "int",
+    "pc",
+    "positional",
+    "reserved",
+    "segment",
+    "stack",
+    "stack_segment",
+    "string_segment",
+    "x87",
+];
 
 /// The class bits.
 pub mod class {
     pub const BASE: u32 = 1 << 0;
     pub const BYTE: u32 = 1 << 1;
-    pub const FRAME: u32 = 1 << 2;
-    pub const GPR: u32 = 1 << 3;
-    pub const INDEX: u32 = 1 << 4;
+    pub const CODE_SEGMENT: u32 = 1 << 2;
+    pub const DATA_SEGMENT: u32 = 1 << 3;
+    pub const FAR_SEGMENT: u32 = 1 << 4;
+    pub const FRAME: u32 = 1 << 5;
+    pub const GPR: u32 = 1 << 6;
+    pub const INDEX: u32 = 1 << 7;
     /// An integer register: the 8, 16 and 32-bit views the width tables name.
-    pub const INT: u32 = 1 << 5;
-    pub const PC: u32 = 1 << 6;
+    pub const INT: u32 = 1 << 8;
+    pub const PC: u32 = 1 << 9;
     /// A position in a stack: an exchange of it is an effect and it is no
     /// register a pass renames or removes.
-    pub const POSITIONAL: u32 = 1 << 7;
-    pub const RESERVED: u32 = 1 << 8;
-    pub const STACK: u32 = 1 << 9;
-    pub const STRING_SEGMENT: u32 = 1 << 10;
-    pub const X87: u32 = 1 << 11;
+    pub const POSITIONAL: u32 = 1 << 10;
+    pub const RESERVED: u32 = 1 << 11;
+    /// A segment register: an operand, not allocatable.
+    pub const SEGMENT: u32 = 1 << 12;
+    pub const STACK: u32 = 1 << 13;
+    pub const STACK_SEGMENT: u32 = 1 << 14;
+    pub const STRING_SEGMENT: u32 = 1 << 15;
+    pub const X87: u32 = 1 << 16;
 }
 
 /// What LIR calls the frame register and the stack pointer, whatever the
@@ -60,6 +83,13 @@ pub struct Info {
     /// The root the description gives the class `frame`, and `stack`.
     pub frame: RegId,
     pub stack: RegId,
+    /// The segment register each address space of a pair kind means, where the
+    /// target has segments: what an access without a prefix reads, the stack's,
+    /// the code's, and the one a far pointer's selector is loaded into.
+    pub data_segment: Option<RegId>,
+    pub stack_segment: Option<RegId>,
+    pub code_segment: Option<RegId>,
+    pub far_segment: Option<RegId>,
     /// The widths the file states (0 pads), and each root's register at each:
     /// `views[root as usize][column of the width]`.
     pub widths: [u32; 8],
