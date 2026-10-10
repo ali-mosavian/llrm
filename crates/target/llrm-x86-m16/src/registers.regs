@@ -9,6 +9,10 @@
 # CV_HREG_e (llvm's CodeViewRegisters.def). The psABI's DWARF map is i386's: real-mode x86 has none,
 # so m16 numbers none and DWARF locations in m16 code are refused.
 #
+# @scratch: the words a pass may borrow for a moment, most preferred first (gcc's REG_ALLOC_ORDER): a
+# register the result is not left in comes last.
+@scratch cx dx bx ax
+#
 # name  bits root lane classes dwarf codeview [load: the mnemonic that loads a far pointer into a segment register]
 eax     32   eax  0    gpr,byte,int  -  17
 ebx     32   ebx  0    gpr,byte,base,int  -  20
