@@ -1042,8 +1042,14 @@ size = 4
 [layout.vbdos]
 form = "far"
 
+# llrm's runtime lays a descriptor out as a C struct of a 16-bit length and a near pointer: QB 4.5's four bytes
+# where the pointer is 2 bytes, and the pointer on its own alignment where it is wider.
 [layout.llrm]
-like = "qb45"
+form = "near"
+length = 0
+data = 2
+size = 4
+natural = true
 
 # What `-fsanitize=stack` compares and calls, per runtime. `limit` is the data-group word holding
 # the lowest SP the runtime allows, `handler` the far routine entered when SP falls below it, and

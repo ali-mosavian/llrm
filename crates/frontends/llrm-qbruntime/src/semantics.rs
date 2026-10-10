@@ -32,14 +32,24 @@ pub fn form(family: &str) -> Option<Form> {
 
 /// How `family`'s runtime reads a string descriptor; none where its strings are
 /// not near, and its routines keep their calls.
-pub fn descriptor(family: &str) -> Option<Descriptor> {
+pub fn descriptor(
+    family: &str,
+    near_bytes: usize,
+) -> Option<Descriptor> {
     if form(family)? != Form::Near {
         return None;
     }
     let row = row("layout", family)?;
     let at =
         |key: &str| row.get(key).and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("layout.{family}.{key}"));
-    Some(Descriptor { length: at("length"), data: at("data"), size: at("size") })
+    let length = at("length");
+    // A natural layout puts the pointer after the 2-byte length, on its own alignment.
+    if row.get("natural").and_then(toml::Value::as_bool) == Some(true) && near_bytes > 2 {
+        let near = near_bytes as i64;
+        let data = (length + 2 + near - 1) / near * near;
+        return Some(Descriptor { length, data, size: data + near });
+    }
+    Some(Descriptor { length, data: at("data"), size: at("size") })
 }
 
 /// Whether llrm's runtime keeps BASIC's stack block for `name`, which no register convention can state.
@@ -251,10 +261,19 @@ mod tests {
     /// at an offset, so it states none and keeps every call.
     #[test]
     fn the_far_runtime_states_no_descriptor() {
-        assert_eq!(descriptor("qb45"), Some(Descriptor { length: 0, data: 2, size: 4 }));
-        assert_eq!(descriptor("pds71"), descriptor("qb45"));
-        assert_eq!(descriptor("vbdos"), None);
+        assert_eq!(descriptor("qb45", 2), Some(Descriptor { length: 0, data: 2, size: 4 }));
+        assert_eq!(descriptor("pds71", 2), descriptor("qb45", 2));
+        assert_eq!(descriptor("vbdos", 2), None);
         assert_eq!((form("qb45"), form("pds71"), form("vbdos")), (Some(Form::Near), Some(Form::Near), Some(Form::Far)));
+    }
+
+    /// llrm's runtime lays a descriptor out as a C struct: QB's four bytes with a 2-byte pointer, the pointer on its
+    /// own alignment after the length where it is a dword.
+    #[test]
+    fn llrm_lays_its_descriptor_out_by_the_pointer_it_has() {
+        assert_eq!(descriptor("llrm", 2), descriptor("qb45", 2));
+        assert_eq!(descriptor("llrm", 4), Some(Descriptor { length: 0, data: 4, size: 8 }));
+        assert_eq!(descriptor("qb45", 4), descriptor("qb45", 2), "the Microsoft runtimes' layout is fixed");
     }
 
     /// Every BASIC runtime states its limit word and handler; a pass naming

@@ -107,8 +107,14 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.checked_overflow = flags.sanitize.signed_integer_overflow;
     frontend.checked_stack = flags.sanitize.stack;
     let bound =
-        llrm_driver::planned(&flags, Some(&["x86-m16"]), Some("https://github.com/ali-mosavian/llrm/issues/1160"))?;
+        llrm_driver::planned(&flags, Some(&["x86-m16", "x86-m32"]), Some("https://github.com/ali-mosavian/llrm/issues/1160"))?;
     frontend.segment_bytes = bound.target.layout().segment_bytes();
+    // The bytes of the pointer that is the near space, and of the one that is the far: a target with one
+    // space has the same for both.
+    let spaces = &bound.target.layout().spaces;
+    let width = |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
+    frontend.near_bytes = width(spaces.near).map_or(0, |bytes| bytes as usize);
+    frontend.far_bytes = width(spaces.far).map_or(frontend.near_bytes, |bytes| bytes as usize);
     let codegen = bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?);
     Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen })
 }

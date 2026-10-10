@@ -2107,7 +2107,7 @@ fn volatile_goes_after_as_and_byref_is_accepted() {
 #[test]
 fn a_near_string_literal_is_laid_out_as_the_runtime_description_says() {
     for (dialect, runtime) in [(Dialect::QuickBasic45, "qb45"), (Dialect::Pds71, "pds71")] {
-        let layout = llrm_qbruntime::semantics::descriptor(runtime).expect("a near runtime states its descriptor");
+        let layout = llrm_qbruntime::semantics::descriptor(runtime, 2).expect("a near runtime states its descriptor");
         let module = parse("x$ = \"ab\"\n", dialect).unwrap();
         let hir = compile(&module, "lit", dialect, runtime).unwrap();
         let mut bytes = vec![0u8; layout.size as usize];

@@ -476,9 +476,11 @@ fn written_basic_inner(
     // prologue, not the procedure symbol.
     let shifted: Vec<objbuild::Fixup> =
         code.fixups.iter().map(|one| objbuild::Fixup { at: one.at + 48, ..one.clone() }).collect();
-    code.fixups = [objbuild::Fixup::new(10, objbuild::OFFSET, statement_data)]
+    let words = HeaderWords::of(module.object.bitness);
+    let offset_kind = if words.width == 4 { objbuild::OFFSET32 } else { objbuild::OFFSET };
+    code.fixups = [objbuild::Fixup::new(words.statements, offset_kind, statement_data)]
         .into_iter()
-        .chain(NAMED.iter().map(|&(word, _, label)| objbuild::Fixup::new(word, objbuild::OFFSET, label)))
+        .chain(NAMED.iter().zip(words.segments).map(|(&(_, _, label), word)| objbuild::Fixup::new(word, offset_kind, label)))
         .chain(shifted)
         .collect();
     let mut symbols: IndexMap<String, (usize, usize)> = symbols
@@ -583,6 +585,29 @@ pub const NAMED: [(usize, &str, &str); 5] = [
     (24, "COMMON", "$QB$COMMON"),
     (32, "BC_CN", "$QB$CN"),
 ];
+
+/// Where MODULE_CODE keeps the addresses it holds, which are the words of the target's near pointer: 16-bit
+/// offsets in real mode, as QB's header has them; dwords, each at its own place, where the object is 32-bit.
+/// The header is 48 bytes either way, so the code starts at 30h.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HeaderWords {
+    /// Bytes of an address.
+    pub width: usize,
+    /// The statement table's, OF_STA.
+    pub statements: usize,
+    /// BC_DS, BC_DATA, BC_FT, COMMON and BC_CN, in `NAMED`'s order.
+    pub segments: [usize; 5],
+}
+
+impl HeaderWords {
+    pub fn of(bitness: u32) -> Self {
+        if bitness == 32 {
+            Self { width: 4, statements: 12, segments: [16, 20, 24, 28, 32] }
+        } else {
+            Self { width: 2, statements: 10, segments: [NAMED[0].0, NAMED[1].0, NAMED[2].0, NAMED[3].0, NAMED[4].0] }
+        }
+    }
+}
 
 /// A BASIC module object as its frontend lays it out around the code.
 pub struct Object {
@@ -982,7 +1007,7 @@ fn procedure(
     let mut body = addressvalues::converted(&body);
     if main {
         let exits;
-        (body, exits) = ends_program(&body);
+        (body, exits) = ends_program(&body, !target.arch.layout().spaces.far_is_near());
         callees.extend(exits);
     }
     for (at, callee) in &machined.calls {
@@ -1095,8 +1120,8 @@ fn size_of(datum: &masm::Datum) -> i64 {
     }
 }
 
-/// Spell BASIC module fallthrough as the runtime's implicit B$CENP.
-pub fn ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
+/// Spell BASIC module fallthrough as the runtime's implicit B$CENP, a far call where the target has far code.
+pub fn ends_program(body: &lir::LirBody, far: bool) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
     let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -1106,7 +1131,7 @@ pub fn ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::C
             let mut instruction = Arc::clone(instruction);
             if instruction.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
                 exits = true;
-                sites.insert(instruction.at, masm::Callee::new("B$CENP", true));
+                sites.insert(instruction.at, masm::Callee::new("B$CENP", far));
                 let mut replaced = (*instruction).clone();
                 replaced.what = Some(_semantics(Operation::Call, "call", vec![], vec![]));
                 instruction = Arc::new(replaced);

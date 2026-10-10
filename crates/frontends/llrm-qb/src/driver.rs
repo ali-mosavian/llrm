@@ -67,6 +67,9 @@ pub struct Frontend {
     /// The most bytes the target's data segment holds: its description's, set
     /// by the CLI that bound the target.
     pub segment_bytes: Option<usize>,
+    /// The bytes of the target's near and far pointer, from its description (0: the 16-bit target's).
+    pub near_bytes: usize,
+    pub far_bytes: usize,
     pub includes: Vec<PathBuf>,
 }
 
@@ -93,6 +96,8 @@ impl Frontend {
             runtime_frames: false,
             error_lines: false,
             segment_bytes: None,
+            near_bytes: 0,
+            far_bytes: 0,
             includes: Vec::new(),
         }
     }
@@ -130,6 +135,8 @@ fn _options(
             runtime_frames: frontend.runtime_frames,
             error_lines: frontend.error_lines,
             segment_bytes: frontend.segment_bytes,
+            near_bytes: frontend.near_bytes,
+            far_bytes: frontend.far_bytes,
         },
         debug: frontend.debug,
         syntax: false,
@@ -169,7 +176,7 @@ pub fn parsed(
         }
         std::fs::write(dump, &stdout).map_err(|error| FrontendError(error.to_string()))?;
     }
-    let mut program = decoded(&stdout, frontend.checked_arrays)?;
+    let mut program = decoded(&stdout, frontend.checked_arrays, frontend.near_bytes)?;
     if frontend.checked_stack {
         let family = program.runtime.tables();
         program.stack_check = Some(
@@ -186,6 +193,7 @@ pub fn parsed(
 pub fn decoded(
     text: &str,
     checked: bool,
+    near_bytes: usize,
 ) -> Result<model::Program, FrontendError> {
     let mut program =
         codec::decode(text).map_err(|error| FrontendError(format!("qbfront produced invalid HIR: {error}")))?;
@@ -211,7 +219,7 @@ pub fn decoded(
     // Where an error is handled the routine raises it, as the checks the
     // frontend writes do.
     program.promises.checked = checked || handles;
-    program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(family);
+    program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(family, if near_bytes == 0 { 2 } else { near_bytes });
     program.promises.routines = llrm_core::abi::runtime::semantics::routines();
     program.promises.nounwind = llrm_core::abi::runtime::CONTRACTS
         .iter()

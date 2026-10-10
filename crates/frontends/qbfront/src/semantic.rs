@@ -420,6 +420,27 @@ pub struct Options {
     /// The most bytes the target's data segment holds, which the near-data and
     /// frame budgets are: none where there are no segments, and no budget.
     pub segment_bytes: Option<usize>,
+    /// The bytes of the target's near and of its far pointer, from its description; 0 for either is the
+    /// 16-bit target's (2 and 4). A far one as wide as the near one is the same space: a flat target.
+    pub near_bytes: usize,
+    pub far_bytes: usize,
+}
+
+impl Options {
+    /// The bytes of a near pointer.
+    pub fn near(&self) -> usize {
+        if self.near_bytes == 0 { 2 } else { self.near_bytes }
+    }
+
+    /// The bytes of a far pointer.
+    pub fn far(&self) -> usize {
+        if self.far_bytes == 0 { 4 } else { self.far_bytes }
+    }
+
+    /// Whether far pointers are near ones: the target has one address space.
+    pub fn one_space(&self) -> bool {
+        self.far() == self.near()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1275,6 +1296,8 @@ impl Compiler {
         runtime: &str,
         options: Options,
     ) -> Self {
+        // A string is its descriptor, whose size is the runtime's (4 bytes where a near runtime keeps QB's).
+        let string_bytes = llrm_qbruntime::semantics::descriptor(runtime, options.near()).map_or(4, |one| one.size as usize);
         let types = vec![
             scalar(VOID, "void", "void", 0, None, "none"),
             scalar(INTEGER, "integer", "integer", 2, Some(true), "none"),
@@ -1282,7 +1305,7 @@ impl Compiler {
             scalar(SINGLE, "single", "float", 4, None, "extended80"),
             scalar(DOUBLE, "double", "float", 8, None, "extended80"),
             scalar(BOOLEAN, "boolean", "boolean", 2, Some(true), "none"),
-            scalar(STRING, "string", "opaque", 4, None, "none"),
+            scalar(STRING, "string", "opaque", string_bytes, None, "none"),
             scalar(ANY, "any", "opaque", 0, None, "none"),
             scalar(BYTE, "$byte", "integer", 1, Some(false), "none"),
             scalar(SIGNED_BYTE, "signed byte", "integer", 1, Some(true), "none"),
@@ -1749,21 +1772,27 @@ impl Compiler {
         &mut self,
         element: u32,
     ) -> u32 {
-        self.addressed_pointer_type(element, "near", 2)
+        self.addressed_pointer_type(element, "near", self.options.near())
     }
 
     fn whole_pointer_type(
         &mut self,
         element: u32,
     ) -> u32 {
-        self.addressed_pointer_type(element, "huge", 4)
+        if self.options.one_space() {
+            return self.pointer_type(element);
+        }
+        self.addressed_pointer_type(element, "huge", self.options.far())
     }
 
     fn far_pointer_type(
         &mut self,
         element: u32,
     ) -> u32 {
-        self.addressed_pointer_type(element, "far", 4)
+        if self.options.one_space() {
+            return self.pointer_type(element);
+        }
+        self.addressed_pointer_type(element, "far", self.options.far())
     }
 
     fn addressed_pointer_type(
@@ -8316,7 +8345,7 @@ impl Compiler {
         // address. The runtime description says which, and where a near
         // descriptor keeps what.
         let (descriptor_symbol, payload_offset) = if let Some(near) =
-            llrm_qbruntime::semantics::descriptor(&self.runtime)
+            llrm_qbruntime::semantics::descriptor(&self.runtime, self.options.near())
         {
             let mut literal = vec![0; near.size as usize];
             literal[near.length as usize..near.length as usize + 2]
@@ -8403,7 +8432,7 @@ impl Compiler {
             name: format!("$string{payload_symbol}$descriptor"),
             type_id: STRING,
             offset: 0,
-            extent: 4,
+            extent: self.width(STRING),
             storage: "static",
             symbol: descriptor_symbol,
         });

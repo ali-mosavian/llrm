@@ -21,12 +21,22 @@ fn main() -> ExitCode {
         }
         taken += 1;
     }
-    let segment_bytes = match llrm_driver::planned(
+    let (segment_bytes, near_bytes, far_bytes) = match llrm_driver::planned(
         &flags,
-        Some(&["x86-m16"]),
+        Some(&["x86-m16", "x86-m32"]),
         Some("https://github.com/ali-mosavian/llrm/issues/1160"),
     ) {
-        Ok(bound) => bound.target.layout().segment_bytes(),
+        Ok(bound) => {
+            let spaces = &bound.target.layout().spaces;
+            let width =
+                |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
+            let near = width(spaces.near).map_or(0, |bytes| bytes as usize);
+            (
+                bound.target.layout().segment_bytes(),
+                near,
+                width(spaces.far).map_or(near, |bytes| bytes as usize),
+            )
+        }
         Err(why) => {
             eprintln!("qbfront: {why}");
             return ExitCode::from(2);
@@ -150,6 +160,8 @@ fn main() -> ExitCode {
             runtime_frames,
             error_lines,
             segment_bytes,
+            near_bytes,
+            far_bytes,
         },
         debug,
         syntax,

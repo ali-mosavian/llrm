@@ -294,7 +294,10 @@ fn _compiler_switches(program: &model::Program) -> Result<i64, CompileError> {
     Ok(flags)
 }
 
-fn _header(program: &model::Program) -> Result<Vec<u8>, CompileError> {
+fn _header(
+    program: &model::Program,
+    bitness: u32,
+) -> Result<Vec<u8>, CompileError> {
     let module = &program.modules[0];
     let object_name = _object_name(&module.name);
     if !object_name.is_ascii() {
@@ -303,14 +306,16 @@ fn _header(program: &model::Program) -> Result<Vec<u8>, CompileError> {
     let mut name = object_name.as_bytes()[..object_name.len().min(8)].to_vec();
     name.resize(8, b' ');
     // MODULE_CODE in runtime/inc/addr.inc. Every symbolic word is an offset,
-    // framed through DGROUP by the shared writer.
+    // framed through DGROUP by the shared writer; where the target's near pointer is a dword the words are
+    // dwords (`HeaderWords`), and the 48 bytes keep the marker and the switches where they were.
+    let words = driver::basic::HeaderWords::of(bitness);
     let mut out: Vec<u8> = [b"bl".to_vec(), name, vec![0; 34], vec![0xff, 0xff]].concat();
     out.extend((_compiler_switches(program)? as u16).to_le_bytes());
     if out.len() != 48 {
         return Err(CompileError::Value("MODULE_CODE is exactly O_ENT bytes".into()));
     }
     // The addends live in the image. The remaining words are zero.
-    pack_into(&mut out, 12, 2); // OF_DS is BC_DS + 2.
+    out[words.segments[0]..words.segments[0] + words.width].copy_from_slice(&2u32.to_le_bytes()[..words.width]); // OF_DS is BC_DS + 2.
     Ok(out)
 }
 
@@ -519,7 +524,7 @@ fn rich_assembled(
     }
     let object = basic::Object {
         code: format!("{}_CODE", _object_name(&module.name)),
-        header: _header(program)?,
+        header: _header(program, codegen.arch.layout().mode)?,
         main: "__main".to_owned(),
         symbols,
         data,
@@ -585,5 +590,5 @@ pub fn object_bytes(
     let module = objbuild::live(&assembled(program, observer, codegen)?)
         .map_err(|error| CompileError::Value(error.to_string()))?;
     let name = source.file_name().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
-    Ok(written_basic(&module, _header(program)?, &name)?)
+    Ok(written_basic(&module, _header(program, codegen.arch.layout().mode)?, &name)?)
 }
