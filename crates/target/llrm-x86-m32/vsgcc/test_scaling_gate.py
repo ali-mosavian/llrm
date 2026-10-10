@@ -491,3 +491,14 @@ def test_a_step_counts_the_same_whatever_the_paths_the_compiler_is_given(tmp_pat
         command = [str(binary), *gate.levels_time.command("llrm", "O2", source)[1:]]
         counts.add(round(gate.own_work(command)["lir peephole"], 0))
     assert max(counts) - min(counts) <= 1, sorted(counts)
+
+
+def test_lir_jumps_copies_a_tail_without_checking_the_whole_function_for_each_copy(tmp_path):
+    """`lir jumps` on `branches` at N=1024 (3,073 blocks, 258 tail copies) checked that the body stayed reducible after each copy,
+    copied the odds table for each block, and looked for an arm among all the blocks for each block it placed: 5,802 Minstr,
+    3.7x a doubling. The copies are checked once (one by one only when the whole is not reducible), and an arm is looked for among
+    the predecessors: 825."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir jumps"]
+    assert cost <= 1500, cost
