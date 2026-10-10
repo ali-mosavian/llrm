@@ -1,17 +1,17 @@
-reason = "rotation priced in clocks (jmp, jcc taken, not taken from the CPU): x_adler -12.1% clocks, x_bubble -3.0%, quicksort -2.0%; one jmp more per entry: quicksort +3.3% instructions, matmul +0.1%, grep +8 bytes"
-blessed = "2026-10-09"
+reason = "phielim renames a loop phi to its back-edge argument only where its copies would need an edge block (never an x87 value); twoaddr ties the source that does not interfere with the destination. matmul bas -O2 instructions -11.6%, nbody_fixed nib -Os instructions -3.7% (xchg chains gone) with memory operands +12%; crc bas +1 instruction, +2 bytes (one copy outside its loop)"
+blessed = "2026-10-10"
 
 [bas.O2]
-instructions = 9356
-memory_operands = 4602
-code_bytes = 487
+instructions = 8279
+memory_operands = 2471
+code_bytes = 457
 data_bytes = 15
 bss_bytes = 0
 
 [bas.Os]
-instructions = 9400
-memory_operands = 4651
-code_bytes = 478
+instructions = 8323
+memory_operands = 2520
+code_bytes = 448
 data_bytes = 15
 bss_bytes = 0
 

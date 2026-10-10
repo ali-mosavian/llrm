@@ -1,20 +1,19 @@
-reason = "movzx r,m8 becomes xor r,r; mov rl,m8 where the CPU description prices the pair lower (486: 2 clocks against 3), one instruction and one byte more per load: vsgcc harness 486 clocks fall, crc 864 to 855, x_life 400178 to 356042 (now under gcc -O2's 368012); gcc -march=i486 emits the same pair"
-blessed = "2026-10-09"
+reason = "phielim renames a loop phi to its back-edge argument only where its copies would need an edge block (never an x87 value); twoaddr ties the source that does not interfere with the destination. matmul bas -O2 instructions -11.6%, nbody_fixed nib -Os instructions -3.7% (xchg chains gone) with memory operands +12%; crc bas +1 instruction, +2 bytes (one copy outside its loop)"
+blessed = "2026-10-10"
 
 [bas.O2]
-instructions = 1216
+instructions = 1217
 memory_operands = 71
-code_bytes = 223
+code_bytes = 225
 data_bytes = 31
 bss_bytes = 0
 
 [bas.Os]
-instructions = 1207
+instructions = 1208
 memory_operands = 71
-code_bytes = 220
+code_bytes = 222
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.0363
 
 [c.O2]
 instructions = 634
