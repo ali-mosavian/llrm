@@ -85,8 +85,8 @@ fn test_a_loop_behind_a_guard_that_rules_out_its_bound_ends_on_the_flags_of_its_
     );
 }
 
-/// mandel's `x * x >> 8` is a 32-bit `imul` and `sar` where the ranges prove the
-/// product fits. Behind the copy, they lost the bound of `x` (its header
+/// mandel's `x * x >> 8` is a 32-bit `imul` and `sar` where the ranges prove
+/// the product fits. Behind the copy, they lost the bound of `x` (its header
 /// computes what the loop tested, and the step is tested after the increment),
 /// so the fixed-point product stayed `imul` + `shrd` (+32.5% instructions).
 #[test]
