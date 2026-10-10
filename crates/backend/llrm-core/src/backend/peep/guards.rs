@@ -401,6 +401,27 @@ pub fn delays(
     load: &Insn,
     crossed: &Arc<Insn>,
 ) -> bool {
+    delayed(cx, load, crossed, false)
+}
+
+/// `delays`, and past a push too: its slot is below the stack pointer, which no
+/// cell the load reads through a register is, and a cell read through the stack
+/// pointer is in the lanes the push writes. For a load a call reads, which the
+/// arguments pushed before it stand between.
+pub fn delays_pushes(
+    cx: &Cx,
+    load: &Insn,
+    crossed: &Arc<Insn>,
+) -> bool {
+    delayed(cx, load, crossed, true)
+}
+
+fn delayed(
+    cx: &Cx,
+    load: &Insn,
+    crossed: &Arc<Insn>,
+    pushes: bool,
+) -> bool {
     let regs = cx.regs();
     let Some(crossed_what) = &crossed.what else {
         return false;
@@ -443,7 +464,8 @@ pub fn delays(
             | Operation::Multiply
             | Operation::Funnel
             | Operation::Compare
-    ) && crossed_what.dests.iter().all(|dest| matches!(dest, Loc::Reg(_))))
+    ) && crossed_what.dests.iter().all(|dest| matches!(dest, Loc::Reg(_)))
+        || pushes && crossed_what.op == Operation::Push)
     {
         return false;
     }
