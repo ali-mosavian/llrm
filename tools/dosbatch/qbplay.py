@@ -76,12 +76,12 @@ class Session:
         text = reply.get("text") or ""
         return "\n".join(text) if isinstance(text, list) else text
 
-    def wait_for(self, text: str, seconds: float = 60) -> None:
+    def wait_for(self, text: str, seconds: float = 60, poll: float = 0.25) -> None:
         deadline = time.monotonic() + seconds
         while text not in self.screen():
             if time.monotonic() > deadline:
                 raise TimeoutError(f"{text!r} never appeared:\n{self.screen()}")
-            time.sleep(0.25)
+            time.sleep(poll)
 
     def wait_for_mode(self, mode: int, seconds: float = 60) -> None:
         """Until the screen is in the BIOS video mode `mode`."""
@@ -91,14 +91,24 @@ class Session:
                 raise TimeoutError(f"the screen never went to mode {mode}")
             time.sleep(0.25)
 
-    def type(self, keys: list[str]) -> None:
+    def type(self, keys: list[str], pause: float = 0.15) -> None:
         for key in keys:
             self.send({"cmd": "key", "key": key})
-            time.sleep(0.15)
+            time.sleep(pause)
 
-    def shot(self, path: Path) -> None:
+    def shot(self, path: Path, settle: float = 0.5) -> None:
+        """A PNG of the screen: it is written a frame after the reply, so this returns once the file is there and has
+        stopped growing (at most 2 s); `settle` is a pause after, for a caller that wants one."""
+        path.unlink(missing_ok=True)
         self.send({"cmd": "screenshot", "path": str(path)})
-        time.sleep(0.5)
+        deadline, size = time.monotonic() + 2, -1
+        while time.monotonic() < deadline:
+            now = path.stat().st_size if path.exists() else 0
+            if now and now == size:
+                break
+            size = now
+            time.sleep(0.01)
+        time.sleep(settle)
 
     def close(self) -> None:
         self.process.kill()

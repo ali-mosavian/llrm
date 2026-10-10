@@ -33,7 +33,7 @@ CACHE = Path.home() / ".cache" / "llrm" / "qb32-demo-refs"
 # The keys after the introduction's, and the checkpoints that are compared in a box (x0, y0, x1, y1 of a 640 x 350
 # screen) rather than whole.
 PLAYED = {
-    "NIBBLES": ([(["space"], 10, "dies", None)], {}),
+    "NIBBLES": ([(["space"], 10, "dies", "Sammy Dies")], {}),
     "GORILLA": (
         [
             (["p"], 5, "prompt1", None),
@@ -50,54 +50,106 @@ LOOK_EVERY = 0.3        # seconds between looks
 SETTLE = 0.5            # seconds after text a step waited for appears
 
 
-KEY_HEAD, KEY_TAIL = 0x41A, 0x41C       # the BIOS keyboard buffer's ends: equal when no key waits
+KEY_HEAD = 0x41A        # the BIOS keyboard buffer's head and tail words: equal when no key waits
+POLL = 0.02             # seconds between looks at what the program is doing
+LOOKS = 3               # successive looks at a graphics screen that must show the same picture
+LONGEST = 15            # the most a step waits, whatever it is waiting for
 
 
-def keys_taken(session, seconds: float = 5) -> bool:
-    """Whether the program has read every key typed: the BIOS keyboard buffer is empty."""
-    deadline = time.monotonic() + seconds
+def keys_taken(session) -> None:
+    """Returns once the program has read every key typed: the BIOS keyboard buffer is empty."""
+    deadline = time.monotonic() + LONGEST
     while time.monotonic() < deadline:
-        reply = session.send({"cmd": "mem_read", "addr": KEY_HEAD, "len": 4})
-        data = str(reply.get("data", ""))
+        data = str(session.send({"cmd": "mem_read", "addr": KEY_HEAD, "len": 4}).get("data", ""))
         if len(data) == 8 and data[:4] == data[4:]:
-            return True
-        time.sleep(0.05)
-    return False
+            return
+        time.sleep(POLL)
+    raise TimeoutError("the program never read the keys")
 
 
-def play(exe: Path, work: Path, steps: list) -> dict[str, Path]:
-    """test_qbdemos.play, but a step does not sleep its whole time: it goes on once the program has read the keys, and
-    then once the text it waited for is there, or else once the screen has been the same picture (the PNG's bytes)
-    for a second. The step's seconds are the longest it waits."""
+def raw_picture(path: Path, rows: tuple[int, int] | None = None) -> bytes:
+    """A PNG's scanlines, inflated and not unfiltered (two screens that differ by a cursor differ in a few bytes of it);
+    only the scanlines `rows` (first, last), where given."""
+    import struct
+    import zlib
+
+    data, at, idat, head = path.read_bytes(), 8, [], b""
+    while at < len(data):
+        size, kind = struct.unpack(">I4s", data[at : at + 8])
+        if kind == b"IHDR":
+            head = data[at + 8 : at + 8 + size]
+        elif kind == b"IDAT":
+            idat.append(data[at + 8 : at + 8 + size])
+        at += 12 + size
+    raw = zlib.decompress(b"".join(idat))
+    if rows is None:
+        return raw
+    width, _height, _depth, color = struct.unpack(">IIBB", head[:10])
+    stride = 1 + width * (3 if color == 2 else 4)
+    scale = width // 640
+    return raw[rows[0] * scale * stride : (rows[1] * scale) * stride]
+
+
+def same_picture(a: bytes, b: bytes) -> bool:
+    """Whether two screens differ by no more than a blinking cursor."""
+    if len(a) != len(b):
+        return False
+    different = (int.from_bytes(a, "little") ^ int.from_bytes(b, "little")).to_bytes(len(a), "little")
+    return len(different.replace(b"\0", b"")) <= 3 * test_qbdemos.CURSOR_PIXELS
+
+
+def settled(session, work: Path, shown: str | None, watch: str | None, name: str | None, before: bytes | None) -> None:
+    """Returns once the screen shows what the step wants.  A step with text to wait for waits for it.  A step that
+    names a checkpoint then waits for its screen to be the same picture LOOKS times running, and, where the checkpoint is
+    a box of the screen (its first and last rows), for that part to have changed from `before` and then stopped."""
+    box = PLAYED.get(watch, ({}, {}))[1].get(name) if watch else None
+    rows = (box[1], box[3]) if box else None
+    deadline, same, last = time.monotonic() + LONGEST, 0, None
+    while time.monotonic() < deadline:
+        if shown and shown not in session.screen():
+            time.sleep(POLL)
+            continue
+        if not name:
+            return
+        now = work / f"look{same % 2}.png"
+        session.shot(now, settle=0)
+        picture = raw_picture(now, rows)
+        if rows and before is not None and same_picture(picture, before):
+            time.sleep(POLL)
+            continue
+        same = same + 1 if last is not None and same_picture(picture, last) else 1
+        if same >= LOOKS:
+            return
+        last = picture
+        time.sleep(POLL)
+    raise TimeoutError(f"the screen never settled{f' on {shown!r}' if shown else ''}")
+
+
+def play(exe: Path, work: Path, steps: list, demo: str | None = None) -> dict[str, Path]:
+    """test_qbdemos.play without its fixed waits: each step types its keys, waits until the program has read them, and
+    then until the screen shows what the step wants; none waits longer than LONGEST."""
     work.mkdir(exist_ok=True)
     shutil.copy(exe, work / "P.EXE")
     shots: dict[str, Path] = {}
     session = qbplay.Session(work)
     try:
         session.send({"cmd": "dos_cmd", "command": "P.EXE"}, wait=False)
-        for keys, longest, name, shown in steps:
+        for keys, _seconds, name, shown in steps:
             began = time.monotonic()
-            session.type(keys)
+            box = PLAYED.get(demo, ({}, {}))[1].get(name) if demo else None
+            before = None
+            if box:
+                session.shot(work / "before.png", settle=0)
+                before = raw_picture(work / "before.png", (box[1], box[3]))
+            session.type(keys, pause=0)
             if keys:
                 keys_taken(session)
-            if shown:
-                session.wait_for(shown, 60)
-                time.sleep(min(SETTLE, longest))
-            else:
-                deadline, same, last, at = time.monotonic() + longest, 0, None, 0
-                while time.monotonic() < deadline:
-                    now = work / f"look{at % 2}.png"
-                    session.shot(now)
-                    same = same + 1 if last is not None and last.read_bytes() == now.read_bytes() else 0
-                    if same >= STABLE_FOR:
-                        break
-                    last, at = now, at + 1
-                    time.sleep(LOOK_EVERY)
+            settled(session, work, shown, demo, name, before)
             if name:
                 shots[name] = work / f"{name}.png"
-                session.shot(shots[name])
+                session.shot(shots[name], settle=0)
             if os.environ.get("QB32DEMO_TRACE"):
-                print(f"{work.parent.parent.name}: {keys} {name} {time.monotonic() - began:.1f}s", file=sys.stderr)
+                print(f"{work.parent.parent.name}: {keys} {name} {time.monotonic() - began:.2f}s", file=sys.stderr)
     finally:
         session.close()
     return shots
@@ -144,7 +196,7 @@ def reference_shots(name: str, source: Path, work: Path) -> dict[str, Path]:
     work.mkdir(parents=True, exist_ok=True)
     (work / "build").mkdir(exist_ok=True)
     exe = qbplay.built_pairs({name: source}, work / "build")[name][0]
-    shots = play(exe, work / "play", script(name))
+    shots = play(exe, work / "play", script(name), name)
     cached.mkdir(parents=True, exist_ok=True)
     for one, path in shots.items():
         shutil.copy(path, cached / f"{one}.png")
@@ -161,7 +213,7 @@ def candidate_shots(name: str, source: Path, runtime: dict[str, Path], work: Pat
     play_dir.mkdir(exist_ok=True)
     for loader in qb32.link(obj, runtime, exe, work):
         shutil.copy(loader, play_dir / loader.name)
-    return play(exe, play_dir, script(name))
+    return play(exe, play_dir, script(name), name)
 
 
 def run(sources: dict[str, Path], work: Path) -> dict[str, list[str]]:

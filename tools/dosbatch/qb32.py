@@ -25,6 +25,47 @@ SHARED = dosbatch.ROOT / "runtime" / "shared" / "dos" / "m32"
 START_FILES = ["runtime/qb/dos/m32/qbstart.asm", "runtime/shared/dos/m32/start.asm"]
 
 
+OBJECTS = Path.home() / ".cache" / "llrm" / "qb32-objs"
+
+
+def _stamp(*names: str) -> str:
+    """Which build of the tools these are: the size and time of each."""
+    parts = []
+    for name in names:
+        path = dosbatch.BIN / name
+        stat = path.stat() if path.exists() else None
+        parts.append(f"{name}:{stat.st_size}:{stat.st_mtime_ns}" if stat else name)
+    return "|".join(parts)
+
+
+def _tree() -> str:
+    """The runtime's sources, headers and start-up files, by content."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for directory in (RUNTIME, SHARED, dosbatch.ROOT / "runtime" / "c" / "x86-m32"):
+        for path in sorted(directory.rglob("*")):
+            if path.is_file() and path.suffix in (".c", ".h", ".asm", ".inc", ".toml"):
+                digest.update(str(path.relative_to(dosbatch.ROOT)).encode() + path.read_bytes())
+    return digest.hexdigest()
+
+
+def cached(key: str, obj: Path, produce) -> None:
+    """`obj` from the cache where `key` is in it; else made by `produce()` and kept.  A cached object is what the same
+    tools made from the same files, so nothing is rebuilt that has not changed."""
+    import hashlib
+    import shutil
+
+    kept = OBJECTS / (hashlib.sha256(key.encode()).hexdigest()[:32] + ".obj")
+    if kept.exists():
+        shutil.copy(kept, obj)
+        return
+    produce()
+    OBJECTS.mkdir(parents=True, exist_ok=True)
+    shutil.copy(obj, kept.with_suffix(".tmp"))
+    kept.with_suffix(".tmp").replace(kept)
+
+
 def records(path: Path):
     """The records of an OMF object: (type, body)."""
     data = path.read_bytes()
@@ -71,15 +112,20 @@ def build(work: Path) -> dict[str, Path]:
     include = dosbatch.c_include(TARGET, work)
     made: dict[str, Path] = {}
     failures = []
+    tree, tools = _tree(), _stamp("llrm-c", "jwasm", "jwlink")
     for source in sorted([*RUNTIME.glob("*.c"), *PLATFORM.glob("*.c"), *PLATFORM.glob("*.asm"), *(RUNTIME / "dos").glob("*.c")]):
         if source.name == "qbstart.asm":
             continue
         obj = work / f"{source.stem}.obj"
-        try:
+
+        def produce(source=source, obj=obj):
             if source.suffix == ".c":
                 dosbatch._host([str(dosbatch.BIN / "llrm-c"), str(source), dosbatch.m_flag(TARGET), "-Os", "-I", str(include), "-I", str(RUNTIME), "-I", str(PLATFORM), "-I", str(RUNTIME / "dos"), "-o", str(obj)])
             else:
                 dosbatch.assemble(source, obj)
+
+        try:
+            cached(f"runtime|{source}|{tree}|{tools}", obj, produce)
         except dosbatch.BuildError as error:
             failures.append(f"{source.name}: {str(error).splitlines()[-1][:160]}")
             continue
@@ -117,8 +163,20 @@ def data_files(source: Path) -> tuple[Path, ...]:
 
 
 def compile_basic(source: Path, obj: Path, flags: tuple[str, ...] = ("-O2",)) -> str | None:
+    """`source` compiled to `obj` for the flat target, or why not.  The object is kept by the source's bytes, the flags and
+    the compiler's build, so a program is compiled again only when one of them changes."""
+    key = f"basic|{source.read_bytes().hex()}|{flags}|{_stamp('llrm-qb')}"
+    try:
+        cached(key, obj, lambda: _compile_basic(source, obj, flags))
+    except RuntimeError as error:
+        return str(error)
+    return None
+
+
+def _compile_basic(source: Path, obj: Path, flags: tuple[str, ...]) -> None:
     done = dosbatch.subprocess.run([str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", dosbatch.m_flag(TARGET), *flags, "-o", str(obj)], capture_output=True, text=True)
-    return None if done.returncode == 0 else (done.stderr or done.stdout).strip()[-400:]
+    if done.returncode != 0:
+        raise RuntimeError((done.stderr or done.stdout).strip()[-400:])
 
 
 def link(program: Path, objects: dict[str, Path], exe: Path, work: Path) -> tuple[Path, ...]:
