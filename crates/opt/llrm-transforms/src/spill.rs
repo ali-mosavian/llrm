@@ -1014,7 +1014,9 @@ fn _rebuild(
 
 /// A point of an instruction: the cells `counted` says live before it, in
 /// the target's registers, and for a call, those live across it, in the
-/// registers `across` says it keeps.
+/// registers `across` says it keeps. The forecast over points, which the
+/// sweep (`Run`) is held to.
+#[cfg(test)]
 pub struct Site {
     pub inst: InstId,
     pub before: Point<ValueId>,
@@ -1029,6 +1031,7 @@ pub struct Site {
 
 /// Each instruction's site in a block but its phis, in order, from the values
 /// live before and across each.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn sites(
     function: &Function,
@@ -1073,6 +1076,7 @@ pub fn sites(
         .collect()
 }
 
+#[cfg(test)]
 impl Site {
     /// Its points, in order.
     pub fn points(self) -> impl Iterator<Item = Point<ValueId>> {
@@ -1099,6 +1103,9 @@ pub struct Pressure {
     /// What is live before and across each instruction of a block, worked out
     /// when first asked and kept for every loop that asks of the block.
     points: BlockPoints,
+    /// What changes in the live set across each instruction of a block, and
+    /// what changes from one block's end to another's start: the same.
+    stepped: Stepped,
 }
 
 /// The live sets of each block's instructions: a cache of what `found` says,
@@ -1124,6 +1131,98 @@ impl std::fmt::Debug for BlockPoints {
     }
 }
 
+/// The steps of each block, and the cells that change between two blocks run
+/// one after the other: asked for by every loop around them, found once.
+#[derive(Clone, Default)]
+struct Stepped {
+    steps: std::rc::Rc<std::cell::RefCell<BTreeMap<i64, std::rc::Rc<liveness::Steps>>>>,
+    moves: std::rc::Rc<std::cell::RefCell<BTreeMap<(i64, i64), std::rc::Rc<Moves>>>>,
+}
+
+/// What stops being live, and what starts, between the end of one block and the
+/// start of the next.
+struct Moves {
+    leave: Vec<ValueId>,
+    enter: Vec<ValueId>,
+}
+
+impl PartialEq for Stepped {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for Stepped {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(formatter, "Stepped({} blocks)", self.steps.borrow().len())
+    }
+}
+
+impl Pressure {
+    /// `liveness::live_steps` of `block`, worked out once.
+    fn steps(
+        &self,
+        function: &Function,
+        block: BlockId,
+    ) -> std::rc::Rc<liveness::Steps> {
+        let at = cfg::id(block);
+        if let Some(found) = self.stepped.steps.borrow().get(&at) {
+            return std::rc::Rc::clone(found);
+        }
+        let found = std::rc::Rc::new(liveness::live_steps(function, &self.found, block));
+        self.stepped.steps.borrow_mut().insert(at, std::rc::Rc::clone(&found));
+        found
+    }
+
+    /// What changes in the live set going from the end of `from` to the start
+    /// of `to`.
+    fn moves(
+        &self,
+        function: &Function,
+        from: BlockId,
+        to: BlockId,
+    ) -> std::rc::Rc<Moves> {
+        let key = (cfg::id(from), cfg::id(to));
+        if let Some(found) = self.stepped.moves.borrow().get(&key) {
+            return std::rc::Rc::clone(found);
+        }
+        let out = &self.found.live_out[&key.0];
+        let first = &self.steps(function, to).first;
+        let (mut leave, mut enter) = (Vec::new(), Vec::new());
+        let (mut ahead, mut behind) = (out.iter().copied().peekable(), first.iter().copied().peekable());
+        loop {
+            match (ahead.peek(), behind.peek()) {
+                (Some(&gone), Some(&new)) if gone == new => {
+                    ahead.next();
+                    behind.next();
+                }
+                (Some(&gone), Some(&new)) if gone < new => {
+                    leave.push(gone);
+                    ahead.next();
+                }
+                (_, Some(&new)) => {
+                    enter.push(new);
+                    behind.next();
+                }
+                (Some(&gone), None) => {
+                    leave.push(gone);
+                    ahead.next();
+                }
+                (None, None) => break,
+            }
+        }
+        let found = std::rc::Rc::new(Moves { leave, enter });
+        self.stepped.moves.borrow_mut().insert(key, std::rc::Rc::clone(&found));
+        found
+    }
+}
+
 impl Pressure {
     /// `function`'s, for an address that takes `scales` (`Room::index_scales`).
     pub fn of(
@@ -1146,6 +1245,7 @@ impl Pressure {
             addressed: addressed.into_iter().collect(),
             folds,
             points: BlockPoints::default(),
+            stepped: Stepped::default(),
         }
     }
 
@@ -1236,6 +1336,7 @@ impl<'a> View<'a> {
     }
 
     /// Each instruction's site in `block`, without the values `hide` names.
+    #[cfg(test)]
     pub fn sites(
         &self,
         block: BlockId,
@@ -1261,6 +1362,72 @@ impl<'a> View<'a> {
             &|value| segment_view(context, layout, room.spaces, function, value),
             &|value| self.pressure.addressed.contains(&value),
         )
+    }
+
+    /// The sweep of `blocks`, in order, without the values `hide` names: what
+    /// changes at each point, found from the blocks' steps and not from what is
+    /// live at each.
+    pub fn run(
+        &self,
+        blocks: &[BlockId],
+        hide: &dyn Fn(ValueId) -> bool,
+    ) -> Run {
+        let (context, layout, function, room) = (self.context, self.layout, self.function, self.room);
+        let counted = |value: ValueId| self.pressure.counted.contains(&value) && !hide(value);
+        let mut folded = |value: ValueId| {
+            if self.pressure.folds.asked.contains(&value) {
+                self.pressure.folds.yes.contains(&value)
+            } else {
+                folded_in(context, function, value, room.index_scales)
+            }
+        };
+        let mut classes: llrm_support::hash::HashMap<ValueId, Option<Cell>> = Default::default();
+        let mut class = |value: ValueId| {
+            *classes
+                .entry(value)
+                .or_insert_with(
+                    || {
+                        let viewed = room.segments > 0 && segment_view(context, layout, room.spaces, function, value);
+                        let counted = counted(value);
+                        let member = [counted && !viewed, counted && viewed, false];
+                        (member[0] || member[1]).then(|| Cell { cell: _cell(&self.pressure.cells, value), member })
+                    },
+                )
+        };
+        let mut out = Vec::new();
+        let mut previous = None::<BlockId>;
+        for &block in blocks {
+            let steps = self.pressure.steps(function, block);
+            let points = self.pressure.points(function, block);
+            let (leave, enter) = match previous {
+                None => (Vec::new(), steps.first.clone()),
+                Some(from) => {
+                    let moves = self.pressure.moves(function, from, block);
+                    (moves.leave.clone(), moves.enter.clone())
+                }
+            };
+            previous = Some(block);
+            let mut run = RunBlock {
+                block: cfg::id(block),
+                leave: leave.into_iter().filter_map(&mut class).collect(),
+                enter: enter.into_iter().filter_map(&mut class).collect(),
+                steps: Vec::with_capacity(steps.steps.len()),
+            };
+            for (step, point) in steps.steps.iter().zip(points.iter()) {
+                let inst = step.inst;
+                run.steps.push(RunStep {
+                    inst,
+                    registers: room.registers
+                        - transient_by(context, layout, function, inst, room, &point.before, &mut folded)
+                        - copied(function, inst, &point.across, room, &counted),
+                    across: calls(function, inst).then(|| (self.across)(inst)),
+                    read: step.read.iter().copied().filter_map(&mut class).collect(),
+                    made: step.made.and_then(&mut class),
+                });
+            }
+            out.push(run);
+        }
+        Run { blocks: out }
     }
 
     /// What fitting the function spills, each cell priced by its traffic.
@@ -1293,8 +1460,8 @@ impl<'a> View<'a> {
                 folded_in(context, function, value, room.index_scales)
             }
         };
-        let mut sweep = Sweep { spilled: IdSet::default(), cost: 0, peak: 0 };
-        let mut kinds = [Resident::default(), Resident::default(), Resident::default()];
+        let mut sweep = Sweep::<ValueId, IdSet<ValueId>>::new();
+        let mut kinds: [Ranked<ValueId>; 3] = Default::default();
         // A value's cell, and which kinds of point it is a resident of.
         let mut classes: llrm_support::hash::HashMap<ValueId, (ValueId, [bool; 3])> = Default::default();
         let mut class = |value: ValueId| {
@@ -1363,20 +1530,143 @@ impl<'a> View<'a> {
     }
 }
 
-/// What `View::swept` has spilled so far.
-struct Sweep {
-    spilled: IdSet<ValueId>,
-    cost: i64,
-    peak: i64,
+/// A cell that starts or stops being a resident, and of which kinds of point.
+#[derive(Clone, Copy, Debug)]
+struct Cell {
+    cell: ValueId,
+    member: [bool; 3],
 }
 
-impl Sweep {
+/// Blocks run one after the other as a sweep takes them: at each instruction,
+/// the registers its point has, the cells it reads for the last time and the
+/// one it makes, and at each block's start, what changed since the last one's
+/// end.
+pub struct Run {
+    blocks: Vec<RunBlock>,
+}
+
+struct RunBlock {
+    block: i64,
+    leave: Vec<Cell>,
+    enter: Vec<Cell>,
+    steps: Vec<RunStep>,
+}
+
+struct RunStep {
+    inst: InstId,
+    registers: i64,
+    /// The registers a call keeps.
+    across: Option<i64>,
+    read: Vec<Cell>,
+    made: Option<Cell>,
+}
+
+impl Run {
+    /// The instructions of each block, in order: where a resident that lives
+    /// to a reader is asked of.
+    pub fn insts(
+        &self,
+        block: usize,
+    ) -> impl Iterator<Item = InstId> + '_ {
+        self.blocks[block].steps.iter().map(|step| step.inst)
+    }
+
+    /// The block ids, in the order they run.
+    pub fn blocks(&self) -> impl Iterator<Item = i64> + '_ {
+        self.blocks.iter().map(|block| block.block)
+    }
+
+    /// What spilling costs to fit the points the blocks have, as `spilled_in`
+    /// prices them: at each, the cheapest residents past its registers are
+    /// spilled and stay spilled. `key` names a cell; `extra` is asked, at each
+    /// instruction (block and step by position), for the residents besides the
+    /// cells there, and `held` are those besides at each point of the segment
+    /// registers, which come after all the others.
+    pub fn fit<K: Ord + Copy + std::hash::Hash, S: Spilled<K>>(
+        &self,
+        room: Room,
+        key: &dyn Fn(ValueId) -> K,
+        price: &dyn Fn(K) -> i64,
+        held: &[K],
+        extra: &mut dyn FnMut(usize, usize, &mut Vec<K>),
+    ) -> i64 {
+        let mut sweep = Sweep::<K, S>::new();
+        let mut kinds: [Ranked<K>; 3] = Default::default();
+        let mut wanted = Vec::new();
+        let mut now = Vec::<K>::new();
+        for (at, block) in self.blocks.iter().enumerate() {
+            for cell in block.leave.iter().filter(|cell| cell.member[0]) {
+                kinds[0].remove(key(cell.cell));
+            }
+            for cell in block.enter.iter().filter(|cell| cell.member[0]) {
+                kinds[0].add(key(cell.cell), price(key(cell.cell)), &sweep.spilled);
+            }
+            for (index, step) in block.steps.iter().enumerate() {
+                wanted.clear();
+                extra(at, index, &mut wanted);
+                for gone in now.iter().filter(|one| !wanted.contains(one)) {
+                    kinds[0].remove(*gone);
+                }
+                for new in wanted.iter().filter(|one| !now.contains(one)) {
+                    kinds[0].add(*new, price(*new), &sweep.spilled);
+                }
+                std::mem::swap(&mut now, &mut wanted);
+                sweep.fit(&mut kinds, 0, step.registers);
+                for cell in step.read.iter().filter(|cell| cell.member[0]) {
+                    kinds[0].remove(key(cell.cell));
+                }
+                if let Some(across) = step.across {
+                    sweep.fit(&mut kinds, 0, across);
+                }
+                if let Some(cell) = step.made.filter(|cell| cell.member[0]) {
+                    kinds[0].add(key(cell.cell), price(key(cell.cell)), &sweep.spilled);
+                }
+            }
+        }
+        kinds[0].clear();
+        for one in held {
+            kinds[1].add(*one, price(*one), &sweep.spilled);
+        }
+        for block in &self.blocks {
+            for cell in block.leave.iter().filter(|cell| cell.member[1]) {
+                kinds[1].remove(key(cell.cell));
+            }
+            for cell in block.enter.iter().filter(|cell| cell.member[1]) {
+                kinds[1].add(key(cell.cell), price(key(cell.cell)), &sweep.spilled);
+            }
+            for step in &block.steps {
+                sweep.fit(&mut kinds, 1, room.segments);
+                for cell in step.read.iter().filter(|cell| cell.member[1]) {
+                    kinds[1].remove(key(cell.cell));
+                }
+                if let Some(cell) = step.made.filter(|cell| cell.member[1]) {
+                    kinds[1].add(key(cell.cell), price(key(cell.cell)), &sweep.spilled);
+                }
+            }
+        }
+        sweep.cost
+    }
+}
+
+/// What a sweep has spilled so far.
+struct Sweep<K, S> {
+    spilled: S,
+    cost: i64,
+    peak: i64,
+    key: std::marker::PhantomData<K>,
+}
+
+impl<K: Ord + Copy + std::hash::Hash, S: Spilled<K>> Sweep<K, S> {
+    fn new() -> Self {
+        Self { spilled: S::default(), cost: 0, peak: 0, key: std::marker::PhantomData }
+    }
+
     /// `fitted`'s step at one point of kind `which`: spill the cells that
     /// number past `registers`, the cheapest first, dearer ties to the larger
     /// cell, out of every kind.
     fn fit(
         &mut self,
-        kinds: &mut [Resident; 3],
+        kinds: &mut [Ranked<K>; 3],
         which: usize,
         registers: i64,
     ) {
@@ -1389,7 +1679,7 @@ impl Sweep {
         touched(victims.len());
         for (each, cell) in victims {
             self.cost += each;
-            self.spilled.insert(cell);
+            self.spilled.add(cell);
             for kind in kinds.iter_mut() {
                 kind.purge(cell);
             }
@@ -1399,13 +1689,18 @@ impl Sweep {
 
 /// The cells live at a point and not spilled: how many values of each, and
 /// their prices in order.
-#[derive(Default)]
-struct Resident {
-    count: llrm_support::hash::HashMap<ValueId, (u32, i64)>,
-    order: BTreeSet<(i64, ValueId)>,
+struct Ranked<K> {
+    count: llrm_support::hash::HashMap<K, (u32, i64)>,
+    order: BTreeSet<(i64, K)>,
 }
 
-impl Resident {
+impl<K> Default for Ranked<K> {
+    fn default() -> Self {
+        Self { count: Default::default(), order: BTreeSet::new() }
+    }
+}
+
+impl<K: Ord + Copy + std::hash::Hash> Ranked<K> {
     fn clear(&mut self) {
         self.count.clear();
         self.order.clear();
@@ -1413,11 +1708,11 @@ impl Resident {
 
     fn add(
         &mut self,
-        cell: ValueId,
+        cell: K,
         price: i64,
-        spilled: &IdSet<ValueId>,
+        spilled: &impl Spilled<K>,
     ) {
-        if spilled.contains(&cell) {
+        if spilled.has(&cell) {
             return;
         }
         touched(1);
@@ -1430,7 +1725,7 @@ impl Resident {
 
     fn remove(
         &mut self,
-        cell: ValueId,
+        cell: K,
     ) {
         let Some(held) = self.count.get_mut(&cell) else { return };
         touched(1);
@@ -1444,7 +1739,7 @@ impl Resident {
 
     fn purge(
         &mut self,
-        cell: ValueId,
+        cell: K,
     ) {
         if let Some((_, price)) = self.count.remove(&cell) {
             self.order.remove(&(price, cell));

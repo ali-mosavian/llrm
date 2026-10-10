@@ -394,14 +394,14 @@ def test_lsr_does_not_add_up_the_function_or_rebuild_its_graph_for_each_loop(tmp
     built the graph of the whole function to ask three blocks' neighbours (`rotate::_shape`): 1,391 Minstr; on `nest` at N=128 it also
     gathered each block's live sets again for each loop around it and built them as trees: 9,362. The traffic is added up once and
     each loop's instructions taken out, the neighbours are asked of the blocks, the live sets kept and the cells sorted in vectors:
-    about 600 and 5,900. Both stay quadratic (the loops are, and each changed loop invalidates what the next asks for), so the bounds
-    are on the cost."""
+    about 600 and 5,900; the spill forecast is a sweep of the loop's blocks, not a list of residents at each point of them: 1,340 on
+    `nest`. The bounds are on the cost."""
     costs = {}
     for axis, n in (("branches", 512), ("nest", 128)):
         source = tmp_path / f"{axis}_{n}.c"
         source.write_text(scaling.AXES[axis](n))
         costs[axis] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir lsr"]
-    assert costs["branches"] <= 900 and costs["nest"] <= 7500, costs
+    assert costs["branches"] <= 900 and costs["nest"] <= 2000, costs
 
 
 def test_lsr_loop_reads_its_own_blocks_and_the_function_facts_once(tmp_path):
