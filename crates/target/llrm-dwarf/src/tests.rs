@@ -206,7 +206,7 @@ fn what_dwarf_cannot_say_is_refused_by_name() {
 fn a_format_that_is_not_dwarf_is_refused() {
     assert!(written(Vec::new(), vec![int()], Format::CodeView).unwrap_err().0.contains("CodeView"));
     assert!(written(Vec::new(), vec![int()], Format::TurboDebugger).unwrap_err().0.contains("Turbo Debugger"));
-    assert!(written(Vec::new(), vec![int()], Format::Dwarf { version: 3 }).unwrap_err().0.contains("version 3"));
+    assert!(written(Vec::new(), vec![int()], Format::Dwarf { version: 1 }).unwrap_err().0.contains("version 1"));
 }
 
 /// A register is DW_OP_reg0 + its number, and a number past 31 is DW_OP_regx.

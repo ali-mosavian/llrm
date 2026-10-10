@@ -296,9 +296,6 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         // linker joins and relocates.
         Some(info) if dwarf => {
             let mut lines = crate::codeview::lines(object, info)?;
-            if object.arch.bits() != 32 {
-                return Err(unencodable("DWARF in OMF is 32-bit code's: 16-bit addresses are a segment and an offset"));
-            }
             let expanded = llrm_dwarf::expanded(object, info).map_err(|error| unencodable(error.0))?;
 
             lines.resize(expanded.sections.len(), Vec::new());
@@ -382,7 +379,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     let mut records = vec![Rc::new(omf::Record::new(omf::THEADR, string(&object.name)))];
     records.extend(td.iter().flat_map(|one| one.before.iter().cloned()));
     records.push(Rc::new(omf::Record::new(omf::LNAMES, lnames.iter().flat_map(|one| string(one)).collect())));
-    if dwarf {
+    if dwarf && bits == 32 {
         // The linker's directive "flat addresses": the debug sections'
         // addresses are the image's (Open Watcom's -hd objects carry
         // it).

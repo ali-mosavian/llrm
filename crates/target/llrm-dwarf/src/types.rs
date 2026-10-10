@@ -99,6 +99,18 @@ impl Tree<'_> {
         Ok(Value::Addr { symbol, delta: offset as i64 - base as i64 })
     }
 
+    /// `DW_AT_high_pc`: a length from DWARF 4, the address of the end before.
+    fn high_pc(
+        &self,
+        range: model::Range,
+    ) -> Result<Value, Unsupported> {
+        if self.version >= 4 {
+            Ok(Value::Len(range.length as u32))
+        } else {
+            self.address(range.section, range.offset + range.length)
+        }
+    }
+
     /// Type `index`'s DIE, which sits at `1 + index`.
     fn describe(
         &mut self,
@@ -376,6 +388,12 @@ impl Tree<'_> {
                 die.attrs.push((AT_EXTERNAL, Value::Flag));
             }
         }
+        // A 16-bit program's data address is an offset in a segment.
+        if let (2, Location::Static { symbol, .. }) = (self.address, &one.location) {
+            if let llrm_object::Definition::Defined { section, .. } = self.object.symbols[*symbol].definition {
+                die.attrs.push((AT_SEGMENT, Value::ExprSegment { section }));
+            }
+        }
         // A list with no entry is a variable the optimiser removed: no location
         // says "optimized out".
         if !matches!(&one.location, Location::List(entries) if entries.is_empty()) {
@@ -398,7 +416,7 @@ impl Tree<'_> {
             let [range] = block.ranges[..] else { return refused("a block of several ranges is not written yet") };
             let mut inner = Die::new(TAG_LEXICAL_BLOCK);
             inner.attrs.push((AT_LOW_PC, self.address(range.section, range.offset)?));
-            inner.attrs.push((AT_HIGH_PC, Value::Len(range.length as u32)));
+            inner.attrs.push((AT_HIGH_PC, self.high_pc(range)?));
             self.scope(&mut inner, &block.variables, &block.blocks)?;
             let at = self.push(inner);
             die.children.push(at);
@@ -424,8 +442,11 @@ impl Tree<'_> {
         if let Some(Type::Procedure { result: Some(result), .. }) = self.info.types.get(one.r#type) {
             self.typed(&mut die, *result)?;
         }
+        if self.address == 2 {
+            die.attrs.push((AT_SEGMENT, Value::ExprSegment { section: range.section }));
+        }
         die.attrs.push((AT_LOW_PC, self.address(range.section, range.offset)?));
-        die.attrs.push((AT_HIGH_PC, Value::Len(range.length as u32)));
+        die.attrs.push((AT_HIGH_PC, self.high_pc(range)?));
         let framed = one
             .variables
             .iter()
@@ -532,7 +553,7 @@ pub fn tree(
         [] => {}
         [range] => {
             unit.attrs.push((AT_LOW_PC, tree.address(range.section, range.offset)?));
-            unit.attrs.push((AT_HIGH_PC, Value::Len(range.length as u32)));
+            unit.attrs.push((AT_HIGH_PC, tree.high_pc(range)?));
         }
         _ => return refused("a module of several code ranges is not written yet"),
     }

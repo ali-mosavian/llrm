@@ -177,11 +177,9 @@ fn the_flavor_asked_for_is_the_formats_or_an_error() {
         assert!(!made.status.success(), "{arguments:?} was written");
         String::from_utf8_lossy(&made.stderr).into_owned()
     };
-    // DWARF in OMF is 32-bit code's (the 16-bit forms are segment and offset).
-    assert!(refused(&["-m16", "-gdwarf"]).contains("DWARF in OMF is 32-bit code's"));
     assert!(refused(&["-m32", "-gcodeview", "-fobject-format=elf"]).contains("cannot carry CodeView"));
     assert!(refused(&["-m32", "-gtd", "-fobject-format=elf"]).contains("Turbo Debugger"));
-    assert!(refused(&["-m32", "-gdwarf-3", "-fobject-format=elf"]).contains("unrecognized"));
+    assert!(refused(&["-m32", "-gdwarf-1", "-fobject-format=elf"]).contains("unrecognized"));
     // Borland's records are 16-bit.
     assert!(refused(&["-m32", "-gtd"]).contains("16-bit"));
     let made = compile(&source, &["-m16", "-gtd"], &object);
@@ -841,4 +839,58 @@ fn dwarf_in_an_omf_object_links_into_an_le_image_that_llvm_reads() {
     let le = image.windows(4).position(|four| four == b"LE\0\0").expect("an LE header");
     let pages = u32::from_le_bytes(image[le + 0x80..le + 0x84].try_into().unwrap()) as usize;
     assert_eq!(image[pages..elf], plain[pages..plain.len()], "the pages of the image differ with -g");
+}
+
+/// DWARF in a 16-bit OMF object, linked by jwlink into an MZ image, in Open
+/// Watcom's own convention for segmented code: address size 2, a
+/// `DW_AT_segment` on each function and data symbol, the segment of a line
+/// program (extended opcode 4) and of an arange. Open Watcom's wdump is the
+/// reader (llvm-dwarfdump has no 16-bit addresses); it read none of it before
+/// the segment forms, and the offsets were unrelocated zeros without
+/// the linker's directive.
+#[test]
+fn dwarf_in_a_16_bit_omf_object_links_into_an_mz_image_that_wdump_reads() {
+    let wdump = std::env::var_os("WDUMP")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("dos/devtools/dev/c/watcom/binl/wdump")))
+        .filter(|path| path.exists());
+    let jwlink = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("jwlink");
+    let (Some(wdump), true) = (wdump, jwlink.exists()) else {
+        skipped("needs Open Watcom's wdump (WDUMP) and jwlink beside llrm");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");
+    let made = compile(&source, &["-m16", "-O0", "-gdwarf-2", "-fobject-format=omf"], &dir.join("known.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(&jwlink)
+        .args(["format", "dos", "debug", "dwarf", "file", "known.obj", "name", "known.exe"])
+        .args(["option", "quiet,start=_main,nodefaultlibs,map=known.map"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(dir.join("known.exe").exists(), "{}", String::from_utf8_lossy(&linked.stdout));
+    let said = Command::new(wdump).args(["-q", "-d", "-Dx"]).arg(dir.join("known.exe")).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    for wanted in [
+        "Address Size 02",
+        "Segment Size 02",
+        "DW_AT_name                    counter",
+        "DW_AT_name                    add",
+        "DW_AT_name                    first",
+        "DW_AT_name                    sum",
+        "DW_AT_segment",
+        "SET_SEGMENT",
+    ] {
+        assert!(text.contains(wanted), "no {wanted:?}:\n{text}");
+    }
+    // The global is where the linker put it: its offset in the data group, not
+    // zero, and its segment the group's.
+    let map = std::fs::read_to_string(dir.join("known.map")).unwrap();
+    let place = map.lines().find(|line| line.contains("_counter")).expect("the map names counter");
+    let offset =
+        place.split_whitespace().next().unwrap().split(':').nth(1).unwrap().trim_end_matches(['*', '+']).to_uppercase();
+    let wanted = format!("Loc expr: addr {}", &offset[offset.len() - 4..]);
+    assert!(text.contains(&wanted), "{wanted:?} not in the dump:\n{text}");
 }
