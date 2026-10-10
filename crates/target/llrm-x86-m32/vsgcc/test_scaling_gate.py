@@ -647,3 +647,24 @@ def test_two_address_asks_interference_of_the_values_it_compares_not_of_every_pa
     source.write_text(scaling.AXES["live"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir twoaddr"]
     assert cost <= 400, cost
+
+
+def test_a_spill_reads_the_instructions_that_name_a_home_and_its_copies_from_the_postings_on_the_cells_axis(tmp_path):
+    """`spill color slots` rebuilt, at every spill, a pair of sets for each instruction that names a home and walked every
+    instruction of the body for the copies of the value: on `cells` at N=1024 that was 4,590 Minstr (slope 2.2).
+    Reading the cells an instruction names from its operands and the copies from the postings of the value reads 1,460.
+    More than 2,200 fails."""
+    source = tmp_path / "cells_1024.c"
+    source.write_text(scaling.AXES["cells"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["spill color slots"]
+    assert cost <= 2200, cost
+
+
+def test_the_homes_wanted_again_are_asked_of_the_instructions_that_name_them_on_the_cells_axis(tmp_path):
+    """`intervals homes` built the pseudo-values of every instruction that names a home, and a table of the homes each
+    names, for the few homes a spill makes it find again: on `cells` at N=1024 that was 3,940 Minstr. Built for the
+    wanted homes alone it reads 2,340. More than 3,200 fails."""
+    source = tmp_path / "cells_1024.c"
+    source.write_text(scaling.AXES["cells"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["intervals homes"]
+    assert cost <= 3200, cost

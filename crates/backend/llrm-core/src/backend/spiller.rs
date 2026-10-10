@@ -1167,9 +1167,30 @@ fn _color_slots(
 }
 
 /// What each of `values` is copied to or from: another value, or a frame cell's
-/// home.
+/// home. Only the instructions that name one of `values` are looked at: those
+/// the postings of the body give, not every instruction of it.
 fn _copied_with(
     body: &LirBody,
+    values: &BTreeSet<u32>,
+) -> IndexMap<u32, Vec<Result<u32, i64>>> {
+    let mut at: Vec<At> = postings::following(body, |postings| {
+        values.iter().flat_map(|value| postings.defs(*value).iter().chain(postings.uses(*value))).copied().collect()
+    });
+    at.sort_unstable();
+    at.dedup();
+    let found = _copied_among(
+        at.iter().map(|&(block, position)| &body.blocks[block as usize].insns[position as usize]),
+        values,
+    );
+    if check_postings() {
+        let walked = _copied_among(body.blocks.iter().flat_map(|block| &block.insns), values);
+        assert!(found == walked, "{}: the copies of the values from the postings differ from the walk", body.name);
+    }
+    found
+}
+
+fn _copied_among<'a>(
+    insns: impl Iterator<Item = &'a Arc<Insn>>,
     values: &BTreeSet<u32>,
 ) -> IndexMap<u32, Vec<Result<u32, i64>>> {
     let mut copies: IndexMap<u32, Vec<Result<u32, i64>>> = IndexMap::default();
@@ -1180,7 +1201,7 @@ fn _copied_with(
         }
         _ => None,
     };
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+    for one in insns {
         let Some(what) = &one.what else { continue };
         let ([into], [from]) = (what.dests.as_slice(), what.sources.as_slice()) else { continue };
         if what.op != Operation::Move || what.name.as_deref() != Some("mov") {
@@ -1415,7 +1436,6 @@ struct HomesState {
     index: Arc<ranges::Indexes>,
     intervals: IndexMap<i64, Interval>,
     known: BTreeSet<i64>,
-    names: crate::support::hash::HashMap<usize, Vec<i64>>,
     count: usize,
 }
 
@@ -1487,6 +1507,60 @@ impl HomesStructure {
     }
 }
 
+/// The frame cells `one` names: their displacement, width and whether it
+/// writes them.
+fn frame_cells(one: &Insn) -> impl Iterator<Item = (i64, u32, bool)> + '_ {
+    let cell = |operand: &Loc, defines: bool| -> Option<(i64, u32, bool)> {
+        let Loc::Mem(cell) = operand else { return None };
+        let addr = cell.addr?;
+        (addr.space == Space::Frame).then_some((addr.disp, cell.width, defines))
+    };
+    one.what.iter().flat_map(move |what| {
+        what.dests
+            .iter()
+            .filter_map(move |operand| cell(operand, true))
+            .chain(what.sources.iter().filter_map(move |operand| cell(operand, false)))
+    })
+}
+
+/// What names a home: an instruction, by the frame cells it names.
+enum Names<'a> {
+    Insn(&'a Insn),
+}
+
+/// An instruction that names a home.
+struct Named<'a> {
+    block: usize,
+    at: usize,
+    names: Names<'a>,
+}
+
+impl Named<'_> {
+    /// The values it defines and reads among the homes `wanted` allows (the
+    /// pseudo-value of a home is `first` and its place among `homes`).
+    fn sets(
+        &self,
+        homes: &[i64],
+        first: u32,
+        wanted: &dyn Fn(i64) -> bool,
+    ) -> (BTreeSet<u32>, BTreeSet<u32>) {
+        let (mut defined, mut used) = (BTreeSet::new(), BTreeSet::new());
+        match &self.names {
+            Names::Insn(one) => {
+                for (disp, _, defines) in frame_cells(one) {
+                    if !wanted(disp) {
+                        continue;
+                    }
+                    if let Ok(place) = homes.binary_search(&disp) {
+                        if defines { &mut defined } else { &mut used }.insert(first + place as u32);
+                    }
+                }
+            }
+        }
+        (defined, used)
+    }
+}
+
 /// The homes' intervals: those of the homes the instructions that changed since
 /// an earlier body do not name are that body's, shifted to the new numbering;
 /// the others are found from where they occur. A spill changes a few blocks and
@@ -1495,24 +1569,25 @@ impl HomesStructure {
 fn homes_kept(
     body: &LirBody,
     index: &Arc<ranges::Indexes>,
-    named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)],
+    named: &[Named<'_>],
     homes: &[i64],
     first: u32,
 ) -> IndexMap<u32, Interval> {
     let pseudo = |home: usize| first + home as u32;
-    // Which homes each instruction names: found when it is needed, for a body
-    // that is kept or has an earlier one to be kept from.
-    let names_now = || -> crate::support::hash::HashMap<usize, Vec<i64>> {
-        let mut now: crate::support::hash::HashMap<usize, Vec<i64>> = Default::default();
-        for (block, at, defined, used) in named {
-            let one = &body.blocks[*block].insns[*at];
-            now.insert(ranges::key(one), defined.union(used).map(|value| homes[(*value - first) as usize]).collect());
-        }
-        now
-    };
     let fresh_for = |wanted: &[usize]| -> IndexMap<u32, Interval> {
         let values: Vec<u32> = wanted.iter().map(|home| pseudo(*home)).collect();
-        crate::analysis::occurrences::Occurrences::planned(named).ranges(body, index, &values)
+        // Only the instructions that name a wanted home, and only the wanted
+        // among what they name: the others' intervals are not asked.
+        let mut disps: Vec<i64> = wanted.iter().map(|home| homes[*home]).collect();
+        disps.sort_unstable();
+        let tuples: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = named
+            .iter()
+            .filter_map(|one| {
+                let (defined, used) = one.sets(homes, first, &|disp| disps.binary_search(&disp).is_ok());
+                (!defined.is_empty() || !used.is_empty()).then_some((one.block, one.at, defined, used))
+            })
+            .collect();
+        crate::analysis::occurrences::Occurrences::planned(&tuples).ranges(body, index, &values)
     };
     let kept = body.facts.0.stash(|held: &mut HomesHeld| {
         held.0
@@ -1524,9 +1599,7 @@ fn homes_kept(
             .cloned()
     });
     let mut result: Option<IndexMap<u32, Interval>> = None;
-    let mut now = None;
     if let Some(state) = &kept {
-        let now = now.insert(names_now());
         let blocks: Vec<(i64, &crate::model::lir::Insns)> =
             state.structure.blocks.iter().zip(&state.insns).map(|((at, _, _), insns)| (*at, insns)).collect();
         let differing = ranges::differing_blocks(&blocks, body);
@@ -1539,11 +1612,13 @@ fn homes_kept(
             &differing,
             ((state.count + 16) / 4).min((named.len() + 16) / FACTOR),
             &mut |run| {
+                // The homes it named then and the homes it names now.
                 for one in run {
-                    let key = ranges::key(one);
-                    touched.extend(
-                        state.names.get(&key).into_iter().flatten().chain(now.get(&key).into_iter().flatten()).copied(),
-                    );
+                    for (disp, _, _) in frame_cells(one) {
+                        if state.known.contains(&disp) || homes.binary_search(&disp).is_ok() {
+                            touched.insert(disp);
+                        }
+                    }
                 }
             },
         );
@@ -1610,7 +1685,6 @@ fn homes_kept(
             .filter_map(|(at, home)| result.get(&pseudo(at)).map(|found| (*home, found.clone())))
             .collect(),
         known: homes.iter().copied().collect(),
-        names: now.unwrap_or_else(names_now),
         count: body.blocks.iter().map(|block| block.insns.len()).sum(),
     };
     body.facts
@@ -1643,58 +1717,96 @@ fn _existing_colors_by(
     let (floor, hole) = (frame.floor, frame.hole);
     let frame_spills = |disp: i64| disp < floor || (-hole..0).contains(&disp);
 
-    let mut slot = |operand: &Loc, capacities: &mut IndexMap<i64, u32>| -> Option<u32> {
-        let Loc::Mem(cell) = operand else {
-            return None;
-        };
-        let addr = cell.addr?;
-        if addr.space != Space::Frame {
-            return None;
-        }
-        let home = addr.disp;
-        if let Some(found) = pseudo.get(&home) {
-            let had = capacities[&home];
-            capacities.insert(home, had.max(cell.width).max(WORD));
-            return Some(*found);
-        }
-        if frame_spills(home) {
-            unknown = true;
-        }
-        None
-    };
-
     // Only an instruction that names a home is made again with it among its
     // values; the others are the body's. Only those with a frame cell among
-    // their operands can, which the occurrences hold by block.
+    // their operands can, which are carried from the body this one was made
+    // from.
     let mut flipped = false;
-    // The instructions that name a home, and which: made again with them among
-    // their values only where the whole body is walked.
-    let mut named: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
+    // The instructions that name a home: made again with them among their
+    // values only where the whole body is walked.
+    let mut named: Vec<Named<'_>> = Vec::new();
     postings::following(body, |postings| {
         for (block_index, block) in body.blocks.iter().enumerate() {
             for &at in postings.frames(block_index) {
                 let one = &block.insns[at as usize];
-                let Some(what) = &one.what else { continue };
-                let defined: BTreeSet<u32> =
-                    what.dests.iter().filter_map(|operand| slot(operand, &mut capacities)).collect();
-                let used: BTreeSet<u32> =
-                    what.sources.iter().filter_map(|operand| slot(operand, &mut capacities)).collect();
-                if defined.is_empty() && used.is_empty() && !whole {
+                let mut names = false;
+                for (disp, width, _) in frame_cells(one) {
+                    if let Some(had) = capacities.get_mut(&disp) {
+                        *had = (*had).max(width).max(WORD);
+                        names = true;
+                    } else if frame_spills(disp) {
+                        unknown = true;
+                    }
+                }
+                if !names && !whole {
                     continue;
                 }
                 // A value changes whether an instruction is a mark, and with it
-                // the slots after it: it is one made of
-                // nothing.
-                flipped |= (!defined.is_empty() || !used.is_empty()) && one.is_meta();
-                named.push((block_index, at as usize, defined, used));
+                // the slots after it: it is one made of nothing.
+                flipped |= names && one.is_meta();
+                named.push(Named { block: block_index, at: at as usize, names: Names::Insn(one) });
             }
         }
     });
+    if llrm_support::env_set("LLRM_CHECK_NAMED") {
+        // The body read whole, instruction by instruction.
+        let mut walked: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
+        let (mut walked_capacities, mut walked_unknown, mut walked_flipped) =
+            (homes.iter().map(|home| (*home, frame.capacities.get(home).map_or(WORD, |one| *one as u32))).collect::<IndexMap<i64, u32>>(), false, false);
+        for (block_index, block) in body.blocks.iter().enumerate() {
+            for (at, one) in block.insns.iter().enumerate() {
+                let Some(what) = &one.what else { continue };
+                let mut slot_of = |operand: &Loc| -> Option<u32> {
+                    let Loc::Mem(cell) = operand else { return None };
+                    let addr = cell.addr?;
+                    if addr.space != Space::Frame {
+                        return None;
+                    }
+                    if let Some(found) = pseudo.get(&addr.disp) {
+                        let had = walked_capacities[&addr.disp];
+                        walked_capacities.insert(addr.disp, had.max(cell.width).max(WORD));
+                        return Some(*found);
+                    }
+                    if frame_spills(addr.disp) {
+                        walked_unknown = true;
+                    }
+                    None
+                };
+                let framed = what.dests.iter().chain(&what.sources).any(
+                    |operand| matches!(operand, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)),
+                );
+                if !framed {
+                    continue;
+                }
+                let defined: BTreeSet<u32> = what.dests.iter().filter_map(&mut slot_of).collect();
+                let used: BTreeSet<u32> = what.sources.iter().filter_map(&mut slot_of).collect();
+                if defined.is_empty() && used.is_empty() && !whole {
+                    continue;
+                }
+                walked_flipped |= (!defined.is_empty() || !used.is_empty()) && one.is_meta();
+                walked.push((block_index, at, defined, used));
+            }
+        }
+        let carried: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = named
+            .iter()
+            .map(|one| {
+                let (defined, used) = one.sets(&homes, first, &|_| true);
+                (one.block, one.at, defined, used)
+            })
+            .collect();
+        assert!(
+            carried == walked && capacities == walked_capacities && unknown == walked_unknown && flipped == walked_flipped,
+            "{}: the instructions that name a home, carried from the body this one was made from, differ from reading the body whole",
+            body.name
+        );
+    }
     let changed_insns = || -> Vec<(usize, usize, Arc<Insn>)> {
         MADE.with(|count| count.set(count.get() + named.len()));
         named
             .iter()
-            .map(|(block_index, at, defined, used)| {
+            .map(|one| {
+                let (block_index, at) = (&one.block, &one.at);
+                let (defined, used) = one.sets(&homes, first, &|_| true);
                 let one = &body.blocks[*block_index].insns[*at];
                 let made = _with(one, |made| {
                     made.defines = one
@@ -5872,20 +5984,7 @@ mod tests {
                 vec![],
             ))
         };
-        let chain = |extra_at_30: bool| {
-            let blocks: Vec<LirBlock> = (0..1600i64)
-                .map(|at| {
-                    let insns = if at == 30 && extra_at_30 {
-                        vec![nop(0x1000), nop(0x1001 + at), nop(0x2000 + at)]
-                    } else {
-                        vec![nop(0x1001 + at), nop(0x2000 + at)]
-                    };
-                    LirBlock { succ: if at < 1599 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
-                })
-                .collect();
-            LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default())
-        };
-        let homes = [-2i64, -4, -6];
+        let homes = [-6i64, -4, -2];
         let first = 1000u32;
         let names = |extra: bool| {
             let one = |home: usize| first + home as u32;
@@ -5913,9 +6012,54 @@ mod tests {
             named.sort_by_key(|(block, at, _, _)| (*block, *at));
             named
         };
+        // The instruction that stores to, or loads from, the home a name says.
+        let naming = |at: i64, defined: &BTreeSet<u32>, used: &BTreeSet<u32>| {
+            let cell = |values: &BTreeSet<u32>| {
+                let home = homes[(*values.iter().next().expect("a home") - first) as usize];
+                Loc::Mem(mem(Addr::new(Space::Frame, home), 2, Register::BP, home, 1))
+            };
+            let what = if defined.is_empty() {
+                semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell(used)])
+            } else {
+                semantics(Operation::Move, "mov", vec![cell(defined)], vec![imm(0, 2)])
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
+        };
+        let chain = |extra_at_30: bool| {
+            let plan = names(extra_at_30);
+            let blocks: Vec<LirBlock> = (0..1600i64)
+                .map(|at| {
+                    let mut insns = if at == 30 && extra_at_30 {
+                        vec![nop(0x1000), nop(0x1001 + at), nop(0x2000 + at)]
+                    } else {
+                        vec![nop(0x1001 + at), nop(0x2000 + at)]
+                    };
+                    for (block, position, defined, used) in &plan {
+                        if *block as i64 == at {
+                            insns[*position] = naming(0x3000 + 4 * at + *position as i64, defined, used);
+                        }
+                    }
+                    LirBlock { succ: if at < 1599 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
+                })
+                .collect();
+            LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default())
+        };
+        // What names the homes in `body`, as the colouring finds it.
+        fn named_in(
+            body: &LirBody,
+            plan: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)>,
+        ) -> Vec<super::Named<'_>> {
+            plan.into_iter()
+                .map(|(block, at, _, _)| super::Named {
+                    block,
+                    at,
+                    names: super::Names::Insn(&body.blocks[block].insns[at]),
+                })
+                .collect()
+        }
         let before = chain(false);
         let first_found =
-            super::homes_kept(&before, &ranges::indexed_shared(&before), &sorted(names(false)), &homes, first);
+            super::homes_kept(&before, &ranges::indexed_shared(&before), &named_in(&before, sorted(names(false))), &homes, first);
         assert_eq!(first_found.len(), 3, "premise: all three homes are live somewhere");
         // A spill puts an instruction in block 30, which names the third home.
         let mut after = before.clone();
@@ -5928,7 +6072,7 @@ mod tests {
                 .collect(),
         );
         let redone = super::homes_redone(&after);
-        let kept = super::homes_kept(&after, &ranges::indexed_shared(&after), &sorted(names(true)), &homes, first);
+        let kept = super::homes_kept(&after, &ranges::indexed_shared(&after), &named_in(&after, sorted(names(true))), &homes, first);
         assert_eq!(super::homes_redone(&after) - redone, 1, "the homes the change does not name were found again");
         let index = ranges::indexed_shared(&after);
         let values: Vec<u32> = (first..first + 3).collect();
