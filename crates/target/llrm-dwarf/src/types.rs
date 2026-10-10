@@ -375,14 +375,18 @@ impl Tree<'_> {
         }
     }
 
+    /// The variable's DIE, or none where its type has no DWARF form (BASIC's
+    /// array, a far pointer): it is left out, never a refused compile.
     fn variable(
         &mut self,
         one: &Variable,
         global: bool,
-    ) -> Result<usize, Unsupported> {
+    ) -> Result<Option<usize>, Unsupported> {
         let mut die = Die::new(if one.kind == Kind::Parameter { TAG_FORMAL_PARAMETER } else { TAG_VARIABLE });
         die.attrs.push((AT_NAME, Value::Str(one.name.clone())));
-        self.typed(&mut die, one.r#type)?;
+        if self.typed(&mut die, one.r#type).is_err() {
+            return Ok(None);
+        }
         if let (true, Location::Static { symbol, .. }) = (global, &one.location) {
             if self.object.symbols[*symbol].binding == Binding::Public {
                 die.attrs.push((AT_EXTERNAL, Value::Flag));
@@ -403,7 +407,7 @@ impl Tree<'_> {
                 die.attrs.push((AT_LOCATION, location));
             }
         }
-        Ok(self.push(die))
+        Ok(Some(self.push(die)))
     }
 
     fn scope(
@@ -413,8 +417,9 @@ impl Tree<'_> {
         blocks: &[Block],
     ) -> Result<(), Unsupported> {
         for one in variables {
-            let at = self.variable(one, false)?;
-            die.children.push(at);
+            if let Some(at) = self.variable(one, false)? {
+                die.children.push(at);
+            }
         }
         for block in blocks {
             let [range] = block.ranges[..] else { return refused("a block of several ranges is not written yet") };
@@ -444,7 +449,8 @@ impl Tree<'_> {
         }
         die.attrs.push((AT_PROTOTYPED, Value::Flag));
         if let Some(Type::Procedure { result: Some(result), .. }) = self.info.types.get(one.r#type) {
-            self.typed(&mut die, *result)?;
+            // A result with no DWARF form leaves the function untyped.
+            let _ = self.typed(&mut die, *result);
         }
         if self.address == 2 {
             die.attrs.push((AT_SEGMENT, Value::ExprSegment { section: range.section }));
@@ -596,8 +602,9 @@ pub fn tree(
         }
     }
     for global in &info.globals {
-        let at = tree.variable(global, true)?;
-        children.push(at);
+        if let Some(at) = tree.variable(global, true)? {
+            children.push(at);
+        }
     }
     for function in &info.functions {
         let at = tree.function(function)?;

@@ -211,3 +211,25 @@ fn a_variable_of_a_type_codeview_cannot_say_is_left_out_not_a_refused_compile() 
     assert!(shape.iter().any(|one| one.starts_with("PROC t ")), "{shape:#?}");
     assert!(!shape.iter().any(|one| one.contains(".S$")), "{shape:#?}");
 }
+
+/// `-gdwarf` on a program with an array (GORILLA has them) refused the compile
+/// ("a BASIC array is its descriptor's: it has no DWARF type"). The array's
+/// variable is left out; the procedure and the other variables are written.
+#[test]
+fn dwarf_leaves_out_a_basic_array_it_cannot_say_and_compiles() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = "DECLARE SUB t ()\nt\nEND\nSUB t\nDIM grid(10) AS INTEGER\nDIM total AS INTEGER\ngrid(1) = 5\ntotal = grid(1)\nPRINT total\nEND SUB\n";
+    let path = written(&directory, "arr.bas", source.as_bytes());
+    let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+    let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+    let codegen = llrm_core::driver::Options {
+        pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
+        debug_format: llrm_object::debug::Format::Dwarf { version: 2 },
+        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+    };
+    let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -gdwarf");
+    let records = omf::parse(&bytes).expect("parses");
+    let text: String = records.iter().flat_map(|one| one.body.iter().map(|&byte| char::from(byte))).collect();
+    assert!(text.contains(".debug_info") && text.contains("TOTAL"), "the DWARF has the other variable");
+    assert!(!text.contains("GRID"), "the array is left out");
+}
