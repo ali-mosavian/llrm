@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use super::{_truncating, allocated};
 use crate::backend::cpu;
@@ -272,7 +272,7 @@ fn test_truncation_saves_the_control_word_once_per_body() {
     // Every `(int)f` saved the control word and built the truncating one again.
     let insn = |at: i64, what: Semantics| Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]));
     let store = |at: i64, disp: i64| {
-        let cell = Mem { through: Register::BP, offset: 0, disp_width: 2, ..frame_cell(disp, 2) };
+        let cell = Mem { through: RegId::BP, offset: 0, disp_width: 2, ..frame_cell(disp, 2) };
         insn(at, sem(Operation::FloatStore, "fisttp", vec![m(&cell)], vec![st(0)]))
     };
     let blocks = vec![
@@ -346,7 +346,7 @@ fn test_a_load_is_not_read_again_after_a_store_that_may_reach_it() {
             falloff.clone()
         } else {
             Mem {
-                through: Register::SI,
+                through: RegId::SI,
                 base: Some(Held { value: 9, width: 2 }),
                 disp_width: 2,
                 ..Mem::new(Some(Addr { index: 5, ..Addr::new(Space::Segment, 0) }), 4)
@@ -716,7 +716,7 @@ fn test_conversion_result_is_kept_for_non_operand_readers() {
             _body(vec![_load(1, &cell), sem(Operation::FloatStore, "fistp", vec![result.clone()], vec![fl(1)])]);
         let first = body.blocks[0].clone();
         match reader {
-            "pinned" => body.pins = IndexMap::from_iter([(2, Register::None)]),
+            "pinned" => body.pins = IndexMap::from_iter([(2, RegId::None)]),
             _ => {
                 let what = match reader {
                     "opaque" => None,
@@ -1495,7 +1495,7 @@ fn spill_traffic(result: &LirBody) -> usize {
                 .any(
                     |arg| matches!(
                         arg,
-                        Loc::Mem(cell) if cell.width == 8 && cell.through == Register::BP
+                        Loc::Mem(cell) if cell.width == 8 && cell.through == RegId::BP
                     ),
                 )
         })

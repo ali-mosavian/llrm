@@ -406,14 +406,15 @@ pub fn sunk(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register::{self, AX, BX, DI, DX};
+    use iced_x86::Register::{AX, BX, DI, DX};
+    use llrm_lir::registers::RegId;
 
     use super::sunk;
     use crate::model::ir::{Loc, Operation, Reg, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
-    fn r(register: Register) -> Loc {
+    fn r(register: RegId) -> Loc {
         Loc::Reg(Reg { register, width: 2 })
     }
 
@@ -436,8 +437,8 @@ mod tests {
 
     fn copy(
         at: i64,
-        dest: Register,
-        source: Register,
+        dest: RegId,
+        source: RegId,
     ) -> Arc<Insn> {
         insn(at, Operation::Move, "mov", vec![r(dest)], vec![r(source)], None)
     }
@@ -562,10 +563,10 @@ mod tests {
                 space: Space::Frame,
                 disp: -4 * (k + 1),
                 index: -(k + 1),
-                base: Register::None,
-                segment: Register::None,
+                base: RegId::None,
+                segment: RegId::None,
             };
-            crate::model::ir::Mem { through: Register::BP, ..crate::model::ir::Mem::new(Some(addr), 2) }
+            crate::model::ir::Mem { through: RegId::BP, ..crate::model::ir::Mem::new(Some(addr), 2) }
         };
         let mut blocks = Vec::new();
         for k in 0..n {

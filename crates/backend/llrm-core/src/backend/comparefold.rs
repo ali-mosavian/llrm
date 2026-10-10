@@ -192,7 +192,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::selected;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
@@ -205,12 +205,12 @@ mod tests {
         // spill.
         let (base, selector, loaded, other) = (1, 2, 3, 4);
         let cell = Mem {
-            through: Register::None,
+            through: RegId::None,
             offset: 0,
             disp_width: 2,
             base: Some(Held { value: base, width: 2 }),
             selector: Some(Held { value: selector, width: 2 }),
-            ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, 0) }), 2)
+            ..Mem::new(Some(Addr { segment: RegId::ES, ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources| Semantics {
             name: Some(name.to_owned()),
@@ -339,7 +339,7 @@ mod tests {
         // C sieve ran 13.4% behind BCC after loading every flag byte into AX.
         let (index, loaded) = (1, 2);
         let cell = Mem {
-            through: Register::BP,
+            through: RegId::BP,
             offset: -1028,
             disp_width: 2,
             index: Some(Held { value: index, width: 2 }),
@@ -364,7 +364,7 @@ mod tests {
         // test does not.
         let loaded = 1;
         let cell =
-            Mem { through: Register::BP, offset: -4, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, -4)), 1) };
+            Mem { through: RegId::BP, offset: -4, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, -4)), 1) };
         let [load, compare] = widened(loaded, &cell, Vec::new());
         let insns = vec![load, compare, branch("jl")];
         let users: IndexMap<u32, i64> = [(loaded, 1)].into_iter().collect();

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::model::ir::{AddressRef, Loc, Operation};
 use crate::model::lir::{Insn, LirBody};
@@ -34,7 +34,7 @@ pub fn converted(body: &LirBody) -> LirBody {
                 }));
                 continue;
             }
-            if addr.is_some() && source.base.is_some() && source.through != Register::None {
+            if addr.is_some() && source.base.is_some() && source.through != RegId::None {
                 addr = addr.map(|addr| Addr { base: source.through, ..addr });
             }
             sources.push(Loc::Address(AddressRef {
@@ -63,7 +63,7 @@ pub fn converted(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::converted;
     use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
@@ -86,14 +86,14 @@ mod tests {
         let frame = Mem {
             base: Some(Held { value: 1, width: 2 }),
             scale: 2,
-            ..mem(Addr::new(Space::Frame, -6), Register::SI, 3, 1)
+            ..mem(Addr::new(Space::Frame, -6), RegId::SI, 3, 1)
         };
         let seg = Mem {
             base: Some(Held { value: 2, width: 2 }),
-            index_through: Register::DI,
-            ..mem(Addr::new(Space::Segment, 8), Register::BX, 5, 2)
+            index_through: RegId::DI,
+            ..mem(Addr::new(Space::Segment, 8), RegId::BX, 5, 2)
         };
-        let plain = mem(Addr::new(Space::Segment, 8), Register::BX, 5, 2);
+        let plain = mem(Addr::new(Space::Segment, 8), RegId::BX, 5, 2);
         let insn = |at, what| Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new()));
         let body = LirBody::new(
             "f",

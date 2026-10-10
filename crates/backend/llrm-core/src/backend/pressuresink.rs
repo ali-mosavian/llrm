@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::allocate::live;
 use crate::backend::classes::RegisterClasses;
@@ -54,7 +54,7 @@ impl LIRTransform for PressureSink {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Class {
     Stack,
-    Within(BTreeSet<Register>),
+    Within(BTreeSet<RegId>),
     Any,
 }
 

@@ -240,7 +240,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::sunk;
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
@@ -248,7 +248,7 @@ mod tests {
     use crate::support::hash::HashMap;
     use crate::support::hash::IndexMap;
 
-    fn r(register: Register) -> Loc {
+    fn r(register: RegId) -> Loc {
         Loc::Reg(Reg { register, width: 2 })
     }
 
@@ -273,16 +273,16 @@ mod tests {
 
     fn _move(
         at: i64,
-        dest: Register,
-        source: Register,
+        dest: RegId,
+        source: RegId,
     ) -> Arc<Insn> {
         _insn(at, Operation::Move, "mov", vec![r(dest)], vec![r(source)], None)
     }
 
     fn _compare(
         at: i64,
-        left: Register,
-        right: Register,
+        left: RegId,
+        right: RegId,
     ) -> Arc<Insn> {
         _insn(at, Operation::Compare, "cmp", vec![], vec![r(left), r(right)], None)
     }
@@ -325,7 +325,7 @@ mod tests {
                         .iter()
                         .filter(|one| {
                             let what = one.what.as_ref().unwrap();
-                            what.name.as_deref() == Some("mov") && what.sources == [r(Register::DX)]
+                            what.name.as_deref() == Some("mov") && what.sources == [r(RegId::DX)]
                         })
                         .map(|one| one.what.as_ref().unwrap().dests[0].clone())
                         .collect(),
@@ -339,7 +339,7 @@ mod tests {
         // Shellsort's gap loop: `mov cx,dx` in the inner loop's header saved
         // `i` for the inner loop's latch; it must not leave for the
         // outer exit.
-        use Register::{AX, BX, CX, DX, SI};
+        use iced_x86::Register::{AX, BX, CX, DX, SI};
         let body = LirBody::new(
             "f",
             1,
@@ -363,7 +363,7 @@ mod tests {
     fn test_copy_read_only_after_its_loop_moves_to_the_exit() {
         // Plasmablobs: `mov di,dx` on the way back to the header ran every pass
         // for one read after the loop.
-        use Register::{AX, BX, DI, DX};
+        use iced_x86::Register::{AX, BX, DI, DX};
         let body = LirBody::new(
             "f",
             1,
@@ -388,7 +388,7 @@ mod tests {
         // #111: the latch's `mov di,dx` left for the exit of a loop tested at
         // its header; run no times, the loop left DI the value DX happened to
         // hold, not the one DI held before it (5812 where 0 is right on DOS).
-        use Register::{AX, BX, DI, DX};
+        use iced_x86::Register::{AX, BX, DI, DX};
         let body = LirBody::new(
             "f",
             1,
@@ -431,13 +431,13 @@ mod tests {
         body: &LirBody,
         path: &[i64],
     ) -> Vec<i64> {
-        let mut held: HashMap<Register, i64> = HashMap::default();
+        let mut held: HashMap<RegId, i64> = HashMap::default();
         let mut pushed = Vec::new();
         let blocks: HashMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
         for at in path {
             for one in &blocks[at].insns {
                 let what = one.what.as_ref().unwrap();
-                let read = |held: &HashMap<Register, i64>, operand: &Loc| match operand {
+                let read = |held: &HashMap<RegId, i64>, operand: &Loc| match operand {
                     Loc::Imm(value) => value.value,
                     Loc::Reg(register) => held[&register.register],
                     _ => unreachable!(),
@@ -459,7 +459,7 @@ mod tests {
         // PRECALCULATIONS' map index was copied back once per row instead of
         // once per pixel, and deedlines drew its minimap from stale
         // plasma data.
-        let (si, bx, dx) = (r(Register::SI), r(Register::BX), r(Register::DX));
+        let (si, bx, dx) = (r(RegId::SI), r(RegId::BX), r(RegId::DX));
         let body = LirBody::new(
             "one",
             0,
