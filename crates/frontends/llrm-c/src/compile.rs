@@ -456,9 +456,11 @@ pub fn main(argv: &[String]) -> i32 {
             )
         {
             let bytes = objbuild::written_in(&built, name, objbuild::CodeLayout::OneSegment, format)?;
-            llrm_core::support::debug::timed("write output", || fs::write(&output, bytes))?;
+            llrm_core::support::debug::timed("write output", || {
+                llrm_core::driver::flags::write_output(&output, bytes)
+            })?;
         } else {
-            fs::write(&output, masm::text(&built)?)?;
+            llrm_core::driver::flags::write_output(&output, masm::text(&built)?)?;
         }
         Ok(())
     })();
