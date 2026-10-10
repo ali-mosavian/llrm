@@ -2935,7 +2935,7 @@ impl Bounded<'_> {
     fn at(
         &self,
         at: i64,
-    ) -> Option<&IndexMap<ValueId, ranges::Interval>> {
+    ) -> Option<&ranges::Intervals> {
         match self {
             Bounded::Held(held) => held.at(at),
             Bounded::Worked(worked) => worked.get(&at),
