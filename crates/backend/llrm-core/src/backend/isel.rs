@@ -780,7 +780,7 @@ pub fn selected_with<'c>(
         function,
         arch,
         promote: arch.layout().promote,
-        in_cells: BTreeSet::new(),
+        in_cells: llrm_mir::dense::IdSet::new(),
         regs: Regs(arch.registers()),
         callee_facts,
         spaces: arch.layout().spaces.roles,
@@ -1269,7 +1269,7 @@ pub struct Selector<'m, 'c, 'p> {
     promote: Vec<String>,
     /// The parameters the caller pushed: each is in its cell, which an
     /// operation can read in place.
-    in_cells: BTreeSet<ValueId>,
+    in_cells: llrm_mir::dense::IdSet<ValueId>,
     /// The register file of `arch`.
     regs: Regs,
     /// What the functions that take part leave different.
