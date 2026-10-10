@@ -78,6 +78,31 @@ pub struct Entry {
 
 /// A target's register file: an entry by iced's number, and each register at
 /// each width by its root.
+/// What a row of `x86.instr` says of its instruction, as a target's build.rs
+/// writes it out: the registers it uses without naming and the flags it
+/// touches.
+#[derive(Clone, Copy, Debug)]
+pub struct Row {
+    pub reads: &'static [&'static str],
+    pub writes: &'static [&'static str],
+    /// What each dest, then each source, may be: `r`, `m`, `i`, `a` or `s`, as
+    /// `x86.instr` spells them.
+    pub kinds: &'static [&'static str],
+    /// The bits of the operation, where it has the one (`stosb`'s 8).
+    pub width: u32,
+    /// `(source, dest)`: the source is the dest's register, whatever the
+    /// semantics name.
+    pub ties: &'static [(usize, usize)],
+    /// `(is a dest, operand, root)`: the operand is that register when it is
+    /// one.
+    pub pins: &'static [(bool, usize, &'static str)],
+    pub flags_read: u32,
+    pub flags_written: u32,
+}
+
+/// A target's rows of `name` with `dests` destinations and `sources` sources.
+pub type Rows = fn(&str, usize, usize) -> &'static [Row];
+
 /// What a query works out once from the file: each width's integer registers,
 /// and all of them.
 pub struct Cache {
@@ -122,6 +147,10 @@ pub struct Info {
     /// The widths the file states (0 pads), and each root's register at each:
     /// `views[root as usize][column of the width]`.
     pub widths: [u32; 8],
+    /// The effect rows of the target's instructions (`MCInstrDesc`'s implicit
+    /// uses and defs): the register file and the instruction table are one
+    /// description of the machine.
+    pub effects: Rows,
     /// Worked out on first ask.
     pub cache: Cache,
     pub views: [[Option<RegId>; 8]; 256],
