@@ -880,9 +880,9 @@ impl Analyses {
         counted(A::NAME, false);
         let had_kept = self.kept.contains_key(&key);
         let old_kept = if why() {
-            self.kept
-                .get(&key)
-                .map(|o| Rc::clone(&o.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
+            self.kept.get(&key).map(|o| {
+                (Rc::clone(&o.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result), o.mark())
+            })
         } else {
             None
         };
@@ -946,11 +946,22 @@ impl Analyses {
             let class = match self.evicted.remove(&key) {
                 Some(old) => {
                     let old = old.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
-                    if *old.result == *result { "same" } else { "diff" }
+                    match (*old.result == *result, old.mark == function.mark()) {
+                        (true, true) => "same-untouched",
+                        (true, false) => "same",
+                        (false, true) => "diff-untouched",
+                        (false, false) => "diff",
+                    }
                 }
                 None if replayed => "replayed",
                 None if had_kept => match &old_kept {
-                    Some(old) if **old == *result => "kept-rerun-same",
+                    Some((old, mark)) if **old == *result => {
+                        if *mark == function.mark() {
+                            "kept-rerun-same-untouched"
+                        } else {
+                            "kept-rerun-same"
+                        }
+                    }
                     _ => "kept-rerun-diff",
                 },
                 None => "first",

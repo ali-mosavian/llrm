@@ -513,7 +513,32 @@ fn a_recomputation_that_comes_to_the_same_result_is_counted() {
     analyses.get::<Counted>(&module.context, &layout, function);
     let counts = crate::passes::recomputes();
     crate::passes::trace_recomputes(false);
-    assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "retarget", "same", 1)]);
+    assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "retarget", "same-untouched", 1)]);
+}
+
+/// Told apart: a rerun on a body no pass touched since the result was made
+/// (`same-untouched`: the pass invalidated and changed nothing), and one after
+/// an edit the analysis did not read (`same`). The census of x_life and
+/// nbody_fixed needed the split to say the first is under 0.5% of a compile.
+#[test]
+fn a_rerun_is_told_untouched_from_after_an_edit_that_changed_nothing_it_reads() {
+    let module = module();
+    let mut function = module.global(module.named("f").unwrap()).function().unwrap().clone();
+    let function = &mut function;
+    let layout = DataLayout::default();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    crate::passes::trace_recomputes(true);
+    analyses.get::<Counted>(&module.context, &layout, function);
+    let branch = function.terminator(function.entry().unwrap()).unwrap();
+    let at = function.instruction(branch).operands.len() - 2;
+    let target = function.instruction(branch).operands[at + 1];
+    function.set_operand(branch, at, target);
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    crate::passes::note_pass("edited");
+    analyses.get::<Counted>(&module.context, &layout, function);
+    let counts = crate::passes::recomputes();
+    crate::passes::trace_recomputes(false);
+    assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "edited", "same", 1)]);
 }
 
 /// A late pass: rewrites a branch, adds no memory operation.
