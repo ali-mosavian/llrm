@@ -1543,8 +1543,8 @@ fn _extent_toward(
 ) -> Option<BigInt> {
     let AffineOperand::Value(value, width) = bound else { return None };
     let range = match unit.function.value(*value).def {
-        ValueDef::Instruction(inst) => crate::ranges::_computed(unit, inst, &Intervals::default(), facts),
-        _ => crate::ranges::_operand(unit, Operand::Value(*value), &Intervals::default(), facts),
+        ValueDef::Instruction(inst) => crate::ranges::_computed(unit, inst, &crate::ranges::Intervals::default(), facts),
+        _ => crate::ranges::_operand(unit, Operand::Value(*value), &crate::ranges::Intervals::default(), facts),
     }?;
     let half = BigInt::from(1) << (width - 1);
     (range.width == *width && range.low >= BigInt::from(0) && range.high < half)

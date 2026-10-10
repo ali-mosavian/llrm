@@ -184,7 +184,7 @@ fn narrowed_delta(
     known: &Intervals,
     facts: &IndexMap<ValueId, Known>,
 ) -> Option<Intervals> {
-    let result = IndexMap::default();
+    let result = Intervals::default();
     let Some((_, compare)) = unit.defining(condition) else {
         return Some(result);
     };
@@ -774,7 +774,7 @@ pub fn edges_solved(
             }
         }
         SOLVED.with(|count| count.set(count.get() + 1));
-        let seeded = if at == cfg::id(entry) { declared_arguments(unit) } else { IndexMap::default() };
+        let seeded = if at == cfg::id(entry) { declared_arguments(unit) } else { Intervals::default() };
         let mut scoped = match sole.and_then(|parent| Some((*parent, known.get(parent)?))) {
             Some((parent, inherited)) if edges(unit, cfg::block(parent), block) == 1 => {
                 on_edge(unit, cfg::block(parent), block, inherited, Some(facts))?
@@ -1172,7 +1172,7 @@ pub fn bounded_solved(
         let at_entry = |at: i64| {
             let mut found = edges_above.get(&at).map(|scope| (**scope).clone()).unwrap_or_default();
             for (value, interval) in result.get(&at).into_iter().flat_map(|scope| scope.iter()) {
-                narrow(&mut found, *value, interval.clone());
+                narrow(&mut found, value, interval.clone());
             }
             found
         };
@@ -1319,12 +1319,12 @@ pub fn bounded_solved(
             };
             let narrowed: llrm_mir::dense::IdSet<ValueId> = scoped
                 .iter()
-                .filter(|(value, interval)| known.get(*value) != Some(*interval))
-                .map(|(value, _)| *value)
+                .filter(|(value, interval)| known.get(&*value) != Some(*interval))
+                .map(|(value, _)| value)
                 .collect();
             for (value, interval) in base.iter() {
-                if !narrowed.contains(value) {
-                    scoped.insert(*value, interval.clone());
+                if !narrowed.contains(&value) {
+                    scoped.insert(value, interval.clone());
                 }
             }
             propagate(&mut scoped, &mut narrowed.iter());
@@ -1434,8 +1434,8 @@ pub fn bounded_solved(
                             narrow_by(std::slice::from_ref(edge), &mut state)?;
                             let delta = state
                                 .iter()
-                                .filter(|(value, interval)| held.nodes[node].state.get(*value) != Some(*interval))
-                                .map(|(value, _)| *value)
+                                .filter(|(value, interval)| held.nodes[node].state.get(&*value) != Some(*interval))
+                                .map(|(value, _)| value)
                                 .collect();
                             held.nodes.push(Prefix {
                                 state: Rc::new(state),
@@ -1481,7 +1481,7 @@ pub fn bounded_solved(
                                     .as_ref()
                                     .clone();
                                 for value in &held.nodes[one].delta {
-                                    narrow(&mut y, *value, held.nodes[one].state[value].clone());
+                                    narrow(&mut y, *value, held.nodes[one].state.get(value).expect("a delta value has a state").clone());
                                 }
                                 propagate(&mut y, &mut held.nodes[one].delta.iter().copied());
                                 y
@@ -1495,20 +1495,20 @@ pub fn bounded_solved(
                         if whole != *settled {
                             let diff: Vec<String> = whole
                                 .iter()
-                                .filter(|(v, i)| settled.get(*v) != Some(*i))
+                                .filter(|(v, i)| settled.get(&*v) != Some(*i))
                                 .map(|(v, i)| {
                                     format!(
                                         "{:?}: sweep [{},{}] vs incremental {:?}",
                                         v,
                                         i.low,
                                         i.high,
-                                        settled.get(v).map(|x| (x.low.to_string(), x.high.to_string()))
+                                        settled.get(&v).map(|x| (x.low.to_string(), x.high.to_string()))
                                     )
                                 })
                                 .chain(
                                     settled
                                         .iter()
-                                        .filter(|(v, _)| !whole.contains_key(*v))
+                                        .filter(|(v, _)| !whole.contains_key(&*v))
                                         .map(|(v, i)| format!("{:?}: only incremental [{},{}]", v, i.low, i.high)),
                                 )
                                 .collect();
@@ -1561,7 +1561,7 @@ pub fn bounded_solved(
             let scoped = scope_at(at, &known, known_id, true)?;
             let destination = Rc::make_mut(result.entry(at).or_default());
             for (value, interval) in scoped.iter() {
-                if narrow_to(destination, *value, interval) {
+                if narrow_to(destination, value, interval) {
                     dead.insert(at);
                 }
             }
@@ -1673,7 +1673,7 @@ fn inductive_boxes(
             break;
         }
         let mut assumed = known.clone();
-        assumed.extend(boxes.iter().map(|(phi, interval)| (*phi, interval.clone())));
+        assumed.extend(boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
         let assumed = closed(assumed);
         let assumed_id = fresh_known();
         let mut scopes = BTreeMap::new();
@@ -1708,7 +1708,7 @@ fn inductive_boxes(
             }
         }
         for phi in &dropped {
-            boxes.swap_remove(phi);
+            boxes.remove(phi);
         }
         if !grown && dropped.is_empty() {
             return Ok(boxes);
@@ -1951,7 +1951,7 @@ pub fn intervals(known: &IndexMap<ValueId, Known>) -> Intervals {
 /// Exact values computed without consulting memory.
 pub fn singletons(unit: &Unit) -> Intervals {
     let function = unit.function;
-    let mut known = IndexMap::<ValueId, Interval>::default();
+    let mut known = Intervals::default();
     let none = IndexMap::default();
     loop {
         let before = known.len();

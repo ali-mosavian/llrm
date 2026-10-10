@@ -57,7 +57,7 @@ impl Parsed {
         let block = cfg::id(unit.function.parent(load).unwrap());
         let memory = floatfacts::cells(&unit, &Calls::default());
         let scoped = ranges::bounded(&unit).unwrap();
-        _memory(&unit, load, Format::Binary32, &memory[&load], scoped.get(&block).unwrap_or(&IndexMap::default()))
+        _memory(&unit, load, Format::Binary32, &memory[&load], scoped.get(&block).unwrap_or(&crate::ranges::Intervals::default()))
     }
 }
 

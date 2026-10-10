@@ -604,3 +604,13 @@ def test_hoist_prices_a_run_by_what_it_moves_not_by_a_clone_of_the_function(tmp_
     source.write_text(scaling.AXES["branches"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir hoist"]
     assert cost <= 900, cost
+
+
+def test_the_intervals_of_a_block_are_its_dominators_not_a_copy_of_them_on_the_branches_axis(tmp_path):
+    """`analysis dominated-edges` copied the dominator's whole interval map into every block, then added the block's own: on
+    `branches` at N=1024 that was 2,400 Minstr (slope 1.79). With a map that shares what the dominator holds it reads 1,240.
+    More than 1,500 fails."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis dominated-edges"]
+    assert cost <= 1500, cost

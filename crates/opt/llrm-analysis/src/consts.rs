@@ -998,7 +998,7 @@ fn _addressed(
     let Some(base) = reference.base else {
         return reference.clone();
     };
-    let interval = ranges::_operand(unit, Operand::Value(base), &Intervals::default(), known);
+    let interval = ranges::_operand(unit, Operand::Value(base), &ranges::Intervals::default(), known);
     let Some(interval) = interval else {
         return reference.clone();
     };

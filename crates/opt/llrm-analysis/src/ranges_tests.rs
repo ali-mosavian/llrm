@@ -15,6 +15,7 @@ use super::{
     exact_offsets_given, on_edge, operations_applied, scoped, singletons,
 };
 use crate::cfg;
+use crate::ranges::Intervals;
 use crate::memory::{MemRef, Unit};
 use crate::testing::{DOS, block, function, layout, parsed, value};
 
@@ -103,7 +104,7 @@ fn test_signed_comparison_edges() {
     ] {
         let parsed = compare(predicate, 16, 4);
         let x = parsed.value("x");
-        let known = IndexMap::from_iter([(x, interval(0, 9, 16))]);
+        let known = Intervals::from_iter([(x, interval(0, 9, 16))]);
         let successor = parsed.block(if taken { "yes" } else { "no" });
 
         let result = on_edge(&parsed.unit(), parsed.block("b0"), successor, &known, None).unwrap().unwrap();
@@ -115,7 +116,7 @@ fn test_signed_comparison_edges() {
 #[test]
 fn an_edge_the_facts_rule_out_is_impossible() {
     let parsed = compare("slt", 16, 4);
-    let known = IndexMap::from_iter([(parsed.value("x"), interval(5, 9, 16))]);
+    let known = Intervals::from_iter([(parsed.value("x"), interval(5, 9, 16))]);
     assert_eq!(on_edge(&parsed.unit(), parsed.block("b0"), parsed.block("yes"), &known, None).unwrap(), None);
     assert!(on_edge(&parsed.unit(), parsed.block("b0"), parsed.block("no"), &known, None).unwrap().is_some());
 }
@@ -123,7 +124,7 @@ fn an_edge_the_facts_rule_out_is_impossible() {
 #[test]
 fn an_edge_to_a_block_that_is_no_successor_is_refused() {
     let parsed = compare("slt", 16, 4);
-    assert!(on_edge(&parsed.unit(), parsed.block("yes"), parsed.block("no"), &IndexMap::default(), None).is_err());
+    assert!(on_edge(&parsed.unit(), parsed.block("yes"), parsed.block("no"), &Intervals::default(), None).is_err());
 }
 
 #[test]
@@ -138,7 +139,7 @@ b1:
 }
 ",
     );
-    let known = IndexMap::from_iter([(parsed.value("x"), interval(0, 9, 16))]);
+    let known = Intervals::from_iter([(parsed.value("x"), interval(0, 9, 16))]);
     assert_eq!(on_edge(&parsed.unit(), parsed.block("b0"), parsed.block("b1"), &known, None).unwrap(), Some(known));
 }
 
@@ -234,7 +235,7 @@ fn computed(
     known: &[(&str, Interval)],
 ) -> Option<Interval> {
     let parsed = Parsed::new(body);
-    let known = known.iter().map(|(name, one)| (parsed.value(name), one.clone())).collect::<IndexMap<_, _>>();
+    let known = known.iter().map(|(name, one)| (parsed.value(name), one.clone())).collect::<Intervals>();
     _computed(&parsed.unit(), parsed.made(name), &known, &IndexMap::default())
 }
 
@@ -359,7 +360,7 @@ fn test_unsigned_edge_never_removes_a_possible_selector() {
             for taken in [true, false] {
                 for width in [16, 32] {
                     let parsed = compare(predicate, width, 255);
-                    let known = IndexMap::from_iter([(parsed.value("x"), interval(span.0, span.1, width))]);
+                    let known = Intervals::from_iter([(parsed.value("x"), interval(span.0, span.1, width))]);
                     let answer = |value: i64| match predicate {
                         "ugt" => value > 255,
                         "uge" => value >= 255,
@@ -541,8 +542,8 @@ fn checked(
         }
         let at = cfg::id(parsed.block(&label));
         for (value, fact) in known.get(&at).into_iter().flatten() {
-            let data = f.value(*value);
-            let (Some(name), Some(width)) = (&data.name, parsed.unit().int_bits(llrm_mir::Operand::Value(*value)))
+            let data = f.value(value);
+            let (Some(name), Some(width)) = (&data.name, parsed.unit().int_bits(llrm_mir::Operand::Value(value)))
             else {
                 continue;
             };
@@ -1093,8 +1094,8 @@ no:
 fn after_no(
     parsed: &Parsed,
     known: &[(&str, Interval)],
-) -> Option<IndexMap<ValueId, Interval>> {
-    let known = known.iter().map(|(name, one)| (parsed.value(name), one.clone())).collect::<IndexMap<_, _>>();
+) -> Option<Intervals> {
+    let known = known.iter().map(|(name, one)| (parsed.value(name), one.clone())).collect::<Intervals>();
     on_edge(&parsed.unit(), parsed.block("b0"), parsed.block("no"), &known, None).unwrap()
 }
 
@@ -1237,7 +1238,7 @@ fn test_an_edge_sets_the_intervals_it_narrows_and_copies_none_of_the_rest() {
     let parsed = compare("slt", 16, 4);
     let x = parsed.value("x");
     let unit = parsed.unit();
-    let mut known: IndexMap<ValueId, Interval> = (1000..2000).map(|at| (ValueId(at), interval(0, 1, 16))).collect();
+    let mut known: Intervals = (1000..2000).map(|at| (ValueId(at), interval(0, 1, 16))).collect();
     known.insert(x, interval(0, 9, 16));
     let delta = super::edge_delta(&unit, parsed.block("b0"), parsed.block("yes"), &known, None).unwrap().unwrap();
     assert_eq!(delta.len(), 1, "an edge on one comparison sets one interval");
