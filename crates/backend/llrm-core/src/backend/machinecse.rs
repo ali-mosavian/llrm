@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::peephole::{_lanes, Lane, Lanes, id};
 use crate::backend::target;
@@ -32,9 +32,9 @@ fn _relocated(where_: &Loc) -> bool {
 /// `_shape`'s tuples: every encoded field of a source.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Shape {
-    Reg(Register, u32),
+    Reg(RegId, u32),
     Imm(i64, u32, Option<Addr>),
-    Address(Option<Addr>, Register, Register, i64, i64, u32),
+    Address(Option<Addr>, RegId, RegId, i64, i64, u32),
 }
 
 /// Every encoded field of a source, including compare=False address fields.
@@ -51,10 +51,10 @@ fn _shape(where_: &Loc) -> Result<Shape, String> {
 
 /// Physical input lanes, or None for a register this tracker omits.
 fn _source_lanes(where_: &Loc) -> Option<Lanes> {
-    let registers: Vec<Register> = match where_ {
+    let registers: Vec<RegId> = match where_ {
         Loc::Reg(one) => vec![one.register],
         Loc::Address(one) => {
-            [one.through, one.index_through].into_iter().filter(|register| *register != Register::None).collect()
+            [one.through, one.index_through].into_iter().filter(|register| *register != RegId::None).collect()
         }
         Loc::Imm(_) => Vec::new(),
         _ => return None,
@@ -293,7 +293,7 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::eliminated;
     use crate::model::ir::{Addr, AddressRef, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -310,7 +310,7 @@ mod tests {
     }
 
     fn bx() -> Loc {
-        Loc::Reg(Reg { register: Register::BX, width: 2 })
+        Loc::Reg(Reg { register: RegId::BX, width: 2 })
     }
 
     fn _lea(
@@ -318,7 +318,7 @@ mod tests {
         at: i64,
     ) -> Arc<Insn> {
         let address = AddressRef {
-            through: Register::BP,
+            through: RegId::BP,
             offset: -100,
             disp_width: 1,
             ..AddressRef::new(Some(Addr::new(Space::Frame, -100)))
@@ -373,11 +373,11 @@ mod tests {
                 Operation::Move,
                 "mov",
                 vec![Loc::Mem(Mem {
-                    through: Register::BP,
+                    through: RegId::BP,
                     disp_width: 1,
                     ..Mem::new(Some(Addr::new(Space::Frame, -2)), 2)
                 })],
-                vec![Loc::Reg(Reg { register: Register::AX, width: 2 })],
+                vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })],
             ),
             vec![],
             vec![],
@@ -490,7 +490,7 @@ mod tests {
     fn test_address_coefficients_are_part_of_the_expression_identity() {
         // `ax + si*2` and `si + ax*2` read the same lanes and compute different
         // numbers.
-        let lea = |at: i64, covers: (i64, i64), through: Register, index: Register, defines: u32| {
+        let lea = |at: i64, covers: (i64, i64), through: RegId, index: RegId, defines: u32| {
             Arc::new(Insn::new(
                 at,
                 Some(covers),
@@ -504,8 +504,8 @@ mod tests {
                 vec![],
             ))
         };
-        let first = lea(0, (0, 3), Register::AX, Register::SI, 1);
-        let different = lea(3, (3, 6), Register::SI, Register::AX, 2);
+        let first = lea(0, (0, 3), RegId::AX, RegId::SI, 1);
+        let different = lea(3, (3, 6), RegId::SI, RegId::AX, 2);
 
         let result = eliminated(&_body(vec![first, Arc::clone(&different)])).unwrap();
 

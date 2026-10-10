@@ -32,8 +32,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::cfg;
-use llrm_analysis::graph::loops;
 use llrm_mir::module::{Function, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
@@ -62,70 +60,74 @@ impl FunctionPass for Merged {
 /// become the values they receive from it. Whether anything merged.
 pub fn merged(function: &mut Function) -> bool {
     let mut changed = false;
-    loop {
-        let Some(entry) = function.entry() else {
-            return changed;
-        };
-        let graph = cfg::graph(function);
-        let predecessors = loops::predecessors(&graph);
-
-        let mut replacement = None;
-        for first in &graph {
-            if first.succ.len() != 1 {
-                continue;
-            }
-            let target = first.succ[0];
-            if target == cfg::id(entry) || target == first.at {
-                continue;
-            }
-            if predecessors.get(&target) != Some(&BTreeSet::from([first.at])) {
-                continue;
-            }
-            let (source, second) = (cfg::block(first.at), cfg::block(target));
-            let phis = edges::phis(function, second);
-            if phis.iter().any(|&phi| {
-                let incoming = arms(function, phi);
-                incoming.iter().map(|&(_, at)| at).collect::<BTreeSet<_>>() != BTreeSet::from([source])
-                    || incoming.iter().any(|&(value, _)| {
-                        Operand::Value(function.instruction(phi).result.expect("a phi's value")) == value
-                    })
-            }) {
-                continue;
-            }
-
-            // Only a jump: a two-way branch or any other terminator stays.
-            let last = function.terminator(source).expect("a successor is a terminator's");
-            if function.instruction(last).opcode != Opcode::Br || function.instruction(last).operands.len() != 1 {
-                continue;
-            }
-
-            let swaps = phis
-                .iter()
-                .map(|&phi| (function.instruction(phi).result.expect("a phi's value"), arms(function, phi)[0].0))
-                .collect::<BTreeMap<ValueId, Operand>>();
-            if swaps.values().any(|value| matches!(value, Operand::Value(one) if swaps.contains_key(one))) {
-                continue;
-            }
-
-            replacement = Some((source, second, last, phis, swaps));
-            break;
+    let Some(entry) = function.entry() else {
+        return false;
+    };
+    // Block by block, each asked of its own neighbours (the uses of the
+    // target), not of a graph of the whole body made again after each merge. A
+    // block that merged is asked again: its new successor may merge too.
+    for first in function.layout().to_vec() {
+        while function.layout().contains(&first) && merged_into(function, first, entry) {
+            changed = true;
         }
-
-        let Some((source, second, last, phis, swaps)) = replacement else {
-            return changed;
-        };
-        function.erase(last).expect("a jump defines nothing");
-        for (value, with) in swaps {
-            function.replace_value(value, with);
-        }
-        for phi in phis {
-            function.erase(phi).expect("a replaced phi");
-        }
-        function.move_run(&function.block(second).instructions().to_vec(), source).expect("a placed block");
-        function.replace_block_uses_with(second, source);
-        function.erase_block(second).expect("an emptied block nothing names");
-        changed = true;
     }
+    changed
+}
+
+/// Whether `first` took the block it jumps to, if it alone reaches it.
+fn merged_into(
+    function: &mut Function,
+    first: llrm_mir::module::BlockId,
+    entry: llrm_mir::module::BlockId,
+) -> bool {
+    let successors = function.successors(first);
+    if successors.len() != 1 {
+        return false;
+    }
+    let target = successors[0];
+    if target == entry || target == first {
+        return false;
+    }
+    if function.predecessors(target) != [first] {
+        return false;
+    }
+    let (source, second) = (first, target);
+    let phis = edges::phis(function, second);
+    if phis.iter().any(|&phi| {
+        let incoming = arms(function, phi);
+        incoming.iter().map(|&(_, at)| at).collect::<BTreeSet<_>>() != BTreeSet::from([source])
+            || incoming
+                .iter()
+                .any(|&(value, _)| Operand::Value(function.instruction(phi).result.expect("a phi's value")) == value)
+    }) {
+        return false;
+    }
+
+    // Only a jump: a two-way branch or any other terminator stays.
+    let last = function.terminator(source).expect("a successor is a terminator's");
+    if function.instruction(last).opcode != Opcode::Br || function.instruction(last).operands.len() != 1 {
+        return false;
+    }
+
+    let swaps = phis
+        .iter()
+        .map(|&phi| (function.instruction(phi).result.expect("a phi's value"), arms(function, phi)[0].0))
+        .collect::<BTreeMap<ValueId, Operand>>();
+    if swaps.values().any(|value| matches!(value, Operand::Value(one) if swaps.contains_key(one))) {
+        return false;
+    }
+
+    function.erase(last).expect("a jump defines nothing");
+    for (value, with) in swaps {
+        function.replace_value(value, with);
+    }
+    for phi in phis {
+        function.erase(phi).expect("a replaced phi");
+    }
+    function.move_run(&function.block(second).instructions().to_vec(), source).expect("a placed block");
+    function.replace_block_uses_with(second, source);
+    function.erase_block(second).expect("an emptied block nothing names");
+    true
 }
 
 #[cfg(test)]

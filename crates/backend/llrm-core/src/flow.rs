@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::constpool::Pool;
 use crate::backend::cpu::{self as targets, ProfileOrName};
@@ -26,7 +26,7 @@ use crate::support::hash::IndexMap;
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn machine<'a>(
-    pinned: &IndexMap<u32, Register>,
+    pinned: &IndexMap<u32, RegId>,
     frame: Option<Rc<RefCell<Frame>>>,
     pool: Option<Rc<RefCell<Pool>>>,
     calls: Option<&IndexMap<i64, String>>,
@@ -45,7 +45,7 @@ pub fn machine<'a>(
         segments,
         &crate::backend::classes::RegisterClasses::m16(),
         spilling.then(Rc::<ssaspill::Run>::default),
-        &crate::backend::peep::targets::x86_m16::RULES,
+        &crate::backend::targets::x86_m16::RULES,
         &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     )
 }
@@ -54,7 +54,7 @@ pub fn machine<'a>(
 /// `spilling` names a run, reports to it.
 #[allow(clippy::too_many_arguments)]
 pub fn machine_with<'a>(
-    pinned: &IndexMap<u32, Register>,
+    pinned: &IndexMap<u32, RegId>,
     frame: Option<Rc<RefCell<Frame>>>,
     pool: Option<Rc<RefCell<Pool>>>,
     calls: Option<&IndexMap<i64, String>>,
@@ -95,7 +95,7 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::floatfold::FloatFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
-        Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer::new(None, segments, classes)),
         Box::new(allocate::RegAlloc::new(

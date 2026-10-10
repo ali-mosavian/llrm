@@ -49,6 +49,15 @@ pub fn materialized(
     body: &LirBody,
     frame: &mut Frame,
 ) -> Result<LirBody, frames::Refused> {
+    materialized_for(body, frame, crate::backend::registerinfo::far_segment().is_some())
+}
+
+/// `materialized` for a target that has far pointers (`far`) or does not.
+fn materialized_for(
+    body: &LirBody,
+    frame: &mut Frame,
+    far: bool,
+) -> Result<LirBody, frames::Refused> {
     let mut slot = None;
     let mut out = body.clone();
     for block in &mut out.blocks {
@@ -58,10 +67,10 @@ pub fn materialized(
                 Some(what)
                     if what.op == Operation::Call
                         && what.indirect
-                        // A far pointer packs selector and offset in four bytes
-                        // of a 16-bit segment; in a 32-bit one a dword is a
-                        // near pointer.
-                        && body.bits == 16
+                        // A far pointer packs selector and offset in four
+                        // bytes; where the target has no far segment a dword is
+                        // a near pointer.
+                        && far
                         && matches!(what.sources.as_slice(), [Loc::Held(Held { width: 4, .. })]) =>
                 {
                     let Loc::Held(target) = what.sources[0] else { unreachable!() };
@@ -104,6 +113,8 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
+
+    use llrm_lir::registers::RegId;
 
     use super::FarIndirectCalls;
     use crate::backend::frame::{Frame, SlotKey};
@@ -186,7 +197,7 @@ mod tests {
             vec![],
             vec![7, 5],
         );
-        call.requires = vec![(Held { value: 7, width: 4 }, iced_x86::Register::EAX)];
+        call.requires = vec![(Held { value: 7, width: 4 }, RegId::EAX)];
         let body = LirBody::new(
             "far",
             0,
@@ -203,10 +214,10 @@ mod tests {
         assert_eq!(called.uses, vec![7]);
     }
 
-    /// In a 32-bit segment a dword target is a near pointer: the call stays as
-    /// it was.
+    /// Where the target has no far segment a dword target is a near pointer:
+    /// the call stays as it was.
     #[test]
-    fn a_dword_target_in_a_32_bit_segment_is_not_a_far_pointer() {
+    fn a_dword_target_where_the_target_has_no_far_segment_is_not_a_far_pointer() {
         let call = Arc::new(Insn::new(
             4,
             Some((4, 7)),
@@ -219,10 +230,9 @@ mod tests {
             vec![],
             vec![5],
         ));
-        let mut body =
+        let body =
             LirBody::new("near", 0, vec![LirBlock::new(0, vec![call])], IndexMap::default(), IndexMap::default());
-        body.bits = 32;
-        let out = FarIndirectCalls::new(Rc::new(RefCell::new(Frame::new(-16)))).transform(body).unwrap();
+        let out = super::materialized_for(&body, &mut Frame::new(-16), false).unwrap();
         assert_eq!(out.insns().len(), 1);
     }
 }

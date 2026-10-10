@@ -35,6 +35,7 @@ const SEGMENTS: i64 = 1 << 22;
 
 pub fn names(
     module: &Module,
+    spaces: &llrm_mir::spaces::Spaces,
     linked: &dyn Fn(&str) -> String,
 ) -> Result<IndexMap<(Space, i64), String>, String> {
     let mut out = IndexMap::default();
@@ -52,7 +53,7 @@ pub fn names(
         } else {
             format!("G${at}")
         };
-        out.extend(segment_name(module, id, &symbol));
+        out.extend(segment_name(module, id, &symbol, spaces));
         out.insert((space(module, id), i64::from(id.0)), symbol);
     }
     Ok(out)
@@ -64,8 +65,9 @@ pub fn segment_name(
     module: &Module,
     id: GlobalId,
     symbol: &str,
+    spaces: &llrm_mir::spaces::Spaces,
 ) -> Option<((Space, i64), String)> {
-    (module.global(id).address_space != 0).then(|| ((Space::Group, segment_of(id)), format!("seg {symbol}")))
+    (module.global(id).address_space != spaces.near).then(|| ((Space::Group, segment_of(id)), format!("seg {symbol}")))
 }
 
 fn is_symbol(name: &str) -> bool {
@@ -210,7 +212,8 @@ impl Initializer<'_> {
             }
             (_, Type::Pointer(space)) if self.layout.is_pair(*space) => {
                 let (global, offset) = target(self.module, self.layout, id)?;
-                let near = self.module.global(global).address_space == 0
+                // A global outside the near space has a segment of its own.
+                let near = !self.names.contains_key(&(Space::Group, segment_of(global)))
                     && matches!(self.module.global(global).kind, GlobalKind::Variable(_));
                 self.out.extend(far_pointer(self.symbol(global), offset, near, self.layout, *space));
                 return Ok(());

@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::allocate::RegAlloc;
 use crate::backend::coalesce::Coalescer;
@@ -67,7 +67,7 @@ fn imm(value: i64) -> Loc {
 }
 
 fn frame(disp: i64) -> Mem {
-    Mem { through: Register::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), 2) }
+    Mem { through: RegId::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), 2) }
 }
 
 /// What a generated body is made of.
@@ -191,10 +191,9 @@ impl Builder {
             9 => {
                 let result = self.fresh();
                 let mut call = self.insn(Operation::Call, "call", vec![], vec![], &[result], &[s]);
-                call.requires = vec![(Held { value: s, width: 2 }, Register::AX)];
-                call.delivers = vec![(Held { value: result, width: 2 }, Register::AX)];
-                call.clobbers =
-                    [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ES].into_iter().collect();
+                call.requires = vec![(Held { value: s, width: 2 }, RegId::AX)];
+                call.delivers = vec![(Held { value: result, width: 2 }, RegId::AX)];
+                call.clobbers = [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ES].into_iter().collect();
                 out.push(call);
                 out.push(self.mov(d, held(result), &[result]));
             }
@@ -443,10 +442,10 @@ fn complaints(done: &LirBody) -> Vec<String> {
             let unplaced = match place {
                 Loc::Held(_) => true,
                 Loc::Mem(cell) => {
-                    (cell.base.is_some() && cell.through == Register::None)
-                        || (cell.index.is_some() && cell.index_through == Register::None)
+                    (cell.base.is_some() && cell.through == RegId::None)
+                        || (cell.index.is_some() && cell.index_through == RegId::None)
                         || (cell.selector.is_some()
-                            && cell.addr.is_some_and(|addr| addr.space == Space::Far && addr.segment == Register::None))
+                            && cell.addr.is_some_and(|addr| addr.space == Space::Far && addr.segment == RegId::None))
                 }
                 _ => false,
             };
@@ -466,7 +465,7 @@ fn complaints(done: &LirBody) -> Vec<String> {
 /// What a body does, run: the generator's body in values, and the allocator's
 /// in registers and frame cells, must store the same things.
 mod run {
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use crate::model::ir::{self, Loc, Mem, Operation, Space};
     use crate::model::lir::LirBody;
@@ -475,7 +474,7 @@ mod run {
     pub struct Machine {
         virtual_: bool,
         vals: HashMap<u32, u32>,
-        regs: HashMap<Register, u32>,
+        regs: HashMap<RegId, u32>,
         mem: HashMap<(i64, i64, i64, i64), u32>,
         stack: Vec<u32>,
         poison: u32,
@@ -513,7 +512,7 @@ mod run {
 
         fn register(
             &mut self,
-            register: Register,
+            register: RegId,
         ) -> u32 {
             let poison = &mut self.poison;
             *self
@@ -536,10 +535,10 @@ mod run {
             if cell.addr.is_some_and(|addr| addr.space == Space::Frame) {
                 return Ok((space, disp + cell.offset, 0, 0));
             }
-            let placed = |held: Option<ir::Held>, through: Register, this: &mut Self| -> Result<i64, String> {
+            let placed = |held: Option<ir::Held>, through: RegId, this: &mut Self| -> Result<i64, String> {
                 match held {
                     None => Ok(0),
-                    Some(_) if through != Register::None => Ok(i64::from(this.register(through))),
+                    Some(_) if through != RegId::None => Ok(i64::from(this.register(through))),
                     Some(held) => this
                         .vals
                         .get(&held.value)
@@ -550,7 +549,7 @@ mod run {
             let base = placed(cell.base, cell.through, self)?;
             let index = placed(cell.index, cell.index_through, self)? * cell.scale;
             let segment = match (cell.addr.map(|addr| addr.segment), cell.selector) {
-                (Some(segment), _) if segment != Register::None => i64::from(self.register(segment)),
+                (Some(segment), _) if segment != RegId::None => i64::from(self.register(segment)),
                 (_, Some(selector)) => self
                     .vals
                     .get(&selector.value)
@@ -725,7 +724,7 @@ mod run {
                                 let (held, _) = one.requires.first().ok_or("a call with no argument")?;
                                 *self.vals.get(&held.value).ok_or("the argument is read before it is set")?
                             } else {
-                                self.register(Register::AX)
+                                self.register(RegId::AX)
                             };
                             let answer = (argument.wrapping_mul(31).wrapping_add(7)) & 0xFFFF;
                             if self.virtual_ {
@@ -736,7 +735,7 @@ mod run {
                                     self.poison += 1;
                                     self.regs.insert(ir::root(*register), Self::poisoned(self.poison));
                                 }
-                                self.regs.insert(Register::EAX, answer);
+                                self.regs.insert(RegId::EAX, answer);
                             }
                         }
                         Operation::Jump => next = what.target,
@@ -1755,9 +1754,9 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
 /// A mask at `slot` over registers, for the `_clobbered` tests.
 fn _mask_at(
     slot: i64,
-    during: &[Register],
-    high: &[Register],
-    before: &[Register],
+    during: &[RegId],
+    high: &[RegId],
+    before: &[RegId],
 ) -> super::allocate::Mask {
     super::allocate::Mask {
         slot,
@@ -1773,14 +1772,14 @@ fn _mask_at(
 fn test_clobbered_agrees_with_a_look_at_every_point() {
     use super::allocate::{_clobbered, _clobbered_reference, Masks};
     use crate::analysis::intervals::{Interval, Segment};
-    let registers = [Register::AX, Register::BX, Register::CX, Register::DX, Register::SI];
+    let registers = [RegId::AX, RegId::BX, RegId::CX, RegId::DX, RegId::SI];
     let mut seed = 99_u64;
     let mut next = |modulus: u64| {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         (seed >> 33) % modulus
     };
     for _ in 0..200 {
-        let pick = |next: &mut dyn FnMut(u64) -> u64| -> Vec<Register> {
+        let pick = |next: &mut dyn FnMut(u64) -> u64| -> Vec<RegId> {
             registers.iter().copied().filter(|_| next(4) == 0).collect()
         };
         let list: Vec<_> = (0..next(12))
@@ -1824,12 +1823,12 @@ fn test_clobbered_agrees_with_a_look_at_every_point() {
 fn test_clobbered_does_not_look_at_every_point() {
     use super::allocate::{_clobbered, Masks};
     use crate::analysis::intervals::{Interval, Segment};
-    let masks = Masks::new((0..20_000).map(|at| _mask_at(at * 3, &[Register::DX], &[], &[])).collect());
+    let masks = Masks::new((0..20_000).map(|at| _mask_at(at * 3, &[RegId::DX], &[], &[])).collect());
     let started = std::time::Instant::now();
     let mut clobbered = 0;
     for at in 0..20_000 {
         let one = Interval::new(1, vec![Segment { start: at * 3 + 1, end: at * 3 + 2 }]);
-        clobbered += usize::from(_clobbered(&one, Register::DX, &masks, 2));
+        clobbered += usize::from(_clobbered(&one, RegId::DX, &masks, 2));
     }
     assert_eq!(clobbered, 0, "a value live between two points is not across either");
     assert!(started.elapsed().as_secs_f64() < 0.2, "{:?} for 20,000 questions", started.elapsed());

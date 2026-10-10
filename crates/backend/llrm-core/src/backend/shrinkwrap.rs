@@ -12,7 +12,7 @@
 
 use std::collections::BTreeSet;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::loops::{dominance, immediate_dominators, loops};
 use crate::model::ir::{self, Loc};
@@ -31,8 +31,8 @@ pub struct Wrap {
 
 /// The registers `one` names, and those the call it is disturbs by its
 /// convention.
-pub fn named(one: &Insn) -> BTreeSet<Register> {
-    let mut found: BTreeSet<Register> =
+pub fn named(one: &Insn) -> BTreeSet<RegId> {
+    let mut found: BTreeSet<RegId> =
         one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)).collect();
     let Some(what) = &one.what else { return found };
     for place in what.dests.iter().chain(&what.sources) {
@@ -70,16 +70,16 @@ fn touches_frame(one: &Insn) -> bool {
 /// frame that cannot be wrapped leaves the registers to be.
 pub fn wrapped(
     body: &LirBody,
-    kept: &BTreeSet<Register>,
-    frame: Option<(Register, Register)>,
+    kept: &BTreeSet<RegId>,
+    frame: Option<(RegId, RegId)>,
 ) -> Option<Wrap> {
     frame.and_then(|registers| placed(body, kept, Some(registers))).or_else(|| placed(body, kept, None))
 }
 
 fn placed(
     body: &LirBody,
-    kept: &BTreeSet<Register>,
-    frame: Option<(Register, Register)>,
+    kept: &BTreeSet<RegId>,
+    frame: Option<(RegId, RegId)>,
 ) -> Option<Wrap> {
     if body.noreturn || (kept.is_empty() && frame.is_none()) {
         return None;

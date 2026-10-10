@@ -1,40 +1,51 @@
 # x86-m16 registers (real-mode DOS), in the format of llrm-x86-m32's registers.regs.
-# Classes: gpr (a value may sit in it), byte (has 8-bit views), base and index (what a word
+# Classes: int (an integer register: the 8, 16 and 32-bit views the width tables name), gpr (a value may
+# sit in it), byte (has 8-bit views), base and index (what a word
 # address `[bx+si]` is made of), frame (the frame pointer: no value is held in it), positional (a position in a
 # stack, st(i): an exchange of it is an effect and it is no register a pass renames or removes).
-# Allocation order is file order. Segment registers are the machine's (machines/dos.toml).
+# Allocation order is file order. The segment registers carry the class of the address space they mean (data_segment, stack_segment, code_segment, far_segment).
 #
 # dwarf and codeview: the register's number in each debug format, `-` for none. CodeView's are
 # CV_HREG_e (llvm's CodeViewRegisters.def). The psABI's DWARF map is i386's: real-mode x86 has none,
 # so m16 numbers none and DWARF locations in m16 code are refused.
 #
-# name  bits root lane classes dwarf codeview
-eax     32   eax  0    gpr,byte  -  17
-ebx     32   ebx  0    gpr,byte,base  -  20
-ecx     32   ecx  0    gpr,byte  -  18
-edx     32   edx  0    gpr,byte  -  19
-esi     32   esi  0    gpr,index  -  23
-edi     32   edi  0    gpr,index  -  24
-ebp     32   ebp  0    reserved,frame,base  -  22
-esp     32   esp  0    reserved,stack  -  21
-ax      16   eax  0    -  -  9
-bx      16   ebx  0    -  -  12
-cx      16   ecx  0    -  -  10
-dx      16   edx  0    -  -  11
-si      16   esi  0    -  -  15
-di      16   edi  0    -  -  16
-bp      16   ebp  0    -  -  14
-sp      16   esp  0    -  -  13
-al      8    eax  0    -  -  1
-bl      8    ebx  0    -  -  4
-cl      8    ecx  0    -  -  2
-dl      8    edx  0    -  -  3
-ah      8    eax  8    -  -  5
-bh      8    ebx  8    -  -  8
-ch      8    ecx  8    -  -  6
-dh      8    edx  8    -  -  7
+# @scratch: the words a pass may borrow for a moment, most preferred first (gcc's REG_ALLOC_ORDER): a
+# register the result is not left in comes last.
+@scratch cx dx bx ax
+#
+# name  bits root lane classes dwarf codeview [load: the mnemonic that loads a far pointer into a segment register]
+eax     32   eax  0    gpr,byte,int  -  17
+ebx     32   ebx  0    gpr,byte,base,int  -  20
+ecx     32   ecx  0    gpr,byte,int  -  18
+edx     32   edx  0    gpr,byte,int  -  19
+esi     32   esi  0    gpr,index,int  -  23
+edi     32   edi  0    gpr,index,int  -  24
+ebp     32   ebp  0    reserved,frame,base,int  -  22
+esp     32   esp  0    reserved,stack,int  -  21
+ax      16   eax  0    int  -  9
+bx      16   ebx  0    int  -  12
+cx      16   ecx  0    int  -  10
+dx      16   edx  0    int  -  11
+si      16   esi  0    int  -  15
+di      16   edi  0    int  -  16
+bp      16   ebp  0    int  -  14
+sp      16   esp  0    int  -  13
+al      8    eax  0    int  -  1
+bl      8    ebx  0    int  -  4
+cl      8    ecx  0    int  -  2
+dl      8    edx  0    int  -  3
+ah      8    eax  8    int  -  5
+bh      8    ebx  8    int  -  8
+ch      8    ecx  8    int  -  6
+dh      8    edx  8    int  -  7
 
 # The x87 stack, as llrm-x86-m32 states it: its depth is the floating values held at once.
+es      16   es   0    segment,reserved,far_segment  -  25  les
+cs      16   cs   0    segment,reserved,code_segment  -  26
+ss      16   ss   0    segment,reserved,stack_segment  -  27
+ds      16   ds   0    segment,reserved,data_segment  -  28  lds
+fs      16   fs   0    segment,reserved  -  29  lfs
+gs      16   gs   0    segment,reserved  -  30  lgs
 st0     80   st0 0    x87,positional  -  128
 st1     80   st1 0    x87,positional  -  129
 st2     80   st2 0    x87,positional  -  130

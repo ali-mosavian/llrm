@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::sign_bits;
@@ -128,7 +128,7 @@ impl Selector<'_, '_, '_> {
     /// form of the lowest, `rest` of each above, which takes its
     /// predecessor's carry where it is not the same form. A constant operand is
     /// an immediate in each half, as the form takes one.
-    pub(super) fn wide_chain(
+    pub fn wide_chain(
         &mut self,
         m: &super::matcher::Match,
         out: &mut Vec<Arc<Insn>>,
@@ -703,7 +703,7 @@ impl Selector<'_, '_, '_> {
             (
                 name,
                 code,
-                vec![(dividend.0, Register::EAX), (divisor.0, Register::EBX), (dividend.1, Register::EDX)],
+                vec![(dividend.0, RegId::EAX), (divisor.0, RegId::EBX), (dividend.1, RegId::EDX)],
                 std::collections::BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Dx]),
             )
         } else {
@@ -712,10 +712,10 @@ impl Selector<'_, '_, '_> {
                 name,
                 code,
                 vec![
-                    (dividend.0, Register::EAX),
-                    (divisor.0, Register::EBX),
-                    (divisor.1, Register::ECX),
-                    (dividend.1, Register::EDX),
+                    (dividend.0, RegId::EAX),
+                    (divisor.0, RegId::EBX),
+                    (divisor.1, RegId::ECX),
+                    (dividend.1, RegId::EDX),
                 ],
                 _four_inputs(),
             )
@@ -723,10 +723,10 @@ impl Selector<'_, '_, '_> {
         let contract = _helper(name, inputs, _four_clobbers());
         let (quotient, remainder) = ((self.half(), self.half()), (self.half(), self.half()));
         let delivers = vec![
-            (quotient.0, Register::EAX),
-            (quotient.1, Register::EDX),
-            (remainder.0, Register::EBX),
-            (remainder.1, Register::ECX),
+            (quotient.0, RegId::EAX),
+            (quotient.1, RegId::EDX),
+            (remainder.0, RegId::EBX),
+            (remainder.1, RegId::ECX),
         ];
         out.push(Arc::new(Insn {
             clobbers: call_clobbers(&contract, self.segments, &self.cpu.general),

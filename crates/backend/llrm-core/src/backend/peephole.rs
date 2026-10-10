@@ -6,7 +6,8 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
-use iced_x86::{FlowControl, Register, RflagsBits};
+use iced_x86::{FlowControl, RflagsBits};
+use llrm_lir::registers::RegId;
 use llrm_x86::parse;
 
 use crate::analysis::dataflow::{self, Direction};
@@ -77,13 +78,13 @@ fn imm(
 }
 
 fn reg(
-    register: Register,
+    register: RegId,
     width: u32,
 ) -> Reg {
     Reg { register, width }
 }
 
-fn full32(register: Register) -> Register {
+fn full32(register: RegId) -> RegId {
     register.full_register32()
 }
 
@@ -95,7 +96,7 @@ pub struct Peephole {
     pub rules: &'static peep::Rules,
     /// The registers a callee keeps for its caller, whole: a run of stores may
     /// not share them.
-    pub saved: Vec<Register>,
+    pub saved: Vec<RegId>,
     pub classes: Rc<RegisterClasses>,
 }
 
@@ -109,7 +110,7 @@ impl Peephole {
         Self::with_rules(
             frame,
             cpu,
-            &peep::targets::x86_m16::RULES,
+            &crate::backend::targets::x86_m16::RULES,
             llrm_x86_m16::PRESERVED.iter().map(|(whole, _)| *whole).collect(),
             RegisterClasses::m16(),
         )
@@ -119,7 +120,7 @@ impl Peephole {
         frame: Option<Rc<RefCell<Frame>>>,
         cpu: impl Into<ProfileOrName<'a>>,
         rules: &'static peep::Rules,
-        saved: Vec<Register>,
+        saved: Vec<RegId>,
         classes: Rc<RegisterClasses>,
     ) -> Result<Self, String> {
         Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules, saved, classes })
@@ -153,9 +154,8 @@ impl Peephole {
                 if address.is_none() && through.is_some() {
                     return body;
                 }
-                if through.is_some_and(|through| {
-                    [Register::BP, Register::EBP, Register::SP, Register::ESP].contains(&through)
-                }) && address.is_none_or(|address| address.space != Space::Frame)
+                if through.is_some_and(|through| [RegId::BP, RegId::EBP, RegId::SP, RegId::ESP].contains(&through))
+                    && address.is_none_or(|address| address.space != Space::Frame)
                 {
                     return body;
                 }
@@ -275,7 +275,6 @@ pub fn popped_arguments(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
-    const SCRATCH: [Register; 4] = [Register::CX, Register::DX, Register::BX, Register::AX];
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
     let exits = liveness::dead_at_exit(body);
@@ -284,7 +283,7 @@ pub fn popped_arguments(
         let dead_after = regthrash::_dead_after(body.bits, block, exits[&block.at].clone());
         let mut insns = Vec::with_capacity(block.insns.len());
         for one in &block.insns {
-            let sp = Loc::Reg(reg(Register::SP, 2));
+            let sp = Loc::Reg(reg(RegId::SP, 2));
             let words = match &one.what {
                 Some(what)
                     if what.op == Operation::Binary
@@ -303,7 +302,10 @@ pub fn popped_arguments(
                 _ => 0,
             };
             let dead = &dead_after[&id(one)];
-            let scratch = SCRATCH.into_iter().find(|register| _lanes(*register).is_subset(dead));
+            let scratch = crate::backend::registerinfo::scratch_order()
+                .iter()
+                .copied()
+                .find(|register| _lanes(*register).is_subset(dead));
             match scratch {
                 Some(register)
                     if words > 0
@@ -523,18 +525,18 @@ pub fn pushes(
     peep::rewritten(rules.pushes, body, &Facts::new(body, Some(cpu)))
 }
 
-pub fn _lanes(register: Register) -> Lanes {
+pub fn _lanes(register: RegId) -> Lanes {
     if target::SEGMENTS.contains(&register) {
         let width = target::width_of(register).expect("a segment register has a width");
         return (0..width).map(|byte| (register, byte as u32)).collect();
     }
     let full = full32(register);
-    if ![Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP]
-        .contains(&full)
+    if !crate::backend::registerinfo::in_class(full, crate::backend::registerinfo::class::INT)
+        || crate::backend::registerinfo::is_stack(full)
     {
         return Lanes::new();
     }
-    let start = u32::from([Register::AH, Register::BH, Register::CH, Register::DH].contains(&register));
+    let start = crate::backend::registerinfo::get(register).map_or(0, |one| one.lane / 8);
     (start..start + register.size() as u32).map(|byte| (full, byte)).collect()
 }
 
@@ -915,12 +917,12 @@ pub fn restored_copies(
 /// One allocated operand with aliases of `before` renamed to `after`.
 pub fn _register_operand(
     one: &Loc,
-    before: Register,
-    after: Register,
+    before: RegId,
+    after: RegId,
 ) -> Loc {
     // `target.named(after, target.width_of(x))`: a width the target does not
     // know leaves `after` as named.
-    let named = |register: Register| target::width_of(register).map_or(after, |width| target::named(after, width));
+    let named = |register: RegId| target::width_of(register).map_or(after, |width| target::named(after, width));
     match one {
         Loc::Reg(one) if ir::root(one.register) == ir::root(before) => {
             Loc::Reg(Reg { register: target::named(after, i64::from(one.width)), ..*one })
@@ -965,7 +967,7 @@ pub fn _moved_lanes(
 
 /// A shift by a constant: whether it is left, its destination, the register
 /// shifted in, and the count.
-pub type Shift = (bool, Option<Register>, Option<Register>, u8);
+pub type Shift = (bool, Option<RegId>, Option<RegId>, u8);
 
 /// `what` as a shift by a constant, from its operands.
 fn constant_shift(what: &Semantics) -> Option<Shift> {
@@ -993,7 +995,7 @@ pub fn _moved_by((left, destination, source, count): Shift) -> Option<(Vec<(Lane
     }
     // Result bit `b` comes from the destination shifted by `count`, and what
     // the shift empties from the source's other end, or zero.
-    let origin = |bit: usize| -> Option<(Register, usize)> {
+    let origin = |bit: usize| -> Option<(RegId, usize)> {
         if left {
             if bit >= count { Some((destination, bit - count)) } else { source.map(|one| (one, bits - count + bit)) }
         } else if bit + count < bits {
@@ -1002,7 +1004,7 @@ pub fn _moved_by((left, destination, source, count): Shift) -> Option<(Vec<(Lane
             source.map(|one| (one, bit + count - bits))
         }
     };
-    let byte = |register: Register, bit: usize| (full32(register), u32::try_from(bit / 8).expect("a byte"));
+    let byte = |register: RegId, bit: usize| (full32(register), u32::try_from(bit / 8).expect("a byte"));
     let mut moved = Vec::new();
     for bit in 0..bits {
         if let Some((register, from)) = origin(bit) {
@@ -1091,8 +1093,8 @@ struct EffectKey<'a> {
     may_write: bool,
     flags: bool,
     what: &'a Semantics,
-    requires: &'a [(Held, Register)],
-    delivers: &'a [(Held, Register)],
+    requires: &'a [(Held, RegId)],
+    delivers: &'a [(Held, RegId)],
 }
 
 impl EffectKey<'_> {
@@ -1110,7 +1112,7 @@ type Effects = Option<(Lanes, Lanes)>;
 /// asked kept to tell a hash that is another's.
 #[derive(Default)]
 struct EffectsHeld {
-    by_hash: HashMap<u64, Vec<(u32, bool, bool, Semantics, Vec<(Held, Register)>, Vec<(Held, Register)>, Effects)>>,
+    by_hash: HashMap<u64, Vec<(u32, bool, bool, Semantics, Vec<(Held, RegId)>, Vec<(Held, RegId)>, Effects)>>,
     count: usize,
 }
 
@@ -1229,7 +1231,7 @@ pub fn _flag_lanes(mask: u32) -> Lanes {
 
 /// A bp-relative slot whose bytes the displacement alone names.
 pub fn _frame_cell(cell: &Mem) -> bool {
-    cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.through == Register::BP && cell.base.is_none()
+    cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.through == RegId::BP && cell.base.is_none()
 }
 
 /// Whether two such slots share a byte -- arithmetic on the displacements.
@@ -1440,10 +1442,10 @@ fn _loaded_scaled_add<'a>(
     };
     if temporary.width != total.width
         || ![2, 4].contains(&temporary.width)
-        || !target::WIDTHS.contains_key(&temporary.register)
-        || !target::WIDTHS.contains_key(&total.register)
+        || !target::integer(temporary.register)
+        || !target::integer(total.register)
         || ir::root(temporary.register) == ir::root(total.register)
-        || ir::root(temporary.register) == Register::ESP
+        || ir::root(temporary.register) == RegId::ESP
         || load.defines.len() != 1
         || shift.defines != load.defines
         || shift.uses != load.defines
@@ -1658,20 +1660,10 @@ pub fn addresses<'a>(
 
 /// `ir.ROOT.get(register)`: `ROOT` itself is private to `ir`, and its keys
 /// are exactly the registers `root` renames plus the eight 32-bit roots.
-fn _root_get(register: Register) -> Option<Register> {
+fn _root_get(register: RegId) -> Option<RegId> {
     let rooted = ir::root(register);
     let key = rooted != register
-        || [
-            Register::EAX,
-            Register::EBX,
-            Register::ECX,
-            Register::EDX,
-            Register::ESI,
-            Register::EDI,
-            Register::EBP,
-            Register::ESP,
-        ]
-        .contains(&register);
+        || crate::backend::registerinfo::in_class(register, crate::backend::registerinfo::class::INT);
     key.then_some(rooted)
 }
 
@@ -1775,7 +1767,7 @@ pub fn secondary_bases<'a>(
         if seen != 0 { Some((definition, consumers)) } else { None }
     };
 
-    let rewritten = |one: &Insn, substitutions: &IndexMap<u32, (u32, Register)>| -> Arc<Insn> {
+    let rewritten = |one: &Insn, substitutions: &IndexMap<u32, (u32, RegId)>| -> Arc<Insn> {
         let operand = |where_: &Loc| -> Loc {
             let Loc::Mem(cell) = where_ else {
                 return where_.clone();
@@ -1804,7 +1796,7 @@ pub fn secondary_bases<'a>(
         })
     };
 
-    let mut substitutions: IndexMap<u32, (u32, Register)> = IndexMap::default();
+    let mut substitutions: IndexMap<u32, (u32, RegId)> = IndexMap::default();
     let mut remove: HashSet<usize> = HashSet::default();
     let mut insert_after: HashMap<usize, Arc<Insn>> = HashMap::default();
     for (candidate, definition) in definitions.clone() {
@@ -1832,7 +1824,7 @@ pub fn secondary_bases<'a>(
         if group.is_empty() {
             continue;
         }
-        let trial_substitutions: IndexMap<u32, (u32, Register)> =
+        let trial_substitutions: IndexMap<u32, (u32, RegId)> =
             group.iter().map(|(value, _made, _consumers)| (*value, (candidate, root))).collect();
         let mut consumers: IndexMap<usize, Arc<Insn>> = IndexMap::default();
         for (_v, _d, found) in &group {
@@ -1986,7 +1978,7 @@ fn _affine_address(
         return Ok(None);
     };
     let replaced = &parts[..=last];
-    let partial: HashSet<Register> = terms.iter().map(|term| term.0).collect();
+    let partial: HashSet<RegId> = terms.iter().map(|term| term.0).collect();
     let stalls = if dest.width < 4 { partial.len() as i64 * cpu.partial_register_stall } else { 0 };
     // The target's own price of the form (`three_operand`): a word address has
     // no prefix and reads no dword register.
@@ -2291,7 +2283,7 @@ fn _flag_source(
 ) -> Option<usize> {
     let registers = |lanes: &Lanes| {
         let mut lanes = *lanes;
-        lanes.retain(|lane| lane.0 != Register::None);
+        lanes.retain(|lane| lane.0 != RegId::None);
         lanes
     };
     let mut crossed = Vec::new();
@@ -2321,7 +2313,7 @@ fn _flag_source(
             .is_none_or(
                 |what| [Operation::Branch, Operation::Jump, Operation::Call, Operation::Return].contains(&what.op),
             );
-        if transfers || !one.clobbers.is_empty() || effect.reads.iter().any(|lane| lane.0 == Register::None) {
+        if transfers || !one.clobbers.is_empty() || effect.reads.iter().any(|lane| lane.0 == RegId::None) {
             return None;
         }
         crossed.push(effect);
@@ -2347,7 +2339,7 @@ pub fn _flag_effect(
         return if one.clobbers.is_empty() { (Lanes::new(), Lanes::new()) } else { (every, Lanes::new()) };
     }
     if let Some(effect) = liveness::effect(bits, one) {
-        let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == Register::None).collect::<Lanes>();
+        let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == RegId::None).collect::<Lanes>();
         return (flags(&effect.reads), flags(&effect.writes));
     }
     if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
@@ -2546,7 +2538,7 @@ pub fn zeroes(body: &LirBody) -> LirBody {
                         if flags_dead
                             && dest.width == *width
                             && [2, 4].contains(width)
-                            && target::WIDTHS.contains_key(&dest.register)
+                            && target::integer(dest.register)
                             && one.symbol != Some(true)
                         {
                             let dest = *dest;
@@ -2662,13 +2654,13 @@ pub fn constants(body: &LirBody) -> LirBody {
                         Loc::Imm(source) => Some(source.width),
                         _ => None,
                     };
-                    if target::WIDTHS.contains_key(&dest.register) && source_width == Some(dest.width) {
+                    if target::integer(dest.register) && source_width == Some(dest.width) {
                         match source {
                             Loc::Imm(source) if source.address.is_none() => {
                                 candidate =
                                     Some((*dest, Known::Value(source.value & ((1i64 << (dest.width * 8)) - 1))));
                             }
-                            Loc::Reg(source) if target::WIDTHS.contains_key(&source.register) => {
+                            Loc::Reg(source) if target::integer(source.register) => {
                                 let value = *held
                                     .entry(*source)
                                     .or_insert_with(
@@ -2690,7 +2682,7 @@ pub fn constants(body: &LirBody) -> LirBody {
                     continue;
                 }
             }
-            let mut written: HashSet<Register> =
+            let mut written: HashSet<RegId> =
                 one.clobbers.iter().chain(&one.clobbers_high).map(|register| full32(*register)).collect();
             written.extend(what.dests.iter().filter_map(|dest| match dest {
                 Loc::Reg(dest) => Some(full32(dest.register)),

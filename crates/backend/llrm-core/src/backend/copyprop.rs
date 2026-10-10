@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
@@ -188,10 +188,10 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         }
     }
     let slot = Slots(places);
-    let mut register_for: IndexMap<Vec<Lane>, Register> = IndexMap::default();
-    for register in target::WIDTHS.keys() {
-        if !_lanes(*register).is_empty() && ir::root(*register) != Register::ESP {
-            register_for.insert(_lanes(*register).into_iter().collect(), *register);
+    let mut register_for: IndexMap<Vec<Lane>, RegId> = IndexMap::default();
+    for register in target::integer_registers() {
+        if !_lanes(register).is_empty() && !crate::backend::registerinfo::is_stack(register) {
+            register_for.insert(_lanes(register).into_iter().collect(), register);
         }
     }
     let mut recipes: HashMap<usize, Recipe> = HashMap::default();
@@ -344,55 +344,52 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         // One register read, named `register` at `width` bytes: the older
         // copy's, where that encodes and reads the same lanes. `put`
         // makes the semantics that reads `replacement` there.
-        let substitute = |changed: &Semantics,
-                          register: Register,
-                          width: i64,
-                          put: &dyn Fn(Register) -> Semantics|
-         -> Option<Semantics> {
-            let source_lanes: Vec<Lane> = _lanes(register).into_iter().collect();
-            // No lane of it is the copy of another: its own register is the
-            // only candidate, and that is none.
-            if !source_lanes.iter().any(|lane| mapping.contains_key(lane)) {
-                return None;
-            }
-            let candidate_lanes: Vec<Lane> =
-                source_lanes.iter().map(|lane| mapping.get(lane).copied().unwrap_or(*lane)).collect();
-            let mut sorted_lanes = candidate_lanes.clone();
-            sorted_lanes.sort();
-            let candidate = register_for.get(&sorted_lanes).copied()?;
-            if candidate == register || width != 0 && target::width_of(candidate) != Some(width) {
-                return None;
-            }
-            if !source_lanes.iter().zip(&candidate_lanes).all(|(left, right)| equal(facts, *left, *right)) {
-                return None;
-            }
-            let before_effects = _register_effects_of_what(body.bits, changed, true, false)?;
-            if candidate_lanes.iter().any(|lane| before_effects.1.contains(lane)) {
-                return None;
-            }
-            let proposed = put(candidate);
-            select::priced_in(body.bits, &proposed, 0, None, false, false, None)?;
-            let after_effects = _register_effects_of_what(body.bits, &proposed, true, false)?;
-            let expected_reads: Lanes = before_effects
-                .0
-                .iter()
-                .filter(|lane| !source_lanes.contains(lane))
-                .copied()
-                .chain(candidate_lanes.iter().copied())
-                .collect();
-            (after_effects.1 == before_effects.1 && after_effects.0 == expected_reads).then_some(proposed)
-        };
+        let substitute =
+            |changed: &Semantics, register: RegId, width: i64, put: &dyn Fn(RegId) -> Semantics| -> Option<Semantics> {
+                let source_lanes: Vec<Lane> = _lanes(register).into_iter().collect();
+                // No lane of it is the copy of another: its own register is the
+                // only candidate, and that is none.
+                if !source_lanes.iter().any(|lane| mapping.contains_key(lane)) {
+                    return None;
+                }
+                let candidate_lanes: Vec<Lane> =
+                    source_lanes.iter().map(|lane| mapping.get(lane).copied().unwrap_or(*lane)).collect();
+                let mut sorted_lanes = candidate_lanes.clone();
+                sorted_lanes.sort();
+                let candidate = register_for.get(&sorted_lanes).copied()?;
+                if candidate == register || width != 0 && target::width_of(candidate) != Some(width) {
+                    return None;
+                }
+                if !source_lanes.iter().zip(&candidate_lanes).all(|(left, right)| equal(facts, *left, *right)) {
+                    return None;
+                }
+                let before_effects = _register_effects_of_what(body.bits, changed, true, false)?;
+                if candidate_lanes.iter().any(|lane| before_effects.1.contains(lane)) {
+                    return None;
+                }
+                let proposed = put(candidate);
+                select::priced_in(body.bits, &proposed, 0, None, false, false, None)?;
+                let after_effects = _register_effects_of_what(body.bits, &proposed, true, false)?;
+                let expected_reads: Lanes = before_effects
+                    .0
+                    .iter()
+                    .filter(|lane| !source_lanes.contains(lane))
+                    .copied()
+                    .chain(candidate_lanes.iter().copied())
+                    .collect();
+                (after_effects.1 == before_effects.1 && after_effects.0 == expected_reads).then_some(proposed)
+            };
         for index in 0..changed.sources.len() {
             let Loc::Reg(source) = changed.sources[index] else {
                 continue;
             };
-            let current = changed.clone();
-            let put = |replacement: Register| {
+            let current = &changed;
+            let put = |replacement: RegId| {
                 let mut sources = current.sources.clone();
                 sources[index] = Loc::Reg(Reg { register: replacement, width: source.width });
                 Semantics { sources, ..current.clone() }
             };
-            if let Some(proposed) = substitute(&current, source.register, 0, &put) {
+            if let Some(proposed) = substitute(current, source.register, 0, &put) {
                 touched = true;
                 changed = proposed;
             }
@@ -402,14 +399,14 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         for (side, count) in [(true, changed.dests.len()), (false, changed.sources.len())] {
             for index in 0..count {
                 for through in [true, false] {
-                    let current = changed.clone();
+                    let current = &changed;
                     let place = if side { &current.dests[index] } else { &current.sources[index] };
                     let Some(at) = place.address() else { continue };
                     let register = if through { at.through } else { at.index_through };
-                    if register == Register::None {
+                    if register == RegId::None {
                         continue;
                     }
-                    let put = |replacement: Register| {
+                    let put = |replacement: RegId| {
                         let renamed = place.map_address(|at| {
                             if through {
                                 ir::AddressRef { through: replacement, ..at }
@@ -425,8 +422,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                         }
                         Semantics { dests, sources, ..current.clone() }
                     };
-                    if let Some(proposed) =
-                        substitute(&current, register, target::width_of(register).unwrap_or(0), &put)
+                    if let Some(proposed) = substitute(current, register, target::width_of(register).unwrap_or(0), &put)
                     {
                         touched = true;
                         changed = proposed;

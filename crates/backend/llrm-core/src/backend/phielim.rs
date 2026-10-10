@@ -816,7 +816,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::{_observed, _settled, _split_edges, Split, eliminated, unsplit};
     use crate::analysis::frequency::Frequency;
@@ -896,7 +896,7 @@ mod tests {
                 Operation::Compare,
                 "cmp",
                 vec![],
-                vec![Loc::Reg(Reg { register: Register::CX, width: 2 }), imm(8, 2)],
+                vec![Loc::Reg(Reg { register: RegId::CX, width: 2 }), imm(8, 2)],
                 None,
             ),
             vec![],
@@ -1203,9 +1203,9 @@ mod tests {
         // Port of tests/test_lir.py: `_settled` looked for a Held in
         // `Mem.through`, which is a register now, so a based cell kept the old
         // id.
-        let where_ = Addr { base: Register::SI, ..Addr::new(Space::Segment, 0x10) };
+        let where_ = Addr { base: RegId::SI, ..Addr::new(Space::Segment, 0x10) };
         let cell = Mem {
-            through: Register::None,
+            through: RegId::None,
             offset: 0,
             disp_width: 2,
             base: Some(Held { value: 21, width: 2 }),
@@ -1215,7 +1215,7 @@ mod tests {
             panic!("a cell stays a cell");
         };
         assert_eq!(got.base, Some(Held { value: 99, width: 2 }), "the cell kept {:?}", got.base);
-        assert_eq!(got.through, Register::None, "the rename placed it");
+        assert_eq!(got.through, RegId::None, "the rename placed it");
         assert_eq!(got.addr, cell.addr);
         assert_eq!(got.width, cell.width);
         assert_eq!(got.offset, cell.offset);

@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops::{self, Loop};
@@ -91,16 +91,16 @@ impl LIRTransform for LoopSlots {
 fn slot(mem: &Mem) -> Option<i64> {
     let addr = mem.addr?;
     (addr.space == Space::Frame
-        && addr.base == Register::None
-        && mem.through == Register::BP
+        && addr.base == RegId::None
+        && mem.through == ir::FRAME
         && mem.base.is_none()
         && mem.index.is_none()
-        && mem.index_through == Register::None)
+        && mem.index_through == RegId::None)
         .then_some(addr.disp + mem.offset)
 }
 
-fn is_bp(register: Register) -> bool {
-    register != Register::None && ir::root(register) == ir::root(Register::BP)
+fn is_bp(register: RegId) -> bool {
+    register != RegId::None && crate::backend::registerinfo::is_frame(register)
 }
 
 /// The word slot `mem` names, when it is exactly one.
@@ -168,6 +168,8 @@ impl Touch {
 #[cfg(test)]
 thread_local! {
     static TOUCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FITTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static RANKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn touch(
@@ -280,7 +282,7 @@ fn live_in(
 /// The word register `root` names, as a plain operand.
 fn word(
     m: u32,
-    root: Register,
+    root: RegId,
 ) -> Loc {
     Loc::Reg(Reg { register: target::named(root, i64::from(m)), width: m })
 }
@@ -288,7 +290,7 @@ fn word(
 fn plain_word(
     m: u32,
     place: &Loc,
-    root: Register,
+    root: RegId,
 ) -> bool {
     matches!(
         place,
@@ -300,7 +302,7 @@ fn plain_word(
 fn reload_of(
     m: u32,
     one: &Insn,
-    root: Register,
+    root: RegId,
 ) -> Option<i64> {
     let what = one.what.as_ref()?;
     match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
@@ -314,7 +316,7 @@ fn reload_of(
 fn reads_plainly(
     m: u32,
     one: &Insn,
-    root: Register,
+    root: RegId,
     effect: &liveness::Effect,
 ) -> bool {
     let Some(what) = one.what.as_ref() else {
@@ -350,13 +352,14 @@ enum Hold {
 /// Registers the loop leaves free, untouched ones first, parked ones last.
 fn free(
     m: u32,
-    roots: &[Register],
+    roots: &[RegId],
     body: &LirBody,
+    effects: &[Vec<Option<liveness::Effect>>],
     one: &Loop,
     index: &BTreeMap<i64, usize>,
     live_into: &IndexMap<i64, Lanes>,
     exits: &BTreeSet<i64>,
-) -> Vec<(Register, Hold)> {
+) -> Vec<(RegId, Hold)> {
     let mut out = Vec::new();
     'roots: for root in roots.iter().copied() {
         let lanes = _lanes(root);
@@ -366,7 +369,7 @@ fn free(
             let block = &body.blocks[index[at]];
             let mut reloaded = None;
             for (position, insn) in block.insns.iter().enumerate() {
-                let Some(effect) = liveness::effect(body.bits, insn) else {
+                let Some(effect) = &effects[index[at]][position] else {
                     continue 'roots;
                 };
                 if effect.reads.is_disjoint(&lanes) && effect.writes.is_disjoint(&lanes) {
@@ -378,7 +381,7 @@ fn free(
                 if let Some(from) = reload_of(m, insn, root) {
                     reloaded = Some(from);
                     folded.push((index[at], position, from));
-                } else if let Some(from) = reloaded.filter(|_| reads_plainly(m, insn, root, &effect)) {
+                } else if let Some(from) = reloaded.filter(|_| reads_plainly(m, insn, root, effect)) {
                     folded.push((index[at], position, from));
                 } else {
                     continue 'roots;
@@ -445,7 +448,7 @@ fn cell(
     at: i64,
 ) -> Mem {
     // A word the frame handed out as a slot of its own: `at` is its first byte.
-    Mem { through: Register::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, at).in_slot(at)), m) }
+    Mem { through: RegId::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, at).in_slot(at)), m) }
 }
 
 /// `one` with each slot access made its register.
@@ -484,7 +487,7 @@ fn rewritten(
 fn reaching_slots(
     m: u32,
     slots: &BTreeSet<i64>,
-    seen: &[(usize, usize, &Arc<Insn>, Touch)],
+    seen: &[(usize, usize, &Arc<Insn>, &Touch)],
 ) -> BTreeMap<i64, Vec<usize>> {
     let mut by_slot: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
     for (i, (_, _, _, touched)) in seen.iter().enumerate() {
@@ -510,11 +513,13 @@ fn reaching_slots(
 fn registrable(
     m: u32,
     bits: u32,
-    home: Register,
+    home: RegId,
     one: &Arc<Insn>,
     touched: &Touch,
     at: i64,
 ) -> bool {
+    #[cfg(test)]
+    FITTED.with(|count| count.set(count.get() + 1));
     if touched.reaches(at, false) || touched.reaches(at, true) {
         return false;
     }
@@ -561,7 +566,7 @@ fn invariant(
     insns: &[(&Arc<Insn>, Lanes)],
     touches: &std::cell::OnceCell<Vec<Touch>>,
     entering: &Lanes,
-    root: Register,
+    root: RegId,
     spills: &BTreeSet<i64>,
 ) -> Option<Source> {
     let lanes = _lanes(root);
@@ -608,22 +613,42 @@ fn invariant(
 /// out once for the loop, where `invariant` asked it again for every register.
 fn writes_of<'a>(
     body: &'a LirBody,
+    may_writes: &[Vec<Option<Lanes>>],
     one: &Loop,
     index: &BTreeMap<i64, usize>,
 ) -> Option<Vec<(&'a Arc<Insn>, Lanes)>> {
     let mut out = Vec::new();
     for at in &one.body {
-        for insn in &body.blocks[index[at]].insns {
-            let effect = liveness::effect(body.bits, insn)?;
-            // A `rep movs` steps si and di only if it runs: a conditional
-            // write, but one that makes the register unfit to hold
-            // its value from one trip to the next.
-            let may_write = peephole::_register_effects(body.bits, insn, true, false)
-                .map_or(effect.writes, |(_, writes)| effect.writes.or(&writes));
-            out.push((insn, may_write));
+        for (insn, may_write) in body.blocks[index[at]].insns.iter().zip(&may_writes[index[at]]) {
+            out.push((insn, may_write.clone()?));
         }
     }
     Some(out)
+}
+
+/// What each instruction may write, or none where its effect is not known:
+/// worked out once for the body, not once for each loop around the instruction.
+fn may_writes(body: &LirBody) -> Vec<Vec<Option<Lanes>>> {
+    body.blocks
+        .iter()
+        .map(|block| {
+            block
+                .insns
+                .iter()
+                .map(|insn| {
+                    let effect = liveness::effect(body.bits, insn)?;
+                    // A `rep movs` steps si and di only if it runs: a
+                    // conditional write, but one that makes
+                    // the register unfit to hold
+                    // its value from one trip to the next.
+                    Some(
+                        peephole::_register_effects(body.bits, insn, true, false)
+                            .map_or(effect.writes, |(_, writes)| effect.writes.or(&writes)),
+                    )
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Whether `one` cannot write the frame cell at `at`: it writes memory only
@@ -670,7 +695,7 @@ fn spares(
 /// `body` with each loop-invariant reload moved to where its loop is entered.
 pub fn hoisted(
     m: u32,
-    available: &[Register],
+    available: &[RegId],
     body: &LirBody,
     spills: &BTreeSet<i64>,
 ) -> LirBody {
@@ -683,6 +708,7 @@ pub fn hoisted(
     let mut found = loops::loops(graph, Some(body.entry));
     found.sort_by_key(|one| one.body.len());
     let mut taken = BTreeSet::<i64>::new();
+    let written = may_writes(body);
     for one in &found {
         if one.body.iter().any(|at| taken.contains(at)) {
             continue;
@@ -691,9 +717,15 @@ pub fn hoisted(
         if entries.is_empty() || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header]) {
             continue;
         }
-        let roots =
-            available.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
-        let Some(writes) = writes_of(body, one, &index) else { continue };
+        let roots = available
+            .iter()
+            .chain(
+                target::SEGMENTS.iter().filter(|one| {
+                    !crate::backend::registerinfo::is_code_segment(**one)
+                        && !crate::backend::registerinfo::is_stack_segment(**one)
+                }),
+            );
+        let Some(writes) = writes_of(body, &written, one, &index) else { continue };
         let touches = std::cell::OnceCell::new();
         let moved = roots
             .filter_map(|root| {
@@ -704,9 +736,9 @@ pub fn hoisted(
             continue;
         }
         // The first reload goes to each entry; the others' values are its.
-        let mut first = BTreeMap::<Register, Arc<Insn>>::new();
+        let mut first = BTreeMap::<RegId, Arc<Insn>>::new();
         let mut rename = IndexMap::<u32, u32>::default();
-        let reloads = |insn: &Insn, root: Register| {
+        let reloads = |insn: &Insn, root: RegId| {
             insn.what
                 .as_ref()
                 .is_some_and(
@@ -755,7 +787,7 @@ pub fn hoisted(
 /// `body` with each loop's spill slots in the registers it leaves free.
 pub fn promoted(
     m: u32,
-    available: &[Register],
+    available: &[RegId],
     body: &LirBody,
     spills: &BTreeSet<i64>,
     costs: &OperationCosts,
@@ -772,6 +804,17 @@ pub fn promoted(
     let busy = Frequency::of(body);
     let mut blocks = body.blocks.clone();
     let mut taken = BTreeSet::<i64>::new();
+    // How each instruction reaches the frame, worked out once, not once for
+    // each loop it is in: a nest of d loops asked every instruction of the
+    // innermost d times.
+    let effects: Vec<Vec<Option<liveness::Effect>>> = body
+        .blocks
+        .iter()
+        .map(|block| block.insns.iter().map(|insn| liveness::effect(body.bits, insn)).collect())
+        .collect();
+    let fits = RefCell::new(BTreeMap::<(usize, usize, i64), bool>::new());
+    let touches: Vec<Vec<Touch>> =
+        body.blocks.iter().map(|block| block.insns.iter().map(|insn| touch(m, insn)).collect()).collect();
     for one in &found {
         if one.body.iter().any(|at| taken.contains(at)) {
             continue;
@@ -780,10 +823,10 @@ pub fn promoted(
         // each slot asks of the instructions that reach it, not of all
         // of them (a loop of d nested levels asked d slots of d levels'
         // instructions, d times over).
-        let mut seen: Vec<(usize, usize, &Arc<Insn>, Touch)> = Vec::new();
+        let mut seen: Vec<(usize, usize, &Arc<Insn>, &Touch)> = Vec::new();
         for block in &one.body {
             for (position, insn) in body.blocks[index[block]].insns.iter().enumerate() {
-                seen.push((index[block], position, insn, touch(m, insn)));
+                seen.push((index[block], position, insn, &touches[index[block]][position]));
             }
         }
         let (mut slots, mut other, mut traps) = (BTreeSet::new(), false, false);
@@ -809,7 +852,7 @@ pub fn promoted(
         {
             continue;
         }
-        let registers = free(m, available, body, one, &index, &live_into, &exits);
+        let registers = free(m, available, body, &effects, one, &index, &live_into, &exits);
         let reloads = registers
             .iter()
             .flat_map(|(_, hold)| folds(hold).iter().map(|(block, position, _)| (*block, *position)))
@@ -817,6 +860,8 @@ pub fn promoted(
         // Most saved first.
         let reaching = reaching_slots(m, &slots, &seen);
         let none = Vec::new();
+        #[cfg(test)]
+        RANKED.with(|count| count.set(count.get() + 1));
         let mut ranked = slots
             .iter()
             .filter(|at| {
@@ -825,14 +870,25 @@ pub fn promoted(
                     .unwrap_or(&none)
                     .iter()
                     .all(
-                        |i| registrable(
-                            m,
-                            body.bits,
-                            *available.last().expect("a register to hold a slot"),
-                            seen[*i].2,
-                            &seen[*i].3,
-                            **at,
-                        ),
+                        |i| {
+                            // Whether an instruction still encodes with the
+                            // slot in a register does not depend on the loop:
+                            // asked once for each instruction and slot, not
+                            // once for each loop around it.
+                            *fits
+                                .borrow_mut()
+                                .entry((seen[*i].0, seen[*i].1, **at))
+                                .or_insert_with(
+                                    || registrable(
+                                        m,
+                                        body.bits,
+                                        *available.last().expect("a register to hold a slot"),
+                                        seen[*i].2,
+                                        seen[*i].3,
+                                        **at,
+                                    ),
+                                )
+                        },
                     )
             })
             .map(|at| {
@@ -872,7 +928,7 @@ pub fn promoted(
         if let Some(at) = bp_slot {
             let saved = ranked.last().expect("a slot").0;
             if saved as f64 * trips > (entered * (costs.store + costs.load) + left * costs.load) as f64 {
-                homes.insert(at, Loc::Reg(Reg { register: target::named(Register::BP, i64::from(m)), width: m }));
+                homes.insert(at, Loc::Reg(Reg { register: target::named(RegId::BP, i64::from(m)), width: m }));
             }
         }
         // A register freed by folding its reloads is free only when each
@@ -982,7 +1038,7 @@ pub fn promoted(
                         near,
                         Operation::Pop,
                         "pop",
-                        vec![Loc::Reg(Reg { register: target::named(Register::BP, i64::from(m)), width: m })],
+                        vec![Loc::Reg(Reg { register: target::named(RegId::BP, i64::from(m)), width: m })],
                         vec![],
                     ),
                 );
@@ -1013,14 +1069,14 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::{cell, made, promoted};
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
-    fn reg(register: Register) -> Loc {
+    fn reg(register: RegId) -> Loc {
         Loc::Reg(Reg { register, width: 2 })
     }
 
@@ -1047,7 +1103,7 @@ mod tests {
     #[test]
     fn test_a_dropped_reload_leaves_no_reader_of_its_value() {
         let one = Imm { value: 1, width: 2, address: None };
-        let bump = |at: i64, register: Register| {
+        let bump = |at: i64, register: RegId| {
             made(at, Operation::Binary, "add", vec![reg(register)], vec![reg(register), Loc::Imm(one.clone())])
         };
         let body = LirBody::new(
@@ -1058,11 +1114,11 @@ mod tests {
                 block(
                     0x10,
                     vec![
-                        bump(0x10, Register::BX),
-                        bump(0x11, Register::DX),
-                        bump(0x12, Register::DI),
+                        bump(0x10, RegId::BX),
+                        bump(0x11, RegId::DX),
+                        bump(0x12, RegId::DI),
                         with(
-                            made(0x13, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(2, -4))]),
+                            made(0x13, Operation::Move, "mov", vec![reg(RegId::SI)], vec![Loc::Mem(cell(2, -4))]),
                             vec![5],
                             vec![],
                         ),
@@ -1082,14 +1138,14 @@ mod tests {
                                 0x14,
                                 Operation::Binary,
                                 "add",
-                                vec![reg(Register::AX)],
-                                vec![reg(Register::AX), reg(Register::SI)],
+                                vec![reg(RegId::AX)],
+                                vec![reg(RegId::AX), reg(RegId::SI)],
                             ),
                             vec![],
                             vec![5],
                         ),
                         with(
-                            made(0x15, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(2, -4))]),
+                            made(0x15, Operation::Move, "mov", vec![reg(RegId::SI)], vec![Loc::Mem(cell(2, -4))]),
                             vec![6],
                             vec![],
                         ),
@@ -1098,13 +1154,13 @@ mod tests {
                                 0x15,
                                 Operation::Binary,
                                 "add",
-                                vec![reg(Register::BX)],
-                                vec![reg(Register::BX), reg(Register::SI)],
+                                vec![reg(RegId::BX)],
+                                vec![reg(RegId::BX), reg(RegId::SI)],
                             ),
                             vec![],
                             vec![6],
                         ),
-                        bump(0x15, Register::CX),
+                        bump(0x15, RegId::CX),
                         Arc::new(Insn::new(
                             0x16,
                             Some((0x16, 0x17)),
@@ -1126,7 +1182,7 @@ mod tests {
                             0x20,
                             Operation::Move,
                             "mov",
-                            vec![Loc::Reg(Reg { register: Register::ESI, width: 4 })],
+                            vec![Loc::Reg(Reg { register: RegId::ESI, width: 4 })],
                             vec![Loc::Imm(Imm { width: 4, ..one.clone() })],
                         ),
                         made(0x21, Operation::Return, "ret", vec![], vec![]),
@@ -1162,19 +1218,8 @@ mod tests {
         let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
         let copy = Semantics {
             name: Some("movsd".to_owned()),
-            dests: vec![
-                Loc::Mem(crate::model::ir::Mem::new(None, 0)),
-                reg(Register::SI),
-                reg(Register::DI),
-                reg(Register::CX),
-            ],
-            sources: vec![
-                reg(Register::CX),
-                reg(Register::SI),
-                reg(Register::DI),
-                reg(Register::DS),
-                reg(Register::ES),
-            ],
+            dests: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0)), reg(RegId::SI), reg(RegId::DI), reg(RegId::CX)],
+            sources: vec![reg(RegId::CX), reg(RegId::SI), reg(RegId::DI), reg(RegId::DS), reg(RegId::ES)],
             ..Semantics::new(Operation::Copy)
         };
         let body = LirBody::new(
@@ -1185,10 +1230,10 @@ mod tests {
                 block(
                     0x10,
                     vec![
-                        made(0x10, Operation::Move, "mov", vec![reg(Register::SI)], vec![word(8)]),
-                        made(0x11, Operation::Move, "mov", vec![reg(Register::DI)], vec![word(4)]),
-                        made(0x12, Operation::Move, "mov", vec![reg(Register::CX)], vec![word(50)]),
-                        made(0x12, Operation::Move, "mov", vec![reg(Register::BX)], vec![word(7)]),
+                        made(0x10, Operation::Move, "mov", vec![reg(RegId::SI)], vec![word(8)]),
+                        made(0x11, Operation::Move, "mov", vec![reg(RegId::DI)], vec![word(4)]),
+                        made(0x12, Operation::Move, "mov", vec![reg(RegId::CX)], vec![word(50)]),
+                        made(0x12, Operation::Move, "mov", vec![reg(RegId::BX)], vec![word(7)]),
                         Arc::new(Insn::new(0x13, Some((0x13, 0x14)), Some(copy), vec![], vec![])),
                         Arc::new(Insn::new(
                             0x15,
@@ -1219,7 +1264,7 @@ mod tests {
         let out =
             super::hoisted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::new());
         let in_loop = out.blocks.iter().find(|one| one.at == 0x10).expect("the loop");
-        let sets = |register: Register| {
+        let sets = |register: RegId| {
             in_loop
                 .insns
                 .iter()
@@ -1230,8 +1275,8 @@ mod tests {
                     ),
                 )
         };
-        assert!(!sets(Register::BX), "premise: an invariant constant leaves the loop");
-        assert!(sets(Register::DI) && sets(Register::SI), "the loop sets si and di");
+        assert!(!sets(RegId::BX), "premise: an invariant constant leaves the loop");
+        assert!(sets(RegId::DI) && sets(RegId::SI), "the loop sets si and di");
     }
 
     /// m32's slots are dwords: LoopSlots was dropped there. Its BP parking once
@@ -1240,13 +1285,13 @@ mod tests {
     /// quicksort into a general protection fault.
     #[test]
     fn test_a_dword_slot_parked_in_the_frame_register_is_pushed_and_popped() {
-        let wide = |register: Register| Loc::Reg(Reg { register, width: 4 });
+        let wide = |register: RegId| Loc::Reg(Reg { register, width: 4 });
         let one = Imm { value: 1, width: 4, address: None };
-        let bump = |at: i64, register: Register| {
+        let bump = |at: i64, register: RegId| {
             made(at, Operation::Binary, "add", vec![wide(register)], vec![wide(register), Loc::Imm(one.clone())])
         };
         let slot = |at: i64| Loc::Mem(cell(4, at));
-        let busy = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
+        let busy = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI];
         let mut loop_body: Vec<Arc<Insn>> =
             busy.iter().enumerate().map(|(at, register)| bump(0x10 + at as i64, *register)).collect();
         for at in 0..8 {
@@ -1254,8 +1299,8 @@ mod tests {
                 0x20 + at,
                 Operation::Binary,
                 "add",
-                vec![wide(Register::EAX)],
-                vec![wide(Register::EAX), slot(-4)],
+                vec![wide(RegId::EAX)],
+                vec![wide(RegId::EAX), slot(-4)],
             ));
         }
         loop_body.push(Arc::new(Insn::new(
@@ -1317,8 +1362,8 @@ mod tests {
                     0x20 + at,
                     Operation::Binary,
                     "add",
-                    vec![reg(Register::AX)],
-                    vec![reg(Register::AX), slot(-2 * (at + 1))],
+                    vec![reg(RegId::AX)],
+                    vec![reg(RegId::AX), slot(-2 * (at + 1))],
                 )
             })
             .collect();
@@ -1366,11 +1411,10 @@ mod tests {
     #[test]
     fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_the_low_word() {
         let one = Imm { value: 1, width: 2, address: None };
-        let bump = |at: i64, register: Register| {
+        let bump = |at: i64, register: RegId| {
             made(at, Operation::Binary, "add", vec![reg(register)], vec![reg(register), Loc::Imm(one.clone())])
         };
-        let les =
-            made(0x14, Operation::Move, "les", vec![reg(Register::BX), reg(Register::ES)], vec![Loc::Mem(cell(4, -4))]);
+        let les = made(0x14, Operation::Move, "les", vec![reg(RegId::BX), reg(RegId::ES)], vec![Loc::Mem(cell(4, -4))]);
         let body = LirBody::new(
             "loop",
             0,
@@ -1379,42 +1423,42 @@ mod tests {
                 block(
                     0x10,
                     vec![
-                        bump(0x10, Register::DX),
+                        bump(0x10, RegId::DX),
                         made(
                             0x13,
                             Operation::Binary,
                             "add",
-                            vec![reg(Register::AX)],
-                            vec![reg(Register::AX), Loc::Mem(cell(2, -4))],
+                            vec![reg(RegId::AX)],
+                            vec![reg(RegId::AX), Loc::Mem(cell(2, -4))],
                         ),
                         les,
                         made(
                             0x17,
                             Operation::Binary,
                             "add",
-                            vec![reg(Register::AX)],
-                            vec![reg(Register::AX), Loc::Mem(cell(2, -4))],
+                            vec![reg(RegId::AX)],
+                            vec![reg(RegId::AX), Loc::Mem(cell(2, -4))],
                         ),
                         made(
                             0x17,
                             Operation::Binary,
                             "add",
-                            vec![reg(Register::AX)],
-                            vec![reg(Register::AX), Loc::Mem(cell(2, -4))],
+                            vec![reg(RegId::AX)],
+                            vec![reg(RegId::AX), Loc::Mem(cell(2, -4))],
                         ),
                         made(
                             0x17,
                             Operation::Binary,
                             "add",
-                            vec![reg(Register::AX)],
-                            vec![reg(Register::AX), Loc::Mem(cell(2, -4))],
+                            vec![reg(RegId::AX)],
+                            vec![reg(RegId::AX), Loc::Mem(cell(2, -4))],
                         ),
                         made(
                             0x17,
                             Operation::Binary,
                             "add",
-                            vec![reg(Register::AX)],
-                            vec![reg(Register::AX), Loc::Mem(cell(2, -4))],
+                            vec![reg(RegId::AX)],
+                            vec![reg(RegId::AX), Loc::Mem(cell(2, -4))],
                         ),
                         Arc::new(Insn::new(
                             0x18,
@@ -1455,6 +1499,32 @@ mod tests {
             reads(&out),
             reads(&body),
             "the word reads stay in memory: the les reads the slot there, a register copy would be stale"
+        );
+    }
+
+    /// `nest(d)` as the front end's pipeline hands it to isel: whether an
+    /// instruction fits a slot in a register was asked again for each loop
+    /// around it, so that the asks grew with the square of the depth. Asked
+    /// once for each instruction and slot, they grow with the nest.
+    #[test]
+    fn test_the_nest_asks_what_fits_a_slot_once_however_deep_the_loops() {
+        use crate::backend::regalloc_input::{Calls, before_phase};
+        let asked = |depth: usize| {
+            let (body, mut phases) =
+                before_phase(Calls::C, &format!("loopslots_nest{depth}.ll"), "_fn", "486", "LoopSlots");
+            super::FITTED.with(|count| count.set(0));
+            super::RANKED.with(|count| count.set(0));
+            phases[0].transform(body).expect("loop slots");
+            (super::RANKED.with(std::cell::Cell::get), super::FITTED.with(std::cell::Cell::get))
+        };
+        let ((ranked4, fitted4), (ranked8, fitted8), (ranked16, fitted16)) = (asked(4), asked(8), asked(16));
+        assert!(
+            ranked4 >= 3 && ranked8 >= 7 && ranked16 >= 15,
+            "premise: every loop of the nest but the outermost, which the function's exit bounds, is ranked ({ranked4}, {ranked8}, {ranked16})"
+        );
+        assert!(
+            fitted16 < 3 * fitted8 && fitted8 < 3 * fitted4,
+            "{fitted4}, {fitted8}, {fitted16} asks for nests 4, 8 and 16 deep"
         );
     }
 }

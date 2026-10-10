@@ -51,6 +51,80 @@ pub fn graph(function: &Function) -> Vec<Block> {
         .collect()
 }
 
+/// The ids of the blocks `at` names, from its terminator: one block's
+/// successors, without the graph of the whole body (LLVM's `successors(BB)`,
+/// gcc's `bb->succs`).
+pub fn successors_of(
+    function: &Function,
+    at: i64,
+) -> Vec<i64> {
+    function.successors(block(at)).into_iter().map(id).collect()
+}
+
+/// The blocks that name `at`, from the users of the block (LLVM's
+/// `predecessors(BB)`, gcc's `bb->preds`).
+pub fn predecessors_of(
+    function: &Function,
+    at: i64,
+) -> BTreeSet<i64> {
+    function.predecessors(block(at)).into_iter().map(id).collect()
+}
+
+/// What a loop asks of the body around it, from its own blocks and the users of
+/// its header (LLVM's `Loop::getLoopPredecessor`, `getExitEdges`,
+/// `getLoopPreheader`; gcc's `loop_preheader_edge` and `get_loop_exit_edges`),
+/// not from the graph of the whole body: found for each loop of a function of N
+/// loops that was N^2.
+pub trait Around {
+    /// The blocks outside the loop that name its header: where it is entered
+    /// from.
+    fn entering(
+        &self,
+        function: &Function,
+    ) -> BTreeSet<i64>;
+
+    /// The edges leaving the loop, as (from, to), in the order of its blocks.
+    fn exits(
+        &self,
+        function: &Function,
+    ) -> Vec<(i64, i64)>;
+
+    /// The one block entering the loop that only goes to its header.
+    fn preheader(
+        &self,
+        function: &Function,
+    ) -> Option<i64>;
+}
+
+impl Around for Loop {
+    fn entering(
+        &self,
+        function: &Function,
+    ) -> BTreeSet<i64> {
+        predecessors_of(function, self.header).into_iter().filter(|at| !self.body.contains(at)).collect()
+    }
+
+    fn exits(
+        &self,
+        function: &Function,
+    ) -> Vec<(i64, i64)> {
+        self.body
+            .iter()
+            .flat_map(|&from| successors_of(function, from).into_iter().map(move |to| (from, to)))
+            .filter(|(_, to)| !self.body.contains(to))
+            .collect()
+    }
+
+    fn preheader(
+        &self,
+        function: &Function,
+    ) -> Option<i64> {
+        let entering = self.entering(function);
+        let [one] = entering.iter().copied().collect::<Vec<_>>()[..] else { return None };
+        (successors_of(function, one) == [self.header]).then_some(one)
+    }
+}
+
 /// `Dominators` as the graph walks read it: over block ids, and nothing
 /// dominates a block the entry does not reach.
 #[derive(Clone, Debug, PartialEq)]

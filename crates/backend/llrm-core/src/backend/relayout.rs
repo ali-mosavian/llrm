@@ -327,16 +327,16 @@ pub fn difference(
 
 #[cfg(test)]
 mod tests {
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use crate::backend::select::{emit_in, priced_in};
     use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
 
     fn load(addr: Addr) -> Semantics {
-        let cell = Mem { through: Register::EBP, ..Mem::new(Some(addr), 4) };
+        let cell = Mem { through: RegId::EBP, ..Mem::new(Some(addr), 4) };
         Semantics {
             name: Some("mov".to_owned()),
-            dests: vec![Loc::Reg(Reg { register: Register::EAX, width: 4 })],
+            dests: vec![Loc::Reg(Reg { register: RegId::EAX, width: 4 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
         }

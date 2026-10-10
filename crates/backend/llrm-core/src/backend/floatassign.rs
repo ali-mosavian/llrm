@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::frequency::Frequency;
 use crate::backend::allocate::{Live, live};
@@ -202,7 +202,7 @@ fn _stable(cell: &Mem) -> bool {
         Some(addr) if addr.space == Space::Far && cell.selector.is_none() => return false,
         Some(_) => {}
     }
-    cell.base.is_some() || cell.index.is_some() || matches!(cell.through, Register::None | Register::BP)
+    cell.base.is_some() || cell.index.is_some() || matches!(cell.through, RegId::None | RegId::BP)
 }
 
 fn _reached(cell: &Mem) -> Option<Addr> {
@@ -212,12 +212,12 @@ fn _reached(cell: &Mem) -> Option<Addr> {
         return cell.addr;
     }
     let addr = cell.addr.expect("replace(None) raises");
-    let base = if addr.base != Register::None {
+    let base = if addr.base != RegId::None {
         addr.base
-    } else if cell.through != Register::None {
+    } else if cell.through != RegId::None {
         cell.through
     } else {
-        Register::SI
+        RegId::SI
     };
     Some(Addr { base, ..addr })
 }
@@ -538,7 +538,7 @@ fn _spill_home(
 
 /// A cell of the spill format, for pricing forms before any cell is taken.
 fn _probe() -> Mem {
-    Mem { through: Register::BP, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 8) }
+    Mem { through: RegId::BP, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 8) }
 }
 
 /// `home` read again at `at`, defining `value`: LRA's restore.

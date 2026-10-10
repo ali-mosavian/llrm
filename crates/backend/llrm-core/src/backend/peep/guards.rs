@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use super::walk::Cx;
 use super::{Set, field};
@@ -273,7 +273,7 @@ pub fn register_width(
     _: &Cx,
     one: Reg,
 ) -> bool {
-    target::WIDTHS.get(&one.register) == Some(&i64::from(one.width))
+    target::integer(one.register) && target::width_of(one.register) == Some(i64::from(one.width))
 }
 
 /// A general register.
@@ -281,14 +281,14 @@ pub fn register_named(
     _: &Cx,
     one: Reg,
 ) -> bool {
-    target::WIDTHS.contains_key(&one.register)
+    target::integer(one.register)
 }
 
 pub fn stack_or_frame(
     _: &Cx,
     one: Reg,
 ) -> bool {
-    [Register::ESP, Register::EBP].contains(&one.register.full_register32())
+    crate::backend::registerinfo::is_stack(one.register) || crate::backend::registerinfo::is_frame(one.register)
 }
 
 pub fn segment(
@@ -510,8 +510,8 @@ pub fn same_cell(
     let logical = |cell: &Mem| Mem { base: None, index: None, ..cell.clone() };
     let physical = |cell: &Mem| (cell.through, cell.index_through, cell.offset);
     let placed = |cell: &Mem| {
-        (cell.base.is_none() || cell.through != Register::None)
-            && (cell.index.is_none() || cell.index_through != Register::None)
+        (cell.base.is_none() || cell.through != RegId::None)
+            && (cell.index.is_none() || cell.index_through != RegId::None)
     };
     logical(one).same_place(&logical(other)) && physical(one) == physical(other) && placed(one) && placed(other)
 }
@@ -613,7 +613,7 @@ pub fn stack_based(
     _: &Cx,
     cell: &Mem,
 ) -> bool {
-    ir::root(cell.through) == Register::ESP
+    crate::backend::registerinfo::is_stack(cell.through)
 }
 
 /// A frame cell at or above the arguments, reached without the stack pointer.
@@ -622,7 +622,7 @@ pub fn frame_argument(
     cell: &Mem,
 ) -> bool {
     cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp >= 4)
-        && ir::root(cell.through) != Register::ESP
-        && ir::root(cell.index_through) != Register::ESP
+        && !crate::backend::registerinfo::is_stack(cell.through)
+        && !crate::backend::registerinfo::is_stack(cell.index_through)
         && !cell.stack_argument
 }

@@ -90,7 +90,8 @@ pub fn _static_frame(
     size: i64,
 ) -> lir::LirBody {
     let moved = |addr: &Addr| -> Addr {
-        let segment = if addr.segment == Register::SS { Register::None } else { addr.segment };
+        let segment =
+            if crate::backend::registerinfo::is_stack_segment(addr.segment) { Register::None } else { addr.segment };
         Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, segment, ..*addr }
     };
     let variables = body
@@ -106,7 +107,7 @@ pub fn _static_frame(
         .collect();
     // Through BP no longer: the data object's own address.
     let through =
-        |register: Register| if matches!(register, Register::BP | Register::EBP) { Register::None } else { register };
+        |register: Register| if crate::backend::registerinfo::is_frame(register) { Register::None } else { register };
     let operand = |r#where: &Loc| -> Loc {
         if !r#where.in_frame() {
             return r#where.clone();
@@ -746,13 +747,13 @@ pub fn assembled(
     options: &Options,
 ) -> Result<masm::Module, String> {
     let abi = object_abi(object, runtime);
-    let mut names = globals::names(module, &|name| abi.linked(name))?;
+    let mut names = globals::names(module, &options.arch.layout().spaces.roles, &|name| abi.linked(name))?;
     // A symbol the frontend states stands as it is, BASIC's type suffix and
     // all.
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         if let Some(symbol) = global.name.as_ref().and_then(|name| object.symbols.get(name)) {
-            names.extend(globals::segment_name(module, id, symbol));
+            names.extend(globals::segment_name(module, id, symbol, &options.arch.layout().spaces.roles));
             names.insert((globals::space(module, id), i64::from(id.0)), symbol.clone());
         }
     }
@@ -761,7 +762,7 @@ pub fn assembled(
     names.insert((Space::Segment, i64::from(main.0)), MAIN.to_owned());
     names.insert((Space::Segment, MAIN_FRAME_ID), MAIN_FRAME.to_owned());
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
-    let segments = Segments::of(&options.machine);
+    let segments = Segments::of(&options.machine, crate::backend::target::offset_bytes(&*options.arch));
     let cpu = options.cpu()?;
     let classes = std::rc::Rc::new(crate::backend::classes::RegisterClasses::of(&*options.arch));
     let facts = crate::backend::calleefacts::CalleeFacts::none();

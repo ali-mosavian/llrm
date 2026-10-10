@@ -12,8 +12,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::graph::loops::{self, Loop};
-use llrm_analysis::{cfg, ssa};
+use llrm_analysis::cfg;
+use llrm_analysis::cfg::Around;
+use llrm_analysis::graph::loops::Loop;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
@@ -47,8 +48,10 @@ pub fn closed(function: &mut Function) -> Result<bool, String> {
     let mut changed = _opened(function)?;
     // Loops come inner first. Closing an inner loop first makes its exit
     // value an ordinary definition in an enclosing loop.
+    // The dominators of the body, found once for as long as no exit is merged.
+    let mut dominance = None;
     for loop_ in cfg::Shape::of(function).loops {
-        changed |= _closed_loop(function, &loop_)?;
+        changed |= _closed_loop(function, &loop_, &mut dominance)?;
     }
     Ok(changed)
 }
@@ -93,7 +96,8 @@ pub(crate) fn definitions(
     blocks: &BTreeSet<i64>,
 ) -> BTreeMap<ValueId, i64> {
     let mut defined = BTreeMap::new();
-    for &block in function.layout().iter().filter(|&&one| blocks.contains(&cfg::id(one))) {
+    for &at in blocks {
+        let block = cfg::block(at);
         for &inst in function.block(block).instructions() {
             if let Some(value) = function.instruction(inst).result {
                 defined.insert(value, cfg::id(block));
@@ -156,24 +160,19 @@ fn _opened(function: &mut Function) -> Result<bool, String> {
 pub fn _closed_loop(
     function: &mut Function,
     loop_: &Loop,
+    dominance: &mut Option<cfg::Dominance>,
 ) -> Result<bool, String> {
-    let graph = cfg::graph(function);
-    let exiting = graph
-        .iter()
-        .filter(|block| loop_.body.contains(&block.at))
-        .flat_map(|block| block.succ.iter().map(move |&successor| (block.at, successor)))
-        .filter(|(_, successor)| !loop_.body.contains(successor))
-        .collect::<Vec<_>>();
+    let exiting = loop_.exits(function);
     let exits = exiting.iter().map(|&(_, target)| target).collect::<BTreeSet<_>>();
     if exits.len() > 1 {
+        *dominance = None;
         return lcssamerges::closed(function, loop_);
     }
     let Some(&exit_at) = exits.first() else {
         return Ok(false);
     };
     let sources = exiting.iter().map(|&(source, _)| source).collect::<BTreeSet<_>>();
-    let predecessors = loops::predecessors(&graph);
-    if predecessors[&exit_at] != sources {
+    if cfg::predecessors_of(function, exit_at) != sources {
         return Ok(false);
     }
 
@@ -184,32 +183,30 @@ pub fn _closed_loop(
 
     // Phi inputs are used on their incoming edge.  A phi in the dedicated
     // exit is already the LCSSA boundary, so only downstream phis count here.
+    // Found from the uses of what the loop defines (LLVM's formLCSSA), not by
+    // reading every instruction outside it for each loop.
     let mut use_sites: BTreeMap<ValueId, BTreeSet<i64>> = BTreeMap::new();
-    for block in graph.iter().filter(|block| !loop_.body.contains(&block.at)) {
-        for inst in operations(function, cfg::block(block.at)) {
-            for operand in &function.instruction(inst).operands {
-                if let Operand::Value(value) = operand
-                    && defined.contains_key(value)
-                {
-                    use_sites.entry(*value).or_default().insert(block.at);
-                }
+    for &value in defined.keys() {
+        for one in function.users(value) {
+            let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
+            if loop_.body.contains(&home) {
+                continue;
             }
-        }
-        if block.at == exit_at {
-            continue;
-        }
-        for phi in edges::phis(function, cfg::block(block.at)) {
-            for (value, predecessor) in arms(function, phi) {
-                if let Operand::Value(value) = value
-                    && defined.contains_key(&value)
-                {
-                    use_sites.entry(value).or_default().insert(cfg::id(predecessor));
+            let user = function.instruction(one.user);
+            let site = if user.opcode == Opcode::Phi {
+                let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
+                if home == exit_at {
+                    continue;
                 }
-            }
+                cfg::id(from)
+            } else {
+                home
+            };
+            use_sites.entry(value).or_default().insert(site);
         }
     }
 
-    let dominance = cfg::Dominance::of(function);
+    let dominance = &*dominance.get_or_insert_with(|| cfg::Dominance::of(function));
     let crossing = use_sites
         .iter()
         .filter(|(value, sites)| {
@@ -233,35 +230,32 @@ pub fn _closed_loop(
         phis.push(phi);
     }
 
-    let error = |error: ssa::SubstitutionError| error.to_string();
-    for block in graph.iter().filter(|block| !loop_.body.contains(&block.at)) {
-        let at = cfg::block(block.at);
-        if block.at != exit_at {
-            for phi in edges::phis(function, at) {
-                let incoming = arms(function, phi)
-                    .into_iter()
-                    .map(|(value, predecessor)| {
-                        if dominance.dominates(exit_at, cfg::id(predecessor)) {
-                            ssa::provider(value, &swap).map(|one| (one, predecessor))
-                        } else {
-                            Ok((value, predecessor))
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(error)?;
-                if from_arms(&incoming) != function.instruction(phi).operands {
-                    function.set_operands(phi, from_arms(&incoming));
-                }
+    // Every use of a crossing value outside the loop that the exit dominates
+    // reads its phi.
+    let mut rewrites = Vec::new();
+    for (&value, &replacement) in &swap {
+        for one in function.users(value) {
+            let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
+            if loop_.body.contains(&home) {
+                continue;
+            }
+            let user = function.instruction(one.user);
+            let reads_it = if user.opcode == Opcode::Phi {
+                home != exit_at
+                    && matches!(
+                        user.operands[one.index as usize + 1],
+                        Operand::Block(from) if dominance.dominates(exit_at, cfg::id(from))
+                    )
+            } else {
+                dominance.dominates(exit_at, home)
+            };
+            if reads_it {
+                rewrites.push((one.user, one.index as usize, replacement));
             }
         }
-        if dominance.dominates(exit_at, block.at) {
-            for inst in operations(function, at) {
-                let operands = ssa::substituted(function.instruction(inst), &swap).map_err(error)?;
-                if operands != function.instruction(inst).operands {
-                    function.set_operands(inst, operands);
-                }
-            }
-        }
+    }
+    for (user, index, operand) in rewrites {
+        function.set_operand(user, index, operand);
     }
     for phi in phis {
         place_phi(function, cfg::block(exit_at), phi)?;

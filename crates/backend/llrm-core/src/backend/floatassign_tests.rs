@@ -140,7 +140,10 @@ fn refuses_nothing(
     let (body, mut frame) = before(file, function);
     let cpu = crate::backend::cpu::profile("486").unwrap();
     let assigned = assigned(&body, Some(&mut frame), None, false, cpu).expect("assigns");
-    let mut alloc = crate::backend::floatalloc::FloatAlloc { frame: Some(Rc::new(RefCell::new(frame))) };
+    let mut alloc = crate::backend::floatalloc::FloatAlloc {
+        frame: Some(Rc::new(RefCell::new(frame))),
+        classes: crate::backend::classes::RegisterClasses::m16(),
+    };
     let done = alloc.transform(assigned);
     assert!(done.is_ok(), "{:?}", done.err());
 }

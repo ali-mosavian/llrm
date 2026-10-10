@@ -7,7 +7,7 @@ pub mod walk;
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::model::lir::{Insn, LirBody};
 
@@ -15,7 +15,7 @@ use crate::model::lir::{Insn, LirBody};
 /// the fixed register that picks each member.
 pub struct Set {
     pub names: &'static [&'static str],
-    pub fixed: &'static [(Register, &'static str)],
+    pub fixed: &'static [(RegId, &'static str)],
 }
 
 impl Set {
@@ -28,7 +28,7 @@ impl Set {
 
     pub fn by_fixed(
         &self,
-        register: Register,
+        register: RegId,
     ) -> Option<&'static str> {
         self.fixed.iter().find(|(one, _)| *one == register).map(|(_, name)| *name)
     }
@@ -84,11 +84,6 @@ pub fn rewritten_insns(
 pub static NO_NAMES: Set = Set { names: &[], fixed: &[] };
 
 include!(concat!(env!("OUT_DIR"), "/peep_rules.rs"));
-
-/// Every target's rules, as its definition directory is named.
-pub mod targets {
-    include!(concat!(env!("OUT_DIR"), "/peep_targets.rs"));
-}
 
 #[cfg(test)]
 mod tests;

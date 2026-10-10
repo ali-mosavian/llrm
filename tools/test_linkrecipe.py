@@ -64,3 +64,8 @@ class LinkRecipeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_a_select_crate_is_not_a_target_with_a_mode():
+    """llrm-x86-m16-select has no datalayout.toml: `modes()` read it and every tool that names a mode failed."""
+    assert linkrecipe.modes() == {"x86-m16": 16, "x86-m32": 32}

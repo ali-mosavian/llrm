@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
 use llrm_mir::Opcode;
 use llrm_mir::module::{BlockId, InstId};
 
@@ -72,7 +71,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
     ) -> (Vec<LirBlock>, i64) {
         let Some(pad) = pad else { return (blocks, entry) };
-        let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+        let sp = Loc::Reg(Reg { register: crate::model::ir::STACK, width: 2 });
         let zero = Loc::Imm(Imm { value: 0, width: 2, address: None });
         let never = [
             insn(at, semantics(Operation::Compare, "cmp", vec![], vec![sp, zero])),

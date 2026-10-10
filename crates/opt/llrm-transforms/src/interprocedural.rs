@@ -58,6 +58,30 @@ fn callees(
     held
 }
 
+/// `edit` run on `module`, and every body it changed said to have: a pass that
+/// rewrites the calls of a function it changes (its callers) reports the
+/// function, and the callers' analyses were read as they stood before
+/// (`ModuleAnalyses::function` brings them up to date, and
+/// `LLRM_CHECK_UNREPORTED` fails the read).
+fn reporting<T>(
+    module: &mut Module,
+    modules: &mut ModuleAnalyses,
+    edit: impl FnOnce(&mut Module) -> T,
+) -> T {
+    let before: Vec<(GlobalId, llrm_mir::module::Mark)> = module
+        .functions()
+        .filter(|(_, _, body)| !body.is_declaration())
+        .map(|(id, _, body)| (id, body.mark()))
+        .collect();
+    let out = edit(module);
+    for (id, mark) in before {
+        if module.global(id).function().map(llrm_mir::module::Function::mark) != Some(mark) {
+            modules.changed(id);
+        }
+    }
+    out
+}
+
 /// `module`'s declarations to declare into: the module's own `Declarations`,
 /// nothing scanned unless a pass declares. `LLRM_CHECK_CALLEES=1` compares them
 /// with a fresh listing.
@@ -230,6 +254,141 @@ fn procedures(
     defined(program).filter(|&(one, _)| one == at).map(|(_, id)| id).collect()
 }
 
+/// `procedures` with each before the functions it calls: a function that takes
+/// its callees' bodies in goes first, and the ones it took are then called by
+/// none.
+fn callers_first(
+    module: &Module,
+    procedures: &[GlobalId],
+) -> Vec<GlobalId> {
+    let mut order = CallGraph::new(module).bottom_up();
+    order.reverse();
+    let wanted: BTreeSet<GlobalId> = procedures.iter().copied().collect();
+    let mut placed: BTreeSet<GlobalId> = BTreeSet::new();
+    let mut out: Vec<GlobalId> = order.into_iter().filter(|id| wanted.contains(id) && placed.insert(*id)).collect();
+    out.extend(procedures.iter().copied().filter(|id| !placed.contains(id)));
+    out
+}
+
+/// The functions nothing reaches any more (private, not addressed, not a root,
+/// called by neither call nor invoke) lose their bodies, and with them the
+/// functions only they called: gcc removes an unreachable node from
+/// the call graph at once, and what its body said (what it writes, whom it
+/// calls) stands for nothing.
+fn bare_the_unreached(
+    module: &mut Module,
+    analyses: &mut ModuleAnalyses,
+    private: &BTreeSet<GlobalId>,
+    addressed: &BTreeSet<GlobalId>,
+    roots: &BTreeSet<GlobalId>,
+) {
+    let held: BTreeSet<GlobalId> = addressed.union(roots).chain(&listed(module)).copied().collect();
+    let mut references = reference_counts(module);
+    let unreached = |id: &GlobalId, references: &llrm_support::hash::IndexMap<GlobalId, i64>| {
+        private.contains(id) && !held.contains(id) && references.get(id).copied().unwrap_or(0) == 0
+    };
+    let mut dead: Vec<GlobalId> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration() && !stub(function))
+        .map(|(id, _, _)| id)
+        .filter(|id| unreached(id, &references))
+        .collect();
+    let mut bared = false;
+    while let Some(id) = dead.pop() {
+        let Some(function) = module.global(id).function().filter(|one| !one.is_declaration() && !stub(one)) else {
+            continue;
+        };
+        let called = calls_of(&module.context, function);
+        bare(module, analyses, id);
+        bared = true;
+        for (callee, count) in called {
+            let left = references.entry(callee).or_insert(0);
+            *left -= count;
+            if *left == 0 && unreached(&callee, &references) {
+                dead.push(callee);
+            }
+        }
+    }
+    if bared {
+        analyses.invalidate_bodies(&PreservedAnalyses::none());
+    }
+}
+
+/// Whether `function` is what `bare` leaves.
+fn stub(function: &llrm_mir::module::Function) -> bool {
+    let mut body = function.walk();
+    body.next().is_some_and(|(_, inst)| function.instruction(inst).opcode == Opcode::Unreachable)
+        && body.next().is_none()
+}
+
+/// `id` with a body of one `unreachable`: nothing it did, wrote or called
+/// stands. (A declaration of an internal function is not a module.) The
+/// caller drops the analyses.
+fn bare(
+    module: &mut Module,
+    analyses: &mut ModuleAnalyses,
+    id: GlobalId,
+) {
+    let Some(mut stub) = module.global(id).function().map(llrm_mir::module::Function::declaration) else { return };
+    let void = module.context.types.void();
+    let entry = stub.create_block(None);
+    stub.insert_block(entry, None).expect("a first block");
+    let end = stub.create_instruction(Opcode::Unreachable, void, Vec::new(), llrm_mir::opcode::Flags::default(), None);
+    stub.insert(end, llrm_mir::edit::Position::End(entry)).expect("a placed block");
+    analyses.changed(id);
+    module.globals[id.0 as usize].kind = GlobalKind::Function(Box::new(stub));
+}
+
+/// The roots in module `at`.
+fn roots_here(
+    roots: &BTreeSet<Defined>,
+    at: usize,
+) -> BTreeSet<GlobalId> {
+    roots.iter().filter(|one| one.0 == at).map(|one| one.1).collect()
+}
+
+/// How often each function is called directly, by call or invoke, in `module`.
+fn reference_counts(module: &Module) -> llrm_support::hash::IndexMap<GlobalId, i64> {
+    let mut found = llrm_support::hash::IndexMap::default();
+    for (_, _, function) in module.functions() {
+        for (callee, count) in calls_of(&module.context, function) {
+            *found.entry(callee).or_insert(0) += count;
+        }
+    }
+    found
+}
+
+/// The functions an indirect call may reach by the metadata that lists them
+/// (`!callees`): no direct call names them, and they are still called.
+fn listed(module: &Module) -> BTreeSet<GlobalId> {
+    module
+        .metadata
+        .iter()
+        .flat_map(|node| &node.operands)
+        .filter_map(|operand| match operand {
+            llrm_mir::module::MetadataOperand::Constant(id) => match module.context.get(*id).kind {
+                llrm_mir::context::ConstantKind::Global(global) => Some(global),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// How often `function` calls each function directly.
+fn calls_of(
+    context: &llrm_mir::context::Context,
+    function: &llrm_mir::module::Function,
+) -> Vec<(GlobalId, i64)> {
+    let mut found: llrm_support::hash::IndexMap<GlobalId, i64> = llrm_support::hash::IndexMap::default();
+    for (_, inst) in function.walk() {
+        if let Some(callee) = llrm_mir::memory::callee(context, function, inst) {
+            *found.entry(callee).or_insert(0) += 1;
+        }
+    }
+    found.into_iter().collect()
+}
+
 /// Defined procedures no outside code calls: every caller is in the program,
 /// and a call through a pointer is not one, so none has its address taken.
 fn unexported(program: &Program) -> BTreeSet<Defined> {
@@ -262,20 +421,23 @@ fn candidates(
     loose: Option<&OperationCosts>,
     reach: i64,
     threshold: inline::Threshold,
+    recursive: &BTreeSet<GlobalId>,
+    addressed: &BTreeSet<GlobalId>,
 ) -> (
     llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
     llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
 ) {
-    let mut found = inline::candidates(module, callees, layout, counts, private, costs, reach, threshold);
-    // Held only to inline from, a body's price is what the trial finds, never
-    // its size.
-    found.retain(|id, _| module.global(*id).linkage != Linkage::AvailableExternally);
+    let found = inline::candidates_over(
+        module, callees, layout, counts, private, costs, reach, threshold, recursive, addressed,
+    );
     let more: llrm_support::hash::IndexMap<GlobalId, inline::Candidate> =
         loose.map_or_else(Default::default, |loose| {
-            inline::candidates(module, callees, layout, counts, private, loose, reach, threshold)
-                .into_iter()
-                .filter(|(id, _)| !found.contains_key(id))
-                .collect()
+            inline::candidates_over(
+                module, callees, layout, counts, private, loose, reach, threshold, recursive, addressed,
+            )
+            .into_iter()
+            .filter(|(id, _)| !found.contains_key(id))
+            .collect()
         });
     // A callee at many sites is not tried: its copies add up, and a caller's
     // gain from one is no tolerance for so many (savegame.c's took 4x the
@@ -499,17 +661,11 @@ fn estimated_callees<E: From<String>>(
             recursive: recursive.contains(&caller),
             base: bases.get(&caller).copied().unwrap_or(0),
         };
-        let mut spliced = false;
-        loop {
-            let mut declared = declared(modules, module);
-            let (context, function) = function_mut(module, caller);
-            let more = inline::expanded(context, function, &by, &accepted, None, &mut declared).map_err(E::from)?;
-            placed(&mut declared, modules, module).map_err(E::from)?;
-            if !more {
-                break;
-            }
-            spliced = true;
-        }
+        let mut declared = declared(modules, module);
+        let (context, function) = function_mut(module, caller);
+        let spliced =
+            inline::expanded_all(context, function, &by, &accepted, None, &mut declared).map_err(E::from)? > 0;
+        placed(&mut declared, modules, module).map_err(E::from)?;
         if spliced {
             modules.changed(caller);
             modules.invalidate(&PreservedAnalyses::none());
@@ -577,18 +733,12 @@ fn estimated_sites<E: From<String>>(
         recursive: recursive.contains(&caller),
         base: bases.get(&caller).copied().unwrap_or(0),
     };
-    let mut spliced = false;
-    loop {
-        let mut declared = declared(modules, module);
-        let (context, function) = function_mut(module, caller);
-        let more = inline::expanded(context, function, &by, &Default::default(), Some(&chosen), &mut declared)
-            .map_err(E::from)?;
-        placed(&mut declared, modules, module).map_err(E::from)?;
-        if !more {
-            break;
-        }
-        spliced = true;
-    }
+    let mut declared = declared(modules, module);
+    let (context, function) = function_mut(module, caller);
+    let spliced = inline::expanded_all(context, function, &by, &Default::default(), Some(&chosen), &mut declared)
+        .map_err(E::from)?
+        > 0;
+    placed(&mut declared, modules, module).map_err(E::from)?;
     if spliced {
         modules.changed(caller);
         modules.invalidate(&PreservedAnalyses::none());
@@ -634,18 +784,12 @@ fn together_trial<E: From<String>>(
         recursive: recursive.contains(&caller),
         base: bases.get(&caller).copied().unwrap_or(0),
     };
-    let mut spliced = false;
-    loop {
-        let mut declared = declared(modules, module);
-        let (context, function) = function_mut(module, caller);
-        let more = inline::expanded(context, function, &by, &Default::default(), Some(&chosen), &mut declared)
-            .map_err(E::from)?;
-        placed(&mut declared, modules, module).map_err(E::from)?;
-        if !more {
-            break;
-        }
-        spliced = true;
-    }
+    let mut declared = declared(modules, module);
+    let (context, function) = function_mut(module, caller);
+    let spliced = inline::expanded_all(context, function, &by, &Default::default(), Some(&chosen), &mut declared)
+        .map_err(E::from)?
+        > 0;
+    placed(&mut declared, modules, module).map_err(E::from)?;
     if !spliced {
         refused.extend(chosen.keys().map(|site| (caller, *site)));
         return Ok(false);
@@ -657,12 +801,18 @@ fn together_trial<E: From<String>>(
         chosen.keys().filter_map(|site| llrm_mir::memory::callee(&module.context, &kept, *site)).collect();
     // The calls of each in the module after: what they were, less this caller's
     // before and plus its now (a scan of the one body, not of the module).
-    let in_body = |function: &llrm_mir::module::Function, callee: GlobalId| {
-        function
-            .walk()
-            .filter(|&(_, inst)| llrm_mir::memory::callee(&module.context, function, inst) == Some(callee))
-            .count() as i64
+    let in_body = |function: &llrm_mir::module::Function| {
+        let mut found: llrm_support::hash::HashMap<GlobalId, i64> = llrm_support::hash::HashMap::default();
+        for (_, inst) in function.walk() {
+            if let Some(callee) =
+                llrm_mir::memory::callee(&module.context, function, inst).filter(|one| callees_of.contains(one))
+            {
+                *found.entry(callee).or_insert(0) += 1;
+            }
+        }
+        found
     };
+    let (before_calls, after_calls) = (in_body(&kept), in_body(module.global(caller).function().expect("a procedure")));
     let held = callees(modules, module);
     let (mut moved, mut gone, mut allowed) = (0, 0, 0);
     for callee in callees_of {
@@ -670,7 +820,7 @@ fn together_trial<E: From<String>>(
         moved += own;
         let was = counts.get(&callee).copied().unwrap_or(0);
         let left =
-            was - in_body(&kept, callee) + in_body(module.global(caller).function().expect("a procedure"), callee);
+            was - before_calls.get(&callee).copied().unwrap_or(0) + after_calls.get(&callee).copied().unwrap_or(0);
         if private.contains(&callee) && was > 0 && left == 0 {
             gone += own;
         }
@@ -775,7 +925,7 @@ pub fn optimized_with<E: From<String>>(
         for &id in bodies {
             analyses.changed(id);
         }
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate_bodies(&PreservedAnalyses::none());
     };
 
     // Inline only after each independent body has reached its local fixed
@@ -796,10 +946,31 @@ pub fn optimized_with<E: From<String>>(
     let mut specialisations = Specialisations::default();
     let mut refused_together: BTreeSet<(GlobalId, llrm_mir::module::InstId)> = BTreeSet::new();
     let mut inline_round = 0;
+    // gcc decides the edges on the call graph and builds only the bodies that
+    // stay: `inline_small_functions` takes a function's last call
+    // (`flag_inline_functions_called_once`, `ipa_inline`) before any body is
+    // made and `inline_transform` makes the survivors;
+    // `remove_unreachable_nodes` drops the rest. Here a private function
+    // called once, whose call is a candidate, is not built in a round (a body
+    // that inlined its callees only to be copied into its caller was built
+    // with all of them: a chain of N, N squared); one still there when no round
+    // changes anything is built; one no call reaches loses its body
+    // (`bare_the_unreached`).
+    // https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/ipa-inline.cc#L1964
+    // (`inline_small_functions`)
+    // https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/ipa-inline.cc#L2686
+    // (`ipa_inline`)
+    // https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/ipa-inline-transform.cc#L727
+    // (`inline_transform`)
+    let mut ahead = true;
     loop {
         let mut changed = false;
+        let mut deferred = false;
         for at in 0..count {
             let module = &mut program.modules[at];
+            let recursive = inline::recursive(module);
+            let addressed = llrm_mir::callgraph::addressed(module);
+            bare_the_unreached(module, &mut modules[at], &private[at], &addressed, &roots_here(roots, at));
             let counts = inline::call_counts(module);
             let (available, more) = candidates(
                 module,
@@ -811,8 +982,9 @@ pub fn optimized_with<E: From<String>>(
                 loose,
                 reach,
                 threshold,
+                &recursive,
+                &addressed,
             );
-            let recursive = inline::recursive(module);
             // What only the clocks admit of a callee stays where its copies,
             // as the pipeline over each alone leaves them, come to no more.
             if loose.is_some()
@@ -834,7 +1006,32 @@ pub fn optimized_with<E: From<String>>(
             {
                 changed = true;
             }
-            for &id in &procedures[at] {
+            // gcc's order (`inline_small_functions`): callers before callees,
+            // the calls each leaves counted as they go, so that a
+            // private function whose last call was inlined is never built.
+            let mut live = reference_counts(module);
+            let reachable_by_pointer: BTreeSet<GlobalId> = addressed.union(&listed(module)).copied().collect();
+            let order = if ahead { procedures[at].clone() } else { callers_first(module, &procedures[at]) };
+            for id in order {
+                let unreached = private[at].contains(&id)
+                    && !reachable_by_pointer.contains(&id)
+                    && !roots.contains(&(at, id))
+                    && !recursive.contains(&id);
+                if unreached && live.get(&id).copied().unwrap_or(0) == 0 {
+                    if let Some(function) = module.global(id).function().filter(|one| !stub(one)) {
+                        // What the body called is called by it no more.
+                        for (callee, count) in calls_of(&module.context, function) {
+                            *live.entry(callee).or_insert(0) -= count;
+                        }
+                        bare(module, &mut modules[at], id);
+                        modules[at].invalidate_bodies(&PreservedAnalyses::none());
+                    }
+                    continue;
+                }
+                if ahead && unreached && live.get(&id).copied().unwrap_or(0) == 1 && available.contains_key(&id) {
+                    deferred = true;
+                    continue;
+                }
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
                 let (constant, constant_more) = constant_sites(
@@ -856,7 +1053,17 @@ pub fn optimized_with<E: From<String>>(
                     recursive: recursive.contains(&id),
                     base: bases[at].get(&id).copied().unwrap_or(0),
                 };
-                let spliced_now = inline::expanded(context, function, &by, &available, Some(&constant), &mut declared)?;
+                let was = calls_of(context, function);
+                let spliced_now =
+                    inline::expanded_all(context, function, &by, &available, Some(&constant), &mut declared)? > 0;
+                if spliced_now {
+                    for (callee, count) in calls_of(context, function) {
+                        *live.entry(callee).or_insert(0) += count;
+                    }
+                    for (callee, count) in was {
+                        *live.entry(callee).or_insert(0) -= count;
+                    }
+                }
                 placed(&mut declared, &mut modules[at], module)?;
                 if spliced_now {
                     edited(&mut modules[at], &[id]);
@@ -920,6 +1127,10 @@ pub fn optimized_with<E: From<String>>(
             }
         }
         if !changed {
+            if ahead && deferred {
+                ahead = false;
+                continue;
+            }
             break;
         }
     }
@@ -932,7 +1143,9 @@ pub fn optimized_with<E: From<String>>(
         _ => (costs, true),
     };
     for at in 0..count {
-        for id in crate::argpromotion::promoted(&mut program.modules[at], &program.layout, priced, bytes) {
+        for id in reporting(&mut program.modules[at], &mut modules[at], |module| {
+            crate::argpromotion::promoted(module, &program.layout, priced, bytes)
+        }) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "promote.")?;
         }
@@ -940,7 +1153,9 @@ pub fn optimized_with<E: From<String>>(
 
     // A far pointer every call fills from DGROUP is passed as its offset.
     for at in 0..count {
-        for id in crate::narrowspace::narrowed(&mut program.modules[at], &program.layout, program.target.spaces()) {
+        for id in reporting(&mut program.modules[at], &mut modules[at], |module| {
+            crate::narrowspace::narrowed(module, &program.layout, program.target.spaces())
+        }) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "narrow.")?;
         }
@@ -1009,15 +1224,17 @@ pub fn optimized_with<E: From<String>>(
         // and the calls go to the copy.
         let mut cloned_now = false;
         for at in 0..count {
-            let made = crate::ipacp::cloned(
-                &mut program.modules[at],
-                &program.layout,
-                &procedures[at],
-                &private[at],
-                costs,
-                threshold.cp_clone,
-                &mut cloning,
-            );
+            let made = reporting(&mut program.modules[at], &mut modules[at], |module| {
+                crate::ipacp::cloned(
+                    module,
+                    &program.layout,
+                    &procedures[at],
+                    &private[at],
+                    costs,
+                    threshold.cp_clone,
+                    &mut cloning,
+                )
+            });
             for &id in &made.added {
                 let size = inline::operations(program.modules[at].global(id).function().expect("a procedure"));
                 procedures[at].push(id);
@@ -1040,6 +1257,9 @@ pub fn optimized_with<E: From<String>>(
         let mut inlined = false;
         for at in 0..count {
             let module = &mut program.modules[at];
+            let recursive = inline::recursive(module);
+            let addressed = llrm_mir::callgraph::addressed(module);
+            bare_the_unreached(module, &mut modules[at], &private[at], &addressed, &roots_here(roots, at));
             let counts = inline::call_counts(module);
             let (available, more) = candidates(
                 module,
@@ -1051,8 +1271,9 @@ pub fn optimized_with<E: From<String>>(
                 loose,
                 reach,
                 threshold,
+                &recursive,
+                &addressed,
             );
-            let recursive = inline::recursive(module);
             // What only the clocks admit of a callee stays where its copies,
             // as the pipeline over each alone leaves them, come to no more.
             if loose.is_some()
@@ -1177,7 +1398,7 @@ pub fn optimized_with<E: From<String>>(
     }
     // What the constants and ranges left unread is not pushed.
     for at in 0..count {
-        for id in crate::deadargs::removed(&mut program.modules[at]) {
+        for id in reporting(&mut program.modules[at], &mut modules[at], crate::deadargs::removed) {
             edited(&mut modules[at], &[id]);
             // A body with fewer values to carry is another body to the loop
             // passes and the recursion's.
@@ -1354,6 +1575,7 @@ pub fn stamped(
     let mut changed = Vec::new();
     let graph = analyses.get::<CallGraphAnalysis>(module);
     let callees = llrm_mir::memory::callees(module);
+    let never_reentered = graph.cannot_reenter(module);
     for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(
@@ -1393,7 +1615,7 @@ pub fn stamped(
                     Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
                 ),
             );
-        let norecurse = graph.cannot_reenter(module, id);
+        let norecurse = never_reentered.contains(&id);
         // The language's word that its loops end holds where nothing a loop
         // that never ended could be seen by.
         let unobserved = !volatile
