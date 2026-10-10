@@ -138,6 +138,18 @@ AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "bra
 # --- measuring -------------------------------------------------------------------------------------------------------
 
 
+ENVIRONMENT_BYTES = 4096
+
+
+def measured_environment(env: dict | None = None) -> dict:
+    """What the compiler under measurement is given: PATH, LLRM_BIN where set, `env`'s own, and padding to a constant size. The bytes
+    of the caller's environment (a sourced script, a longer worktree path) move the stack and the allocator's first pages, and `lir
+    peephole` read 157.0 or 168.8 Minstr of cells(224) by 4 bytes of environment alone: base and head must be given the same bytes."""
+    kept = {"PATH": "/usr/bin:/bin", **({"LLRM_BIN": os.environ["LLRM_BIN"]} if "LLRM_BIN" in os.environ else {}), **(env or {})}
+    used = sum(len(k) + len(v) + 2 for k, v in kept.items())
+    return {**kept, "LLRM_PAD": "x" * max(0, ENVIRONMENT_BYTES - used - len("LLRM_PAD") - 2)}
+
+
 def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tuple[int, int, str]:
     """(instructions:u, task-clock ns, stderr) of one run; raises on a failed compile.
 
@@ -158,7 +170,7 @@ def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tup
         if Path(cmd[0]).name.startswith("llrm-") and Path(cmd[0]).is_file():
             (Path(here) / Path(cmd[0]).name).symlink_to(Path(cmd[0]).resolve())
             cmd = [f"./{Path(cmd[0]).name}", *cmd[1:]]
-        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, cwd=here, env={**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k == "LLRM_BIN"}, **(env or {})})
+        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, cwd=here, env=measured_environment(env))
         if done.returncode:
             said = [l for l in (done.stderr or done.stdout).splitlines() if l and not l.startswith(("[time]", "[mir]"))]
             raise RuntimeError(f"{' '.join(cmd[-1:])}: " + " | ".join(said)[:300])

@@ -104,6 +104,19 @@ def test_a_count_does_not_inherit_the_callers_llrm_variables(monkeypatch):
     assert "LLRM_CHECK_FOO" not in seen and "LLRM_BIN" in seen and "LLRM_DEBUG" in seen, seen
 
 
+def test_a_count_does_not_depend_on_the_size_of_the_callers_environment(monkeypatch):
+    """cells(224) at -O2 read 157.0 Minstr in `lir peephole`, or 168.8 with 4 bytes more environment: the bytes the caller's environment
+    adds move the stack and the allocator's first pages, so base and head measured from different worktrees (or a sourced script) gave
+    a rise on a program with no call in it. The child is given the same bytes whatever the caller's."""
+    code = "import os, sys; print(sum(len(k) + len(v) + 2 for k, v in os.environ.items()), file=sys.stderr)"
+    sizes = set()
+    for width in (0, 3, 40, 300):
+        monkeypatch.setenv("CALLERS_PADDING", "x" * width)
+        monkeypatch.setenv("LLRM_BIN", "/kept" + "b" * width)
+        sizes.add(scaling.sample([sys.executable, "-I", "-c", code], {"LLRM_DEBUG": "time"})[2].strip())
+    assert len(sizes) == 1, sizes
+
+
 def test_the_nest_axis_is_a_loop_nest_as_deep_as_it_says_and_the_gate_sizes_it():
     """gap32's recursive inlining nested loops deeply and rectwo -O2 went 65 M -> 792 M: hoist, lsr, peephole, jumps and the allocator are
     superlinear in nesting depth, which no axis measured (2N/N of a nest 16 deep is 4.3, D/c(2N) 0.44)."""
