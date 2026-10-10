@@ -481,3 +481,13 @@ def test_the_lib_step_runs_tests_in_a_random_order_that_a_seed_repeats(monkeypat
     assert "RUSTC_BOOTSTRAP=1" in command and command.endswith("-Zunstable-options --shuffle"), command
     monkeypatch.setenv("LLRM_SHUFFLE_SEED", "42")
     assert gate.commands(p, cfg, pkgs)["lib"].endswith("-Zunstable-options --shuffle-seed 42")
+
+
+def test_every_step_runs_with_the_flags_the_build_used_and_the_base_build_with_none():
+    """`integration` (`cargo test --test X`) without the build step's RUSTFLAGS rebuilt llrm-c and replaced target/release/llrm-c while
+    `torture` was starting it ("No such file or directory"): the steps share one set of flags, and the base the measure builds, which
+    is historical, has none."""
+    assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS}
+    assert f"RUSTFLAGS='{gate.WARNING_FLAGS}'" in gate.BUILD
+    assert "RUSTFLAGS" in gate.MEASURE_BUILD and "env -u RUSTFLAGS cargo" in gate.MEASURE_BUILD
+    assert "RUSTFLAGS" not in gate.MEASURE_BUILD.replace("env -u RUSTFLAGS", "")
