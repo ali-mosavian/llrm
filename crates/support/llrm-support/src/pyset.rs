@@ -244,8 +244,8 @@ mod tests {
     use super::*;
 
     /// A probe ends at an `Unused` slot, so one must always exist: a set never
-    /// removes (no dummies), and `add` grows the table before `fill` reaches 3/5
-    /// of it.
+    /// removes (no dummies), and `add` grows the table before `fill` reaches
+    /// 3/5 of it.
     #[test]
     fn a_table_always_keeps_an_unused_slot_for_a_probe_to_end_at() {
         let mut set = PySet::new();
