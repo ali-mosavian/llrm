@@ -2908,7 +2908,7 @@ impl Selector<'_, '_, '_> {
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
             .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
-        if self.module.global(global).address_space != 0 {
+        if self.module.global(global).address_space != self.spaces.near {
             let Some(block) = self.current else { return refuse("a far global outside a block") };
             // A carried pointer is canonical: whole 64K strides of its offset
             // are in the selector, so a constant past 64K is a

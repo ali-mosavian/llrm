@@ -1672,7 +1672,9 @@ pub fn _memory(
             return Ok(format!("{size}{segment}{symbol}{disp}{indexed}"));
         }
         Space::Literal if !registers.is_empty() => {
-            let segment = if crate::backend::select::overriding(cell.through, address.segment) == Register::None {
+            let segment = if address.segment == Register::None
+                || crate::backend::registerinfo::default_segment(cell.through) == Some(address.segment)
+            {
                 String::new()
             } else {
                 format!("{}:", target::name_of(address.segment))
