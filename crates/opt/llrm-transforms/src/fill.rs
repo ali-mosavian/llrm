@@ -629,10 +629,34 @@ fn _fill(
     };
     let exit = *function.successors(test).iter().find(|to| !loop_.body.contains(&cfg::id(**to)))?;
 
+    // A loop is a fill only if what it does besides arithmetic is stores, loads
+    // and memsets that `_stored` or `_copied` take: asked before its trips are
+    // proved, which most loops are not worth (27 tries, 5.3 M of x_radix's
+    // compile at -O1).
+    let plain = |inst: InstId| memory::speculatable(unit.context, callees, function, inst);
+    let effects: Vec<InstId> = chain
+        .iter()
+        .flat_map(|&block| {
+            operations(function, block).into_iter().filter(move |&inst| function.terminator(block) != Some(inst))
+        })
+        .filter(|&inst| !plain(inst))
+        .collect();
+    let still = induction::invariant(function, &loop_.body);
+    let takes = match effects[..] {
+        [] => false,
+        [effect] => _stored(unit, callees, effect, &still).is_some(),
+        [one, other] => {
+            _copied(unit, one, other).is_some()
+                || (_stored(unit, callees, one, &still).is_some() && _stored(unit, callees, other, &still).is_some())
+        }
+        _ => effects.iter().all(|&effect| _stored(unit, callees, effect, &still).is_some()),
+    };
+    if !takes {
+        return None;
+    }
     // How many trips is `induction`'s to prove, whatever the counter's step or
     // test.
     let tested = operations(function, test);
-    let plain = |inst: InstId| memory::speculatable(unit.context, callees, function, inst);
     let proof = induction::counted(unit, loop_, None, true)
         .into_iter()
         .find(
@@ -657,12 +681,10 @@ fn _fill(
             operations(function, block).into_iter().filter(move |&inst| function.terminator(block) != Some(inst))
         })
         .collect::<Vec<_>>();
-    let effects = work.iter().copied().filter(|&inst| !plain(inst)).collect::<Vec<_>>();
     let steps = work.iter().copied().filter_map(|inst| _stepped(unit, &phis, latch, inst)).collect::<BTreeSet<_>>();
     if steps.len() != phis.len() {
         return None;
     }
-    let still = induction::invariant(function, &loop_.body);
     let walk = induction::recurrences(unit, loop_, &counters);
     let (effect, pointer, mut stored, bytes, extras) = match effects[..] {
         [effect] => {
