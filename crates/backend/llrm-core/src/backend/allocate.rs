@@ -472,9 +472,14 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
     live_rows_by(body, |_| true)
 }
 
-/// Blocks from which following values may beat the rows of bits: below it a row
-/// is a few words, and finding the occurrences costs more than solving them.
+/// Blocks below which the rows are a few words each and are always the way.
 const WEB_BLOCKS: usize = 256;
+
+/// Words in the rows of bits (blocks times the words of the largest value
+/// number) from which following values may beat them: below it solving the
+/// rows costs less than finding where the values occur (d_faces' largest
+/// body has 9,000).
+const WEB_ROWS: usize = 65_536;
 
 /// `live_rows` of the values `keep` says only: each is live where it is as in
 /// the whole, the others are not numbered, so a caller that asks of a few
@@ -488,6 +493,9 @@ pub fn live_rows_by(
     // blocks times the values (gcc's `calculate_live_on_exit`, LLVM's
     // `LiveVariables`). A body with phis is solved over the rows.
     if body.blocks.len() >= WEB_BLOCKS
+        && body.blocks.len()
+            * (crate::backend::postings::following(body, |postings| postings.largest()) as usize / 64 + 1)
+            >= WEB_ROWS
         && body.blocks.iter().all(|block| block.phis.is_empty())
         && let Some(web) = {
             body.facts.0.bump("live-rows-walks");
