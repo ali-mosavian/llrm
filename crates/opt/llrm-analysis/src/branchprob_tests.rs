@@ -827,3 +827,29 @@ fn test_a_nest_of_counted_loops_asks_each_edge_which_trips_fix_it_once() {
     propagated(&order, &|at| preds.get(&at).cloned().unwrap_or_default(), &successors, &cycles, &given);
     assert!(asked.get() <= 20 * order.len(), "{} successor lists asked for {} blocks", asked.get(), order.len());
 }
+
+/// Each loop's weighing walked every block of the function to find its own
+/// (`propagated_edges`): N one-block loops in a chain of 3N blocks made 3N^2
+/// visits, and `nest` N=128 spent 1,355 samples of 51,470 there (4.6x a
+/// doubling). A loop is weighed by its own blocks.
+#[test]
+fn test_a_loop_is_weighed_by_its_own_blocks_not_the_functions() {
+    let visits = |loops: usize| {
+        let mut text = String::from("define i16 @f(i16 %n) {\nentry:\n  br label %h0\n");
+        for at in 0..loops {
+            text += &format!(
+                "h{at}:\n  %i{at} = phi i16 [ 0, %{} ], [ %j{at}, %h{at} ]\n  %j{at} = add i16 %i{at}, 1\n  %c{at} = icmp slt i16 %j{at}, %n\n  br i1 %c{at}, label %h{at}, label %m{at}\nm{at}:\n  br label %{}\n",
+                if at == 0 { "entry".to_owned() } else { format!("m{}", at - 1) },
+                if at + 1 == loops { "out".to_owned() } else { format!("h{}", at + 1) },
+            );
+        }
+        text += &format!("out:\n  ret i16 %j{}\n}}\n", loops - 1);
+        let module = parsed(&format!("{DOS}{text}"));
+        let function = function(&module, "f");
+        VISITS.with(|visits| visits.set(0));
+        estimated(&module.context, &module.metadata, &module.globals, function, &Shape::of(function), &BTreeMap::new());
+        VISITS.with(|visits| visits.get())
+    };
+    let (small, large) = (visits(40), visits(80));
+    assert!(small > 0 && large <= 2 * small + 8, "{small} visits for 40 loops, {large} for 80");
+}
