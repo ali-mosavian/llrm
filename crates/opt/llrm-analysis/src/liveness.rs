@@ -169,6 +169,31 @@ pub fn live_points(
     points
 }
 
+/// `f(instruction, live across it)` for each instruction of `block` but its
+/// phis, last first, over one set changed as the walk goes: `live_points`
+/// copies the live set twice for each instruction, and a caller that asked it
+/// of every block for each of many values paid the live set's size times the
+/// function's for each (`homes` on N cells and N joins: cubic).
+pub fn each_across(
+    function: &Function,
+    found: &Liveness,
+    block: BlockId,
+    f: &mut dyn FnMut(InstId, &BTreeSet<ValueId>),
+) {
+    let mut alive = found.live_out[&id(block)].clone();
+    for &inst in function.block(block).instructions().iter().rev() {
+        let op = function.instruction(inst);
+        if is_phi(op) {
+            continue;
+        }
+        if let Some(one) = op.result {
+            alive.remove(&one);
+        }
+        f(inst, &alive);
+        alive.extend(reads(op));
+    }
+}
+
 /// What changes in the live set across each instruction of `block` but its
 /// phis, in order, and what is live before the first: `live_points` without a
 /// set copied for every instruction. An instruction's `read` values are those
