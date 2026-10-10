@@ -1218,6 +1218,37 @@ fn test_a_callee_is_specialised_once_for_the_constants_its_sites_pass() {
     assert_eq!(runs.get(), 2, "other constants share the first's");
 }
 
+/// A pass that rewrites the calls of the function it changes (dead arguments,
+/// argument promotion) changed the callers too and reported the one function:
+/// their analyses were read as they stood. `reporting` says every body whose
+/// history moved.
+#[test]
+fn test_a_body_a_pass_changed_without_saying_so_is_reported() {
+    let mut module = parsed(
+        "define internal i16 @g(i16 %a, i16 %unused) {\nb:\n  ret i16 %a\n}\n\ndefine i16 @f(i16 %x) {\nb:\n  %r = call i16 @g(i16 %x, i16 %x)\n  ret i16 %r\n}\n",
+    );
+    let (g, f) = (module.named("g").unwrap(), module.named("f").unwrap());
+    let mut modules = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    modules.function::<llrm_analysis::cfg::Shape>(&module, f);
+    modules.function::<llrm_analysis::cfg::Shape>(&module, g);
+    reporting(&mut module, &mut modules, |module| {
+        let call = {
+            let body = module.global(f).function().unwrap();
+            body.walk()
+                .map(|(_, inst)| inst)
+                .find(|&inst| llrm_mir::memory::callee(&module.context, body, inst) == Some(g))
+                .unwrap()
+        };
+        let operand = module.global(f).function().unwrap().instruction(call).operands[0];
+        function_mut(module, f).1.set_operand(call, 1, operand);
+    });
+    assert!(
+        modules.cached_function::<llrm_analysis::cfg::Shape>(f).is_none(),
+        "the edited caller's analyses were kept"
+    );
+    assert!(modules.cached_function::<llrm_analysis::cfg::Shape>(g).is_some(), "an untouched body lost its analyses");
+}
+
 /// A body whose address is taken is also called through it, with actuals no
 /// site names: its one direct call passed 5, and the call through the
 /// pointer stored 5 as well.

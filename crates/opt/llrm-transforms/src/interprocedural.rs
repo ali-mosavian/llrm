@@ -58,6 +58,30 @@ fn callees(
     held
 }
 
+/// `edit` run on `module`, and every body it changed said to have: a pass that
+/// rewrites the calls of a function it changes (its callers) reports the
+/// function, and the callers' analyses were read as they stood before
+/// (`ModuleAnalyses::function` brings them up to date, and
+/// `LLRM_CHECK_UNREPORTED` fails the read).
+fn reporting<T>(
+    module: &mut Module,
+    modules: &mut ModuleAnalyses,
+    edit: impl FnOnce(&mut Module) -> T,
+) -> T {
+    let before: Vec<(GlobalId, llrm_mir::module::Mark)> = module
+        .functions()
+        .filter(|(_, _, body)| !body.is_declaration())
+        .map(|(id, _, body)| (id, body.mark()))
+        .collect();
+    let out = edit(module);
+    for (id, mark) in before {
+        if module.global(id).function().map(llrm_mir::module::Function::mark) != Some(mark) {
+            modules.changed(id);
+        }
+    }
+    out
+}
+
 /// `module`'s declarations to declare into: the module's own `Declarations`,
 /// nothing scanned unless a pass declares. `LLRM_CHECK_CALLEES=1` compares them
 /// with a fresh listing.
@@ -932,7 +956,9 @@ pub fn optimized_with<E: From<String>>(
         _ => (costs, true),
     };
     for at in 0..count {
-        for id in crate::argpromotion::promoted(&mut program.modules[at], &program.layout, priced, bytes) {
+        for id in reporting(&mut program.modules[at], &mut modules[at], |module| {
+            crate::argpromotion::promoted(module, &program.layout, priced, bytes)
+        }) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "promote.")?;
         }
@@ -940,7 +966,9 @@ pub fn optimized_with<E: From<String>>(
 
     // A far pointer every call fills from DGROUP is passed as its offset.
     for at in 0..count {
-        for id in crate::narrowspace::narrowed(&mut program.modules[at], &program.layout, program.target.spaces()) {
+        for id in reporting(&mut program.modules[at], &mut modules[at], |module| {
+            crate::narrowspace::narrowed(module, &program.layout, program.target.spaces())
+        }) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "narrow.")?;
         }
@@ -1009,15 +1037,17 @@ pub fn optimized_with<E: From<String>>(
         // and the calls go to the copy.
         let mut cloned_now = false;
         for at in 0..count {
-            let made = crate::ipacp::cloned(
-                &mut program.modules[at],
-                &program.layout,
-                &procedures[at],
-                &private[at],
-                costs,
-                threshold.cp_clone,
-                &mut cloning,
-            );
+            let made = reporting(&mut program.modules[at], &mut modules[at], |module| {
+                crate::ipacp::cloned(
+                    module,
+                    &program.layout,
+                    &procedures[at],
+                    &private[at],
+                    costs,
+                    threshold.cp_clone,
+                    &mut cloning,
+                )
+            });
             for &id in &made.added {
                 let size = inline::operations(program.modules[at].global(id).function().expect("a procedure"));
                 procedures[at].push(id);
@@ -1177,7 +1207,7 @@ pub fn optimized_with<E: From<String>>(
     }
     // What the constants and ranges left unread is not pushed.
     for at in 0..count {
-        for id in crate::deadargs::removed(&mut program.modules[at]) {
+        for id in reporting(&mut program.modules[at], &mut modules[at], crate::deadargs::removed) {
             edited(&mut modules[at], &[id]);
             // A body with fewer values to carry is another body to the loop
             // passes and the recursion's.

@@ -1510,7 +1510,7 @@ fn _redundant_masks(
     // brought up to date by what they changed, not worked out afresh for
     // each round.
     if edited {
-        analyses.invalidate(&PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
@@ -1572,7 +1572,7 @@ fn _unsigned_divisions(
     // brought up to date by what they changed, not worked out afresh for
     // each round.
     if edited {
-        analyses.invalidate(&PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);

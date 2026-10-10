@@ -111,7 +111,7 @@ fn _folded(
 ) -> bool {
     let numbers = _numbers(context, layout, function, analyses, calls);
     if numbers {
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate(function, &PreservedAnalyses::none());
     }
     floatfold::_folded(context, layout, function, analyses, calls) | numbers
 }
