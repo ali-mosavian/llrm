@@ -604,3 +604,13 @@ def test_hoist_prices_a_run_by_what_it_moves_not_by_a_clone_of_the_function(tmp_
     source.write_text(scaling.AXES["branches"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir hoist"]
     assert cost <= 900, cost
+
+
+def test_a_load_looks_for_its_provider_in_the_blocks_above_it_not_among_every_load(tmp_path):
+    """`mir gvn` on `branches` at N=1024 took every load of the same bytes as a candidate for each of 7,000 sites, sorted, and
+    skipped those that do not dominate it (9.5 M candidates), and `loadjoins` compared each join load with every provider:
+    5,032 Minstr, 3.2x a doubling. The candidates are found from the site's block up the dominator tree, nearest first: 2,260."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir gvn"]
+    assert cost <= 3400, cost
