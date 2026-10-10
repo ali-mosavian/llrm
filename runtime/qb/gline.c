@@ -1,6 +1,7 @@
 /* LINE: a line, a box or a filled box between the two points (QB rt/grline.asm
    B$LINE). */
 #include "gfx.h"
+#include "gfxdev.h"
 
 enum { SOLID = -1, LINE_STYLE = 0, BOX = 1, FILLED_BOX = 2 };
 
@@ -117,7 +118,10 @@ static void line(int x1, int y1, int x2, int y2, byte color, int solid)
     major = dx > dy ? dx : dy;
     minor = dx > dy ? dy : dx;
     if (first.y == last.y && solid) {
-        gfx_hspan(x, (int)last.x, y, color, OP_SET);
+        GdFill fill;
+
+        gd_fill_select(&fill, color, OP_SET);
+        fill.span(&fill, (unsigned)x, (unsigned)(last.x - first.x + 1), (unsigned)y);
         return;
     }
     decision = 4 * minor - major;
@@ -152,11 +156,14 @@ void gfx_line_between(int color, int style, int how)
     pattern = (unsigned)style;
     phase = 0;
     if (how == FILLED_BOX) {
-        int top = gfx_y1 < gfx_y2 ? gfx_y1 : gfx_y2;
-        int bottom = gfx_y1 < gfx_y2 ? gfx_y2 : gfx_y1;
+        int left = gfx_x1, top = gfx_y1, right = gfx_x2, bottom = gfx_y2;
+        GdFill fill;
 
+        if (!gfx_clip_box(&left, &top, &right, &bottom))
+            return;
+        gd_fill_select(&fill, c, OP_SET);
         for (y = top; y <= bottom; y++)
-            gfx_hspan(gfx_x1, gfx_x2, y, c, OP_SET);
+            fill.span(&fill, (unsigned)left, (unsigned)(right - left + 1), (unsigned)y);
     } else if (how == BOX) {
         /* the edges in QB's order: bottom, top, right, left */
         line(gfx_x1, gfx_y2, gfx_x2, gfx_y2, c, solid);

@@ -38,9 +38,11 @@ void gfx_set_background(byte color)
 void gfx_clear(void)
 {
     unsigned y;
+    GdFill fill;
 
+    gd_fill_select(&fill, 0, OP_SET);
     for (y = 0; y < gfx_current->height; y++)
-        gd_span(0, gfx_current->width, y, 0, OP_SET);
+        fill.span(&fill, 0, gfx_current->width, y);
 }
 
 void gfx_screen(int mode)
@@ -121,23 +123,33 @@ void gfx_plot(int x, int y, byte color, byte operation)
         gd_plot(x, y, color, operation);
 }
 
-void gfx_hspan(int x1, int x2, int y, byte color, byte operation)
+int gfx_clip_box(int *x1, int *y1, int *x2, int *y2)
 {
-    int last = gfx_current->width - 1;
+    int right = (int)gfx_current->width - 1, bottom = (int)gfx_current->height - 1;
 
-    if (x1 > x2) {
-        int swap = x1;
+    if (*x1 > *x2) {
+        int swap = *x1;
 
-        x1 = x2;
-        x2 = swap;
+        *x1 = *x2;
+        *x2 = swap;
     }
-    if (y < 0 || (unsigned)y >= gfx_current->height || x2 < 0 || x1 > last)
-        return;
-    if (x1 < 0)
-        x1 = 0;
-    if (x2 > last)
-        x2 = last;
-    gd_span(x1, x2 - x1 + 1, y, color, operation);
+    if (*y1 > *y2) {
+        int swap = *y1;
+
+        *y1 = *y2;
+        *y2 = swap;
+    }
+    if (*x2 < 0 || *y2 < 0 || *x1 > right || *y1 > bottom)
+        return 0;
+    if (*x1 < 0)
+        *x1 = 0;
+    if (*y1 < 0)
+        *y1 = 0;
+    if (*x2 > right)
+        *x2 = right;
+    if (*y2 > bottom)
+        *y2 = bottom;
+    return 1;
 }
 
 int gfx_pixel(int x, int y)

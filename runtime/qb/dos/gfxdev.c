@@ -58,15 +58,17 @@ static Video *byte_of(unsigned x, unsigned y)
 
 typedef struct GdOps {
     void (*plot)(unsigned x, unsigned y, unsigned color, unsigned operation);
-    void (*span)(unsigned x, unsigned count, unsigned y, unsigned color, unsigned operation);
     unsigned (*read)(unsigned x, unsigned y);
     int (*search)(int x, int last, unsigned y, unsigned c1, unsigned c2, int match);
     void (*move_rows)(unsigned to, unsigned from, unsigned count);
     void (*glyph)(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, unsigned foreground);
 } GdOps;
 
+enum { KIND_PLANAR, KIND_LINEAR, KIND_PACKED4, KIND_PACKED2, KINDS };
+
 static const GdOps planar_ops, linear_ops, packed4_ops, packed2_ops;
 static const GdOps *ops = &planar_ops;
+static unsigned kind = KIND_PLANAR;
 
 int gd_set_mode(unsigned mode)
 {
@@ -76,7 +78,8 @@ int gd_set_mode(unsigned mode)
     dev_int10(&r);
     r.rax = GET_MODE;
     dev_int10(&r);
-    ops = mode == MODE_LINEAR ? &linear_ops : mode == MODE_CGA4 ? &packed4_ops : mode == MODE_CGA2 ? &packed2_ops : &planar_ops;
+    kind = mode == MODE_LINEAR ? KIND_LINEAR : mode == MODE_CGA4 ? KIND_PACKED4 : mode == MODE_CGA2 ? KIND_PACKED2 : KIND_PLANAR;
+    ops = kind == KIND_LINEAR ? &linear_ops : kind == KIND_PACKED4 ? &packed4_ops : kind == KIND_PACKED2 ? &packed2_ops : &planar_ops;
     pitch = mode == MODE_320 ? 40 : mode == MODE_LINEAR ? 320 : 80;
     if (mode == MODE_CGA4 || mode == MODE_CGA2)
         screen = (Video *)QB_VIDEO_MEMORY(0xB800);
@@ -135,34 +138,6 @@ static void planar_plot(unsigned x, unsigned y, unsigned color, unsigned operati
     if (operation)
         controller(GC_DATA_ROTATE, operation << FUNCTION_SHIFT);
     put(byte_of(x, y), 0x80 >> (x & 7), color);
-    controller(GC_BIT_MASK, 0xFF);
-    if (operation)
-        controller(GC_DATA_ROTATE, 0);
-}
-
-static void planar_span(unsigned x, unsigned count, unsigned y, unsigned color,
-             unsigned operation)
-{
-    unsigned last = x + count - 1;
-    unsigned left = 0xFF >> (x & 7), right = 0xFF << (7 - (last & 7)) & 0xFF;
-    Video *at = byte_of(x, y);
-    unsigned between = (last >> 3) - (x >> 3);
-
-    if (count == 0)
-        return;
-    if (operation)
-        controller(GC_DATA_ROTATE, operation << FUNCTION_SHIFT);
-    if (between == 0) {
-        put(at, left & right, color);
-    } else {
-        put(at++, left, color);
-        controller(GC_BIT_MASK, 0xFF);
-        while (--between) {
-            (void)*at;
-            *at++ = (u8)color;
-        }
-        put(at, right, color);
-    }
     controller(GC_BIT_MASK, 0xFF);
     if (operation)
         controller(GC_DATA_ROTATE, 0);
@@ -293,16 +268,6 @@ static void linear_plot(unsigned x, unsigned y, unsigned color, unsigned operati
     *at = (u8)combined(*at, color, operation);
 }
 
-static void linear_span(unsigned x, unsigned count, unsigned y, unsigned color, unsigned operation)
-{
-    Video *at = pixel_at(x, y);
-
-    while (count--) {
-        *at = (u8)combined(*at, color, operation);
-        at++;
-    }
-}
-
 static unsigned linear_read(unsigned x, unsigned y)
 {
     return *pixel_at(x, y);
@@ -346,21 +311,16 @@ static void linear_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned
 }
 
 static const GdOps linear_ops = {
-    linear_plot, linear_span, linear_read, linear_search, linear_move_rows, linear_glyph
+    linear_plot, linear_read, linear_search, linear_move_rows, linear_glyph
 };
 
 static const GdOps planar_ops = {
-    planar_plot, planar_span, planar_read, planar_search, planar_move_rows, planar_glyph
+    planar_plot, planar_read, planar_search, planar_move_rows, planar_glyph
 };
 
 void gd_plot(unsigned x, unsigned y, unsigned color, unsigned operation)
 {
     ops->plot(x, y, color, operation);
-}
-
-void gd_span(unsigned x, unsigned count, unsigned y, unsigned color, unsigned operation)
-{
-    ops->span(x, count, y, color, operation);
 }
 
 unsigned gd_read(unsigned x, unsigned y)
@@ -414,12 +374,6 @@ static unsigned packed_read(unsigned x, unsigned y, unsigned bits)
     return *(packed_row(y) + (x * bits >> 3)) >> packed_shift(x, bits) & ((1u << bits) - 1);
 }
 
-static void packed_span(unsigned x, unsigned count, unsigned y, unsigned color, unsigned operation, unsigned bits)
-{
-    while (count--)
-        packed_plot(x++, y, color, operation, bits);
-}
-
 static int packed_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match, unsigned bits)
 {
     int step = last >= x ? 1 : -1;
@@ -471,20 +425,185 @@ static void packed_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned
 }
 
 static void packed4_plot(unsigned x, unsigned y, unsigned c, unsigned o) { packed_plot(x, y, c, o, 2); }
-static void packed4_span(unsigned x, unsigned n, unsigned y, unsigned c, unsigned o) { packed_span(x, n, y, c, o, 2); }
 static unsigned packed4_read(unsigned x, unsigned y) { return packed_read(x, y, 2); }
 static int packed4_search(int x, int l, unsigned y, unsigned a, unsigned b, int m) { return packed_search(x, l, y, a, b, m, 2); }
 static void packed4_glyph(unsigned x, unsigned y, const u8 QB_FAR *b, unsigned h, unsigned f) { packed_glyph(x, y, b, h, f, 2); }
 static void packed2_plot(unsigned x, unsigned y, unsigned c, unsigned o) { packed_plot(x, y, c, o, 1); }
-static void packed2_span(unsigned x, unsigned n, unsigned y, unsigned c, unsigned o) { packed_span(x, n, y, c, o, 1); }
 static unsigned packed2_read(unsigned x, unsigned y) { return packed_read(x, y, 1); }
 static int packed2_search(int x, int l, unsigned y, unsigned a, unsigned b, int m) { return packed_search(x, l, y, a, b, m, 1); }
 static void packed2_glyph(unsigned x, unsigned y, const u8 QB_FAR *b, unsigned h, unsigned f) { packed_glyph(x, y, b, h, f, 1); }
 
 static const GdOps packed4_ops = {
-    packed4_plot, packed4_span, packed4_read, packed4_search, packed_move_rows, packed4_glyph
+    packed4_plot, packed4_read, packed4_search, packed_move_rows, packed4_glyph
 };
 
 static const GdOps packed2_ops = {
-    packed2_plot, packed2_span, packed2_read, packed2_search, packed_move_rows, packed2_glyph
+    packed2_plot, packed2_read, packed2_search, packed_move_rows, packed2_glyph
 };
+
+/* Span fills: one routine for each kind of mode and each operation, chosen once by gd_fill_select and run on each row
+   of a primitive that has already been clipped to the screen.  A routine has its operation written in, so it tests
+   nothing per pixel and a set writes whole bytes with a block fill.  COMBINE is the new value of the bits a fill
+   covers from what is there and the colour: the colour, and, or, xor. */
+#define COMBINE_SET(old, pattern) (pattern)
+#define COMBINE_AND(old, pattern) ((old) & (pattern))
+#define COMBINE_OR(old, pattern) ((old) | (pattern))
+#define COMBINE_XOR(old, pattern) ((old) ^ (pattern))
+
+/* `count` bytes at `at` become `pattern`, a byte twice: by words, from 8 up (a block fill costs about that). */
+static void fill_bytes(Video *at, unsigned count, unsigned pattern)
+{
+    if (count >= 8) {
+        BlockOp op;
+
+        op.dst = (void QB_FAR *)at;
+        op.src = 0;
+        op.count = count >> 1;
+        op.value = pattern;
+        dev_fill(&op);
+        at += count & ~1u;
+        count &= 1;
+    }
+    while (count--)
+        *at++ = (u8)pattern;
+}
+
+typedef volatile u16 QB_FAR Video16;
+
+/* The 256-colour mode: `pattern` is the colour twice, a byte each. */
+#define LINEAR_FILL(name, combine) \
+    static void name(const GdFill *fill, unsigned x, unsigned count, unsigned y) \
+    { \
+        Video16 *words = (Video16 *)pixel_at(x, y); \
+        unsigned pairs = count >> 1, pattern = fill->pattern; \
+        while (pairs--) { \
+            unsigned old = *words; \
+            *words++ = (u16)combine(old, pattern); \
+        } \
+        if (count & 1) { \
+            Video *last = (Video *)words; \
+            unsigned old = *last; \
+            *last = (u8)combine(old, pattern); \
+        } \
+    }
+
+static void linear_set(const GdFill *fill, unsigned x, unsigned count, unsigned y)
+{
+    fill_bytes(pixel_at(x, y), count, fill->pattern);
+}
+LINEAR_FILL(linear_and, COMBINE_AND)
+LINEAR_FILL(linear_or, COMBINE_OR)
+LINEAR_FILL(linear_xor, COMBINE_XOR)
+
+/* The CGA modes: `pattern` is the colour in every pixel of a byte.  The bytes at the ends of the span keep the
+   pixels the span does not cover. */
+#define PACKED_FILL(name, bits, combine) \
+    static void name(const GdFill *fill, unsigned x, unsigned count, unsigned y) \
+    { \
+        Video *row = packed_row(y); \
+        unsigned last = x + count - 1, pattern = fill->pattern; \
+        unsigned first_byte = x * bits >> 3, last_byte = last * bits >> 3; \
+        unsigned left = 0xFF >> (x * bits & 7), right = 0xFF << (8 - bits - (last * bits & 7)) & 0xFF; \
+        Video *at = row + first_byte, *end = row + last_byte; \
+        unsigned old; \
+        if (first_byte == last_byte) { \
+            left &= right; \
+            old = *at; \
+            *at = (u8)(old & ~left | combine(old, pattern) & left); \
+            return; \
+        } \
+        old = *at; \
+        *at++ = (u8)(old & ~left | combine(old, pattern) & left); \
+        PACKED_MIDDLE_##combine(at, end - at, pattern) \
+        old = *end; \
+        *end = (u8)(old & ~right | combine(old, pattern) & right); \
+    }
+
+#define PACKED_MIDDLE_COMBINE_SET(at, count, pattern) fill_bytes(at, count, pattern);
+#define PACKED_MIDDLE_LOOP(at, count, pattern, combine) \
+    { \
+        unsigned n = count; \
+        while (n--) { \
+            unsigned old = *at; \
+            *at++ = (u8)combine(old, pattern); \
+        } \
+    }
+#define PACKED_MIDDLE_COMBINE_AND(at, count, pattern) PACKED_MIDDLE_LOOP(at, count, pattern, COMBINE_AND)
+#define PACKED_MIDDLE_COMBINE_OR(at, count, pattern) PACKED_MIDDLE_LOOP(at, count, pattern, COMBINE_OR)
+#define PACKED_MIDDLE_COMBINE_XOR(at, count, pattern) PACKED_MIDDLE_LOOP(at, count, pattern, COMBINE_XOR)
+
+PACKED_FILL(packed4_set, 2, COMBINE_SET)
+PACKED_FILL(packed4_and, 2, COMBINE_AND)
+PACKED_FILL(packed4_or, 2, COMBINE_OR)
+PACKED_FILL(packed4_xor, 2, COMBINE_XOR)
+PACKED_FILL(packed2_set, 1, COMBINE_SET)
+PACKED_FILL(packed2_and, 1, COMBINE_AND)
+PACKED_FILL(packed2_or, 1, COMBINE_OR)
+PACKED_FILL(packed2_xor, 1, COMBINE_XOR)
+
+/* The planar modes: the colour goes through the controller's write mode 2, the operation through its function, and the
+   bytes at the ends of a span under a bit mask.  A set needs no read, the other operations read each byte to load the
+   latches.  `pattern` is the colour twice, a byte each. */
+#define PLANAR_FILL(name, function, middle) \
+    static void name(const GdFill *fill, unsigned x, unsigned count, unsigned y) \
+    { \
+        unsigned last = x + count - 1, color = fill->color; \
+        unsigned left = 0xFF >> (x & 7), right = 0xFF << (7 - (last & 7)) & 0xFF; \
+        Video *at = byte_of(x, y); \
+        unsigned between = (last >> 3) - (x >> 3); \
+        if (function) \
+            controller(GC_DATA_ROTATE, function << FUNCTION_SHIFT); \
+        if (between == 0) { \
+            put(at, left & right, color); \
+        } else { \
+            put(at++, left, color); \
+            controller(GC_BIT_MASK, 0xFF); \
+            middle \
+            put(at, right, color); \
+        } \
+        controller(GC_BIT_MASK, 0xFF); \
+        if (function) \
+            controller(GC_DATA_ROTATE, 0); \
+    }
+
+#define PLANAR_SET_MIDDLE fill_bytes(at, between - 1, fill->pattern); at += between - 1;
+#define PLANAR_LATCH_MIDDLE \
+    { \
+        unsigned n = between - 1; \
+        while (n--) { \
+            (void)*at; \
+            *at++ = (u8)color; \
+        } \
+    }
+
+PLANAR_FILL(planar_set, 0, PLANAR_SET_MIDDLE)
+PLANAR_FILL(planar_and, 1, PLANAR_LATCH_MIDDLE)
+PLANAR_FILL(planar_or, 2, PLANAR_LATCH_MIDDLE)
+PLANAR_FILL(planar_xor, 3, PLANAR_LATCH_MIDDLE)
+
+static void (*const spans[KINDS][4])(const GdFill *fill, unsigned x, unsigned count, unsigned y) = {
+    { planar_set, planar_and, planar_or, planar_xor },
+    { linear_set, linear_and, linear_or, linear_xor },
+    { packed4_set, packed4_and, packed4_or, packed4_xor },
+    { packed2_set, packed2_and, packed2_or, packed2_xor }
+};
+
+void gd_fill_select(GdFill *fill, unsigned color, unsigned operation)
+{
+    unsigned byte = color & 0xFF;
+
+    switch (kind) {
+    case KIND_PACKED4:
+        byte = (color & 3) * 0x55;
+        break;
+    case KIND_PACKED2:
+        byte = (color & 1) * 0xFF;
+        break;
+    case KIND_PLANAR:
+        byte = color & 0x0F;
+        break;
+    }
+    fill->span = spans[kind][operation & 3];
+    fill->color = color & 0xFF;
+    fill->pattern = byte | byte << 8;
+}

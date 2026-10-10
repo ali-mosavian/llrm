@@ -32,9 +32,11 @@ static void draw(byte at_row, byte at_column, byte c)
 static void clear_rows(byte first, byte last)
 {
     unsigned y, height = gfx_current->cell_height;
+    GdFill fill;
 
+    gd_fill_select(&fill, 0, OP_SET);
     for (y = first * height; y < (last + 1u) * height; y++)
-        gd_span(0, gfx_current->width, y, 0, OP_SET);
+        fill.span(&fill, 0, gfx_current->width, y);
 }
 
 /* The window scrolls up a text row when the cursor is at its bottom. */

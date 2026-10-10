@@ -1,7 +1,7 @@
 """Graphics primitives and text in each screen mode, on BCOM45 (BC + LINK), the llrm runtime on m16 and on m32, all in
 DOSBox on virtual time: a segment's time is the emulated milliseconds its TIMER reads, `RATE` guest instructions each.
 
-    python tools/dosbatch/gfxbench/run.py [--modes 0 1 2 ...] [--work DIR]
+    python tools/dosbatch/gfxbench/bench.py [--modes 0 1 2 ...] [--work DIR]
 """
 
 from __future__ import annotations
@@ -41,32 +41,33 @@ def parse(text: str) -> dict[str, int]:
     return found
 
 
-def run(modes: list[int], work: Path) -> dict[int, dict[str, dict[str, int]]]:
+def run(modes: list[int], work: Path, only: tuple[str, ...] = COLUMNS) -> dict[int, dict[str, dict[str, int]]]:
+    """The segments of each mode, in milliseconds, for the builds named in `only`."""
     work.mkdir(parents=True, exist_ok=True)
     sources = {mode: source(mode, work) for mode in modes}
-    archive, _ = qbruntime.build(work / "archive16")
-    runtime32 = qb32.build(work / "rt32")
+    archive, _ = qbruntime.build(work / "archive16") if "llrm m16" in only else (None, None)
+    runtime32 = qb32.build(work / "rt32") if "llrm m32" in only else None
     sides: dict[str, tuple[Path, list[dosbatch.Job]]] = {}
     jobs = []
-    for mode, path in sources.items():
+    for mode, path in sources.items() if "BCOM45 m16" in only else ():
         jobs.append(dosbatch.Job(f"B{mode:02d}", "bas", path, screen=True, budget_ms=BUDGET_MS, switches="/O /FPi"))
     sides["BCOM45 m16"] = (work / "run_bc", jobs)
     jobs = []
-    for mode, path in sources.items():
+    for mode, path in sources.items() if "llrm+BCOM45" in only else ():
         obj = work / f"g{mode}.qb45.obj"
         if reason := qbruntime.compile_basic(path, obj, "qb45"):
             raise SystemExit(f"qb45 g{mode}: {reason}")
         jobs.append(dosbatch.Job(f"Q{mode:02d}", "obj", obj, screen=True, budget_ms=BUDGET_MS))
     sides["llrm+BCOM45"] = (work / "run_qb45", jobs)
     jobs = []
-    for mode, path in sources.items():
+    for mode, path in sources.items() if "llrm m16" in only else ():
         obj = work / f"g{mode}.m16.obj"
         if reason := qbruntime.compile_basic(path, obj, "llrm"):
             raise SystemExit(f"m16 g{mode}: {reason}")
         jobs.append(dosbatch.Job(f"L{mode:02d}", "obj", obj, runtime="llrmqb", runtime_file=archive, screen=True, budget_ms=BUDGET_MS))
     sides["llrm m16"] = (work / "run_m16", jobs)
     jobs = []
-    for mode, path in sources.items():
+    for mode, path in sources.items() if "llrm m32" in only else ():
         obj, exe = work / f"g{mode}.m32.obj", work / f"g{mode}.m32.exe"
         if reason := qb32.compile_basic(path, obj):
             raise SystemExit(f"m32 g{mode}: {reason}")
@@ -76,6 +77,8 @@ def run(modes: list[int], work: Path) -> dict[int, dict[str, dict[str, int]]]:
 
     found: dict[int, dict[str, dict[str, int]]] = {mode: {} for mode in modes}
     for side, (where, side_jobs) in sides.items():
+        if side not in only:
+            continue
         results = dosbatch.run(side_jobs, where, conf=CONF, budget_ms=BUDGET_MS)
         for mode, job in zip(modes, side_jobs):
             if results[job.stem].status != "ok":

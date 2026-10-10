@@ -1,0 +1,37 @@
+"""The llrm runtime's filled rows: LINE BF, PAINT and a text scroll on the CGA and 256-colour screens, m16 and m32.
+
+Each ran a pixel at a time (a call, a read and a mask per pixel in the CGA modes): 150 boxes of 32x32 took 24,900 emulated ms
+in SCREEN 1 and 4,300 in SCREEN 13, BCOM45's under 400; a scrolling PRINT took 33,800 in SCREEN 1.  The limits are about three times what a
+row fill takes, so a return to per-pixel writes fails them."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent / "gfxbench"))
+
+import qbruntime  # noqa: E402
+
+LIMITS = {
+    1: {"box-filled": 1500, "paint": 6500, "print-scroll": 20000},
+    13: {"box-filled": 1500},
+}
+
+
+@pytest.fixture(scope="module")
+def timed(tmp_path_factory):
+    if not qbruntime.dosbatch.DOSBOX.exists():
+        pytest.skip("DOSBox-X is unavailable")
+    import bench  # noqa: E402
+
+    return bench.run(list(LIMITS), tmp_path_factory.mktemp("gfxspeed"), only=("llrm m16", "llrm m32"))
+
+
+@pytest.mark.parametrize("side", ["llrm m16", "llrm m32"])
+@pytest.mark.parametrize("mode,segment", [(m, s) for m, limits in LIMITS.items() for s in limits])
+def test_a_filled_row_costs_a_row_fill_not_a_pixel_loop(timed, side: str, mode: int, segment: str):
+    assert timed[mode][segment][side] <= LIMITS[mode][segment]

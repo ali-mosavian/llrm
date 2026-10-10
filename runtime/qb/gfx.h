@@ -43,7 +43,9 @@ byte gfx_attribute(int color);
 
 /* Pixels, clipped to the screen. */
 void gfx_plot(int x, int y, byte color, byte operation);
-void gfx_hspan(int x1, int x2, int y, byte color, byte operation);
+/* Puts the box between the two corners in order (left and top first) and cuts it to the screen: 0 when none of it is
+   on the screen.  A primitive does this once and then fills its rows without clipping them. */
+int gfx_clip_box(int *x1, int *y1, int *x2, int *y2);
 /* The colour of a pixel, or -1 outside the screen. */
 int gfx_pixel(int x, int y);
 /* From pixel `x` (on the screen) toward `last`, which may be off it, the first

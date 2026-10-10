@@ -4,6 +4,7 @@
    as QB's queue does, so a fill runs out of memory only where QB's would; or, where memory is flat, in a block of
    its own, so what the strings and the heap hold does not decide how much of a picture a fill can cover. */
 #include "gfx.h"
+#include "gfxdev.h"
 
 typedef struct Seed {
     short x, y;
@@ -53,12 +54,14 @@ void B_PAIN(short fill, short border)
     byte paint = gfx_color(fill);
     byte edge = border == -1 ? paint : gfx_color(border);
     unsigned long bytes;
+    GdFill painter;
 
     seed_count = 0;
     if (!open_pixel(gfx_x1, gfx_y1, edge))
         return;
     seeds = (Seed *)qb_paint_queue_open(&bytes);
     seed_room = (unsigned)(bytes / sizeof(Seed));
+    gd_fill_select(&painter, paint, OP_SET);
     push(gfx_x1, gfx_y1);
     while (seed_count) {
         Seed seed = seeds[--seed_count];
@@ -71,7 +74,7 @@ void B_PAIN(short fill, short border)
         left = left < 0 ? 0 : left + 1;
         right = gfx_search(seed.x, (int)gfx_current->width - 1, seed.y, edge, edge, 1);
         right = right < 0 ? (int)gfx_current->width - 1 : right - 1;
-        gfx_hspan(left, right, seed.y, paint, OP_SET);
+        painter.span(&painter, (unsigned)left, (unsigned)(right - left + 1), (unsigned)seed.y);
         seed_row(left, right, seed.y - 1, edge, paint);
         seed_row(left, right, seed.y + 1, edge, paint);
     }
