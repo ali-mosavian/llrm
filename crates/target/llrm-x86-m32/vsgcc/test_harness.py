@@ -113,3 +113,15 @@ def test_every_x_kernel_has_its_source_and_its_self_check():
     for n in names:
         assert (harness.source_dir(n) / f"{n}.c").is_file() and harness.source_dir(n) == harness.KERNELS / n
         assert harness.source_dir(n).joinpath(f"{n}.out").read_text().split()
+
+
+def test_a_function_called_with_two_constants_is_cloned_for_each_at_o2(built):
+    """x_dct at -O2 called `dct8(blk[i], 1)` and `dct8(blk[0][j], 8)` through one body that does the stride's multiplies and
+    scaled loads (gcc -O2 does too): 181,973 clocks, 1.51x the better of gcc and clang. -O2 clones a function that does not
+    call itself for the constants its callers pass (gcc's ipa-cp under its own limits): 139,732 (1.16x)."""
+    import os
+    import subprocess
+    env = {**os.environ, "VSGCC_WORK": str(built)}
+    done = subprocess.run([str(HERE / "build.sh"), "x_dct"], capture_output=True, text=True, env=env)
+    assert done.returncode == 0 and "FAIL" not in done.stdout, (done.stdout, done.stderr)
+    assert harness.run("x_dct", "llrm")["clocks"] <= 150000

@@ -150,6 +150,7 @@ impl Options {
     pub fn standard() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
+            inline: inline::Threshold { cp_clone: true, ..Self::default().inline },
             peel: false,
             unswitch: false,
             ..Self::default()
@@ -160,7 +161,7 @@ impl Options {
     /// code, and the larger inline threshold.
     pub fn speed() -> Self {
         Self {
-            inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            inline: inline::Threshold { cp_clone: true, cp_recursive: true, ..inline::Threshold::new(250) },
             unswitch: true,
             ..Self::default()
         }
@@ -171,7 +172,7 @@ impl Options {
     pub fn aggressive() -> Self {
         Self {
             limits: Limits { target_percent: 200, ..Limits::default() },
-            inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            inline: inline::Threshold { cp_clone: true, cp_recursive: true, ..inline::Threshold::new(250) },
             exhaustive: true,
             ..Self::default()
         }

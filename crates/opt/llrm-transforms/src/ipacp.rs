@@ -84,7 +84,7 @@ pub fn cloned(
     procedures: &[GlobalId],
     private: &BTreeSet<GlobalId>,
     costs: &OperationCosts,
-    clone: bool,
+    (clone, recursion): (bool, bool),
     state: &mut Cloning,
 ) -> Changed {
     let mut changed = Changed { added: Vec::new(), edited: Vec::new() };
@@ -125,6 +125,11 @@ pub fn cloned(
     }
     for ((name, known), sites) in groups {
         let Some(body) = module.global(name).function() else { continue };
+        // The clones of a recursive function are the next clone's callers, to
+        // the depth GCC's -O3 unrolls it; below -O3 nothing takes them.
+        if !recursion && recursive.contains(&name) {
+            continue;
+        }
         if !inline::copyable(module, body)
             || body.parameters().len() != known.len()
             || matches!(

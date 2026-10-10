@@ -72,14 +72,27 @@ pub struct Threshold {
     /// `-fno-inline-functions` leaves on as GCC's does;
     /// `-fno-inline-functions-called-once` turns it off.
     pub last: bool,
-    /// `-fipa-cp-clone` (-O3): a function is copied for the constants its
-    /// callers pass though the unit grows (`ipacp`).
+    /// A function is copied for the constants its callers pass though the
+    /// unit grows (`ipacp`): gcc's `-fipa-cp-clone`, which it has at -O3.
     pub cp_clone: bool,
+    /// A recursive function is cloned too, to `ipa-cp-max-recursive-depth`
+    /// (`queens` unrolled eight deep): at -O2 the clones of a recursive
+    /// function are calls the inliner does not take, and cost code for no
+    /// clocks (`queens` +1.0 KB, +3% clocks).
+    pub cp_recursive: bool,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, hint: (325, 225), hot: (525, 225), single: false, last: true, cp_clone: false }
+        Self {
+            limit,
+            hint: (325, 225),
+            hot: (525, 225),
+            single: false,
+            last: true,
+            cp_clone: false,
+            cp_recursive: false,
+        }
     }
 
     /// Nothing inlines, the last call of a function included.

@@ -1422,6 +1422,66 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     assert_eq!(cloned(true), (true, true));
 }
 
+/// `g` calls itself: its copies for the constants of its callers are one more
+/// call each (`g.constprop` for 4 calls `g` for 3), which -O2's inliner does
+/// not take, and `queens` read +1.0 KB and +3% clocks for them. -O3 keeps them
+/// (gcc unrolls it to `ipa-cp-max-recursive-depth`).
+const RECURSIVE_CONTEXTS: &str = "define i16 @g(i16 %k, i16 %x) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %acc = phi i16 [ 0, %b0 ], [ %acc1, %body ]
+  %go = icmp slt i16 %i, %k
+  br i1 %go, label %body, label %done
+
+body:
+  %m = mul i16 %x, %i
+  %acc1 = add i16 %acc, %m
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+done:
+  %again = icmp sgt i16 %x, 100
+  br i1 %again, label %rec, label %out
+
+rec:
+  %y = sub i16 %x, 100
+  %r = call i16 @g(i16 %k, i16 %y)
+  %s = add i16 %r, %acc
+  ret i16 %s
+
+out:
+  ret i16 %acc
+}
+
+define i16 @f(i16 %x) {
+b0:
+  %a = call i16 @g(i16 4, i16 %x)
+  %b = call i16 @g(i16 5, i16 %x)
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+";
+
+#[test]
+fn test_a_recursive_function_is_cloned_for_its_constants_only_where_recursion_is_wanted() {
+    let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[-3]];
+    let cloned = |recursive: bool| {
+        let mut module = parsed(RECURSIVE_CONTEXTS);
+        stepped(
+            &mut module,
+            &["f", "g"],
+            20,
+            Threshold { cp_clone: true, cp_recursive: recursive, ..Threshold::none() },
+        );
+        assert_eq!(results(&module, inputs), results(&parsed(RECURSIVE_CONTEXTS), inputs), "{}", printed(&module));
+        module.named("g.constprop.1").is_some()
+    };
+    assert_eq!((cloned(false), cloned(true)), (false, true));
+}
+
 /// A small function that calls itself is given copies of itself (gcc's
 /// `recursive_inlining`, `max-inline-recursive-depth-auto` 8 and
 /// `-insns-recursive-auto` 450): `hanoi` at -O2 was one call per move, gcc's is

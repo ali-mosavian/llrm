@@ -99,15 +99,18 @@ fn each_level_selects_gcc_s_passes() {
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
     assert_eq!(pipeline(&["-Og"]), pipeline(&["-O1"]));
     assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
-    // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676).
+    // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676); -O2 clones the functions
+    // that do not call themselves, under the same limits.
+    let cloning = |args: &[&str]| (pipeline(args).inline.cp_clone, pipeline(args).inline.cp_recursive);
     assert_eq!(
         (
-            pipeline(&["-O2"]).inline.cp_clone,
-            pipeline(&["-O3"]).inline.cp_clone,
-            pipeline(&["-O3", "-fno-ipa-cp-clone"]).inline.cp_clone,
-            pipeline(&["-O2", "-fipa-cp-clone"]).inline.cp_clone
+            cloning(&["-O2"]),
+            cloning(&["-O3"]),
+            cloning(&["-O3", "-fno-ipa-cp-clone"]),
+            cloning(&["-O2", "-fipa-cp-clone"]),
+            cloning(&["-O2", "-fno-ipa-cp-clone"])
         ),
-        (false, true, false, true)
+        ((true, false), (true, true), (false, false), (true, true), (false, false))
     );
     assert_eq!(
         (pipeline(&["-O1"]).inline.limit, pipeline(&["-O2"]).inline.limit, pipeline(&["-O3"]).inline.limit),
@@ -115,7 +118,10 @@ fn each_level_selects_gcc_s_passes() {
     );
     let max = pipeline(&["-Omax"]);
     assert_eq!(max.limits, Limits { target_percent: 200, ..Limits::default() });
-    assert_eq!((max.inline, max.unroll, max.peel), (Threshold { cp_clone: true, ..Threshold::new(250) }, true, true));
+    assert_eq!(
+        (max.inline, max.unroll, max.peel),
+        (Threshold { cp_clone: true, cp_recursive: true, ..Threshold::new(250) }, true, true)
+    );
     let os = pipeline(&["-Os"]);
     assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
@@ -145,7 +151,7 @@ fn test_no_inline_functions_leaves_called_once_on_as_gcc_does() {
     assert!(!pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline.last);
     assert_eq!(
         pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline,
-        llrm_transforms::inline::Threshold::none()
+        llrm_transforms::inline::Threshold { cp_clone: true, ..llrm_transforms::inline::Threshold::none() }
     );
 }
 
@@ -153,9 +159,12 @@ fn test_no_inline_functions_leaves_called_once_on_as_gcc_does() {
 fn a_pass_option_overrides_the_level_wherever_it_stands() {
     let options = pipeline(&["-fno-unroll-loops", "-O3", "-funswitch-loops", "-fno-inline-functions", "-fno-gcse"]);
     assert!(!options.unroll && options.unswitch && !options.forward && !options.drop_loads);
-    assert_eq!(options.inline, Threshold { cp_clone: true, ..Threshold::new(0) });
+    assert_eq!(options.inline, Threshold { cp_clone: true, cp_recursive: true, ..Threshold::new(0) });
     assert_eq!(pipeline(&["-O2", "-fno-peel-loops", "-fpeel-loops"]).peel, true);
-    assert_eq!(pipeline(&["-O2", "-fno-inline-functions", "-finline-functions"]).inline, Threshold::default());
+    assert_eq!(
+        pipeline(&["-O2", "-fno-inline-functions", "-finline-functions"]).inline,
+        Threshold { cp_clone: true, ..Threshold::default() }
+    );
     let error = parsed(&["-fno-vectorize"]).unwrap_err();
     assert!(error.contains("-fno-vectorize") && error.contains("-funroll-loops"), "{error}");
 }
