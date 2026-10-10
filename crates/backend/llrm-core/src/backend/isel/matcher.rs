@@ -18,17 +18,17 @@ use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::Insn;
 use crate::support::hash::IndexMap;
 
-pub(super) enum State {
+pub enum State {
     Test { feature: usize, edges: &'static [(u16, usize)], default: Option<usize> },
     Leaf(&'static [usize]),
 }
 
 /// The most operands a pattern tests.
-pub(super) const OPERANDS: usize = 3;
+pub const OPERANDS: usize = 3;
 
-type Holds = for<'a, 'b, 'c, 'd> fn(&mut Selector<'a, 'b, 'c>, usize, &Match<'d>) -> bool;
-type Costs = for<'a, 'b, 'c, 'd> fn(&mut Selector<'a, 'b, 'c>, usize, &Match<'d>) -> Result<i64, Unselected>;
-type Emits = for<'a, 'b, 'c, 'd, 'e> fn(
+pub type Holds = for<'a, 'b, 'c, 'd> fn(&mut Selector<'a, 'b, 'c>, usize, &Match<'d>) -> bool;
+pub type Costs = for<'a, 'b, 'c, 'd> fn(&mut Selector<'a, 'b, 'c>, usize, &Match<'d>) -> Result<i64, Unselected>;
+pub type Emits = for<'a, 'b, 'c, 'd, 'e> fn(
     &mut Selector<'a, 'b, 'c>,
     usize,
     &Match<'d>,
@@ -40,20 +40,20 @@ type Emits = for<'a, 'b, 'c, 'd, 'e> fn(
 /// bound to its selector by `llrm-driver`; nothing here names one.
 pub struct Compiled {
     pub name: &'static str,
-    opcodes: &'static [&'static str],
-    types: &'static [&'static str],
-    kinds: &'static [&'static str],
-    commutative: &'static [&'static str],
-    root: Option<usize>,
-    states: &'static [State],
-    groups: &'static [Option<usize>],
-    covers: &'static [bool],
-    holds: Holds,
-    covers_here: Holds,
-    cost: Costs,
-    emit: Emits,
+    pub opcodes: &'static [&'static str],
+    pub types: &'static [&'static str],
+    pub kinds: &'static [&'static str],
+    pub commutative: &'static [&'static str],
+    pub root: Option<usize>,
+    pub states: &'static [State],
+    pub groups: &'static [Option<usize>],
+    pub covers: &'static [bool],
+    pub holds: Holds,
+    pub covers_here: Holds,
+    pub cost: Costs,
+    pub emit: Emits,
     /// The target's peephole rules, generated from the same directory.
-    rules: &'static crate::backend::peep::Rules,
+    pub rules: &'static crate::backend::peep::Rules,
 }
 
 impl Compiled {
@@ -63,26 +63,20 @@ impl Compiled {
     }
 }
 
-mod selectors {
-    use super::*;
-
-    include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
-}
-
 /// The selector of the target `name`, as its definition directory is named.
 pub fn selector(name: &str) -> Option<&'static Compiled> {
-    selectors::ALL.iter().copied().find(|one| one.name == name)
+    crate::backend::selectors::ALL.iter().copied().find(|one| one.name == name)
 }
 
 /// The selector built for 16-bit x86, which the tests of this crate use.
 #[cfg(test)]
 pub(crate) fn m16() -> &'static Compiled {
-    &selectors::x86_m16::SELECTOR
+    &crate::backend::selectors::x86_m16::SELECTOR
 }
 
 /// The instruction a pattern matched: its operands, a commutative
 /// opcode's constant taken second.
-pub(super) struct Match<'a> {
+pub struct Match<'a> {
     pub inst: InstId,
     pub at: i64,
     pub ops: Vec<Operand>,
@@ -118,6 +112,14 @@ fn choose<E>(
 }
 
 impl Selector<'_, '_, '_> {
+    /// The opcode's name, for a pattern that refuses an instruction by it.
+    pub fn mnemonic(
+        &self,
+        m: &Match,
+    ) -> &'static str {
+        self.function.instruction(m.inst).opcode.mnemonic()
+    }
+
     pub(super) fn selected_by_pattern(
         &mut self,
         inst: InstId,
@@ -256,7 +258,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// An integer constant's value at its own width.
-    fn literal(
+    pub fn literal(
         &self,
         operand: Operand,
     ) -> Option<i64> {
@@ -265,7 +267,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// Whether `operand` is of one of `kinds` and `types`.
-    fn operand_is(
+    pub fn operand_is(
         &self,
         operand: Operand,
         kinds: Option<&[&str]>,
@@ -291,7 +293,7 @@ impl Selector<'_, '_, '_> {
 
     /// Whether an instruction of one of `opcodes`, of one of `types` and
     /// with at least `operands` operands, defines `operand`.
-    fn defines(
+    pub fn defines(
         &self,
         operand: Operand,
         opcodes: &[&str],
@@ -307,7 +309,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// Operand `index` of the instruction defining `operand`.
-    fn inner(
+    pub fn inner(
         &self,
         operand: Operand,
         index: usize,
@@ -315,7 +317,7 @@ impl Selector<'_, '_, '_> {
         self.function.instruction(self.definition(operand).expect("a nested instruction")).operands[index]
     }
 
-    fn cover(
+    pub fn cover(
         &mut self,
         operand: Operand,
         root: InstId,
@@ -323,7 +325,7 @@ impl Selector<'_, '_, '_> {
         self.covered.insert(self.definition(operand).expect("a nested instruction"), root);
     }
 
-    fn covered_by(
+    pub fn covered_by(
         &self,
         operand: Operand,
         root: InstId,
@@ -331,7 +333,7 @@ impl Selector<'_, '_, '_> {
         self.definition(operand).is_some_and(|inst| self.covered.get(&inst) == Some(&root))
     }
 
-    fn emitted(
+    pub fn emitted(
         &self,
         m: &Match,
         op: Operation,
@@ -374,7 +376,7 @@ impl Selector<'_, '_, '_> {
 
     // Operand constructors: a LIR operand, and what making it took.
 
-    fn op_held(
+    pub fn op_held(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -383,7 +385,7 @@ impl Selector<'_, '_, '_> {
         Ok(Loc::Held(self.held(operand, self.type_of(operand), m.at, out)?))
     }
 
-    fn op_source(
+    pub fn op_source(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -393,7 +395,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// Held, as its byte.
-    fn op_byte(
+    pub fn op_byte(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -404,7 +406,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A shift's count: cl counts, so a register count is its byte.
-    fn op_count(
+    pub fn op_count(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -418,7 +420,7 @@ impl Selector<'_, '_, '_> {
 
     /// Held, at the result's width; a joined dword's low word is the word
     /// it was joined from.
-    fn op_narrowed(
+    pub fn op_narrowed(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -433,7 +435,7 @@ impl Selector<'_, '_, '_> {
         Ok(Loc::Held(Held { width: to, ..held }))
     }
 
-    fn op_result(
+    pub fn op_result(
         &mut self,
         m: &Match,
         _: &mut Vec<Arc<Insn>>,
@@ -444,7 +446,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A fresh register of the result's width.
-    fn op_fresh(
+    pub fn op_fresh(
         &mut self,
         m: &Match,
         _: &mut Vec<Arc<Insn>>,
@@ -453,7 +455,7 @@ impl Selector<'_, '_, '_> {
         Ok(Loc::Held(self.fresh_held(width)))
     }
 
-    fn op_float(
+    pub fn op_float(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -462,7 +464,7 @@ impl Selector<'_, '_, '_> {
         Ok(Loc::Held(self.float(operand, m.at, out)?))
     }
 
-    fn op_fresult(
+    pub fn op_fresult(
         &mut self,
         m: &Match,
         _: &mut Vec<Arc<Insn>>,
@@ -472,7 +474,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// The cell a float load or store reaches: its bytes in memory.
-    fn op_cell(
+    pub fn op_cell(
         &mut self,
         m: &Match,
         _: &mut Vec<Arc<Insn>>,
@@ -483,7 +485,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// The cell the load defining `value` reads.
-    fn op_loaded(
+    pub fn op_loaded(
         &mut self,
         _: &Match,
         _: &mut Vec<Arc<Insn>>,
@@ -495,7 +497,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// The cell an integer load or store reaches: its register's bytes.
-    fn op_access(
+    pub fn op_access(
         &mut self,
         m: &Match,
         _: &mut Vec<Arc<Insn>>,
@@ -505,7 +507,7 @@ impl Selector<'_, '_, '_> {
         Ok(Loc::Mem(Self::memory(self.pointer(pointer)?, width)))
     }
 
-    fn op_imm(
+    pub fn op_imm(
         &mut self,
         _: &Match,
         _: &mut Vec<Arc<Insn>>,
@@ -517,7 +519,7 @@ impl Selector<'_, '_, '_> {
 
     // Predicates.
 
-    fn is_selected_elsewhere(
+    pub fn is_selected_elsewhere(
         &self,
         m: &Match,
     ) -> bool {
@@ -525,7 +527,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// Whether `value` is read once, by the root, in its block.
-    fn is_only_reader(
+    pub fn is_only_reader(
         &self,
         m: &Match,
         value: Operand,
@@ -536,7 +538,7 @@ impl Selector<'_, '_, '_> {
         )
     }
 
-    fn is_nonvolatile(
+    pub fn is_nonvolatile(
         &self,
         _: &Match,
         load: Operand,
@@ -550,7 +552,7 @@ impl Selector<'_, '_, '_> {
 
     /// Whether nothing may write memory between the load defining `value`
     /// and where the root is made: beside the branch, for a fused compare.
-    fn is_unwritten(
+    pub fn is_unwritten(
         &self,
         m: &Match,
         value: Operand,
@@ -565,7 +567,7 @@ impl Selector<'_, '_, '_> {
     /// Whether `value` is what the float comparison compares second, as
     /// its row in FLOAT_CONDITIONS orders the operands, and a cell fcom can
     /// read: a float's 4 bytes or a double's 8, not an extended's 10.
-    fn is_compared_second(
+    pub fn is_compared_second(
         &self,
         m: &Match,
         value: Operand,
@@ -575,7 +577,7 @@ impl Selector<'_, '_, '_> {
             && matches!(self.size(self.type_of(value)), Ok(4 | 8))
     }
 
-    fn is_lrint(
+    pub fn is_lrint(
         &self,
         _: &Match,
         call: Operand,
@@ -583,21 +585,21 @@ impl Selector<'_, '_, '_> {
         self.definition(call).is_some_and(|inst| self.lrint(inst))
     }
 
-    fn is_narrowed(
+    pub fn is_narrowed(
         &self,
         m: &Match,
     ) -> bool {
         self.words.contains_key(&m.inst)
     }
 
-    fn is_volatile(
+    pub fn is_volatile(
         &self,
         m: &Match,
     ) -> bool {
         m.volatile
     }
 
-    fn is_fused(
+    pub fn is_fused(
         &self,
         m: &Match,
     ) -> bool {
@@ -606,7 +608,7 @@ impl Selector<'_, '_, '_> {
 
     /// Whether a multiply by `factor` has a chain of shifts and adds whose
     /// shifts all fit the width.
-    fn is_scalable(
+    pub fn is_scalable(
         &self,
         m: &Match,
         factor: Operand,
@@ -617,7 +619,7 @@ impl Selector<'_, '_, '_> {
         })
     }
 
-    fn is_same_width(
+    pub fn is_same_width(
         &self,
         m: &Match,
         operand: Operand,
@@ -675,7 +677,7 @@ impl Selector<'_, '_, '_> {
         bytes * 100 + clocks
     }
 
-    fn cost_immediate_multiply(
+    pub fn cost_immediate_multiply(
         &self,
         m: &Match,
         factor: Operand,
@@ -691,7 +693,7 @@ impl Selector<'_, '_, '_> {
         arithmetic::immediate_multiply(self.cpu, n).map_err(Unselected)
     }
 
-    fn cost_scaled(
+    pub fn cost_scaled(
         &self,
         m: &Match,
         factor: Operand,
@@ -710,7 +712,7 @@ impl Selector<'_, '_, '_> {
     // Hooks: what is selected by hand.
 
     /// Shifts and adds of the source, as the old route's _scaled selects.
-    fn hook_scaled(
+    pub fn hook_scaled(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -786,7 +788,7 @@ impl Selector<'_, '_, '_> {
 
     /// A byte product, by the operand size's own multiply of both factors
     /// extended: only the low byte is kept, which no extension changes.
-    fn hook_byte_multiply(
+    pub fn hook_byte_multiply(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -814,7 +816,7 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    fn hook_divide(
+    pub fn hook_divide(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -823,7 +825,7 @@ impl Selector<'_, '_, '_> {
         self.divide(op, m.inst, out)
     }
 
-    fn hook_wide_cast(
+    pub fn hook_wide_cast(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -831,7 +833,7 @@ impl Selector<'_, '_, '_> {
         self.wide_cast(self.cast(m), m.inst, m.at, out)
     }
 
-    fn hook_wide_binary(
+    pub fn hook_wide_binary(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -842,7 +844,7 @@ impl Selector<'_, '_, '_> {
         self.wide_binary(op, m.inst, m.at, out)
     }
 
-    fn hook_float_cast(
+    pub fn hook_float_cast(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -850,7 +852,7 @@ impl Selector<'_, '_, '_> {
         self.float_cast(self.cast(m), m.inst, m.at, out)
     }
 
-    fn hook_far_cast(
+    pub fn hook_far_cast(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -859,7 +861,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A cast no pattern selects, refused once its types are.
-    fn hook_unselected_cast(
+    pub fn hook_unselected_cast(
         &mut self,
         m: &Match,
         _: &mut Vec<Arc<Insn>>,
@@ -871,7 +873,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A dword load read only as words: each word loaded once.
-    fn hook_words(
+    pub fn hook_words(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -893,7 +895,7 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    fn hook_getelementptr(
+    pub fn hook_getelementptr(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -916,7 +918,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A float constant is its bits, stored as integers are.
-    fn hook_float_bits(
+    pub fn hook_float_bits(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -965,7 +967,7 @@ impl Selector<'_, '_, '_> {
 
     /// An i64 read as its two dwords, the low at the address: x86 is
     /// little-endian.
-    fn hook_wide_load(
+    pub fn hook_wide_load(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -988,7 +990,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// An i64 written as its two dwords.
-    fn hook_wide_store(
+    pub fn hook_wide_store(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -1009,7 +1011,7 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    fn hook_far_load(
+    pub fn hook_far_load(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -1021,7 +1023,7 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    fn hook_far_store(
+    pub fn hook_far_store(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -1042,7 +1044,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A field of an answer in registers: the register it came in.
-    fn hook_extractvalue(
+    pub fn hook_extractvalue(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -1062,7 +1064,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// SETcc, as LLVM selects a comparison it keeps as a value.
-    fn hook_setcc(
+    pub fn hook_setcc(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -1093,7 +1095,7 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    fn hook_br(
+    pub fn hook_br(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -1101,7 +1103,7 @@ impl Selector<'_, '_, '_> {
         self.branch(m.inst, m.block_at, m.at, out)
     }
 
-    fn hook_ret(
+    pub fn hook_ret(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -1109,7 +1111,7 @@ impl Selector<'_, '_, '_> {
         self.ret(m.inst, m.convention, m.at, out)
     }
 
-    fn hook_call(
+    pub fn hook_call(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -1119,7 +1121,7 @@ impl Selector<'_, '_, '_> {
         self.call(m.inst, info.calling_convention, m.at, out)
     }
 
-    fn hook_invoke(
+    pub fn hook_invoke(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
@@ -1132,7 +1134,7 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    fn hook_landing_pad(
+    pub fn hook_landing_pad(
         &mut self,
         m: &Match,
         out: &mut Vec<Arc<Insn>>,
