@@ -97,9 +97,9 @@ pub fn popped_width(place: &Loc) -> Option<u32> {
     }
 }
 
-/// Whether an x87 comparison reaches the flags through AX: `fnstsw ax; sahf`
-/// follows it, so nothing may live in AX across it.
-pub fn status_through_ax(what: &Semantics) -> bool {
+/// Whether an x87 comparison reaches the flags through the status-word
+/// register (`fnstsw`, then `sahf`): nothing may live there across it.
+pub fn status_through_register(what: &Semantics) -> bool {
     what.op == Operation::Compare
         && what.sources.iter().any(|one| positional_place(one) || matches!(one, Loc::Held(held) if held.width == 10))
 }

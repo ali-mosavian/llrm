@@ -131,6 +131,15 @@ impl RegisterClasses {
         std::rc::Rc::new(Self::of(&llrm_x86_m16::M16))
     }
 
+    /// The register the x87 status word is stored in (`fnstsw`'s fixed
+    /// destination); the flags reach `sahf` through it.
+    pub fn status_word(&self) -> Option<Register> {
+        let forms = self.pins.get("fnstsw")?;
+        let (_, _, _, pins) =
+            forms.iter().find(|(op, dests, sources, _)| *op == "barrier" && *dests == 1 && *sources == 0)?;
+        pins.iter().find(|(side, index, _)| matches!(side, Side::Dest) && *index == 0).map(|(_, _, register)| *register)
+    }
+
     /// Every operand this instruction requires in one particular register.
     ///
     /// The one place those are written down: the `fixed` column of the form
@@ -211,6 +220,12 @@ mod tests {
 
     /// What `registers.regs` says of m16 is what the allocator's statics and
     /// `llrm_x86_m16`'s constants say.
+    /// The x87 status word's register is the `fnstsw` form's fixed destination.
+    #[test]
+    fn the_status_word_is_where_the_form_table_stores_it() {
+        assert_eq!(RegisterClasses::of(&llrm_x86_m16::M16).status_word(), Some(Register::AX));
+    }
+
     #[test]
     fn m16_registers_are_its_description() {
         let classes = RegisterClasses::of(&llrm_x86_m16::M16);

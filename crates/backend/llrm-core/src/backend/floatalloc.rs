@@ -9,7 +9,10 @@ use std::sync::Arc;
 use iced_x86::Register;
 
 use crate::backend::allocate::live;
+use crate::backend::classes::RegisterClasses;
+#[cfg(test)]
 use crate::backend::constpool::Pool;
+#[cfg(test)]
 use crate::backend::cpu::{self as targets, ProfileOrName};
 use crate::backend::floatassign;
 use crate::backend::floatregions::Unlowered;
@@ -171,16 +174,19 @@ struct _Stack {
     absorbed: HashSet<i64>, // later copies of a group already taken
     fresh: u32,             // the next value no instruction names
     depth: usize,           // how many values the stack holds
+    status_word: Register,  // where `fnstsw` stores the status word
 }
 
 impl _Stack {
     fn new(
         floating: HashSet<u32>,
         depth: usize,
+        status_word: Register,
     ) -> Self {
         Self {
             floating,
             depth,
+            status_word,
             values: Vec::new(),
             sequence: Vec::new(),
             reads: IndexMap::default(),
@@ -655,23 +661,23 @@ impl _Stack {
         let status = semantics(
             Operation::Barrier,
             "fnstsw",
-            vec![Loc::Reg(Reg { register: Register::AX, width: 2 })],
+            vec![Loc::Reg(Reg { register: self.status_word, width: 2 })],
             Vec::new(),
         );
         let mut word = Insn::new(at, Some((at, at)), Some(status), one.defines.clone(), Vec::new());
         // AX is written whether or not a value is delivered in it:
         // nothing else may live there across the compare.
-        word.clobbers = std::collections::BTreeSet::from([Register::AX]);
+        word.clobbers = std::collections::BTreeSet::from([self.status_word]);
         word.delivers = one.delivers.clone();
         word.widths = one.widths.iter().copied().filter(|pair| produced.contains(&pair.0)).collect();
         // sahf reads the status word from AH: it stays in AX until then.
-        let held = match word.delivers.iter().find(|(_, register)| *register == Register::AX) {
+        let held = match word.delivers.iter().find(|(_, register)| *register == self.status_word) {
             Some(&(held, _)) => held,
             None => {
                 let held = Held { value: self.fresh, width: 2 };
                 self.fresh += 1;
                 word.defines.push(held.value);
-                word.delivers.push((held, Register::AX));
+                word.delivers.push((held, self.status_word));
                 word.widths.push((held.value, 2));
                 held
             }
@@ -679,7 +685,7 @@ impl _Stack {
         self.out.push(Arc::new(word));
         let mut sahf = inserted(at, semantics(Operation::Nothing, "sahf", Vec::new(), Vec::new()));
         sahf.uses = vec![held.value];
-        sahf.requires = vec![(held, Register::AX)];
+        sahf.requires = vec![(held, self.status_word)];
         self.out.push(Arc::new(sahf));
         Ok(())
     }
@@ -821,7 +827,10 @@ fn _reverse_postorder(body: &LirBody) -> (Vec<i64>, usize) {
 /// at one of its borders; the first exit reaching it fixes their order, and
 /// every other exit shuffles to that order. A value on the stack at an entry
 /// that the block does not read is popped there.
-fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
+fn _converted(
+    body: &LirBody,
+    classes: &RegisterClasses,
+) -> Result<LirBody, Raised> {
     let floating = floatassign::_floating_values(body);
     if floating.is_empty() {
         return Ok(body.clone());
@@ -840,7 +849,8 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
     }
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut settled: IndexMap<usize, Vec<u32>> = IndexMap::default();
-    let mut stack = _Stack::new(floating.clone(), body.float_stack);
+    let status_word = classes.status_word().ok_or_else(|| unlowered("the target has no x87 status word register"))?;
+    let mut stack = _Stack::new(floating.clone(), body.float_stack, status_word);
     stack.fresh =
         body.blocks
             .iter()
@@ -980,6 +990,7 @@ pub(super) fn _terminators(block: &LirBlock) -> usize {
 }
 
 /// Both passes: `floatassign`'s decisions, then stack form.
+#[cfg(test)]
 pub fn allocated<'a>(
     body: &LirBody,
     mut frame: Option<&mut Frame>,
@@ -989,7 +1000,7 @@ pub fn allocated<'a>(
 ) -> Result<LirBody, Raised> {
     let target = targets::profile(cpu).map_err(Raised::Value)?;
     let assigned = floatassign::assigned(body, frame.as_deref_mut(), pool, basic_semantics, target)?;
-    _truncating(&_converted(&assigned)?, frame)
+    _truncating(&_converted(&assigned, &RegisterClasses::of(&llrm_x86_m16::M16))?, frame)
 }
 
 /// `fisttp` as a 387 has it: `fistp` with the control word set to round
@@ -1128,6 +1139,7 @@ fn _unrounded(one: &Insn) -> bool {
 /// Pass two, reg-stack: `floatassign`'s flat registers in stack form.
 pub struct FloatAlloc {
     pub frame: Option<Rc<RefCell<Frame>>>,
+    pub classes: Rc<RegisterClasses>,
 }
 
 impl LIRTransform for FloatAlloc {
@@ -1144,7 +1156,7 @@ impl LIRTransform for FloatAlloc {
         body: LirBody,
     ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
-        _converted(&body)
+        _converted(&body, &self.classes)
             .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
             .map_err(|error| error.to_string())
     }
