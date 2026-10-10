@@ -1,5 +1,5 @@
 /* The box fills of runtime/qb/dos/gfxdev.c on the screen, every mode and every operation: a random box over random pixels leaves
-   what the operation says of each pixel, and the pixels around it as they were; so does a dot of the same fill.  Prints 0, or the first case that differed. */
+   what the operation says of each pixel, and the pixels around it as they were; so does a dot of the same fill, and a line is what Bresenham's loop through the dot draws.  Prints 0, or the first case that differed. */
 #include "gfxdev.h"
 
 extern void report(long value);
@@ -13,7 +13,25 @@ static unsigned next(void)
     return (unsigned)(rng >> 16) & 0x7FFF;
 }
 
-static unsigned before[REGION_W * REGION_H];
+static unsigned before[REGION_W * REGION_H], expected[REGION_W * REGION_H], saved[REGION_W * REGION_H];
+
+static void grab(unsigned *to)
+{
+    unsigned x, y;
+
+    for (y = 0; y < REGION_H; y++)
+        for (x = 0; x < REGION_W; x++)
+            to[y * REGION_W + x] = gd_read(x, y);
+}
+
+static void put_back(const unsigned *from)
+{
+    unsigned x, y;
+
+    for (y = 0; y < REGION_H; y++)
+        for (x = 0; x < REGION_W; x++)
+            gd_plot(x, y, from[y * REGION_W + x], 0);
+}
 
 int main(void)
 {
@@ -47,6 +65,43 @@ int main(void)
                         return 0;
                     }
                 }
+            /* and a line: the loop of fill.asm against Bresenham's through the dot */
+            {
+                unsigned lx = next() % REGION_W, ly = next() % REGION_H, ldx = next() % (REGION_W - lx);
+                int up = next() & 1, step_y = up ? -1 : 1;
+                unsigned room = up ? ly : REGION_H - 1 - ly, ldy = room ? next() % (room + 1) : 0;
+                int major = (int)(ldx > ldy ? ldx : ldy), minor = (int)(ldx > ldy ? ldy : ldx), decision = 4 * minor - major, k;
+                int px = (int)lx, py = (int)ly;
+
+                grab(saved);
+                gd_dots_begin(&fill);
+                for (k = 0; k <= major; k++) {
+                    fill.dot(&fill, (unsigned)px, (unsigned)py);
+                    if (decision < 0) {
+                        decision += 4 * minor;
+                    } else {
+                        decision += 4 * (minor - major);
+                        if (ldx > ldy)
+                            py += step_y;
+                        else
+                            px++;
+                    }
+                    if (ldx > ldy)
+                        px++;
+                    else
+                        py += step_y;
+                }
+                gd_dots_end(&fill);
+                grab(expected);
+                put_back(saved);
+                fill.line(&fill, lx, ly, ldx, ldy, step_y);
+                for (y = 0; y < REGION_H; y++)
+                    for (x = 0; x < REGION_W; x++)
+                        if (gd_read(x, y) != expected[y * REGION_W + x]) {
+                            report((long)modes[m] * 1000000L + (long)operation * 100000L + (long)(lx + ly * 100) + 70000L);
+                            return 0;
+                        }
+            }
             /* and a few dots of the same fill: the pixel as the operation says, its neighbours as they were */
             for (x = 0; x < 6; x++) {
                 unsigned dx = 1 + next() % (REGION_W - 2), dy = next() % REGION_H;

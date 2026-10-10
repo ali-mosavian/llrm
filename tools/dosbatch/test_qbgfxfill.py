@@ -1,5 +1,5 @@
 """The box fills of the graphics screen under DOSBox, m16 and m32: every mode (SCREEN 13, 1, 2, 9, 7) and operation (set, and, or,
-xor) leaves the pixels of a random box, and of a few dots, as the operation says and the others alone.  No BASIC statement fills with and, or or xor, and
+xor) leaves the pixels of a random box, a few dots and a line as the operation says and the others alone.  No BASIC statement fills with and, or or xor, and
 the fills patch the opcode of their loop (fill.asm), so this is the one test of those patches."""
 
 from __future__ import annotations

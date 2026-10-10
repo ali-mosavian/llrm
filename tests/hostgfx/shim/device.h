@@ -14,6 +14,17 @@ typedef struct FillBox {
     void *dst;
     unsigned rows, middle, steps[2], phase, edges, left, right;
 } FillBox;
+typedef struct FillLine {
+    void *dst;
+    unsigned count;
+    int decision, minor4, step4, steps[2];
+    unsigned phase, x_major, bit, pixels;
+    const unsigned char *tab;
+    unsigned color;
+} FillLine;
+void dev_line_linear(FillLine *line);
+void dev_line_packed(FillLine *line);
+void dev_line_planar(FillLine *line);
 void dev_fill_select(unsigned operation, unsigned byte);
 void dev_fill_box(FillBox *box);
 void dev_int10(Regs *regs);

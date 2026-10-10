@@ -1,4 +1,4 @@
-/* The box fills, dots and CGA searches of runtime/qb/dos/gfxdev.c against the pixel plot and read, on the host: for the 256-colour and the two CGA modes, every
+/* The box fills, dots and CGA searches of runtime/qb/dos/gfxdev.c against the pixel plot and read, and lines against the dot, on the host: for the 256-colour and the two CGA modes, every
    operation, random colours, rows and spans over random video memory.  Exits 0, or 1 with the case that differed.  (The planar
    modes need a model of the graphics controller: the screens of tests/qbrt/gfx_*.bas, against BCOM45's, are theirs.) */
 #include <stdio.h>
@@ -51,6 +51,41 @@ void dev_fill_box(FillBox *box)
     }
 }
 
+/* The line loops of fill.asm in C (the planar one is the controller's: not modelled). */
+static void walk(FillLine *line, int packed)
+{
+    unsigned char *at = line->dst;
+    unsigned place = line->bit, phase = line->phase;
+    int decision = line->decision;
+
+    for (unsigned k = 0; k < line->count; k++) {
+        if (packed)
+            *at = (*at & line->tab[place]) ^ line->tab[8 + place];
+        else
+            *at = (unsigned char)apply(*at);
+        int step = decision >= 0;
+
+        if (line->x_major) {
+            if (packed && ++place == line->pixels) { place = 0; at++; } else if (!packed) at++;
+        } else {
+            at += (int)line->steps[phase / sizeof(unsigned)];
+            phase ^= sizeof(unsigned);
+        }
+        if (step) {
+            decision += line->step4;
+            if (line->x_major) {
+                at += (int)line->steps[phase / sizeof(unsigned)];
+                phase ^= sizeof(unsigned);
+            } else if (packed && ++place == line->pixels) { place = 0; at++; } else if (!packed) at++;
+        } else {
+            decision += line->minor4;
+        }
+    }
+}
+void dev_line_linear(FillLine *line) { walk(line, 0); }
+void dev_line_packed(FillLine *line) { walk(line, 1); }
+void dev_line_planar(FillLine *line) { (void)line; }
+
 static unsigned rng = 7;
 static unsigned next(void) { rng = rng * 1103515245u + 12345u; return (rng >> 8) & 0xFFFFFF; }
 
@@ -95,6 +130,26 @@ int main(void)
                 gd_dots_end(&fill);
                 if (memcmp(ram, after, size)) {
                     fprintf(stderr, "dot: mode %u op %u color %u x %u y %u\n", modes[m].mode, op, color, dx, dy);
+                    return 1;
+                }
+            }
+            if (modes[m].mode != 0x10 && modes[m].mode != 0x0D) {
+                /* a line, against Bresenham's loop through the dot */
+                unsigned lx = next() % 100, ly = 50 + next() % 100, ldx = next() % 100, ldy = next() % 50;
+                int up = next() & 1, step_y = up ? -1 : 1, major = (int)(ldx > ldy ? ldx : ldy), minor = (int)(ldx > ldy ? ldy : ldx);
+                int decision = 4 * minor - major, px = (int)lx, py = (int)ly;
+
+                memcpy(ram, before, size);
+                for (int k = 0; k <= major; k++) {
+                    fill.dot(&fill, (unsigned)px, (unsigned)py);
+                    if (decision < 0) decision += 4 * minor; else { decision += 4 * (minor - major); if (ldx > ldy) py += step_y; else px++; }
+                    if (ldx > ldy) px++; else py += step_y;
+                }
+                memcpy(after, ram, size);
+                memcpy(ram, before, size);
+                fill.line(&fill, lx, ly, ldx, ldy, step_y);
+                if (memcmp(ram, after, size)) {
+                    fprintf(stderr, "line: mode %u op %u color %u from %u,%u dx %u dy %u up %d\n", modes[m].mode, op, color, lx, ly, ldx, ldy, up);
                     return 1;
                 }
             }

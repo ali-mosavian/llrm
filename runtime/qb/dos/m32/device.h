@@ -24,6 +24,19 @@ typedef struct FillBox {
     void QB_FAR *dst;
     unsigned rows, middle, steps[2], phase, edges, left, right;
 } FillBox;
+/* A line (fill.asm): `count` pixels from `dst`, Bresenham's decision value and its two increments, `x_major` if the
+   longer side is x; the first pixel is at `bit` (planar: its mask; CGA: its place in the byte) of the byte at dst,
+   and a step down a row adds steps[0] to the pointer from an even row, steps[1] from an odd one, `phase` (in bytes)
+   naming the first.  The pixel is the one B$FSEL's operation writes (CGA: `tab`, the and of each place in a byte,
+   then the xor; planar: `color`). */
+typedef struct FillLine {
+    void QB_FAR *dst;
+    unsigned count;
+    int decision, minor4, step4, steps[2];
+    unsigned phase, x_major, bit, pixels;
+    const unsigned char *tab;
+    unsigned color;
+} FillLine;
 
 extern void dev_int10(Regs *regs);
 extern void dev_int10r(Regs *regs);
@@ -38,6 +51,9 @@ extern void dev_move(BlockOp *op);
 extern void dev_fill(BlockOp *op);
 extern void dev_fill_select(unsigned operation, unsigned byte);
 extern void dev_fill_box(FillBox *box);
+extern void dev_line_linear(FillLine *line);
+extern void dev_line_packed(FillLine *line);
+extern void dev_line_planar(FillLine *line);
 extern void dev_atan2(const double *y, const double *x, double *out);
 extern void dev_sincos(const double *angle, double *sine, double *cosine);
 
@@ -54,6 +70,9 @@ extern void dev_sincos(const double *angle, double *sine, double *cosine);
 #pragma aux dev_fill "B$FILL"
 #pragma aux dev_fill_select "B$FSEL"
 #pragma aux dev_fill_box "B$FBOX"
+#pragma aux dev_line_linear "B$FLIN"
+#pragma aux dev_line_packed "B$FLIC"
+#pragma aux dev_line_planar "B$FLIP"
 #pragma aux dev_atan2 "B$ATAN2"
 #pragma aux dev_sincos "B$SINCOS"
 

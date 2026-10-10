@@ -112,6 +112,10 @@ static void line(const GdFill *fill, int x1, int y1, int x2, int y2, int solid)
         fill->box(fill, (unsigned)x, (unsigned)y, (unsigned)dx + 1, 1);
         return;
     }
+    if (solid) {
+        fill->line(fill, (unsigned)x, (unsigned)y, (unsigned)dx, (unsigned)dy, step_y);
+        return;
+    }
     major = dx > dy ? dx : dy;
     minor = dx > dy ? dy : dx;
     minor4 = 4 * minor;
@@ -120,7 +124,7 @@ static void line(const GdFill *fill, int x1, int y1, int x2, int y2, int solid)
     gd_dots_begin(fill);
     if (dx > dy) {
         for (k = 0; k <= major; k++, x++) {
-            if (solid || (pattern & (0x8000u >> (phase++ & 15))))
+            if (pattern & (0x8000u >> (phase++ & 15)))
                 fill->dot(fill, (unsigned)x, (unsigned)y);
             if (decision < 0) {
                 decision += minor4;
@@ -131,7 +135,7 @@ static void line(const GdFill *fill, int x1, int y1, int x2, int y2, int solid)
         }
     } else {
         for (k = 0; k <= major; k++, y += step_y) {
-            if (solid || (pattern & (0x8000u >> (phase++ & 15))))
+            if (pattern & (0x8000u >> (phase++ & 15)))
                 fill->dot(fill, (unsigned)x, (unsigned)y);
             if (decision < 0) {
                 decision += minor4;

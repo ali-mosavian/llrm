@@ -18,6 +18,9 @@
 
                 public  B$FSEL
                 public  B$FBOX
+                public  B$FLIN
+                public  B$FLIC
+                public  B$FLIP
 
 FillBox         struc
                 dst             dword   ?
@@ -29,6 +32,21 @@ FillBox         struc
                 left            dword   ?               ;; the and in the low byte, the xor in the next
                 right           dword   ?
 FillBox         ends
+
+FillLine        struc
+                dst             dword   ?
+                count           dword   ?               ;; pixels: the longer side and one
+                decision        dword   ?
+                minor4          dword   ?
+                step4           dword   ?
+                steps           dword   2 dup (?)       ;; bytes to the next row, after an even and after an odd one
+                phase           dword   ?               ;; 0 or 4: which of them follows the first
+                x_major         dword   ?
+                bit             dword   ?               ;; planar: the mask of the first pixel; CGA: its place in the byte
+                pixels          dword   ?               ;; CGA: pixels in a byte
+                tab             dword   ?               ;; CGA: the and of each place, then the xor
+                color           dword   ?               ;; planar
+FillLine        ends
 
 .code
 ;;::::::::::::::
@@ -52,6 +70,11 @@ B$FSEL          proc
                 mov     byte ptr [set_flag], 1
 @@:
                 mov     byte ptr [byte_imm], dl
+                mov     ax, word ptr byte_ops[ebx * 2]
+                mov     word ptr [lx_op], ax
+                mov     word ptr [ly_op], ax
+                mov     byte ptr [lx_imm], dl
+                mov     byte ptr [ly_imm], dl
                 jmp     short @F                ;; the patched bytes are not in the prefetch queue
 @@:
                 pop     ebx
@@ -138,6 +161,227 @@ byte_imm        db      0
 B$FBOX          endp
 
 ;; the opcode and the mod/rm of each operation, for a dword and for a byte
+
+;;::::::::::::::
+;; B$FLIN (eax: ptr FillLine): the 256-colour mode, a pixel a byte
+B$FLIN          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    esi
+                push    edi
+                push    ebp
+                mov     esi, eax
+                mov     edi, [esi].FillLine.dst
+                mov     ecx, [esi].FillLine.count
+                mov     ebx, [esi].FillLine.decision
+                mov     edx, [esi].FillLine.minor4
+                mov     ebp, [esi].FillLine.step4
+                mov     eax, [esi].FillLine.steps
+                cmp     [esi].FillLine.x_major, 0
+                je      @@ymajor
+@@xloop:
+lx_op           db      0C6h, 07h               ;; mov byte ptr [edi], imm8; patched as the box loop's is
+lx_imm          db      0
+                inc     edi
+                test    ebx, ebx
+                js      @@xflat
+                add     ebx, ebp
+                add     edi, eax
+                dec     ecx
+                jnz     @@xloop
+                jmp     @@done
+@@xflat:
+                add     ebx, edx
+                dec     ecx
+                jnz     @@xloop
+                jmp     @@done
+@@ymajor:
+ly_op           db      0C6h, 07h
+ly_imm          db      0
+                add     edi, eax
+                test    ebx, ebx
+                js      @@yflat
+                add     ebx, ebp
+                inc     edi
+                dec     ecx
+                jnz     @@ymajor
+                jmp     @@done
+@@yflat:
+                add     ebx, edx
+                dec     ecx
+                jnz     @@ymajor
+@@done:
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FLIN          endp
+
+;;::::::::::::::
+;; B$FLIC (eax: ptr FillLine): the CGA modes, pixels packed in bytes, each under its own and and xor
+B$FLIC          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    esi
+                push    edi
+                push    ebp
+                mov     esi, eax
+                mov     edi, [esi].FillLine.dst
+                mov     ecx, [esi].FillLine.count
+                mov     ebx, [esi].FillLine.decision
+                mov     ebp, [esi].FillLine.bit
+                cmp     [esi].FillLine.x_major, 0
+                je      @@ymajor
+@@xloop:
+                mov     edx, [esi].FillLine.tab
+                mov     al, [edi]
+                and     al, [edx + ebp]
+                xor     al, [edx + ebp + 8]
+                mov     [edi], al
+                inc     ebp
+                cmp     ebp, [esi].FillLine.pixels
+                jb      @F
+                xor     ebp, ebp
+                inc     edi
+@@:
+                test    ebx, ebx
+                js      @@xflat
+                add     ebx, [esi].FillLine.step4
+                mov     edx, [esi].FillLine.phase
+                add     edi, [esi + edx].FillLine.steps
+                xor     edx, 4
+                mov     [esi].FillLine.phase, edx
+                dec     ecx
+                jnz     @@xloop
+                jmp     @@done
+@@xflat:
+                add     ebx, [esi].FillLine.minor4
+                dec     ecx
+                jnz     @@xloop
+                jmp     @@done
+@@ymajor:
+                mov     edx, [esi].FillLine.tab
+                mov     al, [edi]
+                and     al, [edx + ebp]
+                xor     al, [edx + ebp + 8]
+                mov     [edi], al
+                mov     edx, [esi].FillLine.phase
+                add     edi, [esi + edx].FillLine.steps
+                xor     edx, 4
+                mov     [esi].FillLine.phase, edx
+                test    ebx, ebx
+                js      @@yflat
+                add     ebx, [esi].FillLine.step4
+                inc     ebp
+                cmp     ebp, [esi].FillLine.pixels
+                jb      @F
+                xor     ebp, ebp
+                inc     edi
+@@:
+                dec     ecx
+                jnz     @@ymajor
+                jmp     @@done
+@@yflat:
+                add     ebx, [esi].FillLine.minor4
+                dec     ecx
+                jnz     @@ymajor
+@@done:
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FLIC          endp
+
+;;::::::::::::::
+;; B$FLIP (eax: ptr FillLine): the planar modes, the bit mask written for each pixel, the colour through write mode 2; the
+;; mask is FFh again at the end
+B$FLIP          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    esi
+                push    edi
+                push    ebp
+                mov     esi, eax
+                mov     edi, [esi].FillLine.dst
+                mov     ecx, [esi].FillLine.count
+                mov     ebx, [esi].FillLine.decision
+                mov     ebp, [esi].FillLine.bit
+                mov     edx, 3CEh
+                cmp     [esi].FillLine.x_major, 0
+                je      @@ymajor
+@@xloop:
+                mov     eax, ebp
+                shl     eax, 8
+                mov     al, 8
+                out     dx, ax                  ;; the bit mask
+                mov     al, [edi]               ;; loads the latches
+                mov     al, byte ptr [esi].FillLine.color
+                mov     [edi], al
+                shr     ebp, 1
+                jnz     @F
+                mov     ebp, 80h
+                inc     edi
+@@:
+                test    ebx, ebx
+                js      @@xflat
+                add     ebx, [esi].FillLine.step4
+                add     edi, [esi].FillLine.steps
+                dec     ecx
+                jnz     @@xloop
+                jmp     @@done
+@@xflat:
+                add     ebx, [esi].FillLine.minor4
+                dec     ecx
+                jnz     @@xloop
+                jmp     @@done
+@@ymajor:
+                mov     eax, ebp
+                shl     eax, 8
+                mov     al, 8
+                out     dx, ax
+                mov     al, [edi]
+                mov     al, byte ptr [esi].FillLine.color
+                mov     [edi], al
+                add     edi, [esi].FillLine.steps
+                test    ebx, ebx
+                js      @@yflat
+                add     ebx, [esi].FillLine.step4
+                shr     ebp, 1
+                jnz     @F
+                mov     ebp, 80h
+                inc     edi
+@@:
+                dec     ecx
+                jnz     @@ymajor
+                jmp     @@done
+@@yflat:
+                add     ebx, [esi].FillLine.minor4
+                dec     ecx
+                jnz     @@ymajor
+@@done:
+                mov     eax, 0FF08h
+                out     dx, ax
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FLIP          endp
+
 set_pattern     dd      0
 set_flag        db      0
 dword_ops       dw      07C7h, 2781h, 0F81h, 3781h
