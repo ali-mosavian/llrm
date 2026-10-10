@@ -109,13 +109,13 @@ def test_every_runtime_entry_is_called_by_a_probe_under_llrm(tmp_path_factory):
     work = tmp_path_factory.mktemp("qbrt-entries")
     qbruntime.build(work / "archive")
     exported = set()
-    helpers = set(re.findall(r'#pragma aux \w+ "(B\$\w+)"', (qbruntime.platform_directory() / "device.h").read_text()))
+    # What a program can call is what the frontend's runtime table names; the rest of the B$ names are
+    # the target's helpers and handlers.
+    table = (qbruntime.dosbatch.ROOT / "crates/frontends/llrm-qbruntime/src/runtime.toml").read_text()
+    entries = set(re.findall(r"B\$\w+", table))
     for obj in (work / "archive").glob("*.obj"):
-        # The *USED names are markers the compiler refers to, not routines to call; the target's own helpers
-        # (device.h) are called from C.
-        exported |= {
-            name for name in symbols(obj, 0x90) if name.startswith("B$") and not name.endswith("USED") and name not in helpers
-        }
+        # The *USED names are markers the compiler refers to, not routines to call.
+        exported |= {name for name in symbols(obj, 0x90) if name in entries and not name.endswith("USED")}
     called = set()
     pictures = sorted((qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("gfx_*.bas"))
     for name, source in {**SOURCES, **{path.stem: path for path in pictures}}.items():

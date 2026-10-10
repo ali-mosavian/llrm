@@ -237,7 +237,7 @@ def frontend_flags(source: Path) -> list[str]:
     """The llrm-qb options a source's `' flags:` line asks for (the rest are for other compilers)."""
     for line in source.read_text(encoding="latin-1").splitlines()[:5]:
         if line.startswith("' flags:"):
-            return [word for word in line.split()[2:] if word == "--huge-arrays"]
+            return [word for word in line.split()[2:] if word in ("--huge-arrays", "--error-lines")]
     return []
 
 

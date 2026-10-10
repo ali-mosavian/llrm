@@ -42,5 +42,6 @@ static void copy_bytes(char *to, const char *from, unsigned n)
 /* error.c: raise run-time error `n`.  It does not return: control goes to the
    ON ERROR handler, or the program ends. */
 void qb_error(unsigned n);
+#pragma aux qb_error "B$ERROR"
 
 #endif

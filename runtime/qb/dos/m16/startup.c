@@ -9,6 +9,10 @@
 extern unsigned qb_xi_begin, qb_xi_end, qb_asizds;
 extern char qb_atopsp;
 
+/* trap.asm: puts the divide fault's handler in. */
+extern void qb_traps(void);
+#pragma aux qb_traps "B$TRAPS"
+
 /* Runs each initializer the linked modules registered (B$Init's XI walk). */
 void qb_run_initializers(void)
 {
@@ -17,6 +21,7 @@ void qb_run_initializers(void)
     for (at = (qb_init_fn *)qb_xi_begin; (unsigned)at < qb_xi_end; at++)
         if (*at)
             (*at)();
+    qb_traps();
 }
 
 /* The room the heaps share: everything above the stack, to the last word of
