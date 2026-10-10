@@ -4650,3 +4650,13 @@ fn test_a_function_without_a_copy_runs_copy_propagation_zero_times() {
     transform(one_block(vec![copy(0, Register::AX, Register::BX), add(1, Register::CX, Register::AX)]));
     assert!(copyprop::runs() - before >= 1, "copy propagation did not run on a body with a copy");
 }
+
+/// The lanes of a register follow the description: a high byte is lane 1 of its
+/// root, the stack pointer and what the file omits have none.
+#[test]
+fn the_lanes_of_a_register_are_the_descriptions() {
+    assert_eq!(_lanes(Register::AH), [(Register::EAX, 1)].into_iter().collect());
+    assert_eq!(_lanes(Register::BL), [(Register::EBX, 0)].into_iter().collect());
+    assert_eq!(_lanes(Register::DX), [(Register::EDX, 0), (Register::EDX, 1)].into_iter().collect());
+    assert!(!_lanes(Register::EBP).is_empty() && _lanes(Register::ESP).is_empty() && _lanes(Register::XMM0).is_empty());
+}
