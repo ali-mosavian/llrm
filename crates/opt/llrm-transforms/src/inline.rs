@@ -1151,10 +1151,10 @@ const RECURSIVE_SIZE: i64 = 450;
 /// this per call of it.
 const RECURSIVE_PROBABILITY: i64 = 10;
 
-/// Only a body the ordinary inline threshold admits (`want_inline_small_function_p`
-/// is asked of the recursive edge too), by its growth: the body less the call it
-/// replaces; and one that allocates no stack, each copy of which would add its
-/// frame.
+/// Only a body the ordinary inline threshold admits
+/// (`want_inline_small_function_p` is asked of the recursive edge too), by its
+/// growth: the body less the call it replaces; and one that allocates no stack,
+/// each copy of which would add its frame.
 fn recursion_admits(
     original: &Function,
     budget: i64,
@@ -1164,13 +1164,14 @@ fn recursion_admits(
         && carries(original)
 }
 
-/// GCC's inlining of a recursive callee into a caller that is not it (ipa-inline.cc
-/// L2263-2290): `caller` is given a copy of `original`, the body of recursive `id` as
-/// it was before it was given copies of itself, at each call to it, under the limits
-/// the recursion's own copies are held to; the copies made. One level: gcc's
-/// frequency test (`want_inline_self_recursive_call_p`, `peeling`) is asked only
-/// of an edge inside a copy, the copies' own calls being the callee's to peel
-/// once it has grown.
+/// GCC's inlining of a recursive callee into a caller that is not it
+/// (ipa-inline.cc L2263-2290): `caller` is given a copy of `original`, the body
+/// of recursive `id` as it was before it was given copies of itself, at each
+/// call to it, under the limits the recursion's own copies are held to; the
+/// copies made. One level: gcc's frequency test
+/// (`want_inline_self_recursive_call_p`, `peeling`) is asked only of an edge
+/// inside a copy, the copies' own calls being the callee's to peel once it has
+/// grown.
 pub fn peeled_into(
     id: GlobalId,
     caller: &mut Function,

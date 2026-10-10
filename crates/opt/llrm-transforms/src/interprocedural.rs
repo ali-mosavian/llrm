@@ -1423,8 +1423,9 @@ pub fn optimized_with<E: From<String>>(
                 {
                     continue;
                 }
-                // gcc inlines the callee's body as it was into the callers that are not it, before
-                // the callee is given copies of itself (`inline::peeled_into`).
+                // gcc inlines the callee's body as it was into the callers that
+                // are not it, before the callee is given copies
+                // of itself (`inline::peeled_into`).
                 let callers: Vec<GlobalId> = procedures[at].iter().copied().filter(|&one| one != id).collect();
                 for one in callers {
                     let module = &mut program.modules[at];
