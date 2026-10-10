@@ -1,10 +1,10 @@
-reason = "a spill store ahead of a branch is made on the path that reads the slot, off the other (bintree -2.5% instructions, quicksort c -0.8%, queens -0.1%); bintree nib -Os +1 byte (the store's edge block)"
-blessed = "2026-10-09"
+reason = "shrink-wrap per piece (#1323): the frame and each register kept are set up where first used and a small shared return is copied for the early exit; fib -8.0%, hanoi -8.0%, quicksort c -O2 -3.3% instructions (code +3 B), bintree/quicksort bas -0.4..-1.0%; one byte less in grep nib"
+blessed = "2026-10-10"
 
 [bas.O2]
-instructions = 145694
+instructions = 145092
 memory_operands = 62573
-code_bytes = 724
+code_bytes = 723
 data_bytes = 17
 bss_bytes = 0
 

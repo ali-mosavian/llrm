@@ -194,6 +194,22 @@ pub fn assembled_by(
                     .map_err(|error| error.to_string())? as i64;
                 let body =
                     timed("lir duplicated returns", || jumps::duplicated_returns(procedure.body.clone(), overhead));
+                let procedure = masm::Procedure { body, ..procedure };
+                let enough = std::cell::OnceCell::new();
+                let body = timed("lir shrink-wrap tails", || {
+                    crate::backend::shrinkwrap::tails_split(&procedure.body, &|candidate| {
+                        // Asked only once a tail could be copied.
+                        if !procedure.size
+                            && *enough.get_or_init(|| {
+                                masm::pieces_to_set_up(&procedure) >= crate::backend::shrinkwrap::PIECES
+                            })
+                        {
+                            masm::wrapped_pieces(&procedure, candidate)
+                        } else {
+                            0
+                        }
+                    })
+                });
                 procedures.push(masm::Procedure { body, ..procedure });
             }
             _ => {}

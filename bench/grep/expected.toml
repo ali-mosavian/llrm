@@ -1,5 +1,5 @@
-reason = "a comparison another block's branch reads is made again there (CodeGenPrepare's sinkCmpExpression): queens -1.8% clocks, grep -12 bytes; queens nib -Os +551 memory operands (the byte held in memory is a compare made again)"
-blessed = "2026-10-09"
+reason = "shrink-wrap per piece (#1323): the frame and each register kept are set up where first used and a small shared return is copied for the early exit; fib -8.0%, hanoi -8.0%, quicksort c -O2 -3.3% instructions (code +3 B), bintree/quicksort bas -0.4..-1.0%; one byte less in grep nib"
+blessed = "2026-10-10"
 
 [bas.O2]
 code_bytes = 993
@@ -26,13 +26,13 @@ bss_bytes = 3056
 kernel_ms = 3415.6629
 
 [nib.O2]
-code_bytes = 1453
+code_bytes = 1452
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.5804
 
 [nib.Os]
-code_bytes = 1374
+code_bytes = 1373
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.6052
