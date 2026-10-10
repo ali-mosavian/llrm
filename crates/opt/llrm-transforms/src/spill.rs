@@ -22,6 +22,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::Type;
+use llrm_support::hash::SparseIdMap;
 
 /// How many integer values the target holds in registers, and how many of
 /// them a call leaves; none leaves pressure unpriced.
@@ -835,7 +836,7 @@ impl TrafficBase {
                     *base.makers.get_or_insert_with(value, || 0) += 1;
                 }
                 if kept(inst) {
-                    base.add(function, inst, each, &often, cell, 1);
+                    _add(&mut base.found, function, inst, each, &often, cell, 1);
                 }
             }
         }
@@ -843,79 +844,38 @@ impl TrafficBase {
     }
 
     /// These instructions' traffic taken out: what `of` finds when they are not
-    /// kept.
+    /// kept. Only the instructions' own cells are touched, so a loop pays for
+    /// its size, not the function's.
     pub fn without(
-        &self,
+        self: &std::rc::Rc<Self>,
         function: &Function,
         frequency: &BTreeMap<i64, i64>,
         cell: &dyn Fn(ValueId) -> Option<ValueId>,
         gone: impl IntoIterator<Item = InstId>,
-    ) -> Self {
-        let mut base = self.clone();
+    ) -> TrafficLess {
+        let mut less = TrafficLess { base: std::rc::Rc::clone(self), gone: SparseIdMap::default() };
         let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
         for inst in gone {
             if let Some(block) = function.parent(inst) {
-                base.add(function, inst, often(block), &often, cell, -1);
+                _add(&mut less.gone, function, inst, often(block), &often, cell, -1);
             }
         }
-        // A cell whose traffic all went is one the instructions left alone.
-        let empty: Vec<ValueId> = base
-            .found
-            .iter()
-            .filter(|(_, one)| (one.stores, one.updates, one.loads) == (0, 0, 0))
-            .map(|(value, _)| value)
-            .collect();
-        for value in empty {
-            base.found.remove(&value);
-        }
-        base
+        less
     }
 
-    fn add(
-        &mut self,
+    fn priced(
+        &self,
         function: &Function,
-        inst: InstId,
-        each: i64,
-        often: &dyn Fn(BlockId) -> i64,
-        cell: &dyn Fn(ValueId) -> Option<ValueId>,
-        sign: i64,
-    ) {
-        let found = &mut self.found;
-        let instruction = function.instruction(inst);
-        let of = |value: ValueId| cell(value).unwrap_or(value);
-        let own = instruction.result.map(of);
-        if instruction.opcode == Opcode::Phi {
-            // Each edge from another cell copies into this one.
-            for pair in instruction.operands.chunks(2) {
-                let from = match pair[1] {
-                    Operand::Block(from) => often(from),
-                    _ => each,
-                } * sign;
-                match pair[0] {
-                    Operand::Value(value) if Some(of(value)) == own => {}
-                    Operand::Value(value) => {
-                        found.get_or_insert_with(of(value), Default::default).loads += from;
-                        found.get_or_insert_with(own.expect("a phi's value"), Default::default).stores += from;
-                    }
-                    _ => found.get_or_insert_with(own.expect("a phi's value"), Default::default).stores += from,
-                }
-            }
-            return;
+        costs: &OperationCosts,
+        words: &dyn Fn(ValueId) -> i64,
+        value: ValueId,
+        mut one: Traffic,
+    ) -> Traffic {
+        one.stores *= words(value);
+        if self.makers.get(&value) == Some(&1) {
+            one.rebuild = _rebuild(function, value, costs);
         }
-        if let Some(value) = instruction.result
-            && cell(value).is_some()
-        {
-            found.get_or_insert_with(of(value), Default::default).updates += each * sign;
-            return;
-        }
-        for operand in &instruction.operands {
-            if let Operand::Value(value) = *operand {
-                found.get_or_insert_with(of(value), Default::default).loads += each * sign;
-            }
-        }
-        if let Some(cell) = own {
-            found.get_or_insert_with(cell, Default::default).stores += each * sign;
-        }
+        one
     }
 
     /// The traffic priced: stores in words, and a rebuild where one instruction
@@ -926,17 +886,107 @@ impl TrafficBase {
         costs: &OperationCosts,
         words: &dyn Fn(ValueId) -> i64,
     ) -> BTreeMap<ValueId, Traffic> {
-        self.found
-            .iter()
-            .map(|(value, one)| {
-                let mut one = *one;
-                one.stores *= words(value);
-                if self.makers.get(&value) == Some(&1) {
-                    one.rebuild = _rebuild(function, value, costs);
+        self.found.iter().map(|(value, one)| (value, self.priced(function, costs, words, value, *one))).collect()
+    }
+}
+
+/// Where a value's traffic is counted.
+trait Tally {
+    fn at(
+        &mut self,
+        value: ValueId,
+    ) -> &mut Traffic;
+}
+
+impl Tally for IdMap<ValueId, Traffic> {
+    fn at(
+        &mut self,
+        value: ValueId,
+    ) -> &mut Traffic {
+        self.get_or_insert_with(value, Default::default)
+    }
+}
+
+impl Tally for SparseIdMap<ValueId, Traffic> {
+    fn at(
+        &mut self,
+        value: ValueId,
+    ) -> &mut Traffic {
+        self.entry(value).or_default()
+    }
+}
+
+/// `inst`'s traffic, `sign` times, added to `found` by its cell.
+fn _add(
+    found: &mut impl Tally,
+    function: &Function,
+    inst: InstId,
+    each: i64,
+    often: &dyn Fn(BlockId) -> i64,
+    cell: &dyn Fn(ValueId) -> Option<ValueId>,
+    sign: i64,
+) {
+    let instruction = function.instruction(inst);
+    let of = |value: ValueId| cell(value).unwrap_or(value);
+    let own = instruction.result.map(of);
+    if instruction.opcode == Opcode::Phi {
+        // Each edge from another cell copies into this one.
+        for pair in instruction.operands.chunks(2) {
+            let from = match pair[1] {
+                Operand::Block(from) => often(from),
+                _ => each,
+            } * sign;
+            match pair[0] {
+                Operand::Value(value) if Some(of(value)) == own => {}
+                Operand::Value(value) => {
+                    found.at(of(value)).loads += from;
+                    found.at(own.expect("a phi's value")).stores += from;
                 }
-                (value, one)
-            })
-            .collect()
+                _ => found.at(own.expect("a phi's value")).stores += from,
+            }
+        }
+        return;
+    }
+    if let Some(value) = instruction.result
+        && cell(value).is_some()
+    {
+        found.at(of(value)).updates += each * sign;
+        return;
+    }
+    for operand in &instruction.operands {
+        if let Operand::Value(value) = *operand {
+            found.at(of(value)).loads += each * sign;
+        }
+    }
+    if let Some(cell) = own {
+        found.at(cell).stores += each * sign;
+    }
+}
+
+/// The traffic of a function less some instructions', each value's priced when
+/// asked: a cell whose traffic all went is one they left alone.
+pub struct TrafficLess {
+    base: std::rc::Rc<TrafficBase>,
+    gone: SparseIdMap<ValueId, Traffic>,
+}
+
+impl TrafficLess {
+    pub fn of(
+        &self,
+        function: &Function,
+        costs: &OperationCosts,
+        words: &dyn Fn(ValueId) -> i64,
+        value: ValueId,
+    ) -> Traffic {
+        let mut one = self.base.found.get(&value).copied().unwrap_or_default();
+        if let Some(gone) = self.gone.get(&value) {
+            (one.stores, one.updates, one.loads) =
+                (one.stores + gone.stores, one.updates + gone.updates, one.loads + gone.loads);
+        }
+        if (one.stores, one.updates, one.loads) == (0, 0, 0) {
+            return Traffic::default();
+        }
+        self.base.priced(function, costs, words, value, one)
     }
 }
 

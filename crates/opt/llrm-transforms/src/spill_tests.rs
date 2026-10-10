@@ -854,14 +854,27 @@ fn test_traffic_less_some_instructions_is_the_traffic_of_the_others() {
         let cells = cells(function);
         let words = |value: ValueId| words(&module.context, &layout, function, value);
         let every = function.walk().map(|(_, inst)| inst).collect::<Vec<_>>();
-        let base = super::TrafficBase::of(function, &frequency, &|value| cells.get(&value).copied(), &|_| true);
+        let base = std::rc::Rc::new(super::TrafficBase::of(
+            function,
+            &frequency,
+            &|value| cells.get(&value).copied(),
+            &|_| true,
+        ));
         for step in 1..=4 {
             let gone: BTreeSet<InstId> = every.iter().copied().step_by(step).collect();
             let direct = traffic(function, &frequency, &cells, &costs, &|inst| !gone.contains(&inst), &words);
-            let taken_out = base
-                .without(function, &frequency, &|value| cells.get(&value).copied(), gone.iter().copied())
-                .finished(function, &costs, &words);
-            assert_eq!(taken_out, direct, "every {step}th instruction left out of\n{text}");
+            let taken_out =
+                base.without(function, &frequency, &|value| cells.get(&value).copied(), gone.iter().copied());
+            let asked =
+                direct.keys().copied().chain(every.iter().filter_map(|&inst| function.instruction(inst).result));
+            for value in asked {
+                let want = direct.get(&value).copied().unwrap_or_default();
+                assert_eq!(
+                    taken_out.of(function, &costs, &words, value),
+                    want,
+                    "{value:?} with every {step}th instruction left out of\n{text}"
+                );
+            }
         }
     }
 }

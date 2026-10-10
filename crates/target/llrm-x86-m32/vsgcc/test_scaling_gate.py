@@ -404,6 +404,18 @@ def test_lsr_does_not_add_up_the_function_or_rebuild_its_graph_for_each_loop(tmp
     assert costs["branches"] <= 900 and costs["nest"] <= 7500, costs
 
 
+def test_lsr_loop_reads_its_own_blocks_and_the_function_facts_once(tmp_path):
+    """`mir lsr` on `branches` at N=1024 (128 loops of 1,000 blocks) walked every instruction of the function and copied its table of
+    known registers for each loop (`induction::_recurrences`), took the frame objects and far views of the whole function for each
+    loop and for each use and candidate, and made all of the function's cells' traffic into a table for each loop: 1,683 Minstr. A
+    loop reads its own blocks, the frames and views are found once for the function, and the traffic is priced for the values asked:
+    97. What is left is the analyses `lsr` asks for (liveness, loop products), whose own growth is theirs."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir lsr"]
+    assert cost <= 300, cost
+
+
 def test_an_entry_does_not_hold_up_the_summary_of_what_calls_through_a_pointer(tmp_path):
     """An address-taken function is an entry, and `main` calls it through a pointer: the two feed each other. Bringing the
     summaries up to date kept `main`'s from before the entry's was lowered (the callbacks, which `main` is part of, did not
@@ -417,6 +429,19 @@ def test_an_entry_does_not_hold_up_the_summary_of_what_calls_through_a_pointer(t
         env={**os.environ, "LLRM_CHECK_MODULES": "1"},
     )
     assert done.returncode == 0, done.stderr[-300:]
+
+
+def test_merging_blocks_does_not_build_the_graph_of_the_function_for_each_merge(tmp_path):
+    """callers(N) at -O2: `cfg::merged` (run by decide, rotate and lsr) built the graph of the whole function and its predecessor
+    sets, again after each merge it made: `mir decide` read 2N/N = 3.2, 3.65 (2.5 / 7.9 / 29.0 G at N=1024..4096). Each block
+    is asked of its own neighbours (the uses of its jump's target): 2.0, 2.1 (0.9 / 1.9 / 4.0 G). A step above 2.6 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 1024), ("2n", 2048)):
+        source = tmp_path / f"callers_{label}.c"
+        source.write_text("" if size == 0 else scaling.callers(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir decide", 0.0) - own["empty"].get("mir decide", 0.0) for label in ("n", "2n"))
+    assert big <= 2.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
 
 
 def test_summaries_keep_the_call_graph_when_a_body_calls_a_deeper_one(tmp_path):
