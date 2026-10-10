@@ -1,5 +1,5 @@
 """GORILLA (or any BASIC source) built for dos32 as an LE executable beside DOS32A.EXE, with its linker map, with and
-without debug info: the fixtures for symbol loading in the DOSBox fork.
+without debug info (and with `debug all` and `debug codeview`): the fixtures for symbol loading in the DOSBox fork.
 
     python3 tools/dosbatch/qb32_fixtures.py SOURCE.BAS OUTDIR
 """
@@ -20,7 +20,7 @@ def build(source: Path, out: Path) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
     runtime = qb32.build(out / "runtime")
     made = []
-    for tag, flags, debug in (("", ("-O2",), ()), ("_G", ("-O2", "-g"), ("debug", "all"))):
+    for tag, flags, debug in (("", ("-O2",), ()), ("_G", ("-O2", "-g"), ("debug", "all")), ("_CV", ("-O2", "-g"), ("debug", "codeview"))):
         name = source.stem.upper() + tag
         obj = out / f"{name}.obj"
         if reason := qb32.compile_basic(source, obj, flags):
