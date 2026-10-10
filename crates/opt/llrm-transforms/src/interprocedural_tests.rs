@@ -1499,6 +1499,32 @@ fn test_a_recursive_function_over_an_ordinary_calls_budget_is_inlined_into_itsel
     assert_eq!(calls(Threshold::default().for_size()), 2, "not for size");
 }
 
+/// gcc inlines a recursive function once into a caller that is not it
+/// (ipa-inline.cc L2263-2290): rectwo's `bench_rectwo` called `paths` and kept
+/// the call, 988,865 clocks to gcc's 555,706. The caller holds one copy: the
+/// copy's own two calls, not the one it began with and not a copy's copy.
+#[test]
+fn test_a_caller_that_is_not_recursive_holds_one_copy_of_its_recursive_callee() {
+    let text = format!(
+        "{OVER_SIX}
+define i16 @g(i16 %n) {{
+b:
+  %r = call i16 @f(i16 %n)
+  ret i16 %r
+}}
+"
+    );
+    let inputs: &[&[i128]] = &[&[0], &[1], &[3], &[5]];
+    let mut module = parsed(&text);
+    stepped(&mut module, &["g"], 20, Threshold::default());
+    let printed = printed(&module);
+    let caller = &printed[printed.find("define i16 @g").unwrap()..];
+    let caller = &caller[..caller.find("\n}").unwrap()];
+    assert_eq!(caller.matches("call i16 @f").count(), 2, "{caller}");
+    assert!(caller.contains("icmp eq"), "the copy's base case is in the caller: {caller}");
+    assert_eq!(results(&module, inputs), results(&parsed(&text), inputs), "{printed}");
+}
+
 /// A trial of several sites splices them all and runs the caller's
 /// pipeline once, the way gcc and LLVM inline: it ran the pipeline after each
 /// site (host.c -6.6%, QCport -2.2%, the code the same).

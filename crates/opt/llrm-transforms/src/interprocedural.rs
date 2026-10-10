@@ -1423,6 +1423,24 @@ pub fn optimized_with<E: From<String>>(
                 {
                     continue;
                 }
+                // gcc inlines the callee's body as it was into the callers that
+                // are not it, before the callee is given copies
+                // of itself (`inline::peeled_into`).
+                let callers: Vec<GlobalId> = procedures[at].iter().copied().filter(|&one| one != id).collect();
+                for one in callers {
+                    let module = &mut program.modules[at];
+                    if !module.global(one).function().is_some_and(|body| {
+                        body.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, body, inst) == Some(id))
+                    }) {
+                        continue;
+                    }
+                    let (context, body) = function_mut(module, one);
+                    if inline::peeled_into(id, body, &original, budget, context, &mut unit) > 0 {
+                        edited(&mut modules[at], &[one]);
+                        reoptimised(&mut program.modules[at], &mut modules[at], one, "ipa-peel.")?;
+                    }
+                }
+                let module = &mut program.modules[at];
                 let mut work = original.clone();
                 let (metadata, globals) =
                     (module.metadata.clone(), module.globals.iter().map(GlobalValue::declaration).collect::<Vec<_>>());
