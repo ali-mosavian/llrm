@@ -192,16 +192,27 @@ def link(program: Path, objects: dict[str, Path], exe: Path, work: Path) -> tupl
     return dosbatch.link_target(TARGET, program, exe, work, runtime=(START_FILES, []), objects_after=tuple(closure(program, objects)))
 
 
-# Every dos32 run is given a fixed number of cycles a millisecond, and a budget in guest instructions: with `cycles=max`
-# the emulated time a program takes follows how busy the host is.  The rate is a compromise measured on the loaded
-# host: a program that waits on TIMER costs the host the cycles of every millisecond it waits (5 emulated seconds took
-# 12 s at 100000 and 70 s at 400000), but one that draws or computes runs slower the lower the rate (the demos'
-# introductions did not finish in 15 s at 25000, and the suite took three times as long).
-CYCLES_PER_MS = 100_000
+# Every dos32 run is on virtual time (the fork's `[cpu] virtual time`): the guest clock follows the instructions it
+# runs, `rate` of them to an emulated millisecond, with no host throttle and the idle part of a clock-polling wait
+# skipped.  A run gives the same emulated time every time whatever the host is doing, and its budget is a count of guest
+# instructions (a wall-clock budget made grep fail when other jobs were running).  The rate is a lever: the emulator
+# does its per-millisecond work (timers, events) every `rate` instructions, so a program that computes wants a high one
+# (the 25 bench programs took 5 minutes at 2000, half a minute at 100000), and one that waits on TIMER a low one (the
+# demos' delay loops cost their instructions, so 1/50th of the wall time at 2000).  A game's speed follows the rate.
+BENCH_RATE = 100_000
+DEMO_RATE = 2_000
 BUDGET_INSTRUCTIONS = 12_000_000_000
-BENCH_CONF = dosbatch.CONF.replace("cycles=max", f"cycles=fixed {CYCLES_PER_MS}")
-assert BENCH_CONF != dosbatch.CONF
-BUDGET_MS = BUDGET_INSTRUCTIONS // CYCLES_PER_MS
+
+
+def virtual_conf(rate: int) -> str:
+    conf = dosbatch.CONF.replace("cycles=max", f"virtual time=true\nvirtual time rate={rate}")
+    assert conf != dosbatch.CONF
+    return conf
+
+
+BENCH_CONF = virtual_conf(BENCH_RATE)
+DEMO_CONF = virtual_conf(DEMO_RATE)
+BUDGET_MS = BUDGET_INSTRUCTIONS // BENCH_RATE
 
 
 def run_jobs(jobs, work: Path):

@@ -45,10 +45,10 @@ class Session:
         self.pending = 0
         self.replies: queue.Queue = queue.Queue()
         self.events: list[dict] = []
+        self.arrived = threading.Condition()
         threading.Thread(target=self.read, args=(self.sock.makefile("r"),), daemon=True).start()
         self.send({"cmd": "continue"})
-        time.sleep(1)
-        self.send({"cmd": "wait_for_shell", "timeoutMs": 5000})
+        self.wait_for_shell()
 
     def read(self, lines) -> None:
         """Replies go to the queue in the order their commands were sent; events are kept."""
@@ -57,7 +57,9 @@ class Session:
             if "status" in message:
                 self.replies.put(message)
                 continue
-            self.events.append(message)
+            with self.arrived:
+                self.events.append(message)
+                self.arrived.notify_all()
             if message.get("event") == "stopped":
                 self.sock.sendall(b'{"cmd":"continue"}\n')
 
@@ -70,6 +72,32 @@ class Session:
             self.replies.get(timeout=120)
             self.pending -= 1
         return self.replies.get(timeout=120)
+
+    def wait_for_shell(self, seconds: float = 30) -> None:
+        """Until the DOS shell takes commands: `wait_for_shell` can answer before the emulator has run far enough, so the
+        status says."""
+        deadline = time.monotonic() + seconds
+        while not self.send({"cmd": "status"}).get("shellReady"):
+            if time.monotonic() > deadline:
+                raise TimeoutError("the DOS shell never came up")
+            time.sleep(0.01)
+
+    def wait_event(self, name: str, since: int, seconds: float) -> dict:
+        """The first event called `name` among those after the first `since`; the wait ends the moment it arrives."""
+        deadline = time.monotonic() + seconds
+        with self.arrived:
+            while True:
+                for event in self.events[since:]:
+                    if event.get("event") == name:
+                        return event
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError(f"no {name} event in {seconds} s")
+                self.arrived.wait(left)
+
+    def screen_hash(self, length: int = 0x28000) -> str:
+        """A hash of the adapter's video memory, every plane: the same two hashes are the same picture."""
+        return str(self.send({"cmd": "mem_hash", "addr": 0, "len": length, "vram": True}).get("hash"))
 
     def screen(self) -> str:
         reply = self.send({"cmd": "text_screen"})
@@ -97,17 +125,11 @@ class Session:
             time.sleep(pause)
 
     def shot(self, path: Path, settle: float = 0.5) -> None:
-        """A PNG of the screen: it is written a frame after the reply, so this returns once the file is there and has
-        stopped growing (at most 2 s); `settle` is a pause after, for a caller that wants one."""
+        """A PNG of the screen: the fork replies once the file is whole; `settle` is a pause after, for a caller that wants one."""
         path.unlink(missing_ok=True)
-        self.send({"cmd": "screenshot", "path": str(path)})
-        deadline, size = time.monotonic() + 2, -1
-        while time.monotonic() < deadline:
-            now = path.stat().st_size if path.exists() else 0
-            if now and now == size:
-                break
-            size = now
-            time.sleep(0.01)
+        reply = self.send({"cmd": "screenshot", "path": str(path), "timeout_ms": 5000})
+        if reply.get("status") != "ok" or not path.exists():
+            raise RuntimeError(f"screenshot: {reply}")
         time.sleep(settle)
 
     def close(self) -> None:
