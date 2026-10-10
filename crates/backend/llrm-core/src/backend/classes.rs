@@ -9,7 +9,7 @@ use llrm_lir::registers::RegId;
 use llrm_target::Target;
 use llrm_x86::parse::{self, Side};
 
-use crate::backend::target::{_on_the_stack, Occurrence, SEGMENTS};
+use crate::backend::target::{_on_the_stack, Occurrence};
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
@@ -35,6 +35,10 @@ pub struct RegisterClasses {
     pub addressing: BTreeSet<RegId>,
     /// The bases the encoding permits, the frame's included.
     pub encodable_bases: BTreeSet<RegId>,
+    /// The words whose low byte has a register of its own.
+    pub byte_words: BTreeSet<RegId>,
+    /// The register file of the target these classes are of.
+    pub registers: llrm_lir::registers::Regs,
 }
 
 impl RegisterClasses {
@@ -106,6 +110,14 @@ impl RegisterClasses {
             frame: arch.frame_register(),
             addressing,
             encodable_bases,
+            byte_words: {
+                let regs = llrm_lir::registers::Regs(arch.registers());
+                regs.entries()
+                    .filter(|(id, one)| one.classes & llrm_lir::registers::class::BYTE != 0 && one.root == *id)
+                    .filter_map(|(id, _)| regs.view(id, 16))
+                    .collect()
+            },
+            registers: llrm_lir::registers::Regs(arch.registers()),
         }
     }
 
@@ -134,13 +146,14 @@ impl RegisterClasses {
     /// The register the x87 status word is stored in (`fnstsw`'s fixed
     /// destination); the flags reach `sahf` through it.
     pub fn status_word(&self) -> Option<RegId> {
+        let regs = self.registers;
         let forms = self.pins.get("fnstsw")?;
         let (_, _, _, pins) =
             forms.iter().find(|(op, dests, sources, _)| *op == "barrier" && *dests == 1 && *sources == 0)?;
         let (_, _, register) = pins.iter().find(|(side, index, _)| matches!(side, Side::Dest) && *index == 0)?;
         // The status word is 16 bits whatever width the form pins its register
         // at.
-        crate::backend::registerinfo::view(crate::backend::registerinfo::root(*register), 16)
+        regs.view(regs.root(*register), 16)
     }
 
     /// Every operand this instruction requires in one particular register.
@@ -155,8 +168,9 @@ impl RegisterClasses {
         &self,
         what: &Semantics,
     ) -> IndexMap<Occurrence, RegId> {
+        let regs = self.registers;
         let mut out = IndexMap::default();
-        if _on_the_stack(what) {
+        if _on_the_stack(regs, what) {
             return out;
         }
         let Some(name) = what.name.as_deref() else { return out };
@@ -181,7 +195,7 @@ impl RegisterClasses {
             let pinned = match &places[*index] {
                 Loc::Imm(_) => false,
                 Loc::Held(_) => true,
-                _ => !SEGMENTS.contains(register),
+                _ => !self.registers.is_segment(*register),
             };
             if pinned {
                 out.insert(Occurrence::new(if *side == Side::Dest { "dest" } else { "source" }, *index), *register);

@@ -15,7 +15,7 @@ use llrm_lir::registers::RegId;
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
 use crate::backend::peephole::{_lanes, _register_effects, _register_effects_of_what, Lane, Lanes, id};
-use crate::backend::{select, target};
+use crate::backend::select;
 use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
@@ -163,11 +163,16 @@ pub fn forwarded(body: &LirBody) -> LirBody {
 }
 
 fn forwarded_inner(body: &LirBody) -> LirBody {
+    let regs = body.regs();
     if body.blocks.iter().any(|block| !block.phis.is_empty()) {
         return body.clone();
     }
-    let lanes: Vec<Lane> =
-        llrm_x86::registers::ROOTS.into_iter().flat_map(_lanes).collect::<Lanes>().into_iter().collect();
+    let lanes: Vec<Lane> = llrm_x86::registers::ROOTS
+        .into_iter()
+        .flat_map(|one| _lanes(regs, one))
+        .collect::<Lanes>()
+        .into_iter()
+        .collect();
     assert_eq!(lanes.len(), LANES, "the general registers' byte lanes");
     // A lane's place in the partition, by table: asked of every register a
     // rewrite tries.
@@ -189,9 +194,9 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
     }
     let slot = Slots(places);
     let mut register_for: IndexMap<Vec<Lane>, RegId> = IndexMap::default();
-    for register in target::integer_registers() {
-        if !_lanes(register).is_empty() && !crate::backend::registerinfo::is_stack(register) {
-            register_for.insert(_lanes(register).into_iter().collect(), register);
+    for register in regs.integer_registers() {
+        if !_lanes(regs, register).is_empty() && !regs.is_stack(register) {
+            register_for.insert(_lanes(regs, register).into_iter().collect(), register);
         }
     }
     let mut recipes: HashMap<usize, Recipe> = HashMap::default();
@@ -209,7 +214,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
             recipes.insert(id(&one), Some((Lanes::new(), Vec::new(), 0, Vec::new())));
             continue;
         }
-        let Some(effects) = _register_effects(body.bits, &one, true, false) else {
+        let Some(effects) = _register_effects(regs, body.bits, &one, true, false) else {
             recipes.insert(id(&one), None);
             continue;
         };
@@ -218,8 +223,10 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
             if let (Operation::Move, Some("mov"), [Loc::Reg(dest)], [Loc::Reg(source)]) =
                 (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
             {
-                let (destinations, sources): (Vec<Lane>, Vec<Lane>) =
-                    (_lanes(dest.register).into_iter().collect(), _lanes(source.register).into_iter().collect());
+                let (destinations, sources): (Vec<Lane>, Vec<Lane>) = (
+                    _lanes(regs, dest.register).into_iter().collect(),
+                    _lanes(regs, source.register).into_iter().collect(),
+                );
                 if destinations.len() == dest.width as usize
                     && dest.width == source.width
                     && source.width as usize == sources.len()
@@ -346,7 +353,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         // makes the semantics that reads `replacement` there.
         let substitute =
             |changed: &Semantics, register: RegId, width: i64, put: &dyn Fn(RegId) -> Semantics| -> Option<Semantics> {
-                let source_lanes: Vec<Lane> = _lanes(register).into_iter().collect();
+                let source_lanes: Vec<Lane> = _lanes(regs, register).into_iter().collect();
                 // No lane of it is the copy of another: its own register is the
                 // only candidate, and that is none.
                 if !source_lanes.iter().any(|lane| mapping.contains_key(lane)) {
@@ -357,19 +364,19 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                 let mut sorted_lanes = candidate_lanes.clone();
                 sorted_lanes.sort();
                 let candidate = register_for.get(&sorted_lanes).copied()?;
-                if candidate == register || width != 0 && target::width_of(candidate) != Some(width) {
+                if candidate == register || width != 0 && regs.width_of(candidate) != Some(width) {
                     return None;
                 }
                 if !source_lanes.iter().zip(&candidate_lanes).all(|(left, right)| equal(facts, *left, *right)) {
                     return None;
                 }
-                let before_effects = _register_effects_of_what(body.bits, changed, true, false)?;
+                let before_effects = _register_effects_of_what(regs, body.bits, changed, true, false)?;
                 if candidate_lanes.iter().any(|lane| before_effects.1.contains(lane)) {
                     return None;
                 }
                 let proposed = put(candidate);
                 select::priced_in(body.bits, &proposed, 0, None, false, false, None)?;
-                let after_effects = _register_effects_of_what(body.bits, &proposed, true, false)?;
+                let after_effects = _register_effects_of_what(regs, body.bits, &proposed, true, false)?;
                 let expected_reads: Lanes = before_effects
                     .0
                     .iter()
@@ -422,8 +429,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                         }
                         Semantics { dests, sources, ..current.clone() }
                     };
-                    if let Some(proposed) = substitute(current, register, target::width_of(register).unwrap_or(0), &put)
-                    {
+                    if let Some(proposed) = substitute(current, register, regs.width_of(register).unwrap_or(0), &put) {
                         touched = true;
                         changed = proposed;
                     }

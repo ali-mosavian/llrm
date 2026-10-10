@@ -44,6 +44,7 @@ fn _integer_loads(
     mut frame: Option<&mut Frame>,
     mut pool: Option<&mut Pool>,
 ) -> Result<LirBody, Raised> {
+    let regs = body.regs();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
@@ -57,7 +58,7 @@ fn _integer_loads(
                     && matches!(what.sources[0], Loc::Held(_) | Loc::Imm(_))
                     && width_of(&what.sources[0]).is_some_and(|width| width == 2 || width == 4)
                     && (matches!(what.dests[0], Loc::Held(_))
-                        || crate::backend::target::positional_place(&what.dests[0]))
+                        || crate::backend::target::positional_place(regs, &what.dests[0]))
                 {
                     if let Loc::Imm(Imm { value: value @ (0 | 1), .. }) = what.sources[0] {
                         let mut made = (*one).clone();
@@ -463,6 +464,7 @@ fn _stacked(
     live_out: &Live,
     bundles: &spillplacement::Bundles,
 ) -> IndexMap<usize, BTreeSet<u32>> {
+    let regs = body.regs();
     // Per block: where the stack is first and last emptied, and each value's
     // first and last event.
     let mut borders: IndexMap<i64, (Option<usize>, Option<usize>, IndexMap<u32, (usize, usize)>)> = IndexMap::default();
@@ -470,7 +472,7 @@ fn _stacked(
         let (mut first, mut last, mut events) = (None, None, IndexMap::<u32, (usize, usize)>::default());
         for (position, one) in block.insns.iter().enumerate() {
             let floated = one.what.as_ref().is_some_and(|what| what.sources.iter().chain(&what.dests).any(_floating));
-            if !floated && boundary(one) {
+            if !floated && boundary(regs, one) {
                 first = first.or(Some(position));
                 last = Some(position);
             }
@@ -872,6 +874,7 @@ fn _allocnos(
     homes: &IndexMap<u32, Arc<Insn>>,
     cpu: &Profile,
 ) -> Allocnos {
+    let regs = body.regs();
     let (live_in, live_out) = live(body);
     let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
         set.iter().copied().filter(|value| floating.contains(value)).collect()
@@ -929,7 +932,7 @@ fn _allocnos(
                 .iter()
                 .any(|one| one.what.as_ref().is_some_and(|what| what.sources.iter().chain(&what.dests).any(_floating)));
             if !floated {
-                if group.iter().any(|one| boundary(one)) {
+                if group.iter().any(|one| boundary(regs, one)) {
                     for (_, segment) in current.drain(..) {
                         allocnos.segments[segment].exits.push((at, first));
                         allocnos.exits.entry((at, first)).or_default().push(segment);

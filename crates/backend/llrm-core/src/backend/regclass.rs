@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 
 use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::analysis::intervals as ranges;
 use crate::backend::allocate::{_clobbered, _masks};
@@ -125,21 +126,11 @@ impl Kind {
         self,
         registers: &'a RegisterClasses,
     ) -> &'a BTreeSet<RegId> {
-        static BYTES: std::sync::OnceLock<BTreeSet<RegId>> = std::sync::OnceLock::new();
         match self {
             Kind::WordIndexes => &registers.word_indexes,
             Kind::Addressing => &registers.addressing,
             Kind::WordBases => &registers.word_bases,
-            Kind::Bytes => {
-                BYTES.get_or_init(|| {
-                    // The words whose low byte has a register of its own.
-                    let byte = crate::backend::registerinfo::class::BYTE;
-                    crate::backend::registerinfo::entries()
-                        .filter(|(id, one)| one.classes & byte == byte && one.root == *id)
-                        .filter_map(|(id, _)| crate::backend::registerinfo::view(id, 16))
-                        .collect()
-                })
-            }
+            Kind::Bytes => &registers.byte_words,
         }
     }
 }
@@ -165,6 +156,7 @@ pub enum Item {
 
 /// The items of `one`, appended.
 pub fn contribution(
+    regs: Regs,
     one: &crate::model::lir::Insn,
     items: &mut Vec<Item>,
 ) {
@@ -244,7 +236,7 @@ pub fn contribution(
             }
         }
     }
-    if target::far_load(what) {
+    if target::far_load(regs, what) {
         if let Loc::Held(held) = &what.dests[1] {
             items.push(Item::Far(held.value));
         }
@@ -284,10 +276,11 @@ impl Scan {
         registers: &RegisterClasses,
         segments: &Segments,
     ) -> Self {
+        let regs = body.regs();
         let mut scan = Scan::default();
         let mut touched = Vec::new();
         for one in body.blocks.iter().flat_map(|block| &block.insns) {
-            scan.count(one, true, &mut touched);
+            scan.count(regs, one, true, &mut touched);
         }
         scan.classify(touched, registers, segments);
         scan
@@ -302,13 +295,14 @@ impl Scan {
         registers: &RegisterClasses,
         segments: &Segments,
     ) -> Self {
+        let regs = segments.registers;
         let mut scan = self.clone();
         let mut touched = Vec::new();
         for one in gone {
-            scan.count(one, false, &mut touched);
+            scan.count(regs, one, false, &mut touched);
         }
         for one in added {
-            scan.count(one, true, &mut touched);
+            scan.count(regs, one, true, &mut touched);
         }
         scan.classify(touched, registers, segments);
         scan
@@ -316,12 +310,13 @@ impl Scan {
 
     fn count(
         &mut self,
+        regs: Regs,
         one: &crate::model::lir::Insn,
         put: bool,
         touched: &mut Vec<u32>,
     ) {
         let mut items = Vec::new();
-        contribution(one, &mut items);
+        contribution(regs, one, &mut items);
         for item in items {
             let (value, slot): (u32, fn(&mut Counts) -> &mut u32) = match item {
                 Item::Restrict { value, kind, .. } => (
@@ -427,6 +422,7 @@ fn collected(
     mut uses: Option<&mut Vec<Use>>,
     found: Option<&Found>,
 ) -> Classes {
+    let regs = body.regs();
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
@@ -436,7 +432,7 @@ fn collected(
     for (at, block) in body.blocks.iter().enumerate() {
         for (position, one) in block.insns.iter().enumerate() {
             items.clear();
-            contribution(one, &mut items);
+            contribution(regs, one, &mut items);
             for item in &items {
                 match *item {
                     Item::Restrict { value, kind, role, defining } => {
@@ -467,7 +463,7 @@ fn collected(
     }
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         if let Some(what) = &one.what {
-            if target::far_load(what) {
+            if target::far_load(regs, what) {
                 if let Loc::Held(held) = &what.dests[1] {
                     _restrict(&mut out, held.value, &selectors);
                 }

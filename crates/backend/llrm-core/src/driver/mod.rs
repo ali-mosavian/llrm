@@ -10,6 +10,7 @@ pub mod flags;
 use std::path::PathBuf;
 
 use data::Placed;
+use llrm_lir::registers::Regs;
 use llrm_mir::program::Program;
 use llrm_mir::{GlobalId, Module};
 use llrm_support::debug::timed;
@@ -136,7 +137,11 @@ pub fn compiled(
     });
     optimized(&mut mir, options)?;
     let abi = HirAbi::of(program)?;
-    let segments = Segments::of(&options.machine, crate::backend::target::offset_bytes(&*options.arch));
+    let segments = Segments::of(
+        &options.machine,
+        Regs(options.arch.registers()),
+        crate::backend::target::offset_bytes(&*options.arch),
+    );
     let mut out = Vec::new();
     for ((module, hir), placed) in mir.modules.iter().zip(&program.modules).zip(&placed) {
         let mut assembled = timed("assemble", || {

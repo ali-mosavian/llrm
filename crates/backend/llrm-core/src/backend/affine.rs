@@ -4,9 +4,9 @@
 use std::collections::BTreeSet;
 
 use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::backend::cpu::Profile;
-use crate::backend::target;
 use crate::model::ir::{AddressRef, Imm, Loc, Operation, Reg};
 use crate::model::lir::Insn;
 
@@ -39,6 +39,7 @@ pub fn plain(one: &Insn) -> bool {
 /// The register `one` writes, how, and what `cpu` charges for it, where the
 /// register stays an affine sum.
 pub fn step(
+    regs: Regs,
     one: &Insn,
     cpu: &Profile,
 ) -> Option<(Reg, Step, i64)> {
@@ -49,7 +50,7 @@ pub fn step(
     let [Loc::Reg(dest)] = what.dests.as_slice() else {
         return None;
     };
-    let register = |one: &Reg| one.width == dest.width && target::integer(one.register);
+    let register = |one: &Reg| one.width == dest.width && regs.integer(one.register);
     if ![2, 4].contains(&dest.width) || !register(dest) {
         return None;
     }
@@ -81,12 +82,13 @@ pub fn step(
 /// The 67h address naming `terms` plus `disp`, if one does.
 /// `scales` are the index scales the target's 32-bit address form takes.
 pub fn form(
+    regs: Regs,
     terms: &[(RegId, i64)],
     disp: i64,
     scales: &BTreeSet<i64>,
 ) -> Option<AddressRef> {
     let at = |through: RegId, index: RegId, scale: i64| {
-        (!crate::backend::registerinfo::is_stack(index) && scales.contains(&scale)).then_some(AddressRef {
+        (!regs.is_stack(index) && scales.contains(&scale)).then_some(AddressRef {
             through,
             index_through: index,
             scale,

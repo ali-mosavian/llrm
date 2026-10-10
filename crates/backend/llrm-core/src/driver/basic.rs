@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use iced_x86::Register;
+use llrm_lir::registers::Regs;
 use llrm_mir::facts::Fact;
 use llrm_mir::program::SegmentLayout;
 use llrm_mir::{GlobalId, GlobalKind, Module};
@@ -89,9 +90,9 @@ pub fn _static_frame(
     body: &lir::LirBody,
     size: i64,
 ) -> lir::LirBody {
+    let regs = body.regs();
     let moved = |addr: &Addr| -> Addr {
-        let segment =
-            if crate::backend::registerinfo::is_stack_segment(addr.segment) { Register::None } else { addr.segment };
+        let segment = if regs.is_stack_segment(addr.segment) { Register::None } else { addr.segment };
         Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, segment, ..*addr }
     };
     let variables = body
@@ -106,8 +107,7 @@ pub fn _static_frame(
         })
         .collect();
     // Through BP no longer: the data object's own address.
-    let through =
-        |register: Register| if crate::backend::registerinfo::is_frame(register) { Register::None } else { register };
+    let through = |register: Register| if regs.is_frame(register) { Register::None } else { register };
     let operand = |r#where: &Loc| -> Loc {
         if !r#where.in_frame() {
             return r#where.clone();
@@ -449,8 +449,10 @@ fn written_basic_inner(
         segments.push(stack);
     }
     let every: Vec<usize> = (0..module.procedures.len()).collect();
-    objbuild::_code_by(&mut segments[0], 0, module, &every, &mut symbols, _basic_listing)
-        .map_err(|error| error.to_string())?;
+    objbuild::_code_by(&mut segments[0], 0, module, &every, &mut symbols, |procedure, number| {
+        _basic_listing(procedure, number)
+    })
+    .map_err(|error| error.to_string())?;
 
     let code = &mut segments[0];
     code.image = [header, std::mem::take(&mut code.image)].concat();
@@ -762,7 +764,11 @@ pub fn assembled(
     names.insert((Space::Segment, i64::from(main.0)), MAIN.to_owned());
     names.insert((Space::Segment, MAIN_FRAME_ID), MAIN_FRAME.to_owned());
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
-    let segments = Segments::of(&options.machine, crate::backend::target::offset_bytes(&*options.arch));
+    let segments = Segments::of(
+        &options.machine,
+        Regs(options.arch.registers()),
+        crate::backend::target::offset_bytes(&*options.arch),
+    );
     let cpu = options.cpu()?;
     let classes = std::rc::Rc::new(crate::backend::classes::RegisterClasses::of(&*options.arch));
     let facts = crate::backend::calleefacts::CalleeFacts::none();
@@ -902,6 +908,7 @@ pub fn assembled(
         debug.ranges = options.location_ranges();
     }
     Ok(masm::Module {
+        registers: Regs(options.arch.registers()),
         code: object.code.clone(),
         names,
         externs,

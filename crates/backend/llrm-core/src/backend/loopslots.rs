@@ -20,6 +20,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops::{self, Loop};
@@ -27,7 +28,6 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::peephole::{self, _lanes, Lanes};
-use crate::backend::target;
 use crate::backend::{liveness, select, spiller};
 use crate::model::ir::{self, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};
@@ -99,8 +99,11 @@ fn slot(mem: &Mem) -> Option<i64> {
         .then_some(addr.disp + mem.offset)
 }
 
-fn is_bp(register: RegId) -> bool {
-    register != RegId::None && crate::backend::registerinfo::is_frame(register)
+fn is_bp(
+    regs: Regs,
+    register: RegId,
+) -> bool {
+    register != RegId::None && regs.is_frame(register)
 }
 
 /// The word slot `mem` names, when it is exactly one.
@@ -173,6 +176,7 @@ thread_local! {
 }
 
 fn touch(
+    regs: Regs,
     m: u32,
     one: &Insn,
 ) -> Touch {
@@ -200,16 +204,16 @@ fn touch(
             | Operation::FloatArithPop
             | Operation::FloatUnary
     ) || what.name.as_deref().is_some_and(|name| ["int", "into", "iret", "enter", "bound"].contains(&name))
-        || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_bp(*register));
+        || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_bp(regs, *register));
     let moves = what.op == Operation::Move;
     for (place, written) in what.dests.iter().map(|one| (one, true)).chain(what.sources.iter().map(|one| (one, false)))
     {
         match place {
-            Loc::Reg(reg) if is_bp(reg.register) => out.other = true,
+            Loc::Reg(reg) if is_bp(regs, reg.register) => out.other = true,
             Loc::Mem(mem) => {
-                if is_bp(mem.index_through) || mem.addr.is_some_and(|addr| addr.space == Space::Stack) {
+                if is_bp(regs, mem.index_through) || mem.addr.is_some_and(|addr| addr.space == Space::Stack) {
                     out.other = true;
-                } else if is_bp(mem.through) {
+                } else if is_bp(regs, mem.through) {
                     // An address of the frame is a pointer into it.
                     match slot(mem).filter(|_| mem.width == m && what.op != Operation::Address) {
                         Some(at) if written => {
@@ -235,7 +239,9 @@ fn touch(
                     }
                 }
             }
-            Loc::Address(address) if is_bp(address.through) || is_bp(address.index_through) => out.other = true,
+            Loc::Address(address) if is_bp(regs, address.through) || is_bp(regs, address.index_through) => {
+                out.other = true
+            }
             _ => {}
         }
     }
@@ -248,6 +254,7 @@ fn live_in(
     body: &LirBody,
     at: i64,
 ) -> BTreeSet<i64> {
+    let regs = body.regs();
     let first = body
         .blocks
         .iter()
@@ -257,7 +264,7 @@ fn live_in(
                 .iter()
                 .find_map(
                     |one| {
-                        let touched = touch(m, one);
+                        let touched = touch(regs, m, one);
                         if touched.reads_slot(at) { Some(true) } else { touched.writes.contains(&at).then_some(false) }
                     },
                 );
@@ -281,10 +288,11 @@ fn live_in(
 
 /// The word register `root` names, as a plain operand.
 fn word(
+    regs: Regs,
     m: u32,
     root: RegId,
 ) -> Loc {
-    Loc::Reg(Reg { register: target::named(root, i64::from(m)), width: m })
+    Loc::Reg(Reg { register: regs.named(root, i64::from(m)), width: m })
 }
 
 fn plain_word(
@@ -314,6 +322,7 @@ fn reload_of(
 /// Whether `one` reads `root` only as a plain word source and writes none of
 /// it.
 fn reads_plainly(
+    regs: Regs,
     m: u32,
     one: &Insn,
     root: RegId,
@@ -322,8 +331,8 @@ fn reads_plainly(
     let Some(what) = one.what.as_ref() else {
         return false;
     };
-    let lanes = _lanes(root);
-    let low = _lanes(target::named(root, i64::from(m)));
+    let lanes = _lanes(regs, root);
+    let low = _lanes(regs, regs.named(root, i64::from(m)));
     effect.writes.is_disjoint(&lanes)
         && effect.reads.iter().filter(|lane| lanes.contains(lane)).all(|lane| low.contains(lane))
         && !what.dests.iter().any(|place| {
@@ -360,9 +369,10 @@ fn free(
     live_into: &IndexMap<i64, Lanes>,
     exits: &BTreeSet<i64>,
 ) -> Vec<(RegId, Hold)> {
+    let regs = body.regs();
     let mut out = Vec::new();
     'roots: for root in roots.iter().copied() {
-        let lanes = _lanes(root);
+        let lanes = _lanes(regs, root);
         let through = [one.header].iter().chain(exits).any(|at| !live_into[at].is_disjoint(&lanes));
         let mut folded = Vec::new();
         for at in &one.body {
@@ -381,7 +391,7 @@ fn free(
                 if let Some(from) = reload_of(m, insn, root) {
                     reloaded = Some(from);
                     folded.push((index[at], position, from));
-                } else if let Some(from) = reloaded.filter(|_| reads_plainly(m, insn, root, effect)) {
+                } else if let Some(from) = reloaded.filter(|_| reads_plainly(regs, m, insn, root, effect)) {
                     folded.push((index[at], position, from));
                 } else {
                     continue 'roots;
@@ -391,7 +401,7 @@ fn free(
         let wide = [one.header]
             .iter()
             .chain(exits)
-            .any(|at| !live_into[at].is_disjoint(&lanes.minus(&_lanes(target::named(root, i64::from(m))))));
+            .any(|at| !live_into[at].is_disjoint(&lanes.minus(&_lanes(regs, regs.named(root, i64::from(m))))));
         out.push((
             root,
             match (through, folded.is_empty()) {
@@ -511,6 +521,7 @@ fn reaching_slots(
 /// Whether `one` still encodes with slot `at` in a register: an x87 store
 /// or a far-pointer load takes only memory.
 fn registrable(
+    regs: Regs,
     m: u32,
     bits: u32,
     home: RegId,
@@ -526,7 +537,7 @@ fn registrable(
     if !touched.reads.contains(&at) && !touched.writes.contains(&at) {
         return true;
     }
-    let homes = BTreeMap::from([(at, word(m, home))]);
+    let homes = BTreeMap::from([(at, word(regs, m, home))]);
     rewritten(m, one, &homes)
         .what
         .as_ref()
@@ -562,6 +573,7 @@ enum Source {
 /// that load. A constant counts: a segment register takes one only as
 /// `push / pop`, which qbdemo's PLASMA ran every pixel.
 fn invariant(
+    regs: Regs,
     m: u32,
     insns: &[(&Arc<Insn>, Lanes)],
     touches: &std::cell::OnceCell<Vec<Touch>>,
@@ -569,7 +581,7 @@ fn invariant(
     root: RegId,
     spills: &BTreeSet<i64>,
 ) -> Option<Source> {
-    let lanes = _lanes(root);
+    let lanes = _lanes(regs, root);
     if !entering.is_disjoint(&lanes) {
         return None;
     }
@@ -599,10 +611,10 @@ fn invariant(
     }
     let kept = match from.as_ref()? {
         Source::Slot(at) if spills.contains(at) => {
-            let touches = touches.get_or_init(|| insns.iter().map(|(insn, _)| touch(m, insn)).collect());
+            let touches = touches.get_or_init(|| insns.iter().map(|(insn, _)| touch(regs, m, insn)).collect());
             !touches.iter().any(|touched| touched.writes_slot(*at))
         }
-        Source::Slot(at) => insns.iter().all(|(insn, _)| spares(m, insn, *at)),
+        Source::Slot(at) => insns.iter().all(|(insn, _)| spares(regs, m, insn, *at)),
         Source::Constant(_) => true,
     };
     kept.then_some(from?)
@@ -629,6 +641,7 @@ fn writes_of<'a>(
 /// What each instruction may write, or none where its effect is not known:
 /// worked out once for the body, not once for each loop around the instruction.
 fn may_writes(body: &LirBody) -> Vec<Vec<Option<Lanes>>> {
+    let regs = body.regs();
     body.blocks
         .iter()
         .map(|block| {
@@ -636,13 +649,13 @@ fn may_writes(body: &LirBody) -> Vec<Vec<Option<Lanes>>> {
                 .insns
                 .iter()
                 .map(|insn| {
-                    let effect = liveness::effect(body.bits, insn)?;
+                    let effect = liveness::effect(regs, body.bits, insn)?;
                     // A `rep movs` steps si and di only if it runs: a
                     // conditional write, but one that makes
                     // the register unfit to hold
                     // its value from one trip to the next.
                     Some(
-                        peephole::_register_effects(body.bits, insn, true, false)
+                        peephole::_register_effects(regs, body.bits, insn, true, false)
                             .map_or(effect.writes, |(_, writes)| effect.writes.or(&writes)),
                     )
                 })
@@ -654,6 +667,7 @@ fn may_writes(body: &LirBody) -> Vec<Vec<Option<Lanes>>> {
 /// Whether `one` cannot write the frame cell at `at`: it writes memory only
 /// in far segments, at globals, or at other frame cells.
 fn spares(
+    regs: Regs,
     m: u32,
     one: &Insn,
     at: i64,
@@ -683,7 +697,7 @@ fn spares(
                             addr.space,
                             Space::Far | Space::Segment | Space::Group | Space::External
                         )
-                            && !is_bp(mem.through)
+                            && !is_bp(regs, mem.through)
                     }
                     (None, None) => false,
                 },
@@ -699,6 +713,7 @@ pub fn hoisted(
     body: &LirBody,
     spills: &BTreeSet<i64>,
 ) -> LirBody {
+    let regs = body.regs();
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let index =
@@ -717,19 +732,14 @@ pub fn hoisted(
         if entries.is_empty() || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header]) {
             continue;
         }
-        let roots = available
-            .iter()
-            .chain(
-                target::SEGMENTS.iter().filter(|one| {
-                    !crate::backend::registerinfo::is_code_segment(**one)
-                        && !crate::backend::registerinfo::is_stack_segment(**one)
-                }),
-            );
+        let segment_roots: Vec<RegId> =
+            regs.segments().filter(|one| !regs.is_code_segment(*one) && !regs.is_stack_segment(*one)).collect();
+        let roots = available.iter().chain(segment_roots.iter());
         let Some(writes) = writes_of(body, &written, one, &index) else { continue };
         let touches = std::cell::OnceCell::new();
         let moved = roots
             .filter_map(|root| {
-                invariant(m, &writes, &touches, &live_into[&one.header], *root, spills).map(|at| (*root, at))
+                invariant(regs, m, &writes, &touches, &live_into[&one.header], *root, spills).map(|at| (*root, at))
             })
             .collect::<Vec<_>>();
         if moved.is_empty() {
@@ -793,6 +803,7 @@ pub fn promoted(
     costs: &OperationCosts,
     park: i64,
 ) -> LirBody {
+    let regs = body.regs();
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let mut found = loops::loops(graph, Some(body.entry));
@@ -810,11 +821,11 @@ pub fn promoted(
     let effects: Vec<Vec<Option<liveness::Effect>>> = body
         .blocks
         .iter()
-        .map(|block| block.insns.iter().map(|insn| liveness::effect(body.bits, insn)).collect())
+        .map(|block| block.insns.iter().map(|insn| liveness::effect(regs, body.bits, insn)).collect())
         .collect();
     let fits = RefCell::new(BTreeMap::<(usize, usize, i64), bool>::new());
     let touches: Vec<Vec<Touch>> =
-        body.blocks.iter().map(|block| block.insns.iter().map(|insn| touch(m, insn)).collect()).collect();
+        body.blocks.iter().map(|block| block.insns.iter().map(|insn| touch(regs, m, insn)).collect()).collect();
     for one in &found {
         if one.body.iter().any(|at| taken.contains(at)) {
             continue;
@@ -880,6 +891,7 @@ pub fn promoted(
                                 .entry((seen[*i].0, seen[*i].1, **at))
                                 .or_insert_with(
                                     || registrable(
+                                        regs,
                                         m,
                                         body.bits,
                                         *available.last().expect("a register to hold a slot"),
@@ -920,7 +932,7 @@ pub fn promoted(
             let parked = if matches!(hold, Hold::Parked(_)) { (entered + left) * park } else { 0 };
             let cost = entered * costs.load + if stored(*at) { left * costs.store } else { 0 } + parked;
             if *saved as f64 * trips > cost as f64 {
-                homes.insert(*at, word(m, *root));
+                homes.insert(*at, word(regs, m, *root));
                 hosts.insert(*at, host);
             }
         }
@@ -928,7 +940,7 @@ pub fn promoted(
         if let Some(at) = bp_slot {
             let saved = ranked.last().expect("a slot").0;
             if saved as f64 * trips > (entered * (costs.store + costs.load) + left * costs.load) as f64 {
-                homes.insert(at, Loc::Reg(Reg { register: target::named(RegId::BP, i64::from(m)), width: m }));
+                homes.insert(at, Loc::Reg(Reg { register: regs.named(RegId::BP, i64::from(m)), width: m }));
             }
         }
         // A register freed by folding its reloads is free only when each
@@ -945,7 +957,7 @@ pub fn promoted(
                 hosts.remove(&at);
             }
             if homes.len() < slots.len() {
-                homes.retain(|_, home| !matches!(home, Loc::Reg(reg) if is_bp(reg.register)));
+                homes.retain(|_, home| !matches!(home, Loc::Reg(reg) if is_bp(regs, reg.register)));
             }
             if homes.len() == before {
                 break;
@@ -961,12 +973,12 @@ pub fn promoted(
         if homes.is_empty() {
             continue;
         }
-        let with_bp = homes.values().any(|home| matches!(home, Loc::Reg(reg) if is_bp(reg.register)));
+        let with_bp = homes.values().any(|home| matches!(home, Loc::Reg(reg) if is_bp(regs, reg.register)));
         let parked = hosts
             .values()
             .filter_map(|host| match &registers[*host] {
                 (root, Hold::Parked(width)) => {
-                    Some(Loc::Reg(Reg { register: target::named(*root, i64::from(*width)), width: *width }))
+                    Some(Loc::Reg(Reg { register: regs.named(*root, i64::from(*width)), width: *width }))
                 }
                 _ => None,
             })
@@ -1012,7 +1024,7 @@ pub fn promoted(
             }
             for (slot, home) in &homes {
                 let load = made(near, Operation::Move, "mov", vec![home.clone()], vec![Loc::Mem(cell(m, *slot))]);
-                if matches!(home, Loc::Reg(reg) if is_bp(reg.register)) {
+                if matches!(home, Loc::Reg(reg) if is_bp(regs, reg.register)) {
                     let bp = home.clone();
                     insns.insert(
                         insns.len() - usize::from(jumps),
@@ -1038,7 +1050,7 @@ pub fn promoted(
                         near,
                         Operation::Pop,
                         "pop",
-                        vec![Loc::Reg(Reg { register: target::named(RegId::BP, i64::from(m)), width: m })],
+                        vec![Loc::Reg(Reg { register: regs.named(RegId::BP, i64::from(m)), width: m })],
                         vec![],
                     ),
                 );
@@ -1285,6 +1297,7 @@ mod tests {
     /// quicksort into a general protection fault.
     #[test]
     fn test_a_dword_slot_parked_in_the_frame_register_is_pushed_and_popped() {
+        let regs = crate::backend::registerinfo::test_regs();
         let wide = |register: RegId| Loc::Reg(Reg { register, width: 4 });
         let one = Imm { value: 1, width: 4, address: None };
         let bump = |at: i64, register: RegId| {
@@ -1339,7 +1352,7 @@ mod tests {
                             .dests
                             .iter()
                             .chain(&what.sources)
-                            .any(|place| matches!(place, Loc::Reg(reg) if super::is_bp(reg.register))),
+                            .any(|place| matches!(place, Loc::Reg(reg) if super::is_bp(regs, reg.register))),
                 )
         };
         let pushes = out.insns().iter().filter(|insn| is_bp(insn, Operation::Push)).count();

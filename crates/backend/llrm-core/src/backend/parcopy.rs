@@ -8,6 +8,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+use llrm_lir::registers::Regs;
+
 use crate::backend::target;
 use crate::model::ir::{self, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBody};
@@ -87,6 +89,7 @@ fn remove(
 
 /// `body` with every copy group written in an order that computes it.
 pub fn scheduled(body: &LirBody) -> Result<LirBody, Malformed> {
+    let regs = body.regs();
     if !body.blocks.iter().any(|block| block.insns.iter().any(|one| one.group.is_some())) {
         return Ok(body.clone());
     }
@@ -97,7 +100,7 @@ pub fn scheduled(body: &LirBody) -> Result<LirBody, Malformed> {
         for one in block.insns.iter().map(Some).chain([None]) {
             let group = one.and_then(|one| one.group);
             if !run.is_empty() && group != run[0].group {
-                for part in _ordered(&run)? {
+                for part in _ordered(regs, &run)? {
                     out.extend(_expanded(&part)?);
                 }
                 run = Vec::new();
@@ -154,7 +157,10 @@ fn ungrouped(one: &Insn) -> Arc<Insn> {
 }
 
 /// One group, in an order where no move reads what an earlier one wrote.
-fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Malformed> {
+fn _ordered(
+    regs: Regs,
+    moves: &[Arc<Insn>],
+) -> Result<Vec<Arc<Insn>>, Malformed> {
     let mut identities = Vec::new();
     for one in moves {
         if _into(one)? == _outof(one)? {
@@ -178,7 +184,7 @@ fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Malformed> {
             .map(|at| Arc::clone(&left[at]))
             .collect();
         if ready.is_empty() {
-            let (made, used) = _rotated(&left)?;
+            let (made, used) = _rotated(regs, &left)?;
             out.extend(made);
             for one in &used {
                 remove(&mut left, one);
@@ -243,7 +249,10 @@ type Rotation = (Vec<Arc<Insn>>, Vec<Arc<Insn>>);
 /// and so on. Otherwise save the place the closing move reads on the stack,
 /// perform the remaining moves in order, then pop into the closing move's
 /// destination.
-fn _rotated(left: &[Arc<Insn>]) -> Result<Rotation, Malformed> {
+fn _rotated(
+    regs: Regs,
+    left: &[Arc<Insn>],
+) -> Result<Rotation, Malformed> {
     let mut writes: IndexMap<String, &Arc<Insn>> = IndexMap::default();
     for one in left {
         writes.insert(_into(one)?, one);
@@ -271,7 +280,7 @@ fn _rotated(left: &[Arc<Insn>]) -> Result<Rotation, Malformed> {
     // whose exchange would be `xchg ax,ebx`.
     let widths: IndexSet<u32> = operands.iter().map(_width).collect();
     let pairs: Vec<(&Loc, &Loc)> = operands.iter().zip(operands.iter().skip(1)).collect();
-    if widths.len() == 1 && pairs.iter().all(|(one, other)| target::exchangeable(one, other)) {
+    if widths.len() == 1 && pairs.iter().all(|(one, other)| target::exchangeable(regs, one, other)) {
         let mut made: Vec<Arc<Insn>> = cycle
             .iter()
             .zip(&pairs)
@@ -297,7 +306,9 @@ fn _rotated(left: &[Arc<Insn>]) -> Result<Rotation, Malformed> {
     // first, and every other move, in order, writes only what was read.
     let closing = cycle
         .iter()
-        .rposition(|one| target::pushed_width(&source(one)).is_some() && target::popped_width(&dest(one)).is_some())
+        .rposition(|one| {
+            target::pushed_width(&source(one)).is_some() && target::popped_width(regs, &dest(one)).is_some()
+        })
         .ok_or_else(|| {
             Malformed(format!("{:#06x} is in a copy cycle no move of which the stack can carry", start.at))
         })?;

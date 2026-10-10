@@ -254,6 +254,9 @@ mod tests {
         fn cpus(&self) -> &'static [&'static str] {
             self.0.cpus()
         }
+        fn registers(&self) -> &'static llrm_core::backend::registerinfo::Info {
+            self.0.registers()
+        }
         fn march(
             &self,
             name: &str,

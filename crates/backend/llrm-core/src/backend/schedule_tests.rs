@@ -135,6 +135,7 @@ fn test_pentium_pairs_a_frame_lea_after_an_independent_prefixed_move() {
 /// frame address.
 #[test]
 fn test_scheduler_keeps_symbolic_or_nonframe_addresses_out_of_its_window() {
+    let regs = crate::backend::registerinfo::test_regs();
     let address = AddressRef {
         through: RegId::BX,
         offset: 0,
@@ -143,7 +144,7 @@ fn test_scheduler_keeps_symbolic_or_nonframe_addresses_out_of_its_window() {
     };
     let lea = _insn(1, Operation::Address, "lea", vec![reg(RegId::DI, 2)], vec![Loc::Address(address)]);
 
-    assert!(_safe(16, &lea).is_none());
+    assert!(_safe(regs, 16, &lea).is_none());
 }
 
 /// A flag-producing add must not cross imul before a later flag reader.

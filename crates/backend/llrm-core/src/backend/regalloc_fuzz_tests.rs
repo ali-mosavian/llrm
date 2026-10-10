@@ -435,6 +435,7 @@ fn in_ssa(body: &LirBody) -> LirBody {
 /// What a finished body must be: every value placed, nothing a later phase
 /// cannot schedule or the machine cannot name.
 fn complaints(done: &LirBody) -> Vec<String> {
+    let regs = done.regs();
     let mut out = verify::verify(done, false);
     for one in done.insns() {
         let Some(what) = &one.what else { continue };
@@ -453,7 +454,7 @@ fn complaints(done: &LirBody) -> Vec<String> {
                 out.push(format!("{:#06x}: {} is not placed", one.at, place.repr()));
             }
             if let Loc::Reg(Reg { register, width }) = place {
-                if target::width_of(*register).is_some_and(|got| got != i64::from(*width)) {
+                if regs.width_of(*register).is_some_and(|got| got != i64::from(*width)) {
                     out.push(format!("{:#06x}: register {register:?} at width {width}", one.at));
                 }
             }
@@ -617,6 +618,7 @@ mod run {
             body: &LirBody,
             again: i64,
         ) -> Result<(), String> {
+            let regs = body.regs();
             let mut at = body.entry;
             for _ in 0..10_000 {
                 let block = body.blocks.iter().find(|block| block.at == at).ok_or(format!("no block {at:#x}"))?;
@@ -650,7 +652,7 @@ mod run {
                     match what.op {
                         Operation::Nothing | Operation::Compare => {}
                         Operation::Move => {
-                            if crate::backend::target::far_load(what) {
+                            if crate::backend::target::far_load(regs, what) {
                                 // A far pointer: its offset, then its segment,
                                 // a word on.
                                 let Loc::Mem(cell) = &what.sources[0] else {

@@ -92,7 +92,7 @@ impl Rule<'_> {
         if module == "guards" {
             format!("guards::{}(cx{}{})", call.name, if args.is_empty() { "" } else { ", " }, args.join(", "))
         } else {
-            format!("{module}::{}({})", call.name, args.join(", "))
+            format!("{module}::{}(cx.regs(){}{})", call.name, if args.is_empty() { "" } else { ", " }, args.join(", "))
         }
     }
 
@@ -152,7 +152,7 @@ impl Rule<'_> {
                         let args: Vec<String> = call.args.iter().map(|arg| self.arg(arg)).collect();
                         let map = |list: &str| {
                             format!(
-                                "{list}: s.{list}.iter().map(|o| make::{}(o, {})).collect()",
+                                "{list}: s.{list}.iter().map(|o| make::{}(cx.regs(), o, {})).collect()",
                                 call.name,
                                 args.join(", ")
                             )
