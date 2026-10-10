@@ -21,6 +21,10 @@
                 public  B$FLIN
                 public  B$FLIC
                 public  B$FLIP
+                public  B$FGET
+                public  B$FPSEL
+                public  B$FPUC
+                public  B$FPUP
 
 FillBox         struc
                 dst             dword   ?
@@ -46,6 +50,20 @@ FillLine        struc
                 bpp             dword   ?               ;; CGA: bits a pixel
                 color           dword   ?               ;; the byte of the colour: CGA all its pixels, EGA the nibble
 FillLine        ends
+
+FillXfer        struc
+                screen          dword   ?
+                array           dword   ?
+                rows            dword   ?
+                sbytes          dword   ?
+                abytes          dword   ?
+                stride          dword   ?
+                shift           dword   ?
+                first           dword   ?
+                last            dword   ?
+                step            dword   ?
+                bank            dword   ?
+FillXfer        ends
 
 .code
 ;;::::::::::::::
@@ -565,6 +583,309 @@ ev_ysv          dd      0
                 ret
 B$FLIP          endp
 
+
+;;::::::::::::::
+;; B$FGET (eax: ptr FillXfer): one plane of GET, as QB's NReadL: each array byte is the high byte of `rol ax, cl` over two screen bytes
+B$FGET          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    esi
+                push    edi
+                push    ebp
+                mov     ebx, eax
+                mov     esi, [ebx].FillXfer.screen
+                mov     edi, [ebx].FillXfer.array
+                mov     ebp, [ebx].FillXfer.rows
+                mov     cl, byte ptr [ebx].FillXfer.shift
+@@row:
+                push    esi
+                push    edi
+                mov     ch, byte ptr [ebx].FillXfer.abytes
+                mov     ah, [esi]
+                inc     esi
+@@byte:
+                lodsb
+                mov     dl, al
+                rol     ax, cl
+                dec     ch
+                jz      @@last
+                mov     [edi], ah
+                inc     edi
+                mov     ah, dl
+                jmp     @@byte
+@@last:
+                and     ah, byte ptr [ebx].FillXfer.last
+                mov     [edi], ah
+                pop     edi
+                pop     esi
+                add     edi, [ebx].FillXfer.stride
+                cmp     [ebx].FillXfer.bank, 0
+                je      @@flat
+                xor     esi, 2000h
+                test    esi, 2000h
+                jnz     @@next
+                add     esi, 80
+                jmp     @@next
+@@flat:
+                add     esi, [ebx].FillXfer.step
+@@next:
+                dec     ebp
+                jnz     @@row
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FGET          endp
+
+
+
+;;::::::::::::::
+;; B$FPSEL (eax: how): the way of the PUT that follows, once; 0 PSET, 1 AND, 2 OR, 3 XOR, 4 PRESET (PSET with the colours inverted)
+B$FPSEL         proc
+
+                push    ebx
+                push    ecx
+                mov     ebx, eax
+                mov     ax, 9090h               ;; nothing before the write
+                mov     cx, ax
+                cmp     ebx, 4
+                jne     @F
+                mov     ax, 0D2F6h              ;; not dl, the middle bytes of a CGA PUT
+                mov     cx, 0D5F6h              ;; not ch, the bytes of a planar one
+@@:
+                mov     word ptr [put_not], ax
+                mov     word ptr [pn_single], cx
+                mov     word ptr [pn_first], cx
+                mov     word ptr [pn_mid], cx
+                mov     word ptr [pn_last], cx
+                mov     ax, word ptr put_mids[ebx * 2]
+                mov     word ptr [put_mid], ax
+                mov     eax, dword ptr put_edges[ebx * 4]
+                mov     [put_edge_v], eax
+                pop     ecx
+                pop     ebx
+                ret
+B$FPSEL         endp
+
+;; the edge bytes of a CGA PUT: ah = the source (kept), dl = the mask of the pixels it covers, [edi] the screen byte
+put_pset:
+                mov     dh, ah
+                xor     dh, [edi]
+                and     dh, dl
+                xor     [edi], dh
+                ret
+put_preset:
+                mov     dh, ah
+                not     dh
+                xor     dh, [edi]
+                and     dh, dl
+                xor     [edi], dh
+                ret
+put_and:
+                mov     dh, dl
+                not     dh
+                or      dh, ah
+                and     [edi], dh
+                ret
+put_or:
+                mov     dh, ah
+                and     dh, dl
+                or      [edi], dh
+                ret
+put_xor:
+                mov     dh, ah
+                and     dh, dl
+                xor     [edi], dh
+                ret
+
+;;::::::::::::::
+;; B$FPUC (eax: ptr FillXfer): the CGA modes' PUT, as QB's NWriteL: each screen byte takes bits of two array bytes, `ror ax, cl`
+;; over the pair; the middle bytes are `op [edi], dl` patched by B$FPSEL, the first and last go through a mask
+B$FPUC          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    esi
+                push    edi
+                push    ebp
+                mov     ebx, eax
+                mov     esi, [ebx].FillXfer.array
+                mov     edi, [ebx].FillXfer.screen
+                mov     ebp, [ebx].FillXfer.rows
+                mov     cl, byte ptr [ebx].FillXfer.shift
+@@row:
+                push    esi
+                push    edi
+                mov     ch, byte ptr [ebx].FillXfer.sbytes
+                mov     ah, [esi]
+                inc     esi
+                ror     ax, cl
+                dec     ch
+                jnz     @@more
+                mov     dl, byte ptr [ebx].FillXfer.first
+                and     dl, byte ptr [ebx].FillXfer.last
+                call    dword ptr [put_edge_v]
+                jmp     @@rowdone
+@@more:
+                mov     dl, byte ptr [ebx].FillXfer.first
+                call    dword ptr [put_edge_v]
+                inc     edi
+                dec     ch
+                jz      @@lastbyte
+@@mid:
+                rol     ax, cl
+                lodsb
+                xchg    ah, al
+                ror     ax, cl
+                mov     dl, ah
+put_not         db      90h, 90h                ;; not dl, for PRESET
+put_mid         db      88h, 17h                ;; mov [edi], dl; and, or, xor by B$FPSEL
+                inc     edi
+                dec     ch
+                jnz     @@mid
+@@lastbyte:
+                rol     ax, cl
+                lodsb
+                xchg    ah, al
+                ror     ax, cl
+                mov     dl, byte ptr [ebx].FillXfer.last
+                call    dword ptr [put_edge_v]
+@@rowdone:
+                pop     edi
+                pop     esi
+                add     esi, [ebx].FillXfer.stride
+                cmp     [ebx].FillXfer.bank, 0
+                je      @@flat
+                xor     edi, 2000h
+                test    edi, 2000h
+                jnz     @@next
+                add     edi, 80
+                jmp     @@next
+@@flat:
+                add     edi, [ebx].FillXfer.step
+@@next:
+                dec     ebp
+                jnz     @@row
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FPUC          endp
+
+;;::::::::::::::
+;; B$FPUP (eax: ptr FillXfer): one plane of a planar PUT: the bytes aligned as for the CGA, each written by one `xchg`, which loads the
+;; latches and writes through the function the caller set; the bit mask is set round the first and last bytes of a row if they are partial
+B$FPUP          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    esi
+                push    edi
+                push    ebp
+                mov     ebx, eax
+                mov     esi, [ebx].FillXfer.array
+                mov     edi, [ebx].FillXfer.screen
+                mov     cl, byte ptr [ebx].FillXfer.shift
+                mov     edx, 3CEh
+                mov     al, 8
+                out     dx, al
+                inc     edx                     ;; the data port: the bit mask is addressed
+@@row:
+                push    esi
+                push    edi
+                movzx   ebp, byte ptr [ebx].FillXfer.sbytes
+                mov     ah, [esi]
+                inc     esi
+                ror     ax, cl
+                dec     ebp
+                jnz     @@more
+                push    eax
+                mov     al, byte ptr [ebx].FillXfer.first
+                and     al, byte ptr [ebx].FillXfer.last
+                out     dx, al
+                pop     eax
+                mov     ch, ah
+pn_single       db      90h, 90h
+                xchg    ch, [edi]
+                jmp     @@maskff
+@@more:
+                cmp     byte ptr [ebx].FillXfer.first, 0FFh
+                je      @F
+                push    eax
+                mov     al, byte ptr [ebx].FillXfer.first
+                out     dx, al
+                pop     eax
+@@:
+                mov     ch, ah
+pn_first        db      90h, 90h
+                xchg    ch, [edi]
+                inc     edi
+                cmp     byte ptr [ebx].FillXfer.first, 0FFh
+                je      @F
+                push    eax
+                mov     al, 0FFh
+                out     dx, al
+                pop     eax
+@@:
+                dec     ebp
+                jz      @@lastbyte
+@@mid:
+                rol     ax, cl
+                lodsb
+                xchg    ah, al
+                ror     ax, cl
+                mov     ch, ah
+pn_mid          db      90h, 90h
+                xchg    ch, [edi]
+                inc     edi
+                dec     ebp
+                jnz     @@mid
+@@lastbyte:
+                rol     ax, cl
+                lodsb
+                xchg    ah, al
+                ror     ax, cl
+                cmp     byte ptr [ebx].FillXfer.last, 0FFh
+                je      @F
+                push    eax
+                mov     al, byte ptr [ebx].FillXfer.last
+                out     dx, al
+                pop     eax
+@@:
+                mov     ch, ah
+pn_last         db      90h, 90h
+                xchg    ch, [edi]
+@@maskff:
+                mov     al, 0FFh
+                out     dx, al
+                pop     edi
+                pop     esi
+                add     esi, [ebx].FillXfer.stride
+                add     edi, [ebx].FillXfer.step
+                dec     dword ptr [ebx].FillXfer.rows
+                jnz     @@row
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FPUP          endp
+
+put_mids        dw      1788h, 1720h, 1708h, 1730h, 1788h        ;; mov, and, or, xor [edi], dl; PRESET is a mov of the inverted
+put_edges       dd      put_pset, put_and, put_or, put_xor, put_preset
+put_edge_v      dd      0
 set_pattern     dd      0
 set_flag        db      0
 dword_ops       dw      07C7h, 2781h, 0F81h, 3781h

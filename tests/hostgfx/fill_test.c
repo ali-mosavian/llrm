@@ -102,6 +102,34 @@ static void walk(FillLine *line, int packed)
         }
     }
 }
+/* B$FPSEL, B$FPUC and B$FPUP are not modelled here: tests/qbgfx/fill_ops.c runs them. */
+void dev_put_select(unsigned how) { (void)how; }
+void dev_put_rows(FillXfer *xfer) { (void)xfer; }
+void dev_put_planar(FillXfer *xfer) { (void)xfer; }
+
+/* B$FGET in C. */
+void dev_get_rows(FillXfer *xfer)
+{
+    unsigned char *screen = xfer->screen, *array = xfer->array;
+
+    for (unsigned row = 0; row < xfer->rows; row++) {
+        for (unsigned i = 0; i < xfer->abytes; i++) {
+            unsigned b = (screen[i] << xfer->shift | (xfer->shift ? screen[i + 1] >> (8 - xfer->shift) : 0)) & 0xFF;
+
+            array[i] = (unsigned char)(i == xfer->abytes - 1 ? b & xfer->last : b);
+        }
+        array += xfer->stride;
+        if (xfer->bank) {
+            unsigned off = (unsigned)(screen - cga_ram) ^ 0x2000;
+
+            if (!(off & 0x2000))
+                off += 80;
+            screen = cga_ram + off;
+        } else {
+            screen += xfer->step;
+        }
+    }
+}
 void dev_line_linear(FillLine *line) { walk(line, 0); }
 void dev_line_packed(FillLine *line) { walk(line, 1); }
 void dev_line_planar(FillLine *line) { (void)line; }

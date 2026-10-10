@@ -128,7 +128,7 @@ int main(void)
             /* GET and PUT of a box: whole rows against a pixel at a time */
             {
                 unsigned sx = next() % REGION_W, sy = next() % REGION_H, sw = 1 + next() % (REGION_W - sx), sh = 1 + next() % (REGION_H - sy);
-                unsigned bytes = sprite_bytes(modes[m], sw, sh), i, invert = next() & 1;
+                unsigned bytes = sprite_bytes(modes[m], sw, sh), i, invert = operation == 0 && (next() & 1);
 
                 if (sw > 40)
                     sw = 40;

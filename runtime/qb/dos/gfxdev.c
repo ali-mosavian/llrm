@@ -739,66 +739,6 @@ void gd_fill_select(GdFill *fill, unsigned color, unsigned operation)
 
 /* GET and PUT.  A sub-byte plane (a CGA mode's pixels, an EGA plane's bits) is a run of bits that starts `shift` bits into
    a screen byte and at bit 0 of an array byte, so each byte of one is made of two of the other. */
-static void bits_out(Video *from, unsigned shift, unsigned count, u8 QB_FAR *to)
-{
-    unsigned bytes = (count + 7) >> 3, i;
-
-    for (i = 0; i < bytes; i++) {
-        unsigned b = (unsigned)from[i] << shift;
-
-        if (shift)
-            b |= from[i + 1] >> (8 - shift);
-        to[i] = (u8)b;
-    }
-    to[bytes - 1] &= (u8)(0xFF << (bytes * 8 - count));
-}
-
-/* The byte of the screen run that array bytes `from` give: the bits of the one before it and of this one. */
-static unsigned bits_byte(const u8 QB_FAR *from, unsigned source, unsigned shift, unsigned j)
-{
-    unsigned prev = j ? from[j - 1] : 0, cur = j < source ? from[j] : 0;
-
-    return shift ? (prev << (8 - shift) | cur >> shift) & 0xFF : cur;
-}
-
-static void bits_in(Video *to, unsigned shift, unsigned count, const u8 QB_FAR *from, unsigned operation, unsigned invert)
-{
-    unsigned bytes = (shift + count + 7) >> 3, source = (count + 7) >> 3, j;
-    unsigned first = 0xFF >> shift, last = 0xFF << (bytes * 8 - shift - count) & 0xFF;
-
-    for (j = 0; j < bytes; j++) {
-        unsigned mask = (j == 0 ? first : 0xFF) & (j == bytes - 1 ? last : 0xFF);
-        unsigned src = bits_byte(from, source, shift, j) ^ (invert ? 0xFF : 0), old = to[j];
-
-        to[j] = (u8)(operation == 0 ? old & ~mask | src & mask
-                   : operation == 1 ? old & (src | ~mask)
-                   : operation == 2 ? old | src & mask
-                                    : old ^ src & mask);
-    }
-}
-
-/* The same for one plane of the planar modes: the controller's function does the operation under the bit mask, with the
-   latches loaded by the read. */
-static void bits_in_planar(Video *to, unsigned shift, unsigned count, const u8 QB_FAR *from, unsigned invert)
-{
-    unsigned bytes = (shift + count + 7) >> 3, source = (count + 7) >> 3, j;
-    unsigned first = 0xFF >> shift, last = 0xFF << (bytes * 8 - shift - count) & 0xFF, now = 0xFF;
-
-    for (j = 0; j < bytes; j++) {
-        unsigned mask = (j == 0 ? first : 0xFF) & (j == bytes - 1 ? last : 0xFF);
-        unsigned src = bits_byte(from, source, shift, j) ^ (invert ? 0xFF : 0);
-
-        if (mask != now) {
-            controller(GC_BIT_MASK, mask);
-            now = mask;
-        }
-        (void)to[j];
-        to[j] = (u8)src;
-    }
-    if (now != 0xFF)
-        controller(GC_BIT_MASK, 0xFF);
-}
-
 typedef volatile u32 QB_FAR Video32;
 
 #define COMBINE_SET(old, source) (source)
@@ -846,20 +786,30 @@ void gd_get(unsigned x, unsigned y, unsigned width, unsigned rows, u8 QB_FAR *ou
             op.value = 0;
             dev_move(&op);
         }
-    } else if (kind == KIND_PLANAR) {
-        unsigned per_plane = (width + 7) >> 3, plane;
-
-        for (plane = 0; plane < PLANES; plane++) {
-            controller(GC_READ_MAP, plane);
-            for (row = 0; row < rows; row++)
-                bits_out(byte_of(x, y + row), x & 7, width, out + (row * PLANES + plane) * per_plane);
-        }
     } else {
-        unsigned bits = kind == KIND_PACKED4 ? 2 : 1, bytes = (width * bits + 7) >> 3;
-        unsigned shift = x * bits & 7, at = x * bits >> 3;
+        /* a plane (or the CGA modes' one) at a time, a pass of rows with the bits shifted into place */
+        unsigned bits = kind == KIND_PLANAR ? 1 : kind == KIND_PACKED4 ? 2 : 1, planes = kind == KIND_PLANAR ? PLANES : 1, plane;
+        unsigned total = width * bits, bytes = (total + 7) >> 3, shift = x * bits & 7;
+        FillXfer xfer;
 
-        for (row = 0; row < rows; row++)
-            bits_out(packed_row(y + row) + at, shift, width * bits, out + row * bytes);
+        xfer.rows = rows;
+        xfer.abytes = bytes;
+        xfer.sbytes = (shift + total + 7) >> 3;
+        xfer.stride = planes * bytes;
+        xfer.shift = shift;
+        xfer.last = 0xFF << (bytes * 8 - total) & 0xFF;
+        xfer.bank = kind != KIND_PLANAR;
+        xfer.step = (int)pitch;
+        for (plane = 0; plane < planes; plane++) {
+            if (kind == KIND_PLANAR) {
+                controller(GC_READ_MAP, plane);
+                xfer.screen = byte_of(x, y);
+            } else {
+                xfer.screen = packed_row(y) + (x * bits >> 3);
+            }
+            xfer.array = out + plane * bytes;
+            dev_get_rows(&xfer);
+        }
     }
 }
 
@@ -885,26 +835,41 @@ void gd_put(unsigned x, unsigned y, unsigned width, unsigned rows, const u8 QB_F
                 put_run[operation](pixel_at(x, y + row), in, width, invert ? 0xFFFFFFFFUL : 0);
             }
         }
-    } else if (kind == KIND_PLANAR) {
-        unsigned per_plane = (width + 7) >> 3, plane;
+    } else {
+        /* a plane (or the CGA modes' one) at a time, a pass of rows with the bits shifted into place */
+        unsigned bits = kind == KIND_PACKED4 ? 2 : 1, planes = kind == KIND_PLANAR ? PLANES : 1, plane;
+        unsigned total = width * bits, bytes = (total + 7) >> 3, shift = x * bits & 7;
+        FillXfer xfer;
 
+        xfer.rows = rows;
+        xfer.abytes = bytes;
+        xfer.sbytes = (shift + total + 7) >> 3;
+        xfer.stride = planes * bytes;
+        xfer.shift = shift;
+        xfer.first = 0xFF >> shift;
+        xfer.last = 0xFF << (xfer.sbytes * 8 - shift - total) & 0xFF;
+        xfer.bank = kind != KIND_PLANAR;
+        xfer.step = (int)pitch;
+        dev_put_select(invert ? 4 : operation);
+        if (kind != KIND_PLANAR) {
+            xfer.screen = packed_row(y) + (x * bits >> 3);
+            xfer.array = (void QB_FAR *)in;
+            dev_put_rows(&xfer);
+            return;
+        }
         controller(GC_MODE, 0);
         if (operation)
             controller(GC_DATA_ROTATE, operation << FUNCTION_SHIFT);
-        for (plane = 0; plane < PLANES; plane++) {
+        xfer.screen = byte_of(x, y);
+        for (plane = 0; plane < planes; plane++) {
             dev_outw(0x3C4, 2 | 1 << plane << 8);
-            for (row = 0; row < rows; row++)
-                bits_in_planar(byte_of(x, y + row), x & 7, width, in + (row * PLANES + plane) * per_plane, invert);
+            xfer.rows = rows;
+            xfer.array = (void QB_FAR *)(in + plane * bytes);
+            dev_put_planar(&xfer);
         }
         dev_outw(0x3C4, 2 | 0x0F << 8);
         if (operation)
             controller(GC_DATA_ROTATE, 0);
         controller(GC_MODE, WRITE_MODE_2);
-    } else {
-        unsigned bits = kind == KIND_PACKED4 ? 2 : 1, bytes = (width * bits + 7) >> 3;
-        unsigned shift = x * bits & 7, at = x * bits >> 3;
-
-        for (row = 0; row < rows; row++)
-            bits_in(packed_row(y + row) + at, shift, width * bits, in + row * bytes, operation, invert);
     }
 }

@@ -35,6 +35,17 @@ typedef struct FillLine {
     int decision, minor4, step4, ystep;
     unsigned style, x_major, pmask, bpp, color;
 } FillLine;
+/* One plane's pass of GET or PUT over `rows` rows (fill.asm): the screen's first byte, the array's run of this plane in the first row, and
+   for each row `sbytes` screen bytes against `abytes` array bytes, the bits of one starting `shift` bits into the other (a screen byte
+   takes the array bit 0 at its bit `shift`); `first` and `last` are the masks of the first and last screen byte, and for GET the
+   mask of the last array byte.  Row to row the array run moves `stride` bytes and the screen `step`, or by the CGA banks if `bank`. */
+typedef struct FillXfer {
+    void QB_FAR *screen;
+    void QB_FAR *array;
+    unsigned rows, sbytes, abytes, stride, shift, first, last;
+    int step;
+    unsigned bank;
+} FillXfer;
 
 extern void dev_int10(Regs *regs);
 extern void dev_int10r(Regs *regs);
@@ -52,6 +63,10 @@ extern void dev_fill_box(FillBox *box);
 extern void dev_line_linear(FillLine *line);
 extern void dev_line_packed(FillLine *line);
 extern void dev_line_planar(FillLine *line);
+extern void dev_get_rows(FillXfer *xfer);
+extern void dev_put_select(unsigned how);
+extern void dev_put_rows(FillXfer *xfer);
+extern void dev_put_planar(FillXfer *xfer);
 extern void dev_atan2(const double *y, const double *x, double *out);
 extern void dev_sincos(const double *angle, double *sine, double *cosine);
 
@@ -71,6 +86,10 @@ extern void dev_sincos(const double *angle, double *sine, double *cosine);
 #pragma aux dev_line_linear "B$FLIN"
 #pragma aux dev_line_packed "B$FLIC"
 #pragma aux dev_line_planar "B$FLIP"
+#pragma aux dev_get_rows "B$FGET"
+#pragma aux dev_put_select "B$FPSEL"
+#pragma aux dev_put_rows "B$FPUC"
+#pragma aux dev_put_planar "B$FPUP"
 #pragma aux dev_atan2 "B$ATAN2"
 #pragma aux dev_sincos "B$SINCOS"
 

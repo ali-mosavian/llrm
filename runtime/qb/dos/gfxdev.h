@@ -55,7 +55,7 @@ const u8 QB_FAR *gd_font(unsigned height);
 /* GET and PUT of a box that is on the screen, as QB's array holds it: a row is one run of bytes per plane (a plane's byte holds
    the next 8 pixels' bit of that plane, the leftmost pixel the high bit; the other modes' pixels are `bits` wide and packed the
    same way), the runs of a row following each other.  `operation` is 0 set, 1 and, 2 or, 3 xor; `invert` puts the colours
-   inverted (PRESET). */
+   inverted (PRESET: only with set). */
 void gd_get(unsigned x, unsigned y, unsigned width, unsigned rows, u8 QB_FAR *out);
 void gd_put(unsigned x, unsigned y, unsigned width, unsigned rows, const u8 QB_FAR *in, unsigned operation, unsigned invert);
 

@@ -20,6 +20,17 @@ typedef struct FillLine {
     int decision, minor4, step4, ystep;
     unsigned style, x_major, pmask, bpp, color;
 } FillLine;
+typedef struct FillXfer {
+    void *screen;
+    void *array;
+    unsigned rows, sbytes, abytes, stride, shift, first, last;
+    int step;
+    unsigned bank;
+} FillXfer;
+void dev_get_rows(FillXfer *xfer);
+void dev_put_select(unsigned how);
+void dev_put_rows(FillXfer *xfer);
+void dev_put_planar(FillXfer *xfer);
 void dev_line_linear(FillLine *line);
 void dev_line_packed(FillLine *line);
 void dev_line_planar(FillLine *line);
