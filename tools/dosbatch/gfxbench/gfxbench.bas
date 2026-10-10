@@ -44,7 +44,8 @@ Mark "line-short", t!
 
 t! = TIMER
 FOR i = 1 TO 150
-    LINE (i MOD (w - 40), i MOD (h - 40))-STEP(31, 31), i AND top, BF
+    bx = i MOD (w - 40): by = i MOD (h - 40)
+    LINE (bx, by)-(bx + 31, by + 31), i AND top, BF
 NEXT
 Mark "box-filled", t!
 
