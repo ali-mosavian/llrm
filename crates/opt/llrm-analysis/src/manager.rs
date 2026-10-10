@@ -160,7 +160,6 @@ impl ModuleAnalysis for Summaries {
             None => None,
         };
         let declarations = analyses.get::<Declarations>(module);
-        let shapes = bodies(module).map(|(id, _)| (id, analyses.function::<Shape>(module, id))).collect();
         // What a body's calls and exposed frames are depends on the body and
         // the declarations: kept while neither moved.
         let scratch = analyses.from_scratch();
@@ -170,9 +169,21 @@ impl ModuleAnalysis for Summaries {
         } else {
             std::mem::take(&mut memo.facts)
         };
+        // A body's shape is of its body alone: the one kept with its facts
+        // stands while its history is where they left it.
+        let shapes: IndexMap<GlobalId, Rc<Shape>> = bodies(module)
+            .map(|(id, function)| {
+                let held = kept.get(&id).filter(|one| one.mark == function.mark()).and_then(|one| one.shape.clone());
+                (id, held.unwrap_or_else(|| analyses.function::<Shape>(module, id)))
+            })
+            .collect();
+        let memo = analyses.memo::<SummariesMemo>();
         // The calls were found under the globals' facts of the run before:
         // other facts, the calls are found again.
         let mut body_facts = body_facts(module, &program.layout, program.target.spaces(), kept);
+        for (id, one) in body_facts.iter_mut() {
+            one.shape = Some(Rc::clone(&shapes[id]));
+        }
         if !memo.globals.as_ref().is_some_and(|then| Rc::ptr_eq(then, &globals_held)) {
             body_facts.values_mut().for_each(|one| (one.calls, one.values) = (None, None));
         }
@@ -262,6 +273,7 @@ fn bodies(module: &Module) -> impl Iterator<Item = (GlobalId, &Function)> {
 struct BodyFacts {
     mark: Mark,
     exposed: Rc<BTreeSet<ValueId>>,
+    shape: Option<Rc<Shape>>,
     calls: Option<Rc<alias::CallFacts>>,
     /// Where each pointer points, found once for the direct summary, each
     /// call's and the calls' facts, which all ask it; under the globals' facts
@@ -288,6 +300,7 @@ fn body_facts(
                     exposed: Rc::new(crate::memory::exposed_frames(
                         &Unit::of(module, layout, function).with_spaces(spaces),
                     )),
+                    shape: None,
                     calls: None,
                     values: None,
                 },
