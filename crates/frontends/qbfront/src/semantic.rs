@@ -3569,13 +3569,15 @@ impl Compiler {
                             return self.fail(format!("{name} expects coordinates and optional color"));
                         }
                         self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
-                        let color = if let Some(argument) = arguments.get(2) {
+                        // Without a colour the point takes the foreground (PSET) or the background (PRESET), which is
+                        // the runtime's to know: B$PSET and B$PRST, not a colour made up here.
+                        if let Some(argument) = arguments.get(2) {
                             let (value, type_id) = self.expression(argument)?;
-                            self.convert(value, type_id, INTEGER)?
+                            let color = self.convert(value, type_id, INTEGER)?;
+                            self.emit_runtime_call("B$PSTC", Vec::new(), vec![color]);
                         } else {
-                            Operand::Constant(INTEGER, Number::Integer(if name == "PRESET" { 0 } else { -1 }))
-                        };
-                        self.emit_runtime_call("B$PSTC", Vec::new(), vec![color]);
+                            self.emit_runtime_call(if name == "PRESET" { "B$PRST" } else { "B$PSET" }, Vec::new(), Vec::new());
+                        }
                     }
                     "GET" | "PUT" => {
                         let expected = if name == "GET" { 5 } else { 4 };

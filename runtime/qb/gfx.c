@@ -182,6 +182,19 @@ void B_PSTC(int color)
     gfx_plot(gfx_x1, gfx_y1, gfx_color(color), OP_SET);
 }
 
+/* B$PSET and B$PRST: PSET and PRESET without a colour, which take the
+   foreground and the background; the background is colour 0 made to look like
+   the background colour (gfx_set_background), so PRESET draws 0. */
+void B_PSET(void)
+{
+    gfx_plot(gfx_x1, gfx_y1, gfx_foreground, OP_SET);
+}
+
+void B_PRST(void)
+{
+    gfx_plot(gfx_x1, gfx_y1, 0, OP_SET);
+}
+
 /* B$PNR4: POINT(x, y), the colour there or -1. */
 int B_PNR4(float x, float y)
 {
@@ -209,6 +222,8 @@ void B_PAL2(int attribute, long color)
 #pragma aux B_N2I2 "B$N2I2"
 #pragma aux B_N2R4 "B$N2R4"
 #pragma aux B_PSTC "B$PSTC"
+#pragma aux B_PSET "B$PSET"
+#pragma aux B_PRST "B$PRST"
 #pragma aux B_PNR4 "B$PNR4"
 #pragma aux B_PNI2 "B$PNI2"
 #pragma aux B_PAL2 "B$PAL2"

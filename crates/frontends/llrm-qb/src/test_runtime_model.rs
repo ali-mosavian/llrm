@@ -212,3 +212,13 @@ fn lprint_and_write_call_their_preambles_as_bc_does() {
         ["B$WRIT", "B$PSSD", "B$PEI2", "B$PESD", "B$CHOU", "B$WRIT", "B$PEI2"]
     );
 }
+
+/// PSET and PRESET without a colour called B$PSTC with -1 and 0, a colour made up in the compiler: BCOM45
+/// drew the PSET white whatever COLOR said. BC 4.5 calls B$PSET and B$PRST, which take the foreground and
+/// the background the runtime keeps.
+#[test]
+fn pset_and_preset_without_a_colour_call_the_runtime_for_it() {
+    let names = called("SCREEN 9\nPSET (1, 2)\nPRESET (3, 4)\nPSET (5, 6), 7\nPRESET (8, 9), 1\n");
+    let drawing: Vec<_> = names.iter().filter(|name| name.contains("PSTC") || name.contains("PSET") || name.contains("PRST")).collect();
+    assert_eq!(drawing, ["B$PSET", "B$PRST", "B$PSTC", "B$PSTC"]);
+}
