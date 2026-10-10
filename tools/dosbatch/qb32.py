@@ -147,7 +147,9 @@ def run(names: list[str], work: Path) -> dict[str, tuple[str, bool]]:
         jobs.append(dosbatch.Job(stem, "exe", work / f"{name}.exe", files=(*loaders, *data_files(source))))
         wanted[stem] = (name, (source.parent / f"{name}.out").read_bytes())
     if jobs:
-        results = dosbatch.run(jobs, work / "run")
+        # grep walks 10 MB a character at a time: its emulated time is within a few seconds of the default budget, and
+        # where the linker puts the hot routines moves it past.
+        results = dosbatch.run(jobs, work / "run", budget_ms=300_000)
         for job in jobs:
             name, want = wanted[job.stem]
             got = qbruntime.raw_output(work / "run", job.stem)

@@ -17,12 +17,12 @@ static SD *slice(SD *sd, unsigned from, int len)
     return str_tmp_copy(sd, from, len);
 }
 
-SD *B_LEFT(SD *sd, short len)
+SD *B_LEFT(SD *sd, int len)
 {
     return slice(sd, 0, len);
 }
 
-SD *B_RGHT(SD *sd, short len)
+SD *B_RGHT(SD *sd, int len)
 {
     unsigned skip = len > 0 && (unsigned)len < sd->len ? sd->len - len : 0;
 
@@ -30,7 +30,7 @@ SD *B_RGHT(SD *sd, short len)
 }
 
 /* B$FMID: MID$(s, start, len), start counting from 1. */
-SD *B_FMID(SD *sd, short start, short len)
+SD *B_FMID(SD *sd, int start, int len)
 {
     if (len < 0 || start < 1)
         qb_error(BE_ILLFUN);
@@ -43,7 +43,7 @@ SD *B_FMID(SD *sd, short start, short len)
 
 /* B$SMID: MID$(target, start, max) = source, overwriting in place: a fixed
    string has `width` bytes at `target`, else `target` is the descriptor. */
-void B_SMID(qb_data_ptr target, short width, SD *source, short max, short start)
+void B_SMID(qb_data_ptr target, int width, SD *source, int max, int start)
 {
     char *data;
     unsigned room, count;
@@ -142,7 +142,7 @@ int B_INS2(SD *source, SD *match)
     return instr(1, source, match);
 }
 
-int B_INS3(short start, SD *source, SD *match)
+int B_INS3(int start, SD *source, SD *match)
 {
     if (start <= 0)
         qb_error(BE_ILLFUN);

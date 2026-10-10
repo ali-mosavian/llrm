@@ -3,3 +3,4 @@
 a$ = SPACE$(29999) + "z"
 b$ = a$ + a$ + a$
 PRINT RIGHT$(b$, 1); ASC(MID$(b$, 30000, 1)); ASC(LEFT$(RIGHT$(b$, 2), 1))
+PRINT LEN(b$); INSTR(60001, b$, "z"); LEN(LEFT$(b$, 70000))

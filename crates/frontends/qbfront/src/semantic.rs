@@ -4995,6 +4995,20 @@ impl Compiler {
         value
     }
 
+    /// A count, a length or a position as the program and the runtime pass it: a constant of the word type.
+    fn count(
+        &self,
+        value: i64,
+    ) -> Operand {
+        Operand::Constant(self.word_type(), Number::Integer(value))
+    }
+
+    /// The largest count: BC's omitted MID$ length, a signed word's largest value.
+    fn largest_count(&self) -> i64 {
+        let bits = 8 * self.options.near() as u32;
+        if bits >= 64 { i64::MAX } else { (1i64 << (bits - 1)) - 1 }
+    }
+
     /// The type of a descriptor's count, lower bound and element size: a signed word of the target.
     fn word_type(&self) -> u32 {
         if self.options.one_space() { integer_type(self.options.near(), true) } else { INTEGER }
@@ -5183,9 +5197,9 @@ impl Compiler {
                 Vec::new(),
                 vec![
                     source,
-                    Operand::Constant(INTEGER, Number::Integer(0)),
+                    self.count(0),
                     Operand::Value(destination),
-                    Operand::Constant(INTEGER, Number::Integer(destination_width as i64)),
+                    self.count(destination_width as i64),
                 ],
             );
             self.filled(2, destination_width);
@@ -5218,9 +5232,9 @@ impl Compiler {
             Vec::new(),
             vec![
                 Operand::Value(source),
-                Operand::Constant(INTEGER, Number::Integer(source_width as i64)),
+                self.count(source_width as i64),
                 Operand::Value(destination),
-                Operand::Constant(INTEGER, Number::Integer(destination_width as i64)),
+                self.count(destination_width as i64),
             ],
         );
         self.filled(2, destination_width);
@@ -5242,19 +5256,20 @@ impl Compiler {
         let destination = self.far_address(destination, destination_type);
         let source = self.string_descriptor(source)?;
         let (start, start_type) = self.expression(&arguments[1])?;
-        let start = self.convert(start, start_type, INTEGER)?;
+        let word = self.word_type();
+        let start = self.convert(start, start_type, word)?;
         let maximum = if let Some(length) = arguments.get(2) {
             let (length, length_type) = self.expression(length)?;
-            self.convert(length, length_type, INTEGER)?
+            self.convert(length, length_type, word)?
         } else {
-            Operand::Constant(INTEGER, Number::Integer(i16::MAX as i64))
+            self.count(self.largest_count())
         };
         self.emit_runtime_call(
             "B$SMID",
             Vec::new(),
             vec![
                 Operand::Value(destination),
-                Operand::Constant(INTEGER, Number::Integer(destination_width as i64)),
+                self.count(destination_width as i64),
                 source,
                 maximum,
                 start,
@@ -5401,21 +5416,23 @@ impl Compiler {
                     }
                     Lowering::Mid => {
                         operands.push(self.string_descriptor(&arguments[0])?);
+                        let word = self.word_type();
                         let (start, start_type) = self.expression(&arguments[1])?;
-                        operands.push(self.convert(start, start_type, INTEGER)?);
+                        operands.push(self.convert(start, start_type, word)?);
                         if let Some(length) = arguments.get(2) {
                             let (length, length_type) = self.expression(length)?;
-                            operands.push(self.convert(length, length_type, INTEGER)?);
+                            operands.push(self.convert(length, length_type, word)?);
                         } else {
                             // BC spells the omitted count as the largest
                             // positive INTEGER; FMID clips it to the source.
-                            operands.push(Operand::Constant(INTEGER, Number::Integer(i16::MAX as i64)));
+                            operands.push(self.count(self.largest_count()));
                         }
                     }
                     Lowering::Left | Lowering::Right => {
                         operands.push(self.string_descriptor(&arguments[0])?);
                         let (length, length_type) = self.expression(&arguments[1])?;
-                        operands.push(self.convert(length, length_type, INTEGER)?);
+                        let word = self.word_type();
+                        operands.push(self.convert(length, length_type, word)?);
                     }
                     Lowering::RuntimeString(_) => {
                         operands.push(self.string_descriptor(&arguments[0])?);
@@ -5429,7 +5446,8 @@ impl Compiler {
             }
             if intrinsic.is_some_and(|one| one.lowering == Lowering::StringFill) {
                 let (length, length_type) = self.expression(&arguments[0])?;
-                let length = self.convert(length, length_type, INTEGER)?;
+                let word = self.word_type();
+                let length = self.convert(length, length_type, word)?;
                 let (callee, repeated) = if self.string_syntax(&arguments[1]) {
                     ("B$STRS", self.string_descriptor(&arguments[1])?)
                 } else {
@@ -5443,7 +5461,8 @@ impl Compiler {
             }
             if intrinsic.is_some_and(|one| one.lowering == Lowering::Space) {
                 let (count, type_id) = self.expression(&arguments[0])?;
-                let count = self.convert(count, type_id, INTEGER)?;
+                let word = self.word_type();
+                let count = self.convert(count, type_id, word)?;
                 let pointer_type = self.pointer_type(STRING);
                 let result = self.value(pointer_type);
                 self.emit_runtime_call("B$SPAC", vec![result], vec![count]);
@@ -5565,7 +5584,7 @@ impl Compiler {
         self.emit_runtime_call(
             "B$LDFS",
             vec![result],
-            vec![Operand::Value(address), Operand::Constant(INTEGER, Number::Integer(width as i64))],
+            vec![Operand::Value(address), self.count(width as i64)],
         );
         Ok(Operand::Value(result))
     }
@@ -6557,7 +6576,8 @@ impl Compiler {
             };
             let upper = intrinsic.lowering == Lowering::UpperBound;
             let result = self.array_bound(&variable, dimension, upper)?;
-            return Ok(Some((result, INTEGER)));
+            let word = self.word_type();
+            return Ok(Some((self.convert(result, INTEGER, word)?, word)));
         }
         if let Lowering::RuntimeInteger(routine) = intrinsic.lowering {
             let mut operands = Vec::new();
@@ -6977,21 +6997,22 @@ impl Compiler {
                         .is_some_and(|intrinsic| intrinsic.result == ResultClass::String)
             ) || matches!(&arguments[0], Expr::Literal(Literal::String(_), _))
                 || (self.place_syntax_type(&arguments[0]).is_none() && self.string_syntax(&arguments[0]));
+            let word = self.word_type();
             if produced_string {
                 let address = self.string_descriptor(&arguments[0])?;
-                let result = self.value(INTEGER);
+                let result = self.value(word);
                 self.emit_runtime_call("B$FLEN", vec![result], vec![address]);
-                return Ok(Some((Operand::Value(result), INTEGER)));
+                return Ok(Some((Operand::Value(result), word)));
             }
             let (_, type_id) = self.destination(&arguments[0])?;
             if self.string_width(type_id).is_some() {
                 let address = self.string_descriptor(&arguments[0])?;
-                let result = self.value(INTEGER);
+                let result = self.value(word);
                 self.emit_runtime_call("B$FLEN", vec![result], vec![address]);
-                return Ok(Some((Operand::Value(result), INTEGER)));
+                return Ok(Some((Operand::Value(result), word)));
             }
             let type_ = self.types.iter().find(|one| one.id == type_id).cloned().expect("known LEN type");
-            return Ok(Some((Operand::Constant(INTEGER, Number::Integer(type_.width as i64)), INTEGER)));
+            return Ok(Some((self.count(type_.width as i64), word)));
         }
         if intrinsic.lowering == Lowering::Asc {
             let address = self.string_descriptor(&arguments[0])?;
@@ -7004,18 +7025,20 @@ impl Compiler {
                 ("B$INS2", vec![self.string_descriptor(&arguments[0])?, self.string_descriptor(&arguments[1])?])
             } else {
                 let (start, start_type) = self.expression(&arguments[0])?;
+                let word = self.word_type();
                 (
                     "B$INS3",
                     vec![
-                        self.convert(start, start_type, INTEGER)?,
+                        self.convert(start, start_type, word)?,
                         self.string_descriptor(&arguments[1])?,
                         self.string_descriptor(&arguments[2])?,
                     ],
                 )
             };
-            let result = self.value(INTEGER);
+            let word = self.word_type();
+            let result = self.value(word);
             self.emit_runtime_call(callee, vec![result], operands);
-            return Ok(Some((Operand::Value(result), INTEGER)));
+            return Ok(Some((Operand::Value(result), word)));
         }
         if matches!(
             intrinsic.lowering,
@@ -7498,9 +7521,9 @@ impl Compiler {
                 Vec::new(),
                 vec![
                     source,
-                    Operand::Constant(INTEGER, Number::Integer(0)),
+                    self.count(0),
                     Operand::Value(target),
-                    Operand::Constant(INTEGER, Number::Integer(width as i64)),
+                    self.count(width as i64),
                 ],
             );
             self.filled(2, width);

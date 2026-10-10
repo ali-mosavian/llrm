@@ -47,19 +47,19 @@ static SD *repeated(int n, char c)
 }
 
 /* B$SPAC: SPACE$(n). */
-SD *B_SPAC(short n)
+SD *B_SPAC(int n)
 {
     return repeated(n, ' ');
 }
 
 /* B$STRI: STRING$(n, code). */
-SD *B_STRI(short n, short code)
+SD *B_STRI(int n, short code)
 {
     return repeated(n, (char)code);
 }
 
 /* B$STRS: STRING$(n, text), the first character of the text. */
-SD *B_STRS(short n, SD *text)
+SD *B_STRS(int n, SD *text)
 {
     char first;
 
