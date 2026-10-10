@@ -43,13 +43,8 @@ static unsigned sprite_bytes(unsigned mode, unsigned w, unsigned h)
     return h * planes * ((w * bits + 7) / 8);
 }
 
-/* WORKAROUND M32-FRAMEBASE (remove when target-neutral's fix lands).
-   The box under test, in globals: the m32 compiler gets a function of six or more arguments wrong. */
-static unsigned t_mode, t_bx, t_by, t_w, t_h, t_colors;
-
-static void pack_ref(unsigned char *out)
+static void pack_ref(unsigned mode, unsigned bx, unsigned by, unsigned w, unsigned h, unsigned char *out)
 {
-    unsigned mode = t_mode, bx = t_bx, by = t_by, w = t_w, h = t_h;
     unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1, bits = mode == 0x13 ? 8 : mode == 4 ? 2 : 1;
     unsigned per_plane = (w * bits + 7) / 8, x, y, i;
 
@@ -70,9 +65,8 @@ static void pack_ref(unsigned char *out)
     }
 }
 
-static void put_ref(const unsigned char *in, unsigned operation, unsigned invert)
+static void put_ref(unsigned mode, unsigned bx, unsigned by, unsigned w, unsigned h, const unsigned char *in, unsigned operation, unsigned invert, unsigned colors)
 {
-    unsigned mode = t_mode, bx = t_bx, by = t_by, w = t_w, h = t_h, colors = t_colors;
     unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1, bits = mode == 0x13 ? 8 : mode == 4 ? 2 : 1;
     unsigned per_plane = (w * bits + 7) / 8, x, y;
 
@@ -133,8 +127,7 @@ int main(void)
                 if (sw > 40)
                     sw = 40;
                 bytes = sprite_bytes(modes[m], sw, sh);
-                t_mode = modes[m], t_bx = sx, t_by = sy, t_w = sw, t_h = sh, t_colors = colors[m];
-                pack_ref(expected_sprite);
+                pack_ref(modes[m], sx, sy, sw, sh, expected_sprite);
                 gd_get(sx, sy, sw, sh, sprite);
                 for (i = 0; i < bytes; i++)
                     if (sprite[i] != expected_sprite[i]) {
@@ -144,7 +137,7 @@ int main(void)
                 for (i = 0; i < bytes; i++)
                     sprite[i] = (unsigned char)next();
                 grab(saved);
-                put_ref(sprite, operation, invert);
+                put_ref(modes[m], sx, sy, sw, sh, sprite, operation, invert, colors[m]);
                 grab(expected);
                 put_back(saved);
                 gd_put(sx, sy, sw, sh, sprite, operation, invert);
