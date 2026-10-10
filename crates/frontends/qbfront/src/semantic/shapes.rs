@@ -447,6 +447,9 @@ fn entered_allocated(
 
 /// Fold each proven fact into the HIR.
 pub(super) fn applied(compiler: &mut Compiler) {
+    // A far array's adjusted offset is its bounds alone, so a known shape gives it; where there is one space
+    // it is a pointer, the data less its bounds, which no shape gives.
+    let origin_known = !compiler.options.one_space();
     let (mut classes, known) = known(compiler);
     let statics: BTreeSet<Identity> = compiler
         .functions
@@ -520,7 +523,7 @@ pub(super) fn applied(compiler: &mut Compiler) {
                         one.op = "copy";
                         one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(rank as i64))];
                     }
-                    Some(Tag::DescriptorField { descriptor, field: Slot::Origin }) if one.op == "load" => {
+                    Some(Tag::DescriptorField { descriptor, field: Slot::Origin }) if one.op == "load" && origin_known => {
                         let Some(origin) = fact(descriptor).and_then(|fact| fact.origin) else {
                             continue;
                         };

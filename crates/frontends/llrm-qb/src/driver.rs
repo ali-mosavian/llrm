@@ -219,7 +219,7 @@ pub fn decoded(
     // Where an error is handled the routine raises it, as the checks the
     // frontend writes do.
     program.promises.checked = checked || handles;
-    program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(family, if near_bytes == 0 { 2 } else { near_bytes });
+    program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(program.runtime.value(), if near_bytes == 0 { 2 } else { near_bytes });
     program.promises.routines = llrm_core::abi::runtime::semantics::routines();
     program.promises.nounwind = llrm_core::abi::runtime::CONTRACTS
         .iter()

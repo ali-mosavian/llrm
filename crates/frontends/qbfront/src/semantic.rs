@@ -387,6 +387,44 @@ pub fn compile_with_array_order(
     compile_with_options(module, module_name, dialect, runtime, &Options { row_major, ..Options::default() })
 }
 
+/// Where an array descriptor keeps what, byte by byte: QB's AD (inc/array.inc) where a near pointer is two bytes, llrm's
+/// flat one, with whole pointers and no selector, where it is a dword.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct AdLayout {
+    /// The data pointer, or the data's offset.
+    pub data: usize,
+    /// The data's selector, where the target has them.
+    pub selector: Option<usize>,
+    /// The rank byte.
+    pub rank: usize,
+    /// The features byte.
+    pub features: usize,
+    /// The element's size, a word.
+    pub element: usize,
+    /// The data address already less every lower bound's elements.
+    pub origin: usize,
+    /// The first dimension record: a word of count and a word of lower bound each.
+    pub header: usize,
+}
+
+impl AdLayout {
+    pub(super) fn of(options: &Options) -> Self {
+        if options.one_space() {
+            Self { data: 0, selector: None, rank: 8, features: 9, element: 10, origin: 12, header: 16 }
+        } else {
+            Self { data: 0, selector: Some(2), rank: 8, features: 9, element: 12, origin: 10, header: 14 }
+        }
+    }
+
+    /// The bytes of a descriptor of `rank` dimensions.
+    pub(super) fn bytes(
+        &self,
+        rank: usize,
+    ) -> usize {
+        self.header + 4 * rank
+    }
+}
+
 /// How BC was told to compile the module.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options {
@@ -589,7 +627,7 @@ fn built_from(
             }
             let value_type = if is_array {
                 let descriptor = compiler
-                    .opaque_type(format!("{} descriptor", parameter.declaration.name), 14 + 4 * UNSPECIFIED_ARRAY_RANK);
+                    .opaque_type(format!("{} descriptor", parameter.declaration.name), AdLayout::of(&compiler.options).bytes(UNSPECIFIED_ARRAY_RANK));
                 compiler.pointer_type(descriptor)
             } else if parameter.segmented {
                 compiler.far_pointer_type(parameter_type)
@@ -602,7 +640,7 @@ fn built_from(
             parameters.push(value);
             parameter_bytes += compiler.width(value_type).max(2);
             let referenced = if is_array {
-                14 + 4
+                AdLayout::of(&compiler.options).bytes(1)
             } else if parameter.segmented || parameter.by_value {
                 0
             } else {
@@ -2378,7 +2416,7 @@ impl Compiler {
             // bounded array. BC creates it with B$DDIM, leaving a mutable
             // descriptor that a later REDIM may legally replace.
             let descriptor_type =
-                self.opaque_type(format!("{} descriptor", declaration.name), 14 + 4 * declaration.bounds.len());
+                self.opaque_type(format!("{} descriptor", declaration.name), self.ad().bytes(declaration.bounds.len()));
             let descriptor_extent = self.width(descriptor_type);
             let (descriptor_offset, descriptor_symbol) = if storage == "module" {
                 (0, self.module_data(module_symbol.clone(), descriptor_extent, 1))
@@ -2441,7 +2479,7 @@ impl Compiler {
         }
         if declaration.array && bounds.is_empty() {
             let descriptor_type =
-                self.opaque_type(format!("{} descriptor", declaration.name), 14 + 4 * UNSPECIFIED_ARRAY_RANK);
+                self.opaque_type(format!("{} descriptor", declaration.name), self.ad().bytes(UNSPECIFIED_ARRAY_RANK));
             let descriptor_extent = self.width(descriptor_type);
             let (descriptor_offset, descriptor_symbol) = if storage == "module" {
                 (0, self.module_data(module_symbol.clone(), descriptor_extent, 1))
@@ -2568,7 +2606,7 @@ impl Compiler {
             self.debug_held(held, &source, span, type_id, false);
         }
         let descriptor_place = if array_element.is_some() {
-            let descriptor_type = self.opaque_type(format!("{} descriptor", declaration.name), 14 + 4 * bounds.len());
+            let descriptor_type = self.opaque_type(format!("{} descriptor", declaration.name), self.ad().bytes(bounds.len()));
             let descriptor_extent = self.width(descriptor_type);
             let local_descriptor = matches!(storage, "local" | "parameter");
             let (descriptor_offset, descriptor_storage, descriptor_symbol) = if local_descriptor {
@@ -2703,17 +2741,18 @@ impl Compiler {
         // FADF_STATIC says that storage is not runtime-owned.
         let symbol = self.next_data;
         self.next_data += 1;
-        let mut bytes = vec![0; 14 + 4 * bounds.len()];
-        bytes[8] = bounds.len() as u8;
-        bytes[9] = 0x40;
+        let layout = self.ad();
+        let mut bytes = vec![0; layout.bytes(bounds.len())];
+        bytes[layout.rank] = bounds.len() as u8;
+        bytes[layout.features] = 0x40;
 
-        bytes[12..14].copy_from_slice(&(element_width as u16).to_le_bytes());
+        bytes[layout.element..layout.element + 2].copy_from_slice(&(element_width as u16).to_le_bytes());
         // Q45A05's QB 4.5 BC_CN bytes are 03 00 01 00 then
         // 02 00 01 00 for source bounds (1 TO 2, 1 TO 3); BC /R stores
         // 02 00 01 00 first.
         let records = self.descriptor_records(bounds);
         for (record, (low, high)) in records.iter().enumerate() {
-            let at = 14 + 4 * record;
+            let at = layout.header + 4 * record;
             let count = (high - low + 1) as u16;
             bytes[at..at + 2].copy_from_slice(&count.to_le_bytes());
             bytes[at + 2..at + 4].copy_from_slice(&(*low as u16).to_le_bytes());
@@ -2735,11 +2774,17 @@ impl Compiler {
             bytes,
             readonly: true,
             relocations: vec![
-                DataRelocation { at: 0, target: data_symbol, addend: data_offset as isize, address: "far" },
+                // A whole pointer where the target has one space, else an offset and a selector.
+                DataRelocation {
+                    at: layout.data,
+                    target: data_symbol,
+                    addend: data_offset as isize,
+                    address: if self.options.one_space() { "near" } else { "far" },
+                },
                 // AD_oAdjusted is biased so generic array code can add source
                 // subscripts directly. QB's one-based six-byte DYNARR record
                 // has data at +6 but AD_oAdjusted at +0; TOUCH adds 1*6.
-                DataRelocation { at: 10, target: data_symbol, addend: adjusted_offset as isize, address: "near" },
+                DataRelocation { at: layout.origin, target: data_symbol, addend: adjusted_offset as isize, address: "near" },
             ],
             linkage: "internal",
             address: "near",
@@ -4700,8 +4745,11 @@ impl Compiler {
         if indices.is_empty() {
             return self.fail("array element requires at least one subscript");
         }
+        // Where there is one space every array is one run of memory a pointer reaches: its origin pointer and
+        // the subscripts' offset, as wide as an element number may be.
+        let address = if self.options.one_space() { "flat" } else { address };
         let pointer_type = match address {
-            "near" => self.pointer_type(element),
+            "near" | "flat" => self.pointer_type(element),
             "split_far" => self.far_pointer_type(element),
             _ => self.whole_pointer_type(element),
         };
@@ -4740,8 +4788,9 @@ impl Compiler {
             // it does not normalize this as a huge pointer. /AH arrays need a
             // distinct descriptor/address policy when that dialect option is
             // introduced rather than changing this default-memory-model rule.
-            let selector = self.descriptor_field(descriptor, 2, INTEGER);
-            let adjusted = self.descriptor_field(descriptor, 10, INTEGER);
+            let layout = self.ad();
+            let selector = self.descriptor_field(descriptor, layout.selector.expect("a far array has a selector"), INTEGER);
+            let adjusted = self.descriptor_field(descriptor, layout.origin, INTEGER);
             let offset = self.value(INTEGER);
             self.emit("add", vec![offset], vec![Operand::Value(adjusted), Operand::Value(bytes)]);
             self.tag_last(Tag::ElementOffset { descriptor, origin: Some(adjusted) });
@@ -4754,7 +4803,7 @@ impl Compiler {
             self.emit("ptr_offset", vec![pointer], vec![Operand::Value(data), Operand::Value(bytes)]);
             // Only a near pointer is the +0Ah offset itself; a whole pointer
             // is +0's offset and selector.
-            let origin = (address == "near").then_some(data);
+            let origin = matches!(address, "near" | "flat").then_some(data);
             self.tag_last(Tag::ElementOffset { descriptor, origin });
             pointer
         };
@@ -4769,17 +4818,25 @@ impl Compiler {
         subscripts: &[Operand],
         offset_type: u32,
     ) -> Result<(), SemanticError> {
-        let selector = self.descriptor_field(descriptor, 2, INTEGER);
+        // Without elements the selector is 0, or the data pointer where there is none.
+        let layout = self.ad();
+        let (probe, probe_type) = match layout.selector {
+            Some(at) => (self.descriptor_field(descriptor, at, INTEGER), INTEGER),
+            None => {
+                let pointer_type = self.pointer_type(VOID);
+                (self.descriptor_field(descriptor, layout.data, pointer_type), pointer_type)
+            }
+        };
         let unallocated = self.computed(
             "eq",
             BOOLEAN,
-            vec![Operand::Value(selector), Operand::Constant(INTEGER, Number::Integer(0))],
+            vec![Operand::Value(probe), Operand::Constant(probe_type, Number::Integer(0))],
         );
         self.raise_if(unallocated, 9)?;
         for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
-            let lower = self.descriptor_field(descriptor, 16 + 4 * record, INTEGER);
+            let lower = self.descriptor_field(descriptor, self.ad().header + 2 + 4 * record, INTEGER);
             let lower = self.convert(Operand::Value(lower), INTEGER, LONG)?;
-            let count = self.descriptor_field(descriptor, 14 + 4 * record, INTEGER);
+            let count = self.descriptor_field(descriptor, self.ad().header + 4 * record, INTEGER);
             let count = self.convert(Operand::Value(count), INTEGER, LONG)?;
             self.subscript_checked(subscripts[dimension].clone(), offset_type, lower, count)?;
         }
@@ -4841,7 +4898,7 @@ impl Compiler {
         for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
             let mut subscript = subscripts[dimension].clone();
             if lower {
-                let bound = self.descriptor_field(descriptor, 16 + 4 * record, INTEGER);
+                let bound = self.descriptor_field(descriptor, self.ad().header + 2 + 4 * record, INTEGER);
                 let bound = self.convert(Operand::Value(bound), INTEGER, offset_type)?;
                 let from = self.value(offset_type);
                 self.emit("sub", vec![from], vec![subscript, bound]);
@@ -4850,7 +4907,7 @@ impl Compiler {
             linear = Some(match linear {
                 None => subscript,
                 Some(previous) => {
-                    let count = self.descriptor_field(descriptor, 14 + 4 * record, INTEGER);
+                    let count = self.descriptor_field(descriptor, self.ad().header + 4 * record, INTEGER);
                     let count = self.convert(Operand::Value(count), INTEGER, offset_type)?;
                     let multiplied = self.value(offset_type);
                     self.emit("mul", vec![multiplied], vec![previous, count]);
@@ -4876,7 +4933,12 @@ impl Compiler {
         // A near STRING-array descriptor carries only its already-adjusted
         // data offset at +0Ah. Whole-pointer descriptor policies, when added,
         // use their explicit pointer at +0 instead.
-        let data = self.descriptor_field(descriptor, if address == "near" { 10 } else { 0 }, pointer_type);
+        let layout = self.ad();
+        let data = self.descriptor_field(
+            descriptor,
+            if matches!(address, "near" | "flat") { layout.origin } else { layout.data },
+            pointer_type,
+        );
         self.descriptor_bases.insert(key, data);
         data
     }
@@ -4897,11 +4959,16 @@ impl Compiler {
             vec![value],
             vec![Operand::Indirect { base: descriptor, offset, type_id, volatile: false, inbounds: false }],
         );
-        if let Some(field) = Slot::at(offset) {
+        if let Some(field) = Slot::at(&self.ad(), offset) {
             self.tag_last(Tag::DescriptorField { descriptor, field });
         }
         self.descriptor_fields.insert(key, value);
         value
+    }
+
+    /// Where an array descriptor keeps what.
+    fn ad(&self) -> AdLayout {
+        AdLayout::of(&self.options)
     }
 
     fn invalidate_descriptor_cache(&mut self) {

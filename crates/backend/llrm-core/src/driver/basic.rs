@@ -59,8 +59,14 @@ pub fn _reg(register: Register) -> Loc {
 }
 
 #[allow(non_snake_case)]
-pub fn _RUNTIME_FRAME_HEADER(runtime: model::RuntimeProfile) -> Result<i64, String> {
+pub fn _RUNTIME_FRAME_HEADER(
+    runtime: model::RuntimeProfile,
+    bitness: u32,
+) -> Result<i64, String> {
     match runtime {
+        // llrm's flat frame is eight dwords below EBP: the previous BASIC frame, EBX, ECX, EDX, ESI and EDI as
+        // the caller had them, the bytes of locals and the GOSUB count.
+        model::RuntimeProfile::Llrm if bitness == 32 => Ok(32),
         model::RuntimeProfile::Qb45 | model::RuntimeProfile::Llrm => Ok(10),
         model::RuntimeProfile::Pds71 => Ok(18),
         model::RuntimeProfile::Vbdos => Ok(20),
@@ -159,9 +165,14 @@ pub fn _runtime_frame(
     runtime: model::RuntimeProfile,
     temporary_strings: i64,
     enter_by: &str,
+    bitness: u32,
 ) -> Result<(lir::LirBody, IndexMap<i64, masm::Callee>), String> {
-    let size = size + (size & 1);
-    let header = _RUNTIME_FRAME_HEADER(runtime)?;
+    // A real-mode frame is entered with its bytes of locals in CX and its string slots in BX, and a far call;
+    // a flat one with the bytes in EAX (which a function's callers do not keep), and a near call.
+    let flat = bitness == 32;
+    let word = if flat { 4 } else { 2 };
+    let size = (size + word - 1) / word * word;
+    let header = _RUNTIME_FRAME_HEADER(runtime, bitness)?;
     if size > 0x7FFE {
         return Err(format!("{}: {size} byte BASIC frame exceeds a 16-bit BP displacement", body.name).into());
     }
@@ -169,12 +180,20 @@ pub fn _runtime_frame(
         return Err(format!("{}: too many temporary STRING slots", body.name).into());
     }
     let serial = body.blocks.iter().flat_map(|block| &block.insns).map(|one| one.at).max().unwrap_or(0) + 1;
-    let imm = |value: i64| Loc::Imm(ir::Imm { value, width: 2, address: None });
-    let enter = [
-        _insn(serial, _semantics(Operation::Move, "mov", vec![_reg(Register::CX)], vec![imm(size)])),
-        _insn(serial + 1, _semantics(Operation::Move, "mov", vec![_reg(Register::BX)], vec![imm(temporary_strings)])),
-        _insn(serial + 2, _semantics(Operation::Call, "call", vec![], vec![])),
-    ];
+    let imm = |value: i64| Loc::Imm(ir::Imm { value, width: word as u32, address: None });
+    let enter: Vec<_> = if flat {
+        let eax = Loc::Reg(ir::Reg { register: Register::EAX, width: 4 });
+        vec![
+            _insn(serial, _semantics(Operation::Move, "mov", vec![eax], vec![imm(size)])),
+            _insn(serial + 2, _semantics(Operation::Call, "call", vec![], vec![])),
+        ]
+    } else {
+        vec![
+            _insn(serial, _semantics(Operation::Move, "mov", vec![_reg(Register::CX)], vec![imm(size)])),
+            _insn(serial + 1, _semantics(Operation::Move, "mov", vec![_reg(Register::BX)], vec![imm(temporary_strings)])),
+            _insn(serial + 2, _semantics(Operation::Call, "call", vec![], vec![])),
+        ]
+    };
     let leave_at = serial + 3;
     let leave = _insn(leave_at, _semantics(Operation::Call, "call", vec![], vec![]));
     let framed: Vec<lir::LirBlock> = body
@@ -256,8 +275,8 @@ pub fn _runtime_frame(
     Ok((
         lir::LirBody { variables, ..body.with_blocks(framed) },
         IndexMap::from_iter([
-            (serial + 2, masm::Callee::new(enter_by, true)),
-            (leave_at, masm::Callee::new("B$EXSA", true)),
+            (serial + 2, masm::Callee::new(enter_by, !flat)),
+            (leave_at, masm::Callee::new("B$EXSA", !flat)),
         ]),
     ))
 }
@@ -996,9 +1015,11 @@ fn procedure(
     } else {
         match frame {
             Frame::Runtime { strings } => {
-                entry = machined.reserve + (machined.reserve & 1) + _RUNTIME_FRAME_HEADER(runtime)?;
+                let bitness = target.arch.layout().mode;
+                let word = if bitness == 32 { 4 } else { 2 };
+                entry = (machined.reserve + word - 1) / word * word + _RUNTIME_FRAME_HEADER(runtime, bitness)?;
                 let by = check.and_then(|one| one.entry.as_deref()).unwrap_or("B$ENRA");
-                _runtime_frame(&finalized.body, machined.reserve, runtime, strings, by)?
+                _runtime_frame(&finalized.body, machined.reserve, runtime, strings, by, bitness)?
             }
             Frame::Own => {
                 reserve = machined.reserve;

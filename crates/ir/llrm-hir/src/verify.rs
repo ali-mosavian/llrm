@@ -545,8 +545,9 @@ fn _function(
             }
             for operand in &instruction.operands {
                 if let model::Operand::IndirectPlace(model::IndirectPlace { origin: Some(origin), .. }) = operand {
-                    if types.get(&values[origin].r#type).is_none_or(|one| one.width != 2) {
-                        invalid!("{prefix}: origin value {origin} is not a word offset");
+                    // A word offset where the target has segments, else the origin pointer itself.
+                    if types.get(&values[origin].r#type).is_none_or(|one| one.width != 2 && one.kind != model::TypeKind::Pointer) {
+                        invalid!("{prefix}: origin value {origin} is not a word offset or a pointer");
                     }
                 }
             }

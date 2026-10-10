@@ -3100,12 +3100,35 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             // A segment's integer form is its selector, a far pointer's
             // segment:offset.
+            Op::PointerSegment if self.tables.spaces.segment_space().is_err() => {
+                // One space: the segment of a pointer is the paragraph it is in, so that segment * 16 + offset
+                // (the real-mode form DEF SEG and PEEK use) is the address.
+                let pointer = self.value(&instruction.operands[0])?;
+                let ty = self.result_type(instruction.results[0])?;
+                let address = self.address_integer(pointer)?;
+                let bits = self.b.context.types.int_bits(self.b.type_of(address)).ok_or("an address that is no integer")?;
+                let four = self.b.int(bits, 4);
+                let paragraph = self.b.binary(BinaryOp::LShr, address, four, Flags::default(), "");
+                let result = self.convert(paragraph, false, ty)?;
+                self.define(instruction, result);
+            }
             Op::PointerSegment => {
                 let far = self.value(&instruction.operands[0])?;
                 let segment = self.b.context.types.ptr(self.tables.spaces.segment_space()?);
                 let segment = self.b.cast(CastOp::AddrSpaceCast, far, segment, "");
                 let ty = self.result_type(instruction.results[0])?;
                 let result = self.b.cast(CastOp::PtrToInt, segment, ty, "");
+                self.define(instruction, result);
+            }
+            Op::PointerOffset if self.tables.spaces.segment_space().is_err() => {
+                // The rest of the address after its paragraph, in 0 to 15.
+                let pointer = self.value(&instruction.operands[0])?;
+                let ty = self.result_type(instruction.results[0])?;
+                let address = self.address_integer(pointer)?;
+                let bits = self.b.context.types.int_bits(self.b.type_of(address)).ok_or("an address that is no integer")?;
+                let fifteen = self.b.int(bits, 15);
+                let rest = self.b.binary(BinaryOp::And, address, fifteen, Flags::default(), "");
+                let result = self.convert(rest, false, ty)?;
                 self.define(instruction, result);
             }
             Op::PointerOffset => {
@@ -3143,6 +3166,25 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
                 let function = function_type(&mut self.b.context.types, ty, vec![from, from]);
                 let result = self.b.call(function, callee, &[a, b], "").expect("a difference");
+                self.define(instruction, result);
+            }
+            Op::Concat if self.tables.spaces.segment_space().is_err() => {
+                let [selector, offset] = self.operands(instruction)?[..] else {
+                    return Err("concat without two operands".to_owned());
+                };
+                // One space: segment * 16 + offset, the real-mode address, as a pointer.
+                let ty = self.result_type(instruction.results[0])?;
+                let Type::Pointer(space) = *self.b.context.types.get(ty) else {
+                    return Err("a concat that is no pointer".to_owned());
+                };
+                let wide = self.b.context.types.int(self.tables.layout.pointer(space).bits);
+                let selector = self.convert(selector, false, wide)?;
+                let four = self.b.int(self.tables.layout.pointer(space).bits, 4);
+                let paragraph = self.b.binary(BinaryOp::Shl, selector, four, Flags::default(), "");
+                let base = self.b.cast(CastOp::IntToPtr, paragraph, ty, "");
+                let offset = self.convert(offset, false, wide)?;
+                let byte = self.b.context.types.int(8);
+                let result = self.b.gep(byte, base, &[offset], Flags::default(), "");
                 self.define(instruction, result);
             }
             Op::Concat => {
@@ -3402,6 +3444,18 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             (Some(_), Some(_)) => Ok(self.b.cast(CastOp::Trunc, value, ty, "")),
             _ => Err(format!("operands of {} and {}", types.display(from), types.display(ty))),
         }
+    }
+
+    /// A pointer's address as an integer as wide as the pointer.
+    fn address_integer(
+        &mut self,
+        pointer: Value,
+    ) -> Emit<Value> {
+        let Type::Pointer(space) = *self.b.context.types.get(self.b.type_of(pointer)) else {
+            return Err("the address of a non-pointer".to_owned());
+        };
+        let wide = self.b.context.types.int(self.tables.layout.pointer(space).bits);
+        Ok(self.b.cast(CastOp::PtrToInt, pointer, wide, ""))
     }
 
     fn convert(
