@@ -145,6 +145,12 @@ pub fn holds_a_segment_offset(
         && !is_stack(register)
 }
 
+/// The registers a pass may borrow for a moment, most preferred first: the
+/// description's scratch order.
+pub fn scratch_order() -> &'static [RegId] {
+    info().scratch
+}
+
 pub fn is_segment(register: RegId) -> bool {
     in_class(register, class::SEGMENT)
 }
@@ -294,5 +300,12 @@ mod tests {
         // The width is the segmented space's offset, not a word.
         assert!([RegId::EBX, RegId::ESI].into_iter().all(|one| holds_a_segment_offset(one, 4)));
         assert!(!holds_a_segment_offset(RegId::BX, 4));
+    }
+
+    /// The scratch order is the description's `@scratch` line: what a pass
+    /// borrows first is CX, and the result register AX last.
+    #[test]
+    fn the_scratch_order_is_the_descriptions() {
+        assert_eq!(scratch_order(), [RegId::CX, RegId::DX, RegId::BX, RegId::AX]);
     }
 }

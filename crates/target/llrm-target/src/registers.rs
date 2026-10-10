@@ -37,11 +37,20 @@ fn optional(text: &str) -> Result<Option<u16>, String> {
     if text == "-" { Ok(None) } else { text.parse().map(Some).map_err(|_| text.to_owned()) }
 }
 
+/// The scratch order a `@scratch cx dx bx ax` line states: the registers a pass
+/// may borrow for a moment, most preferred first (gcc's `REG_ALLOC_ORDER`).
+pub fn scratch(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|raw| raw.split('#').next().unwrap_or("").trim().strip_prefix("@scratch"))
+        .flat_map(|names| names.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        .collect()
+}
+
 pub fn parse(text: &str) -> Result<Vec<Register>, String> {
     let mut registers = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
+        if line.is_empty() || line.starts_with('@') {
             continue;
         }
         let columns: Vec<&str> = line.split_whitespace().collect();
@@ -168,6 +177,7 @@ pub fn source(
         .iter()
         .filter_map(|one| one.load.as_ref().map(|load| format!("({id}::{}, {load:?})", one.name.to_uppercase())))
         .collect();
+    let scratch: Vec<String> = scratch(text).iter().map(|name| format!("{id}::{}", name.to_uppercase())).collect();
     let optional = |class: &str| -> Result<String, String> {
         let roots: Vec<&Register> = registers.iter().filter(|one| one.is(class)).collect();
         match roots[..] {
@@ -179,8 +189,9 @@ pub fn source(
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, views }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, views }}\n}};\n",
         loads.join(", "),
+        scratch.join(", "),
         columns.join(", "),
         role("frame")?,
         role("stack")?,
@@ -257,5 +268,14 @@ mod source_tests {
             crate::registers::parse("a 8 a 0 - - 1 x y").unwrap_err(),
             "registers.regs:1: 9 columns, not 7 or 8"
         );
+    }
+
+    /// A `@scratch` line is an order, not a register row.
+    #[test]
+    fn a_scratch_line_is_an_order_not_a_register() {
+        let text = "@scratch cx ax\nebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\n";
+        assert_eq!(crate::registers::scratch(text), ["cx", "ax"]);
+        assert_eq!(crate::registers::parse(text).unwrap().len(), 2);
+        assert!(source(text, "Reg", &["frame", "stack"]).unwrap().contains("&[Reg::CX, Reg::AX]"));
     }
 }
