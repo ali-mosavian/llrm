@@ -208,7 +208,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::executed;
     use crate::backend::cpu;
@@ -231,8 +231,8 @@ mod tests {
     /// instruction: nbody.c read 144 more with its asm unchanged.
     #[test]
     fn test_anchors_that_print_nothing_do_not_execute() {
-        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
-        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
         let insns = vec![
             insn(1, Operation::Nothing, "", vec![], vec![]),
             insn(2, Operation::Move, "mov", vec![ax], vec![bx]),
@@ -247,8 +247,8 @@ mod tests {
     /// loopslots promoted any of it: nothing measured what finally executes.
     #[test]
     fn test_reloads_stores_and_remats_are_counted_apart() {
-        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
-        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
         let marked = |at, reload, store, remat| {
             let mut one = (*insn(at, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()])).clone();
             (one.spill_reload, one.spill_store, one.rematerialized) = (reload, store, remat);
@@ -270,7 +270,7 @@ mod tests {
     /// `imul eax,[bp-520]` read its spill slot, and 57 stores showed 0 reloads.
     #[test]
     fn test_a_use_reading_a_spill_slot_is_a_reload() {
-        let eax = Loc::Reg(Reg { register: Register::EAX, width: 4 });
+        let eax = Loc::Reg(Reg { register: RegId::EAX, width: 4 });
         let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -520)), 4));
         let mut store = (*insn(1, Operation::Move, "mov", vec![cell.clone()], vec![eax.clone()])).clone();
         store.spill_store = true;
@@ -291,7 +291,7 @@ mod tests {
     /// `safe`).
     #[test]
     fn test_a_loop_reading_an_incoming_argument_home_reloads_it_each_trip() {
-        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let home = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, 8)), 2));
         let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
         let blocks = vec![
@@ -326,8 +326,8 @@ mod tests {
     /// its body: suite/ivchan's 21 trips counted as 20.
     #[test]
     fn test_a_loop_tested_at_its_header_runs_its_body_every_trip() {
-        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
-        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
         let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
         let blocks = vec![
             block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
@@ -355,8 +355,8 @@ mod tests {
     /// mandel whose outer loop LSR entered at its body read 57% cheaper.
     #[test]
     fn test_a_loop_counted_at_its_one_exit_runs_its_count() {
-        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
-        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
         let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
         let blocks = vec![
             block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
@@ -378,8 +378,8 @@ mod tests {
     /// block that jumped there, the same code either way.
     #[test]
     fn test_a_guard_into_a_preheader_enters_its_loop_as_into_the_header() {
-        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
-        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
         let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
         let looped = |preheader: bool| {
             let mut blocks = vec![block(
@@ -414,8 +414,8 @@ mod tests {
     /// instrument once gave every uncounted loop ten, whatever its exits.
     #[test]
     fn test_an_uncounted_loop_runs_as_often_as_its_exits_odds_say() {
-        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
-        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
         let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
         let moved = |at| insn(at, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]);
         let tested = |at| insn(at, Operation::Branch, "jne", vec![], vec![]);
@@ -470,8 +470,8 @@ mod tests {
     /// into the join, saves the rarer arm's jmp on the common path.
     #[test]
     fn test_a_diamonds_jumps_are_counted_taken_or_not_and_priced() {
-        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
-        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
         let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
         let targeted = |at, op, name, target| {
             let mut one = (*insn(at, op, name, vec![], vec![])).clone();
@@ -509,8 +509,8 @@ mod tests {
     /// off the loop (PLASMABLOBS read 35,468,659 either way).
     #[test]
     fn test_work_after_a_branch_runs_as_often_as_it_falls_through() {
-        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
-        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
         let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
         let targeted = |at, op, name, target| {
             let mut one = (*insn(at, op, name, vec![], vec![])).clone();

@@ -290,7 +290,7 @@ fn _ends_the_program(
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::reserved;
     use crate::backend::frame::{self, Frame};
@@ -317,7 +317,7 @@ mod tests {
     fn procedure() -> LirBody {
         let held = Loc::Held(Held { value: 1, width: 2 });
         let mut entry = instruction(1, Operation::Call, "call", vec![], vec![held.clone()]);
-        entry.requires = vec![(Held { value: 1, width: 2 }, Register::CX)];
+        entry.requires = vec![(Held { value: 1, width: 2 }, RegId::CX)];
         let insns = vec![
             instruction(
                 0,

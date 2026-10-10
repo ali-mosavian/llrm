@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_x86_m16::cycles::*;
 
 use crate::backend::{cpu, schedule};
@@ -30,10 +30,10 @@ fn test_scalar_double_shifts_use_the_integer_shift_price() {
         let reg = |register| ir::Loc::Reg(ir::Reg { register, width: 4 });
         let what = ir::Semantics {
             name: Some(mnemonic.to_owned()),
-            dests: vec![reg(Register::EDX)],
+            dests: vec![reg(RegId::EDX)],
             sources: vec![
-                reg(Register::EDX),
-                reg(Register::EAX),
+                reg(RegId::EDX),
+                reg(RegId::EAX),
                 ir::Loc::Imm(ir::Imm { value: 16, width: 1, address: None }),
             ],
             ..ir::Semantics::new(ir::Operation::Funnel)
@@ -51,7 +51,7 @@ fn test_a_shift_by_one_is_priced_as_the_three_clock_form() {
     assert_eq!(classify("shl", "ax,1", "d1e0"), "shift_r1");
     assert_eq!(classify("shl", "ax,2", "c1e002"), "shift_ri");
     assert_eq!(classify("shl", "word [bp-4],1", "d166fc"), "shift_ri");
-    let reg = || ir::Loc::Reg(ir::Reg { register: Register::AX, width: 2 });
+    let reg = || ir::Loc::Reg(ir::Reg { register: RegId::AX, width: 2 });
     let what = ir::Semantics {
         name: Some("shl".to_owned()),
         dests: vec![reg()],
@@ -163,8 +163,8 @@ fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
     let reg = |register| ir::Loc::Reg(ir::Reg { register, width: 4 });
     let cell = ir::Mem {
         addr: None,
-        through: Register::EBX,
-        index_through: Register::EBX,
+        through: RegId::EBX,
+        index_through: RegId::EBX,
         index: Some(ir::Held { value: 1, width: 4 }),
         base: Some(ir::Held { value: 1, width: 4 }),
         scale: 2,
@@ -173,7 +173,7 @@ fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
     };
     let what = ir::Semantics {
         name: Some("lea".to_owned()),
-        dests: vec![reg(Register::ESI)],
+        dests: vec![reg(RegId::ESI)],
         sources: vec![ir::Loc::Mem(cell)],
         ..ir::Semantics::new(ir::Operation::Address)
     };

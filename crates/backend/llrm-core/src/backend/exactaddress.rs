@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::loops;
 use crate::backend::affine::{self, Step};
@@ -27,7 +27,7 @@ use crate::model::passes::AddressForm;
 use crate::support::hash::{HashMap, HashSet, IndexMap};
 
 /// An address as a sum: each register's root, multiple and value.
-type Sum = Vec<(Register, i64, u32)>;
+type Sum = Vec<(RegId, i64, u32)>;
 
 /// One cut of the chain computing a register: the removed instructions (by
 /// position), what the register equals in their place, and their cost.
@@ -47,7 +47,7 @@ struct Fold {
     users: Vec<(usize, Arc<Insn>, Roots)>,
 }
 
-fn full32(register: Register) -> Register {
+fn full32(register: RegId) -> RegId {
     ir::root(register)
 }
 
@@ -63,7 +63,7 @@ fn effects(
 fn untouched(
     bits: u32,
     between: &[Arc<Insn>],
-    register: Register,
+    register: RegId,
 ) -> bool {
     let lanes = _lanes(register);
     between.iter().all(|one| effects(bits, one).is_some_and(|(_, writes)| writes.and(&lanes).is_empty()))
@@ -74,7 +74,7 @@ fn holds(
     bits: u32,
     insns: &[Arc<Insn>],
     at: usize,
-    register: Register,
+    register: RegId,
     value: u32,
 ) -> bool {
     let lanes = _lanes(register);
@@ -92,7 +92,7 @@ fn holds(
 /// Adds `term` to `sum`; None where one root would hold two values.
 fn add(
     mut sum: Sum,
-    term: (Register, i64, u32),
+    term: (RegId, i64, u32),
 ) -> Option<Sum> {
     match sum.iter_mut().find(|one| one.0 == term.0) {
         Some(one) if one.2 != term.2 => return None,
@@ -124,7 +124,7 @@ pub(crate) fn cell_of(one: &Insn) -> Option<&Mem> {
         || what.sources.iter().any(|operand| {
             matches!(
                 operand,
-                Loc::Reg(read) if read.register != Register::None && roots.contains(&full32(read.register))
+                Loc::Reg(read) if read.register != RegId::None && roots.contains(&full32(read.register))
             )
         });
     let space = cell.addr?.space;
@@ -145,9 +145,9 @@ fn sum_of(
     at: usize,
     cell: &Mem,
 ) -> Option<Sum> {
-    let registers: Vec<(Register, i64)> = [(cell.through, 1), (cell.index_through, cell.scale)]
+    let registers: Vec<(RegId, i64)> = [(cell.through, 1), (cell.index_through, cell.scale)]
         .into_iter()
-        .filter(|(register, _)| *register != Register::None)
+        .filter(|(register, _)| *register != RegId::None)
         .collect();
     let held: Vec<Held> = [cell.base, cell.index].into_iter().flatten().collect();
     if registers.len() != held.len() || registers.iter().any(|(register, _)| !target::integer(*register)) {
@@ -179,7 +179,7 @@ fn sum_of(
 fn offsets(
     cell: &Mem,
     sum: &Sum,
-) -> Vec<Register> {
+) -> Vec<RegId> {
     match cell.addr.map(|addr| addr.space) {
         Some(Space::Segment | Space::External) => sum.iter().map(|one| one.0).collect(),
         _ if cell.index.is_none() => sum.iter().map(|one| one.0).collect(),
@@ -198,7 +198,7 @@ fn readers(
     bits: u32,
     block: &LirBlock,
     first: usize,
-    register: Register,
+    register: RegId,
     dead_after: &DeadAfter,
 ) -> Option<Vec<usize>> {
     let lanes = _lanes(register);
@@ -341,7 +341,7 @@ fn rewritten(
     bits: u32,
     insns: &[Arc<Insn>],
     at: usize,
-    root: Register,
+    root: RegId,
     stage: &Stage,
     uses: &dyn Fn(&Insn) -> Vec<u32>,
     form: &AddressForm,
@@ -357,10 +357,10 @@ fn rewritten(
         .iter()
         .map(|term| (term.0, term.1 * multiple, term.2))
         .try_fold(before.iter().filter(|term| term.0 != root).copied().collect(), add)?;
-    let terms: Vec<(Register, i64)> = sum.iter().map(|term| (term.0, term.1)).collect();
+    let terms: Vec<(RegId, i64)> = sum.iter().map(|term| (term.0, term.1)).collect();
     let address = affine::form(&terms, 0, &form.scales)?;
     let value =
-        |register: Register| sum.iter().find(|term| term.0 == register).map(|term| Held { value: term.2, width: 4 });
+        |register: RegId| sum.iter().find(|term| term.0 == register).map(|term| Held { value: term.2, width: 4 });
     let (base, index) = (value(address.through), value(address.index_through));
     // A far cell keeps its origin as the base, unless the origin was a
     // constant and the one register the cell had was all offset.
@@ -373,7 +373,7 @@ fn rewritten(
     // A 32-bit EBP base selects SS where a 16-bit cell's register did not.
     if crate::backend::registerinfo::is_frame(address.through)
         && crate::backend::registerinfo::bytes(address.through) == Some(4)
-        && addr.segment == Register::None
+        && addr.segment == RegId::None
     {
         return None;
     }
@@ -412,7 +412,7 @@ fn fold(
     bits: u32,
     block: &LirBlock,
     first: usize,
-    root: Register,
+    root: RegId,
     dead_after: &DeadAfter,
     live_out: &BTreeSet<u32>,
     form: &AddressForm,
@@ -622,7 +622,7 @@ fn folded(
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::exact_addresses;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -630,7 +630,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn reg(
-        register: Register,
+        register: RegId,
         width: u32,
     ) -> Loc {
         Loc::Reg(Reg { register, width })
@@ -654,34 +654,34 @@ mod tests {
         // Uncoalesced, `shl bx,1` reads 20 and defines 21: the address kept
         // naming 21, which lost its only definition with the shift.
         let cell = Mem {
-            addr: Some(Addr { segment: Register::FS, ..Addr::new(Space::Far, 0) }),
+            addr: Some(Addr { segment: RegId::FS, ..Addr::new(Space::Far, 0) }),
             // The allocator names BX first for the 16-bit encoding.
-            through: Register::BX,
+            through: RegId::BX,
             base: Some(Held { value: 26, width: 2 }),
             index: Some(Held { value: 21, width: 2 }),
-            index_through: Register::DI,
+            index_through: RegId::DI,
             exact: true,
             ..Mem::new(None, 2)
         };
         let insns = vec![
-            one(0, Operation::Extend, "movzx", vec![reg(Register::EBX, 4)], vec![reg(Register::BX, 2)], vec![], vec![]),
-            one(1, Operation::Extend, "movzx", vec![reg(Register::EDI, 4)], vec![reg(Register::DI, 2)], vec![], vec![]),
+            one(0, Operation::Extend, "movzx", vec![reg(RegId::EBX, 4)], vec![reg(RegId::BX, 2)], vec![], vec![]),
+            one(1, Operation::Extend, "movzx", vec![reg(RegId::EDI, 4)], vec![reg(RegId::DI, 2)], vec![], vec![]),
             one(
                 2,
                 Operation::Binary,
                 "shl",
-                vec![reg(Register::BX, 2)],
-                vec![reg(Register::BX, 2), Loc::Imm(Imm { value: 1, width: 1, address: None })],
+                vec![reg(RegId::BX, 2)],
+                vec![reg(RegId::BX, 2), Loc::Imm(Imm { value: 1, width: 1, address: None })],
                 vec![21],
                 vec![20],
             ),
-            one(3, Operation::Move, "mov", vec![reg(Register::BX, 2)], vec![Loc::Mem(cell)], vec![30], vec![26, 21]),
+            one(3, Operation::Move, "mov", vec![reg(RegId::BX, 2)], vec![Loc::Mem(cell)], vec![30], vec![26, 21]),
             one(
                 4,
                 Operation::Compare,
                 "cmp",
                 vec![],
-                vec![reg(Register::BX, 2), Loc::Imm(Imm { value: 0, width: 2, address: None })],
+                vec![reg(RegId::BX, 2), Loc::Imm(Imm { value: 0, width: 2, address: None })],
                 vec![],
                 vec![30],
             ),
@@ -695,7 +695,7 @@ mod tests {
         let Loc::Mem(cell) = &load.what.as_ref().unwrap().sources[0] else { panic!("not a cell") };
         assert_eq!(
             (cell.index, cell.scale, cell.through, cell.index_through),
-            (Some(Held { value: 20, width: 4 }), 2, Register::EDI, Register::EBX)
+            (Some(Held { value: 20, width: 4 }), 2, RegId::EDI, RegId::EBX)
         );
         assert!(load.uses.contains(&20) && !load.uses.contains(&21));
     }
@@ -706,42 +706,26 @@ mod tests {
         // shift folded, never a copy, and never into a symbol's cell.
         let cell = |index: i64| Mem {
             addr: Some(Addr { index, ..Addr::new(Space::Segment, 0) }),
-            through: Register::SI,
+            through: RegId::SI,
             base: Some(Held { value: 12, width: 2 }),
             exact: true,
             ..Mem::new(None, 2)
         };
         let insns = vec![
-            one(
-                0,
-                Operation::Extend,
-                "movzx",
-                vec![reg(Register::EAX, 4)],
-                vec![reg(Register::AX, 2)],
-                vec![10],
-                vec![10],
-            ),
-            one(1, Operation::Move, "mov", vec![reg(Register::SI, 2)], vec![reg(Register::AX, 2)], vec![11], vec![10]),
+            one(0, Operation::Extend, "movzx", vec![reg(RegId::EAX, 4)], vec![reg(RegId::AX, 2)], vec![10], vec![10]),
+            one(1, Operation::Move, "mov", vec![reg(RegId::SI, 2)], vec![reg(RegId::AX, 2)], vec![11], vec![10]),
             one(
                 2,
                 Operation::Binary,
                 "shl",
-                vec![reg(Register::SI, 2)],
-                vec![reg(Register::SI, 2), Loc::Imm(Imm { value: 1, width: 1, address: None })],
+                vec![reg(RegId::SI, 2)],
+                vec![reg(RegId::SI, 2), Loc::Imm(Imm { value: 1, width: 1, address: None })],
                 vec![12],
                 vec![11],
             ),
-            one(3, Operation::Move, "mov", vec![reg(Register::CX, 2)], vec![Loc::Mem(cell(1))], vec![13], vec![12]),
-            one(4, Operation::Move, "mov", vec![reg(Register::SI, 2)], vec![Loc::Mem(cell(2))], vec![14], vec![12]),
-            one(
-                5,
-                Operation::Compare,
-                "cmp",
-                vec![],
-                vec![reg(Register::CX, 2), reg(Register::SI, 2)],
-                vec![],
-                vec![13, 14],
-            ),
+            one(3, Operation::Move, "mov", vec![reg(RegId::CX, 2)], vec![Loc::Mem(cell(1))], vec![13], vec![12]),
+            one(4, Operation::Move, "mov", vec![reg(RegId::SI, 2)], vec![Loc::Mem(cell(2))], vec![14], vec![12]),
+            one(5, Operation::Compare, "cmp", vec![], vec![reg(RegId::CX, 2), reg(RegId::SI, 2)], vec![], vec![13, 14]),
         ];
         let body = LirBody::new("copied", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
 
@@ -753,7 +737,7 @@ mod tests {
             let Loc::Mem(cell) = &load.what.as_ref().unwrap().sources[0] else { panic!("not a cell") };
             assert_eq!(
                 (cell.base.map(|one| one.value), cell.through, cell.index_through, cell.scale),
-                (Some(10), Register::EAX, Register::EAX, 1),
+                (Some(10), RegId::EAX, RegId::EAX, 1),
             );
             assert_eq!(load.uses, [10]);
         }
@@ -765,51 +749,35 @@ mod tests {
         // through `[eax+eax]`.
         let cell = |index: i64| Mem {
             addr: Some(Addr { index, ..Addr::new(Space::Segment, 0) }),
-            through: Register::SI,
+            through: RegId::SI,
             base: Some(Held { value: 12, width: 2 }),
             exact: true,
             ..Mem::new(None, 2)
         };
         let insns = vec![
-            one(
-                0,
-                Operation::Extend,
-                "movzx",
-                vec![reg(Register::EAX, 4)],
-                vec![reg(Register::AX, 2)],
-                vec![10],
-                vec![10],
-            ),
-            one(1, Operation::Move, "mov", vec![reg(Register::SI, 2)], vec![reg(Register::AX, 2)], vec![11], vec![10]),
+            one(0, Operation::Extend, "movzx", vec![reg(RegId::EAX, 4)], vec![reg(RegId::AX, 2)], vec![10], vec![10]),
+            one(1, Operation::Move, "mov", vec![reg(RegId::SI, 2)], vec![reg(RegId::AX, 2)], vec![11], vec![10]),
             one(
                 2,
                 Operation::Binary,
                 "shl",
-                vec![reg(Register::SI, 2)],
-                vec![reg(Register::SI, 2), Loc::Imm(Imm { value: 1, width: 1, address: None })],
+                vec![reg(RegId::SI, 2)],
+                vec![reg(RegId::SI, 2), Loc::Imm(Imm { value: 1, width: 1, address: None })],
                 vec![12],
                 vec![11],
             ),
-            one(3, Operation::Move, "mov", vec![reg(Register::CX, 2)], vec![Loc::Mem(cell(1))], vec![13], vec![12]),
+            one(3, Operation::Move, "mov", vec![reg(RegId::CX, 2)], vec![Loc::Mem(cell(1))], vec![13], vec![12]),
             one(
                 4,
                 Operation::Move,
                 "mov",
-                vec![reg(Register::AX, 2)],
+                vec![reg(RegId::AX, 2)],
                 vec![Loc::Imm(Imm { value: 5, width: 2, address: None })],
                 vec![15],
                 vec![],
             ),
-            one(5, Operation::Move, "mov", vec![reg(Register::SI, 2)], vec![Loc::Mem(cell(2))], vec![14], vec![12]),
-            one(
-                6,
-                Operation::Compare,
-                "cmp",
-                vec![],
-                vec![reg(Register::CX, 2), reg(Register::SI, 2)],
-                vec![],
-                vec![13, 14],
-            ),
+            one(5, Operation::Move, "mov", vec![reg(RegId::SI, 2)], vec![Loc::Mem(cell(2))], vec![14], vec![12]),
+            one(6, Operation::Compare, "cmp", vec![], vec![reg(RegId::CX, 2), reg(RegId::SI, 2)], vec![], vec![13, 14]),
         ];
         let body =
             LirBody::new("clobbered", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
@@ -821,6 +789,6 @@ mod tests {
         else {
             panic!("not a cell")
         };
-        assert_ne!(cell.through, Register::EAX);
+        assert_ne!(cell.through, RegId::EAX);
     }
 }

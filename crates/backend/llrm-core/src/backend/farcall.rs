@@ -114,6 +114,8 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
+    use llrm_lir::registers::RegId;
+
     use super::FarIndirectCalls;
     use crate::backend::frame::{Frame, SlotKey};
     use crate::model::ir::{Held, Loc, Operation, Semantics};
@@ -195,7 +197,7 @@ mod tests {
             vec![],
             vec![7, 5],
         );
-        call.requires = vec![(Held { value: 7, width: 4 }, iced_x86::Register::EAX)];
+        call.requires = vec![(Held { value: 7, width: 4 }, RegId::EAX)];
         let body = LirBody::new(
             "far",
             0,

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use super::walk::Facts;
 use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
@@ -20,7 +20,7 @@ fn what(
 }
 
 fn argument() -> Mem {
-    Mem { through: Register::BP, ..Mem::new(Some(Addr::new(Space::Frame, 6)), 2) }
+    Mem { through: RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, 6)), 2) }
 }
 
 /// `mov v,[bp+6]`, `between`, `push v`; what memory_arguments makes of it

@@ -9,6 +9,8 @@
 
 use std::collections::BTreeSet;
 
+use llrm_lir::registers::RegId;
+
 use crate::objectfile::module::{Addr, Space};
 
 const WHOLE: (i64, i64) = (-(1_i64 << 31), 1_i64 << 31);
@@ -82,14 +84,12 @@ fn spans(
         }]));
     };
     let (region, origin) = region(address.space, address.index);
-    let (low, high) = if address.base != iced_x86::Register::None
-        || region == Region::default()
-        || region == Region(vec![Part::Named])
-    {
-        WHOLE
-    } else {
-        (address.disp, address.disp.checked_add(i64::from(width.max(1)))?)
-    };
+    let (low, high) =
+        if address.base != RegId::None || region == Region::default() || region == Region(vec![Part::Named]) {
+            WHOLE
+        } else {
+            (address.disp, address.disp.checked_add(i64::from(width.max(1)))?)
+        };
     Some(BTreeSet::from([Span { region, origin, low, high }]))
 }
 
@@ -163,7 +163,7 @@ fn frame_bytes(
     other_width: u32,
 ) -> Option<bool> {
     let (one, other) = (one?, other?);
-    let fixed = |address: &Addr| address.space == Space::Frame && address.base == iced_x86::Register::None;
+    let fixed = |address: &Addr| address.space == Space::Frame && address.base == RegId::None;
     if !fixed(&one) || !fixed(&other) {
         return None;
     }
@@ -187,6 +187,8 @@ fn may_overlap_by_sets(
 
 #[cfg(test)]
 mod tests {
+    use llrm_lir::registers::RegId;
+
     use super::may_overlap;
     use crate::objectfile::module::{Addr, Space};
 
@@ -200,7 +202,7 @@ mod tests {
     fn overlap_reads_offsets_widths_and_regions() {
         assert!(!may_overlap(frame(-4), 2, frame(-2), 2));
         assert!(may_overlap(frame(-4), 4, frame(-2), 2));
-        let based = Some(Addr { base: iced_x86::Register::BX, ..Addr::new(Space::Frame, 0) });
+        let based = Some(Addr { base: RegId::BX, ..Addr::new(Space::Frame, 0) });
         assert!(may_overlap(based, 1, frame(-40), 2));
         let literal = Some(Addr::new(Space::Literal, 0x400));
         assert!(!may_overlap(literal, 2, Some(Addr::new(Space::Stack, 2)), 2));

@@ -2,7 +2,7 @@
 //! QB runtime's naming of registers around it (`Reg`, the registers a runtime
 //! routine's contract names).
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_x86::asm::REGISTERS;
 pub use llrm_x86::asm::{Mode, Refusal, assembled};
 
@@ -85,7 +85,7 @@ pub fn view(name: &str) -> Option<(Reg, u32)> {
 pub fn machine(
     reg: Reg,
     bits: u32,
-) -> Option<Register> {
+) -> Option<RegId> {
     let sixteen = REGISTERS.get(&reg.name().to_lowercase()).copied()?;
     Some(if bits == 32 { sixteen.full_register32() } else { sixteen })
 }

@@ -11,17 +11,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::LirBody;
 
 /// The registers that are the frame register as LIR names it.
 fn is_frame(
-    register: Register,
-    pointer: Register,
+    register: RegId,
+    pointer: RegId,
 ) -> bool {
-    register != Register::None && crate::model::ir::root(register) == crate::model::ir::root(pointer)
+    register != RegId::None && crate::model::ir::root(register) == crate::model::ir::root(pointer)
 }
 
 /// Whether the function described by `body` (its calls' popped bytes in `pops`)

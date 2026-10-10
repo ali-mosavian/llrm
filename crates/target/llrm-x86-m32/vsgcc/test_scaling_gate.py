@@ -517,6 +517,9 @@ def test_the_interprocedural_step_does_not_build_the_bodies_its_last_calls_took_
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     small, big = (own[label].get("mir interprocedural", 0.0) - own["empty"].get("mir interprocedural", 0.0) for label in ("n", "2n"))
     assert big <= 2.7 * small and big <= 4000, f"{small:.0f} -> {big:.0f} Minstr"
+    # The bodies the pieces took are not built at all: the whole compile at N=512 was 18,947 Minstr, and 9,910 with only the piece tops built.
+    whole = sum(own["2n"].values()) - sum(own["empty"].values())
+    assert whole <= 12000, f"{whole:.0f} Minstr for the whole compile"
 
 
 def test_lir_jumps_copies_a_tail_without_checking_the_whole_function_for_each_copy(tmp_path):

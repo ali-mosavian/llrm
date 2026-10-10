@@ -2,7 +2,7 @@
 //! it now compiles. Each fixture is a function at regalloc's input, and each
 //! test first asserts the shape that caused the refusal is still there.
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::backend::regalloc_input::{before_regalloc, before_regalloc_unspilled, through};
 use crate::model::ir::Loc;
@@ -16,7 +16,7 @@ fn requires_two_registers(body: &LirBody) -> bool {
             ("dest", at) => what.dests.get(at),
             (_, at) => what.sources.get(at),
         };
-        let places: Vec<(u32, Register)> = required
+        let places: Vec<(u32, RegId)> = required
             .iter()
             .filter_map(|(place, register)| match named(&place.side, place.index) {
                 Some(Loc::Held(held)) => Some((held.value, crate::model::ir::root(*register))),

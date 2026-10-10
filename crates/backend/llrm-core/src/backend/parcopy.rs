@@ -377,7 +377,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::{_into, _named, _outof, Malformed, scheduled};
     use crate::backend::verify;
@@ -414,12 +414,12 @@ mod tests {
         _move(into, out_of, Some(group), 0x100)
     }
 
-    fn _reg(one: Register) -> Loc {
+    fn _reg(one: RegId) -> Loc {
         Loc::Reg(Reg { register: one, width: 2 })
     }
 
     fn reg(
-        one: Register,
+        one: RegId,
         width: u32,
     ) -> Loc {
         Loc::Reg(Reg { register: one, width })
@@ -429,7 +429,7 @@ mod tests {
     /// frame `Addr` names the same distinct place.
     fn _slot(offset: i64) -> Loc {
         Loc::Mem(Mem {
-            through: Register::BP,
+            through: RegId::BP,
             offset: 0,
             disp_width: 2,
             ..Mem::new(Some(Addr::new(Space::Frame, -offset)), 2)
@@ -440,7 +440,7 @@ mod tests {
         Insn::new(
             at,
             Some((at, at + 1)),
-            semantics(Operation::Push, "push", vec![], vec![_reg(Register::AX)]),
+            semantics(Operation::Push, "push", vec![], vec![_reg(RegId::AX)]),
             vec![],
             vec![],
         )
@@ -488,7 +488,7 @@ mod tests {
         // source.
         let (source, destination) = (_slot(4), _slot(8));
         let result = scheduled(&_body(vec![
-            grouped(source.clone(), _reg(Register::AX), 1),
+            grouped(source.clone(), _reg(RegId::AX), 1),
             grouped(destination.clone(), source.clone(), 1),
         ]))
         .unwrap();
@@ -517,11 +517,9 @@ mod tests {
     #[test]
     fn test_a_move_goes_after_everything_that_reads_what_it_writes() {
         // pressx's own shape: the reload into r24 must come last.
-        let got = _order(&_body(vec![
-            grouped(_reg(Register::DI), _slot(8), 1),
-            grouped(_reg(Register::BP), _reg(Register::DI), 1),
-        ]));
-        let (di, bp) = (named(&_reg(Register::DI)), named(&_reg(Register::BP)));
+        let got =
+            _order(&_body(vec![grouped(_reg(RegId::DI), _slot(8), 1), grouped(_reg(RegId::BP), _reg(RegId::DI), 1)]));
+        let (di, bp) = (named(&_reg(RegId::DI)), named(&_reg(RegId::BP)));
         let slot = named(&_slot(8));
         assert_eq!(got, [format!("{bp}<-{di}"), format!("{di}<-{slot}")]);
     }
@@ -529,17 +527,16 @@ mod tests {
     #[test]
     fn test_a_move_of_a_place_into_itself_is_dropped() {
         let got = _order(&_body(vec![
-            grouped(_reg(Register::AX), _reg(Register::AX), 1),
-            grouped(_reg(Register::BX), _reg(Register::CX), 1),
+            grouped(_reg(RegId::AX), _reg(RegId::AX), 1),
+            grouped(_reg(RegId::BX), _reg(RegId::CX), 1),
         ]));
-        assert_eq!(got, [format!("{}<-{}", named(&_reg(Register::BX)), named(&_reg(Register::CX)))]);
+        assert_eq!(got, [format!("{}<-{}", named(&_reg(RegId::BX)), named(&_reg(RegId::CX)))]);
     }
 
     #[test]
     fn test_what_is_not_in_a_group_keeps_its_place() {
-        let got =
-            _order(&_body(vec![_other(0x100), grouped(_reg(Register::AX), _reg(Register::CX), 1), _other(0x300)]));
-        let moved = format!("{}<-{}", named(&_reg(Register::AX)), named(&_reg(Register::CX)));
+        let got = _order(&_body(vec![_other(0x100), grouped(_reg(RegId::AX), _reg(RegId::CX), 1), _other(0x300)]));
+        let moved = format!("{}<-{}", named(&_reg(RegId::AX)), named(&_reg(RegId::CX)));
         assert_eq!(got, ["push".to_owned(), moved, "push".to_owned()]);
     }
 
@@ -547,11 +544,9 @@ mod tests {
     fn test_two_groups_are_scheduled_apart() {
         // One group's move may write what another's reads; they are not
         // simultaneous.
-        let got = _order(&_body(vec![
-            grouped(_reg(Register::DI), _slot(8), 1),
-            grouped(_reg(Register::BP), _reg(Register::DI), 2),
-        ]));
-        let (di, bp) = (named(&_reg(Register::DI)), named(&_reg(Register::BP)));
+        let got =
+            _order(&_body(vec![grouped(_reg(RegId::DI), _slot(8), 1), grouped(_reg(RegId::BP), _reg(RegId::DI), 2)]));
+        let (di, bp) = (named(&_reg(RegId::DI)), named(&_reg(RegId::BP)));
         assert_eq!(got, [format!("{di}<-{}", named(&_slot(8))), format!("{bp}<-{di}")]);
     }
 
@@ -560,8 +555,8 @@ mod tests {
         // A register cycle uses xchg; a slot cycle uses the balanced machine
         // stack.
         let swapped = scheduled(&_body(vec![
-            grouped(_reg(Register::AX), _reg(Register::CX), 1),
-            grouped(_reg(Register::CX), _reg(Register::AX), 1),
+            grouped(_reg(RegId::AX), _reg(RegId::CX), 1),
+            grouped(_reg(RegId::CX), _reg(RegId::AX), 1),
         ]))
         .unwrap()
         .blocks[0]
@@ -586,16 +581,16 @@ mod tests {
     #[test]
     fn test_register_cycle_retains_every_virtual_definition() {
         // R_WALK stopped at parcopy: values 11 and 12 were read but undefined.
-        let mut first = grouped(_reg(Register::AX), _reg(Register::CX), 1);
+        let mut first = grouped(_reg(RegId::AX), _reg(RegId::CX), 1);
         first.defines = vec![11];
         first.uses = vec![1];
-        let mut closing = grouped(_reg(Register::CX), _reg(Register::AX), 1);
+        let mut closing = grouped(_reg(RegId::CX), _reg(RegId::AX), 1);
         closing.defines = vec![12];
         closing.uses = vec![2];
         let consumer = Insn::new(
             0x102,
             Some((0x102, 0x102)),
-            semantics(Operation::Push, "push", vec![], vec![_reg(Register::CX)]),
+            semantics(Operation::Push, "push", vec![], vec![_reg(RegId::CX)]),
             vec![],
             vec![12],
         );
@@ -613,11 +608,11 @@ mod tests {
     fn test_register_cycle_retains_covered_bytes_as_an_anchor() {
         // sieve's shared array base made a three-register phi cycle whose final
         // move owned original bytes.
-        let mut closing = grouped(_reg(Register::CX), _reg(Register::DX), 1);
+        let mut closing = grouped(_reg(RegId::CX), _reg(RegId::DX), 1);
         closing.covers = Some((0x100, 0x102));
         let body = _body(vec![
-            grouped(_reg(Register::DX), _reg(Register::SI), 1),
-            grouped(_reg(Register::SI), _reg(Register::CX), 1),
+            grouped(_reg(RegId::DX), _reg(RegId::SI), 1),
+            grouped(_reg(RegId::SI), _reg(RegId::CX), 1),
             closing,
         ]);
 
@@ -640,23 +635,21 @@ mod tests {
                 _ => unreachable!(),
             }
         });
-        let body = _body(vec![
-            grouped(dword_slot.clone(), reg(Register::EDX, 4), 1),
-            grouped(reg(Register::DX, 2), _slot(32), 1),
-        ]);
+        let body =
+            _body(vec![grouped(dword_slot.clone(), reg(RegId::EDX, 4), 1), grouped(reg(RegId::DX, 2), _slot(32), 1)]);
         let got = scheduled(&body).unwrap().blocks[0].insns.clone();
         assert_eq!(names(&got), ["push", "mov", "pop"]);
         assert_eq!(got[0].what.as_ref().unwrap().sources, vec![_slot(32)], "the word the closing move reads is saved");
-        assert_eq!(got[2].what.as_ref().unwrap().dests, vec![reg(Register::DX, 2)]);
+        assert_eq!(got[2].what.as_ref().unwrap().dests, vec![reg(RegId::DX, 2)]);
     }
 
     /// No `xchg` names a segment register.
     #[test]
     fn test_a_cycle_through_a_segment_register_goes_through_the_stack() {
-        let body = _body(vec![grouped(reg(Register::ES, 2), _slot(4), 1), grouped(_slot(4), reg(Register::ES, 2), 1)]);
+        let body = _body(vec![grouped(reg(RegId::ES, 2), _slot(4), 1), grouped(_slot(4), reg(RegId::ES, 2), 1)]);
         let got = scheduled(&body).unwrap().blocks[0].insns.clone();
         assert_eq!(names(&got), ["push", "mov", "pop"]);
-        assert_eq!(got[0].what.as_ref().unwrap().sources, vec![reg(Register::ES, 2)]);
+        assert_eq!(got[0].what.as_ref().unwrap().sources, vec![reg(RegId::ES, 2)]);
     }
 
     #[test]
@@ -664,40 +657,40 @@ mod tests {
         // sieve rotates EDX->CX->SI->EDX without exchanging incompatible
         // register widths.
         let body = _body(vec![
-            grouped(reg(Register::EDX, 4), reg(Register::ESI, 4), 1),
-            grouped(reg(Register::CX, 2), reg(Register::DX, 2), 1),
-            grouped(reg(Register::SI, 2), reg(Register::CX, 2), 1),
+            grouped(reg(RegId::EDX, 4), reg(RegId::ESI, 4), 1),
+            grouped(reg(RegId::CX, 2), reg(RegId::DX, 2), 1),
+            grouped(reg(RegId::SI, 2), reg(RegId::CX, 2), 1),
         ]);
 
         let got = scheduled(&body).unwrap().blocks[0].insns.clone();
 
         assert_eq!(names(&got), ["push", "mov", "mov", "pop"]);
-        assert_eq!(got[0].what.as_ref().unwrap().sources, vec![reg(Register::DX, 2)]);
-        assert_eq!(got[got.len() - 1].what.as_ref().unwrap().dests, vec![reg(Register::CX, 2)]);
+        assert_eq!(got[0].what.as_ref().unwrap().sources, vec![reg(RegId::DX, 2)]);
+        assert_eq!(got[got.len() - 1].what.as_ref().unwrap().dests, vec![reg(RegId::CX, 2)]);
     }
 
     #[test]
     fn test_a_mixed_width_cycle_closing_on_a_byte_saves_a_word() {
         // rcflip's AX <- CX, CL <- AL was refused: its temporary was `push al`.
         let body = _body(vec![
-            grouped(reg(Register::AX, 2), reg(Register::CX, 2), 1),
-            grouped(reg(Register::CL, 1), reg(Register::AL, 1), 1),
+            grouped(reg(RegId::AX, 2), reg(RegId::CX, 2), 1),
+            grouped(reg(RegId::CL, 1), reg(RegId::AL, 1), 1),
         ]);
 
         let got = scheduled(&body).unwrap().blocks[0].insns.clone();
 
         assert_eq!(names(&got), ["push", "mov", "pop"]);
-        assert_eq!(got[0].what.as_ref().unwrap().sources, vec![reg(Register::CX, 2)]);
-        assert_eq!(got[1].what.as_ref().unwrap().dests, vec![reg(Register::CL, 1)]);
-        assert_eq!(got[2].what.as_ref().unwrap().dests, vec![reg(Register::AX, 2)]);
+        assert_eq!(got[0].what.as_ref().unwrap().sources, vec![reg(RegId::CX, 2)]);
+        assert_eq!(got[1].what.as_ref().unwrap().dests, vec![reg(RegId::CL, 1)]);
+        assert_eq!(got[2].what.as_ref().unwrap().dests, vec![reg(RegId::AX, 2)]);
     }
 
     #[test]
     fn named_places_match_python() {
         // Expected strings printed by Python's parcopy._named.
         use crate::model::ir::Imm;
-        assert_eq!(named(&_reg(Register::DI)), "r44");
-        assert_eq!(named(&_reg(Register::BP)), "r42");
+        assert_eq!(named(&_reg(RegId::DI)), "r44");
+        assert_eq!(named(&_reg(RegId::BP)), "r42");
         assert_eq!(named(&_slot(8)), "m[bp-0x8]:26:0");
         assert_eq!(named(&Loc::Imm(Imm { value: -3, width: 2, address: None })), "i-3");
     }

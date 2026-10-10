@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::model::ir::{Imm, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};
@@ -36,11 +36,11 @@ fn _literal(one: &Insn) -> Option<(Mem, i64)> {
     let address = cell.addr.as_ref()?;
     if cell.width == 2
         && cell.base.is_none()
-        && cell.through == Register::None
+        && cell.through == RegId::None
         && cell.offset == 0
         && address.space == Space::Segment
-        && address.base == Register::None
-        && address.segment == Register::None
+        && address.base == RegId::None
+        && address.segment == RegId::None
         && (0..=0xfffe).contains(&address.disp)
     {
         return Some((cell.clone(), *number));
@@ -95,7 +95,7 @@ pub fn combined(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::combined;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -167,7 +167,7 @@ mod tests {
                         Mem { addr: Some(Addr { index: 6, ..high_cell.addr.clone().unwrap() }), ..high_cell.clone() },
                     );
                 }
-                Some("indexed") => low = with_dest(&low, Mem { through: Register::BX, ..cell.clone() }),
+                Some("indexed") => low = with_dest(&low, Mem { through: RegId::BX, ..cell.clone() }),
                 Some("external") => {
                     low = with_dest(
                         &low,
@@ -180,11 +180,11 @@ mod tests {
                     marker.what = what(
                         Operation::Move,
                         "mov",
-                        vec![Loc::Reg(Reg { register: Register::AX, width: 2 })],
+                        vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })],
                         vec![Loc::Mem(cell.clone())],
                     );
                 }
-                Some("requirements") => high.requires = vec![(Held { value: 1, width: 2 }, Register::AX)],
+                Some("requirements") => high.requires = vec![(Held { value: 1, width: 2 }, RegId::AX)],
                 _ => {}
             }
             let (low, marker, high) = (Arc::new(low), Arc::new(marker), Arc::new(high));
