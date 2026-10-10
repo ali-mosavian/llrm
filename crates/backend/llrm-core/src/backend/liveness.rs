@@ -203,7 +203,8 @@ pub fn _declared(
         // Nothing runs after it: it reads explicit results and only the
         // architectural state its generated epilogue itself needs.
         let mut reads: Lanes = one.requires.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
-        for register in _return_state(regs) {
+        for register in _return_state(regs).into_iter().filter(|register| !(one.frame_free && *register == regs.frame))
+        {
             reads.extend(_lanes(regs, register));
         }
         let writes = _universe(regs).minus(&reads);
@@ -468,5 +469,24 @@ mod tests {
         assert!(_lanes(regs, RegId::SI).is_disjoint(&into[&1]));
         assert!(_lanes(regs, RegId::BP).is_subset(&into[&1]));
         assert!(_lanes(regs, RegId::DX).is_disjoint(&into[&1]));
+    }
+
+    #[test]
+    fn test_a_return_of_a_function_without_a_frame_register_does_not_read_it() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let mut ret = Insn::new(
+            3,
+            Some((3, 3)),
+            Some(Semantics { name: Some(String::new()), ..Semantics::new(Operation::Return) }),
+            vec![],
+            vec![],
+        );
+        ret.reads_complete = true;
+        ret.frame_free = true;
+        let body =
+            LirBody::new("f", 1, vec![LirBlock::new(1, vec![Arc::new(ret)])], IndexMap::default(), IndexMap::default());
+        let (into, _successors, _universe) = live_into(&body);
+        assert!(_lanes(regs, RegId::BP).is_disjoint(&into[&1]));
+        assert!(_lanes(regs, RegId::SP).is_subset(&into[&1]));
     }
 }

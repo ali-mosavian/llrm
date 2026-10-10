@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
@@ -21,8 +22,8 @@ use crate::backend::isel::{self, Selected};
 use crate::backend::target::Segments;
 use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, select, ssaspill};
 use crate::flow;
-use crate::model::ir::{Addr, Space};
-use crate::model::lir::LirBody;
+use crate::model::ir::{Addr, Operation, Space};
+use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;
 
 /// What only the frontend knows: each call's contract, and the symbol each
@@ -845,20 +846,23 @@ fn staged(
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
-    let classes: Rc<RegisterClasses> = if crate::backend::framefree::without_frame_register(
+    let frame_free = crate::backend::framefree::without_frame_register(
         &body,
         &registers,
         &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
         !inline.is_empty(),
         false,
         landing.is_some(),
-    ) {
+    );
+    let classes: Rc<RegisterClasses> = if frame_free {
         registers.free = true;
         registers.saved.push((registers.pointer, registers.pointer));
         Rc::new(target.classes.with_frame_free())
     } else {
         Rc::clone(target.classes)
     };
+    // A return reads the frame register only where one is kept.
+    let body = if frame_free { frame_free_returns(body) } else { body };
     let body = if llrm_support::debug::verifying() {
         timed("lir verify", || flow::verified(body, "isel", true, &target.arch.layout().spaces.roles))
             .map_err(|error| error.0)?
@@ -872,6 +876,26 @@ fn staged(
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
     Ok(Staged { body, frame, convention, calls, inline, inline_places, far, pops, landing, registers, classes })
+}
+
+/// `body` with each return marked as one of a function that keeps no frame
+/// register.
+fn frame_free_returns(body: LirBody) -> LirBody {
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let marked = |one: &Arc<Insn>| {
+                if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
+                    Arc::new(Insn { frame_free: true, ..(**one).clone() })
+                } else {
+                    Arc::clone(one)
+                }
+            };
+            block.with_insns(block.insns.iter().map(marked).collect())
+        })
+        .collect();
+    LirBody { blocks, ..body }
 }
 
 /// `phased`; or, where `until_changed`, none if the spiller left the body as it
