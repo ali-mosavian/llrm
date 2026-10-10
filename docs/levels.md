@@ -185,7 +185,7 @@ Sources read:
 
 ## Limits with no counterpart (stay as they are)
 
-Our own numbers, not read from gcc or LLVM: `COUNTED_TRIPS`, `MOST_TERMS`, `MOST_DEGREE`, `MOST_NODES`, `ROUNDS`, `SIZE`, `PHIS` (analysis ranges, induction, difference), `MOST_FIELDS` (argpromotion), `TRIED_SITES` (interprocedural), `UNKNOWN_TRIPS` (profit), `allocate::BUDGET`, `Coloring::BUDGET`, `REMEMBERED` (caches), the pass-order and round counts.
+Our own numbers, not read from gcc or LLVM: `MAX_DOMINATORS` (64: the dominators above a block that its guards are read from, [`guards.rs`](../crates/opt/llrm-analysis/src/guards.rs); LLVM climbs the unique-predecessor chain and bounds its guard collection, [`ScalarEvolution.cpp:16199`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L16199); the programs, QCport and the bench at -m16 and -m32 compile to the same bytes from 8 up), `COUNTED_TRIPS`, `MOST_TERMS`, `MOST_DEGREE`, `MOST_NODES`, `ROUNDS`, `SIZE`, `PHIS` (analysis ranges, induction, difference), `MOST_FIELDS` (argpromotion), `TRIED_SITES` (interprocedural), `UNKNOWN_TRIPS` (profit), `allocate::BUDGET`, `Coloring::BUDGET`, `REMEMBERED` (caches), the pass-order and round counts.
 
 ## The inline threshold is ours
 

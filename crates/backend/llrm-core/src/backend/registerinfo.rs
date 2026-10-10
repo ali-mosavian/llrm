@@ -9,13 +9,25 @@ pub use llrm_lir::registers::{Entry, FRAME, Info, RegId, STACK, class};
 
 static BOUND: OnceLock<&'static Info> = OnceLock::new();
 
-/// Binds the register file of the target the driver builds for; the first
-/// binding stands. Targets that share a register file bind the same facts.
+thread_local! {
+    /// The register file the thread bound: a process compiles for one target,
+    /// but a process of tests compiles for several, each on its own thread, and
+    /// the first binding of the process must not decide the others.
+    static OWN: std::cell::Cell<Option<&'static Info>> = const { std::cell::Cell::new(None) };
+}
+
+/// Binds the register file of the target the driver builds for: for this
+/// thread, and for the threads that bind none, the first binding of the
+/// process. Targets that share a register file bind the same facts.
 pub fn bind(info: &'static Info) {
+    OWN.with(|own| own.set(Some(info)));
     let _ = BOUND.set(info);
 }
 
 fn info() -> &'static Info {
+    if let Some(own) = OWN.with(std::cell::Cell::get) {
+        return own;
+    }
     #[cfg(test)]
     return BOUND.get_or_init(|| &llrm_x86_m16::REGISTER_INFO);
     #[cfg(not(test))]
@@ -307,5 +319,25 @@ mod tests {
     #[test]
     fn the_scratch_order_is_the_descriptions() {
         assert_eq!(scratch_order(), [RegId::CX, RegId::DX, RegId::BX, RegId::AX]);
+    }
+
+    /// Tests that compile for two targets in one process ran on one register
+    /// file: the first to bind decided, and 29 of llrm-c's m16 tests failed
+    /// ("the target's register file names no far segment") whenever an m32 one
+    /// ran first.
+    #[test]
+    fn test_a_thread_binding_a_target_is_not_decided_by_another_threads() {
+        let bound = |info: &'static Info| {
+            std::thread::spawn(move || {
+                bind(info);
+                far_segment().is_some()
+            })
+            .join()
+            .expect("a thread")
+        };
+        // m32 first: it has no far segment, and must not take m16's.
+        assert!(!bound(&llrm_x86_m32::REGISTER_INFO));
+        assert!(bound(&llrm_x86_m16::REGISTER_INFO));
+        assert!(!bound(&llrm_x86_m32::REGISTER_INFO));
     }
 }
