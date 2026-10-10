@@ -205,6 +205,17 @@ pub struct Mark {
     at: usize,
 }
 
+impl Mark {
+    /// Whether `other` is a point in the same function's history: not a copy
+    /// that took its own.
+    pub fn same_history(
+        self,
+        other: Mark,
+    ) -> bool {
+        self.uid == other.uid
+    }
+}
+
 /// A function: its values, instructions and blocks in arenas whose ids are
 /// never reused, their use lists, and the log of what changed. The arenas
 /// are private so that every change goes through `edit`, which keeps the

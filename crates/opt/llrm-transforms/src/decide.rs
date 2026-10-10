@@ -92,7 +92,7 @@ fn _decided(
 ) -> Result<bool, String> {
     let threaded = _threaded(context, function) | _phi_threaded(context, function)?;
     if threaded {
-        analyses.invalidate(&PreservedAnalyses::none());
+        analyses.invalidate(function, &PreservedAnalyses::none());
     }
     let held = Held::of(context, layout, function, analyses, true).with_bounded(context, layout, function, analyses);
     let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()))?;
