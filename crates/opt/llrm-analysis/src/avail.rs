@@ -24,7 +24,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use llrm_mir::dense::IdSet;
-use llrm_mir::module::{InstId, Operand, ValueId};
+use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, IndexMap};
@@ -507,26 +507,49 @@ fn memory_providers(
     let mut group_of: HashMap<&MemRef, usize> = HashMap::default();
     // The groups by what a group naming the same bytes shares, so a load
     // compares itself with those and not with all.
-    let mut by_frame: HashMap<(crate::regions::Frame, i128, i128), Vec<usize>> = HashMap::default();
-    let mut by_pointer: HashMap<(Operand, i64, u64), Vec<usize>> = HashMap::default();
+    let mut group_keys: Vec<Vec<memoryssa::ByteKey>> = Vec::new();
+    let mut load_group: Vec<usize> = Vec::with_capacity(loads.len());
     for (at, (_, (loaded, _))) in loads.iter().enumerate() {
         let group = *group_of
             .entry(loaded)
             .or_insert_with(
                 || {
                     groups.push((loaded, Vec::new()));
-                    let keys = memoryssa::byte_keys(unit, loaded);
-                    if let Some(key) = keys.frame {
-                        by_frame.entry(key).or_default().push(groups.len() - 1);
-                    }
-                    if let Some(key) = keys.pointer {
-                        by_pointer.entry(key).or_default().push(groups.len() - 1);
-                    }
+                    group_keys.push(memoryssa::byte_keys(unit, loaded).list());
                     groups.len() - 1
                 },
             );
         groups[group].1.push(at);
+        load_group.push(group);
     }
+    // The loads by the bytes they name, in the blocks that hold them: those
+    // that dominate a site are found from its block upward, nearest first,
+    // where every load of the same bytes was taken and sorted for each site
+    // (9.5 M candidates for 7,000 sites at N=1024).
+    let tree = shape.dominance.tree();
+    let nearest = crate::nearest::Nearest::of(
+        tree,
+        loads
+            .iter()
+            .enumerate()
+            .filter_map(|(at, (site, _))| function.parent(*site).map(|block| (at, block)))
+            .flat_map(|(at, block)| group_keys[load_group[at]].iter().cloned().map(move |key| (key, block, at))),
+    );
+    // Nearest first is the load order only where each block's dominator comes
+    // before it: the layout of a function in order.
+    let in_order = {
+        let position: HashMap<BlockId, usize> =
+            function.layout().iter().enumerate().map(|(at, block)| (*block, at)).collect();
+        function
+            .layout()
+            .iter()
+            .all(
+                |&block| shape
+                    .dominance
+                    .immediate(cfg::id(block))
+                    .is_none_or(|above| position[&cfg::block(above)] < position[&block]),
+            )
+    };
 
     let mut found = Vec::new();
     for &site in missing {
@@ -559,41 +582,60 @@ fn memory_providers(
         // Loads of one address are one group, whose bytes are compared with
         // `cell` once; the candidates are then taken in load order, as
         // when each was compared.
-        let keys = memoryssa::byte_keys(unit, &cell);
-        let mut near: Vec<usize> = keys
-            .frame
-            .and_then(|key| by_frame.get(&key))
-            .into_iter()
-            .chain(keys.pointer.and_then(|key| by_pointer.get(&key)))
-            .flatten()
-            .copied()
-            .collect();
-        near.sort_unstable();
-        near.dedup();
-        let mut candidates: Vec<usize> = near
-            .iter()
-            .map(|&group| &groups[group])
-            .filter(|(loaded, _)| {
-                SAMES.with(|runs| runs.set(runs.get() + 1));
-                same_bytes(unit, loaded, &cell)
-            })
-            .flat_map(|(_, members)| members.iter().copied())
-            .collect();
-        if llrm_support::env_set("LLRM_CHECK_GROUPS") {
+        let keys = memoryssa::byte_keys(unit, &cell).list();
+        // Whether the loads of a group name the bytes of `cell`, asked once of
+        // each.
+        let mut same: HashMap<usize, bool> = HashMap::default();
+        let mut names = |group: usize| -> bool {
+            *same
+                .entry(group)
+                .or_insert_with(
+                    || {
+                        SAMES.with(|runs| runs.set(runs.get() + 1));
+                        same_bytes(unit, groups[group].0, &cell)
+                    },
+                )
+        };
+        let site_block = function.parent(site);
+        let candidates: Box<dyn Iterator<Item = usize> + '_> = match site_block {
+            Some(block) if in_order && tree.is_reachable(block) => Box::new(
+                nearest
+                    .dominating(tree, &keys.iter().collect::<Vec<_>>(), block)
+                    .map(|(_, at)| at)
+                    .filter(|&at| names(load_group[at])),
+            ),
+            _ => {
+                let mut every: Vec<usize> = groups
+                    .iter()
+                    .enumerate()
+                    .filter(|(group, _)| names(*group))
+                    .flat_map(|(_, (_, members))| members.iter().copied())
+                    .collect();
+                every.sort_unstable();
+                Box::new(every.into_iter().rev())
+            }
+        };
+        if llrm_support::env_set("LLRM_CHECK_GROUPS")
+            && site_block.is_some_and(|block| in_order && tree.is_reachable(block))
+        {
             let mut every: Vec<usize> = groups
                 .iter()
                 .filter(|(loaded, _)| same_bytes(unit, loaded, &cell))
                 .flat_map(|(_, members)| members.iter().copied())
                 .collect();
             every.sort_unstable();
-            let mut keyed = candidates.clone();
-            keyed.sort_unstable();
-            assert!(
-                keyed == every,
-                "LLRM_CHECK_GROUPS: loads naming the same bytes, found through their keys, are not those a scan of every group finds"
+            let walked: Vec<usize> = nearest
+                .dominating(tree, &keys.iter().collect::<Vec<_>>(), site_block.expect("checked"))
+                .map(|(_, at)| at)
+                .filter(|&at| same_bytes(unit, groups[load_group[at]].0, &cell))
+                .collect();
+            let expected: Vec<usize> = every.into_iter().rev().filter(|&at| available(loads[at].0, site)).collect();
+            let seen: Vec<usize> = walked.into_iter().filter(|&at| available(loads[at].0, site)).collect();
+            assert_eq!(
+                seen, expected,
+                "LLRM_CHECK_GROUPS: the loads that dominate a site, found nearest first, are not those a scan of every group finds"
             );
         }
-        candidates.sort_unstable();
         // Nearest first: a walk from the load stops at the first value that
         // holds, and the loads before it, each a walk to fail, are not tried.
         // Every candidate holds the same bytes, so the one a chain of served
@@ -601,7 +643,7 @@ fn memory_providers(
         // fails every load that dominates it too: the write lies on a path
         // from the farther one through the nearer, so those are not walked.
         let mut failed: Vec<InstId> = Vec::new();
-        for at in candidates.into_iter().rev() {
+        for at in candidates {
             let (source, (loaded, value)) = &loads[at];
             if !available(*source, site)
                 || !serves(unit, Operand::Value(*value), result)
