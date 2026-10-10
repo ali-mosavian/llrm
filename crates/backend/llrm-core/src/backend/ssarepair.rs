@@ -47,20 +47,7 @@ pub fn repaired(
         }
     }
     // Dominance frontiers.
-    let mut frontier: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
-    for block in &body.blocks {
-        let Some(coming) = preds.get(&block.at).filter(|from| from.len() > 1) else { continue };
-        for from in coming {
-            let mut runner = Some(*from);
-            while let Some(at) = runner {
-                if Some(at) == idom.get(&block.at).copied().flatten() || !by_at.contains_key(&at) {
-                    break;
-                }
-                frontier.entry(at).or_default().insert(block.at);
-                runner = idom.get(&at).copied().flatten();
-            }
-        }
-    }
+    let frontier = loops::frontiers(&graph, Some(body.entry));
     // Where each value is defined, and so where it needs a phi.
     let mut defined: IndexMap<u32, BTreeSet<i64>> = IndexMap::default();
     for block in &body.blocks {
