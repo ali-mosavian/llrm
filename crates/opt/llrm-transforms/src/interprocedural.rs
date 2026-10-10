@@ -1018,7 +1018,11 @@ pub fn optimized_with<E: From<String>>(
                     && !roots.contains(&(at, id))
                     && !recursive.contains(&id);
                 if unreached && live.get(&id).copied().unwrap_or(0) == 0 {
-                    if !module.global(id).function().is_some_and(stub) {
+                    if let Some(function) = module.global(id).function().filter(|one| !stub(one)) {
+                        // What the body called is called by it no more.
+                        for (callee, count) in calls_of(&module.context, function) {
+                            *live.entry(callee).or_insert(0) -= count;
+                        }
                         bare(module, &mut modules[at], id);
                         modules[at].invalidate_bodies(&PreservedAnalyses::none());
                     }
