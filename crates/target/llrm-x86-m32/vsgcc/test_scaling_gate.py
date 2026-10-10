@@ -667,3 +667,12 @@ def test_a_load_looks_for_its_provider_in_the_blocks_above_it_not_among_every_lo
     source.write_text(scaling.AXES["branches"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir gvn"]
     assert cost <= 3400, cost
+
+
+def test_two_address_asks_interference_of_the_values_it_compares_not_of_every_pair_live_together(tmp_path):
+    """`lir twoaddr` built the whole interference graph and cloned the live set at every instruction to compare a swap's sources with
+    its destination's copy neighbours: `live` at N=1024 took 3,170 Minstr, 3.9x a doubling. It asks of those values alone: 92."""
+    source = tmp_path / "live_1024.c"
+    source.write_text(scaling.AXES["live"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir twoaddr"]
+    assert cost <= 400, cost

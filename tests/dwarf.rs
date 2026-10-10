@@ -177,8 +177,8 @@ fn the_flavor_asked_for_is_the_formats_or_an_error() {
         assert!(!made.status.success(), "{arguments:?} was written");
         String::from_utf8_lossy(&made.stderr).into_owned()
     };
-    assert!(refused(&["-m32", "-gdwarf"]).contains("OMF cannot carry DWARF"));
-    assert!(refused(&["-m32", "-gdwarf-4", "-fobject-format=omf"]).contains("OMF cannot carry DWARF"));
+    // DWARF in OMF is 32-bit code's (the 16-bit forms are segment and offset).
+    assert!(refused(&["-m16", "-gdwarf"]).contains("DWARF in OMF is 32-bit code's"));
     assert!(refused(&["-m32", "-gcodeview", "-fobject-format=elf"]).contains("cannot carry CodeView"));
     assert!(refused(&["-m32", "-gtd", "-fobject-format=elf"]).contains("Turbo Debugger"));
     assert!(refused(&["-m32", "-gdwarf-3", "-fobject-format=elf"]).contains("unrecognized"));
@@ -782,4 +782,63 @@ fn cv4_names_a_local_of_a_function_without_a_frame_register_off_the_stack_pointe
     let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
     let shape = llrm_core::objectfile::cv4info::shape(&records);
     assert!(shape.iter().any(|one| one.starts_with("REGREL add.sum:")), "{shape:#?}");
+}
+
+/// DWARF in an OMF object, linked by jwlink into an LE image: the sections
+/// ride in segments of the class DWARF, as Open Watcom's `-hd` writes them, and
+/// the linker's "flat addresses" directive makes their addresses the image's.
+/// Without the directive a variable's address was its offset in its segment
+/// (`counter` at 0, not 0x10000). llvm-dwarfdump reads the sections that jwlink
+/// puts at the end of the image.
+#[test]
+fn dwarf_in_an_omf_object_links_into_an_le_image_that_llvm_reads() {
+    let (Some(dwarfdump), jwlink) =
+        (dwarfdump(), Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("jwlink"))
+    else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    if !jwlink.exists() {
+        skipped("needs jwlink beside llrm");
+        return;
+    }
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");
+    let made = compile(&source, &["-m32", "-O0", "-gdwarf", "-fobject-format=omf"], &dir.join("known.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(&jwlink)
+        .args(["format", "os2", "le", "debug", "dwarf", "file", "known.obj", "name", "known.exe"])
+        .args(["option", "quiet,start=_main,nodefaultlibs"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    let image =
+        std::fs::read(dir.join("known.exe")).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&linked.stdout)));
+    let elf = image.windows(4).rposition(|four| four == b"\x7fELF").expect("jwlink appends the DWARF as an ELF image");
+    std::fs::write(dir.join("known.elf"), &image[elf..]).unwrap();
+    let ran = |args: &[&str]| Command::new(&dwarfdump).args(args).arg(dir.join("known.elf")).output().unwrap();
+    let verified = ran(&["--verify"]);
+    assert!(verified.status.success(), "{}", String::from_utf8_lossy(&verified.stdout));
+    let text = String::from_utf8_lossy(&ran(&["--debug-info"]).stdout).into_owned();
+    for name in ["add", "main", "first", "second", "sum", "counter", "p", "pt"] {
+        assert!(text.contains(&format!("DW_AT_name\t(\"{name}\")")), "no {name}:\n{text}");
+    }
+    assert!(text.contains("DW_OP_addr 0x10000"), "the global is not at the image's address of the data:\n{text}");
+    // `-g` changes no code or data: the pages of the image are those of the
+    // same program linked without it (the header's debug-information pointers
+    // differ).
+    let made = compile(&source, &["-m32", "-O0", "-fobject-format=omf"], &dir.join("plain.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(&jwlink)
+        .args(["format", "os2", "le", "file", "plain.obj", "name", "plain.exe"])
+        .args(["option", "quiet,start=_main,nodefaultlibs"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    let plain =
+        std::fs::read(dir.join("plain.exe")).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&linked.stdout)));
+    let le = image.windows(4).position(|four| four == b"LE\0\0").expect("an LE header");
+    let pages = u32::from_le_bytes(image[le + 0x80..le + 0x84].try_into().unwrap()) as usize;
+    assert_eq!(image[pages..elf], plain[pages..plain.len()], "the pages of the image differ with -g");
 }

@@ -23,7 +23,6 @@ rule narrowed_immediate_arithmetic
     rewrite @0: =@0 low_word(d), low_word(d), low_word(s) {defines: @1.defines, uses: joined_uses(@0, @1), widths: joined_widths(@0, @1)} ;
             anchor @1 {defines: [], uses: []}
 
-
 // A word copy of a register whose upper half is zero, into one whose upper half nothing reads, is the
 // dword copy: no prefix, and the upper half is zero for what follows.
 group widened_moves

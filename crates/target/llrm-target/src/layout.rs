@@ -42,6 +42,12 @@ pub struct Layout {
     /// for, which the compiler expands before selection: LLVM's
     /// `setOperationAction(..., Expand)`. An operation not listed is native.
     pub expand: Vec<String>,
+    /// The operations (`and.i16`) the machine has an instruction for but would
+    /// rather not run at that width, which selection runs at the native width
+    /// instead: LLVM's `isTypeDesirableForOp` and
+    /// `setOperationAction(..., Promote)`. An operation not listed runs as it
+    /// is.
+    pub promote: Vec<String>,
 }
 
 impl AddressSpaces {
@@ -66,6 +72,15 @@ impl Layout {
         operation: &str,
     ) -> bool {
         self.expand.iter().any(|one| one == operation)
+    }
+
+    /// Whether the machine would rather run `operation` at the native width
+    /// (`promote` in the description).
+    pub fn promotes(
+        &self,
+        operation: &str,
+    ) -> bool {
+        self.promote.iter().any(|one| one == operation)
     }
 
     /// The most bytes a data segment holds; none where segments are not.
@@ -127,10 +142,18 @@ impl Layout {
                 .and_then(|list| list.iter().map(|one| one.as_str().map(str::to_owned)).collect())
                 .ok_or("expand is not a list of operation names")?,
         };
+        let promote = match value.get("promote") {
+            None => Vec::new(),
+            Some(list) => list
+                .as_array()
+                .and_then(|list| list.iter().map(|one| one.as_str().map(str::to_owned)).collect())
+                .ok_or("promote is not a list of operation names")?,
+        };
         Ok(Self {
             mode,
             datalayout,
             expand,
+            promote,
             spaces: AddressSpaces {
                 roles: Spaces {
                     near: required("near")?,
@@ -180,6 +203,13 @@ mod tests {
                 .unwrap_err()
                 .contains("segment_bytes")
         );
+    }
+
+    #[test]
+    fn the_operations_a_machine_promotes_are_its_descriptions_and_none_is_promoted_unless_listed() {
+        assert!(!Layout::parse(FLAT).unwrap().promotes("and.i16"));
+        let described = Layout::parse(&format!("promote = [\"and.i16\", \"xor.i16\"]\n{FLAT}")).unwrap();
+        assert!(described.promotes("and.i16") && described.promotes("xor.i16") && !described.promotes("add.i16"));
     }
 
     #[test]
