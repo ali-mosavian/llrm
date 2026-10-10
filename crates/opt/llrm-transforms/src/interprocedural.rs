@@ -1412,6 +1412,7 @@ pub fn optimized_with<E: From<String>>(
     // early passes have made them: a body with two calls would be a tree,
     // not a chain.
     if let Some(budget) = threshold.recursive_budget(reach).filter(|_| !threshold.single) {
+        let mut unit = inline::UnitSize::of(&program.modules);
         for at in 0..count {
             for &id in &procedures[at] {
                 let module = &mut program.modules[at];
@@ -1434,6 +1435,7 @@ pub fn optimized_with<E: From<String>>(
                         crate::profit::_frequencies(context, &metadata, &globals, function, None).unwrap_or_default()
                     },
                     &mut module.context,
+                    &mut unit,
                 );
                 if made == 0 {
                     continue;

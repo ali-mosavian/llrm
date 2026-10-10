@@ -1750,3 +1750,37 @@ fn test_a_chain_longer_than_a_caller_may_take_is_built_only_where_each_piece_sta
     assert!(alive.len() > 1 && alive.len() <= 6, "{alive:?}");
     assert_eq!(results(&module, INPUTS), results(&parsed(&text), INPUTS));
 }
+
+/// A unit grows by copies of its recursive functions only as far as gcc's
+/// `inline-unit-growth` (params.opt:209, 40%) lets it from the larger of its
+/// size and `large-unit-insns` (10,000): 25 functions of `OVER_SIX` each grew
+/// to the 450-operation cap beside a body of 11,000 operations, 11,000 more, a
+/// unit 2x what began.
+#[test]
+fn test_recursive_copies_stop_where_the_unit_has_grown_by_gccs_limit() {
+    fn operations(text: &str) -> i64 {
+        text.lines().filter(|line| line.starts_with("  %") && !line.contains(" = phi ")).count() as i64
+    }
+    let mut text = String::from("define i16 @filler(i16 %x) {\nb:\n  %t0 = add i16 %x, 1\n");
+    for at in 1..11_000 {
+        text += &format!("  %t{at} = add i16 %t{}, 1\n", at - 1);
+    }
+    text += "  ret i16 %t10999\n}\n\n";
+    let names: Vec<String> = (0..25).map(|at| format!("f{at}")).collect();
+    for name in &names {
+        text += &OVER_SIX.replace("@f(", &format!("@{name}(")).replace("@f(i16 %m)", &format!("@{name}(i16 %m)"));
+        text += "\n";
+    }
+    let mut roots: Vec<&str> = names.iter().map(String::as_str).collect();
+    roots.push("filler");
+    let mut module = parsed(&text);
+    let before = operations(&printed(&module));
+    stepped(&mut module, &roots, 20, Threshold::default());
+    let after = operations(&printed(&module));
+    assert!(after > before, "premise: the recursive functions grew by copies of themselves");
+    assert!(
+        after <= before.max(10_000) * 140 / 100 + 450,
+        "the unit grew from {before} to {after} operations, past a 40% growth of {}",
+        before.max(10_000)
+    );
+}
