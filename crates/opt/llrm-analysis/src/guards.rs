@@ -37,6 +37,16 @@ pub(crate) fn found() -> usize {
     FOUND.with(std::cell::Cell::get)
 }
 
+/// How many dominators above a block its guards are read from. LLVM climbs
+/// the unique-predecessor chain only (`ScalarEvolution::collectFromBlock`,
+/// [`ScalarEvolution.cpp:16199`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L16199)),
+/// which a join ends, and bounds its recursive collection
+/// (`scalar-evolution-max-loop-guard-collection-depth`); here the whole
+/// dominator chain was climbed for each branch asked about, the square of a
+/// function of branches. Held to the same answers on the programs, QCport and
+/// the bench at -m16 and -m32 down to 8.
+const MAX_DOMINATORS: usize = 64;
+
 /// The compares proven on entry to block `at`.
 pub fn guards(
     unit: &Unit,
@@ -49,7 +59,12 @@ pub fn guards(
     let assumed = unit.assumptions();
     let mut found = Vec::new();
     let mut reached = at;
+    let mut climbed = 0;
     while let Some(above) = shape.dominance.immediate(reached) {
+        climbed += 1;
+        if climbed > MAX_DOMINATORS {
+            break;
+        }
         // What the block assumes holds below it, wherever its terminator goes.
         for condition in assumed.here(above) {
             if let Operand::Value(condition) = *condition {

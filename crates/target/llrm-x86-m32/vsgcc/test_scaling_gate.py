@@ -574,3 +574,12 @@ def test_the_backends_liveness_follows_each_value_from_its_reads_not_rows_of_eve
     source.write_text(scaling.AXES["branches"](1024))
     rows = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert rows["lir twoaddr"] <= 1200 and rows["intervals walk"] <= 400 and rows["lir pressuresink"] <= 400, rows
+
+
+def test_a_branchs_guards_come_from_its_nearest_dominators(tmp_path):
+    """`mir decide` on `branches` at N=1024 read every dominator above each branch for the compares that hold there (60 on average,
+    the square of the branches in all): 7,799 Minstr, 3.8x a doubling, half of it in `_implied`. The nearest 64 dominators: 4,246."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir decide"]
+    assert cost <= 5500, cost
