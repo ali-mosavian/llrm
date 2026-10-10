@@ -177,3 +177,18 @@ def test_a_rewrite_patches_the_numbering_and_keeps_the_intervals_it_did_not_chan
         run = steps(compiler, source, "-O2")
     spent = run["facts slots"] + run["facts intervals"]
     assert spent < 450, f"cells N=448 -O2: facts slots + facts intervals cost {spent} Minstr (450 allowed; 2063 before): {run}"
+
+
+def test_the_points_that_destroy_registers_are_not_looked_for_again_in_every_instruction_at_every_rewrite():
+    """Every rewrite walked every instruction of the body for the calls and other points that destroy registers: `facts masks` cost
+    397 Minstr on `cells` N=448 -O2 and 4.1x per doubling. The points of the instructions a rewrite kept are carried (LLVM's
+    `SlotIndexes` keep an instruction's index across an edit), and only those it added are looked at."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["facts masks"] < 100, f"cells N=448 -O2: facts masks cost {run['facts masks']} Minstr (100 allowed; 397 before): {run}"
