@@ -19,13 +19,13 @@ CONF = dosbatch.CONF
 
 
 class Session:
-    def __init__(self, work: Path):
+    def __init__(self, work: Path, conf: str = CONF):
         self.work = work
         probe = socket.socket()
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
         probe.close()
-        (work / "play.conf").write_text(CONF + f"[autoexec]\nmount c {work}\nc:\n")
+        (work / "play.conf").write_text(conf + f"[autoexec]\nmount c {work}\nc:\n")
         env = {**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSBOX_DEBUG_PORT": str(port)}
         self.process = subprocess.Popen(
             [str(dosbatch.DOSBOX), "-nolog", "-conf", str(work / "play.conf")],

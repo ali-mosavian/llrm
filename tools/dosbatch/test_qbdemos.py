@@ -17,6 +17,8 @@ import dosbatch  # noqa: E402
 import qbplay  # noqa: E402
 import qbruntime  # noqa: E402
 
+pytestmark = pytest.mark.slow_dos
+
 CURSOR_PIXELS = 32   # the cursor blinks: a few pixels of difference at most
 
 # (keys to type, seconds to wait, checkpoint name or None, text the screen must show first or None) for

@@ -67,6 +67,7 @@ def demo_differences(tmp_path_factory):
     return qb32demos.run(sources, tmp_path_factory.mktemp("qb32demos"))
 
 
+@pytest.mark.slow_dos
 @pytest.mark.parametrize("name", ["NIBBLES", "GORILLA"])
 def test_demo_looks_as_bcom45_does_on_dos32(demo_differences, name: str):
     assert demo_differences[name] == []

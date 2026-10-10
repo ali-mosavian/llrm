@@ -125,7 +125,7 @@ def build(work: Path) -> dict[str, Path]:
                 dosbatch.assemble(source, obj)
 
         try:
-            cached(f"runtime|{source}|{tree}|{tools}", obj, produce)
+            cached(runtime_key(source, tree, tools), obj, produce)
         except dosbatch.BuildError as error:
             failures.append(f"{source.name}: {str(error).splitlines()[-1][:160]}")
             continue
@@ -162,12 +162,21 @@ def data_files(source: Path) -> tuple[Path, ...]:
     return ()
 
 
+def basic_key(source: Path, flags: tuple[str, ...]) -> str:
+    """What decides the object a BASIC source compiles to: its bytes, the flags, and the compiler's build."""
+    return f"basic|{source.read_bytes().hex()}|{flags}|{_stamp('llrm-qb')}"
+
+
+def runtime_key(source: Path, tree: str, tools: str) -> str:
+    """What decides a runtime object: its source, every source and header of the runtime, and the tools' builds."""
+    return f"runtime|{source}|{tree}|{tools}"
+
+
 def compile_basic(source: Path, obj: Path, flags: tuple[str, ...] = ("-O2",)) -> str | None:
     """`source` compiled to `obj` for the flat target, or why not.  The object is kept by the source's bytes, the flags and
     the compiler's build, so a program is compiled again only when one of them changes."""
-    key = f"basic|{source.read_bytes().hex()}|{flags}|{_stamp('llrm-qb')}"
     try:
-        cached(key, obj, lambda: _compile_basic(source, obj, flags))
+        cached(basic_key(source, flags), obj, lambda: _compile_basic(source, obj, flags))
     except RuntimeError as error:
         return str(error)
     return None
@@ -183,9 +192,21 @@ def link(program: Path, objects: dict[str, Path], exe: Path, work: Path) -> tupl
     return dosbatch.link_target(TARGET, program, exe, work, runtime=(START_FILES, []), objects_after=tuple(closure(program, objects)))
 
 
-# A bench program is given a fixed number of cycles a millisecond: with `cycles=max` the emulated time a program takes
-# follows how busy the host is, and grep (10 MB a character at a time) ran past its budget when other jobs were running.
-BENCH_CONF = dosbatch.CONF.replace("cycles=max", "cycles=fixed 100000")
+# Every dos32 run is given a fixed number of cycles a millisecond, and a budget in guest instructions: with `cycles=max`
+# the emulated time a program takes follows how busy the host is.  The rate is a compromise measured on the loaded
+# host: a program that waits on TIMER costs the host the cycles of every millisecond it waits (5 emulated seconds took
+# 12 s at 100000 and 70 s at 400000), but one that draws or computes runs slower the lower the rate (the demos'
+# introductions did not finish in 15 s at 25000, and the suite took three times as long).
+CYCLES_PER_MS = 100_000
+BUDGET_INSTRUCTIONS = 12_000_000_000
+BENCH_CONF = dosbatch.CONF.replace("cycles=max", f"cycles=fixed {CYCLES_PER_MS}")
+assert BENCH_CONF != dosbatch.CONF
+BUDGET_MS = BUDGET_INSTRUCTIONS // CYCLES_PER_MS
+
+
+def run_jobs(jobs, work: Path):
+    """dosbatch.run at the fixed rate, with the budget in guest instructions."""
+    return dosbatch.run(jobs, work, conf=BENCH_CONF, budget_ms=BUDGET_MS)
 
 
 def run(names: list[str], work: Path) -> dict[str, tuple[str, bool]]:
@@ -210,7 +231,7 @@ def run(names: list[str], work: Path) -> dict[str, tuple[str, bool]]:
         jobs.append(dosbatch.Job(stem, "exe", work / f"{name}.exe", files=(*loaders, *data_files(source))))
         wanted[stem] = (name, (source.parent / f"{name}.out").read_bytes())
     if jobs:
-        results = dosbatch.run(jobs, work / "run", conf=BENCH_CONF)
+        results = run_jobs(jobs, work / "run")
         for job in jobs:
             name, want = wanted[job.stem]
             got = qbruntime.raw_output(work / "run", job.stem)
@@ -238,7 +259,7 @@ def flat_programs(names: list[str], work: Path) -> dict[str, str]:
         stems[f"F{at:03d}"] = name
         jobs.append(dosbatch.Job(f"F{at:03d}", "exe", work / f"{name}.exe", files=loaders))
     if jobs:
-        results = dosbatch.run(jobs, work / "run")
+        results = run_jobs(jobs, work / "run")
         for job in jobs:
             name = stems[job.stem]
             if results[job.stem].status != "ok":
@@ -283,7 +304,7 @@ def probes(names: list[str], work: Path) -> dict[str, str]:
         stems[stem] = name
         jobs.append(dosbatch.Job(stem, "exe", work / f"{name}.exe", files=loaders, stdin=qbruntime.typed_input(name)))
     if jobs:
-        results = dosbatch.run(jobs, work / "run")
+        results = run_jobs(jobs, work / "run")
         for job in jobs:
             name = stems[job.stem]
             if results[job.stem].status != "ok":

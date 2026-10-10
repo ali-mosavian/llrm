@@ -16,6 +16,8 @@ import dosbatch  # noqa: E402
 import qbplay  # noqa: E402
 
 PROBES = sorted((dosbatch.ROOT / "tests" / "qbrt").glob("gfx_*.bas"))
+pytestmark = pytest.mark.slow_dos
+
 SETTLE_SECONDS = 2
 # Probes that draw for longer than that before they wait.
 SETTLE = {"gfx_paint_sweep": 10, "gfx_paint_rules": 6}

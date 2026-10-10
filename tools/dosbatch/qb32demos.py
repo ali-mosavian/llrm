@@ -131,6 +131,8 @@ def play(exe: Path, work: Path, steps: list, demo: str | None = None) -> dict[st
     work.mkdir(exist_ok=True)
     shutil.copy(exe, work / "P.EXE")
     shots: dict[str, Path] = {}
+    # At the default rate (cycles=max): the intros draw a lot and do not finish in 15 s at a fixed 100000. The steps wait on
+    # what the program does, not on the clock, so the rate decides how long a run takes and not what it shows.
     session = qbplay.Session(work)
     try:
         session.send({"cmd": "dos_cmd", "command": "P.EXE"}, wait=False)
