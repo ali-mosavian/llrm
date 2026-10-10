@@ -37,7 +37,7 @@ use crate::cfg;
 use crate::consts::{self, Calls, Cells};
 use crate::floatfacts::{self, Finite, Format, Operation, Rule};
 use crate::memory::{MemRef, Unit};
-use crate::ranges::{self, Interval};
+use crate::ranges;
 
 pub type Bounds = (BigInt, BigInt);
 
@@ -88,7 +88,7 @@ pub fn _memory(
     inst: InstId,
     format: Format,
     memory: &Cells,
-    scoped: &IndexMap<ValueId, Interval>,
+    scoped: &crate::ranges::Intervals,
 ) -> Option<Bounds> {
     let reference = MemRef::of(unit, inst)?;
     let width = match format {
@@ -102,7 +102,7 @@ pub fn _memory(
     let mut offsets = vec![BigInt::from(0)];
     if let Some(base) = reference.base {
         let interval = scoped.get(&base)?;
-        let known = scoped.iter().map(|(value, interval)| (*value, interval.clone())).collect::<BTreeMap<_, _>>();
+        let known = scoped.iter().map(|(value, interval)| (value, interval.clone())).collect::<BTreeMap<_, _>>();
         if ranges::covering(&reference, &known).base.is_some() {
             return None;
         }
@@ -189,7 +189,7 @@ pub fn exact(
         .collect::<Vec<_>>();
     let mut safe = BTreeSet::new();
     let mut values = IndexMap::<ValueId, Bounds>::default();
-    let (empty_cells, empty_scope) = (Cells::default(), IndexMap::default());
+    let (empty_cells, empty_scope) = (Cells::default(), crate::ranges::Intervals::default());
     let mut changed = true;
     while changed {
         changed = false;
