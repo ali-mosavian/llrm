@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use llrm_lir::registers::RegId;
+use llrm_lir::registers::{RegId, Regs};
 
 use crate::model::ir::{Addr, Held, Operation, Semantics, Space};
 use crate::support::hash::IndexMap;
@@ -806,6 +806,9 @@ pub struct LirBody {
     /// 16 or 32: the mode the target's code runs in, which decides how an
     /// instruction encodes and what it touches.
     pub bits: u32,
+    /// The register file of the target the body is for (instruction selection
+    /// sets it): what every query of a register in this body asks.
+    pub registers: Option<Regs>,
     /// Every frame cell names the slot it lies in (`Addr::slot_home`): set once
     /// instruction selection has tagged them, and then a rule of the
     /// verifier.
@@ -950,12 +953,28 @@ impl LirBody {
             float_stack: 0,
             homes: Arc::default(),
             bits: crate::frontends::bc::declen::BITNESS,
+            registers: Self::default_registers(),
             slotted: false,
             cfa_variables: false,
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
             facts: Default::default(),
         }
+    }
+
+    /// The register file a body made with no target has: m16's, for the tests
+    /// of this crate alone; none otherwise.
+    fn default_registers() -> Option<Regs> {
+        #[cfg(test)]
+        return Some(Regs(&llrm_x86_m16::REGISTER_INFO));
+        #[cfg(not(test))]
+        None
+    }
+
+    /// The register file of the body's target.
+    #[must_use]
+    pub fn regs(&self) -> Regs {
+        self.registers.expect("the body has no register file: instruction selection sets it")
     }
 
     /// Python's `replace(body, blocks=blocks)`: the old blocks are never
@@ -996,6 +1015,7 @@ impl LirBody {
             float_stack: self.float_stack,
             homes: Arc::clone(&self.homes),
             bits: self.bits,
+            registers: self.registers,
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
             notes: Arc::clone(&self.notes),

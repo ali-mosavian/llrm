@@ -4,7 +4,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use super::target;
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::lir::{LirBlock, LirBody};
 
@@ -193,6 +192,7 @@ fn _spans(body: &LirBody) -> Vec<String> {
 /// No operand names a register class it cannot be in. A MIR operand cannot
 /// survive lowering here: `ir::Loc` has no variant for one.
 fn _operands(body: &LirBody) -> Vec<String> {
+    let regs = body.regs();
     let mut out = vec![];
     for block in &body.blocks {
         for one in &block.insns {
@@ -205,14 +205,14 @@ fn _operands(body: &LirBody) -> Vec<String> {
                 };
                 // A position in a stack is not a register the target's tables
                 // list.
-                if target::positional(reg.register) {
+                if regs.positional(reg.register) {
                     continue;
                 }
                 let register = reg.register as u32;
-                if !target::known(reg.register) {
+                if !regs.described(reg.register) {
                     out.push(format!("{:#06x} names {register}, which is not a register this target has", one.at));
                 }
-                if target::width_of(reg.register).is_some_and(|width| width != i64::from(reg.width)) {
+                if regs.width_of(reg.register).is_some_and(|width| width != i64::from(reg.width)) {
                     out.push(format!(
                         "{:#06x} names {register} at width {}, which is not the width that register is",
                         one.at, reg.width

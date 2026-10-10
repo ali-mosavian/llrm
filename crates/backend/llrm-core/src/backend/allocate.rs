@@ -20,7 +20,6 @@ use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
 use crate::backend::live::LiveRanges;
 use crate::backend::liveunion::{LiveUnion, Overlaps};
-use crate::backend::registerinfo::segments;
 use crate::backend::target::{self, Segments};
 use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -995,6 +994,7 @@ pub fn explicit_selectors(
     segments: &Segments,
     registers: &RegisterClasses,
 ) -> LirBody {
+    let regs = body.regs();
     let confined = classes(body, &BTreeSet::new(), segments, registers);
     let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
     let empty = IndexMap::default();
@@ -1009,7 +1009,7 @@ pub fn explicit_selectors(
                 if let Loc::Mem(cell) = place {
                     if let Some(selector) = cell.selector {
                         if confined.get(&selector.value) != Some(&selectors)
-                            || !target::SEGMENTS.contains(pinned.get(&selector.value).unwrap_or(&segments::far()))
+                            || !regs.is_segment(*pinned.get(&selector.value).unwrap_or(&regs.far()))
                         {
                             conflicted.insert(selector.value);
                         }
@@ -1028,7 +1028,7 @@ pub fn explicit_selectors(
                 let addr = cell.addr.expect("a far cell has an address");
                 return Loc::Mem(Mem {
                     selector: None,
-                    addr: Some(Addr { segment: segments::far(), ..addr }),
+                    addr: Some(Addr { segment: regs.far(), ..addr }),
                     ..cell.clone()
                 });
             }
@@ -1063,7 +1063,7 @@ pub fn explicit_selectors(
                 ..what.clone()
             };
             let requires: IndexSet<(Held, Register)> =
-                one.requires.iter().copied().chain(named.iter().map(|held| (*held, segments::far()))).collect();
+                one.requires.iter().copied().chain(named.iter().map(|held| (*held, regs.far()))).collect();
             let uses: IndexSet<u32> = one.uses.iter().copied().chain(named.iter().map(|held| held.value)).collect();
             let mut made = (**one).clone();
             made.what = Some(what);
@@ -2843,6 +2843,7 @@ impl RegAlloc {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, Error> {
+        let regs = body.regs();
         let prepare = llrm_support::debug::span("regalloc prepare");
         if self.frame.is_none() {
             self.frame = Some(Rc::new(RefCell::new(frames::of(&body, None, "", None)?)));
@@ -2901,9 +2902,7 @@ impl RegAlloc {
             self.pinned.retain(|value, _register| !incompatible.contains(value));
         }
         let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
-        self.pinned.retain(|value, register| {
-            !(target::SEGMENTS.contains(register) && confined.get(value) == Some(&selectors))
-        });
+        self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
         let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
         body = constrained_body;
         let clash: BTreeSet<u32> = fixed
@@ -3834,15 +3833,16 @@ fn _placed(
     held: &IndexMap<u32, Register>,
     classes: &RegisterClasses,
 ) -> Result<Arc<Insn>, Unplaced> {
+    let regs = classes.registers;
     let Some(what) = &one.what else {
         return Ok(Arc::clone(one));
     };
     let dests = what.dests.iter().map(|x| _settled(x, held, classes)).collect::<Result<Vec<_>, _>>()?;
     let sources = what.sources.iter().map(|x| _settled(x, held, classes)).collect::<Result<Vec<_>, _>>()?;
     let mut name = what.name.clone();
-    if target::far_load(what) {
+    if target::far_load(regs, what) {
         if let Loc::Reg(selector) = &dests[1] {
-            if let Some(spelt) = crate::backend::registerinfo::load_form(selector.register) {
+            if let Some(spelt) = regs.load_form(selector.register) {
                 name = Some(spelt.to_owned());
             }
         }
@@ -3858,6 +3858,7 @@ fn _settled(
     held: &IndexMap<u32, Register>,
     classes: &RegisterClasses,
 ) -> Result<Loc, Unplaced> {
+    let regs = classes.registers;
     let mut place = place.clone();
     if let Loc::Mem(cell) = &place {
         if let Some(selector) = cell.selector {
@@ -3876,10 +3877,10 @@ fn _settled(
                 return Err(Unplaced(format!("scaled cell {} has no register for its base or index", cell.repr())));
             };
             let mut base_register = match (base, cell.base) {
-                (Some(base), Some(held_base)) => target::named(base, i64::from(held_base.width)),
+                (Some(base), Some(held_base)) => regs.named(base, i64::from(held_base.width)),
                 _ => cell.through,
             };
-            let mut index_register = target::named(index_register, i64::from(index.width));
+            let mut index_register = regs.named(index_register, i64::from(index.width));
             if cell.base.is_some_and(|held_base| held_base.width == 2 && index.width == 2)
                 && cell.scale == 1
                 && classes.word_indexes.contains(&base_register)
@@ -3893,7 +3894,7 @@ fn _settled(
             let Some(register) = held.get(&base.value) else {
                 return Ok(place.clone());
             };
-            let placed = target::named(*register, i64::from(base.width).max(2));
+            let placed = regs.named(*register, i64::from(base.width).max(2));
             if cell.addr.is_some_and(|addr| addr.space == Space::Frame) {
                 return Ok(Loc::Mem(Mem { through: Register::BP, index_through: placed, ..cell.clone() }));
             }
@@ -3906,7 +3907,7 @@ fn _settled(
     let Some(register) = held.get(&value.value) else {
         return Err(Unplaced(format!("value#{} at width {} has no register", value.value, value.width)));
     };
-    Ok(Loc::Reg(Reg { register: target::named(*register, i64::from(value.width)), width: value.width }))
+    Ok(Loc::Reg(Reg { register: regs.named(*register, i64::from(value.width)), width: value.width }))
 }
 
 #[cfg(test)]
@@ -4479,6 +4480,7 @@ mod tests {
 
     #[test]
     fn test_a_placed_cell_reaches_memory_by_the_register_its_value_got() {
+        let regs = crate::backend::registerinfo::test_regs();
         for register in [Register::EBX, Register::ESI] {
             let was = cell_of(&_based_cell());
             let got = _settled(
@@ -4488,7 +4490,7 @@ mod tests {
             )
             .expect("placed");
             let Loc::Mem(got) = got else { panic!("not a cell: {got:?}") };
-            assert_eq!(got.through, target::named(register, 2), "{register:?}: {:?}", got.through);
+            assert_eq!(got.through, regs.named(register, 2), "{register:?}: {:?}", got.through);
             assert_eq!(got.base, Some(Held { value: 21, width: 2 }), "the cell stopped naming its value");
             assert_eq!(got.addr, was.addr, "addr");
             assert_eq!(got.width, was.width, "width");
