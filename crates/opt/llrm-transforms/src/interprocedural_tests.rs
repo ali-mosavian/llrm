@@ -1759,3 +1759,26 @@ b1:
     let printed = printed(&module);
     assert!(!printed[printed.find("define i16 @f").unwrap()..].contains("call "), "{printed}");
 }
+
+/// A chain longer than a caller may grow to is taken in pieces, and only the
+/// function that starts a piece is built: the ones it took are called by none,
+/// so none is built (a chain of N: each was built with the next ones in it).
+#[test]
+fn test_a_chain_longer_than_a_caller_may_take_is_built_only_where_each_piece_starts() {
+    let mut text = String::from("define internal i16 @h0(i16 %x) {\nb1:\n  %y = mul i16 %x, 3\n  ret i16 %y\n}\n");
+    for at in 1..90 {
+        text.push_str(&format!(
+            "\ndefine internal i16 @h{at}(i16 %x) {{\nb1:\n  %a = add i16 %x, {at}\n  %c = call i16 @h{}(i16 %a)\n  %y = xor i16 %c, %x\n  ret i16 %y\n}}\n",
+            at - 1
+        ));
+    }
+    text.push_str("\ndefine i16 @f(i16 %x) {\nb1:\n  %r = call i16 @h89(i16 %x)\n  ret i16 %r\n}\n");
+    let mut module = parsed(&text);
+    let (proved, stages) = step(&mut module, &["f"], 4);
+    let alive: BTreeSet<&str> =
+        proved.reachable.iter().map(|&(_, id)| module.global(id).name.as_deref().unwrap()).collect();
+    let built: BTreeSet<&str> = stages.iter().map(|(name, _)| name.as_str()).collect();
+    assert!(built.is_subset(&alive), "built and then taken: {:?}", built.difference(&alive).collect::<Vec<_>>());
+    assert!(alive.len() > 1 && alive.len() <= 6, "{alive:?}");
+    assert_eq!(results(&module, INPUTS), results(&parsed(&text), INPUTS));
+}
