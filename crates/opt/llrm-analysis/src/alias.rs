@@ -1937,7 +1937,30 @@ pub struct PointValues {
 
 thread_local! {
     static VALUE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static VALUE_ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LIMIT_COLLAPSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+
+/// How many rounds over the blocks the value solves of this thread have made,
+/// for a test that a solve finishes within a bound.
+pub fn value_rounds() -> usize {
+    VALUE_ROUNDS.with(std::cell::Cell::get)
+}
+
+/// How many facts this thread has collapsed to whole objects for having more
+/// slices than `MAX_FIELDS_FOR_FIELD_SENSITIVE`.
+pub fn limit_collapses() -> usize {
+    LIMIT_COLLAPSES.with(std::cell::Cell::get)
+}
+
+/// The most slices a pointer may be known by before its objects are taken
+/// whole: gcc stops treating a structure field by field past
+/// `max-fields-for-field-sensitive` (100 from -O2, tree-ssa-structalias.cc
+/// via params.opt), and LLVM's BasicAA caps its depth the same way. A fact
+/// grows by one slice a round where nothing widens it (a loop the shape does
+/// not know of) and never settles; past the limit it settles at the objects'
+/// whole extents.
+pub const MAX_FIELDS_FOR_FIELD_SENSITIVE: usize = 100;
 
 /// How many value solves this thread has made, for a test that two analyses of
 /// one body ask one.
@@ -1986,9 +2009,27 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
     let mut unbounded = HashSet::<ObjectRef>::default();
     let mut sent = HashMap::<i64, u64>::default();
     let mut visited = vec![None::<u64>; graph.len()];
+    let limited = RefCell::new(HashSet::<ValueId>::default());
+    let any_limited = std::cell::Cell::new(false);
     loop {
         let changed = std::cell::Cell::new(false);
+        VALUE_ROUNDS.with(|rounds| rounds.set(rounds.get() + 1));
         let learn = |values: &mut IndexMap<ValueId, Provenance>, value: ValueId, fact: Provenance| {
+            // Past the limit a value stays whole: its objects whole joined with
+            // another slice of them are not one slice, and a value
+            // taken whole once would grow again by the slices its
+            // loop makes.
+            let fact = if fact.slices.len() > MAX_FIELDS_FOR_FIELD_SENSITIVE
+                || (any_limited.get() && limited.borrow().contains(&value))
+            {
+                any_limited.set(true);
+                if limited.borrow_mut().insert(value) {
+                    LIMIT_COLLAPSES.with(|collapsed| collapsed.set(collapsed.get() + 1));
+                }
+                _widened(&fact)
+            } else {
+                fact
+            };
             if values.get(&value) != Some(&fact) {
                 values.insert(value, fact);
                 touched.borrow_mut().insert(value, tick.get());

@@ -35,3 +35,20 @@ fn test_a_loop_entered_behind_a_folded_guard_is_still_counted_by_the_ranges() {
         "{text}"
     );
 }
+
+/// gcc copies headers after `pass_ipa_inline` (passes.def:232), so the inliner
+/// sizes a body before its test is copied. Copied before it, fib's body counted
+/// 9 operations against the 7 the self-inline admits and the nest of six levels
+/// (2004 calls) was not made: 10946 calls, x_fib 268481 clocks against 210858
+/// with the copy off.
+#[test]
+fn test_fib_with_the_header_copy_on_keeps_its_self_inlined_nest() {
+    let text = listing("x_fib", &["-ftree-ch"]);
+    let function: Vec<&str> = text
+        .lines()
+        .skip_while(|line| !line.starts_with("_fib proc"))
+        .take_while(|line| !line.starts_with("_fib endp"))
+        .collect();
+    let tests = function.iter().filter(|line| line.trim().starts_with("cmp ") && line.trim().ends_with(", 2")).count();
+    assert!(tests >= 6, "{tests} tests of n < 2\n{}", function.join("\n"));
+}
