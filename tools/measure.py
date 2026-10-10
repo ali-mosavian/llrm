@@ -250,8 +250,8 @@ def step_rises(
 ) -> tuple[list[str], list[str]]:
     """A step of `high` share or more whose second difference rose by `step_excess` of the compile's cost at 2N, or whose cost at 2N rose
     by `pass_slack`, fails. A step the base did not read is taken to have had none; one below `high`, or on the edge of the share floor,
-    does not fail either way. A new step on an axis both measurements carry (`judged`) has no step baseline, since work moved into an
-    analysis of its own was in other steps' spans before: the axis rule judges it."""
+    does not fail either way. A new step on an axis both measurements carry whose second difference did not rise (`judged`) has no step baseline, since work
+    moved into an analysis of its own was in other steps' spans before: the axis rule judges it. On an axis that rose it is new work."""
     lines, bad = [], []
     for key, (half, small, big, whole) in sorted(now.items()):
         if big < tol["high"] * whole:
@@ -282,7 +282,8 @@ def risen_elsewhere(key: str, base: dict[str, list[float]], now: dict[str, list[
 def rises(base: dict, now: dict, tol: dict | None = None) -> tuple[list[str], list[str]]:
     tol = tol or tolerances()
     lines, bad = [], []
-    judged = frozenset(base["axes"].keys() & now["axes"].keys())
+    # An axis judges a new row only when its own second difference did not rise: work moved between rows leaves it flat or lower.
+    judged = frozenset(axis for axis in base["axes"].keys() & now["axes"].keys() if superlinear(*now["axes"][axis]) <= superlinear(*base["axes"][axis]))
     for part, check in (("compile", compile_rises), ("axes", axis_rises), ("passes", lambda b, n, t: step_rises(b, n, t, judged))):
         got = check(base[part], now[part], tol)
         lines += got[0]
