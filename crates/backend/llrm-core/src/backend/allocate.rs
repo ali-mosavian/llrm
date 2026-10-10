@@ -2699,7 +2699,7 @@ impl Coloring<'_> {
                 continue;
             }
             // Largest first, as the allocator's queue orders them.
-            holders.sort_by_key(|other| Reverse(self.live[other].size(self.index)));
+            holders.sort_by_cached_key(|other| Reverse(self.live[other].size(self.index)));
             let entry = self.stack.len();
             let session = recolored.clone();
             for other in &holders {

@@ -24,6 +24,7 @@ pub trait Ranges {
 }
 
 impl<T: Ranges + ?Sized> Ranges for Arc<T> {
+    #[inline(always)]
     fn range(
         &self,
         value: u32,
@@ -58,6 +59,7 @@ pub struct LiveRanges {
 }
 
 impl Ranges for LiveRanges {
+    #[inline(always)]
     fn range(
         &self,
         value: u32,
@@ -139,6 +141,7 @@ impl LiveRanges {
         self
     }
 
+    #[inline(always)]
     pub fn get(
         &self,
         value: &u32,
