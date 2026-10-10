@@ -11,8 +11,6 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
-use iced_x86::Register;
-
 use crate::backend::frame::{self as frames, Frame};
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -255,7 +253,7 @@ fn _adjust(
 ) -> Arc<Insn> {
     let at = beside.covers.map_or(beside.at, |covers| covers.0);
     let name = if by > 0 { "add" } else { "sub" };
-    let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+    let sp = Loc::Reg(Reg { register: crate::model::ir::STACK, width: 2 });
     let mut one = Insn::new(
         beside.at,
         Some((at, at)),

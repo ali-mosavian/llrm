@@ -44,7 +44,7 @@ fn _relocated(where_: &Loc) -> bool {
 fn _stateful_destination(where_: &Loc) -> bool {
     matches!(
         where_,
-        Loc::Reg(one) if one.register.full_register32() == Register::ESP || _STATEFUL_REGISTERS.contains(&one.register)
+        Loc::Reg(one) if crate::backend::registerinfo::is_stack(one.register) || _STATEFUL_REGISTERS.contains(&one.register)
     )
 }
 

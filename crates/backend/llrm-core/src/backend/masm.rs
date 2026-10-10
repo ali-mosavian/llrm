@@ -19,8 +19,8 @@ use crate::support::pyrepr::Repr;
 
 /// What LIR calls the frame register and the stack pointer, whatever the
 /// target: `spelled` gives each its own.
-const FRAME: Register = Register::BP;
-const STACK: Register = Register::SP;
+const FRAME: Register = ir::FRAME;
+const STACK: Register = ir::STACK;
 
 /// `SIZES`.
 pub static SIZES: LazyLock<IndexMap<u32, &'static str>> =
@@ -809,7 +809,7 @@ fn built(
                                 moved_return(
                                     popped.value,
                                     procedure.registers.slot,
-                                    procedure.registers.spelled(Register::SP),
+                                    procedure.registers.spelled(ir::STACK),
                                 )
                                 .into_iter()
                                 .map(Item::Semantics),
