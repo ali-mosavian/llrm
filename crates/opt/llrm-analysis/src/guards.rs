@@ -434,7 +434,18 @@ pub fn implies(
     if guard.left == *left && guard.right == *right {
         return _stronger(guard.predicate, predicate);
     }
-    guard.left == *right && guard.right == *left && _stronger(guard.predicate.swapped(), predicate)
+    if guard.left == *right && guard.right == *left && _stronger(guard.predicate.swapped(), predicate) {
+        return true;
+    }
+    // Equality is the same at any offset: a wrapping sum is a bijection, so `a
+    // != 1` proves `a - 1 != 0` (LLVM's isKnownPredicate compares the two
+    // sides' difference).
+    let equality = |one: IntPredicate| matches!(one, IntPredicate::Eq | IntPredicate::Ne);
+    if equality(guard.predicate) && equality(predicate) && _stronger(guard.predicate, predicate) {
+        let (given, asked) = (guard.left.minus(&guard.right), left.minus(right));
+        return given == asked || given == asked.times(&BigInt::from(-1));
+    }
+    false
 }
 
 /// Whether `strong` holding of two sides makes `weak` hold of them.

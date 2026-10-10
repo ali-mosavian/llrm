@@ -878,8 +878,31 @@ fn _entered(
 ) -> bool {
     let Some(preheader) = shape.preheader else { return false };
     let (value, limit) = (start, bound);
+    // A side that is a constant off a value is that value and the constant: the
+    // guards read in the same terms are what the two share, `a != 1` and `a
+    // - 1 != 0`.
+    let anchor = |one: &Scev| -> Scev {
+        let [(product, factor)] = one.terms.iter().collect::<Vec<_>>()[..] else { return one.clone() };
+        let Some(value) = product.single().filter(|_| *factor == BigInt::from(1)) else { return one.clone() };
+        match anchored(unit, &AffineOperand::Value(value, width), width, None) {
+            (Some(root), offset) => Scev::unknown(root, width)
+                .plus(&Scev::constant(offset, width))
+                .plus(&Scev::constant(one.constant.clone(), width)),
+            _ => one.clone(),
+        }
+    };
     let (start, bound) = (Scev::of(start, width), Scev::of(bound, width));
-    crate::guards::holds(unit, preheader, test, &start, &bound) || _ranged(unit, preheader, value, limit, test, width)
+    let expanded: Vec<crate::guards::Guard> = crate::guards::guards(unit, preheader)
+        .into_iter()
+        .map(|guard| crate::guards::Guard {
+            predicate: guard.predicate,
+            left: anchor(&guard.left),
+            right: anchor(&guard.right),
+        })
+        .collect();
+    crate::guards::holds(unit, preheader, test, &start, &bound)
+        || expanded.iter().any(|guard| crate::guards::implies(guard, test, &anchor(&start), &anchor(&bound)))
+        || _ranged(unit, preheader, value, limit, test, width)
 }
 
 /// Whether the counters of the loops around the entry put the start of a
@@ -1379,10 +1402,17 @@ pub fn anchored(
             break;
         }
         let Some((_, op)) = unit.defining(Operand::Value(value)) else { break };
-        if op.opcode != Opcode::Binary(BinaryOp::Add) {
+        if !matches!(op.opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)) {
             break;
         }
         let (Some(left), Some(right)) = (term(unit, op.operands[0]), term(unit, op.operands[1])) else { break };
+        if op.opcode == Opcode::Binary(BinaryOp::Sub) {
+            // `x - c`: only the constant on the right.
+            let (other, AffineOperand::Const(constant)) = (left, right) else { break };
+            offset -= &constant.n;
+            term_ = other;
+            continue;
+        }
         let ((AffineOperand::Const(constant), other) | (other, AffineOperand::Const(constant))) = (left, right) else {
             break;
         };
