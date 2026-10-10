@@ -504,3 +504,14 @@ def test_the_interprocedural_step_does_not_build_the_bodies_its_last_calls_took_
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     small, big = (own[label].get("mir interprocedural", 0.0) - own["empty"].get("mir interprocedural", 0.0) for label in ("n", "2n"))
     assert big <= 2.7 * small and big <= 4000, f"{small:.0f} -> {big:.0f} Minstr"
+
+
+def test_lir_jumps_copies_a_tail_without_checking_the_whole_function_for_each_copy(tmp_path):
+    """`lir jumps` on `branches` at N=1024 (3,073 blocks, 258 tail copies) checked that the body stayed reducible after each copy,
+    copied the odds table for each block, and looked for an arm among all the blocks for each block it placed: 5,802 Minstr,
+    3.7x a doubling. The copies are checked once (one by one only when the whole is not reducible), and an arm is looked for among
+    the predecessors: 825."""
+    source = tmp_path / "branches_1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir jumps"]
+    assert cost <= 1500, cost

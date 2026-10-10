@@ -607,7 +607,7 @@ m16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 14b | the address-form table per (mode, address size) read by `Pointer`, `indexed`, `select.rs`, `affine.rs` | `isel.rs`, `select.rs` |
 | 14c | `CostModel`'s m16 notions behind space kinds | `llrm-mir` |
 | 15 | operand model, one PR each (own track, with 10 and 11): done: `Loc::St` to a `Reg` (#1208), `Loc::Address` is `AddressRef` (#1210), the positional class (#1211, #1227), one function for a cell and an address (#1238); dropped, no measured gain: `name` to `OpcodeId`, nesting `AddressRef` in `Mem` (see Opcode names outside the target) | `llrm-lir`, every `Semantics` consumer |
-| 16 | segment and far passes keyed to pair-kind spaces | `farcall`, `farload`, `nearcode`, `datagroup`, far arms of `isel.rs` |
+| 16 | done (#1291, #1294, #1296 and this PR): segment roles and far-load forms are the register file's, near space and default segment are the target's. `datagroup` had 7 segment uses: `segments.data`/`through` come from the machine and the register file's roles, and its base-register test is `holds_a_segment_offset`. `farcall`, `farload`, `nearcode` and the far arms of `isel.rs` ask the same | `farcall`, `farload`, `nearcode`, `datagroup`, far arms of `isel.rs` |
 | 17 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
 | 18 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
 | 19 | class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
