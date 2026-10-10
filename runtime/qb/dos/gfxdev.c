@@ -377,14 +377,28 @@ static unsigned packed_read(unsigned x, unsigned y, unsigned bits)
 static int packed_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match, unsigned bits)
 {
     int step = last >= x ? 1 : -1;
+    Video *row = packed_row(y);
+    unsigned mask = (1u << bits) - 1, per = 8 / bits;
+    unsigned all1 = (c1 & mask) * (0xFF / mask), all2 = (c2 & mask) * (0xFF / mask);
 
     for (;; x += step) {
-        unsigned color = packed_read(x, y, bits);
+        unsigned from = (unsigned)x * bits, byte = row[from >> 3];
+        unsigned shift = 8 - bits - (from & 7), color = byte >> shift & mask;
 
         if ((color == c1 || color == c2) == match)
             return x;
         if (x == last)
             return -1;
+        if (!match && (byte == all1 || byte == all2)) {
+            /* every pixel of this byte is one of the two: none of the rest of it is the one wanted */
+            int rest = step > 0 ? (int)(shift / bits) : (int)(per - 1 - shift / bits), left = last > x ? last - x : x - last;
+
+            if (rest > left)
+                rest = left;
+            x += step * rest;
+            if (x == last)
+                return -1;
+        }
     }
 }
 
@@ -572,6 +586,68 @@ static void (*const boxes[KINDS])(const GdFill *fill, unsigned x, unsigned y, un
     planar_box, linear_box, packed4_box, packed2_box
 };
 
+/* One pixel: what a box would write to it. */
+static void linear_dot_set(const GdFill *fill, unsigned x, unsigned y)
+{
+    *pixel_at(x, y) = (u8)fill->color;
+}
+
+static void linear_dot(const GdFill *fill, unsigned x, unsigned y)
+{
+    Video *at = pixel_at(x, y);
+
+    *at = (u8)(*at & fill->keep ^ fill->flip);
+}
+
+static void packed_dot(const GdFill *fill, unsigned x, unsigned y, unsigned bits)
+{
+    Video *at = packed_row(y) + (x * bits >> 3);
+    unsigned mask = ((1u << bits) - 1) << (8 - bits - (x * bits & 7));
+
+    *at = (u8)(*at & (fill->keep | ~mask) ^ (fill->flip & mask));
+}
+
+static void packed4_dot(const GdFill *fill, unsigned x, unsigned y)
+{
+    packed_dot(fill, x, y, 2);
+}
+
+static void packed2_dot(const GdFill *fill, unsigned x, unsigned y)
+{
+    packed_dot(fill, x, y, 1);
+}
+
+static void planar_dot(const GdFill *fill, unsigned x, unsigned y)
+{
+    Video *at = byte_of(x, y);
+
+    controller(GC_BIT_MASK, 0x80 >> (x & 7));
+    (void)*at;                   /* loads the latches */
+    *at = (u8)fill->color;
+}
+
+static void (*const dots[KINDS][2])(const GdFill *fill, unsigned x, unsigned y) = {
+    { planar_dot, planar_dot },
+    { linear_dot, linear_dot_set },
+    { packed4_dot, packed4_dot },
+    { packed2_dot, packed2_dot }
+};
+
+void gd_dots_begin(const GdFill *fill)
+{
+    if (kind == KIND_PLANAR && fill->operation)
+        controller(GC_DATA_ROTATE, fill->operation << FUNCTION_SHIFT);
+}
+
+void gd_dots_end(const GdFill *fill)
+{
+    if (kind == KIND_PLANAR) {
+        controller(GC_BIT_MASK, 0xFF);
+        if (fill->operation)
+            controller(GC_DATA_ROTATE, 0);
+    }
+}
+
 void gd_fill_select(GdFill *fill, unsigned color, unsigned operation)
 {
     unsigned byte = color & 0xFF;
@@ -589,6 +665,7 @@ void gd_fill_select(GdFill *fill, unsigned color, unsigned operation)
     }
     operation &= 3;
     fill->box = boxes[kind];
+    fill->dot = dots[kind][operation == 0];
     fill->color = color & 0xFF;
     fill->operation = operation;
     fill->keep = operation == 0 ? 0 : operation == 1 ? byte : operation == 2 ? ~byte & 0xFF : 0xFF;

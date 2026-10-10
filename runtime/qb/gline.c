@@ -9,12 +9,6 @@ enum { SOLID = -1, LINE_STYLE = 0, BOX = 1, FILLED_BOX = 2 };
 static unsigned pattern;
 static unsigned phase;
 
-static void dot(int x, int y, byte color)
-{
-    if (pattern & (0x8000u >> (phase++ & 15)))
-        gfx_plot(x, y, color, OP_SET);
-}
-
 typedef struct Point {
     long x, y;
 } Point;
@@ -92,11 +86,10 @@ static int clip(Point *first, Point *last)
    (the value then takes four times the shorter less the longer, else four times
    the shorter): the pixels are where QB's are, and a line style's bits fall on
    the same ones. */
-static void line(int x1, int y1, int x2, int y2, byte color, int solid)
+static void line(const GdFill *fill, int x1, int y1, int x2, int y2, int solid)
 {
     Point first, last;
-    long dx, dy, major, minor, decision, k;
-    int step_y, x, y;
+    int dx, dy, major, minor, decision, minor4, step4, step_y, x, y, k;
 
     first.x = x1;
     first.y = y1;
@@ -112,38 +105,43 @@ static void line(int x1, int y1, int x2, int y2, byte color, int solid)
     }
     x = (int)first.x;
     y = (int)first.y;
-    dx = last.x - first.x;
-    dy = last.y > first.y ? last.y - first.y : first.y - last.y;
+    dx = (int)(last.x - first.x);
+    dy = (int)(last.y > first.y ? last.y - first.y : first.y - last.y);
     step_y = last.y > first.y ? 1 : -1;
-    major = dx > dy ? dx : dy;
-    minor = dx > dy ? dy : dx;
-    if (first.y == last.y && solid) {
-        GdFill fill;
-
-        gd_fill_select(&fill, color, OP_SET);
-        fill.box(&fill, (unsigned)x, (unsigned)y, (unsigned)(last.x - first.x + 1), 1);
+    if (dy == 0 && solid) {
+        fill->box(fill, (unsigned)x, (unsigned)y, (unsigned)dx + 1, 1);
         return;
     }
-    decision = 4 * minor - major;
-    for (k = 0; k <= major; k++) {
-        if (solid)
-            gfx_plot(x, y, color, OP_SET);
-        else
-            dot(x, y, color);
-        if (decision < 0) {
-            decision += 4 * minor;
-        } else {
-            decision += 4 * (minor - major);
-            if (dx > dy)
+    major = dx > dy ? dx : dy;
+    minor = dx > dy ? dy : dx;
+    minor4 = 4 * minor;
+    step4 = 4 * (minor - major);
+    decision = minor4 - major;
+    gd_dots_begin(fill);
+    if (dx > dy) {
+        for (k = 0; k <= major; k++, x++) {
+            if (solid || (pattern & (0x8000u >> (phase++ & 15))))
+                fill->dot(fill, (unsigned)x, (unsigned)y);
+            if (decision < 0) {
+                decision += minor4;
+            } else {
+                decision += step4;
                 y += step_y;
-            else
-                x++;
+            }
         }
-        if (dx > dy)
-            x++;
-        else
-            y += step_y;
+    } else {
+        for (k = 0; k <= major; k++, y += step_y) {
+            if (solid || (pattern & (0x8000u >> (phase++ & 15))))
+                fill->dot(fill, (unsigned)x, (unsigned)y);
+            if (decision < 0) {
+                decision += minor4;
+            } else {
+                decision += step4;
+                x++;
+            }
+        }
     }
+    gd_dots_end(fill);
 }
 
 /* B$LINE: color (-1 for the foreground), style (-1 for solid), and how: a line,
@@ -152,25 +150,25 @@ void gfx_line_between(int color, int style, int how)
 {
     byte c = gfx_color(color);
     int solid = style == SOLID;
+    GdFill fill;
 
     pattern = (unsigned)style;
     phase = 0;
+    gd_fill_select(&fill, c, OP_SET);
     if (how == FILLED_BOX) {
         int left = gfx_x1, top = gfx_y1, right = gfx_x2, bottom = gfx_y2;
-        GdFill fill;
 
         if (!gfx_clip_box(&left, &top, &right, &bottom))
             return;
-        gd_fill_select(&fill, c, OP_SET);
         fill.box(&fill, (unsigned)left, (unsigned)top, (unsigned)(right - left + 1), (unsigned)(bottom - top + 1));
     } else if (how == BOX) {
         /* the edges in QB's order: bottom, top, right, left */
-        line(gfx_x1, gfx_y2, gfx_x2, gfx_y2, c, solid);
-        line(gfx_x1, gfx_y1, gfx_x2, gfx_y1, c, solid);
-        line(gfx_x2, gfx_y1, gfx_x2, gfx_y2, c, solid);
-        line(gfx_x1, gfx_y1, gfx_x1, gfx_y2, c, solid);
+        line(&fill, gfx_x1, gfx_y2, gfx_x2, gfx_y2, solid);
+        line(&fill, gfx_x1, gfx_y1, gfx_x2, gfx_y1, solid);
+        line(&fill, gfx_x2, gfx_y1, gfx_x2, gfx_y2, solid);
+        line(&fill, gfx_x1, gfx_y1, gfx_x1, gfx_y2, solid);
     } else {
-        line(gfx_x1, gfx_y1, gfx_x2, gfx_y2, c, solid);
+        line(&fill, gfx_x1, gfx_y1, gfx_x2, gfx_y2, solid);
     }
 }
 /* B$LINE */

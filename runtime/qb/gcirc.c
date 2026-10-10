@@ -12,6 +12,7 @@
    the end's. */
 #include "device.h"
 #include "gfx.h"
+#include "gfxdev.h"
 
 enum { OCTANTS = 8, FIXED = 256, TURN_COUNTS = 8 };
 
@@ -43,6 +44,7 @@ typedef struct Circle {
     int scale_x;
     long points;            /* n: of an octant */
     byte color;
+    GdFill fill;
     int arc;
     unsigned long from, to; /* counts round the circle, from <= to */
     byte outside;           /* the arc is what lies outside from..to */
@@ -122,7 +124,8 @@ static void plot(Circle *c, long x, long y, unsigned long count)
         if (!endpoint && between == c->outside)
             return;
     }
-    gfx_plot(px, py, c->color, OP_SET);
+    if (px >= 0 && py >= 0 && (unsigned)px < gfx_current->width && (unsigned)py < gfx_current->height)
+        c->fill.dot(&c->fill, (unsigned)px, (unsigned)py);
 }
 
 /* The eight points of a circle point (x, y), with y the count in its octant:
@@ -178,6 +181,7 @@ void B_CIRC(float radius, short color)
     int spoke_from = 0, spoke_to = 0, arc = has_start || has_end, has_to = has_end;
 
     c.color = gfx_color(color);
+    gd_fill_select(&c.fill, c.color, OP_SET);
     if (radius < 0 || ratio <= 0)
         qb_error(BE_ILLFUN);
     c.radius = (long)(radius + 0.5);
@@ -215,7 +219,9 @@ void B_CIRC(float radius, short color)
         c.from = first;
         c.to = last;
     }
+    gd_dots_begin(&c.fill);
     rim(&c);
+    gd_dots_end(&c.fill);
 }
 #pragma aux B_CSTT "B$CSTT"
 #pragma aux B_CSTO "B$CSTO"

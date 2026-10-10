@@ -1,4 +1,4 @@
-/* The box fills of runtime/qb/dos/gfxdev.c against the pixel plot, on the host: for the 256-colour and the two CGA modes, every
+/* The box fills, dots and CGA searches of runtime/qb/dos/gfxdev.c against the pixel plot and read, on the host: for the 256-colour and the two CGA modes, every
    operation, random colours, rows and spans over random video memory.  Exits 0, or 1 with the case that differed.  (The planar
    modes need a model of the graphics controller: the screens of tests/qbrt/gfx_*.bas, against BCOM45's, are theirs.) */
 #include <stdio.h>
@@ -81,6 +81,47 @@ int main(void)
             if (memcmp(ram, after, size)) {
                 fprintf(stderr, "mode %u op %u color %u x %u count %u y %u rows %u\n", modes[m].mode, op, color, x, count, y, rows);
                 return 1;
+            }
+            /* the dot of the same fill, on random pixels, against the plot */
+            for (unsigned i = 0; i < 50; i++) {
+                unsigned dx = next() % modes[m].width, dy = next() % 200;
+
+                memcpy(ram, before, size);
+                gd_plot(dx, dy, color, op);
+                memcpy(after, ram, size);
+                memcpy(ram, before, size);
+                gd_dots_begin(&fill);
+                fill.dot(&fill, dx, dy);
+                gd_dots_end(&fill);
+                if (memcmp(ram, after, size)) {
+                    fprintf(stderr, "dot: mode %u op %u color %u x %u y %u\n", modes[m].mode, op, color, dx, dy);
+                    return 1;
+                }
+            }
+            /* a search along a row of few colours, against a pixel at a time */
+            for (unsigned i = 0; i < 20; i++) {
+                unsigned sy = next() % 200, c1 = next() % modes[m].colors % 3, c2 = next() % modes[m].colors % 3;
+                int sx = next() % modes[m].width, sl = next() % modes[m].width, match = next() & 1, want = -1;
+
+                for (unsigned px = 0; px < modes[m].width; px++)
+                    gd_plot(px, sy, next() % 3 ? next() % modes[m].colors % 3 : 0, 0);
+                if (next() & 1)
+                    for (unsigned px = 0; px < modes[m].width; px++)
+                        gd_plot(px, sy, c1, 0);
+                for (int px = sx, step = sl >= sx ? 1 : -1;; px += step) {
+                    unsigned pc = gd_read(px, sy);
+
+                    if ((pc == c1 || pc == c2) == match) {
+                        want = px;
+                        break;
+                    }
+                    if (px == sl)
+                        break;
+                }
+                if (gd_search(sx, sl, sy, c1, c2, match) != want) {
+                    fprintf(stderr, "search: mode %u x %d last %d y %u c1 %u c2 %u match %d want %d got %d\n", modes[m].mode, sx, sl, sy, c1, c2, match, want, gd_search(sx, sl, sy, c1, c2, match));
+                    return 1;
+                }
             }
         }
     }

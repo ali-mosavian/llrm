@@ -23,8 +23,14 @@ void gd_plot(unsigned x, unsigned y, unsigned color, unsigned operation);
    `y`, already clipped to the screen.  An edge byte of the box becomes old & keep ^ flip. */
 typedef struct GdFill {
     void (*box)(const struct GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows);
+    void (*dot)(const struct GdFill *fill, unsigned x, unsigned y);
     unsigned color, operation, keep, flip;
 } GdFill;
+/* One pixel with the same fill, for primitives that have clipped to the screen: bracketed by gd_dots_begin and
+   gd_dots_end, which leave the adapter as a plot would (the planar modes keep their controller's function and mask
+   between the two). */
+void gd_dots_begin(const GdFill *fill);
+void gd_dots_end(const GdFill *fill);
 void gd_fill_select(GdFill *fill, unsigned color, unsigned operation);
 unsigned gd_read(unsigned x, unsigned y);
 /* From pixel `x` toward `last` (either way, both on the screen), the first

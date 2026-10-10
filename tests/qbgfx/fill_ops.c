@@ -1,5 +1,5 @@
 /* The box fills of runtime/qb/dos/gfxdev.c on the screen, every mode and every operation: a random box over random pixels leaves
-   what the operation says of each pixel, and the pixels around it as they were.  Prints 0, or the first case that differed. */
+   what the operation says of each pixel, and the pixels around it as they were; so does a dot of the same fill.  Prints 0, or the first case that differed. */
 #include "gfxdev.h"
 
 extern void report(long value);
@@ -47,6 +47,20 @@ int main(void)
                         return 0;
                     }
                 }
+            /* and a few dots of the same fill: the pixel as the operation says, its neighbours as they were */
+            for (x = 0; x < 6; x++) {
+                unsigned dx = 1 + next() % (REGION_W - 2), dy = next() % REGION_H;
+                unsigned left = gd_read(dx - 1, dy), old = gd_read(dx, dy), right = gd_read(dx + 1, dy);
+                unsigned want = (operation == 0 ? color : operation == 1 ? old & color : operation == 2 ? old | color : old ^ color) & (colors[m] - 1);
+
+                gd_dots_begin(&fill);
+                fill.dot(&fill, dx, dy);
+                gd_dots_end(&fill);
+                if (gd_read(dx, dy) != want || gd_read(dx - 1, dy) != left || gd_read(dx + 1, dy) != right) {
+                    report((long)modes[m] * 1000000L + (long)operation * 100000L + (long)(dx + dy * 100) + 50000L);
+                    return 0;
+                }
+            }
         }
     }
     report(0);
