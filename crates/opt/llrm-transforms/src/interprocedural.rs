@@ -1411,7 +1411,7 @@ pub fn optimized_with<E: From<String>>(
     // parameters nothing reads are gone and the tail calls are loops, as GCC's
     // early passes have made them: a body with two calls would be a tree,
     // not a chain.
-    if let Some(budget) = threshold.budget(reach).filter(|_| !threshold.single) {
+    if let Some(budget) = threshold.recursive_budget(reach).filter(|_| !threshold.single) {
         for at in 0..count {
             for &id in &procedures[at] {
                 let module = &mut program.modules[at];
