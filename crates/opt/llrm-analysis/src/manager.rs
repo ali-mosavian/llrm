@@ -20,7 +20,7 @@ use llrm_support::debug::counted;
 use llrm_support::hash::IndexMap;
 
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
-use crate::cfg::{self, Shape};
+use crate::cfg::Shape;
 use crate::consts::{self, Calls, Known};
 use crate::floatfacts;
 use crate::globalsaa::{self, Globals, ProgramGlobals};
@@ -1169,81 +1169,6 @@ impl DominatedEdges {
             &registers,
             before,
         )
-    }
-}
-
-/// What each memory cell holds before each instruction, where it is a number,
-/// of the body alone (no callee's writes, no facts from outside):
-/// `consts::cells`.
-pub struct MemoryCells;
-
-impl Analysis for MemoryCells {
-    type Result = consts::SolvedCells;
-    const NAME: &'static str = "memory-cells";
-    const INCREMENTAL: bool = true;
-
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self::Result {
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        consts::cells_solved(
-            &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
-            &consts::Calls::default(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            true,
-        )
-    }
-
-    /// Stores moved between blocks, or given another value, change what is
-    /// held in the blocks they left and entered and what those reach
-    /// (`consts::cells_restarted`); any other change derives them afresh.
-    fn update(
-        previous: &Self::Result,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        Self::update_owned(Rc::new(previous.clone()), changes, context, layout, function, analyses)
-    }
-
-    fn update_owned(
-        previous: Rc<Self::Result>,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        let store = |inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. });
-        let mut touched = BTreeSet::new();
-        for change in changes {
-            match *change {
-                Change::Moved { inst, block, from, .. } if store(inst) => {
-                    touched.extend([cfg::id(block), cfg::id(from)]);
-                }
-                Change::Rewritten(inst) if store(inst) => {
-                    touched.insert(cfg::id(function.parent(inst)?));
-                }
-                _ => return None,
-            }
-        }
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed);
-        // Changed where it stands when no one else holds it.
-        let mut cells = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
-        cells.restarted(&unit, &touched).then_some(cells)
     }
 }
 

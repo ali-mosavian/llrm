@@ -917,8 +917,6 @@ pub fn cells_before(
         None,
         None,
         None,
-        None,
-        false,
     )
     .flat
     .get(&at)
@@ -1014,8 +1012,6 @@ pub fn solved_over(
                 None,
                 None,
                 None,
-                None,
-                false,
             )
             .flat;
             reshadow = false;
