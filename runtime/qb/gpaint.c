@@ -1,9 +1,9 @@
 /* PAINT: fills the area round a point, up to a border colour (QB rt/paint.asm
    B$PAIN).  Spans a row at a time, each span leaving seeds for the rows above
-   and below it.  The seeds wait in all the free string space, as QB's queue
-   does, so a fill runs out of memory only where QB's would. */
+   and below it.  The seeds wait where the target keeps a fill's queue (platform.h): in all the free string space,
+   as QB's queue does, so a fill runs out of memory only where QB's would; or, where memory is flat, in a block of
+   its own, so what the strings and the heap hold does not decide how much of a picture a fill can cover. */
 #include "gfx.h"
-#include "nhstutil.h"
 
 typedef struct Seed {
     short x, y;
@@ -52,20 +52,13 @@ void B_PAIN(short fill, short border)
 {
     byte paint = gfx_color(fill);
     byte edge = border == -1 ? paint : gfx_color(border);
-    char *space;
-    SD *held;
-    unsigned bytes;
+    unsigned long bytes;
 
     seed_count = 0;
     if (!open_pixel(gfx_x1, gfx_y1, edge))
         return;
-    /* The queue is one string, whose length is a word, whatever the free room. */
-    bytes = str_free_bytes();
-    if (bytes > SD_MAX_LENGTH)
-        bytes = SD_MAX_LENGTH;
-    seed_room = bytes / sizeof(Seed);
-    held = str_tmp(seed_room * sizeof(Seed), &space);
-    seeds = (Seed *)space;
+    seeds = (Seed *)qb_paint_queue_open(&bytes);
+    seed_room = (unsigned)(bytes / sizeof(Seed));
     push(gfx_x1, gfx_y1);
     while (seed_count) {
         Seed seed = seeds[--seed_count];
@@ -82,6 +75,6 @@ void B_PAIN(short fill, short border)
         seed_row(left, right, seed.y - 1, edge, paint);
         seed_row(left, right, seed.y + 1, edge, paint);
     }
-    str_tmp_free(held);
+    qb_paint_queue_close();
 }
 #pragma aux B_PAIN "B$PAIN"

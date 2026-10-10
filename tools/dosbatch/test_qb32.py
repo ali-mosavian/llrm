@@ -72,7 +72,7 @@ def test_demo_looks_as_bcom45_does_on_dos32(demo_differences, name: str):
     assert demo_differences[name] == []
 
 
-FLAT_PROGRAMS = ["long_strings"]
+FLAT_PROGRAMS = ["long_strings", "paint_queue"]
 
 
 @pytest.fixture(scope="module")

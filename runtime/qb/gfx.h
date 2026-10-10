@@ -59,4 +59,9 @@ void gfx_line_between(int color, int style, int how);
 /* Raster operations, as the OS layer takes them. */
 enum { OP_SET, OP_AND, OP_OR, OP_XOR };
 
+/* The block a fill keeps its queue of seeds in (the target's paintq.c): its address, and in *bytes its size.  It is
+   held until qb_paint_queue_close. */
+void *qb_paint_queue_open(unsigned long *bytes);
+void qb_paint_queue_close(void);
+
 #endif
