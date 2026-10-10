@@ -820,6 +820,25 @@ impl Analysis for Registers {
     }
 }
 
+/// The bits of each integer value that anything reads (`demanded::demanded`),
+/// LLVM's DemandedBits.
+pub struct DemandedBits;
+
+impl Analysis for DemandedBits {
+    type Result = llrm_mir::dense::IdMap<ValueId, u128>;
+    const NAME: &'static str = "demanded";
+    // The function alone: no module or target is read.
+    const READS_OUTER: bool = false;
+    fn run(
+        context: &Context,
+        _layout: &DataLayout,
+        function: &Function,
+        _analyses: &mut Analyses,
+    ) -> Self::Result {
+        crate::demanded::demanded(context, function)
+    }
+}
+
 /// What each block assumes, LLVM's AssumptionCache: a unit that carries none
 /// found them again, a walk of the whole body, at every `guards` and `ranges`
 /// query.
