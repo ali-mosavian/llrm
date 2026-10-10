@@ -10,7 +10,7 @@ compile takes LIMIT seconds; `--programs` adds QCport's modules, each as one poi
 `run` at -O2 also keeps llrm's per-pass own time (LLRM_DEBUG=time) at each size, and the MIR size (LLRM_DEBUG=mir).
 """
 from concurrent.futures import ThreadPoolExecutor
-import argparse, json, math, os, re, shutil, statistics, subprocess, sys, tempfile
+import argparse, json, math, os, re, shutil, signal, statistics, subprocess, sys, tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -191,8 +191,25 @@ def measured_environment(env: dict | None = None) -> dict:
     return {**kept, "LLRM_PAD": "x" * max(0, ENVIRONMENT_BYTES - used - len("LLRM_PAD") - 2)}
 
 
+WALL_PER_CPU = 10  # a run that burns no CPU (a deadlock, a wait) is given this many wall seconds per CPU second of its budget
+
+
+def _cpu_limited(seconds: float):
+    """For the child: at most `seconds` of its own CPU time (SIGXCPU past it), whatever else the machine is doing."""
+    def apply() -> None:
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_CPU, (int(seconds), int(seconds) + 1))
+
+    return apply
+
+
 def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tuple[int, int, str]:
     """(instructions:u, task-clock ns, stderr) of one run; raises on a failed compile.
+
+    `timeout` is CPU seconds of the run, not wall: a count has no wall-clock budget that load can break (a compile of 3 s timed out
+    at 120 s wall under a load average of 100). A hang that spins is stopped by the CPU limit; one that waits, by a wall backstop
+    `WALL_PER_CPU` times as long.
 
     The child sees no LLRM_ variable of the caller's but LLRM_BIN (and `env`'s own): LLRM_CHECK_*, LLRM_VERIFY and the like add work to
     the step they check, and a count taken under them is not the compiler's (regparm16: 'lir peephole' read 4.5 Minstr over at every size).
@@ -211,7 +228,10 @@ def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tup
         if Path(cmd[0]).name.startswith("llrm-") and Path(cmd[0]).is_file():
             (Path(here) / Path(cmd[0]).name).symlink_to(Path(cmd[0]).resolve())
             cmd = [f"./{Path(cmd[0]).name}", *cmd[1:]]
-        done = subprocess.run([*levels_time.UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, cwd=here, env=measured_environment(env))
+        done = subprocess.run([*levels_time.UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout * WALL_PER_CPU, cwd=here, env=measured_environment(env), preexec_fn=_cpu_limited(timeout))
+        # perf stat exits 0 for a child a signal killed, and says only what the shell would.
+        if "CPU time limit exceeded" in done.stderr or done.returncode in (-signal.SIGXCPU, 128 + signal.SIGXCPU):
+            raise TimeoutError(f"{' '.join(cmd[-1:])}: more than {timeout:g} CPU seconds")
         if done.returncode:
             said = [l for l in (done.stderr or done.stdout).splitlines() if l and not l.startswith(("[time]", "[mir]"))]
             raise RuntimeError(f"{' '.join(cmd[-1:])}: " + " | ".join(said)[:300])
