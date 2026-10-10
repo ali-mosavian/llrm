@@ -6,51 +6,52 @@
 # Allocation order is file order. The segment registers carry the class of the address space they mean (data_segment, stack_segment, code_segment, far_segment).
 #
 # dwarf and codeview: the register's number in each debug format, `-` for none. CodeView's are
-# CV_HREG_e (llvm's CodeViewRegisters.def). The psABI's DWARF map is i386's: real-mode x86 has none,
-# so m16 numbers none and DWARF locations in m16 code are refused.
+# CV_HREG_e (llvm's CodeViewRegisters.def). Real-mode x86 has no psABI DWARF map; the numbers are Open Watcom's
+# (bld/watcom/h/dwregx86.h), which its debugger and jwlink read: the i386 ones for the 32-bit registers, then the
+# x87 stack, the byte, word and segment registers in that order.
 #
 # @scratch: the words a pass may borrow for a moment, most preferred first (gcc's REG_ALLOC_ORDER): a
 # register the result is not left in comes last.
 @scratch cx dx bx ax
 #
 # name  bits root lane classes dwarf codeview [load: the mnemonic that loads a far pointer into a segment register]
-eax     32   eax  0    gpr,byte,int  -  17
-ebx     32   ebx  0    gpr,byte,base,int  -  20
-ecx     32   ecx  0    gpr,byte,int  -  18
-edx     32   edx  0    gpr,byte,int  -  19
-esi     32   esi  0    gpr,index,int  -  23
-edi     32   edi  0    gpr,index,int  -  24
-ebp     32   ebp  0    reserved,frame,base,int  -  22
-esp     32   esp  0    reserved,stack,int  -  21
-ax      16   eax  0    int  -  9
-bx      16   ebx  0    int  -  12
-cx      16   ecx  0    int  -  10
-dx      16   edx  0    int  -  11
-si      16   esi  0    int  -  15
-di      16   edi  0    int  -  16
-bp      16   ebp  0    int  -  14
-sp      16   esp  0    int  -  13
-al      8    eax  0    int  -  1
-bl      8    ebx  0    int  -  4
-cl      8    ecx  0    int  -  2
-dl      8    edx  0    int  -  3
-ah      8    eax  8    int  -  5
-bh      8    ebx  8    int  -  8
-ch      8    ecx  8    int  -  6
-dh      8    edx  8    int  -  7
+eax     32   eax  0    gpr,byte,int  0  17
+ebx     32   ebx  0    gpr,byte,base,int  3  20
+ecx     32   ecx  0    gpr,byte,int  1  18
+edx     32   edx  0    gpr,byte,int  2  19
+esi     32   esi  0    gpr,index,int  6  23
+edi     32   edi  0    gpr,index,int  7  24
+ebp     32   ebp  0    reserved,frame,base,int  5  22
+esp     32   esp  0    reserved,stack,int  4  21
+ax      16   eax  0    int  27  9
+bx      16   ebx  0    int  28  12
+cx      16   ecx  0    int  29  10
+dx      16   edx  0    int  30  11
+si      16   esi  0    int  31  15
+di      16   edi  0    int  32  16
+bp      16   ebp  0    int  33  14
+sp      16   esp  0    int  34  13
+al      8    eax  0    int  19  1
+bl      8    ebx  0    int  21  4
+cl      8    ecx  0    int  23  2
+dl      8    edx  0    int  25  3
+ah      8    eax  8    int  20  5
+bh      8    ebx  8    int  22  8
+ch      8    ecx  8    int  24  6
+dh      8    edx  8    int  26  7
 
 # The x87 stack, as llrm-x86-m32 states it: its depth is the floating values held at once.
-es      16   es   0    segment,reserved,far_segment  -  25  les
-cs      16   cs   0    segment,reserved,code_segment  -  26
-ss      16   ss   0    segment,reserved,stack_segment  -  27
-ds      16   ds   0    segment,reserved,data_segment  -  28  lds
-fs      16   fs   0    segment,reserved  -  29  lfs
-gs      16   gs   0    segment,reserved  -  30  lgs
-st0     80   st0 0    x87,positional  -  128
-st1     80   st1 0    x87,positional  -  129
-st2     80   st2 0    x87,positional  -  130
-st3     80   st3 0    x87,positional  -  131
-st4     80   st4 0    x87,positional  -  132
-st5     80   st5 0    x87,positional  -  133
-st6     80   st6 0    x87,positional  -  134
-st7     80   st7 0    x87,positional  -  135
+es      16   es   0    segment,reserved,far_segment  38  25  les
+cs      16   cs   0    segment,reserved,code_segment  35  26
+ss      16   ss   0    segment,reserved,stack_segment  36  27
+ds      16   ds   0    segment,reserved,data_segment  37  28  lds
+fs      16   fs   0    segment,reserved  39  29  lfs
+gs      16   gs   0    segment,reserved  40  30  lgs
+st0     80   st0 0    x87,positional  11  128
+st1     80   st1 0    x87,positional  12  129
+st2     80   st2 0    x87,positional  13  130
+st3     80   st3 0    x87,positional  14  131
+st4     80   st4 0    x87,positional  15  132
+st5     80   st5 0    x87,positional  16  133
+st6     80   st6 0    x87,positional  17  134
+st7     80   st7 0    x87,positional  18  135

@@ -621,6 +621,52 @@ b:
     assert!(!ranged(pipeline::Options::basic()), "-O1 stated a range from the callers' arguments");
 }
 
+/// gcc's -O1 has value ranges for induction variables only (SCEV with the
+/// loop's iteration bound) and none from -O2's `-ftree-vrp`. Our alias and
+/// branch decisions asked the counted loops' intervals at every level: 24 of
+/// the 25 runs of `Bounded` on x_life at -O1, 42 M of its 510 M. At -O1 they
+/// take none, and with nothing else asking `Bounded` here it is not worked out.
+#[test]
+fn alias_and_decisions_ask_no_loop_intervals_at_o1() {
+    let text = "
+@a = global [16 x i16] zeroinitializer
+
+define i16 @f(i16 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %slot = getelementptr [16 x i16], ptr @a, i16 0, i16 %i
+  store i16 %i, ptr %slot
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, 16
+  br i1 %more, label %loop, label %done
+done:
+  %last = load i16, ptr @a
+  ret i16 %last
+}
+";
+    let asked = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let options = pipeline::Options { inline: crate::inline::Threshold::none(), ..options };
+        let applied = Applied { options, ..Applied::default() };
+        llrm_mir::passes::trace_recomputes(true);
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        let runs = llrm_mir::passes::recomputes();
+        llrm_mir::passes::trace_recomputes(false);
+        runs.iter().filter(|(name, ..)| *name == "bounded").map(|(.., count)| count).sum::<usize>()
+    };
+    assert!(!pipeline::Options::basic().loop_intervals && pipeline::Options::standard().loop_intervals);
+    assert!(asked(pipeline::Options::standard()) > 0, "premise: -O2 asks for the loop's intervals");
+    assert_eq!(asked(pipeline::Options::basic()), 0, "-O1 worked out the counted loops' intervals");
+}
+
 thread_local! {
     static BURNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

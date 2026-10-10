@@ -513,3 +513,17 @@ def test_the_slow_dos_tier_is_skipped_where_the_demo_sources_are_missing(tmp_pat
     env = {"HOME": str(tmp_path), "QB45_DEMOS_DIR": str(tmp_path / "none"), "QB45_DIR": str(tmp_path / "none"), "GATE_ALLOW_MISSING": "1"}
     skipped = gate.skipped_steps(["dos-slow"], gate.missing_capabilities(env))
     assert "QB45_DEMOS_DIR" in skipped["dos-slow"] or "QB45_DIR" in skipped["dos-slow"], skipped
+
+
+def test_a_run_asked_for_another_commit_refuses_and_names_no_pass():
+    """A gate started on a checkout that had failed passed on the previous run's log, and the commit it named was never run."""
+    done = subprocess.run([sys.executable, str(ROOT / "tools/gate/gate.py"), "run", "--expect", "0000000"], capture_output=True, text=True, cwd=ROOT)
+    assert done.returncode == 2 and "not the checkout asked for" in done.stdout, done.stdout + done.stderr
+    assert "PASS" not in done.stdout
+
+
+def test_a_dirty_tree_is_refused_unless_it_is_allowed_and_a_verdict_names_its_commit():
+    assert gate.refusal("a" * 40, True, None, False) and "differs from HEAD" in gate.refusal("a" * 40, True, None, False)
+    assert gate.refusal("a" * 40, True, None, True) is None and gate.refusal("a" * 40, False, "aaaa", False) is None
+    assert gate.verdict_line("fast", [], [], 5.0, [], "abcdef0123456789").startswith("GATE fast PASS at abcdef012345")
+    assert gate.verdict_line("fast", ["lib"], [], 5.0, [], "abcdef0123456789").startswith("GATE fast FAIL: lib at abcdef012345")
