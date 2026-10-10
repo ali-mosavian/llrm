@@ -1648,12 +1648,8 @@ pub fn stamped(
             let shape = Shape::of(function);
             // Found once for the function, not for each loop: the proofs of
             // every loop ask the same.
-            let registers = llrm_analysis::consts::known(
-                &unit_of(module, layout, function).with_spaces(program.target.spaces()),
-                None,
-                None,
-                None,
-            );
+            let registers =
+                llrm_analysis::consts::known(&unit_of(module, layout, function).with_spaces(program.target.spaces()));
             let proofs = |one| {
                 llrm_analysis::induction::counted(
                     &unit_of(module, layout, function)

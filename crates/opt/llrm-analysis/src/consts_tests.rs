@@ -58,7 +58,7 @@ impl Parsed {
         name: &str,
         calls: &Calls,
     ) -> Option<Known> {
-        known(&self.unit(), Some(calls), None, None).get(&self.value(name)).cloned()
+        known_walked(&self.unit(), calls).get(&self.value(name)).cloned()
     }
 
     /// What `_result` makes of `%name` given facts about named values.
@@ -121,11 +121,7 @@ b0:
 ",
     );
     assert_eq!(parsed.solved("loaded", &Calls::default()), Some(Known::new(9, 16)));
-    assert_eq!(
-        known(&parsed.unit(), None, None, None).get(&parsed.value("loaded")),
-        None,
-        "memory is solved only when asked"
-    );
+    assert_eq!(known(&parsed.unit()).get(&parsed.value("loaded")), None, "memory is solved only when asked");
 }
 
 #[test]
@@ -490,7 +486,7 @@ b0:
         ));
         let dos = dos(&parsed.module);
         let unit = Unit { program: machine.then_some(&*dos), ..parsed.unit() };
-        let got = known(&unit, Some(&Calls::default()), None, None).get(&parsed.value("r")).cloned();
+        let got = known_walked(&unit, &Calls::default()).get(&parsed.value("r")).cloned();
         assert_eq!(got.is_some(), kept, "{selector} {machine}");
     }
 }
@@ -592,7 +588,8 @@ fn test_a_dominating_store_supplies_a_load_through_a_pointer() {
     for (between, known) in [
         ("", Some(Known::new(7, 16))),
         ("store i16 9, ptr %q", None),
-        ("store i8 9, ptr %p", None),
+        // The byte written and the high byte of the word stored before it.
+        ("store i8 9, ptr %p", Some(Known::new(9, 16))),
         ("call void @g()", None),
         ("%s = getelementptr inbounds i8, ptr %p, i16 2\n  store i16 9, ptr %s", Some(Known::new(7, 16))),
     ] {
@@ -666,7 +663,7 @@ b0:
         ))
     };
     let (one, two) = (module("g", "h"), module("h", "g"));
-    let solve = |parsed: &Parsed| known(&parsed.unit(), Some(&Calls::default()), None, None);
+    let solve = |parsed: &Parsed| known_walked(&parsed.unit(), &Calls::default());
     let (first, second) = (solve(&one), solve(&two));
     assert_eq!(first.get(&one.value("a")), Some(&Known::new(7, 16)));
     assert_eq!((solve(&two), solve(&one)), (second, first));
@@ -705,7 +702,7 @@ fn test_known_asks_each_bodys_exposed_frames_once() {
     let parsed =
         Parsed::new(&format!("define i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  ret i16 %v39\n}}\n"));
     let before = crate::frameescape::scans();
-    known(&parsed.unit(), Some(&Calls::default()), None, None);
+    known_walked(&parsed.unit(), &Calls::default());
     assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
 }
 

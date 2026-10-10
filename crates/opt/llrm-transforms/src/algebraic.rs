@@ -708,7 +708,7 @@ fn _recurrences(
     let analysed = Unit::within(context, layout, function, outer).with_shape(&shape);
     // Found once, for the body as the rounds before left it, not for each
     // loop's recurrences.
-    let registers = consts::known(&analysed, None, None, None);
+    let registers = consts::known(&analysed);
     let analysed = analysed.with_registers(&registers);
     shape.loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
 }
