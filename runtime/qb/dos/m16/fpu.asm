@@ -1,4 +1,4 @@
-;; name: QB$ATAN2, QB$SINCOS
+;; name: B$ATAN2, B$SINCOS
 ;; desc: the FPU's arctangent and sine
 ;;
 ;; args: ax:ptr double y, dx:ptr double x, cx:ptr double out; or ax:ptr angle, dx:ptr sine, cx:ptr cosine
@@ -17,8 +17,8 @@
 
 .code
 ;;::::::::::::::
-;; QB$ATAN2 (ax: y, dx: x, cx: out)
-QB$ATAN2         proc    public
+;; B$ATAN2 (ax: y, dx: x, cx: out)
+B$ATAN2         proc    public
 
                 push    si
                 mov     si, cx
@@ -31,11 +31,11 @@ QB$ATAN2         proc    public
                 fwait
                 pop     si
                 ret
-QB$ATAN2         endp
+B$ATAN2         endp
 
 ;;::::::::::::::
-;; QB$SINCOS (ax: angle, dx: sine, cx: cosine)
-QB$SINCOS        proc    public
+;; B$SINCOS (ax: angle, dx: sine, cx: cosine)
+B$SINCOS        proc    public
 
                 push    si
                 mov     si, cx
@@ -48,5 +48,5 @@ QB$SINCOS        proc    public
                 fwait
                 pop     si
                 ret
-QB$SINCOS        endp
+B$SINCOS        endp
                 end

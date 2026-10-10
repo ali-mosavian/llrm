@@ -200,17 +200,23 @@ pub fn _contract(
     pushed: i64,
     family: model::RuntimeProfile,
 ) -> Result<Contract, AbiError> {
-    _contract_keeping(name, cleanup, pushed, family, &BTreeSet::new())
+    _contract_keeping(name, true, cleanup, pushed, family, &BTreeSet::new())
 }
 
 /// `_contract`, a call no runtime contract describes keeping `preserved`.
 fn _contract_keeping(
     name: &str,
+    runtime_call: bool,
     cleanup: model::StackCleanup,
     pushed: i64,
     family: model::RuntimeProfile,
     preserved: &BTreeSet<runtime::Reg>,
 ) -> Result<Contract, AbiError> {
+    // A function the program names is not a runtime entry whatever its spelling: only the runtime's own
+    // calls (`RUNTIME`-prefixed) have a contract, which the runtime tables and the entries' declarations give.
+    if !runtime_call {
+        return Ok(ordinary(name, cleanup, pushed, preserved));
+    }
     let resume_label = name.starts_with("$QB$RESA:");
     let restore_label = name.starts_with("$QB$RSTB:");
     let physical_name = if resume_label {
@@ -734,11 +740,22 @@ fn _contract_keeping(
             ..found.clone()
         });
     }
-    if name.starts_with("B$") {
+    if runtime_call && name.starts_with("B$") {
         return Err(AbiError(format!("runtime call {name} has no complete stack-cleanup contract")));
     }
+    Ok(ordinary(name, cleanup, pushed, preserved))
+}
+
+/// What a call of a function no runtime table describes is: stack-only, the cleanup its verified call site
+/// has, the registers the calling convention gives, memory conservative.
+fn ordinary(
+    name: &str,
+    cleanup: model::StackCleanup,
+    pushed: i64,
+    preserved: &BTreeSet<runtime::Reg>,
+) -> Contract {
     let caller = cleanup == model::StackCleanup::Caller;
-    Ok(Contract {
+    Contract {
         cleanup: Some(if caller { 0 } else { pushed }),
         caller_cleanup: if caller { pushed } else { 0 },
         control: Control::Returns,
@@ -752,7 +769,7 @@ fn _contract_keeping(
             .to_owned(),
         clobbers: runtime::EVERY.difference(preserved).copied().collect(),
         ..runtime::worst(name)
-    })
+    }
 }
 
 /// The ABI of the MIR a HIR program emits: a runtime routine linked by its
@@ -844,10 +861,11 @@ impl crate::backend::assemble::Abi for HirAbi {
         }
         let cleanup = if pops { model::StackCleanup::Callee } else { model::StackCleanup::Caller };
         let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
-        if self.runtime.calls_natively() {
+        let runtime_call = callee.starts_with(crate::hir::mir::RUNTIME);
+        if self.runtime.calls_natively() && runtime_call {
             return Ok(native_contract(name, pops, pushed, self.runtime));
         }
-        _contract_keeping(name, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
+        _contract_keeping(name, runtime_call, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
     }
 
     fn linked(

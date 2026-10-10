@@ -1,7 +1,7 @@
-;; name: QB$MOVE, QB$FILL
+;; name: B$MOVE, B$FILL
 ;; desc: string moves by dwords
 ;;
-;; args: ax:ptr BlockOp | dst, src: bytes forward; or by bytes if `value` is not 0 (an EGA latch copy holds one byte); QB$FILL: dst, words of a 16-bit value
+;; args: ax:ptr BlockOp | dst, src: bytes forward; or by bytes if `value` is not 0 (an EGA latch copy holds one byte); B$FILL: dst, words of a 16-bit value
 ;; retn: none
 ;;
 ;; chng: oct/26 written [ali]
@@ -28,14 +28,14 @@ Regs            ends
 BlockOp         struc
                 dst             dword   ?
                 src             dword   ?
-                count           word    ?               ;; bytes, or words for QB$FILL
-                value           word    ?               ;; for QB$FILL
+                count           word    ?               ;; bytes, or words for B$FILL
+                value           word    ?               ;; for B$FILL
 BlockOp         ends
 
 .code
 ;;::::::::::::::
-;; QB$MOVE (ax: op)
-QB$MOVE          proc    public
+;; B$MOVE (ax: op)
+B$MOVE          proc    public
 
                 push    si
                 push    di
@@ -61,11 +61,11 @@ QB$MOVE          proc    public
                 pop     di
                 pop     si
                 ret
-QB$MOVE          endp
+B$MOVE          endp
 
 ;;::::::::::::::
-;; QB$FILL (ax: op)
-QB$FILL          proc    public
+;; B$FILL (ax: op)
+B$FILL          proc    public
 
                 push    di
                 push    es
@@ -85,5 +85,5 @@ QB$FILL          proc    public
                 pop     es
                 pop     di
                 ret
-QB$FILL          endp
+B$FILL          endp
                 end

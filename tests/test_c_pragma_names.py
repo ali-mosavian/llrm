@@ -29,3 +29,20 @@ def test_the_pragma_name_is_the_symbol_in_every_abi(abi, tmp_path):
     subprocess.run(command + ([f"-mabi={abi}"] if abi else []), check=True, capture_output=True)
     published = {line.split()[1] for line in (tmp_path / "n.s").read_text().splitlines() if line.startswith("public ")}
     assert published == {"B$LTRM", "b$seg"}
+
+
+CALLER = """\
+extern void helper(unsigned);
+#pragma aux helper "B$HELPER"
+void f(void) { helper(1); }
+"""
+
+
+def test_a_c_function_named_b_dollar_is_called_like_any_other(tmp_path):
+    """A name must not change code generation: calling `B$HELPER` from C asked for a BASIC stack-cleanup
+    contract and failed ("runtime call B$HELPER has no complete stack-cleanup contract")."""
+    (tmp_path / "c.c").write_text(CALLER)
+    command = [str(llrmbin.bin_dir() / "llrm-c"), str(tmp_path / "c.c"), "-m16", "-O2", "-S", "-o", str(tmp_path / "c.s")]
+    done = subprocess.run(command, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert "call far ptr B$HELPER" in (tmp_path / "c.s").read_text()

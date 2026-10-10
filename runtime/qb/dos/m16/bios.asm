@@ -1,4 +1,4 @@
-;; name: QB$INT10, QB$INT21
+;; name: B$INT10, B$INT21
 ;; desc: software interrupts
 ;;
 ;; args: ax:ptr Regs | the interrupt, with the registers from Regs
@@ -28,8 +28,8 @@ Regs            ends
 BlockOp         struc
                 dst             dword   ?
                 src             dword   ?
-                count           word    ?               ;; bytes, or words for QB$FILL
-                value           word    ?               ;; for QB$FILL
+                count           word    ?               ;; bytes, or words for B$FILL
+                value           word    ?               ;; for B$FILL
 BlockOp         ends
 
 .code
@@ -66,16 +66,16 @@ CALLINT         macro   vector:req
                 endm
 
 ;;::::::::::::::
-;; QB$INT10 (ax: regs)
-QB$INT10         proc    public
+;; B$INT10 (ax: regs)
+B$INT10         proc    public
 
                 CALLINT 10h
-QB$INT10         endp
+B$INT10         endp
 
 ;;::::::::::::::
-;; QB$INT21 (ax: regs)
-QB$INT21         proc    public
+;; B$INT21 (ax: regs)
+B$INT21         proc    public
 
                 CALLINT 21h
-QB$INT21         endp
+B$INT21         endp
                 end

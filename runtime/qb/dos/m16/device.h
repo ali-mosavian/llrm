@@ -27,15 +27,15 @@ extern void dev_fill(BlockOp *op);
 extern void dev_atan2(const double *y, const double *x, double *out);
 extern void dev_sincos(const double *angle, double *sine, double *cosine);
 
-#pragma aux dev_int10 "QB$INT10"
-#pragma aux dev_int21 "QB$INT21"
-#pragma aux dev_outb "QB$OUTB"
-#pragma aux dev_outw "QB$OUTW"
-#pragma aux dev_inb "QB$INB"
-#pragma aux dev_move "QB$MOVE"
-#pragma aux dev_fill "QB$FILL"
-#pragma aux dev_atan2 "QB$ATAN2"
-#pragma aux dev_sincos "QB$SINCOS"
+#pragma aux dev_int10 "B$INT10"
+#pragma aux dev_int21 "B$INT21"
+#pragma aux dev_outb "B$OUTB"
+#pragma aux dev_outw "B$OUTW"
+#pragma aux dev_inb "B$INB"
+#pragma aux dev_move "B$MOVE"
+#pragma aux dev_fill "B$FILL"
+#pragma aux dev_atan2 "B$ATAN2"
+#pragma aux dev_sincos "B$SINCOS"
 
 /* Whether standard output is the screen and not a file or a pipe. */
 int dev_stdout_is_screen(void);
