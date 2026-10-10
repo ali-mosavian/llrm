@@ -4418,7 +4418,7 @@ fn test_a_rep_in_real_mode_writes_cx_and_not_the_upper_half_of_ecx() {
 /// In 32-bit code it counts ECX.
 #[test]
 fn test_a_rep_in_flat_mode_writes_ecx_whole() {
-    let regs = crate::backend::registerinfo::test_regs();
+    let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
     let (_, writes) =
         _register_effects(regs, 32, &repeated_fill("stosd", 4, RegId::EDI, RegId::ECX, RegId::EAX), true, false)
             .expect("encodes");

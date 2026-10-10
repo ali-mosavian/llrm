@@ -1209,7 +1209,7 @@ pub fn _effects_by_table(
     may_write: bool,
     flags: bool,
 ) -> Option<Effects> {
-    let found = match crate::backend::effects::served(bits, what)? {
+    let found = match crate::backend::effects::served(regs, bits, what)? {
         crate::backend::effects::Served::Unknown => return Some(None),
         crate::backend::effects::Served::Known(found) => found,
     };

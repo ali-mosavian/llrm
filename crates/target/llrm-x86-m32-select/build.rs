@@ -1,4 +1,4 @@
-//! Generates x86-m32's selector, peephole rules and effect rows from its
+//! Generates x86-m32's selector and peephole rules from its
 //! definition directory, written against `llrm_core`.
 
 use std::path::Path;

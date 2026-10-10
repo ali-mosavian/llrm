@@ -179,11 +179,40 @@ impl<T: PyHash + PartialEq> PySet<T> {
         }
     }
 
+    /// `set_contains_entry`: the slots `add` would probe for `key`, up to the
+    /// first unused one.
     pub fn contains(
         &self,
         key: &T,
     ) -> bool {
-        self.iter().any(|one| one == key)
+        self.lookup(key).0
+    }
+
+    /// Whether `key` is in the set, and how many slots were examined to say.
+    fn lookup(
+        &self,
+        key: &T,
+    ) -> (bool, usize) {
+        let hash = key.py_hash();
+        let mask = self.mask();
+        let mut perturb = hash as u64;
+        let mut i = (hash as u64 as usize) & mask;
+        let mut examined = 0;
+        loop {
+            let probes = if i + LINEAR_PROBES <= mask { LINEAR_PROBES } else { 0 };
+            let mut at = i;
+            for _ in 0..=probes {
+                examined += 1;
+                match &self.table[at] {
+                    Slot::Unused => return (false, examined),
+                    Slot::Active(stored, one) if *stored == hash && one == key => return (true, examined),
+                    _ => {}
+                }
+                at += 1;
+            }
+            perturb >>= PERTURB_SHIFT;
+            i = (i.wrapping_mul(5).wrapping_add(1).wrapping_add(perturb as usize)) & mask;
+        }
     }
 
     /// Iteration in slot order.
@@ -214,6 +243,19 @@ impl<T: PyHash + PartialEq> FromIterator<T> for PySet<T> {
 mod tests {
     use super::*;
 
+    /// A probe ends at an `Unused` slot, so one must always exist: a set never
+    /// removes (no dummies), and `add` grows the table before `fill` reaches
+    /// 3/5 of it.
+    #[test]
+    fn a_table_always_keeps_an_unused_slot_for_a_probe_to_end_at() {
+        let mut set = PySet::new();
+        for key in 0..3000i64 {
+            set.add(key);
+            assert!(set.table.iter().any(|slot| matches!(slot, Slot::Unused)), "{key} keys fill the table");
+            assert!(!set.contains(&(key + 1)), "a missing key ends at an unused slot");
+        }
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq)]
     struct Pair(i64, i64);
 
@@ -230,6 +272,18 @@ mod tests {
         assert_eq!(int_hash(1 << 61), 1);
         assert_eq!(tuple_hash(&[]), 5740354900026072187);
         assert_eq!(tuple_hash(&[3, 5, 0, 3, 1]), 5904129870890306468);
+    }
+
+    /// A membership test examined every slot of the table (`contains` was a
+    /// scan of `iter`): the constant-cycle propagation of a 1,024-diamond
+    /// function spent 4.0 G of its 4.5 G instructions in `live.contains`. A
+    /// set of 4,096 block ids answers in a few probes, present or not.
+    #[test]
+    fn membership_examines_a_few_slots_whatever_the_size() {
+        let set: PySet<i64> = (0..4096).collect();
+        let worst = (0..8192).map(|key| set.lookup(&key).1).max().unwrap();
+        assert!(worst <= 40, "{worst} slots examined");
+        assert!((0..4096).all(|key| set.contains(&key)) && !(4096..8192).any(|key| set.contains(&key)));
     }
 
     /// `list({(i, i + 1) for i in range(1, 20)})` in CPython 3.13, crossing two
