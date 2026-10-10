@@ -1060,9 +1060,10 @@ impl Analysis for FloatFacts {
         match &*through {
             Ok(integers) => {
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                    let dense = consts::known(&unit, Some(&calls), None, None);
                     assert!(
-                        *integers == consts::known(&unit, Some(&calls), None, None),
-                        "ThroughMemory's integers are not those the float solve derives for itself"
+                        dense.iter().all(|(value, fact)| integers.get(value) == Some(fact)),
+                        "ThroughMemory's integers lack a fact the dense solve derives"
                     );
                 }
                 floatfacts::solved_over(&unit, &calls, None, integers)
@@ -1098,7 +1099,7 @@ impl Analysis for ThroughMemory {
             .with_assumptions(&assumptions)
             .with_registers(&registers)
             .with_exposed(&exposed);
-        Ok(consts::known(&unit, Some(&calls), None, None))
+        Ok(consts::known_walked(&unit, &calls))
     }
 }
 

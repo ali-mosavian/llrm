@@ -48,7 +48,7 @@ use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{FloatKind, Type};
-use llrm_support::hash::{HashMap, HashSet, IndexMap};
+use llrm_support::hash::{HashMap, IndexMap};
 use num_bigint::BigInt;
 
 use crate::avail;
@@ -459,9 +459,9 @@ fn _selector(
 
 /// Every value an instruction that writes memory reads: `_kills` asks
 /// `known` of no other.
-fn _memory_reads(unit: &Unit) -> HashSet<ValueId> {
+fn _memory_reads(unit: &Unit) -> llrm_mir::dense::IdSet<ValueId> {
     let function = unit.function;
-    let mut read = HashSet::default();
+    let mut read = llrm_mir::dense::IdSet::new();
     for (_, inst) in function.walk() {
         let op = function.instruction(inst);
         if !matches!(
@@ -1265,7 +1265,7 @@ fn incoming(
 fn _pointer_stores(
     unit: &Unit,
     calls: &Calls,
-) -> IndexMap<ValueId, Operand> {
+) -> llrm_mir::dense::IdMap<ValueId, Operand> {
     let function = unit.function;
     let accesses = Accesses::plain(unit, calls);
     let candidates = function
@@ -1276,7 +1276,7 @@ fn _pointer_stores(
         })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
-        return IndexMap::default();
+        return Default::default();
     }
     let graph = memoryssa::built(unit, &accesses);
     let shape = unit.shape();
@@ -1291,7 +1291,7 @@ fn _pointer_stores(
             None => false,
         }
     };
-    let mut providers = IndexMap::default();
+    let mut providers = llrm_mir::dense::IdMap::default();
     for (block, inst, (reference, result)) in candidates {
         let clobbers = graph.clobbers(inst, &reference);
         let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
@@ -1308,6 +1308,261 @@ fn _pointer_stores(
         }
     }
     providers
+}
+
+/// The cell a store writes and what it puts there, a volatile store's too: the
+/// cell holds the number a volatile store wrote until something else writes it.
+fn _stored_cell(
+    unit: &Unit,
+    accesses: &Accesses,
+    inst: InstId,
+) -> Option<(MemRef, Operand)> {
+    let instruction = unit.function.instruction(inst);
+    matches!(instruction.opcode, Opcode::Store { .. })
+        .then(|| Some((accesses.references.get(&inst)?.clone(), instruction.operands[0])))
+        .flatten()
+}
+
+/// What serves a load: stores of all its bytes, or stores of each byte.
+enum Provider {
+    Whole(Vec<InstId>),
+    Bytes(Vec<Vec<(InstId, u32)>>),
+}
+
+/// What is known of a body through memory: the registers' facts, then each load
+/// by what the stores MemorySSA says reach it put in its bytes, where they all
+/// put the same (GVN's forwarding with constants; GCC's FRE walks the same
+/// virtual use-def chain for a load's value, `vn_reference_lookup`). A store
+/// may serve a load of its bytes of another type, or a load of bytes several
+/// stores wrote, which is asked of the walk a byte at a time. No state is held
+/// per block: the cost is the walks, not cells times joins.
+pub fn known_walked(
+    unit: &Unit,
+    calls: &Calls,
+) -> IndexMap<ValueId, Known> {
+    // What the caller did not bring, as `known` finds it.
+    let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
+    let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
+    let registers = unit.registers.cloned().unwrap_or_else(|| known(unit, None, None, None));
+    let annotated = unit.references.is_none().then(|| unit.annotated().ok()).flatten();
+    let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
+    let function = unit.function;
+    let plain = Accesses::plain(unit, calls);
+    // The loads' providers, with the indices `placed` proves constant taken
+    // into every address.
+    let providers_of = |accesses: &Accesses, placed: &_| -> llrm_mir::dense::IdMap<ValueId, Provider> {
+        let graph = memoryssa::built(unit, accesses).with_known(_intervals(placed));
+        let mut providers: llrm_mir::dense::IdMap<ValueId, Provider> = Default::default();
+        for (_, inst) in function.walk() {
+            let Some((reference, result)) = avail::loaded_into(unit, accesses, inst) else { continue };
+            if _width(unit, Operand::Value(result)).is_none() {
+                continue;
+            }
+            // An index the registers prove constant is part of the address, in
+            // the load and in each store alike.
+            let reference = _addressed(unit, &reference, placed);
+            if crate::memory::constant_bits(unit, &reference).is_some() {
+                continue;
+            }
+            let mut values = Vec::new();
+            let mut exact = true;
+            let reaching = graph.clobbers_ignoring_invariance(inst, &reference);
+            // A path to the entry that no write meets leaves every byte as it
+            // was found, so no byte is a store's.
+            if reaching.iter().any(|id| graph.access(*id).kind == memoryssa::Kind::Live) {
+                continue;
+            }
+            for id in reaching {
+                let access = graph.access(id);
+                let stored = access
+                    .site
+                    .filter(|_| access.kind == memoryssa::Kind::Def)
+                    .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)));
+                match stored {
+                    Some((site, (cell, _)))
+                        if memoryssa::same_bytes(unit, &reference, &_addressed(unit, &cell, placed)) =>
+                    {
+                        values.push(site)
+                    }
+                    _ => {
+                        exact = false;
+                        break;
+                    }
+                }
+            }
+            if exact && !values.is_empty() {
+                providers.insert(result, Provider::Whole(values));
+            } else if let Some(address) = reference.addr().filter(|_| reference.width <= 8) {
+                // Some of the bytes are another store's, or a wider one's: each
+                // byte is asked of the walk, and read from the
+                // stores that reach it.
+                let mut bytes: Vec<Vec<(InstId, u32)>> = Vec::new();
+                'bytes: for k in 0..reference.width {
+                    // The byte, with the provenance moved to it.
+                    let one = MemRef {
+                        disp: reference.disp + i64::from(k),
+                        width: 1,
+                        provenance: reference.provenance.as_ref().map(|found| found.shifted(i64::from(k))),
+                        ..reference.clone()
+                    };
+                    let mut from = Vec::new();
+                    for id in graph.clobbers_ignoring_invariance(inst, &one) {
+                        let access = graph.access(id);
+                        let Some((site, (cell, _))) = access
+                            .site
+                            .filter(|_| access.kind == memoryssa::Kind::Def)
+                            .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)))
+                        else {
+                            bytes.clear();
+                            break 'bytes;
+                        };
+                        let Some(there) =
+                            _addressed(unit, &cell, placed).addr().filter(|there| there.root == address.root)
+                        else {
+                            bytes.clear();
+                            break 'bytes;
+                        };
+                        let at = address.disp + i64::from(k) - there.disp;
+                        if !(0..i64::from(cell.width)).contains(&at) {
+                            bytes.clear();
+                            break 'bytes;
+                        }
+                        from.push((site, at as u32));
+                    }
+                    if from.is_empty() {
+                        bytes.clear();
+                        break;
+                    }
+                    bytes.push(from);
+                }
+                if bytes.len() == reference.width as usize {
+                    providers.insert(result, Provider::Bytes(bytes));
+                }
+            }
+        }
+        providers
+    };
+    let solve = |accesses: &Accesses| {
+        let mut facts = registers.clone();
+        let mut placed = registers.clone();
+        let mut providers = providers_of(accesses, &placed);
+        for _round in 0..4 {
+            let mut changing = true;
+            while changing {
+                changing = false;
+                for (_, inst) in function.walk() {
+                    let op = function.instruction(inst);
+                    let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else {
+                        continue;
+                    };
+                    if op.opcode == Opcode::Phi {
+                        let seen =
+                            op.operands.iter().step_by(2).map(|&one| incoming(unit, one, &facts)).collect::<Vec<_>>();
+                        let known = seen.iter().flatten().collect::<Vec<_>>();
+                        if seen.is_empty()
+                            || known.len() != seen.len()
+                            || known.iter().map(|one| (&one.n, one.width)).collect::<BTreeSet<_>>().len() != 1
+                        {
+                            continue;
+                        }
+                        facts.insert(target, (*known[0]).clone());
+                        changing = true;
+                        continue;
+                    }
+                    let found = if matches!(op.opcode, Opcode::Load { volatile: false, .. }) {
+                        let loaded = _result(unit, inst, &facts, None);
+                        loaded.or_else(|| {
+                            let values = providers.get(&target)?;
+                            let width = _width(unit, Operand::Value(target))?;
+                            match values {
+                                Provider::Whole(sites) => {
+                                    let mut numbers = sites.iter().map(|site| _put(unit, *site, &facts));
+                                    let first = numbers.next()??;
+                                    numbers
+                                        .all(|one| {
+                                            one.as_ref().is_some_and(|one| one.n == first.n && one.width == first.width)
+                                        })
+                                        .then(|| if first.width == width { _read(Some(&first), width) } else { None })
+                                        .flatten()
+                                }
+                                Provider::Bytes(bytes) => {
+                                    let mut number = BigInt::from(0);
+                                    for (k, from) in bytes.iter().enumerate() {
+                                        let mut seen = BTreeSet::new();
+                                        for (site, at) in from {
+                                            let put = _put(unit, *site, &facts).filter(|put| put.width > 8 * at)?;
+                                            seen.insert((&put.n >> (8 * at)) & BigInt::from(255));
+                                        }
+                                        if seen.len() != 1 {
+                                            return None;
+                                        }
+                                        number |= seen.into_iter().next().expect("one byte") << (8 * k);
+                                    }
+                                    Some(Known::new(number, width))
+                                }
+                            }
+                        })
+                    } else {
+                        _result(unit, inst, &facts, None)
+                    };
+                    if let Some(found) = found {
+                        facts.insert(target, found);
+                        changing = true;
+                    }
+                }
+            }
+            // A load whose index only memory taught us is asked again with it
+            // placed.
+            let learned = facts.iter().any(|(value, _)| !placed.contains_key(value));
+            let unplaced = learned
+                && function.walk().any(|(_, inst)| {
+                    avail::loaded_into(unit, accesses, inst).is_some_and(|(reference, result)| {
+                        !facts.contains_key(&result)
+                            && reference
+                                .base
+                                .is_some_and(|base| facts.contains_key(&base) && !placed.contains_key(&base))
+                    })
+                });
+            if !unplaced {
+                break;
+            }
+            placed = facts.clone();
+            providers = providers_of(accesses, &placed);
+        }
+        facts
+    };
+    // A far store through a selector nothing yet says the value of is taken to
+    // write no program object (an absolute segment: BASIC's POKE after DEF
+    // SEG); the assumption stands where every such selector came out a
+    // number, and the solve is made again without the ones that did not, as
+    // `known` does.
+    let far_stores: Vec<(InstId, ValueId)> = function
+        .walk()
+        .filter_map(|(_, inst)| {
+            let reference = plain.references.get(&inst)?;
+            let store = matches!(function.instruction(inst).opcode, Opcode::Store { .. });
+            let Some(Operand::Value(segment)) = reference.segment else { return None };
+            (store && reference.space == unit.spaces().far && !registers.contains_key(&segment))
+                .then_some((inst, segment))
+        })
+        .collect();
+    let mut allowed: Option<llrm_mir::dense::IdSet<ValueId>> = None;
+    let facts = loop {
+        let assumed: Vec<(InstId, ValueId)> = far_stores
+            .iter()
+            .copied()
+            .filter(|(_, segment)| allowed.as_ref().is_none_or(|allowed| allowed.contains(segment)))
+            .collect();
+        let accesses = plain.clone().without_absolute_writes(&assumed.iter().map(|(inst, _)| *inst).collect());
+        let facts = solve(&accesses);
+        let resolved: llrm_mir::dense::IdSet<ValueId> =
+            assumed.iter().map(|(_, segment)| *segment).filter(|segment| facts.contains_key(segment)).collect();
+        if assumed.iter().all(|(_, segment)| resolved.contains(segment)) {
+            break facts;
+        }
+        allowed = Some(resolved);
+    };
+    constant_cycles::propagated(unit, &facts, None)
 }
 
 fn _solved(
@@ -1329,7 +1584,7 @@ fn _solved(
     // those, solving them again gives the same answer.
     let read = match calls {
         Some(_) => _memory_reads(unit),
-        None => HashSet::default(),
+        None => Default::default(),
     };
     // Registers go first, as SCCP learns them before memory: cells solved
     // with what registers alone prove need solving again only when a value
