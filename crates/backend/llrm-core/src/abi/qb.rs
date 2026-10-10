@@ -94,6 +94,9 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
         ("B$LINE", 6),
         ("B$PAIN", 4),
         ("B$PSTC", 2),
+        // grpoint.asm: `void pascal B$PSET()` and B$PRST, no parameters.
+        ("B$PSET", 0),
+        ("B$PRST", 0),
         ("B$PNI2", 4),
         ("B$PNR4", 8),
         ("B$GGET", 6),
@@ -200,17 +203,23 @@ pub fn _contract(
     pushed: i64,
     family: model::RuntimeProfile,
 ) -> Result<Contract, AbiError> {
-    _contract_keeping(name, cleanup, pushed, family, &BTreeSet::new())
+    _contract_keeping(name, true, cleanup, pushed, family, &BTreeSet::new())
 }
 
 /// `_contract`, a call no runtime contract describes keeping `preserved`.
 fn _contract_keeping(
     name: &str,
+    runtime_call: bool,
     cleanup: model::StackCleanup,
     pushed: i64,
     family: model::RuntimeProfile,
     preserved: &BTreeSet<runtime::Reg>,
 ) -> Result<Contract, AbiError> {
+    // A function the program names is not a runtime entry whatever its spelling: only the runtime's own
+    // calls (`RUNTIME`-prefixed) have a contract, which the runtime tables and the entries' declarations give.
+    if !runtime_call {
+        return Ok(ordinary(name, cleanup, pushed, preserved));
+    }
     let resume_label = name.starts_with("$QB$RESA:");
     let restore_label = name.starts_with("$QB$RSTB:");
     let physical_name = if resume_label {
@@ -221,7 +230,7 @@ fn _contract_keeping(
         name
     };
     let found =
-        runtime::per_call(&IndexMap::from_iter([(0, physical_name.to_owned())]), family.value(), &BTreeSet::new())
+        runtime::per_call(&IndexMap::from_iter([(0, physical_name.to_owned())]), family.tables(), &BTreeSet::new())
             .swap_remove(&0)
             .expect("one call in, one contract out");
     let evidence = &found.evidence;
@@ -394,6 +403,34 @@ fn _contract_keeping(
                 "{evidence} QB45 rt/dvstmt.asm declares Channel word, \
                  RecPtr dword, and RecLen word; B$GET3 cEnd returns past all \
                  8 bytes and B$PUT3 joins that epilogue. Other effects stay conservative."
+            ),
+        ));
+    }
+    if (name == "B$FEOF" || name == "B$DSKI") && pushed == 2 {
+        return Ok(returns(
+            2,
+            format!(
+                "{evidence} QB45 rt/dvstmt.asm B$FEOF (0073..009a) and rt/inpdsk.asm B$DSKI \
+                 (0016..0060) read the one file-number word at [BP+6] and return with RETF 2. \
+                 Device and error effects remain conservative."
+            ),
+        ));
+    }
+    if name == "B$FRI2" && pushed == 2 {
+        return Ok(returns(
+            2,
+            format!(
+                "{evidence} stfree.asm FRE selectors join POP SI/BP / RETF 2 after reading \
+                 the one selector word. Heap compaction and error effects remain conservative."
+            ),
+        ));
+    }
+    if name == "B$FCMD" && pushed == 0 {
+        return Ok(returns(
+            0,
+            format!(
+                "{evidence} COMMAND$ takes no argument: each shipped library's B$FCMD returns \
+                 with nothing popped and its answer in AX."
             ),
         ));
     }
@@ -734,11 +771,22 @@ fn _contract_keeping(
             ..found.clone()
         });
     }
-    if name.starts_with("B$") {
+    if runtime_call && name.starts_with("B$") {
         return Err(AbiError(format!("runtime call {name} has no complete stack-cleanup contract")));
     }
+    Ok(ordinary(name, cleanup, pushed, preserved))
+}
+
+/// What a call of a function no runtime table describes is: stack-only, the cleanup its verified call site
+/// has, the registers the calling convention gives, memory conservative.
+fn ordinary(
+    name: &str,
+    cleanup: model::StackCleanup,
+    pushed: i64,
+    preserved: &BTreeSet<runtime::Reg>,
+) -> Contract {
     let caller = cleanup == model::StackCleanup::Caller;
-    Ok(Contract {
+    Contract {
         cleanup: Some(if caller { 0 } else { pushed }),
         caller_cleanup: if caller { pushed } else { 0 },
         control: Control::Returns,
@@ -752,7 +800,7 @@ fn _contract_keeping(
             .to_owned(),
         clobbers: runtime::EVERY.difference(preserved).copied().collect(),
         ..runtime::worst(name)
-    })
+    }
 }
 
 /// The ABI of the MIR a HIR program emits: a runtime routine linked by its
@@ -779,6 +827,34 @@ impl HirAbi {
             preserved: program.preserved.iter().map(|one| runtime::Reg::from_value(one)).collect::<Result<_, _>>()?,
             stack_check: program.stack_check.clone(),
         })
+    }
+}
+
+/// A routine of llrm's runtime, called as the target calls any function: the table's effects (what it
+/// reads and writes, whether it raises an error or never returns), but not its Microsoft stack block or
+/// registers, which the convention states. What the callee pops is `pops`; the stack bytes pushed are
+/// `pushed`, past the registers.
+fn native_contract(
+    name: &str,
+    pops: bool,
+    pushed: i64,
+    family: model::RuntimeProfile,
+) -> Contract {
+    // A routine that keeps BASIC's pushes pops its whole block, however many words the call pushes, so
+    // the words beyond its declaration are not the caller's to remove.
+    let pops = pops || runtime::semantics::keeps_stack_abi(name);
+    let found = runtime::per_call(&IndexMap::from_iter([(0, name.to_owned())]), family.tables(), &BTreeSet::new())
+        .swap_remove(&0)
+        .expect("one call in, one contract out");
+    Contract {
+        cleanup: Some(if pops { pushed } else { 0 }),
+        caller_cleanup: if pops { 0 } else { pushed },
+        established: true,
+        inputs: Some(BTreeSet::new()),
+        flags_result: false,
+        i386: true,
+        evidence: format!("{} Called as the target's own convention calls a function.", found.evidence),
+        ..found
     }
 }
 
@@ -819,7 +895,11 @@ impl crate::backend::assemble::Abi for HirAbi {
         }
         let cleanup = if pops { model::StackCleanup::Callee } else { model::StackCleanup::Caller };
         let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
-        _contract_keeping(name, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
+        let runtime_call = callee.starts_with(crate::hir::mir::RUNTIME);
+        if self.runtime.calls_natively() && runtime_call {
+            return Ok(native_contract(name, pops, pushed, self.runtime));
+        }
+        _contract_keeping(name, runtime_call, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
     }
 
     fn linked(

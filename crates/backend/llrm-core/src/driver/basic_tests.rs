@@ -51,7 +51,7 @@ fn indexed_frame_cell() -> Mem {
 #[test]
 fn test_an_indexed_frame_cell_moves_below_the_runtime_header() {
     let (framed, _) =
-        _runtime_frame(&loading(indexed_frame_cell()), 46, model::RuntimeProfile::Qb45, 0, "B$ENRA").unwrap();
+        _runtime_frame(&loading(indexed_frame_cell()), 46, model::RuntimeProfile::Qb45, 0, "B$ENRA", 16).unwrap();
     let cell = loaded(&framed);
     assert_eq!((cell.through, cell.addr.unwrap().disp), (Register::BP, -30 - 10));
 }

@@ -1,10 +1,10 @@
 # What `-fsanitize=stack` compares and calls: start.asm stores the lowest ESP the program may
-# reach in _llrm_os_stack_low, a dword, and N$ESTK (errors.nib) panics. The one flat segment makes ESP an
+# reach in LL$STACK_LOW, a dword, and N$ESTK (errors.nib) panics. The one flat segment makes ESP an
 # offset in it.
 #
 # `red_zone` is the bytes below the limit left for the panic's own frames, an interrupt and an
 # unchecked leaf's: start.asm's reserve is 512, and the panic reaches DOS in about 60.
-limit = "_llrm_os_stack_low"
+limit = "LL$STACK_LOW"
 handler = "N$ESTK"
 far = false
 red_zone = 128

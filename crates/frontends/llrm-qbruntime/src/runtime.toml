@@ -1042,6 +1042,15 @@ size = 4
 [layout.vbdos]
 form = "far"
 
+# llrm's runtime lays a descriptor out as a C struct of a length and a near pointer, each a word of the target:
+# QB 4.5's four bytes where the pointer is 2 bytes, and a length as wide as the pointer where that is wider.
+[layout.llrm]
+form = "near"
+length = 0
+data = 2
+size = 4
+natural = true
+
 # What `-fsanitize=stack` compares and calls, per runtime. `limit` is the data-group word holding
 # the lowest SP the runtime allows, `handler` the far routine entered when SP falls below it, and
 # `entry` the runtime's own frame entry that checks (BC's /D calls it in place of B$ENRA, which
@@ -1069,6 +1078,9 @@ limit = "b$pendchk"
 handler = "B$ERR_OSS"
 entry = "B$ENRD"
 red_zone = 0
+
+[stack.llrm]
+like = "qb45"
 
 # `parameters`: `string` is a descriptor's address, `int` a word. `result`
 # is a word, or a `view`: a string made of a `length` and a `data` address,
@@ -1104,3 +1116,9 @@ evidence = "rt/stcore.asm B$FCHR: OR AH,AH / JNZ ERRFC raises error 5 where the 
 parameters = ["int"]
 view = { length = "1", data = "slot($0)" }
 check = { when = "$0 < 0 or 255 < $0", raise = 5 }
+
+# llrm's runtime takes its calls as the target's own convention states them, except these routines, whose
+# stack block is the call site's own length (the bounds of every dimension, the channels closed): a register
+# convention cannot name that, so they keep BASIC's pushes and are popped by the callee.
+[llrm]
+stack_abi = ["B$CLOS", "B$COLR", "B$CSCN", "B$DDIM", "B$FERR", "B$LOCT", "B$OEGA", "B$RDIM", "B$RESN", "B$SERR"]

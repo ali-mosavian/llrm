@@ -362,13 +362,12 @@ impl Body<'_, '_, '_> {
             let next = self.b.block("next");
             let mut cases = vec![(self.b.int(16, RESUMED_AGAIN), again), (self.b.int(16, RESUMED_NEXT), next)];
             if module.owner == self.function.id {
-                cases.extend(
-                    module
-                        .labels
-                        .iter()
-                        .enumerate()
-                        .map(|(k, &label)| (self.b.int(16, LABELS + k as i128), self.block(label))),
-                );
+                for (k, &label) in module.labels.iter().enumerate() {
+                    // A label inside the handler's own code is a block of the handler's function, which
+                    // the body cannot continue in.
+                    let block = self.blocks.get(&label).copied().ok_or("RESUME to a label inside the error handler")?;
+                    cases.push((self.b.int(16, LABELS + k as i128), block));
+                }
             }
             self.dispatch(resumed, &cases);
             // Each switched on the site once every site is known.

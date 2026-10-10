@@ -1,0 +1,30 @@
+' SCREEN 13 drawing: all 256 colours, lines, circles, PAINT, GET and PUT, PALETTE with a mix, text.
+SCREEN 13
+FOR c% = 0 TO 255
+  LINE (c% MOD 16 * 10, c% \ 16 * 6)-(c% MOD 16 * 10 + 8, c% \ 16 * 6 + 4), c%, BF
+NEXT
+LINE (170, 5)-(319, 100), 15
+LINE (170, 100)-(319, 5), 40
+LINE (-20, -20)-(30, 130), 1
+LINE (200, 10)-(300, 90), 200, B
+CIRCLE (230, 140), 30, 4
+CIRCLE (270, 140), 20, 9, , , .5
+CIRCLE (60, 140), 25, 100, -.5, -4.2
+PAINT (250, 50), 66, 200
+CIRCLE (110, 140), 18, 77
+PAINT (110, 140), 120, 77
+DIM a%(400)
+GET (0, 0)-(30, 20), a%
+PUT (250, 170), a%, PSET
+PUT (200, 170), a%, XOR
+PUT (150, 170), a%, OR
+PUT (100, 170), a%, AND
+PUT (50, 170), a%, PRESET
+PALETTE 4, 63
+PALETTE 9, &H3F0000
+PALETTE 100, &H003F20
+PALETTE 200, 4144959
+COLOR 14
+LOCATE 20, 2: PRINT "Mode 13 text"
+PRINT POINT(1, 1); POINT(319, 199); POINT(-5, 2)
+SLEEP

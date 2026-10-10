@@ -152,7 +152,9 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
         } else {
             format!("{}/src/runtime", env!("CARGO_MANIFEST_DIR"))
         };
-        std::fs::read_to_string(format!("{directory}/{name}")).unwrap()
+        // The assembly is laid out in columns: its words are what is compared.
+        let text = std::fs::read_to_string(format!("{directory}/{name}")).unwrap();
+        text.lines().map(|line| line.split_whitespace().collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n")
     };
     assert!(
         runtime("os.asm").contains(&format!("public {}", check.limit))
@@ -167,7 +169,7 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
         Some(llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check });
     let sum = _procedure(&nib::listing(&program, "sum", &nib::O2()), "_sum");
     assert!(
-        sum.contains("cmp sp, word ptr FOO") && sum.contains("call far ptr BAR") && !sum.contains("_llrm_os_stack_low"),
+        sum.contains("cmp sp, word ptr FOO") && sum.contains("call far ptr BAR") && !sum.contains("LL$STACK_LOW"),
         "{sum}"
     );
     let plain = _procedure(&nib::listing(&nib::parsed(&nib::fixture("sum.nib")), "sum", &nib::O2()), "_sum");

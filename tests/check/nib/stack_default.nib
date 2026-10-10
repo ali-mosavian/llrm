@@ -2,7 +2,7 @@
 # a recursion that is no tail call keeps its frame: `n - deep(n - 1)`, where `1 + deep(n - 1)` is a loop
 # The default build checks nothing: no limit word, no panic.
 # CHECK-LABEL: _deep proc
-# CHECK-NOT: _llrm_os_stack_low
+# CHECK-NOT: LL$STACK_LOW
 # CHECK-NOT: N$ESTK
 # CHECK: _deep endp
 fn deep(n: i16) -> i16:

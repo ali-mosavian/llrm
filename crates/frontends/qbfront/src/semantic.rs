@@ -387,6 +387,79 @@ pub fn compile_with_array_order(
     compile_with_options(module, module_name, dialect, runtime, &Options { row_major, ..Options::default() })
 }
 
+/// Where an array descriptor keeps what, byte by byte: QB's AD (inc/array.inc) where a near pointer is two bytes, llrm's
+/// flat one, with whole pointers and no selector, where it is a dword.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct AdLayout {
+    /// The data pointer, or the data's offset.
+    pub data: usize,
+    /// The data's selector, where the target has them.
+    pub selector: Option<usize>,
+    /// The rank byte.
+    pub rank: usize,
+    /// The features byte.
+    pub features: usize,
+    /// The element's size, a word.
+    pub element: usize,
+    /// The data address already less every lower bound's elements.
+    pub origin: usize,
+    /// The first dimension record: a word of count and a word of lower bound each.
+    pub header: usize,
+    /// The bytes of a word: of the element's size, and of each count and lower bound. 2 in real mode, a pointer's
+    /// where there is one space.
+    pub word: usize,
+}
+
+impl AdLayout {
+    pub(super) fn of(options: &Options) -> Self {
+        if options.one_space() {
+            // A C struct of whole words: the pointer, the size in bytes, the rank and features bytes, then the
+            // element size, the origin and the dimension records, each a word.
+            let word = options.near();
+            Self {
+                data: 0,
+                selector: None,
+                rank: 2 * word,
+                features: 2 * word + 1,
+                element: 3 * word,
+                origin: 4 * word,
+                header: 5 * word,
+                word,
+            }
+        } else {
+            Self { data: 0, selector: Some(2), rank: 8, features: 9, element: 12, origin: 10, header: 14, word: 2 }
+        }
+    }
+
+    /// The bytes of a dimension record: its count and its lower bound.
+    pub(super) fn record(&self) -> usize {
+        2 * self.word
+    }
+
+    /// Where dimension record `record` keeps its element count, and its lower bound.
+    pub(super) fn count(
+        &self,
+        record: usize,
+    ) -> usize {
+        self.header + self.record() * record
+    }
+
+    pub(super) fn lower(
+        &self,
+        record: usize,
+    ) -> usize {
+        self.count(record) + self.word
+    }
+
+    /// The bytes of a descriptor of `rank` dimensions.
+    pub(super) fn bytes(
+        &self,
+        rank: usize,
+    ) -> usize {
+        self.header + self.record() * rank
+    }
+}
+
 /// How BC was told to compile the module.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options {
@@ -420,9 +493,30 @@ pub struct Options {
     /// The most bytes the target's data segment holds, which the near-data and
     /// frame budgets are: none where there are no segments, and no budget.
     pub segment_bytes: Option<usize>,
+    /// The bytes of the target's near and of its far pointer, from its description; 0 for either is the
+    /// 16-bit target's (2 and 4). A far one as wide as the near one is the same space: a flat target.
+    pub near_bytes: usize,
+    pub far_bytes: usize,
     /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
     /// standard CodeView 4, which debuggers other than BASIC's read.
     pub bc_codeview: bool,
+}
+
+impl Options {
+    /// The bytes of a near pointer.
+    pub fn near(&self) -> usize {
+        if self.near_bytes == 0 { 2 } else { self.near_bytes }
+    }
+
+    /// The bytes of a far pointer.
+    pub fn far(&self) -> usize {
+        if self.far_bytes == 0 { 4 } else { self.far_bytes }
+    }
+
+    /// Whether far pointers are near ones: the target has one address space.
+    pub fn one_space(&self) -> bool {
+        self.far() == self.near()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -571,7 +665,7 @@ fn built_from(
             }
             let value_type = if is_array {
                 let descriptor = compiler
-                    .opaque_type(format!("{} descriptor", parameter.declaration.name), 14 + 4 * UNSPECIFIED_ARRAY_RANK);
+                    .opaque_type(format!("{} descriptor", parameter.declaration.name), AdLayout::of(&compiler.options).bytes(UNSPECIFIED_ARRAY_RANK));
                 compiler.pointer_type(descriptor)
             } else if parameter.segmented {
                 compiler.far_pointer_type(parameter_type)
@@ -584,7 +678,7 @@ fn built_from(
             parameters.push(value);
             parameter_bytes += compiler.width(value_type).max(2);
             let referenced = if is_array {
-                14 + 4
+                AdLayout::of(&compiler.options).bytes(1)
             } else if parameter.segmented || parameter.by_value {
                 0
             } else {
@@ -1278,6 +1372,8 @@ impl Compiler {
         runtime: &str,
         options: Options,
     ) -> Self {
+        // A string is its descriptor, whose size is the runtime's (4 bytes where a near runtime keeps QB's).
+        let string_bytes = llrm_qbruntime::semantics::descriptor(runtime, options.near()).map_or(4, |one| one.size as usize);
         let types = vec![
             scalar(VOID, "void", "void", 0, None, "none"),
             scalar(INTEGER, "integer", "integer", 2, Some(true), "none"),
@@ -1285,7 +1381,7 @@ impl Compiler {
             scalar(SINGLE, "single", "float", 4, None, "extended80"),
             scalar(DOUBLE, "double", "float", 8, None, "extended80"),
             scalar(BOOLEAN, "boolean", "boolean", 2, Some(true), "none"),
-            scalar(STRING, "string", "opaque", 4, None, "none"),
+            scalar(STRING, "string", "opaque", string_bytes, None, "none"),
             scalar(ANY, "any", "opaque", 0, None, "none"),
             scalar(BYTE, "$byte", "integer", 1, Some(false), "none"),
             scalar(SIGNED_BYTE, "signed byte", "integer", 1, Some(true), "none"),
@@ -1756,21 +1852,27 @@ impl Compiler {
         &mut self,
         element: u32,
     ) -> u32 {
-        self.addressed_pointer_type(element, "near", 2)
+        self.addressed_pointer_type(element, "near", self.options.near())
     }
 
     fn whole_pointer_type(
         &mut self,
         element: u32,
     ) -> u32 {
-        self.addressed_pointer_type(element, "huge", 4)
+        if self.options.one_space() {
+            return self.pointer_type(element);
+        }
+        self.addressed_pointer_type(element, "huge", self.options.far())
     }
 
     fn far_pointer_type(
         &mut self,
         element: u32,
     ) -> u32 {
-        self.addressed_pointer_type(element, "far", 4)
+        if self.options.one_space() {
+            return self.pointer_type(element);
+        }
+        self.addressed_pointer_type(element, "far", self.options.far())
     }
 
     fn addressed_pointer_type(
@@ -2356,7 +2458,7 @@ impl Compiler {
             // bounded array. BC creates it with B$DDIM, leaving a mutable
             // descriptor that a later REDIM may legally replace.
             let descriptor_type =
-                self.opaque_type(format!("{} descriptor", declaration.name), 14 + 4 * declaration.bounds.len());
+                self.opaque_type(format!("{} descriptor", declaration.name), self.ad().bytes(declaration.bounds.len()));
             let descriptor_extent = self.width(descriptor_type);
             let (descriptor_offset, descriptor_symbol) = if storage == "module" {
                 (0, self.module_data(module_symbol.clone(), descriptor_extent, 1))
@@ -2419,7 +2521,7 @@ impl Compiler {
         }
         if declaration.array && bounds.is_empty() {
             let descriptor_type =
-                self.opaque_type(format!("{} descriptor", declaration.name), 14 + 4 * UNSPECIFIED_ARRAY_RANK);
+                self.opaque_type(format!("{} descriptor", declaration.name), self.ad().bytes(UNSPECIFIED_ARRAY_RANK));
             let descriptor_extent = self.width(descriptor_type);
             let (descriptor_offset, descriptor_symbol) = if storage == "module" {
                 (0, self.module_data(module_symbol.clone(), descriptor_extent, 1))
@@ -2546,7 +2648,7 @@ impl Compiler {
             self.debug_held(held, &source, span, type_id, false);
         }
         let descriptor_place = if array_element.is_some() {
-            let descriptor_type = self.opaque_type(format!("{} descriptor", declaration.name), 14 + 4 * bounds.len());
+            let descriptor_type = self.opaque_type(format!("{} descriptor", declaration.name), self.ad().bytes(bounds.len()));
             let descriptor_extent = self.width(descriptor_type);
             let local_descriptor = matches!(storage, "local" | "parameter");
             let (descriptor_offset, descriptor_storage, descriptor_symbol) = if local_descriptor {
@@ -2681,20 +2783,21 @@ impl Compiler {
         // FADF_STATIC says that storage is not runtime-owned.
         let symbol = self.next_data;
         self.next_data += 1;
-        let mut bytes = vec![0; 14 + 4 * bounds.len()];
-        bytes[8] = bounds.len() as u8;
-        bytes[9] = 0x40;
+        let layout = self.ad();
+        let mut bytes = vec![0; layout.bytes(bounds.len())];
+        bytes[layout.rank] = bounds.len() as u8;
+        bytes[layout.features] = 0x40;
 
-        bytes[12..14].copy_from_slice(&(element_width as u16).to_le_bytes());
+        let word = layout.word;
+        bytes[layout.element..layout.element + word].copy_from_slice(&(element_width as u64).to_le_bytes()[..word]);
         // Q45A05's QB 4.5 BC_CN bytes are 03 00 01 00 then
         // 02 00 01 00 for source bounds (1 TO 2, 1 TO 3); BC /R stores
         // 02 00 01 00 first.
         let records = self.descriptor_records(bounds);
         for (record, (low, high)) in records.iter().enumerate() {
-            let at = 14 + 4 * record;
-            let count = (high - low + 1) as u16;
-            bytes[at..at + 2].copy_from_slice(&count.to_le_bytes());
-            bytes[at + 2..at + 4].copy_from_slice(&(*low as u16).to_le_bytes());
+            let count = (high - low + 1) as u64;
+            bytes[layout.count(record)..layout.count(record) + word].copy_from_slice(&count.to_le_bytes()[..word]);
+            bytes[layout.lower(record)..layout.lower(record) + word].copy_from_slice(&(*low as i64 as u64).to_le_bytes()[..word]);
         }
         // B$DDIM's bias: the element number of the lower bounds.
         let mut lower_linear = None;
@@ -2713,11 +2816,17 @@ impl Compiler {
             bytes,
             readonly: true,
             relocations: vec![
-                DataRelocation { at: 0, target: data_symbol, addend: data_offset as isize, address: "far" },
+                // A whole pointer where the target has one space, else an offset and a selector.
+                DataRelocation {
+                    at: layout.data,
+                    target: data_symbol,
+                    addend: data_offset as isize,
+                    address: if self.options.one_space() { "near" } else { "far" },
+                },
                 // AD_oAdjusted is biased so generic array code can add source
                 // subscripts directly. QB's one-based six-byte DYNARR record
                 // has data at +6 but AD_oAdjusted at +0; TOUCH adds 1*6.
-                DataRelocation { at: 10, target: data_symbol, addend: adjusted_offset as isize, address: "near" },
+                DataRelocation { at: layout.origin, target: data_symbol, addend: adjusted_offset as isize, address: "near" },
             ],
             linkage: "internal",
             address: "near",
@@ -3178,7 +3287,7 @@ impl Compiler {
                     let position = self.convert(position, position_type, LONG)?;
                     self.emit_runtime_call("B$SSEK", Vec::new(), vec![file, position]);
                 }
-                Statement::Print { kind, file, using, items, .. } => {
+                Statement::Print { kind, file, using, items, span, .. } => {
                     if *kind == PrintKind::Lprint {
                         self.emit_runtime_call("B$LPRT", Vec::new(), Vec::new());
                     }
@@ -3197,11 +3306,8 @@ impl Compiler {
                         self.emit_runtime_call("B$USNG", Vec::new(), vec![format]);
                     }
                     if items.is_empty() {
-                        self.emit_runtime_call(
-                            "B$PESD",
-                            Vec::new(),
-                            vec![Operand::Constant(INTEGER, Number::Integer(0))],
-                        );
+                        let none = self.null_descriptor(*span)?;
+                        self.emit_runtime_call("B$PESD", Vec::new(), vec![none]);
                         continue;
                     }
                     for item in items {
@@ -3576,13 +3682,15 @@ impl Compiler {
                             return self.fail(format!("{name} expects coordinates and optional color"));
                         }
                         self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
-                        let color = if let Some(argument) = arguments.get(2) {
+                        // Without a colour the point takes the foreground (PSET) or the background (PRESET), which is
+                        // the runtime's to know: B$PSET and B$PRST, not a colour made up here.
+                        if let Some(argument) = arguments.get(2) {
                             let (value, type_id) = self.expression(argument)?;
-                            self.convert(value, type_id, INTEGER)?
+                            let color = self.convert(value, type_id, INTEGER)?;
+                            self.emit_runtime_call("B$PSTC", Vec::new(), vec![color]);
                         } else {
-                            Operand::Constant(INTEGER, Number::Integer(if name == "PRESET" { 0 } else { -1 }))
-                        };
-                        self.emit_runtime_call("B$PSTC", Vec::new(), vec![color]);
+                            self.emit_runtime_call(if name == "PRESET" { "B$PRST" } else { "B$PSET" }, Vec::new(), Vec::new());
+                        }
                     }
                     "GET" | "PUT" => {
                         let expected = if name == "GET" { 5 } else { 4 };
@@ -3688,16 +3796,10 @@ impl Compiler {
                         if arguments.len() != 2 {
                             return self.fail("POKE expects an offset and byte value");
                         }
-                        let offset = self.unsigned_word(&arguments[0])?;
+                        let offset = self.address_word(&arguments[0])?;
                         let (value, value_type) = self.expression(&arguments[1])?;
                         let value = self.convert(value, value_type, BYTE)?;
-                        let segment_place = self.def_segment_place();
-                        let segment = self.value(INTEGER);
-                        self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
-                        self.tag_last(Tag::ReadSegment);
-                        let pointer_type = self.far_pointer_type(BYTE);
-                        let pointer = self.value(pointer_type);
-                        self.emit("concat", vec![pointer], vec![Operand::Value(segment), offset]);
+                        let pointer = self.segment_pointer(offset);
                         self.emit(
                             "store",
                             Vec::new(),
@@ -4676,8 +4778,11 @@ impl Compiler {
         if indices.is_empty() {
             return self.fail("array element requires at least one subscript");
         }
+        // Where there is one space every array is one run of memory a pointer reaches: its origin pointer and
+        // the subscripts' offset, as wide as an element number may be.
+        let address = if self.options.one_space() { "flat" } else { address };
         let pointer_type = match address {
-            "near" => self.pointer_type(element),
+            "near" | "flat" => self.pointer_type(element),
             "split_far" => self.far_pointer_type(element),
             _ => self.whole_pointer_type(element),
         };
@@ -4716,8 +4821,9 @@ impl Compiler {
             // it does not normalize this as a huge pointer. /AH arrays need a
             // distinct descriptor/address policy when that dialect option is
             // introduced rather than changing this default-memory-model rule.
-            let selector = self.descriptor_field(descriptor, 2, INTEGER);
-            let adjusted = self.descriptor_field(descriptor, 10, INTEGER);
+            let layout = self.ad();
+            let selector = self.descriptor_field(descriptor, layout.selector.expect("a far array has a selector"), INTEGER);
+            let adjusted = self.descriptor_field(descriptor, layout.origin, INTEGER);
             let offset = self.value(INTEGER);
             self.emit("add", vec![offset], vec![Operand::Value(adjusted), Operand::Value(bytes)]);
             self.tag_last(Tag::ElementOffset { descriptor, origin: Some(adjusted) });
@@ -4730,7 +4836,7 @@ impl Compiler {
             self.emit("ptr_offset", vec![pointer], vec![Operand::Value(data), Operand::Value(bytes)]);
             // Only a near pointer is the +0Ah offset itself; a whole pointer
             // is +0's offset and selector.
-            let origin = (address == "near").then_some(data);
+            let origin = matches!(address, "near" | "flat").then_some(data);
             self.tag_last(Tag::ElementOffset { descriptor, origin });
             pointer
         };
@@ -4745,18 +4851,27 @@ impl Compiler {
         subscripts: &[Operand],
         offset_type: u32,
     ) -> Result<(), SemanticError> {
-        let selector = self.descriptor_field(descriptor, 2, INTEGER);
+        // Without elements the selector is 0, or the data pointer where there is none.
+        let layout = self.ad();
+        let (probe, probe_type) = match layout.selector {
+            Some(at) => (self.descriptor_field(descriptor, at, INTEGER), INTEGER),
+            None => {
+                let pointer_type = self.pointer_type(VOID);
+                (self.descriptor_field(descriptor, layout.data, pointer_type), pointer_type)
+            }
+        };
         let unallocated = self.computed(
             "eq",
             BOOLEAN,
-            vec![Operand::Value(selector), Operand::Constant(INTEGER, Number::Integer(0))],
+            vec![Operand::Value(probe), Operand::Constant(probe_type, Number::Integer(0))],
         );
         self.raise_if(unallocated, 9)?;
         for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
-            let lower = self.descriptor_field(descriptor, 16 + 4 * record, INTEGER);
-            let lower = self.convert(Operand::Value(lower), INTEGER, LONG)?;
-            let count = self.descriptor_field(descriptor, 14 + 4 * record, INTEGER);
-            let count = self.convert(Operand::Value(count), INTEGER, LONG)?;
+            let word = self.word_type();
+            let lower = self.descriptor_field(descriptor, self.ad().lower(record), word);
+            let lower = self.convert(Operand::Value(lower), word, LONG)?;
+            let count = self.descriptor_field(descriptor, self.ad().count(record), word);
+            let count = self.convert(Operand::Value(count), word, LONG)?;
             self.subscript_checked(subscripts[dimension].clone(), offset_type, lower, count)?;
         }
         Ok(())
@@ -4817,8 +4932,9 @@ impl Compiler {
         for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
             let mut subscript = subscripts[dimension].clone();
             if lower {
-                let bound = self.descriptor_field(descriptor, 16 + 4 * record, INTEGER);
-                let bound = self.convert(Operand::Value(bound), INTEGER, offset_type)?;
+                let word = self.word_type();
+                let bound = self.descriptor_field(descriptor, self.ad().lower(record), word);
+                let bound = self.convert(Operand::Value(bound), word, offset_type)?;
                 let from = self.value(offset_type);
                 self.emit("sub", vec![from], vec![subscript, bound]);
                 subscript = Operand::Value(from);
@@ -4826,8 +4942,9 @@ impl Compiler {
             linear = Some(match linear {
                 None => subscript,
                 Some(previous) => {
-                    let count = self.descriptor_field(descriptor, 14 + 4 * record, INTEGER);
-                    let count = self.convert(Operand::Value(count), INTEGER, offset_type)?;
+                    let word = self.word_type();
+                    let count = self.descriptor_field(descriptor, self.ad().count(record), word);
+                    let count = self.convert(Operand::Value(count), word, offset_type)?;
                     let multiplied = self.value(offset_type);
                     self.emit("mul", vec![multiplied], vec![previous, count]);
                     let combined = self.value(offset_type);
@@ -4852,7 +4969,12 @@ impl Compiler {
         // A near STRING-array descriptor carries only its already-adjusted
         // data offset at +0Ah. Whole-pointer descriptor policies, when added,
         // use their explicit pointer at +0 instead.
-        let data = self.descriptor_field(descriptor, if address == "near" { 10 } else { 0 }, pointer_type);
+        let layout = self.ad();
+        let data = self.descriptor_field(
+            descriptor,
+            if matches!(address, "near" | "flat") { layout.origin } else { layout.data },
+            pointer_type,
+        );
         self.descriptor_bases.insert(key, data);
         data
     }
@@ -4873,11 +4995,35 @@ impl Compiler {
             vec![value],
             vec![Operand::Indirect { base: descriptor, offset, type_id, volatile: false, inbounds: false }],
         );
-        if let Some(field) = Slot::at(offset) {
+        if let Some(field) = Slot::at(&self.ad(), offset) {
             self.tag_last(Tag::DescriptorField { descriptor, field });
         }
         self.descriptor_fields.insert(key, value);
         value
+    }
+
+    /// A count, a length or a position as the program and the runtime pass it: a constant of the word type.
+    fn count(
+        &self,
+        value: i64,
+    ) -> Operand {
+        Operand::Constant(self.word_type(), Number::Integer(value))
+    }
+
+    /// The largest count: BC's omitted MID$ length, a signed word's largest value.
+    fn largest_count(&self) -> i64 {
+        let bits = 8 * self.options.near() as u32;
+        if bits >= 64 { i64::MAX } else { (1i64 << (bits - 1)) - 1 }
+    }
+
+    /// The type of a descriptor's count, lower bound and element size: a signed word of the target.
+    fn word_type(&self) -> u32 {
+        if self.options.one_space() { integer_type(self.options.near(), true) } else { INTEGER }
+    }
+
+    /// Where an array descriptor keeps what.
+    fn ad(&self) -> AdLayout {
+        AdLayout::of(&self.options)
     }
 
     fn invalidate_descriptor_cache(&mut self) {
@@ -4997,11 +5143,13 @@ impl Compiler {
         place: Operand,
     ) -> Operand {
         if let Operand::Indirect { base, offset: 0, .. } = &place {
-            if self
-                .values
-                .iter()
-                .find_map(|(id, pointer)| (*id == *base).then_some(*pointer))
-                .is_some_and(|pointer| self.width(pointer) == 4)
+            // Where far pointers are near ones a 4-byte descriptor pointer is the near pointer.
+            if !self.options.one_space()
+                && self
+                    .values
+                    .iter()
+                    .find_map(|(id, pointer)| (*id == *base).then_some(*pointer))
+                    .is_some_and(|pointer| self.width(pointer) == 4)
             {
                 // VBDOS array descriptors carry a whole data pointer, but
                 // dynamic STRING descriptors are allocated in the near string
@@ -5056,9 +5204,9 @@ impl Compiler {
                 Vec::new(),
                 vec![
                     source,
-                    Operand::Constant(INTEGER, Number::Integer(0)),
+                    self.count(0),
                     Operand::Value(destination),
-                    Operand::Constant(INTEGER, Number::Integer(destination_width as i64)),
+                    self.count(destination_width as i64),
                 ],
             );
             self.filled(2, destination_width);
@@ -5091,9 +5239,9 @@ impl Compiler {
             Vec::new(),
             vec![
                 Operand::Value(source),
-                Operand::Constant(INTEGER, Number::Integer(source_width as i64)),
+                self.count(source_width as i64),
                 Operand::Value(destination),
-                Operand::Constant(INTEGER, Number::Integer(destination_width as i64)),
+                self.count(destination_width as i64),
             ],
         );
         self.filled(2, destination_width);
@@ -5115,19 +5263,20 @@ impl Compiler {
         let destination = self.far_address(destination, destination_type);
         let source = self.string_descriptor(source)?;
         let (start, start_type) = self.expression(&arguments[1])?;
-        let start = self.convert(start, start_type, INTEGER)?;
+        let word = self.word_type();
+        let start = self.convert(start, start_type, word)?;
         let maximum = if let Some(length) = arguments.get(2) {
             let (length, length_type) = self.expression(length)?;
-            self.convert(length, length_type, INTEGER)?
+            self.convert(length, length_type, word)?
         } else {
-            Operand::Constant(INTEGER, Number::Integer(i16::MAX as i64))
+            self.count(self.largest_count())
         };
         self.emit_runtime_call(
             "B$SMID",
             Vec::new(),
             vec![
                 Operand::Value(destination),
-                Operand::Constant(INTEGER, Number::Integer(destination_width as i64)),
+                self.count(destination_width as i64),
                 source,
                 maximum,
                 start,
@@ -5178,6 +5327,18 @@ impl Compiler {
         let far = self.value(pointer_type);
         self.emit("concat", vec![far], vec![Operand::Value(segment), Operand::Value(offset)]);
         Ok(Operand::Value(far))
+    }
+
+    /// The descriptor of no string. Offset 0 of the 16-bit data segment holds zeros, so BC passes 0; where there
+    /// is one space, address 0 is whatever the machine keeps there, and the empty literal's descriptor stands in.
+    fn null_descriptor(
+        &mut self,
+        span: Span,
+    ) -> Result<Operand, SemanticError> {
+        if self.options.one_space() {
+            return self.string_descriptor(&Expr::Literal(Literal::String(String::new()), span));
+        }
+        Ok(Operand::Constant(INTEGER, Number::Integer(0)))
     }
 
     fn string_descriptor(
@@ -5262,21 +5423,23 @@ impl Compiler {
                     }
                     Lowering::Mid => {
                         operands.push(self.string_descriptor(&arguments[0])?);
+                        let word = self.word_type();
                         let (start, start_type) = self.expression(&arguments[1])?;
-                        operands.push(self.convert(start, start_type, INTEGER)?);
+                        operands.push(self.convert(start, start_type, word)?);
                         if let Some(length) = arguments.get(2) {
                             let (length, length_type) = self.expression(length)?;
-                            operands.push(self.convert(length, length_type, INTEGER)?);
+                            operands.push(self.convert(length, length_type, word)?);
                         } else {
                             // BC spells the omitted count as the largest
                             // positive INTEGER; FMID clips it to the source.
-                            operands.push(Operand::Constant(INTEGER, Number::Integer(i16::MAX as i64)));
+                            operands.push(self.count(self.largest_count()));
                         }
                     }
                     Lowering::Left | Lowering::Right => {
                         operands.push(self.string_descriptor(&arguments[0])?);
                         let (length, length_type) = self.expression(&arguments[1])?;
-                        operands.push(self.convert(length, length_type, INTEGER)?);
+                        let word = self.word_type();
+                        operands.push(self.convert(length, length_type, word)?);
                     }
                     Lowering::RuntimeString(_) => {
                         operands.push(self.string_descriptor(&arguments[0])?);
@@ -5290,7 +5453,8 @@ impl Compiler {
             }
             if intrinsic.is_some_and(|one| one.lowering == Lowering::StringFill) {
                 let (length, length_type) = self.expression(&arguments[0])?;
-                let length = self.convert(length, length_type, INTEGER)?;
+                let word = self.word_type();
+                let length = self.convert(length, length_type, word)?;
                 let (callee, repeated) = if self.string_syntax(&arguments[1]) {
                     ("B$STRS", self.string_descriptor(&arguments[1])?)
                 } else {
@@ -5304,7 +5468,8 @@ impl Compiler {
             }
             if intrinsic.is_some_and(|one| one.lowering == Lowering::Space) {
                 let (count, type_id) = self.expression(&arguments[0])?;
-                let count = self.convert(count, type_id, INTEGER)?;
+                let word = self.word_type();
+                let count = self.convert(count, type_id, word)?;
                 let pointer_type = self.pointer_type(STRING);
                 let result = self.value(pointer_type);
                 self.emit_runtime_call("B$SPAC", vec![result], vec![count]);
@@ -5329,9 +5494,7 @@ impl Compiler {
                 // near string descriptor in AX, like the other string
                 // functions.  Keep the filesystem/heap effects on the call.
                 let argument = match &arguments[0] {
-                    Expr::Literal(Literal::String(text), _) if text.is_empty() => {
-                        Operand::Constant(INTEGER, Number::Integer(0))
-                    }
+                    Expr::Literal(Literal::String(text), span) if text.is_empty() => self.null_descriptor(*span)?,
                     expression => self.string_descriptor(expression)?,
                 };
                 let pointer_type = self.pointer_type(STRING);
@@ -5428,7 +5591,7 @@ impl Compiler {
         self.emit_runtime_call(
             "B$LDFS",
             vec![result],
-            vec![Operand::Value(address), Operand::Constant(INTEGER, Number::Integer(width as i64))],
+            vec![Operand::Value(address), self.count(width as i64)],
         );
         Ok(Operand::Value(result))
     }
@@ -6420,7 +6583,8 @@ impl Compiler {
             };
             let upper = intrinsic.lowering == Lowering::UpperBound;
             let result = self.array_bound(&variable, dimension, upper)?;
-            return Ok(Some((result, INTEGER)));
+            let word = self.word_type();
+            return Ok(Some((self.convert(result, INTEGER, word)?, word)));
         }
         if let Lowering::RuntimeInteger(routine) = intrinsic.lowering {
             let mut operands = Vec::new();
@@ -6537,13 +6701,19 @@ impl Compiler {
         ) {
             let (place, type_id) = self.destination(&arguments[0])?;
             let pointer = self.far_address(place, type_id);
-            let result = self.value(INTEGER);
+            // One space: an address is as wide as a pointer, and the segment is always 0.
+            let result_type = if self.options.one_space() && intrinsic.lowering == Lowering::PointerOffset {
+                integer_type(self.options.near(), true)
+            } else {
+                INTEGER
+            };
+            let result = self.value(result_type);
             self.emit(
                 if intrinsic.lowering == Lowering::PointerSegment { "pointer_segment" } else { "pointer_offset" },
                 vec![result],
                 vec![Operand::Value(pointer)],
             );
-            return Ok(Some((Operand::Value(result), INTEGER)));
+            return Ok(Some((Operand::Value(result), result_type)));
         }
         if matches!(intrinsic.lowering, Lowering::Abs | Lowering::Sqrt) {
             let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
@@ -6798,14 +6968,8 @@ impl Compiler {
             return Ok(Some((result, INTEGER)));
         }
         if intrinsic.lowering == Lowering::Peek {
-            let segment_place = self.def_segment_place();
-            let offset = self.unsigned_word(&arguments[0])?;
-            let segment = self.value(INTEGER);
-            self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
-            self.tag_last(Tag::ReadSegment);
-            let pointer_type = self.far_pointer_type(BYTE);
-            let pointer = self.value(pointer_type);
-            self.emit("concat", vec![pointer], vec![Operand::Value(segment), offset]);
+            let offset = self.address_word(&arguments[0])?;
+            let pointer = self.segment_pointer(offset);
             let byte = self.value(BYTE);
             self.emit(
                 "load",
@@ -6840,21 +7004,22 @@ impl Compiler {
                         .is_some_and(|intrinsic| intrinsic.result == ResultClass::String)
             ) || matches!(&arguments[0], Expr::Literal(Literal::String(_), _))
                 || (self.place_syntax_type(&arguments[0]).is_none() && self.string_syntax(&arguments[0]));
+            let word = self.word_type();
             if produced_string {
                 let address = self.string_descriptor(&arguments[0])?;
-                let result = self.value(INTEGER);
+                let result = self.value(word);
                 self.emit_runtime_call("B$FLEN", vec![result], vec![address]);
-                return Ok(Some((Operand::Value(result), INTEGER)));
+                return Ok(Some((Operand::Value(result), word)));
             }
             let (_, type_id) = self.destination(&arguments[0])?;
             if self.string_width(type_id).is_some() {
                 let address = self.string_descriptor(&arguments[0])?;
-                let result = self.value(INTEGER);
+                let result = self.value(word);
                 self.emit_runtime_call("B$FLEN", vec![result], vec![address]);
-                return Ok(Some((Operand::Value(result), INTEGER)));
+                return Ok(Some((Operand::Value(result), word)));
             }
             let type_ = self.types.iter().find(|one| one.id == type_id).cloned().expect("known LEN type");
-            return Ok(Some((Operand::Constant(INTEGER, Number::Integer(type_.width as i64)), INTEGER)));
+            return Ok(Some((self.count(type_.width as i64), word)));
         }
         if intrinsic.lowering == Lowering::Asc {
             let address = self.string_descriptor(&arguments[0])?;
@@ -6867,18 +7032,20 @@ impl Compiler {
                 ("B$INS2", vec![self.string_descriptor(&arguments[0])?, self.string_descriptor(&arguments[1])?])
             } else {
                 let (start, start_type) = self.expression(&arguments[0])?;
+                let word = self.word_type();
                 (
                     "B$INS3",
                     vec![
-                        self.convert(start, start_type, INTEGER)?,
+                        self.convert(start, start_type, word)?,
                         self.string_descriptor(&arguments[1])?,
                         self.string_descriptor(&arguments[2])?,
                     ],
                 )
             };
-            let result = self.value(INTEGER);
+            let word = self.word_type();
+            let result = self.value(word);
             self.emit_runtime_call(callee, vec![result], operands);
-            return Ok(Some((Operand::Value(result), INTEGER)));
+            return Ok(Some((Operand::Value(result), word)));
         }
         if matches!(
             intrinsic.lowering,
@@ -7016,6 +7183,40 @@ impl Compiler {
     /// target can see which device it names.
     /// An address or port, as QB's I4toU2 (qb/ir/exio.asm) takes it: coerced
     /// to LONG, then its low word, if the high word is all zeros or all ones.
+    /// An address a program names to PEEK, POKE, BLOAD or BSAVE: the offset of a segment:offset pair, a word; where
+    /// there is one space the whole address, as wide as a pointer.
+    fn address_word(
+        &mut self,
+        expression: &Expr,
+    ) -> Result<Operand, SemanticError> {
+        if !self.options.one_space() {
+            return self.unsigned_word(expression);
+        }
+        let (value, type_id) = self.expression(expression)?;
+        let (value, type_id) = if matches!(type_id, SINGLE | DOUBLE) {
+            (self.convert(value, type_id, LONG)?, LONG)
+        } else {
+            (value, type_id)
+        };
+        self.convert(value, type_id, integer_type(self.options.near(), true))
+    }
+
+    /// The byte pointer an address names: the offset from DEF SEG's paragraph.
+    fn segment_pointer(
+        &mut self,
+        offset: Operand,
+    ) -> u32 {
+        let segment_place = self.def_segment_place();
+        let segment = self.value(INTEGER);
+        self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
+        self.tag_last(Tag::ReadSegment);
+        let segment = Operand::Value(segment);
+        let pointer_type = self.far_pointer_type(BYTE);
+        let pointer = self.value(pointer_type);
+        self.emit("concat", vec![pointer], vec![segment, offset]);
+        pointer
+    }
+
     fn unsigned_word(
         &mut self,
         expression: &Expr,
@@ -7067,7 +7268,7 @@ impl Compiler {
                 return self.fail("BSAVE expects a path, offset, and length");
             };
             let path = self.string_descriptor(path)?;
-            let offset = self.unsigned_word(offset)?;
+            let offset = self.address_word(offset)?;
             let length = self.unsigned_word(length)?;
             self.emit_runtime_call("B$BSAV", Vec::new(), vec![path, offset, length]);
             self.tag_last(Tag::ReadSegment);
@@ -7076,7 +7277,7 @@ impl Compiler {
 
         let (path, offset, supplied) = match arguments {
             [path] => (path, Operand::Constant(INTEGER, Number::Integer(0)), 0),
-            [path, offset] => (path, self.unsigned_word(offset)?, 1),
+            [path, offset] => (path, self.address_word(offset)?, 1),
             _ => return self.fail("BLOAD expects a path and optional offset"),
         };
         let path = self.string_descriptor(path)?;
@@ -7327,9 +7528,9 @@ impl Compiler {
                 Vec::new(),
                 vec![
                     source,
-                    Operand::Constant(INTEGER, Number::Integer(0)),
+                    self.count(0),
                     Operand::Value(target),
-                    Operand::Constant(INTEGER, Number::Integer(width as i64)),
+                    self.count(width as i64),
                 ],
             );
             self.filled(2, width);
@@ -8321,11 +8522,12 @@ impl Compiler {
         // address. The runtime description says which, and where a near
         // descriptor keeps what.
         let (descriptor_symbol, payload_offset) = if let Some(near) =
-            llrm_qbruntime::semantics::descriptor(&self.runtime)
+            llrm_qbruntime::semantics::descriptor(&self.runtime, self.options.near())
         {
             let mut literal = vec![0; near.size as usize];
-            literal[near.length as usize..near.length as usize + 2]
-                .copy_from_slice(&(encoded.len() as u16).to_le_bytes());
+            let word = near.word as usize;
+            literal[near.length as usize..near.length as usize + word]
+                .copy_from_slice(&(encoded.len() as u64).to_le_bytes()[..word]);
             literal.extend_from_slice(&encoded);
             if literal.len() % 2 != 0 {
                 literal.push(0);
@@ -8408,7 +8610,7 @@ impl Compiler {
             name: format!("$string{payload_symbol}$descriptor"),
             type_id: STRING,
             offset: 0,
-            extent: 4,
+            extent: self.width(STRING),
             storage: "static",
             symbol: descriptor_symbol,
         });

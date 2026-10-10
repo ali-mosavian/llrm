@@ -207,7 +207,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -498,6 +498,21 @@ def test_every_step_runs_with_the_flags_the_build_used_and_the_base_build_with_n
     assert f"RUSTFLAGS='{gate.WARNING_FLAGS}'" in gate.BUILD
     assert "RUSTFLAGS" in gate.MEASURE_BUILD and "env -u RUSTFLAGS cargo" in gate.MEASURE_BUILD
     assert "RUSTFLAGS" not in gate.MEASURE_BUILD.replace("env -u RUSTFLAGS", "")
+
+
+def test_the_slow_dos_tier_is_a_heavy_step_selected_by_the_runtime_and_the_dos32_harness():
+    """The demos and graphics sweeps (minutes) ran in the `pytest` step on every change; now they are a step of their own."""
+    assert "dos-slow" in gate.plan(["runtime/qb/gpaint.c"]).steps
+    assert "dos-slow" in gate.plan(["tools/dosbatch/qb32demos.py"]).steps
+    assert "dos-slow" not in gate.plan(["crates/frontends/llrm-c/src/lib.rs"]).steps
+    command = gate.commands(gate.plan(["runtime/qb/gpaint.c"]), gate.load(), gate.packages())["dos-slow"]
+    assert "-m slow_dos" in command and "exit 77" in command, command
+
+
+def test_the_slow_dos_tier_is_skipped_where_the_demo_sources_are_missing(tmp_path):
+    env = {"HOME": str(tmp_path), "QB45_DEMOS_DIR": str(tmp_path / "none"), "QB45_DIR": str(tmp_path / "none"), "GATE_ALLOW_MISSING": "1"}
+    skipped = gate.skipped_steps(["dos-slow"], gate.missing_capabilities(env))
+    assert "QB45_DEMOS_DIR" in skipped["dos-slow"] or "QB45_DIR" in skipped["dos-slow"], skipped
 
 
 def test_a_run_asked_for_another_commit_refuses_and_names_no_pass():

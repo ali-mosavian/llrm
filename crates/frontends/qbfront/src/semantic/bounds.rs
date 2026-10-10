@@ -262,11 +262,19 @@ impl Compiler {
 
         let call = self.options.checked_arrays.then(|| self.error_block());
         if let Some(call) = call {
-            let data = self.descriptor_field(descriptor, 2, INTEGER);
+            // The selector, or the data pointer where there is none: 0 without elements.
+            let layout = self.ad();
+            let (data, data_type) = match layout.selector {
+                Some(at) => (self.descriptor_field(descriptor, at, INTEGER), INTEGER),
+                None => {
+                    let pointer_type = self.pointer_type(super::VOID);
+                    (self.descriptor_field(descriptor, layout.data, pointer_type), pointer_type)
+                }
+            };
             let allocated = self.computed(
                 "ne",
                 super::BOOLEAN,
-                vec![Operand::Value(data), Operand::Constant(INTEGER, Number::Integer(0))],
+                vec![Operand::Value(data), Operand::Constant(data_type, Number::Integer(0))],
             );
             self.tag_last(Tag::Allocated { descriptor });
             let read = self.new_block();
@@ -276,7 +284,7 @@ impl Compiler {
         let rank = match variable.rank {
             Some(rank) => Operand::Constant(INTEGER, Number::Integer(rank as i64)),
             None => {
-                let rank = self.descriptor_field(descriptor, 8, BYTE);
+                let rank = self.descriptor_field(descriptor, self.ad().rank, BYTE);
                 self.convert(Operand::Value(rank), BYTE, INTEGER)?
             }
         };
@@ -303,13 +311,21 @@ impl Compiler {
         let (lower, count) = match (&rank, constant) {
             (Operand::Constant(_, Number::Integer(rank)), Some(value)) => {
                 let record = (rank - value) as usize;
-                let lower = self.descriptor_field(descriptor, 16 + 4 * record, INTEGER);
-                let count = upper.then(|| self.descriptor_field(descriptor, 14 + 4 * record, INTEGER));
-                (Operand::Value(lower), count.map(Operand::Value))
+                let layout = self.ad();
+                let word = self.word_type();
+                let lower = self.descriptor_field(descriptor, layout.lower(record), word);
+                let count = upper.then(|| self.descriptor_field(descriptor, layout.count(record), word));
+                let lower = self.convert(Operand::Value(lower), word, INTEGER)?;
+                let count = match count {
+                    Some(count) => Some(self.convert(Operand::Value(count), word, INTEGER)?),
+                    None => None,
+                };
+                (lower, count)
             }
             _ => {
                 let entry = self.computed("sub", INTEGER, vec![rank, dimension.clone()]);
-                let bytes = self.computed("mul", INTEGER, vec![entry, Operand::Constant(INTEGER, Number::Integer(4))]);
+                let record = self.ad().record() as i64;
+                let bytes = self.computed("mul", INTEGER, vec![entry, Operand::Constant(INTEGER, Number::Integer(record))]);
                 let pointer_type = self
                     .values
                     .iter()
@@ -319,14 +335,16 @@ impl Compiler {
                 let bytes = self.convert(bytes, INTEGER, offset_type)?;
                 let at = self.value(pointer_type);
                 self.emit("ptr_offset", vec![at], vec![Operand::Value(descriptor), bytes]);
+                let word = self.word_type();
+                let layout = self.ad();
                 let mut field = |offset, slot: Option<Slot>| {
                     let read = self.computed(
                         "load",
-                        INTEGER,
+                        word,
                         vec![Operand::Indirect {
                             base: at,
                             offset,
-                            type_id: INTEGER,
+                            type_id: word,
                             volatile: false,
                             inbounds: false,
                         }],
@@ -337,8 +355,13 @@ impl Compiler {
                     read
                 };
                 let dimension = constant.map(|value| value as usize);
-                let lower = field(16, dimension.map(Slot::LowerOf));
-                let count = upper.then(|| field(14, dimension.map(Slot::CountOf)));
+                let lower = field(layout.lower(0), dimension.map(Slot::LowerOf));
+                let count = upper.then(|| field(layout.count(0), dimension.map(Slot::CountOf)));
+                let lower = self.convert(lower, word, INTEGER)?;
+                let count = match count {
+                    Some(count) => Some(self.convert(count, word, INTEGER)?),
+                    None => None,
+                };
                 (lower, count)
             }
         };

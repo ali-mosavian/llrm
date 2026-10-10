@@ -15,6 +15,8 @@ pub enum Form {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Descriptor {
     pub length: i64,
+    /// The bytes of the length field: a word of the target (2 in real mode).
+    pub word: i64,
     pub data: i64,
     pub size: i64,
 }

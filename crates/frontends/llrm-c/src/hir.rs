@@ -183,6 +183,11 @@ impl Symbol {
         self.base == entry && self.exported()
     }
 
+    /// Whether `#pragma aux` gave the symbol its whole name: a pattern with no `*` for the symbol's own.
+    fn named_by_pragma(&self) -> bool {
+        !self.pattern.is_empty() && self.pattern != "^" && !self.pattern.contains('*')
+    }
+
     pub fn object_name(&self) -> String {
         if self.pattern == "^" {
             return self.base.to_uppercase();
@@ -365,7 +370,9 @@ impl Unit {
             .and_then(|one| one.symbol.get(format))
             .cloned();
         for symbol in self.symbols.values_mut() {
-            if symbol.is_entry(&self.entry) {
+            if symbol.named_by_pragma() {
+                // `#pragma aux f "NAME"` spells the symbol whatever its convention would.
+            } else if symbol.is_entry(&self.entry) {
                 if let Some(pattern) = &entry {
                     symbol.pattern = pattern.clone();
                 }

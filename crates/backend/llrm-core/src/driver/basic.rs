@@ -60,9 +60,15 @@ pub fn _reg(register: Register) -> Loc {
 }
 
 #[allow(non_snake_case)]
-pub fn _RUNTIME_FRAME_HEADER(runtime: model::RuntimeProfile) -> Result<i64, String> {
+pub fn _RUNTIME_FRAME_HEADER(
+    runtime: model::RuntimeProfile,
+    bitness: u32,
+) -> Result<i64, String> {
     match runtime {
-        model::RuntimeProfile::Qb45 => Ok(10),
+        // llrm's flat frame is eight dwords below EBP: the previous BASIC frame, EBX, ECX, EDX, ESI and EDI as
+        // the caller had them, the bytes of locals and the GOSUB count.
+        model::RuntimeProfile::Llrm if bitness == 32 => Ok(32),
+        model::RuntimeProfile::Qb45 | model::RuntimeProfile::Llrm => Ok(10),
         model::RuntimeProfile::Pds71 => Ok(18),
         model::RuntimeProfile::Vbdos => Ok(20),
         model::RuntimeProfile::Freestanding => Err(format!("KeyError: {}", runtime.repr())),
@@ -155,9 +161,14 @@ pub fn _runtime_frame(
     runtime: model::RuntimeProfile,
     temporary_strings: i64,
     enter_by: &str,
+    bitness: u32,
 ) -> Result<(lir::LirBody, IndexMap<i64, masm::Callee>), String> {
-    let size = size + (size & 1);
-    let header = _RUNTIME_FRAME_HEADER(runtime)?;
+    // A real-mode frame is entered with its bytes of locals in CX and its string slots in BX, and a far call;
+    // a flat one with the bytes in EAX (which a function's callers do not keep), and a near call.
+    let flat = bitness == 32;
+    let word = if flat { 4 } else { 2 };
+    let size = (size + word - 1) / word * word;
+    let header = _RUNTIME_FRAME_HEADER(runtime, bitness)?;
     if size > 0x7FFE {
         return Err(format!("{}: {size} byte BASIC frame exceeds a 16-bit BP displacement", body.name).into());
     }
@@ -165,12 +176,20 @@ pub fn _runtime_frame(
         return Err(format!("{}: too many temporary STRING slots", body.name).into());
     }
     let serial = body.blocks.iter().flat_map(|block| &block.insns).map(|one| one.at).max().unwrap_or(0) + 1;
-    let imm = |value: i64| Loc::Imm(ir::Imm { value, width: 2, address: None });
-    let enter = [
-        _insn(serial, _semantics(Operation::Move, "mov", vec![_reg(Register::CX)], vec![imm(size)])),
-        _insn(serial + 1, _semantics(Operation::Move, "mov", vec![_reg(Register::BX)], vec![imm(temporary_strings)])),
-        _insn(serial + 2, _semantics(Operation::Call, "call", vec![], vec![])),
-    ];
+    let imm = |value: i64| Loc::Imm(ir::Imm { value, width: word as u32, address: None });
+    let enter: Vec<_> = if flat {
+        let eax = Loc::Reg(ir::Reg { register: Register::EAX, width: 4 });
+        vec![
+            _insn(serial, _semantics(Operation::Move, "mov", vec![eax], vec![imm(size)])),
+            _insn(serial + 2, _semantics(Operation::Call, "call", vec![], vec![])),
+        ]
+    } else {
+        vec![
+            _insn(serial, _semantics(Operation::Move, "mov", vec![_reg(Register::CX)], vec![imm(size)])),
+            _insn(serial + 1, _semantics(Operation::Move, "mov", vec![_reg(Register::BX)], vec![imm(temporary_strings)])),
+            _insn(serial + 2, _semantics(Operation::Call, "call", vec![], vec![])),
+        ]
+    };
     let leave_at = serial + 3;
     let leave = _insn(leave_at, _semantics(Operation::Call, "call", vec![], vec![]));
     let framed: Vec<lir::LirBlock> = body
@@ -247,8 +266,8 @@ pub fn _runtime_frame(
     Ok((
         lir::LirBody { variables, ..body.with_blocks(framed) },
         IndexMap::from_iter([
-            (serial + 2, masm::Callee::new(enter_by, true)),
-            (leave_at, masm::Callee::new("B$EXSA", true)),
+            (serial + 2, masm::Callee::new(enter_by, !flat)),
+            (leave_at, masm::Callee::new("B$EXSA", !flat)),
         ]),
     ))
 }
@@ -368,9 +387,27 @@ pub fn _basic_listing(
         _ => (Vec::new(), &listing),
     };
     let (enter, leave) = masm::_frame_parts(procedure);
+    // The shell's registers and counts as the target spells them: BP and SP are the frame and the stack pointer,
+    // and a width is the target's slot, which the listing states and these parts leave to the target.
+    let registers = &procedure.registers;
+    let shape = |what: &Semantics| -> Semantics {
+        let place = |loc: &Loc| match loc {
+            Loc::Reg(reg) => Loc::Reg(ir::Reg { register: registers.spelled(reg.register), width: 0 }),
+            Loc::Imm(imm) => Loc::Imm(ir::Imm { width: 0, ..imm.clone() }),
+            other => other.clone(),
+        };
+        Semantics {
+            dests: what.dests.iter().map(place).collect(),
+            sources: what.sources.iter().map(place).collect(),
+            ..what.clone()
+        }
+    };
     let same = |items: &[masm::Item], semantics: &[Semantics]| {
         items.len() == semantics.len()
-            && items.iter().zip(semantics).all(|(item, one)| matches!(item, masm::Item::Semantics(what) if what == one))
+            && items
+                .iter()
+                .zip(semantics)
+                .all(|(item, one)| matches!(item, masm::Item::Semantics(what) if shape(what) == shape(one)))
     };
     if listing.len() < enter.len() || !same(&listing[..enter.len()], &enter) {
         return Err(format!("{}: native frame prefix changed shape", procedure.name).into());
@@ -469,9 +506,11 @@ fn written_basic_inner(
     // prologue, not the procedure symbol.
     let shifted: Vec<objbuild::Fixup> =
         code.fixups.iter().map(|one| objbuild::Fixup { at: one.at + 48, ..one.clone() }).collect();
-    code.fixups = [objbuild::Fixup::new(10, objbuild::OFFSET, statement_data)]
+    let words = HeaderWords::of(module.object.bitness);
+    let offset_kind = if words.width == 4 { objbuild::OFFSET32 } else { objbuild::OFFSET };
+    code.fixups = [objbuild::Fixup::new(words.statements, offset_kind, statement_data)]
         .into_iter()
-        .chain(NAMED.iter().map(|&(word, _, label)| objbuild::Fixup::new(word, objbuild::OFFSET, label)))
+        .chain(NAMED.iter().zip(words.segments).map(|(&(_, _, label), word)| objbuild::Fixup::new(word, offset_kind, label)))
         .chain(shifted)
         .collect();
     let mut symbols: IndexMap<String, (usize, usize)> = symbols
@@ -497,6 +536,10 @@ fn written_basic_inner(
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let object = objbuild::object_of(module, name, segments, &symbols, &externs).map_err(|error| error.to_string())?;
     let emitted = llrm_omf::write::write(&object).map_err(|error| error.to_string())?;
+    // QB's classes and combine modes shape a real-mode link; a flat object keeps the ones its writer gave.
+    if module.object.bitness != 16 {
+        return Ok(emitted);
+    }
     _basic_segment_classes(&emitted, &module.code)
 }
 
@@ -576,6 +619,29 @@ pub const NAMED: [(usize, &str, &str); 5] = [
     (24, "COMMON", "$QB$COMMON"),
     (32, "BC_CN", "$QB$CN"),
 ];
+
+/// Where MODULE_CODE keeps the addresses it holds, which are the words of the target's near pointer: 16-bit
+/// offsets in real mode, as QB's header has them; dwords, each at its own place, where the object is 32-bit.
+/// The header is 48 bytes either way, so the code starts at 30h.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HeaderWords {
+    /// Bytes of an address.
+    pub width: usize,
+    /// The statement table's, OF_STA.
+    pub statements: usize,
+    /// BC_DS, BC_DATA, BC_FT, COMMON and BC_CN, in `NAMED`'s order.
+    pub segments: [usize; 5],
+}
+
+impl HeaderWords {
+    pub fn of(bitness: u32) -> Self {
+        if bitness == 32 {
+            Self { width: 4, statements: 12, segments: [16, 20, 24, 28, 32] }
+        } else {
+            Self { width: 2, statements: 10, segments: [NAMED[0].0, NAMED[1].0, NAMED[2].0, NAMED[3].0, NAMED[4].0] }
+        }
+    }
+}
 
 /// A BASIC module object as its frontend lays it out around the code.
 pub struct Object {
@@ -797,7 +863,7 @@ pub fn assembled(
             selection: options.selection,
             arch: &*options.arch,
             classes: &classes,
-            runtime: runtime.value(),
+            runtime: runtime.tables(),
             basic: true,
             zeroed: matches!(frame, Frame::Runtime { .. }),
         };
@@ -829,7 +895,8 @@ pub fn assembled(
     if !handled {
         rows.clear();
     }
-    procedures.push(super::statement_table(&rows, options.arch.frame_registers(), Regs(options.arch.registers())));
+    let word = if options.arch.layout().mode == 32 { 4 } else { 2 };
+    procedures.push(super::statement_table(&rows, options.arch.frame_registers(), word, Regs(options.arch.registers())));
     let mut data = Vec::new();
     for segment in &object.segments {
         data.push((segment.name.clone(), timed("data layout", || laid_out(module, segment, &names))?));
@@ -965,9 +1032,11 @@ fn procedure(
     } else {
         match frame {
             Frame::Runtime { strings } => {
-                entry = machined.reserve + (machined.reserve & 1) + _RUNTIME_FRAME_HEADER(runtime)?;
+                let bitness = target.arch.layout().mode;
+                let word = if bitness == 32 { 4 } else { 2 };
+                entry = (machined.reserve + word - 1) / word * word + _RUNTIME_FRAME_HEADER(runtime, bitness)?;
                 let by = check.and_then(|one| one.entry.as_deref()).unwrap_or("B$ENRA");
-                _runtime_frame(&finalized.body, machined.reserve, runtime, strings, by)?
+                _runtime_frame(&finalized.body, machined.reserve, runtime, strings, by, bitness)?
             }
             Frame::Own => {
                 reserve = machined.reserve;
@@ -980,7 +1049,7 @@ fn procedure(
     let mut body = addressvalues::converted(&body);
     if main {
         let exits;
-        (body, exits) = ends_program(&body);
+        (body, exits) = ends_program(&body, !target.arch.layout().spaces.far_is_near());
         callees.extend(exits);
     }
     for (at, callee) in &machined.calls {
@@ -1093,8 +1162,8 @@ fn size_of(datum: &masm::Datum) -> i64 {
     }
 }
 
-/// Spell BASIC module fallthrough as the runtime's implicit B$CENP.
-pub fn ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
+/// Spell BASIC module fallthrough as the runtime's implicit B$CENP, a far call where the target has far code.
+pub fn ends_program(body: &lir::LirBody, far: bool) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
     let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -1104,7 +1173,7 @@ pub fn ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::C
             let mut instruction = Arc::clone(instruction);
             if instruction.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
                 exits = true;
-                sites.insert(instruction.at, masm::Callee::new("B$CENP", true));
+                sites.insert(instruction.at, masm::Callee::new("B$CENP", far));
                 let mut replaced = (*instruction).clone();
                 replaced.what = Some(_semantics(Operation::Call, "call", vec![], vec![]));
                 instruction = Arc::new(replaced);

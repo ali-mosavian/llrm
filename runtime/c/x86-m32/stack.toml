@@ -1,8 +1,8 @@
-# What `-fsanitize=stack` compares and calls under the flat runtime: `_llrm_os_stack_low`, a dword the
+# What `-fsanitize=stack` compares and calls under the flat runtime: `LL$STACK_LOW`, a dword the
 # OS layer's start-up fills with the stack's bottom plus its reserve, and `__STKOVERFLOW`, the near
 # routine it enters, which prints "Stack Overflow!" and exits with status 1 (ext.asm). The one flat
 # segment makes ESP an offset in it.
-limit = "_llrm_os_stack_low"
+limit = "LL$STACK_LOW"
 handler = "__STKOVERFLOW"
 far = false
 red_zone = 0
