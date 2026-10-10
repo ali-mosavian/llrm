@@ -12,7 +12,8 @@ typedef struct GfxMode {
     unsigned width, height;
     byte cell_height;      /* of a text character */
     double aspect;         /* height of a pixel over its width, times 1 */
-    byte foreground_only;  /* COLOR takes no background (the VGA modes) */
+    int fg_max, bg_max;    /* the largest numbers COLOR takes, -1 for none */
+    byte cga;              /* COLOR sets the CGA palette: background, palette */
     byte dac;              /* PALETTE takes a mix of red, green and blue (VGA) */
     unsigned colors;       /* attributes */
     byte bits;             /* bits of a pixel in each of its planes (GET and PUT) */
@@ -38,6 +39,7 @@ void gfx_set_colors(int foreground, int background);
 
 /* A colour argument: -1 is the foreground; out of range is an error. */
 byte gfx_color(int color);
+byte gfx_attribute(int color);
 
 /* Pixels, clipped to the screen. */
 void gfx_plot(int x, int y, byte color, byte operation);

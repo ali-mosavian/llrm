@@ -27,6 +27,9 @@ enum {
     PLANES = 4,
     MODE_320 = 0x0D,
     MODE_LINEAR = 0x13,
+    SET_COLOR_SELECT = 0x0B00,
+    MODE_CGA4 = 4,
+    MODE_CGA2 = 6,
     LAST_TEXT_MODE = 7,
     GET_MODE = 0x0F00,
     SET_PALETTE = 0x1000,
@@ -40,7 +43,7 @@ enum {
 /* Volatile: a read loads the latches, which the bits a mask leaves alone come
    from, so it must not be dropped. */
 typedef volatile u8 QB_FAR Video;
-static Video *const screen = (Video *)0xA0000000UL;
+static Video *screen = (Video *)0xA0000000UL;
 static unsigned pitch = 80;       /* bytes of a row of one plane */
 
 static void controller(unsigned index, unsigned value)
@@ -62,7 +65,7 @@ typedef struct GdOps {
     void (*glyph)(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, unsigned foreground);
 } GdOps;
 
-static const GdOps planar_ops, linear_ops;
+static const GdOps planar_ops, linear_ops, packed4_ops, packed2_ops;
 static const GdOps *ops = &planar_ops;
 
 int gd_set_mode(unsigned mode)
@@ -73,11 +76,16 @@ int gd_set_mode(unsigned mode)
     dev_int10(&r);
     r.rax = GET_MODE;
     dev_int10(&r);
-    ops = mode == MODE_LINEAR ? &linear_ops : &planar_ops;
+    ops = mode == MODE_LINEAR ? &linear_ops : mode == MODE_CGA4 ? &packed4_ops : mode == MODE_CGA2 ? &packed2_ops : &planar_ops;
     pitch = mode == MODE_320 ? 40 : mode == MODE_LINEAR ? 320 : 80;
+    if (mode == MODE_CGA4 || mode == MODE_CGA2)
+        screen = (Video *)0xB8000000UL;
+    else
+        screen = (Video *)0xA0000000UL;
     if ((r.rax & 0x7F) != (mode & 0x7F))
         return 0;
-    if (mode > LAST_TEXT_MODE && mode != MODE_LINEAR)
+
+    if (mode > LAST_TEXT_MODE && mode != MODE_LINEAR && mode != MODE_CGA4 && mode != MODE_CGA2)
         controller(GC_MODE, WRITE_MODE_2);
     return 1;
 }
@@ -88,6 +96,18 @@ void gd_palette(unsigned index, unsigned color)
 
     r.rax = SET_PALETTE;
     r.rbx = color << 8 | index;
+    dev_int10(&r);
+}
+
+void gd_cga_color(unsigned background, unsigned palette)
+{
+    Regs r;
+
+    r.rax = SET_COLOR_SELECT;
+    r.rbx = background;
+    dev_int10(&r);
+    r.rax = SET_COLOR_SELECT;
+    r.rbx = 0x0100 | palette;
     dev_int10(&r);
 }
 
@@ -362,3 +382,109 @@ void gd_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, un
 {
     ops->glyph(x, y, bits, height, foreground);
 }
+
+/* The CGA modes: pixels packed in bytes, `bits` each with the leftmost in the high
+   bits, the even rows of the screen in the first 8 KB and the odd rows in the
+   next, 80 bytes a row. */
+enum { CGA_ODD_ROWS = 0x2000, CGA_ROW_BYTES = 80 };
+
+static Video *packed_row(unsigned y)
+{
+    return screen + (y & 1 ? CGA_ODD_ROWS : 0) + (unsigned long)(y >> 1) * CGA_ROW_BYTES;
+}
+
+/* The byte of pixel `x` in a row, and the shift that brings its pixel to the low
+   bits, for pixels of `bits` bits. */
+static unsigned packed_shift(unsigned x, unsigned bits)
+{
+    return 8 - bits - (x * bits & 7);
+}
+
+static void packed_plot(unsigned x, unsigned y, unsigned color, unsigned operation, unsigned bits)
+{
+    Video *at = packed_row(y) + (x * bits >> 3);
+    unsigned shift = packed_shift(x, bits), mask = ((1u << bits) - 1) << shift;
+    unsigned old = *at, new_bits = combined(old >> shift & (mask >> shift), color, operation) << shift & mask;
+
+    *at = (u8)(old & ~mask | new_bits);
+}
+
+static unsigned packed_read(unsigned x, unsigned y, unsigned bits)
+{
+    return *(packed_row(y) + (x * bits >> 3)) >> packed_shift(x, bits) & ((1u << bits) - 1);
+}
+
+static void packed_span(unsigned x, unsigned count, unsigned y, unsigned color, unsigned operation, unsigned bits)
+{
+    while (count--)
+        packed_plot(x++, y, color, operation, bits);
+}
+
+static int packed_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match, unsigned bits)
+{
+    int step = last >= x ? 1 : -1;
+
+    for (;; x += step) {
+        unsigned color = packed_read(x, y, bits);
+
+        if ((color == c1 || color == c2) == match)
+            return x;
+        if (x == last)
+            return -1;
+    }
+}
+
+static void packed_move_rows(unsigned to, unsigned from, unsigned count)
+{
+    BlockOp op;
+
+    if (to < from) {
+        while (count--) {
+            op.dst = packed_row(to++);
+            op.src = packed_row(from++);
+            op.count = CGA_ROW_BYTES;
+            op.value = 0;
+            dev_move(&op);
+        }
+    } else {
+        to += count;
+        from += count;
+        while (count--) {
+            op.dst = packed_row(--to);
+            op.src = packed_row(--from);
+            op.count = CGA_ROW_BYTES;
+            op.value = 0;
+            dev_move(&op);
+        }
+    }
+}
+
+static void packed_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, unsigned foreground, unsigned depth)
+{
+    while (height--) {
+        unsigned row = *bits++, bit, at = x;
+
+        for (bit = 0x80; bit; bit >>= 1)
+            packed_plot(at++, y, row & bit ? foreground : 0, 0, depth);
+        y++;
+    }
+}
+
+static void packed4_plot(unsigned x, unsigned y, unsigned c, unsigned o) { packed_plot(x, y, c, o, 2); }
+static void packed4_span(unsigned x, unsigned n, unsigned y, unsigned c, unsigned o) { packed_span(x, n, y, c, o, 2); }
+static unsigned packed4_read(unsigned x, unsigned y) { return packed_read(x, y, 2); }
+static int packed4_search(int x, int l, unsigned y, unsigned a, unsigned b, int m) { return packed_search(x, l, y, a, b, m, 2); }
+static void packed4_glyph(unsigned x, unsigned y, const u8 QB_FAR *b, unsigned h, unsigned f) { packed_glyph(x, y, b, h, f, 2); }
+static void packed2_plot(unsigned x, unsigned y, unsigned c, unsigned o) { packed_plot(x, y, c, o, 1); }
+static void packed2_span(unsigned x, unsigned n, unsigned y, unsigned c, unsigned o) { packed_span(x, n, y, c, o, 1); }
+static unsigned packed2_read(unsigned x, unsigned y) { return packed_read(x, y, 1); }
+static int packed2_search(int x, int l, unsigned y, unsigned a, unsigned b, int m) { return packed_search(x, l, y, a, b, m, 1); }
+static void packed2_glyph(unsigned x, unsigned y, const u8 QB_FAR *b, unsigned h, unsigned f) { packed_glyph(x, y, b, h, f, 1); }
+
+static const GdOps packed4_ops = {
+    packed4_plot, packed4_span, packed4_read, packed4_search, packed_move_rows, packed4_glyph
+};
+
+static const GdOps packed2_ops = {
+    packed2_plot, packed2_span, packed2_read, packed2_search, packed_move_rows, packed2_glyph
+};

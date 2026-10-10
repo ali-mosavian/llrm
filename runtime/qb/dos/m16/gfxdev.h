@@ -11,6 +11,9 @@
 int gd_set_mode(unsigned mode);
 /* Gives palette entry `index` the adapter's colour `color`. */
 void gd_palette(unsigned index, unsigned color);
+/* The CGA modes' colour select: the background 0 to 15, and which palette, 0 or
+   1, as the BIOS sets them. */
+void gd_cga_color(unsigned background, unsigned palette);
 /* Gives colour register `index` the mix of `red`, `green` and `blue`, 0 to 63. */
 void gd_palette_mix(unsigned index, unsigned red, unsigned green, unsigned blue);
 

@@ -7,15 +7,20 @@
 enum { DEFAULT_FOREGROUND = 15, TEXT_MODE = 3 };
 
 static const GfxMode modes[] = {
-    {7, 0x0D, 320, 200, 8, 5.0 / 6.0, 0, 0, 16, 1, 4},
-    {8, 0x0E, 640, 200, 8, 5.0 / 12.0, 0, 0, 16, 1, 4},
-    {9, 0x10, 640, 350, 14, 35.0 / 48.0, 0, 0, 16, 1, 4},
-    {12, 0x12, 640, 480, 16, 1.0, 1, 1, 16, 1, 4},
-    {13, 0x13, 320, 200, 8, 5.0 / 6.0, 1, 1, 256, 8, 1}
+    /* number, BIOS mode, size, text rows, aspect, COLOR's limits, CGA, DAC,
+       attributes, bits a pixel, planes */
+    {1, 0x04, 320, 200, 8, 5.0 / 6.0, 255, 255, 1, 0, 4, 2, 1},
+    {2, 0x06, 640, 200, 8, 5.0 / 12.0, -1, -1, 0, 0, 2, 1, 1},
+    {7, 0x0D, 320, 200, 8, 5.0 / 6.0, 15, 15, 0, 0, 16, 1, 4},
+    {8, 0x0E, 640, 200, 8, 5.0 / 12.0, 15, 15, 0, 0, 16, 1, 4},
+    {9, 0x10, 640, 350, 14, 35.0 / 48.0, 15, 63, 0, 0, 16, 1, 4},
+    {12, 0x12, 640, 480, 16, 1.0, 15, -1, 0, 1, 16, 1, 4},
+    {13, 0x13, 320, 200, 8, 5.0 / 6.0, 255, -1, 0, 1, 256, 8, 1}
 };
 
 const GfxMode *gfx_current;
 byte gfx_foreground = DEFAULT_FOREGROUND, gfx_background;
+static byte cga_background, cga_palette = 1;
 int gfx_x1, gfx_y1, gfx_x2, gfx_y2;
 
 /* The adapter's own colour numbers for the attributes 0 to 15 at the start of a
@@ -27,7 +32,7 @@ static const byte default_palette[16] = {
 void gfx_set_background(byte color)
 {
     gfx_background = color;
-    gd_palette(0, default_palette[color]);
+    gd_palette(0, color < 16 ? default_palette[color] : color);
 }
 
 void gfx_clear(void)
@@ -56,8 +61,10 @@ void gfx_screen(int mode)
             if (!gd_set_mode(modes[at].bios))
                 break;
             gfx_current = &modes[at];
-            gfx_foreground = DEFAULT_FOREGROUND;
+            gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1 : DEFAULT_FOREGROUND;
             gfx_background = 0;
+            cga_background = 0;
+            cga_palette = 1;
             cn_graphics = 1;
             cn_mode_changed();
             return;
@@ -66,27 +73,45 @@ void gfx_screen(int mode)
     qb_error(BE_ILLFUN);
 }
 
+/* COLOR: the numbers a mode takes are its own, and 255 for the background of the
+   EGA modes is taken and means none. */
 void gfx_set_colors(int foreground, int background)
 {
-    /* a 16-colour mode takes 16 to 31 to blink, which shows as the colour */
-    int most = gfx_current->colors > 16 ? (int)gfx_current->colors - 1 : 31;
+    const GfxMode *mode = gfx_current;
+    int none = background == 255 && !mode->cga && mode->bg_max > 0;
 
-    if (foreground > most || background > 15
-        || (background >= 0 && gfx_current->foreground_only))
+    if (foreground > mode->fg_max || (foreground >= 0 && mode->fg_max < 0)
+        || (!none && (background > mode->bg_max || (background >= 0 && mode->bg_max < 0))))
         qb_error(BE_ILLFUN);
+    if (mode->cga) {
+        if (foreground >= 0)
+            cga_background = foreground & 15;
+        if (background >= 0)
+            cga_palette = background & 1;
+        gd_cga_color(cga_background, cga_palette);
+        return;
+    }
     if (foreground >= 0)
-        gfx_foreground = gfx_current->colors > 16 ? foreground : foreground & 15;
-    if (background >= 0)
-        gfx_set_background(background & 15);
+        gfx_foreground = foreground;
+    if (background >= 0 && !none)
+        gfx_set_background((byte)background);
 }
 
+/* A colour number: -1 is the foreground, and one that is no attribute of the mode
+   is the foreground too (the number is taken as a byte first). */
 byte gfx_color(int color)
 {
     if (color == -1)
         return gfx_foreground;
-    if (color < 0 || (unsigned)color >= gfx_current->colors)
-        qb_error(BE_ILLFUN);
-    return (byte)color;
+    return gfx_attribute(color);
+}
+
+/* The attribute a colour number means, whatever the number. */
+byte gfx_attribute(int color)
+{
+    unsigned attribute = (unsigned)color & 0xFF;
+
+    return attribute < gfx_current->colors ? (byte)attribute : gfx_foreground;
 }
 
 void gfx_plot(int x, int y, byte color, byte operation)
@@ -183,7 +208,7 @@ void B_N2R4(float x, float y)
 /* B$PSTC: PSET and PRESET at the first point. */
 void B_PSTC(int color)
 {
-    gfx_plot(gfx_x1, gfx_y1, gfx_color(color), OP_SET);
+    gfx_plot(gfx_x1, gfx_y1, gfx_attribute(color), OP_SET);
 }
 
 /* B$PSET and B$PRST: PSET and PRESET without a colour, which take the
