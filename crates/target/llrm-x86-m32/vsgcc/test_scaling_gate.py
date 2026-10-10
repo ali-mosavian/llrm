@@ -308,6 +308,19 @@ def test_loopslots_asks_each_instruction_once_not_once_for_each_loop_around_it(t
     assert own["lir loopslots"] <= 600, f"{own['lir loopslots']:.1f} Minstr"
 
 
+def test_the_inliner_splices_the_callers_sites_in_one_scan_and_interprocedural_stays_near_linear_in_the_callers(tmp_path):
+    """Each splice of the caller of N callees counted the body again and the round found the module's recursive and addressed
+    functions twice (`mir interprocedural` own 465 -> 1,232 Minstr from N=256 to 512, 2.65 per doubling). The sites are spliced in one scan, last to first, and the
+    module is scanned once per round: 330 -> 698, 2.12. A step above 2.4 per doubling (slope 1.26) on the `callers` axis fails."""
+    n = 256
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"callers_{label}.c"
+        source.write_text("" if size == 0 else scaling.callers(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("mir interprocedural", 0.0) - own["empty"].get("mir interprocedural", 0.0) for label in ("n", "2n"))
+    assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
 def test_counted_stays_below_cubic_in_the_loops_of_one_function(tmp_path):
     """branches(N) at -O2: each loop's proof built the graph of the whole function (a vector of every block and what it names, a
     map of them) to read the blocks around the loop: `analysis counted` read 2N/N = 3.7, 3.8, 3.9 (46.7 / 170.6 / 648 / 2525 Minstr
@@ -321,3 +334,23 @@ def test_counted_stays_below_cubic_in_the_loops_of_one_function(tmp_path):
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     small, big = (own[label].get("analysis counted", 0.0) - own["empty"].get("analysis counted", 0.0) for label in ("n", "2n"))
     assert big <= 2.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_loop_passes_read_a_loop_not_the_body_around_it(tmp_path):
+    """branches(N) at -O2: lcssa, rotate and trivialunswitch each built the graph of the whole function for each loop (a vector of
+    every block and its successors), lcssa also read every instruction outside the loop for its uses of what the loop defines and
+    found the dominators of the body for each loop: 2N/N = 3.9, 4.0 and 3.5 at N=128 (lcssa 4.3 G at N=1024). A loop is asked of its own
+    blocks and the header's users (`cfg::Around`), uses are found from the uses of a value, and the dominators once: 2.1, 2.0, 2.0
+    (lcssa 105 M). A step above 2.6 (slope 1.38) fails; a few Minstr of start-up are allowed."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"branches_{label}.c"
+        source.write_text("" if size == 0 else scaling.branches(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    grown = {}
+    for step in ("mir lcssa", "mir rotate", "mir trivialunswitch"):
+        small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
+        if big > 2.6 * small + 5.0:
+            grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
+    assert not grown, grown

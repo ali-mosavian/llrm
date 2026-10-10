@@ -41,8 +41,6 @@ fn main() {
         modes.push((built.ident.clone(), built.mode.clone()));
     }
     std::fs::write(out.join("peep_targets.rs"), peep).unwrap();
-    std::fs::write(out.join("positional.rs"), positional(&targets)).unwrap();
-    std::fs::write(out.join("register_info.rs"), register_info(&targets)).unwrap();
     index.push_str(&format!(
         "/// Every target's selector, by its directory's name.\npub static ALL: [&Compiled; {}] = [{}];\n",
         all.len(),
@@ -57,129 +55,6 @@ fn main() {
     }
     effects.push_str("    None\n}\n");
     std::fs::write(out.join("effects.rs"), effects).unwrap();
-}
-
-/// The register file every target's `registers.regs` states, as the table
-/// `backend::registerinfo` queries: one entry per register, by iced's number.
-/// The targets state the same registers (checked here: name, width, root and
-/// lane). The classes are those every target listing the register gives it
-/// (`base` and `index` differ by target and are not here); the debug-format
-/// numbers are each target's own.
-fn register_info(targets: &[std::path::PathBuf]) -> String {
-    struct Row {
-        name: String,
-        bits: u32,
-        root: String,
-        lane: u32,
-        classes: Vec<String>,
-    }
-    let mut rows: Vec<Row> = Vec::new();
-    for dir in targets {
-        let path = dir.join("src/registers.regs");
-        println!("cargo:rerun-if-changed={}", path.display());
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-        for line in text.lines() {
-            let line = line.split('#').next().unwrap_or("").trim();
-            let columns: Vec<&str> = line.split_whitespace().collect();
-            if columns.len() != 7 {
-                continue;
-            }
-            let classes: Vec<String> =
-                if columns[4] == "-" { Vec::new() } else { columns[4].split(',').map(str::to_owned).collect() };
-            let (bits, lane) = (columns[1].parse().unwrap(), columns[3].parse().unwrap());
-            match rows.iter_mut().find(|one| one.name == columns[0]) {
-                Some(seen) => {
-                    assert_eq!(
-                        (seen.bits, &seen.root, seen.lane),
-                        (bits, &columns[2].to_owned(), lane),
-                        "{}: {} differs between targets",
-                        path.display(),
-                        columns[0]
-                    );
-                    // Only the classes every target gives it.
-                    seen.classes.retain(|one| classes.contains(one));
-                }
-                None => {
-                    rows.push(Row { name: columns[0].to_owned(), bits, root: columns[2].to_owned(), lane, classes })
-                }
-            }
-        }
-    }
-    // Each class any register has is a bit; a register's classes are the bits.
-    let mut names: Vec<&str> = rows.iter().flat_map(|row| row.classes.iter().map(String::as_str)).collect();
-    names.sort_unstable();
-    names.dedup();
-    let mut code = String::from("/// The classes the descriptions give registers, one bit each.\npub mod class {\n");
-    for (at, name) in names.iter().enumerate() {
-        code.push_str(&format!("    pub const {}: u32 = 1 << {at};\n", name.to_uppercase()));
-    }
-    code.push_str("}\n\n");
-    code.push_str(
-        "pub static TABLE: [Option<Entry>; 256] = {\n    let mut table: [Option<Entry>; 256] = [None; 256];\n",
-    );
-    for row in &rows {
-        let mask =
-            row.classes.iter().map(|one| format!("class::{}", one.to_uppercase())).collect::<Vec<_>>().join(" | ");
-        let mask = if mask.is_empty() { "0".to_owned() } else { mask };
-        code.push_str(&format!(
-            "    table[iced_x86::Register::{} as usize] = Some(Entry {{ name: {:?}, bits: {}, root: iced_x86::Register::{}, lane: {}, classes: {mask} }});\n",
-            row.name.to_uppercase(),
-            row.name,
-            row.bits,
-            row.root.to_uppercase(),
-            row.lane
-        ));
-    }
-    code.push_str("    table\n};\n\n");
-    // The view of each root at each width, first by iced's number: (root, bits,
-    // register).
-    code.push_str("/// Each register file entry at each width by its root, in the order the registers are numbered.\n");
-    code.push_str("pub static VIEWS: &[(iced_x86::Register, u32, iced_x86::Register)] = &[\n");
-    for row in &rows {
-        code.push_str(&format!(
-            "    (iced_x86::Register::{}, {}, iced_x86::Register::{}),\n",
-            row.root.to_uppercase(),
-            row.bits,
-            row.name.to_uppercase()
-        ));
-    }
-    code.push_str("];\n");
-    code
-}
-
-/// `positional(register)` for the registers whose class is `positional` in
-/// every target's `registers.regs`: a position in a stack, which no pass may
-/// rename or drop. The targets state the same set (checked here); iced names
-/// them.
-fn positional(targets: &[std::path::PathBuf]) -> String {
-    let mut sets: Vec<(String, Vec<String>)> = Vec::new();
-    for dir in targets {
-        let path = dir.join("src/registers.regs");
-        println!("cargo:rerun-if-changed={}", path.display());
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-        let names: Vec<String> = text
-            .lines()
-            .filter(|line| !line.trim_start().starts_with('#'))
-            .filter_map(|line| {
-                let columns: Vec<&str> = line.split_whitespace().collect();
-                columns
-                    .get(4)
-                    .filter(|classes| classes.split(',').any(|one| one == "positional"))
-                    .map(|_| columns[0].to_owned())
-            })
-            .collect();
-        sets.push((path.display().to_string(), names));
-    }
-    let (first, rest) = sets.split_first().expect("a target");
-    for other in rest {
-        assert_eq!(other.1, first.1, "{} and {} state different positional registers", other.0, first.0);
-    }
-    let names: Vec<String> =
-        first.1.iter().map(|name| format!("iced_x86::Register::{}", name.to_uppercase())).collect();
-    let test = if names.is_empty() { "false".to_owned() } else { format!("matches!(register, {})", names.join(" | ")) };
-    format!(
-        "/// Generated by build.rs from the targets' registers.regs.\npub fn positional(register: iced_x86::Register) -> bool {{\n    let _ = register;\n    {test}\n}}\n"
-    )
 }
 
 /// `peep::Rules`, `Rules::NONE` and the group names, from the list.

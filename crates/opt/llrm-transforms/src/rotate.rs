@@ -21,7 +21,8 @@
 
 use std::collections::BTreeSet;
 
-use llrm_analysis::graph::loops::{self, Loop};
+use llrm_analysis::cfg::Around;
+use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction;
 use llrm_analysis::manager::Registers;
 use llrm_analysis::ssa::SsaUpdater;
@@ -153,13 +154,11 @@ pub(crate) fn _shape(
     function: &Function,
     loop_: &Loop,
 ) -> Option<Shape> {
-    let graph = cfg::graph(function);
-    let predecessors = loops::predecessors(&graph);
-    let succ = |at: i64| graph.iter().find(|block| block.at == at).map(|block| block.succ.clone()).unwrap_or_default();
+    let succ = |at: i64| cfg::successors_of(function, at);
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
         return None;
     };
-    let [preheader] = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>()[..] else {
+    let [preheader] = loop_.entering(function).into_iter().collect::<Vec<_>>()[..] else {
         return None;
     };
     let header = cfg::block(loop_.header);
@@ -181,7 +180,9 @@ pub(crate) fn _shape(
     let ([first], [exit]) = (&inside[..], &outside[..]) else {
         return None;
     };
-    if predecessors[first] != BTreeSet::from([loop_.header]) || !_phis(function, cfg::block(*first)).is_empty() {
+    if cfg::predecessors_of(function, *first) != BTreeSet::from([loop_.header])
+        || !_phis(function, cfg::block(*first)).is_empty()
+    {
         return None;
     }
     let work = function

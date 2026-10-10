@@ -1,65 +1,64 @@
-//! The register file as the target description states it (`registers.regs`),
-//! asked through queries, as LLVM's generated `MCRegisterInfo` is: the width,
-//! root, lane, name and classes of a register, and the view of a root at a
-//! width. A `RegId` is iced's `Register` until the newtype (row 11).
+//! The bound target's register file, as its description states it
+//! (`registers.regs`) and the target generated it: queries on the `Info` the
+//! driver bound with the target's selector. A `RegId` is iced's `Register`
+//! until the newtype (row 11).
 
-pub type RegId = iced_x86::Register;
+use std::sync::OnceLock;
 
-/// One register of the file.
-#[derive(Clone, Copy, Debug)]
-pub struct Entry {
-    pub name: &'static str,
-    pub bits: u32,
-    pub root: RegId,
-    /// The bit offset inside the root.
-    pub lane: u32,
-    /// The classes every target gives it, as `class` bits.
-    pub classes: u32,
+pub use llrm_lir::registers::{Entry, Info, RegId, class};
+
+static BOUND: OnceLock<&'static Info> = OnceLock::new();
+
+/// Binds the register file of the target the driver builds for; the first
+/// binding stands. Targets that share a register file bind the same facts.
+pub fn bind(info: &'static Info) {
+    let _ = BOUND.set(info);
 }
 
-include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
+fn info() -> &'static Info {
+    #[cfg(test)]
+    return BOUND.get_or_init(|| &llrm_x86_m16::REGISTER_INFO);
+    #[cfg(not(test))]
+    BOUND.get().expect("no target's register file is bound: the driver binds it with the selector")
+}
 
-/// The file's entry for `register`, if the description lists it.
+/// The entry for `register`, if the description lists it.
 pub fn get(register: RegId) -> Option<&'static Entry> {
-    TABLE.get(register as usize).and_then(Option::as_ref)
+    info().get(register)
 }
 
 /// Whether the description lists `register`.
 pub fn known(register: RegId) -> bool {
-    get(register).is_some()
+    info().known(register)
 }
 
 /// The width of `register`, in bytes.
 pub fn bytes(register: RegId) -> Option<i64> {
-    get(register).map(|one| i64::from(one.bits / 8))
+    info().bytes(register)
 }
 
 /// The register `register` is a view of (itself for a root, and for one the
 /// description does not list).
 pub fn root(register: RegId) -> RegId {
-    get(register).map_or(register, |one| one.root)
+    info().root(register)
 }
 
 /// Which of a root's four bytes `register` names, one bit each: the lane mask.
 pub fn lanes(register: RegId) -> i64 {
-    get(register).map_or(0b1111, |one| {
-        let width = (one.bits / 8).min(4);
-        ((1_i64 << width) - 1) << (one.lane / 8)
-    })
+    info().lanes(register)
 }
 
 /// `register`'s own name, lowercase.
 pub fn name(register: RegId) -> Option<&'static str> {
-    get(register).map(|one| one.name)
+    info().name(register)
 }
 
-/// Whether the description gives `register` every class in `mask` (`class`
-/// bits) in every target that lists it.
+/// Whether the description gives `register` every class in `mask`.
 pub fn in_class(
     register: RegId,
     mask: u32,
 ) -> bool {
-    get(register).is_some_and(|one| one.classes & mask == mask)
+    info().in_class(register, mask)
 }
 
 /// The register of `root` that is `bits` wide: the first by iced's number where
@@ -68,11 +67,12 @@ pub fn view(
     root: RegId,
     bits: u32,
 ) -> Option<RegId> {
-    VIEWS
-        .iter()
-        .filter(|(of, width, _)| *of == root && *width == bits)
-        .map(|(_, _, one)| *one)
-        .min_by_key(|one| *one as usize)
+    info().view(root, bits)
+}
+
+/// Every integer register by `bytes` wide, by iced's number.
+pub fn entries() -> impl Iterator<Item = (RegId, &'static Entry)> {
+    info().entries()
 }
 
 #[cfg(test)]

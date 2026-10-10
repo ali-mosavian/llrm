@@ -1397,6 +1397,19 @@ impl ModuleAnalyses {
         Rc::clone(self.outer.as_ref().expect("set above"))
     }
 
+    /// `outer`, without reading the module again where nothing was dropped
+    /// since: for a caller that asks again and again between changes (a
+    /// decision per call site) and so pays the module's size for each.
+    pub fn outer_held(
+        &mut self,
+        module: &Module,
+    ) -> Rc<Outer> {
+        match &self.outer {
+            Some(held) if self.dropped.is_empty() => Rc::clone(held),
+            _ => self.outer(module),
+        }
+    }
+
     /// The held results among `kept` a fresh computation disagrees with.
     fn stale(
         &self,

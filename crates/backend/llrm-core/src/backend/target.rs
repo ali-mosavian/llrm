@@ -174,14 +174,13 @@ pub static BYTE: LazyLock<PySet<Register>> = LazyLock::new(|| integer_of(1).into
 
 /// The integer registers `bytes` wide, by iced's number.
 fn integer_of(bytes: i64) -> Vec<Register> {
-    registerinfo::TABLE
-        .iter()
-        .enumerate()
-        .filter(|(_, one)| {
-            one.is_some_and(|one| one.classes & registerinfo::class::INT != 0 && i64::from(one.bits / 8) == bytes)
-        })
-        .filter_map(|(at, _)| Register::values().find(|one| *one as usize == at))
-        .collect()
+    let mut found: Vec<Register> = registerinfo::entries()
+        .filter(|(_, one)| one.classes & registerinfo::class::INT != 0 && i64::from(one.bits / 8) == bytes)
+        .map(|(register, _)| register)
+        .collect();
+    found.sort_by_key(|one| *one as usize);
+    found.dedup();
+    found
 }
 
 /// Every integer register (the 8, 16 and 32-bit views), wide ones first, each
@@ -346,7 +345,11 @@ pub fn far_load(what: &Semantics) -> bool {
         && what.dests.len() == 2
 }
 
-include!(concat!(env!("OUT_DIR"), "/positional.rs"));
+/// Whether the register is a position in a stack, where an exchange is an
+/// effect and no pass may rename or drop it: the description's class.
+pub fn positional(register: Register) -> bool {
+    crate::backend::registerinfo::in_class(register, crate::backend::registerinfo::class::POSITIONAL)
+}
 
 /// Whether the operand is a positional register.
 pub fn positional_place(place: &Loc) -> bool {

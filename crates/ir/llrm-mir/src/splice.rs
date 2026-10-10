@@ -37,13 +37,13 @@ fn phis(
 }
 
 /// `call`, a call to `callee`, replaced by a copy of its body, which
-/// `carries`.
+/// `carries`. The instructions of the copy, in the order of the body's.
 pub fn splice(
     context: &mut Context,
     function: &mut Function,
     call: InstId,
     callee: &Function,
-) {
+) -> Vec<InstId> {
     let void = context.types.void();
     let block = function.parent(call).expect("a placed call");
     let instructions = function.block(block).instructions().to_vec();
@@ -114,6 +114,7 @@ pub fn splice(
         Operand::Block(one) => Operand::Block(blocks[&one]),
         constant => constant,
     };
+    let copies: Vec<InstId> = made.iter().map(|&(copy, _)| copy).collect();
     for (copy, inst) in made {
         let operands = callee.instruction(inst).operands.iter().map(|&operand| mapped(operand)).collect();
         function.set_operands(copy, operands);
@@ -138,4 +139,5 @@ pub fn splice(
         function.replace_all_uses_with(result, with);
     }
     function.erase(call).expect("its uses were replaced");
+    copies
 }
