@@ -854,9 +854,15 @@ pub fn bounds<'u>(unit: &Unit<'u>) -> Result<std::borrow::Cow<'u, Bounds>, Strin
     let registers = unit.registers();
     match (unit.bounds, unit.registers) {
         (Some(held), Some(carried)) if std::ptr::eq(&*registers, carried) => {
-            if unit.loop_intervals && llrm_support::env_set("LLRM_CHECK_REPLAY") {
+            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
+                // The body's own intervals, or at a level without them (-O1:
+                // `Outer::loop_intervals`) none: a unit made for alias carries
+                // none there, one made for an induction variable's range the
+                // body's.
+                let facts = held.facts();
                 assert!(
-                    held.facts() == bounded_with(&Unit { bounds: None, ..*unit }, &registers)?,
+                    (!unit.loop_intervals && facts.is_empty())
+                        || facts == bounded_with(&Unit { bounds: None, ..*unit }, &registers)?,
                     "the bounds a unit carries are not those of the body it stands over: stale"
                 );
             }

@@ -566,11 +566,13 @@ pub struct PreservedAnalyses {
     kept: HashSet<TypeId>,
     /// The function itself unchanged, whatever else did.
     function: bool,
+    /// Analyses given up though the rest stand (`except`).
+    dropped: HashSet<TypeId>,
 }
 
 impl PreservedAnalyses {
     pub fn all() -> Self {
-        Self { all: true, kept: HashSet::default(), function: true }
+        Self { all: true, kept: HashSet::default(), function: true, dropped: HashSet::default() }
     }
 
     pub fn none() -> Self {
@@ -581,6 +583,15 @@ impl PreservedAnalyses {
     /// every analysis reading only the function.
     pub fn function() -> Self {
         Self { function: true, ..Self::default() }
+    }
+
+    /// `self` without `A`: for a pass that changed what only a few analyses
+    /// read (hoist moved instructions, which the dominated edges of the
+    /// values moved follow), so that those go and the rest stand.
+    #[must_use]
+    pub fn except<A: Analysis>(mut self) -> Self {
+        self.dropped.insert(TypeId::of::<A>());
+        self
     }
 
     pub fn preserve<A: Analysis>(mut self) -> Self {
@@ -607,7 +618,7 @@ impl PreservedAnalyses {
 
     /// Whether the pass changed nothing: LLVM's `areAllPreserved`.
     pub fn are_all_preserved(&self) -> bool {
-        self.all
+        self.all && self.dropped.is_empty()
     }
 
     /// Whether `A` is kept, named or with everything.
@@ -768,7 +779,7 @@ impl<A: Analysis> Cached for Entry<A> {
         &self,
         preserved: &PreservedAnalyses,
     ) -> bool {
-        A::preserved(preserved)
+        !preserved.dropped.contains(&TypeId::of::<A>()) && A::preserved(preserved)
     }
 
     fn incremental(&self) -> bool {

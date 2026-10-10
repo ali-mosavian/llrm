@@ -111,12 +111,17 @@ pub fn hoisted(
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
         // The intervals of the loops, asked once a loop has been moved out of:
-        // the edges they stand on were found with the instructions
-        // where they were, so what this pass held is let go first
-        // (`LLRM_CHECK_REPLAY`).
+        // the edges they stand on follow where a value is defined, so
+        // those and what is made of them are let go first and the rest
+        // stands (`LLRM_CHECK_REPLAY`, `LLRM_CHECK_UNREPORTED`).
         let mut bounds = || {
             if moved && !asked_after_moving {
-                analyses.invalidate(unit.function, &PreservedAnalyses::none());
+                analyses.invalidate(
+                    unit.function,
+                    &PreservedAnalyses::all()
+                        .except::<llrm_analysis::manager::DominatedEdges>()
+                        .except::<llrm_analysis::manager::Bounded>(),
+                );
             }
             asked_after_moving = moved;
             analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function)
