@@ -198,8 +198,10 @@ pub fn assembled_by(
                 let body = timed("lir shrink-wrap tails", || {
                     crate::backend::shrinkwrap::tails_split(&procedure.body, &|candidate| {
                         // Asked only once a tail could be copied.
-                        if *enough
-                            .get_or_init(|| masm::pieces_to_set_up(&procedure) >= crate::backend::shrinkwrap::PIECES)
+                        if !procedure.size
+                            && *enough.get_or_init(|| {
+                                masm::pieces_to_set_up(&procedure) >= crate::backend::shrinkwrap::PIECES
+                            })
                         {
                             masm::wrapped_pieces(&procedure, candidate)
                         } else {

@@ -202,18 +202,31 @@ pub fn wrapped(
         }
     }
     // The frame register addresses the cells and the arguments from the frame's
-    // set-up on: no register is set up above it, so the frame stays at the
-    // entry when one is.
-    if let Some(&at) = homes.get(&Piece::Frame) {
-        let above_it = pieces
-            .iter()
-            .any(
-                |piece| *piece != Piece::Frame
-                    && !uses[piece].is_empty()
-                    && homes.get(piece).is_none_or(|home| !from_entry.dominates(at, *home)),
-            );
-        if above_it {
-            homes.remove(&Piece::Frame);
+    // set-up on: no register is set up above it, so the frame comes up to the
+    // block above the homes of the registers (the entry, when one is set up
+    // there or not wrapped, where it stays).
+    if homes.contains_key(&Piece::Frame) {
+        let mut blocks = uses[&Piece::Frame].clone();
+        let mut entry_use = false;
+        for piece in &pieces {
+            if *piece == Piece::Frame || uses[piece].is_empty() {
+                continue;
+            }
+            match homes.get(piece) {
+                Some(&home) => blocks.push(home),
+                None => entry_use = true,
+            }
+        }
+        let lifted = if entry_use { None } else { home_of(&blocks) };
+        match lifted {
+            Some(home)
+                if returns.iter().any(|&at| !from_entry.dominates(home, at)) && closed_at(home, true).is_some() =>
+            {
+                homes.insert(Piece::Frame, home);
+            }
+            _ => {
+                homes.remove(&Piece::Frame);
+            }
         }
     }
     if homes.is_empty() {
@@ -282,7 +295,7 @@ pub fn tails_split(
                 || !returns
                 || !tail.phis.is_empty()
                 || copied > budget
-                || tail.insns.iter().any(|one| one.arrival() || one.line.is_some())
+                || tail.insns.iter().any(|one| one.arrival())
             {
                 continue;
             }
