@@ -89,8 +89,7 @@ pub fn parse_corpus_entry(
 /// derived once for the body a test built, which no manager has seen. (Kept for
 /// the life of the test run.)
 pub fn with_registers(unit: crate::memory::Unit<'_>) -> crate::memory::Unit<'_> {
-    let known =
-        Box::leak(Box::new(crate::consts::known(&crate::memory::Unit { registers: None, ..unit }, None, None, None)));
+    let known = Box::leak(Box::new(crate::consts::known(&crate::memory::Unit { registers: None, ..unit })));
     let shape = Box::leak(Box::new(crate::cfg::Shape::of(unit.function)));
     unit.with_registers(known).with_shape(shape)
 }

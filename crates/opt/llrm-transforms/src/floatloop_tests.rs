@@ -58,7 +58,7 @@ fn specialize(body: &str) -> (bool, String) {
         let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(
             context, &layout, function, &outer,
         ));
-        llrm_analysis::floatfacts::solved_with(&unit, &calls, None)
+        llrm_analysis::floatfacts::solved_with(&unit, &calls)
     };
     let changed = specialized(context, &layout, &callees, function, &outer, &calls, &solved);
     assert_eq!(results(&module, &[&[]]), before, "{body}");

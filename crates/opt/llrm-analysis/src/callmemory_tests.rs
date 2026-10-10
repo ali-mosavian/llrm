@@ -4,7 +4,7 @@
 
 use llrm_mir::passes::Outer;
 
-use crate::consts::{Calls, Known, known};
+use crate::consts::{Calls, Known, known_walked};
 use crate::manager::call_effects;
 use crate::memory::Unit;
 use crate::testing::{DOS, function, layout, parsed, value};
@@ -36,7 +36,7 @@ b0:
     let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
     let calls: Calls =
         call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
-    known(&unit, Some(&calls), None, None).get(&value(f, "r")).cloned()
+    known_walked(&unit, &calls).get(&value(f, "r")).cloned()
 }
 
 fn seven() -> Option<Known> {

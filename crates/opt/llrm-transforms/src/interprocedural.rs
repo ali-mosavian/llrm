@@ -1412,6 +1412,7 @@ pub fn optimized_with<E: From<String>>(
     // early passes have made them: a body with two calls would be a tree,
     // not a chain.
     if let Some(budget) = threshold.recursive_budget(reach).filter(|_| !threshold.single) {
+        let mut unit = inline::UnitSize::of(&program.modules);
         for at in 0..count {
             for &id in &procedures[at] {
                 let module = &mut program.modules[at];
@@ -1422,6 +1423,24 @@ pub fn optimized_with<E: From<String>>(
                 {
                     continue;
                 }
+                // gcc inlines the callee's body as it was into the callers that
+                // are not it, before the callee is given copies
+                // of itself (`inline::peeled_into`).
+                let callers: Vec<GlobalId> = procedures[at].iter().copied().filter(|&one| one != id).collect();
+                for one in callers {
+                    let module = &mut program.modules[at];
+                    if !module.global(one).function().is_some_and(|body| {
+                        body.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, body, inst) == Some(id))
+                    }) {
+                        continue;
+                    }
+                    let (context, body) = function_mut(module, one);
+                    if inline::peeled_into(id, body, &original, budget, context, &mut unit) > 0 {
+                        edited(&mut modules[at], &[one]);
+                        reoptimised(&mut program.modules[at], &mut modules[at], one, "ipa-peel.")?;
+                    }
+                }
+                let module = &mut program.modules[at];
                 let mut work = original.clone();
                 let (metadata, globals) =
                     (module.metadata.clone(), module.globals.iter().map(GlobalValue::declaration).collect::<Vec<_>>());
@@ -1434,6 +1453,7 @@ pub fn optimized_with<E: From<String>>(
                         crate::profit::_frequencies(context, &metadata, &globals, function, None).unwrap_or_default()
                     },
                     &mut module.context,
+                    &mut unit,
                 );
                 if made == 0 {
                     continue;
@@ -1628,12 +1648,8 @@ pub fn stamped(
             let shape = Shape::of(function);
             // Found once for the function, not for each loop: the proofs of
             // every loop ask the same.
-            let registers = llrm_analysis::consts::known(
-                &unit_of(module, layout, function).with_spaces(program.target.spaces()),
-                None,
-                None,
-                None,
-            );
+            let registers =
+                llrm_analysis::consts::known(&unit_of(module, layout, function).with_spaces(program.target.spaces()));
             let proofs = |one| {
                 llrm_analysis::induction::counted(
                     &unit_of(module, layout, function)

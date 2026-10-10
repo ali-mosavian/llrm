@@ -189,7 +189,7 @@ def test_loopmotion_and_the_cells_it_asks_stay_linear_in_the_loops_of_one_functi
         source.write_text("" if size == 0 else scaling.branches(size))
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     grown = {}
-    for step in ("mir loopmotion", "analysis memory-cells"):
+    for step in ("mir loopmotion",):
         small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
         if big > 2.6 * small + 5.0:
             grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
@@ -678,6 +678,18 @@ def test_two_address_asks_interference_of_the_values_it_compares_not_of_every_pa
     assert cost <= 400, cost
 
 
+def test_a_load_is_served_by_the_stores_that_reach_it_not_by_a_cell_map_met_at_every_join(tmp_path):
+    """`analysis through-memory` kept the cells of memory as one map per block and met the predecessors' maps at each join: on `joins` at
+    N=256 (N cells known, N joins, four functions) 11,285 Minstr, 3.8x a doubling, and 46 G of GORILLA.BAS's 75 G (17 s at -O1). Served
+    by the stores MemorySSA says reach each load it reads 964. More than 2,000 fails."""
+    source = tmp_path / "joins_256.c"
+    source.write_text(scaling.AXES["joins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis through-memory"]
+    assert cost <= 2000, cost
+
+
+
+
 def test_a_spill_reads_the_instructions_that_name_a_home_and_its_copies_from_the_postings_on_the_cells_axis(tmp_path):
     """`spill color slots` rebuilt, at every spill, a pair of sets for each instruction that names a home and walked every
     instruction of the body for the copies of the value: on `cells` at N=1024 that was 4,590 Minstr (slope 2.2).
@@ -706,3 +718,23 @@ def test_homes_walks_the_live_sets_once_for_all_its_candidates_not_once_for_each
     source.write_text(scaling.AXES["joins"](128))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir homes"]
     assert cost <= 800, cost
+
+
+def test_a_branch_is_decided_from_the_walk_not_from_a_cell_map_met_at_every_join(tmp_path):
+    """`mir decide` solved memory with the dense per-block cell map for the facts its branches are read from: on `joins` at N=256 11,636
+    Minstr, 3.8x a doubling, the same quadratic through-memory had. Read from the stores MemorySSA says reach each load it is 1,380.
+    More than 3,000 fails."""
+    source = tmp_path / "joins_256.c"
+    source.write_text(scaling.AXES["joins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir decide"]
+    assert cost <= 3000, cost
+
+
+def test_a_float_load_is_read_from_the_walk_not_from_a_cell_map_met_at_every_join(tmp_path):
+    """`analysis float-facts` solved the memory the floats are read from with the dense per-block cell map beside the integers': on
+    `fjoins` at N=256 (N float cells known, N joins, four functions) 3,638 Minstr, 3.3x a doubling. Each float load read from the stores
+    MemorySSA says reach it is 986. More than 1,500 fails."""
+    source = tmp_path / "fjoins_256.c"
+    source.write_text(scaling.AXES["fjoins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis float-facts"]
+    assert cost <= 1500, cost

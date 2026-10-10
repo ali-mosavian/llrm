@@ -115,12 +115,7 @@ pub fn optimized(
     // condition changed it.
     let fresh;
     let registers = if equal {
-        fresh = llrm_analysis::consts::known(
-            &memory::Unit::within(unit.context, unit.layout, unit.function, outer),
-            None,
-            None,
-            None,
-        );
+        fresh = llrm_analysis::consts::known(&memory::Unit::within(unit.context, unit.layout, unit.function, outer));
         &fresh
     } else {
         registers
