@@ -362,16 +362,23 @@ pub fn place_operand(
         return _scaled_operand(what, bits);
     }
     let Some(addr) = addr else {
+        // Flat code reaches the stack and frame through their 32-bit registers:
+        // `[sp]` has no encoding there, and the stack token names the word one.
+        let through = match what.through {
+            Register::SP if bits == 32 => Register::ESP,
+            Register::BP if bits == 32 => Register::EBP,
+            other => other,
+        };
         // Encodable where it is reached through a register.
-        if [Register::SI, Register::DI, Register::BX, Register::BP].contains(&what.through)
-            || (bits == 32 && width_of(what.through) == Some(4))
+        if [Register::SI, Register::DI, Register::BX, Register::BP].contains(&through)
+            || (bits == 32 && width_of(through) == Some(4))
         {
             let wide = if what.disp_width != 0 {
                 displacement_in(what.disp_width, bits)
             } else {
-                _displacement_size(what.through, Register::None, what.offset, bits)
+                _displacement_size(through, Register::None, what.offset, bits)
             };
-            return Some((memory_operand(what.through, Register::None, 1, what.offset, wide, Register::None), false));
+            return Some((memory_operand(through, Register::None, 1, what.offset, wide, Register::None), false));
         }
         return None;
     };
