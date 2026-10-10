@@ -1,4 +1,4 @@
-;; name: B$MOVE, B$FILL
+;; name: B$MOVE, B$FILL, B$COPY
 ;; desc: string moves by dwords
 ;;
 ;; args: eax:ptr BlockOp | dst, src: bytes forward; or by bytes if `value` is not 0 (an EGA latch copy holds one
@@ -14,6 +14,7 @@
 
                 public  B$MOVE
                 public  B$FILL
+                public  B$COPY
 
 BlockOp         struc
                 dst             dword   ?
@@ -77,4 +78,26 @@ B$FILL          proc
                 pop     ecx
                 ret
 B$FILL          endp
+;;::::::::::::::
+;; B$COPY (eax: to, edx: from, ebx: count)
+;; the bytes forward, dwords and then what is left; ecx, edx, esi and edi are kept
+B$COPY          proc
+
+                push    ecx
+                push    esi
+                push    edi
+                mov     edi, eax
+                mov     esi, edx
+                mov     ecx, ebx
+                cld
+                shr     ecx, 2
+                rep     movsd
+                mov     ecx, ebx
+                and     ecx, 3
+                rep     movsb
+                pop     edi
+                pop     esi
+                pop     ecx
+                ret
+B$COPY          endp
                 end

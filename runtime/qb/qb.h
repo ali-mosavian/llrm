@@ -36,11 +36,10 @@ enum {
     FE_CORRUPT = 0x9000, FE_NOSTACK = 0x9007
 };
 
-static void copy_bytes(char *to, const char *from, unsigned n)
-{
-    while (n--)
-        *to++ = *from++;
-}
+/* `n` bytes copied forward, a word at a time (the target's block.asm); where the regions overlap, `to` is below
+   `from`. */
+void copy_bytes(char *to, const char *from, unsigned n);
+#pragma aux copy_bytes "B$COPY"
 
 /* error.c: raise run-time error `n`.  It does not return: control goes to the
    ON ERROR handler, or the program ends. */

@@ -6,9 +6,25 @@
    */
 void str_assign(SD *source, SD *destination)
 {
-    if (!str_is_tmp(source))
-        source = str_tmp_copy(source, 0, source->len);
-    str_adopt(destination, source);
+    if (str_is_tmp(source)) {
+        str_adopt(destination, source);
+        return;
+    }
+    /* Copied straight into the destination, which gives up its own string first: a temporary between
+       would be one more allocation and copy. */
+    if (source != destination) {
+        uword len = source->len;
+
+        str_release(destination);
+        if (len == 0) {
+            destination->len = 0;
+            destination->ptr = str_nul.ptr;
+        } else {
+            char *data = str_alloc(destination, len);
+
+            copy_bytes(data, source->ptr, len);
+        }
+    }
 }
 
 /* B$SASS: LET a$ = b$ */

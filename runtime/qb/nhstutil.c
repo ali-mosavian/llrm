@@ -32,93 +32,51 @@ static void corrupt(void)
     qb_error(FE_CORRUPT);
 }
 
+/* The entry helpers are macros: each is a line or two, and a call costs more than they do on every string. */
+
 /* A string takes whole words, so the entries (and the owner pointers in their headers) stay aligned. */
-static uword even(uword n)
-{
-    return (n + WORD - 1) & ~(uword)(WORD - 1);
-}
-
-static int is_free(const StrEntry *entry)
-{
-    return entry->header & 1;
-}
-
-static uword free_data(const StrEntry *entry)
-{
-    return entry->header - 1;
-}
-
-static SD *owner_of(const StrEntry *entry)
-{
-    return (SD *)entry->header;
-}
-
-static char *data_of(StrEntry *entry)
-{
-    return (char *)(entry + 1);
-}
-
-static StrEntry *entry_of(const char *data)
-{
-    return (StrEntry *)data - 1;
-}
-
-static uword entry_bytes(const StrEntry *entry)
-{
-    uword data = is_free(entry) ? free_data(entry) : even(owner_of(entry)->len);
-
-    return WORD + data;
-}
-
-static StrEntry *following(const StrEntry *entry)
-{
-    return (StrEntry *)((char *)entry + entry_bytes(entry));
-}
-
-static int at_end(const StrEntry *entry)
-{
-    return (char *)entry >= str_end;
-}
-
-static void make_free(StrEntry *entry, uword bytes)
-{
-    entry->header = bytes - WORD + 1;
-}
+#define EVEN(n) (((n) + WORD - 1) & ~(uword)(WORD - 1))
+#define IS_FREE(entry) ((entry)->header & 1)
+#define FREE_DATA(entry) ((entry)->header - 1)
+#define OWNER_OF(entry) ((SD *)(entry)->header)
+#define DATA_OF(entry) ((char *)((entry) + 1))
+#define ENTRY_OF(data) ((StrEntry *)(data) - 1)
+#define ENTRY_BYTES(entry) (WORD + (IS_FREE(entry) ? FREE_DATA(entry) : EVEN(OWNER_OF(entry)->len)))
+#define FOLLOWING(entry) ((StrEntry *)((char *)(entry) + ENTRY_BYTES(entry)))
+#define AT_END(entry) ((char *)(entry) >= str_end)
+#define MAKE_FREE(entry, bytes) ((entry)->header = (bytes) - WORD + 1)
 
 /* A string of `len` bytes is in string space when its data is between the
    constants and the boundary. */
-static int in_space(const SD *sd)
-{
-    return sd->len && sd->ptr >= (char *)str_first && sd->ptr < str_end;
-}
+#define IN_SPACE(sd) ((sd)->len && (sd)->ptr >= (char *)str_first && (sd)->ptr < str_end)
 
-static void check_owner(const StrEntry *entry, const SD *owner)
-{
-    if (owner_of(entry) != owner || owner->ptr != (char *)(entry + 1))
-        corrupt();
-}
+#define CHECK_OWNER(entry, owner) \
+    do { \
+        if (OWNER_OF(entry) != (owner) || (owner)->ptr != (char *)((entry) + 1)) \
+            corrupt(); \
+    } while (0)
 
 /* B$STSetFree: the hint is kept only if it names the free entry that ends
    string space. */
 static void set_hint(void)
 {
-    if (at_end(str_free) || !is_free(str_free) || !at_end(following(str_free)))
+    if (AT_END(str_free) || !IS_FREE(str_free) || !AT_END(FOLLOWING(str_free)))
         str_free = (StrEntry *)str_end;
 }
 
 /* Takes `bytes` for `owner` from free `entry`, leaving the rest free. */
 static char *take(StrEntry *entry, uword bytes, SD *owner)
 {
-    uword have = entry_bytes(entry);
+    uword have = ENTRY_BYTES(entry);
 
     if (have > bytes) {
-        make_free((StrEntry *)((char *)entry + bytes), have - bytes);
+        MAKE_FREE((StrEntry *)((char *)entry + bytes), have - bytes);
         str_free = (StrEntry *)((char *)entry + bytes);
     } else {
-        str_free = following(entry);
+        str_free = FOLLOWING(entry);
     }
     entry->header = (uword)owner;
-    return data_of(entry);
+    return DATA_OF(entry);
 }
 
 /* First fit from `from` up to `limit`, joining free neighbours as it goes
@@ -127,17 +85,17 @@ static StrEntry *scan(StrEntry *from, StrEntry *limit, uword bytes)
 {
     StrEntry *entry = from, *after;
 
-    while (entry <= limit && !at_end(entry)) {
-        if (is_free(entry)) {
-            after = following(entry);
-            while (!at_end(after) && is_free(after)) {
-                make_free(entry, entry_bytes(entry) + entry_bytes(after));
-                after = following(entry);
+    while (entry <= limit && !AT_END(entry)) {
+        if (IS_FREE(entry)) {
+            after = FOLLOWING(entry);
+            while (!AT_END(after) && IS_FREE(after)) {
+                MAKE_FREE(entry, ENTRY_BYTES(entry) + ENTRY_BYTES(after));
+                after = FOLLOWING(entry);
             }
-            if (entry_bytes(entry) >= bytes)
+            if (ENTRY_BYTES(entry) >= bytes)
                 return entry;
         }
-        entry = following(entry);
+        entry = FOLLOWING(entry);
     }
     return NULL;
 }
@@ -155,7 +113,7 @@ static StrEntry *fit(uword bytes)
 uword str_free_bytes(void)
 {
     str_compact();
-    return at_end(str_free) ? 0 : free_data(str_free);
+    return AT_END(str_free) ? 0 : FREE_DATA(str_free);
 }
 
 /* B$STCPCT: slide every string down over the free entries, so the free room is
@@ -164,24 +122,24 @@ void str_compact(void)
 {
     StrEntry *to = str_first, *entry = str_first;
 
-    while (!at_end(entry)) {
-        uword bytes = entry_bytes(entry), i;
+    while (!AT_END(entry)) {
+        uword bytes = ENTRY_BYTES(entry), i;
         StrEntry *after = (StrEntry *)((char *)entry + bytes);
 
-        if (!is_free(entry)) {
-            SD *owner = owner_of(entry);
+        if (!IS_FREE(entry)) {
+            SD *owner = OWNER_OF(entry);
 
-            check_owner(entry, owner);
+            CHECK_OWNER(entry, owner);
             if (to != entry)
                 for (i = 0; i < bytes; i += WORD)
                     *(uword *)((char *)to + i) = *(uword *)((char *)entry + i);
-            owner->ptr = data_of(to);
+            owner->ptr = DATA_OF(to);
             to = (StrEntry *)((char *)to + bytes);
         }
         entry = after;
     }
     if ((char *)to != str_end)
-        make_free(to, str_end - (char *)to);
+        MAKE_FREE(to, str_end - (char *)to);
     str_free = to;
 }
 
@@ -192,9 +150,9 @@ uword str_give_tail(void)
     uword room;
 
     set_hint();
-    if (at_end(str_free))
+    if (AT_END(str_free))
         return 0;
-    room = entry_bytes(str_free);
+    room = ENTRY_BYTES(str_free);
     str_end = (char *)str_free;
     str_free = (StrEntry *)str_end;
     return room;
@@ -206,11 +164,11 @@ void str_take(uword bytes)
     if (!bytes)
         return;
     set_hint();
-    if (at_end(str_free)) {
+    if (AT_END(str_free)) {
         str_free = (StrEntry *)str_end;
-        make_free(str_free, bytes);
+        MAKE_FREE(str_free, bytes);
     } else {
-        make_free(str_free, entry_bytes(str_free) + bytes);
+        MAKE_FREE(str_free, ENTRY_BYTES(str_free) + bytes);
     }
     str_end += bytes;
 }
@@ -220,12 +178,15 @@ void str_take(uword bytes)
    space if there is still none. */
 char *str_alloc(SD *owner, uword len)
 {
-    uword bytes = WORD + even(len);
-    StrEntry *entry;
+    uword bytes = WORD + EVEN(len);
+    StrEntry *entry = str_free;
 
     if (len > SD_MAX_LENGTH)
-        qb_error(BE_STRINGSP);
+        goto none;
     owner->len = len;
+    /* The usual case: the hint is a free entry with room. */
+    if (!AT_END(entry) && IS_FREE(entry) && WORD + FREE_DATA(entry) >= bytes)
+        goto found;
     entry = fit(bytes);
     if (!entry) {
         lh_give_free_to_strings();
@@ -236,26 +197,35 @@ char *str_alloc(SD *owner, uword len)
         entry = fit(bytes);
     }
     if (!entry)
-        qb_error(BE_STRINGSP);
+        goto none;
+found:
     owner->ptr = take(entry, bytes, owner);
     return owner->ptr;
+none:
+    /* The descriptor holds no string, so nothing later frees what is not there. */
+    owner->len = 0;
+    owner->ptr = &nul_owner_slot;
+    qb_error(BE_STRINGSP);
+    return NULL;
 }
 
 void str_release(SD *owner)
 {
     StrEntry *entry;
+    uword bytes;
 
-    if (!in_space(owner))
+    if (!IN_SPACE(owner))
         return;
-    entry = entry_of(owner->ptr);
-    check_owner(entry, owner);
-    make_free(entry, entry_bytes(entry));
+    entry = ENTRY_OF(owner->ptr);
+    CHECK_OWNER(entry, owner);
+    bytes = WORD + EVEN(owner->len);
+    MAKE_FREE(entry, bytes);
 }
 
 void str_owner_moved(SD *owner, int delta)
 {
-    if (in_space(owner))
-        entry_of(owner->ptr)->header += delta;
+    if (IN_SPACE(owner))
+        ENTRY_OF(owner->ptr)->header += delta;
 }
 
 static Tmp *as_tmp(SD *sd)
@@ -290,7 +260,7 @@ void str_adopt(SD *to, SD *from)
     str_release(to);
     *to = *from;
     if (to->len)
-        entry_of(to->ptr)->header = (uword)to;
+        ENTRY_OF(to->ptr)->header = (uword)to;
     if (str_is_tmp(from))
         tmp_release(as_tmp(from));
 }
@@ -352,7 +322,7 @@ void str_init(char *first, char *end)
 
     str_first = str_free = (StrEntry *)first;
     str_end = end;
-    make_free(str_first, end - first);
+    MAKE_FREE(str_first, end - first);
     cur_level = 0;
     str_nul.len = 0;
     str_nul.ptr = &nul_owner_slot;
