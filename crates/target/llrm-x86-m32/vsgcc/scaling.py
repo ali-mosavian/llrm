@@ -153,7 +153,27 @@ def joins(n: int) -> str:
     return "".join(out)
 
 
-AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins}
+def fjoins(n: int) -> str:
+    """`joins` in floats: four functions, each with N static float cells all known after N stores and N if/else joins that store one and
+    add another, so the float facts meet N held cells at each join. A float load was read from the dense cell map float-facts solved
+    beside the integers' (GORILLA.BAS: 6.5 % of its -O1 compile)."""
+    out = [PRELUDE_C]
+    for f in range(4):
+        out.append(f"static float c{f}[{n}];\nfloat fn{f}(unsigned a, float x) {{\n")
+        out.append("".join(f"    c{f}[{k}] = {k + 1}.5f;\n" for k in range(n)))
+        out.append(
+            "".join(
+                f"    if ((a >> {k % 7}) & 1u) {{ c{f}[{(k * 3) % n}] = {k + 5}.25f; }} else {{ x += c{f}[{(k * 5 + 1) % n}]; }}\n"
+                for k in range(n)
+            )
+        )
+        out.append(f"    return x + c{f}[{n - 1}];\n}}\n")
+    calls = " + ".join(f"fn{f}(3u, 1.0f)" for f in range(4))
+    out.append(_main("fjoins", f"    return (long)({calls});\n"))
+    return "".join(out)
+
+
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins, "fjoins": fjoins}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------

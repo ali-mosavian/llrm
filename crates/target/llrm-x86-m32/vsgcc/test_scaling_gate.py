@@ -728,3 +728,13 @@ def test_a_branch_is_decided_from_the_walk_not_from_a_cell_map_met_at_every_join
     source.write_text(scaling.AXES["joins"](256))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir decide"]
     assert cost <= 3000, cost
+
+
+def test_a_float_load_is_read_from_the_walk_not_from_a_cell_map_met_at_every_join(tmp_path):
+    """`analysis float-facts` solved the memory the floats are read from with the dense per-block cell map beside the integers': on
+    `fjoins` at N=256 (N float cells known, N joins, four functions) 3,638 Minstr, 3.3x a doubling. Each float load read from the stores
+    MemorySSA says reach it is 986. More than 1,500 fails."""
+    source = tmp_path / "fjoins_256.c"
+    source.write_text(scaling.AXES["fjoins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis float-facts"]
+    assert cost <= 1500, cost
