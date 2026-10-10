@@ -774,10 +774,13 @@ impl Run {
             );
         }
         if preserved.are_all_preserved() {
+            // Every result stands, as the body is now (it may have edited and
+            // put back).
+            analyses.invalidate(unit.function, &preserved);
             return false;
         }
         llrm_mir::passes::note_pass(pass.name());
-        llrm_mir::passes::spanned("invalidate", || analyses.invalidate(&preserved));
+        llrm_mir::passes::spanned("invalidate", || analyses.invalidate(unit.function, &preserved));
         analyses.check_kept(pass.name(), unit.context, unit.layout, unit.function);
         self.changed(stage, unit, analyses);
         true
@@ -790,7 +793,7 @@ impl Run {
         analyses: &mut Analyses,
     ) {
         if cfg::_unreachable(unit.context, unit.function) {
-            analyses.invalidate(&PreservedAnalyses::none());
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
             self.changed("unreachable", unit, analyses);
         }
     }
