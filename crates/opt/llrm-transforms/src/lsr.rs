@@ -248,6 +248,9 @@ pub fn reduced(
     };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
+    // Every instruction's traffic, added up once for the function as it stands:
+    // each loop takes its own instructions out of it.
+    let mut traffic = None::<std::rc::Rc<spill::TrafficBase>>;
     // What is known of the function is the manager's, kept until a loop is
     // changed (and then it is `applied` that declares nothing kept).
     loop {
@@ -264,7 +267,7 @@ pub fn reduced(
             let pressure = analyses.get::<spill::Pressure>(unit.context, unit.layout, unit.function);
             let (context, layout, function) = (&*unit.context, unit.layout, &*unit.function);
             let mut products = || analyses.get::<Products>(context, layout, function);
-            _plan(&view, outer, &loop_, &target, &pressure, &mut products)
+            _plan(&view, outer, &loop_, &target, &pressure, &mut products, &mut traffic)
         };
         let Some(plan) = plan else { continue };
         // A loop with another way out was never counted before: its choice is
@@ -282,6 +285,7 @@ pub fn reduced(
             done.insert(cfg::id(first));
         }
         analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        traffic = None;
         if let Some((before, Some(kept))) = saved {
             dead::dead(unit.context, outer.callees(), unit.function);
             let moved_price = _function_price(unit, &*analyses, outer, &target);
@@ -487,6 +491,7 @@ fn _plan(
     target: &Target,
     pressure: &spill::Pressure,
     products: &mut dyn FnMut() -> std::rc::Rc<Option<std::collections::BTreeMap<i64, i64>>>,
+    base: &mut Option<std::rc::Rc<spill::TrafficBase>>,
 ) -> Option<Plan> {
     let function = view.function;
     let preheader = _preheader(function, loop_)?;
@@ -584,11 +589,13 @@ fn _plan(
     let fixed = _fixed(view, outer, loop_, target.room, pressure, &web_values, &users, exit.as_ref(), &live);
     // The web's reads are the uses the choice replaces; each use adds its own
     // back.
-    let kept = |inst: InstId| !users.web.contains(&inst);
-    let traffic = spill::traffic(function, &frequencies, &cells, &target.costs, &kept, &|value| {
-        spill::words(view.context, view.layout, function, value)
+    let base = base.get_or_insert_with(|| {
+        std::rc::Rc::new(spill::TrafficBase::of(function, &frequencies, &|value| cells.get(&value).copied(), &|_| true))
     });
-    let alive = _alive(function, pressure.found(), loop_, &sites);
+    let traffic = base
+        .without(function, &frequencies, &|value| cells.get(&value).copied(), users.web.iter().copied())
+        .finished(function, &target.costs, &|value| spill::words(view.context, view.layout, function, value));
+    let alive = _alive(function, pressure, loop_, &sites);
     let mut keys = Vec::new();
     let latch_block = cfg::block(latch);
     // The most backedges: the counted exit's, or what an in-bounds access
@@ -902,7 +909,7 @@ fn _fixed(
 /// Where each site's value is live in the loop, before each instruction.
 fn _alive(
     function: &Function,
-    found: &liveness::Liveness,
+    pressure: &spill::Pressure,
     loop_: &Loop,
     sites: &[Site],
 ) -> Vec<BTreeMap<i64, Vec<bool>>> {
@@ -915,20 +922,14 @@ fn _alive(
         .map(|&at| {
             #[cfg(test)]
             LIVE_POINTS.with(|count| count.set(count.get() + 1));
-            (
-                at,
-                liveness::live_points(function, found, cfg::block(at))
-                    .into_iter()
-                    .map(|(_, before, _)| before)
-                    .collect::<Vec<_>>(),
-            )
+            (at, pressure.points(function, cfg::block(at)))
         })
         .collect();
     sites
         .iter()
         .map(|site| {
             live.iter()
-                .map(|(at, points)| (*at, points.iter().map(|before| before.contains(&site.one.value)).collect()))
+                .map(|(at, points)| (*at, points.iter().map(|point| point.before.contains(&site.one.value)).collect()))
                 .collect()
         })
         .collect()

@@ -29,7 +29,7 @@ use llrm_mir::types::TypeId;
 use llrm_support::hash::{HashSet, IndexMap};
 use num_bigint::BigInt;
 
-use crate::cfg;
+use crate::cfg::{self, Around};
 use crate::consts::{Known, masked};
 use crate::graph::loops::Loop;
 use crate::memory::{MemRef, Unit};
@@ -379,8 +379,7 @@ fn _control(
     // Only the blocks the loop and what enters it name are read, not the graph
     // of the whole body (found for each loop, that was N^2 in a function of
     // N loops).
-    let block_of =
-        |at: i64| cfg::Block { at, succ: function.successors(cfg::block(at)).into_iter().map(cfg::id).collect() };
+    let block_of = |at: i64| cfg::Block { at, succ: cfg::successors_of(function, at) };
     if loop_.latches.len() != 1 {
         return None;
     }
@@ -451,12 +450,7 @@ fn _control(
     if !leaving && leaves {
         return None;
     }
-    let outside = function
-        .predecessors(cfg::block(header.at))
-        .into_iter()
-        .map(cfg::id)
-        .filter(|at| !inside.contains(at))
-        .collect::<BTreeSet<_>>();
+    let outside = loop_.entering(function);
     let preheader = match outside.first() {
         Some(&one) if outside.len() == 1 && block_of(one).succ.as_slice() == [header.at] => Some(one),
         _ => None,
@@ -771,6 +765,15 @@ fn _proven(
             let Reach::Solved { bits, .. } = &solved else { unreachable!("_solved solves") };
             let period = BigInt::from(1) << *bits;
             reach = solved;
+            // Counted from a start the branch over the entry proves is not the
+            // bound: `n == 0` skips a loop that ends at `n - 1 ==
+            // 0`, which then runs `n` trips (the `(bound - start) / step` of a
+            // loop tested after its trip is wrong only where it
+            // starts at the bound).
+            entry_guarded = shape.posttested
+                && stepped
+                && abs(&step) == BigInt::from(1)
+                && _entered(unit, &shape, &start, &bound, IntPredicate::Ne, width);
             Some(period)
         } else if test != IntPredicate::Ne && abs(&step) != BigInt::from(1) {
             // An ordered test by more than one: promised not to wrap past the
@@ -954,15 +957,9 @@ pub fn exits(
     };
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return Vec::new() };
     let shape = unit.shape();
-    let block_of =
-        |at: i64| cfg::Block { at, succ: function.successors(cfg::block(at)).into_iter().map(cfg::id).collect() };
+    let block_of = |at: i64| cfg::Block { at, succ: cfg::successors_of(function, at) };
     let inside = &loop_.body;
-    let outside = function
-        .predecessors(cfg::block(loop_.header))
-        .into_iter()
-        .map(cfg::id)
-        .filter(|at| !inside.contains(at))
-        .collect::<BTreeSet<_>>();
+    let outside = loop_.entering(function);
     let preheader = match outside.first() {
         Some(&one) if outside.len() == 1 && block_of(one).succ.as_slice() == [loop_.header] => Some(one),
         _ => None,

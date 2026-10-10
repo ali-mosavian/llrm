@@ -86,6 +86,7 @@ pub mod selects;
 pub mod shrinkwrap;
 pub mod slots;
 pub mod stackusage;
+pub mod stepflags;
 pub mod valuetrack;
 /// The x86 encoder is `llrm_x86::select`; the tests of this crate encode in
 /// real mode through `emit`.
@@ -151,6 +152,7 @@ pub mod select {
     }
 }
 pub mod regclass;
+pub mod registerinfo;
 pub mod sharedstores;
 pub mod spiller;
 pub mod spillforward;

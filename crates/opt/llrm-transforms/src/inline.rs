@@ -46,9 +46,9 @@ use llrm_mir::memory::{Callees, Effects, callee};
 use llrm_mir::module::{Function, InstId, Linkage, Module, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
-use llrm_mir::splice::{carries, splice};
+use llrm_mir::splice::{carries, splice, splice_before};
 use llrm_mir::types::Type;
-use llrm_support::hash::IndexMap;
+use llrm_support::hash::{IndexMap, SparseIdMap};
 
 use crate::profit::{self, OperationCosts, operation};
 
@@ -246,9 +246,11 @@ fn copy_byval_arguments(
     call: InstId,
     callee: &Function,
     declared: &mut Declared,
-) -> Result<(), String> {
+    anchor: Option<InstId>,
+) -> Result<Option<InstId>, String> {
+    let mut placed = None;
     if !llrm_mir::memory::stated(&callee.attrs).writes {
-        return Ok(());
+        return Ok(None);
     }
     for (at, aggregate) in byval_types(callee) {
         let source = function.instruction(call).operands[at];
@@ -260,12 +262,14 @@ fn copy_byval_arguments(
         let width = layout.pointer(space).index_bits;
         let (pointer, void, flag) = (context.types.ptr(0), context.types.void(), context.types.int(1));
         let entry = function.entry().ok_or("a caller with a body")?;
-        let first = function
-            .block(entry)
-            .instructions()
-            .iter()
-            .copied()
-            .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }));
+        let first = anchor.or_else(|| {
+            function
+                .block(entry)
+                .instructions()
+                .iter()
+                .copied()
+                .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
+        });
         let alloca = function.create_instruction(
             Opcode::Alloca { allocated: aggregate, align: None, address_space: 0 },
             pointer,
@@ -274,6 +278,7 @@ fn copy_byval_arguments(
             Some("byval"),
         );
         function.insert(alloca, first.map_or(Position::End(entry), Position::Before))?;
+        placed.get_or_insert(alloca);
         let copy = Operand::Value(function.instruction(alloca).result.expect("a pointer"));
         let count_type = context.types.int(width);
         let length = Operand::Constant(context.int(count_type, i128::from(bytes)));
@@ -302,7 +307,7 @@ fn copy_byval_arguments(
         operands[at] = copy;
         function.set_operands(call, operands);
     }
-    Ok(())
+    Ok(placed)
 }
 
 /// Bytes of stack `function` allocates.
@@ -420,9 +425,9 @@ pub fn size_of(
         .flat_map(|&block| llrm_analysis::liveness::live_points(body, &found, block))
         // An intrinsic, an inline block, is code in line: it keeps every
         // register but those it names.
-        .filter(|(inst, _, _)| {
-            matches!(body.instruction(*inst).opcode, Opcode::Call(_))
-                && !callee(&module.context, body, *inst).is_some_and(|id| {
+        .filter(|point| {
+            matches!(body.instruction(point.inst).opcode, Opcode::Call(_))
+                && !callee(&module.context, body, point.inst).is_some_and(|id| {
                     module
                         .global(id)
                         .name
@@ -430,7 +435,7 @@ pub fn size_of(
                         .is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
                 })
         })
-        .map(|(_, _, across)| across.len() as i64)
+        .map(|point| point.across.len() as i64)
         .sum::<i64>()
         * costs.store;
     work(module, body, callees, costs).map(|work| work + calls + kept)
@@ -500,9 +505,36 @@ pub fn candidates(
     reach: i64,
     threshold: Threshold,
 ) -> IndexMap<GlobalId, Candidate> {
+    candidates_over(
+        module,
+        callees,
+        layout,
+        calls,
+        private,
+        costs,
+        reach,
+        threshold,
+        &recursive(module),
+        &llrm_mir::callgraph::addressed(module),
+    )
+}
+
+/// `candidates` where the module's recursive and addressed functions are known:
+/// a round asks twice (the bytes and the clocks) and found them each time.
+pub fn candidates_over(
+    module: &Module,
+    callees: &Callees,
+    layout: &DataLayout,
+    calls: &Counter,
+    private: &BTreeSet<GlobalId>,
+    costs: &OperationCosts,
+    reach: i64,
+    threshold: Threshold,
+    recursive: &BTreeSet<GlobalId>,
+    addressed: &BTreeSet<GlobalId>,
+) -> IndexMap<GlobalId, Candidate> {
     let budget = threshold.budget(reach);
     let call_cost = costs.call;
-    let (recursive, addressed) = (recursive(module), llrm_mir::callgraph::addressed(module));
     let mut out = IndexMap::default();
     let mut lasts = IndexMap::default();
     for (&name, &count) in calls {
@@ -677,6 +709,7 @@ pub fn expanded(
     let empty = IndexMap::default();
     let constant = constant.unwrap_or(&empty);
     let calls = function.walk().map(|(_, inst)| inst).collect::<Vec<_>>();
+    let own = semantic_count(function);
     for call in calls {
         if !matches!(function.instruction(call).opcode, Opcode::Call(_)) {
             continue;
@@ -686,8 +719,8 @@ pub fn expanded(
         let Some(candidate) = candidate else {
             continue;
         };
-        if fits(context, function, caller, call, candidate) {
-            copy_byval_arguments(context, function, caller.layout, call, &candidate.body, declared)?;
+        if fits(context, function, caller, own, call, candidate) {
+            copy_byval_arguments(context, function, caller.layout, call, &candidate.body, declared, None)?;
             splice(context, function, call, &candidate.body);
             return Ok(true);
         }
@@ -695,40 +728,306 @@ pub fn expanded(
     Ok(false)
 }
 
+/// What a call is told of one actual: the function it names, and whether it
+/// is stack or global memory the caller owns.
+#[derive(Clone, Copy, Default)]
+struct Actual {
+    callee: Option<GlobalId>,
+    owned: bool,
+}
+
+/// How the operands of a body read once it is a copy: its parameters are the
+/// actuals of the call it replaces, and the calls inside it that are inlined
+/// are what they return (`expanded` replaced their results as it went).
+struct Scope<'a> {
+    function: &'a Function,
+    actuals: Option<&'a [Actual]>,
+    results: &'a SparseIdMap<InstId, Actual>,
+}
+
+impl Scope<'_> {
+    fn actual(
+        &self,
+        context: &Context,
+        operand: Operand,
+        depth: usize,
+    ) -> Actual {
+        match operand {
+            Operand::Constant(id) => match context.get(id).kind {
+                ConstantKind::Global(global) => Actual { callee: Some(global), owned: true },
+                _ => Actual::default(),
+            },
+            Operand::Value(value) => match self.function.value(value).def {
+                ValueDef::Argument(at) => {
+                    self.actuals.map_or(Actual { callee: None, owned: true }, |one| one[at as usize])
+                }
+                ValueDef::Instruction(inst) => match self.results.get(&inst) {
+                    Some(&result) => result,
+                    None => match self.function.instruction(inst).opcode {
+                        Opcode::Alloca { .. } => Actual { callee: None, owned: true },
+                        Opcode::GetElementPtr { .. } if depth < 8 => Actual {
+                            callee: None,
+                            owned: self.actual(context, self.function.instruction(inst).operands[0], depth + 1).owned,
+                        },
+                        _ => Actual::default(),
+                    },
+                },
+            },
+            Operand::Block(_) => Actual::default(),
+        }
+    }
+}
+
+/// The calls that are inlined into a copy, by their place among the copy's
+/// instructions, each with what is inlined into it.
+struct Planned<'a> {
+    /// Where it comes among the decisions, which are taken in the order
+    /// `expanded` would splice.
+    seq: usize,
+    candidate: &'a Candidate,
+    nested: Vec<(usize, Planned<'a>)>,
+}
+
+/// The decisions of `expanded` called until it says no, taken ahead of the
+/// splices: the size and the stack as they grow, and what each call is told.
+struct Plan<'a, 'c> {
+    context: &'c Context,
+    caller: &'c Caller<'c>,
+    available: &'a IndexMap<GlobalId, Candidate>,
+    own: i64,
+    frame: u64,
+    seq: usize,
+}
+
+impl<'a> Plan<'a, '_> {
+    /// `candidate` inlined at a call of `function_type` with `actuals`: the
+    /// size and stack it adds are kept, and what is inlined in the copy.
+    fn inline(
+        &mut self,
+        function_type: llrm_mir::types::TypeId,
+        actuals: &[Actual],
+        candidate: &'a Candidate,
+    ) -> Option<(Planned<'a>, Actual)> {
+        if !fits_with(self.context, self.caller, self.own, self.frame, function_type, |at| actuals[at].owned, candidate)
+        {
+            return None;
+        }
+        let callee = &*candidate.body;
+        self.seq += 1;
+        let seq = self.seq;
+        let mut actuals = actuals.to_vec();
+        let copied = copied_byval(callee);
+        for &(at, _) in &copied {
+            actuals[at] = Actual { callee: None, owned: true };
+        }
+        self.own += copied.len() as i64 * 2 + semantic_count(callee) - 1;
+        self.frame += candidate.frame;
+        let mut results = SparseIdMap::default();
+        let mut nested = Vec::new();
+        let mut place = 0;
+        for (_, inst) in callee.walk() {
+            let instruction = callee.instruction(inst);
+            if instruction.opcode == Opcode::Ret {
+                continue;
+            }
+            if let Opcode::Call(info) = &instruction.opcode {
+                let operands = &instruction.operands;
+                let seen: Vec<Actual> = operands
+                    .iter()
+                    .map(|&one| {
+                        Scope { function: callee, actuals: Some(&actuals), results: &results }.actual(
+                            self.context,
+                            one,
+                            0,
+                        )
+                    })
+                    .collect();
+                let target = seen.last().and_then(|one| one.callee).and_then(|name| self.available.get(&name));
+                if let Some(target) = target
+                    && let Some((planned, result)) = self.inline(info.function_type, &seen, target)
+                {
+                    if instruction.result.is_some() {
+                        results.insert(inst, result);
+                    }
+                    nested.push((place, planned));
+                }
+            }
+            place += 1;
+        }
+        let returns: Vec<&llrm_mir::module::Instruction> =
+            callee.walk().map(|(_, inst)| callee.instruction(inst)).filter(|one| one.opcode == Opcode::Ret).collect();
+        let result = match returns[..] {
+            [one] if !one.operands.is_empty() => Scope { function: callee, actuals: Some(&actuals), results: &results }
+                .actual(self.context, one.operands[0], 0),
+            _ => Actual::default(),
+        };
+        Some((Planned { seq, candidate, nested }, result))
+    }
+}
+
+/// The byval arguments `copy_byval_arguments` copies for a call of `callee`
+/// (their places): their bytes are in the candidate's frame.
+fn copied_byval(callee: &Function) -> Vec<(usize, llrm_mir::types::TypeId)> {
+    if llrm_mir::memory::stated(&callee.attrs).writes { byval_types(callee) } else { Vec::new() }
+}
+
+/// The static allocas the copies made so far put on the caller's entry, by the
+/// place of their site among the decisions. Made in order, each copy's go
+/// before those of the copies made before it (the stack objects of a byval
+/// argument after them): made from the last to the first, each goes
+/// where the copies of its neighbours say, and the frame comes out as made in
+/// order.
+#[derive(Default)]
+struct Placed {
+    /// The first instruction of the entry before any copy: the allocas go
+    /// before it.
+    base: Option<InstId>,
+    stack: std::collections::BTreeMap<usize, InstId>,
+    copies: std::collections::BTreeMap<usize, InstId>,
+}
+
+/// `planned` at `call`, then what is inlined into the copy.
+fn executed(
+    context: &mut Context,
+    function: &mut Function,
+    layout: &DataLayout,
+    call: InstId,
+    planned: &Planned,
+    declared: &mut Declared,
+    placed: &mut Placed,
+) -> Result<(), String> {
+    let seq = planned.seq;
+    let after = placed.copies.range(seq + 1..).next().map(|(_, &one)| one);
+    if let Some(copy) = copy_byval_arguments(context, function, layout, call, &planned.candidate.body, declared, after)?
+    {
+        placed.copies.insert(seq, copy);
+    }
+    let anchor = placed.stack.range(..seq).next_back().map(|(_, &one)| one).or(placed.base);
+    let copies = splice_before(context, function, call, &planned.candidate.body, anchor);
+    let body = &*planned.candidate.body;
+    let entry = body.entry();
+    let first = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret).zip(&copies).find(
+        |&((block, inst), _)| Some(block) == entry && matches!(body.instruction(inst).opcode, Opcode::Alloca { .. }),
+    );
+    if let Some((_, &copy)) = first {
+        placed.stack.insert(seq, copy);
+    }
+    for (place, nested) in planned.nested.iter().rev() {
+        executed(context, function, layout, copies[*place], nested, declared, placed)?;
+    }
+    Ok(())
+}
+
+/// Every legal call site in `function` inlined, as `expanded` called until it
+/// says no would: the first legal one, again from the top, a copy's own calls
+/// ahead of the calls after it. The decisions are taken in that order with
+/// the size and the stack kept as they grow (`expanded` counted the body
+/// again for each site, a body of N sites N times), and the splices made
+/// from the last site to the first, so that each splits a block whose tail
+/// is only what is left of it (made in order, each moved the whole tail of
+/// the one block a body of calls is: N sites N times its size). How many
+/// sites were inlined.
+pub fn expanded_all(
+    context: &mut Context,
+    function: &mut Function,
+    caller: &Caller,
+    available: &IndexMap<GlobalId, Candidate>,
+    constant: Option<&SparseIdMap<InstId, Candidate>>,
+    declared: &mut Declared,
+) -> Result<usize, String> {
+    let calls: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
+    let start = (semantic_count(function), frame(context, caller.layout, function));
+    let mut plan = Plan { context: &*context, caller, available, own: start.0, frame: start.1, seq: 0 };
+    let mut results = SparseIdMap::default();
+    let mut sites: Vec<(InstId, Planned)> = Vec::new();
+    for call in calls {
+        let instruction = function.instruction(call);
+        let Opcode::Call(info) = &instruction.opcode else { continue };
+        let scope = Scope { function, actuals: None, results: &results };
+        let seen: Vec<Actual> = instruction.operands.iter().map(|&one| scope.actual(plan.context, one, 0)).collect();
+        let target = constant
+            .and_then(|sites| sites.get(&call))
+            .or_else(|| seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)));
+        let Some(target) = target else { continue };
+        if let Some((planned, result)) = plan.inline(info.function_type, &seen, target) {
+            if instruction.result.is_some() {
+                results.insert(call, result);
+            }
+            sites.push((call, planned));
+        }
+    }
+    let end = (plan.own, plan.frame);
+    let mut placed = Placed {
+        base: function.entry().and_then(|entry| function.block(entry).instructions().first().copied()),
+        ..Placed::default()
+    };
+    for (call, planned) in sites.iter().rev() {
+        executed(context, function, caller.layout, *call, planned, declared, &mut placed)?;
+    }
+    assert_eq!(end.0, semantic_count(function), "the size kept is not the body's");
+    assert_eq!(end.1, frame(context, caller.layout, function), "the stack kept is not the body's");
+    Ok(sites.len())
+}
+
 /// Whether the call fits its callee, which returns, and the stack the copy
-/// adds stays within `FRAME_LIMIT`, and in a recursive function none.
+/// adds stays within `FRAME_LIMIT`, and in a recursive function none; `own` is
+/// the caller's size now.
 fn fits(
     context: &Context,
     function: &Function,
     caller: &Caller,
+    own: i64,
     call: InstId,
     candidate: &Candidate,
 ) -> bool {
-    let callee = &*candidate.body;
     let Opcode::Call(info) = &function.instruction(call).opcode else { return false };
-    info.function_type == callee.ty
+    let stack = if candidate.frame == 0 { 0 } else { frame(context, caller.layout, function) };
+    fits_with(
+        context,
+        caller,
+        own,
+        stack,
+        info.function_type,
+        |at| owned(context, function, function.instruction(call).operands[at], 0),
+        candidate,
+    )
+}
+
+/// `fits` where the call is told what it is by `owned_at` and the caller's
+/// stack is `stack` (only read of a candidate that allocates).
+fn fits_with(
+    context: &Context,
+    caller: &Caller,
+    own: i64,
+    stack: u64,
+    function_type: llrm_mir::types::TypeId,
+    owned_at: impl Fn(usize) -> bool,
+    candidate: &Candidate,
+) -> bool {
+    let callee = &*candidate.body;
+    function_type == callee.ty
         && !matches!(
             context.types.get(callee.ty),
             Type::Function { variadic: true, .. }
         )
-        && (candidate.frame == 0
-            || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
-        && grows_within_limits(function, caller, callee, candidate.moved)
-        && callee.parameters().iter().enumerate().all(|(at, _)| {
-            !Facts::of(&callee.parameter_attrs[at]).releases()
-                || owned(context, function, function.instruction(call).operands[at], 0)
-        })
+        && (candidate.frame == 0 || (!caller.recursive && stack + candidate.frame <= FRAME_LIMIT))
+        && grows_within_limits(own, caller, callee, candidate.moved)
+        && callee
+            .parameters()
+            .iter()
+            .enumerate()
+            .all(|(at, _)| !Facts::of(&callee.parameter_attrs[at]).releases() || owned_at(at))
 }
 
 /// gcc's `caller_growth_limits`: the size after the inline, against the
 /// function limits. A caller whose size before is not known is its own base.
 fn grows_within_limits(
-    function: &Function,
+    own: i64,
     caller: &Caller,
     callee: &Function,
     moved: bool,
 ) -> bool {
-    let (own, callee_size) = (semantic_count(function), semantic_count(callee));
+    let callee_size = semantic_count(callee);
     let base = if caller.base > 0 { caller.base } else { own };
     let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
     let after = own + callee_size;
