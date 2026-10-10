@@ -53,22 +53,61 @@ pub fn tied(body: &LirBody) -> LirBody {
 
     let (_, leaving) = allocate::live(body);
     let copies = _copy_destinations(body);
-    let interference = coalesce::_interference(body);
+    // `_commuted` compares a swap's two sources with the copy neighbours of its
+    // destination: the interference among those values is all it asks of, not
+    // every pair live together (quadratic in the values live at once).
+    let asked: BTreeSet<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insns)
+        .filter_map(|one| _swappable(one))
+        .filter_map(|(into, first, second)| {
+            let neighbours = copies.get(&into)?;
+            Some(neighbours.iter().copied().chain([first, second]))
+        })
+        .flatten()
+        .collect();
+    let interference =
+        if asked.is_empty() { IndexMap::default() } else { coalesce::_interference_among(body, Some(&asked)) };
+    if llrm_support::env_set("LLRM_CHECK_TWOADDR") {
+        let whole = coalesce::_interference(body);
+        for &one in &asked {
+            for &other in &asked {
+                assert_eq!(
+                    interference.get(&one).is_some_and(|found| found.contains(&other)),
+                    whole.get(&one).is_some_and(|found| found.contains(&other)),
+                    "LLRM_CHECK_TWOADDR: values {one} and {other} interfere differently among the asked values than in the whole graph"
+                );
+            }
+        }
+    }
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut alive = leaving[&block.at].clone();
+        // Of a swap's two sources, those live after it: all `_commuted` reads.
         let mut live_after: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
         for one in block.insns.iter().rev() {
-            live_after.insert(ranges::key(one), alive.clone());
+            if let Some((_, first, second)) = _swappable(one) {
+                live_after.insert(
+                    ranges::key(one),
+                    [first, second].into_iter().filter(|value| alive.contains(value)).collect(),
+                );
+            }
             for value in &one.defines {
                 alive.remove(value);
             }
             alive.extend(one.uses.iter().copied());
         }
+        let nothing = BTreeSet::new();
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         for one in &block.insns {
             let mut one = Arc::clone(one);
-            if let Some(chosen) = _commuted(&one, &live_after[&ranges::key(&one)], Some(&copies), Some(&interference)) {
+            if let Some(chosen) = _commuted(
+                &one,
+                live_after.get(&ranges::key(&one)).unwrap_or(&nothing),
+                Some(&copies),
+                Some(&interference),
+            ) {
                 changed = true;
                 one = chosen;
             }
@@ -229,14 +268,13 @@ fn _distance(
     f64::INFINITY
 }
 
-/// The instruction with its commutative sources swapped, or None where it
-/// is returned as it was.
-fn _commuted(
-    one: &Insn,
-    alive: &BTreeSet<u32>,
-    copies: Option<&IndexMap<u32, BTreeSet<u32>>>,
-    interference: Option<&IndexMap<u32, BTreeSet<u32>>>,
-) -> Option<Arc<Insn>> {
+/// The values a commutative instruction writes and reads, where `_commuted`
+/// may swap its sources.
+fn _swappable(one: &Insn) -> Option<(u32, u32, u32)> {
+    _swappable_held(one).map(|(into, first, second)| (into.value, first.value, second.value))
+}
+
+fn _swappable_held(one: &Insn) -> Option<(&Held, &Held, &Held)> {
     let what = one.what.as_ref()?;
     let commutative = (what.op == Operation::Binary
         && matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")))
@@ -257,6 +295,19 @@ fn _commuted(
     if !(into.width == first.width && first.width == second.width) || into.value == first.value {
         return None;
     }
+    Some((into, first, second))
+}
+
+/// The instruction with its commutative sources swapped, or None where it
+/// is returned as it was.
+fn _commuted(
+    one: &Insn,
+    alive: &BTreeSet<u32>,
+    copies: Option<&IndexMap<u32, BTreeSet<u32>>>,
+    interference: Option<&IndexMap<u32, BTreeSet<u32>>>,
+) -> Option<Arc<Insn>> {
+    let what = one.what.as_ref()?;
+    let (into, first, second) = _swappable_held(one)?;
     let no_copies = IndexMap::default();
     let copies = copies.unwrap_or(&no_copies);
     let empty = BTreeSet::new();
