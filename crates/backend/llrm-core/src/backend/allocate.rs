@@ -492,21 +492,17 @@ pub fn live_rows_by(
     // it is written, so the work is the size of the live ranges and not the
     // blocks times the values (gcc's `calculate_live_on_exit`, LLVM's
     // `LiveVariables`). A body with phis is solved over the rows.
-    if body.blocks.len() >= WEB_BLOCKS
-        && body.blocks.len()
-            * (crate::backend::postings::following(body, |postings| postings.largest()) as usize / 64 + 1)
-            >= WEB_ROWS
-        && body.blocks.iter().all(|block| block.phis.is_empty())
-        && let Some(web) = {
+    let mut numbered = None;
+    if body.blocks.len() >= WEB_BLOCKS && body.blocks.iter().all(|block| block.phis.is_empty()) {
+        let values = numbered_by(body, &keep);
+        let rows = body.blocks.len() * (values.len() / 64 + 1);
+        if rows >= WEB_ROWS {
             body.facts.0.bump("live-rows-walks");
             let found = crate::analysis::occurrences::Occurrences::scan(body, &keep);
-            let values = found.values();
             let places = found.occurrences();
-            // The rows cost a word of bits for each block and sixty-four
-            // values; following the values costs about a step for each value
-            // and each block between its first and last occurrence. Few blocks
-            // and many values (a straight line of cells) are the rows'.
-            let rows = body.blocks.len() * (values.len() / 64 + 1);
+            // Following the values costs about a step for each value and each
+            // block between its first and last occurrence; few blocks and many
+            // values (a straight line of cells) are the rows'.
             let steps = values.len()
                 + places
                     .values()
@@ -515,24 +511,28 @@ pub fn live_rows_by(
                         blocks.clone().max().unwrap_or(0) - blocks.min().unwrap_or(0) + 1
                     })
                     .sum::<usize>();
-            (steps <= rows).then(|| live_rows_among(body, &values, &places))
-        }
-    {
-        let found = LiveRows(Found::Web(web));
-        if llrm_support::env_set("LLRM_CHECK_LIVE") {
-            let walk = live_rows_dense(body, &keep);
-            for block in &body.blocks {
-                assert!(
-                    found.entering(block.at).eq(walk.entering(block.at))
-                        && found.leaving(block.at).eq(walk.leaving(block.at))
-                        && found.numbered() == walk.numbered(),
-                    "{}: the liveness found from the occurrences differs from the rows in block {:#x}",
-                    body.name,
-                    block.at
-                );
+            if steps <= rows {
+                let found = LiveRows(Found::Web(live_rows_among(body, &found.values(), &places)));
+                if llrm_support::env_set("LLRM_CHECK_LIVE") {
+                    let walk = live_rows_dense(body, &keep);
+                    for block in &body.blocks {
+                        assert!(
+                            found.entering(block.at).eq(walk.entering(block.at))
+                                && found.leaving(block.at).eq(walk.leaving(block.at))
+                                && found.numbered() == walk.numbered(),
+                            "{}: the liveness found from the occurrences differs from the rows in block {:#x}",
+                            body.name,
+                            block.at
+                        );
+                    }
+                }
+                return found;
             }
         }
-        return found;
+        numbered = Some(values);
+    }
+    if let Some(numbered) = numbered {
+        return live_rows_numbered(body, keep, numbered);
     }
     live_rows_dense(body, keep)
 }
@@ -543,10 +543,15 @@ pub fn live_rows_dense(
     body: &LirBody,
     keep: impl Fn(u32) -> bool,
 ) -> LiveRows {
-    body.facts.0.bump("live-rows-walks");
-    // Every value the body names, numbered by order. Ids can be far apart, so
-    // the number of a value is found by a table over the ids where they are
-    // dense enough, else by search.
+    let numbered = numbered_by(body, &keep);
+    live_rows_numbered(body, keep, numbered)
+}
+
+/// Every value `keep` says that the body names, ascending.
+fn numbered_by(
+    body: &LirBody,
+    keep: &impl Fn(u32) -> bool,
+) -> Vec<u32> {
     let mut numbered: Vec<u32> = Vec::new();
     for block in &body.blocks {
         numbered.extend(
@@ -562,6 +567,19 @@ pub fn live_rows_dense(
     }
     numbered.sort_unstable();
     numbered.dedup();
+    numbered
+}
+
+/// `live_rows_dense` of the values `numbered`, which `keep` says.
+fn live_rows_numbered(
+    body: &LirBody,
+    keep: impl Fn(u32) -> bool,
+    numbered: Vec<u32>,
+) -> LiveRows {
+    body.facts.0.bump("live-rows-walks");
+    // Every value the body names, numbered by order. Ids can be far apart, so
+    // the number of a value is found by a table over the ids where they are
+    // dense enough, else by search.
     let largest = numbered.last().copied().unwrap_or(0) as usize;
     let table: Option<Vec<u32>> = (largest <= 8 * numbered.len() + 64).then(|| {
         let mut table = vec![u32::MAX; largest + 1];
