@@ -410,6 +410,21 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
     return name, code, time.time() - start
 
 
+def snapshot_binaries(release: Path, into: Path) -> Path:
+    """The executables cargo left in `release`, linked into `into` for the steps to run. Every `cargo test --release --test X` compiles
+    the root package's binaries again as a test does (another metadata hash) and links `release/llrm-c` to its own: cargo removes the file
+    and links the new one, even for a unit that was fresh, so with steps running cargo side by side the path has moments with no file
+    (torture: `No such file .../release/llrm-c`). A hard link keeps the inode it was made of: the next link cargo makes is another file."""
+    into.mkdir(parents=True, exist_ok=True)
+    for one in sorted(release.iterdir()):
+        if one.is_file() and os.access(one, os.X_OK) and one.suffix != ".d":
+            staged = into / f".{one.name}.new"
+            staged.unlink(missing_ok=True)
+            os.link(one, staged)
+            os.replace(staged, into / one.name)
+    return into
+
+
 def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     target = os.environ.get("CARGO_TARGET_DIR")
     if not target:
@@ -456,6 +471,8 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         if results["build"][0]:
             print(verdict_line(p.tier, ["build"], [], time.time() - start, [], head_state()[0]))
             return 1, ["build"]
+    if env["LLRM_BIN"] == f"{target}/release":
+        env["LLRM_BIN"] = str(snapshot_binaries(Path(target) / "release", Path(target) / "gate-bins"))
     alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
     jobs = int(os.environ.get("JOBS", "4"))
