@@ -1,5 +1,5 @@
 /* FRE: how much memory is left (QB rt/stfree.asm). */
-#include "fheap.h"
+#include "ad.h"
 #include "nhstutil.h"
 #include "qb.h"
 
@@ -26,7 +26,7 @@ long B_FRSD(SD *sd)
 long B_FRI2(short selector)
 {
     if (selector == -1)
-        return fh_free_bytes();
+        return ad_free_bytes();
     if (selector == -2)
         return stack_free();
     return str_free_bytes();

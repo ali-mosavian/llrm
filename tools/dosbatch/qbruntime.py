@@ -355,7 +355,7 @@ def portable_sources() -> list[Path]:
 
 def platform_sources() -> list[Path]:
     """The target's own code: its C and its assembly."""
-    return sorted([*platform_directory().glob("*.c"), *platform_directory().glob("*.asm")])
+    return sorted([*platform_directory().glob("*.c"), *platform_directory().glob("*.asm"), *(RUNTIME / "dos").glob("*.c")])
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
@@ -371,6 +371,8 @@ def _compile_c(source: Path, obj: Path, include: Path) -> None:
             str(RUNTIME),
             "-I",
             str(platform_directory()),
+            "-I",
+            str(RUNTIME / "dos"),
             "-o",
             str(obj),
         ]

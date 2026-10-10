@@ -71,13 +71,13 @@ def build(work: Path) -> dict[str, Path]:
     include = dosbatch.c_include(TARGET, work)
     made: dict[str, Path] = {}
     failures = []
-    for source in sorted([*RUNTIME.glob("*.c"), *PLATFORM.glob("*.c"), *PLATFORM.glob("*.asm")]):
+    for source in sorted([*RUNTIME.glob("*.c"), *PLATFORM.glob("*.c"), *PLATFORM.glob("*.asm"), *(RUNTIME / "dos").glob("*.c")]):
         if source.name == "qbstart.asm":
             continue
         obj = work / f"{source.stem}.obj"
         try:
             if source.suffix == ".c":
-                dosbatch._host([str(dosbatch.BIN / "llrm-c"), str(source), dosbatch.m_flag(TARGET), "-Os", "-I", str(include), "-I", str(RUNTIME), "-I", str(PLATFORM), "-o", str(obj)])
+                dosbatch._host([str(dosbatch.BIN / "llrm-c"), str(source), dosbatch.m_flag(TARGET), "-Os", "-I", str(include), "-I", str(RUNTIME), "-I", str(PLATFORM), "-I", str(RUNTIME / "dos"), "-o", str(obj)])
             else:
                 dosbatch.assemble(source, obj)
         except dosbatch.BuildError as error:

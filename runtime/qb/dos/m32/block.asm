@@ -6,7 +6,8 @@
 ;; retn: none
 ;;
 ;; chng: oct/26 written [ali]
-;; obs.: the registers are C's (the target's own convention: eax, edx, ebx, ecx); es is ds under the extender.
+;; obs.: the registers are C's (the target's own convention: eax, edx, ebx, ecx), and all but eax are kept; es is
+;;       ds under the extender.
 
                 .386
                 .model  flat
@@ -26,6 +27,8 @@ BlockOp         ends
 ;; B$MOVE (eax: op)
 B$MOVE          proc
 
+                push    ecx
+                push    edx
                 push    esi
                 push    edi
                 mov     edi, [eax].BlockOp.dst
@@ -44,6 +47,8 @@ B$MOVE          proc
                 rep     movsb
                 pop     edi
                 pop     esi
+                pop     edx
+                pop     ecx
                 ret
 B$MOVE          endp
 
@@ -51,6 +56,8 @@ B$MOVE          endp
 ;; B$FILL (eax: op)
 B$FILL          proc
 
+                push    ecx
+                push    edx
                 push    edi
                 mov     edi, [eax].BlockOp.dst
                 movzx   edx, word ptr [eax].BlockOp.value
@@ -66,6 +73,8 @@ B$FILL          proc
                 stosw
 @@:
                 pop     edi
+                pop     edx
+                pop     ecx
                 ret
 B$FILL          endp
                 end

@@ -25,9 +25,9 @@ static unsigned columns_of(void)
 
 static u16 QB_FAR *cell(unsigned row, unsigned column)
 {
-    unsigned long base = bios[BIOS_MODE] == MONO_MODE ? 0xB0000UL : 0xB8000UL;
+    u16 *base = QB_VIDEO_MEMORY(bios[BIOS_MODE] == MONO_MODE ? 0xB000 : 0xB800);
 
-    return (u16 *)base + (row * columns_of() + column);
+    return base + (row * columns_of() + column);
 }
 
 unsigned dev_text_size(void)

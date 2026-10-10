@@ -6,7 +6,8 @@
 ;; retn: B$INB eax -> the byte
 ;;
 ;; chng: oct/26 written [ali]
-;; obs.: the registers are C's (the target's own convention: eax, edx, ebx, ecx), so no thunk is needed.
+;; obs.: the registers are C's (the target's own convention: eax, edx, ebx, ecx), so no thunk is needed; all
+;;       but eax are kept.
 
                 .386
                 .model  flat
@@ -24,6 +25,7 @@ B$OUTB          proc
 
                 xchg    eax, edx                ;; dx the port, al the byte
                 out     dx, al
+                xchg    eax, edx                ;; edx as it came
                 ret
 B$OUTB          endp
 
@@ -33,6 +35,7 @@ B$OUTW          proc
 
                 xchg    eax, edx                ;; dx the port, ax the word
                 out     dx, ax
+                xchg    eax, edx
                 ret
 B$OUTW          endp
 
@@ -40,9 +43,11 @@ B$OUTW          endp
 ;; B$INB (eax: port)
 B$INB           proc
 
+                push    edx
                 mov     edx, eax
                 xor     eax, eax
                 in      al, dx
+                pop     edx
                 ret
 B$INB           endp
 

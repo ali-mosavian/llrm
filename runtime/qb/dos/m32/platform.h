@@ -26,6 +26,13 @@ typedef unsigned char *os_data_mut;
 /* A near pointer as the data pointers the frontend passes and the OS layer takes. */
 #define QB_FAR_OF(p) ((void *)(p))
 
+/* The video memory at paragraph `segment`: the graphics and text screens. DOS/32A maps the first megabyte at
+   linear 0. */
+#define QB_VIDEO_MEMORY(segment) ((void *)((unsigned long)(segment) << 4))
+
+/* The pointer to segment:offset, as a real-mode interrupt returns one. */
+#define QB_REAL_POINTER(segment, offset) ((void *)(((unsigned long)(segment) << 4) + (offset)))
+
 /* A function pointer in a startup table (xi.h, rtinit.h). */
 typedef void (*qb_init_fn)(void);
 

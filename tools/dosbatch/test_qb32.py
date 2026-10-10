@@ -53,3 +53,44 @@ def probed(tmp_path_factory):
 @pytest.mark.parametrize("name", PROBES)
 def test_probe_prints_what_bcom45_prints_on_dos32(probed, name: str):
     assert probed[name] == ""
+
+
+# NIBBLES and GORILLA on dos32, played with the keys of test_qbdemos and compared with BCOM45's screens.
+@pytest.fixture(scope="module")
+def demo_pairs(tmp_path_factory):
+    found, reason = qbruntime.demo_sources()
+    if not found or not qbruntime.dosbatch.QB45.is_dir():
+        pytest.skip(reason or "QB45_DIR is unavailable")
+    work = tmp_path_factory.mktemp("qb32demos")
+    sources = {path.stem.upper(): path for path in found.values()}
+    import qbplay  # noqa: E402
+
+    (work / "ref").mkdir()
+    reference = qbplay.built_pairs(sources, work / "ref")
+    runtime = qb32.build(work / "runtime")
+    pairs = {}
+    for name, source in sources.items():
+        obj = work / f"{name}.obj"
+        assert (reason := qb32.compile_basic(source, obj)) is None, reason
+        exe = work / f"{name}.exe"
+        loaders = qb32.link(obj, runtime, exe, work)
+        pairs[name] = (reference[name][0], exe, loaders)
+    return pairs
+
+
+@pytest.mark.parametrize("name", ["NIBBLES", "GORILLA"])
+def test_demo_shows_what_bcom45_shows_on_dos32(demo_pairs, tmp_path, name: str):
+    import shutil
+
+    import test_qbdemos  # noqa: E402
+
+    reference, candidate, loaders = demo_pairs[name]
+    want = test_qbdemos.play(reference, tmp_path / "ref", test_qbdemos.SCRIPTS[name])
+    (tmp_path / "cand").mkdir()
+    for loader in loaders:
+        shutil.copy(loader, tmp_path / "cand" / loader.name)
+    got = test_qbdemos.play(candidate, tmp_path / "cand", test_qbdemos.SCRIPTS[name])
+    import qbplay  # noqa: E402
+
+    for checkpoint in want:
+        assert qbplay.differing_pixels(want[checkpoint], got[checkpoint]) <= test_qbdemos.CURSOR_PIXELS, checkpoint

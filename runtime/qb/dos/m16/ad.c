@@ -25,6 +25,11 @@ void *ad_near_data(const AD *ad)
     return (void *)ad->data_off;
 }
 
+unsigned long ad_free_bytes(void)
+{
+    return fh_free_bytes();
+}
+
 void ad_far_alloc(AD *ad, unsigned long bytes)
 {
     fh_alloc(ad, bytes);

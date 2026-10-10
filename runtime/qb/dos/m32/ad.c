@@ -20,6 +20,22 @@ void *ad_near_data(const AD *ad)
     return ad->data;
 }
 
+unsigned long ad_free_bytes(void)
+{
+    unsigned long largest = 0;
+    const char *at = heap_low;
+
+    while (at < heap_top) {
+        const LhEntry *entry = (const LhEntry *)at;
+        unsigned long room = entry->size - (sizeof(LhEntry) + sizeof(uword));
+
+        if (entry->type == LH_FREE && room > largest)
+            largest = room;
+        at += entry->size;
+    }
+    return largest;
+}
+
 void ad_far_alloc(AD *ad, unsigned long bytes)
 {
     void *data = lh_alloc((uword)bytes, LH_ARRAY, ad, 0);

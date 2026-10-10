@@ -62,4 +62,7 @@ void ad_near_moved(AD *ad, int delta);
 /* Zeros `bytes` of the elements, as ERASE of a static array does. */
 void ad_clear(AD *ad, unsigned long bytes);
 
+/* The bytes of the largest array the target can still take: FRE(-1). */
+unsigned long ad_free_bytes(void);
+
 #endif

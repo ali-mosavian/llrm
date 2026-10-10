@@ -43,7 +43,7 @@ enum {
 /* Volatile: a read loads the latches, which the bits a mask leaves alone come
    from, so it must not be dropped. */
 typedef volatile u8 QB_FAR Video;
-static Video *screen = (Video *)0xA0000000UL;
+static Video *screen = (Video *)QB_VIDEO_MEMORY(0xA000);
 static unsigned pitch = 80;       /* bytes of a row of one plane */
 
 static void controller(unsigned index, unsigned value)
@@ -79,9 +79,9 @@ int gd_set_mode(unsigned mode)
     ops = mode == MODE_LINEAR ? &linear_ops : mode == MODE_CGA4 ? &packed4_ops : mode == MODE_CGA2 ? &packed2_ops : &planar_ops;
     pitch = mode == MODE_320 ? 40 : mode == MODE_LINEAR ? 320 : 80;
     if (mode == MODE_CGA4 || mode == MODE_CGA2)
-        screen = (Video *)0xB8000000UL;
+        screen = (Video *)QB_VIDEO_MEMORY(0xB800);
     else
-        screen = (Video *)0xA0000000UL;
+        screen = (Video *)QB_VIDEO_MEMORY(0xA000);
     if ((r.rax & 0x7F) != (mode & 0x7F))
         return 0;
 
@@ -263,7 +263,7 @@ const u8 QB_FAR *gd_font(unsigned height)
     r.rax = GET_FONT;
     r.rbx = height == 14 ? FONT_14 : height == 16 ? FONT_16 : FONT_8;
     dev_int10(&r);
-    return (const u8 QB_FAR *)((unsigned long)r.res << 16 | r.rbp);
+    return (const u8 QB_FAR *)QB_REAL_POINTER(r.res, r.rbp);
 }
 
 /* The 256-colour mode: a byte a pixel, rows of 320. */
