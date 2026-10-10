@@ -779,6 +779,7 @@ pub fn selected_with<'c>(
         module,
         function,
         arch,
+        regs: Regs(arch.registers()),
         callee_facts,
         spaces: arch.layout().spaces.roles,
         layout,
@@ -1261,6 +1262,8 @@ pub struct Selector<'m, 'c, 'p> {
     module: &'m Module,
     function: &'m Function,
     arch: &'c dyn llrm_target::Target,
+    /// The register file of `arch`.
+    regs: Regs,
     /// What the functions that take part leave different.
     callee_facts: &'c CalleeFacts,
     layout: DataLayout,
@@ -1405,7 +1408,7 @@ pub struct Selector<'m, 'c, 'p> {
 impl Selector<'_, '_, '_> {
     /// The register file of the target being compiled for.
     pub(crate) fn regs(&self) -> Regs {
-        Regs(self.arch.registers())
+        self.regs
     }
 
     fn body(

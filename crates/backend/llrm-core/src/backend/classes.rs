@@ -37,6 +37,8 @@ pub struct RegisterClasses {
     pub encodable_bases: BTreeSet<RegId>,
     /// The words whose low byte has a register of its own.
     pub byte_words: BTreeSet<RegId>,
+    /// Where the x87 status word is stored (`fnstsw`'s register).
+    status_word: Option<RegId>,
     /// The register file of the target these classes are of.
     pub registers: llrm_lir::registers::Regs,
 }
@@ -102,7 +104,7 @@ impl RegisterClasses {
             |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(word).collect::<BTreeSet<_>>();
         let (encodable_bases, indexes) = (every("base"), every("index"));
         let addressing = encodable_bases.union(&indexes).copied().collect();
-        Self {
+        let mut classes = Self {
             pins,
             available: held("gpr"),
             word_bases: words("base"),
@@ -117,8 +119,11 @@ impl RegisterClasses {
                     .filter_map(|(id, _)| regs.view(id, 16))
                     .collect()
             },
+            status_word: None,
             registers: llrm_lir::registers::Regs(arch.registers()),
-        }
+        };
+        classes.status_word = classes.found_status_word();
+        classes
     }
 
     /// These classes for a function with no frame register (LLVM's `hasFP`
@@ -146,6 +151,10 @@ impl RegisterClasses {
     /// The register the x87 status word is stored in (`fnstsw`'s fixed
     /// destination); the flags reach `sahf` through it.
     pub fn status_word(&self) -> Option<RegId> {
+        self.status_word
+    }
+
+    fn found_status_word(&self) -> Option<RegId> {
         let regs = self.registers;
         let forms = self.pins.get("fnstsw")?;
         let (_, _, _, pins) =
