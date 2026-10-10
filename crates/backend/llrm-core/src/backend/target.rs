@@ -177,7 +177,9 @@ fn integer_of(bytes: i64) -> Vec<Register> {
     registerinfo::TABLE
         .iter()
         .enumerate()
-        .filter(|(_, one)| one.is_some_and(|one| one.classes.contains(&"int") && i64::from(one.bits / 8) == bytes))
+        .filter(|(_, one)| {
+            one.is_some_and(|one| one.classes & registerinfo::class::INT != 0 && i64::from(one.bits / 8) == bytes)
+        })
         .filter_map(|(at, _)| Register::values().find(|one| *one as usize == at))
         .collect()
 }
@@ -186,12 +188,13 @@ fn integer_of(bytes: i64) -> Vec<Register> {
 /// width by iced's number: the order the allocator's tables have always been
 /// walked in.
 pub fn integer_registers() -> impl Iterator<Item = Register> {
-    [4, 2, 1].into_iter().flat_map(integer_of)
+    static ALL: LazyLock<Vec<Register>> = LazyLock::new(|| [4, 2, 1].into_iter().flat_map(integer_of).collect());
+    ALL.iter().copied()
 }
 
 /// Whether `register` is an integer register: one the tables name by width.
 pub fn integer(register: Register) -> bool {
-    registerinfo::in_class(register, "int")
+    registerinfo::in_class(register, registerinfo::class::INT)
 }
 
 /// The same register named at the width an operand needs.

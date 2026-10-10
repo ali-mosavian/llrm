@@ -13,8 +13,8 @@ pub struct Entry {
     pub root: RegId,
     /// The bit offset inside the root.
     pub lane: u32,
-    /// The classes every target gives it.
-    pub classes: &'static [&'static str],
+    /// The classes every target gives it, as `class` bits.
+    pub classes: u32,
 }
 
 include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
@@ -53,13 +53,13 @@ pub fn name(register: RegId) -> Option<&'static str> {
     get(register).map(|one| one.name)
 }
 
-/// Whether the description gives `register` the class in every target that
-/// lists it.
+/// Whether the description gives `register` every class in `mask` (`class`
+/// bits) in every target that lists it.
 pub fn in_class(
     register: RegId,
-    class: &str,
+    mask: u32,
 ) -> bool {
-    get(register).is_some_and(|one| one.classes.contains(&class))
+    get(register).is_some_and(|one| one.classes & mask == mask)
 }
 
 /// The register of `root` that is `bits` wide: the first by iced's number where
@@ -68,8 +68,11 @@ pub fn view(
     root: RegId,
     bits: u32,
 ) -> Option<RegId> {
-    let at = TABLE.iter().position(|one| one.is_some_and(|one| one.root == root && one.bits == bits))?;
-    RegId::values().find(|one| *one as usize == at)
+    VIEWS
+        .iter()
+        .filter(|(of, width, _)| *of == root && *width == bits)
+        .map(|(_, _, one)| *one)
+        .min_by_key(|one| *one as usize)
 }
 
 #[cfg(test)]

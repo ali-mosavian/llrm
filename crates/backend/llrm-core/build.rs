@@ -105,13 +105,24 @@ fn register_info(targets: &[std::path::PathBuf]) -> String {
             }
         }
     }
-    let mut code = String::from(
+    // Each class any register has is a bit; a register's classes are the bits.
+    let mut names: Vec<&str> = rows.iter().flat_map(|row| row.classes.iter().map(String::as_str)).collect();
+    names.sort_unstable();
+    names.dedup();
+    let mut code = String::from("/// The classes the descriptions give registers, one bit each.\npub mod class {\n");
+    for (at, name) in names.iter().enumerate() {
+        code.push_str(&format!("    pub const {}: u32 = 1 << {at};\n", name.to_uppercase()));
+    }
+    code.push_str("}\n\n");
+    code.push_str(
         "pub static TABLE: [Option<Entry>; 256] = {\n    let mut table: [Option<Entry>; 256] = [None; 256];\n",
     );
     for row in &rows {
-        let classes = row.classes.iter().map(|one| format!("{one:?}")).collect::<Vec<_>>().join(", ");
+        let mask =
+            row.classes.iter().map(|one| format!("class::{}", one.to_uppercase())).collect::<Vec<_>>().join(" | ");
+        let mask = if mask.is_empty() { "0".to_owned() } else { mask };
         code.push_str(&format!(
-            "    table[iced_x86::Register::{} as usize] = Some(Entry {{ name: {:?}, bits: {}, root: iced_x86::Register::{}, lane: {}, classes: &[{classes}] }});\n",
+            "    table[iced_x86::Register::{} as usize] = Some(Entry {{ name: {:?}, bits: {}, root: iced_x86::Register::{}, lane: {}, classes: {mask} }});\n",
             row.name.to_uppercase(),
             row.name,
             row.bits,
@@ -119,7 +130,20 @@ fn register_info(targets: &[std::path::PathBuf]) -> String {
             row.lane
         ));
     }
-    code.push_str("    table\n};\n");
+    code.push_str("    table\n};\n\n");
+    // The view of each root at each width, first by iced's number: (root, bits,
+    // register).
+    code.push_str("/// Each register file entry at each width by its root, in the order the registers are numbered.\n");
+    code.push_str("pub static VIEWS: &[(iced_x86::Register, u32, iced_x86::Register)] = &[\n");
+    for row in &rows {
+        code.push_str(&format!(
+            "    (iced_x86::Register::{}, {}, iced_x86::Register::{}),\n",
+            row.root.to_uppercase(),
+            row.bits,
+            row.name.to_uppercase()
+        ));
+    }
+    code.push_str("];\n");
     code
 }
 
