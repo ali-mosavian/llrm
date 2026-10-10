@@ -275,7 +275,6 @@ pub fn popped_arguments(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
-    const SCRATCH: [RegId; 4] = [RegId::CX, RegId::DX, RegId::BX, RegId::AX];
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
     let exits = liveness::dead_at_exit(body);
@@ -303,7 +302,10 @@ pub fn popped_arguments(
                 _ => 0,
             };
             let dead = &dead_after[&id(one)];
-            let scratch = SCRATCH.into_iter().find(|register| _lanes(*register).is_subset(dead));
+            let scratch = crate::backend::registerinfo::scratch_order()
+                .iter()
+                .copied()
+                .find(|register| _lanes(*register).is_subset(dead));
             match scratch {
                 Some(register)
                     if words > 0

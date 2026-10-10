@@ -85,6 +85,8 @@ pub struct Info {
     pub stack: RegId,
     /// The far-pointer load that fills each segment register: `(es, "les")`.
     pub loads: &'static [(RegId, &'static str)],
+    /// The registers a pass may borrow for a moment, most preferred first.
+    pub scratch: &'static [RegId],
     /// The segment register each address space of a pair kind means, where the
     /// target has segments: what an access without a prefix reads, the stack's,
     /// the code's, and the one a far pointer's selector is loaded into.
