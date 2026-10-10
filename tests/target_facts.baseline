@@ -15,9 +15,8 @@
 2 crates/backend/llrm-core/src/backend/objbuild.rs
 4 crates/backend/llrm-core/src/backend/peep/guards.rs
 4 crates/backend/llrm-core/src/backend/peep/make.rs
-30 crates/backend/llrm-core/src/backend/peephole.rs
+11 crates/backend/llrm-core/src/backend/peephole.rs
 1 crates/backend/llrm-core/src/backend/pointers.rs
-4 crates/backend/llrm-core/src/backend/regclass.rs
 5 crates/backend/llrm-core/src/backend/spiller.rs
 3 crates/backend/llrm-core/src/backend/ssaspill.rs
 2 crates/backend/llrm-core/src/backend/storecombine.rs
