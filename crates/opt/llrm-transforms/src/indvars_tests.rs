@@ -152,7 +152,7 @@ fn rewinding_the_corpus_loses_no_trip_count() {
         let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(
             context, layout, function, outer,
         ));
-        let facts = llrm_analysis::consts::known(&unit, None, None, None);
+        let facts = llrm_analysis::consts::known(&unit);
         loops::loops(&cfg::graph(function), function.entry().map(cfg::id))
             .into_iter()
             .filter_map(|loop_| Some((loop_.header, llrm_analysis::induction::trip_count(&unit, &loop_, &facts)?)))

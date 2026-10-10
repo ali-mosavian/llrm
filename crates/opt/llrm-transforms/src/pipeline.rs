@@ -131,7 +131,10 @@ impl Options {
     /// loop is copied out completely only where the code does not grow;
     /// nothing is inlined that `early-inlining-insns` (6) over
     /// `max-inline-insns-auto` (15) of the -O2 threshold does not admit,
-    /// and no gcse, sibling calls, pattern fill, peeling or unswitching.
+    /// and no gcse, sibling calls, peeling or unswitching. Pattern fill is on
+    /// (`LoopIdiomRecognize` is in LLVM's O1 pipeline, PassBuilderPipelines.cpp
+    /// L562): the one departure from gcc's -O1 here, the user's decision of
+    /// 2026-10-10 (docs/levels.md).
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
@@ -140,7 +143,6 @@ impl Options {
             loop_intervals: false,
             forward: false,
             drop_loads: false,
-            fill: false,
             sibcalls: false,
             peel: false,
             unswitch: false,
@@ -303,7 +305,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
         Box::new(fill::Fill { size: applied.options.prefers_size() }),
-        Box::new(fill::Merge),
+        Box::new(fill::Merge { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }

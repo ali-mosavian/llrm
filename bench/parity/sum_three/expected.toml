@@ -1,5 +1,5 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "fill: adjacent constant stores are one store of the widest integer where that is fewer bytes tuned for size (gcc store-merging, LLVM MergeConsecutiveStores); several fills in a loop are a memset each where memsets are cheaper in clocks and bytes"
+blessed = "2026-10-10"
 
 [bas.O2]
 instructions = 86
@@ -16,9 +16,9 @@ data_bytes = 103
 bss_bytes = 0
 
 [c.O2]
-instructions = 95
-memory_operands = 41
-code_bytes = 197
+instructions = 92
+memory_operands = 38
+code_bytes = 191
 data_bytes = 24
 bss_bytes = 0
 
@@ -30,16 +30,16 @@ data_bytes = 24
 bss_bytes = 0
 
 [nib.O2]
-instructions = 78
-memory_operands = 36
-code_bytes = 185
+instructions = 71
+memory_operands = 29
+code_bytes = 171
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 79
-memory_operands = 36
-code_bytes = 184
+instructions = 73
+memory_operands = 30
+code_bytes = 172
 data_bytes = 0
 bss_bytes = 0
 

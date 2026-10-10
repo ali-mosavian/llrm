@@ -34,7 +34,7 @@ fn facts(text: &str) -> (Module, Option<Known>, Option<Known>) {
     let module = parsed(&format!("{DOS}{text}"));
     let dl = layout(&module);
     let f = function(&module, "f");
-    let found = known(&crate::testing::with_registers(Unit::of(&module, &dl, f)), None, None, None);
+    let found = known(&crate::testing::with_registers(Unit::of(&module, &dl, f)));
     let (joined, carried) = (found.get(&value(f, "joined")).cloned(), found.get(&value(f, "carried")).cloned());
     (module, joined, carried)
 }
@@ -94,7 +94,7 @@ fn test_a_body_with_no_open_phi_sets_no_propagation_up() {
         let dl = layout(&module);
         let f = function(&module, "f");
         super::WORKED.with(|worked| worked.set(0));
-        known(&crate::testing::with_registers(Unit::of(&module, &dl, f)), None, None, None);
+        known(&crate::testing::with_registers(Unit::of(&module, &dl, f)));
         super::WORKED.with(std::cell::Cell::get)
     };
     assert_eq!(worked(straight), 0, "a body without a phi");

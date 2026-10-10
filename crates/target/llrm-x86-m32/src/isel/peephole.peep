@@ -48,3 +48,17 @@ rule zero_extended_in_place
     match   movzx d:reg32, w:reg16
     when    free(@0, widening), upper_zero(@0, w), same_root(d, w)
     rewrite anchor @0
+
+// A load whose only reader is an indirect call is the call's memory operand, as `call [table+ecx*4]`:
+// the pointer is read there. The load may carry a relocation, which the call then does; the call
+// keeps what it clobbers and delivers.
+meta called = spread group frame_adjust spill_reload spill_store
+meta loaded_pointer = clobbers requires delivers spread group unowned frame_adjust
+
+group fused_calls
+    walk gap skip nothing resume past
+
+rule fused_call
+    match   mov r:reg, c:mem ; ... delays_pushes(@0, *) ; call r
+    when    free(@0, loaded_pointer), free(@1, called), same_width(r, c), dead(@1, lanes(r)), encodable($1)
+    rewrite anchor @0 ; @1: =@1 c {uses: [], symbol: @0.symbol}

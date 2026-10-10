@@ -1,19 +1,20 @@
-reason = "phielim renames a loop phi to its back-edge argument only where its copies would need an edge block (never an x87 value); twoaddr ties the source that does not interfere with the destination. matmul bas -O2 instructions -11.6%, nbody_fixed nib -Os instructions -3.7% (xchg chains gone) with memory operands +12%; crc bas +1 instruction, +2 bytes (one copy outside its loop)"
+reason = "fill: adjacent constant stores are one store of the widest integer where that is fewer bytes tuned for size (gcc store-merging, LLVM MergeConsecutiveStores); several fills in a loop are a memset each where memsets are cheaper in clocks and bytes"
 blessed = "2026-10-10"
 
 [bas.O2]
-instructions = 1217
+instructions = 1216
 memory_operands = 71
-code_bytes = 225
+code_bytes = 223
 data_bytes = 31
 bss_bytes = 0
 
 [bas.Os]
-instructions = 1208
+instructions = 1207
 memory_operands = 71
-code_bytes = 222
+code_bytes = 220
 data_bytes = 31
 bss_bytes = 0
+kernel_ms = 0.0363
 
 [c.O2]
 instructions = 634
@@ -30,16 +31,16 @@ data_bytes = 10
 bss_bytes = 0
 
 [nib.O2]
-instructions = 649
-memory_operands = 18
-code_bytes = 115
+instructions = 643
+memory_operands = 12
+code_bytes = 99
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 640
-memory_operands = 18
-code_bytes = 114
+instructions = 634
+memory_operands = 12
+code_bytes = 98
 data_bytes = 0
 bss_bytes = 0
 

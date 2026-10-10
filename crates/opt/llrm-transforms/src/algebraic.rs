@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::consts::{self, Known};
-use llrm_analysis::manager::{Ranges, Registers};
+use llrm_analysis::manager::{DemandedBits, Ranges, Registers};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, induction, ranges};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask};
@@ -136,6 +136,7 @@ pub fn simplified(
         round |= _unsigned_divisions(context, layout, function, &outer, analyses, changed || round, &facts, size);
         round |= _divisions(context, layout, function, &outer, &facts);
         round |= _redundant_masks(context, layout, function, &outer, analyses, changed || round);
+        round |= _unread_bits(context, layout, function, analyses, changed || round);
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
@@ -708,7 +709,7 @@ fn _recurrences(
     let analysed = Unit::within(context, layout, function, outer).with_shape(&shape);
     // Found once, for the body as the rounds before left it, not for each
     // loop's recurrences.
-    let registers = consts::known(&analysed, None, None, None);
+    let registers = consts::known(&analysed);
     let analysed = analysed.with_registers(&registers);
     shape.loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
 }
@@ -1577,6 +1578,99 @@ fn _redundant_masks(
         }
     }
     !made.is_empty()
+}
+
+/// A value some of whose bits nothing reads (`DemandedBits`, LLVM's
+/// SimplifyDemandedBits): a mask that clears only bits nobody reads, or an `or`
+/// that sets only such bits, is its operand; an operation whose every read bit
+/// is known zero is zero. `(a + (b & 3)) & 3` is `(a + b) & 3`, and the half of
+/// a bit reversal a masked byte never reads is gone.
+fn _unread_bits(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    edited: bool,
+) -> bool {
+    // A value that is gone reads nothing: what only it read is unread in turn,
+    // so a stage of a reversal at a time, until none is left, not a round
+    // of every rule for each.
+    let mut changed = false;
+    let mut edited = edited;
+    while _unread_bits_once(context, layout, function, analyses, edited) {
+        changed = true;
+        edited = true;
+    }
+    changed
+}
+
+fn _unread_bits_once(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    edited: bool,
+) -> bool {
+    // What can have a read bit cleared or every read bit known zero: a mask, a
+    // shift by a constant (a run of its bits is zero) or a zero extension;
+    // the rest is asked of `known_zero` only once something reads less than
+    // all of a value.
+    let candidates: Vec<InstId> = function
+        .walk()
+        .filter_map(|(_, inst)| {
+            let instruction = function.instruction(inst);
+            let result = instruction.result?;
+            context.types.int_bits(instruction.ty).filter(|&width| width <= 128)?;
+            if function.users(result).is_empty() {
+                return None;
+            }
+            let constant = instruction.operands.iter().any(|&operand| _integer(context, operand).is_some());
+            match instruction.opcode {
+                Opcode::Binary(BinaryOp::And | BinaryOp::Or | BinaryOp::Shl | BinaryOp::LShr) if constant => Some(inst),
+                Opcode::Cast(CastOp::ZExt) => Some(inst),
+                _ => None,
+            }
+        })
+        .collect();
+    if candidates.is_empty() {
+        return false;
+    }
+    if edited {
+        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+    }
+    let read = analyses.get::<DemandedBits>(context, layout, function);
+    // Bits read only shrink as the rewrites below go, so the answers stay sound
+    // for the batch.
+    let mut changed = false;
+    for inst in candidates {
+        if function.is_erased(inst) {
+            continue;
+        }
+        let instruction = function.instruction(inst);
+        let result = instruction.result.expect("a value");
+        let Some(&bits) = read.get(&result) else { continue };
+        let width = context.types.int_bits(instruction.ty).expect("an integer");
+        let all = if width == 128 { u128::MAX } else { (1_u128 << width) - 1 };
+        let zero = llrm_mir::valuetracking::known_zero(context, function, Operand::Value(result)) & all;
+        let (opcode, operands) = (instruction.opcode.clone(), instruction.operands.clone());
+        let replacement = if bits & !zero == 0 {
+            Some(_constant(context, function, inst, 0))
+        } else {
+            let constant = |at: usize| operands.get(at).and_then(|&operand| _integer(context, operand));
+            match (opcode, constant(0), constant(1)) {
+                (Opcode::Binary(BinaryOp::And), None, Some(mask)) if bits & !mask == 0 => Some(operands[0]),
+                (Opcode::Binary(BinaryOp::And), Some(mask), None) if bits & !mask == 0 => Some(operands[1]),
+                (Opcode::Binary(BinaryOp::Or), None, Some(mask)) if bits & mask == 0 => Some(operands[0]),
+                (Opcode::Binary(BinaryOp::Or), Some(mask), None) if bits & mask == 0 => Some(operands[1]),
+                _ => None,
+            }
+        };
+        if let Some(with) = replacement {
+            _forward(function, inst, with);
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// `sdiv` and `srem` of a dividend proved non-negative, by a power of two, are

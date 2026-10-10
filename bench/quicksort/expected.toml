@@ -1,17 +1,17 @@
-reason = "shrink-wrap per piece (#1323): the frame and each register kept are set up where first used and a small shared return is copied for the early exit; fib -8.0%, hanoi -8.0%, quicksort c -O2 -3.3% instructions (code +3 B), bintree/quicksort bas -0.4..-1.0%; one byte less in grep nib"
+reason = "DemandedBits (algebraic): a mask over bits nothing reads is gone. 18 rows better: bintree bas/nib -O2/-Os (-8 B), histo nib (-3 B, -5%), quicksort bas/nib (-7 B). One worse: bintree nib -Os memory_operands 27650 -> 28250, 444 -> 446 B: the LCG state's 'and 65535' went and the allocator then keeps the seed in its slot (add [bp-6],imm) instead of a register."
 blessed = "2026-10-10"
 
 [bas.O2]
-instructions = 228244
+instructions = 227220
 memory_operands = 113692
-code_bytes = 559
+code_bytes = 552
 data_bytes = 17
 bss_bytes = 0
 
 [bas.Os]
-instructions = 214063
+instructions = 213039
 memory_operands = 113705
-code_bytes = 502
+code_bytes = 496
 data_bytes = 17
 bss_bytes = 0
 
@@ -30,16 +30,16 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 164849
+instructions = 163825
 memory_operands = 59388
-code_bytes = 415
+code_bytes = 408
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 166931
+instructions = 165907
 memory_operands = 68976
-code_bytes = 400
+code_bytes = 394
 data_bytes = 0
 bss_bytes = 0
 
