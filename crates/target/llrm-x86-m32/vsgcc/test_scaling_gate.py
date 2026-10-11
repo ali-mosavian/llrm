@@ -809,3 +809,18 @@ def test_loopsimplify_does_not_derive_the_shape_of_the_function_again_for_each_l
     small, big = (own[label].get("mir loopsimplify", 0.0) - own["empty"].get("mir loopsimplify", 0.0) for label in ("n", "2n"))
     assert small > 5.0, f"premise: loopsimplify ran ({small:.1f} Minstr)"
     assert big <= 4.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_a_spill_round_reads_the_homes_by_the_values_it_asks_not_by_the_liveness_of_every_value(tmp_path):
+    """joins(N) at -O2: `regalloc spill` read which stored homes still held (`storedhomes::held`) by solving the liveness of every value in the
+    body and walking every instruction, for each of its rounds (388 at N=256) to read the few homes among them: its own work read 89 / 780 /
+    6,354 Minstr at N=64, 128, 256, a step of 8.7. Asked of the values it reads, where they occur: 48 / 280 / 1,444, a step of 5.8. A
+    step above 7.0 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 64), ("2n", 128)):
+        source = tmp_path / f"joins_{label}.c"
+        source.write_text("" if size == 0 else scaling.joins(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("regalloc spill", 0.0) - own["empty"].get("regalloc spill", 0.0) for label in ("n", "2n"))
+    assert small > 5.0, f"premise: the allocator spilled ({small:.1f} Minstr)"
+    assert big <= 7.0 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
