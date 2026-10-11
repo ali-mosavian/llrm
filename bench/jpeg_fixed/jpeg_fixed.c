@@ -2,22 +2,17 @@
 // data: ../jpeg_single/photo.jpg
 /* JPEG to BMP, an MCU row at a time: baseline Huffman YCbCr in 4:2:0, 4:4:4, 4:2:2 or 4:4:0, with restart markers. Reads
    PHOTO.JPG, writes a top-down 24-bit OUT.BMP and returns the Adler-32 of the BMP's bytes. The IDCT and the colour
-   conversion are in 32-bit fixed point (long; >> floors); chroma is replicated. A progressive or arithmetic-coded file is refused with a message. */
+   conversion are in 32-bit Q10 fixed point (long), each product truncated toward zero; chroma is replicated. A progressive or arithmetic-coded file is refused with a message. */
 #include "../bench_io.h"
 extern void report(long value);
 
 #define MAXW 256 /* the widest picture: a row of MCUs is buffered */
 
-/* cos((2x+1)u*pi/16) * (u ? 1 : 1/sqrt(2)) / 2 in Q12 */
+/* Q10: ten fraction bits. cos((2x+1)u*pi/16) * (u ? 1 : 1/sqrt(2)) / 2 */
 static const int cosine[8][8] = {
-    {1448, 2009, 1892, 1703, 1448, 1138, 784, 400},
-    {1448, 1703, 784, -400, -1448, -2009, -1892, -1138},
-    {1448, 1138, -784, -2009, -1448, 400, 1892, 1703},
-    {1448, 400, -1892, -1138, 1448, 1703, -784, -2009},
-    {1448, -400, -1892, 1138, 1448, -1703, -784, 2009},
-    {1448, -1138, -784, 2009, -1448, -400, 1892, -1703},
-    {1448, -1703, 784, 400, -1448, 2009, -1892, 1138},
-    {1448, -2009, 1892, -1703, 1448, -1138, 784, -400}};
+    {362, 502, 473, 426, 362, 284, 196, 100},       {362, 426, 196, -100, -362, -502, -473, -284}, {362, 284, -196, -502, -362, 100, 473, 426},
+    {362, 100, -473, -284, 362, 426, -196, -502},   {362, -100, -473, 284, 362, -426, -196, 502},  {362, -284, -196, 502, -362, -100, 473, -426},
+    {362, -426, 196, 100, -362, 502, -473, 284},    {362, -502, 473, -426, 362, -284, 196, -100}};
 static const unsigned char zigzag[64] = {0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
                                          35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
 
@@ -127,8 +122,13 @@ static void message(const char *text)
     bench_write(1, text, length);
 }
 
-/* The 8x8 block in coef, into plane `p` at (x0, y0): rows to Q2 (Q12 times the coefficient, >> 10), then columns to
-   integers, +128. */
+/* The Q10 product, truncated toward zero (C's `/`; Nib's fixed `*` floors, so its tmul truncates). a * b fits 32 bits. */
+static long tmul(long a, long b)
+{
+    return a * b / 1024L;
+}
+
+/* The 8x8 block in coef, into plane `p` at (x0, y0): rows to Q10, then columns, +128.5, to integers. */
 static void idct(int p, int x0, int y0)
 {
     long tmp[64], sum;
@@ -136,17 +136,17 @@ static void idct(int p, int x0, int y0)
 
     for (v = 0; v < 8; ++v)
         for (x = 0; x < 8; ++x) {
-            sum = 512L;
+            sum = 0;
             for (u = 0; u < 8; ++u)
-                sum += cosine[x][u] * coef[v * 8 + u];
-            tmp[v * 8 + x] = sum >> 10;
+                sum += tmul(cosine[x][u], coef[v * 8 + u] * 1024L);
+            tmp[v * 8 + x] = sum;
         }
     for (y = 0; y < 8; ++y)
         for (x = 0; x < 8; ++x) {
-            sum = 8192L;
+            sum = 131584L;
             for (v = 0; v < 8; ++v)
-                sum += cosine[y][v] * tmp[v * 8 + x];
-            value = (int)(sum >> 14) + 128;
+                sum += tmul(cosine[y][v], tmp[v * 8 + x]);
+            value = (int)(sum / 1024L);
             planes[p][y0 + y][x0 + x] = (unsigned char)(value < 0 ? 0 : value > 255 ? 255 : value);
         }
 }
@@ -156,17 +156,17 @@ static int clamp(long value)
     return value < 0 ? 0 : value > 255 ? 255 : (int)value;
 }
 
-/* One line of the MCU row as BGR, at (x >> hshift, y >> vshift) in the chroma planes; the constants are Q16. */
+/* One line of the MCU row as BGR, at (x >> hshift, y >> vshift) in the chroma planes; the constants are Q10. */
 static void convert(int y, int width, int hshift, int vshift)
 {
     int x;
     for (x = 0; x < width; ++x) {
-        long luma = planes[0][y][x];
-        long blue = (long)planes[1][y >> vshift][x >> hshift] - 128L;
-        long red = (long)planes[2][y >> vshift][x >> hshift] - 128L;
-        line[3 * x] = (unsigned char)clamp(luma + ((116130L * blue + 32768L) >> 16));
-        line[3 * x + 1] = (unsigned char)clamp(luma + ((-22554L * blue - 46802L * red + 32768L) >> 16));
-        line[3 * x + 2] = (unsigned char)clamp(luma + ((91881L * red + 32768L) >> 16));
+        long luma = (long)planes[0][y][x] * 1024L;
+        long blue = ((long)planes[1][y >> vshift][x >> hshift] - 128L) * 1024L;
+        long red = ((long)planes[2][y >> vshift][x >> hshift] - 128L) * 1024L;
+        line[3 * x] = (unsigned char)clamp((luma + tmul(1815L, blue) + 512L) / 1024L);
+        line[3 * x + 1] = (unsigned char)clamp((luma - tmul(352L, blue) - tmul(731L, red) + 512L) / 1024L);
+        line[3 * x + 2] = (unsigned char)clamp((luma + tmul(1436L, red) + 512L) / 1024L);
     }
 }
 

@@ -3,7 +3,7 @@
 ' data: ../jpeg_single/photo.jpg
 ' JPEG to BMP, an MCU row at a time, as jpeg_single.c: baseline Huffman YCbCr in 4:2:0, 4:4:4, 4:2:2 or 4:4:0 with restart
 ' markers. Reads PHOTO.JPG, writes a top-down 24-bit OUT.BMP and returns the Adler-32 of the BMP's bytes. IDCT and colour
-' conversion in 32-bit fixed point (LONG; the shifts floor). Progressive and arithmetic-coded files are refused with a message.
+' conversion in 32-bit Q10 fixed point (LONG), each product truncated toward zero. Progressive and arithmetic-coded files are refused with a message.
 DEFINT A-Z
 CONST MAXW = 256
 DECLARE FUNCTION BenchJpegFixed& ()
@@ -14,14 +14,14 @@ DECLARE FUNCTION Receive% (count AS INTEGER)
 DECLARE FUNCTION Decode% (table AS INTEGER)
 DECLARE FUNCTION Extend% (value AS INTEGER, size AS INTEGER)
 DECLARE FUNCTION Clamp% (value AS LONG)
-DECLARE FUNCTION Shr& (x AS LONG, divisor AS LONG)
+DECLARE FUNCTION Tmul& (a AS LONG, b AS LONG)
 DECLARE SUB Restart ()
 DECLARE SUB Emit (outFile AS INTEGER, bytes AS STRING)
 DECLARE SUB Put32 (at AS INTEGER, value AS LONG)
 DECLARE SUB Idct (p AS INTEGER, x0 AS INTEGER, y0 AS INTEGER)
 DECLARE SUB Convert (y AS INTEGER, imgW AS INTEGER, hshift AS INTEGER, vshift AS INTEGER)
 
-DIM SHARED cosine(0 TO 7, 0 TO 7) AS INTEGER
+DIM SHARED cosine(0 TO 7, 0 TO 7) AS LONG
 DIM SHARED zigzag(0 TO 63) AS INTEGER, pow2(0 TO 14) AS INTEGER
 DIM SHARED planes(0 TO 2, 0 TO 15, 0 TO MAXW - 1) AS INTEGER
 DIM SHARED quant(0 TO 3, 0 TO 63) AS INTEGER
@@ -56,19 +56,19 @@ FUNCTION Clamp% (value AS LONG)
     END IF
 END FUNCTION
 
-' The constants are Q16.
+' One line of the MCU row as BGR; the constants are Q10.
 SUB Convert (y AS INTEGER, imgW AS INTEGER, hshift AS INTEGER, vshift AS INTEGER)
     DIM x AS INTEGER, cx AS INTEGER, cy AS INTEGER
     DIM luma AS LONG, blue AS LONG, red AS LONG
     cy = y \ (vshift + 1)
     FOR x = 0 TO imgW - 1
         cx = x \ (hshift + 1)
-        luma = planes(0, y, x)
-        blue = planes(1, cy, cx) - 128&
-        red = planes(2, cy, cx) - 128&
-        MID$(lineBuf, 3 * x + 1, 1) = CHR$(Clamp%(luma + Shr&(116130& * blue + 32768&, 65536)))
-        MID$(lineBuf, 3 * x + 2, 1) = CHR$(Clamp%(luma + Shr&(-22554& * blue - 46802& * red + 32768&, 65536)))
-        MID$(lineBuf, 3 * x + 3, 1) = CHR$(Clamp%(luma + Shr&(91881& * red + 32768&, 65536)))
+        luma = planes(0, y, x) * 1024&
+        blue = (planes(1, cy, cx) - 128&) * 1024
+        red = (planes(2, cy, cx) - 128&) * 1024
+        MID$(lineBuf, 3 * x + 1, 1) = CHR$(Clamp%((luma + Tmul&(1815&, blue) + 512) \ 1024))
+        MID$(lineBuf, 3 * x + 2, 1) = CHR$(Clamp%((luma - Tmul&(352&, blue) - Tmul&(731&, red) + 512) \ 1024))
+        MID$(lineBuf, 3 * x + 3, 1) = CHR$(Clamp%((luma + Tmul&(1436&, red) + 512) \ 1024))
     NEXT
 END SUB
 
@@ -108,27 +108,27 @@ FUNCTION GetBit%
     GetBit% = (bitBuf \ pow2(bitCnt)) AND 1
 END FUNCTION
 
-' Rows to Q2 (Q12 cosine times the coefficient, shifted right 10), then columns to integers, +128.
+' Rows to Q10, then columns, +128.5, to integers.
 SUB Idct (p AS INTEGER, x0 AS INTEGER, y0 AS INTEGER)
     DIM tmp(0 TO 63) AS LONG
     DIM sum AS LONG
     DIM v AS INTEGER, x AS INTEGER, u AS INTEGER, y AS INTEGER
     FOR v = 0 TO 7
         FOR x = 0 TO 7
-            sum = 512&
+            sum = 0
             FOR u = 0 TO 7
-                sum = sum + cosine(x, u) * coef(v * 8 + u)
+                sum = sum + Tmul&(cosine(x, u), coef(v * 8 + u) * 1024)
             NEXT
-            tmp(v * 8 + x) = Shr&(sum, 1024)
+            tmp(v * 8 + x) = sum
         NEXT
     NEXT
     FOR y = 0 TO 7
         FOR x = 0 TO 7
-            sum = 8192&
+            sum = 131584
             FOR v = 0 TO 7
-                sum = sum + cosine(y, v) * tmp(v * 8 + x)
+                sum = sum + Tmul&(cosine(y, v), tmp(v * 8 + x))
             NEXT
-            planes(p, y0 + y, x0 + x) = Clamp%(Shr&(sum, 16384) + 128)
+            planes(p, y0 + y, x0 + x) = Clamp%(sum \ 1024)
         NEXT
     NEXT
 END SUB
@@ -158,9 +158,9 @@ FUNCTION NextByte%
     NextByte% = ASC(MID$(inBuf, inPos, 1))
 END FUNCTION
 
-' x \ divisor, rounded down; divisor a power of two, x above -2^30.
-FUNCTION Shr& (x AS LONG, divisor AS LONG)
-    Shr& = (x + 1073741824) \ divisor - 1073741824 \ divisor
+' The Q10 product, truncated toward zero (\ truncates; Nib's fixed * floors, so its tmul truncates). a * b fits a LONG.
+FUNCTION Tmul& (a AS LONG, b AS LONG)
+    Tmul& = (a * b) \ 1024
 END FUNCTION
 
 SUB Put32 (at AS INTEGER, value AS LONG)
@@ -203,15 +203,15 @@ FUNCTION BenchJpegFixed&
     DIM code AS INTEGER, at AS INTEGER, rs AS INTEGER, runLen AS INTEGER, bits AS INTEGER
     DIM size AS LONG
 
-    ' cos((2x+1)u*pi/16) * (u ? 1 : 1/sqrt(2)) / 2 in Q12, row by row
-    DATA 1448,2009,1892,1703,1448,1138,784,400
-    DATA 1448,1703,784,-400,-1448,-2009,-1892,-1138
-    DATA 1448,1138,-784,-2009,-1448,400,1892,1703
-    DATA 1448,400,-1892,-1138,1448,1703,-784,-2009
-    DATA 1448,-400,-1892,1138,1448,-1703,-784,2009
-    DATA 1448,-1138,-784,2009,-1448,-400,1892,-1703
-    DATA 1448,-1703,784,400,-1448,2009,-1892,1138
-    DATA 1448,-2009,1892,-1703,1448,-1138,784,-400
+    ' Q10: cos((2x+1)u*pi/16) * (u ? 1 : 1/sqrt(2)) / 2, row by row
+    DATA 362,502,473,426,362,284,196,100
+    DATA 362,426,196,-100,-362,-502,-473,-284
+    DATA 362,284,-196,-502,-362,100,473,426
+    DATA 362,100,-473,-284,362,426,-196,-502
+    DATA 362,-100,-473,284,362,-426,-196,502
+    DATA 362,-284,-196,502,-362,-100,473,-426
+    DATA 362,-426,196,100,-362,502,-473,284
+    DATA 362,-502,473,-426,362,-284,196,-100
     DATA 0,1,8,16,9,2,3,10,17,24,32,25,18,11,4,5,12,19,26,33,40,48,41,34,27,20,13,6,7,14,21,28
     DATA 35,42,49,56,57,50,43,36,29,22,15,23,30,37,44,51,58,59,52,45,38,31,39,46,53,60,61,54,47,55,62,63
     FOR i = 0 TO 7

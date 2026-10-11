@@ -2,7 +2,7 @@
 
     python3 tools/jpeg_reference.py fixed|single FILE.JPG [OUT.BMP]
 
-`fixed` is exact (32-bit integers, shifts floor). `single` runs in doubles, so it can differ from the float32 benches
+`fixed` is exact (Q10 in 32-bit integers, each product truncated toward zero). `single` runs in doubles, so it can differ from the float32 benches
 where a value lands on a rounding tie.
 """
 
@@ -14,7 +14,8 @@ from pathlib import Path
 ZIGZAG = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
           35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]
 COS = [[(math.sqrt(0.5) if u == 0 else 1.0) / 2 * math.cos((2 * x + 1) * u * math.pi / 16) for u in range(8)] for x in range(8)]
-COS12 = [[round(c * 4096) for c in row] for row in COS]
+COS10 = [[round(c * 1024) for c in row] for row in COS]
+K10 = (1815, 352, 731, 1436)  # 1.772, 0.344136, 0.714136, 1.402
 
 
 class Reader:
@@ -74,21 +75,27 @@ def extend(v: int, s: int) -> int:
     return v if v >= 1 << (s - 1) else v - (1 << s) + 1
 
 
+def tmul(a: int, b: int) -> int:
+    """The Q10 product, truncated toward zero: C's `/`, BASIC's `\\`, Nib's tmul."""
+    p = abs(a * b) >> 10
+    return -p if (a < 0) != (b < 0) else p
+
+
 def idct(coef: list[int], fixed: bool) -> list[int]:
     tmp, out = [0] * 64, [0] * 64
     for v in range(8):
         for x in range(8):
             if fixed:
-                tmp[v * 8 + x] = (sum(COS12[x][u] * coef[v * 8 + u] for u in range(8)) + 512) >> 10
+                tmp[v * 8 + x] = sum(tmul(COS10[x][u], coef[v * 8 + u] * 1024) for u in range(8))
             else:
                 tmp[v * 8 + x] = sum(COS[x][u] * coef[v * 8 + u] for u in range(8))
     for y in range(8):
         for x in range(8):
             if fixed:
-                s = (sum(COS12[y][v] * tmp[v * 8 + x] for v in range(8)) + 8192) >> 14
+                s = int((131584 + sum(tmul(COS10[y][v], tmp[v * 8 + x]) for v in range(8))) / 1024)
             else:
                 s = math.floor(sum(COS[y][v] * tmp[v * 8 + x] for v in range(8)) + 128.5)
-            out[y * 8 + x] = min(255, max(0, s + 128 if fixed else s))
+            out[y * 8 + x] = min(255, max(0, s))
     return out
 
 
@@ -99,8 +106,10 @@ def clamp(v: int) -> int:
 def convert(y: int, cb: int, cr: int, fixed: bool) -> tuple[int, int, int]:
     cb, cr = cb - 128, cr - 128
     if fixed:
-        return (clamp(y + ((91881 * cr + 32768) >> 16)), clamp(y + ((-22554 * cb - 46802 * cr + 32768) >> 16)),
-                clamp(y + ((116130 * cb + 32768) >> 16)))
+        luma, blue, red = y * 1024, cb * 1024, cr * 1024
+        return (clamp(int((luma + tmul(K10[3], red) + 512) / 1024)),
+                clamp(int((luma - tmul(K10[1], blue) - tmul(K10[2], red) + 512) / 1024)),
+                clamp(int((luma + tmul(K10[0], blue) + 512) / 1024)))
     return (clamp(math.floor(y + 1.402 * cr + 0.5)), clamp(math.floor(y - 0.344136 * cb - 0.714136 * cr + 0.5)),
             clamp(math.floor(y + 1.772 * cb + 0.5)))
 

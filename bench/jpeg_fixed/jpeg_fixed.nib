@@ -2,9 +2,10 @@
 # data: ../jpeg_fixed/photo.jpg
 # JPEG to BMP, an MCU row at a time, as jpeg_fixed.c: baseline Huffman YCbCr in 4:2:0, 4:4:4, 4:2:2 or 4:4:0 with restart
 # markers. Reads PHOTO.JPG, writes a top-down 24-bit OUT.BMP and returns the Adler-32 of the BMP's bytes. IDCT and colour
-# conversion in 32-bit fixed point: i32 with explicit shifts, which floor as the C and BASIC do (Nib's fixed `*` and
-# conversions round differently per product).
+# conversion in Q10 fixed point, each product truncated toward zero: fixed `*` floors (#383), tmul() truncates.
 import std.io as io
+
+type Q = fixed i32, fraction=10
 
 const MAXW: i32 = 256
 const ZIGZAG_LEN: i32 = 64
@@ -19,8 +20,6 @@ var valptr: i32[72] = [0] * 72
 var mincode: i32[72] = [0] * 72
 var huffval: u8[1024] = [0] * 1024
 var coef: i32[64] = [0] * 64
-# cos((2x+1)u*pi/16) * (u ? 1 : 1/sqrt(2)) / 2 in Q12, row by row
-var cosine: i32[64] = [1448, 2009, 1892, 1703, 1448, 1138, 784, 400, 1448, 1703, 784, -400, -1448, -2009, -1892, -1138, 1448, 1138, -784, -2009, -1448, 400, 1892, 1703, 1448, 400, -1892, -1138, 1448, 1703, -784, -2009, 1448, -400, -1892, 1138, 1448, -1703, -784, 2009, 1448, -1138, -784, 2009, -1448, -400, 1892, -1703, 1448, -1703, 784, 400, -1448, 2009, -1892, 1138, 1448, -2009, 1892, -1703, 1448, -1138, 784, -400]
 var bad: i32 = 0
 var in_pos: i32 = 0
 var in_len: i32 = 0
@@ -111,37 +110,49 @@ fn put32(at: i32, value: u32) -> void:
     for i in 0..4:
         line[at + i] = u8((value >> u32(8 * i)) & 255)
 
-# The 8x8 block in coef, into plane `p` at (x0, y0): rows to Q2 (Q12 times the coefficient, >> 10), then columns to
-# integers, +128.
-fn idct(p: i32, x0: i32, y0: i32) -> void:
-    let mut tmp: i32[64] = [0] * 64
+# The product truncated toward zero, which is what C's `/` and BASIC's `\` do; fixed `*` floors.
+fn tmul(a: Q, b: Q) -> Q:
+    if a < 0:
+        return 0 - tmul(0 - a, b)
+    if b < 0:
+        return 0 - a * (0 - b)
+    return a * b
+
+# The 8x8 block in coef, into plane `p` at (x0, y0): rows to Q10, then columns, +128.5, to integers.
+fn idct(cosine: &Q[64], p: i32, x0: i32, y0: i32) -> void:
+    let mut tmp: Q[64] = [0] * 64
     for v in 0..8:
         for x in 0..8:
-            let mut sum: i32 = 512
+            let mut sum: Q = 0
             for u in 0..8:
-                sum += cosine[x * 8 + u] * coef[v * 8 + u]
-            tmp[v * 8 + x] = sum >> 10
+                sum += tmul(cosine[x * 8 + u], Q(coef[v * 8 + u]))
+            tmp[v * 8 + x] = sum
     for y in 0..8:
         for x in 0..8:
-            let mut sum: i32 = 8192
+            let mut sum: Q = 128.5
             for v in 0..8:
-                sum += cosine[y * 8 + v] * tmp[v * 8 + x]
-            planes[p * 4096 + (y0 + y) * 256 + x0 + x] = u8(clamp((sum >> 14) + 128))
+                sum += tmul(cosine[y * 8 + v], tmp[v * 8 + x])
+            planes[p * 4096 + (y0 + y) * 256 + x0 + x] = u8(clamp(i32(sum)))
 
 fn clamp(value: i32) -> i32:
     return value < 0 ? 0 : value > 255 ? 255 : value
 
-# One line of the MCU row as BGR, at (x >> hshift, y >> vshift) in the chroma planes; the constants are Q16.
+# One line of the MCU row as BGR, at (x >> hshift, y >> vshift) in the chroma planes.
 fn convert(y: i32, width: i32, hshift: i32, vshift: i32) -> void:
+    let k_blue: Q = 1.7724609375
+    let k_green_blue: Q = 0.34375
+    let k_green_red: Q = 0.7138671875
+    let k_red: Q = 1.40234375
+    let half: Q = 0.5
     for x in 0..width:
         let cy = y >> vshift
         let cx = x >> hshift
-        let luma = i32(planes[y * 256 + x])
-        let blue = i32(planes[4096 + cy * 256 + cx]) - 128
-        let red = i32(planes[8192 + cy * 256 + cx]) - 128
-        line[3 * x] = u8(clamp(luma + ((116130 * blue + 32768) >> 16)))
-        line[3 * x + 1] = u8(clamp(luma + ((-22554 * blue - 46802 * red + 32768) >> 16)))
-        line[3 * x + 2] = u8(clamp(luma + ((91881 * red + 32768) >> 16)))
+        let luma = Q(i32(planes[y * 256 + x]))
+        let blue = Q(i32(planes[4096 + cy * 256 + cx]) - 128)
+        let red = Q(i32(planes[8192 + cy * 256 + cx]) - 128)
+        line[3 * x] = u8(clamp(i32(luma + tmul(k_blue, blue) + half)))
+        line[3 * x + 1] = u8(clamp(i32(luma - tmul(k_green_blue, blue) - tmul(k_green_red, red) + half)))
+        line[3 * x + 2] = u8(clamp(i32(luma + tmul(k_red, red) + half)))
 
 fn bench_jpeg_fixed() -> i32:
     match io.File.open("PHOTO.JPG"):
@@ -162,6 +173,8 @@ fn with_input(input: &mut io.File) -> i32:
             return 0
 
 fn convert_file(file: &mut io.File, out: &mut io.File) -> i32:
+    # Q10: cos((2x+1)u*pi/16) * (u ? 1 : 1/sqrt(2)) / 2, row by row (a module variable starts as an integer)
+    let cosine: Q[64] = [0.353515625, 0.490234375, 0.4619140625, 0.416015625, 0.353515625, 0.27734375, 0.19140625, 0.09765625, 0.353515625, 0.416015625, 0.19140625, -0.09765625, -0.353515625, -0.490234375, -0.4619140625, -0.27734375, 0.353515625, 0.27734375, -0.19140625, -0.490234375, -0.353515625, 0.09765625, 0.4619140625, 0.416015625, 0.353515625, 0.09765625, -0.4619140625, -0.27734375, 0.353515625, 0.416015625, -0.19140625, -0.490234375, 0.353515625, -0.09765625, -0.4619140625, 0.27734375, 0.353515625, -0.416015625, -0.19140625, 0.490234375, 0.353515625, -0.27734375, -0.19140625, 0.490234375, -0.353515625, -0.09765625, 0.4619140625, -0.416015625, 0.353515625, -0.416015625, 0.19140625, 0.09765625, -0.353515625, 0.490234375, -0.4619140625, 0.27734375, 0.353515625, -0.490234375, 0.4619140625, -0.416015625, 0.353515625, -0.27734375, 0.19140625, -0.09765625]
     let mut id: i32[3] = [0, 0, 0]
     let mut sample: i32[3] = [0, 0, 0]
     let mut qsel: i32[3] = [0, 0, 0]
@@ -319,7 +332,7 @@ fn convert_file(file: &mut io.File, out: &mut io.File) -> i32:
                                     break
                                 coef[i32(zigzag[k])] = extend(receive(file, nbits), nbits) * quant[qsel[c] * 64 + k]
                                 k += 1
-                        idct(c, (mx * h + bx) * 8, by * 8)
+                        idct(cosine, c, (mx * h + bx) * 8, by * 8)
         if bad != 0:
             break
         for i in 0..bh:
