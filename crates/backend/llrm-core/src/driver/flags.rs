@@ -64,7 +64,7 @@ impl Level {
 }
 
 /// gcc's `-f` pass names, each with the options it sets.
-const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 20] = [
+const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("allocation-search", |options, on| options.search = on),
     ("allocation-routes", |options, on| options.routes = on),
     ("allocation-search-all", |options, on| options.exhaustive = on),
@@ -302,7 +302,7 @@ impl Flags {
                     .ok_or_else(
                         || format!(
                             "unknown option {flag}; the passes are {}",
-                            PASSES.map(|(one, _)| format!("-f{one}")).join(", ")
+                            PASSES.iter().map(|(one, _)| format!("-f{one}")).collect::<Vec<_>>().join(", ")
                         ),
                     )?;
                 self.passes.push((known, on));

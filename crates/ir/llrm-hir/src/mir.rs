@@ -3155,8 +3155,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let [selector, offset] = self.operands(instruction)?[..] else {
                     return Err("concat without two operands".to_owned());
                 };
-                // One space: DEF SEG's paragraph (0 unless the program names one, such as video memory) times 16, plus
-                // the offset, which is as wide as a pointer: the address.
+                // One space: DEF SEG's paragraph (0 unless the program names
+                // one, such as video memory) times 16, plus the
+                // offset, which is as wide as a pointer: the address.
                 let ty = self.result_type(instruction.results[0])?;
                 let Type::Pointer(space) = *self.b.context.types.get(ty) else {
                     return Err("a concat that is no pointer".to_owned());

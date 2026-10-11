@@ -225,8 +225,9 @@ fn _contract_keeping(
     family: model::RuntimeProfile,
     preserved: &BTreeSet<runtime::Reg>,
 ) -> Result<Contract, AbiError> {
-    // A function the program names is not a runtime entry whatever its spelling: only the runtime's own
-    // calls (`RUNTIME`-prefixed) have a contract, which the runtime tables and the entries' declarations give.
+    // A function the program names is not a runtime entry whatever its
+    // spelling: only the runtime's own calls (`RUNTIME`-prefixed) have a
+    // contract, which the runtime tables and the entries' declarations give.
     if !runtime_call {
         return Ok(ordinary(name, cleanup, pushed, preserved));
     }
@@ -787,8 +788,9 @@ fn _contract_keeping(
     Ok(ordinary(name, cleanup, pushed, preserved))
 }
 
-/// What a call of a function no runtime table describes is: stack-only, the cleanup its verified call site
-/// has, the registers the calling convention gives, memory conservative.
+/// What a call of a function no runtime table describes is: stack-only, the
+/// cleanup its verified call site has, the registers the calling convention
+/// gives, memory conservative.
 fn ordinary(
     name: &str,
     cleanup: model::StackCleanup,
@@ -840,18 +842,20 @@ impl HirAbi {
     }
 }
 
-/// A routine of llrm's runtime, called as the target calls any function: the table's effects (what it
-/// reads and writes, whether it raises an error or never returns), but not its Microsoft stack block or
-/// registers, which the convention states. What the callee pops is `pops`; the stack bytes pushed are
-/// `pushed`, past the registers.
+/// A routine of llrm's runtime, called as the target calls any function: the
+/// table's effects (what it reads and writes, whether it raises an error or
+/// never returns), but not its Microsoft stack block or registers, which the
+/// convention states. What the callee pops is `pops`; the stack bytes pushed
+/// are `pushed`, past the registers.
 fn native_contract(
     name: &str,
     pops: bool,
     pushed: i64,
     family: model::RuntimeProfile,
 ) -> Contract {
-    // A routine that keeps BASIC's pushes pops its whole block, however many words the call pushes, so
-    // the words beyond its declaration are not the caller's to remove.
+    // A routine that keeps BASIC's pushes pops its whole block, however many
+    // words the call pushes, so the words beyond its declaration are not
+    // the caller's to remove.
     let pops = pops || runtime::semantics::keeps_stack_abi(name);
     let found = runtime::per_call(&IndexMap::from_iter([(0, name.to_owned())]), family.tables(), &BTreeSet::new())
         .swap_remove(&0)

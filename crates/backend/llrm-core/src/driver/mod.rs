@@ -438,8 +438,8 @@ pub fn statement_table(
     word: usize,
     regs: Regs,
 ) -> masm::Procedure {
-    // A row is two words: where the statement is, and its line; the table ends with a word of 0. The word is
-    // the target's near pointer.
+    // A row is two words: where the statement is, and its line; the table ends
+    // with a word of 0. The word is the target's near pointer.
     let mut code: Vec<masm::InlinePart> = Vec::new();
     for (_procedure, _order, label, line) in rows {
         code.push(masm::InlinePart::Fixup("offset".into(), label.clone(), 0));
