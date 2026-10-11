@@ -1,4 +1,4 @@
-reason = "new benches: STFT of a 64Ki-sample generated signal, single and fixed"
+reason = "coalesce takes loop blocks deepest first: stft_fixed nib -Os code 2560 -> 2558 bytes, stft_fixed c -O2 code vs tcpp 0.749x -> 0.750x"
 blessed = "2026-10-11"
 
 [bas.O2]
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 1263.1091
 
 [c.O2]
-code_bytes = 1196
+code_bytes = 1198
 data_bytes = 15
 bss_bytes = 5122
 kernel_ms = 518.042
@@ -32,7 +32,7 @@ bss_bytes = 0
 kernel_ms = 810.366
 
 [nib.Os]
-code_bytes = 2560
+code_bytes = 2558
 data_bytes = 5149
 bss_bytes = 0
 kernel_ms = 812.7666
