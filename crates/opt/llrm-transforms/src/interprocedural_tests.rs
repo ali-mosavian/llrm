@@ -1810,3 +1810,79 @@ fn test_recursive_copies_stop_where_the_unit_has_grown_by_gccs_limit() {
         before.max(10_000)
     );
 }
+
+/// A function that calls itself, or a cycle of functions that call one another,
+/// does what its other calls and accesses do: LLVM's PostOrderFunctionAttrs
+/// stamps an SCC together. The call to itself was taken to touch every
+/// memory, so `hanoi` was `memory(inaccessiblemem: readwrite)`, its two calls
+/// with equal arguments could not be one, and it ran 143,747 clocks against
+/// gcc's 39,880.
+#[test]
+fn a_cycle_of_calls_does_what_its_members_do_besides_calling_one_another() {
+    let cycle = |sink: &str| {
+        format!(
+            "@sink = global i16 0
+
+define internal i16 @even(i16 %n) {{
+b1:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b2, label %b3
+b2:
+  ret i16 1
+b3:
+  %m = sub i16 %n, 1
+  %r = call i16 @odd(i16 %m)
+  ret i16 %r
+}}
+
+define internal i16 @odd(i16 %n) {{
+b1:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b2, label %b3
+b2:
+{sink}  ret i16 0
+b3:
+  %m = sub i16 %n, 1
+  %r = call i16 @even(i16 %m)
+  ret i16 %r
+}}
+
+define internal i16 @alone(i16 %n) {{
+b1:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b2, label %b3
+b2:
+  ret i16 0
+b3:
+  %m = sub i16 %n, 1
+  %r = call i16 @alone(i16 %m)
+  %s = add i16 %r, 1
+  ret i16 %s
+}}
+
+define i16 @f(i16 %a) {{
+b1:
+  %x = call i16 @even(i16 %a)
+  %y = call i16 @alone(i16 %a)
+  %t = add i16 %x, %y
+  ret i16 %t
+}}
+"
+        )
+    };
+    let memory_of = |text: &str, name: &str| {
+        let mut module = parsed(text);
+        crate::testing::stamped(&mut module).unwrap();
+        printed(&module)
+            .lines()
+            .find(|line| line.starts_with("define") && line.contains(&format!("@{name}(")))
+            .map(|line| line.contains("memory(none)"))
+            .expect("the function")
+    };
+    let quiet = cycle("");
+    assert!(memory_of(&quiet, "alone"), "a function that only calls itself touches nothing");
+    assert!(memory_of(&quiet, "even") && memory_of(&quiet, "odd"), "nor does a cycle of two");
+    let loud = cycle("  store volatile i16 1, ptr @sink\n");
+    assert!(!memory_of(&loud, "odd") && !memory_of(&loud, "even"), "a member's access is the cycle's");
+    assert!(memory_of(&loud, "alone"));
+}

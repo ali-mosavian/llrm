@@ -20,7 +20,7 @@
 //!
 //! The old module had no tests of its own.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::cfg::Shape;
@@ -1596,6 +1596,10 @@ pub fn stamped(
     let graph = analyses.get::<CallGraphAnalysis>(module);
     let callees = llrm_mir::memory::callees(module);
     let never_reentered = graph.cannot_reenter(module);
+    let cycles: Vec<Vec<GlobalId>> =
+        graph.bottom_up_components().into_iter().filter(|(_, cyclic)| *cyclic).map(|(members, _)| members).collect();
+    let cycle: BTreeMap<GlobalId, usize> =
+        cycles.iter().enumerate().flat_map(|(at, members)| members.iter().map(move |&member| (member, at))).collect();
     for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(
@@ -1673,15 +1677,13 @@ pub fn stamped(
         };
         let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;
         let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, program.target.spaces(), function);
-        let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
-        for &inst in &calls {
-            let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };
-            let declared = llrm_mir::memory::callee(&module.context, function, inst)
-                .and_then(|one| declarations.get(one.0 as usize))
-                .and_then(GlobalValue::function)
-                .map_or(Effects::ANY, |one| llrm_mir::memory::inaccessible(&one.attrs));
-            hidden = _either(hidden, _both(declared, llrm_mir::memory::inaccessible(&info.attrs)));
-        }
+        // A cycle of calls is stamped together, as LLVM's
+        // PostOrderFunctionAttrs takes an SCC: each member does what
+        // all of them do besides calling one another.
+        let members = cycle.get(&id).map_or_else(|| vec![id], |at| cycles[*at].clone());
+        let hidden = members
+            .iter()
+            .fold(Effects::NONE, |all, &member| _either(all, hidden_by(module, member, &declarations, &graph)));
         let pointers = function
             .parameters()
             .iter()
@@ -1738,6 +1740,40 @@ pub fn stamped(
         }
     }
     Ok(changed)
+}
+
+/// What body `id` does to inaccessible memory itself or through the calls it
+/// makes outside the cycle it is in: a volatile access, or a call whose callee
+/// and site do not rule it out.
+fn hidden_by(
+    module: &Module,
+    id: GlobalId,
+    declarations: &[GlobalValue],
+    graph: &CallGraph,
+) -> Effects {
+    let Some(function) = module.global(id).function() else { return Effects::ANY };
+    let volatile = function
+        .walk()
+        .any(
+            |(_, inst)| matches!(
+                function.instruction(inst).opcode,
+                Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
+            ),
+        );
+    let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
+    for (_, inst) in function.walk() {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };
+        let callee = llrm_mir::memory::callee(&module.context, function, inst);
+        if callee.is_some_and(|one| graph.together(id, one)) {
+            continue;
+        }
+        let declared = callee
+            .and_then(|one| declarations.get(one.0 as usize))
+            .and_then(GlobalValue::function)
+            .map_or(Effects::ANY, |one| llrm_mir::memory::inaccessible(&one.attrs));
+        hidden = _either(hidden, _both(declared, llrm_mir::memory::inaccessible(&info.attrs)));
+    }
+    hidden
 }
 
 fn unit_of<'a>(

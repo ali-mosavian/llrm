@@ -606,3 +606,7 @@ fib:                                  ; argument in eax, no frame
     lea  eax,[esi+edi]
     pop ebx / pop esi / pop edi / ret
 ```
+
+## hanoi after equal calls are one (2026-10-11)
+
+On the vsgcc harness (-m32, -O2/-O3) hanoi runs 103 model clocks, 73 instructions (was 143,747 and 91,928; gcc 39,880 and 34,560). The row no longer measures recursion, loops or the allocator: once the unread parameters are gone, `hanoi(n - 1)` is called twice with the same argument, hanoi touches no memory, and the two calls are one (`2 * h + 1`), as gcc's FRE does with `-fno-optimize-sibling-calls` (1,404 instructions). Read it as the compiler folding a const recursion; an allocator-quality row for recursion needs a body whose recursive calls differ (fib, rectwo, recsum).
