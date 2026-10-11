@@ -718,7 +718,7 @@ fn memory_providers(
         };
         // A load that is invariant is clobbered by nothing; the store before it
         // that initialised what it reads is still the value it has.
-        let clobbers = graph.clobbers_ignoring_invariance(site, &cell);
+        let clobbers = graph.nearest_writes(site, &cell);
         let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
         if let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site)
             && let Some((stored, value)) = stored_from(unit, accesses, source)
@@ -732,7 +732,7 @@ fn memory_providers(
         // Several clobbers, each an exact store of the one value, and that
         // value defined where it reaches the load: the arms of a join
         // that stored the same thing.
-        if clobbers.len() > 1
+        if (2..=memoryssa::MAX_NEAREST_WRITES).contains(&clobbers.len())
             && let Some(value) = joined_store(unit, accesses, &graph, &clobbers, &cell, site, &available_value)
             && serves(unit, value, result)
         {
