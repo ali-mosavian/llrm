@@ -126,7 +126,7 @@ fn exit_values(
             if counters.is_empty() {
                 continue;
             }
-            let headers: BTreeSet<ValueId> = counters.keys().copied().collect();
+            let headers = counters.keys().copied().collect::<BTreeSet<_>>();
             for count in induction::exits(&unit, loop_, Some(&facts), false) {
                 let Some(taken) = count.taken.as_ref().filter(|taken| taken.iter().all(|one| one.terms.is_empty()))
                 else {
