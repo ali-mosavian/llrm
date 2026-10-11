@@ -155,7 +155,9 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     cfg = load()
     pkgs = packages()
     live = [f for f in files if not matches(f, cfg["inert"]["paths"])]
-    shared = [f for f in live if matches(f, cfg["shared"]["paths"])]
+    # Nothing of the compiler changed: the steps that cover the files that did, whatever the shared tests and tools are.
+    narrow = forced == "auto" and not any(matches(f, cfg["compiler"]["paths"]) for f in live)
+    shared = [] if narrow else [f for f in live if matches(f, cfg["shared"]["paths"])]
     unknown = [f for f in live if f not in shared and not matches(f, cfg["plain"]["paths"])]
     if forced != "auto":
         tier, reason = forced, "asked for"
@@ -171,6 +173,8 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     touched = {crate_of(f, pkgs) for f in live} - {None}
     cargo = any(not f.startswith("tools/") or f.startswith("tools/bench/") for f in live)
     p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"} | reading(cfg, pkgs, live))  # the root crate enables features (llrm-c's toolchain) the others lack alone
+    if narrow:
+        return narrowed(p, cfg, live)
     steps = []
     if cargo or p.tier == "full":
         steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture"]
@@ -201,6 +205,84 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
         steps += plan(files, "fast").steps  # full is fast's steps and more: whatever fast adds for a diff, full has too
     # Every step but the plain Python tests runs the release binaries: they must be built, and current, first.
     if any(one not in NO_BINARIES for one in steps) and "build" not in steps:
+        steps.insert(0, "build")
+    p.steps = list(dict.fromkeys(steps))
+    return p
+
+
+def data_dir(path: str) -> str | None:
+    """The directory of inputs `path` belongs to (bench/, examples/, tests/run/, runtime/, ...): what other files read it by, or None for code."""
+    top, _, rest = path.partition("/")
+    if top in ("crates", "src", "tools", "docs") or not rest:
+        return None
+    return "tests/run" if path.startswith("tests/run/") else top if top != "tests" else None
+
+
+def step_of_source(path: str, cfg: dict) -> str | None:
+    """The step that runs the tests in `path`, or None where none does."""
+    name = Path(path).stem
+    if path.startswith("tests/") and path.endswith(".rs") and "/" not in path[len("tests/"):]:
+        whole = {**{v: k for k, v in cfg["whole"].items()}, **{v: k for k, v in cfg["exclusive"].items()}}
+        return whole.get(name, "integration")
+    if path.startswith("crates/") and "/tests/" in path and path.endswith(".rs"):
+        return "crate-tests"
+    if path.startswith("crates/") and path.endswith(".rs"):
+        return "lib"
+    if path.endswith(".py") and (path.startswith("tests/") or Path(path).name.startswith("test_")):
+        return "pytest-programs" if name in ("test_programs_compile", "test_loops", "test_innerloops") else "pytest"
+    return None
+
+
+@functools.cache
+def sources() -> dict[str, str]:
+    """Every file a step's tests are in, with its text: the Rust and Python files under tests/ and crates/, and the tests under tools/."""
+    out = {}
+    for pattern in ("tests/*.rs", "tests/*.py", "crates/**/*.rs", "tools/**/test_*.py"):
+        for f in sorted(ROOT.glob(pattern)):
+            if "target" not in f.parts:
+                out[str(f.relative_to(ROOT))] = f.read_text(errors="replace")
+    return out
+
+
+def readers(directory: str, cfg: dict) -> set[str]:
+    """The steps whose tests name `directory` (as `"bench"` or `bench/...`): the steps that read what is in it, found in the tests and not
+    listed. A benchmark merged on its own runs broke pytest-programs, measure and the integration tests that iterate bench/ (#1458)."""
+    mention = re.compile(rf"(?<![\w./-]){re.escape(directory)}(?:/|[\"'])")
+    return {step for path, text in sources().items() if mention.search(text) and (step := step_of_source(path, cfg))}
+
+
+def narrowed(p: Plan, cfg: dict, live: list[str]) -> Plan:
+    """The steps for a diff with none of the compiler's source: each covers the files it was written for. The binaries are built first
+    where a step runs them."""
+    steps = ["pytest"]
+    if any(f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/")) for f in live):
+        steps.append("integration")
+    for directory in sorted({d for f in live if (d := data_dir(f))}):
+        steps += sorted(readers(directory, cfg))
+    if any(f.startswith(("bench/", "tools/bench/")) for f in live):
+        steps.append("bench")
+    if any(f.startswith("tools/torture/") for f in live):
+        steps.append("torture")
+    if any(matches(f, cfg["fmt"]["paths"]) for f in live):
+        steps.append("fmt")
+    for h in cfg["heavy"]:
+        if any(matches(f, h["owners"]) for f in live):
+            steps.append(h["step"])
+    # The Rust tests under tests/ are the integration step's; the programs under tests/run/ are the run step's.
+    run_affecting = [
+        f
+        for f in live
+        if (not f.startswith("tools/") and not (f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/"))))
+        or f.startswith(("tools/dosbatch/", "tools/linkrecipe"))
+    ]
+    if run_affecting:
+        steps.append("run")
+        langs = set()
+        for f in run_affecting:
+            langs |= {lang for lang, pats in cfg["run_languages"].items() if matches(f, pats)} or set(LANGUAGES)
+        p.languages = [l for l in LANGUAGES if l in langs]
+    p.reason = "no compiler source changed"
+    if any(one not in NO_BINARIES for one in steps):
         steps.insert(0, "build")
     p.steps = list(dict.fromkeys(steps))
     return p
