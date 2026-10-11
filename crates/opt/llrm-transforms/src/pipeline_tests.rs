@@ -908,5 +908,8 @@ done:
     let (plain, plain_result) = through(pipeline::Options { unroll_jam: false, ..pipeline::Options::speed() });
     assert_eq!((&result, &plain_result), (&before, &before), "{jammed}");
     assert_ne!(jammed, plain);
-    assert_eq!(through(pipeline::Options::default()).0, through(pipeline::Options { unroll_jam: false, ..Default::default() }).0);
+    assert_eq!(
+        through(pipeline::Options::default()).0,
+        through(pipeline::Options { unroll_jam: false, ..Default::default() }).0
+    );
 }
