@@ -342,8 +342,8 @@ def test_the_measure_step_has_a_command_and_no_baseline_lives_in_the_repository(
 
 def test_steps_asked_for_replace_the_planned_ones_and_the_build_comes_first():
     """Re-running a change to the measurement tools needs build and measure; the full gate took 5-7 minutes."""
-    known = set(gate.commands(gate.plan(["tools/gate/gate.py"]), gate.load(), gate.packages()))
-    p = gate.plan(["tools/gate/gate.py"])
+    known = set(gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages()))
+    p = gate.plan(["tools/gate/gate.py"], "full")
     assert p.tier == "full" and len(p.steps) > 8
     one = gate.restricted(p, ["measure"], known)
     assert one.steps == ["build", "measure"] and one.tier == p.tier and one.languages == p.languages
@@ -610,3 +610,34 @@ def test_the_build_makes_one_set_of_crates_for_the_binaries_and_the_tests():
     """`cargo build --bins` and `cargo test --no-run` each built every crate (238 and 136 CPU-s) and the second linked its llrm-c over
     the first's: the steps ran the test build's binary and the plain build was waste."""
     assert "cargo build" not in gate.BUILD and "cargo test --release -q --workspace --no-run" in gate.BUILD
+
+
+def test_a_diff_without_compiler_source_plans_only_the_steps_that_cover_its_files():
+    """The user's rule: a PR that changes nothing under crates/ or in the Cargo files does not run the compiler gate, it merges on narrow
+    tests of what it changed. A gate.py edit planned the full tier (every step, 4,340 CPU-s); its own tests are the pytest step."""
+    assert gate.plan(["tools/gate/gate.py", "tools/gate/test_gate.py"]).steps == ["pytest"]
+    assert gate.plan(["tools/measure.py"]).steps[-1] == "measure" and "lib" not in gate.plan(["tools/measure.py"]).steps
+    narrow = gate.plan(["tests/target_facts.rs"])
+    assert narrow.tier == "fast" and narrow.steps == ["build", "pytest", "integration", "fmt"], narrow
+    assert gate.plan(["tools/torture/torture.py"]).steps == ["build", "pytest", "torture"]
+    assert "build" not in gate.plan(["tools/gate/tiers.toml"]).steps
+    # compiler source, or a Cargo file anywhere, takes the tiers as before
+    assert gate.plan(["crates/ir/llrm-mir/src/lib.rs", "tools/gate/gate.py"]).tier == "full"
+    assert gate.plan(["Cargo.toml"]).tier == "full" and gate.plan(["crates/opt/llrm-analysis/Cargo.toml"]).steps[0] == "build"
+    assert "lib" in gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]).steps
+    # asking for the full tier still runs every step: the gate's own PRs run the gate
+    assert gate.plan(["tools/gate/gate.py"], "full").tier == "full" and len(gate.plan(["tools/gate/gate.py"], "full").steps) > 8
+
+
+def test_a_benchmark_added_on_its_own_plans_every_step_that_reads_bench():
+    """#1458 merged jpeg_single and jpeg_fixed on a run of the bench step alone and broke pytest-programs, measure and the integration tests
+    that iterate bench/ (dwarf, objwriters, toolchain) on main. The steps are the ones whose tests name the directory, found in the tests."""
+    steps = set(gate.plan(["bench/jpeg_single/jpeg_single.c", "bench/jpeg_single/jpeg_single.bas"]).steps)
+    assert {"bench", "pytest-programs", "measure", "integration"} <= steps, steps
+    assert "lib" not in steps or any("bench" in text for path, text in gate.sources().items() if path.startswith("crates/")), steps
+    readers = gate.readers("bench", gate.load())
+    assert "integration" in readers  # pytest-programs and measure come from tiers.toml's owners of bench/
+    assert gate.step_of_source("tests/dwarf.rs", gate.load()) == "integration" and gate.step_of_source("tests/cv4.rs", gate.load()) == "cv4"
+    # a directory no test names adds nothing
+    assert gate.readers("no_such_" + "directory_anywhere", gate.load()) == set()
+    assert "integration" in gate.plan(["examples/hello.c"]).steps or "pytest-programs" in gate.plan(["examples/hello.c"]).steps

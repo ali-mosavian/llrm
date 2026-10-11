@@ -10,6 +10,10 @@
 # crates/*/*/tests/ that nobody lists is cheap, so a new test is never forgotten.
 # A diff of only [inert] paths runs nothing. Changed paths in no table below are unknown: full.
 
+# The compiler's source: a diff with none of it tests what it changed (the gate's own steps for those files) and not the compiler.
+[compiler]
+paths = ["crates/**", "src/**", "build.rs", "Cargo.toml", "Cargo.lock", "**/Cargo.toml", "rust-toolchain.toml", ".cargo/**"]
+
 [inert]
 paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**", ".zed/**"]
 
