@@ -681,3 +681,47 @@ fn an_alias_of_a_keyed_map_and_three_uses_of_it_count_as_three() {
         "a file that neither imports nor defines the alias is no user of it (a name like Facts is another file's own); an indented associated type is no alias, but a keyed set itself"
     );
 }
+
+/// What a loop body needs the frame register for, by the instruction: division,
+/// float arithmetic, a float load, a call and a frame object do; integer
+/// arithmetic, an integer load/store and a gep do not. Lists of these kept
+/// apart (LSR's and the allocator's) disagreed on the divide.
+#[test]
+fn test_instructions_that_need_the_frame_register_are_calls_divides_floats_and_frame_objects() {
+    let module = parse::module(
+        "declare void @f()\n\
+         define i32 @g(ptr %p, ptr %q, i32 %a) {\n\
+         entry:\n\
+           %slot = alloca i32\n\
+           %add = add i32 %a, 1\n\
+           %ld = load i32, ptr %p\n\
+           %gep = getelementptr i32, ptr %p, i32 1\n\
+           %div = sdiv i32 %a, 3\n\
+           %fl = load double, ptr %q\n\
+           %st = load i32, ptr %slot\n\
+           call void @f()\n\
+           ret i32 %add\n\
+         }\n",
+    )
+    .expect("parses");
+    let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("g")).expect("g");
+    let needs: Vec<(String, bool)> = function
+        .walk()
+        .map(|(_, id)| {
+            let name = function.instruction(id).result.and_then(|value| function.value(value).name.clone());
+            (
+                name.unwrap_or_else(|| function.instruction(id).opcode.mnemonic().to_owned()),
+                function.needs_frame_register(&module.context, id),
+            )
+        })
+        .collect();
+    let named = |name: &str| needs.iter().find(|(one, _)| one == name).map(|(_, needs)| *needs);
+    assert_eq!(named("slot"), Some(true), "{needs:?}");
+    assert_eq!(named("add"), Some(false), "{needs:?}");
+    assert_eq!(named("ld"), Some(false), "{needs:?}");
+    assert_eq!(named("gep"), Some(false), "{needs:?}");
+    assert_eq!(named("div"), Some(true), "{needs:?}");
+    assert_eq!(named("fl"), Some(true), "{needs:?}");
+    assert_eq!(named("st"), Some(true), "{needs:?}");
+    assert_eq!(named("call"), Some(true), "{needs:?}");
+}

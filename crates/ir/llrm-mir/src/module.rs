@@ -396,6 +396,38 @@ impl Function {
         &self.instructions[id.0 as usize]
     }
 
+    /// Whether `id` lowers to code that needs the frame register to hold the
+    /// frame: its opcode does (`Opcode::needs_frame_register`), or it loads or
+    /// stores a float, or an operand is a frame object (an `alloca`).
+    pub fn needs_frame_register(
+        &self,
+        context: &Context,
+        id: InstId,
+    ) -> bool {
+        let one = self.instruction(id);
+        if one.opcode.needs_frame_register() {
+            return true;
+        }
+        let float = |ty: TypeId| matches!(context.types.get(ty), Type::Float(_));
+        match one.opcode {
+            Opcode::Load { .. } if float(one.ty) => return true,
+            Opcode::Store { .. }
+                if one.operands.first().and_then(|op| self.operand_type(context, *op)).is_some_and(float) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        one.operands
+            .iter()
+            .any(
+                |operand| matches!(
+                    operand,
+                    Operand::Value(value) if matches!(self.value(*value).def, ValueDef::Instruction(def) if matches!(self.instruction(def).opcode, Opcode::Alloca { .. }))
+                ),
+            )
+    }
+
     pub fn block(
         &self,
         id: BlockId,

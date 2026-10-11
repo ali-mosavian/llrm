@@ -485,6 +485,54 @@ impl Opcode {
         )
     }
 
+    /// Whether an instruction of this opcode lowers to code that needs the
+    /// frame register to hold the frame: a call or return, a division (it
+    /// traps), a float operation (the x87 stack and its escapes), anything
+    /// that unwinds, and a frame object. The backend's
+    /// `framefree::needs_frame` is the same question of the code lowered; a
+    /// float load or store, and an operand that is a frame object, are of
+    /// the instruction (`Function::needs_frame_register`).
+    pub fn needs_frame_register(&self) -> bool {
+        match self {
+            Self::Ret
+            | Self::Invoke(_)
+            | Self::Resume
+            | Self::Unreachable
+            | Self::Call(_)
+            | Self::LandingPad { .. }
+            | Self::Alloca { .. }
+            | Self::FNeg
+            | Self::FCmp(_) => true,
+            Self::Binary(op) => matches!(
+                op,
+                BinaryOp::UDiv
+                    | BinaryOp::SDiv
+                    | BinaryOp::URem
+                    | BinaryOp::SRem
+                    | BinaryOp::FAdd
+                    | BinaryOp::FSub
+                    | BinaryOp::FMul
+                    | BinaryOp::FDiv
+                    | BinaryOp::FRem
+            ),
+            Self::Cast(op) => matches!(
+                op,
+                CastOp::FPTrunc | CastOp::FPExt | CastOp::FPToUI | CastOp::FPToSI | CastOp::UIToFP | CastOp::SIToFP
+            ),
+            Self::Br
+            | Self::Switch
+            | Self::ExtractValue(_)
+            | Self::InsertValue(_)
+            | Self::Load { .. }
+            | Self::Store { .. }
+            | Self::GetElementPtr { .. }
+            | Self::ICmp(_)
+            | Self::Phi
+            | Self::Select
+            | Self::Freeze => false,
+        }
+    }
+
     pub fn mnemonic(&self) -> &'static str {
         match self {
             Self::Ret => "ret",
