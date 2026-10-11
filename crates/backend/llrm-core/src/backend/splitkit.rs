@@ -1529,6 +1529,7 @@ pub fn placed(
     occupied: &Occupied,
     width: u32,
     saving: &dyn Fn(&Insn) -> f64,
+    parking: Option<RegId>,
 ) -> Vec<Region> {
     let blocks = Blocks::of(body);
     let analysis = analysed_in(&blocks, value, live);
@@ -1570,7 +1571,13 @@ pub fn placed(
         let through = _grown(&mut placement, &blocks, &analysis, Some(&blocked));
         let live = placement.finish();
         let held = _held(&placement, &blocks, &analysis, &through, &live, &blocked);
-        let saved = benefit(&held, &placement);
+        let mut saved = benefit(&held, &placement);
+        // The frame register is a register with a cost of its own: the `push`
+        // and the `pop` where the stretch is entered and left.
+        if saved > 0.0 && parking == Some(allocate::_whole(*register)) {
+            saved -=
+                _copies(&crossings_in(&blocks, u32::MAX, &held, &Everywhere, true), &|at| placement.frequency[&at]);
+        }
         if saved > 0.0 && best.as_ref().is_none_or(|(found, _)| saved > *found) {
             best = Some((saved, held));
         }
@@ -2346,7 +2353,7 @@ mod tests {
         let masks = crate::backend::allocate::Masks::default();
         let occupied = super::Occupied::new(IndexMap::from_iter([(RegId::EAX, taken)]), &masks);
         let regions =
-            super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[RegId::AX], &occupied, 2, &|_| 1.0);
+            super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[RegId::AX], &occupied, 2, &|_| 1.0, None);
         let first = regions.first().expect("a region");
         assert_eq!(first.spans.get(&0x10), Some(&vec![(0, 3)]), "{regions:?}");
         assert_eq!(first.spans.get(&0x20), Some(&vec![(0, 1)]), "{regions:?}");

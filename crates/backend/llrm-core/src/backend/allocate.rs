@@ -1797,6 +1797,7 @@ fn _allocated(
                             &occupied,
                             width,
                             &_held_saving,
+                            frame_register,
                         )
                     });
                     if placed.is_empty() {

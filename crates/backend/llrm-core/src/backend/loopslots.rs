@@ -5,11 +5,8 @@
 //! slot for the next instruction. Each slot the loop reaches moves into one,
 //! loaded on entry and stored on exit where it was written and is read after.
 //!
-//! BP is one more when the loop reaches no other frame cell: it enters with
-//! `push bp; mov bp,[bp+d]` and leaves with `pop bp`. Such a loop may not
-//! call, trap or touch x87 state, since the runtime walks the BP chain when
-//! it raises an error. A spill slot's address is never taken, so no pointer
-//! reaches any slot this moves.
+//! A spill slot's address is never taken, so no pointer reaches any slot this
+//! moves. (The frame register is the allocator's to give out: `parkable`.)
 //!
 //! A register live through the loop but untouched in it is one more, parked
 //! on the stack: pushed on entry and popped on exit.
@@ -124,10 +121,6 @@ struct Touch {
     /// Frame bytes it reaches other than as exactly one word, which no
     /// register can stand for: a dword store, a far pointer load.
     wide: Vec<Reach>,
-    /// A frame access that is no word slot, or a use of BP itself.
-    other: bool,
-    /// Something that needs BP to be the frame pointer while it runs.
-    traps: bool,
 }
 
 /// Frame bytes `[from, to)` one access reads or writes.
@@ -184,36 +177,17 @@ fn touch(
     TOUCHED.with(|count| count.set(count.get() + 1));
     let mut out = Touch { word: m, ..Touch::default() };
     let Some(what) = one.what.as_ref() else {
-        out.other = true;
-        out.traps = true;
         return out;
     };
-    out.traps = matches!(
-        what.op,
-        Operation::Call
-            | Operation::Return
-            | Operation::Leave
-            | Operation::Divide
-            | Operation::Escape
-            | Operation::Barrier
-            | Operation::Data
-            | Operation::Restore
-            | Operation::FloatLoad
-            | Operation::FloatStore
-            | Operation::FloatArith
-            | Operation::FloatArithPop
-            | Operation::FloatUnary
-    ) || what.name.as_deref().is_some_and(|name| ["int", "into", "iret", "enter", "bound"].contains(&name))
-        || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_bp(regs, *register));
     let moves = what.op == Operation::Move;
     for (place, written) in what.dests.iter().map(|one| (one, true)).chain(what.sources.iter().map(|one| (one, false)))
     {
         match place {
-            Loc::Reg(reg) if is_bp(regs, reg.register) => out.other = true,
             Loc::Mem(mem) => {
-                if is_bp(regs, mem.index_through) || mem.addr.is_some_and(|addr| addr.space == Space::Stack) {
-                    out.other = true;
-                } else if is_bp(regs, mem.through) {
+                if !is_bp(regs, mem.index_through)
+                    && !mem.addr.is_some_and(|addr| addr.space == Space::Stack)
+                    && is_bp(regs, mem.through)
+                {
                     // An address of the frame is a pointer into it.
                     match slot(mem).filter(|_| mem.width == m && what.op != Operation::Address) {
                         Some(at) if written => {
@@ -226,7 +200,6 @@ fn touch(
                             out.reads.insert(at);
                         }
                         None => {
-                            out.other = true;
                             if let Some(at) = slot(mem).filter(|_| what.op != Operation::Address) {
                                 out.wide.push(Reach {
                                     from: at,
@@ -238,9 +211,6 @@ fn touch(
                         }
                     }
                 }
-            }
-            Loc::Address(address) if is_bp(regs, address.through) || is_bp(regs, address.index_through) => {
-                out.other = true
             }
             _ => {}
         }
@@ -840,10 +810,8 @@ pub fn promoted(
                 seen.push((index[block], position, insn, &touches[index[block]][position]));
             }
         }
-        let (mut slots, mut other, mut traps) = (BTreeSet::new(), false, false);
+        let mut slots = BTreeSet::new();
         for (_, _, _, touched) in &seen {
-            other |= touched.other;
-            traps |= touched.traps;
             slots.extend(touched.reads.iter().chain(&touched.writes).copied());
         }
         if slots.is_empty() || !slots.iter().all(|at| spills.contains(at)) {
@@ -924,8 +892,6 @@ pub fn promoted(
                 exits.iter().any(|to| live.contains(to))
             }
         };
-        // BP takes the last slot when the rest fill every free register.
-        let bp = !other && !traps && ranked.len() == registers.len() + 1 && !stored(ranked.last().expect("a slot").1);
         let mut homes = BTreeMap::<i64, Loc>::new();
         let mut hosts = BTreeMap::<i64, usize>::new();
         for (host, ((saved, at), (root, hold))) in ranked.iter().zip(&registers).enumerate() {
@@ -936,15 +902,8 @@ pub fn promoted(
                 hosts.insert(*at, host);
             }
         }
-        let bp_slot = ranked.last().map(|(_, at)| *at).filter(|_| bp && homes.len() == registers.len());
-        if let Some(at) = bp_slot {
-            let saved = ranked.last().expect("a slot").0;
-            if saved as f64 * trips > (entered * (costs.store + costs.load) + left * costs.load) as f64 {
-                homes.insert(at, Loc::Reg(Reg { register: regs.named(RegId::BP, i64::from(m)), width: m }));
-            }
-        }
         // A register freed by folding its reloads is free only when each
-        // slot it reloads has a home; BP only when the frame is left alone.
+        // slot it reloads has a home.
         loop {
             let before = homes.len();
             let unfolded = hosts
@@ -955,9 +914,6 @@ pub fn promoted(
             for at in unfolded {
                 homes.remove(&at);
                 hosts.remove(&at);
-            }
-            if homes.len() < slots.len() {
-                homes.retain(|_, home| !matches!(home, Loc::Reg(reg) if is_bp(regs, reg.register)));
             }
             if homes.len() == before {
                 break;
@@ -973,7 +929,6 @@ pub fn promoted(
         if homes.is_empty() {
             continue;
         }
-        let with_bp = homes.values().any(|home| matches!(home, Loc::Reg(reg) if is_bp(regs, reg.register)));
         let parked = hosts
             .values()
             .filter_map(|host| match &registers[*host] {
@@ -1024,17 +979,8 @@ pub fn promoted(
             }
             for (slot, home) in &homes {
                 let load = made(near, Operation::Move, "mov", vec![home.clone()], vec![Loc::Mem(cell(m, *slot))]);
-                if matches!(home, Loc::Reg(reg) if is_bp(regs, reg.register)) {
-                    let bp = home.clone();
-                    insns.insert(
-                        insns.len() - usize::from(jumps),
-                        made(near, Operation::Push, "push", vec![], vec![bp]),
-                    );
-                    insns.insert(insns.len() - usize::from(jumps), load);
-                } else {
-                    insns.insert(place, load);
-                    place += 1;
-                }
+                insns.insert(place, load);
+                place += 1;
             }
             blocks[index[at]] = block.with_insns(insns);
         }
@@ -1043,19 +989,6 @@ pub fn promoted(
             let mut insns = block.insns.to_vec();
             let near = insns.first().map_or(*to, |insn| insn.at);
             let mut place = 0;
-            if with_bp {
-                insns.insert(
-                    0,
-                    made(
-                        near,
-                        Operation::Pop,
-                        "pop",
-                        vec![Loc::Reg(Reg { register: regs.named(RegId::BP, i64::from(m)), width: m })],
-                        vec![],
-                    ),
-                );
-                place = 1;
-            }
             for (slot, home) in &homes {
                 if stored(*slot) {
                     insns.insert(
@@ -1289,75 +1222,6 @@ mod tests {
         };
         assert!(!sets(RegId::BX), "premise: an invariant constant leaves the loop");
         assert!(sets(RegId::DI) && sets(RegId::SI), "the loop sets si and di");
-    }
-
-    /// m32's slots are dwords: LoopSlots was dropped there. Its BP parking once
-    /// found no BP to pop, because EBP is not the register BP: the loop
-    /// left its exit with EBP holding a slot's value and a program ran
-    /// quicksort into a general protection fault.
-    #[test]
-    fn test_a_dword_slot_parked_in_the_frame_register_is_pushed_and_popped() {
-        let regs = crate::backend::registerinfo::test_regs();
-        let wide = |register: RegId| Loc::Reg(Reg { register, width: 4 });
-        let one = Imm { value: 1, width: 4, address: None };
-        let bump = |at: i64, register: RegId| {
-            made(at, Operation::Binary, "add", vec![wide(register)], vec![wide(register), Loc::Imm(one.clone())])
-        };
-        let slot = |at: i64| Loc::Mem(cell(4, at));
-        let busy = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI];
-        let mut loop_body: Vec<Arc<Insn>> =
-            busy.iter().enumerate().map(|(at, register)| bump(0x10 + at as i64, *register)).collect();
-        for at in 0..8 {
-            loop_body.push(made(
-                0x20 + at,
-                Operation::Binary,
-                "add",
-                vec![wide(RegId::EAX)],
-                vec![wide(RegId::EAX), slot(-4)],
-            ));
-        }
-        loop_body.push(Arc::new(Insn::new(
-            0x30,
-            Some((0x30, 0x31)),
-            Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
-            vec![],
-            vec![],
-        )));
-        let body = LirBody::new(
-            "loop",
-            0,
-            vec![
-                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
-                block(0x10, loop_body, vec![0x10, 0x40]),
-                block(0x40, vec![made(0x40, Operation::Return, "ret", vec![], vec![])], vec![]),
-            ],
-            IndexMap::default(),
-            IndexMap::default(),
-        );
-        let costs = &crate::backend::cpu::profile("486").unwrap().operations;
-        let out = promoted(
-            4,
-            &crate::backend::classes::RegisterClasses::m16().available,
-            &body,
-            &BTreeSet::from([-4]),
-            costs,
-            2,
-        );
-        let is_bp = |insn: &Arc<Insn>, op: Operation| {
-            insn.what
-                .as_ref()
-                .is_some_and(
-                    |what| what.op == op
-                        && what
-                            .dests
-                            .iter()
-                            .chain(&what.sources)
-                            .any(|place| matches!(place, Loc::Reg(reg) if super::is_bp(regs, reg.register))),
-                )
-        };
-        let pushes = out.insns().iter().filter(|insn| is_bp(insn, Operation::Push)).count();
-        let pops = out.insns().iter().filter(|insn| is_bp(insn, Operation::Pop)).count();
-        assert_eq!((pushes, pops), (1, 1), "the slot lives in EBP between a push and a pop");
     }
 
     /// Ranking a loop's slots asked every instruction of the loop how it
