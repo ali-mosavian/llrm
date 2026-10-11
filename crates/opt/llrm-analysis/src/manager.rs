@@ -62,6 +62,7 @@ impl<'a> Unit<'a> {
             point_values: None,
             callbacks: outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()),
             loop_intervals: outer.loop_intervals(),
+            congruent: None,
         }
     }
 }

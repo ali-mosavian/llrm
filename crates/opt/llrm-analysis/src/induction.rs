@@ -540,6 +540,11 @@ pub fn counted_renewed(
 ) -> Counted {
     let registers = unit.registers();
     let shape = unit.shape();
+    // One body under one set of facts: what is known of its congruences is
+    // found once for the loops, not once for each proof (610 times, 585 of
+    // 6,449 Minstr, on 32 loops).
+    let congruent = std::cell::OnceCell::new();
+    let unit = &Unit { congruent: Some(&congruent), ..*unit };
     shape
         .loops
         .iter()
@@ -1494,7 +1499,7 @@ fn _low_bits_zero(
     bound: &AffineOperand,
     shift: u32,
 ) -> bool {
-    let known = crate::alias::congruences_with(unit, facts);
+    let known = unit.congruences(facts);
     let of = |one: &AffineOperand| match one {
         AffineOperand::Const(constant) => Some((BigInt::from(0), constant.n.clone())),
         AffineOperand::Value(value, _) => {

@@ -765,9 +765,26 @@ pub struct Unit<'a> {
     /// a level without them (`Outer::loop_intervals`) they are empty on
     /// purpose.
     pub loop_intervals: bool,
+    /// The congruences of this body under these registers
+    /// (`alias::congruences_with`), where a caller asking many times of one
+    /// body made a cell for them: each proof of a loop's trips asked of the
+    /// whole function, once for each loop.
+    pub congruent: Option<&'a std::cell::OnceCell<IndexMap<ValueId, (num_bigint::BigInt, num_bigint::BigInt)>>>,
 }
 
 impl<'a> Unit<'a> {
+    /// `alias::congruences_with(self, facts)`: the cell's, made once, where the
+    /// unit carries one.
+    pub fn congruences(
+        &self,
+        facts: &IndexMap<ValueId, Known>,
+    ) -> Cow<'a, IndexMap<ValueId, (num_bigint::BigInt, num_bigint::BigInt)>> {
+        match self.congruent {
+            Some(cell) => Cow::Borrowed(cell.get_or_init(|| crate::alias::congruences_with(self, facts))),
+            None => Cow::Owned(crate::alias::congruences_with(self, facts)),
+        }
+    }
+
     /// The intrinsic `inst` calls, if it calls one.
     pub fn intrinsic(
         &self,
@@ -819,6 +836,7 @@ impl<'a> Unit<'a> {
             point_values: None,
             callbacks: None,
             loop_intervals: true,
+            congruent: None,
         }
     }
 
