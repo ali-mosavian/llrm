@@ -92,6 +92,10 @@ static StrEntry *scan(StrEntry *from, StrEntry *limit, uword bytes)
         if (IS_FREE(entry)) {
             after = FOLLOWING(entry);
             while (!AT_END(after) && IS_FREE(after)) {
+                /* the hint must not be left inside the entry that swallows it:
+                   the next allocation would overwrite its header */
+                if (after == str_free)
+                    str_free = entry;
                 MAKE_FREE(entry, ENTRY_BYTES(entry) + ENTRY_BYTES(after));
                 after = FOLLOWING(entry);
             }

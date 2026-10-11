@@ -1,0 +1,114 @@
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# data: @signal
+# Short-time Fourier transform in f32, as stft_single.c: a 256-point Hann-windowed FFT of every 128-sample hop of SIGNAL,
+# the 129 bin powers of each frame written to SPECTRA. Module vars cannot be floats: those arrays are locals.
+import std.io as io
+
+const N: i32 = 256
+const HOP: i32 = 128
+const BINS: i32 = 129
+
+var rev: u8[256] = [0] * 256
+var block: i16[256] = [0] * 256
+var row: u16[129] = [0] * 129
+
+fn fft(re: &mut f32[256], im: &mut f32[256], tw_re: &f32[128], tw_im: &f32[128]) -> void:
+    let mut m: i32 = 2
+    while m <= N:
+        let half = m // 2
+        let stride = N // m
+        let mut i: i32 = 0
+        while i < N:
+            for j in 0..half:
+                let ar = re[i + j]
+                let ai = im[i + j]
+                let br = re[i + j + half]
+                let bi = im[i + j + half]
+                let tr = tw_re[j * stride] * br - tw_im[j * stride] * bi
+                let ti = tw_re[j * stride] * bi + tw_im[j * stride] * br
+                re[i + j] = (ar + tr) * 0.5
+                im[i + j] = (ai + ti) * 0.5
+                re[i + j + half] = (ar - tr) * 0.5
+                im[i + j + half] = (ai - ti) * 0.5
+            i += m
+        m *= 2
+
+# Pointers to the module's arrays are `*near` and made far by `.far()`, which is near on m32: spelling `*far` warns there.
+fn fill(file: &mut io.File, at: i32) -> bool:
+    unsafe:
+        let data: *near mut i16 = &mut block
+        match file.read_raw(data.offset(at).cast[u8]().far(), 2 * HOP):
+            .ok(n):
+                return n == 2 * HOP
+            .err(_):
+                return false
+
+fn put(file: &mut io.File) -> bool:
+    unsafe:
+        let data: *near u16 = &row
+        match file.write_raw(data.cast[u8]().far(), 2 * BINS):
+            .ok(n):
+                return n == 2 * BINS
+            .err(_):
+                return false
+
+fn bench_stft_single() -> i32:
+    let mut tw_re: f32[128] = [0.0] * 128
+    let mut tw_im: f32[128] = [0.0] * 128
+    let mut window: f32[256] = [0.0] * 256
+    let mut re: f32[256] = [0.0] * 256
+    let mut im: f32[256] = [0.0] * 256
+    let mut c: f32 = 1.0
+    let mut s: f32 = 0.0
+    for k in 0..HOP:
+        tw_re[k] = c
+        tw_im[k] = -s
+        let next = c * 0.99969882 - s * 0.024541229
+        s = s * 0.99969882 + c * 0.024541229
+        c = next
+    for k in 0..HOP:
+        window[k] = (1.0 - tw_re[k]) * 0.5
+        window[k + HOP] = 1.0 - window[k]
+    for i in 0..N:
+        let mut r: i32 = 0
+        let mut t: i32 = i
+        for _bit in 0..8:
+            r = r * 2 + (t & 1)
+            t = t >> 1
+        rev[i] = u8(r)
+    let mut sum: i32 = 0
+    let mut index: i32 = 0
+    match io.File.open("SIGNAL"):
+        .err(_):
+            return -1
+        .ok(opened):
+            let mut input = opened
+            match io.File.create("SPECTRA"):
+                .err(_):
+                    return -1
+                .ok(created):
+                    let mut output = created
+                    if !fill(input, 0):
+                        return -1
+                    let mut now: i32 = 0
+                    while fill(input, (1 - now) * HOP):
+                        for n in 0..HOP:
+                            re[i32(rev[n])] = f32(block[now * HOP + n]) * 0.25 * window[n]
+                            re[i32(rev[n + HOP])] = f32(block[(1 - now) * HOP + n]) * 0.25 * window[n + HOP]
+                            im[i32(rev[n])] = 0.0
+                            im[i32(rev[n + HOP])] = 0.0
+                        fft(re, im, tw_re, tw_im)
+                        for k in 0..BINS:
+                            let p = (re[k] * re[k] + im[k] * im[k]) * (1.0 / 16.0)
+                            let q: i32 = p >= 65535.0 ? 65535 : i32(p)
+                            row[k] = u16(q)
+                            sum = ((sum * 3) + q + index) & 0x1FFFFFFF
+                            index += 1
+                        if !put(output):
+                            return -1
+                        now = 1 - now
+    return sum
+
+fn main() -> i16:
+    print(bench_stft_single())
+    return 0

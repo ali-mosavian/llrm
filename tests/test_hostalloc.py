@@ -22,3 +22,16 @@ def test_string_allocator_survives_random_operations(tmp_path):
     for seed in range(1, 6):
         done = subprocess.run([str(exe), str(seed)], capture_output=True, text=True)
         assert done.returncode == 0 and done.stdout.strip() == "ok", f"seed {seed}: {done.stderr[-300:]}"
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="needs a host C compiler")
+def test_joined_free_entries_do_not_strand_the_hint(tmp_path):
+    exe = tmp_path / "hint_test"
+    build = subprocess.run(
+        ["gcc", "-O1", "-g", "-I", str(ROOT / "tests/hostalloc/shim"), "-I", str(ROOT / "runtime/qb"), str(ROOT / "tests/hostalloc/hint_test.c"), "-o", str(exe)],
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr[-600:]
+    done = subprocess.run([str(exe)], capture_output=True, text=True)
+    assert done.returncode == 0 and done.stdout.strip() == "ok", done.stdout + done.stderr[-300:]
