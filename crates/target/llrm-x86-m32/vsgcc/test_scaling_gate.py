@@ -849,3 +849,30 @@ def test_a_compile_of_one_small_function_does_not_build_a_table_of_the_instructi
     source.write_text("int f(int a, int b) { return a * 3 + b; }\n")
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["lir duplicated returns"] <= 2.0, f"{own['lir duplicated returns']:.2f} Minstr"
+
+
+def test_call_effects_do_not_build_the_modules_callbacks_again_for_each_call(tmp_path):
+    """N functions whose addresses are taken (a table of callbacks that write a global each) and a function with N calls through a pointer: each
+    call may call back, and `analysis call-effects` put the callbacks' N written slices into the call's own set, a tree, to compare and
+    list them: N^2 inserts (QCport's host: 186 slices in each of 9,018 sites, 3.3 Minstr-thousands of 17 G). Its own work read 73 Minstr at
+    N=100 and 276 at 200, a step of 3.8. The sets are put together once and the calls with the same others share the list: 16.6 and 33.2,
+    a step of 2.0. A step above 2.8 fails; a few Minstr of start-up are allowed."""
+
+    def program(n):
+        out = ["extern void report(long value);\n"]
+        for i in range(n):
+            out.append(f"int g{i};\nstatic void cb{i}(void) {{ g{i} += {i + 1}; }}\n")
+        out.append("void (*table[%d])(void) = {%s};\n" % (n, ",".join(f"cb{i}" for i in range(n))))
+        out.append("void (*hook)(void);\nlong run(int k)\n{\n    long t = 0;\n")
+        out += [f"    hook(); t += g{j} + k;\n" for j in range(n)]
+        out.append("    return t;\n}\nint main(void) { report(run(1)); return 0; }\n")
+        return "".join(out)
+
+    own = {}
+    for label, size in (("empty", 0), ("n", 100), ("2n", 200)):
+        source = tmp_path / f"callbacks_{label}.c"
+        source.write_text("" if size == 0 else program(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("analysis call-effects", 0.0) - own["empty"].get("analysis call-effects", 0.0) for label in ("n", "2n"))
+    assert small > 5.0, f"premise: call-effects ran ({small:.1f} Minstr)"
+    assert big <= 2.8 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
