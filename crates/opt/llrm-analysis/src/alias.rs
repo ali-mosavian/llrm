@@ -2833,17 +2833,20 @@ fn mod_floor(
 ///
 /// A value wraps at its width, so a modulus holds only where it divides
 /// the width's: each is cut to that divisor, and an exact residue masked.
-pub fn congruences(unit: &Unit) -> IndexMap<ValueId, (BigInt, BigInt)> {
+pub fn congruences(unit: &Unit) -> Congruences {
     congruences_with(unit, &unit.registers())
 }
+
+/// Each value's (residue, modulus): what it is congruent to.
+pub type Congruences = llrm_mir::dense::IdMap<ValueId, (BigInt, BigInt)>;
 
 /// `congruences`, given what `consts::known` finds without memory.
 pub fn congruences_with(
     unit: &Unit,
     constants: &IndexMap<ValueId, Known>,
-) -> IndexMap<ValueId, (BigInt, BigInt)> {
+) -> Congruences {
     let function = unit.function;
-    let mut result = IndexMap::<ValueId, (BigInt, BigInt)>::default();
+    let mut result = Congruences::default();
     let zero = BigInt::from(0);
     for loop_ in &unit.shape().loops {
         for affine in induction::basics(unit, loop_).values() {

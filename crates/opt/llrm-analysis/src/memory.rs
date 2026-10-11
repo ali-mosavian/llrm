@@ -769,22 +769,10 @@ pub struct Unit<'a> {
     /// (`alias::congruences_with`), where a caller asking many times of one
     /// body made a cell for them: each proof of a loop's trips asked of the
     /// whole function, once for each loop.
-    pub congruent: Option<&'a std::cell::OnceCell<IndexMap<ValueId, (num_bigint::BigInt, num_bigint::BigInt)>>>,
+    pub congruent: Option<&'a std::cell::OnceCell<crate::alias::Congruences>>,
 }
 
 impl<'a> Unit<'a> {
-    /// `alias::congruences_with(self, facts)`: the cell's, made once, where the
-    /// unit carries one.
-    pub fn congruences(
-        &self,
-        facts: &IndexMap<ValueId, Known>,
-    ) -> Cow<'a, IndexMap<ValueId, (num_bigint::BigInt, num_bigint::BigInt)>> {
-        match self.congruent {
-            Some(cell) => Cow::Borrowed(cell.get_or_init(|| crate::alias::congruences_with(self, facts))),
-            None => Cow::Owned(crate::alias::congruences_with(self, facts)),
-        }
-    }
-
     /// The intrinsic `inst` calls, if it calls one.
     pub fn intrinsic(
         &self,
