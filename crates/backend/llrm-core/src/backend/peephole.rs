@@ -243,6 +243,7 @@ impl Peephole {
             crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
         })?;
         let body = addresses(&body, &self.cpu)?;
+        let body = stepped_after_compare(self.rules, &body);
         let body = gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?;
         let body = borrows(self.rules, &increments(self.rules, &body));
         let body = doubled(self.rules, &body, &self.cpu)?;
@@ -2131,6 +2132,15 @@ pub fn increments(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.increments, body, &Facts::new(body, None))
+}
+
+/// A step made before the compare of the value it replaces, after it
+/// (`peephole.peep`).
+pub fn stepped_after_compare(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.stepped_after_compare, body, &Facts::new(body, None))
 }
 
 /// `mov r,0 ; sbb r,0` as `sbb r,r` (`peephole.peep`).

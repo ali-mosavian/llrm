@@ -16,6 +16,7 @@ fused_calls body
 far_loads body
 increments body
 borrows body
+stepped_after_compare body
 doubled body
 narrowed_arithmetic body
 widened_moves body
