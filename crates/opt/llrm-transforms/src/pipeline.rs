@@ -77,6 +77,8 @@ pub struct Options {
     /// complete copy of a loop may grow the code is `limits.grows`, which
     /// gcc lets only -O3 do.)
     pub for_size: bool,
+    /// gcc's `-fexpensive-optimizations` (-O2 and up): the passes it gates.
+    pub expensive: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest
     /// (`-fallocation-search`).
     pub search: bool,
@@ -114,6 +116,7 @@ impl Default for Options {
             unswitch: false,
             copy_headers: false,
             for_size: false,
+            expensive: true,
             search: true,
             routes: true,
             exhaustive: false,
@@ -146,6 +149,7 @@ impl Options {
             sibcalls: false,
             peel: false,
             unswitch: false,
+            expensive: false,
             ..Self::default()
         }
     }
@@ -474,6 +478,7 @@ pub fn recorded(
         manager.add(jumpthread::JumpThread {
             size: applied.options.prefers_size(),
             correlated: applied.options.copy_headers,
+            states: applied.options.expensive,
         });
     }
     // A loop entered at its body runs it at least once: what it loads

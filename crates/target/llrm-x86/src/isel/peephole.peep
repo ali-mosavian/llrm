@@ -204,6 +204,20 @@ rule fused_sourceless_unary
     rewrite anchor @0 ; @1: op c / ; anchor @2
 
 
+// `lea t,[a]; cmp x,o; mov x,t`: a step made before the compare that reads
+// the value it replaces, and copied back over it. The lea sets no flag, so
+// the branch after reads the compare's either way; made after it, the step
+// is in place and one register holds both values.
+group stepped_after_compare
+    walk window skip meta
+
+rule step_after_compare
+    match   lea t:reg, a:any ; cmp x:reg, o:any ; mov x, t
+    when    free(@0, rewritable), free(@1, settled), free(@2, synthetic), same_width(x, t), !same_root(x, t),
+            operand(o, t), dead(@2, lanes(t)), encodable($1)
+    rewrite @1 ; @0: =@0 x, a ; drop @2
+
+
 // Select compact INC/DEC for a unit add whose carry result is dead: they
 // differ from it only in keeping CF.
 group increments
