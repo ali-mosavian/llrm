@@ -811,7 +811,7 @@ fn allocated(
         &crate::backend::classes::RegisterClasses::m16(),
     )?)];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_none() {
-        phases.push(Box::new(ParallelCopy));
+        phases.push(Box::new(ParallelCopy::default()));
     }
     if std::env::var_os("FUZZ_SHOW").is_some() {
         eprintln!("{}", crate::backend::lirtext::lir_stage("input", &[(body.name.clone(), body.clone())]));
@@ -867,7 +867,7 @@ fn spilled_and_allocated(
             segments,
             &crate::backend::classes::RegisterClasses::m16(),
         )?),
-        Box::new(ParallelCopy),
+        Box::new(ParallelCopy::default()),
     ];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_some() {
         phases.pop();
