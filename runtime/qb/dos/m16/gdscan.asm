@@ -12,19 +12,18 @@
                 include gdfill.inc
 
 .code
-;***
-;B$FSCL
-;
-;Purpose:
-;       scan a 256-colour row for PAINT
-;       `repne scasb` finds a colour, `repe scasb` skips one.
-;Inputs:
-;       ax: ptr FillScan
-;Outputs:
-;       FillScan.found, -1 if none
-;Saves:
-;       bx cx dx si di bp es
-;****
+;; B$FSCL - scan a 256-colour row for PAINT.
+;;
+;; `repne scasb` finds a colour, `repe scasb` skips one.
+;;
+;; Args:
+;;     scan (ax): ptr to a FillScan.
+;;
+;; Returns:
+;;     scan.found: the index of the pixel from `at`, -1 if none.
+;;
+;; Saves:    bx cx dx si di bp es
+;; Clobbers: ax, flags
 B$FSCL          proc    public
 
                 push    bx
@@ -117,21 +116,21 @@ B$FSCL          proc    public
                 ret
 B$FSCL          endp
 
-;***
-;B$FSCP
-;
-;Purpose:
-;       scan a planar row for PAINT
-;       A byte of eight pixels at a time by the controller's colour
-;       compare (read mode 1, set up by the caller): one `out` and
-;       one read tell which of the eight are of a colour.
-;Inputs:
-;       ax: ptr FillScan
-;Outputs:
-;       FillScan.found and .hits, found -1 if none
-;Saves:
-;       bx cx dx si di bp es
-;****
+;; B$FSCP - scan a planar row for PAINT.
+;;
+;; A byte of eight pixels at a time by the controller's colour compare
+;; (read mode 1, set up by the caller): one `out` and one read tell
+;; which of the eight are of a colour.
+;;
+;; Args:
+;;     scan (ax): ptr to a FillScan.
+;;
+;; Returns:
+;;     scan.found: the index of the byte from `at`, -1 if none.
+;;     scan.hits: the pixels of that byte that matched.
+;;
+;; Saves:    bx cx dx si di bp es
+;; Clobbers: ax, flags
 B$FSCP          proc    public
 
                 push    bx
@@ -278,23 +277,22 @@ one:
 done:
                 endm
 
-;***
-;B$FSCC
-;
-;Purpose:
-;       scan a CGA row for PAINT, a byte at a time
-;       The pixels of a byte equal to a colour show as bits of the
-;       byte xor the colour's pattern.  The first and last byte are
-;       taken under their masks; the ones between, for one colour, by
-;       a short loop that only says whether a pixel of the byte is
-;       wanted, and the byte it stops at is taken as the others.
-;Inputs:
-;       ax: ptr FillScan (`x`, `to`: the pixels to scan)
-;Outputs:
-;       FillScan.found: the pixel, -1 if none
-;Saves:
-;       bx cx dx si di bp es
-;****
+;; B$FSCC - scan a CGA row for PAINT, a byte at a time.
+;;
+;; The pixels of a byte equal to a colour show as bits of the byte xor
+;; the colour's pattern.  The first and last byte are taken under their
+;; masks; the ones between, for one colour, by a short loop that only
+;; says whether a pixel of the byte is wanted, and the byte it stops at
+;; is taken as the others.
+;;
+;; Args:
+;;     scan (ax): ptr to a FillScan; `x` to `to` are the pixels to scan.
+;;
+;; Returns:
+;;     scan.found: the pixel, -1 if none.
+;;
+;; Saves:    bx cx dx si di bp es
+;; Clobbers: ax, flags
 B$FSCC          proc    public
 
 
@@ -317,21 +315,21 @@ B$FSCC          proc    public
                 ret
 B$FSCC          endp
 
-;***
-;B$FSCR
-;
-;Purpose:
-;       a CGA PAINT row: the open pixel and the run round it
-;       Searches `x` to `to` for a pixel that is neither colour `c1`
-;       nor `c2`; the run round it of pixels that are not `c1` is
-;       `left` to `right`, within 0 to `limit`.
-;Inputs:
-;       ax: ptr FillScan
-;Outputs:
-;       FillScan.found: 0, or -1 if the row had no such pixel
-;Saves:
-;       bx cx dx si di bp es
-;****
+;; B$FSCR - scan a CGA PAINT row for the open pixel and the run round it.
+;;
+;; Searches `x` to `to` for a pixel that is neither colour `c1` nor `c2`.
+;; The run round it of pixels that are not `c1` is `left` to `right`,
+;; within 0 to `limit`.
+;;
+;; Args:
+;;     scan (ax): ptr to a FillScan.
+;;
+;; Returns:
+;;     scan.found: 0, or -1 if the row had no such pixel.
+;;     scan.left, scan.right: the run, when found is 0.
+;;
+;; Saves:    bx cx dx si di bp es
+;; Clobbers: ax, flags
 B$FSCR          proc    public
 
 

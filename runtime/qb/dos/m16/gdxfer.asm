@@ -12,20 +12,15 @@
                 include gdfill.inc
 
 .code
-;***
-;B$FGET
-;
-;Purpose:
-;       one plane of GET, as QB's NReadL
-;       Each array byte is the high byte of `rol ax, cl` over two
-;       screen bytes.
-;Inputs:
-;       ax: ptr FillXfer
-;Outputs:
-;       none
-;Saves:
-;       bx cx dx si di bp es fs
-;****
+;; B$FGET - read one plane of a box into a GET array, as QB's NReadL.
+;;
+;; Each array byte is the high byte of `rol ax, cl` over two screen bytes.
+;;
+;; Args:
+;;     xfer (ax): ptr to a FillXfer.
+;;
+;; Saves:    bx cx dx si di bp es fs
+;; Clobbers: ax, flags
 B$FGET          proc    public
 
                 push    bx
@@ -86,19 +81,14 @@ B$FGET          proc    public
                 ret
 B$FGET          endp
 
-;***
-;B$FPSEL
-;
-;Purpose:
-;       the way of the PUT that follows, once
-;       Patches the write of B$FPUC and B$FPUP.
-;Inputs:
-;       ax: how (0 PSET, 1 AND, 2 OR, 3 XOR, 4 PRESET)
-;Outputs:
-;       none
-;Saves:
-;       bx cx
-;****
+;; B$FPSEL - set the way of the PUT that follows, once.
+;;
+;; Args:
+;;     how (ax): 0 PSET, 1 AND, 2 OR, 3 XOR, 4 PRESET.
+;;
+;; Saves:    bx cx
+;; Clobbers: ax, flags
+;; Patches:  the write of B$FPUC and B$FPUP.
 B$FPSEL         proc    public
 
                 push    bx
@@ -160,21 +150,17 @@ put_xor:
                 xor     es:[di], dh
                 ret
 
-;***
-;B$FPUC
-;
-;Purpose:
-;       PUT in the CGA modes, as QB's NWriteL
-;       Each screen byte takes bits of two array bytes by `ror ax, cl`
-;       over the pair.  The middle bytes are the `op [di], dl` that
-;       B$FPSEL patched; the first and last go through a mask.
-;Inputs:
-;       ax: ptr FillXfer
-;Outputs:
-;       none
-;Saves:
-;       bx cx dx si di bp es fs
-;****
+;; B$FPUC - PUT a box in the CGA modes, as QB's NWriteL.
+;;
+;; Each screen byte takes bits of two array bytes by `ror ax, cl` over
+;; the pair.  The middle bytes are the `op [di], dl` that B$FPSEL
+;; patched; the first and last go through a mask.
+;;
+;; Args:
+;;     xfer (ax): ptr to a FillXfer.
+;;
+;; Saves:    bx cx dx si di bp es fs
+;; Clobbers: ax, flags
 B$FPUC          proc    public
 
                 push    bx
@@ -256,22 +242,18 @@ put_mid         db      88h, 15h
                 ret
 B$FPUC          endp
 
-;***
-;B$FPUP
-;
-;Purpose:
-;       one plane of PUT in the planar modes
-;       The bytes are aligned as for the CGA and each is written by
-;       one `xchg`, which loads the latches and writes through the
-;       function the caller set.  The bit mask is set round the first
-;       and last byte of a row if they are partial.
-;Inputs:
-;       ax: ptr FillXfer
-;Outputs:
-;       none
-;Saves:
-;       bx cx dx si di bp es fs
-;****
+;; B$FPUP - PUT one plane of a box in the planar modes.
+;;
+;; The bytes are aligned as for the CGA and each is written by one
+;; `xchg`, which loads the latches and writes through the function the
+;; caller set.  The bit mask is set round the first and last byte of a
+;; row if they are partial.
+;;
+;; Args:
+;;     xfer (ax): ptr to a FillXfer.
+;;
+;; Saves:    bx cx dx si di bp es fs
+;; Clobbers: ax, flags
 B$FPUP          proc    public
 
                 push    bx

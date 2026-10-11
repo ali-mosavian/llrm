@@ -13,21 +13,15 @@
                 include gdfill.inc
 
 .code
-;***
-;B$FSEL
-;
-;Purpose:
-;       the box fill's operation and pattern, once for a primitive
-;       Patches the opcode, mod/rm and immediate of the `op mem, imm` that
-;       B$FBOX runs, as UGL patches its fillers.
-;Inputs:
-;       ax: operation (0 set, 1 and, 2 or, 3 xor)
-;       dx: the pattern byte
-;Outputs:
-;       none
-;Saves:
-;       bx
-;****
+;; B$FSEL - set the box fill's operation and pattern, once per primitive.
+;;
+;; Args:
+;;     operation (ax): 0 set, 1 and, 2 or, 3 xor.
+;;     pattern   (dl): the byte to fill with.
+;;
+;; Saves:    bx
+;; Clobbers: ax, flags
+;; Patches:  the opcode, mod/rm and immediate of the box fill's loops.
 B$FSEL          proc    public
 
                 push    bx
@@ -56,21 +50,17 @@ B$FSEL          proc    public
                 ret
 B$FSEL          endp
 
-;***
-;B$FBOX
-;
-;Purpose:
-;       fill rows of a box with the operation B$FSEL set
-;       A row is an edge byte (if `edges`), `middle` bytes, an edge byte.
-;       A row starts `steps[0]` after the one before it when that is
-;       even, `steps[1]` when odd (`phase`: which the first is).
-;Inputs:
-;       ax: ptr FillBox
-;Outputs:
-;       none
-;Saves:
-;       si di bp es
-;****
+;; B$FBOX - fill rows of a box with the operation B$FSEL set.
+;;
+;; A row is an edge byte (if `edges`), `middle` bytes, then an edge byte.
+;; A row starts `steps[0]` after the one before it when that is even,
+;; `steps[1]` when it is odd (`phase` says which the first is).
+;;
+;; Args:
+;;     box (ax): ptr to a FillBox.
+;;
+;; Saves:    si di bp es
+;; Clobbers: ax bx cx dx, flags
 B$FBOX          proc    public
 
                 push    si

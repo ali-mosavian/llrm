@@ -12,20 +12,15 @@
                 include gdfill.inc
 
 .code
-;***
-;B$FLSEL
-;
-;Purpose:
-;       the line kernels' operation and colour, once for a primitive
-;       Patches the `op mem, imm` sites of B$FLIN, B$FLIC and B$FLIP.
-;Inputs:
-;       ax: operation (0 set, 1 and, 2 or, 3 xor)
-;       dx: the colour byte
-;Outputs:
-;       none
-;Saves:
-;       bx
-;****
+;; B$FLSEL - set the line kernels' operation and colour, once per primitive.
+;;
+;; Args:
+;;     operation (ax): 0 set, 1 and, 2 or, 3 xor.
+;;     color     (dl): the colour byte.
+;;
+;; Saves:    bx
+;; Clobbers: ax, flags
+;; Patches:  the `op mem, imm` sites of B$FLIN, B$FLIC and B$FLIP.
 B$FLSEL          proc    public
 
                 push    bx
@@ -52,19 +47,15 @@ B$FLSEL          proc    public
                 ret
 B$FLSEL          endp
 
-;***
-;B$FLIN
-;
-;Purpose:
-;       a line in the 256-colour mode, a pixel a byte
-;       The colour and the `mov` are patched in by B$FLSEL.
-;Inputs:
-;       ax: ptr FillLine
-;Outputs:
-;       none
-;Saves:
-;       bx cx dx si di bp
-;****
+;; B$FLIN - draw a line in the 256-colour mode, a pixel a byte.
+;;
+;; The colour and the `mov` are patched in by B$FLSEL.
+;;
+;; Args:
+;;     line (ax): ptr to a FillLine.
+;;
+;; Saves:    bx cx dx si di bp
+;; Clobbers: ax, flags
 B$FLIN          proc    public
 
                 push    bx
@@ -197,21 +188,17 @@ sv_imm          db      0
                 ret
 B$FLIN          endp
 
-;***
-;B$FLIC
-;
-;Purpose:
-;       a line in the CGA modes, as QB's
-;       The mask of the pixels of a line that fall in a byte is
-;       accumulated and the byte blended once.  A step down or up a
-;       row toggles the bank (bit 13) and adds 80 on the way back.
-;Inputs:
-;       ax: ptr FillLine
-;Outputs:
-;       none
-;Saves:
-;       bx cx dx si di bp
-;****
+;; B$FLIC - draw a line in the CGA modes, as QB's.
+;;
+;; The mask of the pixels of a line that fall in a byte is accumulated
+;; and the byte blended once.  A step down or up a row toggles the
+;; bank (bit 13) and adds 80 on the way back.
+;;
+;; Args:
+;;     line (ax): ptr to a FillLine.
+;;
+;; Saves:    bx cx dx si di bp
+;; Clobbers: ax, flags
 B$FLIC          proc    public
 
                 push    bx
@@ -353,21 +340,17 @@ cv_sv           dw      0
                 ret
 B$FLIC          endp
 
-;***
-;B$FLIP
-;
-;Purpose:
-;       a line in the EGA and VGA planar modes, as QB's
-;       The mask of the pixels in a byte is accumulated, then `out`
-;       and one `xchg` reads the latches and writes the colour.  A
-;       vertical line sets the mask once.
-;Inputs:
-;       ax: ptr FillLine
-;Outputs:
-;       the graphics controller's bit mask is left at FFh
-;Saves:
-;       bx cx dx si di bp
-;****
+;; B$FLIP - draw a line in the EGA and VGA planar modes, as QB's.
+;;
+;; The mask of the pixels in a byte is accumulated, then `out` and one
+;; `xchg` reads the latches and writes the colour.  A vertical line sets
+;; the mask once.  The graphics controller's bit mask is left at FFh.
+;;
+;; Args:
+;;     line (ax): ptr to a FillLine.
+;;
+;; Saves:    bx cx dx si di bp
+;; Clobbers: ax, flags
 B$FLIP          proc    public
 
                 push    bx

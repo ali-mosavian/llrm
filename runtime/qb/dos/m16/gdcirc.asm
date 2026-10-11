@@ -43,20 +43,16 @@ PTC             macro   r, c
                 mov     es:[di], al
                 endm
 
-;***
-;B$FOCP
-;
-;Purpose:
-;       the eight points of a circle step, planar
-;       The bit mask by `out`, the latches loaded by the read, the
-;       colour written.
-;Inputs:
-;       ax: ptr FillOct
-;Outputs:
-;       none
-;Saves:
-;       bx cx dx di es
-;****
+;; B$FOCP - plot the eight points of a circle step, planar.
+;;
+;; The bit mask by `out`, the latches loaded by the read, the colour
+;; written.
+;;
+;; Args:
+;;     oct (ax): ptr to a FillOct.
+;;
+;; Saves:    bx cx dx di es
+;; Clobbers: ax, flags
 B$FOCP          proc    public
 
                 push    bx
@@ -84,19 +80,15 @@ B$FOCP          proc    public
                 ret
 B$FOCP          endp
 
-;***
-;B$FOCC
-;
-;Purpose:
-;       the eight points of a circle step, CGA
-;       Each byte is blended under the mask of its pixel.
-;Inputs:
-;       ax: ptr FillOct
-;Outputs:
-;       none
-;Saves:
-;       bx cx dx di es
-;****
+;; B$FOCC - plot the eight points of a circle step, CGA.
+;;
+;; Each byte is blended under the mask of its pixel.
+;;
+;; Args:
+;;     oct (ax): ptr to a FillOct.
+;;
+;; Saves:    bx cx dx di es
+;; Clobbers: ax, flags
 B$FOCC          proc    public
 
                 push    bx
