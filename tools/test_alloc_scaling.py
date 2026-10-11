@@ -214,6 +214,11 @@ def test_a_rewrite_looks_again_at_the_values_it_disturbed_only_for_a_register_th
     rewrite: 1,332 Minstr on `branches` at N=400 and 5,716 at 800 (9.5% of the compile). Values placed before a rewrite did not
     clash, and nothing else moved: the values it named, those whose class moved and those held across a point it added are
     looked at, with the holders they overlap."""
+
+
+def test_a_split_asks_what_holds_a_register_where_it_splits_and_gathers_none_of_it():
+    """`split occupied` gathered the segments of every value placed in any register, sorted, at each split: 220 Minstr on `branches` at
+    N=400 and 933 at 800 (slope 2.07). The union of holders answers by the span asked, as LLVM's `LiveIntervalUnion::Query` does."""
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
@@ -223,3 +228,6 @@ def test_a_rewrite_looks_again_at_the_values_it_disturbed_only_for_a_register_th
         source.write_text(scaling.AXES["branches"](400))
         run = steps(compiler, source, "-O2")
     assert run["after overlapping"] < 500, f"branches N=400 -O2: after overlapping cost {run['after overlapping']} Minstr (500 allowed; 1332 before): {run}"
+
+
+    assert run.get("split occupied", 0.0) < 20, f"branches N=400 -O2: split occupied cost {run.get('split occupied')} Minstr (20 allowed; ~220 before): {run}"

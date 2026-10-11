@@ -1882,23 +1882,7 @@ fn _allocated(
                 }
             }
             let spread = llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &live_sets));
-            let occupied = llrm_support::debug::timed("split occupied", || {
-                splitkit::Occupied::new(
-                    union
-                        .registers()
-                        .map(|(register, held)| {
-                            (
-                                register,
-                                held.iter()
-                                    .filter(|other| **other != value)
-                                    .flat_map(|other| facts.live[other].segments.clone())
-                                    .collect(),
-                            )
-                        })
-                        .collect(),
-                    &facts.masks,
-                )
-            });
+            let occupied = splitkit::Occupied::of(&union, &facts.live, value, &facts.masks);
             let sets: &dyn LiveAt = &live_sets;
             // A range in one block splits locally; any other by region, and
             // failing that block by block. Only a piece that pays is carved.

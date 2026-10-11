@@ -227,6 +227,15 @@ impl LiveUnion {
         self.registers.get(register).map(|held| held.holders.clone()).unwrap_or_default()
     }
 
+    /// Whether `register` has enough holders to be indexed: fewer are better
+    /// gathered once than asked of one by one.
+    pub fn many(
+        &self,
+        register: &RegId,
+    ) -> bool {
+        self.registers.get(register).is_some_and(|held| held.holders.len() >= BIG)
+    }
+
     /// `values` (held by `register`) in the order they took it.
     pub fn in_taking_order(
         &self,
