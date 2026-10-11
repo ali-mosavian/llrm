@@ -787,20 +787,14 @@ pub fn _interference_among(
         (Some(found), Some(_)) => found.widths(body, &wanted),
         _ => crate::analysis::occurrences::widths_of(body.blocks.iter().flat_map(|block| &block.insns), &wanted),
     };
-    let mut graph = Building::default();
+    // Asked of a few values, their rows are bits from the start: a group of N
+    // live together is N rows given N bits at once, not N^2 pairs each
+    // written into a tree.
+    let mut graph = if only.is_some() { Building::bits() } else { Building::default() };
 
-    let edge = |graph: &mut Building, one: u32, other: u32| {
-        if one != other && wanted(one) && wanted(other) {
-            graph.link(one, other);
-        }
-    };
-    let all_pairs = |graph: &mut Building, alive: &BTreeSet<u32>| {
-        let named: Vec<u32> = alive.iter().copied().filter(|one| wanted(*one)).collect();
-        for value in &named {
-            for other in &named {
-                edge(graph, *value, *other);
-            }
-        }
+    let all_pairs = |graph: &mut Building, alive: &Alive| {
+        let named: Vec<u32> = alive.iter().filter(|one| wanted(*one)).collect();
+        graph.link_group(&named);
     };
 
     let targets: BTreeSet<i64> = body.blocks.iter().flat_map(|block| block.succ.iter().copied()).collect();
@@ -831,16 +825,20 @@ pub fn _interference_among(
         })
     });
     for (block_index, block) in body.blocks.iter().enumerate() {
-        let mut alive: BTreeSet<u32> = rows.leaving(block.at).into_iter().filter(|one| wanted(*one)).collect();
         if let Some(touched) = &touched {
+            // A quiet block (no value asked of in it, no entry, no phi, no
+            // parallel copy with two live) adds no pair, and what
+            // is live at its end is asked of the others only.
             let quiet = !touched.contains(&block_index)
                 && !entries.contains(&block.at)
                 && block.phis.is_empty()
-                && (alive.len() < 2 || !block.insns.iter().any(|one| one.group.is_some()));
+                && (!block.insns.iter().any(|one| one.group.is_some())
+                    || rows.leaving(block.at).into_iter().filter(|one| wanted(*one)).nth(1).is_none());
             if quiet {
                 continue;
             }
         }
+        let mut alive: Alive = rows.leaving(block.at).into_iter().filter(|one| wanted(*one)).collect();
         if entries.contains(&block.at) {
             all_pairs(&mut graph, &rows.entering(block.at).into_iter().filter(|one| wanted(*one)).collect());
         }
@@ -883,7 +881,7 @@ pub fn _interference_among(
                 let mut before = alive.clone();
                 for item in group {
                     for value in &item.defines {
-                        before.remove(value);
+                        before.remove(*value);
                     }
                 }
                 for item in group {
@@ -917,21 +915,24 @@ pub fn _interference_among(
                 }
             }
             for value in &one.defines {
-                for other in &alive {
-                    if Some(*other) != equal {
-                        edge(&mut graph, *value, *other);
-                    }
+                if wanted(*value) {
+                    let near: Vec<u32> = alive
+                        .iter()
+                        .filter(|other| Some(*other) != equal && *other != *value && wanted(*other))
+                        .collect();
+                    graph.link_all(*value, &near);
                 }
             }
             for value in &one.defines {
-                alive.remove(value);
+                alive.remove(*value);
             }
             alive.extend(one.uses.iter().copied().filter(|value| wanted(*value)));
             index -= 1;
         }
         for value in block.arrives() {
-            for other in &alive {
-                edge(&mut graph, value, *other);
+            if wanted(value) {
+                let near: Vec<u32> = alive.iter().filter(|other| *other != value && wanted(*other)).collect();
+                graph.link_all(value, &near);
             }
         }
     }
@@ -946,16 +947,83 @@ struct Building {
     rows: Vec<Neighbours>,
     seen: Vec<bool>,
     order: Vec<u32>,
+    /// Rows are bits from the start (a few values asked of), not trees that
+    /// turn to bits.
+    bits: bool,
 }
 
 impl Building {
+    fn bits() -> Self {
+        Self { bits: true, ..Self::default() }
+    }
+
+    /// `value` next to each of `others`, in their order.
+    fn link_all(
+        &mut self,
+        value: u32,
+        others: &[u32],
+    ) {
+        if others.is_empty() {
+            return;
+        }
+        if !self.bits {
+            for other in others {
+                self.link(value, *other);
+            }
+            return;
+        }
+        self.touch(value);
+        let most = others.iter().copied().max().expect("not empty") as usize;
+        let mut mask = vec![0u64; most / 64 + 1];
+        for other in others {
+            self.touch(*other);
+            self.rows[*other as usize].insert(value);
+            mask[*other as usize / 64] |= 1u64 << (*other % 64);
+        }
+        self.rows[value as usize].join(&mask, value);
+    }
+
+    /// Every value of `group` next to every other.
+    fn link_group(
+        &mut self,
+        group: &[u32],
+    ) {
+        // A value alone is next to nothing, and is no node of the graph for it.
+        if group.len() < 2 {
+            return;
+        }
+        if !self.bits {
+            for value in group {
+                for other in group {
+                    if value != other {
+                        self.link(*value, *other);
+                    }
+                }
+            }
+            return;
+        }
+        let most = *group.iter().max().expect("not empty") as usize;
+        let mut mask = vec![0u64; most / 64 + 1];
+        for value in group {
+            mask[*value as usize / 64] |= 1u64 << (*value % 64);
+        }
+        for value in group {
+            self.touch(*value);
+            self.rows[*value as usize].join(&mask, *value);
+        }
+    }
+
     fn touch(
         &mut self,
         value: u32,
     ) {
         let at = value as usize;
         if at >= self.rows.len() {
-            self.rows.resize_with(at + 1, Neighbours::default);
+            if self.bits {
+                self.rows.resize_with(at + 1, || Neighbours::Dense { words: Vec::new(), len: 0 });
+            } else {
+                self.rows.resize_with(at + 1, Neighbours::default);
+            }
             self.seen.resize(at + 1, false);
         }
         if !self.seen[at] {
@@ -1468,5 +1536,69 @@ mod tests {
                 "pinned={pinned}"
             );
         }
+    }
+}
+
+/// The values live at a point, as bits: a set taken, copied and walked at every
+/// instruction of a body was a tree.
+#[derive(Clone, Default)]
+struct Alive {
+    words: Vec<u64>,
+}
+
+impl Alive {
+    fn insert(
+        &mut self,
+        value: u32,
+    ) {
+        let at = value as usize / 64;
+        if at >= self.words.len() {
+            self.words.resize(at + 1, 0);
+        }
+        self.words[at] |= 1u64 << (value % 64);
+    }
+
+    fn remove(
+        &mut self,
+        value: u32,
+    ) {
+        if let Some(word) = self.words.get_mut(value as usize / 64) {
+            *word &= !(1u64 << (value % 64));
+        }
+    }
+
+    /// The members, ascending.
+    fn iter(&self) -> impl Iterator<Item = u32> + '_ {
+        self.words
+            .iter()
+            .enumerate()
+            .flat_map(
+                |(at, word)| {
+                    let mut rest = *word;
+                    std::iter::from_fn(move || {
+                        if rest == 0 {
+                            return None;
+                        }
+                        let bit = rest.trailing_zeros();
+                        rest &= rest - 1;
+                        Some(at as u32 * 64 + bit)
+                    })
+                },
+            )
+    }
+
+    fn extend(
+        &mut self,
+        values: impl IntoIterator<Item = u32>,
+    ) {
+        values.into_iter().for_each(|value| self.insert(value));
+    }
+}
+
+impl FromIterator<u32> for Alive {
+    fn from_iter<I: IntoIterator<Item = u32>>(values: I) -> Self {
+        let mut alive = Self::default();
+        alive.extend(values);
+        alive
     }
 }
