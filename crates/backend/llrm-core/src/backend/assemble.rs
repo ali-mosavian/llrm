@@ -495,6 +495,21 @@ fn cheaper(
 /// same output on every bench row below this share.
 const SPILLER_TRAFFIC: f64 = 0.005;
 
+/// Whether `what` reads or writes a frame cell the spiller could move: one at a
+/// fixed displacement. An array's cell, indexed, reaches its whole object and
+/// is not the traffic the spiller removes.
+fn names_frame_cell(what: &Semantics) -> bool {
+    what.dests
+        .iter()
+        .chain(&what.sources)
+        .any(
+            |place| matches!(
+                place,
+                Loc::Mem(mem) if mem.index.is_none() && mem.addr.is_some_and(|addr| addr.space == Space::Frame)
+            ),
+        )
+}
+
 /// What `cheaper` does below -Omax (LLVM allocates once; GCC runs its reload
 /// pass only on what the allocator left in memory): the allocator alone, and
 /// the spiller's route too only where the allocator left traffic through the
@@ -514,17 +529,7 @@ fn directed(
         let weight = if target.cpu.size { 1.0 } else { busy.block(block.at) };
         for one in block.insns.iter().filter(|one| masm::prints(one)) {
             all += weight;
-            let frame = one
-                .what
-                .as_ref()
-                .is_some_and(
-                    |what| what.dests.iter().chain(&what.sources).any(|place| {
-                        matches!(
-                            place,
-                            crate::model::ir::Loc::Mem(mem) if mem.addr.is_some_and(|addr| addr.space == Space::Frame)
-                        )
-                    }),
-                );
+            let frame = one.what.as_ref().is_some_and(names_frame_cell);
             if one.spill_reload || one.spill_store || frame {
                 traffic += weight;
             }
@@ -692,7 +697,19 @@ fn cheaper_by(
 
 #[cfg(test)]
 mod tests {
-    use super::cheaper_by;
+    use super::{cheaper_by, names_frame_cell};
+    use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
+
+    /// An indexed array's cell counted as frame traffic, so every function
+    /// with a local array ran the spiller's route as well and compiled up to
+    /// 14% slower (x_strlen, ring, x_radix) for the same code.
+    #[test]
+    fn test_an_arrays_indexed_cell_is_not_the_frame_traffic_the_spiller_removes() {
+        let cell = |index| Mem { index, ..Mem::new(Some(Addr::new(Space::Frame, -16)), 2) };
+        let read = |cell| Semantics { sources: vec![Loc::Mem(cell)], ..Semantics::new(Operation::Move) };
+        assert!(names_frame_cell(&read(cell(None))));
+        assert!(!names_frame_cell(&read(cell(Some(Held { value: 1, width: 2 })))));
+    }
 
     /// The spiller's route was kept unless the allocator alone was cheaper by
     /// bytes: where bytes tied (sieve -Os) or neither had a price
