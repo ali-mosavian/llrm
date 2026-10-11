@@ -826,3 +826,71 @@ fn test_accesses_of_one_leaf_are_not_compared_with_each_other() {
     assert_eq!(compared(40), 0);
     assert_eq!(compared(400), 0);
 }
+
+/// A cell is live on entering the blocks it is read in before it is written,
+/// and the blocks that lead there along paths that do not write it. One written
+/// and read in one arm of a switch is live nowhere, and a phi of N inputs for
+/// it at the join was N^2 data made to be pruned.
+#[test]
+fn a_cell_is_live_where_it_is_read_before_it_is_written_and_not_in_the_arm_that_both_writes_and_reads_it() {
+    use std::collections::HashMap;
+    let text = "define i32 @f(i32 %a) {
+entry:
+  %t = alloca i32
+  %u = alloca i32
+  switch i32 %a, label %j [
+    i32 0, label %x
+    i32 1, label %y
+  ]
+
+x:
+  store i32 1, ptr %t
+  store i32 5, ptr %u
+  %lx = load i32, ptr %u
+  br label %j
+
+y:
+  store i32 2, ptr %t
+  br label %j
+
+j:
+  %r = load i32, ptr %t
+  ret i32 %r
+}
+";
+    let module = llrm_analysis::testing::parsed(text);
+    let function = llrm_analysis::testing::function(&module, "f");
+    let (mut stores, mut loads) = (HashMap::default(), HashMap::default());
+    let (mut types, mut seen) = (Vec::new(), Vec::new());
+    for (_, inst) in function.walk() {
+        match function.instruction(inst).opcode {
+            Opcode::Store { .. } => seen.push(inst),
+            Opcode::Load { .. } => {
+                // The loads are of %u (first), then of %t.
+                let slot = loads.len();
+                loads.insert(inst, [1, 0][slot]);
+                types.push(function.instruction(inst).ty);
+            }
+            _ => {}
+        }
+    }
+    // Stores in order: t and u in x, t in y.
+    stores.insert(seen[0], 0);
+    stores.insert(seen[1], 1);
+    stores.insert(seen[2], 0);
+    types.reverse();
+    let plan = super::Plan { variables: vec![None, None], types, stores, loads };
+    let live = super::live_in(function, &plan);
+    let names = |cell: usize| -> Vec<String> {
+        function
+            .layout()
+            .iter()
+            .filter(|&&block| live[cell].contains(&cfg::id(block)))
+            .map(|&block| function.block(block).name.clone().expect("a name"))
+            .collect()
+    };
+    // The default edge goes straight to j, writing nothing: t is live on the
+    // way there too.
+    assert_eq!(names(0), ["entry", "j"], "t is read at j, past the arms that write it and the edge that does not");
+    assert!(names(1).is_empty(), "u is written before it is read, in its arm: {:?}", names(1));
+}

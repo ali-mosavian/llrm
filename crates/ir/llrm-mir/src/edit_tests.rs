@@ -484,3 +484,35 @@ fn a_terminators_successors_and_a_blocks_predecessors_are_listed_once_each_in_or
         assert_eq!(into_d.len(), 1 + cases, "{cases} cases: the entry, and each b block once");
     }
 }
+
+/// A value read by many places goes to another in one step, and a phi of many
+/// inputs is cleared in one: the use lists agree with the operands after both.
+/// (A scan of the list for each use made the first U^2 and, over the dead phis
+/// of a promotion, the second N^3.)
+#[test]
+fn a_value_replaced_and_a_phi_cleared_leave_the_use_lists_true() {
+    let n = 60;
+    let mut text = String::from("define i32 @f(i32 %a, i32 %b) {\nentry:\n  switch i32 %a, label %d [\n");
+    for k in 0..n {
+        text += &format!("    i32 {k}, label %b{k}\n");
+    }
+    text += "  ]\n";
+    for k in 0..n {
+        text += &format!("b{k}:\n  %x{k} = add i32 %a, {k}\n  br label %d\n");
+    }
+    text += "d:\n  %p = phi i32 ";
+    text += &(0..n).map(|k| format!("[%b, %b{k}]")).collect::<Vec<_>>().join(", ");
+    text += ", [0, %entry]\n  %q = add i32 %p, %p\n  %r = mul i32 %q, %b\n  ret i32 %r\n}\n";
+    let mut m = module(&text);
+    let f = function(&mut m);
+    let (_, b) = (0, f.parameters()[1]);
+    let (_, a) = (0, f.parameters()[0]);
+    assert!(f.users(b).len() > n, "premise: %b is read many times");
+    f.replace_value(b, Operand::Value(a));
+    assert!(f.users(b).is_empty());
+    assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
+    let (phi, _) = named(f, "p");
+    f.set_operands(phi, Vec::new());
+    assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
+    assert!(f.instruction(phi).operands.is_empty());
+}
