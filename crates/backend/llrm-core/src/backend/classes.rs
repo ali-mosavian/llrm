@@ -34,10 +34,6 @@ pub struct RegisterClasses {
     /// touches the frame, saving it with a `push` before and restoring it
     /// with a `pop` after (`parked`).
     pub parkable: bool,
-    /// This allocation offers the frame register: it is one more register,
-    /// the last given out, and a point that needs the frame destroys it
-    /// (`masks`).
-    pub offers_frame: bool,
     /// Every register an address may be made of, the frame's included:
     /// `[bx+si]`, `[bp+di]`.
     pub addressing: BTreeSet<RegId>,
@@ -119,7 +115,6 @@ impl RegisterClasses {
             word_indexes: words("index"),
             frame: arch.frame_register(),
             parkable: false,
-            offers_frame: false,
             addressing,
             encodable_bases,
             byte_words: {
@@ -159,14 +154,15 @@ impl RegisterClasses {
         Self { parkable: true, ..self.clone() }
     }
 
-    /// The register points that need the frame destroy, where it is offered.
-    pub fn frame_needed(&self) -> Option<RegId> {
-        self.offers_frame.then(|| crate::model::ir::root(self.frame))
+    /// These classes for a function that may not park the frame register.
+    pub fn unparkable(&self) -> Self {
+        Self { parkable: false, ..self.clone() }
     }
 
-    /// These classes with the frame register offered to values.
-    pub fn offering_frame(&self) -> Self {
-        Self { offers_frame: true, ..self.with_frame_free() }
+    /// The register points that need the frame destroy, where a function may
+    /// park it.
+    pub fn frame_needed(&self) -> Option<RegId> {
+        self.parkable.then(|| crate::model::ir::root(self.frame))
     }
 
     /// 16-bit x86's, which the tests of this crate are written for.

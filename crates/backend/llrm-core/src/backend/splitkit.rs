@@ -1412,6 +1412,22 @@ fn _copies(
         .sum()
 }
 
+/// Whether holding `value` through `region` in a register saved around it
+/// saves more than the `push` and the `pop` cost: `_benefit`, the copies being
+/// those of the frame register's old value.
+pub fn parking_pays(
+    body: &LirBody,
+    value: u32,
+    region: &Region,
+    saving: &dyn Fn(&Insn) -> f64,
+) -> bool {
+    let depths = ranges::depths_shared(body);
+    let frequency = |at: i64| ranges::level(depths[&at]);
+    let blocks = Blocks::of(body);
+    let saved = _saved(body, value, region, &frequency, saving);
+    saved - _copies(&crossings_in(&blocks, u32::MAX, region, &Everywhere, true), &frequency) > 0.0
+}
+
 /// The region `segments` (slots, as `index` numbers them) cover: from the
 /// instruction that makes a range to the one that last reads it.
 pub fn region_of(

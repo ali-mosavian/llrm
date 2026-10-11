@@ -1977,7 +1977,9 @@ fn _affine_address(
         return Ok(None);
     };
     let z = full32(dest.register);
-    if full32(source.register) == z {
+    // The frame register is the frame or a value in a stretch that holds one:
+    // no address is made of a sum with it.
+    if full32(source.register) == z || regs.is_frame(source.register) || regs.is_frame(dest.register) {
         return Ok(None);
     }
     let bits = i64::from(dest.width) * 8;
@@ -1998,6 +2000,9 @@ fn _affine_address(
                 disp = wrapped(disp * factor);
             }
             affine::Step::AddRegister(other) => {
+                if regs.is_frame(other.register) {
+                    break;
+                }
                 let root = full32(other.register);
                 match terms.iter_mut().find(|term| term.0 == root) {
                     Some(term) => term.1 += 1,
