@@ -122,6 +122,22 @@ def nest(n: int) -> str:
     return "".join(out)
 
 
+def cases(n: int) -> str:
+    """One loop around a `switch` of N cases, each deciding the next state by a compare and a mask of a byte the loop makes: a
+    block with N successors, each reached by one edge, as a state machine or an interpreter's dispatch has."""
+    arms = "".join(
+        f"    case {k}: return c < {k * 37 % 250 + 3} ? {(k + 1) % n} : (c & {k % 7 + 1} ? {(k + 3) % n} : {(k + 5) % n});\n" for k in range(n)
+    )
+    return (
+        PRELUDE_C
+        + f"static int step(int s, int c)\n{{\n    switch (s) {{\n{arms}    default: return 0;\n    }}\n}}\n"
+        + "long fn(int n)\n{\n    int i, s = 0;\n    long sum = 0;\n    unsigned r = 9u;\n"
+        + "    for (i = 0; i < n; ++i) {\n        r = r * 1103515245u + 12345u;\n"
+        + "        s = step(s, (int)((r >> 16) & 255u));\n        sum += s * (i & 3);\n    }\n    return sum;\n}\n"
+        + _main("cases", "    return fn(n + 7);\n")
+    )
+
+
 def cells(n: int) -> str:
     """One function reading and writing N distinct memory cells (elements of one static array), each read after the stores to every
     cell before it: the loads that memory forwarding looks up meet N different cells, so a pass that scans every cell held per load
@@ -173,7 +189,7 @@ def fjoins(n: int) -> str:
     return "".join(out)
 
 
-AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins, "fjoins": fjoins}
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins, "fjoins": fjoins, "cases": cases}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------
