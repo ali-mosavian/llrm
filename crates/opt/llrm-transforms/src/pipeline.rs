@@ -435,7 +435,8 @@ pub fn recorded(
     // The loops it guards are re-simplified for the passes that follow. Not at
     // -Os (`optimize_loop_for_size_p`): there only a loop proven to run is
     // entered at its body, which the last `Rotate` does.
-    if applied.options.copy_headers && !applied.options.prefers_size() {
+    let guarded = applied.options.copy_headers && !applied.options.prefers_size();
+    if guarded {
         manager.add(rotate::Rotate { proven: false, copy: true });
         manager.add(loopsimplify::LoopSimplify);
         manager.add(lcssa::LoopClosedSSA);
@@ -450,8 +451,9 @@ pub fn recorded(
     }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged leaves it before its counters are chosen, as LLVM runs LICM
-    // before LoopStrengthReduce.
-    if applied.options.wanted("hoist") {
+    // before LoopStrengthReduce. Only the copy has entered loops at their
+    // body by here; without it the last `Rotate` has not, and hoist follows it.
+    if guarded && applied.options.wanted("hoist") {
         manager.add(hoist::Hoist { size: applied.options.prefers_size() });
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
@@ -486,6 +488,11 @@ pub fn recorded(
             correlated: applied.options.copy_headers,
             states: applied.options.expensive,
         });
+    }
+    // A loop entered at its body runs it at least once: what it loads
+    // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
+    if !guarded && applied.options.wanted("hoist") {
+        manager.add(hoist::Hoist { size: applied.options.prefers_size() });
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {

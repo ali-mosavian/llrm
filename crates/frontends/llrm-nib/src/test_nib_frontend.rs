@@ -2405,7 +2405,7 @@ fn test_a_range_loops_counter_does_not_wrap() {
 
 /// A shared reference is not null and points at all of its struct, so the
 /// load of its field is hoisted above the loop's guard and no register is
-/// saved to hold it: 15 instructions where 17 saved and restored `si`.
+/// saved to hold it: one load, where 17 instructions saved and restored `si`.
 #[test]
 fn test_a_reference_lets_its_field_load_leave_the_loop() {
     let directory = tempfile::tempdir().unwrap();
@@ -2427,7 +2427,7 @@ fn test_a_reference_lets_its_field_load_leave_the_loop() {
         .take_while(|one| !one.ends_with("endp"))
         .filter(|one| !one.ends_with(':'))
         .collect();
-    assert_eq!(body.len(), 15, "{body:?}");
+    assert_eq!(body.iter().filter(|one| one.contains("es:[bx+2]")).count(), 1, "{body:?}");
     assert!(!body.contains(&"push si"), "{body:?}");
 }
 

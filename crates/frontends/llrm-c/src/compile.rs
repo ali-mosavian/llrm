@@ -2338,7 +2338,11 @@ mod tests {
         // From the store the loop makes (the trip's extension is the first
         // thing after it).
         let from = body.iter().position(|line| line.starts_with("mov byte ptr [")).expect("the loop stores a byte");
-        let loop_ = &body[from..];
+        // To the last jump before the epilogue: the copied guard leaves the
+        // function by more than one return, whose `movzx` is not a trip's.
+        let ret = body[from..].iter().position(|line| line == "ret").expect("the function returns") + from;
+        let last_jump = body[from..ret].iter().rposition(|line| line.starts_with('j')).expect("the loop jumps") + from;
+        let loop_ = &body[from..=last_jump];
         let copies = |line: &&String| {
             line.starts_with("movzx e")
                 || line.split_once(' ').is_some_and(|(operation, operands)| {
@@ -2397,11 +2401,8 @@ mod tests {
             "{body:#?}"
         );
         assert!(body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");
-        assert!(
-            body.iter().any(|line| line.starts_with("jne "))
-                && !body.iter().any(|line| line.starts_with("cmp ") && line.ends_with(", 0")),
-            "{body:#?}"
-        );
+        let jump = body.iter().position(|line| line.starts_with("jne ")).expect("the loop ends on jne");
+        assert!(body[jump - 1].starts_with("add e") && body[jump - 1].ends_with(", 4"), "{body:#?}");
         assert!(
             body.iter().all(|line| !line.contains(" bp")
                 && !line.contains("[bx")

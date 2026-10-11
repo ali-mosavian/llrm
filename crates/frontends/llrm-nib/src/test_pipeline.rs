@@ -124,17 +124,17 @@ fn _trap_branches(
 /// trip (3 compare-and-branch pairs against C's none), 245,433 executed
 /// instructions against C's 163,105 (#453).
 ///
-/// The loop still keeps one: `lo < len`, invariant, is in the second block of
-/// the loop and trivial unswitch handles only a header's branch. The header
-/// copy with the branch the way in settles threaded takes it out (`-ftree-ch`);
-/// this reads 0 when that is on by default (#1194).
+/// The loop kept one without the header copy: `lo < len`, invariant, is in the
+/// second block of the loop and trivial unswitch handles only a header's
+/// branch. The header copy, on by default, settles the branch threaded and
+/// takes it out (#1194).
 #[test]
-fn test_a_partition_loop_has_one_bounds_check_in_it_until_the_header_copy_is_on() {
+fn test_a_partition_loop_has_no_bounds_check_in_it() {
     let function = _nib("partition", "partition", "_partition");
     let loops = _innermost_loops(&function);
     assert!(!loops.is_empty(), "premise: the loop is found\n{function}");
     for body in loops {
-        assert_eq!(_trap_branches(&function, &body), 1, "{body:#?}\n{function}");
+        assert_eq!(_trap_branches(&function, &body), 0, "{body:#?}\n{function}");
     }
 }
 

@@ -226,10 +226,33 @@ fn test_sum_three_loop_is_five_instructions_by_default() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let loop_ = lines.windows(5).any(|w| {
-        w[..3].iter().all(|line| line.starts_with("add ax, word ptr"))
-            && w[3].starts_with("add e") && w[3].ends_with(", 2")
-            && w[4].starts_with("jne ")
-    });
+    let loop_ = lines
+        .windows(5)
+        .any(
+            |w| w[..3].iter().all(|line| line.starts_with("add ax, word ptr"))
+                && w[3].starts_with("add e")
+                && w[3].ends_with(", 2")
+                && w[4].starts_with("jne "),
+        );
+    assert!(loop_, "{text}");
+}
+
+/// Tuned for size the copy is off and the loop is entered at its body only
+/// after the last `Rotate`: `Hoist` ahead of it found no loop it could take
+/// the three row loads out of, and the loop reloaded `[row+4]` each trip
+/// (`mov ebp, [ecx+4]; add ax, [ebp+edi]` three times).
+#[test]
+fn test_tuned_for_size_the_row_loads_still_leave_the_loop() {
+    let source = format!("{}/bench/parity/sum_three/sum_three.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-Os", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let loop_ = lines.windows(3).any(|w| w.iter().all(|line| line.starts_with("add ax, word ptr")));
     assert!(loop_, "{text}");
 }
