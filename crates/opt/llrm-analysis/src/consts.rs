@@ -1018,9 +1018,6 @@ fn exit_loads(
 /// What serves a read of `reference` (its index placed by `placed`): the stores
 /// `ask` says reach it, whole or byte by byte. None where a path meets no
 /// write.
-/// The nearest writes a load may have and still be served by them.
-const MAX_REACHING: usize = 100;
-
 fn provider_of(
     unit: &Unit,
     accesses: &Accesses,
@@ -1037,7 +1034,7 @@ fn provider_of(
     // body (`joins` 256: 10% of the compile). LLVM's walker stops at
     // `memssa-check-limit` (100) checks, gcc's value numbering at
     // `sccvn-max-alias-queries-per-access` (1000).
-    if reaching.len() > MAX_REACHING {
+    if reaching.len() > memoryssa::MAX_NEAREST_WRITES {
         return None;
     }
     // A path to the entry that no write meets leaves every byte as it
@@ -1078,7 +1075,7 @@ fn provider_of(
             };
             let mut from = Vec::new();
             let nearest = ask(&one);
-            if nearest.len() > MAX_REACHING {
+            if nearest.len() > memoryssa::MAX_NEAREST_WRITES {
                 bytes.clear();
                 break 'bytes;
             }
@@ -1138,7 +1135,7 @@ pub fn load_providers(
         if crate::memory::constant_bits(unit, &reference).is_some() {
             continue;
         }
-        let ask = |one: &MemRef| graph.clobbers_ignoring_invariance(inst, one);
+        let ask = |one: &MemRef| graph.nearest_writes(inst, one);
         if let Some(provider) = provider_of(unit, accesses, &graph, &reference, &ask) {
             providers.insert(result, provider);
         }
