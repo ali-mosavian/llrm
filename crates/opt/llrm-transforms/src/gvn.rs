@@ -79,7 +79,7 @@ impl FunctionPass for Gvn {
         // Numbering leaves the CFG alone: every candidate has these trips.
         let registers = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        let trips = if !profit::registers(analyses.outer()).priced() {
+        let trips = if !self.pre || !profit::registers(analyses.outer()).priced() {
             IndexMap::default()
         } else {
             let counted = analyses.get::<llrm_analysis::manager::Counted>(unit.context, unit.layout, unit.function);
@@ -169,7 +169,10 @@ pub fn optimized(
         registers
     };
     let (numbered, subexpressed) =
-        _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer), trips, registers, shape)?;
+        // Without `pre` this is -O1's FRE: gcc's has no profit pricing, so a
+        // load is served wherever it is redundant and nothing is numbered
+        // twice.
+        _numbered(unit, outer, accesses, &profit::costs(outer), if pre { profit::registers(outer) } else { crate::spill::Room::default() }, trips, registers, shape)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, pre && !subexpressed)?;
