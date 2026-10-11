@@ -233,6 +233,12 @@ def c_source(path: Path) -> bytes:
     return b"".join(lines[head:])
 
 
+def stage_shared_headers(folder: Path) -> None:
+    """The benches' shared headers, beside `folder`: a program's `#include "../bench_io.h"` finds them there as it does in bench/, and
+    the references compile a copy of the source in `folder`."""
+    shutil.copy(BENCH / "bench_io.h", folder.parent / "bench_io.h")
+
+
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
     """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
     Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
@@ -240,6 +246,7 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
     home, compiler, levels = BORLAND[language]
     folder = work / f"{language}{opt}"
     folder.mkdir(parents=True)
+    stage_shared_headers(folder)
     for variant, stem in variants_:
         text = c_source(variant.source)
         if home.name == "tc201":  # TC 2.01 reads a `#` after a bare LF as an illegal character: every program with a #define failed
