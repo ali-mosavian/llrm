@@ -1203,3 +1203,42 @@ clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 established = true
 inputs = []
 evidence = "runtime/qb/events.c, written for the llrm runtime; QB's counterpart is rt/gwaevt.asm, which jumps into the handler: PLAY(n): the notes waiting in the background music queue; AX. Pascal, far, the arguments popped by the callee."
+
+["B$STIK"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/events.c: STICK(n) of a machine with no joystick or light pen, 0; QB's counterpart is in rt/evtstg.asm and rt/evtpen.asm, which read the adapter. Pascal, far, the argument popped by the callee."
+
+["B$FSTG"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/events.c: STRIG(n) of a machine with no joystick or light pen, 0; QB's counterpart is in rt/evtstg.asm and rt/evtpen.asm, which read the adapter. Pascal, far, the argument popped by the callee."
+
+["B$FPEN"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/events.c: PEN(n) of a machine with no joystick or light pen, 0; QB's counterpart is in rt/evtstg.asm and rt/evtpen.asm, which read the adapter. Pascal, far, the argument popped by the callee."

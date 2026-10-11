@@ -1544,6 +1544,28 @@ fn synthesize_statement(
     let descriptor = if line_input { Some(StatementShape::LineInput) } else { dispatched.or(emitted) };
     let arguments = state.expressions.split_off(expression_base);
     let labels = state.labels.split_off(label_base);
+    // `STRIG ON` and `STRIG OFF` start and stop reading the joystick's buttons; the grammar emits nothing for them.
+    let strig_switch = (keyword == named("tkSTRIG") && arguments.is_empty()).then(|| {
+        state.tokens[..state.at].iter().rev().find_map(|token| match token.kind {
+            TokenKind::Reserved(id) if id == named("tkON") => Some("ON"),
+            TokenKind::Reserved(id) if id == named("tkOFF") => Some("OFF"),
+            _ => None,
+        })
+    });
+    if let Some(Some(verb)) = strig_switch {
+        state.expressions.truncate(expression_base);
+        state.statements.push(Statement::Runtime {
+            name: "EVENT".into(),
+            arguments: vec![
+                Expr::Name("STRIG".into(), span),
+                Expr::Omitted(span),
+                Expr::Name(verb.into(), span),
+                Expr::Omitted(span),
+            ],
+            span,
+        });
+        return true;
+    }
     if let Some(event) = event_statement(actions, &arguments, &labels, span) {
         state.expressions.truncate(expression_base);
         state.statements.push(event);

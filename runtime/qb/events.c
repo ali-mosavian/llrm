@@ -10,11 +10,17 @@
 
 enum { HUNDREDTHS = 100, DAY = 8640000L, LONGEST = 86400 };
 
-enum { DEVICE_TIMER = 1, DEVICE_PLAY = 2, DEVICE_KEY = 3 };
+enum {
+    DEVICE_TIMER = 1,
+    DEVICE_PLAY = 2,
+    DEVICE_KEY = 3,
+    DEVICE_FIRST_ABSENT = 4,
+    DEVICE_LAST = 8
+};
 
 enum { OFF, ON, STOP };
 
-enum { KEYS = 32, TRAPS = KEYS + 1 };
+enum { KEYS = 32, ABSENT = DEVICE_LAST - DEVICE_FIRST_ABSENT + 1, TRAPS = KEYS + 1 + ABSENT };
 
 typedef struct Trap {
     short handler; /* the compiler's number for the handler, 0 for none */
@@ -26,7 +32,9 @@ typedef struct Trap {
     unsigned last; /* PLAY: the notes the last look found */
 } Trap;
 
-/* The timer, the music, then KEY(1) to KEY(31) */
+/* The timer, the music, KEY(1) to KEY(31), then the joystick, serial port,
+   light pen, user event and signal, of which this machine has none: they take
+   their statements and never have an event. */
 static Trap traps[TRAPS];
 
 /* Whether any KEY(n) has a handler: until one has, the keyboard is left alone.
@@ -52,6 +60,8 @@ static Trap *trap_of(short device, long number)
         return &traps[1];
     if (device == DEVICE_KEY && number >= 1 && number < KEYS && key_scan[number])
         return &traps[1 + number];
+    if (device >= DEVICE_FIRST_ABSENT && device <= DEVICE_LAST)
+        return &traps[KEYS + 1 + device - DEVICE_FIRST_ABSENT];
     return 0;
 }
 
@@ -66,7 +76,7 @@ void B_EVAR(short device, long number, short handler)
     trap->handler = handler;
     trap->number = number;
     keys_armed = 0;
-    for (device = 2; device < TRAPS; device++)
+    for (device = 2; device <= KEYS; device++)
         keys_armed |= traps[device].handler != 0;
     cn_key_hook = keys_armed ? take_keys : 0;
 }
@@ -194,6 +204,29 @@ short B_FPLY(short ignored)
     return (short)music_waiting();
 }
 
+/* B$STIK, B$FSTG and B$FPEN: STICK(n), STRIG(n) and PEN(n) of a machine
+   without a joystick or a light pen: nothing moves and nothing is pressed. */
+short B_STIK(short which)
+{
+    (void)which;
+    return 0;
+}
+
+short B_FSTG(short which)
+{
+    (void)which;
+    return 0;
+}
+
+short B_FPEN(short which)
+{
+    (void)which;
+    return 0;
+}
+
+#pragma aux B_STIK "B$STIK"
+#pragma aux B_FSTG "B$FSTG"
+#pragma aux B_FPEN "B$FPEN"
 #pragma aux B_EVAR "B$EVAR"
 #pragma aux B_EVSW "B$EVSW"
 #pragma aux B_EVAN "B$EVAN"

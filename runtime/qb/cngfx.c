@@ -58,22 +58,30 @@ static void gfx_write(const char *text, unsigned count)
     while (count--) {
         byte c = (byte)*text++;
 
-        if (c == '\r' || c == '\n') {
+        switch (c) {
+        case '\r':
+        case '\n':
             gfx_newline();
-        } else if (c == '\f') {
+            break;
+        case '\f':
             clear_rows(view_top, view_bottom);
             row = view_top;
             column = 0;
-        } else if (c == HOME) {
+            break;
+        case HOME:
             row = view_top;
             column = 0;
-        } else if (c == '\t') {
+            break;
+        case '\t':
             do {
                 if (column == columns)
                     gfx_newline();
                 draw(row, column++, ' ');
             } while (column % TAB_STOP);
-        } else if (c != BELL) {
+            break;
+        case BELL:
+            break;
+        default:
             if (column == columns)
                 gfx_newline();
             draw(row, column++, c);

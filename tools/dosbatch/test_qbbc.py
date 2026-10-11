@@ -11,7 +11,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
+import qb32  # noqa: E402
 import qbruntime  # noqa: E402
+
+# Waits cost no wall clock time: the clock is the guest's instruction count.
+CONF = qb32.virtual_conf(2000)
 
 pytestmark = pytest.mark.slow_dos
 SOURCES = sorted([*(dosbatch.ROOT / "tests" / "qbrt").glob("events_*.bas"), *(dosbatch.ROOT / "tests" / "qbrt").glob("bc_*.bas")])
@@ -33,7 +37,7 @@ def test_program_matches_bc(tmp_path, source: Path):
     texts = []
     for job in jobs:
         where = tmp_path / job.stem
-        result = dosbatch.run([job], where)[job.stem]
+        result = dosbatch.run([job], where, conf=CONF)[job.stem]
         assert result.status == "ok", result.detail
         texts.append(dosbatch.read_dos(where, "L.TXT"))
     assert texts[0].strip(), "BC's reference is missing"

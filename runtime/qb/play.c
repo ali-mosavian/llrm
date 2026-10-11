@@ -120,12 +120,6 @@ static void wait_for_room(void)
         ;
 }
 
-static void wait_for_empty(void)
-{
-    while (tail != head)
-        ;
-}
-
 /* A time in thousandths of a tick as whole ticks, the part left over kept in
    `owed` for the next time: a run of short notes takes as long as they should,
    though each is a whole number of ticks. */
@@ -172,17 +166,16 @@ static void play_note(Player *p, int note, long time)
         dev_ticker_start();
         tick_started = 1;
     }
+    /* in the foreground a note waits for the one sounding to end */
+    if (p->foreground)
+        while (sound_left || quiet_left)
+            ;
     wait_for_room();
     at = &queue[head];
     at->hertz = note ? frequency(note) : 0;
     at->sound = ticks_of(sounding, &owed_sound);
     at->quiet = ticks_of(time - sounding, &owed_quiet);
     head = (head + 1) % QUEUE;
-    /* with nothing sounding the note starts now, not at the next tick */
-    dev_interrupts_off();
-    if (!sound_left && !quiet_left)
-        music_tick();
-    dev_interrupts_on();
 }
 
 static int dots(Player *p)
@@ -241,45 +234,62 @@ static void run(Player *p)
     long n;
 
     while ((command = next_command(p)) != 0) {
-        if (command >= 'A' && command <= 'G') {
+        switch (command) {
+        case 'A':
+        case 'B':
+        case 'C':
+        case 'D':
+        case 'E':
+        case 'F':
+        case 'G': {
             int note = named_note(p, command);
 
             n = number(p);
             if (n == 0 || n > LONGEST_NOTE)
                 illegal();
             play_note(p, note, duration(p, n < 0 ? p->length : (int)n, dots(p)));
-        } else if (command == 'N') {
+            break;
+        }
+        case 'N':
             n = number(p);
             if (n < 0 || n > HIGHEST_NOTE)
                 illegal();
             play_note(p, (int)n, duration(p, p->length, dots(p)));
-        } else if (command == 'P') {
+            break;
+        case 'P':
             n = number(p);
             if (n < 1 || n > LONGEST_NOTE)
                 illegal();
             play_note(p, 0, duration(p, (int)n, dots(p)));
-        } else if (command == 'O') {
+            break;
+        case 'O':
             n = number(p);
             if (n < LOWEST_OCTAVE || n > HIGHEST_OCTAVE)
                 illegal();
             p->octave = (int)n;
-        } else if (command == '<' || command == '>') {
+            break;
+        case '<':
+        case '>':
             p->octave += command == '>' ? 1 : -1;
             if (p->octave < LOWEST_OCTAVE || p->octave > HIGHEST_OCTAVE)
                 illegal();
-        } else if (command == 'L') {
+            break;
+        case 'L':
             n = number(p);
             if (n < 1 || n > LONGEST_NOTE)
                 illegal();
             p->length = (int)n;
-        } else if (command == 'T') {
+            break;
+        case 'T':
             n = number(p);
             if (n < LOWEST_TEMPO || n > HIGHEST_TEMPO)
                 illegal();
             p->tempo = (int)n;
-        } else if (command == 'M') {
+            break;
+        case 'M':
             style(p);
-        } else {
+            break;
+        default:
             illegal();
         }
     }
@@ -287,8 +297,8 @@ static void run(Player *p)
 
 /* B$SPLY: PLAY with the string of commands.  What the commands set (the octave,
    the length, the tempo, the style and foreground or background) stays set for
-   the next PLAY.  Music in the foreground has the program wait until the last
-   note has begun. */
+   the next PLAY.  Music in the foreground has each note wait for the one
+   sounding to end. */
 /* What PLAY keeps from one use to the next, and SOUND reads. */
 static Player player = {0, 0, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NORMAL, 1};
 
@@ -299,8 +309,6 @@ void B_SPLY(SD *commands)
     player.end = commands->ptr + commands->len;
     run(&player);
     str_tmp_free(commands);
-    if (player.foreground)
-        wait_for_empty();
 }
 
 #pragma aux B_SPLY "B$SPLY"
