@@ -2427,3 +2427,37 @@ b4:
         assert_eq!(parsed.run(&[(x, 32)], 10_000), Some(x as u128 - 1), "{x}");
     }
 }
+
+/// A header phi that takes another counter's next value and a constant more,
+/// from that counter's start and the constant, is a counter of the same step
+/// (SCEV's `{2,+,3}` beside `{0,+,3}`). A header copy leaves one where the test
+/// read `i + 2`: x_base64 kept two counters and shuffled them in the latch.
+#[test]
+fn test_a_phi_that_is_a_counter_and_a_constant_is_a_counter() {
+    let derived = |start: i16, more: i16| {
+        Parsed::new(&format!(
+            "define void @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b1 ]
+  %t = phi i16 [ {start}, %b0 ], [ %t.next, %b1 ]
+  %i.next = add i16 %i, 3
+  %t.next = add i16 %i.next, {more}
+  %c = icmp slt i16 %t.next, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret void
+}}
+"
+        ))
+    };
+    let counters = derived(2, 2).basics();
+    assert_eq!(counters.len(), 2, "{counters:?}");
+    let t = counters.values().find(|one| one.start == constant(2, 16)).expect("the derived counter");
+    assert_eq!(t.step, constant(3, 16));
+    // A different start is not the counter and a constant.
+    assert_eq!(derived(1, 2).basics().len(), 1);
+}

@@ -18,6 +18,7 @@ import json
 import threading
 import time
 import shutil
+import tempfile
 import tomllib
 import subprocess
 from collections.abc import Iterable
@@ -356,11 +357,14 @@ def _oversized(work: Path, cap: int) -> str | None:
     return None
 
 
-def _launch(command: list[str], work: Path, timeout: int, cap: int, **options) -> str | None:
-    """Run `command` until it exits, or until a file in `work` passes `cap` bytes, which stops it: the file's name. A
-    launch that outlives `timeout` is an error."""
+def _launch(command: list[str], work: Path, timeout: int | None, cap: int, stall: int | None = None, **options) -> str | None:
+    """Run `command` until it exits, or until a file in `work` passes `cap` bytes, which stops it: the file's name. A launch
+    that outlives `timeout` (None: no limit) or whose events.txt does not grow for `stall` seconds is an error. Each job's
+    own budget is guest time, so how long a launch takes on the wall is the host's load, not a property of the programs:
+    only an emulator that has stopped reporting is stuck."""
     process = subprocess.Popen(command, **options)
-    deadline = time.monotonic() + timeout
+    started = last = time.monotonic()
+    seen = -1
     while True:
         try:
             process.wait(timeout=0.2)
@@ -371,16 +375,64 @@ def _launch(command: list[str], work: Path, timeout: int, cap: int, **options) -
             process.kill()
             process.wait()
             return over
-        if time.monotonic() > deadline:
+        now = time.monotonic()
+        size = (work / "events.txt").stat().st_size if (work / "events.txt").exists() else 0
+        if size != seen:
+            seen, last = size, now
+        if (timeout is not None and now > started + timeout) or (stall is not None and now > last + stall):
             process.kill()
             process.wait()
-            raise subprocess.TimeoutExpired(command, timeout)
+            raise subprocess.TimeoutExpired(command, timeout if timeout is not None else stall)
 
 
-def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF, cap: int = OUTPUT_CAP) -> dict[str, Result]:
+class BinaryError(Exception):
+    """The emulator binary cannot run the jobs as asked: not a program's failure, so nothing retries it."""
+
+
+_VIRTUAL: dict[tuple[str, int], str | None] = {}
+
+
+def virtual_time_problem(binary: Path | None = None) -> str | None:
+    """Why `binary` cannot give CONF's virtual time, or None when it can. A binary without it ignores the setting
+    quietly and runs every `:ms` budget at the host's speed again: the busy-host flake, back, with nothing said. Asked
+    by running 50 ms of a spinning program: with virtual time that is exactly 50 x the rate in instructions."""
+    binary = binary or DOSBOX
+    stamp = (str(binary), binary.stat().st_mtime_ns) if binary.exists() else (str(binary), 0)
+    if stamp not in _VIRTUAL:
+        _VIRTUAL[stamp] = _probe_virtual_time(binary)
+    return _VIRTUAL[stamp]
+
+
+def _probe_virtual_time(binary: Path) -> str | None:
+    if not binary.exists():
+        return f"{binary} does not exist"
+    with tempfile.TemporaryDirectory() as where:
+        work = Path(where)
+        (work / "SPIN.COM").write_bytes(b"\xeb\xfe")
+        (work / "job.conf").write_text(CONF)
+        (work / "jobs.txt").write_text(f":ms 50\nmount c {work}\nc:\nSPIN.COM\n.\n")
+        with open(work / "jobs.txt") as stdin, open(work / "events.txt", "w") as sink:
+            try:
+                subprocess.run([str(binary), "-nolog", "-conf", str(work / "job.conf")], stdin=stdin, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),), timeout=120,
+                               env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
+            except subprocess.TimeoutExpired:
+                return f"{binary} did not finish a 50 ms job in 120 s"
+        ends = [json.loads(line) for line in (work / "events.txt").read_text().splitlines() if line.startswith('{"ev":"end"')]
+    expected = 50 * int(re.search(r"rate=(\d+)", CYCLES).group(1))
+    if not ends or abs(ends[0].get("instructions", 0) - expected) > expected // 10:
+        got = ends[0].get("instructions") if ends else "no end event"
+        return (f"{binary} ran 50 ms as {got} instructions, not about {expected}: it has no `virtual time` (or no dosrun job "
+                f"runner). Build the fork's dosrun branch at the commit toolchain/dosrunbuild.sh pins, or set DOSBOX_BIN to one")
+    return None
+
+
+def run(jobs: list[Job], work: Path, timeout: int | None = None, stall: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF, cap: int = OUTPUT_CAP) -> dict[str, Result]:
     """Every job's result. One dosrun launch: a first job builds (BC, LINK),
     then each program runs as its own job with `budget_ms` of emulated time, so
     a hang ends that program alone."""
+    if "virtual time=true" in conf and (problem := virtual_time_problem()):
+        raise BinaryError(problem)
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
@@ -413,11 +465,11 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
     events = work / "events.txt"
     with open(work / "jobs.txt") as stdin, open(events, "w") as sink:
         try:
-            over = _launch([str(DOSBOX), "-nolog", "-conf", str(work / "job.conf")], work, timeout, cap, stdin=stdin,
+            over = _launch([str(DOSBOX), "-nolog", "-conf", str(work / "job.conf")], work, timeout, cap, stall, stdin=stdin,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
                            env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"DOSBox did not finish in {timeout}s ({work})")
+            raise RuntimeError(f"DOSBox reported nothing for {stall}s or ran past {timeout}s ({work})")
     if over is not None:
         return stopped_for_output(jobs, work, over, cap)
     return collect(jobs, work, events)
