@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops;
 use llrm_mir::edit::Position;
+use llrm_mir::footprint::Footprint;
 use llrm_mir::module::{BlockId, Function, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
@@ -24,6 +25,12 @@ pub struct LoopSimplify;
 impl FunctionPass for LoopSimplify {
     fn name(&self) -> &'static str {
         "loopsimplify"
+    }
+
+    /// Preheaders, latches and dedicated exits are made from the CFG's shape
+    /// alone.
+    fn reads(&self) -> Footprint {
+        Footprint::STRUCTURE
     }
 
     fn run(

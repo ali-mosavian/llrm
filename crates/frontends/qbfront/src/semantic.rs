@@ -698,7 +698,7 @@ fn built_from(
                     &parameter.declaration.name,
                     parameter.declaration.span,
                     parameter_type,
-                    true,
+                    debug::ARRAY_PARAMETER,
                     false,
                 );
                 compiler
@@ -742,7 +742,7 @@ fn built_from(
                     &parameter.declaration.name,
                     parameter.declaration.span,
                     parameter_type,
-                    false,
+                    0,
                     true,
                 );
                 compiler.emit("store", Vec::new(), vec![Operand::Place(place), Operand::Value(value)]);
@@ -752,7 +752,7 @@ fn built_from(
                     &parameter.declaration.name,
                     parameter.declaration.span,
                     parameter_type,
-                    false,
+                    0,
                     false,
                 );
                 compiler
@@ -2682,7 +2682,7 @@ impl Compiler {
                 storage,
                 symbol: descriptor_symbol,
             });
-            self.debug_held(debug::Held::Place(descriptor_place), &source, span, element, true);
+            self.debug_held(debug::Held::Place(descriptor_place), &source, span, element, descriptor_extent);
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
@@ -2745,7 +2745,7 @@ impl Compiler {
                 storage,
                 symbol: descriptor_symbol,
             });
-            self.debug_held(debug::Held::Place(descriptor_place), &source, span, element, true);
+            self.debug_held(debug::Held::Place(descriptor_place), &source, span, element, descriptor_extent);
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
@@ -2844,7 +2844,7 @@ impl Compiler {
             } else {
                 debug::Held::Place(place)
             };
-            self.debug_held(held, &source, span, type_id, false);
+            self.debug_held(held, &source, span, type_id, 0);
         }
         let descriptor_place = if array_element.is_some() {
             let descriptor_type = self.opaque_type(format!("{} descriptor", declaration.name), self.ad().bytes(bounds.len()));
@@ -2874,7 +2874,7 @@ impl Compiler {
                 storage: descriptor_storage,
                 symbol: descriptor_symbol,
             });
-            self.debug_held(debug::Held::Place(descriptor), &source, span, element, true);
+            self.debug_held(debug::Held::Place(descriptor), &source, span, element, descriptor_extent);
             if local_descriptor {
                 self.data_offset += descriptor_extent;
             } else {

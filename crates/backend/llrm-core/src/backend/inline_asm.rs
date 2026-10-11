@@ -69,7 +69,7 @@ pub fn view(name: &str) -> Option<(Reg, u32)> {
     }
     // The 16-bit register of the root: asm names are x86's, whatever the
     // target.
-    let sixteen = llrm_x86::registers::word_of(register.full_register32())?;
+    let sixteen = llrm_x86::registers::word_of(RegId::from(register.full_register32()))?;
     let bits = if register.is_gpr8() {
         8
     } else if register.is_gpr16() {
@@ -87,5 +87,5 @@ pub fn machine(
     bits: u32,
 ) -> Option<RegId> {
     let sixteen = REGISTERS.get(&reg.name().to_lowercase()).copied()?;
-    Some(if bits == 32 { sixteen.full_register32() } else { sixteen })
+    Some(if bits == 32 { RegId::from(sixteen.full_register32()) } else { RegId::from(sixteen) })
 }

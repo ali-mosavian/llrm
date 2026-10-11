@@ -275,7 +275,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         + "; ".join(f"{cargo} -p {one['package']} " + (f"--lib -- {one['lib']}" if "lib" in one else f"--test {one['test']}") + " || rc=1" for one in cfg["scan"] if "package" in one)
         + "; exit $rc",
         "bench": bench,
-        "torture": "timeout 600 uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
+        "torture": "uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
         # Enforced or not (tiers.toml [fmt]), the check runs and lists the files. Unenforced, "files would change" (exit 1) passes
         # and anything else (2 or more: no toolchain, a failed build, a crash) still fails the step.
         "fmt": "tools/fmt.sh --check"

@@ -178,7 +178,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
     // rewrite tries.
     let mut places = vec![[u8::MAX; 4]; 512];
     for (index, (register, byte)) in lanes.iter().enumerate() {
-        places[*register as usize][*byte as usize] = index as u8;
+        places[(*register).index()][*byte as usize] = index as u8;
     }
     struct Slots(Vec<[u8; 4]>);
     impl Slots {
@@ -188,7 +188,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         ) -> Option<&usize> {
             const PLACES: [usize; 28] =
                 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27];
-            let place = *self.0.get(lane.0 as usize)?.get(lane.1 as usize)?;
+            let place = *self.0.get(lane.0.index())?.get(lane.1 as usize)?;
             (place != u8::MAX).then(|| &PLACES[place as usize])
         }
     }

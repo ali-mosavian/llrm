@@ -386,6 +386,29 @@ fn test_globals_aa_asks_each_bodys_exposed_frames_once() {
     assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
 }
 
+/// Each entry whose summary grew woke every caller of something unknown, the
+/// bodies still queued among them: visits grew with entries squared (102 for
+/// 12 entries; GORILLA's `summaries visit` was 26% of compiling it at -O1).
+#[test]
+fn test_callbacks_are_taken_once_the_queued_bodies_are_visited() {
+    let count: usize = 12;
+    let globals: String = (0..count).map(|at| format!("@g{at} = internal global i16 0\n")).collect();
+    let bodies: String = (0..count)
+        .map(|at| {
+            format!(
+                "define internal void @h{at}() {{\nentry:\n  store i16 {at}, ptr @g{at}\n  ret void\n}}\n\
+                 define void @f{at}() {{\nentry:\n  call void @h{at}()\n  call void @ext()\n  ret void\n}}\n"
+            )
+        })
+        .collect();
+    let module = parsed(&format!("{DOS}declare void @ext()\n{globals}\n{bodies}"));
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let before = alias::visits();
+    analyses.get::<Summaries>(&module);
+    let visits = alias::visits() - before;
+    assert!(visits <= 4 * count, "{visits} visits for {count} entries");
+}
+
 /// Two loops, the second counting to `%lim`, which a block outside both makes.
 const LIMITED: &str = "define i16 @f() {
 b0:

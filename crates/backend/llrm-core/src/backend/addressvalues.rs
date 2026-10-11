@@ -35,7 +35,7 @@ pub fn converted(body: &LirBody) -> LirBody {
                 continue;
             }
             if addr.is_some() && source.base.is_some() && source.through != RegId::None {
-                addr = addr.map(|addr| Addr { base: source.through, ..addr });
+                addr = addr.map(|addr| Addr { base: source.through.iced(), ..addr });
             }
             sources.push(Loc::Address(AddressRef {
                 addr,

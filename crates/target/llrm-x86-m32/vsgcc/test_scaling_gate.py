@@ -738,3 +738,38 @@ def test_a_float_load_is_read_from_the_walk_not_from_a_cell_map_met_at_every_joi
     source.write_text(scaling.AXES["fjoins"](256))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis float-facts"]
     assert cost <= 1500, cost
+
+
+def test_the_edges_a_switch_names_are_asked_once_not_once_for_each_of_its_successors(tmp_path):
+    """cases(N) at -O1 and -O2: `ranges::edges_solved` listed a switch's N successors, and counted its operands, for each of the N blocks
+    it leads to, and `Function::successors` found each of them new by a scan of the list: `analysis dominated-edges` read 2N/N = 3.1,
+    4.7, 6.4 (28 / 88 / 412 / 2,641 Minstr at N=64..512), a fifth of the compile at N=512. A terminator's repeated targets are found once and
+    the edge asked of the branch that makes it: it reads 2.0. A step above 2.4 fails; a few Minstr of start-up are allowed."""
+    n = 128
+    for level in ("O1", "O2"):
+        own = {}
+        for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+            source = tmp_path / f"cases_{level}_{label}.c"
+            source.write_text("" if size == 0 else scaling.cases(size))
+            own[label] = gate.own_work(gate.levels_time.command("llrm", level, source))
+        small, big = (own[label].get("analysis dominated-edges", 0.0) - own["empty"].get("analysis dominated-edges", 0.0) for label in ("n", "2n"))
+        assert small > 5.0, f"premise: the analysis ran ({small:.1f} Minstr)"
+        assert big <= 2.4 * small + 5.0, f"{level}: {small:.1f} -> {big:.1f} Minstr"
+
+
+def test_promote_places_phis_only_where_a_cell_is_live_and_keeps_to_the_cells_a_write_reaches(tmp_path):
+    """cases(N) at -O1 (-O2 does not inline a step of 128 cases): inlining the switch's step() leaves two stack cells for each arm, written and read in the arm. `mir promote`
+    placed a phi of N inputs at the join for every cell and pruned them after (`ssa::pruned_phis` 2,345 Minstr at N=512, the N^3 of clearing
+    N dead phis of N inputs each by a scan of the block's uses), asked every available cell at each store (`_available`, 810), and copied
+    every cell's value for each block of the dominator tree and looked up every cell in each (`rewrite`, 427): its own work read
+    2N/N = 4.5, 5.5 (229 / 1,029 / 5,694 Minstr at N=128..512). A phi only where the cell is live in, a store asked the buckets of the
+    cells it may reach, the values kept with an undo log: 2.1, 2.2. A step above 2.4 fails; a few Minstr of start-up are allowed."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"cases_{label}.c"
+        source.write_text("" if size == 0 else scaling.cases(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O1", source))
+    small, big = (own[label].get("mir promote", 0.0) - own["empty"].get("mir promote", 0.0) for label in ("n", "2n"))
+    assert small > 5.0, f"premise: promote ran ({small:.1f} Minstr)"
+    assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"

@@ -175,18 +175,29 @@ fn names(
         .any(|one| one.name == ".debug_str" && one.image.windows(wanted.len()).any(|at| at == wanted.as_bytes()))
 }
 
-/// A far pointer has no DWARF type: the variable that has it is left out (it
-/// was a refused compile), and the others are written.
+/// A far or huge pointer is a pointer with Open Watcom's DW_AT_address_class
+/// (far16 2, huge16 3, far32 5): a segment and an offset, still pointing at its
+/// target. It was refused, and the variable with it.
 #[test]
-fn a_variable_of_an_unwritable_type_is_left_out_and_the_others_are_written() {
-    let far = Type::Pointer { target: 0, bytes: 6, reach: Reach::Far };
-    let mut used = frame("xfar", 8);
-    used.r#type = 1;
-    let kept = frame("xnear", 12);
-    let made = written(vec![used, kept], vec![int(), far.clone()], Format::Default).expect("written");
-    assert!(!names(&made, "xfar") && names(&made, "xnear"));
-    // Nothing uses it: the unit is written without it.
-    assert!(written(vec![frame("x", 8)], vec![int(), far], Format::Default).is_ok());
+fn a_far_pointer_is_written_with_its_address_class() {
+    let far = Type::Pointer { target: 0, bytes: 4, reach: Reach::Far };
+    let huge = Type::Pointer { target: 0, bytes: 4, reach: Reach::Huge };
+    let mut one = frame("xfar", 8);
+    one.r#type = 1;
+    let mut two = frame("xhuge", 12);
+    two.r#type = 2;
+    let made = written(vec![one, two], vec![int(), far.clone(), huge], Format::Default).expect("written");
+    assert!(names(&made, "xfar") && names(&made, "xhuge"));
+    // DW_AT_address_class (0x33) as a one-byte constant is in an abbreviation.
+    let abbrev = made.sections.iter().find(|one| one.name == ".debug_abbrev").expect("abbreviations");
+    assert!(abbrev.image.windows(2).any(|two| two == [0x33, 0x0b]));
+    // A pointer of a width no address class names is left out with its
+    // variable.
+    let odd = Type::Pointer { target: 0, bytes: 3, reach: Reach::Far };
+    let mut three = frame("xodd", 8);
+    three.r#type = 1;
+    let made = written(vec![three, frame("xnear", 12)], vec![int(), odd], Format::Default).expect("written");
+    assert!(!names(&made, "xodd") && names(&made, "xnear"));
 }
 
 /// BASIC's array (its bounds are a descriptor's) leaves its variable out, never

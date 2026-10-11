@@ -7,7 +7,109 @@
 
 use iced_x86::Register;
 
-pub type RegId = Register;
+/// A register's id: iced's number for it today, behind a type that is ours.
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RegId(Register);
+
+impl std::fmt::Debug for RegId {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+include!(concat!(env!("OUT_DIR"), "/reg_consts.rs"));
+
+impl RegId {
+    /// The register iced names, for the encoder and the decoder.
+    #[inline]
+    pub const fn new(register: Register) -> Self {
+        RegId(register)
+    }
+
+    #[inline]
+    pub const fn iced(self) -> Register {
+        self.0
+    }
+
+    /// Every register iced names.
+    #[inline]
+    pub fn values() -> impl Iterator<Item = RegId> + DoubleEndedIterator + ExactSizeIterator {
+        Register::values().map(RegId)
+    }
+
+    /// iced's number of the register: the index into the tables.
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    #[inline]
+    pub fn full_register32(self) -> RegId {
+        RegId(self.0.full_register32())
+    }
+
+    #[inline]
+    pub fn full_register(self) -> RegId {
+        RegId(self.0.full_register())
+    }
+
+    #[inline]
+    pub fn size(self) -> usize {
+        self.0.size()
+    }
+
+    #[inline]
+    pub fn number(self) -> usize {
+        self.0.number()
+    }
+
+    #[inline]
+    pub fn is_gpr(self) -> bool {
+        self.0.is_gpr()
+    }
+
+    #[inline]
+    pub fn is_gpr8(self) -> bool {
+        self.0.is_gpr8()
+    }
+
+    #[inline]
+    pub fn is_gpr16(self) -> bool {
+        self.0.is_gpr16()
+    }
+
+    #[inline]
+    pub fn is_gpr32(self) -> bool {
+        self.0.is_gpr32()
+    }
+
+    #[inline]
+    pub fn is_segment_register(self) -> bool {
+        self.0.is_segment_register()
+    }
+
+    #[inline]
+    pub fn is_st(self) -> bool {
+        self.0.is_st()
+    }
+}
+
+impl From<Register> for RegId {
+    #[inline]
+    fn from(register: Register) -> Self {
+        RegId::new(register)
+    }
+}
+
+impl From<RegId> for Register {
+    #[inline]
+    fn from(register: RegId) -> Self {
+        register.0
+    }
+}
 
 /// The classes a description may give a register, one bit each, in this order.
 /// A name not here is refused where the table is generated.
@@ -59,8 +161,8 @@ pub mod class {
 /// What LIR calls the frame register and the stack pointer, whatever the
 /// target: a listing and an object spell them as the target has them
 /// (`FrameRegisters::spelled`).
-pub const FRAME: RegId = Register::BP;
-pub const STACK: RegId = Register::SP;
+pub const FRAME: RegId = RegId::BP;
+pub const STACK: RegId = RegId::SP;
 
 /// One register of the file.
 #[derive(Clone, Copy, Debug)]
@@ -162,7 +264,7 @@ impl Info {
         &self,
         register: RegId,
     ) -> Option<&Entry> {
-        self.table.get(register as usize).and_then(Option::as_ref)
+        self.table.get(register.index()).and_then(Option::as_ref)
     }
 
     /// Whether the description lists `register`.
@@ -228,7 +330,7 @@ impl Info {
         bits: u32,
     ) -> Option<RegId> {
         let column = self.widths.iter().position(|one| *one == bits && bits != 0)?;
-        self.views.get(root as usize)?[column]
+        self.views.get(root.index())?[column]
     }
 
     /// Whether `register` is a view of the frame register's root.
@@ -389,7 +491,7 @@ impl Info {
                         .filter(|(_, one)| one.classes & class::INT != 0 && i64::from(one.bits / 8) == bytes)
                         .map(|(register, _)| register)
                         .collect();
-                    found.sort_by_key(|one| *one as usize);
+                    found.sort_by_key(|one| one.index());
                     found.dedup();
                     found
                 },
@@ -474,3 +576,16 @@ impl PartialEq for Regs {
 }
 
 impl Eq for Regs {}
+
+/// A register as its number, which is how every dump names it.
+impl llrm_support::pyrepr::Repr for RegId {
+    fn repr(&self) -> String {
+        self.0.repr()
+    }
+}
+
+impl llrm_support::pyset::PyHash for RegId {
+    fn py_hash(&self) -> i64 {
+        self.0.py_hash()
+    }
+}

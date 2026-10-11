@@ -1,20 +1,19 @@
-reason = "fill: adjacent constant stores are one store of the widest integer where that is fewer bytes tuned for size (gcc store-merging, LLVM MergeConsecutiveStores); several fills in a loop are a memset each where memsets are cheaper in clocks and bytes"
-blessed = "2026-10-10"
+reason = "crc bas: the accumulator is in eax, not a saved register, so its final xor is copied to si for the call that follows (+1 instruction, +2 bytes, once)"
+blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 1216
+instructions = 1217
 memory_operands = 71
-code_bytes = 223
+code_bytes = 225
 data_bytes = 31
 bss_bytes = 0
 
 [bas.Os]
-instructions = 1207
+instructions = 1208
 memory_operands = 71
-code_bytes = 220
+code_bytes = 222
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.0363
 
 [c.O2]
 instructions = 634

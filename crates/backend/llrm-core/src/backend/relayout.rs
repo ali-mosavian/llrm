@@ -152,14 +152,10 @@ impl Moves<'_> {
         &self,
         addr: Addr,
         offset: i64,
-        in_frame: bool,
     ) -> Option<(Addr, i64)> {
         let new = match (addr.space, addr.slot_home()) {
             (Space::Frame, Some(home)) => self.disp(home, addr.disp)?,
             (Space::Frame, None) => return None,
-            // An indexed array: a literal displacement through BP, the
-            // selector's.
-            (Space::Literal, _) if in_frame => addr.disp - self.hole,
             _ => return Some((addr, offset)),
         };
         // `offset` repeats the displacement on a cell the spiller made from a
@@ -173,7 +169,7 @@ impl Moves<'_> {
         cell: &Mem,
     ) -> Option<Mem> {
         let Some(addr) = cell.addr else { return Some(cell.clone()) };
-        let (addr, offset) = self.addr(addr, cell.offset, cell.in_frame())?;
+        let (addr, offset) = self.addr(addr, cell.offset)?;
         Some(Mem { addr: Some(addr), offset, ..cell.clone() })
     }
 
@@ -182,7 +178,7 @@ impl Moves<'_> {
         cell: &AddressRef,
     ) -> Option<AddressRef> {
         let Some(addr) = cell.addr else { return Some(cell.clone()) };
-        let (addr, offset) = self.addr(addr, cell.offset, cell.in_frame())?;
+        let (addr, offset) = self.addr(addr, cell.offset)?;
         Some(AddressRef { addr: Some(addr), offset, ..cell.clone() })
     }
 

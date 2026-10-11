@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use super::target::Segments;
 use crate::abi::runtime;
@@ -13,8 +13,8 @@ use crate::support::hash::IndexMap;
 pub fn call_clobbers(
     contract: &runtime::Contract,
     segments: &Segments,
-    general: &[Register],
-) -> BTreeSet<Register> {
+    general: &[RegId],
+) -> BTreeSet<RegId> {
     let names = _names(general);
     let mut out = unnamed_selectors_clobbered(contract, segments, general);
     out.extend(_named_clobbers(&names, &runtime::disturbs(contract)));
@@ -27,8 +27,8 @@ pub fn call_clobbers(
 pub fn unnamed_selectors_clobbered(
     contract: &runtime::Contract,
     segments: &Segments,
-    general: &[Register],
-) -> BTreeSet<Register> {
+    general: &[RegId],
+) -> BTreeSet<RegId> {
     let names = _names(general);
     if runtime::disturbs(contract) == *runtime::EVERY || contract.i386 {
         segments.selectors.iter().copied().filter(|register| !names.contains_key(register)).collect()
@@ -40,17 +40,17 @@ pub fn unnamed_selectors_clobbered(
 /// The registers a value may be placed in that a call under `contract` keeps.
 pub fn call_keeps(
     contract: &runtime::Contract,
-    general: &[Register],
-) -> Vec<Register> {
+    general: &[RegId],
+) -> Vec<RegId> {
     let names = _names(general);
     let clobbered = _named_clobbers(&names, &runtime::disturbs(contract));
     general.iter().copied().filter(|register| !clobbered.contains(register)).collect()
 }
 
 fn _named_clobbers(
-    names: &IndexMap<Register, BTreeSet<String>>,
+    names: &IndexMap<RegId, BTreeSet<String>>,
     disturbed: &BTreeSet<runtime::Reg>,
-) -> BTreeSet<Register> {
+) -> BTreeSet<RegId> {
     names
         .iter()
         .filter(|(_, spelled)| disturbed.iter().any(|named| spelled.contains(&named.value().to_lowercase())))
@@ -64,9 +64,9 @@ fn _named_clobbers(
 pub fn call_clobbered_high_keeping(
     contract: &runtime::Contract,
     segments: &Segments,
-    general: &[Register],
-    whole: &BTreeSet<Register>,
-) -> BTreeSet<Register> {
+    general: &[RegId],
+    whole: &BTreeSet<RegId>,
+) -> BTreeSet<RegId> {
     call_clobbered_high(contract, segments, general)
         .into_iter()
         .filter(|register| !whole.contains(&ir::root(*register)))
@@ -77,21 +77,21 @@ pub fn call_clobbered_high_keeping(
 pub fn call_clobbered_high(
     contract: &runtime::Contract,
     segments: &Segments,
-    general: &[Register],
-) -> BTreeSet<Register> {
+    general: &[RegId],
+) -> BTreeSet<RegId> {
     if !contract.i386 {
         return BTreeSet::new();
     }
-    let whole: BTreeSet<Register> = call_clobbers(contract, segments, general).into_iter().map(ir::root).collect();
+    let whole: BTreeSet<RegId> = call_clobbers(contract, segments, general).into_iter().map(ir::root).collect();
     general.iter().copied().filter(|register| !whole.contains(&ir::root(*register))).collect()
 }
 
 /// Each allocatable register by the names runtime.py's own Reg enum uses.
-fn _names(general: &[Register]) -> IndexMap<Register, BTreeSet<String>> {
+fn _names(general: &[RegId]) -> IndexMap<RegId, BTreeSet<String>> {
     general
         .iter()
         .copied()
-        .chain([Register::ES])
+        .chain([RegId::ES])
         .map(|register| {
             (
                 register,

@@ -18,6 +18,7 @@ pub const AT_LANGUAGE: u16 = 0x13;
 pub const AT_PRODUCER: u16 = 0x25;
 pub const AT_LOCATION: u16 = 0x02;
 pub const AT_SEGMENT: u16 = 0x46;
+pub const AT_ADDRESS_CLASS: u16 = 0x33;
 pub const AT_CONST_VALUE: u16 = 0x1c;
 pub const AT_UPPER_BOUND: u16 = 0x2f;
 pub const AT_DATA_MEMBER_LOCATION: u16 = 0x38;

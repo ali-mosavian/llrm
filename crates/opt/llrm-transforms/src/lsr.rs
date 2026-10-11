@@ -837,8 +837,7 @@ fn _post_incremented(
     loop_: &Loop,
 ) -> Option<PostIncrement> {
     let function = view.function;
-    // Cheap first: a latch branch on a compare of a header phi with a constant,
-    // whose step is read elsewhere too.
+    // Cheap first: a latch branch on a compare of a header phi with a constant.
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
     let branch = function.terminator(cfg::block(latch))?;
     let Some(&Operand::Value(condition)) = function.instruction(branch).operands.first() else { return None };
@@ -857,9 +856,6 @@ fn _post_incremented(
         return None;
     }
     let Some(Operand::Value(step)) = _latch_arm(function, read, cfg::block(latch)) else { return None };
-    if function.users(step).iter().all(|one| one.user == phi || one.user == compare) {
-        return None;
-    }
     let proofs = induction::counted_leaving(view, loop_, None, true);
     let [proof] = &proofs[..] else { return None };
     if !proof.shifted || !proof.posttested || proof.compare != compare {
@@ -2378,6 +2374,55 @@ fn _applied(
                 .find(|pair| pair[1] == Operand::Block(plan.latch))
                 .map(|pair| pair[0])
                 .expect("a latch arm");
+            // A counter that takes another counter's next value and a constant
+            // more steps from itself, so the other can go.
+            let steps_itself = |next: ValueId| match function.value(next).def {
+                ValueDef::Instruction(made) => {
+                    let op = function.instruction(made);
+                    match op.opcode {
+                        Opcode::Binary(BinaryOp::Add) => op.operands.contains(&Operand::Value(existing)),
+                        Opcode::Binary(BinaryOp::Sub) => op.operands[0] == Operand::Value(existing),
+                        _ => false,
+                    }
+                }
+                _ => false,
+            };
+            let own = matches!(from_latch, Operand::Value(next) if steps_itself(next));
+            if !own && one.pointer.is_none() {
+                let ty = function.value(existing).ty;
+                let step = expander.int(context, function, &one.of.step);
+                let next = function.create_instruction(
+                    Opcode::Binary(BinaryOp::Add),
+                    ty,
+                    vec![Operand::Value(existing), step],
+                    Flags::default(),
+                    Some("lsr.iv.next"),
+                );
+                // Where the step it replaces stood, for what reads it there.
+                let at = match from_latch {
+                    Operand::Value(old) => match function.value(old).def {
+                        ValueDef::Instruction(made) if function.parent(made) == Some(plan.latch) => {
+                            Position::Before(made)
+                        }
+                        _ => Position::Before(back),
+                    },
+                    _ => Position::Before(back),
+                };
+                function.insert(next, at).expect("a latch");
+                let next = Operand::Value(function.instruction(next).result.expect("a value"));
+                let operands = function
+                    .instruction(phi)
+                    .operands
+                    .chunks(2)
+                    .flat_map(
+                        |pair| if pair[1] == Operand::Block(plan.latch) { [next, pair[1]] } else { [pair[0], pair[1]] },
+                    )
+                    .collect();
+                function.set_operands(phi, operands);
+                steps.push(next);
+                stepping.push(None);
+                continue;
+            }
             steps.push(from_latch);
             stepping.push(None);
             continue;
@@ -2529,7 +2574,7 @@ fn _applied(
     )
     .expect("a pre-tested loop");
     let shape = rotate::_shape(function, &plan.loop_).expect("a rotatable loop");
-    rotate::_rotate(context, function, &shape, Some((Operand::Value(guard), true))).expect("a rotation");
+    rotate::_rotate(context, function, &shape, Some((Operand::Value(guard), true)), &[]).expect("a rotation");
     crate::cfg::merged(function);
     // The guard also reaches the exit: the loop leaves through its own block
     // again.

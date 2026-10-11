@@ -1,31 +1,31 @@
-reason = "x87: a float load one arithmetic instruction reads is its memory operand (nbody c -8%/-12.5% Os, fpbench -1.2%, parity/qbsp -6.8%, nbody_single nib -5.3%)"
-blessed = "2026-10-09"
+reason = "phielim renames a loop phi to its back-edge argument only where its copies would need an edge block (never an x87 value); twoaddr ties the source that does not interfere with the destination. matmul bas -O2 instructions -11.6%, nbody_fixed nib -Os instructions -3.7% (xchg chains gone) with memory operands +12%; crc bas +1 instruction, +2 bytes (one copy outside its loop)"
+blessed = "2026-10-10"
 
 [bas.O2]
-instructions = 21694
+instructions = 21693
 memory_operands = 5066
-code_bytes = 720
+code_bytes = 715
 data_bytes = 23
 bss_bytes = 0
 
 [bas.Os]
-instructions = 21764
+instructions = 21763
 memory_operands = 5120
-code_bytes = 712
+code_bytes = 707
 data_bytes = 23
 bss_bytes = 0
 
 [c.O2]
 instructions = 19768
 memory_operands = 3003
-code_bytes = 338
+code_bytes = 336
 data_bytes = 8
 bss_bytes = 0
 
 [c.Os]
 instructions = 19768
 memory_operands = 3003
-code_bytes = 338
+code_bytes = 336
 data_bytes = 8
 bss_bytes = 0
 

@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
@@ -2570,7 +2570,7 @@ pub(crate) fn _keeps(
 /// Whether allocated LIR names one fixed BP-relative frame range.
 fn _exact_frame(cell: &Mem) -> bool {
     cell.addr.is_some_and(|addr| addr.space == Space::Frame)
-        && cell.through == Register::BP
+        && cell.through == RegId::BP
         && cell.base.is_none()
         && cell.index.is_none()
 }
@@ -2818,7 +2818,7 @@ fn _frame_loads(
                                 && source.width == 2
                                 && source.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0)
                                 && source.base.is_none()
-                                && source.through == Register::BP
+                                && source.through == RegId::BP
                                 && one.defines == [*value]
                                 && one.uses.is_empty()
                             {
@@ -3243,7 +3243,7 @@ fn _unfolded_index(
     let rebased = |place: &Loc| -> Loc {
         match place {
             Loc::Mem(cell) if cell.base == Some(base) && cell.index == Some(index) => {
-                Loc::Mem(Mem { index: None, scale: 1, index_through: Register::None, ..cell.clone() })
+                Loc::Mem(Mem { index: None, scale: 1, index_through: RegId::None, ..cell.clone() })
             }
             _ => place.clone(),
         }
@@ -3403,8 +3403,8 @@ fn _address_source(
     let addr = address.addr?;
     if one.symbol == Some(true)
         || addr.space != Space::Frame
-        || address.through != Register::BP
-        || address.index_through != Register::None
+        || address.through != RegId::BP
+        || address.index_through != RegId::None
         || address.scale != 1
         || one.requires.iter().chain(&one.delivers).any(|(held, _register)| held.value == value)
     {
@@ -3431,7 +3431,7 @@ fn _address_source(
             && cell.addr.is_some_and(|found| {
                 found.space == Space::Literal
                     && found.index == 0
-                    && (found.segment == Register::None || regs.is_stack_segment(found.segment))
+                    && (found.segment == (RegId::None).iced() || regs.is_stack_segment(RegId::from(found.segment)))
             });
         if !fits {
             invalid = true;
@@ -3443,7 +3443,7 @@ fn _address_source(
             // The folded address's slot: the cell is that frame address plus a
             // constant.
             addr: Some(Addr { index: addr.index, ..Addr::new(Space::Frame, displacement) }),
-            through: Register::BP,
+            through: RegId::BP,
             offset: displacement,
             disp_width: 0,
             base: None,
@@ -3867,7 +3867,7 @@ fn _address_of(
         [Loc::Mem(cell)] if cell.base.is_none() && cell.index.is_none() => AddressRef {
             addr: cell.addr,
             through: cell.through,
-            index_through: Register::None,
+            index_through: RegId::None,
             scale: 1,
             offset: cell.offset,
             disp_width: cell.disp_width,
@@ -3885,10 +3885,10 @@ fn _address_of(
         && one.group.is_none()
         && one.symbol != Some(true)
         && source.addr.is_some_and(|addr| {
-            addr.space == Space::Frame && source.through == Register::BP
-                || matches!(addr.space, Space::Segment | Space::External) && source.through == Register::None
+            addr.space == Space::Frame && source.through == RegId::BP
+                || matches!(addr.space, Space::Segment | Space::External) && source.through == RegId::None
         })
-        && source.index_through == Register::None)
+        && source.index_through == RegId::None)
         .then_some(source)
 }
 
@@ -4074,9 +4074,9 @@ fn _inserted(
 
 /// A requirement, naming whichever value now feeds the instruction.
 fn _wants(
-    side: &[(Held, Register)],
+    side: &[(Held, RegId)],
     rename: &IndexMap<u32, u32>,
-) -> Vec<(Held, Register)> {
+) -> Vec<(Held, RegId)> {
     side.iter()
         .map(|(held, register)| {
             (Held { value: rename.get(&held.value).copied().unwrap_or(held.value), width: held.width }, *register)
@@ -4278,8 +4278,8 @@ fn _encodable(
     classes: &RegisterClasses,
 ) -> Result<bool, Error> {
     let regs = classes.registers;
-    let mut taken: IndexMap<u32, Register> = IndexMap::default();
-    let rows: IndexMap<u32, Vec<Register>> = [1_u32, 2, 4]
+    let mut taken: IndexMap<u32, RegId> = IndexMap::default();
+    let rows: IndexMap<u32, Vec<RegId>> = [1_u32, 2, 4]
         .into_iter()
         .map(|width| {
             (
@@ -4341,7 +4341,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
 
     use super::{_color_slots, _constants, planned, spilled, spilled_from};
     use crate::backend::frame::{Frame, SlotKey};
@@ -4385,7 +4385,7 @@ mod tests {
     fn mem(
         addr: Addr,
         width: u32,
-        through: Register,
+        through: RegId,
         offset: i64,
         disp_width: u32,
     ) -> Mem {
@@ -4597,7 +4597,7 @@ mod tests {
     #[test]
     fn test_parameter_is_reloaded_across_what_spares_the_frame() {
         for between in ["call sparing the frame", "call", "call listing nothing"] {
-            let param = mem(Addr::new(Space::Frame, 6), 2, Register::BP, 0, 2);
+            let param = mem(Addr::new(Space::Frame, 6), 2, RegId::BP, 0, 2);
             let load = insn(
                 0x100,
                 (0x100, 0x100),
@@ -4615,7 +4615,7 @@ mod tests {
                     disturbs: BTreeSet::new(),
                 })
             });
-            middle.clobbers = BTreeSet::from([Register::EAX]);
+            middle.clobbers = BTreeSet::from([RegId::EAX]);
             let got = _out(&_body(vec![load, middle, _add(2, 1, 0x102)]), &[1]);
             let slots: Vec<&Loc> = got
                 .iter()
@@ -4633,7 +4633,7 @@ mod tests {
     }
 
     fn _parameter_across(store: Insn) -> (LirBody, Frame, Mem) {
-        let parameter = mem(Addr::new(Space::Frame, 6), 2, Register::BP, 0, 2);
+        let parameter = mem(Addr::new(Space::Frame, 6), 2, RegId::BP, 0, 2);
         let load = insn(
             0x100,
             (0x100, 0x100),
@@ -4662,7 +4662,7 @@ mod tests {
 
     #[test]
     fn test_parameter_rematerializes_across_an_exact_disjoint_local_store() {
-        let local = mem(Addr::new(Space::Frame, -2), 2, Register::BP, 0, 2);
+        let local = mem(Addr::new(Space::Frame, -2), 2, RegId::BP, 0, 2);
         let store = insn(
             0x101,
             (0x101, 0x101),
@@ -4677,8 +4677,8 @@ mod tests {
     fn test_parameter_rematerializes_across_a_local_array_store() {
         let local = Mem {
             index: Some(Held { value: 4, width: 2 }),
-            index_through: Register::SI,
-            ..mem(Addr::new(Space::Frame, -132), 2, Register::BP, 0, 2)
+            index_through: RegId::SI,
+            ..mem(Addr::new(Space::Frame, -132), 2, RegId::BP, 0, 2)
         };
         let store = insn(
             0x101,
@@ -4870,7 +4870,7 @@ mod tests {
         disp_width: u32,
     ) -> AddressRef {
         AddressRef {
-            through: Register::BP,
+            through: RegId::BP,
             offset: disp,
             disp_width,
             ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
@@ -4955,7 +4955,7 @@ mod tests {
         let source = _frame_address(-38, 1);
         let cell = Mem {
             base: Some(Held { value: 1, width: 2 }),
-            ..Mem::new(Some(Addr { base: Register::SI, ..Addr::new(Space::Literal, 10) }), 2)
+            ..Mem::new(Some(Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Literal, 10) }), 2)
         };
         let load = insn(
             0x14,
@@ -5001,7 +5001,7 @@ mod tests {
             let lea = semantics(
                 Operation::Address,
                 "lea",
-                vec![Loc::Reg(Reg { register: Register::BX, width: 2 })],
+                vec![Loc::Reg(Reg { register: RegId::BX, width: 2 })],
                 vec![Loc::Address(source)],
             );
             let names: IndexMap<(Space, i64), String> = IndexMap::from_iter([((space, 7), "_descriptor".to_owned())]);
@@ -5586,8 +5586,8 @@ mod tests {
 
     #[test]
     fn test_spilling_a_pointer_renames_the_cell_it_is_the_base_of() {
-        let where_ = Addr { base: Register::SI, ..Addr::new(Space::Segment, 0x10) };
-        let cell = Mem { base: Some(Held { value: 3, width: 2 }), ..mem(where_, 2, Register::None, 0, 2) };
+        let where_ = Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Segment, 0x10) };
+        let cell = Mem { base: Some(Held { value: 3, width: 2 }), ..mem(where_, 2, RegId::None, 0, 2) };
         let load = insn(
             0x20,
             (0x20, 0x22),
@@ -5608,7 +5608,7 @@ mod tests {
         assert_eq!(got.uses, [base.value], "uses {:?}, cell on {base:?}", got.uses);
         assert_ne!(got.uses, [3], "nothing was spilled; the fixture does not reach the rename");
         assert!(made.contains(&base.value), "{base:?} is not one of the reloads {made:?}");
-        assert_eq!(read.through, Register::None, "the rename placed it");
+        assert_eq!(read.through, RegId::None, "the rename placed it");
         assert_eq!((read.addr, read.width, read.offset, read.disp_width), (Some(where_), 2, 0, 2));
     }
 
@@ -5622,7 +5622,7 @@ mod tests {
             base: Some(Held { value: 5, width: 4 }),
             index: Some(Held { value: 1, width: 4 }),
             scale: 2,
-            ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, 0) }), 2)
+            ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let read = insn(
             0x100,
@@ -5643,7 +5643,7 @@ mod tests {
     /// of once, and the load is found stable all the same.
     #[test]
     fn test_whether_a_loaded_cell_holds_asks_of_each_instruction_once() {
-        let cell = Loc::Mem(mem(Addr::new(Space::Frame, 4), 2, Register::BP, 4, 1));
+        let cell = Loc::Mem(mem(Addr::new(Space::Frame, 4), 2, RegId::BP, 4, 1));
         let load = insn(0, (0, 1), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell]), &[1], &[]);
         let mut blocks = vec![LirBlock { succ: vec![1], ..LirBlock::new(0, vec![Arc::new(load)]) }];
         for at in 1..=40_i64 {
@@ -5682,7 +5682,7 @@ mod tests {
     /// overlap one cell still makes that one unstable.
     #[test]
     fn test_a_loaded_cell_is_asked_about_only_what_may_write_it() {
-        let cell = |disp: i64| Loc::Mem(mem(Addr::new(Space::Frame, disp), 2, Register::BP, disp, 1));
+        let cell = |disp: i64| Loc::Mem(mem(Addr::new(Space::Frame, disp), 2, RegId::BP, disp, 1));
         let n = 60_i64;
         let mut insns = Vec::new();
         for i in 0..n {
@@ -5746,7 +5746,7 @@ mod tests {
 
     #[test]
     fn test_a_stable_load_stored_to_a_local_keeps_its_store_defined() {
-        let cell = |disp: i64| Loc::Mem(mem(Addr::new(Space::Frame, disp), 2, Register::BP, disp, 1));
+        let cell = |disp: i64| Loc::Mem(mem(Addr::new(Space::Frame, disp), 2, RegId::BP, disp, 1));
         let load =
             insn(0x10, (0x10, 0x13), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell(-0x3C)]), &[1], &[]);
         let store =
@@ -5968,7 +5968,7 @@ mod tests {
         assert!(got.len() > 1, "two spilled operands took the in-place path");
     }
 
-    /// `ir.Mem(Addr(Space.FAR, disp, segment=Register.ES), 2, base=ir.Held(5,
+    /// `ir.Mem(Addr(Space.FAR, disp, segment=RegId.ES), 2, base=ir.Held(5,
     /// 2), index=...)`.
     fn _far(
         disp: i64,
@@ -5977,7 +5977,7 @@ mod tests {
         Mem {
             base: Some(Held { value: 5, width: 2 }),
             index: index.map(|value| Held { value, width: 2 }),
-            ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, disp) }), 2)
+            ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, disp) }), 2)
         }
     }
 
@@ -6138,7 +6138,7 @@ mod tests {
         let naming = |at: i64, defined: &BTreeSet<u32>, used: &BTreeSet<u32>| {
             let cell = |values: &BTreeSet<u32>| {
                 let home = homes[(*values.iter().next().expect("a home") - first) as usize];
-                Loc::Mem(mem(Addr::new(Space::Frame, home), 2, Register::BP, home, 1))
+                Loc::Mem(mem(Addr::new(Space::Frame, home), 2, RegId::BP, home, 1))
             };
             let what = if defined.is_empty() {
                 semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell(used)])
@@ -6415,7 +6415,7 @@ mod tests {
     /// increment.
     #[test]
     fn test_a_value_defined_twice_keeps_its_increment_in_its_home() {
-        let home = mem(Addr::new(Space::Frame, -0x2A), 2, Register::BP, -0x2A, 1);
+        let home = mem(Addr::new(Space::Frame, -0x2A), 2, RegId::BP, -0x2A, 1);
         let at = |at: i64, what: Semantics, defines: &[u32], uses: &[u32]| insn(at, (at, at + 2), what, defines, uses);
         let block = |at: i64, insns: Vec<Insn>, succ: Vec<i64>| LirBlock {
             succ,
@@ -6560,8 +6560,8 @@ mod tests {
         for constraint in ["requires", "delivers", "symbol"] {
             let mut constant = _remat_constant();
             match constraint {
-                "requires" => constant.requires = vec![(Held { value: 1, width: 2 }, Register::AX)],
-                "delivers" => constant.delivers = vec![(Held { value: 1, width: 2 }, Register::AX)],
+                "requires" => constant.requires = vec![(Held { value: 1, width: 2 }, RegId::AX)],
+                "delivers" => constant.delivers = vec![(Held { value: 1, width: 2 }, RegId::AX)],
                 _ => constant.symbol = Some(true),
             }
             let result = _spilled_one("guarded", vec![constant, _push(3, (3, 4), held(1, 2), &[1])]);

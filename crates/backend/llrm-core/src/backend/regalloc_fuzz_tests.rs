@@ -446,7 +446,9 @@ fn complaints(done: &LirBody) -> Vec<String> {
                     (cell.base.is_some() && cell.through == RegId::None)
                         || (cell.index.is_some() && cell.index_through == RegId::None)
                         || (cell.selector.is_some()
-                            && cell.addr.is_some_and(|addr| addr.space == Space::Far && addr.segment == RegId::None))
+                            && cell
+                                .addr
+                                .is_some_and(|addr| addr.space == Space::Far && addr.segment == (RegId::None).iced()))
                 }
                 _ => false,
             };
@@ -550,7 +552,7 @@ mod run {
             let base = placed(cell.base, cell.through, self)?;
             let index = placed(cell.index, cell.index_through, self)? * cell.scale;
             let segment = match (cell.addr.map(|addr| addr.segment), cell.selector) {
-                (Some(segment), _) if segment != RegId::None => i64::from(self.register(segment)),
+                (Some(segment), _) if segment != (RegId::None).iced() => i64::from(self.register(RegId::from(segment))),
                 (_, Some(selector)) => self
                     .vals
                     .get(&selector.value)
@@ -809,7 +811,7 @@ fn allocated(
         &crate::backend::classes::RegisterClasses::m16(),
     )?)];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_none() {
-        phases.push(Box::new(ParallelCopy));
+        phases.push(Box::new(ParallelCopy::default()));
     }
     if std::env::var_os("FUZZ_SHOW").is_some() {
         eprintln!("{}", crate::backend::lirtext::lir_stage("input", &[(body.name.clone(), body.clone())]));
@@ -855,7 +857,7 @@ fn spilled_and_allocated(
             prices: crate::backend::ssaspill::Prices::clocks(),
             run: Default::default(),
         }),
-        Box::new(PhiElimination),
+        Box::new(PhiElimination::default()),
         Box::new(TwoAddress),
         Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::m16())),
         Box::new(RegAlloc::new(
@@ -865,7 +867,7 @@ fn spilled_and_allocated(
             segments,
             &crate::backend::classes::RegisterClasses::m16(),
         )?),
-        Box::new(ParallelCopy),
+        Box::new(ParallelCopy::default()),
     ];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_some() {
         phases.pop();
@@ -1251,6 +1253,28 @@ fn test_the_interference_among_a_web_looks_only_at_the_instructions_that_name_it
         skipped += all.count() - last_visited();
     }
     assert!(skipped > 0, "premise: some instruction names none of the web");
+}
+
+/// The interference among a web of a few values was written a pair at a time
+/// into rows that were trees, and a group of N values live together was N^2
+/// pairs (siblings interference 170 of 1,972 Minstr on a 1.3 KB quicksort).
+/// Asked of a few values the rows are bits, a group written to its
+/// members a mask at a time.
+#[test]
+fn test_the_interference_among_a_web_is_bits_not_a_tree_of_pairs() {
+    use crate::analysis::intervals::intervals;
+    use crate::backend::coalesce::_interference_among;
+    use crate::backend::neighbours::Neighbours;
+    let mut rows = 0;
+    for seed in 0..40u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        let web: std::collections::BTreeSet<u32> = intervals(&plain, None).keys().copied().step_by(2).take(8).collect();
+        for near in _interference_among(&plain, Some(&web)).values() {
+            rows += 1;
+            assert!(matches!(near, Neighbours::Dense { .. }), "seed {seed}: a row of a web is a tree");
+        }
+    }
+    assert!(rows > 0, "premise: some value of a web interferes");
 }
 
 /// The no-split allocation of a body the base allocation split nothing in is
@@ -2021,4 +2045,70 @@ fn test_a_gap_with_no_room_left_is_answered_by_a_fresh_numbering() {
         current = edited;
     }
     assert!(refused, "40 instructions in one gap were all patched");
+}
+
+/// The points that destroy registers, carried across a rewrite, are the points
+/// a fresh look at the rewritten body finds, in the same order and at the same
+/// slots in the registers' lists: a rewrite that removed or added a call took
+/// its point out or put it in, and left every other point where it was.
+#[test]
+fn test_the_points_that_destroy_registers_carried_across_a_rewrite_are_those_of_a_fresh_look() {
+    use super::allocate::{_masks, Masks};
+    use crate::analysis::intervals::{changes, indexed};
+    let segments = &crate::backend::target::BUILT_IN;
+    let mut carried = 0;
+    for seed in 0..80u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 12 + (seed % 11) as usize });
+        let mut numbering = indexed(&plain);
+        let mut current = plain.clone();
+        let mut masks = _masks(&current, &numbering, segments);
+        let _ = masks.same_points(&masks);
+        let mut next = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let mut random = |bound: usize| {
+            next = next.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (next >> 33) as usize % bound
+        };
+        for _ in 0..12 {
+            let mut blocks = current.blocks.clone();
+            let at = random(blocks.len());
+            let mut insns: Vec<Arc<Insn>> = blocks[at].insns.to_vec();
+            for _ in 0..1 + random(3) {
+                match random(3) {
+                    0 if !insns.is_empty() => {
+                        let mut one = (*insns[random(insns.len())]).clone();
+                        if random(2) == 0 {
+                            one.clobbers = [RegId::EAX, RegId::ECX].into_iter().collect();
+                        }
+                        insns.insert(random(insns.len() + 1), Arc::new(one));
+                    }
+                    1 if insns.len() > 1 => {
+                        insns.remove(random(insns.len()));
+                    }
+                    _ if !insns.is_empty() => {
+                        let place = random(insns.len());
+                        insns[place] = Arc::new((*insns[place]).clone());
+                    }
+                    _ => {}
+                }
+            }
+            blocks[at].insns = insns.into();
+            let edited = current.with_blocks(blocks);
+            let Some(patched) = numbering.patched(&current, &edited) else {
+                numbering = indexed(&edited);
+                masks = _masks(&edited, &numbering, segments);
+                current = edited;
+                continue;
+            };
+            let found = changes(&current, &edited)
+                .and_then(|changes| Masks::after(&masks, &numbering, &patched, segments, &changes));
+            let fresh = _masks(&edited, &patched, segments);
+            let found = found.expect("a rewrite of the same shape carries the points");
+            assert!(found.same_points(&fresh), "seed {seed}: the points carried differ from a fresh look");
+            carried += 1;
+            masks = found;
+            numbering = patched;
+            current = edited;
+        }
+    }
+    assert!(carried > 100, "only {carried} rewrites carried their points");
 }

@@ -146,20 +146,37 @@ fn edge_delta(
     known: &Intervals,
     facts: Option<&IndexMap<ValueId, Known>>,
 ) -> Result<Option<Intervals>, String> {
-    #[cfg(test)]
-    EDGE_DELTAS.with(|count| count.set(count.get() + 1));
-    let successors = unit.function.successors(block);
-    if !successors.contains(&successor) {
+    if !unit.function.successors(block).contains(&successor) {
         return Err("not a successor".to_owned());
     }
+    edge_delta_of(unit, block, successor, known, facts)
+}
+
+/// `edge_delta` of an edge known to be one: a block's way in is asked of its
+/// predecessor, which names it, and a switch of N cases listed its N successors
+/// again for each.
+fn edge_delta_of(
+    unit: &Unit,
+    block: BlockId,
+    successor: BlockId,
+    known: &Intervals,
+    facts: Option<&IndexMap<ValueId, Known>>,
+) -> Result<Option<Intervals>, String> {
+    #[cfg(test)]
+    EDGE_DELTAS.with(|count| count.set(count.get() + 1));
     let empty = IndexMap::default();
     let facts = facts.unwrap_or(&empty);
-    if successors.len() != 2 {
-        return Ok(Some(Intervals::default()));
-    }
+    // Two distinct targets, or the branch decides nothing.
     let Some((condition, taken)) = branch(unit, block) else {
         return Ok(Some(Intervals::default()));
     };
+    let other = match unit.function.instruction(unit.function.terminator(block).expect("a branch")).operands[2] {
+        Operand::Block(other) => other,
+        _ => unreachable!("branch() found two blocks"),
+    };
+    if taken == other {
+        return Ok(Some(Intervals::default()));
+    }
     Ok(narrowed_delta(unit, condition, successor == taken, known, facts))
 }
 
@@ -952,11 +969,15 @@ pub fn edges_solved(
     let mut moved: BTreeSet<i64> = BTreeSet::new();
     let mut made: BTreeMap<i64, u64> = BTreeMap::new();
     let assumed = unit.assumptions();
+    // The edges a terminator names twice, found once: a block's way in counts
+    // only where its one predecessor names it once, and counting a switch's
+    // operands for each of its N successors was N^2.
+    let twice = named_twice(unit);
+    let once = |parent: i64, block: i64| !twice.contains(&(parent, block));
     for &at in &order {
         let block = cfg::block(at);
         let sole = predecessors.get(&at).filter(|parents| parents.len() == 1).and_then(|parents| parents.first());
-        let from_parent =
-            sole.is_some_and(|parent| known.contains_key(parent) && edges(unit, cfg::block(*parent), block) == 1);
+        let from_parent = sole.is_some_and(|parent| known.contains_key(parent) && once(*parent, at));
         let source = if from_parent { sole.copied() } else { immediate.get(&at).copied().flatten() };
         if let Some((states, reached)) = before {
             let stale = reached.contains(&block)
@@ -976,9 +997,9 @@ pub fn edges_solved(
         let seeded = if at == cfg::id(entry) { declared_arguments(unit) } else { Intervals::default() };
         let mut made_of = llrm_support::hash::FxBuild::default().build_hasher();
         let mut scoped = match sole.and_then(|parent| Some((*parent, known.get(parent)?))) {
-            Some((parent, inherited)) if edges(unit, cfg::block(parent), block) == 1 => {
+            Some((parent, inherited)) if once(parent, at) => {
                 made.get(&parent).hash(&mut made_of);
-                match edge_delta(unit, cfg::block(parent), block, inherited, Some(facts))? {
+                match edge_delta_of(unit, cfg::block(parent), block, inherited, Some(facts))? {
                     Some(delta) => {
                         delta.iter().for_each(|(value, interval)| (value, interval).hash(&mut made_of));
                         applied(inherited, delta)
@@ -1032,15 +1053,31 @@ pub fn edges_solved(
     Ok(EdgeStates { order, own, below: known, made })
 }
 
-/// How many of `parent`'s terminator's targets are `block`.
-fn edges(
-    unit: &Unit,
-    parent: BlockId,
-    block: BlockId,
-) -> usize {
-    unit.function.terminator(parent).map_or(0, |one| {
-        unit.function.instruction(one).operands.iter().filter(|operand| **operand == Operand::Block(block)).count()
-    })
+/// The (block, target) pairs a terminator names more than once, as ids: a
+/// conditional branch to one block twice, a switch with two cases to one block.
+fn named_twice(unit: &Unit) -> BTreeSet<(i64, i64)> {
+    let function = unit.function;
+    let mut out = BTreeSet::new();
+    for &block in function.layout() {
+        let Some(last) = function.terminator(block) else { continue };
+        let targets = &function.instruction(last).operands;
+        // One or two targets (every `br`) are compared; more are sorted.
+        if targets.len() <= 3 {
+            if let [_, Operand::Block(one), Operand::Block(two)] = targets[..]
+                && one == two
+            {
+                out.insert((cfg::id(block), cfg::id(one)));
+            }
+            continue;
+        }
+        let mut named: Vec<BlockId> = targets
+            .iter()
+            .filter_map(|operand| if let Operand::Block(target) = operand { Some(*target) } else { None })
+            .collect();
+        named.sort_unstable();
+        out.extend(named.windows(2).filter(|pair| pair[0] == pair[1]).map(|pair| (cfg::id(block), cfg::id(pair[0]))));
+    }
+    out
 }
 
 pub type Facts = IndexMap<i64, Intervals>;
@@ -1854,6 +1891,14 @@ pub fn bounded_solved(
         if !counted && boxes.is_empty() {
             continue;
         }
+        // A box holds wherever the header's phi is read, the header itself
+        // too, though the trip's counts there stop short of the exit value:
+        // a rotated loop computes in its header what the loop tested before.
+        let at_header = (!inside.contains(&loop_.header) && !boxes.is_empty()).then(|| {
+            let mut held = declared_arguments(unit);
+            held.extend(boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
+            closed(held)
+        });
         known.extend(boxes);
         // The header's values too: seen from inside, they are the trip's,
         // though the header itself also sees the exit value.
@@ -1865,6 +1910,16 @@ pub fn bounded_solved(
             for (value, interval) in scoped.iter() {
                 if narrow_to(destination, value, interval) {
                     dead.insert(at);
+                }
+            }
+        }
+        if let Some(held) = at_header {
+            let held_id = fresh_known();
+            let scoped = scope_at(loop_.header, &held, held_id, true)?;
+            let destination = Rc::make_mut(result.entry(loop_.header).or_default());
+            for (value, interval) in scoped.iter() {
+                if narrow_to(destination, value, interval) {
+                    dead.insert(loop_.header);
                 }
             }
         }
@@ -1973,7 +2028,11 @@ fn inductive_boxes(
         assumed.extend(boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
         let assumed = closed(assumed);
         let assumed_id = fresh_known();
-        let mut scopes = BTreeMap::new();
+        // What holds as each latch leaves for the header: the scope at its end
+        // with its branch's condition applied, as SCEV takes a loop's exit
+        // count from the latch test. A rotated loop's counter is bounded by
+        // the test after its step, which the block's own scope does not hold.
+        let mut scopes: BTreeMap<i64, Option<Intervals>> = BTreeMap::new();
         let mut grown = false;
         let mut dropped = Vec::new();
         for (phi, width, _, latches) in &candidates {
@@ -1982,9 +2041,13 @@ fn inductive_boxes(
             let mut known_all = true;
             for (latch, value) in latches {
                 if !scopes.contains_key(latch) {
-                    scopes.insert(*latch, scope_at(*latch, &assumed, assumed_id, false)?);
+                    let at_latch = scope_at(*latch, &assumed, assumed_id, false)?;
+                    let leaving = on_edge(unit, cfg::block(*latch), header, &at_latch, Some(facts))?;
+                    scopes.insert(*latch, leaving);
                 }
-                match _operand(unit, *value, &scopes[latch], facts).filter(|interval| interval.width == *width) {
+                // An edge no execution takes brings no value round.
+                let Some(scope) = &scopes[latch] else { continue };
+                match _operand(unit, *value, scope, facts).filter(|interval| interval.width == *width) {
                     Some(interval) => {
                         wanted.low = wanted.low.min(interval.low);
                         wanted.high = wanted.high.max(interval.high);

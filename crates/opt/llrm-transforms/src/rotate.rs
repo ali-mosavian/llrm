@@ -30,9 +30,9 @@ use llrm_analysis::{cfg, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, MetadataNode, MetadataOperand, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
-use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
+use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, PreservedAnalyses};
 
 use crate::lcssa::{arms, from_arms};
 
@@ -63,7 +63,7 @@ impl FunctionPass for Rotate {
         if self.proven && llrm_support::debug::enabled("census") {
             census(unit.context, unit.layout, unit.function, unit.id, analyses);
         }
-        match entered(unit.context, unit.layout, unit.function, analyses, self.proven, self.copy) {
+        match entered(unit.context, unit.layout, unit.function, unit.declared, analyses, self.proven, self.copy) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("rotate: {error}"),
@@ -77,13 +77,14 @@ pub fn entered(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
+    declared: &mut Declared,
     analyses: &Analyses,
     proven: bool,
     copy: bool,
 ) -> Result<bool, String> {
     let mut done: llrm_mir::dense::IdSet<BlockId> = llrm_mir::dense::IdSet::new();
     while proven && rotated(context, layout, function, analyses, &mut done)? {}
-    while copy && copied(context, layout, function, analyses, &mut done)? {}
+    while copy && copied(context, layout, function, declared, analyses, &mut done)? {}
     if done.is_empty() {
         return Ok(false);
     }
@@ -103,6 +104,10 @@ pub(crate) struct Shape {
     pub exit: BlockId,
     /// The loop's blocks but its header: where a moved phi is read.
     pub body: BTreeSet<BlockId>,
+    /// What the header computes that blocks after it read: each is also made by
+    /// the copy of the test before the loop, and what it reaches reads the
+    /// copy's on entry and the header's after.
+    pub carried: Vec<InstId>,
 }
 
 fn _phis(
@@ -124,6 +129,8 @@ fn _test_only(
     function: &Function,
     header: BlockId,
     inst: InstId,
+    divides: bool,
+    carried: bool,
 ) -> bool {
     let op = function.instruction(inst);
     let computes = match op.opcode {
@@ -133,26 +140,50 @@ fn _test_only(
         | Opcode::GetElementPtr { .. }
         | Opcode::Select
         | Opcode::Freeze => true,
-        Opcode::Binary(kind) => !matches!(
-            kind,
-            BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem
-        ),
+        // A division may trap, and a loop entered past its test never traps
+        // there: not where the test is not also copied before the loop.
+        Opcode::Binary(kind) => {
+            divides || !matches!(
+                kind,
+                BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem
+            )
+        }
         _ => false,
     };
     // A header phi reading it takes it round the back edge: it is the step of a
     // counter, which must run before the trip it starts, not skip the
-    // first.
+    // first. Another block may read it where the copy of the test makes it
+    // before the loop too.
     computes
         && op.result.is_none_or(|value| {
-            function.users(value).iter().all(|one| {
-                function.parent(one.user) == Some(header) && function.instruction(one.user).opcode != Opcode::Phi
-            })
+            function
+                .users(value)
+                .iter()
+                .all(
+                    |one| {
+                        let inside = function.parent(one.user) == Some(header);
+                        (inside || carried) && !(inside && function.instruction(one.user).opcode == Opcode::Phi)
+                    },
+                )
         })
 }
 
 pub(crate) fn _shape(
     function: &Function,
     loop_: &Loop,
+) -> Option<Shape> {
+    _shape_of(function, loop_, false, false)
+}
+
+/// `_shape`; `chained`: the loop is the rest of one already entered behind the
+/// copy of an earlier test, whose latch is that test, a branch to this header
+/// or out. `copied`: its test is copied before it, so that skipping it on entry
+/// skips no trap.
+fn _shape_of(
+    function: &Function,
+    loop_: &Loop,
+    chained: bool,
+    copied: bool,
 ) -> Option<Shape> {
     let succ = |at: i64| cfg::successors_of(function, at);
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
@@ -168,7 +199,8 @@ pub(crate) fn _shape(
     {
         return None;
     }
-    if latch == loop_.header || succ(latch) != [loop_.header] {
+    let to_header = if chained { succ(latch).contains(&loop_.header) } else { succ(latch) == [loop_.header] };
+    if latch == loop_.header || !to_header {
         return None;
     }
     let branch = terminator(loop_.header)?;
@@ -196,11 +228,24 @@ pub(crate) fn _shape(
                 op.opcode != Opcode::Phi && !op.opcode.is_terminator()
             },
         );
-    if !work.into_iter().all(|inst| _test_only(function, header, inst)) {
+    let work: Vec<InstId> = work.collect();
+    if !work.iter().all(|&inst| _test_only(function, header, inst, copied, copied)) {
         return None;
     }
     let block = cfg::block;
     let body = loop_.body.iter().copied().filter(|&at| at != loop_.header).map(block).collect();
+    let carried =
+        work.iter()
+            .copied()
+            .filter(|&inst| {
+                function
+                    .instruction(inst)
+                    .result
+                    .is_some_and(
+                        |value| function.users(value).iter().any(|one| function.parent(one.user) != Some(header)),
+                    )
+            })
+            .collect();
     Some(Shape {
         preheader: block(preheader),
         header,
@@ -208,6 +253,7 @@ pub(crate) fn _shape(
         latch: block(latch),
         exit: block(*exit),
         body,
+        carried,
     })
 }
 
@@ -219,6 +265,7 @@ pub(crate) fn _rotate(
     function: &mut Function,
     shape: &Shape,
     guard: Option<(Operand, bool)>,
+    copies: &[(llrm_mir::module::ValueId, Operand)],
 ) -> Result<(), String> {
     let entering = function.terminator(shape.preheader).expect("a terminated preheader");
     if let Some((guard, exits_on_true)) = guard {
@@ -298,6 +345,20 @@ pub(crate) fn _rotate(
         }
         function.erase(phi)?;
     }
+    // What the header computes that others read: the copy's value before the
+    // loop, the header's after it.
+    for &inst in &shape.carried {
+        let Some(value) = function.instruction(inst).result else { continue };
+        let Some(&(_, copy)) = copies.iter().find(|(old, _)| *old == value) else { continue };
+        let mut updater = SsaUpdater::new(function.value(value).ty, function.value(value).name.clone().as_deref());
+        updater.add_available_value(shape.preheader, copy);
+        updater.add_available_value(shape.header, Operand::Value(value));
+        for one in function.users(value).to_vec() {
+            if function.parent(one.user) != Some(shape.header) {
+                updater.rewrite_use(context, function, one);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -323,7 +384,7 @@ pub fn rotated(
         if induction::trip_count(&unit, &loop_, &facts).is_none() {
             continue;
         }
-        _rotate(context, function, &shape, None)?;
+        _rotate(context, function, &shape, None, &[])?;
         done.insert(shape.first);
         return Ok(true);
     }
@@ -373,6 +434,7 @@ pub fn copied(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
+    declared: &mut Declared,
     analyses: &Analyses,
     done: &mut llrm_mir::dense::IdSet<BlockId>,
 ) -> Result<bool, String> {
@@ -382,7 +444,7 @@ pub fn copied(
         if done.contains(&cfg::block(loop_.header)) {
             continue;
         }
-        let Some(shape) = _shape(function, &loop_) else {
+        let Some(shape) = _shape_of(function, &loop_, false, true) else {
             continue;
         };
         // A loop proven to run needs no guard: it is entered at its body once
@@ -402,14 +464,127 @@ pub fn copied(
         if insns > MAX_HEADER_INSNS {
             continue;
         }
-        let Some(guard) = _copy_test(function, &shape) else {
+        let Some((guard, copies)) = _copy_test(function, &shape) else {
             continue;
         };
-        _rotate(context, function, &shape, Some(guard))?;
-        done.insert(shape.first);
+        let weights = function
+            .instruction(function.terminator(shape.header).expect("a terminated header"))
+            .metadata
+            .iter()
+            .find(|(kind, _)| kind == "prof")
+            .map(|(_, node)| *node);
+        _rotate(context, function, &shape, Some(guard), &copies)?;
+        _weighed(context, declared, function, &shape, weights, guard.1);
+        // Each following test that leaves the loop is copied too while the
+        // budget lasts (`while (a && b)`): gcc's chain of headers.
+        let mut first = shape.first;
+        let mut remaining = MAX_HEADER_INSNS - insns;
+        while let Some((next, spent)) = _chained(context, layout, function, declared, analyses, first, remaining)? {
+            first = next;
+            remaining -= spent;
+        }
+        done.insert(first);
         return Ok(true);
     }
     Ok(false)
+}
+
+/// The loop entered at `first` copied once more: its header, which tests and
+/// leaves the loop, has its test copied behind the one before, entering at
+/// the block it goes on to (gcc's `copy_headers` chain, each header after the
+/// first with one predecessor and no call, all within
+/// `param_max_loop_header_insns`). The body block now entered and the
+/// instructions the copy spent, or none.
+fn _chained(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut Declared,
+    analyses: &Analyses,
+    first: BlockId,
+    remaining: usize,
+) -> Result<Option<(BlockId, usize)>, String> {
+    let preheader = cfg::predecessors_of(function, cfg::id(first)).into_iter().find(|&at| {
+        function.terminator(cfg::block(at)).is_some_and(|last| function.instruction(last).operands.len() == 3)
+    });
+    let Some(preheader) = preheader else { return Ok(None) };
+    let mut fresh = analyses.fresh();
+    let found = fresh.get::<cfg::Shape>(context, layout, function);
+    let Some(loop_) = found.loops.iter().find(|one| one.header == cfg::id(first)).cloned() else { return Ok(None) };
+    // The loop must be entered by the guard alone, over an edge of its own.
+    if loop_.entering(function) != BTreeSet::from([preheader]) {
+        return Ok(None);
+    }
+    let insns = function
+        .block(first)
+        .instructions()
+        .iter()
+        .filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
+        .count();
+    if insns > remaining {
+        return Ok(None);
+    }
+    // Only a header that tests and leaves is copied: the others end the chain
+    // before an edge is split for them.
+    let leaves = function.terminator(first).is_some_and(|last| {
+        let last = function.instruction(last);
+        last.opcode == Opcode::Br
+            && last.operands.len() == 3
+            && cfg::successors_of(function, cfg::id(first)).iter().filter(|at| loop_.body.contains(at)).count() == 1
+    });
+    if !leaves {
+        return Ok(None);
+    }
+    let bridge = crate::edges::split(function, cfg::block(preheader), first, Vec::new())?;
+    let mut fresh = analyses.fresh();
+    let found = fresh.get::<cfg::Shape>(context, layout, function);
+    let Some(loop_) = found.loops.iter().find(|one| one.header == cfg::id(first)).cloned() else { return Ok(None) };
+    let Some(shape) = _shape_of(function, &loop_, true, true).filter(|shape| shape.preheader == bridge) else {
+        return Ok(None);
+    };
+    let Some((guard, copies)) = _copy_test(function, &shape) else { return Ok(None) };
+    let weights = function
+        .instruction(function.terminator(shape.header).expect("a terminated header"))
+        .metadata
+        .iter()
+        .find(|(kind, _)| kind == "prof")
+        .map(|(_, node)| *node);
+    _rotate(context, function, &shape, Some(guard), &copies)?;
+    _weighed(context, declared, function, &shape, weights, guard.1);
+    Ok(Some((shape.first, insns)))
+}
+
+/// The guard the copy left in the preheader is taken as the header's test is:
+/// the weights it declares, else the loop heuristic's (`branchprob::LOOP`)
+/// for staying in against leaving. gcc's header copying duplicates the test's
+/// edge probabilities and LLVM's `LoopRotate` puts its weights on the guard
+/// (`updateBranchWeights`); left to be guessed again from structure, the
+/// guard outside the loop is a branch like any other and the way into the
+/// loop is laid out as the unlikely one.
+fn _weighed(
+    context: &mut Context,
+    declared: &mut Declared,
+    function: &mut Function,
+    shape: &Shape,
+    weights: Option<llrm_mir::module::MetadataId>,
+    exits_on_true: bool,
+) {
+    let guard = function.terminator(shape.preheader).expect("a terminated preheader");
+    let node = weights.unwrap_or_else(|| {
+        let word = context.types.int(32);
+        let weight = |context: &mut Context, n: f64| MetadataOperand::Constant(context.int(word, n as i128));
+        let (staying, leaving) = llrm_analysis::branchprob::LOOP;
+        let (first, second) = if exits_on_true { (leaving, staying) } else { (staying, leaving) };
+        declared.node(MetadataNode {
+            distinct: false,
+            operands: vec![
+                MetadataOperand::String("branch_weights".to_owned()),
+                weight(context, first),
+                weight(context, second),
+            ],
+        })
+    });
+    function.annotate(guard, "prof", node);
 }
 
 /// The header's test computed in the preheader, on what the header's phis read
@@ -418,7 +593,7 @@ pub fn copied(
 fn _copy_test(
     function: &mut Function,
     shape: &Shape,
-) -> Option<(Operand, bool)> {
+) -> Option<((Operand, bool), Vec<(llrm_mir::module::ValueId, Operand)>)> {
     let branch = function.terminator(shape.header).expect("a terminated header");
     let [Operand::Value(cond), Operand::Block(taken), _] = function.instruction(branch).operands[..] else {
         return None;
@@ -429,6 +604,7 @@ fn _copy_test(
         let start = arms(function, phi).into_iter().find(|&(_, from)| from == shape.preheader)?.0;
         known.push((value, start));
     }
+    let phis_known = known.len();
     let entering = function.terminator(shape.preheader).expect("a terminated preheader");
     let work: Vec<InstId> = function
         .block(shape.header)
@@ -454,7 +630,9 @@ fn _copy_test(
         }
     }
     let guard = known.iter().find(|(old, _)| *old == cond)?.1;
-    Some((guard, taken == shape.exit))
+    // The copies of the work (the phis' starts stay out).
+    let copies = known.iter().skip(phis_known).copied().collect();
+    Some(((guard, taken == shape.exit), copies))
 }
 
 #[cfg(test)]

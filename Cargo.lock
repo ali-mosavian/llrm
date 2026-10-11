@@ -338,6 +338,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "llrm-core",
+ "llrm-lir",
  "llrm-target",
  "llrm-x86",
  "llrm-x86-m16",
@@ -565,6 +566,7 @@ dependencies = [
  "iced-x86",
  "llrm-analysis",
  "llrm-hir",
+ "llrm-lir",
  "llrm-mir",
  "llrm-omf",
  "llrm-qbruntime",

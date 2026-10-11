@@ -1,7 +1,7 @@
 //! `-g`: BASIC's side of the debug information -- its types and the names
 //! BC's /Zi gives them. `llrm_hir::debug` builds the rest.
 
-use llrm_hir::model::DebugScalar;
+use llrm_hir::model::{DebugReach, DebugScalar};
 
 use super::{Compiler, DOUBLE, INTEGER, LONG, SIGNED_BYTE, SINGLE, STRING};
 use crate::syntax::{Declaration, Span};
@@ -19,6 +19,10 @@ fn sigil(type_id: u32) -> Option<char> {
         _ => None,
     }
 }
+
+/// An array parameter's descriptor is its caller's, of a rank not known here:
+/// a size no descriptor has.
+pub(super) const ARRAY_PARAMETER: usize = 1;
 
 /// Where a variable is held.
 pub(super) enum Held {
@@ -65,14 +69,58 @@ impl Compiler {
         Some(self.debug.scalar(scalar))
     }
 
-    /// `type_id`'s, or an array of them.
+    /// `type_id`'s, or an array of them: `array` the bytes of its
+    /// descriptor, 0 for a scalar.
     fn debug_type_of(
         &mut self,
         type_id: u32,
-        array: bool,
+        array: usize,
     ) -> Option<i64> {
         let element = self.debug_type(type_id)?;
-        Some(if array { self.debug.array(element) } else { element })
+        if array == 0 {
+            return Some(element);
+        }
+        Some(match self.debug_descriptor(type_id, element, array) {
+            Some(descriptor) => self.debug.described_array(element, descriptor),
+            None => self.debug.array(element),
+        })
+    }
+
+    /// The struct a real-mode array's descriptor is (QB's AD): `bytes` long,
+    /// a far data pointer, the byte size, rank, flags, origin, element size
+    /// and a (count, lower bound) pair for each dimension. None for a
+    /// descriptor of another size, or a STRING array's, whose elements are
+    /// near descriptors that this does not describe.
+    fn debug_descriptor(
+        &mut self,
+        type_id: u32,
+        element: i64,
+        bytes: usize,
+    ) -> Option<i64> {
+        const FIXED: usize = 14;
+        const DIMENSION: usize = 4;
+        let rank = bytes.checked_sub(FIXED).filter(|extra| extra % DIMENSION == 0).map(|extra| extra / DIMENSION)?;
+        if rank == 0 || type_id == STRING {
+            return None;
+        }
+        let int16 = self.debug.scalar(DebugScalar::Int16);
+        let int32 = self.debug.scalar(DebugScalar::Int32);
+        let byte = self.debug.scalar(DebugScalar::UInt8);
+        let word = self.debug.scalar(DebugScalar::UInt16);
+        let data = self.debug.pointer(element, DebugReach::Far);
+        let dimension =
+            self.debug.structure("DIMENSION", DIMENSION as i64, &[("count", word, 0, None), ("lower", int16, 2, None)]);
+        let dimensions = self.debug.sized(dimension, (rank * DIMENSION) as i64);
+        let fields = [
+            ("data", data, 0, None),
+            ("bytes", int32, 4, None),
+            ("rank", byte, 8, None),
+            ("features", byte, 9, None),
+            ("origin", int16, 10, None),
+            ("element_size", int16, 12, None),
+            ("dimensions", dimensions, FIXED as i64, None),
+        ];
+        Some(self.debug.structure("ARRAY", bytes as i64, &fields))
     }
 
     /// The TYPE `declared` at `span`, `type_id`, of `fields` at `offsets`,
@@ -154,7 +202,7 @@ impl Compiler {
         source: &str,
         span: Span,
         type_id: u32,
-        array: bool,
+        array: usize,
     ) {
         if !self.debugging() || source.starts_with('$') {
             return;
@@ -183,7 +231,7 @@ impl Compiler {
         source: &str,
         span: Span,
         type_id: u32,
-        array: bool,
+        array: usize,
         by_value: bool,
     ) {
         if !self.debugging() {

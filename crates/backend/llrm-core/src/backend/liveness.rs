@@ -32,12 +32,11 @@ pub fn _terminator(what: Option<&Semantics>) -> bool {
 // MASM emitter derives push/pop preservation from surviving body uses, so a
 // dead final write to either register must remain removable.  Treating them as
 // semantic return inputs retained one-use loads and other dead computations
-// immediately before an epilogue.
+// immediately before an epilogue. The frame register is no different: where a
+// frame is kept the body never writes it, and where none is (`hasFP` false) it
+// is a value register the epilogue restores, as for SI and DI.
 pub fn _return_state(regs: Regs) -> Vec<RegId> {
-    [Some(regs.frame), Some(regs.stack), regs.data_segment, regs.stack_segment, regs.code_segment]
-        .into_iter()
-        .flatten()
-        .collect()
+    [Some(regs.stack), regs.data_segment, regs.stack_segment, regs.code_segment].into_iter().flatten().collect()
 }
 
 /// Every lane a body can name. "Dead" here means every lane but the live ones.
@@ -466,7 +465,7 @@ mod tests {
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(regs, RegId::AX).is_subset(&into[&1]));
         assert!(_lanes(regs, RegId::SI).is_disjoint(&into[&1]));
-        assert!(_lanes(regs, RegId::BP).is_subset(&into[&1]));
+        assert!(_lanes(regs, RegId::BP).is_disjoint(&into[&1]));
         assert!(_lanes(regs, RegId::DX).is_disjoint(&into[&1]));
     }
 }
