@@ -343,3 +343,24 @@ fn test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return() {
         function.iter().take_while(|line| !line.starts_with("jl ")).filter(|line| line.starts_with("push ")).count();
     assert!(entry <= 2, "{entry} pushes before the early return\n{text}");
 }
+
+/// A loop the guard enters at its second block (`while (at >= gap &&
+/// values[at - gap] > value)`: the test of the value follows the guard) was
+/// laid out [guard][body][test] and entered by a `jmp` to the test, one taken
+/// jump a loop entry (shellsort -O1 +3.5% instructions). Turned to start at the
+/// block it is entered at, the guard falls into the test and the bottom test
+/// jumps back, as gcc's `rotate_loop` does for a loop entered in its middle.
+#[test]
+fn test_a_loop_entered_at_its_second_block_is_laid_out_from_it() {
+    let source = format!("{}/bench/shellsort/shellsort.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O1", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let jumps = text.lines().filter(|line| line.trim().starts_with("jmp ")).count();
+    assert_eq!(jumps, 0, "{text}");
+}
