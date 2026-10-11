@@ -124,13 +124,16 @@ B$COPY          endp
 ;;     value (edx): the byte, in dl.
 ;;     count (ebx): bytes.
 ;;
-;; Saves:    ecx edi
+;; Saves:    ecx edx edi
 ;; Clobbers: eax, flags
-B$FILLB         proc uses ecx edi
+B$FILLB         proc uses ecx edx edi
 
                 mov     edi, eax
                 movzx   eax, dl
-                imul    eax, eax, 01010101h     ;; the byte four times
+                mov     ah, al
+                mov     edx, eax
+                shl     eax, 16
+                or      eax, edx                ;; the byte four times; imul costs 9 to 40 clocks
                 mov     ecx, ebx
                 cld
                 shr     ecx, 2

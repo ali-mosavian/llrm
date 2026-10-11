@@ -135,15 +135,18 @@ B$COPY          endp
 ;;     value (dx): the byte, in dl.
 ;;     count (cx): bytes.
 ;;
-;; Saves:    bx cx di es
+;; Saves:    bx cx dx di es
 ;; Clobbers: eax, flags
-B$FILLB         proc    public uses bx cx di es
+B$FILLB         proc    public uses bx cx dx di es
 
                 push    ds
                 pop     es
                 mov     di, ax
                 movzx   eax, dl
-                imul    eax, eax, 01010101h     ;; the byte four times
+                mov     ah, al
+                mov     edx, eax
+                shl     eax, 16
+                or      eax, edx                ;; the byte four times; imul costs 9 to 40 clocks
                 mov     bx, cx
                 cld
                 shr     cx, 2
