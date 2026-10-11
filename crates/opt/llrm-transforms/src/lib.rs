@@ -62,7 +62,6 @@ pub mod narrowspace;
 mod narrowspace_tests;
 pub mod peel;
 pub mod phiopt;
-pub mod pinned;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;

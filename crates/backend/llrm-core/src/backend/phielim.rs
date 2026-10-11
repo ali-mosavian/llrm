@@ -65,6 +65,7 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
     // (only an edge block); an x87 value has no copy to save.
     let floating = crate::backend::ssaspill::floating(body);
 
+    let depths = crate::analysis::intervals::depths_shared(body);
     let once = _read_once(body);
     // One per predecessor->successor edge. Every move a phi becomes on
     // that edge is simultaneous with the others and with none outside it.
@@ -157,9 +158,15 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
             // A copy may run in the predecessor only when neither end needs
             // a distinct value on its other paths. Otherwise put it on its
             // actual edge.
-            if pairs.iter().any(|&(result, value)| {
-                _observed(body, &at_of, where_, block.at, result) || _observed(body, &at_of, where_, block.at, value)
-            }) {
+            // A copy goes where it runs least: on an edge leaving a loop, not
+            // in the predecessor, which runs every trip.
+            let leaves = depths.get(&where_) > depths.get(&block.at);
+            if leaves
+                || pairs.iter().any(|&(result, value)| {
+                    _observed(body, &at_of, where_, block.at, result)
+                        || _observed(body, &at_of, where_, block.at, value)
+                })
+            {
                 match split.entry((where_, block.at)).or_insert_with(|| Split::Pairs(Vec::new())) {
                     Split::Pairs(existing) => existing.extend(pairs.iter().copied()),
                     Split::Selected(_) => unreachable!("eliminated only splits pairs"),
@@ -1209,6 +1216,37 @@ mod tests {
                 after.block(at)
             );
         }
+    }
+
+    /// A loop's exit read a value the loop makes through a phi: its copy went
+    /// in the loop's last block, so it ran every trip (mandel's `mov eax, 32`),
+    /// where on the exit edge it runs once.
+    #[test]
+    fn test_a_copy_on_an_edge_leaving_a_loop_is_not_made_in_the_loop() {
+        let define = |at: i64, result: u32| {
+            Arc::new(Insn::new(
+                at,
+                Some((at, at + 1)),
+                what(Operation::Move, "mov", vec![held(result, 4)], vec![imm(1, 4)], None),
+                vec![result],
+                vec![],
+            ))
+        };
+        let leaving = body(
+            "leaves-a-loop",
+            vec![
+                block(0, vec![define(0, 1), define(1, 2), branch(2, Some((2, 3)), "jz", 2)], vec![4, 6], vec![]),
+                block(4, vec![branch(4, Some((4, 5)), "jz", 2)], vec![4, 6], vec![]),
+                block(6, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 1), (4, 2)] }]),
+            ],
+        );
+        let loop_ = leaving.blocks.iter().find(|one| one.at == 4).unwrap().insns.len();
+
+        let done = eliminated(&leaving).unwrap();
+
+        let kept = done.blocks.iter().find(|one| one.at == 4).unwrap();
+        assert_eq!(kept.insns.len(), loop_, "the loop's block gained a copy: {:?}", kept.insns);
+        assert_eq!(done.blocks.len(), leaving.blocks.len() + 1, "the exit edge has a block of its own");
     }
 
     #[test]

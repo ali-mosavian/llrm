@@ -37,7 +37,7 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, phiopt, pinned, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch,
+    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch,
     window,
 };
 
@@ -435,7 +435,9 @@ pub fn recorded(
         // is cleaned as gcc's DOM, forwprop and DCE do after `pass_ch`.
         manager.add(fold::Fold);
         manager.add(algebraic::Algebraic { size: false });
-        manager.add(pinned::Pinned);
+        // A counted exit's values are numbers where the copy made its test
+        // the one that leaves.
+        manager.add(indvars::IndVars);
         manager.add(dead::Dead);
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
