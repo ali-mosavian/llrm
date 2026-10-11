@@ -69,6 +69,7 @@ pub mod ports;
 pub mod profit;
 pub mod promote;
 pub mod rotate;
+pub mod smallunroll;
 pub mod spares;
 pub mod spill;
 pub mod splitcopy;

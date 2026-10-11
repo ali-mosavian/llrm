@@ -43,6 +43,11 @@ direction = 2*alu_rr
 # matmul (C) runs 15.5% more instructions, nbody_fixed (BASIC) 6.5% more and 19.9% more memory operands, for 71% and
 # 38% less code: this target's gate lets executed work only fall, so the larger budget stays.
 unroll_budget = 200
+# An innermost loop of at most this many instructions is unrolled this many times (a runtime count's remainder peeled) at
+# -O2 and up: gcc's i486_cost `small_unroll_ninsns` and `small_unroll_factor` (x86-tune-costs.h:361-362), read by
+# `ix86_loop_unroll_adjust` under -munroll-only-small-loops, which -O2 turns on for the x86 (docs/levels.md).
+small_unroll_insns = 4
+small_unroll_factor = 2
 
 # What each operation comes to in code bytes: the instruction's bytes, twice
 # where an operation becomes more than the instruction (the extensions, copies,

@@ -41,6 +41,11 @@ direction = 2*alu_rr
 # GCC's 200 (2633 B), still faster than gcc (17734 clocks) and clang (13144) against 11307; no other program's
 # clocks move. Change it by measuring the same two columns again.
 unroll_budget = 150
+# An innermost loop of at most this many instructions is unrolled this many times (a runtime count's remainder peeled) at
+# -O2 and up: gcc's i486_cost `small_unroll_ninsns` and `small_unroll_factor` (x86-tune-costs.h:361-362), read by
+# `ix86_loop_unroll_adjust` under -munroll-only-small-loops, which -O2 turns on for the x86 (docs/levels.md).
+small_unroll_insns = 4
+small_unroll_factor = 2
 
 # What each operation comes to in code bytes, by the convention x86-m16's table states: the instruction's bytes,
 # twice where an operation becomes more than the instruction; a call, return, branch and stack operation is the

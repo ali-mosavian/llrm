@@ -75,7 +75,7 @@ fn cost(
     Ok(Cost::Sum(terms))
 }
 
-const OPERATIONS: [&str; 33] = [
+const OPERATIONS: [&str; 35] = [
     "add",
     "multiply",
     "divide",
@@ -109,6 +109,8 @@ const OPERATIONS: [&str; 33] = [
     "copy_cell",
     "direction",
     "unroll_budget",
+    "small_unroll_insns",
+    "small_unroll_factor",
 ];
 
 impl Description {
@@ -243,6 +245,8 @@ impl Description {
                 "copy_cell" => out.copy_cell = value,
                 "direction" => out.direction = value,
                 "unroll_budget" => out.unroll_budget = value,
+                "small_unroll_insns" => out.small_unroll_insns = value,
+                "small_unroll_factor" => out.small_unroll_factor = value,
                 other => unreachable!("`{other}` was checked"),
             }
         }
@@ -254,7 +258,7 @@ impl Description {
 mod tests {
     use super::*;
 
-    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_store = fs\nfloat_release = fr\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ndirection = 2*a\nunroll_budget = 7\n";
+    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_store = fs\nfloat_release = fr\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ndirection = 2*a\nunroll_budget = 7\nsmall_unroll_insns = 4\nsmall_unroll_factor = 2\n";
 
     #[test]
     fn a_sum_is_terms_with_counts_and_signs() {

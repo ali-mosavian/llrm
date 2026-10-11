@@ -224,6 +224,13 @@ pub struct OperationCosts {
     /// it saves is boosted (`peelsize::Limits`); 0: the target states none
     /// and the pass's own is used.
     pub unroll_budget: i64,
+    /// How many instructions an innermost loop may have to be unrolled
+    /// `small_unroll_factor` times at -O2 and up, a runtime count's remainder
+    /// peeled (gcc's `-munroll-only-small-loops`, the processor costs'
+    /// `small_unroll_ninsns` and `small_unroll_factor`); 0: the target does
+    /// not.
+    pub small_unroll_insns: i64,
+    pub small_unroll_factor: i64,
 }
 
 impl OperationCosts {
@@ -305,6 +312,8 @@ impl Default for OperationCosts {
             copy_cell: 1,
             direction: 1,
             unroll_budget: 0,
+            small_unroll_insns: 0,
+            small_unroll_factor: 0,
         }
     }
 }

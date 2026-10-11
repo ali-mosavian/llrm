@@ -37,8 +37,8 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unroll_jam, unswitch,
-    window,
+    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, smallunroll, tailrec, trivialunswitch, unroll, unroll_jam,
+    unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -78,6 +78,10 @@ pub struct Options {
     /// A nest's outer loop unrolled and its inner copies fused (gcc's
     /// `-floop-unroll-and-jam`, -O3 only).
     pub unroll_jam: bool,
+    /// An innermost loop of a few instructions runs two bodies a trip (gcc's
+    /// `-munroll-only-small-loops`, which -O2 and -O3 turn on for the x86, not
+    /// -Os).
+    pub small_unroll: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -124,6 +128,7 @@ impl Default for Options {
             sibcalls: true,
             unswitch: false,
             unroll_jam: false,
+            small_unroll: true,
             copy_headers: false,
             for_size: false,
             expensive: true,
@@ -159,6 +164,7 @@ impl Options {
             sibcalls: false,
             peel: false,
             unswitch: false,
+            small_unroll: false,
             expensive: false,
             ..Self::default()
         }
@@ -211,6 +217,7 @@ impl Options {
             limits: Limits { grows: false, target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default().for_size(),
             for_size: true,
+            small_unroll: false,
             ..Self::default()
         }
     }
@@ -260,6 +267,7 @@ impl Options {
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
+            "smallunroll" => self.small_unroll,
             "fill" | "merge" => self.fill,
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
@@ -479,6 +487,11 @@ pub fn recorded(
     // there.
     if applied.options.wanted("window") {
         manager.add(window::Window { size: applied.options.prefers_size() });
+    }
+    // With the counters chosen, as gcc's `loop2_unroll` follows `ivopts` and
+    // combine: its size is what the loop comes to.
+    if applied.options.wanted("smallunroll") {
+        manager.add(smallunroll::SmallUnroll);
     }
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
