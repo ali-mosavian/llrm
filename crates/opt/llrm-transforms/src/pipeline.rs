@@ -37,7 +37,7 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
+    loopsimplify, lsr, peel, phiopt, pinned, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -434,6 +434,7 @@ pub fn recorded(
         // is cleaned as gcc's DOM, forwprop and DCE do after `pass_ch`.
         manager.add(fold::Fold);
         manager.add(algebraic::Algebraic { size: false });
+        manager.add(pinned::Pinned);
         manager.add(dead::Dead);
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
