@@ -1,7 +1,7 @@
 """Graphics primitives and text in each screen mode, on BCOM45 (BC + LINK), the llrm runtime in real mode and flat, all in
 DOSBox on virtual time: a segment's time is the emulated milliseconds its TIMER reads, `RATE` guest instructions each.
 
-    python tools/dosbatch/gfxbench/bench.py [--modes 0 1 2 ...] [--work DIR]
+    python tools/dosbatch/gfxbench/gfxbench_run.py [--modes 0 1 2 ...] [--work DIR]
 """
 
 from __future__ import annotations
