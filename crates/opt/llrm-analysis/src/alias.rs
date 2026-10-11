@@ -624,24 +624,35 @@ fn _borrowed(
 /// elsewhere, what a nonlocal reaches, what escaped before the call, and
 /// of the tracked globals what GlobalsAA says it names and what
 /// `callbacks` into the module do, all of them where that is unknown.
+///
+/// Less what a call back into the module adds (`_calling_back`'s), which is the
+/// same set for every call that may call back: whether each of the two is
+/// wanted comes back with them, and the sets are put together once for all the
+/// calls with the same others (`calls_annotated`).
 fn _unknown_visible(
     procedure: &Procedure,
     facts: &PointsTo,
     at: InstId,
     actual: &[Provenance],
-    callbacks: Option<&Summary>,
-) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
+) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>, Back), String> {
     let unit = &procedure.unit;
     let allowed = _allowed(unit, at);
     let (mut reads, mut writes) = _through_arguments(&allowed, actual);
-    let (other_reads, other_writes) = _unknown_other(unit, facts, at, callbacks)?;
+    let (other_reads, other_writes, back) = _unknown_base(unit, facts, at)?;
     if allowed.other.reads {
         reads.extend(other_reads);
     }
     if allowed.other.writes {
         writes.extend(other_writes);
     }
-    Ok((reads, writes))
+    Ok((reads, writes, Back { reads: back && allowed.other.reads, writes: back && allowed.other.writes }))
+}
+
+/// Which of a call's reads and writes a call back into the module adds to.
+#[derive(Clone, Copy, Default)]
+struct Back {
+    reads: bool,
+    writes: bool,
 }
 
 /// What a callee nobody summarized may read and write through each of `actual`,
@@ -664,22 +675,8 @@ fn _through_arguments(
     (reads, writes)
 }
 
-/// What an unsummarized callee may read and write at `at` other than
-/// through its arguments.
-fn _unknown_other(
-    unit: &Unit,
-    facts: &PointsTo,
-    at: InstId,
-    callbacks: Option<&Summary>,
-) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
-    let (mut reads, mut writes, back) = _unknown_base(unit, facts, at)?;
-    if back {
-        _calling_back(unit, callbacks, true, true, &mut reads, &mut writes);
-    }
-    Ok((reads, writes))
-}
-
-/// `_unknown_other` less what a call back into the module adds, which depends
+/// What an unsummarized callee may read and write at `at` other than through
+/// its arguments, less what a call back into the module adds, which depends
 /// on the callbacks and nothing else a revisit changes; and whether the call
 /// may call back.
 fn _unknown_base(
@@ -1659,10 +1656,22 @@ pub fn calls_annotated(
     };
 
     let mut out = IndexMap::default();
-    // Calls reaching the same slices share one list of references.
-    let mut made: HashMap<BTreeSet<Slice>, Rc<[MemRef]>> = HashMap::default();
+    // Calls reaching the same slices, and calling back or not, share one list
+    // of references.
+    let mut made: HashMap<(BTreeSet<Slice>, Option<bool>), Rc<[MemRef]>> = HashMap::default();
+    // What a call back into the module adds, put together once for the calls
+    // that ask.
+    let back: std::cell::OnceCell<(BTreeSet<Slice>, BTreeSet<Slice>)> = std::cell::OnceCell::new();
+    let added = || {
+        back.get_or_init(|| {
+            let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
+            _calling_back(&procedure.unit, callbacks, true, true, &mut reads, &mut writes);
+            (reads, writes)
+        })
+    };
     for at in procedure.sites.iter().copied() {
         let actual = _actuals(procedure, &facts, at);
+        let mut calling_back = Back::default();
         let mut effect = match callee(&at) {
             Some(callee) => {
                 // A body does no more than its call states.
@@ -1677,7 +1686,8 @@ pub fn calls_annotated(
                 effect
             }
             None => {
-                let (reads, writes) = _unknown_visible(procedure, &facts, at, &actual, callbacks)?;
+                let (reads, writes, back) = _unknown_visible(procedure, &facts, at, &actual)?;
+                calling_back = back;
                 Summary { reads, writes, ..Summary::default() }
             }
         };
@@ -1713,13 +1723,27 @@ pub fn calls_annotated(
             }
         }
         let fills = _fills(&procedure.unit, &facts, at);
-        let mut shared = |slices: BTreeSet<Slice>, typed: Vec<MemRef>| -> Rc<[MemRef]> {
+        let mut shared = |slices: BTreeSet<Slice>, typed: Vec<MemRef>, adds: Option<bool>| -> Rc<[MemRef]> {
+            // `adds`: the call back's reads (false) or writes (true) are in the
+            // list too: the two sorted runs put together, as one
+            // set of both would be.
+            let extra = adds.map(|writes| if writes { &added().1 } else { &added().0 });
             if !typed.is_empty() {
-                return slices.iter().map(reference).chain(typed).collect();
+                let all: Vec<MemRef> = match extra {
+                    Some(extra) => slices.union(extra).map(reference).collect(),
+                    None => slices.iter().map(reference).collect(),
+                };
+                return all.into_iter().chain(typed).collect();
             }
-            Rc::clone(made.entry(slices).or_insert_with_key(|slices| slices.iter().map(reference).collect()))
+            Rc::clone(made.entry((slices, adds)).or_insert_with_key(|(slices, _)| match extra {
+                Some(extra) => slices.union(extra).map(reference).collect(),
+                None => slices.iter().map(reference).collect(),
+            }))
         };
-        let (loads, stores) = (shared(effect.reads, Vec::new()), shared(effect.writes, typed));
+        let (loads, stores) = (
+            shared(effect.reads, Vec::new(), calling_back.reads.then_some(false)),
+            shared(effect.writes, typed, calling_back.writes.then_some(true)),
+        );
         out.insert(at, Effect { loads, stores, fills });
     }
     Ok(out)
