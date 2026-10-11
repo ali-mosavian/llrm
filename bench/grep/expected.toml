@@ -1,4 +1,4 @@
-reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
+reason = "a call's upper-half register clobbers now reach its callers' summaries: grep nib -O2/-Os grow 27 and 21 bytes where a long was kept in esi/edi across a call that loses its upper half (the miscompile qb's circle sweep showed)"
 blessed = "2026-10-11"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 3056
 kernel_ms = 3415.6629
 
 [nib.O2]
-code_bytes = 1448
+code_bytes = 1475
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.5804
 
 [nib.Os]
-code_bytes = 1370
+code_bytes = 1391
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.6052
