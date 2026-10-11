@@ -60,6 +60,7 @@ use crate::memory::{
 };
 use crate::ranges;
 use crate::regions::{self, ByteRange};
+use crate::sliceset::{Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
 pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::NONLOCAL));
@@ -318,8 +319,8 @@ fn _resolved_reference(
 /// object identities.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Summary {
-    pub reads: BTreeSet<Slice>,
-    pub writes: BTreeSet<Slice>,
+    pub reads: SliceSet,
+    pub writes: SliceSet,
     pub captures: BTreeSet<Option<Identity>>,
     pub unknown_read: bool,
     pub unknown_write: bool,
@@ -360,7 +361,7 @@ impl Summary {
         // A slice of a whole object, any byte of it: an address nothing placed,
         // as a pointer strength reduction made does.
         let unplaced = |one: &Slice| one.low <= -(1_i64 << 31) && one.high >= 1_i64 << 31;
-        let within = |old_unknown: bool, new_unknown: bool, old: &BTreeSet<Slice>, new: &BTreeSet<Slice>| {
+        let within = |old_unknown: bool, new_unknown: bool, old: &SliceSet, new: &SliceSet| {
             old_unknown
                 || new_unknown
                 || new
@@ -376,21 +377,27 @@ impl Summary {
         &self,
         arguments: &[Provenance],
     ) -> Summary {
-        let expand = |items: &BTreeSet<Slice>| {
-            let mut out = BTreeSet::new();
-            for item in items {
+        let expand = |items: &SliceSet| -> SliceSet {
+            // A shared run with a parameter's slice is put into the set to be
+            // instantiated with it; any other passes through as it
+            // is.
+            let mut items = items.clone();
+            if items.has_parameter_run() {
+                items.materialize();
+            }
+            items.mapped(|item, found| {
                 if item.object.kind != MemoryKind::Parameter {
-                    out.insert(item.clone());
-                    continue;
+                    found.push(*item);
+                    return;
                 }
                 let Key::Int(index) = item.object.key else {
-                    continue;
+                    return;
                 };
                 if !(0 <= index && index < arguments.len() as i64) {
-                    continue;
+                    return;
                 }
                 for actual in &arguments[index as usize].slices {
-                    out.insert(
+                    found.push(
                         Slice::new(
                             actual.object.clone(),
                             actual.low + item.low,
@@ -401,8 +408,7 @@ impl Summary {
                         .expect("two valid slices sum to a valid slice"),
                     );
                 }
-            }
-            out
+            })
         };
 
         Summary {
@@ -724,8 +730,8 @@ fn _calling_back(
     callbacks: Option<&Summary>,
     reading: bool,
     writing: bool,
-    reads: &mut BTreeSet<Slice>,
-    writes: &mut BTreeSet<Slice>,
+    reads: &mut SliceSet,
+    writes: &mut SliceSet,
 ) {
     let Some(callbacks) = callbacks else {
         if reading {
@@ -737,13 +743,13 @@ fn _calling_back(
         return;
     };
     if reading {
-        reads.extend(callbacks.reads.iter().cloned());
+        reads.absorb(&callbacks.reads);
         if callbacks.unknown_read {
             reads.extend(_tracked(unit));
         }
     }
     if writing {
-        writes.extend(callbacks.writes.iter().cloned());
+        writes.absorb(&callbacks.writes);
         if callbacks.unknown_write {
             writes.extend(_tracked(unit));
         }
@@ -815,7 +821,9 @@ impl CalledBack {
     }
 
     fn summary(&self) -> Option<Summary> {
-        Some(Summary { reads: _coalesced(&self.out.reads), writes: _coalesced(&self.out.writes), ..self.out.clone() })
+        // The run every summary that calls back holds, made once.
+        let run = |set: &SliceSet| SliceSet::shared(&Shared::of(set.coalesced().to_set()));
+        Some(Summary { reads: run(&self.out.reads), writes: run(&self.out.writes), ..self.out.clone() })
     }
 
     /// Entry `name` is now `summary`: added in when it only grew, else all
@@ -980,15 +988,25 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
             _ => None,
         })
         .collect();
-    Ok(Summary { reads, writes, captures, unknown_read, unknown_write, unknown_write_types: types })
+    Ok(Summary {
+        reads: reads.into(),
+        writes: writes.into(),
+        captures,
+        unknown_read,
+        unknown_write,
+        unknown_write_types: types,
+    })
 }
 
 fn _widen_parameters(summary: Summary) -> Summary {
-    let widened = |items: &BTreeSet<Slice>| {
-        items
-            .iter()
-            .map(|one| if one.object.kind == MemoryKind::Parameter { Slice::whole(one.object) } else { one.clone() })
-            .collect()
+    let widened = |items: &SliceSet| {
+        let mut items = items.clone();
+        if items.has_parameter_run() {
+            items.materialize();
+        }
+        items.mapped(|one, found| {
+            found.push(if one.object.kind == MemoryKind::Parameter { Slice::whole(one.object) } else { *one });
+        })
     };
     Summary { reads: widened(&summary.reads), writes: widened(&summary.writes), ..summary }
 }
@@ -1465,7 +1483,7 @@ struct Visit {
     captured: IndexMap<InstId, Option<BTreeSet<Option<Identity>>>>,
     facts: Rc<PointsTo>,
     version: Option<usize>,
-    unknown: (BTreeSet<Slice>, BTreeSet<Slice>),
+    unknown: (SliceSet, SliceSet),
     /// What the calls to something unknown may do besides calling back, with
     /// whether the reads and the writes of one that does are wanted: found
     /// once from the facts, where `unknown` is found again for each callbacks.
@@ -1559,14 +1577,15 @@ fn _summarized(
         visit.version = None;
     }
     if visit.version != Some(version) {
-        let (mut reads, mut writes, back_reads, back_writes) = visit.base.clone().expect("found above");
+        let (reads, writes, back_reads, back_writes) = visit.base.clone().expect("found above");
+        let (mut reads, mut writes) = (SliceSet::from(reads), SliceSet::from(writes));
         _calling_back(&procedure.unit, callbacks, back_reads, back_writes, &mut reads, &mut writes);
         visit.unknown = (reads, writes);
         visit.version = Some(version);
     }
     let (mut reads, mut writes) = (direct.reads.clone(), direct.writes.clone());
-    reads.extend(visit.unknown.0.iter().cloned());
-    writes.extend(visit.unknown.1.iter().cloned());
+    reads.absorb(&visit.unknown.0);
+    writes.absorb(&visit.unknown.1);
     let captures = facts
         .escaped
         .iter()
@@ -1588,18 +1607,19 @@ fn _summarized(
         if procedures.get_index_of(target).is_some_and(|callee| component[me].1 && component[me] == component[callee]) {
             effect = _widen_parameters(effect);
         }
-        reads.extend(effect.reads);
-        writes.extend(effect.writes);
+        reads.absorb(&effect.reads);
+        writes.absorb(&effect.writes);
         unknown_read |= effect.unknown_read;
         types = merged_types((unknown_write, &types), (effect.unknown_write, &effect.unknown_write_types));
         unknown_write |= effect.unknown_write;
     }
     // A callee's frame is gone when it returns: what its calls touch
     // there, like its own accesses, is no effect of calling it.
-    let (reads, writes) = (reads.into_iter().filter(outlives).collect(), writes.into_iter().filter(outlives).collect());
+    reads.retain_outliving();
+    writes.retain_outliving();
     Ok(Summary {
-        reads: _coalesced(&reads),
-        writes: _coalesced(&writes),
+        reads: reads.coalesced(),
+        writes: writes.coalesced(),
         captures,
         unknown_read,
         unknown_write,
@@ -1656,15 +1676,16 @@ pub fn calls_annotated(
     };
 
     let mut out = IndexMap::default();
-    // Calls reaching the same slices, and calling back or not, share one list
-    // of references.
-    let mut made: HashMap<(BTreeSet<Slice>, Option<bool>), Rc<[MemRef]>> = HashMap::default();
-    // What a call back into the module adds, put together once for the calls
-    // that ask.
-    let back: std::cell::OnceCell<(BTreeSet<Slice>, BTreeSet<Slice>)> = std::cell::OnceCell::new();
+    // Calls reaching the same slices share one list of references. A set's
+    // shared run is part of its key by where it is: the same run is the
+    // same slices.
+    let mut made: HashMap<(BTreeSet<Slice>, usize), Rc<[MemRef]>> = HashMap::default();
+    // What a call back into the module adds, found once for the calls that ask:
+    // the run the callbacks' summary holds.
+    let back: std::cell::OnceCell<(SliceSet, SliceSet)> = std::cell::OnceCell::new();
     let added = || {
         back.get_or_init(|| {
-            let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
+            let (mut reads, mut writes) = (SliceSet::new(), SliceSet::new());
             _calling_back(&procedure.unit, callbacks, true, true, &mut reads, &mut writes);
             (reads, writes)
         })
@@ -1678,17 +1699,17 @@ pub fn calls_annotated(
                 let allowed = _allowed(&procedure.unit, at);
                 let mut effect = callee.instantiated(&actual);
                 if !(allowed.arguments.reads || allowed.other.reads) {
-                    (effect.reads, effect.unknown_read) = (BTreeSet::new(), false);
+                    (effect.reads, effect.unknown_read) = (SliceSet::new(), false);
                 }
                 if !(allowed.arguments.writes || allowed.other.writes) {
-                    (effect.writes, effect.unknown_write) = (BTreeSet::new(), false);
+                    (effect.writes, effect.unknown_write) = (SliceSet::new(), false);
                 }
                 effect
             }
             None => {
                 let (reads, writes, back) = _unknown_visible(procedure, &facts, at, &actual)?;
                 calling_back = back;
-                Summary { reads, writes, ..Summary::default() }
+                Summary { reads: reads.into(), writes: writes.into(), ..Summary::default() }
             }
         };
         if effect.unknown_read {
@@ -1723,27 +1744,20 @@ pub fn calls_annotated(
             }
         }
         let fills = _fills(&procedure.unit, &facts, at);
-        let mut shared = |slices: BTreeSet<Slice>, typed: Vec<MemRef>, adds: Option<bool>| -> Rc<[MemRef]> {
-            // `adds`: the call back's reads (false) or writes (true) are in the
-            // list too: the two sorted runs put together, as one
-            // set of both would be.
-            let extra = adds.map(|writes| if writes { &added().1 } else { &added().0 });
+        if calling_back.reads {
+            effect.reads.absorb(&added().0);
+        }
+        if calling_back.writes {
+            effect.writes.absorb(&added().1);
+        }
+        let mut shared = |slices: SliceSet, typed: Vec<MemRef>| -> Rc<[MemRef]> {
             if !typed.is_empty() {
-                let all: Vec<MemRef> = match extra {
-                    Some(extra) => slices.union(extra).map(reference).collect(),
-                    None => slices.iter().map(reference).collect(),
-                };
-                return all.into_iter().chain(typed).collect();
+                return slices.iter().map(reference).chain(typed).collect();
             }
-            Rc::clone(made.entry((slices, adds)).or_insert_with_key(|(slices, _)| match extra {
-                Some(extra) => slices.union(extra).map(reference).collect(),
-                None => slices.iter().map(reference).collect(),
-            }))
+            let run = slices.base().map_or(0, |run| Rc::as_ptr(run) as usize);
+            Rc::clone(made.entry((slices.own().clone(), run)).or_insert_with(|| slices.iter().map(reference).collect()))
         };
-        let (loads, stores) = (
-            shared(effect.reads, Vec::new(), calling_back.reads.then_some(false)),
-            shared(effect.writes, typed, calling_back.writes.then_some(true)),
-        );
+        let (loads, stores) = (shared(effect.reads, Vec::new()), shared(effect.writes, typed));
         out.insert(at, Effect { loads, stores, fills });
     }
     Ok(out)

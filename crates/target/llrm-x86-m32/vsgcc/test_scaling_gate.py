@@ -876,3 +876,27 @@ def test_call_effects_do_not_build_the_modules_callbacks_again_for_each_call(tmp
     small, big = (own[label].get("analysis call-effects", 0.0) - own["empty"].get("analysis call-effects", 0.0) for label in ("n", "2n"))
     assert small > 5.0, f"premise: call-effects ran ({small:.1f} Minstr)"
     assert big <= 2.8 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_a_summary_of_a_function_that_calls_back_does_not_hold_the_callbacks_as_a_set_of_its_own(tmp_path):
+    """150 functions whose addresses are taken (callbacks writing a global each) and 100 functions that each call through a pointer, which may
+    call back: each one's summary held the callbacks' 150 slices in a tree set of its own, built, compared, filtered and coalesced at every
+    visit of the fixed point, and instantiated at every call. `summaries visit` read 321 Minstr; the callbacks held as the one run every
+    summary refers to: 11.5. A bound of 60 fails the first and passes the second with a margin of five."""
+
+    def program(callbacks, callers):
+        out = ["extern void report(long value);\n"]
+        for i in range(callbacks):
+            out.append(f"int g{i};\nstatic void cb{i}(void) {{ g{i} += {i + 1}; }}\n")
+        out.append("void (*table[%d])(void) = {%s};\n" % (callbacks, ",".join(f"cb{i}" for i in range(callbacks))))
+        out.append("void (*hook)(void);\n")
+        out += [f"long run{j}(int k) {{ hook(); return g{j % callbacks} + k; }}\n" for j in range(callers)]
+        out.append("int main(void) { long t = 0;\n" + "".join(f"    t += run{j}({j});\n" for j in range(callers)))
+        out.append("    report(t); return 0; }\n")
+        return "".join(out)
+
+    source = tmp_path / "callers.c"
+    source.write_text(program(150, 100))
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["summaries visit"] > 1.0, f"premise: the fixed point visited ({own['summaries visit']:.1f} Minstr)"
+    assert own["summaries visit"] <= 60.0, f"{own['summaries visit']:.1f} Minstr"

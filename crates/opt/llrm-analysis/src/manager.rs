@@ -495,8 +495,8 @@ fn moved(
     to: &Module,
 ) -> Summary {
     let mut out = summary.clone();
-    out.reads = carried(&summary.reads, from, to, &mut out.unknown_read);
-    out.writes = carried(&summary.writes, from, to, &mut out.unknown_write);
+    out.reads = carried(&summary.reads, from, to, &mut out.unknown_read).into();
+    out.writes = carried(&summary.writes, from, to, &mut out.unknown_write).into();
     // A global reached as unknown memory has no access type here.
     if out.unknown_write {
         out.unknown_write_types = None;
@@ -505,7 +505,7 @@ fn moved(
 }
 
 fn carried(
-    slices: &BTreeSet<Slice>,
+    slices: &crate::sliceset::SliceSet,
     from: &Module,
     to: &Module,
     unknown: &mut bool,
