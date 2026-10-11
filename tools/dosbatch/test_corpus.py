@@ -62,3 +62,13 @@ def test_missing_and_offline_says_so(monkeypatch, tmp_path):
 def test_the_pinned_dickens_is_the_one_silesia_publishes():
     assert corpus.CORPORA["dickens"].size == 10192446
     assert len(corpus.CORPORA["dickens"].sha256) == 64
+
+
+def test_the_signal_is_generated_offline_to_its_pinned_hash(monkeypatch, tmp_path):
+    """The STFT benches' input has no site: it is built here, and a generator that drifts is Unavailable, not another signal."""
+    monkeypatch.setattr(corpus, "CACHE", tmp_path / "cache")
+    assert len(corpus.path("signal").read_bytes()) == 131072
+    monkeypatch.setitem(corpus.CORPORA, "signal", corpus.Corpus("0" * 64, 131072, (), lambda: b"x"))
+    (tmp_path / "cache" / "signal").unlink()
+    with pytest.raises(corpus.Unavailable, match="pinned"):
+        corpus.path("signal")

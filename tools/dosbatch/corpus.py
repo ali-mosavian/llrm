@@ -8,11 +8,17 @@ from __future__ import annotations
 import bz2
 import io
 import os
+import sys
 import hashlib
 import zipfile
 import urllib.request
+from typing import Callable
 from pathlib import Path
 from dataclasses import dataclass
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import signal_gen  # noqa: E402
 
 CACHE = Path(os.environ.get("LLRM_BENCH_CACHE", Path.home() / ".cache" / "llrm-bench"))
 
@@ -26,6 +32,7 @@ class Corpus:
     sha256: str
     size: int
     sources: tuple[str, ...]  # tried in order; .bz2 and .zip are unpacked
+    make: Callable[[], bytes] | None = None  # a corpus no site holds: built here, as the pinned hash says
 
 
 CORPORA = {
@@ -34,7 +41,9 @@ CORPORA = {
         "b24c37886142e11d0ee687db6ab06f936207aa7f2ea1fd1d9a36763c7a507e6a",
         10192446,
         ("https://sun.aei.polsl.pl/~sdeor/corpus/dickens.bz2", "https://github.com/MiloszKrajewski/SilesiaCorpus/raw/master/dickens.zip"),
-    )
+    ),
+    # The STFT benches' input (signal_gen.py): 65536 samples of two sines and a chirp.
+    "signal": Corpus("aa839ae4edb98a8e4fb3f2415e616ec4389e0b4329fcbac8e63fad2eaf26d82f", 131072, (), signal_gen.signal),
 }
 
 
@@ -53,6 +62,11 @@ def unpack(source: str, data: bytes, name: str) -> bytes:
 
 def fetch(name: str, corpus: Corpus) -> bytes:
     """The corpus's bytes from the first source that gives the pinned hash."""
+    if corpus.make:
+        data = corpus.make()
+        if digest(data) != corpus.sha256:
+            raise Unavailable(f"{name}: the generator's SHA-256 {digest(data)} is not the pinned {corpus.sha256}")
+        return data
     problems = []
     for source in corpus.sources:
         try:
