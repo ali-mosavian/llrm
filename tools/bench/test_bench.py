@@ -373,12 +373,11 @@ class CSourceTests(unittest.TestCase):
             self.assertEqual(bench.c_source(source), b"// a comment\nint main(void) { return 0; }\n")
 
 
-def test_reference_builds_find_bench_io_beside_the_copied_source(tmp_path):
-    """jpeg.c includes "../bench_io.h": the references compile a copy in work/<ref>/, where the header was missing, so BC and TC had no row."""
-    folder = tmp_path / "bcc" / "O2"
-    folder.mkdir(parents=True)
-    bench.stage_shared_headers(folder)
-    assert (folder.parent / "bench_io.h").read_bytes() == (bench.BENCH / "bench_io.h").read_bytes()
+def test_reference_builds_find_bench_io_in_the_volume_root(tmp_path):
+    """jpeg.c includes "../bench_io.h", which a DOS volume's root cannot name: the Borland builds' copy includes it beside the source, and BC and TC had no row."""
+    text = bench.stage_shared_headers(tmp_path, b'#include "../bench_io.h"\nint x;\n')
+    assert text == b'#include "bench_io.h"\nint x;\n'
+    assert (tmp_path / "bench_io.h").read_bytes() == (bench.BENCH / "bench_io.h").read_bytes()
 
 
 def test_llrm_c_benches_find_the_os_layer_header(tmp_path):

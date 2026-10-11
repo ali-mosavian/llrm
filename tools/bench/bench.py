@@ -216,7 +216,7 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
     flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
-    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
+    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
     try:
@@ -240,10 +240,11 @@ def c_source(path: Path) -> bytes:
     return b"".join(lines[head:])
 
 
-def stage_shared_headers(folder: Path) -> None:
-    """The benches' shared headers, beside `folder`: a program's `#include "../bench_io.h"` finds them there as it does in bench/, and
-    the references compile a copy of the source in `folder`."""
-    shutil.copy(BENCH / "bench_io.h", folder.parent / "bench_io.h")
+def stage_shared_headers(folder: Path, text: bytes) -> bytes:
+    """`text`, a program's source, as it builds in `folder` (a DOS volume's root, which has no `..`): the benches' shared header
+    beside it, and `#include "../bench_io.h"` naming it there."""
+    shutil.copy(BENCH / "bench_io.h", folder / "bench_io.h")
+    return text.replace(b'"../bench_io.h"', b'"bench_io.h"')
 
 
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
@@ -253,9 +254,8 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
     home, compiler, levels = BORLAND[language]
     folder = work / f"{language}{opt}"
     folder.mkdir(parents=True)
-    stage_shared_headers(folder)
     for variant, stem in variants_:
-        text = c_source(variant.source)
+        text = stage_shared_headers(folder, c_source(variant.source))
         if home.name == "tc201":  # TC 2.01 reads a `#` after a bare LF as an illegal character: every program with a #define failed
             text = text.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         (folder / f"{stem}.c").write_bytes(text)
