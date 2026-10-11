@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::dense::IdMap;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 
@@ -302,6 +302,55 @@ thread_local! {
 /// 4.3x a doubling on `branches`). gcc's `calculate_live_on_exit` and LLVM's
 /// `LiveVariables` both walk from each use.
 pub fn live(function: &Function) -> Liveness {
+    let found = solved(function, &|_| true);
+    #[cfg(test)]
+    assert_eq!(found, live_dense(function), "liveness from the uses is not the bit-set fixed point");
+    found
+}
+
+/// `live` of the values `wanted` says only: each is live where it is in the
+/// whole, the others are in no set. A caller that asks of a few values (the
+/// phis a pass takes for cells) is not charged for the live sets of every value
+/// in the function.
+pub fn live_where(
+    function: &Function,
+    wanted: &dyn Fn(ValueId) -> bool,
+) -> Liveness {
+    // A phi's arm is live where the phi is: following a wanted arm needs the
+    // liveness of the phi that takes it, and of the phis that take that
+    // one.
+    let mut needed: IdSet<ValueId> = function
+        .walk()
+        .filter_map(|(_, inst)| function.instruction(inst).result)
+        .chain(function.parameters().iter().copied())
+        .filter(|value| wanted(*value))
+        .collect();
+    let phis: Vec<&Instruction> =
+        function.walk().map(|(_, inst)| function.instruction(inst)).filter(|one| one.opcode == Opcode::Phi).collect();
+    let mut grown = true;
+    while grown {
+        grown = false;
+        for phi in &phis {
+            let Some(result) = phi.result else { continue };
+            if !needed.contains(&result)
+                && phi.operands.chunks(2).any(|pair| matches!(pair[0], Operand::Value(arm) if needed.contains(&arm)))
+            {
+                needed.insert(result);
+                grown = true;
+            }
+        }
+    }
+    let mut found = solved(function, &|value| needed.contains(&value));
+    for set in found.live_in.values_mut().chain(found.live_out.values_mut()) {
+        set.retain(|value| wanted(*value));
+    }
+    found
+}
+
+fn solved(
+    function: &Function,
+    wanted: &dyn Fn(ValueId) -> bool,
+) -> Liveness {
     SOLVES.with(|solves| solves.set(solves.get() + 1));
     let layout = function.layout();
     let mut at_index = IdMap::<BlockId, usize>::new();
@@ -347,7 +396,7 @@ pub fn live(function: &Function) -> Liveness {
     let mut pending = Vec::new();
     for (position, &block) in layout.iter().enumerate() {
         for value in _exposed(function, block) {
-            if position != 0 || !arriving.contains(&value) {
+            if wanted(value) && (position != 0 || !arriving.contains(&value)) {
                 pending.push(Reach::After(position, value));
             }
         }
@@ -370,7 +419,7 @@ pub fn live(function: &Function) -> Liveness {
                     // Each edge brings the phi's arm from its own block.
                     for phi in blocks[position].0.iter().filter(|phi| phi.result == Some(value)) {
                         for &from in &predecessors[position] {
-                            if let Some(arm) = arm(phi, layout[from]) {
+                            if let Some(arm) = arm(phi, layout[from]).filter(|arm| wanted(*arm)) {
                                 pending.push(Reach::Out(from, arm));
                             }
                         }
@@ -387,8 +436,6 @@ pub fn live(function: &Function) -> Liveness {
             after.remove(&result);
         }
     }
-    #[cfg(test)]
-    assert_eq!(found, live_dense(function), "liveness from the uses is not the bit-set fixed point");
     found
 }
 
@@ -660,6 +707,44 @@ join:
         assert!(!live_in(&module, &found, "join", "y"));
         assert!(live_out(&module, &found, "right", "z"));
         assert!(!live_out(&module, &found, "left", "z"), "only the right edge carries it");
+    }
+
+    /// `homes` took the liveness of every value in a function to read that of
+    /// its phis: the sets of every value built (43% of `mir homes` on a
+    /// function of 256 joins). Asked of some values, each is live where it
+    /// is in the whole and no other is in any set.
+    #[test]
+    fn test_the_liveness_of_some_values_is_theirs_in_the_whole_and_nothing_else() {
+        let (module, whole) = facts(
+            "define i16 @f(i1 %c, i16 %x) {
+top:
+  %y = add i16 %x, 1
+  br i1 %c, label %left, label %right
+
+left:
+  br label %join
+
+right:
+  %z = add i16 %y, 1
+  br label %join
+
+join:
+  %r = phi i16 [ 0, %left ], [ %z, %right ]
+  %w = add i16 %r, %y
+  ret i16 %w
+}
+",
+        );
+        let f = function(&module, "f");
+        let (y, z) = (value(f, "y"), value(f, "z"));
+        let some = live_where(f, &|one| one == y || one == z);
+        for (blocks, kept) in [(&whole.live_in, &some.live_in), (&whole.live_out, &some.live_out)] {
+            for (at, live) in blocks {
+                let wanted: Vec<ValueId> = live.iter().copied().filter(|one| *one == y || *one == z).collect();
+                assert_eq!(kept[at].iter().copied().collect::<Vec<_>>(), wanted, "block {at}");
+            }
+        }
+        assert!(some.live_in.values().chain(some.live_out.values()).flatten().all(|one| *one == y || *one == z));
     }
 
     #[test]
