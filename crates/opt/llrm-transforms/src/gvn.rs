@@ -93,6 +93,17 @@ impl FunctionPass for Gvn {
     }
 }
 
+/// Whether the call `inst` of `function` reads and writes nothing.
+fn silent(
+    context: &llrm_mir::context::Context,
+    outer: &Outer,
+) -> impl Fn(&Function, InstId) -> bool {
+    move |function, inst| {
+        let effects = llrm_mir::memory::of(context, outer.callees(), function, inst);
+        !effects.reads && !effects.writes
+    }
+}
+
 /// Number values, reuse dominating providers, and complete join PRE;
 /// whether anything changed. `outer` is what the analyses read of the
 /// module and target, `accesses` what each instruction of `unit` touches,
@@ -241,7 +252,10 @@ fn _numbered(
         )?;
         let subexpressed =
             transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
-        Ok((function, (forwarded || subexpressed, subexpressed)))
+        // Equal calls that touch nothing are one, after the arithmetic that
+        // makes their arguments equal.
+        let called = transform::equal_calls(&mut function, &silent(unit.context, outer))?;
+        Ok((function, (forwarded || subexpressed || called, subexpressed || called)))
     };
     let crossing = numbered(unit.function, false)?;
     let price = |one: &Function| {

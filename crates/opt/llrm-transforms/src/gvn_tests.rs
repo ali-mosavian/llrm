@@ -926,3 +926,44 @@ b0:
     let after = managed(text);
     assert!(!after.contains("load i16"), "the load survives: {after}");
 }
+
+/// Two calls with the same arguments to a function that touches no memory are
+/// one call, as LLVM's GVN numbers a call that `doesNotAccessMemory` and gcc's
+/// FRE a const function's. A callee that reads or writes, an argument that
+/// differs, or another callee keeps both. hanoi's `hanoi(n - 1) + 1 +
+/// hanoi(n - 1)` was two recursions, 2^13 calls for what one makes.
+#[test]
+fn test_equal_calls_to_a_function_that_touches_no_memory_are_one() {
+    let calls = |attrs: &str, second: &str, callee: &str| {
+        numbered(&format!(
+            "@g = global i16 0
+
+define i16 @h(i16 %n) {attrs} {{
+b0:
+  %m = mul i16 %n, 3
+  ret i16 %m
+}}
+
+define i16 @k(i16 %n) {attrs} {{
+b0:
+  %m = mul i16 %n, 5
+  ret i16 %m
+}}
+
+define i16 @f(i16 %x, i16 %y) {{
+b0:
+  %a = call i16 @h(i16 %x)
+  %b = call i16 @{callee}(i16 {second})
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        ))
+    };
+    let count = |text: &str| text.lines().filter(|line| line.contains("call i16 @")).count();
+    assert_eq!(count(&calls("memory(none)", "%x", "h")), 1);
+    assert_eq!(count(&calls("memory(none)", "%y", "h")), 2, "another argument is another call");
+    assert_eq!(count(&calls("memory(none)", "%x", "k")), 2, "another callee is another call");
+    assert_eq!(count(&calls("memory(read)", "%x", "h")), 2, "a callee that reads is not numbered here");
+    assert_eq!(count(&calls("", "%x", "h")), 2, "nor one that says nothing");
+}
