@@ -1854,6 +1854,14 @@ pub fn bounded_solved(
         if !counted && boxes.is_empty() {
             continue;
         }
+        // A box holds wherever the header's phi is read, the header itself
+        // too, though the trip's counts there stop short of the exit value:
+        // a rotated loop computes in its header what the loop tested before.
+        let at_header = (!inside.contains(&loop_.header) && !boxes.is_empty()).then(|| {
+            let mut held = declared_arguments(unit);
+            held.extend(boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
+            closed(held)
+        });
         known.extend(boxes);
         // The header's values too: seen from inside, they are the trip's,
         // though the header itself also sees the exit value.
@@ -1865,6 +1873,16 @@ pub fn bounded_solved(
             for (value, interval) in scoped.iter() {
                 if narrow_to(destination, value, interval) {
                     dead.insert(at);
+                }
+            }
+        }
+        if let Some(held) = at_header {
+            let held_id = fresh_known();
+            let scoped = scope_at(loop_.header, &held, held_id, true)?;
+            let destination = Rc::make_mut(result.entry(loop_.header).or_default());
+            for (value, interval) in scoped.iter() {
+                if narrow_to(destination, value, interval) {
+                    dead.insert(loop_.header);
                 }
             }
         }
@@ -1973,7 +1991,11 @@ fn inductive_boxes(
         assumed.extend(boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
         let assumed = closed(assumed);
         let assumed_id = fresh_known();
-        let mut scopes = BTreeMap::new();
+        // What holds as each latch leaves for the header: the scope at its end
+        // with its branch's condition applied, as SCEV takes a loop's exit
+        // count from the latch test. A rotated loop's counter is bounded by
+        // the test after its step, which the block's own scope does not hold.
+        let mut scopes: BTreeMap<i64, Option<Intervals>> = BTreeMap::new();
         let mut grown = false;
         let mut dropped = Vec::new();
         for (phi, width, _, latches) in &candidates {
@@ -1982,9 +2004,13 @@ fn inductive_boxes(
             let mut known_all = true;
             for (latch, value) in latches {
                 if !scopes.contains_key(latch) {
-                    scopes.insert(*latch, scope_at(*latch, &assumed, assumed_id, false)?);
+                    let at_latch = scope_at(*latch, &assumed, assumed_id, false)?;
+                    let leaving = on_edge(unit, cfg::block(*latch), header, &at_latch, Some(facts))?;
+                    scopes.insert(*latch, leaving);
                 }
-                match _operand(unit, *value, &scopes[latch], facts).filter(|interval| interval.width == *width) {
+                // An edge no execution takes brings no value round.
+                let Some(scope) = &scopes[latch] else { continue };
+                match _operand(unit, *value, scope, facts).filter(|interval| interval.width == *width) {
                     Some(interval) => {
                         wanted.low = wanted.low.min(interval.low);
                         wanted.high = wanted.high.max(interval.high);
