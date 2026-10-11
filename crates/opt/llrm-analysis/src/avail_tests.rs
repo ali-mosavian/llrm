@@ -577,7 +577,9 @@ fn a_dead_store_solve_picks_no_buckets_where_nothing_is_overwritten_yet() {
     let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), None);
     let picked = crate::regions::PICKED.with(|picked| picked.get().0) - before;
     assert_eq!(removed, vec![]);
-    assert_eq!(picked, 0, "{picked} bucket picks for 12 loads after which nothing is overwritten");
+    // The one store's cell is compared with its bucket's, two ways; the loads
+    // pick none.
+    assert_eq!(picked, 2, "{picked} bucket picks for 12 loads after which nothing is overwritten");
 }
 
 /// `memory_providers` compared each missing load's cell with every group of

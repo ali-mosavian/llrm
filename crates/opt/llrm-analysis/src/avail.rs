@@ -196,8 +196,12 @@ impl Stored {
                 .for_each(|&one| test(one)),
         }
         if llrm_support::env_set("LLRM_CHECK_CLOBBERS") {
-            let all = (0..self.cells.len()).filter(|&one| related(&self.cells[at], &self.cells[one])).collect::<Vec<_>>();
-            assert!(found.iter().collect::<Vec<_>>() == all, "LLRM_CHECK_CLOBBERS: cells sharing bytes were in no shared bucket");
+            let all =
+                (0..self.cells.len()).filter(|&one| related(&self.cells[at], &self.cells[one])).collect::<Vec<_>>();
+            assert!(
+                found.iter().collect::<Vec<_>>() == all,
+                "LLRM_CHECK_CLOBBERS: cells sharing bytes were in no shared bucket"
+            );
         }
         let found = Rc::new(found);
         memo.borrow_mut()[at] = Some(found.clone());
@@ -308,10 +312,18 @@ impl Solve<'_, '_> {
 
             // Anything this reads or writes puts the cells it may touch back in
             // doubt.
-            let reached = self.reached(inst, loads, stores);
-            if !overwritten.is_empty() && reached.all.intersects(&overwritten) {
-                for (reference, cells) in loads.iter().chain(stores).zip(&reached.each) {
-                    self.clobber(&mut overwritten, inst, cells, reference, shielded && (call || !reference.named()));
+            if !overwritten.is_empty() {
+                let reached = self.reached(inst, loads, stores);
+                if reached.all.intersects(&overwritten) {
+                    for (reference, cells) in loads.iter().chain(stores).zip(&reached.each) {
+                        self.clobber(
+                            &mut overwritten,
+                            inst,
+                            cells,
+                            reference,
+                            shielded && (call || !reference.named()),
+                        );
+                    }
                 }
             }
             // What a call fills it writes before reading, unless it may read it
@@ -402,7 +414,8 @@ impl Solve<'_, '_> {
         let mut live = reached.clone();
         live.intersect_with(overwritten);
         for at in live.iter() {
-            if self.within(inst, reference, at, unnamed) && may_clobber(self.unit, None, &self.stored.cells[at], reference)
+            if self.within(inst, reference, at, unnamed)
+                && may_clobber(self.unit, None, &self.stored.cells[at], reference)
             {
                 overwritten.remove(at);
             }
