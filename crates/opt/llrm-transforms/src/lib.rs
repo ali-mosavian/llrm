@@ -30,7 +30,6 @@ pub mod exitsink;
 pub mod expand;
 pub mod fill;
 pub mod fixednarrow;
-pub mod pinned;
 pub mod floatfold;
 pub mod floatloop;
 pub mod fold;
@@ -63,6 +62,7 @@ pub mod narrowspace;
 mod narrowspace_tests;
 pub mod peel;
 pub mod phiopt;
+pub mod pinned;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;

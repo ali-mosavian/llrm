@@ -6,7 +6,6 @@
 //! its phi copy is no longer the old counter kept alive past its step.
 
 use llrm_analysis::cfg;
-use llrm_analysis::consts::{self, Calls};
 use llrm_analysis::manager::Held;
 use llrm_analysis::ranges;
 use llrm_mir::footprint::Footprint;
@@ -44,7 +43,7 @@ impl FunctionPass for Pinned {
             );
             let view = held.unit(unit.context, unit.layout, unit.function, analyses.outer());
             let function = view.function;
-            let facts = consts::known_walked(&view, &Calls::default());
+            let facts = view.registers();
             let Ok(bounds) = ranges::bounds(&view) else { return PreservedAnalyses::all() };
             let mut found = Vec::new();
             for &block in function.layout() {
@@ -80,7 +79,10 @@ impl FunctionPass for Pinned {
     }
 }
 
-fn to_i128(number: &BigInt, _width: u32) -> i128 {
+fn to_i128(
+    number: &BigInt,
+    _width: u32,
+) -> i128 {
     i128::try_from(number.clone()).expect("an interval of at most 64 bits")
 }
 

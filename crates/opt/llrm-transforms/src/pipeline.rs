@@ -37,7 +37,8 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, phiopt, pinned, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
+    loopsimplify, lsr, peel, phiopt, pinned, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch,
+    window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
