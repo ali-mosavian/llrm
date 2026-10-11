@@ -202,8 +202,10 @@ class StallTests(unittest.TestCase):
         import subprocess
         import sys
 
+        # Stuck is spinning without a report: stall counts the emulator's CPU seconds (test_hostload.py has the one that
+        # only waits).
         with tempfile.TemporaryDirectory() as where:
             began = time.monotonic()
             with self.assertRaises(subprocess.TimeoutExpired):
-                dosbatch._launch([sys.executable, "-c", "import time; time.sleep(60)"], Path(where), None, 1 << 20, stall=2, cwd=where)
+                dosbatch._launch([sys.executable, "-c", "while True: pass"], Path(where), None, 1 << 20, stall=2, cwd=where)
             self.assertLess(time.monotonic() - began, 20)

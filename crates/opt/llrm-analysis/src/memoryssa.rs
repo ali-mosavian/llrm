@@ -682,7 +682,18 @@ pub struct MemorySSA<'a> {
     /// over.
     index: std::cell::RefCell<Option<Rc<FrameIndex>>>,
     taken: std::cell::Cell<usize>,
+    /// While a walk is bounded (`nearest_writes`): the most writes it collects
+    /// before it stops.
+    limit: std::cell::Cell<Option<usize>>,
 }
+
+/// The nearest writes a walk collects for a caller that serves a load from
+/// them: past this it stops and the caller serves nothing. A scalar written in
+/// each arm of N joins is reached by N of them, N^2 over the body (`joins` 256:
+/// 10% of the compile). LLVM's walker stops at `memssa-check-limit` (100)
+/// checks, gcc's value numbering at `sccvn-max-alias-queries-per-access`
+/// (1000).
+pub const MAX_NEAREST_WRITES: usize = 100;
 
 impl MemorySSA<'_> {
     /// This graph with the register constants `known` tells, as the
@@ -745,6 +756,20 @@ impl MemorySSA<'_> {
         memory: &MemRef,
     ) -> BTreeSet<usize> {
         self.frontier_for(site, memory, None, None, None, false)
+    }
+
+    /// `clobbers_ignoring_invariance`, stopped once more than
+    /// `MAX_NEAREST_WRITES` are found: a set longer than that is incomplete,
+    /// and its length is all a caller reads of it.
+    pub fn nearest_writes(
+        &self,
+        site: InstId,
+        memory: &MemRef,
+    ) -> BTreeSet<usize> {
+        self.limit.set(Some(MAX_NEAREST_WRITES));
+        let found = self.frontier_for(site, memory, None, None, None, false);
+        self.limit.set(None);
+        found
     }
 
     /// Whether a dominating earlier read's memory state still applies.
@@ -932,9 +957,10 @@ impl MemorySSA<'_> {
     ) -> BTreeSet<usize> {
         let found = self.walked(site, memory, boundary, edge, edge_memory, true, honor);
         if check_jumps() {
-            assert_eq!(
-                found,
-                self.walked(site, memory, boundary, edge, edge_memory, false, honor),
+            let stepped = self.walked(site, memory, boundary, edge, edge_memory, false, honor);
+            let cut = self.limit.get().is_some_and(|limit| found.len() > limit && stepped.len() > limit);
+            assert!(
+                found == stepped || cut,
                 "LLRM_CHECK_JUMPS: a walk that jumps found other than a walk step by step"
             );
         }
@@ -1122,6 +1148,9 @@ impl MemorySSA<'_> {
             chain.clear();
         };
         while let Some(current) = pending.pop() {
+            if self.limit.get().is_some_and(|limit| found.len() > limit) {
+                break;
+            }
             self.taken.set(self.taken.get() + 1);
             #[cfg(test)]
             STEPS.with(|steps| steps.set(steps.get() + 1));
@@ -1391,6 +1420,7 @@ pub fn built<'a>(
         exacts,
         index: Default::default(),
         taken: Default::default(),
+        limit: Default::default(),
     }
 }
 

@@ -119,7 +119,7 @@ def adler(data: bytes) -> int:
     for byte in data:
         a = (a + byte) % 65521
         b = (b + a) % 65521
-    value = b * 65536 + a
+    value = (b << 16) + a
     return value - (1 << 32) if value >= 1 << 31 else value
 
 
