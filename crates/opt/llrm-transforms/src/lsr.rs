@@ -284,6 +284,19 @@ pub fn reduced(
                 done.remove(&loop_.header);
                 continue;
             }
+            // A counter some trips step has no candidate (it is no function of
+            // the trip): where the target's address takes no scale, the pointer
+            // that moves with it is made first, and the loop chosen again.
+            if !size && let Some(plan) = crate::mirror::found(&view, &loop_, &target.forms) {
+                drop(facts);
+                crate::mirror::applied(unit.context, unit.function, &plan);
+                dead::dead(unit.context, outer.callees(), unit.function);
+                analyses.invalidate(unit.function, &PreservedAnalyses::none());
+                whole = Whole::default();
+                changed = true;
+                done.remove(&loop_.header);
+                continue;
+            }
             let pressure = analyses.get::<spill::Pressure>(unit.context, unit.layout, unit.function);
             let (context, layout, function) = (&*unit.context, unit.layout, &*unit.function);
             let mut products = || analyses.get::<Products>(context, layout, function);

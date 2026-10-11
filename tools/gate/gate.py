@@ -155,7 +155,9 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     cfg = load()
     pkgs = packages()
     live = [f for f in files if not matches(f, cfg["inert"]["paths"])]
-    shared = [f for f in live if matches(f, cfg["shared"]["paths"])]
+    # Nothing of the compiler changed: the steps that cover the files that did, whatever the shared tests and tools are.
+    narrow = forced == "auto" and not any(matches(f, cfg["compiler"]["paths"]) for f in live)
+    shared = [] if narrow else [f for f in live if matches(f, cfg["shared"]["paths"])]
     unknown = [f for f in live if f not in shared and not matches(f, cfg["plain"]["paths"])]
     if forced != "auto":
         tier, reason = forced, "asked for"
@@ -171,6 +173,8 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     touched = {crate_of(f, pkgs) for f in live} - {None}
     cargo = any(not f.startswith("tools/") or f.startswith("tools/bench/") for f in live)
     p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"} | reading(cfg, pkgs, live))  # the root crate enables features (llrm-c's toolchain) the others lack alone
+    if narrow:
+        return narrowed(p, cfg, live)
     steps = []
     if cargo or p.tier == "full":
         steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture"]
@@ -206,6 +210,84 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     return p
 
 
+def data_dir(path: str) -> str | None:
+    """The directory of inputs `path` belongs to (bench/, examples/, tests/run/, runtime/, ...): what other files read it by, or None for code."""
+    top, _, rest = path.partition("/")
+    if top in ("crates", "src", "tools", "docs") or not rest:
+        return None
+    return "tests/run" if path.startswith("tests/run/") else top if top != "tests" else None
+
+
+def step_of_source(path: str, cfg: dict) -> str | None:
+    """The step that runs the tests in `path`, or None where none does."""
+    name = Path(path).stem
+    if path.startswith("tests/") and path.endswith(".rs") and "/" not in path[len("tests/"):]:
+        whole = {**{v: k for k, v in cfg["whole"].items()}, **{v: k for k, v in cfg["exclusive"].items()}}
+        return whole.get(name, "integration")
+    if path.startswith("crates/") and "/tests/" in path and path.endswith(".rs"):
+        return "crate-tests"
+    if path.startswith("crates/") and path.endswith(".rs"):
+        return "lib"
+    if path.endswith(".py") and (path.startswith("tests/") or Path(path).name.startswith("test_")):
+        return "pytest-programs" if name in ("test_programs_compile", "test_loops", "test_innerloops") else "pytest"
+    return None
+
+
+@functools.cache
+def sources() -> dict[str, str]:
+    """Every file a step's tests are in, with its text: the Rust and Python files under tests/ and crates/, and the tests under tools/."""
+    out = {}
+    for pattern in ("tests/*.rs", "tests/*.py", "crates/**/*.rs", "tools/**/test_*.py"):
+        for f in sorted(ROOT.glob(pattern)):
+            if "target" not in f.parts:
+                out[str(f.relative_to(ROOT))] = f.read_text(errors="replace")
+    return out
+
+
+def readers(directory: str, cfg: dict) -> set[str]:
+    """The steps whose tests name `directory` (as `"bench"` or `bench/...`): the steps that read what is in it, found in the tests and not
+    listed. A benchmark merged on its own runs broke pytest-programs, measure and the integration tests that iterate bench/ (#1458)."""
+    mention = re.compile(rf"(?<![\w./-]){re.escape(directory)}(?:/|[\"'])")
+    return {step for path, text in sources().items() if mention.search(text) and (step := step_of_source(path, cfg))}
+
+
+def narrowed(p: Plan, cfg: dict, live: list[str]) -> Plan:
+    """The steps for a diff with none of the compiler's source: each covers the files it was written for. The binaries are built first
+    where a step runs them."""
+    steps = ["pytest"]
+    if any(f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/")) for f in live):
+        steps.append("integration")
+    for directory in sorted({d for f in live if (d := data_dir(f))}):
+        steps += sorted(readers(directory, cfg))
+    if any(f.startswith(("bench/", "tools/bench/")) for f in live):
+        steps.append("bench")
+    if any(f.startswith("tools/torture/") for f in live):
+        steps.append("torture")
+    if any(matches(f, cfg["fmt"]["paths"]) for f in live):
+        steps.append("fmt")
+    for h in cfg["heavy"]:
+        if any(matches(f, h["owners"]) for f in live):
+            steps.append(h["step"])
+    # The Rust tests under tests/ are the integration step's; the programs under tests/run/ are the run step's.
+    run_affecting = [
+        f
+        for f in live
+        if (not f.startswith("tools/") and not (f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/"))))
+        or f.startswith(("tools/dosbatch/", "tools/linkrecipe"))
+    ]
+    if run_affecting:
+        steps.append("run")
+        langs = set()
+        for f in run_affecting:
+            langs |= {lang for lang, pats in cfg["run_languages"].items() if matches(f, pats)} or set(LANGUAGES)
+        p.languages = [l for l in LANGUAGES if l in langs]
+    p.reason = "no compiler source changed"
+    if any(one not in NO_BINARIES for one in steps):
+        steps.insert(0, "build")
+    p.steps = list(dict.fromkeys(steps))
+    return p
+
+
 def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
     """`p` with only the steps `names` (the tier, the languages and the crates as planned). A step the diff did not select may be named:
     a change to the measurement tools re-runs build and measure, not the other fourteen steps. The build comes
@@ -221,16 +303,19 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
+# So there is no `cargo build --bins` here: it made a second set of every crate (238 CPU-s) for binaries the test build then links over
+# (all of them but hir-mir, which the corpus scripts build themselves).
 WARNING_FLAGS = "-D warnings"
 WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
 # Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-c apart from the build step's and put
 # its binary over target/release/llrm-c (the inode changed after `integration`), while `torture`, `run` and the like were running it:
 # "No such file or directory: .../release/llrm-c" in torture. One set of flags, one build, one binary.
-STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS}
+# RUSTC_BOOTSTRAP too, for the lib step's `--shuffle`: libtest reads it when the tests run, but cargo takes it for an input of every
+# crate it builds, so set on the lib step alone it rebuilt the whole workspace there (1,088 CPU-s) and again in the next cargo step.
+STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1"}
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
-    f"{WARNINGS_AS_ERRORS} cargo build --release -q --bins && "
     f"{WARNINGS_AS_ERRORS} cargo test --release -q --workspace --no-run"
 )
 # Measurements compare two revisions, so their historical base is built without
@@ -240,12 +325,13 @@ MEASURE_BUILD = "env -u RUSTFLAGS cargo build --release -q --bins && env -u RUST
 DIST_BUILD = "cargo build --profile dist -q --bins"
 
 
+# What the doc step reports where no doc comment has a fence to run: a log with no result reads as a cut-short run.
+SKIPPED_DOC = "echo 'test result: ok. 0 passed; 0 failed; no doc comment has a fence to run, rustdoc not run'"
+
 # A lib test that depends on the order tests run in passes in the plain order and fails when the threads start in
 # another (llrm-c's m16 tests, 29 of 136, when an m32 test bound the register file first). The lib step runs the
 # tests in a random order; each test binary prints its seed ("running 136 tests (shuffle seed: N)", kept in the
-# failed step's log), and LLRM_SHUFFLE_SEED=N repeats that order. libtest reads RUSTC_BOOTSTRAP when it runs, not
-# when it is built: the build is not redone.
-SHUFFLED = "RUSTC_BOOTSTRAP=1"
+# failed step's log), and LLRM_SHUFFLE_SEED=N repeats that order. (RUSTC_BOOTSTRAP is in STEP_ENV.)
 
 
 def shuffle() -> str:
@@ -272,8 +358,9 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     )
     steps = {
         "build": BUILD,
-        "lib": f"{SHUFFLED} {cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
-        "doc": f"{cargo} {libs} --doc" if libs else "true",
+        "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
+        # rustdoc over every crate costs 456 CPU-s to find no test: it runs when a doc comment has a fence to run.
+        "doc": f"if python3 tools/gate/doctests.py crates src tests; then {cargo} {libs} --doc; else {SKIPPED_DOC}; fi" if libs else "true",
         "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
         # Every scan runs, and any failing fails the step: the first red must not hide the others.

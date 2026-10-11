@@ -105,6 +105,28 @@ b0:
     assert_eq!(parsed.solved("loaded", &Calls::default()), None);
 }
 
+/// A scalar written in one arm of each of N joins is reached, at the last, by N
+/// nearest writes: all of them were asked of each load, N^2 over the body
+/// (`joins` 256: 10% of the compile, 2,146 Minstr). Past 100, LLVM's
+/// `memssa-check-limit`, a load is not served.
+#[test]
+fn a_load_reached_by_more_than_a_hundred_writes_is_not_served_by_them() {
+    let chain = |joins: usize| {
+        let diamonds: String = (0..joins)
+            .map(|k| {
+                format!(
+                    "  br i1 %c, label %t{k}, label %j{k}\n\nt{k}:\n  store i16 7, ptr @g\n  br label %j{k}\n\nj{k}:\n"
+                )
+            })
+            .collect();
+        Parsed::new(&format!(
+            "@g = global i16 0\n\ndefine i16 @f(i1 %c) {{\nb0:\n  store i16 7, ptr @g\n{diamonds}  %loaded = load i16, ptr @g\n  ret i16 %loaded\n}}\n"
+        ))
+    };
+    assert_eq!(chain(20).solved("loaded", &Calls::default()), Some(Known::new(7, 16)), "21 writes of 7 reach the load");
+    assert_eq!(chain(150).solved("loaded", &Calls::default()), None, "151 writes reach it: past the limit");
+}
+
 #[test]
 fn a_store_through_a_constant_index_is_read_back() {
     let parsed = Parsed::new(

@@ -57,6 +57,7 @@ pub mod loopexit;
 pub mod loopmotion;
 pub mod loopsimplify;
 pub mod lsr;
+pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
