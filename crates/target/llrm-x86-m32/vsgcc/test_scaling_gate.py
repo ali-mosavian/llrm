@@ -824,3 +824,18 @@ def test_a_spill_round_reads_the_homes_by_the_values_it_asks_not_by_the_liveness
     small, big = (own[label].get("regalloc spill", 0.0) - own["empty"].get("regalloc spill", 0.0) for label in ("n", "2n"))
     assert small > 5.0, f"premise: the allocator spilled ({small:.1f} Minstr)"
     assert big <= 7.0 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_isel_does_not_narrow_each_blocks_edges_by_the_edges_it_already_has(tmp_path):
+    """joins(N) at -O2: `ranges::scoped`, which isel asks of every function, took the solve's facts of each block (already the edges that dominate
+    it) and narrowed them, entry by entry, by the same edges a second time: for a chain of N branches every block holds all the edges above it, N^2
+    no-op narrowings (`isel` own work 110 / 299 / 884 Minstr at N=64, 128, 256, a step of 2.7, 3.0). Left alone, the blocks no counted loop holds:
+    82 / 171 / 378, a step of 2.1, 2.2. A step above 2.4 fails; a few Minstr of start-up are allowed."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 64), ("2n", 128)):
+        source = tmp_path / f"joins_{label}.c"
+        source.write_text("" if size == 0 else scaling.joins(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("isel", 0.0) - own["empty"].get("isel", 0.0) for label in ("n", "2n"))
+    assert small > 5.0, f"premise: isel ran ({small:.1f} Minstr)"
+    assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
