@@ -48,8 +48,7 @@ void B_PAIN(short fill, short border)
     /* the first run is the one through the point, which is neither border nor
      * fill */
     gd_run(gfx_x1, gfx_x1, (unsigned)gfx_y1, edge, paint, last, &left, &right);
-    painter.box(&painter, (unsigned)left, (unsigned)gfx_y1,
-                (unsigned)(right - left + 1), 1);
+    painter.box(&painter, (unsigned)left, (unsigned)gfx_y1, (unsigned)(right - left + 1), 1);
     push(left, right, gfx_y1, -1);
     push(left, right, gfx_y1, 1);
     while (span_count) {
@@ -62,10 +61,9 @@ void B_PAIN(short fill, short border)
            has not reached; the run is painted whole and left to look at the
            rows beyond it, in the direction away from the one it was found from,
            and over what it reaches past its parent's span, back */
-        while (x <= span.right && gd_run(x, span.right, (unsigned)y, edge,
-                                         paint, last, &left, &right)) {
-            painter.box(&painter, (unsigned)left, (unsigned)y,
-                        (unsigned)(right - left + 1), 1);
+        while (x <= span.right &&
+               gd_run(x, span.right, (unsigned)y, edge, paint, last, &left, &right)) {
+            painter.box(&painter, (unsigned)left, (unsigned)y, (unsigned)(right - left + 1), 1);
             push(left, right, y, span.step);
             /* the run can reach past the span it was found under, and there the
              * row it was found from may hold more of the area */
@@ -78,4 +76,5 @@ void B_PAIN(short fill, short border)
     }
     qb_paint_queue_close();
 }
+
 #pragma aux B_PAIN "B$PAIN"

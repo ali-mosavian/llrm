@@ -31,4 +31,5 @@ SD *B_INKY(void)
     text[1] = (char)llrm_os_console_read_key();
     return key;
 }
+
 #pragma aux B_INKY "B$INKY"

@@ -27,8 +27,7 @@ static int last_x, last_y;
 
 /* The adapter's own colour numbers for the attributes 0 to 15 at the start of a
    mode: 0-5 and 7 as they are, 6 brown (20), 8-15 the bright ones (56-63). */
-static const byte default_palette[16] = {0,  1,  2,  3,  4,  5,  20, 7,
-                                         56, 57, 58, 59, 60, 61, 62, 63};
+static const byte default_palette[16] = {0, 1, 2, 3, 4, 5, 20, 7, 56, 57, 58, 59, 60, 61, 62, 63};
 
 void gfx_set_background(byte color)
 {
@@ -66,8 +65,7 @@ void gfx_screen(int mode)
                 last_y = (int)modes[at].height / 2;
             }
             gfx_current = &modes[at];
-            gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1
-                                                   : DEFAULT_FOREGROUND;
+            gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1 : DEFAULT_FOREGROUND;
             gfx_background = 0;
             cga_background = 0;
             cga_palette = 1;
@@ -87,8 +85,7 @@ void gfx_set_colors(int foreground, int background)
     int none = background == 255 && !mode->cga && mode->bg_max > 0;
 
     if (foreground > mode->fg_max || (foreground >= 0 && mode->fg_max < 0) ||
-        (!none &&
-         (background > mode->bg_max || (background >= 0 && mode->bg_max < 0))))
+        (!none && (background > mode->bg_max || (background >= 0 && mode->bg_max < 0))))
         qb_error(BE_ILLFUN);
     if (mode->cga) {
         if (foreground >= 0)
@@ -123,15 +120,13 @@ byte gfx_attribute(int color)
 
 void gfx_plot(int x, int y, byte color, byte operation)
 {
-    if (x >= 0 && y >= 0 && (unsigned)x < gfx_current->width &&
-        (unsigned)y < gfx_current->height)
+    if (x >= 0 && y >= 0 && (unsigned)x < gfx_current->width && (unsigned)y < gfx_current->height)
         gd_plot(x, y, color, operation);
 }
 
 int gfx_clip_box(int *x1, int *y1, int *x2, int *y2)
 {
-    int right = (int)gfx_current->width - 1,
-        bottom = (int)gfx_current->height - 1;
+    int right = (int)gfx_current->width - 1, bottom = (int)gfx_current->height - 1;
 
     if (*x1 > *x2) {
         int swap = *x1;
@@ -160,8 +155,7 @@ int gfx_clip_box(int *x1, int *y1, int *x2, int *y2)
 
 int gfx_pixel(int x, int y)
 {
-    if (x < 0 || y < 0 || (unsigned)x >= gfx_current->width ||
-        (unsigned)y >= gfx_current->height)
+    if (x < 0 || y < 0 || (unsigned)x >= gfx_current->width || (unsigned)y >= gfx_current->height)
         return -1;
     return gd_read(x, y);
 }
@@ -290,23 +284,21 @@ int B_PNI2(short x, short y)
 void B_PAL2(short attribute, long color)
 {
     need_graphics();
-    if (attribute < 0 || (unsigned)attribute >= gfx_current->colors ||
-        color < 0)
+    if (attribute < 0 || (unsigned)attribute >= gfx_current->colors || color < 0)
         qb_error(BE_ILLFUN);
     if (gfx_current->dac) {
         /* red, green and blue, 0 to 63 each, in the three bytes from the low
          * one */
-        if ((color & 0xFF) > 63 || (color >> 8 & 0xFF) > 63 ||
-            (color >> 16) > 63)
+        if ((color & 0xFF) > 63 || (color >> 8 & 0xFF) > 63 || (color >> 16) > 63)
             qb_error(BE_ILLFUN);
-        gd_palette_mix(attribute, color & 0xFF, color >> 8 & 0xFF,
-                       (unsigned)(color >> 16));
+        gd_palette_mix(attribute, color & 0xFF, color >> 8 & 0xFF, (unsigned)(color >> 16));
     } else {
         if (color > 63)
             qb_error(BE_ILLFUN);
         gd_palette(attribute, (byte)color);
     }
 }
+
 #pragma aux B_N1I2 "B$N1I2"
 #pragma aux B_N1R4 "B$N1R4"
 #pragma aux B_N2I2 "B$N2I2"
@@ -340,6 +332,7 @@ static Comp gfx_comp = {0, C_GR, {0, 0, 0, 0, 0, gfx_term}};
 
 #define XI_FN gfx_xinit
 #include "xi.h"
+
 void gfx_xinit(void)
 {
     screen_set_mode = gfx_screen;

@@ -20,9 +20,11 @@ static Comp comp = {0, C_RT, {B_DSG0}};
 
 #define XI_FN defseg_xinit
 #include "xi.h"
+
 void defseg_xinit(void)
 {
     qb_comp_add(&comp);
 }
+
 #pragma aux b_seg "b$seg"
 #pragma aux B_DSG0 "B$DSG0"

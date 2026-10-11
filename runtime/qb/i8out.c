@@ -70,6 +70,7 @@ static long double magnitude;
 static int quick_digits(int k, unsigned long long *digits, int *up)
 {
     enum { MOST = 27 };
+
     long double ten_power, product, integral, threshold, difference;
     int s = DIGITS - k, at;
 

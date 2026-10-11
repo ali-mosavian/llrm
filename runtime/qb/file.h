@@ -8,20 +8,15 @@
 #include "nheap.h"
 
 /* The modes of OPEN, as the frontend passes them (inc/devdef.inc MD_*). */
-enum FileMode {
-    MD_INPUT = 1,
-    MD_OUTPUT = 2,
-    MD_RANDOM = 4,
-    MD_APPEND = 8,
-    MD_BINARY = 32
-};
+enum FileMode { MD_INPUT = 1, MD_OUTPUT = 2, MD_RANDOM = 4, MD_APPEND = 8, MD_BINARY = 32 };
 
 typedef struct Fdb {
     SD fielded;   /* the FIELD back-pointer string, if any */
     short handle; /* the OS's */
     byte mode;    /* an enum FileMode */
     byte flags;
-    byte column; /* where the next byte of PRINT # goes on its line */
+    /* where the next byte of PRINT # goes on its line */
+    byte column;
     unsigned record_length; /* RANDOM's record, INPUT's and OUTPUT's buffer */
 } Fdb;
 

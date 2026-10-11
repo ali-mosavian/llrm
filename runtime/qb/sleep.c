@@ -16,8 +16,7 @@ void B_SLEP(long seconds)
 {
     long start = dev_clock();
 
-    while (!llrm_os_console_key_ready() &&
-           (seconds == 0 || elapsed(start) < seconds * HUNDREDTHS))
+    while (!llrm_os_console_key_ready() && (seconds == 0 || elapsed(start) < seconds * HUNDREDTHS))
         ;
 }
 
@@ -26,5 +25,6 @@ void B_BEEP(void)
 {
     cn_putc(7);
 }
+
 #pragma aux B_SLEP "B$SLEP"
 #pragma aux B_BEEP "B$BEEP"

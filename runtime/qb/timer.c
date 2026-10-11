@@ -12,4 +12,5 @@ float *B_TIMR(void)
     seconds = (float)((double)dev_clock() / HUNDREDTHS);
     return &seconds;
 }
+
 #pragma aux B_TIMR "B$TIMR"

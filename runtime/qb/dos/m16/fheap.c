@@ -128,6 +128,7 @@ static Comp fh_comp = {0, C_FH, {fh_ini}};
 
 #define XI_FN fh_xinit
 #include "xi.h"
+
 void fh_xinit(void)
 {
     qb_comp_add(&fh_comp);

@@ -31,5 +31,6 @@ long B_FRI2(short selector)
         return stack_free();
     return str_free_bytes();
 }
+
 #pragma aux B_FRSD "B$FRSD"
 #pragma aux B_FRI2 "B$FRI2"

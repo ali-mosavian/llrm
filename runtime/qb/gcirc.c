@@ -48,8 +48,8 @@ typedef struct Circle {
     int arc;
     unsigned long from, to; /* counts round the circle, from <= to */
     byte outside;           /* the arc is what lies outside from..to */
-    byte spoke_from,
-        spoke_to; /* a line from that end of the arc to the centre */
+    /* a line from that end of the arc to the centre */
+    byte spoke_from, spoke_to;
     byte drawn_from, drawn_to; /* and whether it has been drawn */
 } Circle;
 
@@ -185,11 +185,9 @@ static void rim_plain(Circle *c)
         int sx = (int)(ax >> 8), sy = (int)(ay >> 8);
 
         if (c->scale_x)
-            c->fill.octet(&c->fill, (unsigned)c->cx, (unsigned)c->cy, sx, y, sy,
-                          x);
+            c->fill.octet(&c->fill, (unsigned)c->cx, (unsigned)c->cy, sx, y, sy, x);
         else
-            c->fill.octet(&c->fill, (unsigned)c->cx, (unsigned)c->cy, x, sy, y,
-                          sx);
+            c->fill.octet(&c->fill, (unsigned)c->cx, (unsigned)c->cy, x, sy, y, sx);
         if (y >= x)
             break;
         if (sum >= 0) {
@@ -220,8 +218,7 @@ void B_CIRC(float radius, short color)
     Circle c;
     double ratio = has_aspect ? aspect_ratio : gfx_current->aspect;
     double from = 0, to = 2 * pi;
-    int spoke_from = 0, spoke_to = 0, arc = has_start || has_end,
-        has_to = has_end;
+    int spoke_from = 0, spoke_to = 0, arc = has_start || has_end, has_to = has_end;
 
     c.color = gfx_color(color);
     gd_fill_select(&c.fill, c.color, OP_SET);
@@ -269,6 +266,7 @@ void B_CIRC(float radius, short color)
         rim_plain(&c);
     gd_dots_end(&c.fill);
 }
+
 #pragma aux B_CSTT "B$CSTT"
 #pragma aux B_CSTO "B$CSTO"
 #pragma aux B_CASP "B$CASP"

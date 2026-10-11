@@ -137,8 +137,7 @@ static int plain_char(char c)
 {
     byte code = (byte)c;
 
-    return !(code == 7 || (code >= 9 && code <= 13) ||
-             (code >= 28 && code <= 31));
+    return !(code == 7 || (code >= 9 && code <= 13) || (code >= 28 && code <= 31));
 }
 
 /* Writes the run of plain characters that fits the line, in one call. */
@@ -197,8 +196,7 @@ static byte text_width(void)
 
 static void text_locate(int new_row, int new_column)
 {
-    if (new_row == 0 || new_row > rows || new_column == 0 ||
-        new_column > columns)
+    if (new_row == 0 || new_row > rows || new_column == 0 || new_column > columns)
         qb_error(BE_ILLFUN);
     if (new_row > 0)
         row = new_row - 1;
@@ -227,8 +225,7 @@ static void text_view(int top, int bottom)
 /* Only the screen's own size is accepted. */
 static void text_size(int new_columns, int new_rows)
 {
-    if ((new_columns && new_columns != columns) ||
-        (new_rows && new_rows != rows))
+    if ((new_columns && new_columns != columns) || (new_rows && new_rows != rows))
         qb_error(BE_ILLFUN);
 }
 
@@ -264,6 +261,7 @@ static const Driver text_driver;
 
 #define XI_FN cn_text_xinit
 #include "xi.h"
+
 void cn_text_xinit(void)
 {
     cn_text_driver = &text_driver;
@@ -274,8 +272,7 @@ static void text_color(int foreground, int background)
     if (foreground > MAX_FOREGROUND || background > MAX_BACKGROUND)
         qb_error(BE_ILLFUN);
     if (foreground >= 0)
-        attribute = (attribute & 0x70) | (foreground & 15) |
-                    ((foreground & 16) ? BLINK : 0);
+        attribute = (attribute & 0x70) | (foreground & 15) | ((foreground & 16) ? BLINK : 0);
     if (background >= 0)
         attribute = (attribute & 0x8F) | ((background & 7) << 4);
 }
@@ -290,6 +287,5 @@ static void text_locate_cursor(int new_row, int new_column, int cursor)
 }
 
 static const Driver text_driver = {
-    text_init,          text_write, text_crlf, text_erase, text_sync,
-    text_cursor,        text_pos,   text_line, text_width, text_color,
-    text_locate_cursor, text_clear, text_view, text_size};
+    text_init, text_write, text_crlf,  text_erase,         text_sync,  text_cursor, text_pos,
+    text_line, text_width, text_color, text_locate_cursor, text_clear, text_view,   text_size};

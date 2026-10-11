@@ -95,6 +95,7 @@ int B_FLEN(SD *sd)
     str_tmp_free(sd);
     return len;
 }
+
 #pragma aux B_LTRM "B$LTRM"
 #pragma aux B_RTRM "B$RTRM"
 #pragma aux B_SPAC "B$SPAC"

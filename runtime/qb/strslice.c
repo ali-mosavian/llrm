@@ -96,9 +96,7 @@ int B_SCMP(SD *first, SD *second)
     for (at = 0; at < common && order == 0; at++)
         order = first->ptr[at] - second->ptr[at];
     if (order == 0)
-        order = first->len == second->len  ? 0
-                : first->len < second->len ? -1
-                                           : 1;
+        order = first->len == second->len ? 0 : first->len < second->len ? -1 : 1;
     str_tmp_free(first);
     str_tmp_free(second);
     return order < 0 ? -1 : order > 0;
@@ -123,11 +121,8 @@ static int instr(unsigned start, SD *source, SD *match)
         found = start;
         if (match->len != 0) {
             found = 0;
-            for (at = start - 1; at + match->len <= source->len && !found;
-                 at++) {
-                for (i = 0;
-                     i < match->len && source->ptr[at + i] == match->ptr[i];
-                     i++)
+            for (at = start - 1; at + match->len <= source->len && !found; at++) {
+                for (i = 0; i < match->len && source->ptr[at + i] == match->ptr[i]; i++)
                     ;
                 if (i == match->len)
                     found = at + 1;
@@ -150,5 +145,6 @@ int B_INS3(int start, SD *source, SD *match)
         qb_error(BE_ILLFUN);
     return instr(start, source, match);
 }
+
 #pragma aux B_INS2 "B$INS2"
 #pragma aux B_INS3 "B$INS3"

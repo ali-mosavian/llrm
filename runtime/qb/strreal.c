@@ -23,5 +23,6 @@ SD *B_STR8(double v)
 {
     return real_text(v, 1);
 }
+
 #pragma aux B_STR4 "B$STR4"
 #pragma aux B_STR8 "B$STR8"

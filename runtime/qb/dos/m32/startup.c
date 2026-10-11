@@ -28,8 +28,7 @@ void qb_run_initializers(void)
    will give, the most of a few sizes. */
 void qb_dynamic_region(char **first, char **top)
 {
-    static const unsigned long sizes[] = {4UL << 20, 1UL << 20, 256UL << 10,
-                                          64UL << 10};
+    static const unsigned long sizes[] = {4UL << 20, 1UL << 20, 256UL << 10, 64UL << 10};
     unsigned at;
 
     for (at = 0; at < sizeof sizes / sizeof sizes[0]; at++) {

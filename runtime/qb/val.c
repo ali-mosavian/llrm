@@ -27,4 +27,5 @@ double *B_FVAL(SD *sd)
     str_tmp_free(sd);
     return &value;
 }
+
 #pragma aux B_FVAL "B$FVAL"

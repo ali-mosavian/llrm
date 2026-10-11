@@ -21,8 +21,8 @@ enum {
     LONGEST_NOTE = 64,
     HIGHEST_NOTE = 84,
     SEMITONES = 12,
-    TICKS_PER_MINUTE =
-        1092390L /* a minute of the clock's ticks, in thousandths */
+    /* a minute of the clock's ticks, in thousandths */
+    TICKS_PER_MINUTE = 1092390L
 };
 
 /* How much of a note sounds before the silence that ends it, in eighths. */
@@ -104,6 +104,7 @@ void music_tick(void)
         tail = (tail + 1) % QUEUE;
     }
 }
+
 #pragma aux music_tick "B$MUSICTICK"
 
 /* The notes waiting: PLAY(n) and ON PLAY (events.c). */
@@ -152,8 +153,8 @@ static long duration(const Player *p, int length, int dots)
 
 static unsigned frequency(int note)
 {
-    static const unsigned octave_three[SEMITONES] = {
-        262, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494};
+    static const unsigned octave_three[SEMITONES] = {262, 277, 294, 311, 330, 349,
+                                                     370, 392, 415, 440, 466, 494};
     int octave = (note - 1) / SEMITONES - 3;
     unsigned hertz = octave_three[(note - 1) % SEMITONES];
 
@@ -246,8 +247,7 @@ static void run(Player *p)
             n = number(p);
             if (n == 0 || n > LONGEST_NOTE)
                 illegal();
-            play_note(p, note,
-                      duration(p, n < 0 ? p->length : (int)n, dots(p)));
+            play_note(p, note, duration(p, n < 0 ? p->length : (int)n, dots(p)));
         } else if (command == 'N') {
             n = number(p);
             if (n < 0 || n > HIGHEST_NOTE)
@@ -291,8 +291,7 @@ static void run(Player *p)
    note has begun. */
 void B_SPLY(SD *commands)
 {
-    static Player player = {
-        0, 0, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NORMAL, 1};
+    static Player player = {0, 0, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NORMAL, 1};
 
     player.at = commands->ptr;
     player.end = commands->ptr + commands->len;
@@ -301,6 +300,7 @@ void B_SPLY(SD *commands)
     if (player.foreground)
         wait_for_empty();
 }
+
 #pragma aux B_SPLY "B$SPLY"
 
 /* The program has ended: what is queued is not played, and the speaker is
@@ -316,6 +316,7 @@ static Comp comp = {0, C_SN, {0, 0, 0, 0, music_stop}};
 
 #define XI_FN play_xinit
 #include "xi.h"
+
 void play_xinit(void)
 {
     qb_comp_add(&comp);

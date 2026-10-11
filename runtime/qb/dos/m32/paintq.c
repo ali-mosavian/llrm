@@ -13,9 +13,8 @@ static unsigned long block_bytes;
 
 void *qb_paint_queue_open(unsigned long *bytes)
 {
-    unsigned long need = (unsigned long)gfx_current->width *
-                         gfx_current->height / SPANS_PER_PIXEL_DIVISOR *
-                         SPAN_BYTES;
+    unsigned long need = (unsigned long)gfx_current->width * gfx_current->height /
+                         SPANS_PER_PIXEL_DIVISOR * SPAN_BYTES;
 
     if (block_bytes < need) {
         void *more = (void *)llrm_os_more(need);

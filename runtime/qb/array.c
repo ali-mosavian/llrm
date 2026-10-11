@@ -44,8 +44,7 @@ static void describe(AD *ad, const DimCall *call)
     ad->features = rank_and_features >> 8;
     ad->elem = (unsigned short)call->element;
     for (dim = 0; dim < ad->dims; dim++) {
-        int upper = (short)call->bounds[dim].upper,
-            lower = (short)call->bounds[dim].lower;
+        int upper = (short)call->bounds[dim].upper, lower = (short)call->bounds[dim].lower;
 
         if (upper < lower)
             qb_error(BE_SUBSCRIP);
@@ -152,9 +151,11 @@ static void moved(void *data, int delta)
 
 #define XI_FN array_xinit
 #include "xi.h"
+
 void array_xinit(void)
 {
     lh_on_move(LH_ARRAY, moved);
 }
+
 #pragma aux B_ERAS "B$ERAS"
 #pragma aux array_dim "@array_dim@4"

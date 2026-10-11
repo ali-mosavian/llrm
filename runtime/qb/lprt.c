@@ -16,4 +16,5 @@ void B_LPRT(void)
     printer.mode = MD_OUTPUT;
     file_print_to(&printer);
 }
+
 #pragma aux B_LPRT "B$LPRT"

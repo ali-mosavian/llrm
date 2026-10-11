@@ -8,7 +8,6 @@ typedef unsigned short u16;
 typedef unsigned int u32;
 #define QB_FAR
 extern unsigned char vga_ram[0x10000], cga_ram[0x4000];
-#define QB_VIDEO_MEMORY(segment)                                               \
-    ((void *)((segment) == 0xB800 ? cga_ram : vga_ram))
+#define QB_VIDEO_MEMORY(segment) ((void *)((segment) == 0xB800 ? cga_ram : vga_ram))
 #define QB_REAL_POINTER(segment, offset) ((void *)0)
 #endif

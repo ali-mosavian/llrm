@@ -25,8 +25,8 @@ static void draw(byte at_row, byte at_column, byte c)
 {
     unsigned height = gfx_current->cell_height;
 
-    gd_glyph(at_column * CELL_WIDTH, at_row * height,
-             font + (unsigned)c * height, height, gfx_foreground);
+    gd_glyph(at_column * CELL_WIDTH, at_row * height, font + (unsigned)c * height, height,
+             gfx_foreground);
 }
 
 static void clear_rows(byte first, byte last)
@@ -35,8 +35,7 @@ static void clear_rows(byte first, byte last)
     GdFill fill;
 
     gd_fill_select(&fill, 0, OP_SET);
-    fill.box(&fill, 0, first * height, gfx_current->width,
-             (last + 1u - first) * height);
+    fill.box(&fill, 0, first * height, gfx_current->width, (last + 1u - first) * height);
 }
 
 /* The window scrolls up a text row when the cursor is at its bottom. */
@@ -49,8 +48,7 @@ static void gfx_newline(void)
         row++;
         return;
     }
-    gd_move_rows(view_top * height, (view_top + 1u) * height,
-                 (view_bottom - view_top) * height);
+    gd_move_rows(view_top * height, (view_top + 1u) * height, (view_bottom - view_top) * height);
     clear_rows(view_bottom, view_bottom);
     row = view_bottom;
 }
@@ -117,8 +115,7 @@ static byte gfx_width(void)
 static void gfx_locate(int new_row, int new_column, int cursor)
 {
     (void)cursor;
-    if (new_row == 0 || new_row > rows || new_column == 0 ||
-        new_column > columns)
+    if (new_row == 0 || new_row > rows || new_column == 0 || new_column > columns)
         qb_error(BE_ILLFUN);
     if (new_row > 0)
         row = new_row - 1;
@@ -154,13 +151,13 @@ static void gfx_size(int new_columns, int new_rows)
     (void)new_rows;
 }
 
-static const Driver driver = {
-    gfx_init,   gfx_write,      gfx_newline, gfx_erase, gfx_sync,
-    gfx_cursor, gfx_pos,        gfx_line,    gfx_width, gfx_set_colors,
-    gfx_locate, gfx_clear_text, gfx_view,    gfx_size};
+static const Driver driver = {gfx_init,   gfx_write,      gfx_newline, gfx_erase, gfx_sync,
+                              gfx_cursor, gfx_pos,        gfx_line,    gfx_width, gfx_set_colors,
+                              gfx_locate, gfx_clear_text, gfx_view,    gfx_size};
 
 #define XI_FN cn_gfx_xinit
 #include "xi.h"
+
 void cn_gfx_xinit(void)
 {
     cn_gfx_driver = &driver;

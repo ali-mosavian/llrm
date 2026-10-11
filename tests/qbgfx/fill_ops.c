@@ -11,6 +11,7 @@ extern void report(long value);
 enum { REGION_W = 48, REGION_H = 24, ROUNDS = 120 };
 
 static unsigned long rng = 12345;
+
 static unsigned next(void)
 {
     rng = rng * 1103515245UL + 12345UL;
@@ -44,21 +45,19 @@ static unsigned char sprite[1024], expected_sprite[1024];
  * made them. */
 static unsigned sprite_bytes(unsigned mode, unsigned w, unsigned h)
 {
-    unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1,
-             bits = mode == 0x13 ? 8
-                    : mode == 4  ? 2
-                                 : 1;
+    unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1, bits = mode == 0x13 ? 8
+                                                                   : mode == 4  ? 2
+                                                                                : 1;
 
     return h * planes * ((w * bits + 7) / 8);
 }
 
-static void pack_ref(unsigned mode, unsigned bx, unsigned by, unsigned w,
-                     unsigned h, unsigned char *out)
+static void pack_ref(unsigned mode, unsigned bx, unsigned by, unsigned w, unsigned h,
+                     unsigned char *out)
 {
-    unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1,
-             bits = mode == 0x13 ? 8
-                    : mode == 4  ? 2
-                                 : 1;
+    unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1, bits = mode == 0x13 ? 8
+                                                                   : mode == 4  ? 2
+                                                                                : 1;
     unsigned per_plane = (w * bits + 7) / 8, x, y, i;
 
     for (y = 0; y < h; y++, out += planes * per_plane) {
@@ -78,14 +77,12 @@ static void pack_ref(unsigned mode, unsigned bx, unsigned by, unsigned w,
     }
 }
 
-static void put_ref(unsigned mode, unsigned bx, unsigned by, unsigned w,
-                    unsigned h, const unsigned char *in, unsigned operation,
-                    unsigned invert, unsigned colors)
+static void put_ref(unsigned mode, unsigned bx, unsigned by, unsigned w, unsigned h,
+                    const unsigned char *in, unsigned operation, unsigned invert, unsigned colors)
 {
-    unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1,
-             bits = mode == 0x13 ? 8
-                    : mode == 4  ? 2
-                                 : 1;
+    unsigned planes = mode == 0x10 || mode == 0x0D ? 4 : 1, bits = mode == 0x13 ? 8
+                                                                   : mode == 4  ? 2
+                                                                                : 1;
     unsigned per_plane = (w * bits + 7) / 8, x, y;
 
     for (y = 0; y < h; y++, in += planes * per_plane)
@@ -97,8 +94,7 @@ static void put_ref(unsigned mode, unsigned bx, unsigned by, unsigned w,
                     if (in[plane * per_plane + (x >> 3)] & (0x80 >> (x & 7)))
                         color |= 1u << plane;
             } else {
-                color =
-                    in[at >> 3] >> (8 - bits - (at & 7)) & ((1u << bits) - 1);
+                color = in[at >> 3] >> (8 - bits - (at & 7)) & ((1u << bits) - 1);
             }
             if (invert)
                 color = ~color & (colors - 1);
@@ -117,8 +113,7 @@ int main(void)
         for (round = 0; round < ROUNDS; round++) {
             unsigned operation = round & 3, color = next() % colors[m];
             unsigned bx = next() % REGION_W, by = next() % REGION_H;
-            unsigned count = 1 + next() % (REGION_W - bx),
-                     rows = 1 + next() % (REGION_H - by);
+            unsigned count = 1 + next() % (REGION_W - bx), rows = 1 + next() % (REGION_H - by);
             GdFill fill;
 
             for (y = 0; y < REGION_H; y++)
@@ -139,8 +134,7 @@ int main(void)
                                                  : old ^ color) &
                                (colors[m] - 1);
                     if (gd_read(x, y) != want) {
-                        report((long)modes[m] * 1000000L +
-                               (long)operation * 100000L +
+                        report((long)modes[m] * 1000000L + (long)operation * 100000L +
                                (long)(bx + by * 100) + 1);
                         return 0;
                     }
@@ -148,8 +142,7 @@ int main(void)
             /* GET and PUT of a box: whole rows against a pixel at a time */
             {
                 unsigned sx = next() % REGION_W, sy = next() % REGION_H,
-                         sw = 1 + next() % (REGION_W - sx),
-                         sh = 1 + next() % (REGION_H - sy);
+                         sw = 1 + next() % (REGION_W - sx), sh = 1 + next() % (REGION_H - sy);
                 unsigned bytes = sprite_bytes(modes[m], sw, sh), i,
                          invert = operation == 0 && (next() & 1);
 
@@ -160,24 +153,21 @@ int main(void)
                 gd_get(sx, sy, sw, sh, sprite);
                 for (i = 0; i < bytes; i++)
                     if (sprite[i] != expected_sprite[i]) {
-                        report((long)modes[m] * 1000000L +
-                               (long)operation * 100000L +
+                        report((long)modes[m] * 1000000L + (long)operation * 100000L +
                                (long)(sx + sy * 100) + 80000L);
                         return 0;
                     }
                 for (i = 0; i < bytes; i++)
                     sprite[i] = (unsigned char)next();
                 grab(saved);
-                put_ref(modes[m], sx, sy, sw, sh, sprite, operation, invert,
-                        colors[m]);
+                put_ref(modes[m], sx, sy, sw, sh, sprite, operation, invert, colors[m]);
                 grab(expected);
                 put_back(saved);
                 gd_put(sx, sy, sw, sh, sprite, operation, invert);
                 for (y = 0; y < REGION_H; y++)
                     for (x = 0; x < REGION_W; x++)
                         if (gd_read(x, y) != expected[y * REGION_W + x]) {
-                            report((long)modes[m] * 1000000L +
-                                   (long)operation * 100000L +
+                            report((long)modes[m] * 1000000L + (long)operation * 100000L +
                                    (long)(sx + sy * 100) + 90000L);
                             return 0;
                         }
@@ -188,10 +178,8 @@ int main(void)
                 unsigned lx = next() % REGION_W, ly = next() % REGION_H,
                          ldx = next() % (REGION_W - lx);
                 int up = next() & 1, step_y = up ? -1 : 1;
-                unsigned room = up ? ly : REGION_H - 1 - ly,
-                         ldy = room ? next() % (room + 1) : 0;
-                unsigned style = next() & 1 ? 0xFFFF : (next() & 0xFFFF),
-                         turn = next() & 15;
+                unsigned room = up ? ly : REGION_H - 1 - ly, ldy = room ? next() % (room + 1) : 0;
+                unsigned style = next() & 1 ? 0xFFFF : (next() & 0xFFFF), turn = next() & 15;
                 int major, minor, decision, k;
                 int px = (int)lx, py = (int)ly;
 
@@ -222,15 +210,12 @@ int main(void)
                 gd_dots_end(&fill);
                 grab(expected);
                 put_back(saved);
-                fill.style =
-                    turn ? (style << turn | style >> (16 - turn)) & 0xFFFF
-                         : style;
+                fill.style = turn ? (style << turn | style >> (16 - turn)) & 0xFFFF : style;
                 fill.line(&fill, lx, ly, ldx, ldy, step_y);
                 for (y = 0; y < REGION_H; y++)
                     for (x = 0; x < REGION_W; x++)
                         if (gd_read(x, y) != expected[y * REGION_W + x]) {
-                            report((long)modes[m] * 1000000L +
-                                   (long)(lx + ly * 100) + 70000L +
+                            report((long)modes[m] * 1000000L + (long)(lx + ly * 100) + 70000L +
                                    (ldx == 0 ? 5000L : 0));
                             return 0;
                         }
@@ -238,10 +223,8 @@ int main(void)
             /* and the eight points of a circle step (set only), against eight
              * dots */
             if (operation == 0) {
-                int u = next() % 11, v = next() % 11, w = next() % 11,
-                    z = next() % 11;
-                unsigned cx = 11 + next() % (REGION_W - 22),
-                         cy = 11 + next() % (REGION_H - 22);
+                int u = next() % 11, v = next() % 11, w = next() % 11, z = next() % 11;
+                unsigned cx = 11 + next() % (REGION_W - 22), cy = 11 + next() % (REGION_H - 22);
 
                 grab(saved);
                 gd_dots_begin(&fill);
@@ -262,19 +245,17 @@ int main(void)
                 for (y = 0; y < REGION_H; y++)
                     for (x = 0; x < REGION_W; x++)
                         if (gd_read(x, y) != expected[y * REGION_W + x]) {
-                            report((long)modes[m] * 1000000L +
-                                   (long)(cx + cy * 100) + 60000L);
+                            report((long)modes[m] * 1000000L + (long)(cx + cy * 100) + 60000L);
                             return 0;
                         }
             }
             /* and a search along a row of few colours, either way, both ways of
              * matching, against a pixel at a time */
             {
-                unsigned sy = next() % REGION_H, i,
-                         fewer = colors[m] < 3 ? colors[m] : 3;
+                unsigned sy = next() % REGION_H, i, fewer = colors[m] < 3 ? colors[m] : 3;
                 unsigned c1 = next() % fewer, c2 = next() % fewer;
-                int sx = next() % REGION_W, sl = next() % REGION_W, want = -1,
-                    got, px, match = next() & 1, step = sl >= sx ? 1 : -1;
+                int sx = next() % REGION_W, sl = next() % REGION_W, want = -1, got, px,
+                    match = next() & 1, step = sl >= sx ? 1 : -1;
 
                 if (next() % 3 == 0)
                     c2 = c1;
@@ -292,16 +273,15 @@ int main(void)
                 }
                 got = gd_search(sx, sl, sy, c1, c2, match);
                 if (got != want) {
-                    report((long)modes[m] * 1000000L + (long)(sx + sy * 100) +
-                           55000L + (match ? 1000L : 0));
+                    report((long)modes[m] * 1000000L + (long)(sx + sy * 100) + 55000L +
+                           (match ? 1000L : 0));
                     return 0;
                 }
                 /* and PAINT's run: the first pixel of sx..sl that is neither
                  * colour, and the pixels of colour other than c1 round it */
                 {
-                    int lo = sx < sl ? sx : sl, hi = sx < sl ? sl : sx,
-                        open = -1, left = 0, right = REGION_W - 1, gl = -1,
-                        gr = -1, found;
+                    int lo = sx < sl ? sx : sl, hi = sx < sl ? sl : sx, open = -1, left = 0,
+                        right = REGION_W - 1, gl = -1, gr = -1, found;
 
                     for (px = lo; px <= hi && open < 0; px++)
                         if (gd_read(px, sy) != c1 && gd_read(px, sy) != c2)
@@ -319,10 +299,8 @@ int main(void)
                             }
                     }
                     found = gd_run(lo, hi, sy, c1, c2, REGION_W - 1, &gl, &gr);
-                    if (found != (open >= 0) ||
-                        (found && (gl != left || gr != right))) {
-                        report((long)modes[m] * 1000000L +
-                               (long)(lo + sy * 100) + 65000L);
+                    if (found != (open >= 0) || (found && (gl != left || gr != right))) {
+                        report((long)modes[m] * 1000000L + (long)(lo + sy * 100) + 65000L);
                         return 0;
                     }
                 }
@@ -330,8 +308,7 @@ int main(void)
             /* and a few dots of the same fill: the pixel as the operation says,
              * its neighbours as they were */
             for (x = 0; x < 6; x++) {
-                unsigned dx = 1 + next() % (REGION_W - 2),
-                         dy = next() % REGION_H;
+                unsigned dx = 1 + next() % (REGION_W - 2), dy = next() % REGION_H;
                 unsigned left = gd_read(dx - 1, dy), old = gd_read(dx, dy),
                          right = gd_read(dx + 1, dy);
                 unsigned want = (operation == 0   ? color
@@ -345,9 +322,8 @@ int main(void)
                 gd_dots_end(&fill);
                 if (gd_read(dx, dy) != want || gd_read(dx - 1, dy) != left ||
                     gd_read(dx + 1, dy) != right) {
-                    report((long)modes[m] * 1000000L +
-                           (long)operation * 100000L + (long)(dx + dy * 100) +
-                           50000L);
+                    report((long)modes[m] * 1000000L + (long)operation * 100000L +
+                           (long)(dx + dy * 100) + 50000L);
                     return 0;
                 }
             }

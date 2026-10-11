@@ -2,12 +2,7 @@
    one on 24 bits, so a program sees the sequence QB gives it. */
 #include "qb.h"
 
-enum {
-    MULTIPLIER = 16598013L,
-    INCREMENT = 12820163L,
-    SEED_MASK = 0xFFFFFFL,
-    SEED_BITS = 24
-};
+enum { MULTIPLIER = 16598013L, INCREMENT = 12820163L, SEED_MASK = 0xFFFFFFL, SEED_BITS = 24 };
 
 static unsigned long seed = 0x50000L;
 static float last;
@@ -54,6 +49,7 @@ void B_RNZP(double x)
     copy_bytes((char *)words, (const char *)&x, 8);
     seed = seed & 0xFF0000FFUL | (unsigned long)(words[2] ^ words[3]) << 8;
 }
+
 #pragma aux B_RND0 "B$RND0"
 #pragma aux B_RND1 "B$RND1"
 #pragma aux B_RNZP "B$RNZP"

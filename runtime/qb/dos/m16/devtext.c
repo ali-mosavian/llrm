@@ -15,8 +15,7 @@ enum {
 };
 
 /* The BIOS data area, 0040h:0000h. */
-static const volatile u8 QB_FAR *const bios =
-    (const volatile u8 QB_FAR *)0x400UL;
+static const volatile u8 QB_FAR *const bios = (const volatile u8 QB_FAR *)0x400UL;
 
 static unsigned columns_of(void)
 {
@@ -73,14 +72,13 @@ void dev_text_cursor_show(int visible)
     dev_int10(&r);
 }
 
-void dev_text_put(unsigned row, unsigned column, unsigned character,
-                  unsigned attribute)
+void dev_text_put(unsigned row, unsigned column, unsigned character, unsigned attribute)
 {
     *cell(row, column) = (u16)(attribute << 8 | character);
 }
 
-void dev_text_write(unsigned row, unsigned column, const char *text,
-                    unsigned count, unsigned attribute)
+void dev_text_write(unsigned row, unsigned column, const char *text, unsigned count,
+                    unsigned attribute)
 {
     u16 QB_FAR *at = cell(row, column);
 
@@ -88,8 +86,7 @@ void dev_text_write(unsigned row, unsigned column, const char *text,
         *at++ = (u16)(attribute << 8 | (u8)*text++);
 }
 
-void dev_text_scroll(unsigned top, unsigned bottom, unsigned lines,
-                     unsigned attribute)
+void dev_text_scroll(unsigned top, unsigned bottom, unsigned lines, unsigned attribute)
 {
     unsigned rows = bottom - top + 1, width = columns_of();
     BlockOp op;

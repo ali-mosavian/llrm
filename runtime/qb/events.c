@@ -8,7 +8,9 @@
 #include "qb.h"
 
 enum { HUNDREDTHS = 100, DAY = 8640000L, LONGEST = 86400 };
+
 enum { DEVICE_TIMER = 1, DEVICE_PLAY = 2 };
+
 enum { OFF, ON, STOP };
 
 typedef struct Trap {
@@ -27,9 +29,7 @@ extern unsigned music_waiting(void);
 
 static Trap *trap_of(short device)
 {
-    return device == DEVICE_TIMER  ? &timer_trap
-           : device == DEVICE_PLAY ? &play_trap
-                                   : 0;
+    return device == DEVICE_TIMER ? &timer_trap : device == DEVICE_PLAY ? &play_trap : 0;
 }
 
 /* B$EVAR: ON device(number) GOSUB the handler of that number; 0 takes the
@@ -38,8 +38,7 @@ void B_EVAR(short device, long number, short handler)
 {
     Trap *trap = trap_of(device);
 
-    if (!trap ||
-        (device == DEVICE_TIMER && handler && (number < 1 || number > LONGEST)))
+    if (!trap || (device == DEVICE_TIMER && handler && (number < 1 || number > LONGEST)))
         qb_error(BE_ILLFUN);
     trap->handler = handler;
     trap->number = number;
@@ -131,6 +130,7 @@ short B_FPLY(short ignored)
     (void)ignored;
     return (short)music_waiting();
 }
+
 #pragma aux B_EVAR "B$EVAR"
 #pragma aux B_EVSW "B$EVSW"
 #pragma aux B_EVAN "B$EVAN"

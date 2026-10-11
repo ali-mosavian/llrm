@@ -18,8 +18,7 @@ SD *B_FCMD(void)
 
     result = str_tmp(length, &data);
     for (at = 0; at < length; at++)
-        data[at] =
-            text[at] >= 'a' && text[at] <= 'z' ? text[at] - 32 : text[at];
+        data[at] = text[at] >= 'a' && text[at] <= 'z' ? text[at] - 32 : text[at];
     return result;
 }
 
@@ -50,11 +49,8 @@ SD *B_FEVS(SD *name)
 
     if (name->len == 0)
         qb_error(BE_ILLFUN);
-    for (at = 0;
-         (length = llrm_os_environment(at, (os_data_mut)text, TEXT_MAX)) >= 0;
-         at++) {
-        for (i = 0;
-             i < name->len && (long)i < length && text[i] == name->ptr[i]; i++)
+    for (at = 0; (length = llrm_os_environment(at, (os_data_mut)text, TEXT_MAX)) >= 0; at++) {
+        for (i = 0; i < name->len && (long)i < length && text[i] == name->ptr[i]; i++)
             ;
         if (i == name->len && (long)i < length && text[i] == '=') {
             long value = length - i - 1;
@@ -67,6 +63,7 @@ SD *B_FEVS(SD *name)
     str_tmp_free(name);
     return made(0);
 }
+
 #pragma aux B_FCMD "B$FCMD"
 #pragma aux B_FEVI "B$FEVI"
 #pragma aux B_FEVS "B$FEVS"

@@ -1,25 +1,30 @@
 #ifndef QB_DEVICE_H
 #define QB_DEVICE_H
 #include "platform.h"
+
 typedef struct Regs {
     unsigned rax, rbx, rcx, rdx, rbp, res, rflags;
 } Regs;
+
 typedef struct BlockOp {
     void *dst;
     const void *src;
     unsigned count;
     unsigned value;
 } BlockOp;
+
 typedef struct FillBox {
     void *dst;
     unsigned rows, middle, steps[2], phase, edges, left, right;
 } FillBox;
+
 typedef struct FillLine {
     void *dst;
     unsigned count;
     int decision, minor4, step4, ystep;
     unsigned style, x_major, pmask, bpp, color;
 } FillLine;
+
 typedef struct FillXfer {
     void *screen;
     void *array;
@@ -27,16 +32,19 @@ typedef struct FillXfer {
     int step;
     unsigned bank;
 } FillXfer;
+
 typedef struct FillScan {
     void *at;
     unsigned count, c1, c2, flags, first, last, middle;
     int found;
     unsigned hits, x, to, left, right, limit;
 } FillScan;
+
 typedef struct FillOct {
     void *base;
     unsigned row[4], col[4], mask[4], color;
 } FillOct;
+
 void dev_octet_planar(FillOct *oct);
 void dev_octet_packed(FillOct *oct);
 void dev_scan_linear(FillScan *scan);

@@ -78,8 +78,7 @@ static int parse_number(unsigned from, NumberField *f)
             f->width++;
             p++;
         }
-    } else if (p + 1 < format_length && format[p] == '$' &&
-               format[p + 1] == '$') {
+    } else if (p + 1 < format_length && format[p] == '$' && format[p + 1] == '$') {
         f->dollar = 1;
         f->width += 2;
         f->before_point++;
@@ -94,8 +93,7 @@ static int parse_number(unsigned from, NumberField *f)
         digits_seen = 1;
         p++;
     }
-    if (p < format_length && format[p] == '.' && p + 1 < format_length &&
-        format[p + 1] == '#') {
+    if (p < format_length && format[p] == '.' && p + 1 < format_length && format[p + 1] == '#') {
         f->point = 1;
         f->width++;
         p++;
@@ -112,8 +110,8 @@ static int parse_number(unsigned from, NumberField *f)
     }
     if (!digits_seen && !f->stars && !f->dollar)
         return 0;
-    if (p + 3 < format_length && format[p] == '^' && format[p + 1] == '^' &&
-        format[p + 2] == '^' && format[p + 3] == '^') {
+    if (p + 3 < format_length && format[p] == '^' && format[p + 1] == '^' && format[p + 2] == '^' &&
+        format[p + 3] == '^') {
         f->carets = 4;
         p += 4;
         if (p < format_length && format[p] == '^') {
@@ -121,8 +119,7 @@ static int parse_number(unsigned from, NumberField *f)
             p++;
         }
     }
-    if (p < format_length && (format[p] == '+' || format[p] == '-') &&
-        !f->leading_plus) {
+    if (p < format_length && (format[p] == '+' || format[p] == '-') && !f->leading_plus) {
         f->trailing = format[p++];
     }
     f->length = p - from;
@@ -155,8 +152,7 @@ static enum FieldKind field_at(unsigned from, unsigned *length, NumberField *f)
         }
         return LITERAL;
     }
-    if ((c == '#' || c == '.' || c == '+' || c == '$' || c == '*') &&
-        parse_number(from, f)) {
+    if ((c == '#' || c == '.' || c == '+' || c == '$' || c == '*') && parse_number(from, f)) {
         *length = f->length;
         return NUMBER;
     }
@@ -331,13 +327,12 @@ static void write_exponent_overflow(const NumberField *f);
    right-aligned in the field's columns, the minus sign in the columns of the
    digits when the field has no sign of its own, and a % before the number when
    it does not fit. */
-static void write_number(const NumberField *f, const char *mantissa,
-                         unsigned mantissa_length, unsigned columns)
+static void write_number(const NumberField *f, const char *mantissa, unsigned mantissa_length,
+                         unsigned columns)
 {
     char lead = leading_sign(f), trail = trailing_sign(f);
     int minus = number.negative && !lead && !trail;
-    unsigned needed =
-        mantissa_length + (minus || lead ? 1 : 0) + (f->dollar ? 1 : 0);
+    unsigned needed = mantissa_length + (minus || lead ? 1 : 0) + (f->dollar ? 1 : 0);
     unsigned length = 0, pad = 0;
     char fill = f->stars ? '*' : ' ';
 
@@ -463,8 +458,7 @@ static void write_field(const NumberField *f)
 
 static void load_integer(long value)
 {
-    unsigned long magnitude =
-        value < 0 ? 0UL - (unsigned long)value : (unsigned long)value;
+    unsigned long magnitude = value < 0 ? 0UL - (unsigned long)value : (unsigned long)value;
     char reversed[12];
     int count = 0, i;
 
@@ -486,8 +480,8 @@ static void load_real(double value, int is_double)
     int exponent, limit = is_double ? 16 : 7;
 
     fout_digits(value, is_double, &d, &exponent);
-    number.scientific = (exponent < 0 ? -exponent : exponent) > limit ||
-                        exponent + (int)d.count > limit;
+    number.scientific =
+        (exponent < 0 ? -exponent : exponent) > limit || exponent + (int)d.count > limit;
     fout_digits(value, 1, &d, &exponent);
     number.negative = d.sign == '-';
     copy_bytes(number.text, d.text, d.count);
@@ -542,8 +536,7 @@ static void using_string(SD *item)
     str_tmp_free(item);
 }
 
-static const UsingOps ops = {using_integer, using_real, using_string,
-                             using_end};
+static const UsingOps ops = {using_integer, using_real, using_string, using_end};
 
 /* B$USNG: PRINT USING, with the format. */
 void B_USNG(SD *format)
@@ -552,4 +545,5 @@ void B_USNG(SD *format)
     str_tmp_free(format);
     using_ops = &ops;
 }
+
 #pragma aux B_USNG "B$USNG"

@@ -17,6 +17,6 @@ int dev_stdout_is_screen(void)
     r.rax = DOS_IOCTL;
     r.rbx = STDOUT_HANDLE;
     dev_int21(&r);
-    return !(r.rflags & CARRY) && (r.rdx & (DEVICE_BIT | CONSOLE_OUT_BIT)) ==
-                                      (DEVICE_BIT | CONSOLE_OUT_BIT);
+    return !(r.rflags & CARRY) &&
+           (r.rdx & (DEVICE_BIT | CONSOLE_OUT_BIT)) == (DEVICE_BIT | CONSOLE_OUT_BIT);
 }

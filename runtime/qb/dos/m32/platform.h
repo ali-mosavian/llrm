@@ -33,8 +33,7 @@ typedef unsigned char *os_data_mut;
 #define QB_VIDEO_MEMORY(segment) ((void *)((unsigned long)(segment) << 4))
 
 /* The pointer to segment:offset, as a real-mode interrupt returns one. */
-#define QB_REAL_POINTER(segment, offset)                                       \
-    ((void *)(((unsigned long)(segment) << 4) + (offset)))
+#define QB_REAL_POINTER(segment, offset) ((void *)(((unsigned long)(segment) << 4) + (offset)))
 
 /* The most bytes a BASIC string holds: a signed length of the target's word. */
 #define QB_STRING_LIMIT 0x7FFFFFFFL

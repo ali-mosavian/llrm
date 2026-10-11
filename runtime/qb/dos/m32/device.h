@@ -11,12 +11,14 @@
 typedef struct Regs {
     unsigned rax, rbx, rcx, rdx, rbp, res, rflags;
 } Regs;
+
 typedef struct BlockOp {
     void *dst;
     const void *src;
     unsigned count;
     unsigned value;
 } BlockOp;
+
 /* A box fill (gdfill.asm): `rows` rows from `dst`, each a run of `middle` bytes
    of the operation and pattern B$FSEL last set, with an edge byte before and
    after it if `edges` (new = old & and ^ xor, `left` and `right` hold the and
@@ -26,6 +28,7 @@ typedef struct FillBox {
     void QB_FAR *dst;
     unsigned rows, middle, steps[2], phase, edges, left, right;
 } FillBox;
+
 /* A line (gdline.asm), set with the colour B$FLSEL last had: `count` pixels
    from `dst` (the byte holding the first), Bresenham's decision value and its
    two increments (`minor4`, `step4`), `x_major` 1 if the longer side is x, 0 if
@@ -41,6 +44,7 @@ typedef struct FillLine {
     int decision, minor4, step4, ystep;
     unsigned style, x_major, pmask, bpp, color;
 } FillLine;
+
 /* One plane's pass of GET or PUT over `rows` rows (gdxfer.asm): the screen's
    first byte, the array's run of this plane in the first row, and for each row
    `sbytes` screen bytes against `abytes` array bytes, the bits of one starting
@@ -55,6 +59,7 @@ typedef struct FillXfer {
     int step;
     unsigned bank;
 } FillXfer;
+
 /* A scan for the first pixel (or planar byte of pixels) that is of colour `c1`
    or `c2` (`flags` bit 0) or of neither (bit 0 clear), from `at` forwards or,
    `flags` bit 1, backwards, over `count` of them (gdscan.asm).  Planar: `first`
@@ -74,6 +79,7 @@ typedef struct FillScan {
     int found;
     unsigned hits, x, to, left, right, limit;
 } FillScan;
+
 /* The eight points of a circle step for the planar or CGA modes (gdcirc.asm):
    the screen's base, the offsets of the four rows (cy-v, cy+v, cy-z, cy+z) and
    of the four columns' bytes (cx+u, cx-u, cx+w, cx-w) with the mask of the
@@ -163,13 +169,11 @@ unsigned dev_text_size(void);   /* rows in the high byte, columns in the low */
 unsigned dev_text_cursor(void); /* row in the high byte */
 void dev_text_move(unsigned row, unsigned column);
 void dev_text_cursor_show(int visible);
-void dev_text_put(unsigned row, unsigned column, unsigned character,
-                  unsigned attribute);
-void dev_text_write(unsigned row, unsigned column, const char *text,
-                    unsigned count, unsigned attribute);
+void dev_text_put(unsigned row, unsigned column, unsigned character, unsigned attribute);
+void dev_text_write(unsigned row, unsigned column, const char *text, unsigned count,
+                    unsigned attribute);
 /* The rows `top` to `bottom` move up `lines`, the rows freed are blanks of
    `attribute`; no lines, or as many as the rows, clears them. */
-void dev_text_scroll(unsigned top, unsigned bottom, unsigned lines,
-                     unsigned attribute);
+void dev_text_scroll(unsigned top, unsigned bottom, unsigned lines, unsigned attribute);
 
 #endif

@@ -32,9 +32,11 @@ static void land(void)
 
 #define XI_FN onerror_xinit
 #include "xi.h"
+
 void onerror_xinit(void)
 {
     qb_lander = land;
 }
+
 #pragma aux on_error "@on_error@2"
 #pragma aux raise "@raise@2"

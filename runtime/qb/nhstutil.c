@@ -44,22 +44,19 @@ static void corrupt(void)
 #define OWNER_OF(entry) ((SD *)(entry)->header)
 #define DATA_OF(entry) ((char *)((entry) + 1))
 #define ENTRY_OF(data) ((StrEntry *)(data) - 1)
-#define ENTRY_BYTES(entry)                                                     \
-    (WORD + (IS_FREE(entry) ? FREE_DATA(entry) : EVEN(OWNER_OF(entry)->len)))
+#define ENTRY_BYTES(entry) (WORD + (IS_FREE(entry) ? FREE_DATA(entry) : EVEN(OWNER_OF(entry)->len)))
 #define FOLLOWING(entry) ((StrEntry *)((char *)(entry) + ENTRY_BYTES(entry)))
 #define AT_END(entry) ((char *)(entry) >= str_end)
 #define MAKE_FREE(entry, bytes) ((entry)->header = (bytes) - WORD + 1)
 
 /* A string of `len` bytes is in string space when its data is between the
    constants and the boundary. */
-#define IN_SPACE(sd)                                                           \
-    ((sd)->len && (sd)->ptr >= (char *)str_first && (sd)->ptr < str_end)
+#define IN_SPACE(sd) ((sd)->len && (sd)->ptr >= (char *)str_first && (sd)->ptr < str_end)
 
-#define CHECK_OWNER(entry, owner)                                              \
-    do {                                                                       \
-        if (OWNER_OF(entry) != (owner) ||                                      \
-            (owner)->ptr != (char *)((entry) + 1))                             \
-            corrupt();                                                         \
+#define CHECK_OWNER(entry, owner)                                                                  \
+    do {                                                                                           \
+        if (OWNER_OF(entry) != (owner) || (owner)->ptr != (char *)((entry) + 1))                   \
+            corrupt();                                                                             \
     } while (0)
 
 /* B$STSetFree: the hint is kept only if it names the free entry that ends

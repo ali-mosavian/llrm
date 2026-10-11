@@ -107,6 +107,7 @@ void B_WIDT(short columns, short rows)
 {
     cn_set_size(columns, rows);
 }
+
 #pragma aux screen_color "@screen_color@2"
 #pragma aux screen_locate "@screen_locate@2"
 #pragma aux screen_mode "@screen_mode@2"

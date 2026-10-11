@@ -73,8 +73,7 @@ typedef struct Parsed {
 
 /* &H and &O numbers, which are 16 or 32 bits wide, and whose high half is the
    sign bit (&HFFFF is -1). */
-static char radix_number(const char **cursor, int radix, byte type,
-                         FinValue *value)
+static char radix_number(const char **cursor, int radix, byte type, FinValue *value)
 {
     const char *p = *cursor;
     unsigned long total = 0;
@@ -163,6 +162,7 @@ static const char *decimal(const char *p, Parsed *out)
 static unsigned long long divide_scaled(int *scale, int *inexact)
 {
     enum { QUOTIENT_BITS = 63 };
+
     unsigned long long quotient = 0;
     unsigned at;
 
@@ -192,6 +192,7 @@ static unsigned long long divide_scaled(int *scale, int *inexact)
 static int quick_double(unsigned long long mantissa, int exponent, double *out)
 {
     enum { MOST = 27, HALF_WAY = 0x400 };
+
     long double ten_power, quick;
     byte bytes[10];
     unsigned low;
@@ -221,6 +222,7 @@ static int quick_double(unsigned long long mantissa, int exponent, double *out)
 static double nearest_double(unsigned long long mantissa, int exponent)
 {
     enum { PRECISION = 53, HIDDEN = 52, LOWEST = -1074, BIAS = 1075 };
+
     unsigned long long kept, bits;
     int scale = 0, inexact = 0, lowest, cut;
     unsigned length;
@@ -326,8 +328,7 @@ char fin_number(const char **cursor, byte type, FinValue *value)
         value->single = (float)real;
     } else {
         whole = parsed.whole && parsed.mantissa <= 0x7FFFFFFFUL
-                    ? (parsed.negative ? -(long)parsed.mantissa
-                                       : (long)parsed.mantissa)
+                    ? (parsed.negative ? -(long)parsed.mantissa : (long)parsed.mantissa)
                     : round_to_long(real);
         if (type == VT_I2) {
             if (whole < -32768L || whole > 32767L)

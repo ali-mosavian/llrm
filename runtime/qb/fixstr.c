@@ -5,8 +5,7 @@
 
 /* B$ASSN: the `source_length` bytes at `source` into the `length` bytes at
    `target`: cut to fit, or padded with blanks. */
-void B_ASSN(qb_data_ptr source, int source_length, qb_data_ptr target,
-            int length)
+void B_ASSN(qb_data_ptr source, int source_length, qb_data_ptr target, int length)
 {
     char *to = QB_NEAR_OF(target);
     const char *from = QB_NEAR_OF(source);
@@ -26,5 +25,6 @@ SD *B_LDFS(qb_data_ptr field, int length)
     copy_bytes(data, QB_NEAR_OF(field), length);
     return result;
 }
+
 #pragma aux B_ASSN "B$ASSN"
 #pragma aux B_LDFS "B$LDFS"

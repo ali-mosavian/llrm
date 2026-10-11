@@ -16,8 +16,10 @@ typedef struct GfxMode {
     byte cga;           /* COLOR sets the CGA palette: background, palette */
     byte dac;           /* PALETTE takes a mix of red, green and blue (VGA) */
     unsigned colors;    /* attributes */
-    byte bits;   /* bits of a pixel in each of its planes (GET and PUT) */
-    byte planes; /* 4 for the EGA and VGA modes with 16 colours, else 1 */
+    /* bits of a pixel in each of its planes (GET and PUT) */
+    byte bits;
+    /* 4 for the EGA and VGA modes with 16 colours, else 1 */
+    byte planes;
 } GfxMode;
 
 extern const GfxMode *gfx_current;

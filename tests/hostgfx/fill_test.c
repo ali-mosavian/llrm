@@ -18,19 +18,23 @@ void dev_int10(Regs *r)
     else
         current_mode = r->rax;
 }
+
 void dev_int10r(Regs *r)
 {
     dev_int10(r);
 }
+
 void dev_outw(unsigned port, unsigned word)
 {
     (void)port;
     (void)word;
 }
+
 void dev_move(BlockOp *op)
 {
     memmove(op->dst, op->src, op->count);
 }
+
 void dev_fill(BlockOp *op)
 {
     unsigned short *at = op->dst;
@@ -41,16 +45,19 @@ void dev_fill(BlockOp *op)
 
 /* fill.asm in C: the run of `op mem, imm`, and the edge bytes. */
 static unsigned fill_operation, fill_byte;
+
 void dev_fill_select(unsigned operation, unsigned byte)
 {
     fill_operation = operation;
     fill_byte = byte;
 }
+
 void dev_line_select(unsigned operation, unsigned byte)
 {
     (void)operation;
     (void)byte;
 }
+
 static unsigned apply(unsigned old)
 {
     return fill_operation == 0   ? fill_byte
@@ -58,6 +65,7 @@ static unsigned apply(unsigned old)
            : fill_operation == 2 ? old | fill_byte
                                  : old ^ fill_byte;
 }
+
 void dev_fill_box(FillBox *box)
 {
     unsigned char *row = box->dst;
@@ -74,10 +82,8 @@ void dev_fill_box(FillBox *box)
             *at = (unsigned char)apply(*at);
         if (box->edges)
             *at = (*at & (box->right & 0xFF)) ^ (box->right >> 8 & 0xFF);
-        row +=
-            (int)box
-                ->steps[phase / sizeof(unsigned)]; /* a step back wraps as the
-                                                      target's offsets do */
+        /* a step back wraps as the target's offsets do */
+        row += (int)box->steps[phase / sizeof(unsigned)];
         phase ^= sizeof(unsigned);
     }
 }
@@ -134,16 +140,19 @@ static void walk(FillLine *line, int packed)
         }
     }
 }
+
 /* B$FPSEL, B$FPUC and B$FPUP are not modelled here: tests/qbgfx/fill_ops.c runs
  * them. */
 void dev_put_select(unsigned how)
 {
     (void)how;
 }
+
 void dev_put_rows(FillXfer *xfer)
 {
     (void)xfer;
 }
+
 void dev_put_planar(FillXfer *xfer)
 {
     (void)xfer;
@@ -154,14 +163,15 @@ void dev_octet_planar(FillOct *oct)
 {
     (void)oct;
 }
+
 void dev_octet_packed(FillOct *oct)
 {
     static const unsigned char pair[8][2] = {{0, 0}, {2, 2}, {2, 3}, {0, 1},
                                              {1, 1}, {3, 3}, {3, 2}, {1, 0}};
 
     for (unsigned i = 0; i < 8; i++) {
-        unsigned char *at = (unsigned char *)oct->base + oct->row[pair[i][0]] +
-                            oct->col[pair[i][1]];
+        unsigned char *at =
+            (unsigned char *)oct->base + oct->row[pair[i][0]] + oct->col[pair[i][1]];
         unsigned mask = oct->mask[pair[i][1]];
 
         *at = (unsigned char)((*at & ~mask) | (oct->color & mask));
@@ -184,6 +194,7 @@ void dev_scan_linear(FillScan *scan)
         }
     }
 }
+
 void dev_scan_planar(FillScan *scan)
 {
     scan->found = -1;
@@ -194,8 +205,7 @@ void dev_scan_planar(FillScan *scan)
 void dev_scan_packed(FillScan *scan)
 {
     const unsigned char *row = scan->at;
-    unsigned bits = scan->flags & 4 ? 2 : 1, per = 8 / bits,
-             pix = (1u << bits) - 1;
+    unsigned bits = scan->flags & 4 ? 2 : 1, per = 8 / bits, pix = (1u << bits) - 1;
     int step = scan->to < scan->x ? -1 : 1;
 
     scan->found = -1;
@@ -247,13 +257,11 @@ void dev_get_rows(FillXfer *xfer)
 
     for (unsigned row = 0; row < xfer->rows; row++) {
         for (unsigned i = 0; i < xfer->abytes; i++) {
-            unsigned b =
-                (screen[i] << xfer->shift |
-                 (xfer->shift ? screen[i + 1] >> (8 - xfer->shift) : 0)) &
-                0xFF;
+            unsigned b = (screen[i] << xfer->shift |
+                          (xfer->shift ? screen[i + 1] >> (8 - xfer->shift) : 0)) &
+                         0xFF;
 
-            array[i] =
-                (unsigned char)(i == xfer->abytes - 1 ? b & xfer->last : b);
+            array[i] = (unsigned char)(i == xfer->abytes - 1 ? b & xfer->last : b);
         }
         array += xfer->stride;
         if (xfer->bank) {
@@ -267,20 +275,24 @@ void dev_get_rows(FillXfer *xfer)
         }
     }
 }
+
 void dev_line_linear(FillLine *line)
 {
     walk(line, 0);
 }
+
 void dev_line_packed(FillLine *line)
 {
     walk(line, 1);
 }
+
 void dev_line_planar(FillLine *line)
 {
     (void)line;
 }
 
 static unsigned rng = 7;
+
 static unsigned next(void)
 {
     rng = rng * 1103515245u + 12345u;
@@ -298,8 +310,7 @@ int main(void)
         for (unsigned round = 0; round < 6000; round++) {
             unsigned x = next() % modes[m].width, y = next() % 200,
                      color = next() % modes[m].colors, op = next() % 4;
-            unsigned count = 1 + next() % (modes[m].width - x),
-                     rows = 1 + next() % (200 - y);
+            unsigned count = 1 + next() % (modes[m].width - x), rows = 1 + next() % (200 - y);
             static unsigned char before[0x10000], after[0x10000];
             unsigned char *ram = modes[m].mode == 0x13 ? vga_ram : cga_ram;
             unsigned size = modes[m].mode == 0x13 ? 64000 : 16384;
@@ -316,8 +327,7 @@ int main(void)
             gd_fill_select(&fill, color, op);
             fill.box(&fill, x, y, count, rows);
             if (memcmp(ram, after, size)) {
-                fprintf(stderr,
-                        "mode %u op %u color %u x %u count %u y %u rows %u\n",
+                fprintf(stderr, "mode %u op %u color %u x %u count %u y %u rows %u\n",
                         modes[m].mode, op, color, x, count, y, rows);
                 return 1;
             }
@@ -333,20 +343,19 @@ int main(void)
                 fill.dot(&fill, dx, dy);
                 gd_dots_end(&fill);
                 if (memcmp(ram, after, size)) {
-                    fprintf(stderr, "dot: mode %u op %u color %u x %u y %u\n",
-                            modes[m].mode, op, color, dx, dy);
+                    fprintf(stderr, "dot: mode %u op %u color %u x %u y %u\n", modes[m].mode, op,
+                            color, dx, dy);
                     return 1;
                 }
             }
             if (modes[m].mode != 0x10 && modes[m].mode != 0x0D && op == 0) {
                 /* a line with a style, against Bresenham's loop through the dot
                  */
-                unsigned lx = next() % 100, ly = 50 + next() % 100,
-                         ldx = next() % 100, ldy = next() % 50;
-                unsigned style = next() & 1 ? 0xFFFF : (next() & 0xFFFF),
-                         turn = next() & 15;
-                int up = next() & 1, step_y = up ? -1 : 1, major, minor,
-                    decision, px = (int)lx, py = (int)ly;
+                unsigned lx = next() % 100, ly = 50 + next() % 100, ldx = next() % 100,
+                         ldy = next() % 50;
+                unsigned style = next() & 1 ? 0xFFFF : (next() & 0xFFFF), turn = next() & 15;
+                int up = next() & 1, step_y = up ? -1 : 1, major, minor, decision, px = (int)lx,
+                    py = (int)ly;
 
                 if (next() % 4 == 0)
                     ldx = 0;
@@ -373,16 +382,13 @@ int main(void)
                 }
                 memcpy(after, ram, size);
                 memcpy(ram, before, size);
-                fill.style =
-                    turn ? (style << turn | style >> (16 - turn)) & 0xFFFF
-                         : style;
+                fill.style = turn ? (style << turn | style >> (16 - turn)) & 0xFFFF : style;
                 fill.line(&fill, lx, ly, ldx, ldy, step_y);
                 if (memcmp(ram, after, size)) {
                     fprintf(stderr,
                             "line: mode %u color %u from %u,%u dx %u dy %u up "
                             "%d style %x turn %u\n",
-                            modes[m].mode, color, lx, ly, ldx, ldy, up, style,
-                            turn);
+                            modes[m].mode, color, lx, ly, ldx, ldy, up, style, turn);
                     return 1;
                 }
             }
@@ -390,12 +396,11 @@ int main(void)
             for (unsigned i = 0; i < 20; i++) {
                 unsigned sy = next() % 200, c1 = next() % modes[m].colors % 3,
                          c2 = next() % modes[m].colors % 3;
-                int sx = next() % modes[m].width, sl = next() % modes[m].width,
-                    match = next() & 1, want = -1;
+                int sx = next() % modes[m].width, sl = next() % modes[m].width, match = next() & 1,
+                    want = -1;
 
                 for (unsigned px = 0; px < modes[m].width; px++)
-                    gd_plot(px, sy,
-                            next() % 3 ? next() % modes[m].colors % 3 : 0, 0);
+                    gd_plot(px, sy, next() % 3 ? next() % modes[m].colors % 3 : 0, 0);
                 if (next() & 1)
                     for (unsigned px = 0; px < modes[m].width; px++)
                         gd_plot(px, sy, c1, 0);
@@ -410,9 +415,8 @@ int main(void)
                         break;
                 }
                 {
-                    int lo = sx < sl ? sx : sl, hi = sx < sl ? sl : sx,
-                        open = -1, left = 0, right = (int)modes[m].width - 1,
-                        gl = -1, gr = -1;
+                    int lo = sx < sl ? sx : sl, hi = sx < sl ? sl : sx, open = -1, left = 0,
+                        right = (int)modes[m].width - 1, gl = -1, gr = -1;
 
                     for (int px = lo; px <= hi && open < 0; px++)
                         if (gd_read(px, sy) != c1 && gd_read(px, sy) != c2)
@@ -429,16 +433,14 @@ int main(void)
                                 break;
                             }
                     }
-                    int found = gd_run(lo, hi, sy, c1, c2,
-                                       (int)modes[m].width - 1, &gl, &gr);
+                    int found = gd_run(lo, hi, sy, c1, c2, (int)modes[m].width - 1, &gl, &gr);
 
-                    if (found != (open >= 0) ||
-                        (found && (gl != left || gr != right))) {
+                    if (found != (open >= 0) || (found && (gl != left || gr != right))) {
                         fprintf(stderr,
                                 "run: mode %u lo %d hi %d y %u c1 %u c2 %u "
                                 "open %d run %d..%d got %d %d..%d\n",
-                                modes[m].mode, lo, hi, sy, c1, c2, open, left,
-                                right, found, gl, gr);
+                                modes[m].mode, lo, hi, sy, c1, c2, open, left, right, found, gl,
+                                gr);
                         return 1;
                     }
                 }

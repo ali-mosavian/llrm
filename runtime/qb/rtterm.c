@@ -37,5 +37,6 @@ void B_CENP(void)
         qb_no_resume();
     B_CEND();
 }
+
 #pragma aux B_CEND "B$CEND"
 #pragma aux B_CENP "B$CENP"

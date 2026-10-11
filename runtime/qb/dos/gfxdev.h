@@ -16,27 +16,26 @@ void gd_palette(unsigned index, unsigned color);
 void gd_cga_color(unsigned background, unsigned palette);
 /* Gives colour register `index` the mix of `red`, `green` and `blue`, 0 to 63.
  */
-void gd_palette_mix(unsigned index, unsigned red, unsigned green,
-                    unsigned blue);
+void gd_palette_mix(unsigned index, unsigned red, unsigned green, unsigned blue);
 
 void gd_plot(unsigned x, unsigned y, unsigned color, unsigned operation);
+
 /* A fill of a box of pixels: the routine for the mode, chosen with the
    operation by gd_fill_select (which patches the box loop for it, so only one
    fill is under way at a time), run on a box of `rows` rows of `count` pixels
    from `x` and row `y`, already clipped to the screen.  An edge byte of the box
    becomes old & keep ^ flip. */
 typedef struct GdFill {
-    void (*box)(const struct GdFill *fill, unsigned x, unsigned y,
-                unsigned count, unsigned rows);
+    void (*box)(const struct GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows);
     void (*dot)(const struct GdFill *fill, unsigned x, unsigned y);
-    void (*line)(const struct GdFill *fill, unsigned x, unsigned y, unsigned dx,
-                 unsigned dy, int step_y);
-    void (*octet)(const struct GdFill *fill, unsigned cx, unsigned cy, int u,
-                  int v, int w, int z);
+    void (*line)(const struct GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy,
+                 int step_y);
+    void (*octet)(const struct GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z);
     unsigned color, operation, keep, flip;
     unsigned style; /* of the next line: its 16 bits, the next pixel's the high
                        one */
 } GdFill;
+
 /* A line of the fill's colour from pixel (x, y) to the right, clipped to the
    screen: dx pixels across and dy down (step_y 1) or up
    (-1), Bresenham's way, stepping along the longer side, the pixels of the
@@ -59,16 +58,15 @@ int gd_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match);
 /* PAINT's row: the first pixel from x to last that is neither edge nor paint,
    and the run of pixels that are not edge round it, left to right within 0 to
    limit.  0 if there is no such pixel. */
-int gd_run(int x, int last, unsigned y, unsigned edge, unsigned paint,
-           int limit, int *left, int *right);
+int gd_run(int x, int last, unsigned y, unsigned edge, unsigned paint, int limit, int *left,
+           int *right);
 /* Copies whole rows of pixels, the first first, so that moving up over itself
    is right. */
 void gd_move_rows(unsigned to, unsigned from, unsigned count);
 
 /* A character cell: `height` rows of 8 pixels, one byte of `bits` a row, its
    set bits in `foreground`, the others in colour 0; x a multiple of 8. */
-void gd_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height,
-              unsigned foreground);
+void gd_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, unsigned foreground);
 /* The BIOS's font of characters `height` rows high (8, 14 or 16). */
 const u8 QB_FAR *gd_font(unsigned height);
 
@@ -78,9 +76,8 @@ const u8 QB_FAR *gd_font(unsigned height);
    `bits` wide and packed the same way), the runs of a row following each other.
    `operation` is 0 set, 1 and, 2 or, 3 xor; `invert` puts the colours inverted
    (PRESET: only with set). */
-void gd_get(unsigned x, unsigned y, unsigned width, unsigned rows,
-            u8 QB_FAR *out);
-void gd_put(unsigned x, unsigned y, unsigned width, unsigned rows,
-            const u8 QB_FAR *in, unsigned operation, unsigned invert);
+void gd_get(unsigned x, unsigned y, unsigned width, unsigned rows, u8 QB_FAR *out);
+void gd_put(unsigned x, unsigned y, unsigned width, unsigned rows, const u8 QB_FAR *in,
+            unsigned operation, unsigned invert);
 
 #endif

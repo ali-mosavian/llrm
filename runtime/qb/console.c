@@ -15,8 +15,8 @@ const Driver *cn_gfx_driver;
 byte cn_graphics;
 static const Driver stream_driver;
 static const Driver *driver;
-static const Driver
-    *redirected; /* PRINT #n: the file driver, until the statement ends */
+/* PRINT #n: the file driver, until the statement ends */
+static const Driver *redirected;
 static byte column;
 static char pending[CHUNK];
 static unsigned used;
@@ -114,10 +114,10 @@ static void stream_size(int columns, int rows)
     (void)rows;
 }
 
-static const Driver stream_driver = {
-    stream_init,   stream_write, stream_newline, stream_erase, stream_sync,
-    stream_cursor, stream_pos,   stream_line,    stream_width, stream_color,
-    stream_locate, stream_clear, stream_view,    stream_size};
+static const Driver stream_driver = {stream_init,  stream_write,  stream_newline, stream_erase,
+                                     stream_sync,  stream_cursor, stream_pos,     stream_line,
+                                     stream_width, stream_color,  stream_locate,  stream_clear,
+                                     stream_view,  stream_size};
 
 const Driver *cn_driver(void)
 {

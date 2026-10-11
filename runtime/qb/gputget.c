@@ -8,6 +8,7 @@
 #include "ad.h"
 
 enum { HEADER = 4 };
+
 enum { PUT_OR, PUT_AND, PUT_PRESET, PUT_PSET, PUT_XOR };
 
 typedef u8 QB_FAR *Bytes;
@@ -83,8 +84,7 @@ void B_GPUT(qb_data_ptr data, const AD *ad, short how)
 {
     Bytes in = (Bytes)data;
     unsigned planes = gfx_current->planes, bits = gfx_current->bits;
-    unsigned width = ((u16 QB_FAR *)in)[0] / bits,
-             height = ((u16 QB_FAR *)in)[1];
+    unsigned width = ((u16 QB_FAR *)in)[0] / bits, height = ((u16 QB_FAR *)in)[1];
     unsigned per_plane = row_bytes(width), x, y, plane;
 
     if (how < PUT_OR || how > PUT_XOR ||
@@ -116,8 +116,7 @@ void B_GPUT(qb_data_ptr data, const AD *ad, short how)
             } else {
                 unsigned at = x * bits;
 
-                color =
-                    in[at >> 3] >> (8 - bits - (at & 7)) & ((1u << bits) - 1);
+                color = in[at >> 3] >> (8 - bits - (at & 7)) & ((1u << bits) - 1);
             }
             if (how == PUT_PRESET)
                 color = ~color & (gfx_current->colors - 1);
@@ -132,5 +131,6 @@ void B_GPUT(qb_data_ptr data, const AD *ad, short how)
         in += planes * per_plane;
     }
 }
+
 #pragma aux B_GGET "B$GGET"
 #pragma aux B_GPUT "B$GPUT"

@@ -17,16 +17,15 @@ typedef struct Point {
    8 below. */
 static int outside(const Point *p)
 {
-    return (p->x < 0) | (p->x >= (long)gfx_current->width) << 1 |
-           (p->y < 0) << 2 | (p->y >= (long)gfx_current->height) << 3;
+    return (p->x < 0) | (p->x >= (long)gfx_current->width) << 1 | (p->y < 0) << 2 |
+           (p->y >= (long)gfx_current->height) << 3;
 }
 
 /* The other coordinate of the line from (`along_from`, `other_from`) to
    (`along_to`, `other_to`) where the first coordinate is `edge`: the exact
    value, rounded to the nearest whole number, a half going away from 0 from the
    offset it is measured from. */
-static long cut(long along_from, long other_from, long along_to, long other_to,
-                long edge)
+static long cut(long along_from, long other_from, long along_to, long other_to, long edge)
 {
     long numerator = (other_to - other_from) * (edge - along_from);
     long denominator = along_to - along_from;
@@ -110,8 +109,7 @@ static void line(GdFill *fill, int x1, int y1, int x2, int y2, int solid)
     step_y = last.y > first.y ? 1 : -1;
     if (solid) {
         if (dy == 0) {
-            fill->box(fill, (unsigned)first.x, (unsigned)first.y,
-                      (unsigned)dx + 1, 1);
+            fill->box(fill, (unsigned)first.x, (unsigned)first.y, (unsigned)dx + 1, 1);
             return;
         }
         fill->style = 0xFFFF;
@@ -119,12 +117,10 @@ static void line(GdFill *fill, int x1, int y1, int x2, int y2, int solid)
         /* the style's bits fall on the pixels in turn along the statement's
          * lines: the next is the one the phase says */
         turn = phase & 15;
-        fill->style = turn ? (pattern << turn | pattern >> (16 - turn)) & 0xFFFF
-                           : pattern;
+        fill->style = turn ? (pattern << turn | pattern >> (16 - turn)) & 0xFFFF : pattern;
         phase += (unsigned)(dx > dy ? dx : dy) + 1;
     }
-    fill->line(fill, (unsigned)first.x, (unsigned)first.y, (unsigned)dx,
-               (unsigned)dy, step_y);
+    fill->line(fill, (unsigned)first.x, (unsigned)first.y, (unsigned)dx, (unsigned)dy, step_y);
 }
 
 /* B$LINE: color (-1 for the foreground), style (-1 for solid), and how: a line,
@@ -143,8 +139,8 @@ void gfx_line_between(int color, int style, int how)
 
         if (!gfx_clip_box(&left, &top, &right, &bottom))
             return;
-        fill.box(&fill, (unsigned)left, (unsigned)top,
-                 (unsigned)(right - left + 1), (unsigned)(bottom - top + 1));
+        fill.box(&fill, (unsigned)left, (unsigned)top, (unsigned)(right - left + 1),
+                 (unsigned)(bottom - top + 1));
     } else if (how == BOX) {
         /* the edges in QB's order: bottom, top, right, left */
         line(&fill, gfx_x1, gfx_y2, gfx_x2, gfx_y2, solid);
@@ -155,9 +151,11 @@ void gfx_line_between(int color, int style, int how)
         line(&fill, gfx_x1, gfx_y1, gfx_x2, gfx_y2, solid);
     }
 }
+
 /* B$LINE */
 void B_LINE(short color, short style, short how)
 {
     gfx_line_between(color, style, how);
 }
+
 #pragma aux B_LINE "B$LINE"

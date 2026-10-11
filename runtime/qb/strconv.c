@@ -118,6 +118,7 @@ double *B_FCVD(SD *sd)
     bytes_of(sd, &value, 8);
     return &value;
 }
+
 #pragma aux B_FASC "B$FASC"
 #pragma aux B_FHEX "B$FHEX"
 #pragma aux B_FOCT "B$FOCT"

@@ -138,6 +138,7 @@ void B_RDR8(qb_data_ptr destination)
 {
     read_number(VT_R8, destination);
 }
+
 #pragma aux B_RSTB "B$RSTB"
 #pragma aux B_RDI2 "B$RDI2"
 #pragma aux B_RDI4 "B$RDI4"

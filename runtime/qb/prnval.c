@@ -5,6 +5,7 @@
 #include "fout.h"
 #include "prnval.h"
 #include "rtinit.h"
+
 enum { ZONE = 14 };
 
 /* B$PRTCHK: make room for `len` more characters on the line, ending it first
@@ -112,6 +113,7 @@ void B_FTAB(short column)
     while (pos++ < target)
         cn_putc(' ');
 }
+
 #pragma aux B_FTAB "B$FTAB"
 
 /* B$WRIT: the start of a WRITE statement. */
@@ -119,6 +121,7 @@ void B_WRIT(void)
 {
     writing = 1;
 }
+
 #pragma aux B_WRIT "B$WRIT"
 
 /* B$PEOS: the end of a PRINT that ended with a separator, and of an INPUT.  The
@@ -137,38 +140,47 @@ void B_PCI2(short v)
 {
     number(v, COMMA);
 }
+
 void B_PSI2(short v)
 {
     number(v, SEMI);
 }
+
 void B_PEI2(short v)
 {
     number(v, EOL);
 }
+
 void B_PCI4(long v)
 {
     number(v, COMMA);
 }
+
 void B_PSI4(long v)
 {
     number(v, SEMI);
 }
+
 void B_PEI4(long v)
 {
     number(v, EOL);
 }
+
 void B_PCSD(SD *sd)
 {
     string(sd, COMMA);
 }
+
 void B_PSSD(SD *sd)
 {
     string(sd, SEMI);
 }
+
 void B_PESD(SD *sd)
 {
     string(sd, EOL);
 }
+
 #pragma aux B_PEOS "B$PEOS"
 #pragma aux B_PCI2 "B$PCI2"
 #pragma aux B_PSI2 "B$PSI2"

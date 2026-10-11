@@ -20,26 +20,32 @@ void B_PCR4(float v)
 {
     real(v, 0, COMMA);
 }
+
 void B_PSR4(float v)
 {
     real(v, 0, SEMI);
 }
+
 void B_PER4(float v)
 {
     real(v, 0, EOL);
 }
+
 void B_PCR8(double v)
 {
     real(v, 1, COMMA);
 }
+
 void B_PSR8(double v)
 {
     real(v, 1, SEMI);
 }
+
 void B_PER8(double v)
 {
     real(v, 1, EOL);
 }
+
 #pragma aux B_PCR4 "B$PCR4"
 #pragma aux B_PSR4 "B$PSR4"
 #pragma aux B_PER4 "B$PER4"

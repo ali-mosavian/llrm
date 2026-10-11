@@ -50,5 +50,6 @@ SD *B_SCAT(SD *left, SD *right)
     str_tmp_free(right);
     return joined;
 }
+
 #pragma aux B_SASS "B$SASS"
 #pragma aux B_SCAT "B$SCAT"
