@@ -897,6 +897,22 @@ fn _entered(
     {
         return true;
     }
+    // A signed ordered test reads them at an offset too (`n > 2` proves `1 < n
+    // - 1`), where the sides are sums that cannot wrap.
+    if matches!(
+        test,
+        IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
+    ) {
+        let rooted = |one: &AffineOperand| {
+            let (root, offset) = anchored_with(unit, one, width, None, Some(llrm_mir::opcode::Flags::NSW));
+            let number = Scev::constant(offset, width);
+            root.map_or(number.clone(), |root| Scev::unknown(root, width).plus(&number))
+        };
+        let (start, bound) = (rooted(value), rooted(limit));
+        return crate::guards::guards(unit, preheader)
+            .into_iter()
+            .any(|guard| crate::guards::implies_at_offset(&guard, test, &start, &bound));
+    }
     // Only an equality test reads the guards at an offset (`a != 1` proves `a -
     // 1 != 0`), and only where the ones above do not prove it as they
     // stand.
@@ -1403,6 +1419,19 @@ pub fn anchored(
     width: u32,
     facts: Option<&IndexMap<ValueId, Known>>,
 ) -> (Option<ValueId>, BigInt) {
+    anchored_with(unit, term_, width, facts, None)
+}
+
+/// `anchored`, through the adds and subtractions that carry `no_wrap` only
+/// where it is given: an ordered compare reads a value as its root plus a
+/// constant only where the sum cannot wrap.
+pub fn anchored_with(
+    unit: &Unit,
+    term_: &AffineOperand,
+    width: u32,
+    facts: Option<&IndexMap<ValueId, Known>>,
+    no_wrap: Option<llrm_mir::opcode::Flags>,
+) -> (Option<ValueId>, BigInt) {
     let empty = IndexMap::default();
     let facts = facts.unwrap_or(&empty);
     let mut term_ = term_.clone();
@@ -1416,7 +1445,9 @@ pub fn anchored(
             break;
         }
         let Some((_, op)) = unit.defining(Operand::Value(value)) else { break };
-        if !matches!(op.opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)) {
+        if !matches!(op.opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub))
+            || no_wrap.is_some_and(|flag| !op.flags.contains(flag))
+        {
             break;
         }
         let (Some(left), Some(right)) = (term(unit, op.operands[0]), term(unit, op.operands[1])) else { break };
