@@ -1,5 +1,5 @@
-reason = "fill: adjacent constant stores are one store of the widest integer (gcc store-merging, LLVM MergeConsecutiveStores); a loop of several fills to apart bytes is a memset each where the stores are no larger than the loop"
-blessed = "2026-10-10"
+reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
+blessed = "2026-10-11"
 
 [bas.O2]
 code_bytes = 993
@@ -26,7 +26,7 @@ bss_bytes = 3056
 kernel_ms = 3415.6629
 
 [nib.O2]
-code_bytes = 1446
+code_bytes = 1448
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.5804

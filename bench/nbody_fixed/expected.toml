@@ -1,31 +1,31 @@
-reason = "phielim renames a loop phi to its back-edge argument only where its copies would need an edge block (never an x87 value); twoaddr ties the source that does not interfere with the destination. matmul bas -O2 instructions -11.6%, nbody_fixed nib -Os instructions -3.7% (xchg chains gone) with memory operands +12%; crc bas +1 instruction, +2 bytes (one copy outside its loop)"
-blessed = "2026-10-10"
+reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
+blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 1448167
-memory_operands = 333048
+instructions = 1446168
+memory_operands = 332049
 code_bytes = 568
 data_bytes = 125
 bss_bytes = 0
 
 [bas.Os]
-instructions = 1448161
-memory_operands = 333048
+instructions = 1446162
+memory_operands = 332049
 code_bytes = 555
 data_bytes = 125
 bss_bytes = 0
 
 [c.O2]
-instructions = 1452167
-memory_operands = 326049
-code_bytes = 484
+instructions = 1450167
+memory_operands = 325049
+code_bytes = 481
 data_bytes = 0
 bss_bytes = 96
 
 [c.Os]
-instructions = 1452161
-memory_operands = 326049
-code_bytes = 471
+instructions = 1450161
+memory_operands = 325049
+code_bytes = 468
 data_bytes = 0
 bss_bytes = 96
 
