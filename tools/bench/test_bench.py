@@ -379,3 +379,10 @@ def test_reference_builds_find_bench_io_beside_the_copied_source(tmp_path):
     folder.mkdir(parents=True)
     bench.stage_shared_headers(folder)
     assert (folder.parent / "bench_io.h").read_bytes() == (bench.BENCH / "bench_io.h").read_bytes()
+
+
+def test_llrm_c_benches_find_the_os_layer_header(tmp_path):
+    """bench_io.h includes llrm_os.h: bench.py built C without -I for it, so jpeg's C variants did not compile."""
+    flag, directory = bench.c_include_arguments(tmp_path)
+    assert flag == "-I"
+    assert (Path(directory) / "llrm_os.h").exists()

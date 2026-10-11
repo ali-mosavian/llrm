@@ -130,6 +130,11 @@ def nib_extras(source: Path) -> list[str]:
     return [str(one) for one in dosbatch.link_files(source, run_tests.header(source).get("link", "").split(), dosbatch.REAL_MODE)]
 
 
+def c_include_arguments(work: Path) -> list[str]:
+    """`-I` for the OS layer's C header (llrm_os.h), as tests/run gives every C program: a bench that includes bench_io.h needs it."""
+    return ["-I", str(dosbatch.c_include(dosbatch.REAL_MODE, work))]
+
+
 def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
     """(exe, linker map) of the variant at -`opt`, or why it did not build. BASIC is only compiled here: LINK runs in DOSBox."""
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
@@ -150,6 +155,8 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
         tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
+        if variant.language == "c":
+            extra += c_include_arguments(work)
         done = cpulimit.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], 300, capture_output=True, text=True)
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-300:]
