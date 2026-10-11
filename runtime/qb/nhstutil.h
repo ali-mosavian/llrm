@@ -42,6 +42,7 @@ void str_assign(SD *source, SD *destination);
 SD *str_tmp_copy(SD *source, uword from, uword len);
 byte str_is_tmp(const SD *sd);
 void str_tmp_free(SD *sd);
+#pragma aux str_tmp_free "B$STDALCTMP"
 void str_all_tmp_free(int level);
 
 #endif

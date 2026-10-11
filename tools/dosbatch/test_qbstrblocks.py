@@ -26,7 +26,7 @@ TAIL = "\nNEXT\nEND\n"
 # per iteration, over the empty loop
 LIMITS = {"SPACE$(54)": ('t = SPACE$(54)', 300), "STRING$(300)": ('t = STRING$(300, 65)', 400), "compare 54 equal": ("IF t = u THEN j = j + 1", 160)}
 CHECK = """DEFINT A-Z
-DIM a AS STRING, b AS STRING
+DIM a AS STRING, b AS STRING, c AS STRING
 lt = 0: gt = 0: eq = 0
 FOR n = 0 TO 40
   a = STRING$(n, 97)
@@ -41,8 +41,28 @@ NEXT
 hi = (CHR$(200) > CHR$(100)) + (CHR$(100) < CHR$(200)) + (CHR$(127) < CHR$(128))
 sz = LEN(SPACE$(37)) + LEN(STRING$(5, 66))
 PRINT lt; gt; eq; hi; sz; ASC(MID$(STRING$(41, 66), 41, 1)); ASC(RIGHT$(SPACE$(7), 1))
+a = "abcdefghijklmnopqrst"
+MID$(a, 2) = a
+smear = 0
+FOR p = 1 TO 20
+  IF MID$(a, p, 1) = "a" THEN smear = smear + 1
+NEXT
+b = SPACE$(40)
+c = "0123456789ABCDEFGHIJKLMNOP"
+MID$(b, 7) = c
+MID$(b, 36, 9) = c
+ON ERROR GOTO oops
+MID$(b, 0, 1) = "x"
+%s
+PRINT smear; ASC(MID$(b, 7, 1)); ASC(MID$(b, 32, 1)); ASC(MID$(b, 33, 1)); ASC(MID$(b, 40, 1)); errs
+END
+oops:
+errs = errs + 1
+RESUME NEXT
 """
-EXPECT = [820, 820, 41, -3, 42, 66, 32]
+# The flat runtime ends the program at a second error under ON ERROR (#1482): there only one is raised.
+MORE_ERRORS = 'MID$(b, 41, 1) = "x"\nMID$(b, 1, -1) = "x"'
+EXPECT = {"16": [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 3], "32": [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 1]}
 
 
 def instructions(where: Path) -> int:
@@ -94,5 +114,5 @@ def test_block_string_operations_cost_a_string_instruction_not_a_byte_loop(runne
 
 @pytest.mark.parametrize("target", ["16", "32"])
 def test_comparison_and_fill_results_at_every_length(runner, target: str):
-    result, _ = runner(target, "check", CHECK)
-    assert [int(word) for word in result.text.split()] == EXPECT
+    result, _ = runner(target, "check", CHECK % (MORE_ERRORS if target == "16" else ""))
+    assert [int(word) for word in result.text.split()] == EXPECT[target]
