@@ -44,7 +44,11 @@ pub struct CyclePrices {
 }
 
 impl CyclePrices {
+    /// None tuned for size: a register copy is two bytes, a push or a pop one.
     pub fn of(cpu: &Profile) -> Option<Self> {
+        if cpu.size {
+            return None;
+        }
         Some(Self { copy: cpu.cost("mov_rr").ok()?, push: cpu.cost("push_r").ok()?, pop: cpu.cost("pop_r").ok()? })
     }
 
