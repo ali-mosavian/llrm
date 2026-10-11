@@ -357,11 +357,14 @@ def _oversized(work: Path, cap: int) -> str | None:
     return None
 
 
-def _launch(command: list[str], work: Path, timeout: int, cap: int, **options) -> str | None:
-    """Run `command` until it exits, or until a file in `work` passes `cap` bytes, which stops it: the file's name. A
-    launch that outlives `timeout` is an error."""
+def _launch(command: list[str], work: Path, timeout: int | None, cap: int, stall: int | None = None, **options) -> str | None:
+    """Run `command` until it exits, or until a file in `work` passes `cap` bytes, which stops it: the file's name. A launch
+    that outlives `timeout` (None: no limit) or whose events.txt does not grow for `stall` seconds is an error. Each job's
+    own budget is guest time, so how long a launch takes on the wall is the host's load, not a property of the programs:
+    only an emulator that has stopped reporting is stuck."""
     process = subprocess.Popen(command, **options)
-    deadline = time.monotonic() + timeout
+    started = last = time.monotonic()
+    seen = -1
     while True:
         try:
             process.wait(timeout=0.2)
@@ -372,10 +375,14 @@ def _launch(command: list[str], work: Path, timeout: int, cap: int, **options) -
             process.kill()
             process.wait()
             return over
-        if time.monotonic() > deadline:
+        now = time.monotonic()
+        size = (work / "events.txt").stat().st_size if (work / "events.txt").exists() else 0
+        if size != seen:
+            seen, last = size, now
+        if (timeout is not None and now > started + timeout) or (stall is not None and now > last + stall):
             process.kill()
             process.wait()
-            raise subprocess.TimeoutExpired(command, timeout)
+            raise subprocess.TimeoutExpired(command, timeout if timeout is not None else stall)
 
 
 class BinaryError(Exception):
@@ -420,7 +427,7 @@ def _probe_virtual_time(binary: Path) -> str | None:
     return None
 
 
-def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF, cap: int = OUTPUT_CAP) -> dict[str, Result]:
+def run(jobs: list[Job], work: Path, timeout: int | None = None, stall: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF, cap: int = OUTPUT_CAP) -> dict[str, Result]:
     """Every job's result. One dosrun launch: a first job builds (BC, LINK),
     then each program runs as its own job with `budget_ms` of emulated time, so
     a hang ends that program alone."""
@@ -458,11 +465,11 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
     events = work / "events.txt"
     with open(work / "jobs.txt") as stdin, open(events, "w") as sink:
         try:
-            over = _launch([str(DOSBOX), "-nolog", "-conf", str(work / "job.conf")], work, timeout, cap, stdin=stdin,
+            over = _launch([str(DOSBOX), "-nolog", "-conf", str(work / "job.conf")], work, timeout, cap, stall, stdin=stdin,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
                            env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"DOSBox did not finish in {timeout}s ({work})")
+            raise RuntimeError(f"DOSBox reported nothing for {stall}s or ran past {timeout}s ({work})")
     if over is not None:
         return stopped_for_output(jobs, work, over, cap)
     return collect(jobs, work, events)

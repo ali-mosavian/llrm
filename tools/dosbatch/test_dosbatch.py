@@ -174,3 +174,24 @@ class LoadedHostTests(unittest.TestCase):
         if not dosbatch.DOSBOX.exists():
             self.skipTest("no dosbox-x")
         self.assertIsNone(dosbatch.virtual_time_problem(dosbatch.DOSBOX))
+
+
+class StallTests(unittest.TestCase):
+    """A launch's wall time is the host's load: a fixed limit killed a torture step that was still making progress."""
+
+    def test_a_launch_that_keeps_reporting_is_never_cut_off_by_how_long_it_takes(self):
+        import sys
+
+        writer = "import time\nfor i in range(10):\n    open('events.txt', 'a').write('{}\\n'); time.sleep(0.5)\n"
+        with tempfile.TemporaryDirectory() as where:
+            self.assertIsNone(dosbatch._launch([sys.executable, "-c", writer], Path(where), None, 1 << 20, stall=2, cwd=where))
+
+    def test_a_launch_that_stops_reporting_is_stopped(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as where:
+            began = time.monotonic()
+            with self.assertRaises(subprocess.TimeoutExpired):
+                dosbatch._launch([sys.executable, "-c", "import time; time.sleep(60)"], Path(where), None, 1 << 20, stall=2, cwd=where)
+            self.assertLess(time.monotonic() - began, 20)

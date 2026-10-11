@@ -162,6 +162,13 @@ def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():
     p = gate.plan(["tools/qcport-run.py"])
     assert "timeout" not in gate.commands(p, gate.load(), gate.packages())["qcport"]
 
+def test_the_torture_step_has_no_wall_clock_limit_of_its_own():
+    """`timeout 600` killed a full gate's torture step at 150 of 474 programs under load: every program's budget is guest time, so
+    the step's wall time is the host's load. dosbatch stops an emulator that stops reporting."""
+    p = gate.plan(["tools/torture/torture.py"])
+    assert "timeout" not in gate.commands(p, gate.load(), gate.packages())["torture"]
+
+
 def test_every_step_the_planner_can_produce_is_in_exactly_one_ci_group():
     """A step in no group would never run in CI, silently: the matrix is built from the groups."""
     plans = [gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full"), gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "auto"), gate.plan(["crates/backend/x.rs"], "fast")]  # `scans` and `measure` are fast-tier steps
