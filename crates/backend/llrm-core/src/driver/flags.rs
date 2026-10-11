@@ -64,7 +64,7 @@ impl Level {
 }
 
 /// gcc's `-f` pass names, each with the options it sets.
-const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 21] = [
+const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 22] = [
     ("allocation-search", |options, on| options.search = on),
     ("allocation-routes", |options, on| options.routes = on),
     ("allocation-search-all", |options, on| options.exhaustive = on),
