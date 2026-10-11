@@ -221,6 +221,53 @@ pub fn operations(body: &Function) -> i64 {
     semantic_count(body)
 }
 
+/// `body`'s size as gcc's `estimate_num_insns` counts it (`eni_size_weights`),
+/// the unit of `max-inline-insns-auto`: a compare that only a conditional
+/// branch reads is that branch (GIMPLE_COND holds its comparison), an address
+/// computation only a load or store reads is the access (an ARRAY_REF), and a
+/// return counts one where a phi and an unconditional jump count none. The
+/// unit of every limit that is gcc's own number (`max-inline-insns-auto`,
+/// jump threading's copy limit).
+pub fn gcc_insns(body: &Function) -> i64 {
+    gcc_insns_in(body, body.walk().map(|(_, inst)| inst))
+}
+
+/// `gcc_insns` of the instructions `insts` of `body`: the size of a path
+/// jump threading copies.
+pub fn gcc_insns_in(
+    body: &Function,
+    insts: impl IntoIterator<Item = InstId>,
+) -> i64 {
+    let only_by = |inst: InstId, accepts: &dyn Fn(&Function, &llrm_mir::module::Use) -> bool| {
+        let Some(result) = body.instruction(inst).result else { return false };
+        let uses = body.users(result);
+        !uses.is_empty() && uses.iter().all(|one| accepts(body, one))
+    };
+    insts
+        .into_iter()
+        .filter(|&inst| {
+            let instruction = body.instruction(inst);
+            match instruction.opcode {
+                Opcode::Phi => false,
+                Opcode::Br => instruction.operands.len() != 1,
+                Opcode::ICmp(_) => !only_by(inst, &|body, one| {
+                    let user = body.instruction(one.user);
+                    user.opcode == Opcode::Br && user.operands.len() == 3 && one.index == 0
+                }),
+                Opcode::GetElementPtr { .. } => !only_by(inst, &|body, one| {
+                    let user = body.instruction(one.user);
+                    match user.opcode {
+                        Opcode::Load { .. } => one.index == 0,
+                        Opcode::Store { .. } => one.index == 1,
+                        _ => false,
+                    }
+                }),
+                _ => true,
+            }
+        })
+        .count() as i64
+}
+
 fn semantic_count(body: &Function) -> i64 {
     body.walk().filter(|&(_, inst)| semantic(body, inst)).count() as i64
 }
