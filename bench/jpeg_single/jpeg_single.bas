@@ -1,3 +1,5 @@
+' flags: -O2 -march=i486
+' m16 only: the harness runs BASIC on the Microsoft runtime, and the llrm runtime has no file GET/PUT of strings yet (#1441)
 ' data: photo.jpg
 ' JPEG to BMP, an MCU row at a time, as jpeg_single.c: baseline Huffman YCbCr in 4:2:0, 4:4:4, 4:2:2 or 4:4:0 with restart
 ' markers. Reads PHOTO.JPG, writes a top-down 24-bit OUT.BMP and returns the Adler-32 of the BMP's bytes. IDCT and colour
