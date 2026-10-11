@@ -923,3 +923,66 @@ fn a_value_in_two_registers_is_said_as_two_pieces() {
     let wide = wide.split("DW_TAG_").next().unwrap();
     assert!(wide.contains("DW_OP_piece 0x4") && wide.matches("DW_OP_piece").count() == 2, "{wide}");
 }
+
+/// Nib's DWARF in OMF, linked by jwlink, read back: the 32-bit LE image's DWARF
+/// by llvm-dwarfdump (verified), the 16-bit MZ image's by wdump. A bare
+/// `-gdwarf` at -m16 wrote version 5, which wdump read none of (no address
+/// size, no names); Open Watcom's convention is version 2.
+#[test]
+fn nib_dwarf_in_omf_links_into_images_that_independent_readers_read() {
+    let wdump = std::env::var_os("WDUMP")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("dos/devtools/dev/c/watcom/binl/wdump")))
+        .filter(|path| path.exists());
+    let bins = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().to_path_buf();
+    let (Some(dwarfdump), Some(wdump), true) = (dwarfdump(), wdump, bins.join("jwlink").exists()) else {
+        skipped("needs llvm-dwarfdump, Open Watcom's wdump (WDUMP) and jwlink beside llrm");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.nib");
+    let link = |bits: &str, format: &[&str]| {
+        let made = Command::new(bins.join("llrm-nib"))
+            .args([&format!("-m{bits}"), "-O0", "-gdwarf", "-fobject-format=omf"])
+            .arg(&source)
+            .arg("-o")
+            .arg(dir.join(format!("n{bits}.obj")))
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        let linked = Command::new(bins.join("jwlink"))
+            .args(format)
+            .args(["debug", "dwarf", "file"])
+            .arg(format!("n{bits}.obj"))
+            .args(["name"])
+            .arg(format!("n{bits}.exe"))
+            .args(["option", "quiet,start=_main,nodefaultlibs"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::fs::read(dir.join(format!("n{bits}.exe")))
+            .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&linked.stdout)))
+    };
+    let image = link("32", &["format", "os2", "le"]);
+    let elf = image.windows(4).rposition(|four| four == b"\x7fELF").expect("jwlink appends the DWARF as an ELF image");
+    std::fs::write(dir.join("n32.elf"), &image[elf..]).unwrap();
+    let ran = |args: &[&str]| Command::new(&dwarfdump).args(args).arg(dir.join("n32.elf")).output().unwrap();
+    let verified = ran(&["--verify"]);
+    assert!(verified.status.success(), "{}", String::from_utf8_lossy(&verified.stdout));
+    let text = String::from_utf8_lossy(&ran(&["--debug-info"]).stdout).into_owned();
+    for name in ["add", "main", "first", "second", "sum", "total"] {
+        assert!(text.contains(&format!("DW_AT_name\t(\"{name}\")")), "no {name}:\n{text}");
+    }
+    link("16", &["format", "dos"]);
+    let said = Command::new(wdump).args(["-q", "-d", "-Dx"]).arg(dir.join("n16.exe")).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    for wanted in [
+        "Address Size 02",
+        "DW_AT_name                    add",
+        "DW_AT_name                    sum",
+        "\".debug_frame\"",
+    ] {
+        assert!(text.contains(wanted), "no {wanted:?}:\n{text}");
+    }
+}

@@ -44,10 +44,17 @@ pub struct ObjectFormat {
     pub bitness: u32,
     /// The lines a listing opens with: its instruction set and memory model.
     pub header: Vec<String>,
+    /// The DWARF version `-gdwarf` writes: the one the target's own consumers
+    /// read.
+    pub dwarf_version: u16,
 }
 
+/// What `-gdwarf` writes where the target does not say.
+pub const DEFAULT_DWARF_VERSION: u16 = 5;
+
 impl ObjectFormat {
-    /// `text`, an `object.toml`: `formats`, `default`, `bitness` and `header`.
+    /// `text`, an `object.toml`: `formats`, `default`, `bitness`, `header` and,
+    /// optionally, `dwarf_version`.
     pub fn parse(text: &str) -> Result<Self, String> {
         let value: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
         let formats = value
@@ -79,7 +86,15 @@ impl ObjectFormat {
             .iter()
             .map(|line| line.as_str().map(str::to_owned).ok_or("a header line is not a string"))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { formats, default, bitness, header })
+        let dwarf_version = match value.get("dwarf_version") {
+            None => DEFAULT_DWARF_VERSION,
+            Some(one) => one
+                .as_integer()
+                .and_then(|one| u16::try_from(one).ok())
+                .filter(|one| (2..=5).contains(one))
+                .ok_or("dwarf_version is not 2 to 5")?,
+        };
+        Ok(Self { formats, default, bitness, header, dwarf_version })
     }
 
     /// The format written when `asked` is the one `-fobject-format=` named, if
@@ -115,6 +130,16 @@ mod tests {
             (flat.formats.as_slice(), flat.default, flat.bitness, flat.header.len()),
             (&[Format::Omf, Format::Elf][..], Format::Omf, 32, 2)
         );
+    }
+
+    #[test]
+    fn a_target_declares_the_dwarf_version_its_consumers_read() {
+        let parse = |extra: &str| {
+            ObjectFormat::parse(&format!("formats = [\"omf\"]\ndefault = \"omf\"\nbitness = 16\nheader = []\n{extra}"))
+        };
+        assert_eq!(parse("").unwrap().dwarf_version, DEFAULT_DWARF_VERSION);
+        assert_eq!(parse("dwarf_version = 2\n").unwrap().dwarf_version, 2);
+        assert_eq!(parse("dwarf_version = 6\n").unwrap_err(), "dwarf_version is not 2 to 5");
     }
 
     #[test]
