@@ -1,0 +1,126 @@
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# data: @signal
+# Short-time Fourier transform in Q9 fixed point, as stft_fixed.c: fixed '*' floors, as C's >> and BASIC's floor do.
+# The twiddles are rotated in Q15 and cut to Q9.
+import std.io as io
+
+type Q = fixed i32, fraction=9
+type R = fixed i32, fraction=15
+
+const N: i32 = 256
+const HOP: i32 = 128
+const BINS: i32 = 129
+
+var tw_re: Q[128] = [0] * 128
+var tw_im: Q[128] = [0] * 128
+var window: Q[256] = [0] * 256
+var re: Q[256] = [0] * 256
+var im: Q[256] = [0] * 256
+var rev: u8[256] = [0] * 256
+var block: i16[256] = [0] * 256
+var row: u16[129] = [0] * 129
+
+# A sample over 4, truncated toward zero: fixed '/' does, an integer '/' is not defined.
+fn quarter(sample: i16) -> Q:
+    return Q(i32(Q(i32(sample)) / 4))
+
+fn fft() -> void:
+    let mut m: i32 = 2
+    while m <= N:
+        let half = m // 2
+        let stride = N // m
+        let mut i: i32 = 0
+        while i < N:
+            for j in 0..half:
+                let ar = re[i + j]
+                let ai = im[i + j]
+                let br = re[i + j + half]
+                let bi = im[i + j + half]
+                let tr = tw_re[j * stride] * br - tw_im[j * stride] * bi
+                let ti = tw_re[j * stride] * bi + tw_im[j * stride] * br
+                re[i + j] = (ar + tr) / 2
+                im[i + j] = (ai + ti) / 2
+                re[i + j + half] = (ar - tr) / 2
+                im[i + j + half] = (ai - ti) / 2
+            i += m
+        m *= 2
+
+# Pointers to the module's arrays are `*near` and made far by `.far()`, which is near on m32: spelling `*far` warns there.
+fn fill(file: &mut io.File, at: i32) -> bool:
+    unsafe:
+        let data: *near mut i16 = &mut block
+        match file.read_raw(data.offset(at).cast[u8]().far(), 2 * HOP):
+            .ok(n):
+                return n == 2 * HOP
+            .err(_):
+                return false
+
+fn put(file: &mut io.File) -> bool:
+    unsafe:
+        let data: *near u16 = &row
+        match file.write_raw(data.cast[u8]().far(), 2 * BINS):
+            .ok(n):
+                return n == 2 * BINS
+            .err(_):
+                return false
+
+fn bench_stft_fixed() -> i32:
+    let mut c: R = 1
+    let mut s: R = 0
+    let cos_step: R = 0.99969882
+    let sin_step: R = 0.024541229
+    for k in 0..HOP:
+        tw_re[k] = Q(c)
+        tw_im[k] = 0 - Q(s)
+        let next = c * cos_step - s * sin_step
+        s = s * cos_step + c * sin_step
+        c = next
+    for k in 0..HOP:
+        window[k] = (Q(1) - tw_re[k]) / 2
+        window[k + HOP] = Q(1) - window[k]
+    for i in 0..N:
+        let mut r: i32 = 0
+        let mut t: i32 = i
+        for _bit in 0..8:
+            r = r * 2 + (t & 1)
+            t = t >> 1
+        rev[i] = u8(r)
+    let mut sum: i32 = 0
+    let mut index: i32 = 0
+    match io.File.open("SIGNAL"):
+        .err(_):
+            return -1
+        .ok(opened):
+            let mut input = opened
+            match io.File.create("SPECTRA"):
+                .err(_):
+                    return -1
+                .ok(created):
+                    let mut output = created
+                    if !fill(input, 0):
+                        return -1
+                    let mut now: i32 = 0
+                    while fill(input, (1 - now) * HOP):
+                        for n in 0..HOP:
+                            re[i32(rev[n])] = quarter(block[now * HOP + n]) * window[n]
+                            re[i32(rev[n + HOP])] = quarter(block[(1 - now) * HOP + n]) * window[n + HOP]
+                            im[i32(rev[n])] = 0
+                            im[i32(rev[n + HOP])] = 0
+                        fft()
+                        for k in 0..BINS:
+                            let pr = i32(re[k] * 4)
+                            let pi = i32(im[k] * 4)
+                            let mut q: i32 = (pr * pr + pi * pi) // 256
+                            if q > 65535:
+                                q = 65535
+                            row[k] = u16(q)
+                            sum = ((sum * 3) + q + index) & 0x1FFFFFFF
+                            index += 1
+                        if !put(output):
+                            return -1
+                        now = 1 - now
+    return sum
+
+fn main() -> i16:
+    print(bench_stft_fixed())
+    return 0
