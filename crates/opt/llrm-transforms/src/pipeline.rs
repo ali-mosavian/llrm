@@ -239,7 +239,7 @@ impl Options {
             "decide" => self.decide,
             "dead" => self.dead,
             "hoist" | "loopmotion" => self.hoist,
-            "gvn" => self.forward && self.drop_loads,
+            "gvn" | "equalcalls" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sroa" | "promote" => self.promote,
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
@@ -283,6 +283,9 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(phiopt::PhiOpt { size: applied.options.prefers_size() }),
         // Once the arguments are values rather than frame cells; the loop it
         // makes goes to the loop passes below.
+        // Before a call is made a loop: two equal calls are one first, as
+        // LLVM's EarlyCSE and gcc's FRE precede tail-recursion elimination.
+        Box::new(gvn::EqualCalls),
         Box::new(tailrec::TailRecursion),
         Box::new(loopsimplify::LoopSimplify),
         Box::new(lcssa::LoopClosedSSA),

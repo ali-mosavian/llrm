@@ -1,5 +1,5 @@
-reason = "shrink-wrap per piece (#1323): the frame and each register kept are set up where first used and a small shared return is copied for the early exit; fib -8.0%, hanoi -8.0%, quicksort c -O2 -3.3% instructions (code +3 B), bintree/quicksort bas -0.4..-1.0%; one byte less in grep nib"
-blessed = "2026-10-10"
+reason = "hanoi (c, nib) -O2/-Os: equal calls to a function that touches no memory are one (self-recursive memory(none), GVN numbers the call, merged before tail recursion makes it a loop): 188,403 -> 111 instructions at c -O2. The row now measures a const recursion folded, not recursion."
+blessed = "2026-10-11"
 
 [bas.O2]
 instructions = 335856
@@ -17,30 +17,30 @@ bss_bytes = 0
 kernel_ms = 5.691
 
 [c.O2]
-instructions = 188403
+instructions = 111
 memory_operands = 0
-code_bytes = 55
+code_bytes = 39
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 212979
+instructions = 111
 memory_operands = 0
-code_bytes = 53
+code_bytes = 39
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 155637
+instructions = 112
 memory_operands = 0
-code_bytes = 53
+code_bytes = 42
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 155637
+instructions = 112
 memory_operands = 0
-code_bytes = 53
+code_bytes = 42
 data_bytes = 0
 bss_bytes = 0
 

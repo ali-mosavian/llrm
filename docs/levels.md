@@ -18,6 +18,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir fold` | x | on | on | on | on | on |
 | `mir decide` | x | on | on | on | on | on |
 | `mir phiopt` | x | on | on | on | on | on |
+| `mir equalcalls` | x | x | on | on | on | x |
 | `mir tailrec` | x | x | on | on | on | x |
 | `mir loopsimplify` | x | on | on | on | on | on |
 | `mir lcssa` | x | on | on | on | on | on |
