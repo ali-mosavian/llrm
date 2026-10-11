@@ -134,9 +134,6 @@ pub struct Insn {
     pub volatile: bool,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
-    /// A return of a function that keeps no frame register: the epilogue
-    /// reads nothing of it, and it is one more register for values.
-    pub frame_free: bool,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<u32>,
     pub debug: DebugTags,
@@ -428,7 +425,6 @@ impl Insn {
             rematerialized: false,
             volatile: false,
             reads_complete: false,
-            frame_free: false,
             line: None,
             debug: DebugTags::default(),
             effect: Derived::default(),

@@ -5,10 +5,8 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
-use std::sync::Arc;
 
-use llrm_lir::registers::RegId;
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, Regs};
 use llrm_mir::facts::Fact;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 use llrm_support::debug::timed;
@@ -22,8 +20,8 @@ use crate::backend::isel::{self, Selected};
 use crate::backend::target::Segments;
 use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, select, ssaspill};
 use crate::flow;
-use crate::model::ir::{Addr, Operation, Space};
-use crate::model::lir::{Insn, LirBody};
+use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
+use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
 /// What only the frontend knows: each call's contract, and the symbol each
@@ -716,6 +714,34 @@ mod tests {
     }
 }
 
+/// `what` with the stack and frame tokens of its register-addressed cells
+/// named at the width of the target's addresses: `[sp]` has no encoding in
+/// flat code, and the token is only the stack's name until the frame layout
+/// resolves it.
+fn stack_as_addressed(
+    regs: Regs,
+    bits: u32,
+    what: &Semantics,
+) -> Semantics {
+    let bytes = i64::from(bits / 8);
+    let widen = |place: &Loc| {
+        if place.address().is_none_or(|cell| cell.addr.is_some()) {
+            return place.clone();
+        }
+        place.map_address(|cell| {
+            let wide = |register: RegId| {
+                if regs.is_stack(register) || regs.is_frame(register) { regs.named(register, bytes) } else { register }
+            };
+            AddressRef { through: wide(cell.through), index_through: wide(cell.index_through), ..cell }
+        })
+    };
+    Semantics {
+        dests: what.dests.iter().map(&widen).collect(),
+        sources: what.sources.iter().map(&widen).collect(),
+        ..what.clone()
+    }
+}
+
 /// What a finished function costs: its encoded bytes where the target optimizes
 /// for size, else the instructions and memory operands it is expected to
 /// execute per call.
@@ -729,6 +755,7 @@ fn cost(
             .iter()
             .filter_map(|one| one.what.as_ref())
             .map(|what| {
+                let what = &stack_as_addressed(made.body.regs(), made.body.bits, what);
                 let priced = select::priced_in(made.body.bits, what, 0, None, false, false, None)
                     .map(|code| code.code.len() as f64);
                 // A function with one instruction the encoder cannot price is
@@ -846,23 +873,20 @@ fn staged(
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
-    let frame_free = crate::backend::framefree::without_frame_register(
+    let classes: Rc<RegisterClasses> = if crate::backend::framefree::without_frame_register(
         &body,
         &registers,
         &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
         !inline.is_empty(),
         false,
         landing.is_some(),
-    );
-    let classes: Rc<RegisterClasses> = if frame_free {
+    ) {
         registers.free = true;
         registers.saved.push((registers.pointer, registers.pointer));
         Rc::new(target.classes.with_frame_free())
     } else {
         Rc::clone(target.classes)
     };
-    // A return reads the frame register only where one is kept.
-    let body = if frame_free { frame_free_returns(body) } else { body };
     let body = if llrm_support::debug::verifying() {
         timed("lir verify", || flow::verified(body, "isel", true, &target.arch.layout().spaces.roles))
             .map_err(|error| error.0)?
@@ -876,26 +900,6 @@ fn staged(
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
     Ok(Staged { body, frame, convention, calls, inline, inline_places, far, pops, landing, registers, classes })
-}
-
-/// `body` with each return marked as one of a function that keeps no frame
-/// register.
-fn frame_free_returns(body: LirBody) -> LirBody {
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| {
-            let marked = |one: &Arc<Insn>| {
-                if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
-                    Arc::new(Insn { frame_free: true, ..(**one).clone() })
-                } else {
-                    Arc::clone(one)
-                }
-            };
-            block.with_insns(block.insns.iter().map(marked).collect())
-        })
-        .collect();
-    LirBody { blocks, ..body }
 }
 
 /// `phased`; or, where `until_changed`, none if the spiller left the body as it
