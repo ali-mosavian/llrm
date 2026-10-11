@@ -1,4 +1,4 @@
-;; name: B$INT10, B$INT10R, B$INT17, B$INT21
+;; name: B$INT10, B$INT10R, B$INT16, B$INT17, B$INT21
 ;; desc: software interrupts
 ;;
 ;; chng: oct/26 written [ali]
@@ -9,6 +9,7 @@
                 .model  flat
 
                 public  B$INT10
+                public  B$INT16
                 public  B$INT17
                 public  B$INT21
                 public  B$INT10R
@@ -154,6 +155,24 @@ B$INT17         proc
 
                 CALLINT 17h
 B$INT17         endp
+
+;; B$INT16 - call BIOS or DOS interrupt 16h.
+;;
+;; Loads eax ebx ecx edx from `regs`, runs interrupt 16h, and stores ax bx cx dx
+;; ebp es and the flags back as the interrupt left them.
+;;
+;; Args:
+;;     regs (eax): ptr to a Regs.
+;;
+;; Returns:
+;;     regs: the registers and the flags as the interrupt left them.
+;;
+;; Saves:    all general registers and es (pushad, push es)
+;; Clobbers: flags
+B$INT16         proc
+
+                CALLINT 16h
+B$INT16         endp
 
 ;; B$INT21 - call BIOS or DOS interrupt 21h.
 ;;

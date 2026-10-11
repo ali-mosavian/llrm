@@ -93,6 +93,7 @@ extern void dev_int10(Regs *regs);
 /* Where protected mode has to ask for a real-mode result, the interrupt run in
  * real mode; here it is the same. */
 #define dev_int10r dev_int10
+extern void dev_int16(Regs *regs);
 extern void dev_int17(Regs *regs);
 extern void dev_int21(Regs *regs);
 extern void dev_outb(unsigned port, unsigned value);
@@ -122,6 +123,7 @@ extern void dev_atan2(const double *y, const double *x, double *out);
 extern void dev_sincos(const double *angle, double *sine, double *cosine);
 
 #pragma aux dev_int10 "B$INT10"
+#pragma aux dev_int16 "B$INT16"
 #pragma aux dev_int17 "B$INT17"
 #pragma aux dev_int21 "B$INT21"
 #pragma aux dev_outb "B$OUTB"

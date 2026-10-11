@@ -6,6 +6,8 @@
 
 enum { CTRL_Z = 26 };
 
+int (*cn_key_hook)(void);
+
 /* The empty string when no key is waiting; a key is one character, and an
    extended key (function and cursor keys) is a zero and its scan code.  The end
    of redirected input ends the program. */
@@ -16,8 +18,15 @@ SD *B_INKY(void)
     byte code;
 
     cn_sync();
-    if (!llrm_os_console_key_ready())
-        return &str_nul;
+    for (;;) {
+        if (cn_key_hook)
+            cn_key_hook();
+        if (!llrm_os_console_key_ready())
+            return &str_nul;
+        /* a key that came in as the hook looked is read once it is no trap's */
+        if (!cn_key_hook || !cn_key_hook())
+            break;
+    }
     code = llrm_os_console_read_key();
     if (code == CTRL_Z)
         qb_end();

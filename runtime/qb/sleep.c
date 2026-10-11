@@ -16,8 +16,16 @@ void B_SLEP(long seconds)
 {
     long start = dev_clock();
 
-    while (!llrm_os_console_key_ready() && (seconds == 0 || elapsed(start) < seconds * HUNDREDTHS))
-        ;
+    for (;;) {
+        if (cn_key_hook)
+            cn_key_hook();
+        if (llrm_os_console_key_ready()) {
+            if (!cn_key_hook || !cn_key_hook())
+                break;
+        } else if (seconds != 0 && elapsed(start) >= seconds * HUNDREDTHS) {
+            break;
+        }
+    }
 }
 
 /* B$BEEP: the bell character, which the console sounds or passes on. */
