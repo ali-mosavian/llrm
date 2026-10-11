@@ -1,4 +1,4 @@
-reason = "new benches: baseline JPEG to BMP"
+reason = "coalesce takes loop blocks deepest first, the hottest copies first within a loop (x_binsearch -9.4% clocks m32): bintree c -O2 +2.6% instructions (the LCG chain in the loop takes a longer multiply sequence), qbsp/mandel/grep code bytes +0.3..1.9%, fib/crc/jpeg/grep/qbsp nib better"
 blessed = "2026-10-11"
 
 [bas.O2]
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 542.2903
 
 [c.O2]
-code_bytes = 3158
+code_bytes = 3156
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 308.3818
@@ -26,7 +26,7 @@ bss_bytes = 15849
 kernel_ms = 310.146
 
 [nib.O2]
-code_bytes = 6305
+code_bytes = 6301
 data_bytes = 17198
 bss_bytes = 0
 kernel_ms = 392.1256
