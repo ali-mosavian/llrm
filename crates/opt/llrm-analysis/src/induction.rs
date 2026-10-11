@@ -1924,6 +1924,10 @@ pub fn basics(
     let inside = &loop_.body;
     let still = invariant(function, inside);
     let within = |inst: InstId| function.parent(inst).is_some_and(|block| inside.contains(&cfg::id(block)));
+    // The value each counter takes round the loop, by counter; the phis that
+    // are not `phi + step`, with their start and what they take round.
+    let mut backs: Vec<(ValueId, ValueId)> = Vec::new();
+    let mut derived: Vec<(ValueId, AffineOperand, ValueId)> = Vec::new();
     for &inst in function.block(header).instructions() {
         let phi = function.instruction(inst);
         if phi.opcode != Opcode::Phi {
@@ -1955,10 +1959,38 @@ pub fn basics(
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let (Some(Some(step)), Some(start)) = (steps.first(), term(unit, start)) else { continue };
+        let (Some(Some(step)), Some(start)) = (steps.first(), term(unit, start)) else {
+            // Not `phi + step`: the value round may be another counter's, and
+            // a constant more.
+            if let (&[(Operand::Value(back), _)], Some(start)) = (&around[..], term(unit, start)) {
+                derived.push((result, start, back));
+            }
+            continue;
+        };
         if steps.iter().all(|one| one.as_ref() == Some(step)) {
+            if let [(Operand::Value(back), _)] = around[..] {
+                backs.push((back, result));
+            }
             out.insert(result, Affine { value: result, start, step: step.clone(), header: loop_.header });
         }
+    }
+    // A header phi that is a counter and a constant: round the loop it takes
+    // that counter's next value and a constant more, from a start that is its
+    // start and the constant. A header copy leaves one where the test read
+    // `i + 2` (SCEV's add recurrence `{2,+,3}` beside `{0,+,3}`).
+    for (result, start, back) in derived {
+        let Some(made) = defining(function, back).filter(|&made| within(made)) else { continue };
+        let Some((stepped, constant)) = stepping(unit, function.instruction(made)) else { continue };
+        let (AffineOperand::Value(next, _), AffineOperand::Const(more)) = (&stepped, &constant) else { continue };
+        let Some(counter) = backs.iter().find(|(back, _)| back == next).and_then(|(_, phi)| out.get(phi)).cloned()
+        else {
+            continue;
+        };
+        let (AffineOperand::Const(was), AffineOperand::Const(now)) = (&counter.start, &start) else { continue };
+        if masked(&(&was.n + &more.n), now.width) != masked(&now.n, now.width) {
+            continue;
+        }
+        out.insert(result, Affine { value: result, start, step: counter.step.clone(), header: loop_.header });
     }
     out
 }
