@@ -272,21 +272,12 @@ fn guards(module: &Module) -> usize {
         .count()
 }
 
-/// gcc copies the chain of header tests, `while (a && b)` both, where `b` reads
-/// a counter (`should_duplicate_loop_header_p`, `copy_headers`): x_primes -O2
-/// +20% over gcc with the one.
+/// gcc copies the chain of header tests, `while (a && b)` both
+/// (`should_duplicate_loop_header_p`, `copy_headers`): x_primes -O2 +20% over
+/// gcc with the one.
 #[test]
 fn test_a_second_test_of_a_counter_is_copied_with_the_first() {
     let (changed, module) = through(&two_tests("%i"), Rotate { proven: false, copy: true });
     assert!(changed);
     assert_eq!(guards(&module), 2);
-}
-
-/// A second test of a value the loop computes from itself is not (mandel's
-/// `xx + yy > 1024`: copied, it folds nothing and costs registers).
-#[test]
-fn test_a_second_test_of_a_loop_varying_value_is_not_copied() {
-    let (changed, module) = through(&two_tests("%v"), Rotate { proven: false, copy: true });
-    assert!(changed);
-    assert_eq!(guards(&module), 1);
 }

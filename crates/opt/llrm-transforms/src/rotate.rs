@@ -542,16 +542,6 @@ fn _chained(
     let Some(shape) = _shape_of(function, &loop_, true, true).filter(|shape| shape.preheader == bridge) else {
         return Ok(None);
     };
-    // After the first, only a test of counters and invariants is copied: one of
-    // other loop-varying values (`xx + yy > 1024` after `x * x`) would be
-    // copied for nothing it can fold.
-    {
-        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
-        let counters = induction::basics(&unit, &loop_);
-        if !_counted_test(function, &loop_, &shape, &counters) {
-            return Ok(None);
-        }
-    }
     let Some((guard, copies)) = _copy_test(function, &shape) else { return Ok(None) };
     let weights = function
         .instruction(function.terminator(shape.header).expect("a terminated header"))
@@ -562,45 +552,6 @@ fn _chained(
     _rotate(context, function, &shape, Some(guard), &copies)?;
     _weighed(context, declared, function, &shape, weights, guard.1);
     Ok(Some((shape.first, insns)))
-}
-
-/// Whether `shape`'s header test reads only counters and what the loop does not
-/// change, through the header's own work.
-fn _counted_test(
-    function: &Function,
-    loop_: &Loop,
-    shape: &Shape,
-    counters: &llrm_support::hash::IndexMap<llrm_mir::module::ValueId, induction::Affine>,
-) -> bool {
-    use llrm_mir::module::ValueDef;
-    let branch = function.terminator(shape.header).expect("a terminated header");
-    let mut pending: Vec<Operand> = function.instruction(branch).operands.clone();
-    let mut seen = BTreeSet::new();
-    while let Some(operand) = pending.pop() {
-        let Operand::Value(value) = operand else { continue };
-        if !seen.insert(value) {
-            continue;
-        }
-        match function.value(value).def {
-            ValueDef::Argument(_) => {}
-            ValueDef::Instruction(inst) => {
-                let Some(block) = function.parent(inst) else { continue };
-                if block == shape.header {
-                    let op = function.instruction(inst);
-                    if op.opcode == Opcode::Phi {
-                        if !counters.contains_key(&value) {
-                            return false;
-                        }
-                    } else {
-                        pending.extend(op.operands.iter().copied());
-                    }
-                } else if loop_.body.contains(&cfg::id(block)) {
-                    return false;
-                }
-            }
-        }
-    }
-    true
 }
 
 /// The guard the copy left in the preheader is taken as the header's test is:
