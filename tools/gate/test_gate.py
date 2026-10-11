@@ -222,6 +222,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
 def test_a_gate_run_makes_a_target_dir_that_does_not_exist_yet(tmp_path, monkeypatch):
     """On a fresh CI runner CARGO_TARGET_DIR is not there: `run` died FileNotFoundError on target/gate-logs before any step."""
     monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "fresh" / "target"))
+    monkeypatch.setenv("LLRM_BIN", str(tmp_path / "bin"))  # the gate sets it; a plain shell does not, and snapshots a release dir that is not there
     code, failed = gate.execute(gate.Plan("fast", "test", steps=[]))
     assert code == 0 and (tmp_path / "fresh/target/gate-logs").is_dir()
 
@@ -251,6 +252,7 @@ def test_a_step_run_by_the_gate_does_not_see_a_requirement_for_a_tool_the_host_l
     for name, value in {"CARGO_TARGET_DIR": str(tmp_path / "t"), "HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1", "TCPP30_DIR": "", "TD_DIR": ""}.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv("LLRM_REQUIRE_TURBO", raising=False)
+    monkeypatch.setenv("LLRM_BIN", str(tmp_path / "bin"))
     monkeypatch.setattr(gate, "commands", lambda *a: {"probe": 'echo "[$LLRM_REQUIRE_TURBO]"'})
     assert gate.execute(gate.Plan("fast", "test", steps=["probe"]))[0] == 0
     assert (tmp_path / "t/gate-logs/probe.log").read_text().strip() == "[]"
