@@ -25,6 +25,8 @@
                 public  B$FSCL
                 public  B$FSCP
                 public  B$FSCC
+                public  B$FOCP
+                public  B$FOCC
                 public  B$FPSEL
                 public  B$FPUC
                 public  B$FPUP
@@ -1221,6 +1223,89 @@ B$FSCC          proc
                 pop     ebx
                 ret
 B$FSCC          endp
+
+
+FillOct         struc
+                base            dword   ?
+                row             dword   4 dup (?)
+                col             dword   4 dup (?)
+                pm              dword   4 dup (?)
+                color           dword   ?
+FillOct         ends
+
+PTP             macro   r, c
+                mov     edi, [ebx].FillOct.base
+                add     edi, [ebx].FillOct.row[4*r]
+                add     edi, [ebx].FillOct.col[4*c]
+                mov     ah, byte ptr [ebx].FillOct.pm[4*c]
+                mov     al, 8
+                out     dx, ax
+                mov     al, es:[edi]
+                mov     es:[edi], cl
+                endm
+
+PTC             macro   r, c
+                mov     edi, [ebx].FillOct.base
+                add     edi, [ebx].FillOct.row[4*r]
+                add     edi, [ebx].FillOct.col[4*c]
+                mov     al, es:[edi]
+                mov     ah, al
+                xor     ah, cl
+                and     ah, byte ptr [ebx].FillOct.pm[4*c]
+                xor     al, ah
+                mov     es:[edi], al
+                endm
+
+;;::::::::::::::
+;; B$FOCP (eax: ptr FillOct): the eight points of a circle step, planar: the bit mask by `out`, the latches loaded by the read, the colour written
+B$FOCP          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    edi
+                mov     ebx, eax
+                mov     cl, byte ptr [ebx].FillOct.color
+                mov     edx, 3CEh
+                PTP     0, 0
+                PTP     2, 2
+                PTP     2, 3
+                PTP     0, 1
+                PTP     1, 1
+                PTP     3, 3
+                PTP     3, 2
+                PTP     1, 0
+                pop     edi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FOCP          endp
+
+;;::::::::::::::
+;; B$FOCC (eax: ptr FillOct): the same for the CGA modes, each byte blended under the mask of its pixel
+B$FOCC          proc
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    edi
+                mov     ebx, eax
+                mov     cl, byte ptr [ebx].FillOct.color
+                PTC     0, 0
+                PTC     2, 2
+                PTC     2, 3
+                PTC     0, 1
+                PTC     1, 1
+                PTC     3, 3
+                PTC     3, 2
+                PTC     1, 0
+                pop     edi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FOCC          endp
 
 set_pattern     dd      0
 set_flag        db      0

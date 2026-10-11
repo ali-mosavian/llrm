@@ -645,40 +645,59 @@ static void linear_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, in
     b[w] = color;
 }
 
+static void packed_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z, unsigned bits)
+{
+    FillOct oct;
+    unsigned ys[4], xs[4], i;
+
+    ys[0] = cy - v;
+    ys[1] = cy + v;
+    ys[2] = cy - z;
+    ys[3] = cy + z;
+    xs[0] = cx + u;
+    xs[1] = cx - u;
+    xs[2] = cx + w;
+    xs[3] = cx - w;
+    for (i = 0; i < 4; i++) {
+        oct.row[i] = (ys[i] & 1 ? CGA_ODD_ROWS : 0) + (ys[i] >> 1) * CGA_ROW_BYTES;
+        oct.col[i] = xs[i] * bits >> 3;
+        oct.mask[i] = ((1u << bits) - 1) << (8 - bits - (xs[i] * bits & 7));
+    }
+    oct.base = (void QB_FAR *)screen;
+    oct.color = fill->flip & 0xFF;
+    dev_octet_packed(&oct);
+}
+
 static void packed4_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
 {
-    packed_dot(fill, cx + u, cy - v, 2);
-    packed_dot(fill, cx + w, cy - z, 2);
-    packed_dot(fill, cx - w, cy - z, 2);
-    packed_dot(fill, cx - u, cy - v, 2);
-    packed_dot(fill, cx - u, cy + v, 2);
-    packed_dot(fill, cx - w, cy + z, 2);
-    packed_dot(fill, cx + w, cy + z, 2);
-    packed_dot(fill, cx + u, cy + v, 2);
+    packed_octet(fill, cx, cy, u, v, w, z, 2);
 }
 
 static void packed2_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
 {
-    packed_dot(fill, cx + u, cy - v, 1);
-    packed_dot(fill, cx + w, cy - z, 1);
-    packed_dot(fill, cx - w, cy - z, 1);
-    packed_dot(fill, cx - u, cy - v, 1);
-    packed_dot(fill, cx - u, cy + v, 1);
-    packed_dot(fill, cx - w, cy + z, 1);
-    packed_dot(fill, cx + w, cy + z, 1);
-    packed_dot(fill, cx + u, cy + v, 1);
+    packed_octet(fill, cx, cy, u, v, w, z, 1);
 }
 
 static void planar_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
 {
-    planar_dot(fill, cx + u, cy - v);
-    planar_dot(fill, cx + w, cy - z);
-    planar_dot(fill, cx - w, cy - z);
-    planar_dot(fill, cx - u, cy - v);
-    planar_dot(fill, cx - u, cy + v);
-    planar_dot(fill, cx - w, cy + z);
-    planar_dot(fill, cx + w, cy + z);
-    planar_dot(fill, cx + u, cy + v);
+    FillOct oct;
+    unsigned xs[4], i;
+
+    oct.row[0] = (cy - v) * pitch;
+    oct.row[1] = (cy + v) * pitch;
+    oct.row[2] = (cy - z) * pitch;
+    oct.row[3] = (cy + z) * pitch;
+    xs[0] = cx + u;
+    xs[1] = cx - u;
+    xs[2] = cx + w;
+    xs[3] = cx - w;
+    for (i = 0; i < 4; i++) {
+        oct.col[i] = xs[i] >> 3;
+        oct.mask[i] = 0x80 >> (xs[i] & 7);
+    }
+    oct.base = (void QB_FAR *)screen;
+    oct.color = fill->color;
+    dev_octet_planar(&oct);
 }
 
 static void (*const octets[KINDS])(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z) = {

@@ -57,6 +57,13 @@ typedef struct FillScan {
     int found;
     unsigned hits;
 } FillScan;
+/* The eight points of a circle step for the planar or CGA modes (fill.asm): the screen's base, the offsets of the four rows (cy-v, cy+v, cy-z,
+   cy+z) and of the four columns' bytes (cx+u, cx-u, cx+w, cx-w) with the mask of the pixel in each, and the colour (CGA: in every pixel
+   of a byte); the points are (u,-v) (w,-z) (-w,-z) (-u,-v) (-u,v) (-w,z) (w,z) (u,v). */
+typedef struct FillOct {
+    void QB_FAR *base;
+    unsigned row[4], col[4], mask[4], color;
+} FillOct;
 
 extern void dev_int10(Regs *regs);
 /* Where protected mode has to ask for a real-mode result, the interrupt run in real mode; here it is the same. */
@@ -79,6 +86,8 @@ extern void dev_get_rows(FillXfer *xfer);
 extern void dev_scan_linear(FillScan *scan);
 extern void dev_scan_planar(FillScan *scan);
 extern void dev_scan_packed(FillScan *scan);
+extern void dev_octet_planar(FillOct *oct);
+extern void dev_octet_packed(FillOct *oct);
 extern void dev_put_select(unsigned how);
 extern void dev_put_rows(FillXfer *xfer);
 extern void dev_put_planar(FillXfer *xfer);
@@ -104,6 +113,8 @@ extern void dev_sincos(const double *angle, double *sine, double *cosine);
 #pragma aux dev_scan_linear "B$FSCL"
 #pragma aux dev_scan_planar "B$FSCP"
 #pragma aux dev_scan_packed "B$FSCC"
+#pragma aux dev_octet_planar "B$FOCP"
+#pragma aux dev_octet_packed "B$FOCC"
 #pragma aux dev_put_select "B$FPSEL"
 #pragma aux dev_put_rows "B$FPUC"
 #pragma aux dev_put_planar "B$FPUP"

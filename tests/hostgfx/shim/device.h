@@ -33,6 +33,12 @@ typedef struct FillScan {
     int found;
     unsigned hits;
 } FillScan;
+typedef struct FillOct {
+    void *base;
+    unsigned row[4], col[4], mask[4], color;
+} FillOct;
+void dev_octet_planar(FillOct *oct);
+void dev_octet_packed(FillOct *oct);
 void dev_scan_linear(FillScan *scan);
 void dev_scan_planar(FillScan *scan);
 void dev_scan_packed(FillScan *scan);

@@ -107,6 +107,20 @@ void dev_put_select(unsigned how) { (void)how; }
 void dev_put_rows(FillXfer *xfer) { (void)xfer; }
 void dev_put_planar(FillXfer *xfer) { (void)xfer; }
 
+/* B$FOCC in C; the planar one is the controller's. */
+void dev_octet_planar(FillOct *oct) { (void)oct; }
+void dev_octet_packed(FillOct *oct)
+{
+    static const unsigned char pair[8][2] = { { 0, 0 }, { 2, 2 }, { 2, 3 }, { 0, 1 }, { 1, 1 }, { 3, 3 }, { 3, 2 }, { 1, 0 } };
+
+    for (unsigned i = 0; i < 8; i++) {
+        unsigned char *at = (unsigned char *)oct->base + oct->row[pair[i][0]] + oct->col[pair[i][1]];
+        unsigned mask = oct->mask[pair[i][1]];
+
+        *at = (unsigned char)((*at & ~mask) | (oct->color & mask));
+    }
+}
+
 /* B$FSCL in C; the planar scan is the controller's and not modelled. */
 void dev_scan_linear(FillScan *scan)
 {
