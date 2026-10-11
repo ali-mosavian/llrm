@@ -833,7 +833,7 @@ fn test_accesses_of_one_leaf_are_not_compared_with_each_other() {
 /// it at the join was N^2 data made to be pruned.
 #[test]
 fn a_cell_is_live_where_it_is_read_before_it_is_written_and_not_in_the_arm_that_both_writes_and_reads_it() {
-    use std::collections::HashMap;
+    use llrm_support::hash::HashMap;
     let text = "define i32 @f(i32 %a) {
 entry:
   %t = alloca i32
