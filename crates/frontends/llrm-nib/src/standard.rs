@@ -5,11 +5,13 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Whether a library for BASIC calls the llrm runtime, whose entries take the target's own convention
-/// (regparm3) instead of BASIC's (pascal16): `--basic-runtime=llrm`.
+/// Whether a library for BASIC calls the llrm runtime, whose entries take the
+/// target's own convention (regparm3) instead of BASIC's (pascal16):
+/// `--basic-runtime=llrm`.
 static LLRM_RUNTIME: AtomicBool = AtomicBool::new(false);
 
-/// Says which runtime a library for BASIC is built for: `qb45` (the default) or `llrm`.
+/// Says which runtime a library for BASIC is built for: `qb45` (the default) or
+/// `llrm`.
 pub fn set_basic_runtime(runtime: &str) -> Result<(), String> {
     match runtime {
         "qb45" => LLRM_RUNTIME.store(false, Ordering::Relaxed),
@@ -19,8 +21,8 @@ pub fn set_basic_runtime(runtime: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// QB 4.5's adapters for the llrm runtime: the same, but its string copy is called as the target calls any
-/// function.
+/// QB 4.5's adapters for the llrm runtime: the same, but its string copy is
+/// called as the target calls any function.
 fn qb45_for_llrm() -> &'static str {
     static TEXT: OnceLock<String> = OnceLock::new();
     TEXT.get_or_init(|| {

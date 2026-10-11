@@ -183,7 +183,8 @@ impl Symbol {
         self.base == entry && self.exported()
     }
 
-    /// Whether `#pragma aux` gave the symbol its whole name: a pattern with no `*` for the symbol's own.
+    /// Whether `#pragma aux` gave the symbol its whole name: a pattern with no
+    /// `*` for the symbol's own.
     fn named_by_pragma(&self) -> bool {
         !self.pattern.is_empty() && self.pattern != "^" && !self.pattern.contains('*')
     }
@@ -371,7 +372,8 @@ impl Unit {
             .cloned();
         for symbol in self.symbols.values_mut() {
             if symbol.named_by_pragma() {
-                // `#pragma aux f "NAME"` spells the symbol whatever its convention would.
+                // `#pragma aux f "NAME"` spells the symbol whatever its
+                // convention would.
             } else if symbol.is_entry(&self.entry) {
                 if let Some(pattern) = &entry {
                     symbol.pattern = pattern.clone();

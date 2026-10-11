@@ -45,12 +45,14 @@ pub(super) struct Arguments {
 
 pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut source = None;
-    // The runtime is llrm's unless `--runtime` or `-fqb-runtime=` names a Microsoft one.
+    // The runtime is llrm's unless `--runtime` or `-fqb-runtime=` names a
+    // Microsoft one.
     let mut frontend = Frontend::new("vbdos", "llrm");
     let (mut dump_hir, mut flags, mut dump) = (None, Flags::default(), None);
     let mut at = 0;
     while at < argv.len() {
-        // The runtime the program calls: the Microsoft ones by their stack ABI, or llrm's by the target's own.
+        // The runtime the program calls: the Microsoft ones by their stack ABI,
+        // or llrm's by the target's own.
         if let Some(runtime) = argv[at].strip_prefix("-fqb-runtime=") {
             frontend.runtime = runtime.to_owned();
             at += 1;
@@ -108,11 +110,10 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.debug = flags.debug;
     frontend.checked_overflow = flags.sanitize.signed_integer_overflow;
     frontend.checked_stack = flags.sanitize.stack;
-    let bound =
-        llrm_driver::planned(&flags, Some(&["x86-m16", "x86-m32"]), Some("https://github.com/ali-mosavian/llrm/issues/1160"))?;
+    let bound = llrm_driver::target(&flags, None)?;
     frontend.segment_bytes = bound.target.layout().segment_bytes();
-    // The bytes of the pointer that is the near space, and of the one that is the far: a target with one
-    // space has the same for both.
+    // The bytes of the pointer that is the near space, and of the one that is
+    // the far: a target with one space has the same for both.
     let spaces = &bound.target.layout().spaces;
     let width = |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
     frontend.near_bytes = width(spaces.near).map_or(0, |bytes| bytes as usize);
@@ -173,7 +174,8 @@ mod tests {
         parse_args(&argv).expect("parses").frontend.runtime
     }
 
-    /// llrm-qb called the Microsoft VB-DOS runtime unless told otherwise; the default is llrm's.
+    /// llrm-qb called the Microsoft VB-DOS runtime unless told otherwise; the
+    /// default is llrm's.
     #[test]
     fn the_runtime_is_llrms_unless_a_microsoft_one_is_named() {
         assert_eq!(runtime(&["p.bas"]), "llrm");

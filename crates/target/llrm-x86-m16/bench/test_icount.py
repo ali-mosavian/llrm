@@ -81,6 +81,14 @@ class CountTests(unittest.TestCase):
         self.assertEqual(result.error, "")
         self.assertEqual((result.region.instructions, result.region.memory_operands), (34, 34))
 
+    def test_a_region_costs_the_486s_clocks_by_vsgccs_table(self):
+        """1 + 5 dec + 4 jnz taken at 3 and one not at 1 + 3 movs and cld at 1 + the rep movsw (15 for the first,
+        3 for each of the 15 after) + 2 movs + a ret at 5 = 90. A branch taken costs more than one not taken: the
+        stream's price, not the count's."""
+        entry = maps.find(maps.symbols(self.listing), "region")
+        result = icount.run(self.exe, entry, self.directory)
+        self.assertEqual(result.region.clocks, 1 + 5 + (4 * 3 + 1) + 4 + (15 + 15 * 3) + 2 + 5)
+
     def test_a_rep_with_nothing_to_repeat_costs_nothing(self):
         """The hook still fires once with CX at 0: 4 instructions in `other`, not 5, and no memory operand."""
         entry = maps.find(maps.symbols(self.listing), "other")

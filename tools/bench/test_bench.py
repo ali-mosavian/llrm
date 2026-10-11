@@ -371,3 +371,17 @@ class CSourceTests(unittest.TestCase):
             source = Path(where) / "g.c"
             source.write_bytes(b"// data: @dickens\n// flags: -O2\n// a comment\nint main(void) { return 0; }\n")
             self.assertEqual(bench.c_source(source), b"// a comment\nint main(void) { return 0; }\n")
+
+
+def test_reference_builds_find_bench_io_in_the_volume_root(tmp_path):
+    """jpeg.c includes "../bench_io.h", which a DOS volume's root cannot name: the Borland builds' copy includes it beside the source, and BC and TC had no row."""
+    text = bench.stage_shared_headers(tmp_path, b'#include "../bench_io.h"\nint x;\n')
+    assert text == b'#include "bench_io.h"\nint x;\n'
+    assert (tmp_path / "bench_io.h").read_bytes() == (bench.BENCH / "bench_io.h").read_bytes()
+
+
+def test_llrm_c_benches_find_the_os_layer_header(tmp_path):
+    """bench_io.h includes llrm_os.h: bench.py built C without -I for it, so jpeg's C variants did not compile."""
+    flag, directory = bench.c_include_arguments(tmp_path)
+    assert flag == "-I"
+    assert (Path(directory) / "llrm_os.h").exists()

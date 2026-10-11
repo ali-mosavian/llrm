@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
+import cpulimit  # noqa: E402
 import llrmbin  # noqa: E402
 
 BIN = llrmbin.bin_dir()
@@ -67,10 +69,11 @@ COMPILE_SECONDS = 10
 
 
 def _run(command: list[str], env: dict | None = None, cwd: Path | None = None, timeout: int = 600) -> str:
+    """`timeout` is seconds of CPU time, not wall clock: a loaded host runs the same compile slower."""
     try:
-        done = subprocess.run(command, capture_output=True, text=True, env=env, cwd=cwd, timeout=timeout)
+        done = cpulimit.run(command, timeout, capture_output=True, text=True, env=env, cwd=cwd)
     except subprocess.TimeoutExpired:
-        raise CompileError(f"{Path(command[0]).name} did not finish in {timeout}s")
+        raise CompileError(f"{Path(command[0]).name} did not finish in {timeout}s of CPU")
     if done.returncode != 0:
         text = (done.stderr or done.stdout).strip()
         # the tool's own lines, not a build's warnings before them

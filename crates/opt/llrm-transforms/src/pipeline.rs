@@ -37,7 +37,8 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
+    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unroll_jam, unswitch,
+    window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -74,6 +75,9 @@ pub struct Options {
     pub fill: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
+    /// A nest's outer loop unrolled and its inner copies fused (gcc's
+    /// `-floop-unroll-and-jam`, -O3 only).
+    pub unroll_jam: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -119,6 +123,7 @@ impl Default for Options {
             fill: true,
             sibcalls: true,
             unswitch: false,
+            unroll_jam: false,
             copy_headers: false,
             for_size: false,
             expensive: true,
@@ -179,6 +184,7 @@ impl Options {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
+            unroll_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
         }
@@ -548,6 +554,7 @@ pub struct Fixed {
     /// Once, after everything else.
     last: Vec<Box<dyn FunctionPass>>,
     unswitch: Option<unswitch::Unswitch>,
+    jam: Option<unroll_jam::UnrollJam>,
     only: bool,
     dump: Option<PathBuf>,
     /// Bodies run, naming each one's dump.
@@ -575,7 +582,7 @@ impl Fixed {
             .unswitch
             .then(
                 || {
-                    let options = Options { unswitch: false, ..applied.options.clone() };
+                    let options = Options { unswitch: false, unroll_jam: false, ..applied.options.clone() };
                     let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
                     unswitch::Unswitch { passes: vec![Box::new(Fixed::new(&reoptimize))] }
                 },
@@ -587,6 +594,7 @@ impl Fixed {
             peelers,
             last,
             unswitch,
+            jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
             only: only.is_some(),
             dump: applied.dump.clone(),
             runs: 0,
@@ -628,6 +636,15 @@ impl Fixed {
         }
         if let Some(unswitch) = &mut self.unswitch {
             run.step(unswitch, "unswitch", unit, analyses);
+        }
+        // After unswitching, as gcc's pass order has it: an invariant guard is
+        // out of the nest by then. The fused copies are cleaned as a peeled
+        // loop is.
+        if let Some(jam) = &mut self.jam {
+            if run.step(jam, "unroll-jam", unit, analyses) {
+                self.scalarized(unit, analyses, run, "jammed");
+                self.fixed(unit, analyses, run, "jammed-")?;
+            }
         }
         for one in &mut self.last {
             let stage = one.name();
