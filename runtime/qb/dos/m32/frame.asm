@@ -5,7 +5,8 @@
 ;;       B$EXSA [in] ebp               | the frame B$ENRA built
 ;;                   eax               | the function's result, kept
 ;; retn: B$ENRA ebp -> the new frame, esp below its locals
-;;       B$EXSA ebx, ecx, edx, esi, edi, ebp and b_curframe as the caller had them
+;;       B$EXSA ebx, ecx, edx, esi, edi, ebp and b_curframe as the caller had
+;;       them
 ;;
 ;; chng: oct/26 written [ali]
 ;; obs.: the frame below ebp, a dword each:
@@ -21,9 +22,10 @@
 ;;           ebp-32   GOSUB count
 ;;           ...      the locals, zeroed
 ;;
-;;       The procedure's body uses any register, so the frame keeps those a flat caller expects kept.  A
-;;       call of either entry takes the frame apart and puts it together again, below the stack the
-;;       entry was called with, using no memory below esp: an interrupt may come at any time.
+;;       The procedure's body uses any register, so the frame keeps those a flat
+;;       caller expects kept.  A call of either entry takes the frame apart and
+;;       puts it together again, below the stack the entry was called with,
+;;       using no memory below esp: an interrupt may come at any time.
 
                 .386
                 .model  flat
@@ -45,17 +47,30 @@ FR_GOSUB        equ     -32
 FR_SIZE         equ     32                      ;; the header, ebp-32 .. ebp-1
 
 .data
-_b_curframe     dd      0                       ;; frame of the procedure running
+;; frame of the procedure running
+_b_curframe     dd      0
 
 .code
-;;::::::::::::::
-;; B$ENRA ()
+;; B$ENRA - build a BASIC procedure's frame and zero its locals.
+;;
+;; The frame is the one in the file header.  It is built below the stack the
+;; caller called with, using no memory below esp.
+;;
+;; Args:
+;;     locals (eax): bytes of locals, a multiple of 4.
+;;
+;; Returns:
+;;     ebp: the new frame; esp is below its locals.
+;;
+;; Saves:    ebx ecx edx esi edi in the frame (B$EXSA restores them)
+;; Clobbers: eax ecx edx edi, flags
 B$ENRA          proc
 
                 sub     esp, 4
                 mov     [esp], eax              ;; the bytes of locals
                 mov     eax, [esp+4]            ;; the way back
-                mov     [esp+4], ebp            ;; the previous frame, where it was
+                ;; the previous frame, where it was
+                mov     [esp+4], ebp
                 lea     ebp, [esp+4]
                 sub     esp, FR_SIZE - 4
                 mov     [ebp+FR_EBX], ebx
@@ -80,8 +95,17 @@ B$ENRA          proc
                 jmp     edx
 B$ENRA          endp
 
-;;::::::::::::::
-;; B$EXSA ()
+;; B$EXSA - take a BASIC procedure's frame apart.
+;;
+;; Args:
+;;     frame  (ebp): the frame B$ENRA built.
+;;     result (eax): the function's result, kept.
+;;
+;; Returns:
+;;     ebx, ecx, edx, esi, edi, ebp and b_curframe as the caller had them.
+;;
+;; Saves:    none
+;; Clobbers: flags
 B$EXSA          proc
 
                 mov     edx, [esp]              ;; the way back

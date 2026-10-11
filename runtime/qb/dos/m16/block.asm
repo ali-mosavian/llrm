@@ -1,12 +1,10 @@
 ;; name: B$MOVE, B$FILL, B$COPY
 ;; desc: string moves by dwords
 ;;
-;; args: ax:ptr BlockOp | dst, src: bytes forward; or by bytes if `value` is not 0 (an EGA latch copy holds one byte); B$FILL: dst, words of a 16-bit value
-;; retn: none
-;;
 ;; chng: oct/26 written [ali]
-;; obs.: the registers are C's (regparm3: ax, dx, cx), so no thunk is needed; the QB
-;;       runtime's device code (dev*.c, gfxdev.c) is C around these. Target 386+ with an FPU.
+;; obs.: the registers are C's (regparm3: ax, dx, cx), so no thunk is needed;
+;;       the QB runtime's device code (dev*.c, gfxdev.c) is C around these.
+;;       Target 386+ with an FPU.
 
                 .model  medium, pascal
                 .386
@@ -28,19 +26,24 @@ Regs            ends
 BlockOp         struc
                 dst             dword   ?
                 src             dword   ?
-                count           word    ?               ;; bytes, or words for B$FILL
+                ;; bytes, or words for B$FILL
+                count           word    ?
                 value           word    ?               ;; for B$FILL
 BlockOp         ends
 
 .code
-;;::::::::::::::
-;; B$MOVE (ax: op)
-B$MOVE          proc    public
+;; B$MOVE - copy `count` bytes from `src` to `dst`, forward.
+;;
+;; By dwords and then the bytes left; by bytes alone if `value` is not 0 (an EGA
+;; latch copy holds one byte).
+;;
+;; Args:
+;;     op (ax): near ptr to a BlockOp.
+;;
+;; Saves:    si di ds es
+;; Clobbers: ax bx cx dx, flags
+B$MOVE          proc    public uses si di ds es
 
-                push    si
-                push    di
-                push    ds
-                push    es
                 mov     bx, ax
                 les     di, [bx].BlockOp.dst
                 mov     cx, [bx].BlockOp.count
@@ -56,19 +59,20 @@ B$MOVE          proc    public
                 and     cx, 3
 @@:
                 rep     movsb
-                pop     es
-                pop     ds
-                pop     di
-                pop     si
                 ret
 B$MOVE          endp
 
-;;::::::::::::::
-;; B$FILL (ax: op)
-B$FILL          proc    public
+;; B$FILL - fill `count` words at `dst` with the 16-bit `value`.
+;;
+;; Two words at a time, and the last one if `count` is odd.
+;;
+;; Args:
+;;     op (ax): near ptr to a BlockOp.
+;;
+;; Saves:    di es
+;; Clobbers: ax bx cx dx, flags
+B$FILL          proc    public uses di es
 
-                push    di
-                push    es
                 mov     bx, ax
                 les     di, [bx].BlockOp.dst
                 movzx   eax, [bx].BlockOp.value
@@ -82,20 +86,23 @@ B$FILL          proc    public
                 jnc     @F
                 stosw
 @@:
-                pop     es
-                pop     di
                 ret
 B$FILL          endp
-                ;;::::::::::::::
-;; B$COPY (ax: to, dx: from, cx: count)
-;; near bytes forward, dwords and then what is left; bx, cx, dx, si, di and es are kept
-B$COPY          proc    public
+                
+;; B$COPY - copy `count` bytes from `from` to `to`, forward.
+;;
+;; By dwords and then the bytes left; byte by byte when `to` is 0 to 3 above
+;; `from`, as a loop would.
+;;
+;; Args:
+;;     to    (ax): near ptr.
+;;     from  (dx): near ptr.
+;;     count (cx): bytes.
+;;
+;; Saves:    bx cx si di es
+;; Clobbers: ax, flags
+B$COPY          proc    public uses bx cx si di es
 
-                push    bx
-                push    cx
-                push    si
-                push    di
-                push    es
                 push    ds
                 pop     es
                 mov     di, ax
@@ -104,7 +111,8 @@ B$COPY          proc    public
                 mov     ax, di
                 sub     ax, si
                 cmp     ax, 4
-                jb      @F                      ;; `to` 0 to 3 above `from`: byte by byte, as a loop would
+                ;; `to` 0 to 3 above `from`: byte by byte, as a loop would
+                jb      @F
                 mov     bx, cx
                 shr     cx, 2
                 rep     movsd
@@ -112,11 +120,6 @@ B$COPY          proc    public
                 and     cx, 3
 @@:
                 rep     movsb
-                pop     es
-                pop     di
-                pop     si
-                pop     cx
-                pop     bx
                 ret
 B$COPY          endp
                 end

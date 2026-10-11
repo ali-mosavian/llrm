@@ -1,23 +1,25 @@
 ;; name: B$OEGA, B$RESN, B$FERR, B$SERR, QB_LAND
-;; desc: ON ERROR GOTO, RESUME NEXT, ERR and ERROR: taking an error to the handler
+;; desc: ON ERROR GOTO, RESUME NEXT, ERR and ERROR: taking an error to the
+;;       handler
 ;;
 ;; args: B$OEGA [in] erradr:dword            | the landing pad, 0 for none
 ;;       B$SERR [in] errnum:word             | the error to raise
-;;       QB_LAND                             | from C, with the handler's offset in qb_land_to
+;;       QB_LAND                             | from C, with the handler's offset
+;;                                             in qb_land_to
 ;; retn: B$FERR ax -> the error number
 ;;       B$OEGA, B$FERR, B$SERR as BASIC calls them (the callee pops its words)
 ;;       QB_LAND, B$RESN do not return
 ;;
 ;; chng: oct/26 written [ali]
-;; obs.: the program registers a landing pad with B$OEGA; the frame of the code that
-;;       registered it (its bp, and its sp once the call has returned) and the
-;;       call's return offset are kept. An error is taken to the pad by QB_LAND,
-;;       which puts that frame back and jumps to the pad. The pad asks for the
-;;       number with B$FERR and calls B$RESN, which leaves for the first row of
-;;       the module's statement table at or after the registration, the row the
-;;       compiler put at the code that runs the user's handler. A registration
-;;       made inside a procedure (cur_level not 0) is the handler re-arming
-;;       itself and keeps the frame of the main code.
+;; obs.: the program registers a landing pad with B$OEGA; the frame of the code
+;;       that registered it (its bp, and its sp once the call has returned) and
+;;       the call's return offset are kept. An error is taken to the pad by
+;;       QB_LAND, which puts that frame back and jumps to the pad. The pad asks
+;;       for the number with B$FERR and calls B$RESN, which leaves for the first
+;;       row of the module's statement table at or after the registration, the
+;;       row the compiler put at the code that runs the user's handler. A
+;;       registration made inside a procedure (cur_level not 0) is the handler
+;;       re-arming itself and keeps the frame of the main code.
 
                 .model  medium, pascal
                 .386
@@ -36,11 +38,13 @@
 
 
 
-;; error.c: record the pad and mark no error in progress; raise a BASIC error number
+;; error.c: record the pad and mark no error in progress; raise a BASIC error
+;; number
 on_error        proto   far fastcall :word
 raise           proto   far fastcall :word
 
-OF_STA          equ     10                      ;; the statement table's offset in the module header
+;; the statement table's offset in the module header
+OF_STA          equ     10
 ROW_SIZE        equ     4                       ;; an address and a line number
 NO_ROW          equ     0FFFFh
 
@@ -48,14 +52,23 @@ NO_ROW          equ     0FFFFh
 landing         dword   0                       ;; where QB_LAND and B$RESN jump
 
 .code
-;;::::::::::::::
-;; B$OEGA (erradr:dword)
+;; B$OEGA - register the landing pad of ON ERROR GOTO.
+;;
+;; In the main code (cur_level 0) the caller's frame is kept: its bp, its sp
+;; once this call has returned, and the call's return offset.
+;;
+;; Args:
+;;     erradr (bp+6): the landing pad, 0 for none.  The callee pops it.
+;;
+;; Saves:    none
+;; Clobbers: ax, flags
 B$OEGA          proc    public\
                         erradr:dword
 
                 cmp     cur_level, 0
                 jne     @F
-                lea     ax, [bp+10]             ;; sp once the caller has the call behind it
+                ;; sp once the caller has the call behind it
+                lea     ax, [bp+10]
                 mov     qb_land_sp, ax
                 mov     ax, [bp]
                 mov     qb_land_bp, ax
@@ -66,8 +79,15 @@ B$OEGA          proc    public\
                 ret
 B$OEGA          endp
 
-;;::::::::::::::
-;; QB_LAND ()
+;; QB_LAND - take an error to the landing pad.
+;;
+;; Puts the registered frame back and jumps to the pad.  It does not return.
+;;
+;; Args:
+;;     qb_land_to: the pad's offset (set by C).
+;;
+;; Saves:    none
+;; Clobbers: ax, flags (it does not return)
 QB_LAND         proc    public
 
                 mov     ax, qb_land_to
@@ -82,11 +102,20 @@ QB_LAND         proc    public
                 jmp     D landing
 QB_LAND         endp
 
-;;::::::::::::::
-;; B$RESN ()
+;; B$RESN - RESUME NEXT: leave the pad for the user's handler.
+;;
+;; Jumps to the first row of the module's statement table at or after the
+;; registration, or to B$CEND when there is none.  It does not return.
+;;
+;; Args:
+;;     none.
+;;
+;; Saves:    none
+;; Clobbers: ax bx cx dx es, flags (it does not return)
 B$RESN          proc    public
 
-                add     sp, 4                   ;; the pad's call to us: not coming back
+                ;; the pad's call to us: not coming back
+                add     sp, 4
                 mov     es, qb_module_segment
                 mov     bx, es:[OF_STA]
                 mov     cx, qb_err_ip
@@ -113,16 +142,29 @@ B$RESN          proc    public
                 jmp     B$CEND
 B$RESN          endp
 
-;;::::::::::::::
-;; B$FERR ()
+;; B$FERR - ERR: the number of the error.
+;;
+;; Args:
+;;     none.
+;;
+;; Returns:
+;;     ax: the error number.
+;;
+;; Saves:    none
+;; Clobbers: ax
 B$FERR          proc    public
 
                 mov     ax, b_errnum
                 ret
 B$FERR          endp
 
-;;::::::::::::::
-;; B$SERR (errnum:word)
+;; B$SERR - ERROR: raise a BASIC error.
+;;
+;; Args:
+;;     errnum (bp+6): the error number.  The callee pops it.
+;;
+;; Saves:    none
+;; Clobbers: ax, flags (it does not return)
 B$SERR          proc    public\
                         errnum:word
 

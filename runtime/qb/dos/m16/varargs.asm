@@ -32,7 +32,8 @@
 
                 include qb.inc
 
-;; fastcall: ax, dx (the C side, regparm3, takes them so); the name is @array_dim@4
+;; fastcall: ax, dx (the C side, regparm3, takes them so); the name is
+;; @array_dim@4
 array_dim       proto   far fastcall :word, :word
 file_close      proto   far fastcall :word, :word
 
@@ -48,7 +49,8 @@ DIMPROC         macro   entry:req, mode:req
 entry           proc    public\
                         elem:word, rankFeat:word, ad:ptr word
 
-                invoke  array_dim, mode, addr ad ;; the block, past bp and the return
+                ;; the block, past bp and the return
+                invoke  array_dim, mode, addr ad
 
                 movzx   ebx, B rankFeat         ;; rank
                 lea     bx, [4*ebx+6]           ;; bytes the caller pushed
@@ -57,13 +59,34 @@ entry           endp
                 endm
 
 .code
-;;::::::::::::::
-;; B$DDIM (...), B$RDIM (...)
+;; B$DDIM, B$RDIM - DIM (allocate) and REDIM (reallocate) a dynamic array.
+;;
+;; The block is popped by the entry (popblock): the call pushed a word each
+;; for the array descriptor, rank and features, and element size, then four
+;; bytes for each dimension.
+;;
+;; Args:
+;;     ad       (bp+6):  the array descriptor, the start of the block.
+;;     rankFeat (bp+8):  rank, features << 8.
+;;     elem     (bp+10): element size.
+;;     bounds   (bp+12): upper, lower words for each dimension, the one next
+;;                       to elem being the first stored.
+;;
+;; Saves:    none (bp is popped by popblock)
+;; Clobbers: ax bx dx, flags
                 DIMPROC B$DDIM, DIM_ALLOCATE
                 DIMPROC B$RDIM, DIM_REALLOCATE
 
-;;::::::::::::::
-;; B$CLOS (channel:word..., count:word)
+;; B$CLOS - CLOSE the channels given, or all of them.
+;;
+;; The block is popped by the entry (popblock).
+;;
+;; Args:
+;;     count    (bp+6): channels to close, 0: all.
+;;     channels (bp+8): that many words, the channel numbers.
+;;
+;; Saves:    none (bp is popped by popblock)
+;; Clobbers: ax bx dx, flags
 B$CLOS          proc    public\
                         channel:word, count:word
 
@@ -79,7 +102,8 @@ BLOCKPROC       macro   entry:req, handler:req
 entry           proc    public\
                         count:word
 
-                invoke  handler, addr count     ;; the count and the words past it
+                ;; the count and the words past it
+                invoke  handler, addr count
 
                 movzx   ebx, count
                 lea     bx, [2*ebx+2]           ;; bytes the caller pushed
@@ -87,14 +111,32 @@ entry           proc    public\
 entry           endp
                 endm
 
-;;::::::::::::::
-;; B$COLR (...), B$LOCT (...), B$CSCN (...)
+;; B$COLR, B$LOCT, B$CSCN - COLOR, LOCATE and SCREEN with the arguments given.
+;;
+;; The block is popped by the entry (popblock).
+;;
+;; Args:
+;;     count (bp+6): words that follow.
+;;     words (bp+8): (flag, value) for each argument; no value where the
+;;                   flag is 0.
+;;
+;; Saves:    none (bp is popped by popblock)
+;; Clobbers: ax bx dx, flags
                 BLOCKPROC B$COLR, screen_color
                 BLOCKPROC B$LOCT, screen_locate
                 BLOCKPROC B$CSCN, screen_mode
 
-;;::::::::::::::
-;; popblock (bx: bytes, bp pushed by the entry) :  return, popping bx bytes
+;; popblock - return from an entry, popping its block of arguments.
+;;
+;; Args:
+;;     bytes (bx): the bytes the caller pushed.
+;;     saved (sp): the entry's bp, then the far return address.
+;;
+;; Returns:
+;;     To the caller, with the block popped.
+;;
+;; Saves:    none
+;; Clobbers: ax dx, flags
 popblock        proc
 
                 pop     bp

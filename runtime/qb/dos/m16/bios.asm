@@ -1,12 +1,10 @@
 ;; name: B$INT10, B$INT17, B$INT21
 ;; desc: software interrupts
 ;;
-;; args: ax:ptr Regs | the interrupt, with the registers from Regs
-;; retn: Regs -> the registers and the flags as the interrupt left them
-;;
 ;; chng: oct/26 written [ali]
-;; obs.: the registers are C's (regparm3: ax, dx, cx), so no thunk is needed; the QB
-;;       runtime's device code (dev*.c, gfxdev.c) is C around these. Target 386+ with an FPU.
+;; obs.: the registers are C's (regparm3: ax, dx, cx), so no thunk is needed;
+;;       the QB runtime's device code (dev*.c, gfxdev.c) is C around these.
+;;       Target 386+ with an FPU.
 
                 .model  medium, pascal
                 .386
@@ -28,16 +26,17 @@ Regs            ends
 BlockOp         struc
                 dst             dword   ?
                 src             dword   ?
-                count           word    ?               ;; bytes, or words for B$FILL
+                ;; bytes, or words for B$FILL
+                count           word    ?
                 value           word    ?               ;; for B$FILL
 BlockOp         ends
 
 .code
-;;::::::::::::::
-;; software interrupt, with the registers of the Regs at si
+;; CALLINT - software interrupt, with the registers of the Regs at si.
 CALLINT         macro   vector:req
 
-                pushad                          ;; the BIOS and DOS keep what they like of the registers
+                ;; the BIOS and DOS keep what they like of the registers
+                pushad
                 push    es
                 mov     si, ax
                 push    si
@@ -61,22 +60,55 @@ CALLINT         macro   vector:req
                 ret
                 endm
 
-;;::::::::::::::
-;; B$INT10 (ax: regs)
+;; B$INT10 - call BIOS or DOS interrupt 10h.
+;;
+;; Loads ax bx cx dx from `regs`, runs interrupt 10h, and stores ax bx cx dx bp
+;; es and the flags back as the interrupt left them.
+;;
+;; Args:
+;;     regs (ax): near ptr to a Regs.
+;;
+;; Returns:
+;;     regs: the registers and the flags as the interrupt left them.
+;;
+;; Saves:    all general registers and es (pushad, push es)
+;; Clobbers: flags
 B$INT10         proc    public
 
                 CALLINT 10h
 B$INT10         endp
 
-;;::::::::::::::
-;; B$INT17 (ax: regs)
+;; B$INT17 - call BIOS or DOS interrupt 17h.
+;;
+;; Loads ax bx cx dx from `regs`, runs interrupt 17h, and stores ax bx cx dx bp
+;; es and the flags back as the interrupt left them.
+;;
+;; Args:
+;;     regs (ax): near ptr to a Regs.
+;;
+;; Returns:
+;;     regs: the registers and the flags as the interrupt left them.
+;;
+;; Saves:    all general registers and es (pushad, push es)
+;; Clobbers: flags
 B$INT17         proc    public
 
                 CALLINT 17h
 B$INT17         endp
 
-;;::::::::::::::
-;; B$INT21 (ax: regs)
+;; B$INT21 - call BIOS or DOS interrupt 21h.
+;;
+;; Loads ax bx cx dx from `regs`, runs interrupt 21h, and stores ax bx cx dx bp
+;; es and the flags back as the interrupt left them.
+;;
+;; Args:
+;;     regs (ax): near ptr to a Regs.
+;;
+;; Returns:
+;;     regs: the registers and the flags as the interrupt left them.
+;;
+;; Saves:    all general registers and es (pushad, push es)
+;; Clobbers: flags
 B$INT21         proc    public
 
                 CALLINT 21h

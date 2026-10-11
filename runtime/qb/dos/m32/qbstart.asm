@@ -1,13 +1,17 @@
 ;; name: _main, qb_xi_begin, qb_xi_end, qb_module_header
-;; desc: the QB module's start under DOS/32A: the initializers, then the module's body
+;; desc: the QB module's start under DOS/32A: the initializers, then the
+;;       module's body
 ;;
-;; args: the OS layer's start-up (runtime/shared/dos/m32/start.asm) calls _main with the stack set
+;; args: the OS layer's start-up (runtime/shared/dos/m32/start.asm) calls
+;;       _main with the stack set
 ;; retn: _main does not return: the module ends through B$CENP
 ;;
 ;; chng: oct/26 written [ali]
-;; obs.: Every module with an initializer declares XIB, XI and XIE in that order (xi.h), so the first the
-;;       linker meets fixes the order and the bounds below are those segments' bases.  The module's data
-;;       segment BC_SA holds the address of its header; its code starts 30h bytes after that header.
+;; obs.: Every module with an initializer declares XIB, XI and XIE in that
+;;       order (xi.h), so the first the linker meets fixes the order and the
+;;       bounds below are those segments' bases.  The module's data segment
+;;       BC_SA holds the address of its header; its code starts 30h bytes
+;;       after that header.
 
                 .386
                 .model  flat
@@ -17,7 +21,8 @@
                 public  qb_xi_end
                 public  qb_module_header
 
-HEADER_CODE     equ     30h                     ;; where the module's code starts
+;; where the module's code starts
+HEADER_CODE     equ     30h
                 extrn   _qb_start:near
 
 XIB             segment dword public 'DATA'
@@ -27,7 +32,8 @@ XI              ends
 XIE             segment dword public 'DATA'
 XIE             ends
 
-;; the module's BC_SA starts with the address of its header: a label here is that address's place
+;; the module's BC_SA starts with the address of its header: a label here is
+;; that address's place
 BC_SA           segment dword public 'DATA'
 bc_sa           label   dword
 BC_SA           ends
@@ -38,8 +44,17 @@ qb_xi_end       dd      offset XIE
 qb_module_header dd     0
 
 .code
-;;::::::::::::::
-;; _main ()
+;; _main - run the initializers, then the module's body.
+;;
+;; The OS layer's start-up calls it with the stack set.  It records the
+;; address of the module's header in qb_module_header, and calls the code
+;; HEADER_CODE bytes after it.
+;;
+;; Returns:
+;;     Not by design: a module ends through B$CENP.
+;;
+;; Saves:    none
+;; Clobbers: everything: it calls the module
 _main           proc
 
                 call    _qb_start
@@ -47,6 +62,7 @@ _main           proc
                 mov     qb_module_header, eax
                 add     eax, HEADER_CODE
                 call    eax
-                ret                             ;; a module ends through B$CENP
+                ;; a module ends through B$CENP
+                ret
 _main           endp
                 end

@@ -1,12 +1,9 @@
 ;; name: B$INT10, B$INT10R, B$INT17, B$INT21
 ;; desc: software interrupts
 ;;
-;; args: eax:ptr Regs | the interrupt, with the registers from Regs
-;; retn: Regs -> the registers and the flags as the interrupt left them
-;;
 ;; chng: oct/26 written [ali]
-;; obs.: DOS/32A passes the interrupt on to the real-mode BIOS and DOS with these registers; the calls the
-;;       runtime makes this way take no pointers.  All registers are kept but the ones Regs returns.
+;; obs.: DOS/32A passes the interrupt on to the real-mode BIOS and DOS with
+;;       these registers; the calls the runtime makes this way take no pointers.
 
                 .386
                 .model  flat
@@ -27,8 +24,7 @@ Regs            struc
 Regs            ends
 
 .code
-;;::::::::::::::
-;; software interrupt, with the registers of the Regs at esi
+;; CALLINT - software interrupt, with the registers of the Regs at esi.
 CALLINT         macro   vector:req
 
                 pushad
@@ -41,7 +37,8 @@ CALLINT         macro   vector:req
                 mov     edx, [esi].Regs.rdx
                 int     vector
                 pop     esi
-                movzx   eax, ax                 ;; an interrupt returns 16-bit registers: the rest is not its
+                ;; an interrupt returns 16-bit registers: the rest is not its
+                movzx   eax, ax
                 mov     [esi].Regs.rax, eax
                 movzx   ebx, bx
                 mov     [esi].Regs.rbx, ebx
@@ -60,18 +57,38 @@ CALLINT         macro   vector:req
                 ret
                 endm
 
-;;::::::::::::::
-;; B$INT10 (eax: regs)
+;; B$INT10 - call BIOS or DOS interrupt 10h.
+;;
+;; Loads eax ebx ecx edx from `regs`, runs interrupt 10h, and stores ax bx cx dx
+;; ebp es and the flags back as the interrupt left them.
+;;
+;; Args:
+;;     regs (eax): ptr to a Regs.
+;;
+;; Returns:
+;;     regs: the registers and the flags as the interrupt left them.
+;;
+;; Saves:    all general registers and es (pushad, push es)
+;; Clobbers: flags
 B$INT10         proc
 
                 CALLINT 10h
 B$INT10         endp
 
-;;::::::::::::::
-;; B$INT10R (eax: regs)
-;; interrupt 10h run in real mode (DPMI 0300h), for the functions that return a real-mode segment:offset (the
-;; font's, 1130h), which a protected-mode call would not give as the BIOS made it. res and rbp come back as
-;; the real-mode ES and BP.
+;; B$INT10R - call BIOS interrupt 10h in real mode (DPMI 0300h).
+;;
+;; For the functions that return a real-mode segment:offset (the font's, 1130h),
+;; which a protected-mode call would not give as the BIOS made it.
+;;
+;; Args:
+;;     regs (eax): ptr to a Regs.
+;;
+;; Returns:
+;;     regs: the registers and the flags as the interrupt left them; res and rbp
+;;         are the real-mode ES and BP.
+;;
+;; Saves:    all general registers and es (pushad, push es)
+;; Clobbers: flags
 RMCALL_SIZE     equ     32h
 
 B$INT10R        proc
@@ -96,7 +113,8 @@ B$INT10R        proc
                 mov     eax, [esi].Regs.rbp
                 mov     [edi+08h], eax
                 mov     eax, 0300h
-                mov     ebx, 0010h              ;; interrupt 10h, no flags to reset
+                ;; interrupt 10h, no flags to reset
+                mov     ebx, 0010h
                 xor     ecx, ecx
                 int     31h
                 movzx   eax, word ptr [edi+1Ch]
@@ -119,15 +137,37 @@ B$INT10R        proc
                 ret
 B$INT10R        endp
 
-;;::::::::::::::
-;; B$INT17 (eax: regs)
+;; B$INT17 - call BIOS or DOS interrupt 17h.
+;;
+;; Loads eax ebx ecx edx from `regs`, runs interrupt 17h, and stores ax bx cx dx
+;; ebp es and the flags back as the interrupt left them.
+;;
+;; Args:
+;;     regs (eax): ptr to a Regs.
+;;
+;; Returns:
+;;     regs: the registers and the flags as the interrupt left them.
+;;
+;; Saves:    all general registers and es (pushad, push es)
+;; Clobbers: flags
 B$INT17         proc
 
                 CALLINT 17h
 B$INT17         endp
 
-;;::::::::::::::
-;; B$INT21 (eax: regs)
+;; B$INT21 - call BIOS or DOS interrupt 21h.
+;;
+;; Loads eax ebx ecx edx from `regs`, runs interrupt 21h, and stores ax bx cx dx
+;; ebp es and the flags back as the interrupt left them.
+;;
+;; Args:
+;;     regs (eax): ptr to a Regs.
+;;
+;; Returns:
+;;     regs: the registers and the flags as the interrupt left them.
+;;
+;; Saves:    all general registers and es (pushad, push es)
+;; Clobbers: flags
 B$INT21         proc
 
                 CALLINT 21h

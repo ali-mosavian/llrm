@@ -1,11 +1,9 @@
 ;; name: B$ATAN2, B$SINCOS
 ;; desc: the FPU's arctangent and sine
 ;;
-;; args: eax:ptr double y, edx:ptr double x, ebx:ptr double out; or eax:ptr angle, edx:ptr sine, ebx:ptr cosine
-;; retn: none
-;;
 ;; chng: oct/26 written [ali]
-;; obs.: the registers are C's (the target's own convention: eax, edx, ebx, ecx).
+;; obs.: the registers are C's (the target's own convention: eax, edx, ebx,
+;;       ecx).
 
                 .386
                 .387
@@ -15,8 +13,20 @@
                 public  B$SINCOS
 
 .code
-;;::::::::::::::
-;; B$ATAN2 (eax: y, edx: x, ebx: out)
+;; B$ATAN2 - store atan(y / x), in (-pi, pi], at `out`.
+;;
+;; The FPU stack is left empty.
+;;
+;; Args:
+;;     y   (eax): ptr to a double.
+;;     x   (edx): ptr to a double.
+;;     out (ebx): ptr to a double.
+;;
+;; Returns:
+;;     *out: the angle.
+;;
+;; Saves:    none
+;; Clobbers: flags, the FPU's status
 B$ATAN2         proc
 
                 fld     qword ptr [eax]
@@ -27,8 +37,20 @@ B$ATAN2         proc
                 ret
 B$ATAN2         endp
 
-;;::::::::::::::
-;; B$SINCOS (eax: angle, edx: sine, ebx: cosine)
+;; B$SINCOS - store the sine and the cosine of an angle.
+;;
+;; The FPU stack is left empty.
+;;
+;; Args:
+;;     angle  (eax): ptr to a double.
+;;     sine   (edx): ptr to a double.
+;;     cosine (ebx): ptr to a double.
+;;
+;; Returns:
+;;     *sine, *cosine.
+;;
+;; Saves:    none
+;; Clobbers: flags, the FPU's status
 B$SINCOS        proc
 
                 fld     qword ptr [eax]

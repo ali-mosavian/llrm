@@ -1,12 +1,10 @@
 ;; name: B$OUTB, B$OUTW, B$INB, B$CLI, B$STI
-;; desc: I/O ports
-;;
-;; args: ax:word port, dx:word value | a byte or a word to the port: for a word the index is the low byte and the datum the high one, as the VGA's index/data pairs take it
-;; retn: B$INB ax -> the byte
+;; desc: I/O ports and the interrupt flag
 ;;
 ;; chng: oct/26 written [ali]
-;; obs.: the registers are C's (regparm3: ax, dx, cx), so no thunk is needed; the QB
-;;       runtime's device code (dev*.c, gfxdev.c) is C around these. Target 386+ with an FPU.
+;; obs.: the registers are C's (regparm3: ax, dx, cx), so no thunk is needed;
+;;       the QB runtime's device code (dev*.c, gfxdev.c) is C around these.
+;;       Target 386+ with an FPU.
 
                 .model  medium, pascal
                 .386
@@ -16,8 +14,14 @@
                 include qb.inc
 
 .code
-;;::::::::::::::
-;; B$OUTB (ax: port, dx: value)
+;; B$OUTB - write a byte to a port.
+;;
+;; Args:
+;;     port  (ax): the port number.
+;;     value (dx): the byte, in its low byte.
+;;
+;; Saves:    none
+;; Clobbers: ax dx
 B$OUTB          proc    public
 
                 xchg    ax, dx                  ;; dx the port, al the byte
@@ -25,8 +29,17 @@ B$OUTB          proc    public
                 ret
 B$OUTB          endp
 
-;;::::::::::::::
-;; B$OUTW (ax: port, dx: value)
+;; B$OUTW - write a word to a port.
+;;
+;; For the VGA's index/data pairs the index is the low byte and the datum the
+;; high one.
+;;
+;; Args:
+;;     port  (ax): the port number.
+;;     value (dx): the word, in its low word.
+;;
+;; Saves:    none
+;; Clobbers: ax dx
 B$OUTW          proc    public
 
                 xchg    ax, dx                  ;; dx the port, ax the word
@@ -34,8 +47,16 @@ B$OUTW          proc    public
                 ret
 B$OUTW          endp
 
-;;::::::::::::::
-;; B$INB (ax: port)
+;; B$INB - read a byte from a port.
+;;
+;; Args:
+;;     port (ax): the port number.
+;;
+;; Returns:
+;;     ax: the byte, the rest zero.
+;;
+;; Saves:    none
+;; Clobbers: ax dx, flags
 B$INB           proc    public
 
                 mov     dx, ax
@@ -44,14 +65,26 @@ B$INB           proc    public
                 ret
 B$INB           endp
 
-;;::::::::::::::
-;; B$CLI (), B$STI ()
+;; B$CLI - clear the interrupt flag.
+;;
+;; Args:
+;;     None.
+;;
+;; Saves:    none
+;; Clobbers: flags
 B$CLI           proc    public
 
                 cli
                 ret
 B$CLI           endp
 
+;; B$STI - set the interrupt flag.
+;;
+;; Args:
+;;     None.
+;;
+;; Saves:    none
+;; Clobbers: flags
 B$STI           proc    public
 
                 sti

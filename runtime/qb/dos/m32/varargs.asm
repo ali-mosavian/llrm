@@ -2,23 +2,27 @@
 ;; desc: entries whose stack block has the length of the call, flat
 ;;
 ;; args: B$DDIM, B$RDIM [in] (last pushed first, a dword slot each)
-;;                      ad:dword          | the array descriptor
-;;                      rankFeat:dword    | rank, features << 8 (the low word)
-;;                      elem:dword        | element size
-;;                      upper, lower:dword| each dimension's bounds, the one next to elem being the first
-;;                                        | stored
+;;                      ad:dword           | the array descriptor
+;;                      rankFeat:dword     | rank, features << 8 (low word)
+;;                      elem:dword         | element size
+;;                      upper, lower:dword | each dimension's bounds, the one
+;;                                         | next to elem being the first
+;;                                         | stored
 ;;       B$CLOS         [in] count:dword   | channels to close, 0: all
 ;;                      channel:dword...   | the channels
 ;;       B$COLR, B$LOCT, B$CSCN
 ;;                      [in] count:dword   | slots that follow
-;;                      (flag, value)...   | per argument; no value where the flag is 0
+;;                      (flag, value)...   | per argument; no value where the
+;;                                         | flag is 0
 ;; retn: none; the entry pops its whole block
 ;;
 ;; chng: oct/26 written [ali]
-;; obs.: as the real-mode entries (the callee pops as many slots as the call pushed): a register
-;;       convention cannot say that, so these keep BASIC's pushes; C does the work (array_dim in
-;;       array.c, file_close in file.c, the screen routines in screen.c) and takes the block's
-;;       address.  A value is the low 16 bits of its slot.  The entries change eax, ebx, ecx and edx.
+;; obs.: as the real-mode entries (the callee pops as many slots as the call
+;;       pushed): a register convention cannot say that, so these keep
+;;       BASIC's pushes; C does the work (array_dim in array.c, file_close in
+;;       file.c, the screen routines in screen.c) and takes the block's
+;;       address.  A value is the low 16 bits of its slot.  The entries
+;;       change eax, ebx, ecx and edx.
 
                 .386
                 .model  flat
@@ -41,8 +45,8 @@ DIM_ALLOCATE    equ     0                       ;; enum DimMode, array.h
 DIM_REALLOCATE  equ     1
 
 .code
-;;::::::::::::::
-;; the DIM entries differ in the mode alone: the block, past the return, and then the rank's bytes
+;; the DIM entries differ in the mode alone: the block, past the return, and
+;; then the rank's bytes
 DIMPROC         macro   entry:req, mode:req
 
 entry           proc
@@ -50,26 +54,55 @@ entry           proc
                 mov     eax, mode
                 lea     edx, [esp+SLOT]         ;; the block: descriptor first
                 call    @array_dim@4
-                movzx   ecx, byte ptr [esp+2*SLOT]      ;; rank
+                ;; rank
+                movzx   ecx, byte ptr [esp+2*SLOT]
                 lea     ecx, [8*ecx+3*SLOT]     ;; bytes the caller pushed
                 jmp     popblock
 entry           endp
                 endm
 
-;;::::::::::::::
-;; B$DDIM (...), B$RDIM (...)
+;; B$DDIM, B$RDIM - DIM (allocate) and REDIM (reallocate) a dynamic array.
+;;
+;; The entry pops its block (popblock): a dword slot each for the array
+;; descriptor, rank and features, and element size, then two for each
+;; dimension.
+;;
+;; Args:
+;;     ad       (esp+4):  the array descriptor, the start of the block.
+;;     rankFeat (esp+8):  rank, features << 8 (the low word).
+;;     elem     (esp+12): element size.
+;;     bounds   (esp+16): upper, lower for each dimension, the one next to
+;;                        elem being the first stored.
+;;
+;; Returns:
+;;     To the caller, with the block popped.
+;;
+;; Saves:    none
+;; Clobbers: eax ecx edx, flags
                 DIMPROC B$DDIM, DIM_ALLOCATE
                 DIMPROC B$RDIM, DIM_REALLOCATE
 
-;;::::::::::::::
-;; B$CLOS (channel:dword..., count:dword)
+;; B$CLOS - CLOSE the channels given, or all of them.
+;;
+;; Args:
+;;     count    (esp+4): channels to close, 0: all.
+;;     channels (esp+8): that many dword slots, the channel numbers.
+;;
+;; Returns:
+;;     To the caller, with the block popped.
+;;
+;; Saves:    none
+;; Clobbers: eax ecx edx, flags
 B$CLOS          proc
 
-                lea     eax, [esp+2*SLOT]       ;; the channels, just past the count
-                movzx   edx, word ptr [esp+SLOT]        ;; the count
+                ;; the channels, just past the count
+                lea     eax, [esp+2*SLOT]
+                ;; the count
+                movzx   edx, word ptr [esp+SLOT]
                 call    @file_close@4
                 movzx   ecx, word ptr [esp+SLOT]
-                lea     ecx, [4*ecx+SLOT]       ;; bytes the caller pushed
+                ;; bytes the caller pushed
+                lea     ecx, [4*ecx+SLOT]
                 jmp     popblock
 B$CLOS          endp
 
@@ -78,7 +111,8 @@ BLOCKPROC       macro   entry:req, handler:req
 
 entry           proc
 
-                lea     eax, [esp+SLOT]         ;; the count and the slots past it
+                ;; the count and the slots past it
+                lea     eax, [esp+SLOT]
                 call    handler
                 movzx   ecx, word ptr [esp+SLOT]
                 lea     ecx, [4*ecx+SLOT]       ;; bytes the caller pushed
@@ -86,14 +120,33 @@ entry           proc
 entry           endp
                 endm
 
-;;::::::::::::::
-;; B$COLR (...), B$LOCT (...), B$CSCN (...)
+;; B$COLR, B$LOCT, B$CSCN - COLOR, LOCATE and SCREEN with the arguments given.
+;;
+;; Args:
+;;     count (esp+4): slots that follow.
+;;     slots (esp+8): (flag, value) for each argument; no value where the
+;;                    flag is 0.
+;;
+;; Returns:
+;;     To the caller, with the block popped.
+;;
+;; Saves:    none
+;; Clobbers: eax ecx edx, flags
                 BLOCKPROC B$COLR, @screen_color@2
                 BLOCKPROC B$LOCT, @screen_locate@2
                 BLOCKPROC B$CSCN, @screen_mode@2
 
-;;::::::::::::::
-;; popblock (ecx: bytes) :  return, popping ecx bytes
+;; popblock - return from an entry, popping its block of arguments.
+;;
+;; Args:
+;;     bytes (ecx):  the bytes the caller pushed.
+;;     return (esp): the return address.
+;;
+;; Returns:
+;;     To the caller, with the block popped.
+;;
+;; Saves:    none
+;; Clobbers: edx, flags
 popblock        proc
 
                 pop     edx                     ;; return address

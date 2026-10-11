@@ -1,14 +1,16 @@
 ;; name: B$DIV0, B$TRAPS
-;; desc: the divide fault: an integer division by zero is the error Division by zero
+;; desc: the divide fault: an integer division by zero is the error Division by
+;;       zero
 ;;
 ;; args: B$TRAPS (none)                       | takes processor exception 0
 ;; retn: B$DIV0 does not return: the error is raised
 ;;
 ;; chng: oct/26 written [ali]
-;; obs.: the extender (DPMI 0203h) enters the handler with the exception's frame on the stack: its own way
-;;       back, an error code, then the faulting program's eip, cs, eflags, esp and ss.  The handler makes the
-;;       fault resume at B$DIV0, which raises the error on the program's own stack; the extender puts the old
-;;       handler back when the program ends.
+;; obs.: the extender (DPMI 0203h) enters the handler with the exception's frame
+;;       on the stack: its own way back, an error code, then the faulting
+;;       program's eip, cs, eflags, esp and ss.  The handler makes the fault
+;;       resume at B$DIV0, which raises the error on the program's own stack;
+;;       the extender puts the old handler back when the program ends.
 
                 .386
                 .model  flat
@@ -21,11 +23,19 @@
 BE_DIVIDE0      equ     11
 DPMI_SET_EXCEPTION equ  0203h
 DIVIDE_EXCEPTION   equ  0
-FRAME_EIP       equ     12                      ;; the faulting eip, past the way back and the error code
+;; the faulting eip, past the way back and the error code
+FRAME_EIP       equ     12
 
 .code
-;;::::::::::::::
-;; B$DIV0 ()
+;; B$DIV0 - the divide fault: raise the error Division by zero.
+;;
+;; divide_fault makes the fault resume here.  It does not return.
+;;
+;; Args:
+;;     none.
+;;
+;; Saves:    none
+;; Clobbers: eax, flags
 B$DIV0          proc
 
                 sti
@@ -33,29 +43,38 @@ B$DIV0          proc
                 call    B$ERROR
 B$DIV0          endp
 
-;;::::::::::::::
-;; the exception handler: the fault resumes at B$DIV0
+;; divide_fault - the exception handler: the fault resumes at B$DIV0.
+;;
+;; Args:
+;;     frame (esp): the extender's exception frame: its own way back (8
+;;                  bytes), an error code (4), then the faulting eip, cs,
+;;                  eflags, esp and ss.
+;;
+;; Returns:
+;;     To the extender (retf), with the faulting eip set to B$DIV0.
+;;
+;; Saves:    none
+;; Clobbers: none
 divide_fault    proc
 
                 mov     dword ptr [esp+FRAME_EIP], offset B$DIV0
                 retf
 divide_fault    endp
 
-;;::::::::::::::
-;; B$TRAPS ()
-B$TRAPS         proc
+;; B$TRAPS - take processor exception 0 for divide_fault.
+;;
+;; Args:
+;;     none.
+;;
+;; Saves:    ebx ecx edx
+;; Clobbers: eax, flags
+B$TRAPS         proc    uses ebx ecx edx
 
-                push    ebx
-                push    ecx
-                push    edx
                 mov     eax, DPMI_SET_EXCEPTION
                 mov     ebx, DIVIDE_EXCEPTION
                 mov     ecx, cs
                 mov     edx, offset divide_fault
                 int     31h
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$TRAPS         endp
                 end

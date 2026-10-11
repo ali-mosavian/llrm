@@ -34,7 +34,8 @@ qb_start        proto   far c
 
 PAGES_64K       equ     1000h                   ;; paragraphs in 64 KB
 LAST_WORD       equ     0FFFEh                  ;; the last word of 64 KB
-HEADER_CODE     equ     30h                     ;; where the module's code starts
+;; where the module's code starts
+HEADER_CODE     equ     30h
 
 ;; DGROUP's first bytes are zero: the compiled code uses address 0 as the
 ;; empty string's descriptor (PRINT with nothing passes it)
@@ -50,7 +51,8 @@ XIE             segment word public 'DATA'
 XIE             ends
 
 _DATA           segment word public 'DATA'
-qb_asizds       word    0                       ;; the last usable word of DGROUP
+;; the last usable word of DGROUP
+qb_asizds       word    0
 qb_xi_begin     word    O DGROUP:XIB
 qb_xi_end       word    O DGROUP:XIE
 qb_module_segment word  0                       ;; the module's code segment
@@ -73,8 +75,18 @@ BC_SAB          ends
 DGROUP          group   _NULL, _DATA, _BSS, XIB, XI, XIE, STACK, BC_SAB
 
 .code
-;;::::::::::::::
-;; start ()
+;; start - the startup of a QB45 compiled module.
+;;
+;; Rebases ss to DGROUP, sets qb_asizds, zeroes BSS up to the stack, calls
+;; qb_start, then enters the module at BC_SA:HEADER_CODE. It never returns:
+;; a module ends through B$CENP/B$CEND.
+;;
+;; Args:
+;;     psp   (es):    the program segment prefix.
+;;     stack (ss:sp): the STACK segment's own frame.
+;;
+;; Saves:    none
+;; Clobbers: everything
 start           proc
 
                 mov     bx, es                  ;; the PSP, before ds leaves it
@@ -130,6 +142,7 @@ start           proc
                 xor     dx, dx
                 ret
 
-@@hang:         jmp     short @@hang            ;; a module ends through B$CENP/B$CEND
+;; a module ends through B$CENP/B$CEND
+@@hang:         jmp     short @@hang
 start           endp
                 end     start

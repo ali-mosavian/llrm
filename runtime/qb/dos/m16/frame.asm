@@ -46,11 +46,25 @@ FR_GOSUB        equ     -10
 FR_SIZE         equ     10                      ;; the header, bp-10 .. bp-1
 
 .data
-b_curframe      word    0                       ;; frame of the procedure running
+;; frame of the procedure running
+b_curframe      word    0
 
 .code
-;;::::::::::::::
-;; B$ENRA ()
+;; B$ENRA - build a BASIC procedure's frame and zero its locals.
+;;
+;; The frame is the one in the file header.  The caller's far way back is
+;; taken off the stack and put back below the frame, so B$ENRA returns with
+;; sp below the locals.
+;;
+;; Args:
+;;     locals (cx): bytes of locals, even.
+;;     slots  (bx): temporary string slots, unused.
+;;
+;; Returns:
+;;     bp: the new frame.
+;;
+;; Saves:    es; si and di in the frame (B$EXSA restores them)
+;; Clobbers: ax bx cx dx di, flags
 B$ENRA          proc    public
 
                 pop     bx                      ;; our caller's way back,
@@ -87,8 +101,17 @@ B$ENRA          proc    public
                 ret
 B$ENRA          endp
 
-;;::::::::::::::
-;; B$EXSA ()
+;; B$EXSA - take a BASIC procedure's frame apart.
+;;
+;; Args:
+;;     frame  (bp):    the frame B$ENRA built.
+;;     result (dx:ax): the function's result, kept.
+;;
+;; Returns:
+;;     si, di, bp and b_curframe as the caller had them.
+;;
+;; Saves:    none
+;; Clobbers: bx cx, flags
 B$EXSA          proc    public
 
                 pop     bx                      ;; our caller's way back
