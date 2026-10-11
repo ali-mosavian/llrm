@@ -373,13 +373,9 @@ class CSourceTests(unittest.TestCase):
             self.assertEqual(bench.c_source(source), b"// a comment\nint main(void) { return 0; }\n")
 
 
-class SharedHeaderTests(unittest.TestCase):
-    def test_reference_builds_find_bench_io_beside_the_copied_source(self):
-        """jpeg.c includes "../bench_io.h": the references compile a copy in work/<ref>/, where the header was missing, so BC and TC had no row."""
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as where:
-            folder = Path(where) / "bcc" / "O2"
-            folder.mkdir(parents=True)
-            bench.stage_shared_headers(folder)
-            self.assertEqual((folder.parent / "bench_io.h").read_bytes(), (bench.BENCH / "bench_io.h").read_bytes())
+def test_reference_builds_find_bench_io_beside_the_copied_source(tmp_path):
+    """jpeg.c includes "../bench_io.h": the references compile a copy in work/<ref>/, where the header was missing, so BC and TC had no row."""
+    folder = tmp_path / "bcc" / "O2"
+    folder.mkdir(parents=True)
+    bench.stage_shared_headers(folder)
+    assert (folder.parent / "bench_io.h").read_bytes() == (bench.BENCH / "bench_io.h").read_bytes()
