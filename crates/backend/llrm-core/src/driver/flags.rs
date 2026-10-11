@@ -172,8 +172,7 @@ pub struct Flags {
     /// `-gcodeview`, `-gdwarf[-N]` or `-gtd` says which.
     pub debug: bool,
     pub debug_format: llrm_object::debug::Format,
-    /// `-gdwarf` without a version: 16-bit code gets the version Open Watcom's
-    /// tools read, 2.
+    /// `-gdwarf` without a version: the target's default.
     dwarf_unversioned: bool,
     /// `-fobject-format=`: the object format to write, where the target has
     /// more than its default.
@@ -409,8 +408,8 @@ impl Flags {
         // is.
         let object_format = self.format(&*arch).map_or("omf", |format| format.name());
         let debug_format = match self.debug_format {
-            llrm_object::debug::Format::Dwarf { .. } if self.dwarf_unversioned && arch.object().bitness == 16 => {
-                llrm_object::debug::Format::Dwarf { version: 2 }
+            llrm_object::debug::Format::Dwarf { .. } if self.dwarf_unversioned => {
+                llrm_object::debug::Format::Dwarf { version: arch.object().dwarf_version }
             }
             other => other,
         };
