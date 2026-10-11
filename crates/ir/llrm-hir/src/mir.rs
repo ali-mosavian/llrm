@@ -3100,6 +3100,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             // A segment's integer form is its selector, a far pointer's
             // segment:offset.
+            // One space: a segment means nothing and is always 0.
+            Op::PointerSegment if self.tables.spaces.segment_space().is_err() => {
+                let ty = self.result_type(instruction.results[0])?;
+                let zero = self.convert_constant_zero(ty)?;
+                self.define(instruction, zero);
+            }
             Op::PointerSegment => {
                 let far = self.value(&instruction.operands[0])?;
                 let segment = self.b.context.types.ptr(self.tables.spaces.segment_space()?);
@@ -3143,6 +3149,26 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
                 let function = function_type(&mut self.b.context.types, ty, vec![from, from]);
                 let result = self.b.call(function, callee, &[a, b], "").expect("a difference");
+                self.define(instruction, result);
+            }
+            Op::Concat if self.tables.spaces.segment_space().is_err() => {
+                let [selector, offset] = self.operands(instruction)?[..] else {
+                    return Err("concat without two operands".to_owned());
+                };
+                // One space: DEF SEG's paragraph (0 unless the program names one, such as video memory) times 16, plus
+                // the offset, which is as wide as a pointer: the address.
+                let ty = self.result_type(instruction.results[0])?;
+                let Type::Pointer(space) = *self.b.context.types.get(ty) else {
+                    return Err("a concat that is no pointer".to_owned());
+                };
+                let bits = self.tables.layout.pointer(space).bits;
+                let wide = self.b.context.types.int(bits);
+                let selector = self.convert(selector, false, wide)?;
+                let four = self.b.int(bits, 4);
+                let paragraph = self.b.binary(BinaryOp::Shl, selector, four, Flags::default(), "");
+                let offset = self.convert(offset, false, wide)?;
+                let address = self.b.binary(BinaryOp::Add, paragraph, offset, Flags::default(), "");
+                let result = self.b.cast(CastOp::IntToPtr, address, ty, "");
                 self.define(instruction, result);
             }
             Op::Concat => {
@@ -3402,6 +3428,15 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             (Some(_), Some(_)) => Ok(self.b.cast(CastOp::Trunc, value, ty, "")),
             _ => Err(format!("operands of {} and {}", types.display(from), types.display(ty))),
         }
+    }
+
+    /// The constant 0 of integer type `ty`.
+    fn convert_constant_zero(
+        &mut self,
+        ty: TypeId,
+    ) -> Emit<Value> {
+        let bits = self.b.context.types.int_bits(ty).ok_or("a zero of a non-integer")?;
+        Ok(self.b.int(bits, 0))
     }
 
     fn convert(

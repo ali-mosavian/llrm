@@ -14,7 +14,7 @@ pub fn ROOT() -> PathBuf {
 /// `DIALECTS`: the QB-family `hir.Dialect` values.
 pub const DIALECTS: [&str; 5] = ["qbasic11", "qb45", "pds71", "vbdos", "quickr"];
 /// `RUNTIMES`: the QB-family `hir.RuntimeProfile` values.
-pub const RUNTIMES: [&str; 3] = ["qb45", "pds71", "vbdos"];
+pub const RUNTIMES: [&str; 4] = ["qb45", "pds71", "vbdos", "llrm"];
 /// `ARRAY_ORDERS`: every `hir.ArrayOrder` value.
 pub const ARRAY_ORDERS: [&str; 2] = ["column-major", "row-major"];
 
@@ -69,6 +69,9 @@ pub struct Frontend {
     /// The most bytes the target's data segment holds: its description's, set
     /// by the CLI that bound the target.
     pub segment_bytes: Option<usize>,
+    /// The bytes of the target's near and far pointer, from its description (0: the 16-bit target's).
+    pub near_bytes: usize,
+    pub far_bytes: usize,
     pub includes: Vec<PathBuf>,
 }
 
@@ -96,6 +99,8 @@ impl Frontend {
             error_lines: false,
             bc_codeview: false,
             segment_bytes: None,
+            near_bytes: 0,
+            far_bytes: 0,
             includes: Vec::new(),
         }
     }
@@ -133,6 +138,8 @@ fn _options(
             runtime_frames: frontend.runtime_frames,
             error_lines: frontend.error_lines,
             segment_bytes: frontend.segment_bytes,
+            near_bytes: frontend.near_bytes,
+            far_bytes: frontend.far_bytes,
             bc_codeview: frontend.bc_codeview,
         },
         debug: frontend.debug,
@@ -173,9 +180,9 @@ pub fn parsed(
         }
         std::fs::write(dump, &stdout).map_err(|error| FrontendError(error.to_string()))?;
     }
-    let mut program = decoded(&stdout, frontend.checked_arrays)?;
+    let mut program = decoded(&stdout, frontend.checked_arrays, frontend.near_bytes)?;
     if frontend.checked_stack {
-        let family = program.runtime.value();
+        let family = program.runtime.tables();
         program.stack_check = Some(
             llrm_core::abi::runtime::semantics::stack(family)
                 .ok_or_else(|| FrontendError(format!("the {family} runtime states no stack limit")))?,
@@ -190,10 +197,11 @@ pub fn parsed(
 pub fn decoded(
     text: &str,
     checked: bool,
+    near_bytes: usize,
 ) -> Result<model::Program, FrontendError> {
     let mut program =
         codec::decode(text).map_err(|error| FrontendError(format!("qbfront produced invalid HIR: {error}")))?;
-    let family = program.runtime.value();
+    let family = program.runtime.tables();
     for object_ in program.modules.iter_mut().flat_map(|module| &mut module.data) {
         if object_.linkage == model::DataLinkage::External && llrm_core::abi::runtime::named_only(&object_.name, family)
         {
@@ -215,7 +223,7 @@ pub fn decoded(
     // Where an error is handled the routine raises it, as the checks the
     // frontend writes do.
     program.promises.checked = checked || handles;
-    program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(family);
+    program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(program.runtime.value(), if near_bytes == 0 { 2 } else { near_bytes });
     program.promises.routines = llrm_core::abi::runtime::semantics::routines();
     program.promises.nounwind = llrm_core::abi::runtime::CONTRACTS
         .iter()
@@ -225,4 +233,34 @@ pub fn decoded(
     program.promises.no_retain = llrm_core::abi::runtime::captures_nothing().into_iter().map(str::to_owned).collect();
     program.promises.no_return = llrm_core::abi::runtime::never_returning().into_iter().map(str::to_owned).collect();
     Ok(program)
+}
+
+/// The program's runtime calls made as the target calls any function it has not marked: the target's
+/// own convention (`native_cc`, its description's `cc`), the caller popping, the first argument the last pushed. The other runtimes keep their
+/// stack ABI, which the Microsoft routines fix.
+pub fn natively_called(
+    program: &mut model::Program,
+    native_cc: Option<&str>,
+) {
+    let named = native_cc.filter(|cc| *cc != "cdecl").map(str::to_owned);
+    for function in program.modules.iter_mut().flat_map(|module| &mut module.functions) {
+        let called: std::collections::HashMap<i64, String> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|one| Some((one.id, one.callee.clone()?)))
+            .collect();
+        let native = |call: &model::CallAbi| {
+            call.callee.is_none()
+                && !called
+                    .get(&call.instruction)
+                    .is_some_and(|name| llrm_core::abi::runtime::semantics::keeps_stack_abi(name))
+        };
+        let natives: Vec<bool> = function.calls.iter().map(native).collect();
+        for call in function.calls.iter_mut().zip(natives).filter_map(|(call, native)| native.then_some(call)) {
+            call.cleanup = model::StackCleanup::Caller;
+            call.order.reverse();
+            call.convention = named.clone();
+        }
+    }
 }

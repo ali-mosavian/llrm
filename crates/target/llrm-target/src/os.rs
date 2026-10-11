@@ -98,7 +98,7 @@ impl Interface {
         &self,
         op: &Op,
     ) -> String {
-        format!("{}{}", self.prefix, op.name)
+        format!("{}{}", self.prefix, op.name.to_uppercase())
     }
 
     /// The operations of the groups a target implements.
@@ -246,7 +246,7 @@ impl Layer {
     }
 
     /// The C header of the interface: each operation declared `__cdecl` as
-    /// `llrm_os_<name>` (C's underscore makes the symbol), the data
+    /// `llrm_os_<name>`, each named for its assembly symbol by a `#pragma aux`, the data
     /// pointers far where the target has far data. The layer's routines are
     /// written in the target's C convention whatever its default is.
     pub fn c_header(&self) -> Result<String, String> {
@@ -282,9 +282,10 @@ impl Layer {
             let (Some(types), Some(returns)) = (types, kind(&op.returns)) else { continue };
             let args = if types.is_empty() { "void".to_owned() } else { types.join(", ") };
             text += &format!(
-                "{returns} __cdecl llrm_os_{}({args});
-",
-                op.name
+                "{returns} __cdecl llrm_os_{}({args});\n#pragma aux llrm_os_{} \"{}\"\n",
+                op.name,
+                op.name,
+                interface.symbol(op)
             );
         }
         for (name, code) in &interface.errors {
@@ -448,7 +449,7 @@ mod tests {
             Layer { text: "os = \"dos\"\nconvention = \"cdecl16\"\npointer = \"far\"\ngroups = [\"core\"]\n", ..LAYER };
         assert!(
             far.nib_module().unwrap().contains(
-                "@extern(\"cdecl16\", name=\"_llrm_os_open\")\npub fn open(name: *far char, mode: u8) -> i16"
+                "@extern(\"cdecl16\", name=\"LL$OPEN\")\npub fn open(name: *far char, mode: u8) -> i16"
             )
         );
     }

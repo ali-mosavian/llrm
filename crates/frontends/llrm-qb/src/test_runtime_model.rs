@@ -212,3 +212,77 @@ fn lprint_and_write_call_their_preambles_as_bc_does() {
         ["B$WRIT", "B$PSSD", "B$PEI2", "B$PESD", "B$CHOU", "B$WRIT", "B$PEI2"]
     );
 }
+
+/// PSET and PRESET without a colour called B$PSTC with -1 and 0, a colour made up in the compiler: BCOM45
+/// drew the PSET white whatever COLOR said. BC 4.5 calls B$PSET and B$PRST, which take the foreground and
+/// the background the runtime keeps.
+#[test]
+fn pset_and_preset_without_a_colour_call_the_runtime_for_it() {
+    let names = called("SCREEN 9\nPSET (1, 2)\nPRESET (3, 4)\nPSET (5, 6), 7\nPRESET (8, 9), 1\n");
+    let drawing: Vec<_> = names.iter().filter(|name| name.contains("PSTC") || name.contains("PSET") || name.contains("PRST")).collect();
+    assert_eq!(drawing, ["B$PSET", "B$PRST", "B$PSTC", "B$PSTC"]);
+}
+
+/// On the flat target a string argument was cut to the low 4 bits of its pointer (a 4-byte descriptor pointer was
+/// taken for a far one): `Twice$("ab")` printed nothing. Where there is one space, no pointer is split.
+#[test]
+fn flat_target_string_pointers_are_not_split() {
+    let source = "DECLARE FUNCTION T$ (s$)\nPRINT T$(\"ab\")\nFUNCTION T$ (s$)\nT$ = s$ + s$\nEND FUNCTION\n";
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "flat.bas", source.as_bytes());
+    let mut frontend = qb_driver::Frontend::new("qb45", "llrm");
+    (frontend.near_bytes, frontend.far_bytes) = (4, 4);
+    let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{error}"));
+    let split = program
+        .modules
+        .iter()
+        .flat_map(|module| &module.functions)
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .filter(|one| one.op == llrm_core::hir::model::Op::PointerOffset)
+        .count();
+    assert_eq!(split, 0);
+}
+
+/// A bare PRINT passed the descriptor address 0. On the flat target that is the interrupt table: a PRINT after a
+/// loop ending in `;` wrote its garbage length and the program died. The argument is a real descriptor.
+#[test]
+fn flat_target_bare_print_passes_a_real_descriptor() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "flat.bas", b"PRINT\n");
+    let mut frontend = qb_driver::Frontend::new("qb45", "llrm");
+    (frontend.near_bytes, frontend.far_bytes) = (4, 4);
+    let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{error}"));
+    let call = program
+        .modules
+        .iter()
+        .flat_map(|module| &module.functions)
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .find(|one| one.callee.as_deref() == Some("B$PESD"))
+        .expect("a B$PESD call");
+    assert!(!matches!(call.operands[0], llrm_core::hir::model::Operand::Constant { .. }), "{:?}", call.operands);
+}
+
+/// VARSEG and VARPTR split an address into a paragraph and a nibble: on a flat target above 1 MB that reached the
+/// wrong memory. Where there is one space VARPTR is the whole address, as wide as a pointer, and VARSEG is 0.
+#[test]
+fn flat_target_varptr_is_a_whole_address() {
+    let source = "x% = 1\nDEF SEG = VARSEG(x%)\nPRINT PEEK(VARPTR(x%))\n";
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "flat.bas", source.as_bytes());
+    let mut frontend = qb_driver::Frontend::new("qb45", "llrm");
+    (frontend.near_bytes, frontend.far_bytes) = (4, 4);
+    let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{error}"));
+    let module = &program.modules[0];
+    let function = module.functions.iter().find(|one| one.name == "__main").expect("the main code");
+    let offset = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find(|one| one.op == llrm_core::hir::model::Op::PointerOffset)
+        .expect("a VARPTR");
+    let value = function.values.iter().find(|one| one.id == offset.results[0]).expect("its value");
+    let width = module.types.iter().find(|one| one.id == value.r#type).expect("its type").width;
+    assert_eq!(width, 4, "VARPTR is not a whole address");
+}

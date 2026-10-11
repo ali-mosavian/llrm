@@ -2107,7 +2107,7 @@ fn volatile_goes_after_as_and_byref_is_accepted() {
 #[test]
 fn a_near_string_literal_is_laid_out_as_the_runtime_description_says() {
     for (dialect, runtime) in [(Dialect::QuickBasic45, "qb45"), (Dialect::Pds71, "pds71")] {
-        let layout = llrm_qbruntime::semantics::descriptor(runtime).expect("a near runtime states its descriptor");
+        let layout = llrm_qbruntime::semantics::descriptor(runtime, 2).expect("a near runtime states its descriptor");
         let module = parse("x$ = \"ab\"\n", dialect).unwrap();
         let hir = compile(&module, "lit", dialect, runtime).unwrap();
         let mut bytes = vec![0u8; layout.size as usize];
@@ -2135,4 +2135,24 @@ fn the_near_data_budget_is_the_targets_segment() {
     assert!(error.contains("exceeds the 1 KiB near-data budget"), "{error}");
     assert!(on(Some(65536)).is_ok());
     assert!(on(None).is_ok());
+}
+
+#[test]
+fn event_traps_keep_their_device_number_verb_and_handler() {
+    let module = parse("on timer(5) gosub tick\r\nplay on\r\nkey(2) stop\r\n", Dialect::QuickBasic45).unwrap();
+    let verbs: Vec<(String, usize)> = module
+        .statements
+        .iter()
+        .filter_map(|one| match one {
+            Statement::Runtime { name, arguments, .. } if name == "EVENT" => {
+                let verb = match &arguments[2] {
+                    Expr::Name(verb, _) => verb.clone(),
+                    _ => String::new(),
+                };
+                Some((verb, arguments.len()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(verbs, [("GOSUB".to_string(), 4), ("ON".to_string(), 4), ("STOP".to_string(), 4)]);
 }
