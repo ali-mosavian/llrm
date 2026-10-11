@@ -249,6 +249,8 @@ pub const TUPLE: &str = "$TUPLE";
 /// ON n GOTO|GOSUB's selector: `n` rounded to INTEGER, ERROR 5 raised by the
 /// ON statement itself where it is outside 0..255, so RESUME retries the ON.
 pub const ON_SELECTOR: &str = "$ON";
+/// The name a coordinate pair's x carries when the pair is STEP-relative to the last point.
+pub const STEP_MARK: &str = "$STEP";
 
 /// Where the first comma outside parentheses stands in `tokens`.
 fn depth_zero_comma(tokens: &[Token]) -> Option<usize> {
@@ -1331,6 +1333,66 @@ fn data_statement(
     ParseResult::GoodSyntax
 }
 
+/// A graphics statement's arguments in place: each coordinate pair whose STEP the source gave has its x wrapped in
+/// `STEP(x)`; `LINE -(x, y)` gets the pair `STEP(0), 0` (the last point) in front; `LINE`'s color, B or BF, and style
+/// are three arguments, `Omitted` where the source left them out.
+fn graphics_arguments(
+    state: &ParseState,
+    name: &str,
+    mut arguments: Vec<Expr>,
+    actions: &[AstAction],
+    span: Span,
+) -> Vec<Expr> {
+    let keyword_at = state.tokens[..state.at].iter().rposition(|token| token.span == span).unwrap_or(0);
+    let tokens = &state.tokens[keyword_at..state.at];
+    let marked = |slot: u8| actions.iter().any(|action| matches!(action, AstAction::Mark { slot: s, .. } if *s == slot));
+    let zero = |at: Span| Expr::Literal(Literal::Integer(0, TypeName::Integer), at);
+    let omitted_first = name == "LINE"
+        && tokens.get(1).is_some_and(|token| token.kind == TokenKind::Reserved(named("tkMinus")));
+    if name == "LINE" {
+        if omitted_first {
+            arguments.splice(0..0, [zero(span), zero(span)]);
+        }
+        let rest = arguments.split_off(4.min(arguments.len()));
+        let mut rest = rest.into_iter();
+        let mut take = |present: bool| if present { rest.next() } else { None };
+        let color = take(marked(1));
+        let mode = take(marked(2) || marked(3));
+        let style = take(marked(4));
+        for one in [color, mode, style] {
+            arguments.push(one.unwrap_or(Expr::Omitted(span)));
+        }
+        while arguments.len() > 4 && matches!(arguments.last(), Some(Expr::Omitted(_))) {
+            arguments.pop();
+        }
+    }
+    let pairs: &[usize] = match name {
+        "LINE" | "GET" => &[0, 2],
+        _ => &[0],
+    };
+    let mut floor = span.start;
+    let mut after_first = 0;
+    for &at in pairs {
+        let Some(x) = arguments.get(at) else { break };
+        let from = if at == 0 { floor } else { after_first };
+        let stepped = (at == 0 && omitted_first) || tokens.iter().any(|token| {
+            token.kind == TokenKind::Reserved(named("tkSTEP"))
+                && token.span.start >= from
+                && token.span.end <= x.span().start
+        });
+        if at == 0 {
+            after_first = arguments.get(1).map_or(floor, |y| y.span().end);
+            floor = after_first;
+        }
+        if stepped {
+            let x = arguments[at].clone();
+            let at_span = x.span();
+            arguments[at] = Expr::Apply { name: STEP_MARK.into(), arguments: vec![x], span: at_span };
+        }
+    }
+    arguments
+}
+
 fn synthesize_statement(
     state: &mut ParseState,
     keyword: u16,
@@ -1667,6 +1729,9 @@ fn synthesize_statement(
                 {
                     arguments.push(Expr::Name(mode.into(), mode_span));
                 }
+            }
+            if matches!(name, "PSET" | "PRESET" | "LINE" | "CIRCLE" | "PAINT" | "GET" | "PUT") {
+                arguments = graphics_arguments(state, name, arguments, actions, span);
             }
             Statement::Runtime { name: name.into(), arguments, span }
         }

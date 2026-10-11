@@ -22,6 +22,8 @@ const GfxMode *gfx_current;
 byte gfx_foreground = DEFAULT_FOREGROUND, gfx_background;
 static byte cga_background, cga_palette = 1;
 int gfx_x1, gfx_y1, gfx_x2, gfx_y2;
+/* The last referenced point: STEP is taken from it, and LINE -(x, y) starts at it. */
+static int last_x, last_y;
 
 /* The adapter's own colour numbers for the attributes 0 to 15 at the start of a
    mode: 0-5 and 7 as they are, 6 brown (20), 8-15 the bright ones (56-63). */
@@ -60,6 +62,10 @@ void gfx_screen(int mode)
         if (modes[at].number == mode) {
             if (!gd_set_mode(modes[at].bios))
                 break;
+            if (gfx_current != &modes[at]) {
+                last_x = (int)modes[at].width / 2;
+                last_y = (int)modes[at].height / 2;
+            }
             gfx_current = &modes[at];
             gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1 : DEFAULT_FOREGROUND;
             gfx_background = 0;
@@ -189,30 +195,59 @@ static void need_graphics(void)
         qb_error(BE_ILLFUN);
 }
 
-void B_N1I2(short x, short y)
+/* The first and second points of a statement, absolute (B$N..) or (B$S..) a step from the last point and from the first;
+   each is the last point after. A step is rounded before it is added, as BC does. */
+static void first_point(int x, int y)
 {
     need_graphics();
-    gfx_x1 = x;
-    gfx_y1 = y;
+    last_x = gfx_x1 = x;
+    last_y = gfx_y1 = y;
+}
+
+static void second_point(int x, int y)
+{
+    last_x = gfx_x2 = x;
+    last_y = gfx_y2 = y;
+}
+
+void B_N1I2(short x, short y)
+{
+    first_point(x, y);
 }
 
 void B_N1R4(float x, float y)
 {
-    need_graphics();
-    gfx_x1 = rounded(x);
-    gfx_y1 = rounded(y);
+    first_point(rounded(x), rounded(y));
 }
 
 void B_N2I2(short x, short y)
 {
-    gfx_x2 = x;
-    gfx_y2 = y;
+    second_point(x, y);
 }
 
 void B_N2R4(float x, float y)
 {
-    gfx_x2 = rounded(x);
-    gfx_y2 = rounded(y);
+    second_point(rounded(x), rounded(y));
+}
+
+void B_S1I2(short x, short y)
+{
+    first_point(last_x + x, last_y + y);
+}
+
+void B_S1R4(float x, float y)
+{
+    first_point(last_x + rounded(x), last_y + rounded(y));
+}
+
+void B_S2I2(short x, short y)
+{
+    second_point(gfx_x1 + x, gfx_y1 + y);
+}
+
+void B_S2R4(float x, float y)
+{
+    second_point(gfx_x1 + rounded(x), gfx_y1 + rounded(y));
 }
 
 /* B$PSTC: PSET and PRESET at the first point. */
@@ -269,6 +304,10 @@ void B_PAL2(short attribute, long color)
 #pragma aux B_N1R4 "B$N1R4"
 #pragma aux B_N2I2 "B$N2I2"
 #pragma aux B_N2R4 "B$N2R4"
+#pragma aux B_S1I2 "B$S1I2"
+#pragma aux B_S1R4 "B$S1R4"
+#pragma aux B_S2I2 "B$S2I2"
+#pragma aux B_S2R4 "B$S2R4"
 #pragma aux B_PSTC "B$PSTC"
 #pragma aux B_PSET "B$PSET"
 #pragma aux B_PRST "B$PRST"

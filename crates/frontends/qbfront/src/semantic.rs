@@ -14,7 +14,7 @@ mod tags;
 use tags::{Passing, Shape, Slot, Tag};
 
 use crate::dialect::Dialect;
-use crate::generated_parser::{EACH, ON_SELECTOR, TUPLE};
+use crate::generated_parser::{EACH, ON_SELECTOR, STEP_MARK, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter, PrintKind,
@@ -3610,7 +3610,7 @@ impl Compiler {
                             return self
                                 .fail("CIRCLE expects coordinates, radius, and optional color, angles, and aspect");
                         }
-                        self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
+                        self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
                         for (index, callee) in [(4, "B$CSTT"), (5, "B$CSTO"), (6, "B$CASP")] {
                             if let Some(argument) = arguments.get(index) {
                                 if !matches!(argument, Expr::Omitted(_)) {
@@ -3635,38 +3635,41 @@ impl Compiler {
                         self.emit_runtime_call("B$CIRC", Vec::new(), vec![radius, color]);
                     }
                     "LINE" => {
-                        if !(4..=6).contains(&arguments.len()) {
-                            return self.fail("LINE expects two coordinate pairs, an optional color, and B or BF");
+                        if !(4..=7).contains(&arguments.len()) {
+                            return self.fail("LINE expects two coordinate pairs, an optional color, B or BF, and a style");
                         }
-                        self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
-                        self.graphics_coordinate("B$N2I2", "B$N2R4", &arguments[2], &arguments[3])?;
-                        let color = if let Some(argument) = arguments.get(4) {
+                        self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
+                        self.graphics_coordinate(2, &arguments[2], &arguments[3])?;
+                        let present = |at: usize| arguments.get(at).filter(|one| !matches!(one, Expr::Omitted(_)));
+                        let color = if let Some(argument) = present(4) {
                             let (value, type_id) = self.expression(argument)?;
                             self.convert(value, type_id, INTEGER)?
                         } else {
                             Operand::Constant(INTEGER, Number::Integer(-1))
                         };
-                        let mode = match arguments.get(5) {
+                        let mode = match present(5) {
                             None => 0,
                             Some(Expr::Name(name, _)) if canonical(name) == "B" => 1,
                             Some(Expr::Name(name, _)) if canonical(name) == "BF" => 2,
-                            _ => return self.fail("LINE style must be B or BF"),
+                            _ => return self.fail("LINE option must be B or BF"),
+                        };
+                        let style = if let Some(argument) = present(6) {
+                            let (value, type_id) = self.expression(argument)?;
+                            self.convert(value, type_id, INTEGER)?
+                        } else {
+                            Operand::Constant(INTEGER, Number::Integer(-1))
                         };
                         self.emit_runtime_call(
                             "B$LINE",
                             Vec::new(),
-                            vec![
-                                color,
-                                Operand::Constant(INTEGER, Number::Integer(-1)),
-                                Operand::Constant(INTEGER, Number::Integer(mode)),
-                            ],
+                            vec![color, style, Operand::Constant(INTEGER, Number::Integer(mode))],
                         );
                     }
                     "PAINT" => {
                         if !(3..=4).contains(&arguments.len()) {
                             return self.fail("PAINT expects coordinates, fill, and optional border");
                         }
-                        self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
+                        self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
                         let (fill, fill_type) = self.expression(&arguments[2])?;
                         let fill = self.convert(fill, fill_type, INTEGER)?;
                         let border = if let Some(argument) = arguments.get(3) {
@@ -3681,7 +3684,7 @@ impl Compiler {
                         if !(2..=3).contains(&arguments.len()) {
                             return self.fail(format!("{name} expects coordinates and optional color"));
                         }
-                        self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
+                        self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
                         // Without a colour the point takes the foreground (PSET) or the background (PRESET), which is
                         // the runtime's to know: B$PSET and B$PRST, not a colour made up here.
                         if let Some(argument) = arguments.get(2) {
@@ -3697,9 +3700,9 @@ impl Compiler {
                         if arguments.len() != expected {
                             return self.fail(format!("graphics {name} has the wrong number of operands"));
                         }
-                        self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
+                        self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
                         let array_index = if name == "GET" {
-                            self.graphics_coordinate("B$N2I2", "B$N2R4", &arguments[2], &arguments[3])?;
+                            self.graphics_coordinate(2, &arguments[2], &arguments[3])?;
                             4
                         } else {
                             2
@@ -7144,23 +7147,29 @@ impl Compiler {
         Ok(operands)
     }
 
+    /// A graphics coordinate pair, absolute or (`STEP(x)`) relative to the last point, as the first or second of the
+    /// statement. The runtime keeps the last point and takes the step from it.
     fn graphics_coordinate(
         &mut self,
-        integer_callee: &str,
-        real_callee: &str,
+        which: u8,
         x: &Expr,
         y: &Expr,
     ) -> Result<(), SemanticError> {
+        let (x, step) = match x {
+            Expr::Apply { name, arguments, .. } if name == STEP_MARK && arguments.len() == 1 => (&arguments[0], true),
+            x => (x, false),
+        };
+        let kind = if step { 'S' } else { 'N' };
         let (x, x_type) = self.expression(x)?;
         let (y, y_type) = self.expression(y)?;
         if matches!(x_type, SINGLE | DOUBLE) || matches!(y_type, SINGLE | DOUBLE) {
             let x = self.stored_float_argument(x, x_type, SINGLE)?;
             let y = self.stored_float_argument(y, y_type, SINGLE)?;
-            self.emit_runtime_call(real_callee, Vec::new(), vec![x, y]);
+            self.emit_runtime_call(&format!("B${kind}{which}R4"), Vec::new(), vec![x, y]);
         } else {
             let x = self.convert(x, x_type, INTEGER)?;
             let y = self.convert(y, y_type, INTEGER)?;
-            self.emit_runtime_call(integer_callee, Vec::new(), vec![x, y]);
+            self.emit_runtime_call(&format!("B${kind}{which}I2"), Vec::new(), vec![x, y]);
         }
         Ok(())
     }
