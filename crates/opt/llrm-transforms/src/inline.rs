@@ -229,13 +229,23 @@ pub fn operations(body: &Function) -> i64 {
 /// unit of every limit that is gcc's own number (`max-inline-insns-auto`,
 /// jump threading's copy limit).
 pub fn gcc_insns(body: &Function) -> i64 {
+    gcc_insns_in(body, body.walk().map(|(_, inst)| inst))
+}
+
+/// `gcc_insns` of the instructions `insts` of `body`: the size of a path
+/// jump threading copies.
+pub fn gcc_insns_in(
+    body: &Function,
+    insts: impl IntoIterator<Item = InstId>,
+) -> i64 {
     let only_by = |inst: InstId, accepts: &dyn Fn(&Function, &llrm_mir::module::Use) -> bool| {
         let Some(result) = body.instruction(inst).result else { return false };
         let uses = body.users(result);
         !uses.is_empty() && uses.iter().all(|one| accepts(body, one))
     };
-    body.walk()
-        .filter(|&(_, inst)| {
+    insts
+        .into_iter()
+        .filter(|&inst| {
             let instruction = body.instruction(inst);
             match instruction.opcode {
                 Opcode::Phi => false,

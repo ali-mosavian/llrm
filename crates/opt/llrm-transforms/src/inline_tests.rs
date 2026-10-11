@@ -1452,3 +1452,38 @@ b6:
     // and three branches and no return.
     assert_eq!((super::gcc_insns(body), super::operations(body)), (7, 6));
 }
+
+/// Jump threading counts the blocks it copies in the same unit: the same rules
+/// over a chosen set of instructions, not the body.
+#[test]
+fn test_gcc_insns_in_counts_the_chosen_instructions_by_the_same_rules() {
+    let module = parsed(
+        "define i32 @f(i32 %n, ptr %p) {
+b0:
+  %a = icmp slt i32 %n, 2
+  br i1 %a, label %b1, label %b2
+b1:
+  ret i32 0
+b2:
+  %g = getelementptr inbounds i32, ptr %p, i32 %n
+  %v = load i32, ptr %g
+  ret i32 %v
+}
+",
+    );
+    let body = module.global(llrm_mir::context::GlobalId(0)).function().expect("a body");
+    let blocks: Vec<_> = {
+        let mut seen = Vec::new();
+        for (block, _) in body.walk() {
+            if !seen.contains(&block) {
+                seen.push(block);
+            }
+        }
+        seen
+    };
+    let of = |index: usize| {
+        let insts: Vec<_> = body.walk().filter(|&(block, _)| block == blocks[index]).map(|(_, inst)| inst).collect();
+        super::gcc_insns_in(body, insts)
+    };
+    assert_eq!((of(0), of(1), of(2)), (1, 1, 2));
+}
