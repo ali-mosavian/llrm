@@ -449,3 +449,38 @@ fn erase_all_refuses_a_result_something_outside_it_uses() {
     f.erase_all(&[x, y]).expect("y uses x, both go");
     assert!(f.is_erased(x) && f.is_erased(y) && f.check_uses().is_empty());
 }
+
+/// A terminator that names many blocks lists each once, in operand order,
+/// however many: the list of a switch of N cases was found by a scan of what
+/// was listed, N^2 for N distinct targets.
+#[test]
+fn a_terminators_successors_and_a_blocks_predecessors_are_listed_once_each_in_order() {
+    for cases in [3_usize, 40, 300] {
+        let mut text = String::from("define i32 @f(i32 %a) {\nentry:\n  switch i32 %a, label %d [\n");
+        // Every case but the last pair goes to its own block; the others
+        // repeat.
+        for k in 0..cases {
+            text += &format!("    i32 {k}, label %b{}\n", if k % 3 == 2 { k - 1 } else { k });
+        }
+        text += "  ]\nd:\n  ret i32 0\n";
+        for k in 0..cases {
+            text += &format!("b{k}:\n  br label %d\n");
+        }
+        text += "}\n";
+        let mut m = module(&text);
+        let f = function(&mut m);
+        let entry = f.entry().expect("an entry");
+        let found = f.successors(entry);
+        let names: Vec<String> = found.iter().map(|&block| f.block(block).name.clone().expect("a name")).collect();
+        let mut expected = vec!["d".to_owned()];
+        for k in 0..cases {
+            let name = format!("b{}", if k % 3 == 2 { k - 1 } else { k });
+            if !expected.contains(&name) {
+                expected.push(name);
+            }
+        }
+        assert_eq!(names, expected, "{cases} cases");
+        let into_d = f.predecessors(found[0]);
+        assert_eq!(into_d.len(), 1 + cases, "{cases} cases: the entry, and each b block once");
+    }
+}

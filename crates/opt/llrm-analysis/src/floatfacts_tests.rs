@@ -36,7 +36,7 @@ impl Parsed {
         &self,
         name: &str,
     ) -> Option<Finite> {
-        known(&self.unit(), &Calls::default(), None).get(&self.value(name)).cloned()
+        known(&self.unit(), &Calls::default()).get(&self.value(name)).cloned()
     }
 }
 
@@ -259,14 +259,25 @@ b0:
 ",
     );
     let unit = parsed.unit();
-    let memory = cells(&unit, &Calls::default());
     let load = function(&parsed.module, "f")
         .walk()
         .map(|(_, inst)| inst)
         .find(|&inst| unit.function.instruction(inst).result == Some(parsed.value("bits")))
         .unwrap();
+    let calls = Calls::default();
+    let solved = solved_with(&unit, &calls);
     let reference = MemRef::of(&unit, load).unwrap();
-    assert_eq!(consts::_cell(&memory[&load], &reference), Some(Known::new(0x40c0_0000, 32)));
+    let mut asked = consts::memory_queries(unit, &solved.integers);
+    let memory = cells_before(
+        &unit,
+        &calls,
+        &solved.integers,
+        &solved.facts,
+        consts::ReadAt::Before(load),
+        &[reference.clone()],
+        &mut asked,
+    );
+    assert_eq!(consts::_cell(&memory, &asked.resolve(&reference)), Some(Known::new(0x40c0_0000, 32)));
     assert_eq!(parsed.fact("back"), Some(integer(6)));
 }
 
@@ -338,9 +349,6 @@ fn test_a_loop_exit_repeats_its_stores_every_iteration() {
     assert_eq!(exits[0].count, BigInt::from(10));
     let stored = exits[0].stores.iter().map(|(_, fact)| fact.n.clone()).collect::<Vec<_>>();
     assert_eq!(stored, [0x43f3_c000, 0x4240_0000, 0x3f40_0000].map(BigInt::from));
-    let edges = exit_cells(&unit, &Calls::default());
-    let after = consts::known(&unit, Some(&Calls::default()), Some(&edges), None);
-    assert_eq!(after.get(&parsed.value("after")), Some(&Known::new(0x43f3_c000, 32)));
 }
 
 /// A trip whose result no float holds proves no exit.

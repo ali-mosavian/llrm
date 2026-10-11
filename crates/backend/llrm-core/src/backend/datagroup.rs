@@ -203,18 +203,24 @@ fn _prefixed(
         if cell.index.is_some() || !regs.holds_a_segment_offset(cell.through, offset_bytes) {
             return None;
         }
-        let addr = Addr { space: Space::Literal, disp: cell.offset, index: 0, base: cell.through, segment: through };
+        let addr = Addr {
+            space: Space::Literal,
+            disp: cell.offset,
+            index: 0,
+            base: cell.through.iced(),
+            segment: through.iced(),
+        };
         return Some(ir::Mem { addr: Some(addr), ..cell.clone() });
     };
-    if addr.segment != RegId::None {
+    if addr.segment != (RegId::None).iced() {
         return None;
     }
     if !matches!(addr.space, Space::Segment | Space::External | Space::Literal) {
         return None;
     }
-    let base = if cell.index.is_some() || cell.base.is_some() { cell.through } else { addr.base };
+    let base = if cell.index.is_some() || cell.base.is_some() { cell.through } else { RegId::from(addr.base) };
     if stack_based(base) {
         return None;
     }
-    Some(ir::Mem { addr: Some(Addr { segment: through, ..addr }), ..cell.clone() })
+    Some(ir::Mem { addr: Some(Addr { segment: through.iced(), ..addr }), ..cell.clone() })
 }

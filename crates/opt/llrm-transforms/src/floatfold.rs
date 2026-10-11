@@ -86,7 +86,7 @@ pub(crate) fn _folded(
         let unit = held.unit(context, layout, function, analyses.outer());
         let facts = match solved {
             Some(solved) => solved.facts.clone(),
-            None => floatfacts::known(&unit, calls, None),
+            None => floatfacts::known(&unit, calls),
         };
         let conversions = floatfacts::converted(&unit, calls, Some(&facts));
         (facts, conversions)

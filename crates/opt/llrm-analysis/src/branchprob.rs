@@ -79,7 +79,9 @@ impl Odds {
 
 // LLVM's weights (BranchProbabilityInfo.cpp), and GCC's hit rates.
 const UNREACHABLE: (f64, f64) = (1.0, ((1 << 20) - 1) as f64);
-const LOOP: (f64, f64) = (124.0, 4.0);
+/// Staying in a loop to leaving it: LLVM's weights, and the guard a copied
+/// header leaves before the loop.
+pub const LOOP: (f64, f64) = (124.0, 4.0);
 const OPCODE: (f64, f64) = (20.0, 12.0);
 const ORDERED: (f64, f64) = ((1024 * 1024 - 1) as f64, 1.0);
 const CALL: (f64, f64) = (67.0, 33.0);

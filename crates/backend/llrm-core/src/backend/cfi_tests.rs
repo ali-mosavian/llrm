@@ -1,4 +1,9 @@
-use iced_x86::Register::{BP, EBP, ESI, ESP, SP};
+use llrm_lir::registers::RegId;
+const BP: RegId = RegId::BP;
+const EBP: RegId = RegId::EBP;
+const ESI: RegId = RegId::ESI;
+const ESP: RegId = RegId::ESP;
+const SP: RegId = RegId::SP;
 use llrm_object::debug::FrameRow;
 
 use super::rows;

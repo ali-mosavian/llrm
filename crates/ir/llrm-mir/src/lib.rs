@@ -16,6 +16,7 @@ pub mod facts;
 #[cfg(test)]
 mod facts_coverage;
 mod facts_rewrite;
+pub mod footprint;
 pub mod hash;
 pub mod interpret;
 pub mod intrinsics;

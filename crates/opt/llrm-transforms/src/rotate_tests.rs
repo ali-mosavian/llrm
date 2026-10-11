@@ -189,3 +189,42 @@ b3:
 ";
     assert!(!through(text, Rotate { proven: true, copy: false }).0);
 }
+
+/// The guard a header copy leaves before the loop was an unweighted branch like
+/// any other, so the way into the loop was laid out as the unlikely one (the
+/// copy of a `while (at >= gap && ...)` in shellsort -O1: 17,720 clocks against
+/// 15,658 without the copy). It takes the loop test's weights as gcc's header
+/// copy takes its probabilities and LLVM's `LoopRotate` its weights.
+#[test]
+fn test_a_copied_header_guard_enters_the_loop_as_the_loop_stays_in() {
+    use std::collections::BTreeMap;
+
+    use llrm_analysis::branchprob::{self, Heuristic};
+    use llrm_analysis::cfg::Shape;
+    let (changed, module) = through(&summing("%n"), Rotate { proven: false, copy: true });
+    assert!(changed);
+    let function = llrm_analysis::testing::function(&module, "f");
+    let entry = cfg::id(function.entry().unwrap());
+    let odds = branchprob::estimated(
+        &module.context,
+        &module.metadata,
+        &module.globals,
+        function,
+        &Shape::of(function),
+        &BTreeMap::new(),
+    );
+    assert_eq!(odds.by.get(&entry), Some(&Heuristic::Declared));
+    let into = function
+        .successors(function.entry().unwrap())
+        .into_iter()
+        .map(cfg::id)
+        .find(
+            |at| {
+                // The way in is the successor that is in the loop.
+                only_loop(function).body.contains(at)
+            },
+        );
+    let into = into.expect("a way into the loop");
+    let got = odds.probability(entry, into).unwrap();
+    assert!((got - 124.0 / 128.0).abs() < 1e-9, "{got}");
+}

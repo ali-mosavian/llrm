@@ -90,22 +90,45 @@ impl Occurrences {
     pub fn planned(named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)]) -> Self {
         let mut found = Self::default();
         for (block, position, defined, used) in named {
-            for value in defined.union(used) {
-                found
-                    .by_value
-                    .entry(*value)
-                    .or_default()
-                    .push(
-                        Named {
-                            place: (*block, *position),
-                            defined: defined.contains(value),
-                            used: used.contains(value),
-                            mentions: 1,
-                        },
-                    );
-            }
+            let (defined, used): (Vec<u32>, Vec<u32>) =
+                (defined.iter().copied().collect(), used.iter().copied().collect());
+            found.plan(*block, *position, &defined, &used);
         }
         found
+    }
+
+    /// One instruction of a plan: the values it defines and reads, each
+    /// ascending and once.
+    pub fn plan(
+        &mut self,
+        block: usize,
+        position: usize,
+        defined: &[u32],
+        used: &[u32],
+    ) {
+        let (mut at_defined, mut at_used) = (0, 0);
+        while at_defined < defined.len() || at_used < used.len() {
+            let value = match (defined.get(at_defined), used.get(at_used)) {
+                (Some(one), Some(other)) => *one.min(other),
+                (Some(one), None) => *one,
+                (None, Some(other)) => *other,
+                (None, None) => break,
+            };
+            let (is_defined, is_used) = (defined.get(at_defined) == Some(&value), used.get(at_used) == Some(&value));
+            at_defined += usize::from(is_defined);
+            at_used += usize::from(is_used);
+            self.by_value
+                .entry(value)
+                .or_default()
+                .push(
+                    Named {
+                        place: (block, position),
+                        defined: is_defined,
+                        used: is_used,
+                        mentions: 1,
+                    },
+                );
+        }
     }
 
     /// The intervals of `values` (ascending) found from the occurrences,

@@ -376,8 +376,8 @@ fn _place(
 
 pub fn _named(one: &Loc) -> Result<String, Malformed> {
     match one {
-        Loc::Reg(reg) => Ok(format!("r{}", ir::root(reg.register) as u32)),
-        Loc::Mem(memory) => Ok(format!("m{}:{}:{}", memory.addr.repr(), memory.through as u32, memory.offset)),
+        Loc::Reg(reg) => Ok(format!("r{}", (ir::root(reg.register)).index() as u32)),
+        Loc::Mem(memory) => Ok(format!("m{}:{}:{}", memory.addr.repr(), memory.through.index() as u32, memory.offset)),
         Loc::Imm(imm) => Ok(format!("i{}", imm.value)),
         _ => Err(Malformed(format!("a copy group names {}, which is not a place", one.repr()))),
     }

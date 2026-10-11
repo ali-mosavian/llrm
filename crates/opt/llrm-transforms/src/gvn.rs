@@ -115,12 +115,7 @@ pub fn optimized(
     // condition changed it.
     let fresh;
     let registers = if equal {
-        fresh = llrm_analysis::consts::known(
-            &memory::Unit::within(unit.context, unit.layout, unit.function, outer),
-            None,
-            None,
-            None,
-        );
+        fresh = llrm_analysis::consts::known(&memory::Unit::within(unit.context, unit.layout, unit.function, outer));
         &fresh
     } else {
         registers
@@ -231,7 +226,7 @@ fn _numbered(
     let crossed = std::cell::Cell::new(false);
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
-        let mut function = function.clone();
+        let mut function = function.fork();
         let forwarded = transform::forwarded(
             unit.context,
             unit.layout,

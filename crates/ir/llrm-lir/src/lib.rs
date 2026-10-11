@@ -13,9 +13,10 @@ use std::fmt;
 use std::hash::Hash;
 use std::sync::LazyLock;
 
-use iced_x86::Register;
 pub use llrm_omf::module::{Addr, Space};
 use llrm_support::pyrepr::{self, Repr};
+
+use crate::registers::RegId;
 
 pub mod flag;
 mod root;
@@ -30,15 +31,15 @@ pub use registers::{FRAME, STACK};
 /// Direct port of `qbopt.model.ir:Reg`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Reg {
-    pub register: iced_x86::Register,
+    pub register: RegId,
     pub width: u32,
 }
 
 /// The eight x87 registers, top first.
-fn x87_stack() -> &'static [iced_x86::Register; 8] {
-    static STACK: std::sync::OnceLock<[iced_x86::Register; 8]> = std::sync::OnceLock::new();
+fn x87_stack() -> &'static [RegId; 8] {
+    static STACK: std::sync::OnceLock<[RegId; 8]> = std::sync::OnceLock::new();
     STACK.get_or_init(|| {
-        let mut found = iced_x86::Register::values().filter(|one| one.is_st());
+        let mut found = RegId::values().filter(|one| one.is_st());
         std::array::from_fn(|_| found.next().expect("eight x87 registers"))
     })
 }
@@ -90,8 +91,8 @@ pub struct Imm {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct AddressRef {
     pub addr: Option<Addr>,
-    pub through: iced_x86::Register,
-    pub index_through: iced_x86::Register,
+    pub through: RegId,
+    pub index_through: RegId,
     pub scale: i64,
     pub offset: i64,
     pub disp_width: u32,
@@ -99,14 +100,7 @@ pub struct AddressRef {
 
 impl AddressRef {
     pub const fn new(addr: Option<Addr>) -> Self {
-        Self {
-            addr,
-            through: iced_x86::Register::None,
-            index_through: iced_x86::Register::None,
-            scale: 1,
-            offset: 0,
-            disp_width: 0,
-        }
+        Self { addr, through: RegId::None, index_through: RegId::None, scale: 1, offset: 0, disp_width: 0 }
     }
 }
 
@@ -136,7 +130,7 @@ impl AddressRef {
 pub struct Mem {
     pub addr: Option<Addr>,
     pub width: u32,
-    pub through: iced_x86::Register,
+    pub through: RegId,
     pub offset: i64,
     pub disp_width: u32,
     pub base: Option<Held>,
@@ -144,7 +138,7 @@ pub struct Mem {
     pub selector: Option<Held>,
     pub index: Option<Held>,
     pub scale: i64,
-    pub index_through: iced_x86::Register,
+    pub index_through: RegId,
     /// Lowering proved (`ranges::exact_offsets`) that this address names the
     /// same byte summed through 32-bit registers: its start is the object's,
     /// and every partial sum of its offset is a non-negative 16-bit integer.
@@ -203,7 +197,7 @@ impl Mem {
         Self {
             addr,
             width,
-            through: iced_x86::Register::None,
+            through: RegId::None,
             offset: 0,
             disp_width: 0,
             base: None,
@@ -211,7 +205,7 @@ impl Mem {
             selector: None,
             index: None,
             scale: 1,
-            index_through: iced_x86::Register::None,
+            index_through: RegId::None,
             exact: false,
         }
     }
@@ -225,14 +219,14 @@ impl Mem {
 
 fn _in_frame(
     addr: Option<Addr>,
-    through: Register,
+    through: RegId,
     valued: bool,
 ) -> bool {
     // A base value is the register's: the frame register is a frame only where
     // nothing was given it.
     addr.is_some_and(|addr| {
         addr.space == Space::Frame
-            || (addr.space == Space::Literal && !valued && matches!(through, Register::BP | Register::EBP))
+            || (addr.space == Space::Literal && !valued && matches!(through, RegId::BP | RegId::EBP))
     })
 }
 
@@ -306,8 +300,8 @@ pub use flag::Flag;
 /// Direct port of `qbopt.model.ir:Effects`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Effects {
-    pub defs: Option<BTreeSet<iced_x86::Register>>,
-    pub uses: Option<BTreeSet<iced_x86::Register>>,
+    pub defs: Option<BTreeSet<RegId>>,
+    pub uses: Option<BTreeSet<RegId>>,
     pub flags_written: Flag,
     pub flags_read: Flag,
     pub loads: Vec<Mem>,
@@ -633,10 +627,10 @@ mod tests {
     #[test]
     fn a_literal_displacement_through_a_register_holding_a_value_is_not_in_the_frame() {
         let table = |base| Mem {
-            through: iced_x86::Register::EBP,
+            through: RegId::EBP,
             base,
             index: Some(Held { value: 2, width: 4 }),
-            index_through: iced_x86::Register::EDX,
+            index_through: RegId::EDX,
             ..Mem::new(Some(Addr::new(Space::Literal, -16)), 4)
         };
         assert!(table(None).in_frame(), "an indexed frame array is BP's");
@@ -647,10 +641,8 @@ mod tests {
     fn root_normalises_every_sub_register_of_the_ax_pair() {
         // Port of tests/test_ir.
         // py::test_root_normalises_every_sub_register_of_the_ax_pair.
-        for register in
-            [iced_x86::Register::AL, iced_x86::Register::AH, iced_x86::Register::AX, iced_x86::Register::EAX]
-        {
-            assert_eq!(root(register), iced_x86::Register::EAX);
+        for register in [RegId::AL, RegId::AH, RegId::AX, RegId::EAX] {
+            assert_eq!(root(register), RegId::EAX);
         }
     }
 
@@ -670,10 +662,10 @@ mod tests {
         // py::test_two_cells_reached_by_different_values_are_different_cells.
         let mut left = Mem::new(None, 2);
         left.base = Some(Held { value: 1, width: 2 });
-        left.through = iced_x86::Register::BX;
+        left.through = RegId::BX;
         let mut right = left.clone();
         right.base = Some(Held { value: 2, width: 2 });
-        right.through = iced_x86::Register::SI;
+        right.through = RegId::SI;
 
         assert_ne!(left, right);
     }
@@ -694,10 +686,10 @@ mod tests {
             state.finish()
         };
         for change in [
-            |cell: &mut Mem| cell.through = iced_x86::Register::BX,
+            |cell: &mut Mem| cell.through = RegId::BX,
             |cell: &mut Mem| cell.offset = 6,
             |cell: &mut Mem| cell.disp_width = 2,
-            |cell: &mut Mem| cell.index_through = iced_x86::Register::DI,
+            |cell: &mut Mem| cell.index_through = RegId::DI,
         ] {
             let mut right = left.clone();
             change(&mut right);
@@ -705,7 +697,7 @@ mod tests {
             assert_ne!(hash(&left), hash(&right));
         }
         let address = |through| AddressRef { through, ..AddressRef::new(Some(Addr::new(Space::Segment, 4))) };
-        assert_ne!(address(iced_x86::Register::BX), address(iced_x86::Register::SI));
+        assert_ne!(address(RegId::BX), address(RegId::SI));
         assert_eq!(left, left.clone());
     }
 
@@ -730,7 +722,7 @@ mod tests {
         memory.base = Some(Held { value: 1, width: 2 });
         memory.selector = Some(Held { value: 2, width: 2 });
         memory.index = Some(Held { value: 3, width: 2 });
-        memory.through = iced_x86::Register::BX;
+        memory.through = RegId::BX;
 
         let Loc::Mem(mapped_memory) =
             mapped(&Loc::Mem(memory.clone()), |held| Held { value: held.value + 10, width: held.width })
@@ -796,8 +788,8 @@ mod tests {
     fn the_same_place_ignores_encoding_details_but_not_the_address() {
         let left = AddressRef::new(Some(Addr::new(Space::Literal, 12)));
         let mut right = left.clone();
-        right.through = iced_x86::Register::BX;
-        right.index_through = iced_x86::Register::SI;
+        right.through = RegId::BX;
+        right.index_through = RegId::SI;
         right.scale = 4;
         right.offset = -8;
         right.disp_width = 2;
@@ -810,8 +802,8 @@ mod tests {
 }
 
 /// `Register_` is an int to Python, and prints as one.
-fn register_repr(register: Register) -> String {
-    (register as u32).to_string()
+fn register_repr(register: RegId) -> String {
+    (register.index() as u32).to_string()
 }
 
 impl Operation {
@@ -970,7 +962,7 @@ mod repr_tests {
         assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");
         let semantics = Semantics {
             name: Some("mov".to_owned()),
-            dests: vec![Loc::Reg(Reg { register: Register::AX, width: 2 })],
+            dests: vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })],
             sources: vec![Loc::Imm(Imm { value: 1, width: 2, address: None })],
             ..Semantics::new(Operation::Move)
         };

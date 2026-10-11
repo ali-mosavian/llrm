@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 
+use llrm_lir::registers::RegId;
 use llrm_mir::{MetadataId, debuginfo as di};
 use llrm_object::debug::{self as model, Info, Kind, Location, Variable};
 
@@ -54,7 +55,7 @@ pub struct Debug {
     pub return_register: String,
     /// The frame and stack registers of 32-bit code, and the bytes a call
     /// pushes (near, far): what its frame rows are read from.
-    pub frame: Option<(iced_x86::Register, iced_x86::Register, [i64; 2])>,
+    pub frame: Option<(RegId, RegId, [i64; 2])>,
     pub registers: Vec<model::Register>,
     pub types: Vec<model::Type>,
     /// Each MIR type node's type.
@@ -485,8 +486,8 @@ pub fn laid_out(
                             procedure.body.bits,
                             &super::valuetrack::Regs::new(
                                 &debug.file,
-                                debug.frame.map_or(iced_x86::Register::None, |(pointer, ..)| pointer),
-                                debug.frame.map_or(iced_x86::Register::None, |(_, stack, _)| stack),
+                                debug.frame.map_or(RegId::None, |(pointer, ..)| pointer),
+                                debug.frame.map_or(RegId::None, |(_, stack, _)| stack),
                             ),
                             rows,
                             bias,
@@ -712,11 +713,13 @@ pub fn laid_out(
 
 #[cfg(test)]
 mod tests {
+    use llrm_lir::registers::RegId;
+
     use super::super::masm::Place;
     use super::super::valuetrack::Where;
     use super::stable;
 
-    fn reg(register: iced_x86::Register) -> Where {
+    fn reg(register: llrm_lir::registers::RegId) -> Where {
         Where::Place(Place::Register(register))
     }
 
@@ -725,18 +728,28 @@ mod tests {
     /// `bx` for a call that clobbers `ax`, so `bx` is its place.
     #[test]
     fn the_place_a_scope_is_given_is_one_every_range_holds() {
-        use iced_x86::Register::{AX, BX};
-        let ranges = [(2, 6, vec![reg(AX), reg(BX)]), (6, 12, vec![reg(BX)])];
-        assert_eq!(stable(&ranges, 11), Some((2, reg(BX))));
+        const AX: RegId = RegId::AX;
+        const BX: RegId = RegId::BX;
+        let ranges = [(2, 6, vec![reg(RegId::from(AX)), reg(RegId::from(BX))]), (6, 12, vec![reg(RegId::from(BX))])];
+        assert_eq!(stable(&ranges, 11), Some((2, reg(RegId::from(BX)))));
     }
 
     /// A gap, a range that stops short of the last statement, and a place no
     /// range shares, each leave the variable out.
     #[test]
     fn a_variable_that_has_a_gap_or_stops_short_or_moves_has_no_place_for_a_scope() {
-        use iced_x86::Register::{AX, BX};
-        assert_eq!(stable(&[(2, 4, vec![reg(AX)]), (5, 12, vec![reg(AX)])], 11), None, "a gap");
-        assert_eq!(stable(&[(2, 8, vec![reg(AX)])], 11), None, "short of the last statement");
-        assert_eq!(stable(&[(2, 4, vec![reg(AX)]), (4, 12, vec![reg(BX)])], 11), None, "moved");
+        const AX: RegId = RegId::AX;
+        const BX: RegId = RegId::BX;
+        assert_eq!(
+            stable(&[(2, 4, vec![reg(RegId::from(AX))]), (5, 12, vec![reg(RegId::from(AX))])], 11),
+            None,
+            "a gap"
+        );
+        assert_eq!(stable(&[(2, 8, vec![reg(RegId::from(AX))])], 11), None, "short of the last statement");
+        assert_eq!(
+            stable(&[(2, 4, vec![reg(RegId::from(AX))]), (4, 12, vec![reg(RegId::from(BX))])], 11),
+            None,
+            "moved"
+        );
     }
 }

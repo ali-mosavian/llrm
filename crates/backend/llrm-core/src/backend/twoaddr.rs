@@ -89,7 +89,7 @@ pub fn tied(body: &LirBody) -> LirBody {
         .filter_map(|(one, _)| _swappable(one))
         .filter_map(|(into, first, second)| {
             let neighbours = copies.get(&into)?;
-            Some(neighbours.iter().copied().chain([first, second]))
+            Some(neighbours.iter().copied().chain([into, first, second]))
         })
         .flatten()
         .collect();
@@ -324,13 +324,12 @@ fn _commuted(
     let empty = BTreeSet::new();
     let affinities = copies.get(&into.value).unwrap_or(&empty);
 
+    // The copy into the destination of a tied source that interferes with it
+    // stays, so that source counts as blocked too.
     let blocked = |source: u32| -> usize {
-        affinities
-            .iter()
-            .filter(|other| {
-                interference.and_then(|graph| graph.get(&source)).is_some_and(|found| found.contains(other))
-            })
-            .count()
+        let found = interference.and_then(|graph| graph.get(&source));
+        affinities.iter().filter(|other| found.is_some_and(|found| found.contains(other))).count()
+            + usize::from(found.is_some_and(|found| found.contains(&into.value)))
     };
 
     let reusable = !alive.contains(&first.value)
@@ -722,6 +721,22 @@ mod tests {
             .collect();
 
         let chosen = _commuted(&one, &BTreeSet::from([3]), Some(&copies), Some(&interference)).expect("swapped");
+
+        assert_eq!(sources(&chosen), reversed(&one));
+    }
+
+    /// CRC's `(x >> 1) ^ t` tied the shifted copy, which interferes with the
+    /// loop phi it joins, and copied the result into place every iteration.
+    #[test]
+    fn test_a_source_that_interferes_with_the_destination_is_not_the_one_tied() {
+        let one = addition("xor");
+        let copies = graph(&[(3, &[1, 2])]);
+        let interference: crate::backend::coalesce::Graph = graph(&[(1, &[2, 3]), (2, &[1]), (3, &[1])])
+            .into_iter()
+            .map(|(value, near)| (value, near.into_iter().collect()))
+            .collect();
+
+        let chosen = _commuted(&one, &BTreeSet::new(), Some(&copies), Some(&interference)).expect("swapped");
 
         assert_eq!(sources(&chosen), reversed(&one));
     }

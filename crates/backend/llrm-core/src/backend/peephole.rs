@@ -22,7 +22,7 @@ use crate::backend::{
     affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores,
     spillforward, storecombine,
 };
-use crate::model::ir::{self, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet};
@@ -219,21 +219,24 @@ impl Peephole {
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
             self.rules,
-            &fused(
+            &fused_calls(
                 self.rules,
-                &overwritten(&shuttles(
+                &fused(
                     self.rules,
-                    &restored_copies(
+                    &overwritten(&shuttles(
                         self.rules,
-                        &high_extracts(
-                            &transferred(
-                                self.rules,
-                                &commuted(self.rules, &constants(&pushes(self.rules, &body, &self.cpu))),
-                            ),
-                            &self.cpu,
-                        )?,
-                    ),
-                )),
+                        &restored_copies(
+                            self.rules,
+                            &high_extracts(
+                                &transferred(
+                                    self.rules,
+                                    &commuted(self.rules, &constants(&pushes(self.rules, &body, &self.cpu))),
+                                ),
+                                &self.cpu,
+                            )?,
+                        ),
+                    )),
+                ),
             ),
         );
         let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
@@ -921,6 +924,17 @@ pub fn restored_copies(
     peep::rewritten(rules.restored_copies, body, &Facts::new(body, None))
 }
 
+/// Whether `register` in an operand at `addr` is the frame base, which the
+/// frame layout resolves: not a read of the frame register, so a copy of that
+/// register does not rename it.
+pub fn is_frame_base(
+    regs: Regs,
+    addr: Option<Addr>,
+    register: RegId,
+) -> bool {
+    addr.is_some_and(|addr| addr.space == Space::Frame) && regs.is_frame(register)
+}
+
 /// One allocated operand with aliases of `before` renamed to `after`.
 pub fn _register_operand(
     regs: Regs,
@@ -931,28 +945,27 @@ pub fn _register_operand(
     // `target.named(after, target.width_of(x))`: a width the target does not
     // know leaves `after` as named.
     let named = |register: RegId| regs.width_of(register).map_or(after, |width| regs.named(after, width));
+    let renames = |register: RegId, addr: Option<Addr>| {
+        ir::root(register) == ir::root(before) && !is_frame_base(regs, addr, register)
+    };
     match one {
         Loc::Reg(one) if ir::root(one.register) == ir::root(before) => {
             Loc::Reg(Reg { register: regs.named(after, i64::from(one.width)), ..*one })
         }
-        Loc::Mem(one) if [ir::root(one.through), ir::root(one.index_through)].contains(&ir::root(before)) => {
+        Loc::Mem(one) => {
+            let (through, index) = (renames(one.through, one.addr), renames(one.index_through, None));
+            if !through && !index {
+                return Loc::Mem(one.clone());
+            }
             Loc::Mem(Mem {
-                through: if ir::root(one.through) == ir::root(before) { named(one.through) } else { one.through },
-                index_through: if ir::root(one.index_through) == ir::root(before) {
-                    named(one.index_through)
-                } else {
-                    one.index_through
-                },
+                through: if through { named(one.through) } else { one.through },
+                index_through: if index { named(one.index_through) } else { one.index_through },
                 ..one.clone()
             })
         }
         Loc::Address(one) => {
-            let through = if ir::root(one.through) == ir::root(before) { named(one.through) } else { one.through };
-            let index = if ir::root(one.index_through) == ir::root(before) {
-                named(one.index_through)
-            } else {
-                one.index_through
-            };
+            let through = if renames(one.through, one.addr) { named(one.through) } else { one.through };
+            let index = if renames(one.index_through, None) { named(one.index_through) } else { one.index_through };
             Loc::Address(AddressRef { through, index_through: index, ..one.clone() })
         }
         _ => one.clone(),
@@ -1391,6 +1404,15 @@ pub fn fused(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.fused, body, &Facts::new(body, None))
+}
+
+/// Fold a load that only an indirect call reads into the call
+/// (`peephole.peep`).
+pub fn fused_calls(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.fused_calls, body, &Facts::new(body, None))
 }
 
 /// Load a far pointer's two words with one les (lds, lfs, lgs)

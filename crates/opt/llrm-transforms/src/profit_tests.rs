@@ -136,7 +136,7 @@ fn a_loop_induction_counts_is_weighted_by_its_count() {
             &layout,
             function(&module),
         ));
-        let trips = proven_trips(&unit, &llrm_analysis::consts::known(&unit, None, None, None));
+        let trips = proven_trips(&unit, &llrm_analysis::consts::known(&unit));
         let callees = llrm_mir::memory::callees(&module);
         (
             trips.len(),

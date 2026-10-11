@@ -281,6 +281,21 @@ impl Accesses {
         Self { references, touched, fills: IndexMap::default(), source: None }
     }
 
+    /// These accesses with the stores `absolute` names writing nothing a
+    /// program object holds: a far store through a selector taken to be an
+    /// absolute segment (`consts::_selector`).
+    pub fn without_absolute_writes(
+        mut self,
+        absolute: &llrm_mir::dense::IdSet<InstId>,
+    ) -> Self {
+        for inst in absolute.iter() {
+            if let Some((_, writes)) = self.touched.get_mut(&inst) {
+                *writes = Some(none());
+            }
+        }
+        self
+    }
+
     /// What `inst` writes; `None` where it may write anything.
     pub fn writes(
         &self,
@@ -497,6 +512,67 @@ pub fn clobber_runs() -> usize {
     RUNS.with(std::cell::Cell::get)
 }
 
+/// The index is made once walks have stepped over this many accesses for each
+/// access there is: a body that is walked a little pays for the walks, not for
+/// the index.
+const STEPS_PER_ACCESS: usize = 2;
+/// The bytes of an object the index keeps.
+const OBJECT_BYTES: i128 = 1 << 24;
+/// The widest write or read an index of bytes holds.
+const WIDEST: i128 = 64;
+
+/// The nearest write to each byte of every exact cell, above each access: a
+/// persistent map from (object, byte) to def, a version of it per access (a def
+/// that writes one cell exactly makes a new one by changing its bytes;
+/// everything else keeps its parent's), as LLVM's `OptimizeUses` keeps a stack
+/// of the last def of each location down its walk of the tree. A load of one of
+/// N cells then reads its bytes and not the N stores before it. GCC's
+/// `walk_aliased_vdefs` and LLVM's `memssa-check-limit` bound the walk instead;
+/// this does not give an answer up. Made once walks have stepped over enough
+/// accesses to pay for it.
+#[derive(Default)]
+struct FrameIndex {
+    /// Per access, the nearest def writing each (object, byte) above it and
+    /// itself.
+    at: Vec<Option<llrm_mir::dense::ShareMap<usize, usize>>>,
+    /// Per access, the nearest def above it and itself that is no exact cell:
+    /// one the walk asks of any read.
+    wild: Vec<Option<usize>>,
+    /// Per access, the nearest def above it and itself that writes an exact
+    /// cell of an object that may be addressed from elsewhere: one the walk
+    /// asks of a read of another addressed object.
+    escaping: Vec<Option<usize>>,
+    /// Per access, the same strictly above it.
+    up_wild: Vec<Option<usize>>,
+    up_escaping: Vec<Option<usize>>,
+    /// Per access, the phi or entry its chain ends in.
+    root: Vec<usize>,
+    /// The addressed objects some def writes a cell of, and for an object read
+    /// whether another of them may alias it (asked once per object).
+    addressed: Vec<ObjectRef>,
+    aliased: std::cell::RefCell<llrm_support::hash::HashMap<u32, bool>>,
+}
+
+/// The key of a byte of an object in the index.
+fn key(
+    object: u32,
+    byte: i128,
+) -> usize {
+    ((object as usize) << 24) | byte as usize
+}
+
+/// The one object a reference certainly points into, and the bytes it covers
+/// there, where its provenance names a single offset (`Slice::low` with `high`
+/// one past): the same cell is the same object and bytes however its pointer
+/// was made.
+fn exact_object(reference: &MemRef) -> Option<(ObjectRef, i128, i128)> {
+    let provenance = reference.provenance.as_ref()?;
+    let mut slices = provenance.slices.iter();
+    let (Some(slice), None) = (slices.next(), slices.next()) else { return None };
+    (slice.high == slice.low + 1 && reference.width > 0)
+        .then(|| (slice.object, i128::from(slice.low), i128::from(slice.low) + i128::from(reference.width)))
+}
+
 /// `MemorySSA::span`.
 fn spans(accesses: &[Access]) -> Vec<(u32, u32)> {
     let top = accesses.last().map_or(0, |last| last.id) + 1;
@@ -545,6 +621,8 @@ thread_local! {
     pub(crate) static MAY_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static SLOW_CLOBBERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static UNCHANGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Accesses the walks stepped over.
+    pub(crate) static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -566,6 +644,8 @@ pub struct MemorySSA<'a> {
     /// the def.
     reaches: std::cell::RefCell<llrm_mir::dense::IdMap<InstId, Rc<Reach>>>,
     unit: Unit<'a>,
+    /// The state each block leaves.
+    ends: IndexMap<i64, Option<usize>>,
     /// The values that are constants, for placing an index away from a cell
     /// (`with_known`).
     known: Option<BTreeMap<ValueId, Interval>>,
@@ -589,6 +669,19 @@ pub struct MemorySSA<'a> {
     span: Vec<(u32, u32)>,
     /// Per access, the walk that last visited it, and the walks made.
     stamps: std::cell::RefCell<(Vec<u32>, u32)>,
+    /// Of each def that writes one cell at a fixed displacement, the frame and
+    /// bytes (`regions::displaced_span`): a cell at a fixed displacement of the
+    /// same frame whose bytes miss them is not written, settled without asking
+    /// `may_clobber` or remembering the answer.
+    fixed: llrm_mir::dense::IdMap<InstId, (crate::regions::Frame, i128, i128)>,
+    /// Of each def that writes one cell its pointer's provenance places
+    /// exactly, the object and bytes: a read placed exactly elsewhere in
+    /// the same object, or in one it cannot alias, is not written.
+    exacts: llrm_mir::dense::IdMap<InstId, (ObjectRef, i128, i128)>,
+    /// The last-write index, once made, and the accesses walks have stepped
+    /// over.
+    index: std::cell::RefCell<Option<Rc<FrameIndex>>>,
+    taken: std::cell::Cell<usize>,
 }
 
 impl MemorySSA<'_> {
@@ -631,6 +724,16 @@ impl MemorySSA<'_> {
         memory: &MemRef,
     ) -> BTreeSet<usize> {
         self.frontier(site, memory, None, None, None)
+    }
+
+    /// The possible nearest writes at the end of `block`, as a load placed
+    /// there would find them.
+    pub fn clobbers_at_end(
+        &self,
+        block: i64,
+        memory: &MemRef,
+    ) -> BTreeSet<usize> {
+        self.walked_from(Some(block), self.ends[&block], false, memory, None, None, None, true)
     }
 
     /// `clobbers` for a load that is invariant, as if it were not: the store
@@ -727,6 +830,84 @@ impl MemorySSA<'_> {
         next
     }
 
+    /// The index, made once walks have stepped over enough accesses.
+    fn index_ready(&self) -> Option<Rc<FrameIndex>> {
+        if let Some(found) = self.index.borrow().as_ref() {
+            return Some(Rc::clone(found));
+        }
+        if self.taken.get() < STEPS_PER_ACCESS * self.span.len() {
+            return None;
+        }
+        let made = Rc::new(self.built_index());
+        *self.index.borrow_mut() = Some(Rc::clone(&made));
+        Some(made)
+    }
+
+    fn built_index(&self) -> FrameIndex {
+        let top = self.span.len();
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); top];
+        let mut roots = Vec::new();
+        for access in &self.accesses {
+            match access.defining {
+                Some(parent) => children[parent].push(access.id),
+                None => roots.push(access.id),
+            }
+        }
+        let mut index = FrameIndex {
+            at: vec![None; top],
+            wild: vec![None; top],
+            escaping: vec![None; top],
+            up_wild: vec![None; top],
+            up_escaping: vec![None; top],
+            root: vec![0; top],
+            addressed: Vec::new(),
+            aliased: Default::default(),
+        };
+        let mut seen_addressed = std::collections::BTreeSet::new();
+        let mut stack: Vec<usize> = Vec::new();
+        for &root in &roots {
+            index.at[root] = Some(Default::default());
+            index.root[root] = root;
+            stack.push(root);
+            while let Some(node) = stack.pop() {
+                for &child in &children[node] {
+                    let access = self.access(child);
+                    let mut version = index.at[node].clone();
+                    let (mut wild, mut escaping) = (index.wild[node], index.escaping[node]);
+                    if access.kind == Kind::Def
+                        && let Some(site) = access.site
+                    {
+                        match self.exacts.get(&site) {
+                            Some((object, first, last))
+                                if last - first <= WIDEST && *first >= 0 && *last <= OBJECT_BYTES =>
+                            {
+                                let map = version.as_mut().expect("a version");
+                                for byte in *first..*last {
+                                    map.insert(key(object.id(), byte), child);
+                                }
+                                if object.addressed {
+                                    escaping = Some(child);
+                                    if seen_addressed.insert(object.id()) {
+                                        index.addressed.push(*object);
+                                    }
+                                }
+                            }
+                            _ => wild = Some(child),
+                        }
+                    }
+                    index.up_wild[child] = index.wild[node];
+                    index.up_escaping[child] = index.escaping[node];
+                    index.at[child] = version;
+                    index.wild[child] = wild;
+                    index.escaping[child] = escaping;
+                    index.root[child] = index.root[node];
+                    stack.push(child);
+                }
+            }
+        }
+        index
+    }
+
     fn frontier(
         &self,
         site: InstId,
@@ -783,12 +964,129 @@ impl MemorySSA<'_> {
         jumping: bool,
         honor: bool,
     ) -> BTreeSet<usize> {
-        let block = self.at(site).block;
         // A load of what is written once, then never: no write changes what it
         // reads.
         let invariant =
             honor && llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
-        let mut pending = vec![self.at(site).defining];
+        self.walked_from(
+            self.at(site).block,
+            self.at(site).defining,
+            invariant,
+            memory,
+            boundary,
+            edge,
+            edge_memory,
+            jumping,
+        )
+    }
+
+    /// `walked` from the memory state `defining`, which a site or the end of a
+    /// block is in.
+    fn walked_from(
+        &self,
+        block: Option<i64>,
+        defining: Option<usize>,
+        invariant: bool,
+        memory: &MemRef,
+        boundary: Option<usize>,
+        edge: Option<i64>,
+        edge_memory: Option<&MemRef>,
+        jumping: bool,
+    ) -> BTreeSet<usize> {
+        let memory_span = displaced_span(memory);
+        let edge_span = edge_memory.and_then(displaced_span);
+        let memory_exact = exact_object(memory);
+        let edge_exact = edge_memory.and_then(exact_object);
+        let mut pending = vec![defining];
+        // A fixed cell of a frame with many fixed writes: the nearest write of
+        // it is the index's, past the writes `fixed` rules apart.
+        if jumping
+            && boundary.is_none()
+            && edge.is_none()
+            && edge_memory.is_none()
+            && !invariant
+            && let Some((object, low, high)) = memory_exact
+            && high - low <= WIDEST
+            && low >= 0
+            && high <= OBJECT_BYTES
+            && let Some(index) = self.index_ready()
+            && let Some(above) = defining
+            && let Some(version) = index.at[above].as_ref()
+        {
+            let nearest = (low..high)
+                .filter_map(|byte| version.get(&key(object.id(), byte)).copied())
+                .max_by_key(|found| self.span[*found].0);
+            let root = index.root[above];
+            let reaches_others = object.addressed && {
+                let known = index.aliased.borrow().get(&object.id()).copied();
+                known.unwrap_or_else(|| {
+                    let found = index
+                        .addressed
+                        .iter()
+                        .any(|other| other.id() != object.id() && crate::memory::objects_may_alias(other, &object));
+                    index.aliased.borrow_mut().insert(object.id(), found);
+                    found
+                })
+            };
+            let (mut wild, mut escaping) =
+                (index.wild[above], if reaches_others { index.escaping[above] } else { None });
+            let mut hit = None;
+            // The writes nearer than the exact one that may reach the cell,
+            // nearest first: the walk asks each, as it asks any def.
+            loop {
+                let (candidate, is_wild) = match (wild, escaping) {
+                    (Some(w), Some(e)) => {
+                        if self.behind(w, e) {
+                            (w, true)
+                        } else {
+                            (e, false)
+                        }
+                    }
+                    (Some(w), None) => (w, true),
+                    (None, Some(e)) => (e, false),
+                    (None, None) => break,
+                };
+                if nearest.is_some_and(|nearest| !self.behind(candidate, nearest)) {
+                    break;
+                }
+                if is_wild {
+                    wild = index.up_wild[candidate];
+                } else {
+                    escaping = index.up_escaping[candidate];
+                }
+                let at = self.access(candidate).site.expect("a def has a site");
+                if !is_wild
+                    && self.exacts.get(&at).is_none_or(|(written, _, _)| {
+                        written.id() == object.id() || !crate::memory::objects_may_alias(written, &object)
+                    })
+                {
+                    continue;
+                }
+                let written = &self.written[&at];
+                let slot = self.slot(memory);
+                if changes(memory, invariant, written.as_deref(), |_| self.clobbered(slot, memory, candidate, at)) {
+                    hit = Some(candidate);
+                    break;
+                }
+            }
+            // The exact one is a write of those bytes; whether it clobbers the
+            // read is the alias rules' (a type may apart them):
+            // where it does not, the walk goes on.
+            let confirmed = hit.is_some()
+                || nearest.is_none_or(|found| {
+                    let at = self.access(found).site.expect("a def has a site");
+                    let slot = self.slot(memory);
+                    changes(memory, invariant, self.written[&at].as_deref(), |_| {
+                        self.clobbered(slot, memory, found, at)
+                    })
+                });
+            if confirmed {
+                if let Some(found) = hit.or(nearest) {
+                    return BTreeSet::from([found]);
+                }
+                pending = vec![Some(root)];
+            }
+        }
         // Visited accesses by stamp: a set built per walk was most of its cost.
         let mut stamps = self.stamps.borrow_mut();
         if stamps.0.len() < self.span.len() {
@@ -824,6 +1122,9 @@ impl MemorySSA<'_> {
             chain.clear();
         };
         while let Some(current) = pending.pop() {
+            self.taken.set(self.taken.get() + 1);
+            #[cfg(test)]
+            STEPS.with(|steps| steps.set(steps.get() + 1));
             let Some(current) = current else {
                 chain.clear();
                 continue;
@@ -873,9 +1174,38 @@ impl MemorySSA<'_> {
                     };
                     let written = &self.written[&access.site.expect("a def has a site")];
                     let site = access.site.expect("a def has a site");
-                    if changes(queried, invariant, written.as_deref(), |_| {
-                        self.clobbered(queried_slot, queried, current, site)
-                    }) {
+                    let fixed_apart = match (
+                        self.fixed.get(&site),
+                        if std::ptr::eq(queried, memory) { &memory_span } else { &edge_span },
+                    ) {
+                        (Some((frame, low, high)), Some((cell_frame, cell_low, cell_high))) => {
+                            frame == cell_frame && !(cell_low < high && low < cell_high)
+                        }
+                        _ => false,
+                    };
+                    // A write placed exactly: apart from a read placed exactly
+                    // in the same object by its bytes, from
+                    // one in another object that cannot alias it by the
+                    // objects.
+                    let apart = fixed_apart
+                        || match (
+                            self.exacts.get(&site),
+                            if std::ptr::eq(queried, memory) { &memory_exact } else { &edge_exact },
+                        ) {
+                            (Some((written, low, high)), Some((read, cell_low, cell_high))) => {
+                                if written.id() == read.id() {
+                                    !(cell_low < high && low < cell_high)
+                                } else {
+                                    !crate::memory::objects_may_alias(written, read)
+                                }
+                            }
+                            _ => false,
+                        };
+                    if !apart
+                        && changes(queried, invariant, written.as_deref(), |_| {
+                            self.clobbered(queried_slot, queried, current, site)
+                        })
+                    {
                         ended(table, &mut chain, current);
                         found.insert(current);
                     } else {
@@ -1027,7 +1357,23 @@ pub fn built<'a>(
         std::iter::once(live.clone()).chain(phis.values().cloned()).chain(sites.values().cloned()).collect();
     accesses.sort_by_key(|access| access.id);
     let span = spans(&accesses);
+    let fixed = written
+        .iter()
+        .filter_map(|(site, writes)| match writes.as_deref() {
+            Some([only]) => displaced_span(only).map(|span| (site, span)),
+            _ => None,
+        })
+        .collect();
+    let exacts = written
+        .iter()
+        .filter_map(|(site, writes)| match writes.as_deref() {
+            Some([only]) => exact_object(only).map(|found| (site, found)),
+            _ => None,
+        })
+        .collect();
+    let ends = outgoing.iter().map(|(block, state)| (*block, Some(resolved(&replacements, *state)))).collect();
     MemorySSA {
+        ends,
         live,
         accesses,
         sites,
@@ -1041,6 +1387,10 @@ pub fn built<'a>(
         jumps: Default::default(),
         span,
         stamps: Default::default(),
+        fixed,
+        exacts,
+        index: Default::default(),
+        taken: Default::default(),
     }
 }
 

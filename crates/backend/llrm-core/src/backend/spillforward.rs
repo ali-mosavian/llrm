@@ -131,7 +131,7 @@ fn _held(
                         && register.register.is_gpr()
                 })
                 .map(|((other, _), _)| *other)
-                .min_by_key(|other| other.register as u32)
+                .min_by_key(|other| other.register.index() as u32)
                 .filter(|_| _plain(one) && !one.volatile && one.group.is_none() && one.symbol != Some(true));
             facts.retain(|pair, _| _lanes(regs, pair.0.register).is_disjoint(&writes));
             facts.insert((*register, cell.clone()), false);
@@ -172,7 +172,7 @@ fn _held(
                 **stored && held == cell && other.width == cell.width && other.register.is_gpr()
             })
             .map(|((other, _), _)| *other)
-            .min_by_key(|other| other.register as u32)
+            .min_by_key(|other| other.register.index() as u32)
             .map(|from| (at, from))
     })();
     facts.retain(|pair, _| _lanes(regs, pair.0.register).is_disjoint(&writes));

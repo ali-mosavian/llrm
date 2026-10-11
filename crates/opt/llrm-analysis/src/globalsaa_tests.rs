@@ -8,7 +8,7 @@ use llrm_mir::passes::{Analyses, ModuleAnalyses, Outer};
 use llrm_mir::program::{Exports, Program, ProgramAnalyses};
 use llrm_mir::target::Neutral;
 
-use crate::consts::{Calls, Known, known};
+use crate::consts::{Calls, Known, known_walked};
 use crate::manager::{GlobalsAA, ProgramSummaries, Summaries, ThroughMemory, call_effects};
 use crate::memory::Unit;
 use crate::testing::{DOS, function, layout, parsed, value};
@@ -64,7 +64,7 @@ b0:
         let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
         let calls: Calls =
             call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
-        return known(&unit, Some(&calls), None, None).get(&value(f, "r")).cloned();
+        return known_walked(&unit, &calls).get(&value(f, "r")).cloned();
     }
     let known = Analyses::new(outer).get::<ThroughMemory>(&module.context, &layout, f);
     Result::as_ref(&*known).unwrap().get(&value(f, "r")).cloned()

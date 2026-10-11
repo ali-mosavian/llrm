@@ -206,6 +206,11 @@ pub struct Mark {
 }
 
 impl Mark {
+    /// How many changes the function had logged at this point.
+    pub fn position(&self) -> usize {
+        self.at
+    }
+
     /// Whether `other` is a point in the same function's history: not a copy
     /// that took its own.
     pub fn same_history(
@@ -448,8 +453,12 @@ impl Function {
         &self,
         block: BlockId,
     ) -> Vec<BlockId> {
+        let operands = self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default();
+        if operands.len() > SCAN {
+            return Self::listed_once(operands);
+        }
         let mut out = Vec::new();
-        for operand in self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default() {
+        for operand in operands {
             if let Operand::Block(target) = operand
                 && !out.contains(target)
             {
@@ -459,13 +468,29 @@ impl Function {
         out
     }
 
+    /// The blocks `operands` name, once each, by a set: a switch of N cases
+    /// named N blocks, and a scan of what was listed for each was N^2.
+    #[cold]
+    fn listed_once(operands: &[Operand]) -> Vec<BlockId> {
+        let mut seen = crate::dense::IdSet::<u32>::new();
+        operands
+            .iter()
+            .filter_map(|operand| if let Operand::Block(target) = operand { Some(*target) } else { None })
+            .filter(|target| seen.insert(target.0))
+            .collect()
+    }
+
     /// The blocks whose terminators name `block`, once each.
     pub fn predecessors(
         &self,
         block: BlockId,
     ) -> Vec<BlockId> {
+        let users = self.block_users(block);
+        if users.len() > SCAN {
+            return self.parents_once(users);
+        }
         let mut out = Vec::new();
-        for one in self.block_users(block) {
+        for one in users {
             let user = one.user;
             if self.instruction(user).opcode.is_terminator()
                 && let Some(parent) = self.parent(user)
@@ -475,6 +500,21 @@ impl Function {
             }
         }
         out
+    }
+
+    /// The blocks whose terminators are among `users`, once each, by a set.
+    #[cold]
+    fn parents_once(
+        &self,
+        users: &[Use],
+    ) -> Vec<BlockId> {
+        let mut seen = crate::dense::IdSet::<u32>::new();
+        users
+            .iter()
+            .filter(|one| self.instruction(one.user).opcode.is_terminator())
+            .filter_map(|one| self.parent(one.user))
+            .filter(|parent| seen.insert(parent.0))
+            .collect()
     }
 
     /// Instructions in layout order, with their block.
@@ -507,6 +547,16 @@ impl Function {
     /// Where the function stands now.
     pub fn mark(&self) -> Mark {
         Mark { uid: self.lineage.uid, at: self.lineage.logged }
+    }
+
+    /// A copy to edit and put in this function's place, which carries on its
+    /// history: a mark taken of this one is a point in the copy's, and what
+    /// the copy logs follows it. For a copy that replaces the function, not
+    /// one kept beside it (`clone` is that: its edits are its own).
+    pub fn fork(&self) -> Self {
+        let mut copy = self.clone();
+        copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged };
+        copy
     }
 
     /// What changed since `mark`, in order; none where `mark` is of another
@@ -715,3 +765,6 @@ impl Module {
         }
     }
 }
+
+/// Operands scanned for a repeat before a set is used.
+const SCAN: usize = 16;

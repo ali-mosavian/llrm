@@ -107,7 +107,7 @@ pub fn optimized(
     let price = |state: &Function| {
         let within = memory::Unit::within(unit.context, unit.layout, state, outer);
         // A body of its own, which no manager has seen.
-        let registers = llrm_analysis::consts::known(&within, None, None, None);
+        let registers = llrm_analysis::consts::known(&within);
         let shape = cfg::Shape::of(state);
         let within = within.with_registers(&registers).with_shape(&shape);
         let trips = profit::proven_trips(&within, &registers);
