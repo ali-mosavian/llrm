@@ -838,9 +838,12 @@ pub fn _interference_among(
                 continue;
             }
         }
-        let mut alive: Alive = rows.leaving(block.at).into_iter().filter(|one| wanted(*one)).collect();
+        let mut alive = Alive::of(only.is_some(), rows.leaving(block.at).into_iter().filter(|one| wanted(*one)));
         if entries.contains(&block.at) {
-            all_pairs(&mut graph, &rows.entering(block.at).into_iter().filter(|one| wanted(*one)).collect());
+            all_pairs(
+                &mut graph,
+                &Alive::of(only.is_some(), rows.entering(block.at).into_iter().filter(|one| wanted(*one))),
+            );
         }
         // The positions to walk, last first; every one where not asked of a
         // few.
@@ -915,12 +918,26 @@ pub fn _interference_among(
                 }
             }
             for value in &one.defines {
-                if wanted(*value) {
-                    let near: Vec<u32> = alive
-                        .iter()
-                        .filter(|other| Some(*other) != equal && *other != *value && wanted(*other))
-                        .collect();
-                    graph.link_all(*value, &near);
+                if !wanted(*value) {
+                    continue;
+                }
+                match &alive {
+                    // The whole body: the pairs one at a time, as the tree is
+                    // walked.
+                    Alive::Tree(set) => {
+                        for other in set {
+                            if Some(*other) != equal && other != value && wanted(*other) {
+                                graph.link(*value, *other);
+                            }
+                        }
+                    }
+                    Alive::Bits(_) => {
+                        let near: Vec<u32> = alive
+                            .iter()
+                            .filter(|other| Some(*other) != equal && *other != *value && wanted(*other))
+                            .collect();
+                        graph.link_all(*value, &near);
+                    }
                 }
             }
             for value in &one.defines {
@@ -931,8 +948,19 @@ pub fn _interference_among(
         }
         for value in block.arrives() {
             if wanted(value) {
-                let near: Vec<u32> = alive.iter().filter(|other| *other != value && wanted(*other)).collect();
-                graph.link_all(value, &near);
+                match &alive {
+                    Alive::Tree(set) => {
+                        for other in set {
+                            if *other != value && wanted(*other) {
+                                graph.link(value, *other);
+                            }
+                        }
+                    }
+                    Alive::Bits(_) => {
+                        let near: Vec<u32> = alive.iter().filter(|other| *other != value && wanted(*other)).collect();
+                        graph.link_all(value, &near);
+                    }
+                }
             }
         }
     }
@@ -1539,52 +1567,75 @@ mod tests {
     }
 }
 
-/// The values live at a point, as bits: a set taken, copied and walked at every
-/// instruction of a body was a tree.
-#[derive(Clone, Default)]
-struct Alive {
-    words: Vec<u64>,
+/// The values live at a point: bits while a few values are asked of (a web), a
+/// tree for the whole body, where the values are many and a bit set is walked
+/// word by word.
+#[derive(Clone)]
+enum Alive {
+    Bits(Vec<u64>),
+    Tree(BTreeSet<u32>),
 }
 
 impl Alive {
+    fn of(
+        bits: bool,
+        values: impl IntoIterator<Item = u32>,
+    ) -> Self {
+        let mut alive = if bits { Self::Bits(Vec::new()) } else { Self::Tree(BTreeSet::new()) };
+        alive.extend(values);
+        alive
+    }
+
     fn insert(
         &mut self,
         value: u32,
     ) {
-        let at = value as usize / 64;
-        if at >= self.words.len() {
-            self.words.resize(at + 1, 0);
+        match self {
+            Self::Bits(words) => {
+                let at = value as usize / 64;
+                if at >= words.len() {
+                    words.resize(at + 1, 0);
+                }
+                words[at] |= 1u64 << (value % 64);
+            }
+            Self::Tree(set) => {
+                set.insert(value);
+            }
         }
-        self.words[at] |= 1u64 << (value % 64);
     }
 
     fn remove(
         &mut self,
         value: u32,
     ) {
-        if let Some(word) = self.words.get_mut(value as usize / 64) {
-            *word &= !(1u64 << (value % 64));
+        match self {
+            Self::Bits(words) => {
+                if let Some(word) = words.get_mut(value as usize / 64) {
+                    *word &= !(1u64 << (value % 64));
+                }
+            }
+            Self::Tree(set) => {
+                set.remove(&value);
+            }
         }
     }
 
     /// The members, ascending.
-    fn iter(&self) -> impl Iterator<Item = u32> + '_ {
-        self.words
-            .iter()
-            .enumerate()
-            .flat_map(
-                |(at, word)| {
-                    let mut rest = *word;
-                    std::iter::from_fn(move || {
-                        if rest == 0 {
-                            return None;
-                        }
-                        let bit = rest.trailing_zeros();
-                        rest &= rest - 1;
-                        Some(at as u32 * 64 + bit)
-                    })
-                },
-            )
+    fn iter(&self) -> Box<dyn Iterator<Item = u32> + '_> {
+        match self {
+            Self::Bits(words) => Box::new(words.iter().enumerate().flat_map(|(at, word)| {
+                let mut rest = *word;
+                std::iter::from_fn(move || {
+                    if rest == 0 {
+                        return None;
+                    }
+                    let bit = rest.trailing_zeros();
+                    rest &= rest - 1;
+                    Some(at as u32 * 64 + bit)
+                })
+            })),
+            Self::Tree(set) => Box::new(set.iter().copied()),
+        }
     }
 
     fn extend(
@@ -1592,13 +1643,5 @@ impl Alive {
         values: impl IntoIterator<Item = u32>,
     ) {
         values.into_iter().for_each(|value| self.insert(value));
-    }
-}
-
-impl FromIterator<u32> for Alive {
-    fn from_iter<I: IntoIterator<Item = u32>>(values: I) -> Self {
-        let mut alive = Self::default();
-        alive.extend(values);
-        alive
     }
 }
