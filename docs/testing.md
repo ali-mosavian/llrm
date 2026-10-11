@@ -53,7 +53,7 @@ Hosted runners have no instruction counters, so CI always SKIPS `measure` and th
 `llrm-c` with the same measurement of the commit it branches from. Three measurements, all user-space instructions
 (`perf stat -e instructions:u`), so host load does not move them:
 
-- the compile of the 66 vsgcc programs and QCport's 65 modules at -O1, -O2 and -Os (`tools/compile-cost.py`);
+- the compile of the 66 vsgcc programs and QCport's 65 modules at -O1, -O2, -O3 and -Os (`tools/compile-cost.py`);
 - the cost at N/2, N and 2N on generated programs, per axis and level (`crates/target/*/vsgcc/scaling_gate.py`): the gate holds the second difference c(2N) − 3c(N) + 2c(N/2), which is 1.5kN² of a cost a + bN + kN²: nil for fixed and linear work, so a saving of either does not move it and a pass gone quadratic does (neither the ratio 2N/N nor c(2N) − 2c(N) is free of both);
 - the same for each step of the compile with 1.5% or more of its work (`LLRM_DEBUG=time`'s `[instr]` rows).
 

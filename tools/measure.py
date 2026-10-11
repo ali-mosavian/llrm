@@ -7,7 +7,7 @@
     tools/measure.py creep [REF]        compare REF (HEAD) with the commit 50 merges or a week back at the same tolerances
 
 Three measurements, all user-space instructions (`perf stat`), so a loaded host does not move them: the compile of the 66 vsgcc
-programs and QCport's modules at -O1/-O2/-Os (tools/compile-cost.py); the ratio of the compile at 2N to N on generated programs
+programs and QCport's modules at -O1/-O2/-O3/-Os (tools/compile-cost.py); the ratio of the compile at 2N to N on generated programs
 (vsgcc/scaling_gate.py); and the same ratio for each step of the compile (`LLRM_DEBUG=time`'s [instr] rows).
 
 A measurement is stored per commit under ~/.cache/llrm/measure (LLRM_MEASURE_DIR), never in the repository, so two branches never
