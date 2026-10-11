@@ -468,13 +468,16 @@ pub fn _scaled_operand(
             (memory_operand(what.through, what.index_through, what.scale, 0, 4, RegId::from(addr.segment)), true)
         });
     }
-    if !matches!(addr.space, Space::Far | Space::Literal) {
+    if !matches!(addr.space, Space::Far | Space::Literal | Space::Frame) {
         return None;
     }
     if addr.space == Space::Far && addr.segment == (RegId::None).iced() {
         return None;
     }
-    let (base, disp) = (what.through, addr.disp);
+    // A frame cell and an index is reached through the frame register, BP in
+    // real mode and EBP in flat.
+    let base = if addr.space == Space::Frame && what.through == RegId::None { RegId::BP } else { what.through };
+    let disp = addr.disp;
     let segment = if matches!(addr.space, Space::Far | Space::Literal) { addr.segment } else { (RegId::None).iced() };
     if _WORD_INDEXES.contains(&what.index_through) {
         if what.scale != 1 || !_WORD_BASES.contains(&base) {

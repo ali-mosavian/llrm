@@ -3966,18 +3966,13 @@ impl Selector<'_, '_, '_> {
     ) -> Mem {
         match pointer {
             Pointer::Frame { disp, index: None, .. } => frame(disp, width),
-            // As addressforms spells an indexed frame cell: BP and the index,
-            // the displacement a literal no relocation owns, through SS. A
-            // dword index is the 67h form's, whose base is EBP.
+            // A frame cell and an index: the frame's until layout resolves it,
+            // through BP, or EBP for a dword index (the 67h form's base).
             Pointer::Frame { disp, index: Some(index), scale } => Mem {
                 through: if index.width == 4 { RegId::EBP } else { RegId::BP },
-                disp_width: 2,
                 index: Some(index),
                 scale,
-                ..Mem::new(
-                    Some(Addr { segment: regs.stack_segment_register().iced(), ..Addr::new(Space::Literal, disp) }),
-                    width,
-                )
+                ..frame(disp, width)
             },
             Pointer::Global { space, index, offset, base, scale: 1, plus } => Mem {
                 disp_width: 2,
