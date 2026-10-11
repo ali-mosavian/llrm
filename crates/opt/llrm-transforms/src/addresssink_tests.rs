@@ -174,3 +174,35 @@ b4:
     let b2 = after.split("b2:").nth(1).expect("a block b2");
     assert!(b2.contains("icmp eq") && !b2.contains("br i1 %c"), "{after}");
 }
+
+/// x_hash's `while (keys[slot] != -1 && keys[slot] != k)`: the loop's exit
+/// block read the loop's address through a closing phi whose every arm is that
+/// address. Isel cannot fold a phi into an addressing mode, so the load through
+/// it was four instructions to form the address in registers where
+/// `_keys[edx*4]` would do (+12.6% clocks at -O1, once numbering made the loads
+/// one address). The phi is the value every arm carries.
+#[test]
+fn test_a_phi_whose_arms_are_one_address_is_that_address() {
+    let text = "define i16 @f(i16 %i, i16 %c) {
+b0:
+  %p = getelementptr inbounds i16, ptr @g, i16 %i
+  %x = load i16, ptr %p
+  %t = icmp slt i16 %x, %c
+  br i1 %t, label %b1, label %b2
+
+b1:
+  %u = icmp sgt i16 %x, 7
+  br i1 %u, label %b2, label %b3
+
+b2:
+  %q = phi ptr [ %p, %b0 ], [ %p, %b1 ]
+  %y = load i16, ptr %q
+  ret i16 %y
+
+b3:
+  ret i16 0
+}
+";
+    let after = sunk(text, &[&[1, 5], &[1, -5], &[2, 9]]);
+    assert!(!after.contains("phi") && after.contains("load i16, ptr %p\n  ret i16 %y"), "{after}");
+}

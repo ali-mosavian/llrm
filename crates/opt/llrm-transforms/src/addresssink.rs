@@ -40,14 +40,29 @@ impl FunctionPass for AddressSink {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // A closing phi (`lcssa`) whose arms are all one value is that value:
+        // nothing after this needs loop-closed form, and isel cannot
+        // fold a phi into an addressing mode.
+        let closed = trivial_phis(unit.function);
         // Blocks and edges are as they were.
         let sunk_compares = !analyses.outer().target().multiple_condition_registers() && compares_sunk(unit.function);
-        if sunk(unit.function) || sunk_compares {
+        if sunk(unit.function) || sunk_compares || closed {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
         }
     }
+}
+
+/// Each phi whose arms are one value, or itself, replaced by that value;
+/// whether any was.
+fn trivial_phis(function: &mut Function) -> bool {
+    let phis = function.walk().filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi).count();
+    if phis == 0 {
+        return false;
+    }
+    crate::transform::_trivial_phis(function).expect("a phi of one value is replaced");
+    function.walk().filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi).count() != phis
 }
 
 /// What the join makes of its phi's arms: a value every arm reads, or an
