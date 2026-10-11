@@ -146,7 +146,10 @@ impl Index {
 /// are live once there are many.
 #[derive(Clone, Debug, Default)]
 struct Held {
-    holders: Vec<u32>,
+    /// The holders by when they took the register.
+    order: std::collections::BTreeMap<u64, u32>,
+    /// When each took it.
+    rank: crate::support::hash::HashMap<u32, u64>,
     index: RefCell<Option<Index>>,
 }
 
@@ -189,7 +192,8 @@ impl LiveUnion {
         self.taken += 1;
         let at = self.taken;
         let held = self.registers.entry(register).or_default();
-        held.holders.push(value);
+        held.rank.insert(value, at);
+        held.order.insert(at, value);
         if let Some(index) = held.index.get_mut() {
             index.add(value, at, live);
         }
@@ -204,7 +208,9 @@ impl LiveUnion {
         live: &impl crate::backend::live::Ranges,
     ) {
         let held = self.registers.get_mut(&register).expect("a value is in the register it holds");
-        held.holders.retain(|other| *other != value);
+        if let Some(at) = held.rank.remove(&value) {
+            held.order.remove(&at);
+        }
         if let Some(index) = held.index.get_mut() {
             index.remove(value, live);
         }
@@ -224,12 +230,23 @@ impl LiveUnion {
         &self,
         register: &RegId,
     ) -> Vec<u32> {
-        self.registers.get(register).map(|held| held.holders.clone()).unwrap_or_default()
+        self.registers.get(register).map(|held| held.order.values().copied().collect()).unwrap_or_default()
+    }
+
+    /// `values` (held by `register`) in the order they took it.
+    pub fn in_taking_order(
+        &self,
+        register: &RegId,
+        values: &mut [u32],
+    ) {
+        if let Some(held) = self.registers.get(register) {
+            values.sort_by_key(|value| held.rank.get(value).copied().unwrap_or(u64::MAX));
+        }
     }
 
     /// Each register with its holders.
     pub fn registers(&self) -> impl Iterator<Item = (RegId, Vec<u32>)> + '_ {
-        self.registers.iter().map(|(register, held)| (*register, held.holders.clone()))
+        self.registers.iter().map(|(register, held)| (*register, held.order.values().copied().collect()))
     }
 
     /// `held`'s index, built once enough is asked of a register with many
@@ -241,12 +258,12 @@ impl LiveUnion {
     ) -> Option<std::cell::Ref<'a, Index>> {
         self.asked.set(self.asked.get().saturating_add(1));
         if held.index.borrow().is_none() {
-            if held.holders.len() < BIG || self.asked.get() < ASKED {
+            if held.order.len() < BIG || self.asked.get() < ASKED {
                 return None;
             }
             let mut index = Index::default();
-            for (at, value) in held.holders.iter().enumerate() {
-                index.add(*value, at as u64 + 1, live);
+            for (at, value) in &held.order {
+                index.add(*value, *at, live);
             }
             *held.index.borrow_mut() = Some(index);
         }
@@ -264,8 +281,8 @@ impl LiveUnion {
         let Some(held) = self.registers.get(register) else { return Vec::new() };
         let Some(index) = self.indexed(held, live) else {
             return held
-                .holders
-                .iter()
+                .order
+                .values()
                 .copied()
                 .filter(|other| live.range(*other).is_some_and(|found| found.overlaps(one)))
                 .collect();
@@ -286,7 +303,7 @@ impl LiveUnion {
     ) -> bool {
         let Some(held) = self.registers.get(register) else { return false };
         let Some(index) = self.indexed(held, live) else {
-            return held.holders.iter().filter_map(|other| live.range(*other)).any(|other| other.overlaps(one));
+            return held.order.values().filter_map(|other| live.range(*other)).any(|other| other.overlaps(one));
         };
         one.segments.iter().any(|segment| index.meets(segment.start, segment.end))
     }
