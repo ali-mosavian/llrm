@@ -217,3 +217,23 @@ fn test_the_guards_of_a_block_come_from_its_nearest_dominators() {
     let found = guards(&unit, last);
     assert!(!found.is_empty() && found.len() <= super::MAX_DOMINATORS + 1, "{} guards", found.len());
 }
+
+/// `n > 2` was read only as it stood, so the entry guard of `for (x = 1; x < n
+/// - 1; ++x)` (`1 < n - 1`) proved nothing and the loop was not counted behind
+/// its copied header (x_life -O3 +4.3% clocks).
+#[test]
+fn test_a_signed_guard_proves_the_same_order_at_other_constants() {
+    use super::{Guard, implies_at_offset};
+    let parsed = Parsed::new(GUARDED);
+    let n = Scev::unknown(parsed.value("n"), 16);
+    let number = |value: i64| Scev::constant(value, 16);
+    let guard = Guard { predicate: IntPredicate::Sgt, left: n.clone(), right: number(2) };
+    let minus_one = n.plus(&number(-1));
+
+    assert!(implies_at_offset(&guard, IntPredicate::Slt, &number(1), &minus_one), "n > 2 proves 1 < n - 1");
+    assert!(implies_at_offset(&guard, IntPredicate::Slt, &number(0), &minus_one), "and 0 < n - 1");
+    assert!(!implies_at_offset(&guard, IntPredicate::Slt, &number(2), &minus_one), "not 2 < n - 1");
+    assert!(!implies_at_offset(&guard, IntPredicate::Ult, &number(1), &minus_one), "an unsigned order is not read");
+    let sum = Guard { predicate: IntPredicate::Sgt, left: n.plus(&number(1)), right: number(2) };
+    assert!(!implies_at_offset(&sum, IntPredicate::Slt, &number(1), &minus_one), "a guard side that is a sum may wrap");
+}
