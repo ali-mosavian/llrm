@@ -1,5 +1,6 @@
 """The gate's path map: a change in an area selects that area's tests, and nothing is left out by omission."""
 
+import re
 import pytest
 import sys
 import subprocess
@@ -492,7 +493,7 @@ def test_the_lib_step_runs_tests_in_a_random_order_that_a_seed_repeats(monkeypat
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     monkeypatch.delenv("LLRM_SHUFFLE_SEED", raising=False)
     command = gate.commands(p, cfg, pkgs)["lib"]
-    assert "RUSTC_BOOTSTRAP=1" in command and command.endswith("-Zunstable-options --shuffle"), command
+    assert command.endswith("-Zunstable-options --shuffle"), command
     monkeypatch.setenv("LLRM_SHUFFLE_SEED", "42")
     assert gate.commands(p, cfg, pkgs)["lib"].endswith("-Zunstable-options --shuffle-seed 42")
 
@@ -501,7 +502,7 @@ def test_every_step_runs_with_the_flags_the_build_used_and_the_base_build_with_n
     """`integration` (`cargo test --test X`) without the build step's RUSTFLAGS rebuilt llrm-c and replaced target/release/llrm-c while
     `torture` was starting it ("No such file or directory"): the steps share one set of flags, and the base the measure builds, which
     is historical, has none."""
-    assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS}
+    assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1"}
     assert f"RUSTFLAGS='{gate.WARNING_FLAGS}'" in gate.BUILD
     assert "RUSTFLAGS" in gate.MEASURE_BUILD and "env -u RUSTFLAGS cargo" in gate.MEASURE_BUILD
     assert "RUSTFLAGS" not in gate.MEASURE_BUILD.replace("env -u RUSTFLAGS", "")
@@ -568,3 +569,34 @@ def test_a_steps_cpu_time_is_its_process_trees_and_not_the_waiting_in_it(tmp_pat
     assert wall >= 0.6 and cpu < 0.3, f"a step that only waited read {cpu:.2f} s of CPU"
     table = gate.step_table({"a": (0, 5.0, 2.0), "b": (0, 9.0, 8.0), "skipped": (77, 0, 0)})
     assert table.splitlines()[1].startswith("[steps] b ") and "skipped" not in table and table.endswith("10 cpu")
+
+
+def test_no_cargo_step_sets_an_environment_the_others_do_not(monkeypatch):
+    """RUSTC_BOOTSTRAP=1 on the lib step alone made cargo rebuild the workspace there (1,088 CPU-s of a 4,340 CPU-s gate) and again for
+    the next step without it: an environment variable is an input of every crate cargo builds. The variables a cargo step needs are in
+    STEP_ENV, for all of them."""
+    cfg, pkgs = gate.load(), gate.packages()
+    monkeypatch.delenv("LLRM_SHUFFLE_SEED", raising=False)
+    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"], "full")
+    for step, command in gate.commands(p, cfg, pkgs).items():
+        assert not re.match(r"\s*[A-Z_]+=\S+\s+cargo", command), f"{step} sets its own environment for cargo: {command[:80]}"
+    assert gate.STEP_ENV["RUSTC_BOOTSTRAP"] == "1"
+
+
+def test_the_doc_step_runs_rustdoc_only_where_a_doc_comment_has_a_fence_to_run(tmp_path):
+    """`cargo test --doc` took 456 CPU-s of a 4,340 CPU-s gate to run no test: every fence in the tree is ```text. Rustdoc runs when a doc
+    comment has a fence it would run: an untagged one, rust, no_run, should_panic, compile_fail, ignore."""
+    import doctests
+
+    def has(text):
+        (tmp_path / "a.rs").write_text(text)
+        return doctests.has_doctests([tmp_path])
+
+    assert not has("//! ```text\n//! a b\n//! ```\n")
+    assert not has("/// ```sh\n/// make\n/// ```\nfn f() {}\n")
+    assert has("//! ```\n//! let a = 1;\n//! ```\n")
+    assert has("/// ```rust\n/// let a = 1;\n/// ```\n") and has("/// ```no_run\n/// f();\n/// ```\n")
+    assert has("/// ```should_panic\n/// f();\n/// ```\n") and has("/// ```edition2021\n/// f();\n/// ```\n")
+    assert not has("/// ```text\n/// x\n/// ```\n/// ```text\n/// y\n/// ```\n"), "a closing fence is not an opening one"
+    command = gate.commands(gate.plan(["crates/frontends/llrm-c/src/lib.rs"], "full"), gate.load(), gate.packages())["doc"]
+    assert command.startswith("if python3 tools/gate/doctests.py") and "--doc" in command, command
