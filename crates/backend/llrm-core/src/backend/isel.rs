@@ -664,40 +664,23 @@ enum Pointer {
         disp: i64,
         index: Option<Held>,
         scale: i64,
+        /// The frame object the address was made from, where `disp` may lie
+        /// outside it (a strength-reduced index): the slot its cells belong to.
+        /// None: the slot `disp` lies in.
+        home: Option<i64>,
     },
     /// `segment` is the register a stack pointer is read through; none, DS.
-    Based {
-        base: Held,
-        index: Option<Held>,
-        scale: i64,
-        offset: i64,
-        segment: Option<RegId>,
-    },
+    Based { base: Held, index: Option<Held>, scale: i64, offset: i64, segment: Option<RegId> },
     /// A near global's symbol, a displacement from it, and a register
     /// holding a variable one, times `scale`: a scaled one is a dword index.
     /// A second register `plus`, added unscaled, makes the `[bx+si+symbol]`
     /// form.
-    Global {
-        space: Space,
-        index: i64,
-        offset: i64,
-        base: Option<Held>,
-        scale: i64,
-        plus: Option<Held>,
-    },
+    Global { space: Space, index: i64, offset: i64, base: Option<Held>, scale: i64, plus: Option<Held> },
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
-    Far {
-        selector: Held,
-        base: Option<Held>,
-        index: Option<Held>,
-        scale: i64,
-        offset: i64,
-    },
+    Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
     /// A near address no global owns, a constant: `[disp16]`.
-    Absolute {
-        offset: i64,
-    },
+    Absolute { offset: i64 },
 }
 
 /// `LLRM_CHECK_CALLEES=1`: the callees' effects selection was given are what a
@@ -1484,7 +1467,7 @@ impl Selector<'_, '_, '_> {
                             },
                         );
                     let address = function.instruction(inst).result.expect("an address");
-                    self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1 });
+                    self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1, home: Some(disp) });
                     self.frame_objects.push((disp, size));
                     if exposed.contains(&address) {
                         reach.insert((disp, disp + size));
@@ -1569,7 +1552,7 @@ impl Selector<'_, '_, '_> {
                 // Its own bytes are the stack's: the value is their address,
                 // and the body reaches the frame through it.
                 Parameter::Bytes(disp) => {
-                    self.pointers.insert(parameter, Pointer::Frame { disp: *disp, index: None, scale: 1 });
+                    self.pointers.insert(parameter, Pointer::Frame { disp: *disp, index: None, scale: 1, home: None });
                     self.unsealed = true;
                     continue;
                 }
@@ -1628,7 +1611,7 @@ impl Selector<'_, '_, '_> {
             // An interrupt handler's one parameter is the address of the
             // registers it saved.
             if function.calling_convention == llrm_mir::opcode::X86_INTR {
-                self.pointers.insert(parameter, Pointer::Frame { disp, index: None, scale: 1 });
+                self.pointers.insert(parameter, Pointer::Frame { disp, index: None, scale: 1, home: None });
                 self.unsealed = true;
                 continue;
             }
@@ -1637,7 +1620,7 @@ impl Selector<'_, '_, '_> {
                 self.float_loaded(
                     held,
                     "fld",
-                    Pointer::Frame { disp, index: None, scale: 1 },
+                    Pointer::Frame { disp, index: None, scale: 1, home: None },
                     size,
                     false,
                     block_at[&entry],
@@ -1647,7 +1630,7 @@ impl Selector<'_, '_, '_> {
             }
             if self.is_far(function.value(parameter).ty) {
                 let (offset, selector) = self.far_loaded(
-                    Pointer::Frame { disp, index: None, scale: 1 },
+                    Pointer::Frame { disp, index: None, scale: 1, home: None },
                     false,
                     block_at[&entry],
                     &mut prologue,
@@ -2785,7 +2768,7 @@ impl Selector<'_, '_, '_> {
         // The list holds a near data pointer.
         let width = self.layout.pointer(self.spaces.data).bits / 8;
         let held = Held { value: self.fresh(), width };
-        out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1 }, held)));
+        out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1, home: None }, held)));
         let list = self.pointer(arguments[0])?;
         out.push(insn(
             at,
@@ -2908,7 +2891,7 @@ impl Selector<'_, '_, '_> {
         moved: Pointer,
         ty: TypeId,
     ) -> Pointer {
-        let (Pointer::Frame { disp: from, .. }, Pointer::Frame { disp: to, index, scale }) = (base, moved) else {
+        let (Pointer::Frame { disp: from, .. }, Pointer::Frame { disp: to, index, scale, home }) = (base, moved) else {
             return moved;
         };
         let Type::Pointer(space) = self.types().get(ty) else { return moved };
@@ -2923,7 +2906,7 @@ impl Selector<'_, '_, '_> {
             return moved;
         };
         let inside = object + (to - object).rem_euclid(wrap);
-        if inside <= object + size { Pointer::Frame { disp: inside, index, scale } } else { moved }
+        if inside <= object + size { Pointer::Frame { disp: inside, index, scale, home } } else { moved }
     }
 
     /// A global's address, and a constant displacement from it. A far
@@ -3220,7 +3203,9 @@ impl Selector<'_, '_, '_> {
                     Some(Pointer::Based { base, index: Some(sum), scale: 1, offset, segment })
                 }
                 _ if chained && !self.only_addressed(address) => None,
-                Pointer::Frame { disp, index: None, .. } => Some(Pointer::Frame { disp, index: Some(sum), scale: 1 }),
+                Pointer::Frame { disp, index: None, home, .. } => {
+                    Some(Pointer::Frame { disp, index: Some(sum), scale: 1, home })
+                }
                 Pointer::Far { selector, base: Some(base), index: None, offset, .. } => {
                     Some(Pointer::Far { selector, base: Some(base), index: Some(sum), scale: 1, offset })
                 }
@@ -3629,7 +3614,9 @@ impl Selector<'_, '_, '_> {
         };
         let wide = Held { value: self.value(index), width: 4 };
         let (scaled, base) = match pointer {
-            Pointer::Frame { disp, index: None, .. } => (Pointer::Frame { disp, index: Some(wide), scale }, None),
+            Pointer::Frame { disp, index: None, home, .. } => {
+                (Pointer::Frame { disp, index: Some(wide), scale, home }, None)
+            }
             // A dword base is the wide register already; a word one is widened
             // where defined.
             Pointer::Based { base, index: None, offset, segment, .. }
@@ -3968,12 +3955,28 @@ impl Selector<'_, '_, '_> {
             Pointer::Frame { disp, index: None, .. } => frame(disp, width),
             // A frame cell and an index: the frame's until layout resolves it,
             // through BP, or EBP for a dword index (the 67h form's base).
-            Pointer::Frame { disp, index: Some(index), scale } => Mem {
-                through: if index.width == 4 { RegId::EBP } else { RegId::BP },
-                index: Some(index),
-                scale,
-                ..frame(disp, width)
-            },
+            // A frame cell and an index: the frame's until layout resolves it,
+            // through BP, or EBP for a dword index (the 67h form's base). It
+            // reaches the whole object its address was made from, which a based
+            // address says (`overlap`): the register is its `base`.
+            Pointer::Frame { disp, index: Some(index), scale, home } => {
+                let through = if index.width == 4 { RegId::EBP } else { RegId::BP };
+                let cell = frame(disp, width);
+                Mem {
+                    through,
+                    index: Some(index),
+                    scale,
+                    addr: cell
+                        .addr
+                        .map(
+                            |addr| {
+                                let addr = Addr { base: through.iced(), ..addr };
+                                home.map_or(addr, |home| addr.in_slot(home))
+                            },
+                        ),
+                    ..cell
+                }
+            }
             Pointer::Global { space, index, offset, base, scale: 1, plus } => Mem {
                 disp_width: 2,
                 base,
@@ -6247,7 +6250,7 @@ impl Selector<'_, '_, '_> {
         self.scratch += size + size % 2;
         self.depth = self.depth.max(self.allocas + self.scratch);
         self.extents.push((-(self.allocas + self.scratch), size + size % 2));
-        Pointer::Frame { disp: -(self.allocas + self.scratch), index: None, scale: 1 }
+        Pointer::Frame { disp: -(self.allocas + self.scratch), index: None, scale: 1, home: None }
     }
 
     /// A float's `size` bytes stored to a stack temporary, where a push or
@@ -6313,7 +6316,7 @@ impl Pointer {
         by: i64,
     ) -> Pointer {
         match self {
-            Pointer::Frame { disp, index, scale } => Pointer::Frame { disp: disp + by, index, scale },
+            Pointer::Frame { disp, index, scale, home } => Pointer::Frame { disp: disp + by, index, scale, home },
             Pointer::Based { base, index, scale, offset, segment } => {
                 Pointer::Based { base, index, scale, offset: offset + by, segment }
             }
