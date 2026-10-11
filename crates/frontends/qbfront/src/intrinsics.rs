@@ -222,7 +222,12 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("PEEK", 1..=1, Integer, ReadsMemory, Lowering::Peek),
     intrinsic!("INP", 1..=1, Integer, Device, Lowering::PortIn),
     intrinsic!("POINT", 2..=2, Integer, Runtime, Lowering::Point),
+    intrinsic!("PLAY", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FPLY")),
     intrinsic!("POS", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FPOS")),
+    // The event checks the front end writes (never a program's: `$` cannot
+    // start a name).
+    intrinsic!("$EVANY", 0..=0, Integer, Runtime, Lowering::RuntimeInteger("B$EVAN")),
+    intrinsic!("$EVPD", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$EVPD")),
     intrinsic!("RTRIM", 1..=1, String, Runtime, Lowering::RuntimeString("B$RTRM")),
     intrinsic!("RIGHT", 2..=2, String, Runtime, Lowering::Right),
     intrinsic!("RND", 0..=1, Single, Runtime, Lowering::Random),

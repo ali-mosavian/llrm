@@ -249,6 +249,44 @@ pub const TUPLE: &str = "$TUPLE";
 /// ON n GOTO|GOSUB's selector: `n` rounded to INTEGER, ERROR 5 raised by the
 /// ON statement itself where it is outside 0..255, so RESUME retries the ON.
 pub const ON_SELECTOR: &str = "$ON";
+/// An event trap statement as `EVENT(device, number, verb, label)`:
+/// `ON TIMER(5) GOSUB tick` is `("TIMER", 5, "GOSUB", "tick")`, `PLAY ON` is
+/// `("PLAY", omitted, "ON", omitted)`.  The number is the interval of TIMER,
+/// the notes of PLAY, the key of KEY and so on, as the statement gave it.
+fn event_statement(
+    actions: &[AstAction],
+    arguments: &[Expr],
+    labels: &[(String, Span)],
+    span: Span,
+) -> Option<Statement> {
+    let named = |wanted: &[(&'static str, &'static str)]| -> Option<&'static str> {
+        actions.iter().find_map(|action| match action {
+            AstAction::Unsupported(identity) => wanted.iter().find(|(id, _)| id == identity).map(|(_, name)| *name),
+            _ => None,
+        })
+    };
+    let device = named(&[
+        ("opEvTimer0", "TIMER"),
+        ("opEvTimer1", "TIMER"),
+        ("opEvPlay0", "PLAY"),
+        ("opEvPlay1", "PLAY"),
+        ("opEvKey", "KEY"),
+        ("opEvStrig", "STRIG"),
+        ("opEvCom", "COM"),
+        ("opEvPen", "PEN"),
+        ("opEvUEvent", "UEVENT"),
+        ("opEvSignal", "SIGNAL"),
+    ])?;
+    let verb = named(&[("opEvGosub", "GOSUB"), ("opEvOn", "ON"), ("opEvOff", "OFF"), ("opEvStop", "STOP")])?;
+    let number = arguments.first().cloned().unwrap_or(Expr::Omitted(span));
+    let label = labels.first().map_or(Expr::Omitted(span), |(name, at)| Expr::Name(name.clone(), *at));
+    Some(Statement::Runtime {
+        name: "EVENT".into(),
+        arguments: vec![Expr::Name(device.into(), span), number, Expr::Name(verb.into(), span), label],
+        span,
+    })
+}
+
 /// The name a coordinate pair's x carries when the pair is STEP-relative to the last point.
 pub const STEP_MARK: &str = "$STEP";
 
@@ -1506,6 +1544,11 @@ fn synthesize_statement(
     let descriptor = if line_input { Some(StatementShape::LineInput) } else { dispatched.or(emitted) };
     let arguments = state.expressions.split_off(expression_base);
     let labels = state.labels.split_off(label_base);
+    if let Some(event) = event_statement(actions, &arguments, &labels, span) {
+        state.expressions.truncate(expression_base);
+        state.statements.push(event);
+        return true;
+    }
     if let Some(Some(gosub)) = on_branch {
         let ([selector], false) = (&arguments[..], labels.is_empty()) else {
             return false;
@@ -2810,6 +2853,8 @@ fn contextual_reserved_name(id: u16) -> Option<String> {
                 | "MOD"
                 | "NEXT"
                 | "NOT"
+                | "OFF"
+                | "ON"
                 | "OPTION"
                 | "OR"
                 | "REM"
@@ -2818,6 +2863,7 @@ fn contextual_reserved_name(id: u16) -> Option<String> {
                 | "SHARED"
                 | "STATIC"
                 | "STEP"
+                | "STOP"
                 | "SUB"
                 | "THEN"
                 | "TO"

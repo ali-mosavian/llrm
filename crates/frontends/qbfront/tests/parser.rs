@@ -2136,3 +2136,23 @@ fn the_near_data_budget_is_the_targets_segment() {
     assert!(on(Some(65536)).is_ok());
     assert!(on(None).is_ok());
 }
+
+#[test]
+fn event_traps_keep_their_device_number_verb_and_handler() {
+    let module = parse("on timer(5) gosub tick\r\nplay on\r\nkey(2) stop\r\n", Dialect::QuickBasic45).unwrap();
+    let verbs: Vec<(String, usize)> = module
+        .statements
+        .iter()
+        .filter_map(|one| match one {
+            Statement::Runtime { name, arguments, .. } if name == "EVENT" => {
+                let verb = match &arguments[2] {
+                    Expr::Name(verb, _) => verb.clone(),
+                    _ => String::new(),
+                };
+                Some((verb, arguments.len()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(verbs, [("GOSUB".to_string(), 4), ("ON".to_string(), 4), ("STOP".to_string(), 4)]);
+}

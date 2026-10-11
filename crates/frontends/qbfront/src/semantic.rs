@@ -602,7 +602,8 @@ fn built_from(
     if let Some(procedure) = module.procedures.iter().find(|one| loop_keyword(dialect, &one.name)) {
         return Err(SemanticError { message: format!("{} is reserved", procedure.name) });
     }
-    let mut module = outline_module_gosubs(module)?;
+    let module = event_traps(module)?;
+    let mut module = outline_module_gosubs(&module)?;
     if module.prelude {
         add_prelude(&mut module)?;
     }
@@ -1109,6 +1110,200 @@ fn handles_errors(statements: &[Statement]) -> bool {
     !targets.is_empty()
 }
 
+/// The module procedure that runs the handlers of the events that are due.
+const EVENT_DISPATCHER: &str = "$EVENTS";
+
+/// The device codes of the event trap statements, as the runtime numbers
+/// them.
+const EVENT_DEVICES: [(&str, i64); 8] =
+    [("TIMER", 1), ("PLAY", 2), ("KEY", 3), ("STRIG", 4), ("COM", 5), ("PEN", 6), ("UEVENT", 7), ("SIGNAL", 8)];
+
+/// Event trapping, by the checks QB's /V makes: before each statement of the
+/// module the runtime is asked whether an event is due, and if so `$EVENTS`
+/// runs the handler of each.  A handler is the GOSUB label of
+/// `ON event GOSUB`, so it is a procedure of the module's scope after
+/// `outline_module_gosubs`; here each is numbered, the statement says the
+/// number to the runtime, and `$EVENTS` calls them by it.  The checks go in
+/// the module's statements only: a SUB or FUNCTION cannot call a handler.
+fn event_traps(module: &Module) -> Result<Module, SemanticError> {
+    fn events(
+        statements: &[Statement],
+        labels: &mut Vec<String>,
+        any: &mut bool,
+    ) {
+        for statement in statements {
+            match statement {
+                Statement::Runtime { name, arguments, .. } if name == "EVENT" => {
+                    *any = true;
+                    if let [_, _, Expr::Name(verb, _), Expr::Name(label, _)] = arguments.as_slice() {
+                        if verb == "GOSUB" && !labels.iter().any(|one| one == canonical(label)) {
+                            labels.push(canonical(label).into());
+                        }
+                    }
+                }
+                Statement::If { then_branch, else_branch, .. } => {
+                    events(then_branch, labels, any);
+                    events(else_branch, labels, any);
+                }
+                Statement::For { body, .. } | Statement::While { body, .. } | Statement::Do { body, .. } => {
+                    events(body, labels, any)
+                }
+                Statement::Select { arms, otherwise, .. } => {
+                    for (_, body) in arms {
+                        events(body, labels, any);
+                    }
+                    events(otherwise, labels, any);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn number(
+        value: i64,
+        span: Span,
+    ) -> Expr {
+        Expr::Literal(Literal::Integer(value, TypeName::Integer), span)
+    }
+
+    /// IF $EVANY THEN $EVENTS: runs the handlers of the events that are due.
+    fn due_check(span: Span) -> Statement {
+        Statement::If {
+            condition: Expr::Apply { name: "$EVANY".into(), arguments: Vec::new(), span },
+            then_branch: vec![Statement::Call {
+                name: EVENT_DISPATCHER.into(),
+                arguments: Vec::new(),
+                explicit: false,
+                span,
+            }],
+            else_branch: Vec::new(),
+            span,
+        }
+    }
+
+    fn rewrite(
+        statements: &mut Vec<Statement>,
+        labels: &[String],
+        check: bool,
+    ) {
+        let mut out = Vec::with_capacity(statements.len() * 2);
+        for mut statement in statements.drain(..) {
+            let span = statement.span();
+            let metadata = matches!(
+                statement,
+                Statement::Static(_)
+                    | Statement::Shared(_)
+                    | Statement::DefType { .. }
+                    | Statement::TypeDecl { .. }
+                    | Statement::Const { .. }
+                    | Statement::Comment(_)
+                    | Statement::OptionExplicit(_)
+                    | Statement::OptionBase(_, _)
+                    | Statement::Data { .. }
+                    | Statement::Label(_, _)
+            );
+            match &mut statement {
+                Statement::Runtime { name, arguments, .. } if name == "EVENT" => {
+                    if let [_, _, Expr::Name(verb, _), label] = arguments.as_mut_slice() {
+                        if verb == "GOSUB" {
+                            let id = match label {
+                                Expr::Name(label, _) => {
+                                    labels.iter().position(|one| one == canonical(label)).map_or(0, |at| at as i64 + 1)
+                                }
+                                _ => 0,
+                            };
+                            *label = number(id, span);
+                        }
+                    }
+                }
+                Statement::If { then_branch, else_branch, .. } => {
+                    rewrite(then_branch, labels, check);
+                    rewrite(else_branch, labels, check);
+                }
+                Statement::For { body, .. } | Statement::While { body, .. } | Statement::Do { body, .. } => {
+                    rewrite(body, labels, check);
+                    // a loop with nothing in it waits for an event
+                    if check && body.is_empty() {
+                        body.push(due_check(span));
+                    }
+                }
+                Statement::Select { arms, otherwise, .. } => {
+                    for (_, body) in arms {
+                        rewrite(body, labels, check);
+                    }
+                    rewrite(otherwise, labels, check);
+                }
+                _ => {}
+            }
+            if check && !metadata {
+                out.push(due_check(span));
+            }
+            out.push(statement);
+        }
+        *statements = out;
+    }
+
+    let mut labels = Vec::new();
+    let mut any = false;
+    events(&module.statements, &mut labels, &mut any);
+    if !any {
+        return Ok(module.clone());
+    }
+    let mut module = module.clone();
+    let span = module.statements.iter().find_map(|one| matches!(one, Statement::Runtime { name, .. } if name == "EVENT").then(|| one.span())).unwrap_or(Span { line: 0, start: 0, end: 0 });
+    rewrite(&mut module.statements, &labels, !labels.is_empty());
+    if labels.is_empty() {
+        return Ok(module);
+    }
+    // Falling off the module's last statement must not run the handlers
+    // placed after it.
+    let end = Statement::Runtime { name: "END".into(), arguments: Vec::new(), span };
+    module.statements.push(end);
+    let body = labels
+        .iter()
+        .enumerate()
+        .map(|(at, label)| {
+            let id = at as i64 + 1;
+            Statement::If {
+                condition: Expr::Apply { name: "$EVPD".into(), arguments: vec![number(id, span)], span },
+                then_branch: vec![
+                    Statement::Call { name: label.clone(), arguments: Vec::new(), explicit: false, span },
+                    Statement::Runtime { name: "EVDONE".into(), arguments: vec![number(id, span)], span },
+                ],
+                else_branch: Vec::new(),
+                span,
+            }
+        })
+        .collect();
+    module.procedures.push(Procedure {
+        name: EVENT_DISPATCHER.into(),
+        alias: None,
+        cdecl: false,
+        kind: ProcedureKind::Sub,
+        parameters: Vec::new(),
+        result: None,
+        body,
+        declaration: false,
+        is_static: false,
+        exported: false,
+        private: false,
+        module_scope: true,
+        span,
+    });
+    // The handlers are GOSUB targets, so that they become procedures.
+    for label in &labels {
+        for _ in 0..2 {
+            module.statements.push(Statement::Call {
+                name: "GOSUB".into(),
+                arguments: vec![Expr::Name(label.clone(), span)],
+                explicit: false,
+                span,
+            });
+        }
+    }
+    Ok(module)
+}
+
 fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
     fn visit(
         statements: &[Statement],
@@ -1229,7 +1424,11 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             _ => None,
         })
         .collect::<Vec<_>>();
-    if direct_calls.len() == targets.len() && direct_calls.iter().collect::<BTreeSet<_>>().len() == direct_calls.len() {
+    let has_events = module.procedures.iter().any(|one| one.name == EVENT_DISPATCHER);
+    if !has_events
+        && direct_calls.len() == targets.len()
+        && direct_calls.iter().collect::<BTreeSet<_>>().len() == direct_calls.len()
+    {
         let mut regions = BTreeMap::new();
         let mut covered = BTreeSet::new();
         for target in &direct_calls {
@@ -3541,6 +3740,40 @@ impl Compiler {
                             return self.fail("BEEP takes no arguments");
                         }
                         self.emit_runtime_call("B$BEEP", Vec::new(), Vec::new());
+                    }
+                    "EVENT" => {
+                        let [Expr::Name(device, _), number, Expr::Name(verb, _), id] = arguments.as_slice() else {
+                            return self.fail("an event statement has its device, number, verb and handler");
+                        };
+                        let device = EVENT_DEVICES.iter().find(|(one, _)| one == device).map(|(_, code)| *code).unwrap_or(0);
+                        let device = Operand::Constant(INTEGER, Number::Integer(device));
+                        let number = if matches!(number, Expr::Omitted(_)) {
+                            Operand::Constant(LONG, Number::Integer(0))
+                        } else {
+                            let (value, type_id) = self.expression(number)?;
+                            self.convert(value, type_id, LONG)?
+                        };
+                        if verb == "GOSUB" {
+                            let (id, id_type) = self.expression(id)?;
+                            let id = self.convert(id, id_type, INTEGER)?;
+                            self.emit_runtime_call("B$EVAR", Vec::new(), vec![device, number, id]);
+                        } else {
+                            let mode = match verb.as_str() {
+                                "ON" => 1,
+                                "OFF" => 0,
+                                _ => 2,
+                            };
+                            let mode = Operand::Constant(INTEGER, Number::Integer(mode));
+                            self.emit_runtime_call("B$EVSW", Vec::new(), vec![device, number, mode]);
+                        }
+                    }
+                    "EVDONE" => {
+                        let [id] = arguments.as_slice() else {
+                            return self.fail("EVDONE takes the handler's number");
+                        };
+                        let (id, id_type) = self.expression(id)?;
+                        let id = self.convert(id, id_type, INTEGER)?;
+                        self.emit_runtime_call("B$EVDN", Vec::new(), vec![id]);
                     }
                     "ERROR" => {
                         if arguments.len() != 1 {

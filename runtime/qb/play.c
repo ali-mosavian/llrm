@@ -101,6 +101,12 @@ void music_tick(void)
 }
 #pragma aux music_tick "B$MUSICTICK"
 
+/* The notes waiting: PLAY(n) and ON PLAY (events.c). */
+unsigned music_waiting(void)
+{
+    return (head + QUEUE - tail) % QUEUE;
+}
+
 /* Waits, with the tick running, until `done` is so. */
 static void wait_for_room(void)
 {

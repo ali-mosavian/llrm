@@ -1122,3 +1122,84 @@ check = { when = "$0 < 0 or 255 < $0", raise = 5 }
 # convention cannot name that, so they keep BASIC's pushes and are popped by the callee.
 [llrm]
 stack_abi = ["B$CLOS", "B$COLR", "B$CSCN", "B$DDIM", "B$FERR", "B$LOCT", "B$OEGA", "B$RDIM", "B$RESN", "B$SERR"]
+
+# The event trapping of the llrm runtime (runtime/qb/events.c), which has no counterpart in QB's: the front end numbers the
+# handlers and asks which are due, where QB jumps into a handler's address.
+
+["B$EVAR"]
+cleanup = 8
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/events.c, written for the llrm runtime; QB's counterpart is rt/gwaevt.asm, which jumps into the handler: ON event GOSUB: the device, the number (the interval of TIMER, the notes of PLAY, the key of KEY) and the handler's number. Pascal, far, the arguments popped by the callee."
+
+["B$EVSW"]
+cleanup = 8
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/events.c, written for the llrm runtime; QB's counterpart is rt/gwaevt.asm, which jumps into the handler: event ON, OFF or STOP: the device, the number and the mode. Pascal, far, the arguments popped by the callee."
+
+["B$EVAN"]
+cleanup = 0
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/events.c, written for the llrm runtime; QB's counterpart is rt/gwaevt.asm, which jumps into the handler: whether any event is due; AX. Pascal, far, the arguments popped by the callee."
+
+["B$EVPD"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/events.c, written for the llrm runtime; QB's counterpart is rt/gwaevt.asm, which jumps into the handler: whether the handler of that number is due; if so it is marked running; AX. Pascal, far, the arguments popped by the callee."
+
+["B$EVDN"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/events.c, written for the llrm runtime; QB's counterpart is rt/gwaevt.asm, which jumps into the handler: the handler of that number has returned. Pascal, far, the arguments popped by the callee."
+
+["B$FPLY"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/events.c, written for the llrm runtime; QB's counterpart is rt/gwaevt.asm, which jumps into the handler: PLAY(n): the notes waiting in the background music queue; AX. Pascal, far, the arguments popped by the callee."
