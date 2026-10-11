@@ -28,8 +28,8 @@ var adler_b: u32 = 0
 
 fn fill(file: &mut io.File) -> i32:
     unsafe:
-        let data: *far mut u8 = &mut inbuf
-        match file.read_raw(data, 512):
+        let data: *near mut u8 = &mut inbuf
+        match file.read_raw(data.far(), 512):
             .ok(n):
                 return i32(n)
             .err(_):
@@ -94,8 +94,8 @@ fn restart(file: &mut io.File) -> void:
 
 fn emit(out: &mut io.File, count: i32) -> void:
     unsafe:
-        let data: *far u8 = &line
-        let _ = out.write_raw(data, u16(count))
+        let data: *near u8 = &line
+        let _ = out.write_raw(data.far(), u16(count))
     for i in 0..count:
         adler_a += u32(line[i])
         if adler_a >= 65521:
