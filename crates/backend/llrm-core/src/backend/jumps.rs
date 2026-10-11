@@ -206,6 +206,7 @@ pub fn optimized(
 fn inverted(body: &LirBody) -> LirBody {
     let mut blocks = body.blocks.clone();
     let mut changed = false;
+    let mut odds: Option<std::sync::Arc<crate::analysis::frequency::Frequency>> = None;
     for index in 0..blocks.len() {
         let (last, before) = _real_tail(&blocks[index]);
         let (Some(last), Some(branch)) = (last, before) else { continue };
@@ -219,13 +220,51 @@ fn inverted(body: &LirBody) -> LirBody {
             || branch_what.op != Operation::Branch
             || branch_what.indirect
             || branch_what.target.is_none()
-            || branch_what.target != after
             || last_what.target.is_none()
             || blocks[index].succ.len() != 2
         {
             continue;
         }
         let Some(opposite) = opposite else { continue };
+        if branch_what.target != after {
+            // Neither way is the block laid out next: the likelier one is the
+            // conditional jump, so that the trip that goes on pays one taken
+            // branch, not a branch not taken and a jump (the loop that went
+            // round by `je exit; jmp top`).
+            let (taken, onward) = (branch_what.target.expect("a target"), last_what.target.expect("a target"));
+            let busy = odds.get_or_insert_with(|| crate::analysis::frequency::Frequency::of(body));
+            if after == last_what.target || busy.edge(blocks[index].at, onward) <= busy.edge(blocks[index].at, taken) {
+                continue;
+            }
+            let flipped = Arc::new(Insn {
+                what: Some(Semantics {
+                    name: Some((*opposite).to_owned()),
+                    target: Some(onward),
+                    ..branch_what.clone()
+                }),
+                ..(*branch).clone()
+            });
+            let jump = Arc::new(Insn {
+                what: Some(Semantics { target: Some(taken), ..last_what.clone() }),
+                ..(*last).clone()
+            });
+            let insns = blocks[index]
+                .insns
+                .iter()
+                .map(|one| {
+                    if Arc::ptr_eq(one, &branch) {
+                        Arc::clone(&flipped)
+                    } else if Arc::ptr_eq(one, &last) {
+                        Arc::clone(&jump)
+                    } else {
+                        Arc::clone(one)
+                    }
+                })
+                .collect();
+            blocks[index] = blocks[index].with_insns(insns);
+            changed = true;
+            continue;
+        }
         let flipped = Arc::new(Insn {
             what: Some(Semantics {
                 name: Some((*opposite).to_owned()),
