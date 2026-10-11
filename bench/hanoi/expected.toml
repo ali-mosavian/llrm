@@ -1,4 +1,4 @@
-reason = "hanoi (c, nib) -O2/-Os: equal calls to a function that touches no memory are one (self-recursive memory(none), GVN numbers the call, merged before tail recursion makes it a loop): 188,403 -> 111 instructions at c -O2. The row now measures a const recursion folded, not recursion."
+reason = "(x + a) + a is x + (a << 1): hanoi's two recursive calls are one call once the permuted arguments are dead, so h + 1 + h is 2h + 1 (#1432)"
 blessed = "2026-10-11"
 
 [bas.O2]
@@ -17,30 +17,30 @@ bss_bytes = 0
 kernel_ms = 5.691
 
 [c.O2]
-instructions = 111
+instructions = 98
 memory_operands = 0
-code_bytes = 39
+code_bytes = 37
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 111
+instructions = 98
 memory_operands = 0
-code_bytes = 39
+code_bytes = 37
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 112
+instructions = 99
 memory_operands = 0
-code_bytes = 42
+code_bytes = 40
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 112
+instructions = 99
 memory_operands = 0
-code_bytes = 42
+code_bytes = 40
 data_bytes = 0
 bss_bytes = 0
 
