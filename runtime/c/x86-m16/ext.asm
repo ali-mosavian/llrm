@@ -4,6 +4,8 @@
 .386
 
 extrn _llrm_os_open:far
+extrn _llrm_os_create:far
+extrn _llrm_os_close:far
 extrn _llrm_os_read:far
 extrn _llrm_os_write_file:far
 extrn _llrm_os_exit:far
@@ -109,6 +111,71 @@ done:
     ret
 _input_read endp
 
+; Files by name, in the current directory. int file_open(const char *name, int mode): mode 0 opens an existing file
+; to read, 1 creates (or empties) one to write; a handle, or below zero on an error. int file_read(int handle,
+; char *buffer, int count) and int file_write(int handle, const char *buffer, int count): the bytes moved, 0 at the
+; end of a file being read, below zero on an error. int file_close(int handle): 0.
+public _file_open
+_file_open proc far
+    push bp
+    mov bp, sp
+    cmp word ptr [bp+8], 0
+    jne fo_create
+    push 0
+    push ds
+    push word ptr [bp+6]
+    call far ptr _llrm_os_open
+    add sp, 6
+    pop bp
+    ret
+fo_create:
+    push ds
+    push word ptr [bp+6]
+    call far ptr _llrm_os_create
+    add sp, 4
+    pop bp
+    ret
+_file_open endp
+
+public _file_read
+_file_read proc far
+    push bp
+    mov bp, sp
+    push word ptr [bp+10]
+    push ds
+    push word ptr [bp+8]
+    push word ptr [bp+6]
+    call far ptr _llrm_os_read
+    add sp, 8
+    pop bp
+    ret
+_file_read endp
+
+public _file_write
+_file_write proc far
+    push bp
+    mov bp, sp
+    push word ptr [bp+10]
+    push ds
+    push word ptr [bp+8]
+    push word ptr [bp+6]
+    call far ptr _llrm_os_write_file
+    add sp, 8
+    pop bp
+    ret
+_file_write endp
+
+public _file_close
+_file_close proc far
+    push bp
+    mov bp, sp
+    push word ptr [bp+6]
+    call far ptr _llrm_os_close
+    add sp, 2
+    pop bp
+    ret
+_file_close endp
+
 ; int keep(int x)
 public _keep
 _keep proc far
@@ -199,6 +266,58 @@ input_read_ proc far
     retf
 input_read_ endp
 
+public file_open_
+file_open_ proc far
+    push bx
+    push cx
+    push dx
+    push ax
+    call far ptr _file_open
+    add sp, 4
+    pop cx
+    pop bx
+    retf
+file_open_ endp
+
+; Three arguments: AX, DX, BX.
+public file_read_
+file_read_ proc far
+    push cx
+    push bx
+    push dx
+    push ax
+    call far ptr _file_read
+    add sp, 6
+    pop cx
+    retf
+file_read_ endp
+
+public file_write_
+file_write_ proc far
+    push cx
+    push bx
+    push dx
+    push ax
+    call far ptr _file_write
+    add sp, 6
+    pop cx
+    retf
+file_write_ endp
+
+public file_close_
+file_close_ proc far
+    push bx
+    push cx
+    push dx
+    push ax
+    call far ptr _file_close
+    add sp, 2
+    pop dx
+    pop cx
+    pop bx
+    retf
+file_close_ endp
+
 public keep_
 keep_ proc far
     retf
@@ -226,6 +345,44 @@ _input_read@3 proc far
     add sp, 4
     retf
 _input_read@3 endp
+
+public _file_open@3
+_file_open@3 proc far
+    push dx
+    push ax
+    call far ptr _file_open
+    add sp, 4
+    retf
+_file_open@3 endp
+
+; Three arguments: AX, DX, CX.
+public _file_read@3
+_file_read@3 proc far
+    push cx
+    push dx
+    push ax
+    call far ptr _file_read
+    add sp, 6
+    retf
+_file_read@3 endp
+
+public _file_write@3
+_file_write@3 proc far
+    push cx
+    push dx
+    push ax
+    call far ptr _file_write
+    add sp, 6
+    retf
+_file_write@3 endp
+
+public _file_close@3
+_file_close@3 proc far
+    push ax
+    call far ptr _file_close
+    add sp, 2
+    retf
+_file_close@3 endp
 
 public _keep@3
 _keep@3 proc far

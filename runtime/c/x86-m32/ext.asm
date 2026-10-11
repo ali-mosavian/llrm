@@ -6,6 +6,8 @@
 .model flat
 
 extrn _llrm_os_open:near
+extrn _llrm_os_create:near
+extrn _llrm_os_close:near
 extrn _llrm_os_read:near
 extrn _llrm_os_write_file:near
 extrn _llrm_os_exit:near
@@ -113,6 +115,85 @@ done:
     ret
 input_read_ endp
 
+; Files by name, in the current directory. int file_open(const char *name, int mode): mode 0 opens an existing file
+; to read, 1 creates (or empties) one to write; a handle, or below zero on an error. int file_read(int handle,
+; char *buffer, int count) and int file_write(int handle, const char *buffer, int count): the bytes moved, 0 at the
+; end of a file being read, below zero on an error. int file_close(int handle): 0. Arguments in EAX, EDX, EBX.
+public file_open_
+file_open_ proc
+    push ebx
+    push ecx
+    push esi
+    push edi
+    test edx, edx
+    jnz fo_create
+    push 0
+    push eax
+    call _llrm_os_open
+    add esp, 8
+    jmp short fo_done
+fo_create:
+    push eax
+    call _llrm_os_create
+    add esp, 4
+fo_done:
+    movsx eax, ax
+    pop edi
+    pop esi
+    pop ecx
+    pop ebx
+    ret
+file_open_ endp
+
+public file_read_
+file_read_ proc
+    push ecx
+    push esi
+    push edi
+    push ebx
+    push edx
+    push eax
+    call _llrm_os_read
+    add esp, 12
+    pop edi
+    pop esi
+    pop ecx
+    ret
+file_read_ endp
+
+public file_write_
+file_write_ proc
+    push ecx
+    push esi
+    push edi
+    push ebx
+    push edx
+    push eax
+    call _llrm_os_write_file
+    add esp, 12
+    pop edi
+    pop esi
+    pop ecx
+    ret
+file_write_ endp
+
+public file_close_
+file_close_ proc
+    push ebx
+    push ecx
+    push esi
+    push edi
+    push eax
+    call _llrm_os_close
+    add esp, 4
+    movsx eax, ax
+    pop edi
+    pop esi
+    pop ecx
+    pop ebx
+    ret
+file_close_ endp
+
 ; int keep(int x), long keep32(long x): opaque to the optimizer, which cannot see through a call. x is in EAX,
 ; where the answer goes.
 public keep_
@@ -138,6 +219,41 @@ _input_read proc
     mov edx, dword ptr [esp+8]
     jmp input_read_
 _input_read endp
+
+public _file_open
+_file_open proc
+    mov eax, dword ptr [esp+4]
+    mov edx, dword ptr [esp+8]
+    jmp file_open_
+_file_open endp
+
+public _file_read
+_file_read proc
+    push ebx
+    mov eax, dword ptr [esp+8]
+    mov edx, dword ptr [esp+12]
+    mov ebx, dword ptr [esp+16]
+    call file_read_
+    pop ebx
+    ret
+_file_read endp
+
+public _file_write
+_file_write proc
+    push ebx
+    mov eax, dword ptr [esp+8]
+    mov edx, dword ptr [esp+12]
+    mov ebx, dword ptr [esp+16]
+    call file_write_
+    pop ebx
+    ret
+_file_write endp
+
+public _file_close
+_file_close proc
+    mov eax, dword ptr [esp+4]
+    jmp file_close_
+_file_close endp
 
 public _keep
 _keep proc

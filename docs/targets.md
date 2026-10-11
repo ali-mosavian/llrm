@@ -162,7 +162,7 @@ right to left in dword slots, the caller removes them, symbols `_name`, EBX, ESI
 EBP preserved. The OS layer (`_llrm_os_*`) and `main` are cdecl32: the layer's assembly
 and the start-up call them with stack arguments whatever a language's default is. Nib's
 `"c"` is the convention of an unmarked C function, the target's default; the C test glue
-(`report`, `keep`, `input_read`) is written in it. The direction flag is clear and the
+(`report`, `keep`, `input_read`, `file_open`, `file_read`, `file_write`, `file_close`) is written in it. The direction flag is clear and the
 x87 stack empty on entry and return; results are in EAX, EDX:EAX for 64 bits and ST0 for
 floats; structs are packed to 4 bytes. Where the C ABI differs from Open Watcom's: none
 now; `watcall32` returns a struct through ESI as `wcc386` does.
