@@ -2122,6 +2122,7 @@ mod tests {
                 default: llrm_target::object::Format::Omf,
                 bitness: 32,
                 header: vec![".386".to_owned(), ".model flat".to_owned()],
+                dwarf_version: llrm_target::object::DEFAULT_DWARF_VERSION,
             },
             code: "T_TEXT".into(),
             names: no_names(),

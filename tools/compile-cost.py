@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What it costs llrm-c to compile: user-space instructions per file at -O1, -O2 and -Os.
+"""What it costs llrm-c to compile: user-space instructions per file at -O1, -O2, -O3 and -Os.
 
     tools/compile-cost.py [--noise] [llrm-c]     print the measurement (tools/measure.py compares it with the merge-base's)
 
@@ -24,7 +24,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))  # the target the comparison is for owns its programs and flags
-LEVELS = ("-O1", "-O2", "-Os")
+LEVELS = ("-O1", "-O2", "-O3", "-Os")
 SCRATCH = os.environ.get("CARGO_TARGET_DIR")  # never /tmp
 MODULES = ("host", "render", "model", "game", "sound", "ui")
 
