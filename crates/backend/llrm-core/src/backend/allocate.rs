@@ -512,6 +512,49 @@ impl LiveAt for LiveRows {
     }
 }
 
+/// Where a value is live, from its segments: live into a block when a segment
+/// covers the block's first slot, out of it when one reaches its end (a use at
+/// the last instruction ends a slot before it). The facts the allocator keeps
+/// already say it, so a split asks them and no rows are made of the body.
+pub struct IntervalLive<'a> {
+    pub live: &'a LiveRanges,
+    pub index: &'a Indexes,
+}
+
+impl LiveAt for IntervalLive<'_> {
+    fn live_in(
+        &self,
+        block: i64,
+        value: u32,
+    ) -> bool {
+        let first = self.index.span[&block].0;
+        self.live
+            .get(&value)
+            .is_some_and(
+                |one| {
+                    let at = one.segments.partition_point(|seg| seg.start <= first);
+                    at > 0 && one.segments[at - 1].end > first
+                },
+            )
+    }
+
+    fn live_out(
+        &self,
+        block: i64,
+        value: u32,
+    ) -> bool {
+        let last = self.index.span[&block].1;
+        self.live
+            .get(&value)
+            .is_some_and(
+                |one| {
+                    let at = one.segments.partition_point(|seg| seg.start < last);
+                    at > 0 && one.segments[at - 1].end >= last
+                },
+            )
+    }
+}
+
 impl LiveAt for (&Live, &Live) {
     fn live_in(
         &self,
@@ -1548,7 +1591,6 @@ fn _allocated(
     // and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
     let mut splits_made = 0_usize;
-    let mut placing: Option<LiveRows> = None;
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -1729,10 +1771,20 @@ fn _allocated(
         if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
             let _split = llrm_support::debug::span("regalloc split");
             let bundles = spillplacement::edge_bundles(&body);
-            let live_sets =
-                placing.get_or_insert_with(|| llrm_support::debug::timed("split placing", || live_rows(&body)));
-            let spread =
-                llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &*live_sets));
+            let live_sets = IntervalLive { live: &facts.live, index: &facts.index };
+            if llrm_support::env_set("LLRM_CHECK_PLACING") {
+                let rows = live_rows_by(&body, |one| one == value);
+                for block in &body.blocks {
+                    assert!(
+                        live_sets.live_in(block.at, value) == rows.live_in(block.at, value)
+                            && live_sets.live_out(block.at, value) == rows.live_out(block.at, value),
+                        "{}: value#{value} is live at block {:#x} by its segments as the rows have it not",
+                        body.name,
+                        block.at
+                    );
+                }
+            }
+            let spread = llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &live_sets));
             let occupied = llrm_support::debug::timed("split occupied", || {
                 splitkit::Occupied::new(
                     union
@@ -1750,7 +1802,7 @@ fn _allocated(
                     &facts.masks,
                 )
             });
-            let sets: &dyn LiveAt = &*live_sets;
+            let sets: &dyn LiveAt = &live_sets;
             // A range in one block splits locally; any other by region, and
             // failing that block by block. Only a piece that pays is carved.
             let regions: Vec<splitkit::Region> = match llrm_support::debug::timed("split local", || {
@@ -1963,7 +2015,6 @@ fn _allocated(
         // What is done of the rewrite besides its facts: the pins, the placed
         // values it disturbs, the queue.
         let _after = llrm_support::debug::span("regalloc after rewrite");
-        placing = None;
         // `fixed` keeps the first answer of every body this run has seen, so
         // the blocks the rewrite left as they were add nothing to it: a
         // value met in one is already there.
