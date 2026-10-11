@@ -16,14 +16,14 @@ typedef struct DM {
 } DM;
 
 typedef struct AD {
-    u16 data_off;    /* FHD_oData */
-    u16 data_seg;    /* FHD_hData: DS for a near array, 0 when none */
-    u16 next;        /* FHD_pNext: the next descriptor of the far heap */
-    u16 size;        /* FHD_cPara: paragraphs, or bytes for a near array */
+    u16 data_off; /* FHD_oData */
+    u16 data_seg; /* FHD_hData: DS for a near array, 0 when none */
+    u16 next;     /* FHD_pNext: the next descriptor of the far heap */
+    u16 size;     /* FHD_cPara: paragraphs, or bytes for a near array */
     u8 dims;
     u8 features;
-    u16 adjusted;    /* AD_oAdjusted: the offset of element (0,...,0) */
-    u16 elem;        /* AD_cbElement */
+    u16 adjusted; /* AD_oAdjusted: the offset of element (0,...,0) */
+    u16 elem;     /* AD_cbElement */
     DM dm[1];
 } AD;
 

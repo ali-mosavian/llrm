@@ -10,8 +10,8 @@ void str_assign(SD *source, SD *destination)
         str_adopt(destination, source);
         return;
     }
-    /* Copied straight into the destination, which gives up its own string first: a temporary between
-       would be one more allocation and copy. */
+    /* Copied straight into the destination, which gives up its own string
+       first: a temporary between would be one more allocation and copy. */
     if (source != destination) {
         uword len = source->len;
 
@@ -34,7 +34,7 @@ void B_SASS(SD *source, SD *destination)
 }
 
 /* B$SCAT: the two strings joined in a temporary; a temporary operand is freed.
-   */
+ */
 SD *B_SCAT(SD *left, SD *right)
 {
     long length = (long)left->len + right->len;

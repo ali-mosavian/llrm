@@ -16,8 +16,8 @@ void B_SLEP(long seconds)
 {
     long start = dev_clock();
 
-    while (!llrm_os_console_key_ready()
-           && (seconds == 0 || elapsed(start) < seconds * HUNDREDTHS))
+    while (!llrm_os_console_key_ready() &&
+           (seconds == 0 || elapsed(start) < seconds * HUNDREDTHS))
         ;
 }
 

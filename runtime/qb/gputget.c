@@ -46,7 +46,8 @@ void B_GGET(qb_data_ptr data, const AD *ad)
     ((u16 QB_FAR *)out)[0] = width * bits;
     ((u16 QB_FAR *)out)[1] = height;
     out += HEADER;
-    if (left >= 0 && top >= 0 && (unsigned)left + width <= gfx_current->width && (unsigned)top + height <= gfx_current->height) {
+    if (left >= 0 && top >= 0 && (unsigned)left + width <= gfx_current->width &&
+        (unsigned)top + height <= gfx_current->height) {
         gd_get((unsigned)left, (unsigned)top, width, height, out);
         return;
     }
@@ -66,7 +67,8 @@ void B_GGET(qb_data_ptr data, const AD *ad)
                         out[plane * per_plane + (x >> 3)] |= 0x80 >> (x & 7);
                 }
             } else {
-                /* a pixel is `bits` wide in the row, the leftmost in the high bits */
+                /* a pixel is `bits` wide in the row, the leftmost in the high
+                 * bits */
                 unsigned at = x * bits;
 
                 out[at >> 3] |= color << (8 - bits - (at & 7));
@@ -81,19 +83,24 @@ void B_GPUT(qb_data_ptr data, const AD *ad, short how)
 {
     Bytes in = (Bytes)data;
     unsigned planes = gfx_current->planes, bits = gfx_current->bits;
-    unsigned width = ((u16 QB_FAR *)in)[0] / bits, height = ((u16 QB_FAR *)in)[1];
+    unsigned width = ((u16 QB_FAR *)in)[0] / bits,
+             height = ((u16 QB_FAR *)in)[1];
     unsigned per_plane = row_bytes(width), x, y, plane;
 
-    if (how < PUT_OR || how > PUT_XOR
-        || HEADER + (unsigned long)height * planes * per_plane
-               > array_bytes(ad))
+    if (how < PUT_OR || how > PUT_XOR ||
+        HEADER + (unsigned long)height * planes * per_plane > array_bytes(ad))
         qb_error(BE_ILLFUN);
     in += HEADER;
-    if (width && height && gfx_x1 >= 0 && gfx_y1 >= 0 && (unsigned)gfx_x1 + width <= gfx_current->width
-        && (unsigned)gfx_y1 + height <= gfx_current->height) {
+    if (width && height && gfx_x1 >= 0 && gfx_y1 >= 0 &&
+        (unsigned)gfx_x1 + width <= gfx_current->width &&
+        (unsigned)gfx_y1 + height <= gfx_current->height) {
         /* on the screen: whole rows */
         gd_put((unsigned)gfx_x1, (unsigned)gfx_y1, width, height, in,
-               how == PUT_OR ? 2 : how == PUT_AND ? 1 : how == PUT_XOR ? 3 : 0, how == PUT_PRESET);
+               how == PUT_OR    ? 2
+               : how == PUT_AND ? 1
+               : how == PUT_XOR ? 3
+                                : 0,
+               how == PUT_PRESET);
         return;
     }
     for (y = 0; y < height; y++) {
@@ -109,7 +116,8 @@ void B_GPUT(qb_data_ptr data, const AD *ad, short how)
             } else {
                 unsigned at = x * bits;
 
-                color = in[at >> 3] >> (8 - bits - (at & 7)) & ((1u << bits) - 1);
+                color =
+                    in[at >> 3] >> (8 - bits - (at & 7)) & ((1u << bits) - 1);
             }
             if (how == PUT_PRESET)
                 color = ~color & (gfx_current->colors - 1);

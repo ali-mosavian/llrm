@@ -7,17 +7,17 @@
 
 /* A screen mode of 16 colours in planes. */
 typedef struct GfxMode {
-    byte number;           /* of SCREEN */
-    byte bios;             /* the BIOS's own */
+    byte number; /* of SCREEN */
+    byte bios;   /* the BIOS's own */
     unsigned width, height;
-    byte cell_height;      /* of a text character */
-    double aspect;         /* height of a pixel over its width, times 1 */
-    int fg_max, bg_max;    /* the largest numbers COLOR takes, -1 for none */
-    byte cga;              /* COLOR sets the CGA palette: background, palette */
-    byte dac;              /* PALETTE takes a mix of red, green and blue (VGA) */
-    unsigned colors;       /* attributes */
-    byte bits;             /* bits of a pixel in each of its planes (GET and PUT) */
-    byte planes;           /* 4 for the EGA and VGA modes with 16 colours, else 1 */
+    byte cell_height;   /* of a text character */
+    double aspect;      /* height of a pixel over its width, times 1 */
+    int fg_max, bg_max; /* the largest numbers COLOR takes, -1 for none */
+    byte cga;           /* COLOR sets the CGA palette: background, palette */
+    byte dac;           /* PALETTE takes a mix of red, green and blue (VGA) */
+    unsigned colors;    /* attributes */
+    byte bits;   /* bits of a pixel in each of its planes (GET and PUT) */
+    byte planes; /* 4 for the EGA and VGA modes with 16 colours, else 1 */
 } GfxMode;
 
 extern const GfxMode *gfx_current;
@@ -43,8 +43,9 @@ byte gfx_attribute(int color);
 
 /* Pixels, clipped to the screen. */
 void gfx_plot(int x, int y, byte color, byte operation);
-/* Puts the box between the two corners in order (left and top first) and cuts it to the screen: 0 when none of it is
-   on the screen.  A primitive does this once and then fills its rows without clipping them. */
+/* Puts the box between the two corners in order (left and top first) and cuts
+   it to the screen: 0 when none of it is on the screen.  A primitive does this
+   once and then fills its rows without clipping them. */
 int gfx_clip_box(int *x1, int *y1, int *x2, int *y2);
 /* The colour of a pixel, or -1 outside the screen. */
 int gfx_pixel(int x, int y);
@@ -61,8 +62,8 @@ void gfx_line_between(int color, int style, int how);
 /* Raster operations, as the OS layer takes them. */
 enum { OP_SET, OP_AND, OP_OR, OP_XOR };
 
-/* The block a fill keeps its queue of seeds in (the target's paintq.c): its address, and in *bytes its size.  It is
-   held until qb_paint_queue_close. */
+/* The block a fill keeps its queue of seeds in (the target's paintq.c): its
+   address, and in *bytes its size.  It is held until qb_paint_queue_close. */
 void *qb_paint_queue_open(unsigned long *bytes);
 void qb_paint_queue_close(void);
 

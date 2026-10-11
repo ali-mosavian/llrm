@@ -40,16 +40,17 @@ void B_CASP(float ratio)
 typedef struct Circle {
     int cx, cy;
     long radius;
-    long scale;             /* the aspect, in 256ths, of the scaled axis */
+    long scale; /* the aspect, in 256ths, of the scaled axis */
     int scale_x;
-    long points;            /* n: of an octant */
+    long points; /* n: of an octant */
     byte color;
     GdFill fill;
     int arc;
     unsigned long from, to; /* counts round the circle, from <= to */
     byte outside;           /* the arc is what lies outside from..to */
-    byte spoke_from, spoke_to;     /* a line from that end of the arc to the centre */
-    byte drawn_from, drawn_to;     /* and whether it has been drawn */
+    byte spoke_from,
+        spoke_to; /* a line from that end of the arc to the centre */
+    byte drawn_from, drawn_to; /* and whether it has been drawn */
 } Circle;
 
 static const double pi = 3.141592653589793;
@@ -124,7 +125,8 @@ static void plot(Circle *c, long x, long y, unsigned long count)
         if (!endpoint && between == c->outside)
             return;
     }
-    if (px >= 0 && py >= 0 && (unsigned)px < gfx_current->width && (unsigned)py < gfx_current->height)
+    if (px >= 0 && py >= 0 && (unsigned)px < gfx_current->width &&
+        (unsigned)py < gfx_current->height)
         c->fill.dot(&c->fill, (unsigned)px, (unsigned)py);
 }
 
@@ -161,15 +163,19 @@ static void rim(Circle *c)
     }
 }
 
-/* The circle without start or end angles, as QB plots one: whole integer steps, the aspect's scaling a running sum of 256ths, and
-   the eight points of a step all together, with no test of each against the screen when the circle is on it. */
+/* The circle without start or end angles, as QB plots one: whole integer steps,
+   the aspect's scaling a running sum of 256ths, and the eight points of a step
+   all together, with no test of each against the screen when the circle is on
+   it. */
 static void rim_plain(Circle *c)
 {
     int x = (int)c->radius, y = 0, sum = 1 - x, scale = (int)c->scale;
     unsigned long ax = (unsigned long)x * scale + FIXED / 2, ay = FIXED / 2;
-    int reach_x = (int)(c->scale_x ? (ax >> 8) : (unsigned long)x), reach_y = (int)(c->scale_x ? (unsigned long)x : (ax >> 8));
-    int inside = c->cx - reach_x >= 0 && c->cy - reach_y >= 0 && (unsigned)(c->cx + reach_x) < gfx_current->width
-                 && (unsigned)(c->cy + reach_y) < gfx_current->height;
+    int reach_x = (int)(c->scale_x ? (ax >> 8) : (unsigned long)x),
+        reach_y = (int)(c->scale_x ? (unsigned long)x : (ax >> 8));
+    int inside = c->cx - reach_x >= 0 && c->cy - reach_y >= 0 &&
+                 (unsigned)(c->cx + reach_x) < gfx_current->width &&
+                 (unsigned)(c->cy + reach_y) < gfx_current->height;
 
     if (!inside) {
         rim(c);
@@ -179,9 +185,11 @@ static void rim_plain(Circle *c)
         int sx = (int)(ax >> 8), sy = (int)(ay >> 8);
 
         if (c->scale_x)
-            c->fill.octet(&c->fill, (unsigned)c->cx, (unsigned)c->cy, sx, y, sy, x);
+            c->fill.octet(&c->fill, (unsigned)c->cx, (unsigned)c->cy, sx, y, sy,
+                          x);
         else
-            c->fill.octet(&c->fill, (unsigned)c->cx, (unsigned)c->cy, x, sy, y, sx);
+            c->fill.octet(&c->fill, (unsigned)c->cx, (unsigned)c->cy, x, sy, y,
+                          sx);
         if (y >= x)
             break;
         if (sum >= 0) {
@@ -212,7 +220,8 @@ void B_CIRC(float radius, short color)
     Circle c;
     double ratio = has_aspect ? aspect_ratio : gfx_current->aspect;
     double from = 0, to = 2 * pi;
-    int spoke_from = 0, spoke_to = 0, arc = has_start || has_end, has_to = has_end;
+    int spoke_from = 0, spoke_to = 0, arc = has_start || has_end,
+        has_to = has_end;
 
     c.color = gfx_color(color);
     gd_fill_select(&c.fill, c.color, OP_SET);
@@ -245,7 +254,7 @@ void B_CIRC(float radius, short color)
             first = last;
             last = swap;
             c.outside = 1;
-            c.spoke_from = (byte)spoke_to;     /* the ends change places */
+            c.spoke_from = (byte)spoke_to; /* the ends change places */
             c.spoke_to = (byte)spoke_from;
         }
         if (first == last && (c.spoke_from || c.spoke_to))

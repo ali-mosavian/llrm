@@ -62,7 +62,8 @@ void *lh_data(LhEntry *entry)
 
 static uword entry_size(uword bytes)
 {
-    return (HEADER + bytes + FOOTER + sizeof(uword) - 1) & ~(uword)(sizeof(uword) - 1);
+    return (HEADER + bytes + FOOTER + sizeof(uword) - 1) &
+           ~(uword)(sizeof(uword) - 1);
 }
 
 static void zero(LhEntry *entry)
@@ -224,7 +225,7 @@ static void nh_ini(void)
     nh_init(first, top);
 }
 
-static Comp nh_comp = { 0, C_NH, { nh_ini } };
+static Comp nh_comp = {0, C_NH, {nh_ini}};
 
 #define XI_FN nh_xinit
 #include "xi.h"

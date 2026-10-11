@@ -169,7 +169,7 @@ static void close_fdb(Fdb *fdb)
 }
 
 /* B$CLOS: CLOSE #a, #b ... closes those channels, and a bare CLOSE every file.
-   */
+ */
 void file_close(const int *channels, unsigned count)
 {
     Fdb *fdb;
@@ -201,12 +201,8 @@ long B_FLOF(short channel)
 
 /* A record variable of `length` bytes, or the data of a string descriptor when
    the length is 0. */
-static void record_of(
-    qb_data_ptr record,
-    int length,
-    os_data_mut *data,
-    unsigned *bytes
-)
+static void record_of(qb_data_ptr record, int length, os_data_mut *data,
+                      unsigned *bytes)
 {
     if (length) {
         *data = (os_data_mut)record;
@@ -335,23 +331,57 @@ static void file_newline(void)
     out_fdb->column = 0;
 }
 
-static void file_init(void) {}
-static void file_erase(void) {}
-static void file_sync(void) {}
-static void file_cursor(int visible) { (void)visible; }
-static byte file_pos(void) { return out_fdb->column; }
-static byte file_line(void) { return 0; }
-static byte file_width(void) { return FILE_WIDTH; }
-static void file_color(int f, int b) { (void)f; (void)b; }
-static void file_locate(int r, int c, int k) { (void)r; (void)c; (void)k; }
-static void file_view(int t, int b) { (void)t; (void)b; }
-static void file_size(int c, int r) { (void)c; (void)r; }
+static void file_init(void)
+{
+}
+static void file_erase(void)
+{
+}
+static void file_sync(void)
+{
+}
+static void file_cursor(int visible)
+{
+    (void)visible;
+}
+static byte file_pos(void)
+{
+    return out_fdb->column;
+}
+static byte file_line(void)
+{
+    return 0;
+}
+static byte file_width(void)
+{
+    return FILE_WIDTH;
+}
+static void file_color(int f, int b)
+{
+    (void)f;
+    (void)b;
+}
+static void file_locate(int r, int c, int k)
+{
+    (void)r;
+    (void)c;
+    (void)k;
+}
+static void file_view(int t, int b)
+{
+    (void)t;
+    (void)b;
+}
+static void file_size(int c, int r)
+{
+    (void)c;
+    (void)r;
+}
 
 static const Driver file_driver = {
-    file_init, file_write, file_newline, file_erase, file_sync, file_cursor,
-    file_pos, file_line, file_width, file_color, file_locate, file_sync,
-    file_view, file_size
-};
+    file_init,   file_write, file_newline, file_erase, file_sync,
+    file_cursor, file_pos,   file_line,    file_width, file_color,
+    file_locate, file_sync,  file_view,    file_size};
 
 /* LPRINT: the statement's output goes to this file, a printer's. */
 void file_print_to(Fdb *fdb)
@@ -404,7 +434,8 @@ void B_DSKI(short channel)
 {
     Fdb *fdb = open_fdb(channel);
 
-    if (fdb->mode != MD_INPUT && fdb->mode != MD_RANDOM && fdb->mode != MD_BINARY)
+    if (fdb->mode != MD_INPUT && fdb->mode != MD_RANDOM &&
+        fdb->mode != MD_BINARY)
         qb_error(BE_FILEMODE);
     qb_input_file = fdb;
     qb_input_file_line = next_line;
@@ -418,7 +449,7 @@ static void close_all(void)
     file_close(NULL, 0);
 }
 
-static Comp comp = { 0, C_DK, { 0, 0, 0, 0, close_all } };
+static Comp comp = {0, C_DK, {0, 0, 0, 0, close_all}};
 
 #define XI_FN file_xinit
 #include "xi.h"

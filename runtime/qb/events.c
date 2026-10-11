@@ -12,13 +12,13 @@ enum { DEVICE_TIMER = 1, DEVICE_PLAY = 2 };
 enum { OFF, ON, STOP };
 
 typedef struct Trap {
-    short handler;   /* the compiler's number for the handler, 0 for none */
-    byte state;      /* OFF, ON, or STOP: an event is kept, the handler waits */
-    byte due;        /* an event happened that the handler has not run for */
-    byte running;    /* the handler is running: a second event waits for it */
-    long number;     /* TIMER: seconds between events; PLAY: the notes */
-    long next;       /* TIMER: when the next is, in hundredths of a second */
-    unsigned last;   /* PLAY: the notes the last look found */
+    short handler; /* the compiler's number for the handler, 0 for none */
+    byte state;    /* OFF, ON, or STOP: an event is kept, the handler waits */
+    byte due;      /* an event happened that the handler has not run for */
+    byte running;  /* the handler is running: a second event waits for it */
+    long number;   /* TIMER: seconds between events; PLAY: the notes */
+    long next;     /* TIMER: when the next is, in hundredths of a second */
+    unsigned last; /* PLAY: the notes the last look found */
 } Trap;
 
 static Trap timer_trap, play_trap;
@@ -27,7 +27,9 @@ extern unsigned music_waiting(void);
 
 static Trap *trap_of(short device)
 {
-    return device == DEVICE_TIMER ? &timer_trap : device == DEVICE_PLAY ? &play_trap : 0;
+    return device == DEVICE_TIMER  ? &timer_trap
+           : device == DEVICE_PLAY ? &play_trap
+                                   : 0;
 }
 
 /* B$EVAR: ON device(number) GOSUB the handler of that number; 0 takes the
@@ -36,7 +38,8 @@ void B_EVAR(short device, long number, short handler)
 {
     Trap *trap = trap_of(device);
 
-    if (!trap || (device == DEVICE_TIMER && handler && (number < 1 || number > LONGEST)))
+    if (!trap ||
+        (device == DEVICE_TIMER && handler && (number < 1 || number > LONGEST)))
         qb_error(BE_ILLFUN);
     trap->handler = handler;
     trap->number = number;
@@ -75,8 +78,8 @@ static void look(void)
         unsigned waiting = music_waiting();
 
         /* when the notes waiting go from the number to one less */
-        if (play_trap.last >= (unsigned long)play_trap.number
-            && waiting < (unsigned long)play_trap.number)
+        if (play_trap.last >= (unsigned long)play_trap.number &&
+            waiting < (unsigned long)play_trap.number)
             play_trap.due = 1;
         play_trap.last = waiting;
     }

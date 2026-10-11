@@ -133,15 +133,42 @@ void B_PEOS(void)
         using_ops->end(0);
 }
 
-void B_PCI2(short v) { number(v, COMMA); }
-void B_PSI2(short v) { number(v, SEMI); }
-void B_PEI2(short v) { number(v, EOL); }
-void B_PCI4(long v) { number(v, COMMA); }
-void B_PSI4(long v) { number(v, SEMI); }
-void B_PEI4(long v) { number(v, EOL); }
-void B_PCSD(SD *sd) { string(sd, COMMA); }
-void B_PSSD(SD *sd) { string(sd, SEMI); }
-void B_PESD(SD *sd) { string(sd, EOL); }
+void B_PCI2(short v)
+{
+    number(v, COMMA);
+}
+void B_PSI2(short v)
+{
+    number(v, SEMI);
+}
+void B_PEI2(short v)
+{
+    number(v, EOL);
+}
+void B_PCI4(long v)
+{
+    number(v, COMMA);
+}
+void B_PSI4(long v)
+{
+    number(v, SEMI);
+}
+void B_PEI4(long v)
+{
+    number(v, EOL);
+}
+void B_PCSD(SD *sd)
+{
+    string(sd, COMMA);
+}
+void B_PSSD(SD *sd)
+{
+    string(sd, SEMI);
+}
+void B_PESD(SD *sd)
+{
+    string(sd, EOL);
+}
 #pragma aux B_PEOS "B$PEOS"
 #pragma aux B_PCI2 "B$PCI2"
 #pragma aux B_PSI2 "B$PSI2"

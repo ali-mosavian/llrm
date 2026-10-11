@@ -124,7 +124,7 @@ static void fh_ini(void)
     bottom.next = 0;
 }
 
-static Comp fh_comp = { 0, C_FH, { fh_ini } };
+static Comp fh_comp = {0, C_FH, {fh_ini}};
 
 #define XI_FN fh_xinit
 #include "xi.h"

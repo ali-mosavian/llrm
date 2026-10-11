@@ -9,8 +9,8 @@ enum { MAX_DIGITS = 16 };
 /* A number as its sign, its leading digits and the exponent of ten that puts
    the decimal point before the first: value = 0.d1d2... * 10^exponent. */
 typedef struct Decimal {
-    char sign;                 /* ' ' or '-' */
-    char text[MAX_DIGITS];     /* no trailing zeros */
+    char sign;             /* ' ' or '-' */
+    char text[MAX_DIGITS]; /* no trailing zeros */
     unsigned count;
     int exponent;
 } Decimal;

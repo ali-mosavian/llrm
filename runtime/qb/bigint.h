@@ -10,8 +10,8 @@
 enum { BIG_LIMBS = 84 };
 
 typedef struct Big {
-    u16 limb[BIG_LIMBS];   /* least significant first */
-    unsigned used;         /* limbs in use; the rest are zero */
+    u16 limb[BIG_LIMBS]; /* least significant first */
+    unsigned used;       /* limbs in use; the rest are zero */
 } Big;
 
 /* Four working numbers shared by the conversions in i8out.c and fin.c, which

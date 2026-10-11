@@ -1,5 +1,6 @@
-/* The compiled module (its header at the start of its code, and the data area the header points at in the
-   module's data).  The portable code sees only the READ/DATA state. */
+/* The compiled module (its header at the start of its code, and the data area
+   the header points at in the module's data).  The portable code sees only the
+   READ/DATA state. */
 #ifndef QB_MODULE_H
 #define QB_MODULE_H
 

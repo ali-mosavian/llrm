@@ -2,7 +2,8 @@
    the layout. */
 #include "nhstutil.h"
 
-/* An entry is a header of one word, then its data; WORD is that word, QB's two bytes where a near pointer is two. */
+/* An entry is a header of one word, then its data; WORD is that word, QB's two
+ * bytes where a near pointer is two. */
 enum { NUMTEMPS = 20, WORD = sizeof(uword) };
 
 typedef struct StrEntry {
@@ -17,7 +18,7 @@ typedef struct Tmp {
 } Tmp;
 
 static StrEntry *str_first;
-static StrEntry *str_free;   /* where the last allocation left off: a hint */
+static StrEntry *str_free; /* where the last allocation left off: a hint */
 static char *str_end;
 
 int cur_level;
@@ -32,28 +33,33 @@ static void corrupt(void)
     qb_error(FE_CORRUPT);
 }
 
-/* The entry helpers are macros: each is a line or two, and a call costs more than they do on every string. */
+/* The entry helpers are macros: each is a line or two, and a call costs more
+ * than they do on every string. */
 
-/* A string takes whole words, so the entries (and the owner pointers in their headers) stay aligned. */
+/* A string takes whole words, so the entries (and the owner pointers in their
+ * headers) stay aligned. */
 #define EVEN(n) (((n) + WORD - 1) & ~(uword)(WORD - 1))
 #define IS_FREE(entry) ((entry)->header & 1)
 #define FREE_DATA(entry) ((entry)->header - 1)
 #define OWNER_OF(entry) ((SD *)(entry)->header)
 #define DATA_OF(entry) ((char *)((entry) + 1))
 #define ENTRY_OF(data) ((StrEntry *)(data) - 1)
-#define ENTRY_BYTES(entry) (WORD + (IS_FREE(entry) ? FREE_DATA(entry) : EVEN(OWNER_OF(entry)->len)))
+#define ENTRY_BYTES(entry)                                                     \
+    (WORD + (IS_FREE(entry) ? FREE_DATA(entry) : EVEN(OWNER_OF(entry)->len)))
 #define FOLLOWING(entry) ((StrEntry *)((char *)(entry) + ENTRY_BYTES(entry)))
 #define AT_END(entry) ((char *)(entry) >= str_end)
 #define MAKE_FREE(entry, bytes) ((entry)->header = (bytes) - WORD + 1)
 
 /* A string of `len` bytes is in string space when its data is between the
    constants and the boundary. */
-#define IN_SPACE(sd) ((sd)->len && (sd)->ptr >= (char *)str_first && (sd)->ptr < str_end)
+#define IN_SPACE(sd)                                                           \
+    ((sd)->len && (sd)->ptr >= (char *)str_first && (sd)->ptr < str_end)
 
-#define CHECK_OWNER(entry, owner) \
-    do { \
-        if (OWNER_OF(entry) != (owner) || (owner)->ptr != (char *)((entry) + 1)) \
-            corrupt(); \
+#define CHECK_OWNER(entry, owner)                                              \
+    do {                                                                       \
+        if (OWNER_OF(entry) != (owner) ||                                      \
+            (owner)->ptr != (char *)((entry) + 1))                             \
+            corrupt();                                                         \
     } while (0)
 
 /* B$STSetFree: the hint is kept only if it names the free entry that ends
@@ -202,7 +208,8 @@ found:
     owner->ptr = take(entry, bytes, owner);
     return owner->ptr;
 none:
-    /* The descriptor holds no string, so nothing later frees what is not there. */
+    /* The descriptor holds no string, so nothing later frees what is not there.
+     */
     owner->len = 0;
     owner->ptr = &nul_owner_slot;
     qb_error(BE_STRINGSP);
@@ -315,7 +322,7 @@ void str_all_tmp_free(int level)
 }
 
 /* B$STINIT: all of string space is one free entry, and every temporary is free.
-   */
+ */
 void str_init(char *first, char *end)
 {
     Tmp *tmp;

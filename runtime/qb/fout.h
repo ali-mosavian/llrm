@@ -17,8 +17,9 @@ unsigned fout_i4(long v, char *out);
    more places than that. */
 unsigned fout_real(double v, int is_double, char *out);
 
-/* The digits of a SINGLE (7 places) or DOUBLE (16), as PRINT rounds them, and the
-   exponent of ten of the last digit: v = d.text * 10^exponent as an integer. */
+/* The digits of a SINGLE (7 places) or DOUBLE (16), as PRINT rounds them, and
+   the exponent of ten of the last digit: v = d.text * 10^exponent as an
+   integer. */
 void fout_digits(double v, int is_double, Decimal *d, int *exponent);
 
 #endif

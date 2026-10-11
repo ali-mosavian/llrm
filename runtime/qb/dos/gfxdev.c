@@ -1,6 +1,6 @@
-/* The graphics screen: each kind of mode has its table of operations, the planar
-   EGA and VGA modes (QB rt/llega.asm, rt/llegasup.asm) and the linear 256-colour
-   one.
+/* The graphics screen: each kind of mode has its table of operations, the
+   planar EGA and VGA modes (QB rt/llega.asm, rt/llegasup.asm) and the linear
+   256-colour one.
 
    A write goes through the graphics controller's write mode 2, which spreads
    the low four bits of the byte written over the planes, under the bit mask and
@@ -10,7 +10,6 @@
    them back. */
 #include "device.h"
 #include "gfxdev.h"
-
 
 enum {
     GC_PORT = 0x3CE,
@@ -44,7 +43,7 @@ enum {
    from, so it must not be dropped. */
 typedef volatile u8 QB_FAR Video;
 static Video *screen = (Video *)QB_VIDEO_MEMORY(0xA000);
-static unsigned pitch = 80;       /* bytes of a row of one plane */
+static unsigned pitch = 80; /* bytes of a row of one plane */
 
 static void controller(unsigned index, unsigned value)
 {
@@ -59,9 +58,11 @@ static Video *byte_of(unsigned x, unsigned y)
 typedef struct GdOps {
     void (*plot)(unsigned x, unsigned y, unsigned color, unsigned operation);
     unsigned (*read)(unsigned x, unsigned y);
-    int (*search)(int x, int last, unsigned y, unsigned c1, unsigned c2, int match);
+    int (*search)(int x, int last, unsigned y, unsigned c1, unsigned c2,
+                  int match);
     void (*move_rows)(unsigned to, unsigned from, unsigned count);
-    void (*glyph)(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, unsigned foreground);
+    void (*glyph)(unsigned x, unsigned y, const u8 QB_FAR *bits,
+                  unsigned height, unsigned foreground);
 } GdOps;
 
 enum { KIND_PLANAR, KIND_LINEAR, KIND_PACKED4, KIND_PACKED2, KINDS };
@@ -78,8 +79,14 @@ int gd_set_mode(unsigned mode)
     dev_int10(&r);
     r.rax = GET_MODE;
     dev_int10(&r);
-    kind = mode == MODE_LINEAR ? KIND_LINEAR : mode == MODE_CGA4 ? KIND_PACKED4 : mode == MODE_CGA2 ? KIND_PACKED2 : KIND_PLANAR;
-    ops = kind == KIND_LINEAR ? &linear_ops : kind == KIND_PACKED4 ? &packed4_ops : kind == KIND_PACKED2 ? &packed2_ops : &planar_ops;
+    kind = mode == MODE_LINEAR ? KIND_LINEAR
+           : mode == MODE_CGA4 ? KIND_PACKED4
+           : mode == MODE_CGA2 ? KIND_PACKED2
+                               : KIND_PLANAR;
+    ops = kind == KIND_LINEAR    ? &linear_ops
+          : kind == KIND_PACKED4 ? &packed4_ops
+          : kind == KIND_PACKED2 ? &packed2_ops
+                                 : &planar_ops;
     pitch = mode == MODE_320 ? 40 : mode == MODE_LINEAR ? 320 : 80;
     if (mode == MODE_CGA4 || mode == MODE_CGA2)
         screen = (Video *)QB_VIDEO_MEMORY(0xB800);
@@ -88,7 +95,8 @@ int gd_set_mode(unsigned mode)
     if ((r.rax & 0x7F) != (mode & 0x7F))
         return 0;
 
-    if (mode > LAST_TEXT_MODE && mode != MODE_LINEAR && mode != MODE_CGA4 && mode != MODE_CGA2)
+    if (mode > LAST_TEXT_MODE && mode != MODE_LINEAR && mode != MODE_CGA4 &&
+        mode != MODE_CGA2)
         controller(GC_MODE, WRITE_MODE_2);
     return 1;
 }
@@ -129,11 +137,12 @@ void gd_palette_mix(unsigned index, unsigned red, unsigned green, unsigned blue)
 static void put(Video *at, unsigned mask, unsigned color)
 {
     controller(GC_BIT_MASK, mask);
-    (void)*at;                   /* loads the latches */
+    (void)*at; /* loads the latches */
     *at = (u8)color;
 }
 
-static void planar_plot(unsigned x, unsigned y, unsigned color, unsigned operation)
+static void planar_plot(unsigned x, unsigned y, unsigned color,
+                        unsigned operation)
 {
     if (operation)
         controller(GC_DATA_ROTATE, operation << FUNCTION_SHIFT);
@@ -163,7 +172,8 @@ static unsigned equal_to(Video *at, unsigned color)
     return *at;
 }
 
-static int planar_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match)
+static int planar_search(int x, int last, unsigned y, unsigned c1, unsigned c2,
+                         int match)
 {
     int back = last < x;
     unsigned first_byte = (unsigned)x >> 3, last_byte = (unsigned)last >> 3;
@@ -203,14 +213,14 @@ static void planar_move_rows(unsigned to, unsigned from, unsigned count)
     op.dst = byte_of(0, to);
     op.src = byte_of(0, from);
     op.count = count * pitch;
-    op.value = 1;                /* by bytes: a latch holds one */
+    op.value = 1; /* by bytes: a latch holds one */
     controller(GC_MODE, WRITE_MODE_1);
     dev_move(&op);
     controller(GC_MODE, WRITE_MODE_2);
 }
 
 static void planar_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits,
-              unsigned height, unsigned foreground)
+                         unsigned height, unsigned foreground)
 {
     Video *at = byte_of(x, y);
 
@@ -252,7 +262,8 @@ static unsigned combined(unsigned old, unsigned color, unsigned operation)
     }
 }
 
-static void linear_plot(unsigned x, unsigned y, unsigned color, unsigned operation)
+static void linear_plot(unsigned x, unsigned y, unsigned color,
+                        unsigned operation)
 {
     Video *at = pixel_at(x, y);
 
@@ -264,7 +275,8 @@ static unsigned linear_read(unsigned x, unsigned y)
     return *pixel_at(x, y);
 }
 
-static int linear_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match)
+static int linear_search(int x, int last, unsigned y, unsigned c1, unsigned c2,
+                         int match)
 {
     int step = last >= x ? 1 : -1;
     FillScan scan;
@@ -289,13 +301,16 @@ static void linear_move_rows(unsigned to, unsigned from, unsigned count)
     dev_move(&op);
 }
 
-/* A glyph row of 8 pixels, a nibble at a time: the 4 pixels of a nibble as 4 bytes, each 0xFF where the pixel is set. */
+/* A glyph row of 8 pixels, a nibble at a time: the 4 pixels of a nibble as 4
+ * bytes, each 0xFF where the pixel is set. */
 static const u32 nibble_bytes[16] = {
-    0x00000000UL, 0xFF000000UL, 0x00FF0000UL, 0xFFFF0000UL, 0x0000FF00UL, 0xFF00FF00UL, 0x00FFFF00UL, 0xFFFFFF00UL,
-    0x000000FFUL, 0xFF0000FFUL, 0x00FF00FFUL, 0xFFFF00FFUL, 0x0000FFFFUL, 0xFF00FFFFUL, 0x00FFFFFFUL, 0xFFFFFFFFUL
-};
+    0x00000000UL, 0xFF000000UL, 0x00FF0000UL, 0xFFFF0000UL,
+    0x0000FF00UL, 0xFF00FF00UL, 0x00FFFF00UL, 0xFFFFFF00UL,
+    0x000000FFUL, 0xFF0000FFUL, 0x00FF00FFUL, 0xFFFF00FFUL,
+    0x0000FFFFUL, 0xFF00FFFFUL, 0x00FFFFFFUL, 0xFFFFFFFFUL};
 
-static void linear_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, unsigned foreground)
+static void linear_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits,
+                         unsigned height, unsigned foreground)
 {
     u32 ink = (u32)(foreground & 0xFF) * 0x01010101UL;
     volatile u32 QB_FAR *at = (volatile u32 QB_FAR *)pixel_at(x, y);
@@ -309,13 +324,11 @@ static void linear_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned
     }
 }
 
-static const GdOps linear_ops = {
-    linear_plot, linear_read, linear_search, linear_move_rows, linear_glyph
-};
+static const GdOps linear_ops = {linear_plot, linear_read, linear_search,
+                                 linear_move_rows, linear_glyph};
 
-static const GdOps planar_ops = {
-    planar_plot, planar_read, planar_search, planar_move_rows, planar_glyph
-};
+static const GdOps planar_ops = {planar_plot, planar_read, planar_search,
+                                 planar_move_rows, planar_glyph};
 
 void gd_plot(unsigned x, unsigned y, unsigned color, unsigned operation)
 {
@@ -337,47 +350,59 @@ void gd_move_rows(unsigned to, unsigned from, unsigned count)
     ops->move_rows(to, from, count);
 }
 
-void gd_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, unsigned foreground)
+void gd_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height,
+              unsigned foreground)
 {
     ops->glyph(x, y, bits, height, foreground);
 }
 
-/* The CGA modes: pixels packed in bytes, `bits` each with the leftmost in the high
-   bits, the even rows of the screen in the first 8 KB and the odd rows in the
-   next, 80 bytes a row. */
+/* The CGA modes: pixels packed in bytes, `bits` each with the leftmost in the
+   high bits, the even rows of the screen in the first 8 KB and the odd rows in
+   the next, 80 bytes a row. */
 enum { CGA_ODD_ROWS = 0x2000, CGA_ROW_BYTES = 80 };
 
 static Video *packed_row(unsigned y)
 {
-    return screen + (y & 1 ? CGA_ODD_ROWS : 0) + (unsigned long)(y >> 1) * CGA_ROW_BYTES;
+    return screen + (y & 1 ? CGA_ODD_ROWS : 0) +
+           (unsigned long)(y >> 1) * CGA_ROW_BYTES;
 }
 
-/* The byte of pixel `x` in a row, and the shift that brings its pixel to the low
-   bits, for pixels of `bits` bits. */
+/* The byte of pixel `x` in a row, and the shift that brings its pixel to the
+   low bits, for pixels of `bits` bits. */
 static unsigned packed_shift(unsigned x, unsigned bits)
 {
     return 8 - bits - (x * bits & 7);
 }
 
-static void packed_plot(unsigned x, unsigned y, unsigned color, unsigned operation, unsigned bits)
+static void packed_plot(unsigned x, unsigned y, unsigned color,
+                        unsigned operation, unsigned bits)
 {
     Video *at = packed_row(y) + (x * bits >> 3);
     unsigned shift = packed_shift(x, bits), mask = ((1u << bits) - 1) << shift;
-    unsigned old = *at, new_bits = combined(old >> shift & (mask >> shift), color, operation) << shift & mask;
+    unsigned old = *at,
+             new_bits =
+                 combined(old >> shift & (mask >> shift), color, operation)
+                     << shift &
+                 mask;
 
     *at = (u8)(old & ~mask | new_bits);
 }
 
 static unsigned packed_read(unsigned x, unsigned y, unsigned bits)
 {
-    return *(packed_row(y) + (x * bits >> 3)) >> packed_shift(x, bits) & ((1u << bits) - 1);
+    return *(packed_row(y) + (x * bits >> 3)) >> packed_shift(x, bits) &
+           ((1u << bits) - 1);
 }
 
-/* The CGA modes' scan, a byte of pixels at a time (B$FSCC): the masks of the pixels of the first and the last byte that are in range
-   go to the kernel, which gives the first byte with a wanted pixel in range and which pixels of it, and the first of those, from
-   the left going right and from the right going left, is the pixel. */
-/* The search of a row of 2-bit or 1-bit pixels: the kernel makes the masks and the colour bytes and gives the pixel. */
-static int packed_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match, unsigned flags)
+/* The CGA modes' scan, a byte of pixels at a time (B$FSCC): the masks of the
+   pixels of the first and the last byte that are in range go to the kernel,
+   which gives the first byte with a wanted pixel in range and which pixels of
+   it, and the first of those, from the left going right and from the right
+   going left, is the pixel. */
+/* The search of a row of 2-bit or 1-bit pixels: the kernel makes the masks and
+ * the colour bytes and gives the pixel. */
+static int packed_search(int x, int last, unsigned y, unsigned c1, unsigned c2,
+                         int match, unsigned flags)
 {
     FillScan scan;
 
@@ -391,8 +416,10 @@ static int packed_search(int x, int last, unsigned y, unsigned c1, unsigned c2, 
     return scan.found;
 }
 
-/* PAINT's row in one go: the first pixel from `x` to `last` that is neither colour, and the run of non-`edge` pixels it is in. */
-int gd_run(int x, int last, unsigned y, unsigned edge, unsigned paint, int limit, int *left, int *right)
+/* PAINT's row in one go: the first pixel from `x` to `last` that is neither
+ * colour, and the run of non-`edge` pixels it is in. */
+int gd_run(int x, int last, unsigned y, unsigned edge, unsigned paint,
+           int limit, int *left, int *right)
 {
     FillScan scan;
     int open, l, r;
@@ -422,12 +449,14 @@ int gd_run(int x, int last, unsigned y, unsigned edge, unsigned paint, int limit
     return 1;
 }
 
-static int packed4_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match)
+static int packed4_search(int x, int last, unsigned y, unsigned c1, unsigned c2,
+                          int match)
 {
     return packed_search(x, last, y, c1, c2, match, 4);
 }
 
-static int packed2_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match)
+static int packed2_search(int x, int last, unsigned y, unsigned c1, unsigned c2,
+                          int match)
 {
     return packed_search(x, last, y, c1, c2, match, 0);
 }
@@ -437,7 +466,8 @@ static void packed_move_rows(unsigned to, unsigned from, unsigned count)
     BlockOp op;
 
     if (to < from && !((to ^ from) & 1)) {
-        /* a scroll by an even number of rows: the rows of each bank are one block of the bank */
+        /* a scroll by an even number of rows: the rows of each bank are one
+         * block of the bank */
         unsigned bank, offset, n;
 
         for (bank = 0; bank < 2; bank++) {
@@ -473,15 +503,20 @@ static void packed_move_rows(unsigned to, unsigned from, unsigned count)
 }
 
 /* The 4 pixels of a nibble as 4 pixels of 2 bits, 11 where the pixel is set. */
-static const u8 nibble_pairs[16] = {
-    0x00, 0x03, 0x0C, 0x0F, 0x30, 0x33, 0x3C, 0x3F, 0xC0, 0xC3, 0xCC, 0xCF, 0xF0, 0xF3, 0xFC, 0xFF
-};
+static const u8 nibble_pairs[16] = {0x00, 0x03, 0x0C, 0x0F, 0x30, 0x33,
+                                    0x3C, 0x3F, 0xC0, 0xC3, 0xCC, 0xCF,
+                                    0xF0, 0xF3, 0xFC, 0xFF};
 
-/* A glyph of 8 pixels a row on the CGA screen: 2 bytes a row of 2-bit pixels, 1 of 1-bit ones, the even and the odd rows in their banks. */
-static void packed_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, unsigned foreground, unsigned depth)
+/* A glyph of 8 pixels a row on the CGA screen: 2 bytes a row of 2-bit pixels, 1
+ * of 1-bit ones, the even and the odd rows in their banks. */
+static void packed_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits,
+                         unsigned height, unsigned foreground, unsigned depth)
 {
     Video *at = packed_row(y) + (x * depth >> 3);
-    unsigned ink = depth == 2 ? (foreground & 3) * 0x55 : foreground & 1 ? 0xFF : 0, row;
+    unsigned ink = depth == 2       ? (foreground & 3) * 0x55
+                   : foreground & 1 ? 0xFF
+                                    : 0,
+             row;
 
     for (; height; height--, bits++, y++) {
         row = *bits;
@@ -498,26 +533,47 @@ static void packed_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned
     }
 }
 
-static void packed4_plot(unsigned x, unsigned y, unsigned c, unsigned o) { packed_plot(x, y, c, o, 2); }
-static unsigned packed4_read(unsigned x, unsigned y) { return packed_read(x, y, 2); }
-static void packed4_glyph(unsigned x, unsigned y, const u8 QB_FAR *b, unsigned h, unsigned f) { packed_glyph(x, y, b, h, f, 2); }
-static void packed2_plot(unsigned x, unsigned y, unsigned c, unsigned o) { packed_plot(x, y, c, o, 1); }
-static unsigned packed2_read(unsigned x, unsigned y) { return packed_read(x, y, 1); }
-static void packed2_glyph(unsigned x, unsigned y, const u8 QB_FAR *b, unsigned h, unsigned f) { packed_glyph(x, y, b, h, f, 1); }
+static void packed4_plot(unsigned x, unsigned y, unsigned c, unsigned o)
+{
+    packed_plot(x, y, c, o, 2);
+}
+static unsigned packed4_read(unsigned x, unsigned y)
+{
+    return packed_read(x, y, 2);
+}
+static void packed4_glyph(unsigned x, unsigned y, const u8 QB_FAR *b,
+                          unsigned h, unsigned f)
+{
+    packed_glyph(x, y, b, h, f, 2);
+}
+static void packed2_plot(unsigned x, unsigned y, unsigned c, unsigned o)
+{
+    packed_plot(x, y, c, o, 1);
+}
+static unsigned packed2_read(unsigned x, unsigned y)
+{
+    return packed_read(x, y, 1);
+}
+static void packed2_glyph(unsigned x, unsigned y, const u8 QB_FAR *b,
+                          unsigned h, unsigned f)
+{
+    packed_glyph(x, y, b, h, f, 1);
+}
 
-static const GdOps packed4_ops = {
-    packed4_plot, packed4_read, packed4_search, packed_move_rows, packed4_glyph
-};
+static const GdOps packed4_ops = {packed4_plot, packed4_read, packed4_search,
+                                  packed_move_rows, packed4_glyph};
 
-static const GdOps packed2_ops = {
-    packed2_plot, packed2_read, packed2_search, packed_move_rows, packed2_glyph
-};
+static const GdOps packed2_ops = {packed2_plot, packed2_read, packed2_search,
+                                  packed_move_rows, packed2_glyph};
 
-/* Box fills: one routine for each kind of mode, chosen once by gd_fill_select with the operation patched into the box
-   loop (gdfill.asm), and run on a box that has already been clipped to the screen.  The geometry is worked out once for
-   the box; each row is a straight run of `op mem, imm`, with the byte at each end of a row patched where the pixels in
-   it are not all the box's.  An edge byte is old & keep ^ flip, which every operation is: set keeps nothing and flips
-   to the pattern; and keeps the pattern; or keeps what the pattern lacks and flips to it; xor keeps all and flips. */
+/* Box fills: one routine for each kind of mode, chosen once by gd_fill_select
+   with the operation patched into the box loop (gdfill.asm), and run on a box
+   that has already been clipped to the screen.  The geometry is worked out once
+   for the box; each row is a straight run of `op mem, imm`, with the byte at
+   each end of a row patched where the pixels in it are not all the box's.  An
+   edge byte is old & keep ^ flip, which every operation is: set keeps nothing
+   and flips to the pattern; and keeps the pattern; or keeps what the pattern
+   lacks and flips to it; xor keeps all and flips. */
 static unsigned edge_and(const GdFill *fill, unsigned mask)
 {
     return (fill->keep | ~mask) & 0xFF;
@@ -529,7 +585,8 @@ static unsigned edge_xor(const GdFill *fill, unsigned mask)
 }
 
 /* The 256-colour mode: a row is `count` bytes, `pitch` apart. */
-static void linear_box(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows)
+static void linear_box(const GdFill *fill, unsigned x, unsigned y,
+                       unsigned count, unsigned rows)
 {
     FillBox box;
 
@@ -542,18 +599,21 @@ static void linear_box(const GdFill *fill, unsigned x, unsigned y, unsigned coun
     dev_fill_box(&box);
 }
 
-/* The CGA modes: the bytes at the ends of a row keep the pixels the box does not cover.  Rows alternate between the two
-   banks of the screen. */
-static void packed_box(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows, unsigned bits)
+/* The CGA modes: the bytes at the ends of a row keep the pixels the box does
+   not cover.  Rows alternate between the two banks of the screen. */
+static void packed_box(const GdFill *fill, unsigned x, unsigned y,
+                       unsigned count, unsigned rows, unsigned bits)
 {
     unsigned last = x + count - 1;
     unsigned first_byte = x * bits >> 3, last_byte = last * bits >> 3;
-    unsigned left = 0xFF >> (x * bits & 7), right = 0xFF << (8 - bits - (last * bits & 7)) & 0xFF;
+    unsigned left = 0xFF >> (x * bits & 7),
+             right = 0xFF << (8 - bits - (last * bits & 7)) & 0xFF;
     Video *row = packed_row(y);
     FillBox box;
 
     if (first_byte == last_byte) {
-        unsigned keep = edge_and(fill, left & right), flip = edge_xor(fill, left & right);
+        unsigned keep = edge_and(fill, left & right),
+                 flip = edge_xor(fill, left & right);
 
         while (rows--) {
             Video *at = row + first_byte;
@@ -575,20 +635,24 @@ static void packed_box(const GdFill *fill, unsigned x, unsigned y, unsigned coun
     dev_fill_box(&box);
 }
 
-static void packed4_box(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows)
+static void packed4_box(const GdFill *fill, unsigned x, unsigned y,
+                        unsigned count, unsigned rows)
 {
     packed_box(fill, x, y, count, rows, 2);
 }
 
-static void packed2_box(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows)
+static void packed2_box(const GdFill *fill, unsigned x, unsigned y,
+                        unsigned count, unsigned rows)
 {
     packed_box(fill, x, y, count, rows, 1);
 }
 
-/* The planar modes: the colour goes through the controller's write mode 2, the operation through its function, and the
-   bytes at the ends of a row under a bit mask.  What a mask covers is written down a whole column, so the mask is
-   written three times for a box.  A set has the run of the box loop; the other operations read each byte to load the
-   latches (a dword read would load only the last one). */
+/* The planar modes: the colour goes through the controller's write mode 2, the
+   operation through its function, and the bytes at the ends of a row under a
+   bit mask.  What a mask covers is written down a whole column, so the mask is
+   written three times for a box.  A set has the run of the box loop; the other
+   operations read each byte to load the latches (a dword read would load only
+   the last one). */
 static void planar_edge(Video *at, unsigned rows, unsigned color)
 {
     while (rows--) {
@@ -598,9 +662,11 @@ static void planar_edge(Video *at, unsigned rows, unsigned color)
     }
 }
 
-static void planar_box(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows)
+static void planar_box(const GdFill *fill, unsigned x, unsigned y,
+                       unsigned count, unsigned rows)
 {
-    unsigned last = x + count - 1, color = fill->color, function = fill->operation;
+    unsigned last = x + count - 1, color = fill->color,
+             function = fill->operation;
     unsigned left = 0xFF >> (x & 7), right = 0xFF << (7 - (last & 7)) & 0xFF;
     unsigned between = (last >> 3) - (x >> 3);
     Video *at = byte_of(x, y);
@@ -640,9 +706,9 @@ static void planar_box(const GdFill *fill, unsigned x, unsigned y, unsigned coun
         controller(GC_DATA_ROTATE, 0);
 }
 
-static void (*const boxes[KINDS])(const GdFill *fill, unsigned x, unsigned y, unsigned count, unsigned rows) = {
-    planar_box, linear_box, packed4_box, packed2_box
-};
+static void (*const boxes[KINDS])(const GdFill *fill, unsigned x, unsigned y,
+                                  unsigned count, unsigned rows) = {
+    planar_box, linear_box, packed4_box, packed2_box};
 
 /* One pixel: what a box would write to it. */
 static void linear_dot_set(const GdFill *fill, unsigned x, unsigned y)
@@ -657,7 +723,8 @@ static void linear_dot(const GdFill *fill, unsigned x, unsigned y)
     *at = (u8)(*at & fill->keep ^ fill->flip);
 }
 
-static void packed_dot(const GdFill *fill, unsigned x, unsigned y, unsigned bits)
+static void packed_dot(const GdFill *fill, unsigned x, unsigned y,
+                       unsigned bits)
 {
     Video *at = packed_row(y) + (x * bits >> 3);
     unsigned mask = ((1u << bits) - 1) << (8 - bits - (x * bits & 7));
@@ -680,12 +747,14 @@ static void planar_dot(const GdFill *fill, unsigned x, unsigned y)
     Video *at = byte_of(x, y);
 
     controller(GC_BIT_MASK, 0x80 >> (x & 7));
-    (void)*at;                   /* loads the latches */
+    (void)*at; /* loads the latches */
     *at = (u8)fill->color;
 }
 
-/* Eight points of a circle step at once, without a call for each (set only: the dots' `color` and masks as they are). */
-static void linear_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
+/* Eight points of a circle step at once, without a call for each (set only: the
+ * dots' `color` and masks as they are). */
+static void linear_octet(const GdFill *fill, unsigned cx, unsigned cy, int u,
+                         int v, int w, int z)
 {
     Video *c = pixel_at(cx, cy), *a, *b;
     unsigned long vp = (unsigned long)v * pitch, zp = (unsigned long)z * pitch;
@@ -705,7 +774,8 @@ static void linear_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, in
     b[w] = color;
 }
 
-static void packed_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z, unsigned bits)
+static void packed_octet(const GdFill *fill, unsigned cx, unsigned cy, int u,
+                         int v, int w, int z, unsigned bits)
 {
     FillOct oct;
     unsigned ys[4], xs[4], i;
@@ -719,7 +789,8 @@ static void packed_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, in
     xs[2] = cx + w;
     xs[3] = cx - w;
     for (i = 0; i < 4; i++) {
-        oct.row[i] = (ys[i] & 1 ? CGA_ODD_ROWS : 0) + (ys[i] >> 1) * CGA_ROW_BYTES;
+        oct.row[i] =
+            (ys[i] & 1 ? CGA_ODD_ROWS : 0) + (ys[i] >> 1) * CGA_ROW_BYTES;
         oct.col[i] = xs[i] * bits >> 3;
         oct.mask[i] = ((1u << bits) - 1) << (8 - bits - (xs[i] * bits & 7));
     }
@@ -728,17 +799,20 @@ static void packed_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, in
     dev_octet_packed(&oct);
 }
 
-static void packed4_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
+static void packed4_octet(const GdFill *fill, unsigned cx, unsigned cy, int u,
+                          int v, int w, int z)
 {
     packed_octet(fill, cx, cy, u, v, w, z, 2);
 }
 
-static void packed2_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
+static void packed2_octet(const GdFill *fill, unsigned cx, unsigned cy, int u,
+                          int v, int w, int z)
 {
     packed_octet(fill, cx, cy, u, v, w, z, 1);
 }
 
-static void planar_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z)
+static void planar_octet(const GdFill *fill, unsigned cx, unsigned cy, int u,
+                         int v, int w, int z)
 {
     FillOct oct;
     unsigned xs[4], i;
@@ -760,19 +834,20 @@ static void planar_octet(const GdFill *fill, unsigned cx, unsigned cy, int u, in
     dev_octet_planar(&oct);
 }
 
-static void (*const octets[KINDS])(const GdFill *fill, unsigned cx, unsigned cy, int u, int v, int w, int z) = {
-    planar_octet, linear_octet, packed4_octet, packed2_octet
-};
+static void (*const octets[KINDS])(const GdFill *fill, unsigned cx, unsigned cy,
+                                   int u, int v, int w, int z) = {
+    planar_octet, linear_octet, packed4_octet, packed2_octet};
 
-static void (*const dots[KINDS][2])(const GdFill *fill, unsigned x, unsigned y) = {
-    { planar_dot, planar_dot },
-    { linear_dot, linear_dot_set },
-    { packed4_dot, packed4_dot },
-    { packed2_dot, packed2_dot }
-};
+static void (*const dots[KINDS][2])(const GdFill *fill, unsigned x,
+                                    unsigned y) = {{planar_dot, planar_dot},
+                                                   {linear_dot, linear_dot_set},
+                                                   {packed4_dot, packed4_dot},
+                                                   {packed2_dot, packed2_dot}};
 
-/* Lines: the loops of gdline.asm, one for each kind of mode, with Bresenham's terms here.  They draw in the colour, as set. */
-static void line_terms(FillLine *line, const GdFill *fill, unsigned dx, unsigned dy)
+/* Lines: the loops of gdline.asm, one for each kind of mode, with Bresenham's
+ * terms here.  They draw in the colour, as set. */
+static void line_terms(FillLine *line, const GdFill *fill, unsigned dx,
+                       unsigned dy)
 {
     int major = (int)(dx > dy ? dx : dy), minor = (int)(dx > dy ? dy : dx);
 
@@ -784,7 +859,8 @@ static void line_terms(FillLine *line, const GdFill *fill, unsigned dx, unsigned
     line->style = fill->style;
 }
 
-static void linear_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y)
+static void linear_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx,
+                        unsigned dy, int step_y)
 {
     FillLine line;
 
@@ -794,7 +870,8 @@ static void linear_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx,
     dev_line_linear(&line);
 }
 
-static void packed_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y, unsigned bits)
+static void packed_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx,
+                        unsigned dy, int step_y, unsigned bits)
 {
     FillLine line;
 
@@ -807,17 +884,20 @@ static void packed_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx,
     dev_line_packed(&line);
 }
 
-static void packed4_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y)
+static void packed4_line(const GdFill *fill, unsigned x, unsigned y,
+                         unsigned dx, unsigned dy, int step_y)
 {
     packed_line(fill, x, y, dx, dy, step_y, 2);
 }
 
-static void packed2_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y)
+static void packed2_line(const GdFill *fill, unsigned x, unsigned y,
+                         unsigned dx, unsigned dy, int step_y)
 {
     packed_line(fill, x, y, dx, dy, step_y, 1);
 }
 
-static void planar_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y)
+static void planar_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx,
+                        unsigned dy, int step_y)
 {
     FillLine line;
 
@@ -829,9 +909,9 @@ static void planar_line(const GdFill *fill, unsigned x, unsigned y, unsigned dx,
     dev_line_planar(&line);
 }
 
-static void (*const lines[KINDS])(const GdFill *fill, unsigned x, unsigned y, unsigned dx, unsigned dy, int step_y) = {
-    planar_line, linear_line, packed4_line, packed2_line
-};
+static void (*const lines[KINDS])(const GdFill *fill, unsigned x, unsigned y,
+                                  unsigned dx, unsigned dy, int step_y) = {
+    planar_line, linear_line, packed4_line, packed2_line};
 
 void gd_dots_begin(const GdFill *fill)
 {
@@ -871,14 +951,18 @@ void gd_fill_select(GdFill *fill, unsigned color, unsigned operation)
     fill->color = color & 0xFF;
     fill->style = 0xFFFF;
     fill->operation = operation;
-    fill->keep = operation == 0 ? 0 : operation == 1 ? byte : operation == 2 ? ~byte & 0xFF : 0xFF;
+    fill->keep = operation == 0   ? 0
+                 : operation == 1 ? byte
+                 : operation == 2 ? ~byte & 0xFF
+                                  : 0xFF;
     fill->flip = operation == 1 ? 0 : byte;
     dev_fill_select(operation, byte);
     dev_line_select(operation, byte);
 }
 
-/* GET and PUT.  A sub-byte plane (a CGA mode's pixels, an EGA plane's bits) is a run of bits that starts `shift` bits into
-   a screen byte and at bit 0 of an array byte, so each byte of one is made of two of the other. */
+/* GET and PUT.  A sub-byte plane (a CGA mode's pixels, an EGA plane's bits) is
+   a run of bits that starts `shift` bits into a screen byte and at bit 0 of an
+   array byte, so each byte of one is made of two of the other. */
 typedef volatile u32 QB_FAR Video32;
 
 #define COMBINE_SET(old, source) (source)
@@ -886,25 +970,26 @@ typedef volatile u32 QB_FAR Video32;
 #define COMBINE_OR(old, source) ((old) | (source))
 #define COMBINE_XOR(old, source) ((old) ^ (source))
 
-#define LINEAR_PUT(name, combine) \
-    static void name(Video *to, const u8 QB_FAR *from, unsigned count, u32 flip) \
-    { \
-        Video32 *d = (Video32 *)to; \
-        const u32 QB_FAR *s = (const u32 QB_FAR *)from; \
-        unsigned n = count >> 2; \
-        Video *db; \
-        const u8 QB_FAR *sb; \
-        while (n--) { \
-            u32 old_ = *d; \
-            *d++ = combine(old_, *s++ ^ flip); \
-        } \
-        db = (Video *)d; \
-        sb = (const u8 QB_FAR *)s; \
-        n = count & 3; \
-        while (n--) { \
-            unsigned old_ = *db; \
-            *db++ = (u8)combine(old_, (unsigned)(*sb++ ^ flip) & 0xFF); \
-        } \
+#define LINEAR_PUT(name, combine)                                              \
+    static void name(Video *to, const u8 QB_FAR *from, unsigned count,         \
+                     u32 flip)                                                 \
+    {                                                                          \
+        Video32 *d = (Video32 *)to;                                            \
+        const u32 QB_FAR *s = (const u32 QB_FAR *)from;                        \
+        unsigned n = count >> 2;                                               \
+        Video *db;                                                             \
+        const u8 QB_FAR *sb;                                                   \
+        while (n--) {                                                          \
+            u32 old_ = *d;                                                     \
+            *d++ = combine(old_, *s++ ^ flip);                                 \
+        }                                                                      \
+        db = (Video *)d;                                                       \
+        sb = (const u8 QB_FAR *)s;                                             \
+        n = count & 3;                                                         \
+        while (n--) {                                                          \
+            unsigned old_ = *db;                                               \
+            *db++ = (u8)combine(old_, (unsigned)(*sb++ ^ flip) & 0xFF);        \
+        }                                                                      \
     }
 
 LINEAR_PUT(linear_put_set, COMBINE_SET)
@@ -912,7 +997,8 @@ LINEAR_PUT(linear_put_and, COMBINE_AND)
 LINEAR_PUT(linear_put_or, COMBINE_OR)
 LINEAR_PUT(linear_put_xor, COMBINE_XOR)
 
-void gd_get(unsigned x, unsigned y, unsigned width, unsigned rows, u8 QB_FAR *out)
+void gd_get(unsigned x, unsigned y, unsigned width, unsigned rows,
+            u8 QB_FAR *out)
 {
     unsigned row;
 
@@ -927,9 +1013,14 @@ void gd_get(unsigned x, unsigned y, unsigned width, unsigned rows, u8 QB_FAR *ou
             dev_move(&op);
         }
     } else {
-        /* a plane (or the CGA modes' one) at a time, a pass of rows with the bits shifted into place */
-        unsigned bits = kind == KIND_PLANAR ? 1 : kind == KIND_PACKED4 ? 2 : 1, planes = kind == KIND_PLANAR ? PLANES : 1, plane;
-        unsigned total = width * bits, bytes = (total + 7) >> 3, shift = x * bits & 7;
+        /* a plane (or the CGA modes' one) at a time, a pass of rows with the
+         * bits shifted into place */
+        unsigned bits = kind == KIND_PLANAR    ? 1
+                        : kind == KIND_PACKED4 ? 2
+                                               : 1,
+                 planes = kind == KIND_PLANAR ? PLANES : 1, plane;
+        unsigned total = width * bits, bytes = (total + 7) >> 3,
+                 shift = x * bits & 7;
         FillXfer xfer;
 
         xfer.rows = rows;
@@ -953,14 +1044,15 @@ void gd_get(unsigned x, unsigned y, unsigned width, unsigned rows, u8 QB_FAR *ou
     }
 }
 
-void gd_put(unsigned x, unsigned y, unsigned width, unsigned rows, const u8 QB_FAR *in, unsigned operation, unsigned invert)
+void gd_put(unsigned x, unsigned y, unsigned width, unsigned rows,
+            const u8 QB_FAR *in, unsigned operation, unsigned invert)
 {
     unsigned row;
 
     if (kind == KIND_LINEAR) {
-        static void (*const put_run[4])(Video *to, const u8 QB_FAR *from, unsigned count, u32 flip) = {
-            linear_put_set, linear_put_and, linear_put_or, linear_put_xor
-        };
+        static void (*const put_run[4])(Video *to, const u8 QB_FAR *from,
+                                        unsigned count, u32 flip) = {
+            linear_put_set, linear_put_and, linear_put_or, linear_put_xor};
 
         for (row = 0; row < rows; row++, in += width) {
             if (operation == 0 && !invert) {
@@ -972,13 +1064,17 @@ void gd_put(unsigned x, unsigned y, unsigned width, unsigned rows, const u8 QB_F
                 op.value = 0;
                 dev_move(&op);
             } else {
-                put_run[operation](pixel_at(x, y + row), in, width, invert ? 0xFFFFFFFFUL : 0);
+                put_run[operation](pixel_at(x, y + row), in, width,
+                                   invert ? 0xFFFFFFFFUL : 0);
             }
         }
     } else {
-        /* a plane (or the CGA modes' one) at a time, a pass of rows with the bits shifted into place */
-        unsigned bits = kind == KIND_PACKED4 ? 2 : 1, planes = kind == KIND_PLANAR ? PLANES : 1, plane;
-        unsigned total = width * bits, bytes = (total + 7) >> 3, shift = x * bits & 7;
+        /* a plane (or the CGA modes' one) at a time, a pass of rows with the
+         * bits shifted into place */
+        unsigned bits = kind == KIND_PACKED4 ? 2 : 1,
+                 planes = kind == KIND_PLANAR ? PLANES : 1, plane;
+        unsigned total = width * bits, bytes = (total + 7) >> 3,
+                 shift = x * bits & 7;
         FillXfer xfer;
 
         xfer.rows = rows;

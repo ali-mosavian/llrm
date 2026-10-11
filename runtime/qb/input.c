@@ -80,9 +80,10 @@ static int fits_values(const InputBlock QB_FAR *block, unsigned count)
             end = fin_string(&at, &start, &length);
         } else {
             FinValue value;
-            byte type = block->type[item] == TYPE_I2 ? VT_I2
-                      : block->type[item] == TYPE_I4 ? VT_I4
-                      : block->type[item] == TYPE_R4 ? VT_R4 : VT_R8;
+            byte type = block->type[item] == TYPE_I2   ? VT_I2
+                        : block->type[item] == TYPE_I4 ? VT_I4
+                        : block->type[item] == TYPE_R4 ? VT_R4
+                                                       : VT_R8;
 
             end = fin_number(&at, type, &value);
         }

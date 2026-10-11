@@ -12,7 +12,7 @@ void B_DSG0(void)
     b_seg = dgroup_segment();
 }
 
-static Comp comp = { 0, C_RT, { B_DSG0 } };
+static Comp comp = {0, C_RT, {B_DSG0}};
 
 #define XI_FN defseg_xinit
 #include "xi.h"

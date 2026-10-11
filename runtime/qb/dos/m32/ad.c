@@ -1,5 +1,5 @@
-/* Where an array's elements are on this target: the local heap, for every kind of array, since one pointer
-   reaches all memory. */
+/* Where an array's elements are on this target: the local heap, for every kind
+   of array, since one pointer reaches all memory. */
 #include "qb.h"
 #include "ad.h"
 #include "nheap.h"

@@ -18,7 +18,8 @@ SD *B_FCMD(void)
 
     result = str_tmp(length, &data);
     for (at = 0; at < length; at++)
-        data[at] = text[at] >= 'a' && text[at] <= 'z' ? text[at] - 32 : text[at];
+        data[at] =
+            text[at] >= 'a' && text[at] <= 'z' ? text[at] - 32 : text[at];
     return result;
 }
 
@@ -40,7 +41,8 @@ SD *B_FEVI(short n)
     return made(llrm_os_environment(n - 1, (os_data_mut)text, TEXT_MAX));
 }
 
-/* B$FEVS: ENVIRON$(name), the value of the variable, or "" without it.  The name is matched as typed. */
+/* B$FEVS: ENVIRON$(name), the value of the variable, or "" without it.  The
+ * name is matched as typed. */
 SD *B_FEVS(SD *name)
 {
     long length, at;
@@ -48,8 +50,11 @@ SD *B_FEVS(SD *name)
 
     if (name->len == 0)
         qb_error(BE_ILLFUN);
-    for (at = 0; (length = llrm_os_environment(at, (os_data_mut)text, TEXT_MAX)) >= 0; at++) {
-        for (i = 0; i < name->len && (long)i < length && text[i] == name->ptr[i]; i++)
+    for (at = 0;
+         (length = llrm_os_environment(at, (os_data_mut)text, TEXT_MAX)) >= 0;
+         at++) {
+        for (i = 0;
+             i < name->len && (long)i < length && text[i] == name->ptr[i]; i++)
             ;
         if (i == name->len && (long)i < length && text[i] == '=') {
             long value = length - i - 1;

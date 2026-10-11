@@ -6,7 +6,8 @@
 #include "nhstutil.h"
 #include "rtinit.h"
 
-/* The most an array may hold, unless it is huge: what the target's pointer can reach. */
+/* The most an array may hold, unless it is huge: what the target's pointer can
+ * reach. */
 enum { ARRAY_MAX = AD_MAX_BYTES };
 
 static int is_string_array(const AD *ad)
@@ -43,7 +44,8 @@ static void describe(AD *ad, const DimCall *call)
     ad->features = rank_and_features >> 8;
     ad->elem = (unsigned short)call->element;
     for (dim = 0; dim < ad->dims; dim++) {
-        int upper = (short)call->bounds[dim].upper, lower = (short)call->bounds[dim].lower;
+        int upper = (short)call->bounds[dim].upper,
+            lower = (short)call->bounds[dim].lower;
 
         if (upper < lower)
             qb_error(BE_SUBSCRIP);

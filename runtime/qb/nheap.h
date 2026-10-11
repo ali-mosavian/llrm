@@ -14,17 +14,17 @@
 enum LhType { LH_FREE = 1, LH_ARRAY, LH_FILE };
 
 typedef struct LhEntry {
-    uword size;     /* the whole entry in bytes, even */
-    byte type;     /* an LhType */
-    byte file;     /* an FDB's channel */
-    void *owner;   /* what points at the data, for the type's relocation hook */
+    uword size;  /* the whole entry in bytes, even */
+    byte type;   /* an LhType */
+    byte file;   /* an FDB's channel */
+    void *owner; /* what points at the data, for the type's relocation hook */
 } LhEntry;
 
 extern char *heap_low;
 extern char *heap_top;
 
 /* A type's hook, called when compaction moves an entry's data `delta` bytes up.
-   */
+ */
 typedef void (*LhMoved)(void *data, int delta);
 void lh_on_move(enum LhType type, LhMoved moved);
 

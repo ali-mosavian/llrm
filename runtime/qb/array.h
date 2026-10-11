@@ -11,7 +11,8 @@
    the front being the first stored. */
 typedef struct DimCall {
     AD *ad;
-    int rank_and_features;      /* each a stack slot, of which the low 16 bits are the INTEGER */
+    int rank_and_features; /* each a stack slot, of which the low 16 bits are
+                              the INTEGER */
     int element;
     struct {
         int upper;

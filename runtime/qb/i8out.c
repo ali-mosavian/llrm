@@ -61,7 +61,6 @@ static int guess_exponent(const Parts *parts)
 /* The magnitude of the value being converted, for the FPU's quick way. */
 static long double magnitude;
 
-
 /* x87's extended numbers hold 64 bits, enough for value * 10^s to be rounded
    only once and a little (relative 2^-64, under 0.0006 of the last digit) when
    10^s is exact, which it is up to 10^27.  The digits then come out of the

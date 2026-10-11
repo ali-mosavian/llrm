@@ -5,16 +5,16 @@ extern unsigned qb_module_segment;
 
 /* Offsets in the header (MODULE_CODE). */
 enum ModuleWord {
-    OF_MOD = 2,     /* the name, 8 characters */
-    OF_DS = 12,     /* the READ/DATA lines, in DGROUP */
-    OF_DAT = 14     /* the module's data area, in DGROUP */
+    OF_MOD = 2, /* the name, 8 characters */
+    OF_DS = 12, /* the READ/DATA lines, in DGROUP */
+    OF_DAT = 14 /* the module's data area, in DGROUP */
 };
 
 struct ModuleData {
-    u8 restored;      /* RESTORE has run */
+    u8 restored; /* RESTORE has run */
     u8 unused;
-    u16 data;         /* the next DATA item */
-    u16 on_error;     /* the ON ERROR handler, 0 for none */
+    u16 data;     /* the next DATA item */
+    u16 on_error; /* the ON ERROR handler, 0 for none */
 };
 
 /* B$GETMODCODE: a word of the module header. */

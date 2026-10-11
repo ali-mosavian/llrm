@@ -1,6 +1,7 @@
 /* This target's devices as the QB runtime uses them (QB rt/ll*.asm): the
    standard output being the screen, the clock, the speaker, the text screen.
-   C around the intrinsics of bios.asm, ports.asm and block.asm; a target brings its own. */
+   C around the intrinsics of bios.asm, ports.asm and block.asm; a target brings
+   its own. */
 #ifndef QB_DEVICE_H
 #define QB_DEVICE_H
 
@@ -16,29 +17,37 @@ typedef struct BlockOp {
     unsigned count;
     unsigned value;
 } BlockOp;
-/* A box fill (gdfill.asm): `rows` rows from `dst`, each a run of `middle` bytes of the operation and pattern B$FSEL last set,
-   with an edge byte before and after it if `edges` (new = old & and ^ xor, `left` and `right` hold the and low, the xor
-   next); a row starts steps[0] after the one before when that is even, steps[1] when odd, `phase` (in bytes) naming
-   the first. */
+/* A box fill (gdfill.asm): `rows` rows from `dst`, each a run of `middle` bytes
+   of the operation and pattern B$FSEL last set, with an edge byte before and
+   after it if `edges` (new = old & and ^ xor, `left` and `right` hold the and
+   low, the xor next); a row starts steps[0] after the one before when that is
+   even, steps[1] when odd, `phase` (in bytes) naming the first. */
 typedef struct FillBox {
     void QB_FAR *dst;
     unsigned rows, middle, steps[2], phase, edges, left, right;
 } FillBox;
-/* A line (gdline.asm), set with the colour B$FLSEL last had: `count` pixels from `dst` (the byte holding the first), Bresenham's decision
-   value and its two increments (`minor4`, `step4`), `x_major` 1 if the longer side is x, 0 if y, 2 for a vertical line; `style` the 16 bits
-   of the line style, the next pixel's the high bit.  `ystep` is the bytes to the next row, down or up (CGA: 80 and -80, the banks
-   toggling).  The first pixel's mask in its byte is `pmask` (a bit for the planar modes; the bits of the pixel for CGA, `bpp` wide, and
-   `color` the colour in every pixel of a byte; planar: the colour). */
+/* A line (gdline.asm), set with the colour B$FLSEL last had: `count` pixels
+   from `dst` (the byte holding the first), Bresenham's decision value and its
+   two increments (`minor4`, `step4`), `x_major` 1 if the longer side is x, 0 if
+   y, 2 for a vertical line; `style` the 16 bits of the line style, the next
+   pixel's the high bit.  `ystep` is the bytes to the next row, down or up (CGA:
+   80 and -80, the banks toggling).  The first pixel's mask in its byte is
+   `pmask` (a bit for the planar modes; the bits of the pixel for CGA, `bpp`
+   wide, and `color` the colour in every pixel of a byte; planar: the colour).
+ */
 typedef struct FillLine {
     void QB_FAR *dst;
     unsigned count;
     int decision, minor4, step4, ystep;
     unsigned style, x_major, pmask, bpp, color;
 } FillLine;
-/* One plane's pass of GET or PUT over `rows` rows (gdxfer.asm): the screen's first byte, the array's run of this plane in the first row, and
-   for each row `sbytes` screen bytes against `abytes` array bytes, the bits of one starting `shift` bits into the other (a screen byte
-   takes the array bit 0 at its bit `shift`); `first` and `last` are the masks of the first and last screen byte, and for GET the
-   mask of the last array byte.  Row to row the array run moves `stride` bytes and the screen `step`, or by the CGA banks if `bank`. */
+/* One plane's pass of GET or PUT over `rows` rows (gdxfer.asm): the screen's
+   first byte, the array's run of this plane in the first row, and for each row
+   `sbytes` screen bytes against `abytes` array bytes, the bits of one starting
+   `shift` bits into the other (a screen byte takes the array bit 0 at its bit
+   `shift`); `first` and `last` are the masks of the first and last screen byte,
+   and for GET the mask of the last array byte.  Row to row the array run moves
+   `stride` bytes and the screen `step`, or by the CGA banks if `bank`. */
 typedef struct FillXfer {
     void QB_FAR *screen;
     void QB_FAR *array;
@@ -46,13 +55,18 @@ typedef struct FillXfer {
     int step;
     unsigned bank;
 } FillXfer;
-/* A scan for the first pixel (or planar byte of pixels) that is of colour `c1` or `c2` (`flags` bit 0) or of neither (bit 0 clear), from
-   `at` forwards or, `flags` bit 1, backwards, over `count` of them (gdscan.asm).  Planar: `first` and `last` are the masks of the pixels
-   to take in the first and last byte, `middle` in the others, and for CGA (`flags` bit 2 for 2-bit pixels) `c1` and `c2` are the byte
-   with the colour in every pixel and the masks have a bit for each pixel (its low bit if 2).  Out: `found` the index of the one (a byte, and
-   `hits` the pixels of it), -1 if none.  CGA: `at` is the row, and the scan runs over the pixels from `x` to `to` (it makes the
-   masks, patterns and count itself) and `found` is the pixel.  dev_scan_run does three of them for PAINT: the first pixel of
-   `x` to `to` that is neither `c1` nor `c2`, and from it the run of pixels that are not `c1`, `left` to `right` within 0 to `limit`
+/* A scan for the first pixel (or planar byte of pixels) that is of colour `c1`
+   or `c2` (`flags` bit 0) or of neither (bit 0 clear), from `at` forwards or,
+   `flags` bit 1, backwards, over `count` of them (gdscan.asm).  Planar: `first`
+   and `last` are the masks of the pixels to take in the first and last byte,
+   `middle` in the others, and for CGA (`flags` bit 2 for 2-bit pixels) `c1` and
+   `c2` are the byte with the colour in every pixel and the masks have a bit for
+   each pixel (its low bit if 2).  Out: `found` the index of the one (a byte,
+   and `hits` the pixels of it), -1 if none.  CGA: `at` is the row, and the scan
+   runs over the pixels from `x` to `to` (it makes the masks, patterns and count
+   itself) and `found` is the pixel.  dev_scan_run does three of them for PAINT:
+   the first pixel of `x` to `to` that is neither `c1` nor `c2`, and from it the
+   run of pixels that are not `c1`, `left` to `right` within 0 to `limit`
    (`found` is -1 if there was no such pixel). */
 typedef struct FillScan {
     void QB_FAR *at;
@@ -60,9 +74,11 @@ typedef struct FillScan {
     int found;
     unsigned hits, x, to, left, right, limit;
 } FillScan;
-/* The eight points of a circle step for the planar or CGA modes (gdcirc.asm): the screen's base, the offsets of the four rows (cy-v, cy+v, cy-z,
-   cy+z) and of the four columns' bytes (cx+u, cx-u, cx+w, cx-w) with the mask of the pixel in each, and the colour (CGA: in every pixel
-   of a byte); the points are (u,-v) (w,-z) (-w,-z) (-u,-v) (-u,v) (-w,z) (w,z) (u,v). */
+/* The eight points of a circle step for the planar or CGA modes (gdcirc.asm):
+   the screen's base, the offsets of the four rows (cy-v, cy+v, cy-z, cy+z) and
+   of the four columns' bytes (cx+u, cx-u, cx+w, cx-w) with the mask of the
+   pixel in each, and the colour (CGA: in every pixel of a byte); the points are
+   (u,-v) (w,-z) (-w,-z) (-u,-v) (-u,v) (-w,z) (w,z) (u,v). */
 typedef struct FillOct {
     void QB_FAR *base;
     unsigned row[4], col[4], mask[4], color;
@@ -143,8 +159,8 @@ void dev_tone(unsigned hertz);
 
 /* The text screen: cells of a character and an attribute from 0, 0 at the top
    left. */
-unsigned dev_text_size(void);        /* rows in the high byte, columns in the low */
-unsigned dev_text_cursor(void);      /* row in the high byte */
+unsigned dev_text_size(void);   /* rows in the high byte, columns in the low */
+unsigned dev_text_cursor(void); /* row in the high byte */
 void dev_text_move(unsigned row, unsigned column);
 void dev_text_cursor_show(int visible);
 void dev_text_put(unsigned row, unsigned column, unsigned character,

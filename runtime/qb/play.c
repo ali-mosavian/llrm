@@ -3,8 +3,8 @@
    A note is a letter A to G, a sharp (# or +) or a flat (-), a length and dots;
    the other commands set the octave (O, < and >), the length (L), the tempo (T)
    and the style (M).  The notes go to a queue that the clock tick plays through
-   the speaker; music in the foreground makes the program wait until the queue is
-   empty (the last note has begun), music in the background only while it is
+   the speaker; music in the foreground makes the program wait until the queue
+   is empty (the last note has begun), music in the background only while it is
    full. */
 #include "device.h"
 #include "nhstutil.h"
@@ -21,7 +21,8 @@ enum {
     LONGEST_NOTE = 64,
     HIGHEST_NOTE = 84,
     SEMITONES = 12,
-    TICKS_PER_MINUTE = 1092390L    /* a minute of the clock's ticks, in thousandths */
+    TICKS_PER_MINUTE =
+        1092390L /* a minute of the clock's ticks, in thousandths */
 };
 
 /* How much of a note sounds before the silence that ends it, in eighths. */
@@ -68,13 +69,17 @@ static long number(Player *p)
 }
 
 /* The music waiting to be played, a ring the clock tick empties: the program
-   writes `head` and the tick writes `tail`, so neither needs the other to stop. */
+   writes `head` and the tick writes `tail`, so neither needs the other to stop.
+ */
 typedef struct Note {
-    unsigned hertz;               /* 0 for a rest */
-    byte sound, quiet;            /* ticks of tone, then of silence */
+    unsigned hertz;    /* 0 for a rest */
+    byte sound, quiet; /* ticks of tone, then of silence */
 } Note;
 
-enum { QUEUE = 19 };   /* one place is left empty: 18 notes wait before a background PLAY does, as with BCOM45 */
+enum {
+    QUEUE = 19
+}; /* one place is left empty: 18 notes wait before a background PLAY does, as
+      with BCOM45 */
 
 static Note queue[QUEUE];
 static volatile unsigned head, tail;
@@ -148,8 +153,7 @@ static long duration(const Player *p, int length, int dots)
 static unsigned frequency(int note)
 {
     static const unsigned octave_three[SEMITONES] = {
-        262, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494
-    };
+        262, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494};
     int octave = (note - 1) / SEMITONES - 3;
     unsigned hertz = octave_three[(note - 1) % SEMITONES];
 
@@ -242,8 +246,8 @@ static void run(Player *p)
             n = number(p);
             if (n == 0 || n > LONGEST_NOTE)
                 illegal();
-            play_note(p, note, duration(p, n < 0 ? p->length : (int)n,
-                                        dots(p)));
+            play_note(p, note,
+                      duration(p, n < 0 ? p->length : (int)n, dots(p)));
         } else if (command == 'N') {
             n = number(p);
             if (n < 0 || n > HIGHEST_NOTE)
@@ -287,7 +291,8 @@ static void run(Player *p)
    note has begun. */
 void B_SPLY(SD *commands)
 {
-    static Player player = { 0, 0, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NORMAL, 1 };
+    static Player player = {
+        0, 0, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NORMAL, 1};
 
     player.at = commands->ptr;
     player.end = commands->ptr + commands->len;
@@ -298,7 +303,8 @@ void B_SPLY(SD *commands)
 }
 #pragma aux B_SPLY "B$SPLY"
 
-/* The program has ended: what is queued is not played, and the speaker is quiet. */
+/* The program has ended: what is queued is not played, and the speaker is
+ * quiet. */
 static void music_stop(void)
 {
     tail = head;
@@ -306,7 +312,7 @@ static void music_stop(void)
     dev_tone(0);
 }
 
-static Comp comp = { 0, C_SN, { 0, 0, 0, 0, music_stop } };
+static Comp comp = {0, C_SN, {0, 0, 0, 0, music_stop}};
 
 #define XI_FN play_xinit
 #include "xi.h"

@@ -17,12 +17,12 @@ enum FileMode {
 };
 
 typedef struct Fdb {
-    SD fielded;           /* the FIELD back-pointer string, if any */
-    short handle;         /* the OS's */
-    byte mode;            /* an enum FileMode */
+    SD fielded;   /* the FIELD back-pointer string, if any */
+    short handle; /* the OS's */
+    byte mode;    /* an enum FileMode */
     byte flags;
-    byte column;          /* where the next byte of PRINT # goes on its line */
-    unsigned record_length;   /* RANDOM's record, INPUT's and OUTPUT's buffer */
+    byte column; /* where the next byte of PRINT # goes on its line */
+    unsigned record_length; /* RANDOM's record, INPUT's and OUTPUT's buffer */
 } Fdb;
 
 /* B$OPEN, B$CLOS, B$GETn, B$PUTn, B$FLOF, B$FLOC, B$FEOF */

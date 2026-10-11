@@ -65,20 +65,16 @@ static int digit_value(char c)
 
 /* What the digits of one number came to. */
 typedef struct Parsed {
-    unsigned long long mantissa;   /* the leading digits that fit 64 bits */
-    int exponent;                  /* of ten, for the mantissa */
+    unsigned long long mantissa; /* the leading digits that fit 64 bits */
+    int exponent;                /* of ten, for the mantissa */
     int negative;
-    int whole;                     /* an integer, with nothing left over */
+    int whole; /* an integer, with nothing left over */
 } Parsed;
 
 /* &H and &O numbers, which are 16 or 32 bits wide, and whose high half is the
    sign bit (&HFFFF is -1). */
-static char radix_number(
-    const char **cursor,
-    int radix,
-    byte type,
-    FinValue *value
-)
+static char radix_number(const char **cursor, int radix, byte type,
+                         FinValue *value)
 {
     const char *p = *cursor;
     unsigned long total = 0;
@@ -330,8 +326,9 @@ char fin_number(const char **cursor, byte type, FinValue *value)
         value->single = (float)real;
     } else {
         whole = parsed.whole && parsed.mantissa <= 0x7FFFFFFFUL
-            ? (parsed.negative ? -(long)parsed.mantissa : (long)parsed.mantissa)
-            : round_to_long(real);
+                    ? (parsed.negative ? -(long)parsed.mantissa
+                                       : (long)parsed.mantissa)
+                    : round_to_long(real);
         if (type == VT_I2) {
             if (whole < -32768L || whole > 32767L)
                 fin_fail(BE_OVERFLOW);

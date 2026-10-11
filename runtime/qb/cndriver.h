@@ -32,7 +32,8 @@ extern const Driver *cn_gfx_driver;
    cn_mode_changed after). */
 extern byte cn_graphics;
 
-/* PRINT # and WRITE #: the statement's output goes to `to` until cn_reset_output. */
+/* PRINT # and WRITE #: the statement's output goes to `to` until
+ * cn_reset_output. */
 void cn_redirect(const Driver *to);
 
 /* The driver in use, chosen when output first happens and again when the

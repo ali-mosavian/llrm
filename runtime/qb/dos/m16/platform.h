@@ -30,16 +30,18 @@ typedef unsigned char QB_FAR *os_data_mut;
 #define QB_FAR_OF(p) ((void QB_FAR *)(p))
 
 /* The video memory at paragraph `segment`: the graphics and text screens. */
-#define QB_VIDEO_MEMORY(segment) ((void QB_FAR *)((unsigned long)(segment) << 16))
+#define QB_VIDEO_MEMORY(segment)                                               \
+    ((void QB_FAR *)((unsigned long)(segment) << 16))
 
 /* The pointer to segment:offset, as a real-mode interrupt returns one. */
-#define QB_REAL_POINTER(segment, offset) ((void QB_FAR *)((unsigned long)(segment) << 16 | (offset)))
+#define QB_REAL_POINTER(segment, offset)                                       \
+    ((void QB_FAR *)((unsigned long)(segment) << 16 | (offset)))
 
 /* The most bytes a BASIC string holds: QB 4.5's 32767. */
 #define QB_STRING_LIMIT 32767L
 
 /* A function pointer in a startup table (xi.h, rtinit.h). */
-typedef void (QB_FAR *qb_init_fn)(void);
+typedef void(QB_FAR *qb_init_fn)(void);
 
 /* A near address of what a data pointer addresses, when it is in the program's
    near data. */

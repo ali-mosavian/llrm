@@ -10,25 +10,21 @@
 #include "fout.h"
 #include "prnval.h"
 
-enum {
-    FORMAT_MAX = 255,
-    DIGITS_MAX = 80,
-    NO_FIELD = 0
-};
+enum { FORMAT_MAX = 255, DIGITS_MAX = 80, NO_FIELD = 0 };
 
 enum FieldKind { LITERAL, FIRST_CHARACTER, WHOLE_STRING, FIXED_STRING, NUMBER };
 
 /* A numeric field as the format writes it. */
 typedef struct NumberField {
-    unsigned length;         /* characters of the format */
-    unsigned width;          /* columns of the number, without the signs */
+    unsigned length; /* characters of the format */
+    unsigned width;  /* columns of the number, without the signs */
     int leading_plus;
-    char trailing;           /* '+', '-' or 0 */
+    char trailing; /* '+', '-' or 0 */
     int stars, dollar, commas;
-    int before_point;        /* digit positions before the point */
+    int before_point; /* digit positions before the point */
     int decimals;
     int point;
-    int carets;              /* 4 or 5 for an exponent, else 0 */
+    int carets; /* 4 or 5 for an exponent, else 0 */
 } NumberField;
 
 /* A number as digits: value = 0.text * 10^integers, so integers is how many
@@ -38,14 +34,14 @@ typedef struct Number {
     char text[DIGITS_MAX + 2];
     int count;
     int integers;
-    int scientific;          /* PRINT would write it with an exponent */
+    int scientific; /* PRINT would write it with an exponent */
 } Number;
 
 static char format[FORMAT_MAX];
 static unsigned format_length, at;
 static Number number;
-static char body[FORMAT_MAX + DIGITS_MAX];   /* the number's own characters */
-static char line[FORMAT_MAX + DIGITS_MAX + 8];   /* the whole field */
+static char body[FORMAT_MAX + DIGITS_MAX];     /* the number's own characters */
+static char line[FORMAT_MAX + DIGITS_MAX + 8]; /* the whole field */
 
 static void using_begin(SD *text)
 {
@@ -82,8 +78,8 @@ static int parse_number(unsigned from, NumberField *f)
             f->width++;
             p++;
         }
-    } else if (p + 1 < format_length && format[p] == '$'
-               && format[p + 1] == '$') {
+    } else if (p + 1 < format_length && format[p] == '$' &&
+               format[p + 1] == '$') {
         f->dollar = 1;
         f->width += 2;
         f->before_point++;
@@ -98,8 +94,8 @@ static int parse_number(unsigned from, NumberField *f)
         digits_seen = 1;
         p++;
     }
-    if (p < format_length && format[p] == '.' && p + 1 < format_length
-        && format[p + 1] == '#') {
+    if (p < format_length && format[p] == '.' && p + 1 < format_length &&
+        format[p + 1] == '#') {
         f->point = 1;
         f->width++;
         p++;
@@ -116,8 +112,8 @@ static int parse_number(unsigned from, NumberField *f)
     }
     if (!digits_seen && !f->stars && !f->dollar)
         return 0;
-    if (p + 3 < format_length && format[p] == '^' && format[p + 1] == '^'
-        && format[p + 2] == '^' && format[p + 3] == '^') {
+    if (p + 3 < format_length && format[p] == '^' && format[p + 1] == '^' &&
+        format[p + 2] == '^' && format[p + 3] == '^') {
         f->carets = 4;
         p += 4;
         if (p < format_length && format[p] == '^') {
@@ -125,8 +121,8 @@ static int parse_number(unsigned from, NumberField *f)
             p++;
         }
     }
-    if (p < format_length && (format[p] == '+' || format[p] == '-')
-        && !f->leading_plus) {
+    if (p < format_length && (format[p] == '+' || format[p] == '-') &&
+        !f->leading_plus) {
         f->trailing = format[p++];
     }
     f->length = p - from;
@@ -159,8 +155,8 @@ static enum FieldKind field_at(unsigned from, unsigned *length, NumberField *f)
         }
         return LITERAL;
     }
-    if ((c == '#' || c == '.' || c == '+' || c == '$' || c == '*')
-        && parse_number(from, f)) {
+    if ((c == '#' || c == '.' || c == '+' || c == '$' || c == '*') &&
+        parse_number(from, f)) {
         *length = f->length;
         return NUMBER;
     }
@@ -325,8 +321,8 @@ static int fits_columns(const NumberField *f, unsigned length)
 {
     int minus = number.negative && !f->leading_plus && !f->trailing;
 
-    return length + (minus || f->leading_plus ? 1 : 0) + (f->dollar ? 1 : 0)
-           <= f->width + f->leading_plus;
+    return length + (minus || f->leading_plus ? 1 : 0) + (f->dollar ? 1 : 0) <=
+           f->width + f->leading_plus;
 }
 
 static void write_exponent_overflow(const NumberField *f);
@@ -335,17 +331,13 @@ static void write_exponent_overflow(const NumberField *f);
    right-aligned in the field's columns, the minus sign in the columns of the
    digits when the field has no sign of its own, and a % before the number when
    it does not fit. */
-static void write_number(
-    const NumberField *f,
-    const char *mantissa,
-    unsigned mantissa_length,
-    unsigned columns
-)
+static void write_number(const NumberField *f, const char *mantissa,
+                         unsigned mantissa_length, unsigned columns)
 {
     char lead = leading_sign(f), trail = trailing_sign(f);
     int minus = number.negative && !lead && !trail;
-    unsigned needed = mantissa_length + (minus || lead ? 1 : 0)
-                    + (f->dollar ? 1 : 0);
+    unsigned needed =
+        mantissa_length + (minus || lead ? 1 : 0) + (f->dollar ? 1 : 0);
     unsigned length = 0, pad = 0;
     char fill = f->stars ? '*' : ' ';
 
@@ -471,8 +463,8 @@ static void write_field(const NumberField *f)
 
 static void load_integer(long value)
 {
-    unsigned long magnitude = value < 0 ? 0UL - (unsigned long)value
-                                        : (unsigned long)value;
+    unsigned long magnitude =
+        value < 0 ? 0UL - (unsigned long)value : (unsigned long)value;
     char reversed[12];
     int count = 0, i;
 
@@ -494,8 +486,8 @@ static void load_real(double value, int is_double)
     int exponent, limit = is_double ? 16 : 7;
 
     fout_digits(value, is_double, &d, &exponent);
-    number.scientific = (exponent < 0 ? -exponent : exponent) > limit
-                        || exponent + (int)d.count > limit;
+    number.scientific = (exponent < 0 ? -exponent : exponent) > limit ||
+                        exponent + (int)d.count > limit;
     fout_digits(value, 1, &d, &exponent);
     number.negative = d.sign == '-';
     copy_bytes(number.text, d.text, d.count);
@@ -550,9 +542,8 @@ static void using_string(SD *item)
     str_tmp_free(item);
 }
 
-static const UsingOps ops = {
-    using_integer, using_real, using_string, using_end
-};
+static const UsingOps ops = {using_integer, using_real, using_string,
+                             using_end};
 
 /* B$USNG: PRINT USING, with the format. */
 void B_USNG(SD *format)

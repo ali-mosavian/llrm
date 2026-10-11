@@ -15,21 +15,20 @@ static const GfxMode modes[] = {
     {8, 0x0E, 640, 200, 8, 5.0 / 12.0, 15, 15, 0, 0, 16, 1, 4},
     {9, 0x10, 640, 350, 14, 35.0 / 48.0, 15, 63, 0, 0, 16, 1, 4},
     {12, 0x12, 640, 480, 16, 1.0, 15, -1, 0, 1, 16, 1, 4},
-    {13, 0x13, 320, 200, 8, 5.0 / 6.0, 255, -1, 0, 1, 256, 8, 1}
-};
+    {13, 0x13, 320, 200, 8, 5.0 / 6.0, 255, -1, 0, 1, 256, 8, 1}};
 
 const GfxMode *gfx_current;
 byte gfx_foreground = DEFAULT_FOREGROUND, gfx_background;
 static byte cga_background, cga_palette = 1;
 int gfx_x1, gfx_y1, gfx_x2, gfx_y2;
-/* The last referenced point: STEP is taken from it, and LINE -(x, y) starts at it. */
+/* The last referenced point: STEP is taken from it, and LINE -(x, y) starts at
+ * it. */
 static int last_x, last_y;
 
 /* The adapter's own colour numbers for the attributes 0 to 15 at the start of a
    mode: 0-5 and 7 as they are, 6 brown (20), 8-15 the bright ones (56-63). */
-static const byte default_palette[16] = {
-    0, 1, 2, 3, 4, 5, 20, 7, 56, 57, 58, 59, 60, 61, 62, 63
-};
+static const byte default_palette[16] = {0,  1,  2,  3,  4,  5,  20, 7,
+                                         56, 57, 58, 59, 60, 61, 62, 63};
 
 void gfx_set_background(byte color)
 {
@@ -67,7 +66,8 @@ void gfx_screen(int mode)
                 last_y = (int)modes[at].height / 2;
             }
             gfx_current = &modes[at];
-            gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1 : DEFAULT_FOREGROUND;
+            gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1
+                                                   : DEFAULT_FOREGROUND;
             gfx_background = 0;
             cga_background = 0;
             cga_palette = 1;
@@ -79,15 +79,16 @@ void gfx_screen(int mode)
     qb_error(BE_ILLFUN);
 }
 
-/* COLOR: the numbers a mode takes are its own, and 255 for the background of the
-   EGA modes is taken and means none. */
+/* COLOR: the numbers a mode takes are its own, and 255 for the background of
+   the EGA modes is taken and means none. */
 void gfx_set_colors(int foreground, int background)
 {
     const GfxMode *mode = gfx_current;
     int none = background == 255 && !mode->cga && mode->bg_max > 0;
 
-    if (foreground > mode->fg_max || (foreground >= 0 && mode->fg_max < 0)
-        || (!none && (background > mode->bg_max || (background >= 0 && mode->bg_max < 0))))
+    if (foreground > mode->fg_max || (foreground >= 0 && mode->fg_max < 0) ||
+        (!none &&
+         (background > mode->bg_max || (background >= 0 && mode->bg_max < 0))))
         qb_error(BE_ILLFUN);
     if (mode->cga) {
         if (foreground >= 0)
@@ -103,8 +104,8 @@ void gfx_set_colors(int foreground, int background)
         gfx_set_background((byte)background);
 }
 
-/* A colour number: -1 is the foreground, and one that is no attribute of the mode
-   is the foreground too (the number is taken as a byte first). */
+/* A colour number: -1 is the foreground, and one that is no attribute of the
+   mode is the foreground too (the number is taken as a byte first). */
 byte gfx_color(int color)
 {
     if (color == -1)
@@ -122,14 +123,15 @@ byte gfx_attribute(int color)
 
 void gfx_plot(int x, int y, byte color, byte operation)
 {
-    if (x >= 0 && y >= 0 && (unsigned)x < gfx_current->width
-        && (unsigned)y < gfx_current->height)
+    if (x >= 0 && y >= 0 && (unsigned)x < gfx_current->width &&
+        (unsigned)y < gfx_current->height)
         gd_plot(x, y, color, operation);
 }
 
 int gfx_clip_box(int *x1, int *y1, int *x2, int *y2)
 {
-    int right = (int)gfx_current->width - 1, bottom = (int)gfx_current->height - 1;
+    int right = (int)gfx_current->width - 1,
+        bottom = (int)gfx_current->height - 1;
 
     if (*x1 > *x2) {
         int swap = *x1;
@@ -158,8 +160,8 @@ int gfx_clip_box(int *x1, int *y1, int *x2, int *y2)
 
 int gfx_pixel(int x, int y)
 {
-    if (x < 0 || y < 0 || (unsigned)x >= gfx_current->width
-        || (unsigned)y >= gfx_current->height)
+    if (x < 0 || y < 0 || (unsigned)x >= gfx_current->width ||
+        (unsigned)y >= gfx_current->height)
         return -1;
     return gd_read(x, y);
 }
@@ -195,8 +197,9 @@ static void need_graphics(void)
         qb_error(BE_ILLFUN);
 }
 
-/* The first and second points of a statement, absolute (B$N..) or (B$S..) a step from the last point and from the first;
-   each is the last point after. A step is rounded before it is added, as BC does. */
+/* The first and second points of a statement, absolute (B$N..) or (B$S..) a
+   step from the last point and from the first; each is the last point after. A
+   step is rounded before it is added, as BC does. */
 static void first_point(int x, int y)
 {
     need_graphics();
@@ -287,13 +290,17 @@ int B_PNI2(short x, short y)
 void B_PAL2(short attribute, long color)
 {
     need_graphics();
-    if (attribute < 0 || (unsigned)attribute >= gfx_current->colors || color < 0)
+    if (attribute < 0 || (unsigned)attribute >= gfx_current->colors ||
+        color < 0)
         qb_error(BE_ILLFUN);
     if (gfx_current->dac) {
-        /* red, green and blue, 0 to 63 each, in the three bytes from the low one */
-        if ((color & 0xFF) > 63 || (color >> 8 & 0xFF) > 63 || (color >> 16) > 63)
+        /* red, green and blue, 0 to 63 each, in the three bytes from the low
+         * one */
+        if ((color & 0xFF) > 63 || (color >> 8 & 0xFF) > 63 ||
+            (color >> 16) > 63)
             qb_error(BE_ILLFUN);
-        gd_palette_mix(attribute, color & 0xFF, color >> 8 & 0xFF, (unsigned)(color >> 16));
+        gd_palette_mix(attribute, color & 0xFF, color >> 8 & 0xFF,
+                       (unsigned)(color >> 16));
     } else {
         if (color > 63)
             qb_error(BE_ILLFUN);
@@ -329,7 +336,7 @@ static void gfx_term(void)
     gfx_screen(0);
 }
 
-static Comp gfx_comp = { 0, C_GR, { 0, 0, 0, 0, 0, gfx_term } };
+static Comp gfx_comp = {0, C_GR, {0, 0, 0, 0, 0, gfx_term}};
 
 #define XI_FN gfx_xinit
 #include "xi.h"
