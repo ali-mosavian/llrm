@@ -221,6 +221,8 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
+# So there is no `cargo build --bins` here: it made a second set of every crate (238 CPU-s) for binaries the test build then links over
+# (all of them but hir-mir, which the corpus scripts build themselves).
 WARNING_FLAGS = "-D warnings"
 WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
 # Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-c apart from the build step's and put
@@ -232,7 +234,6 @@ STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1"}
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
-    f"{WARNINGS_AS_ERRORS} cargo build --release -q --bins && "
     f"{WARNINGS_AS_ERRORS} cargo test --release -q --workspace --no-run"
 )
 # Measurements compare two revisions, so their historical base is built without

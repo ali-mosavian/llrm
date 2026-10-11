@@ -421,7 +421,7 @@ def test_a_one_line_change_to_any_rust_file_selects_the_fmt_step_in_the_fast_tie
 
 def test_the_build_rejects_compiler_warnings():
     assert gate.WARNINGS_AS_ERRORS == "RUSTFLAGS='-D warnings'"
-    assert gate.BUILD.count(gate.WARNINGS_AS_ERRORS) == 4
+    assert gate.BUILD.count(gate.WARNINGS_AS_ERRORS) == 3
     assert "cargo check --workspace --all-targets -q" in gate.BUILD
     assert "cargo check --release --workspace --all-targets -q" in gate.BUILD
 
@@ -600,3 +600,9 @@ def test_the_doc_step_runs_rustdoc_only_where_a_doc_comment_has_a_fence_to_run(t
     assert not has("/// ```text\n/// x\n/// ```\n/// ```text\n/// y\n/// ```\n"), "a closing fence is not an opening one"
     command = gate.commands(gate.plan(["crates/frontends/llrm-c/src/lib.rs"], "full"), gate.load(), gate.packages())["doc"]
     assert command.startswith("if python3 tools/gate/doctests.py") and "--doc" in command, command
+
+
+def test_the_build_makes_one_set_of_crates_for_the_binaries_and_the_tests():
+    """`cargo build --bins` and `cargo test --no-run` each built every crate (238 and 136 CPU-s) and the second linked its llrm-c over
+    the first's: the steps ran the test build's binary and the plain build was waste."""
+    assert "cargo build" not in gate.BUILD and "cargo test --release -q --workspace --no-run" in gate.BUILD
