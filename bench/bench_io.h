@@ -14,7 +14,11 @@
 #else
 #include <io.h>
 #include <fcntl.h>
+#if defined(__TURBOC__) || defined(__BORLANDC__)
+#include <sys\stat.h> /* a DOS compiler reads the path as DOS does */
+#else
 #include <sys/stat.h>
+#endif
 #define bench_open_read(name) open(name, O_RDONLY | O_BINARY)
 #define bench_create(name) open(name, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, S_IWRITE)
 #define bench_read(handle, buffer, count) read(handle, buffer, count)
