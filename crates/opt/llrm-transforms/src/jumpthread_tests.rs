@@ -420,3 +420,134 @@ fn test_a_branch_the_way_in_settles_is_threaded_on_each_way() {
     assert_eq!(results(&after, inputs), results(&before, inputs), "{printed}");
     assert!(printed.matches("br i1 %last").count() < 2, "the second branch on %last is decided on each way: {printed}");
 }
+
+/// A loop whose header branches on a compare of `%x`, which the loop does not
+/// change: the true arm goes straight to the body, the false one adds a
+/// constant first, and the body is one block that is the latch.
+const INVARIANT: &str = "define i16 @f(i16 %x, i16 %n) {
+b0:
+  %c = icmp eq i16 %x, 8
+  br label %head
+
+head:
+  %m = phi i16 [ %n, %b0 ], [ %m1, %join ]
+  %acc = phi i16 [ 0, %b0 ], [ %acc1, %join ]
+  br i1 %c, label %join, label %other
+
+other:
+  %d = add i16 %acc, 5
+  br label %join
+
+join:
+  %v = phi i16 [ 0, %head ], [ %d, %other ]
+  %acc1 = add i16 %acc, %v
+  %m1 = sub i16 %m, 1
+  %done = icmp sle i16 %m1, 0
+  br i1 %done, label %exit, label %head
+
+exit:
+  %r = phi i16 [ %acc1, %join ]
+  ret i16 %r
+}
+";
+
+/// `INVARIANT` with a second block in the chain to the latch.
+const INVARIANT_CHAIN: &str = "define i16 @f(i16 %x, i16 %n) {
+b0:
+  %c = icmp eq i16 %x, 8
+  br label %head
+
+head:
+  %m = phi i16 [ %n, %b0 ], [ %m1, %tail ]
+  %acc = phi i16 [ 0, %b0 ], [ %acc2, %tail ]
+  br i1 %c, label %join, label %other
+
+other:
+  %d = add i16 %acc, 5
+  br label %join
+
+join:
+  %v = phi i16 [ 0, %head ], [ %d, %other ]
+  %acc1 = add i16 %acc, %v
+  %big = icmp sgt i16 %acc1, 1000
+  br i1 %big, label %exit, label %tail
+
+tail:
+  %acc2 = add i16 %acc1, 1
+  %m1 = sub i16 %m, 1
+  %done = icmp sle i16 %m1, 0
+  br i1 %done, label %exit, label %head
+
+exit:
+  %r = phi i16 [ %acc1, %join ], [ %acc2, %tail ]
+  ret i16 %r
+}
+";
+
+const INVARIANT_INPUTS: &[&[i128]] = &[&[8, 1], &[8, 5], &[3, 1], &[3, 5], &[8, 400], &[3, 400], &[0, 2]];
+
+fn the_branch_on_the_invariant_is_in_no_loop(text: &str) -> bool {
+    let mut module = parsed(text);
+    let function = crate::testing::f(&mut module);
+    let graph = llrm_analysis::cfg::graph(function);
+    let loops = llrm_analysis::graph::loops::loops(&graph, function.entry().map(llrm_analysis::cfg::id));
+    function
+        .walk()
+        .all(
+            |(block, inst)| {
+                let op = function.instruction(inst);
+                let tests = op.opcode == llrm_mir::opcode::Opcode::Br
+                    && op.operands.len() == 3
+                    && matches!(
+                        op.operands[0],
+                        llrm_mir::module::Operand::Value(c) if function.value(c).name.as_deref() == Some("c")
+                    );
+                !tests || !loops.iter().any(|one| one.body.contains(&llrm_analysis::cfg::id(block)))
+            },
+        )
+}
+
+fn split(text: &str) -> String {
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let expected = results(&module, INVARIANT_INPUTS);
+    let after = crate::testing::managed(&mut module, JumpThread { size: false, correlated: true, states: true });
+    assert_eq!(results(&module, INVARIANT_INPUTS), expected, "{after}");
+    after
+}
+
+/// rectwo -O2 ran `xor ebp,ebp; cmp [esp+14h],8; je` on every trip of its
+/// hottest loop: the header's branch on the invariant `n == 8`, the arms
+/// rejoining in the body. A loop for each arm leaves the test out of both.
+#[test]
+fn test_a_loop_branching_on_an_invariant_has_a_loop_for_each_arm() {
+    let after = split(INVARIANT);
+    assert!(the_branch_on_the_invariant_is_in_no_loop(&after), "{after}");
+    // The original join is deleted, not left unreachable.
+    assert!(!after.contains("join:"), "{after}");
+}
+
+#[test]
+fn test_the_arms_chain_may_run_through_two_blocks_with_an_exit_between() {
+    let after = split(INVARIANT_CHAIN);
+    assert!(the_branch_on_the_invariant_is_in_no_loop(&after), "{after}");
+    assert!(!after.contains("join:") && !after.contains("tail:"), "{after}");
+}
+
+#[test]
+fn test_a_branch_the_loop_changes_is_left() {
+    let text = INVARIANT
+        .replace("%c = icmp eq i16 %x, 8\n  br label %head", "br label %head")
+        .replace(
+            "  br i1 %c, label %join, label %other",
+            "  %c = icmp eq i16 %m, 8\n  br i1 %c, label %join, label %other",
+        );
+    let after = split(&text);
+    assert!(after.contains("join:"), "{after}");
+}
+
+#[test]
+fn test_the_size_of_the_copies_is_gccs_limit() {
+    let mut module = parsed(&format!("{DOS}{INVARIANT}"));
+    let after = crate::testing::managed(&mut module, JumpThread { size: true, correlated: true, states: true });
+    assert!(after.contains("join:"), "a size build copies nothing: {after}");
+}

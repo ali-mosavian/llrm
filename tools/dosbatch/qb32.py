@@ -20,9 +20,10 @@ import qbruntime  # noqa: E402
 
 TARGET = dosbatch.linkrecipe.named(32)
 RUNTIME = qbruntime.RUNTIME
-PLATFORM = RUNTIME / "dos" / "m32"
-SHARED = dosbatch.ROOT / "runtime" / "shared" / "dos" / "m32"
-START_FILES = ["runtime/qb/dos/m32/qbstart.asm", "runtime/shared/dos/m32/start.asm"]
+# The OS layer's directory is the target's to say; the QB runtime's code for it sits beside it under runtime/qb.
+SHARED = Path(dosbatch.os_layer(TARGET, "directory", "c"))
+PLATFORM = RUNTIME / SHARED.parent.name / SHARED.name
+START_FILES = [str((PLATFORM / "qbstart.asm").relative_to(dosbatch.ROOT)), str((SHARED / "start.asm").relative_to(dosbatch.ROOT))]
 
 
 OBJECTS = Path.home() / ".cache" / "llrm" / "qb32-objs"
@@ -43,7 +44,7 @@ def _tree() -> str:
     import hashlib
 
     digest = hashlib.sha256()
-    for directory in (RUNTIME, SHARED, dosbatch.ROOT / "runtime" / "c" / "x86-m32"):
+    for directory in (RUNTIME, SHARED, dosbatch.ROOT / "runtime" / "c" / TARGET):
         for path in sorted(directory.rglob("*")):
             if path.is_file() and path.suffix in (".c", ".h", ".asm", ".inc", ".toml"):
                 digest.update(str(path.relative_to(dosbatch.ROOT)).encode() + path.read_bytes())
@@ -205,7 +206,7 @@ BUDGET_INSTRUCTIONS = 12_000_000_000
 
 
 def virtual_conf(rate: int) -> str:
-    conf = dosbatch.CONF.replace("cycles=max", f"virtual time=true\nvirtual time rate={rate}")
+    conf = dosbatch.CONF.replace(dosbatch.CYCLES, f"virtual time=true\nvirtual time rate={rate}")
     assert conf != dosbatch.CONF
     return conf
 

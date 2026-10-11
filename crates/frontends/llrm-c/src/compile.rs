@@ -165,6 +165,9 @@ struct Args {
     flags: Flags,
     dump: Option<PathBuf>,
     include: Vec<String>,
+    /// The target, whose OS layer header a program that includes it is given
+    /// (`os_header_directory`).
+    target: std::rc::Rc<dyn llrm_target::Target>,
     /// Watcom switches the program opts into, passed to wccq: -oa, -on.
     watcom: Vec<&'static str>,
     /// The target, the built-in DOS on a 386 unless `--machine` names
@@ -340,6 +343,14 @@ fn usage() -> String {
     format!("usage: llrm-c [-h] [-I INCLUDE] [--dump DUMP] [--os-layer FIELD] {} source", flags::USAGE)
 }
 
+/// A directory holding `target`'s OS layer header as `llrm_os.h`.
+fn os_header_directory(target: &dyn llrm_target::Target) -> Option<tempfile::TempDir> {
+    let text = target.os_layer()?.report(&target.runtime("c")?, "header").ok()?;
+    let directory = tempfile::tempdir().ok()?;
+    fs::write(directory.path().join("llrm_os.h"), text + "\n").ok()?;
+    Some(directory)
+}
+
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut flags, mut dump) = (None, Flags::default(), None);
     let (mut include, mut watcom) = (Vec::new(), Vec::new());
@@ -387,7 +398,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 )
         });
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
-    Ok(Args { source, os_layer, dump, include, watcom, codegen: bound.options(&flags, machine), flags })
+    let target = bound.target.clone();
+    Ok(Args { source, os_layer, dump, include, target, watcom, codegen: bound.options(&flags, machine), flags })
 }
 
 /// `main`: exit status 0 on success, 1 on a refusal, 2 on bad arguments.
@@ -427,13 +439,25 @@ pub fn main(argv: &[String]) -> i32 {
                     .collect();
                 let switches: Vec<&str> =
                     args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
-                recorded_for(
-                    &args.source,
-                    &args.include,
-                    args.flags.debug,
-                    &switches,
-                    &Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?,
-                )
+                let profile =
+                    Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?;
+                let record =
+                    |include: &[String]| recorded_for(&args.source, include, args.flags.debug, &switches, &profile);
+                let first = record(&args.include);
+                // `#include "llrm_os.h"` needs no `-I`: a program that includes
+                // it, itself or through another header, is
+                // recorded again with the header's directory searched last. The
+                // others pay nothing for it.
+                match &first {
+                    Err(error) if error.0.contains("llrm_os.h") => match os_header_directory(&*args.target) {
+                        Some(directory) => {
+                            let include = [&args.include[..], &[directory.path().display().to_string()]].concat();
+                            record(&include)
+                        }
+                        None => first,
+                    },
+                    _ => first,
+                }
             })?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
@@ -511,7 +535,10 @@ mod tests {
         // The assembly is laid out in columns: its words are what is compared.
         let runtime = |name: &str| {
             let text = std::fs::read_to_string(root.join("runtime").join(name)).unwrap();
-            text.lines().map(|line| line.split_whitespace().collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n")
+            text.lines()
+                .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         assert!(
             runtime("shared/dos/m16/os.asm").contains(&format!("public {}", check.limit))

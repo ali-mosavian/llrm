@@ -18,7 +18,16 @@ import dosbatch
 CONF = dosbatch.CONF
 
 
+BACKSTOP = 3600  # wall seconds: for an emulator that waits and burns no CPU
+
+
 class Session:
+    def limit(self, seconds: float):
+        """A function that says whether the emulator has used `seconds` of CPU time since now. The wall clock is the host's
+        load: waiting 30 s for a DOS shell to come up failed whenever the host was busy. The wall only backs this up."""
+        cpu, wall = dosbatch._cpu_seconds(self.process.pid), time.monotonic()
+        return lambda: dosbatch._cpu_seconds(self.process.pid) - cpu > seconds or time.monotonic() - wall > BACKSTOP
+
     def __init__(self, work: Path, conf: str = CONF):
         self.work = work
         probe = socket.socket()
@@ -33,13 +42,13 @@ class Session:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        deadline = time.monotonic() + 30
+        late = self.limit(30)
         while True:
             try:
                 self.sock = socket.create_connection(("127.0.0.1", port))
                 break
             except OSError:
-                if time.monotonic() > deadline:
+                if late():
                     raise
                 time.sleep(0.2)
         self.pending = 0
@@ -69,16 +78,26 @@ class Session:
             self.pending += 1
             return None
         while self.pending:
-            self.replies.get(timeout=120)
+            self.reply()
             self.pending -= 1
-        return self.replies.get(timeout=120)
+        return self.reply()
+
+    def reply(self) -> dict:
+        """The next reply: the emulator gets 120 s of CPU time to give it, however long a busy host takes."""
+        late = self.limit(120)
+        while True:
+            try:
+                return self.replies.get(timeout=1)
+            except queue.Empty:
+                if late():
+                    raise
 
     def wait_for_shell(self, seconds: float = 30) -> None:
         """Until the DOS shell takes commands: `wait_for_shell` can answer before the emulator has run far enough, so the
         status says."""
-        deadline = time.monotonic() + seconds
+        late = self.limit(seconds)
         while not self.send({"cmd": "status"}).get("shellReady"):
-            if time.monotonic() > deadline:
+            if late():
                 raise TimeoutError("the DOS shell never came up")
             time.sleep(0.01)
 
@@ -105,17 +124,17 @@ class Session:
         return "\n".join(text) if isinstance(text, list) else text
 
     def wait_for(self, text: str, seconds: float = 60, poll: float = 0.25) -> None:
-        deadline = time.monotonic() + seconds
+        late = self.limit(seconds)
         while text not in self.screen():
-            if time.monotonic() > deadline:
+            if late():
                 raise TimeoutError(f"{text!r} never appeared:\n{self.screen()}")
             time.sleep(poll)
 
     def wait_for_mode(self, mode: int, seconds: float = 60) -> None:
         """Until the screen is in the BIOS video mode `mode`."""
-        deadline = time.monotonic() + seconds
+        late = self.limit(seconds)
         while self.send({"cmd": "text_screen"}).get("video_mode") != mode:
-            if time.monotonic() > deadline:
+            if late():
                 raise TimeoutError(f"the screen never went to mode {mode}")
             time.sleep(0.25)
 

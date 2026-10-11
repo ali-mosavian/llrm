@@ -65,8 +65,9 @@ pub fn _RUNTIME_FRAME_HEADER(
     bitness: u32,
 ) -> Result<i64, String> {
     match runtime {
-        // llrm's flat frame is eight dwords below EBP: the previous BASIC frame, EBX, ECX, EDX, ESI and EDI as
-        // the caller had them, the bytes of locals and the GOSUB count.
+        // llrm's flat frame is eight dwords below EBP: the previous BASIC
+        // frame, EBX, ECX, EDX, ESI and EDI as the caller had them, the bytes
+        // of locals and the GOSUB count.
         model::RuntimeProfile::Llrm if bitness == 32 => Ok(32),
         model::RuntimeProfile::Qb45 | model::RuntimeProfile::Llrm => Ok(10),
         model::RuntimeProfile::Pds71 => Ok(18),
@@ -164,8 +165,9 @@ pub fn _runtime_frame(
     enter_by: &str,
     bitness: u32,
 ) -> Result<(lir::LirBody, IndexMap<i64, masm::Callee>), String> {
-    // A real-mode frame is entered with its bytes of locals in CX and its string slots in BX, and a far call;
-    // a flat one with the bytes in EAX (which a function's callers do not keep), and a near call.
+    // A real-mode frame is entered with its bytes of locals in CX and its
+    // string slots in BX, and a far call; a flat one with the bytes in EAX
+    // (which a function's callers do not keep), and a near call.
     let flat = bitness == 32;
     let word = if flat { 4 } else { 2 };
     let size = (size + word - 1) / word * word;
@@ -388,8 +390,9 @@ pub fn _basic_listing(
         _ => (Vec::new(), &listing),
     };
     let (enter, leave) = masm::_frame_parts(procedure);
-    // The shell's registers and counts as the target spells them: BP and SP are the frame and the stack pointer,
-    // and a width is the target's slot, which the listing states and these parts leave to the target.
+    // The shell's registers and counts as the target spells them: BP and SP are
+    // the frame and the stack pointer, and a width is the target's slot,
+    // which the listing states and these parts leave to the target.
     let registers = &procedure.registers;
     let shape = |what: &Semantics| -> Semantics {
         let place = |loc: &Loc| match loc {
@@ -511,7 +514,12 @@ fn written_basic_inner(
     let offset_kind = if words.width == 4 { objbuild::OFFSET32 } else { objbuild::OFFSET };
     code.fixups = [objbuild::Fixup::new(words.statements, offset_kind, statement_data)]
         .into_iter()
-        .chain(NAMED.iter().zip(words.segments).map(|(&(_, _, label), word)| objbuild::Fixup::new(word, offset_kind, label)))
+        .chain(
+            NAMED
+                .iter()
+                .zip(words.segments)
+                .map(|(&(_, _, label), word)| objbuild::Fixup::new(word, offset_kind, label)),
+        )
         .chain(shifted)
         .collect();
     let mut symbols: IndexMap<String, (usize, usize)> = symbols
@@ -537,7 +545,8 @@ fn written_basic_inner(
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let object = objbuild::object_of(module, name, segments, &symbols, &externs).map_err(|error| error.to_string())?;
     let emitted = llrm_omf::write::write(&object).map_err(|error| error.to_string())?;
-    // QB's classes and combine modes shape a real-mode link; a flat object keeps the ones its writer gave.
+    // QB's classes and combine modes shape a real-mode link; a flat object
+    // keeps the ones its writer gave.
     if module.object.bitness != 16 {
         return Ok(emitted);
     }
@@ -621,9 +630,10 @@ pub const NAMED: [(usize, &str, &str); 5] = [
     (32, "BC_CN", "$QB$CN"),
 ];
 
-/// Where MODULE_CODE keeps the addresses it holds, which are the words of the target's near pointer: 16-bit
-/// offsets in real mode, as QB's header has them; dwords, each at its own place, where the object is 32-bit.
-/// The header is 48 bytes either way, so the code starts at 30h.
+/// Where MODULE_CODE keeps the addresses it holds, which are the words of the
+/// target's near pointer: 16-bit offsets in real mode, as QB's header has them;
+/// dwords, each at its own place, where the object is 32-bit. The header is 48
+/// bytes either way, so the code starts at 30h.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HeaderWords {
     /// Bytes of an address.
@@ -897,7 +907,12 @@ pub fn assembled(
         rows.clear();
     }
     let word = if options.arch.layout().mode == 32 { 4 } else { 2 };
-    procedures.push(super::statement_table(&rows, options.arch.frame_registers(), word, Regs(options.arch.registers())));
+    procedures.push(super::statement_table(
+        &rows,
+        options.arch.frame_registers(),
+        word,
+        Regs(options.arch.registers()),
+    ));
     let mut data = Vec::new();
     for segment in &object.segments {
         data.push((segment.name.clone(), timed("data layout", || laid_out(module, segment, &names))?));
@@ -1163,8 +1178,12 @@ fn size_of(datum: &masm::Datum) -> i64 {
     }
 }
 
-/// Spell BASIC module fallthrough as the runtime's implicit B$CENP, a far call where the target has far code.
-pub fn ends_program(body: &lir::LirBody, far: bool) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
+/// Spell BASIC module fallthrough as the runtime's implicit B$CENP, a far call
+/// where the target has far code.
+pub fn ends_program(
+    body: &lir::LirBody,
+    far: bool,
+) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
     let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {

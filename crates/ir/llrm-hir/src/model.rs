@@ -59,14 +59,15 @@ str_enum!(RuntimeProfile {
     Qb45("QB45") = "qb45",
     Pds71("PDS71") = "pds71",
     Vbdos("VBDOS") = "vbdos",
-    // QB's frames and descriptors, called as the target's own convention calls a function (llrm's runtime).
+    // QB's frames and descriptors, called as the target's own convention calls
+    // a function (llrm's runtime).
     Llrm("LLRM") = "llrm",
     Freestanding("FREESTANDING") = "freestanding",
 });
 
 impl RuntimeProfile {
-    /// The Microsoft runtime whose measured tables (`llrm-qbruntime`) describe this profile's routines: llrm
-    /// implements QB 4.5's.
+    /// The Microsoft runtime whose measured tables (`llrm-qbruntime`) describe
+    /// this profile's routines: llrm implements QB 4.5's.
     pub fn tables(self) -> &'static str {
         match self {
             Self::Llrm => Self::Qb45.value(),
@@ -74,7 +75,8 @@ impl RuntimeProfile {
         }
     }
 
-    /// Whether runtime calls follow the target's own convention, not the Microsoft runtime's stack ABI.
+    /// Whether runtime calls follow the target's own convention, not the
+    /// Microsoft runtime's stack ABI.
     pub fn calls_natively(self) -> bool {
         self == Self::Llrm
     }

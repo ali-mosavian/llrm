@@ -16,6 +16,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import cpulimit
+
 import dosbatch
 
 
@@ -282,7 +284,7 @@ def extras(items: tuple, candidate: bool) -> tuple[Path, ...]:
 
 def compile_basic(source: Path, obj: Path, runtime: str) -> str | None:
     """`source` as llrm-qb compiles it for `runtime` (qb45 or llrm); the reason it did not, or None."""
-    done = subprocess.run(
+    done = cpulimit.run(
         [
             str(dosbatch.BIN / "llrm-qb"),
             str(source),
@@ -294,9 +296,9 @@ def compile_basic(source: Path, obj: Path, runtime: str) -> str | None:
             "-o",
             str(obj),
         ],
+        300,
         capture_output=True,
         text=True,
-        timeout=300,
     )
     return None if done.returncode == 0 and obj.exists() else "compile: " + (done.stderr or done.stdout).strip()[-600:]
 
@@ -386,8 +388,9 @@ def remove_existing_archive(work: Path) -> None:
         existing.unlink()
 
 
-def archive(objects: list[Path], output: Path, work: Path) -> None:
-    """Use QB45's librarian, not a host archive writer, for a LINK-compatible OMF library."""
+def archive(objects: list[Path], output: Path, work: Path, seconds: int = 300) -> None:
+    """Use QB45's librarian, not a host archive writer, for a LINK-compatible OMF library; the emulator gets `seconds`
+    of CPU time."""
     work.mkdir(parents=True, exist_ok=True)
     remove_existing_archive(work)
     copied = []
@@ -401,15 +404,16 @@ def archive(objects: list[Path], output: Path, work: Path) -> None:
     (work / "job.conf").write_text(dosbatch.CONF)
     events = work / "events.txt"
     with (work / "jobs.txt").open() as stdin, events.open("w") as sink:
-        subprocess.run(
+        # CPU seconds, not the wall clock: LIB.EXE takes the same CPU time on a host shared by thirty gates, and many times the
+        # wall time.
+        cpulimit.run(
             [str(dosbatch.DOSBOX), "-nolog", "-conf", str(work / "job.conf")],
+            seconds,
             stdin=stdin,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             pass_fds=(sink.fileno(),),
             env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())},
-            check=True,
-            timeout=300,
         )
     made = work / ARCHIVE_NAME
     if not made.is_file() or made.stat().st_size == 0:

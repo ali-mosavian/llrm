@@ -1,5 +1,5 @@
-reason = "a diamond-bodied loop's latch falls into the header (x_collatz -15.7% clocks); costs one jmp per loop entry: quicksort bas +2.1% instructions"
-blessed = "2026-10-09"
+reason = "coalesce takes loop blocks deepest first, the hottest copies first within a loop (x_binsearch -9.4% clocks m32): bintree c -O2 +2.6% instructions (the LCG chain in the loop takes a longer multiply sequence), qbsp/mandel/grep code bytes +0.3..1.9%, fib/crc/jpeg/grep/qbsp nib better"
+blessed = "2026-10-11"
 
 [bas.O2]
 instructions = 308816
@@ -9,12 +9,11 @@ data_bytes = 13
 bss_bytes = 0
 
 [bas.Os]
-instructions = 308272
-memory_operands = 20866
-code_bytes = 301
+instructions = 305948
+memory_operands = 20126
+code_bytes = 305
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 4.1216
 
 [c.O2]
 instructions = 172712

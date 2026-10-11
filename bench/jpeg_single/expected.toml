@@ -1,0 +1,74 @@
+reason = "coalesce takes loop blocks deepest first, the hottest copies first within a loop (x_binsearch -9.4% clocks m32): bintree c -O2 +2.6% instructions (the LCG chain in the loop takes a longer multiply sequence), qbsp/mandel/grep code bytes +0.3..1.9%, fib/crc/jpeg/grep/qbsp nib better"
+blessed = "2026-10-11"
+
+[bas.O2]
+code_bytes = 5186
+data_bytes = 29635
+bss_bytes = 0
+kernel_ms = 538.1787
+
+[bas.Os]
+code_bytes = 4904
+data_bytes = 29635
+bss_bytes = 0
+kernel_ms = 542.2903
+
+[c.O2]
+code_bytes = 3156
+data_bytes = 634
+bss_bytes = 15849
+kernel_ms = 308.3818
+
+[c.Os]
+code_bytes = 2917
+data_bytes = 634
+bss_bytes = 15849
+kernel_ms = 310.146
+
+[nib.O2]
+code_bytes = 6301
+data_bytes = 17198
+bss_bytes = 0
+kernel_ms = 392.1256
+
+[nib.Os]
+code_bytes = 5900
+data_bytes = 17198
+bss_bytes = 0
+kernel_ms = 399.1848
+
+[bcc.O2]
+code_bytes = 3192
+data_bytes = 634
+bss_bytes = 15849
+kernel_ms = 608.1099
+
+[bcc.Os]
+code_bytes = 3090
+data_bytes = 634
+bss_bytes = 15849
+kernel_ms = 746.7687
+
+[tcpp.O2]
+code_bytes = 3446
+data_bytes = 634
+bss_bytes = 15849
+kernel_ms = 813.7156
+
+[tcpp.Os]
+code_bytes = 3270
+data_bytes = 634
+bss_bytes = 15849
+kernel_ms = 806.5947
+
+[pds71.O2]
+code_bytes = 6157
+data_bytes = 1257
+bss_bytes = 3718
+kernel_ms = 2091.4243
+
+[vbdos.O2]
+code_bytes = 6101
+data_bytes = 1305
+bss_bytes = 3718
+kernel_ms = 2708.6217

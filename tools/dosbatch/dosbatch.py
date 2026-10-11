@@ -25,6 +25,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from dataclasses import dataclass
 
+import cpulimit
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import linkrecipe  # noqa: E402
@@ -101,7 +103,7 @@ _RUNTIME_LOCK = threading.Lock()
 
 
 def _host(command: list[str]) -> None:
-    done = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    done = cpulimit.run(command, 300, capture_output=True, text=True)
     if done.returncode != 0:
         raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
 
@@ -379,14 +381,24 @@ def _oversized(work: Path, cap: int) -> str | None:
     return None
 
 
+def _cpu_seconds(pid: int) -> float:
+    """The CPU time `pid` has used so far, or 0 where /proc does not say."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+    except (OSError, IndexError, ValueError):
+        return 0.0
+
+
 def _launch(command: list[str], work: Path, timeout: int | None, cap: int, stall: int | None = None, **options) -> str | None:
     """Run `command` until it exits, or until a file in `work` passes `cap` bytes, which stops it: the file's name. A launch
-    that outlives `timeout` (None: no limit) or whose events.txt does not grow for `stall` seconds is an error. Each job's
-    own budget is guest time, so how long a launch takes on the wall is the host's load, not a property of the programs:
-    only an emulator that has stopped reporting is stuck."""
+    that outlives `timeout` (None: no limit) or that uses `stall` seconds of CPU without its events.txt growing is an error.
+    Each job's own budget is guest time, so how long a launch takes on the wall is the host's load, not a property of the
+    programs: a wall-clock stall stopped emulators that were only waiting for a CPU. One that spins without reporting is
+    stuck, and its own CPU time says so."""
     process = subprocess.Popen(command, **options)
-    started = last = time.monotonic()
-    seen = -1
+    started = time.monotonic()
+    seen, spent = -1, 0.0
     while True:
         try:
             process.wait(timeout=0.2)
@@ -397,11 +409,11 @@ def _launch(command: list[str], work: Path, timeout: int | None, cap: int, stall
             process.kill()
             process.wait()
             return over
-        now = time.monotonic()
         size = (work / "events.txt").stat().st_size if (work / "events.txt").exists() else 0
+        used = _cpu_seconds(process.pid)
         if size != seen:
-            seen, last = size, now
-        if (timeout is not None and now > started + timeout) or (stall is not None and now > last + stall):
+            seen, spent = size, used
+        if (timeout is not None and time.monotonic() > started + timeout) or (stall is not None and used > spent + stall):
             process.kill()
             process.wait()
             raise subprocess.TimeoutExpired(command, timeout if timeout is not None else stall)
@@ -425,7 +437,9 @@ def virtual_time_problem(binary: Path | None = None) -> str | None:
     return _VIRTUAL[stamp]
 
 
-def _probe_virtual_time(binary: Path) -> str | None:
+def _probe_virtual_time(binary: Path, seconds: int = 120) -> str | None:
+    """Why `binary` cannot give virtual time, or None. The 50 ms job is limited to `seconds` of the emulator's CPU time:
+    a start-up that waited for a busy host's CPU is not a binary without virtual time."""
     if not binary.exists():
         return f"{binary} does not exist"
     with tempfile.TemporaryDirectory() as where:
@@ -435,11 +449,11 @@ def _probe_virtual_time(binary: Path) -> str | None:
         (work / "jobs.txt").write_text(f":ms 50\nmount c {work}\nc:\nSPIN.COM\n.\n")
         with open(work / "jobs.txt") as stdin, open(work / "events.txt", "w") as sink:
             try:
-                subprocess.run([str(binary), "-nolog", "-conf", str(work / "job.conf")], stdin=stdin, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),), timeout=120,
-                               env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
+                cpulimit.run([str(binary), "-nolog", "-conf", str(work / "job.conf")], seconds, stdin=stdin, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
+                             env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
             except subprocess.TimeoutExpired:
-                return f"{binary} did not finish a 50 ms job in 120 s"
+                return f"{binary} did not finish a 50 ms job in {seconds} s of CPU time"
         ends = [json.loads(line) for line in (work / "events.txt").read_text().splitlines() if line.startswith('{"ev":"end"')]
     expected = 50 * int(re.search(r"rate=(\d+)", CYCLES).group(1))
     if not ends or abs(ends[0].get("instructions", 0) - expected) > expected // 10:
