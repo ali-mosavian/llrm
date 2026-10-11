@@ -231,3 +231,18 @@ def test_a_split_asks_what_holds_a_register_where_it_splits_and_gathers_none_of_
 
 
     assert run.get("split occupied", 0.0) < 20, f"branches N=400 -O2: split occupied cost {run.get('split occupied')} Minstr (20 allowed; ~220 before): {run}"
+
+
+def test_a_rewrite_moves_the_holders_of_a_register_it_named_in_the_index_and_does_not_build_it_again():
+    """`union.refresh()` dropped the index of every register after every rewrite, and the next questions built it again from every
+    holder: `regalloc evict` 692 Minstr on `branches` at N=400 and 2,601 at 800, `recolor` and `base` their shares of 4 G. Only the
+    intervals of the values the rewrite named moved, and those are moved in the index."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](400))
+        run = steps(compiler, source, "-O2")
+    assert run["regalloc evict"] < 200, f"branches N=400 -O2: regalloc evict cost {run['regalloc evict']} Minstr (200 allowed; 692 before): {run}"
