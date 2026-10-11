@@ -77,7 +77,7 @@ fn test_only_omax_searches_every_shape() {
 /// 2026-10-10; -Og does not.
 #[test]
 fn each_level_selects_gcc_s_passes() {
-    // (scalar passes, last call inlined, inlines at all, gcse, sibling calls,
+    // (scalar passes, last call inlined, inlines at all, pre, sibling calls,
     // fill, peel, unswitch, copies may grow)
     let row = |level: &str| {
         let o = pipeline(&[level]);
@@ -85,7 +85,7 @@ fn each_level_selects_gcc_s_passes() {
             [o.dead, o.promote, o.drop_stores, o.hoist, o.strength],
             o.inline.last,
             o.inline.limit > 0,
-            o.forward && o.drop_loads,
+            o.pre,
             o.sibcalls,
             o.fill,
             o.peel,

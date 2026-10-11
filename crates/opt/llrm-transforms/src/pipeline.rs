@@ -62,6 +62,10 @@ pub struct Options {
     pub hoist: bool,
     pub forward: bool,
     pub drop_loads: bool,
+    /// Partial redundancies are made full by inserting a computation or load on
+    /// the path that lacks it: gcc's `-ftree-pre`, -O2 and up. Without it
+    /// `gvn` only removes what is redundant on every path (`-ftree-fre`, -O1).
+    pub pre: bool,
     pub drop_stores: bool,
     pub promote: bool,
     pub strength: bool,
@@ -106,6 +110,7 @@ impl Default for Options {
             loop_intervals: true,
             forward: true,
             drop_loads: true,
+            pre: true,
             drop_stores: true,
             promote: true,
             strength: true,
@@ -134,18 +139,18 @@ impl Options {
     /// loop is copied out completely only where the code does not grow;
     /// nothing is inlined that `early-inlining-insns` (6) over
     /// `max-inline-insns-auto` (15) of the -O2 threshold does not admit,
-    /// and no gcse, sibling calls, peeling or unswitching. Pattern fill is on
-    /// (`LoopIdiomRecognize` is in LLVM's O1 pipeline, PassBuilderPipelines.cpp
-    /// L562): the one departure from gcc's -O1 here, the user's decision of
-    /// 2026-10-10 (docs/levels.md).
+    /// value numbering that inserts nothing (`-ftree-fre`; no
+    /// `-ftree-pre`), and no sibling calls, peeling or unswitching. Pattern
+    /// fill is on (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
+    /// PassBuilderPipelines.cpp L562): the one departure from gcc's -O1
+    /// here, the user's decision of 2026-10-10 (docs/levels.md).
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
             inline: inline::Threshold::new(Self::default().inline.limit * 6 / 15),
             ipa_ranges: false,
             loop_intervals: false,
-            forward: false,
-            drop_loads: false,
+            pre: false,
             sibcalls: false,
             peel: false,
             unswitch: false,
@@ -305,7 +310,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // one.
         Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),
-        Box::new(gvn::Gvn),
+        Box::new(gvn::Gvn { pre: applied.options.pre }),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
         Box::new(indvars::IndVars { exit_values: false }),
