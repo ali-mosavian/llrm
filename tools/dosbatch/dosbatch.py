@@ -25,6 +25,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from dataclasses import dataclass
 
+import cpulimit
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import linkrecipe  # noqa: E402
@@ -101,7 +103,7 @@ _RUNTIME_LOCK = threading.Lock()
 
 
 def _host(command: list[str]) -> None:
-    done = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    done = cpulimit.run(command, 300, capture_output=True, text=True)
     if done.returncode != 0:
         raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
 
