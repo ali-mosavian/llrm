@@ -107,7 +107,11 @@ pub fn machine_with<'a>(
         )?),
         // After allocation: which moves in a phi's copy conflict is a question
         // about locations.
-        Box::new(parcopy::ParallelCopy),
+        Box::new(parcopy::ParallelCopy {
+            prices: parcopy::CyclePrices::of(target),
+            available: classes.available.clone(),
+            saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+        }),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
         Box::new(peephole::Peephole::with_rules(
             frame.clone(),

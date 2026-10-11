@@ -1,4 +1,4 @@
-reason = "a call's upper-half register clobbers now reach its callers' summaries: grep nib -O2/-Os grow 27 and 21 bytes where a long was kept in esi/edi across a call that loses its upper half (the miscompile qb's circle sweep showed)"
+reason = "parcopy: a cycle of copies goes through a dead register where a pop costs more clocks (4 on the 486) than copies: grep c -O2 +1 byte, fewer clocks"
 blessed = "2026-10-11"
 
 [bas.O2]
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 3886.6766
 
 [c.O2]
-code_bytes = 548
+code_bytes = 549
 data_bytes = 81
 bss_bytes = 3056
 kernel_ms = 3415.7936
