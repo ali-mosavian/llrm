@@ -275,7 +275,7 @@ pub fn reduced(
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
-            if let Some(rewrite) = _post_incremented(&view, &loop_) {
+            if let Some(rewrite) = _post_incremented(&view, &loop_).or_else(|| _stepped_before_test(&view, &loop_)) {
                 drop(facts);
                 _read_after_step(unit, rewrite);
                 analyses.invalidate(unit.function, &PreservedAnalyses::none());
@@ -874,6 +874,103 @@ fn _post_incremented(
         induction::AffineOperand::Value(..) => return None,
     };
     Some(PostIncrement { compare: proof.compare, counter, step, ty, bound: moved })
+}
+
+/// A test of the counter that leaves the loop, made after the step the
+/// counter's other use is: the compare reads the step and the bound a step on,
+/// so the counter is dead once stepped. gcc's ivopts takes a use after the
+/// increment from the incremented candidate, whichever exit it is; here a
+/// loop entered behind its copied tests leaves from its header, and the
+/// stepped value and the counter were two registers (`lea cx, [si+1]; cmp
+/// si, 31; ...; mov si, cx`). Where an ordered test would wrap the step's
+/// flags say so, as `icmp (add nsw x, k), c` is `icmp x, c - k`.
+fn _stepped_before_test(
+    view: &memory::Unit,
+    loop_: &Loop,
+) -> Option<PostIncrement> {
+    let function = view.function;
+    let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
+    for &at in &loop_.body {
+        let block = cfg::block(at);
+        let branch = function.terminator(block)?;
+        let instruction = function.instruction(branch);
+        if instruction.operands.len() != 3
+            || !function.successors(block).iter().any(|one| !loop_.body.contains(&cfg::id(*one)))
+        {
+            continue;
+        }
+        let Operand::Value(condition) = instruction.operands[0] else { continue };
+        let ValueDef::Instruction(compare) = function.value(condition).def else { continue };
+        let Opcode::ICmp(predicate) = function.instruction(compare).opcode else { continue };
+        let operands = &function.instruction(compare).operands;
+        let ((Operand::Value(read), Operand::Constant(bound)) | (Operand::Constant(bound), Operand::Value(read))) =
+            (operands[0], operands[1])
+        else {
+            continue;
+        };
+        let ValueDef::Instruction(phi) = function.value(read).def else { continue };
+        if function.instruction(phi).opcode != Opcode::Phi || function.parent(phi) != Some(cfg::block(loop_.header)) {
+            continue;
+        }
+        let Some(Operand::Value(step)) = _latch_arm(function, read, cfg::block(latch)) else { continue };
+        let ValueDef::Instruction(made) = function.value(step).def else { continue };
+        let stepper = function.instruction(made);
+        let width = view.int_bits(Operand::Value(read))?;
+        if width > 64 {
+            continue;
+        }
+        let signed = |bits: u128| {
+            let low = bits & ((1u128 << width) - 1);
+            if low >> (width - 1) == 1 { low as i128 - (1i128 << width) } else { low as i128 }
+        };
+        let by = match (&stepper.opcode, &stepper.operands[..]) {
+            (Opcode::Binary(BinaryOp::Add), [Operand::Value(one), k @ Operand::Constant(_)])
+            | (Opcode::Binary(BinaryOp::Add), [k @ Operand::Constant(_), Operand::Value(one)])
+                if *one == read =>
+            {
+                signed(view.int_constant(*k)?)
+            }
+            (Opcode::Binary(BinaryOp::Sub), [Operand::Value(one), k @ Operand::Constant(_)]) if *one == read => {
+                -signed(view.int_constant(*k)?)
+            }
+            _ => continue,
+        };
+        // The step is made before the compare, on every path to it.
+        let (stepped_in, compared_in) = (function.parent(made)?, block);
+        let before = if stepped_in == compared_in {
+            let all = function.block(block).instructions();
+            all.iter().position(|one| *one == made)? < all.iter().position(|one| *one == compare)?
+        } else {
+            view.shape().dominance.dominates(cfg::id(stepped_in), at)
+        };
+        // The counter is read by the step, the compare and its phi alone.
+        let readers = function.users(read);
+        if !before || readers.iter().any(|one| one.user != made && one.user != compare && one.user != phi) {
+            continue;
+        }
+        let flags = llrm_mir::facts::Facts::of_flags(stepper.flags);
+        let ty = function.value(read).ty;
+        let equality = matches!(predicate, IntPredicate::Eq | IntPredicate::Ne);
+        let unsigned =
+            matches!(
+                predicate,
+                IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge
+            );
+        if (!equality && !unsigned && !flags.no_signed_wrap()) || (unsigned && !flags.no_unsigned_wrap()) {
+            continue;
+        }
+        let known = view.int_constant(Operand::Constant(bound))?;
+        let (known, modulus) =
+            (if unsigned { (known & ((1u128 << width) - 1)) as i128 } else { signed(known) }, 1i128 << width);
+        let moved = known + by;
+        let (low, high) = if unsigned { (0, modulus - 1) } else { (-(modulus >> 1), (modulus >> 1) - 1) };
+        let moved = if equality { signed(moved.rem_euclid(modulus) as u128) } else { moved };
+        if !equality && (moved < low || moved > high) {
+            continue;
+        }
+        return Some(PostIncrement { compare, counter: read, step, ty, bound: moved });
+    }
+    None
 }
 
 /// `rewrite`: the compare reads the step and the bound a step on.

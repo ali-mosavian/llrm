@@ -256,3 +256,26 @@ fn test_tuned_for_size_the_row_loads_still_leave_the_loop() {
     let loop_ = lines.windows(3).any(|w| w.iter().all(|line| line.starts_with("add ax, word ptr")));
     assert!(loop_, "{text}");
 }
+
+/// A loop entered behind its copied tests leaves from its header, where the
+/// counter is tested after the step that is made for it anyway: `lea cx,
+/// [si+1]; cmp si, 31; ...; mov si, cx` held the counter in two registers.
+/// gcc's ivopts tests the stepped value, `inc dx; cmp dx, 32`. mandel's m16
+/// loop ran 200737 instructions against 172712 with the copy off.
+#[test]
+fn test_a_counter_tested_in_the_header_after_its_step_is_tested_stepped() {
+    let source = format!("{}/bench/mandel/mandel.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let stepped = lines
+        .windows(2)
+        .any(|pair| pair[0].strip_prefix("inc ").is_some_and(|register| pair[1] == format!("cmp {register}, 32")));
+    assert!(stepped, "{text}");
+}
