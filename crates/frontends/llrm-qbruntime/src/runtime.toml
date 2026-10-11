@@ -1242,3 +1242,18 @@ clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 established = true
 inputs = []
 evidence = "runtime/qb/events.c: PEN(n) of a machine with no joystick or light pen, 0; QB's counterpart is in rt/evtstg.asm and rt/evtpen.asm, which read the adapter. Pascal, far, the argument popped by the callee."
+
+["B$SCMP"]
+cleanup = 4
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = ["ax", "bx", "cx", "dx", "si", "di"]
+evidence = '''
+rt/stcore.asm `cProc SCMP,<FAR>,<ES,SI,DI>` with `parmW psdL` and `parmW psdR`, so RETF 4 and es, si and di come back. It sets ES=DS, compares the shorter length with REPE CMPSB, saves the flags with PUSHF and frees each operand with B$STDALCTMP, which frees a temporary only and raises nothing; no error comes out of it, so a string comparison under ON ERROR is a plain call. The result is the flags (flags_result).
+'''
