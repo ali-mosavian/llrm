@@ -77,3 +77,27 @@ def test_the_gfx_benchmark_is_importable_beside_the_bench_tool_in_one_process():
     finally:
         sys.path.remove(str(Path(__file__).parent / "gfxbench"))
         del sys.modules["bench"]
+
+
+def test_a_session_wait_is_the_emulators_cpu_time_not_the_wall_clock():
+    """wait_for_shell and the waits beside it gave the emulator 30 to 60 wall seconds: NIBBLES and GORILLA failed with
+    "the DOS shell never came up" when the host was busy."""
+    import time
+
+    import qbplay
+
+    session = qbplay.Session.__new__(qbplay.Session)
+    session.process = subprocess.Popen(["sleep", "5"])
+    try:
+        late = session.limit(0.3)
+        time.sleep(1.2)
+        assert not late()
+    finally:
+        session.process.kill()
+    session.process = subprocess.Popen(["sh", "-c", "while :; do :; done"])
+    try:
+        late = session.limit(0.3)
+        time.sleep(1.2)
+        assert late()
+    finally:
+        session.process.kill()
