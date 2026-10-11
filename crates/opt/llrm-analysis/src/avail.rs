@@ -125,10 +125,15 @@ struct Stored {
     number: IndexMap<MemRef, usize>,
     index: CellMap<usize, (), OverlapBucket>,
     private: Bits,
+    /// The cells that do not certainly name their own bytes.
+    selfless: Bits,
     /// Per cell, lazily: the cells whose store writes all its bytes, the
     /// cells naming its bytes, and those placed to write some of them.
     covering: RefCell<Vec<Option<Rc<Bits>>>>,
     alike: RefCell<Vec<Option<Rc<Bits>>>>,
+    /// `alike`, as the cells it holds, for a test that asks whether one is in a
+    /// set.
+    alike_cells: RefCell<Vec<Option<Rc<[usize]>>>>,
     pieces: RefCell<Vec<Option<Rc<Bits>>>>,
 }
 
@@ -155,13 +160,17 @@ impl Stored {
             cells.iter().enumerate().filter(|(_, one)| private(one)).for_each(|(at, _)| marked.insert(at));
         }
         let size = cells.len();
+        let mut selfless = Bits::new(size);
+        (0..size).filter(|&at| !same_bytes(unit, &cells[at], &cells[at])).for_each(|at| selfless.insert(at));
         Self {
+            selfless,
             cells,
             number,
             index,
             private: marked,
             covering: RefCell::new(vec![None; size]),
             alike: RefCell::new(vec![None; size]),
+            alike_cells: RefCell::new(vec![None; size]),
             pieces: RefCell::new(vec![None; size]),
         }
     }
@@ -223,6 +232,23 @@ impl Stored {
         at: usize,
     ) -> Rc<Bits> {
         self.related(&self.alike, at, |one, other| same_bytes(unit, one, other))
+    }
+
+    /// Whether a cell naming the bytes of cell `at` is in `set`.
+    fn alike_in(
+        &self,
+        unit: &Unit,
+        at: usize,
+        set: &Bits,
+    ) -> bool {
+        ALIKE_ASKS.with(|asked| asked.set(asked.get() + 1));
+        let known = self.alike_cells.borrow()[at].clone();
+        let cells = known.unwrap_or_else(|| {
+            let cells: Rc<[usize]> = self.alike(unit, at).iter().collect();
+            self.alike_cells.borrow_mut()[at] = Some(cells.clone());
+            cells
+        });
+        cells.iter().any(|&one| set.contains(one))
     }
 
     /// Whether the cells in `overwritten` together write every byte of
@@ -490,21 +516,28 @@ pub fn dead_stores_escaping(
     while let Some(std::cmp::Reverse(at)) = work.pop() {
         queued[at] = false;
         let block = by_rank[at];
-        let mut out: Option<Bits> = None;
-        for successor in &block.succ {
-            let have = &entry[successor];
-            out = Some(match out {
-                None => have.clone(),
-                Some(mut out) => {
-                    for one in out.iter().collect::<Vec<_>>() {
-                        if !stored.alike(unit, one).intersects(have) {
-                            out.remove(one);
-                        }
+        // What a cell is overwritten by on every successor path: the first's
+        // entry, less the cells no cell naming their bytes is overwritten in
+        // another's. A cell that names its own bytes and is in the entry
+        // stays, so only the others are asked.
+        let mut haves = block.succ.iter().map(|successor| &entry[successor]);
+        let out = haves
+            .next()
+            .map(
+                |first| {
+                    let mut out = first.clone();
+                    for have in haves {
+                        let mut doubt = out.clone();
+                        doubt.subtract(have);
+                        let mut selfless = out.clone();
+                        selfless.intersect_with(&stored.selfless);
+                        doubt.union_with(&selfless);
+                        let gone: Vec<usize> = doubt.iter().filter(|&one| !stored.alike_in(unit, one, have)).collect();
+                        gone.into_iter().for_each(|one| out.remove(one));
                     }
                     out
-                }
-            });
-        }
+                },
+            );
         // No successor at all: only the caller may read it -- and after an
         // `unreachable` nothing does, as LLVM's DSE skips such exits; the
         // noreturn call before it reads what escaped by then.
@@ -563,6 +596,16 @@ fn aborts(
     unit.function
         .terminator(cfg::block(at))
         .is_some_and(|last| unit.function.instruction(last).opcode == Opcode::Unreachable)
+}
+
+thread_local! {
+    static ALIKE_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has asked whether a cell naming a cell's bytes is
+/// overwritten on a path, for a test that a join asks of the cells that differ.
+pub fn alike_asks() -> usize {
+    ALIKE_ASKS.with(std::cell::Cell::get)
 }
 
 thread_local! {

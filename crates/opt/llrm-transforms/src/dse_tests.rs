@@ -524,3 +524,22 @@ fn a_cell_is_compared_with_the_cells_that_may_share_its_bytes_not_with_every_cel
     assert_eq!(after.matches("store").count(), 0, "every slot is dead: {after}");
     assert!(asked <= 4 * cells, "{asked} pairs asked for {cells} cells");
 }
+
+/// A block with many successors took each cell its first successor overwrites
+/// through every other successor's set, one by one: cells x successors (cubic
+/// on a `switch` of N cases, `cases` 512: `mir dse` 3685 Minstr). The cells a
+/// successor's set lacks are the ones asked.
+#[test]
+fn a_switch_asks_only_the_cells_its_arms_differ_in() {
+    let arms = 30;
+    let slots: String = (0..arms).map(|i| format!("  %s{i} = alloca i16\n")).collect();
+    let cases: String = (0..arms).map(|i| format!("    i16 {i}, label %a{i}\n")).collect();
+    let bodies: String = (0..arms).map(|i| format!("a{i}:\n  store i16 {i}, ptr %s{i}\n  br label %j\n\n")).collect();
+    let before = llrm_analysis::avail::alike_asks();
+    let after = dropped(&format!(
+        "define i16 @f(i16 %x) {{\nb0:\n{slots}  switch i16 %x, label %j [\n{cases}  ]\n\n{bodies}j:\n  ret i16 0\n}}\n"
+    ));
+    let asked = llrm_analysis::avail::alike_asks() - before;
+    assert_eq!(after.matches("store").count(), 0, "every slot is dead: {after}");
+    assert!(asked <= 2 * arms, "{asked} asks for a switch of {arms} arms");
+}
