@@ -93,6 +93,44 @@ impl FunctionPass for Gvn {
     }
 }
 
+/// Whether the call `inst` of `function` reads and writes nothing.
+fn silent(
+    context: &llrm_mir::context::Context,
+    outer: &Outer,
+) -> impl Fn(&Function, InstId) -> bool {
+    move |function, inst| {
+        let effects = llrm_mir::memory::of(context, outer.callees(), function, inst);
+        !effects.reads && !effects.writes
+    }
+}
+
+/// What EarlyCSE does to calls: two equal calls that touch no memory are one,
+/// before `tailrec` makes the second a loop's trip and leaves the first alone.
+/// Arithmetic and loads stay for `Gvn`, which prices what a longer-lived value
+/// costs in spills; a call is always worth merging. No analysis is asked for
+/// unless the body has two such calls.
+#[derive(Default)]
+pub struct EqualCalls;
+
+impl FunctionPass for EqualCalls {
+    fn name(&self) -> &'static str {
+        "equalcalls"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        match transform::equal_calls(unit.function, &silent(unit.context, &outer)) {
+            Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
+            Ok(false) => PreservedAnalyses::all(),
+            Err(error) => panic!("equalcalls: {error}"),
+        }
+    }
+}
+
 /// Number values, reuse dominating providers, and complete join PRE;
 /// whether anything changed. `outer` is what the analyses read of the
 /// module and target, `accesses` what each instruction of `unit` touches,
@@ -241,7 +279,10 @@ fn _numbered(
         )?;
         let subexpressed =
             transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
-        Ok((function, (forwarded || subexpressed, subexpressed)))
+        // Equal calls that touch nothing are one, after the arithmetic that
+        // makes their arguments equal.
+        let called = transform::equal_calls(&mut function, &silent(unit.context, outer))?;
+        Ok((function, (forwarded || subexpressed || called, subexpressed || called)))
     };
     let crossing = numbered(unit.function, false)?;
     let price = |one: &Function| {

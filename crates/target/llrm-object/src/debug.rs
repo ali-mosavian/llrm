@@ -184,6 +184,12 @@ pub enum Type {
         element: TypeId,
         bytes: Option<u32>,
     },
+    /// BASIC's array of `element`: a variable of it is `descriptor`, a struct
+    /// the program keeps the bounds and the data pointer in.
+    Described {
+        element: TypeId,
+        descriptor: TypeId,
+    },
     /// A struct or, with `union`, a union: a type a member may reach again (a
     /// pointer to itself), by its index, which may be a later one.
     Struct {
@@ -349,6 +355,7 @@ impl Type {
         match self {
             Type::Scalar(_) | Type::Basic { .. } | Type::FixedString(_) => Vec::new(),
             Type::Array { element, .. } => vec![*element],
+            Type::Described { element, descriptor } => vec![*element, *descriptor],
             Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
             Type::Enum { underlying, .. } => vec![*underlying],
             Type::Pointer { target, .. }
@@ -384,6 +391,7 @@ impl Info {
             },
             Type::FixedString(bytes) => u64::from(*bytes),
             Type::Array { bytes, .. } => u64::from((*bytes)?),
+            Type::Described { descriptor, .. } => return self.size_of(*descriptor),
             Type::Struct { bytes, .. } => u64::from(*bytes),
             Type::Enum { underlying, .. } => return self.size_of(*underlying),
             Type::Pointer { bytes, .. } => u64::from(*bytes),
