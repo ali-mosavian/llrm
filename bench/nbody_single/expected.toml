@@ -1,5 +1,5 @@
-reason = "x87: a float load one arithmetic instruction reads is its memory operand (nbody c -8%/-12.5% Os, fpbench -1.2%, parity/qbsp -6.8%, nbody_single nib -5.3%)"
-blessed = "2026-10-09"
+reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
+blessed = "2026-10-11"
 
 [bas.O2]
 instructions = 1037180
@@ -30,16 +30,16 @@ data_bytes = 24
 bss_bytes = 96
 
 [nib.O2]
-instructions = 1278428
-memory_operands = 230174
-code_bytes = 567
+instructions = 1276428
+memory_operands = 229174
+code_bytes = 564
 data_bytes = 32
 bss_bytes = 0
 
 [nib.Os]
-instructions = 1278464
-memory_operands = 230174
-code_bytes = 561
+instructions = 1276464
+memory_operands = 229174
+code_bytes = 558
 data_bytes = 32
 bss_bytes = 0
 
