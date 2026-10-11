@@ -82,8 +82,7 @@ fn str_of_every_numeric_type_compiles() {
 #[test]
 fn a_function_keyword_without_an_intrinsic_is_refused() {
     for dialect in DIALECTS {
-        for (source, keyword) in [("x = LPOS(0)\n", "LPOS"), ("x = ERDEV\n", "ERDEV"), ("x = SETMEM(0)\n", "SETMEM")]
-        {
+        for (source, keyword) in [("x = LPOS(0)\n", "LPOS"), ("x = ERDEV\n", "ERDEV"), ("x = SETMEM(0)\n", "SETMEM")] {
             let error = parsed(source, dialect).expect_err(source);
             assert!(error.contains(&format!("{keyword} is not supported")), "{dialect}: {error}");
         }
