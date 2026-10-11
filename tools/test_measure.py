@@ -235,6 +235,38 @@ def test_two_clones_do_not_share_the_tree_the_base_is_built_in(tmp_path):
     assert measure.build_tree(tmp_path / "a", {"LLRM_MEASURE_BUILD": "/elsewhere"}) == Path("/elsewhere")
 
 
+def test_worktrees_of_one_repository_share_the_tree_the_base_is_built_in_and_clones_do_not(tmp_path):
+    """The build tree was keyed by the working tree's path: 48 worktrees of one repository made 48 trees of 10-37 GB, 489 GB, and filled
+    /home. A commit made in one worktree is in all of them, so one tree serves them; a clone has other objects and keeps its own."""
+    def sh(*args, cwd):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    main = tmp_path / "main"
+    main.mkdir()
+    sh("init", "-q", "-b", "main", cwd=main)
+    (main / "a").write_text("1")
+    sh("add", "a", cwd=main)
+    sh("commit", "-q", "-m", "one", cwd=main)
+    sh("worktree", "add", "-q", "--detach", str(tmp_path / "wt"), cwd=main)
+    sh("clone", "-q", str(main), str(tmp_path / "clone"), cwd=tmp_path)
+    here, there, apart = (measure.build_tree(tmp_path / d, {}) for d in ("main", "wt", "clone"))
+    assert here == there and here != apart
+
+
+def test_the_build_cache_drops_the_least_recently_used_trees_past_its_cap(tmp_path):
+    """489 GB of build trees filled /home and killed the gates: past the cap the trees used longest ago go, never the one in use."""
+    for age, name in enumerate(["oldest", "old", "newer", "using"]):
+        tree = tmp_path / name
+        tree.mkdir()
+        (tree / "blob").write_bytes(b"x" * 1000)
+        (tree / ".used").touch()
+        os.utime(tree / ".used", (1_000_000 + age, 1_000_000 + age))
+    gone = measure.pruned(tmp_path, tmp_path / "using", 2500)
+    assert [t.name for t in gone] == ["oldest", "old"]
+    assert sorted(t.name for t in tmp_path.iterdir()) == ["newer", "using"]
+    assert measure.pruned(tmp_path, tmp_path / "using", 10**9) == []
+
+
 def test_a_commit_only_the_remote_has_is_checked_out_in_a_clone_measure_owns(tmp_path):
     """'unable to read tree': the build tree was a worktree of another session's repository. It is a clone measure.py makes of this
     repository, and a commit this repository has not got is fetched from its origin."""
