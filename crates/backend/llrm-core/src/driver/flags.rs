@@ -64,7 +64,7 @@ impl Level {
 }
 
 /// gcc's `-f` pass names, each with the options it sets.
-const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 19] = [
+const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 20] = [
     ("allocation-search", |options, on| options.search = on),
     ("allocation-routes", |options, on| options.routes = on),
     ("allocation-search-all", |options, on| options.exhaustive = on),
@@ -86,6 +86,7 @@ const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 19] = [
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
     ("ipa-vrp", |options, on| options.ipa_ranges = on),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
+    ("tree-pre", |options, on| options.pre = on),
     ("tree-dse", |options, on| options.drop_stores = on),
     ("tree-dce", |options, on| options.dead = on),
     ("tree-sra", |options, on| options.promote = on),

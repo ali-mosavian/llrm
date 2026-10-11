@@ -48,9 +48,18 @@ use crate::{edges, loadjoins, transform};
 
 /// The single value-reuse pass: scalar GVN and memory-aware PRE. The
 /// target's registers price it (`profit::registers`); none leaves pricing
-/// out.
-#[derive(Default)]
-pub struct Gvn;
+/// out. Without `pre` it only eliminates what is redundant on every path
+/// (gcc's `-ftree-fre`, -O1): nothing is inserted to make a partial
+/// redundancy full.
+pub struct Gvn {
+    pub pre: bool,
+}
+
+impl Default for Gvn {
+    fn default() -> Self {
+        Self { pre: true }
+    }
+}
 
 impl FunctionPass for Gvn {
     fn name(&self) -> &'static str {
@@ -82,9 +91,9 @@ impl FunctionPass for Gvn {
                 &registers,
             )
         };
-        match accesses
-            .and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape))
-        {
+        match accesses.and_then(|accesses| {
+            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.pre)
+        }) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -147,6 +156,7 @@ pub fn optimized(
     trips: &IndexMap<i64, i64>,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
+    pre: bool,
 ) -> Result<bool, String> {
     let equal = propagated(unit);
     // What is known of the body the manager saw, unless propagating a branch's
@@ -162,7 +172,7 @@ pub fn optimized(
         _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer), trips, registers, shape)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
-    let combined = joined(unit.function, !subexpressed)?;
+    let combined = joined(unit.function, pre && !subexpressed)?;
     // Joining may split an edge, which the manager's shape has not seen.
     let joined_shape;
     let shape = if combined {
@@ -179,7 +189,7 @@ pub fn optimized(
         outer.callees(),
         accesses,
         pointers,
-        !combined,
+        pre && !combined,
         shape,
     )?;
     Ok(equal || numbered || combined || loaded)
