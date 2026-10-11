@@ -104,6 +104,33 @@ fn silent(
     }
 }
 
+/// What EarlyCSE does to calls: two equal calls that touch no memory are one,
+/// before `tailrec` makes the second a loop's trip and leaves the first alone.
+/// Arithmetic and loads stay for `Gvn`, which prices what a longer-lived value
+/// costs in spills; a call is always worth merging. No analysis is asked for
+/// unless the body has two such calls.
+#[derive(Default)]
+pub struct EqualCalls;
+
+impl FunctionPass for EqualCalls {
+    fn name(&self) -> &'static str {
+        "equalcalls"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        match transform::equal_calls(unit.function, &silent(unit.context, &outer)) {
+            Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
+            Ok(false) => PreservedAnalyses::all(),
+            Err(error) => panic!("equalcalls: {error}"),
+        }
+    }
+}
+
 /// Number values, reuse dominating providers, and complete join PRE;
 /// whether anything changed. `outer` is what the analyses read of the
 /// module and target, `accesses` what each instruction of `unit` touches,

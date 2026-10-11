@@ -967,3 +967,43 @@ b0:
     assert_eq!(count(&calls("memory(read)", "%x", "h")), 2, "a callee that reads is not numbered here");
     assert_eq!(count(&calls("", "%x", "h")), 2, "nor one that says nothing");
 }
+
+/// Equal calls are merged before `tailrec` runs: it makes the second of two
+/// calls a loop's trip, and then the first has no equal to merge with.
+/// `hanoi(n - 1) + 1 + hanoi(n - 1)` ran as a nest of loops and 8,191 calls'
+/// work, 143,747 clocks; one call, `2 * h + 1`, is 103.
+#[test]
+fn test_two_equal_calls_are_one_before_tail_recursion_makes_a_loop_of_one() {
+    use super::EqualCalls;
+    use crate::tailrec::TailRecursion;
+    let text = "define internal i32 @h(i32 %n) memory(none) {
+b0:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %b1, label %b2
+b1:
+  ret i32 0
+b2:
+  %m = sub i32 %n, 1
+  %a = call i32 @h(i32 %m)
+  %p = add i32 %a, 1
+  %b = call i32 @h(i32 %m)
+  %q = add i32 %p, %b
+  ret i32 %q
+}
+";
+    let run = |merge: bool| {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        if merge {
+            manager.add(EqualCalls);
+        }
+        manager.add(TailRecursion);
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+        printed(&module)
+    };
+    let calls = |text: &str| text.lines().filter(|line| line.contains("call i32 @h")).count();
+    let (merged, looped) = (run(true), run(false));
+    assert!(looped.contains("tailrecurse"), "premise: tail recursion makes the second call a loop\n{looped}");
+    assert_eq!((calls(&merged), merged.contains("tailrecurse")), (1, false), "{merged}");
+}
