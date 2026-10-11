@@ -1,4 +1,4 @@
-"""Graphics primitives and text in each screen mode, on BCOM45 (BC + LINK), the llrm runtime on m16 and on m32, all in
+"""Graphics primitives and text in each screen mode, on BCOM45 (BC + LINK), the llrm runtime in real mode and flat, all in
 DOSBox on virtual time: a segment's time is the emulated milliseconds its TIMER reads, `RATE` guest instructions each.
 
     python tools/dosbatch/gfxbench/bench.py [--modes 0 1 2 ...] [--work DIR]
@@ -22,7 +22,7 @@ MODES = (0, 1, 2, 7, 8, 9, 12, 13)
 RATE = 2000
 CONF = qb32.virtual_conf(RATE)
 BUDGET_MS = 3_000_000
-COLUMNS = ("BCOM45 m16", "llrm+BCOM45", "llrm m16", "llrm m32")
+COLUMNS = ("BCOM45", "llrm+BCOM45", "llrm real", "llrm flat")
 
 
 def source(mode: int, work: Path) -> Path:
@@ -45,13 +45,13 @@ def run(modes: list[int], work: Path, only: tuple[str, ...] = COLUMNS) -> dict[i
     """The segments of each mode, in milliseconds, for the builds named in `only`."""
     work.mkdir(parents=True, exist_ok=True)
     sources = {mode: source(mode, work) for mode in modes}
-    archive, _ = qbruntime.build(work / "archive16") if "llrm m16" in only else (None, None)
-    runtime32 = qb32.build(work / "rt32") if "llrm m32" in only else None
+    archive, _ = qbruntime.build(work / "archive_real") if "llrm real" in only else (None, None)
+    runtime32 = qb32.build(work / "rt_flat") if "llrm flat" in only else None
     sides: dict[str, tuple[Path, list[dosbatch.Job]]] = {}
     jobs = []
-    for mode, path in sources.items() if "BCOM45 m16" in only else ():
+    for mode, path in sources.items() if "BCOM45" in only else ():
         jobs.append(dosbatch.Job(f"B{mode:02d}", "bas", path, screen=True, budget_ms=BUDGET_MS, switches="/O /FPi"))
-    sides["BCOM45 m16"] = (work / "run_bc", jobs)
+    sides["BCOM45"] = (work / "run_bc", jobs)
     jobs = []
     for mode, path in sources.items() if "llrm+BCOM45" in only else ():
         obj = work / f"g{mode}.qb45.obj"
@@ -60,20 +60,20 @@ def run(modes: list[int], work: Path, only: tuple[str, ...] = COLUMNS) -> dict[i
         jobs.append(dosbatch.Job(f"Q{mode:02d}", "obj", obj, screen=True, budget_ms=BUDGET_MS))
     sides["llrm+BCOM45"] = (work / "run_qb45", jobs)
     jobs = []
-    for mode, path in sources.items() if "llrm m16" in only else ():
-        obj = work / f"g{mode}.m16.obj"
+    for mode, path in sources.items() if "llrm real" in only else ():
+        obj = work / f"g{mode}.real.obj"
         if reason := qbruntime.compile_basic(path, obj, "llrm"):
-            raise SystemExit(f"m16 g{mode}: {reason}")
+            raise SystemExit(f"real g{mode}: {reason}")
         jobs.append(dosbatch.Job(f"L{mode:02d}", "obj", obj, runtime="llrmqb", runtime_file=archive, screen=True, budget_ms=BUDGET_MS))
-    sides["llrm m16"] = (work / "run_m16", jobs)
+    sides["llrm real"] = (work / "run_real", jobs)
     jobs = []
-    for mode, path in sources.items() if "llrm m32" in only else ():
-        obj, exe = work / f"g{mode}.m32.obj", work / f"g{mode}.m32.exe"
+    for mode, path in sources.items() if "llrm flat" in only else ():
+        obj, exe = work / f"g{mode}.flat.obj", work / f"g{mode}.flat.exe"
         if reason := qb32.compile_basic(path, obj):
-            raise SystemExit(f"m32 g{mode}: {reason}")
+            raise SystemExit(f"flat g{mode}: {reason}")
         loaders = qb32.link(obj, runtime32, exe, work)
         jobs.append(dosbatch.Job(f"M{mode:02d}", "exe", exe, files=loaders, screen=True, budget_ms=BUDGET_MS))
-    sides["llrm m32"] = (work / "run_m32", jobs)
+    sides["llrm flat"] = (work / "run_flat", jobs)
 
     found: dict[int, dict[str, dict[str, int]]] = {mode: {} for mode in modes}
     for side, (where, side_jobs) in sides.items():
@@ -89,7 +89,7 @@ def run(modes: list[int], work: Path, only: tuple[str, ...] = COLUMNS) -> dict[i
 
 
 def table(found: dict[int, dict[str, dict[str, int]]]) -> str:
-    head = f"{'mode':>4} {'segment':<13}" + "".join(f"{c:>12}" for c in COLUMNS) + f"{'q45/BC':>9}{'m16/BC':>9}{'m32/BC':>9}"
+    head = f"{'mode':>4} {'segment':<13}" + "".join(f"{c:>12}" for c in COLUMNS) + f"{'q45/BC':>9}{'real/BC':>9}{'flat/BC':>9}"
     lines = [f"emulated ms ({RATE} guest instructions each; a TIMER tick is 55 ms)", head]
     for mode, rows in found.items():
         for label, cells in rows.items():

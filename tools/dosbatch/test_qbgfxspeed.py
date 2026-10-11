@@ -29,10 +29,10 @@ def timed(tmp_path_factory):
         pytest.skip("DOSBox-X is unavailable")
     import bench  # noqa: E402
 
-    return bench.run(list(LIMITS), tmp_path_factory.mktemp("gfxspeed"), only=("llrm m16", "llrm m32"))
+    return bench.run(list(LIMITS), tmp_path_factory.mktemp("gfxspeed"), only=("llrm real", "llrm flat"))
 
 
-@pytest.mark.parametrize("side", ["llrm m16", "llrm m32"])
+@pytest.mark.parametrize("side", ["llrm real", "llrm flat"])
 @pytest.mark.parametrize("mode,segment", [(m, s) for m, limits in LIMITS.items() for s in limits])
 def test_a_filled_row_costs_a_row_fill_not_a_pixel_loop(timed, side: str, mode: int, segment: str):
     assert timed[mode][segment][side] <= LIMITS[mode][segment]

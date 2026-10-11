@@ -77,12 +77,12 @@ fn str_of_every_numeric_type_compiles() {
 }
 
 /// A function keyword the table lacks is refused, never read as a
-/// variable: DATE$ compiled to an empty string. A later dialect's keyword
+/// variable: DATE$ once compiled to an empty string. A later dialect's keyword
 /// stays a name in an earlier one.
 #[test]
 fn a_function_keyword_without_an_intrinsic_is_refused() {
     for dialect in DIALECTS {
-        for (source, keyword) in [("PRINT DATE$\n", "DATE$"), ("x = ERDEV\n", "ERDEV"), ("x = VARPTR$(a)\n", "VARPTR$")]
+        for (source, keyword) in [("x = LPOS(0)\n", "LPOS"), ("x = ERDEV\n", "ERDEV"), ("x = SETMEM(0)\n", "SETMEM")]
         {
             let error = parsed(source, dialect).expect_err(source);
             assert!(error.contains(&format!("{keyword} is not supported")), "{dialect}: {error}");
