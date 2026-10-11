@@ -3082,3 +3082,35 @@ fn test_a_library_cut_to_nothing_assembles_without_an_entry() {
         "a program with no entry is still refused"
     );
 }
+
+/// `zip(a, b)` walks two slices' elements by one counter, bounded by the
+/// `inbounds` accesses of both. Behind the header copy the loop is tested for
+/// equality, and its trips were counted to 65536 (the width's period) where
+/// the accesses allow 32768: the biased byte counter `add bx, 2` was no exit
+/// test, and the loop kept `inc cx; jne` beside it and reloaded a segment
+/// offset from `[bp-2]` each trip (7 instructions, one of them a load).
+#[test]
+fn test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "fn dot(a: &[i16], b: &[i16]) -> i32:\n    let mut total: i32 = 0\n    for (x, y) in zip(a, b):\n        total += i32(x) * i32(y)\n    return total\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "dot.nib", source));
+    let module = nib_compile::assembled(
+        &program,
+        "dot",
+        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
+        &crate::real_mode().os,
+    )
+    .expect("assembles");
+    let asm = masm::text(&module).expect("prints");
+    let from = asm.find("_dot proc").expect("the function");
+    let body: Vec<&str> = asm[from..]
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .take_while(|one| !one.ends_with("endp"))
+        .filter(|one| !one.ends_with(':'))
+        .collect();
+    let at = body.iter().position(|one| *one == "add bx, 2").expect("the byte counter steps");
+    assert_eq!(body.get(at + 1).map(|one| &one[..4]), Some("jne "), "{body:?}");
+    assert!(!body.iter().any(|one| one.contains("[bp-")), "{body:?}");
+}
