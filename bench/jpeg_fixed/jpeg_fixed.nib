@@ -1,0 +1,349 @@
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# data: ../jpeg_fixed/photo.jpg
+# JPEG to BMP, an MCU row at a time, as jpeg_fixed.c: baseline Huffman YCbCr in 4:2:0, 4:4:4, 4:2:2 or 4:4:0 with restart
+# markers. Reads PHOTO.JPG, writes a top-down 24-bit OUT.BMP and returns the Adler-32 of the BMP's bytes. IDCT and colour
+# conversion in Q10 fixed point, each product truncated toward zero: fixed `*` floors (#383), tmul() truncates.
+import std.io as io
+
+type Q = fixed i32, fraction=10
+
+const MAXW: i32 = 256
+const ZIGZAG_LEN: i32 = 64
+
+var zigzag: u8[64] = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]
+var inbuf: u8[512] = [0] * 512
+var planes: u8[12288] = [0] * 12288
+var line: u8[771] = [0] * 771
+var quant: i32[256] = [0] * 256
+var maxcode: i32[72] = [0] * 72
+var valptr: i32[72] = [0] * 72
+var mincode: i32[72] = [0] * 72
+var huffval: u8[1024] = [0] * 1024
+var coef: i32[64] = [0] * 64
+var bad: i32 = 0
+var in_pos: i32 = 0
+var in_len: i32 = 0
+var bit_buf: i32 = 0
+var bit_cnt: i32 = 0
+var adler_a: u32 = 1
+var adler_b: u32 = 0
+
+fn fill(file: &mut io.File) -> i32:
+    unsafe:
+        let data: *far mut u8 = &mut inbuf
+        match file.read_raw(data, 512):
+            .ok(n):
+                return i32(n)
+            .err(_):
+                return 0
+
+fn next_byte(file: &mut io.File) -> i32:
+    if in_pos == in_len:
+        in_len = fill(file)
+        in_pos = 0
+        if in_len <= 0:
+            in_len = 0
+            bad = 1
+            return 0
+    let byte = i32(inbuf[in_pos])
+    in_pos += 1
+    return byte
+
+fn next16(file: &mut io.File) -> i32:
+    let high = next_byte(file)
+    return high * 256 + next_byte(file)
+
+fn get_bit(file: &mut io.File) -> i32:
+    if bit_cnt == 0:
+        bit_buf = next_byte(file)
+        if bit_buf == 255:
+            if next_byte(file) != 0:
+                bad = 1
+        bit_cnt = 8
+    bit_cnt -= 1
+    return (bit_buf >> bit_cnt) & 1
+
+fn receive(file: &mut io.File, count: i32) -> i32:
+    let mut value: i32 = 0
+    for _ in 0..count:
+        value = value * 2 + get_bit(file)
+    return value
+
+fn decode(file: &mut io.File, table: i32) -> i32:
+    let mut code = get_bit(file)
+    let mut length: i32 = 1
+    while code > maxcode[table * 18 + length]:
+        code = code * 2 + get_bit(file)
+        length += 1
+        if length > 16:
+            bad = 1
+            return 0
+    return i32(huffval[table * 256 + valptr[table * 18 + length] + code - mincode[table * 18 + length]])
+
+fn extend(value: i32, size: i32) -> i32:
+    return value >= (1 << (size - 1)) ? value : value - (1 << size) + 1
+
+fn restart(file: &mut io.File) -> void:
+    bit_cnt = 0
+    let mut marker: i32 = 0
+    loop:
+        let mut byte = next_byte(file)
+        while byte != 255 && bad == 0:
+            byte = next_byte(file)
+        marker = next_byte(file)
+        if bad != 0 || (marker >= 208 && marker <= 215):
+            break
+
+fn emit(out: &mut io.File, count: i32) -> void:
+    unsafe:
+        let data: *far u8 = &line
+        let _ = out.write_raw(data, u16(count))
+    for i in 0..count:
+        adler_a += u32(line[i])
+        if adler_a >= 65521:
+            adler_a -= 65521
+        adler_b += adler_a
+        if adler_b >= 65521:
+            adler_b -= 65521
+
+fn put32(at: i32, value: u32) -> void:
+    for i in 0..4:
+        line[at + i] = u8((value >> u32(8 * i)) & 255)
+
+# The product truncated toward zero, which is what C's `/` and BASIC's `\` do; fixed `*` floors.
+fn tmul(a: Q, b: Q) -> Q:
+    if a < 0:
+        return 0 - tmul(0 - a, b)
+    if b < 0:
+        return 0 - a * (0 - b)
+    return a * b
+
+# The 8x8 block in coef, into plane `p` at (x0, y0): rows to Q10, then columns, +128.5, to integers.
+fn idct(cosine: &Q[64], p: i32, x0: i32, y0: i32) -> void:
+    let mut tmp: Q[64] = [0] * 64
+    for v in 0..8:
+        for x in 0..8:
+            let mut sum: Q = 0
+            for u in 0..8:
+                sum += tmul(cosine[x * 8 + u], Q(coef[v * 8 + u]))
+            tmp[v * 8 + x] = sum
+    for y in 0..8:
+        for x in 0..8:
+            let mut sum: Q = 128.5
+            for v in 0..8:
+                sum += tmul(cosine[y * 8 + v], tmp[v * 8 + x])
+            planes[p * 4096 + (y0 + y) * 256 + x0 + x] = u8(clamp(i32(sum)))
+
+fn clamp(value: i32) -> i32:
+    return value < 0 ? 0 : value > 255 ? 255 : value
+
+# One line of the MCU row as BGR, at (x >> hshift, y >> vshift) in the chroma planes.
+fn convert(y: i32, width: i32, hshift: i32, vshift: i32) -> void:
+    let k_blue: Q = 1.7724609375
+    let k_green_blue: Q = 0.34375
+    let k_green_red: Q = 0.7138671875
+    let k_red: Q = 1.40234375
+    let half: Q = 0.5
+    for x in 0..width:
+        let cy = y >> vshift
+        let cx = x >> hshift
+        let luma = Q(i32(planes[y * 256 + x]))
+        let blue = Q(i32(planes[4096 + cy * 256 + cx]) - 128)
+        let red = Q(i32(planes[8192 + cy * 256 + cx]) - 128)
+        line[3 * x] = u8(clamp(i32(luma + tmul(k_blue, blue) + half)))
+        line[3 * x + 1] = u8(clamp(i32(luma - tmul(k_green_blue, blue) - tmul(k_green_red, red) + half)))
+        line[3 * x + 2] = u8(clamp(i32(luma + tmul(k_red, red) + half)))
+
+fn bench_jpeg_fixed() -> i32:
+    match io.File.open("PHOTO.JPG"):
+        .ok(opened):
+            let mut input = opened
+            return with_input(input)
+        .err(_):
+            print("PHOTO.JPG not found")
+            return 0
+
+fn with_input(input: &mut io.File) -> i32:
+    match io.File.create("OUT.BMP"):
+        .ok(created):
+            let mut output = created
+            return convert_file(input, output)
+        .err(_):
+            print("cannot write OUT.BMP")
+            return 0
+
+fn convert_file(file: &mut io.File, out: &mut io.File) -> i32:
+    # Q10: cos((2x+1)u*pi/16) * (u ? 1 : 1/sqrt(2)) / 2, row by row (a module variable starts as an integer)
+    let cosine: Q[64] = [0.353515625, 0.490234375, 0.4619140625, 0.416015625, 0.353515625, 0.27734375, 0.19140625, 0.09765625, 0.353515625, 0.416015625, 0.19140625, -0.09765625, -0.353515625, -0.490234375, -0.4619140625, -0.27734375, 0.353515625, 0.27734375, -0.19140625, -0.490234375, -0.353515625, 0.09765625, 0.4619140625, 0.416015625, 0.353515625, 0.09765625, -0.4619140625, -0.27734375, 0.353515625, 0.416015625, -0.19140625, -0.490234375, 0.353515625, -0.09765625, -0.4619140625, 0.27734375, 0.353515625, -0.416015625, -0.19140625, 0.490234375, 0.353515625, -0.27734375, -0.19140625, 0.490234375, -0.353515625, -0.09765625, 0.4619140625, -0.416015625, 0.353515625, -0.416015625, 0.19140625, 0.09765625, -0.353515625, 0.490234375, -0.4619140625, 0.27734375, 0.353515625, -0.490234375, 0.4619140625, -0.416015625, 0.353515625, -0.27734375, 0.19140625, -0.09765625]
+    let mut id: i32[3] = [0, 0, 0]
+    let mut sample: i32[3] = [0, 0, 0]
+    let mut qsel: i32[3] = [0, 0, 0]
+    let mut dcsel: i32[3] = [0, 0, 0]
+    let mut acsel: i32[3] = [0, 0, 0]
+    let mut pred: i32[3] = [0, 0, 0]
+    let mut counts: i32[17] = [0] * 17
+    let mut width: i32 = 0
+    let mut height: i32 = 0
+    let mut interval: i32 = 0
+    let mut scanned: i32 = 0
+    let mut comps: i32 = 0
+    if next_byte(file) != 255 || next_byte(file) != 216:
+        print("not a JPEG")
+        return 0
+    while scanned == 0 && bad == 0:
+        let mut marker = next_byte(file)
+        while marker != 255 && bad == 0:
+            marker = next_byte(file)
+        marker = next_byte(file)
+        while marker == 255:
+            marker = next_byte(file)
+        let mut length = next16(file) - 2
+        if marker == 0xDB:
+            while length > 0:
+                let t = next_byte(file)
+                if (t >> 4) != 0:
+                    print("16-bit quantization tables not supported")
+                    return 0
+                for k in 0..64:
+                    quant[(t & 3) * 64 + k] = next_byte(file)
+                length -= 65
+        else if marker == 0xC4:
+            while length > 0 && bad == 0:
+                let mut t = next_byte(file)
+                t = (t >> 4) * 2 + (t & 1)
+                let mut n: i32 = 0
+                for k in 1..17:
+                    counts[k] = next_byte(file)
+                    n += counts[k]
+                let mut code: i32 = 0
+                let mut at: i32 = 0
+                for k in 1..17:
+                    valptr[t * 18 + k] = at
+                    mincode[t * 18 + k] = code
+                    code += counts[k]
+                    at += counts[k]
+                    maxcode[t * 18 + k] = counts[k] != 0 ? code - 1 : -1
+                    code *= 2
+                for k in 0..n:
+                    huffval[t * 256 + k] = u8(next_byte(file))
+                length -= 17 + n
+        else if marker == 0xC0:
+            if next_byte(file) != 8:
+                print("only 8-bit samples are supported")
+                return 0
+            height = next16(file)
+            width = next16(file)
+            comps = next_byte(file)
+            for i in 0..comps:
+                if i < 3:
+                    id[i] = next_byte(file)
+                    sample[i] = next_byte(file)
+                    qsel[i] = next_byte(file) & 3
+            length -= comps < 3 ? 6 + 3 * comps : 15
+        else if marker == 0xC2:
+            print("progressive JPEG not supported")
+            return 0
+        else if marker >= 0xC9 && marker <= 0xCF && marker != 0xCC:
+            print("arithmetic-coded JPEG not supported")
+            return 0
+        else if marker >= 0xC1 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC:
+            print("only baseline JPEG is supported")
+            return 0
+        else if marker == 0xDD:
+            interval = next16(file)
+            length -= 2
+        else if marker == 0xDA:
+            let n = next_byte(file)
+            for _ in 0..n:
+                let want = next_byte(file)
+                let selector = next_byte(file)
+                for c in 0..3:
+                    if id[c] == want:
+                        dcsel[c] = selector >> 4
+                        acsel[c] = 2 + (selector & 1)
+            let _a = next_byte(file)
+            let _b = next_byte(file)
+            let _c = next_byte(file)
+            scanned = 1
+            length = 0
+        while length > 0:
+            let _skip = next_byte(file)
+            length -= 1
+    let hmax = sample[0] >> 4
+    let vmax = sample[0] & 15
+    if bad != 0 || comps != 3 || hmax < 1 || hmax > 2 || vmax < 1 || vmax > 2 || sample[1] != 17 || sample[2] != 17 || width < 1 || width > MAXW || height < 1:
+        print("unsupported JPEG")
+        return 0
+    let bw = 8 * hmax
+    let bh = 8 * vmax
+    let mcus_x = (width + bw - 1) // bw
+    let mcus_y = (height + bh - 1) // bh
+    let stride = (width * 3 + 3) & -4
+    let size = 54 + stride * height
+    for i in 0..54:
+        line[i] = 0
+    line[0] = 66
+    line[1] = 77
+    put32(2, u32(size))
+    put32(10, 54)
+    put32(14, 40)
+    put32(18, u32(width))
+    put32(22, u32(0 - height))
+    line[26] = 1
+    line[28] = 24
+    put32(34, u32(size - 54))
+    put32(38, 2835)
+    put32(42, 2835)
+    emit(out, 54)
+    let mut left = interval
+    for my in 0..mcus_y:
+        for mx in 0..mcus_x:
+            if bad != 0:
+                break
+            if interval != 0 && left == 0:
+                restart(file)
+                for i in 0..3:
+                    pred[i] = 0
+                left = interval
+            left -= 1
+            for c in 0..3:
+                let h = c == 0 ? hmax : 1
+                let v = c == 0 ? vmax : 1
+                for by in 0..v:
+                    for bx in 0..h:
+                        for k in 0..64:
+                            coef[k] = 0
+                        let t = decode(file, dcsel[c])
+                        if t != 0:
+                            pred[c] += extend(receive(file, t), t)
+                        coef[0] = pred[c] * quant[qsel[c] * 64]
+                        let mut k: i32 = 1
+                        while k < 64 && bad == 0:
+                            let rs = decode(file, acsel[c])
+                            let run = rs >> 4
+                            let nbits = rs & 15
+                            if nbits == 0:
+                                if run != 15:
+                                    break
+                                k += 16
+                            else:
+                                k += run
+                                if k > 63:
+                                    break
+                                coef[i32(zigzag[k])] = extend(receive(file, nbits), nbits) * quant[qsel[c] * 64 + k]
+                                k += 1
+                        idct(cosine, c, (mx * h + bx) * 8, by * 8)
+        if bad != 0:
+            break
+        for i in 0..bh:
+            if my * bh + i >= height:
+                break
+            convert(i, width, hmax - 1, vmax - 1)
+            for k in width * 3..stride:
+                line[k] = 0
+            emit(out, stride)
+    return i32((adler_b << 16) | adler_a)
+
+fn main() -> i16:
+    print(bench_jpeg_fixed())
+    return 0
