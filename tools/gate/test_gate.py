@@ -602,6 +602,8 @@ def test_the_doc_step_runs_rustdoc_only_where_a_doc_comment_has_a_fence_to_run(t
     assert not has("/// ```text\n/// x\n/// ```\n/// ```text\n/// y\n/// ```\n"), "a closing fence is not an opening one"
     command = gate.commands(gate.plan(["crates/frontends/llrm-c/src/lib.rs"], "full"), gate.load(), gate.packages())["doc"]
     assert command.startswith("if python3 tools/gate/doctests.py") and "--doc" in command, command
+    skipped = subprocess.run(["bash", "-c", command.replace("python3 tools/gate/doctests.py crates src tests", "false")], capture_output=True, text=True)
+    assert skipped.returncode == 0 and gate.incomplete(skipped.stdout, None, False) is None, "a skipped doc step reads as a cut-short run: " + skipped.stdout
 
 
 def test_the_build_makes_one_set_of_crates_for_the_binaries_and_the_tests():

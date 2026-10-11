@@ -243,6 +243,9 @@ MEASURE_BUILD = "env -u RUSTFLAGS cargo build --release -q --bins && env -u RUST
 DIST_BUILD = "cargo build --profile dist -q --bins"
 
 
+# What the doc step reports where no doc comment has a fence to run: a log with no result reads as a cut-short run.
+SKIPPED_DOC = "echo 'test result: ok. 0 passed; 0 failed; no doc comment has a fence to run, rustdoc not run'"
+
 # A lib test that depends on the order tests run in passes in the plain order and fails when the threads start in
 # another (llrm-c's m16 tests, 29 of 136, when an m32 test bound the register file first). The lib step runs the
 # tests in a random order; each test binary prints its seed ("running 136 tests (shuffle seed: N)", kept in the
@@ -275,7 +278,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         "build": BUILD,
         "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
         # rustdoc over every crate costs 456 CPU-s to find no test: it runs when a doc comment has a fence to run.
-        "doc": f"if python3 tools/gate/doctests.py crates src tests; then {cargo} {libs} --doc; fi" if libs else "true",
+        "doc": f"if python3 tools/gate/doctests.py crates src tests; then {cargo} {libs} --doc; else {SKIPPED_DOC}; fi" if libs else "true",
         "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
         # Every scan runs, and any failing fails the step: the first red must not hide the others.
