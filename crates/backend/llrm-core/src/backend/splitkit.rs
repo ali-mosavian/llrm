@@ -909,7 +909,14 @@ enum Holders<'a> {
     /// The occupants as the allocation keeps them: asked of by the span, not
     /// gathered for every register at each split (LLVM's
     /// `LiveIntervalUnion::Query`).
-    Union { union: &'a LiveUnion, live: &'a crate::backend::live::LiveRanges, value: u32 },
+    Union {
+        union: &'a LiveUnion,
+        live: &'a crate::backend::live::LiveRanges,
+        value: u32,
+        /// A register with few holders is gathered, once, where it is first
+        /// asked.
+        gathered: std::cell::RefCell<IndexMap<RegId, (Vec<Segment>, Vec<i64>)>>,
+    },
 }
 
 impl<'a> Occupied<'a> {
@@ -941,7 +948,7 @@ impl<'a> Occupied<'a> {
         value: u32,
         masks: &'a allocate::Masks,
     ) -> Self {
-        Self { held: Holders::Union { union, live, value }, masks }
+        Self { held: Holders::Union { union, live, value, gathered: Default::default() }, masks }
     }
 }
 
@@ -985,7 +992,40 @@ impl Occupied<'_> {
                         .collect()
                 })
                 .unwrap_or_default(),
-            Holders::Union { union, live, value } => {
+            Holders::Union { union, live, value, gathered } if !union.many(&whole) => {
+                let mut gathered = gathered.borrow_mut();
+                let (all, reach) = gathered
+                    .entry(whole)
+                    .or_insert_with(
+                        || {
+                            let mut all: Vec<Segment> = union
+                                .holders(&whole)
+                                .into_iter()
+                                .filter(|other| other != value)
+                                .filter_map(|other| live.get(&other))
+                                .flat_map(|one| one.segments.iter().copied())
+                                .collect();
+                            all.sort_by_key(|one| (one.start, one.end));
+                            let mut furthest = i64::MIN;
+                            let reach = all
+                                .iter()
+                                .map(|one| {
+                                    furthest = furthest.max(one.end);
+                                    furthest
+                                })
+                                .collect();
+                            (all, reach)
+                        },
+                    );
+                let from = reach.partition_point(|end| *end <= span.0);
+                let to = from + all[from..].partition_point(|one| one.start < span.1);
+                all[from..to]
+                    .iter()
+                    .filter(|one| one.end > span.0)
+                    .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                    .collect()
+            }
+            Holders::Union { union, live, value, .. } => {
                 let probe = crate::analysis::intervals::Interval::new(0, vec![Segment { start: span.0, end: span.1 }]);
                 union
                     .meeting(&whole, &probe, *live)
@@ -1016,7 +1056,7 @@ impl Occupied<'_> {
                 .filter(|one| one.overlaps(&inside))
                 .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
                 .collect(),
-            Holders::Union { union, live, value } => union
+            Holders::Union { union, live, value, .. } => union
                 .holders(&whole)
                 .into_iter()
                 .filter(|other| other != value)
