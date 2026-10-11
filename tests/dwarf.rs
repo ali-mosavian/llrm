@@ -644,6 +644,27 @@ fn g_leaves_the_code_of_the_bench_programs_alone() {
     }
 }
 
+/// A string literal's label was numbered by the front end's own handle, which
+/// `-g` moves: two literals passed to a call were `L_b222` and `L_b232` without
+/// `-g` and `L_b245` and `L_b255` with it, and the listings differed by the
+/// names.
+#[test]
+fn g_leaves_the_labels_of_string_literals_alone() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("literals.c");
+    std::fs::write(&source, "extern int open_it(const char *name, int mode);\nint main(void) { return open_it(\"IN\", 0) + open_it(\"OUT\", 1); }\n").unwrap();
+    for machine in ["-m32", "-m16"] {
+        let assembly = |debug: bool| {
+            let out = scratch.path().join("x.s");
+            let flags: Vec<&str> = [machine, "-O0", "-S"].into_iter().chain(debug.then_some("-g")).collect();
+            let made = compile(&source, &flags, &out);
+            assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+            std::fs::read_to_string(&out).unwrap()
+        };
+        assert_eq!(assembly(false), assembly(true), "{machine}: -g changed the listing");
+    }
+}
+
 /// A global nothing reads was kept in the data when `-g` described it, "for a
 /// debugger to read at any time", where the build without `-g` drops it: the
 /// object differed by the global, and its neighbours in the layout by the room
