@@ -166,7 +166,7 @@ pub fn classify(
         return "movzx";
     }
     if mnem == "xchg" {
-        return "alu_rr";
+        return "xchg_rr";
     }
     // 16-bit and 32-bit divide are not the same instruction and the second
     // is much the slower -- 27 clocks against 43 on a 486. Deciding by the
