@@ -187,11 +187,19 @@ impl Tree<'_> {
                 die
             }
             Type::Pointer { target, bytes, reach } => {
-                if *reach != Reach::Near {
-                    return refused("a far or huge pointer has no DWARF type");
-                }
                 let mut die = Die::new(TAG_POINTER);
                 die.attrs.push((AT_BYTE_SIZE, Value::U8(*bytes)));
+                // A far or huge pointer is a segment and an offset: Open
+                // Watcom's DW_AT_address_class says which (dwarf.h: far16 2,
+                // huge16 3, far32 5), and the size tells how
+                // wide.
+                match (reach, bytes) {
+                    (Reach::Near, _) => {}
+                    (Reach::Far, 4) => die.attrs.push((AT_ADDRESS_CLASS, Value::U8(2))),
+                    (Reach::Huge, 4) => die.attrs.push((AT_ADDRESS_CLASS, Value::U8(3))),
+                    (Reach::Far, 6) => die.attrs.push((AT_ADDRESS_CLASS, Value::U8(5))),
+                    _ => return refused(format!("a {bytes}-byte {reach:?} pointer has no address class")),
+                }
                 self.typed(&mut die, *target)?;
                 die
             }

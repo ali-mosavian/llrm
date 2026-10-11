@@ -508,3 +508,19 @@ b0:
     );
     assert!(after.contains("store i64"), "{after}");
 }
+
+/// Every cell a function stores to was compared with every other, two ways
+/// over: quadratic in the cells, 590 Minstr of GORILLA's `mir dse` at -O1.
+/// A cell is compared with the cells of the buckets it reaches: a slot nothing
+/// takes the address of is in its own.
+#[test]
+fn a_cell_is_compared_with_the_cells_that_may_share_its_bytes_not_with_every_cell() {
+    let cells = 40;
+    let slots: String = (0..cells).map(|i| format!("  %s{i} = alloca i16\n")).collect();
+    let stores: String = (0..cells).map(|i| format!("  store i16 {i}, ptr %s{i}\n")).collect();
+    let before = llrm_analysis::avail::related_pairs();
+    let after = dropped(&format!("define i16 @f() {{\nb0:\n{slots}{stores}{stores}  ret i16 0\n}}\n"));
+    let asked = llrm_analysis::avail::related_pairs() - before;
+    assert_eq!(after.matches("store").count(), 0, "every slot is dead: {after}");
+    assert!(asked <= 4 * cells, "{asked} pairs asked for {cells} cells");
+}

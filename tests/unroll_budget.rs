@@ -49,15 +49,17 @@ fn verdict(
     (after("scaled "), after("budget "), after("boost "), line.ends_with("admitted"))
 }
 
-/// Both targets took GCC's 200 under LLVM's 400% boost, a limit over either
-/// reference's: x86-m32's matmul unrolled to 2633 B where clang's is 1789 and
-/// gcc's 402. The edge loops come from sweeping the size: each target's
-/// pass names the budget its description states, admits the loops whose
-/// (scaled) copies fit it under the boost, and refuses the next one.
+/// -O3 and -Omax take twice the target's budget, LLVM's -O3 (the user's
+/// decision of 2026-10-11 for -O3). Both targets took GCC's 200 under LLVM's
+/// 400% boost, a limit over either reference's: x86-m32's matmul unrolled to
+/// 2633 B where clang's is 1789 and gcc's 402. The edge loops come from
+/// sweeping the size: each target's pass names the budget its description
+/// states, admits the loops whose (scaled) copies fit it under the boost, and
+/// refuses the next one.
 #[test]
 fn test_each_target_unrolls_to_the_budget_its_description_states() {
     for (flags, budget) in
-        [(&["-m32", "-O3", "-march=i486"][..], 150), (&["-m32", "-Omax", "-march=i486"][..], 300), (&["-O3"][..], 200)]
+        [(&["-m32", "-O3", "-march=i486"][..], 300), (&["-m32", "-Omax", "-march=i486"][..], 300), (&["-O3"][..], 400)]
     {
         let sweep: Vec<_> = (1..=10).map(|steps| verdict(flags, steps)).collect();
         for (steps, &(scaled, named, boost, admitted)) in sweep.iter().enumerate() {

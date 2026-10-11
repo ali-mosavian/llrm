@@ -164,11 +164,13 @@ impl Options {
     }
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
-    /// code, and the larger inline threshold.
+    /// code, and the larger inline threshold; the copy budget is LLVM's -O3
+    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's.
     pub fn speed() -> Self {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
+            limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
         }
     }
@@ -299,7 +301,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(gvn::Gvn),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
-        Box::new(indvars::IndVars),
+        Box::new(indvars::IndVars { exit_values: false }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size() }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
@@ -434,6 +436,9 @@ pub fn recorded(
         // is cleaned as gcc's DOM, forwprop and DCE do after `pass_ch`.
         manager.add(fold::Fold);
         manager.add(algebraic::Algebraic { size: false });
+        // A counted exit's values are numbers where the copy made its test
+        // the one that leaves.
+        manager.add(indvars::IndVars { exit_values: true });
         manager.add(dead::Dead);
     }
     // Before LSR: a factor of two or a scale the product carries still shows as

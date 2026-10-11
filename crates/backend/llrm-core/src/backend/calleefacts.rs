@@ -112,9 +112,23 @@ impl CalleeFacts {
                 whole.remove(&ir::root(own));
             }
             let mut high = BTreeSet::new();
+            let mut saved_whole = BTreeSet::new();
             for (kept, pushed) in &frame.saved {
+                if kept == pushed {
+                    saved_whole.insert(ir::root(*kept));
+                }
                 if whole.remove(&ir::root(*kept)) && kept != pushed {
                     high.insert(*kept);
+                }
+            }
+            // The upper half a callee loses is lost to this function's caller
+            // too, unless the whole register is saved here.
+            for one in body.insns() {
+                for lost in &one.clobbers_high {
+                    let root = ir::root(*lost);
+                    if !whole.contains(&root) && !saved_whole.contains(&root) {
+                        high.insert(root);
+                    }
                 }
             }
             llrm_support::debug!("facts", "{name} writes {:?}, the upper half of {:?}", whole, high);
@@ -151,6 +165,8 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     fn parsed(text: &str) -> Module {
@@ -208,5 +224,41 @@ mod tests {
         let order: Vec<_> =
             CalleeFacts::of(&module).1.into_iter().filter_map(|id| module.global(id).name.clone()).collect();
         assert_eq!(order, ["leaf", "f"]);
+    }
+
+    /// `octants` saves `si` and calls `plot`, whose callees lose the upper half
+    /// of `edi`; its fact said it wrote only `esi`, so `rim` kept a long in
+    /// `edi` across it and read garbage (qb's gcirc.c arcs lost 19 pixels).
+    #[test]
+    fn what_a_call_loses_of_the_upper_half_is_lost_to_the_callers_caller() {
+        use crate::model::lir::{Insn, LirBlock};
+        use crate::support::hash::IndexMap;
+
+        let call = Arc::new(Insn {
+            clobbers_high: BTreeSet::from([RegId::EDI]),
+            ..Insn::new(
+                1,
+                Some((1, 1)),
+                Some(crate::model::ir::Semantics::new(crate::model::ir::Operation::Call)),
+                vec![],
+                vec![],
+            )
+        });
+        let body =
+            LirBody::new("leaf", 1, vec![LirBlock::new(1, vec![call])], IndexMap::default(), IndexMap::default());
+        let frame = |saved: Vec<(RegId, RegId)>| llrm_target::FrameRegisters {
+            pointer: RegId::BP,
+            stack: RegId::SP,
+            saved,
+            slot: 2,
+            optional: false,
+            enter: false,
+            free: false,
+        };
+        let facts = CalleeFacts::of(&parsed(LEAF)).0;
+        facts.record("leaf", &body, &frame(vec![(RegId::ESI, RegId::SI), (RegId::EDI, RegId::DI)]));
+        assert_eq!(facts.written("leaf").unwrap().high, BTreeSet::from([RegId::EDI]), "saved by the word");
+        facts.record("leaf", &body, &frame(vec![(RegId::EDI, RegId::EDI)]));
+        assert!(facts.written("leaf").unwrap().high.is_empty(), "saved whole");
     }
 }

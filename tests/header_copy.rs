@@ -102,3 +102,23 @@ fn test_a_fixed_point_product_in_a_rotated_loop_is_still_narrowed() {
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(!text.contains("shrd"), "{text}");
 }
+
+/// With the header copied, mandel's counter leaves on `i + 1 < 32` false with
+/// 32. The exit read the stepped counter, which kept the old one alive past its
+/// step: `lea eax, [edx+1]; or eax, eax; je; mov edx, eax` for the trip
+/// where `inc edx; je` does.
+#[test]
+fn test_a_counted_exits_number_lets_its_counter_step_in_place() {
+    let source = format!("{}/bench/mandel/mandel.nib", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let in_place = lines.windows(2).any(|pair| pair[0].starts_with("inc e") && pair[1].starts_with("je "));
+    assert!(in_place, "{text}");
+}
