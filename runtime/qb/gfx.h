@@ -28,6 +28,9 @@ extern byte gfx_foreground, gfx_background;
 /* The two points of the statement being run, as B$N1I2 and B$N2I2 gave them. */
 extern int gfx_x1, gfx_y1, gfx_x2, gfx_y2;
 
+/* The last point referenced: STEP is taken from it, and DRAW starts at it. */
+extern int gfx_last_x, gfx_last_y;
+
 /* SCREEN: sets the mode, or returns to text with 0.  Not a mode this has is an
    Illegal function call. */
 void gfx_screen(int mode);

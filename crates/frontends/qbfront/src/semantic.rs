@@ -3767,6 +3767,31 @@ impl Compiler {
                             self.emit_runtime_call("B$EVSW", Vec::new(), vec![device, number, mode]);
                         }
                     }
+                    "DRAW" => {
+                        let [commands] = arguments.as_slice() else {
+                            return self.fail("DRAW expects a string of commands");
+                        };
+                        let commands = self.string_descriptor(commands)?;
+                        self.emit_runtime_call("B$DRAW", Vec::new(), vec![commands]);
+                    }
+                    "SOUND" => {
+                        let [frequency, duration] = arguments.as_slice() else {
+                            return self.fail("SOUND expects a frequency and a duration");
+                        };
+                        let (frequency, frequency_type) = self.expression(frequency)?;
+                        let frequency = self.convert(frequency, frequency_type, INTEGER)?;
+                        let (duration, duration_type) = self.expression(duration)?;
+                        let duration = self.stored_float_argument(duration, duration_type, SINGLE)?;
+                        self.emit_runtime_call("B$SOND", Vec::new(), vec![frequency, duration]);
+                    }
+                    "DATE$" | "TIME$" => {
+                        let [text] = arguments.as_slice() else {
+                            return self.fail(format!("{name} = takes a string"));
+                        };
+                        let text = self.string_descriptor(text)?;
+                        let callee = if name == "DATE$" { "B$SDAT" } else { "B$STIM" };
+                        self.emit_runtime_call(callee, Vec::new(), vec![text]);
+                    }
                     "EVDONE" => {
                         let [id] = arguments.as_slice() else {
                             return self.fail("EVDONE takes the handler's number");

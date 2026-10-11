@@ -72,8 +72,8 @@ static long number(Player *p)
    writes `head` and the tick writes `tail`, so neither needs the other to stop.
  */
 typedef struct Note {
-    unsigned hertz;    /* 0 for a rest */
-    byte sound, quiet; /* ticks of tone, then of silence */
+    unsigned hertz;        /* 0 for a rest */
+    unsigned sound, quiet; /* ticks of tone, then of silence */
 } Note;
 
 enum {
@@ -84,7 +84,7 @@ enum {
 static Note queue[QUEUE];
 static volatile unsigned head, tail;
 static byte tick_started;
-static byte sound_left, quiet_left;
+static volatile unsigned sound_left, quiet_left;
 
 /* The clock tick: counts the note out, and starts the next. */
 void music_tick(void)
@@ -129,12 +129,12 @@ static void wait_for_empty(void)
 /* A time in thousandths of a tick as whole ticks, the part left over kept in
    `owed` for the next time: a run of short notes takes as long as they should,
    though each is a whole number of ticks. */
-static byte ticks_of(long thousandths, long *owed)
+static unsigned ticks_of(long thousandths, long *owed)
 {
     long whole = (*owed + thousandths) / 1000;
 
     *owed = *owed + thousandths - whole * 1000;
-    return (byte)whole;
+    return (unsigned)whole;
 }
 
 /* A note of `length`th of a whole note and `dots` dots, in thousandths of a
@@ -289,9 +289,11 @@ static void run(Player *p)
    the length, the tempo, the style and foreground or background) stays set for
    the next PLAY.  Music in the foreground has the program wait until the last
    note has begun. */
+/* What PLAY keeps from one use to the next, and SOUND reads. */
+static Player player = {0, 0, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NORMAL, 1};
+
 void B_SPLY(SD *commands)
 {
-    static Player player = {0, 0, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NORMAL, 1};
 
     player.at = commands->ptr;
     player.end = commands->ptr + commands->len;
@@ -302,6 +304,45 @@ void B_SPLY(SD *commands)
 }
 
 #pragma aux B_SPLY "B$SPLY"
+
+/* B$SOND: SOUND frequency, duration in clock ticks (18.2 a second).  In
+   foreground music a note waits for the one sounding to end; in background
+   music it joins the queue and the program goes on.  The note starts at the
+   next tick.  A duration of 0 silences what is sounding. */
+void B_SOND(short hertz, float duration)
+{
+    long ticks;
+    Note *at;
+
+    if (duration < 0 || duration > 65535.5f)
+        illegal();
+    ticks = (long)(duration + 0.5f);
+    if (ticks == 0) {
+        dev_interrupts_off();
+        tail = head;
+        sound_left = quiet_left = 0;
+        dev_tone(0);
+        dev_interrupts_on();
+        return;
+    }
+    if (hertz < 37)
+        illegal();
+    if (!tick_started) {
+        dev_ticker_start();
+        tick_started = 1;
+    }
+    if (player.foreground)
+        while (sound_left || quiet_left)
+            ;
+    wait_for_room();
+    at = &queue[head];
+    at->hertz = (unsigned)hertz;
+    at->sound = (unsigned)ticks;
+    at->quiet = 0;
+    head = (head + 1) % QUEUE;
+}
+
+#pragma aux B_SOND "B$SOND"
 
 /* The program has ended: what is queued is not played, and the speaker is
  * quiet. */

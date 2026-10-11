@@ -23,7 +23,7 @@ static byte cga_background, cga_palette = 1;
 int gfx_x1, gfx_y1, gfx_x2, gfx_y2;
 /* The last referenced point: STEP is taken from it, and LINE -(x, y) starts at
  * it. */
-static int last_x, last_y;
+int gfx_last_x, gfx_last_y;
 
 /* The adapter's own colour numbers for the attributes 0 to 15 at the start of a
    mode: 0-5 and 7 as they are, 6 brown (20), 8-15 the bright ones (56-63). */
@@ -61,8 +61,8 @@ void gfx_screen(int mode)
             if (!gd_set_mode(modes[at].bios))
                 break;
             if (gfx_current != &modes[at]) {
-                last_x = (int)modes[at].width / 2;
-                last_y = (int)modes[at].height / 2;
+                gfx_last_x = (int)modes[at].width / 2;
+                gfx_last_y = (int)modes[at].height / 2;
             }
             gfx_current = &modes[at];
             gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1 : DEFAULT_FOREGROUND;
@@ -197,14 +197,14 @@ static void need_graphics(void)
 static void first_point(int x, int y)
 {
     need_graphics();
-    last_x = gfx_x1 = x;
-    last_y = gfx_y1 = y;
+    gfx_last_x = gfx_x1 = x;
+    gfx_last_y = gfx_y1 = y;
 }
 
 static void second_point(int x, int y)
 {
-    last_x = gfx_x2 = x;
-    last_y = gfx_y2 = y;
+    gfx_last_x = gfx_x2 = x;
+    gfx_last_y = gfx_y2 = y;
 }
 
 void B_N1I2(short x, short y)
@@ -229,12 +229,12 @@ void B_N2R4(float x, float y)
 
 void B_S1I2(short x, short y)
 {
-    first_point(last_x + x, last_y + y);
+    first_point(gfx_last_x + x, gfx_last_y + y);
 }
 
 void B_S1R4(float x, float y)
 {
-    first_point(last_x + rounded(x), last_y + rounded(y));
+    first_point(gfx_last_x + rounded(x), gfx_last_y + rounded(y));
 }
 
 void B_S2I2(short x, short y)
