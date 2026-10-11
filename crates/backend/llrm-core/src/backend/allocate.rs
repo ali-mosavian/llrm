@@ -1678,24 +1678,6 @@ fn _allocated(
             continue;
         }
 
-        // The frame register, a register with a cost of its own as LLVM's
-        // callee-saved ones have: given out where no point of the value's range
-        // needs the frame and nothing else is free, if holding it saves more
-        // than the `push` and `pop` it takes.
-        if let Some(frame) = frame_register.filter(|_| !fixed.contains_key(&value)) {
-            if _frame_allowed(facts.confined.get(&value), width, frame, classes)
-                && !_in_an_address_sum(&body, value)
-                && !_clobbered(&mine, frame, &facts.masks, width)
-                && !union.busy(&frame, &mine, &facts.live)
-                && _parking_pays(&body, &facts, value, &mine)
-            {
-                r#where.insert(value, frame);
-                union.add(frame, value, &facts.live);
-                stage.insert(value, Stage::Done);
-                continue;
-            }
-        }
-
         // An unspillable range has no fallback, so it may evict at any stage.
         if at == Stage::Assign || facts.live.weight(value) == INF {
             let movable = |other: u32, register: RegId| -> bool {
@@ -1872,6 +1854,25 @@ fn _allocated(
         }
         if rewritten.is_none() {
             // Last chance: move what holds a register rather than spill.
+            // The frame register, a register with a cost of its own as LLVM's
+            // callee-saved ones have: given out where no point of the value's
+            // range needs the frame and nothing else is free, if
+            // holding it saves more than the `push` and `pop` it
+            // takes.
+            if let Some(frame) = frame_register.filter(|_| !fixed.contains_key(&value)) {
+                if _frame_allowed(facts.confined.get(&value), width, frame, classes)
+                    && !_in_an_address_sum(&body, value)
+                    && !_clobbered(&mine, frame, &facts.masks, width)
+                    && !union.busy(&frame, &mine, &facts.live)
+                    && _parking_pays(&body, &facts, value, &mine)
+                {
+                    r#where.insert(value, frame);
+                    union.add(frame, value, &facts.live);
+                    stage.insert(value, Stage::Done);
+                    continue;
+                }
+            }
+
             let choices = |other: u32| -> Vec<RegId> {
                 let mut order = match fixed.get(&other) {
                     None => target::order(facts.confined.get(&other), segments, classes),
@@ -2240,7 +2241,7 @@ fn _frame_parked(
             Ok(cut)
         }
         None => {
-            Err(Unplaced(format!("{}: the frame register cannot be saved over {:?}", body.name, region.spans)).into())
+            Err(Error::Parking(format!("{}: the frame register cannot be saved over {:?}", body.name, region.spans)))
         }
     }
 }

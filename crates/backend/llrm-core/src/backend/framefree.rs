@@ -165,6 +165,13 @@ pub fn needs_frame(
     one: &Insn,
     regs: Regs,
 ) -> bool {
+    *one.frame.get_or_init(|| _needs_frame(one, regs))
+}
+
+fn _needs_frame(
+    one: &Insn,
+    regs: Regs,
+) -> bool {
     let Some(what) = &one.what else { return true };
     if matches!(
         what.op,

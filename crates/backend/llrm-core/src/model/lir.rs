@@ -143,6 +143,8 @@ pub struct Insn {
     /// Its identity (`Insn::id`): given when first asked, never again to
     /// another instruction.
     pub ident: Derived<u64>,
+    /// Whether it needs the frame register (`framefree::needs_frame`).
+    pub frame: Derived<bool>,
 }
 
 /// A fact worked out from an instruction's fields, kept on it for every pass
@@ -429,6 +431,7 @@ impl Insn {
             debug: DebugTags::default(),
             effect: Derived::default(),
             ident: Derived::default(),
+            frame: Derived::default(),
         }
     }
 
