@@ -279,3 +279,25 @@ fn test_a_counter_tested_in_the_header_after_its_step_is_tested_stepped() {
         .any(|pair| pair[0].strip_prefix("inc ").is_some_and(|register| pair[1] == format!("cmp {register}, 32")));
     assert!(stepped, "{text}");
 }
+
+/// A path that returns early stored its result in the frame cell the other
+/// paths' sum lives in, and the shared return reloaded it: the path touched the
+/// frame, so the registers and the frame were set up on it too (queens' leaf
+/// call: `push si; push di; ... pop di; pop si; leave`, the most frequent
+/// path). With the return copied for the path, the reload is forwarded and the
+/// store dead before the pieces it needs are counted: `mov ax, 1; ret`.
+#[test]
+fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
+    let source = format!("{}/bench/queens/queens.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.ends_with(':')).collect();
+    let early = lines.windows(2).any(|pair| pair[0] == "mov ax, 1" && pair[1] == "ret");
+    assert!(early, "{text}");
+}

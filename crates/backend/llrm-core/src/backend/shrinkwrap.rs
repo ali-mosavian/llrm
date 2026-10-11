@@ -21,7 +21,7 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::loops::{dominance, immediate_dominators, loops};
 use crate::model::ir::Semantics;
-use crate::model::ir::{self, Loc};
+use crate::model::ir::{self, Loc, Mem};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 
 /// What a procedure sets up and takes back: the frame, or a register it keeps
@@ -303,6 +303,10 @@ pub fn tails_split(
             }
             let before = *score.get_or_insert_with(|| worth(&best));
             let Some(made) = tail_copied(&best, tail, &parents[&tail.at]) else { continue };
+            // The copy lets a path reload nothing it stored on the way: what
+            // the early path stored for the tail to read is gone before the
+            // pieces it needs are counted.
+            let made = returns_cleaned(&made);
             let now = worth(&made);
             // Only where the early path skips several pieces: each is a push
             // and a pop saved, and the copy costs bytes on every
@@ -315,6 +319,73 @@ pub fn tails_split(
         }
         return best;
     }
+}
+
+/// `body` with, on each path that returns through a block of its own, the
+/// reloads a store on that path fills forwarded and the allocator's stores no
+/// later instruction of the path reads dropped: a frame dies at its return, as
+/// gcc's and LLVM's dead store elimination of a local at the end of a function.
+fn returns_cleaned(body: &LirBody) -> LirBody {
+    let body = crate::backend::spillforward::forwarded(body);
+    let parents = crate::backend::jumps::_predecessors(&body.blocks);
+    let mut cleaned: BTreeMap<i64, Vec<Arc<Insn>>> = BTreeMap::new();
+    for block in &body.blocks {
+        let returns = block
+            .insns
+            .last()
+            .is_some_and(|last| last.what.as_ref().is_some_and(|what| what.op == ir::Operation::Return));
+        let Some(&only) =
+            parents.get(&block.at).filter(|ways| ways.len() == 1 && returns).and_then(|ways| ways.first())
+        else {
+            continue;
+        };
+        let Some(way) = body.blocks.iter().find(|one| one.at == only) else { continue };
+        if way.succ != [block.at] {
+            continue;
+        }
+        let mut read: Vec<Mem> = Vec::new();
+        let mut dead: BTreeSet<usize> = BTreeSet::new();
+        for one in block.insns.iter().chain(way.insns.iter()).rev() {
+            let Some(what) = &one.what else { continue };
+            if one.spill_store
+                && let [Loc::Mem(cell)] = what.dests.as_slice()
+                && crate::backend::peephole::_frame_cell(cell)
+                && !read.iter().any(|seen| crate::backend::peephole::_overlapping(seen, cell))
+            {
+                dead.insert(crate::backend::peephole::id(one));
+                continue;
+            }
+            for place in what.sources.iter().chain(what.dests.iter().filter(|_| what.op != ir::Operation::Move)) {
+                if let Loc::Mem(cell) = place {
+                    read.push(cell.clone());
+                }
+            }
+        }
+        if !dead.is_empty() {
+            cleaned.insert(
+                way.at,
+                way.insns
+                    .iter()
+                    .map(|one| {
+                        if dead.contains(&crate::backend::peephole::id(one)) {
+                            crate::model::lir::anchor(Arc::clone(one))
+                        } else {
+                            Arc::clone(one)
+                        }
+                    })
+                    .collect(),
+            );
+        }
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| match cleaned.remove(&block.at) {
+            Some(insns) => block.with_insns(insns),
+            None => block.clone(),
+        })
+        .collect();
+    body.with_blocks(blocks)
 }
 
 /// `body` with `tail` copied for each of `ways`, the original gone.
