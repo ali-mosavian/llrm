@@ -1393,3 +1393,62 @@ b1:
     assert!(!inlined(4), "a 4-byte copy paid for the body");
     assert!(inlined(2000), "a 2,000-byte copy was not counted");
 }
+
+/// gcc's size unit (`estimate_num_insns`, `eni_size_weights`): a compare only a
+/// conditional branch reads is that branch, an address only an access reads
+/// is the access, a return is one, a phi and a plain jump none. Counting the
+/// compare and its branch as two put `chop` (gcc: growth 14) at 17 against a
+/// limit of 15.
+#[test]
+fn test_gcc_insns_counts_a_compare_and_its_branch_once_and_a_return() {
+    let module = parsed(
+        "define i32 @f(i32 %n, ptr %p) {
+b0:
+  %a = icmp slt i32 %n, 2
+  br i1 %a, label %b1, label %b2
+b1:
+  ret i32 0
+b2:
+  %g = getelementptr inbounds i32, ptr %p, i32 %n
+  %v = load i32, ptr %g
+  %b = icmp eq i32 %v, 5
+  br i1 %b, label %b3, label %b4
+b3:
+  ret i32 1
+b4:
+  %c = icmp eq i32 %v, 6
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+",
+    );
+    let body = module.global(llrm_mir::context::GlobalId(0)).function().expect("a body");
+    // br, ret, load, br, ret, icmp (read by a zext), zext, ret
+    assert_eq!(super::gcc_insns(body), 8);
+    let chain = parsed(
+        "define i32 @g(i32 %n) {
+b0:
+  %a = icmp slt i32 %n, 2
+  br i1 %a, label %b1, label %b2
+b1:
+  ret i32 0
+b2:
+  %b = icmp slt i32 %n, 4
+  br i1 %b, label %b3, label %b4
+b3:
+  ret i32 1
+b4:
+  %c = icmp slt i32 %n, 6
+  br i1 %c, label %b5, label %b6
+b5:
+  ret i32 2
+b6:
+  ret i32 3
+}
+",
+    );
+    let body = chain.global(llrm_mir::context::GlobalId(0)).function().expect("a body");
+    // Three branches and four returns; the ordinary count has three compares
+    // and three branches and no return.
+    assert_eq!((super::gcc_insns(body), super::operations(body)), (7, 6));
+}
