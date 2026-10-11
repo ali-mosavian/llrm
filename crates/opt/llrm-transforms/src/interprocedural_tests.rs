@@ -1499,6 +1499,32 @@ fn test_a_recursive_function_over_an_ordinary_calls_budget_is_inlined_into_itsel
     assert_eq!(calls(Threshold::default().for_size()), 2, "not for size");
 }
 
+/// gcc inlines a recursive function once into a caller that is not it
+/// (ipa-inline.cc L2263-2290): rectwo's `bench_rectwo` called `paths` and kept
+/// the call, 988,865 clocks to gcc's 555,706. The caller holds one copy: the
+/// copy's own two calls, not the one it began with and not a copy's copy.
+#[test]
+fn test_a_caller_that_is_not_recursive_holds_one_copy_of_its_recursive_callee() {
+    let text = format!(
+        "{OVER_SIX}
+define i16 @g(i16 %n) {{
+b:
+  %r = call i16 @f(i16 %n)
+  ret i16 %r
+}}
+"
+    );
+    let inputs: &[&[i128]] = &[&[0], &[1], &[3], &[5]];
+    let mut module = parsed(&text);
+    stepped(&mut module, &["g"], 20, Threshold::default());
+    let printed = printed(&module);
+    let caller = &printed[printed.find("define i16 @g").unwrap()..];
+    let caller = &caller[..caller.find("\n}").unwrap()];
+    assert_eq!(caller.matches("call i16 @f").count(), 2, "{caller}");
+    assert!(caller.contains("icmp eq"), "the copy's base case is in the caller: {caller}");
+    assert_eq!(results(&module, inputs), results(&parsed(&text), inputs), "{printed}");
+}
+
 /// A trial of several sites splices them all and runs the caller's
 /// pipeline once, the way gcc and LLVM inline: it ran the pipeline after each
 /// site (host.c -6.6%, QCport -2.2%, the code the same).
@@ -1749,4 +1775,114 @@ fn test_a_chain_longer_than_a_caller_may_take_is_built_only_where_each_piece_sta
     assert!(built.is_subset(&alive), "built and then taken: {:?}", built.difference(&alive).collect::<Vec<_>>());
     assert!(alive.len() > 1 && alive.len() <= 6, "{alive:?}");
     assert_eq!(results(&module, INPUTS), results(&parsed(&text), INPUTS));
+}
+
+/// A unit grows by copies of its recursive functions only as far as gcc's
+/// `inline-unit-growth` (params.opt:209, 40%) lets it from the larger of its
+/// size and `large-unit-insns` (10,000): 25 functions of `OVER_SIX` each grew
+/// to the 450-operation cap beside a body of 11,000 operations, 11,000 more, a
+/// unit 2x what began.
+#[test]
+fn test_recursive_copies_stop_where_the_unit_has_grown_by_gccs_limit() {
+    fn operations(text: &str) -> i64 {
+        text.lines().filter(|line| line.starts_with("  %") && !line.contains(" = phi ")).count() as i64
+    }
+    let mut text = String::from("define i16 @filler(i16 %x) {\nb:\n  %t0 = add i16 %x, 1\n");
+    for at in 1..11_000 {
+        text += &format!("  %t{at} = add i16 %t{}, 1\n", at - 1);
+    }
+    text += "  ret i16 %t10999\n}\n\n";
+    let names: Vec<String> = (0..25).map(|at| format!("f{at}")).collect();
+    for name in &names {
+        text += &OVER_SIX.replace("@f(", &format!("@{name}(")).replace("@f(i16 %m)", &format!("@{name}(i16 %m)"));
+        text += "\n";
+    }
+    let mut roots: Vec<&str> = names.iter().map(String::as_str).collect();
+    roots.push("filler");
+    let mut module = parsed(&text);
+    let before = operations(&printed(&module));
+    stepped(&mut module, &roots, 20, Threshold::default());
+    let after = operations(&printed(&module));
+    assert!(after > before, "premise: the recursive functions grew by copies of themselves");
+    assert!(
+        after <= before.max(10_000) * 140 / 100 + 450,
+        "the unit grew from {before} to {after} operations, past a 40% growth of {}",
+        before.max(10_000)
+    );
+}
+
+/// A function that calls itself, or a cycle of functions that call one another,
+/// does what its other calls and accesses do: LLVM's PostOrderFunctionAttrs
+/// stamps an SCC together. The call to itself was taken to touch every
+/// memory, so `hanoi` was `memory(inaccessiblemem: readwrite)`, its two calls
+/// with equal arguments could not be one, and it ran 143,747 clocks against
+/// gcc's 39,880.
+#[test]
+fn a_cycle_of_calls_does_what_its_members_do_besides_calling_one_another() {
+    let cycle = |sink: &str| {
+        format!(
+            "@sink = global i16 0
+
+define internal i16 @even(i16 %n) {{
+b1:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b2, label %b3
+b2:
+  ret i16 1
+b3:
+  %m = sub i16 %n, 1
+  %r = call i16 @odd(i16 %m)
+  ret i16 %r
+}}
+
+define internal i16 @odd(i16 %n) {{
+b1:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b2, label %b3
+b2:
+{sink}  ret i16 0
+b3:
+  %m = sub i16 %n, 1
+  %r = call i16 @even(i16 %m)
+  ret i16 %r
+}}
+
+define internal i16 @alone(i16 %n) {{
+b1:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b2, label %b3
+b2:
+  ret i16 0
+b3:
+  %m = sub i16 %n, 1
+  %r = call i16 @alone(i16 %m)
+  %s = add i16 %r, 1
+  ret i16 %s
+}}
+
+define i16 @f(i16 %a) {{
+b1:
+  %x = call i16 @even(i16 %a)
+  %y = call i16 @alone(i16 %a)
+  %t = add i16 %x, %y
+  ret i16 %t
+}}
+"
+        )
+    };
+    let memory_of = |text: &str, name: &str| {
+        let mut module = parsed(text);
+        crate::testing::stamped(&mut module).unwrap();
+        printed(&module)
+            .lines()
+            .find(|line| line.starts_with("define") && line.contains(&format!("@{name}(")))
+            .map(|line| line.contains("memory(none)"))
+            .expect("the function")
+    };
+    let quiet = cycle("");
+    assert!(memory_of(&quiet, "alone"), "a function that only calls itself touches nothing");
+    assert!(memory_of(&quiet, "even") && memory_of(&quiet, "odd"), "nor does a cycle of two");
+    let loud = cycle("  store volatile i16 1, ptr @sink\n");
+    assert!(!memory_of(&loud, "odd") && !memory_of(&loud, "even"), "a member's access is the cycle's");
+    assert!(memory_of(&loud, "alone"));
 }

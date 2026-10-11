@@ -313,6 +313,69 @@ pub fn subexpressions(
     Ok(true)
 }
 
+/// Two calls with the same callee and arguments that touch no memory (`silent`
+/// says which) are one: the later one is the earlier's value, where the earlier
+/// has certainly run. LLVM's GVN numbers a call that `doesNotAccessMemory` and
+/// gcc's FRE a call to a const function. `silent` is asked only of calls that
+/// have an equal. Whether anything changed.
+pub fn equal_calls(
+    function: &mut Function,
+    silent: &dyn Fn(&Function, InstId) -> bool,
+) -> Result<bool, String> {
+    // By callee and arguments, in layout order: only groups of two or more
+    // are looked at again.
+    let mut groups: IndexMap<(TypeId, &[Operand]), Vec<(usize, usize, InstId)>> = IndexMap::default();
+    for (at, &block) in function.layout().iter().enumerate() {
+        for (index, &inst) in function.block(block).instructions().iter().enumerate() {
+            let op = function.instruction(inst);
+            if matches!(op.opcode, Opcode::Call(_)) && op.result.is_some() {
+                groups.entry((op.ty, &op.operands[..])).or_default().push((at, index, inst));
+            }
+        }
+    }
+    let groups: Vec<Vec<(usize, usize, InstId)>> = groups
+        .into_values()
+        .filter(|calls| calls.len() > 1)
+        .map(|calls| calls.into_iter().filter(|&(_, _, inst)| silent(function, inst)).collect::<Vec<_>>())
+        .filter(|calls| calls.len() > 1)
+        .collect();
+    if groups.is_empty() {
+        return Ok(false);
+    }
+    let dominance = cfg::Dominance::of(function);
+    let layout = function.layout().to_vec();
+    let mut swap: Vec<(ValueId, ValueId)> = Vec::new();
+    for calls in &groups {
+        let mut leaders: Vec<(usize, usize, InstId)> = Vec::new();
+        for &(at, index, inst) in calls {
+            let earlier = leaders
+                .iter()
+                .rev()
+                .find(|leader| _reaches(leader.0, leader.1, at, index, &dominance, &layout, layout[at]))
+                .copied();
+            match earlier {
+                Some((_, _, leader)) => {
+                    let (mine, theirs) = (function.instruction(inst).result, function.instruction(leader).result);
+                    if let (Some(mine), Some(theirs)) = (mine, theirs) {
+                        swap.push((mine, theirs));
+                    }
+                }
+                None => leaders.push((at, index, inst)),
+            }
+        }
+    }
+    if swap.is_empty() {
+        return Ok(false);
+    }
+    for &(mine, theirs) in &swap {
+        function.replace_value(mine, Operand::Value(theirs));
+        if let ValueDef::Instruction(inst) = function.value(mine).def {
+            function.erase(inst)?;
+        }
+    }
+    Ok(true)
+}
+
 /// Python's `_computation` key tuple.
 ///
 /// `name` was the old operation's variant; it is the opcode, whose
@@ -684,12 +747,9 @@ b0:
             .unwrap()
         };
         let (context, function) = module.function_mut("f").expect("@f");
-        let registers = llrm_analysis::consts::known(
-            &llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)),
-            None,
-            None,
-            None,
-        );
+        let registers = llrm_analysis::consts::known(&llrm_analysis::testing::with_registers(Unit::within(
+            context, &layout, function, &outer,
+        )));
         let shape = llrm_analysis::cfg::Shape::of(function);
         let changed = forwarded(
             context,

@@ -4,6 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use llrm_lir::registers::RegId;
+
+use crate::backend::peephole::is_frame_base;
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::lir::{LirBlock, LirBody};
 
@@ -33,6 +36,7 @@ pub fn verify_for(
     let mut out = verify(body, in_ssa);
     if spaces.far_is_near() && spaces.segment_bytes.is_none() {
         out.extend(_flat(body));
+        out.extend(_wide_addresses(body));
     }
     out
 }
@@ -41,8 +45,13 @@ pub fn verify_for(
 /// of any segment but the stack's and the data's, which are the one space here
 /// (the encoder drops them): the machine of the target has no other to name.
 fn _flat(body: &LirBody) -> Vec<String> {
-    use iced_x86::Register::{DS, None as NoSegment, SS};
-    let other = |segment| segment != NoSegment && segment != SS && segment != DS;
+    const DS: RegId = RegId::DS;
+    const NO_SEGMENT: RegId = RegId::None;
+    const SS: RegId = RegId::SS;
+    let other = |segment: iced_x86::Register| {
+        let segment = RegId::from(segment);
+        segment != NO_SEGMENT && segment != SS && segment != DS
+    };
     let mut out = vec![];
     for block in &body.blocks {
         for one in &block.insns {
@@ -189,6 +198,33 @@ fn _spans(body: &LirBody) -> Vec<String> {
     out
 }
 
+/// In flat code a base or an index is as wide as the target's addresses: the
+/// frame register's width. The frame and stack bases the frame layout resolves
+/// are no register read.
+fn _wide_addresses(body: &LirBody) -> Vec<String> {
+    let regs = body.regs();
+    let wide = regs.width_of(regs.frame).unwrap_or(0);
+    let mut out = vec![];
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        let Some(what) = &one.what else { continue };
+        for at in what.dests.iter().chain(&what.sources).filter_map(Loc::address) {
+            for (register, framed) in [
+                (at.through, is_frame_base(regs, at.addr, at.through) || regs.is_stack(at.through)),
+                (at.index_through, false),
+            ] {
+                if register != RegId::None && !framed && regs.width_of(register).is_some_and(|width| width < wide) {
+                    out.push(format!(
+                        "{:#06x} addresses through {}, narrower than this target's {wide}-byte addresses",
+                        one.at,
+                        regs.name(register).unwrap_or("?")
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// No operand names a register class it cannot be in. A MIR operand cannot
 /// survive lowering here: `ir::Loc` has no variant for one.
 fn _operands(body: &LirBody) -> Vec<String> {
@@ -208,7 +244,7 @@ fn _operands(body: &LirBody) -> Vec<String> {
                 if regs.positional(reg.register) {
                     continue;
                 }
-                let register = reg.register as u32;
+                let register = reg.register.index() as u32;
                 if !regs.described(reg.register) {
                     out.push(format!("{:#06x} names {register}, which is not a register this target has", one.at));
                 }

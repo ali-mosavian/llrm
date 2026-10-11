@@ -518,6 +518,41 @@ fn test_a_posttested_header_knows_its_counter() {
     assert_eq!(known.get(&header).and_then(|facts| facts.get(&rotated.value("i"))), Some(&interval(0, 9, 8)));
 }
 
+/// mandel with its header copied: `x` stays in the box its own break test
+/// gives it. The step is tested after the increment (`i + 1 < 32`), which the
+/// latch's block scope does not hold, and `x * x` is made in the header,
+/// which the trip's counts leave out. Both lost, `x * x` had no range and
+/// the fixed-point product stayed 64-bit (mandel nib -O2 +32.5% instructions).
+#[test]
+fn test_a_rotated_loop_keeps_its_phis_box_in_its_header() {
+    let parsed = Parsed::new(
+        "define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  %x = phi i32 [ 0, %b0 ], [ %x1, %b2 ]
+  %xx = mul i32 %x, %x
+  %out = icmp sgt i32 %xx, 1000
+  br i1 %out, label %b3, label %b2
+
+b2:
+  %x1 = sub i32 %xx, 500
+  %next = add i32 %i, 1
+  %again = icmp slt i32 %next, 32
+  br i1 %again, label %b1, label %b3
+
+b3:
+  ret void
+}
+",
+    );
+    let known = bounded(&parsed.unit()).unwrap();
+    let header = cfg::id(parsed.block("b1"));
+    assert_eq!(known.get(&header).and_then(|facts| facts.get(&parsed.value("x"))), Some(&interval(-512, 511, 32)));
+}
+
 /// `text` with every fact `facts` states at a block checked where the
 /// block's `;check` line is, if its value is defined there: `@check`
 /// calls `@f` and answers how many checks failed.

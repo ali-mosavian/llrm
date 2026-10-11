@@ -85,7 +85,7 @@ fn spans(
     };
     let (region, origin) = region(address.space, address.index);
     let (low, high) =
-        if address.base != RegId::None || region == Region::default() || region == Region(vec![Part::Named]) {
+        if address.base != (RegId::None).iced() || region == Region::default() || region == Region(vec![Part::Named]) {
             WHOLE
         } else {
             (address.disp, address.disp.checked_add(i64::from(width.max(1)))?)
@@ -150,6 +150,9 @@ pub fn may_overlap(
     if let Some(answer) = frame_bytes(one, one_width, other, other_width) {
         return answer;
     }
+    if different_slots(one, other) {
+        return false;
+    }
     may_overlap_by_sets(one, one_width, other, other_width)
 }
 
@@ -163,13 +166,29 @@ fn frame_bytes(
     other_width: u32,
 ) -> Option<bool> {
     let (one, other) = (one?, other?);
-    let fixed = |address: &Addr| address.space == Space::Frame && address.base == RegId::None;
+    let fixed = |address: &Addr| address.space == Space::Frame && address.base == (RegId::None).iced();
     if !fixed(&one) || !fixed(&other) {
         return None;
     }
     let end = |address: &Addr, width: u32| address.disp.checked_add(i64::from(width.max(1)));
     let (one_end, other_end) = (end(&one, one_width)?, end(&other, other_width)?);
     Some(one.disp < other_end && other.disp < one_end)
+}
+
+/// A frame address that reaches its whole object (one with a base register,
+/// an indexed array's) stays in the slot it was made from, and meets no cell
+/// of another slot.
+fn different_slots(
+    one: Option<Addr>,
+    other: Option<Addr>,
+) -> bool {
+    let (Some(one), Some(other)) = (one, other) else { return false };
+    one.space == Space::Frame
+        && other.space == Space::Frame
+        && matches!(
+            (one.slot_home(), other.slot_home()),
+            (Some(a), Some(b)) if a != b
+        )
 }
 
 fn may_overlap_by_sets(
@@ -196,13 +215,26 @@ mod tests {
         Some(Addr::new(Space::Frame, disp))
     }
 
+    /// An indexed array's cell (a frame address with a base register) reaches
+    /// its whole object and no other slot: the store of a local beside it was
+    /// kept for it, and a reload of a local was made after it.
+    #[test]
+    fn a_based_frame_address_meets_its_own_slot_and_no_other() {
+        let array =
+            |home: i64| Some(Addr { base: (RegId::BP).iced(), ..Addr::new(Space::Frame, home + 700).in_slot(home) });
+        let local = |home: i64| Some(Addr::new(Space::Frame, home).in_slot(home));
+        assert!(!may_overlap(array(-800), 1, local(-8), 4));
+        assert!(may_overlap(array(-800), 1, local(-800), 2));
+        assert!(may_overlap(array(-800), 1, array(-800), 1));
+    }
+
     /// Frame bytes meet by offset and width; a based address reaches its
     /// whole region; a literal address is never SP-relative stack.
     #[test]
     fn overlap_reads_offsets_widths_and_regions() {
         assert!(!may_overlap(frame(-4), 2, frame(-2), 2));
         assert!(may_overlap(frame(-4), 4, frame(-2), 2));
-        let based = Some(Addr { base: RegId::BX, ..Addr::new(Space::Frame, 0) });
+        let based = Some(Addr { base: (RegId::BX).iced(), ..Addr::new(Space::Frame, 0) });
         assert!(may_overlap(based, 1, frame(-40), 2));
         let literal = Some(Addr::new(Space::Literal, 0x400));
         assert!(!may_overlap(literal, 2, Some(Addr::new(Space::Stack, 2)), 2));

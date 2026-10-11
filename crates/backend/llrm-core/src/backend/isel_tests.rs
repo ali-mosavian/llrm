@@ -5041,7 +5041,7 @@ define i16 @f() addrspace(1) {
 /// none to show.
 #[test]
 fn a_parameter_is_a_cell_a_register_or_gone() {
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
     use llrm_mir::debuginfo as di;
 
     use crate::backend::isel::{Convention, Parameter};
@@ -5070,8 +5070,8 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     let convention = Convention {
         parameters: vec![
             Parameter::Cell(6),
-            Parameter::Registers(vec![Register::AX]),
-            Parameter::Registers(vec![Register::DX, Register::AX]),
+            Parameter::Registers(vec![RegId::AX]),
+            Parameter::Registers(vec![RegId::DX, RegId::AX]),
         ],
         returns: Vec::new(),
         popped: 0,
@@ -5086,7 +5086,7 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
         found,
         [
             ("a".to_owned(), DebugPlace::At(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 6))),
-            ("b".to_owned(), DebugPlace::Register(Register::AX)),
+            ("b".to_owned(), DebugPlace::Register(RegId::AX)),
             ("d".to_owned(), DebugPlace::Gone)
         ]
     );
@@ -5232,7 +5232,8 @@ fn test_an_i64_compare_and_convert_follow_the_native_width_not_a_dword() {
 #[test]
 fn test_a_wide_result_is_in_the_conventions_register_pair() {
     use llrm_target::Target;
-    let pair: Vec<iced_x86::Register> = llrm_x86_m16::M16.results(8).iter().map(|one| one.full_register32()).collect();
+    let pair: Vec<llrm_lir::registers::RegId> =
+        llrm_x86_m16::M16.results(8).iter().map(|one| one.full_register32()).collect();
     let selected =
         selected("declare i64 @g()\ndefine i64 @f() {\n  %x = call i64 @g()\n  ret i64 %x\n}\n", "f").expect("selects");
     let insns = selected.body.insns();

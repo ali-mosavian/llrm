@@ -837,8 +837,7 @@ fn _post_incremented(
     loop_: &Loop,
 ) -> Option<PostIncrement> {
     let function = view.function;
-    // Cheap first: a latch branch on a compare of a header phi with a constant,
-    // whose step is read elsewhere too.
+    // Cheap first: a latch branch on a compare of a header phi with a constant.
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
     let branch = function.terminator(cfg::block(latch))?;
     let Some(&Operand::Value(condition)) = function.instruction(branch).operands.first() else { return None };
@@ -857,9 +856,6 @@ fn _post_incremented(
         return None;
     }
     let Some(Operand::Value(step)) = _latch_arm(function, read, cfg::block(latch)) else { return None };
-    if function.users(step).iter().all(|one| one.user == phi || one.user == compare) {
-        return None;
-    }
     let proofs = induction::counted_leaving(view, loop_, None, true);
     let [proof] = &proofs[..] else { return None };
     if !proof.shifted || !proof.posttested || proof.compare != compare {

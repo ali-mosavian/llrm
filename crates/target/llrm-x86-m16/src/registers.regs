@@ -55,3 +55,5 @@ st4     80   st4 0    x87,positional  15  132
 st5     80   st5 0    x87,positional  16  133
 st6     80   st6 0    x87,positional  17  134
 st7     80   st7 0    x87,positional  18  135
+# The return address, which a frame description's rules name as the column the caller resumes at.
+eip     32   eip  0    pc  8  -

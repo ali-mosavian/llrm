@@ -39,8 +39,8 @@ fn _literal(one: &Insn) -> Option<(Mem, i64)> {
         && cell.through == RegId::None
         && cell.offset == 0
         && address.space == Space::Segment
-        && address.base == RegId::None
-        && address.segment == RegId::None
+        && address.base == (RegId::None).iced()
+        && address.segment == (RegId::None).iced()
         && (0..=0xfffe).contains(&address.disp)
     {
         return Some((cell.clone(), *number));

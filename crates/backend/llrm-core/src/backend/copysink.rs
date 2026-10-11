@@ -343,7 +343,11 @@ mod tests {
         // Shellsort's gap loop: `mov cx,dx` in the inner loop's header saved
         // `i` for the inner loop's latch; it must not leave for the
         // outer exit.
-        use iced_x86::Register::{AX, BX, CX, DX, SI};
+        const AX: RegId = RegId::AX;
+        const BX: RegId = RegId::BX;
+        const CX: RegId = RegId::CX;
+        const DX: RegId = RegId::DX;
+        const SI: RegId = RegId::SI;
         let body = LirBody::new(
             "f",
             1,
@@ -360,14 +364,17 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        assert_eq!(_copies(&sunk(&body))[&38], vec![r(CX)]);
+        assert_eq!(_copies(&sunk(&body))[&38], vec![r(RegId::from(CX))]);
     }
 
     #[test]
     fn test_copy_read_only_after_its_loop_moves_to_the_exit() {
         // Plasmablobs: `mov di,dx` on the way back to the header ran every pass
         // for one read after the loop.
-        use iced_x86::Register::{AX, BX, DI, DX};
+        const AX: RegId = RegId::AX;
+        const BX: RegId = RegId::BX;
+        const DI: RegId = RegId::DI;
+        const DX: RegId = RegId::DX;
         let body = LirBody::new(
             "f",
             1,
@@ -384,7 +391,7 @@ mod tests {
             IndexMap::default(),
         );
         let copies = _copies(&sunk(&body));
-        assert!(copies[&5].is_empty() && copies[&9] == vec![r(DI)]);
+        assert!(copies[&5].is_empty() && copies[&9] == vec![r(RegId::from(DI))]);
     }
 
     #[test]
@@ -392,7 +399,10 @@ mod tests {
         // #111: the latch's `mov di,dx` left for the exit of a loop tested at
         // its header; run no times, the loop left DI the value DX happened to
         // hold, not the one DI held before it (5812 where 0 is right on DOS).
-        use iced_x86::Register::{AX, BX, DI, DX};
+        const AX: RegId = RegId::AX;
+        const BX: RegId = RegId::BX;
+        const DI: RegId = RegId::DI;
+        const DX: RegId = RegId::DX;
         let body = LirBody::new(
             "f",
             1,
@@ -406,7 +416,7 @@ mod tests {
             IndexMap::default(),
         );
         let copies = _copies(&sunk(&body));
-        assert!(copies[&5] == vec![r(DI)] && copies[&9].is_empty(), "{copies:?}");
+        assert!(copies[&5] == vec![r(RegId::from(DI))] && copies[&9].is_empty(), "{copies:?}");
     }
 
     fn _raw_insn(

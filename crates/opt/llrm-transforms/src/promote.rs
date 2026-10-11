@@ -44,6 +44,7 @@ use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, regions, ssa};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
+use llrm_mir::footprint::Footprint;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
@@ -247,6 +248,12 @@ pub struct Promote;
 impl FunctionPass for Promote {
     fn name(&self) -> &'static str {
         "promote"
+    }
+
+    /// A load becomes the value a store left in its cell: memory operations
+    /// (and what addresses them) and the CFG.
+    fn reads(&self) -> Footprint {
+        Footprint::MEMORY | Footprint::STRUCTURE
     }
 
     fn run(
@@ -543,6 +550,46 @@ fn _available(
             based.entry(value).or_default().push(at);
         }
     }
+    // The cells a write may reach, by the buckets of the objects it may alias:
+    // a store asked every cell that was available, N cells at each of N
+    // stores. A cell outside the buckets the write reaches is one
+    // `overlapping` rules out unseen.
+    // Made when a write finds many cells available: putting every cell in a
+    // bucket costs more than asking the few that are (host.c: promote 245
+    // -> 605 Minstr when it was made for each function).
+    let indexed = std::cell::OnceCell::new();
+    let reached = RefCell::new(HashMap::<InstId, Option<Vec<usize>>>::default());
+    let reach = |inst: InstId, writes: &[MemRef]| -> Option<Vec<usize>> {
+        let index = indexed.get_or_init(|| {
+            let mut buckets = regions::OverlapBuckets::default();
+            llrm_analysis::cellmap::CellMap::<usize, (), regions::OverlapBucket>::new(
+                (0..refs.len()).map(|at| (at, ())).collect(),
+                |at| (regions::overlap_bucket(&mut buckets, &refs[*at]), None),
+            )
+        });
+        reached
+            .borrow_mut()
+            .entry(inst)
+            .or_insert_with(|| {
+                let mut cells = Vec::new();
+                for written in writes {
+                    match regions::overlap_buckets(written, &index.parts) {
+                        None => return None,
+                        Some(picked) => cells.extend(
+                            picked
+                                .iter()
+                                .filter_map(|bucket| index.buckets.get(bucket))
+                                .flat_map(IndexMap::keys)
+                                .copied(),
+                        ),
+                    }
+                }
+                cells.sort_unstable();
+                cells.dedup();
+                Some(cells)
+            })
+            .clone()
+    };
     let mut every = Bits::new(cells.len());
     (0..cells.len()).for_each(|at| every.insert(at));
     let mut leaving = reachable.iter().map(|at| (*at, every.clone())).collect::<BTreeMap<_, _>>();
@@ -584,8 +631,17 @@ fn _available(
                 moved.iter().for_each(|&at| available.remove(at));
             }
             if !writes.is_empty() {
-                let gone = available
-                    .iter()
+                // The cells available are asked one by one while they are few;
+                // past `MANY`, the buckets the write reaches
+                // say which could be hit.
+                const MANY: usize = 24;
+                let near = if available.iter().nth(MANY).is_some() { reach(inst, writes) } else { None };
+                let asked: Vec<usize> = match &near {
+                    Some(cells) => cells.iter().copied().filter(|&at| available.contains(at)).collect(),
+                    None => available.iter().collect(),
+                };
+                let gone = asked
+                    .into_iter()
                     .filter(|&at| {
                         *clobbered
                             .borrow_mut()
@@ -639,6 +695,49 @@ fn edges(
         .collect()
 }
 
+/// For each cell, the blocks it is live on entering: where a load of it is
+/// reached before any store of it, along the paths that have none. Found
+/// backwards from the loads that read before they write, stopping at the blocks
+/// that write.
+fn live_in(
+    function: &Function,
+    plan: &Plan,
+) -> Vec<BTreeSet<i64>> {
+    let cells = plan.types.len();
+    let mut writes = vec![BTreeSet::<i64>::new(); cells];
+    let mut reading = vec![Vec::<BlockId>::new(); cells];
+    let mut written = HashSet::<usize>::default();
+    for &block in function.layout() {
+        written.clear();
+        for &inst in function.block(block).instructions() {
+            if let Some(&slot) = plan.loads.get(&inst) {
+                if !written.contains(&slot) {
+                    reading[slot].push(block);
+                }
+            } else if let Some(&slot) = plan.stores.get(&inst) {
+                written.insert(slot);
+                writes[slot].insert(cfg::id(block));
+            }
+        }
+    }
+    reading
+        .into_iter()
+        .zip(&writes)
+        .map(|(mut work, writes)| {
+            let mut live = BTreeSet::new();
+            while let Some(block) = work.pop() {
+                if !live.insert(cfg::id(block)) {
+                    continue;
+                }
+                work.extend(
+                    function.predecessors(block).into_iter().filter(|before| !writes.contains(&cfg::id(*before))),
+                );
+            }
+            live
+        })
+        .collect()
+}
+
 /// `function` with each planned load its cell's stored value: phis where
 /// the stores' dominance frontiers put them, named down the dominator tree.
 fn rewrite(
@@ -662,6 +761,11 @@ fn rewrite(
         .map(|&ty| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })))
         .collect::<Vec<_>>();
 
+    // Where each cell is live on entering a block: LLVM's PromoteMemToReg
+    // places a phi only there. A cell stored and read inside one arm of a
+    // switch of N cases is live at no join, and a phi of N inputs at the
+    // join for each such cell was N^2 data made to be pruned.
+    let live = live_in(function, plan);
     // Each phi placed, by block and cell, with the block each input comes from.
     let mut phis = HashMap::<(i64, usize), (InstId, Vec<BlockId>)>::default();
     let mut named_phis = Vec::new();
@@ -677,7 +781,11 @@ fn rewrite(
         let mut placed = BTreeSet::new();
         while let Some(at) = work.pop() {
             for &frontier in frontiers.get(&at).into_iter().flatten() {
-                if !placed.insert(frontier) {
+                // A cell `-g` names keeps its phis, live or not: the debugger
+                // is told where the variable is by the phi, and
+                // by the record it leaves when it goes.
+                let pruned = plan.variables.get(slot).copied().flatten().is_none() && !live[slot].contains(&frontier);
+                if pruned || !placed.insert(frontier) {
                     continue;
                 }
                 let block = cfg::block(frontier);
@@ -718,20 +826,48 @@ fn rewrite(
             children.entry(parent).or_default().push(at);
         }
     }
+    // The phis of each block, by cell, so that a block asks its own and not
+    // every cell's.
+    let mut phis_at = HashMap::<i64, Vec<usize>>::default();
+    for &(at, slot) in phis.keys() {
+        phis_at.entry(at).or_default().push(slot);
+    }
+    phis_at.values_mut().for_each(|slots| slots.sort_unstable());
     let mut dead = Vec::new();
-    let mut stack = vec![(entry, poison.clone())];
-    while let Some((at, mut current)) = stack.pop() {
-        let block = cfg::block(at);
-        for (slot, value) in current.iter_mut().enumerate() {
-            if let Some((phi, _)) = phis.get(&(at, slot)) {
-                *value = Operand::Value(function.instruction(*phi).result.expect("a phi's value"));
+    // The value each cell has, down the dominator tree: a block changes a few,
+    // which are put back on leaving it. A copy of every cell's value for
+    // each child was blocks x cells.
+    enum Visit {
+        Enter(i64),
+        Leave(usize),
+    }
+    let mut current = poison.clone();
+    let mut undo = Vec::<(usize, Operand)>::new();
+    let mut stack = vec![Visit::Enter(entry)];
+    while let Some(visit) = stack.pop() {
+        let at = match visit {
+            Visit::Leave(marked) => {
+                while undo.len() > marked {
+                    let (slot, old) = undo.pop().expect("an entry above the mark");
+                    current[slot] = old;
+                }
+                continue;
             }
+            Visit::Enter(at) => at,
+        };
+        stack.push(Visit::Leave(undo.len()));
+        let block = cfg::block(at);
+        for &slot in phis_at.get(&at).into_iter().flatten() {
+            let (phi, _) = &phis[&(at, slot)];
+            undo.push((slot, current[slot]));
+            current[slot] = Operand::Value(function.instruction(*phi).result.expect("a phi's value"));
         }
         for inst in function.block(block).instructions().to_vec() {
             if let Some(&slot) = plan.loads.get(&inst) {
                 function.replace_value(function.instruction(inst).result.expect("a load's value"), current[slot]);
                 dead.push(inst);
             } else if let Some(&slot) = plan.stores.get(&inst) {
+                undo.push((slot, current[slot]));
                 current[slot] = function.instruction(inst).operands[0];
                 // And the value it stores, from the instruction after it on.
                 if let Some(named) = plan.variables.get(slot).copied().flatten()
@@ -743,14 +879,14 @@ fn rewrite(
             }
         }
         for successor in function.successors(block) {
-            for (slot, &value) in current.iter().enumerate() {
-                let Some((phi, from)) = phis.get(&(cfg::id(successor), slot)) else { continue };
+            for &slot in phis_at.get(&cfg::id(successor)).into_iter().flatten() {
+                let (phi, from) = &phis[&(cfg::id(successor), slot)];
                 for (index, _) in from.iter().enumerate().filter(|(_, one)| **one == block) {
-                    function.set_operand(*phi, 2 * index, value);
+                    function.set_operand(*phi, 2 * index, current[slot]);
                 }
             }
         }
-        stack.extend(children.get(&at).into_iter().flatten().map(|&child| (child, current.clone())));
+        stack.extend(children.get(&at).into_iter().flatten().map(|&child| Visit::Enter(child)));
     }
     for inst in dead {
         function.erase(inst).expect("a promoted load has no users left");

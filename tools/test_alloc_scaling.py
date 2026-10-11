@@ -179,6 +179,21 @@ def test_a_rewrite_patches_the_numbering_and_keeps_the_intervals_it_did_not_chan
     assert spent < 450, f"cells N=448 -O2: facts slots + facts intervals cost {spent} Minstr (450 allowed; 2063 before): {run}"
 
 
+def test_a_split_asks_the_values_segments_where_it_is_live_and_makes_no_rows_of_the_body():
+    """`split placing` solved liveness for every value over the whole body at each round of a function with branches: 868 Minstr on
+    `branches` at N=400 and 6,710 at 800 (slope 2.95), 21% of the compile. A split asks of one value, and its segments, which the
+    facts already keep and carry across a rewrite, say where it is live."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](400))
+        run = steps(compiler, source, "-O2")
+    assert run.get("split placing", 0.0) < 5, f"branches N=400 -O2: split placing cost {run.get('split placing')} Minstr (5 allowed; 868 before): {run}"
+
+
 def test_the_points_that_destroy_registers_are_not_looked_for_again_in_every_instruction_at_every_rewrite():
     """Every rewrite walked every instruction of the body for the calls and other points that destroy registers: `facts masks` cost
     397 Minstr on `cells` N=448 -O2 and 4.1x per doubling. The points of the instructions a rewrite kept are carried (LLVM's

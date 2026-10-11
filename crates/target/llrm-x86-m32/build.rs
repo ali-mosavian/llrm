@@ -4,8 +4,9 @@ fn main() {
     let path = "src/registers.regs";
     println!("cargo:rerun-if-changed={path}");
     let text = std::fs::read_to_string(path).expect("registers.regs");
-    let code = llrm_target::registers::source(&text, "iced_x86::Register", &llrm_lir::registers::CLASSES, "rows")
-        .unwrap_or_else(|error| panic!("{path}: {error}"));
+    let code =
+        llrm_target::registers::source(&text, "llrm_lir::registers::RegId", &llrm_lir::registers::CLASSES, "rows")
+            .unwrap_or_else(|error| panic!("{path}: {error}"));
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     std::fs::write(out.join("register_info.rs"), code).unwrap();
     // The instruction effects belong to the same description: the register file

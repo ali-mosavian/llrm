@@ -1,20 +1,19 @@
-reason = "shrink-wrap per piece (#1323): the frame and each register kept are set up where first used and a small shared return is copied for the early exit; fib -8.0%, hanoi -8.0%, quicksort c -O2 -3.3% instructions (code +3 B), bintree/quicksort bas -0.4..-1.0%; one byte less in grep nib"
-blessed = "2026-10-10"
+reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
+blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 145092
+instructions = 144792
 memory_operands = 62573
-code_bytes = 723
+code_bytes = 715
 data_bytes = 17
 bss_bytes = 0
 
 [bas.Os]
-instructions = 141576
+instructions = 141276
 memory_operands = 63940
-code_bytes = 642
+code_bytes = 636
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 1.9135
 
 [c.O2]
 instructions = 57563
@@ -31,16 +30,16 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 87378
+instructions = 87078
 memory_operands = 13027
-code_bytes = 401
+code_bytes = 394
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 116445
-memory_operands = 27650
-code_bytes = 444
+instructions = 116145
+memory_operands = 28850
+code_bytes = 445
 data_bytes = 0
 bss_bytes = 0
 

@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::LazyLock;
 
+use llrm_lir::registers::RegId;
+
 use super::{Effects, RESTORE_IDIOM, Semantics, TABLE_DATA, UNMODELLED, barrier};
 use crate::frontends::bc::declen::Insn;
 use crate::model::ir::lift::Decoded;
@@ -91,7 +93,7 @@ fn restore_effects(
     low: iced_x86::Register,
     high: iced_x86::Register,
 ) -> Effects {
-    let registers = BTreeSet::from([low, high]);
+    let registers = BTreeSet::from([RegId::from(low), RegId::from(high)]);
     Effects {
         defs: Some(registers.clone()),
         uses: Some(registers),
@@ -238,7 +240,7 @@ impl Node {
 ///
 /// Direct port of `qbopt.model.ir:pinned`.
 #[must_use]
-pub fn pinned(node: &Node) -> Option<BTreeSet<iced_x86::Register>> {
+pub fn pinned(node: &Node) -> Option<BTreeSet<RegId>> {
     if !barrier(node.semantics()) {
         return Some(BTreeSet::new());
     }
@@ -266,6 +268,8 @@ pub fn span(node: &Node) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
 
     use super::{Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, pinned, span};
     use crate::frontends::bc::declen::decode;
@@ -310,9 +314,9 @@ mod tests {
     fn omf_source_nodes_restore_effects_name_both_partial_write_roots_and_nothing_else() {
         let pair_zero = RESTORE_EFFECTS.get(&0).unwrap();
         let pair_one = RESTORE_EFFECTS.get(&1).unwrap();
-        assert_eq!(pair_zero.defs, Some(BTreeSet::from([iced_x86::Register::EAX, iced_x86::Register::EDX])));
+        assert_eq!(pair_zero.defs, Some(BTreeSet::from([RegId::EAX, RegId::EDX])));
         assert_eq!(pair_zero.uses, pair_zero.defs);
-        assert_eq!(pair_one.defs, Some(BTreeSet::from([iced_x86::Register::ECX, iced_x86::Register::EBX])));
+        assert_eq!(pair_one.defs, Some(BTreeSet::from([RegId::ECX, RegId::EBX])));
         assert_eq!(pair_one.uses, pair_one.defs);
         for effects in [pair_zero, pair_one] {
             assert_eq!(effects.flags_written.bits(), 0);
@@ -330,11 +334,11 @@ mod tests {
         assert_eq!(pinned(&modelled), Some(BTreeSet::new()));
 
         let mut known_effects = effects();
-        known_effects.defs = Some(BTreeSet::from([iced_x86::Register::EAX]));
-        known_effects.uses = Some(BTreeSet::from([iced_x86::Register::EDX]));
+        known_effects.defs = Some(BTreeSet::from([RegId::EAX]));
+        known_effects.uses = Some(BTreeSet::from([RegId::EDX]));
         let known = Node::Opaque(Opaque::new(insn(4), known_effects));
         assert!(barrier(known.semantics()));
-        assert_eq!(pinned(&known), Some(BTreeSet::from([iced_x86::Register::EAX, iced_x86::Register::EDX])));
+        assert_eq!(pinned(&known), Some(BTreeSet::from([RegId::EAX, RegId::EDX])));
 
         let mut unknown_effects = effects();
         unknown_effects.defs = None;

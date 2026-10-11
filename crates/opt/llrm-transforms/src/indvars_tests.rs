@@ -152,7 +152,7 @@ fn rewinding_the_corpus_loses_no_trip_count() {
         let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(
             context, layout, function, outer,
         ));
-        let facts = llrm_analysis::consts::known(&unit, None, None, None);
+        let facts = llrm_analysis::consts::known(&unit);
         loops::loops(&cfg::graph(function), function.entry().map(cfg::id))
             .into_iter()
             .filter_map(|loop_| Some((loop_.header, llrm_analysis::induction::trip_count(&unit, &loop_, &facts)?)))
@@ -366,7 +366,7 @@ end:
     );
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(AsksBounds);
-    manager.add(super::IndVars);
+    manager.add(super::IndVars { exit_values: false });
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
     // The pass that asks, and the one indvars's evaluation of the loop leaves
@@ -413,4 +413,71 @@ b3:
     assert!(changed, "{after}");
     assert!(after.contains("icmp ult i32 %widen.iv.next"), "{after}");
     assert!(!after.contains("zext i16 %i to i32"), "{after}");
+}
+
+fn with_exit_values(text: &str) -> String {
+    let mut module = crate::testing::parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::IndVars { exit_values: true });
+    manager.run_module(&mut module, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    crate::testing::printed(&module)
+}
+
+/// The counter's step leaves a loop that also breaks, on `i + 1 < 32` false:
+/// the exit reads 32. It read the stepped counter, which kept the old one
+/// alive past its step (mandel: `lea; or; je; mov` where `inc; je` does), and
+/// made 32 in the latch each trip for the exit's phi.
+#[test]
+fn test_an_exit_phi_of_a_stepped_counter_is_the_number_its_count_gives() {
+    let text = with_exit_values(
+        "define i32 @f(i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp sgt i32 %i, %n
+  br i1 %c, label %b3, label %b2
+
+b2:
+  %next = add i32 %i, 1
+  %again = icmp slt i32 %next, 32
+  br i1 %again, label %b1, label %b4
+
+b3:
+  ret i32 -1
+
+b4:
+  %last = phi i32 [ %next, %b2 ]
+  ret i32 %last
+}
+",
+    );
+    assert!(text.contains("ret i32 32") && !text.contains("%last"), "{text}");
+}
+
+/// An exit whose count is not a number keeps its value.
+#[test]
+fn test_an_exit_phi_of_a_loop_with_an_unknown_count_keeps_its_value() {
+    let text = with_exit_values(
+        "define i32 @f(i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  br label %b2
+
+b2:
+  %next = add i32 %i, 1
+  %again = icmp slt i32 %next, %n
+  br i1 %again, label %b1, label %b4
+
+b4:
+  %last = phi i32 [ %next, %b2 ]
+  ret i32 %last
+}
+",
+    );
+    assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
 }

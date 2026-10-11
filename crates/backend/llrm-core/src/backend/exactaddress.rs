@@ -381,7 +381,8 @@ fn rewritten(
         return None;
     }
     // A 32-bit EBP base selects SS where a 16-bit cell's register did not.
-    if regs.is_frame(address.through) && regs.bytes(address.through) == Some(4) && addr.segment == RegId::None {
+    if regs.is_frame(address.through) && regs.bytes(address.through) == Some(4) && addr.segment == (RegId::None).iced()
+    {
         return None;
     }
     let widened = Mem {
@@ -663,7 +664,7 @@ mod tests {
         // Uncoalesced, `shl bx,1` reads 20 and defines 21: the address kept
         // naming 21, which lost its only definition with the shift.
         let cell = Mem {
-            addr: Some(Addr { segment: RegId::FS, ..Addr::new(Space::Far, 0) }),
+            addr: Some(Addr { segment: (RegId::FS).iced(), ..Addr::new(Space::Far, 0) }),
             // The allocator names BX first for the 16-bit encoding.
             through: RegId::BX,
             base: Some(Held { value: 26, width: 2 }),

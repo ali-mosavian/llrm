@@ -18,7 +18,7 @@ def made(compile=None, axes=None, passes=None):
 
 
 def files(**per_file):
-    return {f"{name} {level}": n for name, n in per_file.items() for level in ("-O1", "-O2", "-Os")}
+    return {f"{name} {level}": n for name, n in per_file.items() for level in ("-O1", "-O2", "-O3", "-Os")}
 
 
 def test_a_branch_equal_to_its_base_passes():
@@ -31,6 +31,14 @@ def test_one_file_costing_much_more_fails_though_the_geomean_barely_moves():
     base = made(files(**{f"p{i}": 1000 for i in range(66)}))
     now = made(dict(base["compile"]) | {"p0 -O2": 1100})
     assert any("p0 -O2" in line for line in measure.rises(base, now, TOL)[1])
+
+
+def test_a_file_dearer_only_at_o3_fails():
+    """Recursion inlining admitted to gcc's -O3 growth made quicksort's -O3 compile x9.6 (205M -> 1,972M instructions): -O3 was not one of the
+    levels measured, so the gate passed it."""
+    base = made(files(**{f"p{i}": 1000 for i in range(66)}))
+    now = made(dict(base["compile"]) | {"p0 -O3": 9600})
+    assert any("p0 -O3" in line for line in measure.rises(base, now, TOL)[1])
 
 
 def test_every_file_a_little_dearer_fails_on_the_geomean():

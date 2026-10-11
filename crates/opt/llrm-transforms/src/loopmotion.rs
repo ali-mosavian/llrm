@@ -27,11 +27,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::consts::{self, Calls, Known, masked};
+use llrm_analysis::consts::{self, Known, masked};
 use llrm_analysis::graph::loops::{self, Loop};
-use llrm_analysis::manager::{
-    Annotated, AssumptionCache, Bounded, Counted, DominatedEdges, ExposedFrames, MemoryCells, Registers,
-};
+use llrm_analysis::manager::{Annotated, AssumptionCache, Bounded, Counted, DominatedEdges, ExposedFrames, Registers};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, regions};
@@ -138,8 +136,7 @@ pub fn sunk_stores(
             .with_registers(&registers)
             .with_shape(&shape)
             .with_counted(&counted);
-        let moved =
-            _moved(&unit, analyses, &accesses, loop_, &inside, &predecessors, &successors, &shape.dominance, source)?;
+        let moved = _moved(&unit, &accesses, loop_, &inside, &predecessors, &successors, &shape.dominance, source)?;
         if moved.is_empty() {
             continue;
         }
@@ -178,7 +175,6 @@ enum Stored {
 #[allow(clippy::too_many_arguments)]
 fn _moved(
     unit: &Unit,
-    analyses: &mut Analyses,
     accesses: &Accesses,
     loop_: &Loop,
     operations: &[InstId],
@@ -230,8 +226,7 @@ fn _moved(
     let nonempty = induction::nonempty(unit, loop_);
     let invariant =
         if nonempty { induction::invariant(function, &loop_.body) } else { induction::Invariant::default() };
-    let mut exit =
-        _Exit { unit, accesses, predecessors, entry: cfg::id(function.entry().expect("an entry")), analyses };
+    let mut exit = _Exit { unit, accesses, predecessors, entry: cfg::id(function.entry().expect("an entry")) };
     for &inst in operations {
         if moved.iter().any(|(one, _)| *one == inst)
             || !unobserved(inst)
@@ -284,7 +279,6 @@ struct _Exit<'a> {
     accesses: &'a Accesses,
     predecessors: &'a BTreeMap<i64, BTreeSet<i64>>,
     entry: i64,
-    analyses: &'a mut Analyses,
 }
 
 impl _Exit<'_> {
@@ -385,7 +379,7 @@ impl _Exit<'_> {
                 return (false, usize::MAX);
             };
             if let Some(wanted) = _known(unit, expected) {
-                let fact = consts::initialized(unit, inst, reference).or_else(|| self.after(inst, reference));
+                let fact = consts::initialized(unit, inst, reference);
                 if fact == Some(wanted) {
                     return (true, usize::MAX);
                 }
@@ -425,22 +419,6 @@ impl _Exit<'_> {
                 },
             );
         (answer, lowest)
-    }
-
-    /// What memory says `reference` holds once `inst` has run.
-    fn after(
-        &mut self,
-        inst: InstId,
-        reference: &MemRef,
-    ) -> Option<Known> {
-        let unit = self.unit;
-        let calls = Calls::default();
-        let cells = self.analyses.get::<MemoryCells>(unit.context, unit.layout, unit.function);
-        let before = cells.at(unit.function, inst).map(|here| (**here).clone()).unwrap_or_default();
-        let nothing = IndexMap::default();
-        let mut queries = consts::memory_queries(*unit, &nothing);
-        let after = consts::_kills(before, inst, &nothing, &calls, None, None, false, &mut queries);
-        consts::_cell(&after, reference)
     }
 }
 

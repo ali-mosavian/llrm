@@ -129,22 +129,14 @@ fn _numbers(
         let held = manager::Held::of(context, layout, function, analyses, true);
         let outer = std::rc::Rc::clone(analyses.outer());
         let unit = held.unit(context, layout, function, &outer);
-        let edges = floatfacts::exit_cells(&unit, calls);
-        // With no edges the answer is the manager's, where it was of these
-        // writes.
-        let shared = (edges.is_empty() && *calls == manager::writes(context, layout, function, analyses))
+        let exits = floatfacts::loop_exits(&unit, calls);
+        // With no loop to leave the answer is the manager's, where it was of
+        // these writes.
+        let shared = (exits.is_empty() && *calls == manager::writes(context, layout, function, analyses))
             .then(|| analyses.get::<manager::ThroughMemory>(context, layout, function));
         let facts = match shared.as_deref() {
-            Some(Ok(through)) => {
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
-                    assert!(
-                        *through == consts::known(&unit, Some(calls), Some(&edges), None),
-                        "ThroughMemory's integers are not those fold derives for itself"
-                    );
-                }
-                through.clone()
-            }
-            _ => consts::known(&unit, Some(calls), Some(&edges), None),
+            Some(Ok(through)) => through.clone(),
+            _ => consts::known_walked_over(&unit, calls, &exits),
         };
         (_known_values(&unit, &facts), _folded_phi_edges(&unit, &facts))
     };

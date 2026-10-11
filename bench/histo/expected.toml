@@ -1,5 +1,5 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "DemandedBits (algebraic): a mask over bits nothing reads is gone. 18 rows better: bintree bas/nib -O2/-Os (-8 B), histo nib (-3 B, -5%), quicksort bas/nib (-7 B). One worse: bintree nib -Os memory_operands 27650 -> 28250, 444 -> 446 B: the LCG state's 'and 65535' went and the allocator then keeps the seed in its slot (add [bp-6],imm) instead of a register."
+blessed = "2026-10-10"
 
 [bas.O2]
 instructions = 83615
@@ -30,16 +30,16 @@ data_bytes = 0
 bss_bytes = 4608
 
 [nib.O2]
-instructions = 83601
+instructions = 79505
 memory_operands = 12672
-code_bytes = 131
+code_bytes = 128
 data_bytes = 4608
 bss_bytes = 0
 
 [nib.Os]
-instructions = 75793
+instructions = 71697
 memory_operands = 13056
-code_bytes = 125
+code_bytes = 122
 data_bytes = 4608
 bss_bytes = 0
 

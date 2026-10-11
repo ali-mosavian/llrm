@@ -398,3 +398,46 @@ fn tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register() {
         "no register k in {locals:?}"
     );
 }
+
+/// `-gtd` refused the whole compile of what its records cannot say: any program
+/// of Nib's or BASIC's ("only C's information is written") and C at `-O2`
+/// ("p has a location list"). The variables they can say are written, and
+/// TLINK /v builds Turbo Debugger's table from them: TDUMP names the functions
+/// and the variables a frame cell holds.
+#[test]
+fn tlink_builds_turbo_debuggers_table_from_nib_and_from_optimised_c() {
+    let Some((borland, _)) = toolchain() else {
+        skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
+        return;
+    };
+    let bins = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().to_path_buf();
+    let matrix = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix");
+    let scratch = tempfile::tempdir().unwrap();
+    for (short, tool, source, level) in [("nib", "llrm-nib", "known.nib", "-O0"), ("cfast", "llrm-c", "known.c", "-O2")]
+    {
+        let made = Command::new(bins.join(tool))
+            .args(["-m16", "-gtd", level])
+            .arg(matrix.join(source))
+            .arg("-o")
+            .arg(scratch.path().join(format!("{short}.obj")))
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{short}: {}", String::from_utf8_lossy(&made.stderr));
+    }
+    let mut commands = Vec::new();
+    for short in ["nib", "cfast"] {
+        commands.push(format!("tlink /v c:\\lib\\c0m {short}.obj, {short}.exe,, c:\\lib\\cm > {short}.tl"));
+        commands.push(format!("tdump {short}.exe > {short}.tx"));
+    }
+    dosbox::run(&[('c', &borland), ('w', scratch.path())], "c:\\bin", &commands);
+    for (short, wanted) in [("nib", ["add", "main", "sum", "total"]), ("cfast", ["add", "main", "sum", "counter"])] {
+        let dump = std::fs::read_to_string(scratch.path().join(format!("{}.TX", short.to_uppercase())))
+            .unwrap_or_else(|error| panic!("DOS made no {short}.tx: {error}"));
+        assert!(dump.contains("Module Table"), "{short}: no module table:\n{dump}");
+        // The link is not case sensitive: `main` is `_MAIN` among the publics.
+        let folded = dump.to_lowercase();
+        for name in wanted {
+            assert!(folded.contains(name), "{short}: TDUMP names no {name}:\n{dump}");
+        }
+    }
+}

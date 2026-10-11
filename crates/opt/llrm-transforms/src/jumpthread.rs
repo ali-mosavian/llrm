@@ -57,6 +57,11 @@ pub struct JumpThread {
     /// A branch the way into its block settles is threaded to its arm there:
     /// the guards a header copy leaves.
     pub correlated: bool,
+    /// A switch the paths into it decide is threaded: gcc's
+    /// `pass_thread_jumps`, gated on `flag_expensive_optimizations` (-O2
+    /// and up; `tree-ssa-threadbackward.cc:1072`), where -O1 has only its
+    /// early, size-optimising threader.
+    pub states: bool,
 }
 
 impl FunctionPass for JumpThread {
@@ -74,7 +79,7 @@ impl FunctionPass for JumpThread {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if !threaded(unit.context, unit.layout, unit.function, &outer, self.size, self.correlated) {
+        if !threaded(unit.context, unit.layout, unit.function, &outer, self.size, self.correlated, self.states) {
             return PreservedAnalyses::all();
         }
         // What the copies know of their state: a product by a constant, a
@@ -109,6 +114,7 @@ pub fn threaded(
     outer: &Outer,
     size: bool,
     correlate: bool,
+    states: bool,
 ) -> bool {
     // The common function has nothing to thread: no analysis is made for it.
     let unit = memory::Unit::within(context, layout, function, outer);
@@ -142,7 +148,7 @@ pub fn threaded(
     // the copies made is not threaded again, or a loop would be peeled one
     // trip at a time. GCC registers its threads once and applies them together.
     let mut rounds = 0;
-    while let Some(paths) = found(context, layout, function, outer, copied, size, rounds == 0, correlate) {
+    while let Some(paths) = found(context, layout, function, outer, copied, size, rounds == 0, correlate, states) {
         rounds += 1;
         llrm_support::debug!("jumpthread", "{} paths, {} instructions copied so far", paths.len(), copied);
         // A path of phis and a branch copies no instruction and still spends
@@ -167,6 +173,7 @@ fn found(
     size: bool,
     branches: bool,
     correlate: bool,
+    states: bool,
 ) -> Option<Vec<Path>> {
     let shape = cfg::Shape::of(function);
     let unit = memory::Unit::within(context, layout, function, outer).with_shape(&shape);
@@ -238,7 +245,7 @@ fn found(
         // path decides is threaded wherever it is.
         let Some((state, decide)) = decided(function, &unit, last) else { continue };
         let is_switch = function.instruction(last).opcode == Opcode::Switch;
-        if is_switch && (size || loop_.is_none()) || !is_switch && !branches {
+        if is_switch && (size || !states || loop_.is_none()) || !is_switch && !branches {
             continue;
         }
         let Some(chain) = chain_to_phi(function, loop_, block, state) else { continue };

@@ -517,7 +517,7 @@ pub fn rules(
     for (name, set) in &program.sets {
         let names: Vec<String> = set.names.iter().map(|one| format!("{one:?}")).collect();
         let fixed: Vec<String> =
-            set.fixed.iter().map(|(register, one)| format!("(Register::{}, {one:?})", upper(register))).collect();
+            set.fixed.iter().map(|(register, one)| format!("(RegId::{}, {one:?})", upper(register))).collect();
         let _ = writeln!(
             out,
             "pub static SET_{}: Set = Set {{ names: &[{}], fixed: &[{}] }};",

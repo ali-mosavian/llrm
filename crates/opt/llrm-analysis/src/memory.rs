@@ -947,7 +947,7 @@ impl<'a> Unit<'a> {
         match self.registers {
             Some(registers) => {
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
-                    let fresh = crate::consts::known(&Unit { registers: None, ..*self }, None, None, None);
+                    let fresh = crate::consts::known(&Unit { registers: None, ..*self });
                     assert!(
                         *registers == fresh,
                         "the registers a unit carries are not those of the body it stands over: stale"
@@ -1131,7 +1131,7 @@ impl<'h> Standing<'h> {
         if let Some(held) = self.held {
             return held;
         }
-        self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }, None, None, None))
+        self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }))
     }
 }
 

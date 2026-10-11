@@ -191,7 +191,7 @@ pub fn stamp(
                 let unit = Unit::of(module, &program.layout, function).with_shape(&shape);
                 // Found once, for the body as it is: its ranges and the
                 // arguments' proofs ask the same.
-                let registers = crate::consts::known(&unit, None, None, None);
+                let registers = crate::consts::known(&unit);
                 let unit = unit.with_registers(&registers);
                 let scoped = ranges::bounds(&unit).map(std::borrow::Cow::into_owned).unwrap_or_default();
                 for (block, inst, target) in calls {

@@ -1195,13 +1195,26 @@ pub fn summaries_updating(
         })
         .collect();
     let mut version = 0;
+    // The callbacks' version each body was last visited with: a change to the
+    // callbacks wakes the bodies that read them once the queue has drained,
+    // the ones still in it being visited with the new callbacks anyway.
+    let mut seen = vec![usize::MAX; procedures.len()];
+    let mut stale = false;
     loop {
         let Some(std::cmp::Reverse(first)) = work.pop() else {
+            if stale {
+                stale = false;
+                for reader in callers_of_unknown.iter().copied().filter(|reader| seen[*reader] != version) {
+                    wake!(reader);
+                }
+                continue;
+            }
             if !(waiting_coupled && deferred) {
                 break;
             }
             // Everything else is settled: the coupled bodies from nothing.
             waiting_coupled = false;
+            stale = false;
             for at in coupled {
                 start(*at, &mut result);
                 reset[*at] = true;
@@ -1231,6 +1244,7 @@ pub fn summaries_updating(
             continue;
         }
         llrm_support::debug::counted("summaries rounds", true);
+        seen[at] = version;
         let (name, procedure) = procedures.get_index(at).expect("a member of the graph");
         let made = llrm_support::debug::timed("summaries visit", || {
             _summarized(
@@ -1246,7 +1260,7 @@ pub fn summaries_updating(
         })?;
         if made != result[name] {
             result.insert(name.clone(), made);
-            let mut woken: Vec<usize> = readers[at].iter().copied().collect();
+            let woken: Vec<usize> = readers[at].iter().copied().collect();
             if entries.contains(&at) {
                 // The callbacks may not move while an entry that is among the
                 // coupled bodies' own makers does: they could hold each other
@@ -1272,7 +1286,7 @@ pub fn summaries_updating(
                 if now != callbacks {
                     callbacks = now;
                     version += 1;
-                    woken.extend(callers_of_unknown.iter().copied());
+                    stale = true;
                 }
             }
             for reader in woken {

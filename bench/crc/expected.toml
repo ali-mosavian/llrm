@@ -1,20 +1,19 @@
-reason = "movzx r,m8 becomes xor r,r; mov rl,m8 where the CPU description prices the pair lower (486: 2 clocks against 3), one instruction and one byte more per load: vsgcc harness 486 clocks fall, crc 864 to 855, x_life 400178 to 356042 (now under gcc -O2's 368012); gcc -march=i486 emits the same pair"
-blessed = "2026-10-09"
+reason = "crc bas: the accumulator is in eax, not a saved register, so its final xor is copied to si for the call that follows (+1 instruction, +2 bytes, once)"
+blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 1216
+instructions = 1217
 memory_operands = 71
-code_bytes = 223
+code_bytes = 225
 data_bytes = 31
 bss_bytes = 0
 
 [bas.Os]
-instructions = 1207
+instructions = 1208
 memory_operands = 71
-code_bytes = 220
+code_bytes = 222
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.0363
 
 [c.O2]
 instructions = 634
@@ -31,16 +30,16 @@ data_bytes = 10
 bss_bytes = 0
 
 [nib.O2]
-instructions = 649
-memory_operands = 18
-code_bytes = 115
+instructions = 643
+memory_operands = 12
+code_bytes = 99
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 640
-memory_operands = 18
-code_bytes = 114
+instructions = 634
+memory_operands = 12
+code_bytes = 98
 data_bytes = 0
 bss_bytes = 0
 

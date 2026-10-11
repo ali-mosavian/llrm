@@ -354,8 +354,26 @@ impl Function {
         operands: Vec<Operand>,
     ) {
         let old = std::mem::take(&mut self.instructions[inst.0 as usize].operands);
-        for (index, operand) in old.into_iter().enumerate() {
-            self.remove_use(operand, Use { user: inst, index: index as u32 });
+        if old.len() > 4 {
+            // A phi of N inputs names a few values and N blocks: each list is
+            // scanned once for all the places `inst` names it, not
+            // once for each, which was N^2 for the one value
+            // N inputs repeat.
+            let mut places = crate::hash::HashMap::<Operand, Vec<u32>>::default();
+            for (index, operand) in old.into_iter().enumerate() {
+                places.entry(operand).or_default().push(index as u32);
+            }
+            for (operand, indexes) in places {
+                if let Some(uses) = self.uses_of(operand) {
+                    #[cfg(test)]
+                    USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
+                    uses.retain(|one| one.user != inst || indexes.binary_search(&one.index).is_err());
+                }
+            }
+        } else {
+            for (index, operand) in old.into_iter().enumerate() {
+                self.remove_use(operand, Use { user: inst, index: index as u32 });
+            }
         }
         for (index, &operand) in operands.iter().enumerate() {
             self.add_use(operand, Use { user: inst, index: index as u32 });
@@ -435,7 +453,14 @@ impl Function {
     ) {
         if with != Operand::Value(value) {
             self.retarget_debug_records(value, with);
-            self.replace_uses(self.users(value).to_vec(), with);
+            // Every use goes: the list is taken, not scanned for each of its
+            // uses (a value of U uses read U^2 entries).
+            let uses = std::mem::take(&mut self.value_uses[value.0 as usize]);
+            for one in uses {
+                self.instructions[one.user.0 as usize].operands[one.index as usize] = with;
+                self.add_use(with, one);
+                self.log(Change::Rewritten(one.user));
+            }
         }
     }
 

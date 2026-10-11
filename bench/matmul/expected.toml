@@ -1,17 +1,17 @@
-reason = "rotation priced in clocks (jmp, jcc taken, not taken from the CPU): x_adler -12.1% clocks, x_bubble -3.0%, quicksort -2.0%; one jmp more per entry: quicksort +3.3% instructions, matmul +0.1%, grep +8 bytes"
-blessed = "2026-10-09"
+reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
+blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 9356
-memory_operands = 4602
-code_bytes = 487
+instructions = 8255
+memory_operands = 2471
+code_bytes = 454
 data_bytes = 15
 bss_bytes = 0
 
 [bas.Os]
-instructions = 9400
-memory_operands = 4651
-code_bytes = 478
+instructions = 8299
+memory_operands = 2520
+code_bytes = 445
 data_bytes = 15
 bss_bytes = 0
 

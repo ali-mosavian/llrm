@@ -77,6 +77,8 @@ pub struct Options {
     /// complete copy of a loop may grow the code is `limits.grows`, which
     /// gcc lets only -O3 do.)
     pub for_size: bool,
+    /// gcc's `-fexpensive-optimizations` (-O2 and up): the passes it gates.
+    pub expensive: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest
     /// (`-fallocation-search`).
     pub search: bool,
@@ -114,6 +116,7 @@ impl Default for Options {
             unswitch: false,
             copy_headers: false,
             for_size: false,
+            expensive: true,
             search: true,
             routes: true,
             exhaustive: false,
@@ -131,7 +134,10 @@ impl Options {
     /// loop is copied out completely only where the code does not grow;
     /// nothing is inlined that `early-inlining-insns` (6) over
     /// `max-inline-insns-auto` (15) of the -O2 threshold does not admit,
-    /// and no gcse, sibling calls, pattern fill, peeling or unswitching.
+    /// and no gcse, sibling calls, peeling or unswitching. Pattern fill is on
+    /// (`LoopIdiomRecognize` is in LLVM's O1 pipeline, PassBuilderPipelines.cpp
+    /// L562): the one departure from gcc's -O1 here, the user's decision of
+    /// 2026-10-10 (docs/levels.md).
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
@@ -140,10 +146,10 @@ impl Options {
             loop_intervals: false,
             forward: false,
             drop_loads: false,
-            fill: false,
             sibcalls: false,
             peel: false,
             unswitch: false,
+            expensive: false,
             ..Self::default()
         }
     }
@@ -162,11 +168,13 @@ impl Options {
     }
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
-    /// code, and the larger inline threshold.
+    /// code, and the larger inline threshold; the copy budget is LLVM's -O3
+    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's.
     pub fn speed() -> Self {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
+            limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
         }
     }
@@ -235,7 +243,7 @@ impl Options {
             "decide" => self.decide,
             "dead" => self.dead,
             "hoist" | "loopmotion" => self.hoist,
-            "gvn" => self.forward && self.drop_loads,
+            "gvn" | "equalcalls" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sroa" | "promote" => self.promote,
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
@@ -279,6 +287,9 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(phiopt::PhiOpt { size: applied.options.prefers_size() }),
         // Once the arguments are values rather than frame cells; the loop it
         // makes goes to the loop passes below.
+        // Before a call is made a loop: two equal calls are one first, as
+        // LLVM's EarlyCSE and gcc's FRE precede tail-recursion elimination.
+        Box::new(gvn::EqualCalls),
         Box::new(tailrec::TailRecursion),
         Box::new(loopsimplify::LoopSimplify),
         Box::new(lcssa::LoopClosedSSA),
@@ -297,13 +308,13 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(gvn::Gvn),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
-        Box::new(indvars::IndVars),
+        Box::new(indvars::IndVars { exit_values: false }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size() }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
         Box::new(fill::Fill { size: applied.options.prefers_size() }),
-        Box::new(fill::Merge),
+        Box::new(fill::Merge { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
@@ -432,6 +443,9 @@ pub fn recorded(
         // is cleaned as gcc's DOM, forwprop and DCE do after `pass_ch`.
         manager.add(fold::Fold);
         manager.add(algebraic::Algebraic { size: false });
+        // A counted exit's values are numbers where the copy made its test
+        // the one that leaves.
+        manager.add(indvars::IndVars { exit_values: true });
         manager.add(dead::Dead);
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
@@ -464,6 +478,7 @@ pub fn recorded(
         manager.add(jumpthread::JumpThread {
             size: applied.options.prefers_size(),
             correlated: applied.options.copy_headers,
+            states: applied.options.expensive,
         });
     }
     // A loop entered at its body runs it at least once: what it loads
@@ -641,7 +656,7 @@ impl Fixed {
         let limit = std::cmp::max(16, size + 1);
         // The change each pass last left the body at, unchanged: handed that
         // body again it would change nothing, so it is skipped.
-        let mut settled: Vec<Option<usize>> = vec![None; self.passes.len()];
+        let mut settled: Vec<Option<(usize, usize)>> = vec![None; self.passes.len()];
         let mut unroll_settled = None;
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
@@ -651,12 +666,22 @@ impl Fixed {
             let before = run.version;
             run.rounds += 1;
             for (one, settled) in self.passes.iter_mut().zip(&mut settled) {
-                if *settled == Some(run.version) {
-                    run.skipped += 1;
-                    continue;
+                if let Some((version, stretches)) = *settled {
+                    if version == run.version {
+                        run.skipped += 1;
+                        continue;
+                    }
+                    // Edits since it found nothing to do, none of which reaches
+                    // what it reads.
+                    run.classify(unit);
+                    let reached = run.reached_since(stretches);
+                    if !reached.meets(one.reads()) {
+                        run.unreached += 1;
+                        continue;
+                    }
                 }
                 let name = format!("{prefix}r{:02}-{}", iteration + 1, one.name());
-                *settled = (!run.step(&mut **one, &name, unit, analyses)).then_some(run.version);
+                *settled = (!run.step(&mut **one, &name, unit, analyses)).then(|| (run.version, run.stretches.len()));
             }
             // Ask at the original pipeline boundary: fully converging the
             // scalar passes first destroys matmul's exact counted-loop shape.
@@ -713,17 +738,21 @@ impl FunctionPass for Fixed {
             useful: 0,
             idle_with_analyses: 0,
             useful_with_analyses: 0,
+            classified: unit.function.mark(),
+            stretches: Vec::new(),
+            unreached: 0,
         };
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
         llrm_support::debug!(
             "runs",
-            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {})",
+            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {})",
             unit.id.map_or(-1, |id| i64::from(id.0)),
             TRIGGER.with(|trigger| trigger.borrow().clone()),
             run.fixed,
             run.rounds,
             run.steps,
             run.skipped,
+            run.unreached,
             run.version,
             run.idle,
             run.useful,
@@ -756,9 +785,46 @@ struct Run {
     /// a pass would not save, since the next pass to ask would pay it.
     idle_with_analyses: u64,
     useful_with_analyses: u64,
+    /// Where the log of edits has been classified to, and what each stretch of
+    /// it reached (`footprint::of`), found once for every pass that asks.
+    classified: llrm_mir::module::Mark,
+    stretches: Vec<llrm_mir::footprint::Footprint>,
+    /// Passes not run because no edit since they found nothing reached what
+    /// they read.
+    unreached: usize,
 }
 
 impl Run {
+    /// The edits made since the last stretch, classified as one: after every
+    /// pass, so that no stretch holds the edits of two passes. A function
+    /// put in place of the body (a copy has a history of its own) is every
+    /// part changed.
+    fn classify(
+        &mut self,
+        unit: &Unit,
+    ) {
+        let now = unit.function.mark();
+        let reached = if !now.same_history(self.classified) {
+            llrm_mir::footprint::Footprint::ALL
+        } else if now.position() != self.classified.position() {
+            unit.function
+                .changes_since(self.classified)
+                .map_or(llrm_mir::footprint::Footprint::ALL, |changes| llrm_mir::footprint::of(unit.function, changes))
+        } else {
+            return;
+        };
+        self.stretches.push(reached);
+        self.classified = now;
+    }
+
+    /// What the stretches since the `len`th reached.
+    fn reached_since(
+        &self,
+        len: usize,
+    ) -> llrm_mir::footprint::Footprint {
+        self.stretches[len..].iter().fold(llrm_mir::footprint::Footprint::NONE, |all, reached| all | *reached)
+    }
+
     /// `pass` over the body; whether it changed it.
     fn step(
         &mut self,
@@ -775,6 +841,7 @@ impl Run {
         let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
         let preserved =
             llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
+        self.classify(unit);
         if let Some((billed, analysed)) = billed {
             let with_analyses = llrm_support::debug::work() - billed;
             let own = with_analyses.saturating_sub(llrm_support::debug::analysed_work() - analysed);

@@ -338,7 +338,7 @@ fn test_an_inclusive_test_at_its_types_maximum_is_not_counted() {
 #[test]
 fn test_posttested_counter_has_an_exact_fixed_trip_count() {
     let parsed = looped(Some(0), Some(4), IntPredicate::Ult, 1, shaped("post-stepped", 16));
-    let facts = consts::known(&parsed.unit(), None, None, None);
+    let facts = consts::known(&parsed.unit());
     assert_eq!(trip_count(&parsed.unit(), &parsed.only_loop(), &facts), Some(BigInt::from(4)));
     assert_eq!(decoded(parsed.run(&[(0, 16), (0, 16)], 1_000).unwrap(), 16).0, BigInt::from(4));
 }
@@ -368,7 +368,7 @@ b3:
 }
 ",
     );
-    let facts = consts::known(&parsed.unit(), None, None, None);
+    let facts = consts::known(&parsed.unit());
     assert_eq!(trip_count(&parsed.unit(), &parsed.only_loop(), &facts), Some(BigInt::from(32)));
     for start in [0, -5, 0x7FFF_FFF0] {
         assert_eq!(parsed.run(&[(start, 32)], 10_000), Some(32), "{start}");
@@ -863,7 +863,7 @@ b3:
         ));
         let (unit, loop_) = (parsed.unit(), parsed.only_loop());
         assert!(counted(&unit, &loop_, None, false).is_empty(), "{elsewhere}");
-        let facts = consts::known(&unit, None, None, None);
+        let facts = consts::known(&unit);
         assert_eq!(trips_unless_stopped(&unit, &loop_, &facts), stops.map(BigInt::from), "{elsewhere}");
     }
 }
@@ -1137,7 +1137,7 @@ fn test_every_corpus_count_is_where_its_test_first_fails() {
                 continue;
             }
             let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
-            let facts = consts::known(&unit, None, None, None);
+            let facts = consts::known(&unit);
             for loop_ in loops::loops(&cfg::graph(function), None) {
                 for proof in counted_unless_stopped(&unit, &loop_, Some(&facts), false) {
                     proofs += 1;
@@ -1235,7 +1235,7 @@ b5:
         ));
         let inner =
             loops::loops(&cfg::graph(parsed.function()), None).into_iter().min_by_key(|one| one.body.len()).unwrap();
-        let facts = consts::known(&parsed.unit(), None, None, None);
+        let facts = consts::known(&parsed.unit());
         assert_eq!(trip_count(&parsed.unit(), &inner, &facts), count.map(BigInt::from), "{rewind}");
         assert_eq!(parsed.run(&[(0, 32)], 1_000), Some(trips), "{rewind}");
     }

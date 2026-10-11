@@ -189,7 +189,7 @@ def test_loopmotion_and_the_cells_it_asks_stay_linear_in_the_loops_of_one_functi
         source.write_text("" if size == 0 else scaling.branches(size))
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     grown = {}
-    for step in ("mir loopmotion", "analysis memory-cells"):
+    for step in ("mir loopmotion",):
         small, big = (own[label].get(step, 0.0) - own["empty"].get(step, 0.0) for label in ("n", "2n"))
         if big > 2.6 * small + 5.0:
             grown[step] = f"{small:.1f} -> {big:.1f} Minstr"
@@ -678,6 +678,18 @@ def test_two_address_asks_interference_of_the_values_it_compares_not_of_every_pa
     assert cost <= 400, cost
 
 
+def test_a_load_is_served_by_the_stores_that_reach_it_not_by_a_cell_map_met_at_every_join(tmp_path):
+    """`analysis through-memory` kept the cells of memory as one map per block and met the predecessors' maps at each join: on `joins` at
+    N=256 (N cells known, N joins, four functions) 11,285 Minstr, 3.8x a doubling, and 46 G of GORILLA.BAS's 75 G (17 s at -O1). Served
+    by the stores MemorySSA says reach each load it reads 964. More than 2,000 fails."""
+    source = tmp_path / "joins_256.c"
+    source.write_text(scaling.AXES["joins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis through-memory"]
+    assert cost <= 2000, cost
+
+
+
+
 def test_a_spill_reads_the_instructions_that_name_a_home_and_its_copies_from_the_postings_on_the_cells_axis(tmp_path):
     """`spill color slots` rebuilt, at every spill, a pair of sets for each instruction that names a home and walked every
     instruction of the body for the copies of the value: on `cells` at N=1024 that was 4,590 Minstr (slope 2.2).
@@ -706,3 +718,58 @@ def test_homes_walks_the_live_sets_once_for_all_its_candidates_not_once_for_each
     source.write_text(scaling.AXES["joins"](128))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir homes"]
     assert cost <= 800, cost
+
+
+def test_a_branch_is_decided_from_the_walk_not_from_a_cell_map_met_at_every_join(tmp_path):
+    """`mir decide` solved memory with the dense per-block cell map for the facts its branches are read from: on `joins` at N=256 11,636
+    Minstr, 3.8x a doubling, the same quadratic through-memory had. Read from the stores MemorySSA says reach each load it is 1,380.
+    More than 3,000 fails."""
+    source = tmp_path / "joins_256.c"
+    source.write_text(scaling.AXES["joins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir decide"]
+    assert cost <= 3000, cost
+
+
+def test_a_float_load_is_read_from_the_walk_not_from_a_cell_map_met_at_every_join(tmp_path):
+    """`analysis float-facts` solved the memory the floats are read from with the dense per-block cell map beside the integers': on
+    `fjoins` at N=256 (N float cells known, N joins, four functions) 3,638 Minstr, 3.3x a doubling. Each float load read from the stores
+    MemorySSA says reach it is 986. More than 1,500 fails."""
+    source = tmp_path / "fjoins_256.c"
+    source.write_text(scaling.AXES["fjoins"](256))
+    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis float-facts"]
+    assert cost <= 1500, cost
+
+
+def test_the_edges_a_switch_names_are_asked_once_not_once_for_each_of_its_successors(tmp_path):
+    """cases(N) at -O1 and -O2: `ranges::edges_solved` listed a switch's N successors, and counted its operands, for each of the N blocks
+    it leads to, and `Function::successors` found each of them new by a scan of the list: `analysis dominated-edges` read 2N/N = 3.1,
+    4.7, 6.4 (28 / 88 / 412 / 2,641 Minstr at N=64..512), a fifth of the compile at N=512. A terminator's repeated targets are found once and
+    the edge asked of the branch that makes it: it reads 2.0. A step above 2.4 fails; a few Minstr of start-up are allowed."""
+    n = 128
+    for level in ("O1", "O2"):
+        own = {}
+        for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+            source = tmp_path / f"cases_{level}_{label}.c"
+            source.write_text("" if size == 0 else scaling.cases(size))
+            own[label] = gate.own_work(gate.levels_time.command("llrm", level, source))
+        small, big = (own[label].get("analysis dominated-edges", 0.0) - own["empty"].get("analysis dominated-edges", 0.0) for label in ("n", "2n"))
+        assert small > 5.0, f"premise: the analysis ran ({small:.1f} Minstr)"
+        assert big <= 2.4 * small + 5.0, f"{level}: {small:.1f} -> {big:.1f} Minstr"
+
+
+def test_promote_places_phis_only_where_a_cell_is_live_and_keeps_to_the_cells_a_write_reaches(tmp_path):
+    """cases(N) at -O1 (-O2 does not inline a step of 128 cases): inlining the switch's step() leaves two stack cells for each arm, written and read in the arm. `mir promote`
+    placed a phi of N inputs at the join for every cell and pruned them after (`ssa::pruned_phis` 2,345 Minstr at N=512, the N^3 of clearing
+    N dead phis of N inputs each by a scan of the block's uses), asked every available cell at each store (`_available`, 810), and copied
+    every cell's value for each block of the dominator tree and looked up every cell in each (`rewrite`, 427): its own work read
+    2N/N = 4.5, 5.5 (229 / 1,029 / 5,694 Minstr at N=128..512). A phi only where the cell is live in, a store asked the buckets of the
+    cells it may reach, the values kept with an undo log: 2.1, 2.2. A step above 2.4 fails; a few Minstr of start-up are allowed."""
+    n = 128
+    own = {}
+    for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
+        source = tmp_path / f"cases_{label}.c"
+        source.write_text("" if size == 0 else scaling.cases(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O1", source))
+    small, big = (own[label].get("mir promote", 0.0) - own["empty"].get("mir promote", 0.0) for label in ("n", "2n"))
+    assert small > 5.0, f"premise: promote ran ({small:.1f} Minstr)"
+    assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"

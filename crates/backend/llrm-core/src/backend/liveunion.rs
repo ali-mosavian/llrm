@@ -12,7 +12,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 
 use crate::analysis::intervals::{Interval, Segment};
 use crate::support::hash::IndexMap;
@@ -153,7 +153,7 @@ struct Held {
 /// The values each register holds, whole registers.
 #[derive(Clone, Debug, Default)]
 pub struct LiveUnion {
-    registers: IndexMap<Register, Held>,
+    registers: IndexMap<RegId, Held>,
     taken: u64,
     /// Questions asked since the intervals last moved.
     asked: Cell<u32>,
@@ -167,7 +167,7 @@ impl LiveUnion {
     /// `holders` as they stand (a test's, or a state to start from), where
     /// `live` has them.
     pub fn of(
-        holders: impl IntoIterator<Item = (Register, Vec<u32>)>,
+        holders: impl IntoIterator<Item = (RegId, Vec<u32>)>,
         live: &impl crate::backend::live::Ranges,
     ) -> Self {
         let mut union = Self::new();
@@ -182,7 +182,7 @@ impl LiveUnion {
     /// `value` takes `register`, for as long as `live` says it is live.
     pub fn add(
         &mut self,
-        register: Register,
+        register: RegId,
         value: u32,
         live: &impl crate::backend::live::Ranges,
     ) {
@@ -199,7 +199,7 @@ impl LiveUnion {
     /// it took it.
     pub fn remove(
         &mut self,
-        register: Register,
+        register: RegId,
         value: u32,
         live: &impl crate::backend::live::Ranges,
     ) {
@@ -222,13 +222,13 @@ impl LiveUnion {
     /// The holders of `register`, in the order they took it.
     pub fn holders(
         &self,
-        register: &Register,
+        register: &RegId,
     ) -> Vec<u32> {
         self.registers.get(register).map(|held| held.holders.clone()).unwrap_or_default()
     }
 
     /// Each register with its holders.
-    pub fn registers(&self) -> impl Iterator<Item = (Register, Vec<u32>)> + '_ {
+    pub fn registers(&self) -> impl Iterator<Item = (RegId, Vec<u32>)> + '_ {
         self.registers.iter().map(|(register, held)| (*register, held.holders.clone()))
     }
 
@@ -257,7 +257,7 @@ impl LiveUnion {
     /// they took it.
     pub fn meeting(
         &self,
-        register: &Register,
+        register: &RegId,
         one: &Interval,
         live: &impl crate::backend::live::Ranges,
     ) -> Vec<u32> {
@@ -280,7 +280,7 @@ impl LiveUnion {
     /// Whether any holder of `register` is live where `one` is.
     pub fn busy(
         &self,
-        register: &Register,
+        register: &RegId,
         one: &Interval,
         live: &impl crate::backend::live::Ranges,
     ) -> bool {
@@ -403,20 +403,20 @@ mod tests {
     ) {
         let mut union = LiveUnion::new();
         for value in taking {
-            union.add(Register::AX, *value, live);
+            union.add(RegId::AX, *value, live);
         }
-        let holders = union.holders(&Register::AX);
+        let holders = union.holders(&RegId::AX);
         assert_eq!(&holders, taking);
         for round in 0..3 {
             for query in queries {
                 let one = interval(0, &[*query]);
                 assert_eq!(
-                    union.meeting(&Register::AX, &one, live),
+                    union.meeting(&RegId::AX, &one, live),
                     pairwise(&holders, live, &one),
                     "{query:?} round {round}"
                 );
                 assert_eq!(
-                    union.busy(&Register::AX, &one, live),
+                    union.busy(&RegId::AX, &one, live),
                     !pairwise(&holders, live, &one).is_empty(),
                     "{query:?} round {round}"
                 );
@@ -480,28 +480,28 @@ mod tests {
         let live = live(&[(1, &[(0, 10)]), (2, &[(10, 20)]), (3, &[(20, 30)])]);
         let mut union = LiveUnion::new();
         for value in [1, 2, 3] {
-            union.add(Register::BX, value, &live);
+            union.add(RegId::BX, value, &live);
         }
-        union.remove(Register::BX, 2, &live);
-        assert!(!union.busy(&Register::BX, &interval(0, &[(10, 20)]), &live));
-        union.add(Register::BX, 2, &live);
-        assert_eq!(union.holders(&Register::BX), vec![1, 3, 2]);
-        assert_eq!(union.meeting(&Register::BX, &interval(0, &[(5, 25)]), &live), vec![1, 3, 2]);
+        union.remove(RegId::BX, 2, &live);
+        assert!(!union.busy(&RegId::BX, &interval(0, &[(10, 20)]), &live));
+        union.add(RegId::BX, 2, &live);
+        assert_eq!(union.holders(&RegId::BX), vec![1, 3, 2]);
+        assert_eq!(union.meeting(&RegId::BX, &interval(0, &[(5, 25)]), &live), vec![1, 3, 2]);
     }
 
     #[test]
     fn test_holders_that_clash_after_the_intervals_move_are_all_found_until_one_is_removed() {
         let before = live(&[(1, &[(0, 10)]), (2, &[(10, 20)])]);
         let mut union = LiveUnion::new();
-        union.add(Register::CX, 1, &before);
-        union.add(Register::CX, 2, &before);
+        union.add(RegId::CX, 1, &before);
+        union.add(RegId::CX, 2, &before);
         // A rewrite moves both over each other.
         let after = live(&[(1, &[(0, 15)]), (2, &[(5, 20)])]);
         union.refresh();
-        assert_eq!(union.meeting(&Register::CX, &interval(0, &[(12, 13)]), &after), vec![1, 2]);
-        union.remove(Register::CX, 2, &after);
-        assert_eq!(union.meeting(&Register::CX, &interval(0, &[(12, 13)]), &after), vec![1]);
-        assert!(!union.busy(&Register::CX, &interval(0, &[(16, 18)]), &after));
+        assert_eq!(union.meeting(&RegId::CX, &interval(0, &[(12, 13)]), &after), vec![1, 2]);
+        union.remove(RegId::CX, 2, &after);
+        assert_eq!(union.meeting(&RegId::CX, &interval(0, &[(12, 13)]), &after), vec![1]);
+        assert!(!union.busy(&RegId::CX, &interval(0, &[(16, 18)]), &after));
     }
 
     #[test]
