@@ -75,6 +75,9 @@ impl Tree<'_> {
         }
         Ok(match self.info.types.get(index) {
             Some(Type::Scalar(Scalar::Void)) | None => None,
+            // BASIC's array is its descriptor to a debugger that cannot bound
+            // it.
+            Some(Type::Described { descriptor, .. }) => return self.ty(*descriptor),
             Some(_) => Some(1 + index),
         })
     }
@@ -118,7 +121,7 @@ impl Tree<'_> {
     ) -> Result<(), Unsupported> {
         let one = self.info.types[index].clone();
         let mut die = match &one {
-            Type::Scalar(Scalar::Void) => return Ok(()),
+            Type::Scalar(Scalar::Void) | Type::Described { .. } => return Ok(()),
             Type::Scalar(scalar) => base(*scalar, None)?,
             Type::Basic { name, scalar } => base(*scalar, Some(name))?,
             Type::FixedString(_) => return refused("a BASIC STRING * n has no DWARF type"),
@@ -537,6 +540,7 @@ fn references(one: &Type) -> Vec<usize> {
     match one {
         Type::Scalar(_) | Type::Basic { .. } | Type::FixedString(_) => Vec::new(),
         Type::Array { element, .. } => vec![*element],
+        Type::Described { element, descriptor } => vec![*element, *descriptor],
         Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
         Type::Enum { underlying, .. } => vec![*underlying],
         Type::Pointer { target, .. }
