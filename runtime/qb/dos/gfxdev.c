@@ -367,37 +367,60 @@ static unsigned packed_read(unsigned x, unsigned y, unsigned bits)
 /* The CGA modes' scan, a byte of pixels at a time (B$FSCC): the masks of the pixels of the first and the last byte that are in range
    go to the kernel, which gives the first byte with a wanted pixel in range and which pixels of it, and the first of those, from
    the left going right and from the right going left, is the pixel. */
-static int packed_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match, unsigned bits)
+/* The search of a row of 2-bit or 1-bit pixels: the kernel makes the masks and the colour bytes and gives the pixel. */
+static int packed_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match, unsigned flags)
 {
-    int back = last < x;
-    unsigned per = 8 / bits, all = bits == 2 ? 0x55 : 0xFF, mask = (1u << bits) - 1;
-    unsigned first_byte = (unsigned)x * bits >> 3, last_byte = (unsigned)last * bits >> 3;
-    unsigned k0 = (unsigned)x % per, kl = (unsigned)last % per, k, base;
     FillScan scan;
 
-    scan.at = packed_row(y) + first_byte;
-    scan.count = (back ? first_byte - last_byte : last_byte - first_byte) + 1;
-    scan.c1 = (c1 & mask) * (0xFF / mask);
-    scan.c2 = (c2 & mask) * (0xFF / mask);
-    scan.flags = (match ? 1 : 0) | (back ? 2 : 0) | (bits == 2 ? 4 : 0);
-    scan.first = back ? all & (0xFF << ((per - 1 - k0) * bits)) & 0xFF : all & (0xFF >> (k0 * bits));
-    scan.last = back ? all & (0xFF >> (kl * bits)) : all & (0xFF << ((per - 1 - kl) * bits)) & 0xFF;
-    scan.middle = all;
+    scan.at = packed_row(y);
+    scan.x = (unsigned)x;
+    scan.to = (unsigned)last;
+    scan.c1 = c1;
+    scan.c2 = c2;
+    scan.flags = (match ? 1 : 0) | flags;
     dev_scan_packed(&scan);
-    if (scan.found < 0)
-        return -1;
-    if (back) {
-        base = (first_byte - (unsigned)scan.found) * per;
-        for (k = per; k--;)
-            if (scan.hits & 1u << ((per - 1 - k) * bits))
-                return (int)(base + k);
-    } else {
-        base = (first_byte + (unsigned)scan.found) * per;
-        for (k = 0; k < per; k++)
-            if (scan.hits & 1u << ((per - 1 - k) * bits))
-                return (int)(base + k);
+    return scan.found;
+}
+
+/* PAINT's row in one go: the first pixel from `x` to `last` that is neither colour, and the run of non-`edge` pixels it is in. */
+int gd_run(int x, int last, unsigned y, unsigned edge, unsigned paint, int limit, int *left, int *right)
+{
+    FillScan scan;
+    int open, l, r;
+
+    if (kind == KIND_PACKED4 || kind == KIND_PACKED2) {
+        scan.at = packed_row(y);
+        scan.x = (unsigned)x;
+        scan.to = (unsigned)last;
+        scan.c1 = edge;
+        scan.c2 = paint;
+        scan.flags = kind == KIND_PACKED4 ? 4 : 0;
+        scan.limit = (unsigned)limit;
+        dev_scan_run(&scan);
+        if (scan.found < 0)
+            return 0;
+        *left = (int)scan.left;
+        *right = (int)scan.right;
+        return 1;
     }
-    return -1;
+    open = ops->search(x, last, y, edge, paint, 0);
+    if (open < 0)
+        return 0;
+    l = ops->search(open, 0, y, edge, edge, 1);
+    r = ops->search(open, limit, y, edge, edge, 1);
+    *left = l < 0 ? 0 : l + 1;
+    *right = r < 0 ? limit : r - 1;
+    return 1;
+}
+
+static int packed4_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match)
+{
+    return packed_search(x, last, y, c1, c2, match, 4);
+}
+
+static int packed2_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match)
+{
+    return packed_search(x, last, y, c1, c2, match, 0);
 }
 
 static void packed_move_rows(unsigned to, unsigned from, unsigned count)
@@ -438,11 +461,9 @@ static void packed_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned
 
 static void packed4_plot(unsigned x, unsigned y, unsigned c, unsigned o) { packed_plot(x, y, c, o, 2); }
 static unsigned packed4_read(unsigned x, unsigned y) { return packed_read(x, y, 2); }
-static int packed4_search(int x, int l, unsigned y, unsigned a, unsigned b, int m) { return packed_search(x, l, y, a, b, m, 2); }
 static void packed4_glyph(unsigned x, unsigned y, const u8 QB_FAR *b, unsigned h, unsigned f) { packed_glyph(x, y, b, h, f, 2); }
 static void packed2_plot(unsigned x, unsigned y, unsigned c, unsigned o) { packed_plot(x, y, c, o, 1); }
 static unsigned packed2_read(unsigned x, unsigned y) { return packed_read(x, y, 1); }
-static int packed2_search(int x, int l, unsigned y, unsigned a, unsigned b, int m) { return packed_search(x, l, y, a, b, m, 1); }
 static void packed2_glyph(unsigned x, unsigned y, const u8 QB_FAR *b, unsigned h, unsigned f) { packed_glyph(x, y, b, h, f, 1); }
 
 static const GdOps packed4_ops = {

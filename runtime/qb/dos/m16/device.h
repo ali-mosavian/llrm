@@ -50,12 +50,15 @@ typedef struct FillXfer {
    `at` forwards or, `flags` bit 1, backwards, over `count` of them (fill.asm).  Planar: `first` and `last` are the masks of the pixels
    to take in the first and last byte, `middle` in the others, and for CGA (`flags` bit 2 for 2-bit pixels) `c1` and `c2` are the byte
    with the colour in every pixel and the masks have a bit for each pixel (its low bit if 2).  Out: `found` the index of the one (a byte, and
-   `hits` the pixels of it), -1 if none. */
+   `hits` the pixels of it), -1 if none.  CGA: `at` is the row, and the scan runs over the pixels from `x` to `to` (it makes the
+   masks, patterns and count itself) and `found` is the pixel.  dev_scan_run does three of them for PAINT: the first pixel of
+   `x` to `to` that is neither `c1` nor `c2`, and from it the run of pixels that are not `c1`, `left` to `right` within 0 to `limit`
+   (`found` is -1 if there was no such pixel). */
 typedef struct FillScan {
     void QB_FAR *at;
     unsigned count, c1, c2, flags, first, last, middle;
     int found;
-    unsigned hits;
+    unsigned hits, x, to, left, right, limit;
 } FillScan;
 /* The eight points of a circle step for the planar or CGA modes (fill.asm): the screen's base, the offsets of the four rows (cy-v, cy+v, cy-z,
    cy+z) and of the four columns' bytes (cx+u, cx-u, cx+w, cx-w) with the mask of the pixel in each, and the colour (CGA: in every pixel
@@ -86,6 +89,7 @@ extern void dev_get_rows(FillXfer *xfer);
 extern void dev_scan_linear(FillScan *scan);
 extern void dev_scan_planar(FillScan *scan);
 extern void dev_scan_packed(FillScan *scan);
+extern void dev_scan_run(FillScan *scan);
 extern void dev_octet_planar(FillOct *oct);
 extern void dev_octet_packed(FillOct *oct);
 extern void dev_put_select(unsigned how);
@@ -113,6 +117,7 @@ extern void dev_sincos(const double *angle, double *sine, double *cosine);
 #pragma aux dev_scan_linear "B$FSCL"
 #pragma aux dev_scan_planar "B$FSCP"
 #pragma aux dev_scan_packed "B$FSCC"
+#pragma aux dev_scan_run "B$FSCR"
 #pragma aux dev_octet_planar "B$FOCP"
 #pragma aux dev_octet_packed "B$FOCC"
 #pragma aux dev_put_select "B$FPSEL"

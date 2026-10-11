@@ -31,7 +31,7 @@ typedef struct FillScan {
     void *at;
     unsigned count, c1, c2, flags, first, last, middle;
     int found;
-    unsigned hits;
+    unsigned hits, x, to, left, right, limit;
 } FillScan;
 typedef struct FillOct {
     void *base;
@@ -42,6 +42,7 @@ void dev_octet_packed(FillOct *oct);
 void dev_scan_linear(FillScan *scan);
 void dev_scan_planar(FillScan *scan);
 void dev_scan_packed(FillScan *scan);
+void dev_scan_run(FillScan *scan);
 void dev_get_rows(FillXfer *xfer);
 void dev_put_select(unsigned how);
 void dev_put_rows(FillXfer *xfer);

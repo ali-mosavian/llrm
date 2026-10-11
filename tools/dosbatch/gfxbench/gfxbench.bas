@@ -56,7 +56,7 @@ NEXT
 Mark "circle", t!
 
 t! = TIMER
-FOR i = 1 TO 8
+FOR i = 1 TO 32
     LINE (20, 20)-(120, 80), top, B
     PAINT (60, 50), 1, top
     LINE (20, 20)-(120, 80), 0, BF

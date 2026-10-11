@@ -25,6 +25,7 @@
                 public  B$FSCL
                 public  B$FSCP
                 public  B$FSCC
+                public  B$FSCR
                 public  B$FOCP
                 public  B$FOCC
                 public  B$FPSEL
@@ -81,6 +82,11 @@ FillScan        struc
                 middle          dword   ?
                 found           dword   ?
                 hits            dword   ?
+                x               dword    ?
+                to              dword    ?
+                left            dword    ?
+                right           dword    ?
+                limit           dword    ?
 FillScan        ends
 
 .code
@@ -1099,11 +1105,52 @@ keep:
                 and     al, maskop
                 endm
 
+;; SHRMASK / SHLMASK (dl: bits a pixel, ch: pixels a byte less 1, dh: all the pixels): al = the pixels of a byte from the one `slot` names
+;; to its end: those that are the pixel and the ones after it (SHR), or it and the ones before (SHL)
+SHRMASK         macro   slot
+                mov     al, slot
+                and     al, ch
+                mov     cl, dl
+                dec     cl
+                shl     al, cl
+                mov     cl, al
+                mov     al, 0FFh
+                shr     al, cl
+                and     al, dh
+                endm
+SHLMASK         macro   slot
+                mov     al, slot
+                not     al
+                and     al, ch
+                mov     cl, dl
+                dec     cl
+                shl     al, cl
+                mov     cl, al
+                mov     al, 0FFh
+                shl     al, cl
+                and     al, dh
+                endm
+;; PATTERN (al: a colour, dl: bits a pixel): al = the byte with it in every pixel
+PATTERN         macro
+                local   one, done
+                cmp     dl, 2
+                jne     one
+                and     al, 3
+                mov     ah, 55h
+                mul     ah
+                jmp     done
+one:
+                and     al, 1
+                neg     al
+done:
+                endm
+
 ;;::::::::::::::
 ;; B$FSCC (eax: ptr FillScan): the CGA modes' scan, a byte at a time: the pixels of a byte equal to a colour show as bits of the byte xor the
 ;; colour's pattern.  The first and last byte are taken under their masks; the ones between, for one colour, by a short loop that
 ;; only says whether some pixel of the byte is wanted, and the byte it stops at is taken as the others are
 B$FSCC          proc
+
 
                 push    ebx
                 push    ecx
@@ -1112,15 +1159,128 @@ B$FSCC          proc
                 push    edi
                 push    ebp
                 mov     ebx, eax
-                mov     edi, [ebx].FillScan.at
-                mov     cl, byte ptr [ebx].FillScan.count
-                mov     dl, byte ptr [ebx].FillScan.c1
-                mov     dh, byte ptr [ebx].FillScan.c2
+                call    scan_one
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FSCC          endp
+
+;; B$FSCR (ax: ptr FillScan): the row of CGA pixels from `x` to `to` is searched for a pixel that is neither colour `c1` nor `c2`; the run of
+;; pixels round it that are not `c1` is `left` to `right` (within 0 to `limit`), and `found` is 0, or -1 if the row had no such pixel
+B$FSCR          proc
+
+
+                push    ebx
+                push    ecx
+                push    edx
+                push    esi
+                push    edi
+                push    ebp
+                mov     ebx, eax
+                call    scan_one
+                mov     eax, [ebx].FillScan.found
+                or      eax, eax
+                js      @@out
+                mov     [ebx].FillScan.right, eax
+                mov     [ebx].FillScan.x, eax
+                mov     [ebx].FillScan.to, 0
+                mov     eax, [ebx].FillScan.c1
+                mov     [ebx].FillScan.c2, eax
+                or      dword ptr [ebx].FillScan.flags, 1
+                call    scan_one
+                mov     eax, [ebx].FillScan.found
+                inc     eax
+                mov     [ebx].FillScan.left, eax
+                mov     eax, [ebx].FillScan.right
+                mov     [ebx].FillScan.x, eax
+                mov     eax, [ebx].FillScan.limit
+                mov     [ebx].FillScan.to, eax
+                call    scan_one
+                mov     eax, [ebx].FillScan.found
+                or      eax, eax
+                jns     @F
+                mov     eax, [ebx].FillScan.limit
+                inc     eax
+@@:
+                dec     eax
+                mov     [ebx].FillScan.right, eax
+                mov     [ebx].FillScan.found, 0
+@@out:
+                pop     ebp
+                pop     edi
+                pop     esi
+                pop     edx
+                pop     ecx
+                pop     ebx
+                ret
+B$FSCR          endp
+
+;; scan_one (bx: ptr FillScan): the search of the CGA pixels from `x` to `to`; the registers are the callers' to save
+scan_one        proc    near
+
                 mov     esi, [ebx].FillScan.flags
-                mov     ebp, 1
-                test    esi, 2
+                mov     dl, 1                   ;; pixels of 1 bit: 8 to a byte (log 3, last pixel of a byte 7)
+                mov     dh, 3
+                mov     ch, 7
+                test    esi, 4
                 jz      @F
+                mov     dl, 2                   ;; or 2 bits: 4 to a byte
+                mov     dh, 2
+                mov     ch, 3
+@@:
+                mov     ebp, 1
+                mov     eax, [ebx].FillScan.x
+                cmp     eax, [ebx].FillScan.to
+                jle     @F
                 mov     ebp, -1
+                or      esi, 2
+@@:
+                mov     cl, dh
+                mov     eax, [ebx].FillScan.x
+                shr     eax, cl
+                mov     edi, [ebx].FillScan.at
+                add     edi, eax
+                mov     [ebx].FillScan.count, eax
+                mov     eax, [ebx].FillScan.to
+                shr     eax, cl
+                sub     eax, [ebx].FillScan.count
+                jge     @F
+                neg     eax
+@@:
+                inc     eax
+                mov     [ebx].FillScan.count, eax
+                mov     dh, 0FFh                ;; the pixels of a byte: a bit each, the low bit of each if 2 bits
+                cmp     dl, 2
+                jne     @F
+                mov     dh, 55h
+@@:
+                test    esi, 2
+                jnz     @@maskback
+                SHRMASK byte ptr [ebx].FillScan.x
+                mov     byte ptr [ebx].FillScan.first, al
+                SHLMASK byte ptr [ebx].FillScan.to
+                mov     byte ptr [ebx].FillScan.last, al
+                jmp     @@maskdone
+@@maskback:
+                SHLMASK byte ptr [ebx].FillScan.x
+                mov     byte ptr [ebx].FillScan.first, al
+                SHRMASK byte ptr [ebx].FillScan.to
+                mov     byte ptr [ebx].FillScan.last, al
+@@maskdone:
+                mov     byte ptr [ebx].FillScan.middle, dh
+                mov     al, byte ptr [ebx].FillScan.c1
+                PATTERN
+                push    eax
+                mov     al, byte ptr [ebx].FillScan.c2
+                PATTERN
+                mov     dh, al
+                pop     eax
+                mov     dl, al
+                mov     cl, byte ptr [ebx].FillScan.count
 @@:
                 cmp     cl, 1
                 jne     @@several
@@ -1155,38 +1315,27 @@ B$FSCC          proc
                 dec     cl
                 jnz     @@findequal2
                 jmp     @@lastbyte
-@@skipequal2:                                   ;; 2-bit pixels, a pixel that is not: some pixel of the byte xor the pattern is not 00
-                mov     al, [edi]
-                xor     al, dl
-                mov     ch, al
-                shr     ch, 1
-                or      al, ch
-                test    al, 55h
-                jnz     @@mid
-                add     edi, ebp
-                dec     cl
-                jnz     @@skipequal2
-                jmp     @@lastbyte
+@@skipequal2:                                   ;; 2-bit pixels, a pixel that is not: some byte that is not the pattern
+                mov     al, dl
+                jmp     @@scanbytes
 @@onebit:
+                mov     al, dl
                 test    esi, 1
-                jz      @@skipequal1
-@@findequal1:
-                mov     al, [edi]
-                xor     al, dl
-                cmp     al, 0FFh
-                jne     @@mid
-                add     edi, ebp
-                dec     cl
-                jnz     @@findequal1
-                jmp     @@lastbyte
-@@skipequal1:
-                mov     al, [edi]
-                xor     al, dl
-                jnz     @@mid
-                add     edi, ebp
-                dec     cl
-                jnz     @@skipequal1
-                jmp     @@lastbyte
+                jz      @@scanbytes
+                not     al                      ;; a pixel of the colour: some byte that is not its complement
+                jmp     @@scanbytes
+@@scanbytes:                                    ;; the bytes between, none of them al: repe scasb, backwards when bp is -1
+                xor     ch, ch
+                cld
+                cmp     ebp, 0
+                jg      @F
+                std
+@@:
+                repe    scasb
+                cld
+                je      @@lastbyte
+                sub     edi, ebp
+                jmp     @@mid
 @@twocolours:
                 BYTEHIT byte ptr [ebx].FillScan.middle
                 jnz     @@hit
@@ -1208,21 +1357,45 @@ B$FSCC          proc
                 mov     [ebx].FillScan.hits, 0
                 jmp     @@done
 @@hit:
-                movzx   eax, al
-                mov     [ebx].FillScan.hits, eax
+                mov     ah, 0
+                mov     edx, eax                  ;; the pixels of the byte that were found, a bit each
                 mov     eax, edi
                 sub     eax, [ebx].FillScan.at
-                imul    eax, ebp
+                mov     cl, 3
+                mov     dh, 80h
+                mov     ebp, 1
+                test    esi, 4
+                jz      @F
+                mov     cl, 2
+                mov     dh, 40h
+                mov     ebp, 2
+@@:
+                shl     eax, cl               ;; the byte's first pixel
+                mov     ecx, ebp
+                test    esi, 2
+                jnz     @@hitback
+@@hitforward:
+                test    dl, dh
+                jnz     @@gotpixel
+                inc     eax
+                shl     dl, cl
+                jmp     @@hitforward
+@@hitback:
+                add     eax, 7                ;; the byte's last pixel
+                test    esi, 4
+                jz      @@hitbackloop
+                sub     eax, 4
+@@hitbackloop:
+                test    dl, 1
+                jnz     @@gotpixel
+                dec     eax
+                shr     dl, cl
+                jmp     @@hitbackloop
+@@gotpixel:
                 mov     [ebx].FillScan.found, eax
 @@done:
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
-B$FSCC          endp
+scan_one        endp
 
 
 FillOct         struc

@@ -139,33 +139,53 @@ void dev_scan_linear(FillScan *scan)
 }
 void dev_scan_planar(FillScan *scan) { scan->found = -1; }
 
-/* B$FSCC in C, a pixel at a time: the bytes of `count` from `at`, the slots of a byte masked by first, middle and last. */
+/* B$FSCC in C, a pixel at a time: the row `at`, the pixels from `x` to `to`, 2-bit ones if `flags` bit 2. */
 void dev_scan_packed(FillScan *scan)
 {
-    unsigned char *at = scan->at;
+    const unsigned char *row = scan->at;
     unsigned bits = scan->flags & 4 ? 2 : 1, per = 8 / bits, pix = (1u << bits) - 1;
-    int step = scan->flags & 2 ? -1 : 1;
+    int step = scan->to < scan->x ? -1 : 1;
 
     scan->found = -1;
     scan->hits = 0;
-    for (unsigned i = 0; i < scan->count; i++, at += step) {
-        unsigned mask = i == 0 ? scan->first : scan->middle, hits = 0;
+    for (int at = (int)scan->x;; at += step) {
+        unsigned v = row[at / per] >> ((per - 1 - at % per) * bits) & pix;
+        int is = v == (scan->c1 & pix) || v == (scan->c2 & pix);
 
-        if (i == scan->count - 1)
-            mask &= scan->last;
-        for (unsigned k = 0; k < per; k++) {
-            unsigned slot = 1u << ((per - 1 - k) * bits), v = *at >> ((per - 1 - k) * bits) & pix;
-            int is = v == (scan->c1 & pix) || v == (scan->c2 & pix);
-
-            if ((mask & slot) && is == (int)(scan->flags & 1))
-                hits |= slot;
-        }
-        if (hits) {
-            scan->found = (int)i;
-            scan->hits = hits;
+        if (is == (int)(scan->flags & 1)) {
+            scan->found = at;
             return;
         }
+        if (at == (int)scan->to)
+            return;
     }
+}
+
+/* B$FSCR in C, by the scan above. */
+void dev_scan_run(FillScan *scan)
+{
+    unsigned flags = scan->flags & 4;
+    FillScan one = *scan;
+
+    one.flags = flags;
+    dev_scan_packed(&one);
+    if (one.found < 0) {
+        scan->found = -1;
+        return;
+    }
+    FillScan back = *scan, forward = *scan;
+
+    back.x = forward.x = (unsigned)one.found;
+    back.c2 = back.c1;
+    forward.c2 = forward.c1;
+    back.to = 0;
+    forward.to = scan->limit;
+    back.flags = forward.flags = flags | 1;
+    dev_scan_packed(&back);
+    dev_scan_packed(&forward);
+    scan->left = (unsigned)(back.found + 1);
+    scan->right = forward.found < 0 ? scan->limit : (unsigned)forward.found - 1;
+    scan->found = 0;
 }
 
 /* B$FGET in C. */
@@ -288,6 +308,31 @@ int main(void)
                     }
                     if (px == sl)
                         break;
+                }
+                {
+                    int lo = sx < sl ? sx : sl, hi = sx < sl ? sl : sx, open = -1, left = 0, right = (int)modes[m].width - 1, gl = -1, gr = -1;
+
+                    for (int px = lo; px <= hi && open < 0; px++)
+                        if (gd_read(px, sy) != c1 && gd_read(px, sy) != c2)
+                            open = px;
+                    if (open >= 0) {
+                        for (int px = open - 1; px >= 0; px--)
+                            if (gd_read(px, sy) == c1) {
+                                left = px + 1;
+                                break;
+                            }
+                        for (int px = open + 1; px < (int)modes[m].width; px++)
+                            if (gd_read(px, sy) == c1) {
+                                right = px - 1;
+                                break;
+                            }
+                    }
+                    int found = gd_run(lo, hi, sy, c1, c2, (int)modes[m].width - 1, &gl, &gr);
+
+                    if (found != (open >= 0) || (found && (gl != left || gr != right))) {
+                        fprintf(stderr, "run: mode %u lo %d hi %d y %u c1 %u c2 %u open %d run %d..%d got %d %d..%d\n", modes[m].mode, lo, hi, sy, c1, c2, open, left, right, found, gl, gr);
+                        return 1;
+                    }
                 }
                 if (gd_search(sx, sl, sy, c1, c2, match) != want) {
                     fprintf(stderr, "search: mode %u x %d last %d y %u c1 %u c2 %u match %d want %d got %d\n", modes[m].mode, sx, sl, sy, c1, c2, match, want, gd_search(sx, sl, sy, c1, c2, match));

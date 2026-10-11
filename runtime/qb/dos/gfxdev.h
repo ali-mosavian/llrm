@@ -44,6 +44,9 @@ unsigned gd_read(unsigned x, unsigned y);
    pixel that is of colour `c1` or `c2` (`match` 1) or of neither (`match` 0),
    or -1 when there is none. */
 int gd_search(int x, int last, unsigned y, unsigned c1, unsigned c2, int match);
+/* PAINT's row: the first pixel from x to last that is neither edge nor paint, and the run of pixels that are not edge round it,
+   left to right within 0 to limit.  0 if there is no such pixel. */
+int gd_run(int x, int last, unsigned y, unsigned edge, unsigned paint, int limit, int *left, int *right);
 /* Copies whole rows of pixels, the first first, so that moving up over itself
    is right. */
 void gd_move_rows(unsigned to, unsigned from, unsigned count);

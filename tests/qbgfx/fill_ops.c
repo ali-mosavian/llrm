@@ -246,6 +246,31 @@ int main(void)
                     report((long)modes[m] * 1000000L + (long)(sx + sy * 100) + 55000L + (match ? 1000L : 0));
                     return 0;
                 }
+                /* and PAINT's run: the first pixel of sx..sl that is neither colour, and the pixels of colour other than c1 round it */
+                {
+                    int lo = sx < sl ? sx : sl, hi = sx < sl ? sl : sx, open = -1, left = 0, right = REGION_W - 1, gl = -1, gr = -1, found;
+
+                    for (px = lo; px <= hi && open < 0; px++)
+                        if (gd_read(px, sy) != c1 && gd_read(px, sy) != c2)
+                            open = px;
+                    if (open >= 0) {
+                        for (px = open - 1; px >= 0; px--)
+                            if (gd_read(px, sy) == c1) {
+                                left = px + 1;
+                                break;
+                            }
+                        for (px = open + 1; px < REGION_W; px++)
+                            if (gd_read(px, sy) == c1) {
+                                right = px - 1;
+                                break;
+                            }
+                    }
+                    found = gd_run(lo, hi, sy, c1, c2, REGION_W - 1, &gl, &gr);
+                    if (found != (open >= 0) || (found && (gl != left || gr != right))) {
+                        report((long)modes[m] * 1000000L + (long)(lo + sy * 100) + 65000L);
+                        return 0;
+                    }
+                }
             }
             /* and a few dots of the same fill: the pixel as the operation says, its neighbours as they were */
             for (x = 0; x < 6; x++) {
