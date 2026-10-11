@@ -7,7 +7,7 @@ unset DEBUG TARGET HOST PROFILE OPT_LEVEL
 
 DEST="$1"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/llrm"
-COMMIT=36b738a39b5a08a9539a3235f6a7c322208b76df
+COMMIT=1e2f3f0d8d35385e8fd28a27236ce9ec3cd8822a
 
 . "$(dirname "$0")/cache.sh"
 dosbox() {
