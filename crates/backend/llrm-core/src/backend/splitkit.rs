@@ -1237,21 +1237,28 @@ fn _held(
     region
 }
 
-/// What holding `region` in a register saves: a memory operand per
-/// reference inside it, less every copy `crossings` says carving it adds.
+/// What holding `region` in a register saves: what each reference inside it
+/// costs spilled (`saving`: a reload, less what its instruction folds), less
+/// every copy `crossings` says carving it adds.
 fn _benefit(
     blocks: &Blocks,
     value: u32,
     region: &Region,
     frequency: &dyn Fn(i64) -> f64,
     live: &dyn allocate::LiveAt,
+    saving: &dyn Fn(&Insn) -> f64,
 ) -> f64 {
     let body = blocks.body;
     let saved: f64 = named_in(body, value)
         .iter()
         .map(|(block, positions)| {
             let at = body.blocks[*block].at;
-            positions.iter().filter(|position| region.covers(at, **position)).count() as f64 * frequency(at)
+            positions
+                .iter()
+                .filter(|position| region.covers(at, **position))
+                .map(|position| saving(&body.blocks[*block].insns[*position]))
+                .sum::<f64>()
+                * frequency(at)
         })
         .sum();
     let copies: f64 = crossings_in(blocks, value, region, live)
@@ -1271,9 +1278,10 @@ pub fn pays(
     value: u32,
     region: &Region,
     live: &dyn allocate::LiveAt,
+    saving: &dyn Fn(&Insn) -> f64,
 ) -> bool {
     let depths = ranges::depths_shared(body);
-    _benefit(&Blocks::of(body), value, region, &|at| ranges::level(depths[&at]), live) > 0.0
+    _benefit(&Blocks::of(body), value, region, &|at| ranges::level(depths[&at]), live, saving) > 0.0
 }
 
 /// Whether `region` holds all of `value`'s range: every block it is named in
@@ -1335,6 +1343,7 @@ pub fn placed(
     candidates: &[RegId],
     occupied: &Occupied,
     width: u32,
+    saving: &dyn Fn(&Insn) -> f64,
 ) -> Vec<Region> {
     let blocks = Blocks::of(body);
     let analysis = analysed_in(&blocks, value, live);
@@ -1346,7 +1355,7 @@ pub fn placed(
         if region.is_empty() || _whole_range(&blocks, &analysis, value, region, live) {
             return 0.0;
         }
-        _benefit(&blocks, value, region, &|at| placement.frequency[&at], live)
+        _benefit(&blocks, value, region, &|at| placement.frequency[&at], live, saving)
     };
     let open = |_: i64| None;
     let mut compact = Region::default();
@@ -2052,6 +2061,33 @@ mod tests {
         assert_eq!(joined.segments, vec![intervals::Segment { start: first.start, end: second.end }]);
     }
 
+    /// Three `add`s of a value between its definition and a push, in a block
+    /// of their own: held in a register they save three reloads against the
+    /// two copies that carve them out, but each `add` takes the memory operand
+    /// when the value is spilled, so they save one and a half. Carved on the
+    /// first count, mandel -O2 (16-bit) split a counter and spilled it anyway:
+    /// 1.3% more instructions and 8% more code than spilling it whole.
+    #[test]
+    fn test_a_region_of_instructions_that_fold_the_spilled_value_does_not_pay() {
+        let body = body(
+            "one",
+            vec![
+                block(0, vec![move_imm(0, 3, 0x40), jump(2, 0x10)], &[0x10]),
+                block(0x10, vec![add(0x10, 3), add(0x12, 3), add(0x14, 3), jump(0x16, 0x20)], &[0x20]),
+                block(
+                    0x20,
+                    vec![push(0x20, 3), _insn(0x22, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[])],
+                    &[],
+                ),
+            ],
+        );
+        let live = crate::backend::allocate::live(&body);
+        let region = region(&body, &[0x10]);
+        let sets = (&live.0, &live.1);
+        assert!(super::pays(&body, 3, &region, &sets, &|_| 1.0), "premise: three reloads outweigh two copies");
+        assert!(!super::pays(&body, 3, &region, &sets, &crate::backend::allocate::_held_saving));
+    }
+
     /// A value whose register is taken before and after a loop, but free in
     /// it, spilled whole and reloaded every trip. Placement keeps it in the
     /// register across the loop, entering after the interference before it
@@ -2071,7 +2107,8 @@ mod tests {
         ];
         let masks = crate::backend::allocate::Masks::default();
         let occupied = super::Occupied::new(IndexMap::from_iter([(RegId::EAX, taken)]), &masks);
-        let regions = super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[RegId::AX], &occupied, 2);
+        let regions =
+            super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[RegId::AX], &occupied, 2, &|_| 1.0);
         let first = regions.first().expect("a region");
         assert_eq!(first.spans.get(&0x10), Some(&vec![(0, 3)]), "{regions:?}");
         assert_eq!(first.spans.get(&0x20), Some(&vec![(0, 1)]), "{regions:?}");

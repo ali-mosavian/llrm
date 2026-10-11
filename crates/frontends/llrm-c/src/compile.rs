@@ -803,6 +803,23 @@ mod tests {
         assert_eq!(super::Profile::parse(&none, "x").unwrap_err(), "the C runtime description has no [frontend]");
     }
 
+    /// A load whose only reader is an add is the add's memory operand. The
+    /// return read the frame register as it does where one is kept, so a load
+    /// into EBP, the last register given out where none is, looked live to
+    /// the end: `mov ebp, [..]; add ax, bp` where the other two loads folded.
+    #[test]
+    fn test_m32_a_load_into_the_free_frame_register_is_folded_into_its_add() {
+        let lines = flat_listing("sumthree");
+        let body: Vec<&str> = lines
+            .iter()
+            .skip_while(|line| *line != "sum_three_ proc near")
+            .take_while(|line| *line != "sum_three_ endp")
+            .map(String::as_str)
+            .collect();
+        let folded = body.iter().filter(|line| line.starts_with("add ax, word ptr [")).count();
+        assert_eq!(folded, 3, "{body:#?}");
+    }
+
     /// The 386 front end records `sum.c` as the committed flat stream: `flat=1`
     /// in INIT, int and pointers 4 bytes. (Its source path is the
     /// machine's, so that line is not compared.)

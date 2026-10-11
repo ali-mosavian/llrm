@@ -1,5 +1,5 @@
-reason = "fill: adjacent constant stores are one store of the widest integer (gcc store-merging, LLVM MergeConsecutiveStores); a loop of several fills to apart bytes is a memset each where the stores are no larger than the loop"
-blessed = "2026-10-10"
+reason = "a call's upper-half register clobbers now reach its callers' summaries: grep nib -O2/-Os grow 27 and 21 bytes where a long was kept in esi/edi across a call that loses its upper half (the miscompile qb's circle sweep showed)"
+blessed = "2026-10-11"
 
 [bas.O2]
 code_bytes = 993
@@ -26,13 +26,13 @@ bss_bytes = 3056
 kernel_ms = 3415.6629
 
 [nib.O2]
-code_bytes = 1446
+code_bytes = 1475
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.5804
 
 [nib.Os]
-code_bytes = 1370
+code_bytes = 1391
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.6052
