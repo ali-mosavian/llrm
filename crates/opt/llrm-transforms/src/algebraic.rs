@@ -301,6 +301,16 @@ fn _offset_compared(
     if width > 64 {
         return false;
     }
+    // A test of a phi's own next value stays on it: the step is made for the
+    // next trip anyway, and testing the phi keeps both live (ivopts takes a
+    // use after the increment from the incremented candidate).
+    if let (Operand::Value(source), Some(result)) = (source, function.instruction(made).result)
+        && let ValueDef::Instruction(phi) = function.value(source).def
+        && function.instruction(phi).opcode == Opcode::Phi
+        && function.instruction(phi).operands.contains(&Operand::Value(result))
+    {
+        return false;
+    }
     let signed = matches!(
         predicate,
         IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge

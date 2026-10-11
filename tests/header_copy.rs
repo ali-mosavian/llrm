@@ -301,3 +301,22 @@ fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
     let early = lines.windows(2).any(|pair| pair[0] == "mov ax, 1" && pair[1] == "ret");
     assert!(early, "{text}");
 }
+
+/// Behind the copy `JumpThread` cleans the function with `Algebraic` after
+/// LSR, and `icmp ne (x + 1), 2` became `icmp ne x, 1` for the counter's own
+/// next value: `lea eax,[ecx+1]; add edi,24; cmp ecx,1; mov ecx,eax; jne`, the
+/// counter in two registers (x_life +5% clocks). The step is tested where it
+/// is made: `inc ecx; add edi,24; cmp ecx,2; jne`.
+#[test]
+fn test_a_counted_inner_loop_tests_its_stepped_counter_after_the_cleanup() {
+    let text = listing("x_life", &["-ftree-ch"]);
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let stepped = lines
+        .windows(4)
+        .any(
+            |w| w[0].strip_prefix("inc ")
+                .is_some_and(|register| w[1..3].iter().any(|line| *line == format!("cmp {register}, 2")))
+                && w[3].starts_with("jne "),
+        );
+    assert!(stepped, "{text}");
+}
