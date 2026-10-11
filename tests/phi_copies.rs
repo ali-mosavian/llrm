@@ -62,3 +62,17 @@ fn test_a_crc_step_keeps_the_accumulator_in_one_register() {
     let body = text.split("_bench_crc proc").nth(1).unwrap().split("_bench_crc endp").next().unwrap();
     assert!(!body.contains("esi") && !body.contains("mov eax, ebx"), "{body}");
 }
+
+/// x_rle's run length leaves at 255: the number the exit's phi takes was made
+/// in the loop's test block (`mov eax, 255; cmp ecx, 255; jl`), every trip, for
+/// an exit taken once. It is made on the edge that leaves (`mov eax, 255;
+/// jmp`): x_rle -O1 +4.4% clocks behind the header copy.
+#[test]
+fn test_a_constant_a_loop_exit_takes_is_made_on_its_edge_not_every_trip() {
+    let text = listing("crates/target/llrm-x86-m32/vsgcc/kernels/x_rle/x_rle.c", &["-O1", "-ftree-ch"]);
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let in_the_loop = lines
+        .windows(2)
+        .any(|pair| pair[0].starts_with("mov e") && pair[0].ends_with(", 255") && !pair[1].starts_with("jmp "));
+    assert!(!in_the_loop, "{text}");
+}

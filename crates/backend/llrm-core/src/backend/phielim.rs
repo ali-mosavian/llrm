@@ -65,6 +65,13 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
     // (only an edge block); an x87 value has no copy to save.
     let floating = crate::backend::ssaspill::floating(body);
 
+    let depths = crate::analysis::intervals::depths_shared(body);
+    // An edge that leaves a loop and is taken on under a quarter of its trips
+    // (the `jmp` its block costs is paid back by the copy it keeps out of
+    // the loop's trips).
+    let rare_exit = |from: i64, into: i64| {
+        depths.get(&from) > depths.get(&into) && body.odds.chance(from, &at_of[&from].succ, into) < 0.25
+    };
     let once = _read_once(body);
     // One per predecessor->successor edge. Every move a phi becomes on
     // that edge is simultaneous with the others and with none outside it.
@@ -100,6 +107,9 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                 // it define the phi's result outright says what the phi said.
                 if edges.iter().all(|&(w, v)| {
                     _defined_in(at_of[&w], v)
+                        // A constant made in a loop to leave it runs every
+                        // trip.
+                        && !(rare_exit(w, block.at) && _constant_made_in(at_of[&w], v).is_some())
                         && (once.get(&v).copied() == Some(1)
                             || !floating.contains(&phi.result)
                                 && (_observed(body, &at_of, w, block.at, phi.result)
@@ -157,9 +167,15 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
             // A copy may run in the predecessor only when neither end needs
             // a distinct value on its other paths. Otherwise put it on its
             // actual edge.
-            if pairs.iter().any(|&(result, value)| {
-                _observed(body, &at_of, where_, block.at, result) || _observed(body, &at_of, where_, block.at, value)
-            }) {
+            // A copy goes where it runs least: on an edge leaving a loop, not
+            // in the predecessor, which runs every trip.
+            let leaves = rare_exit(where_, block.at);
+            if leaves
+                || pairs.iter().any(|&(result, value)| {
+                    _observed(body, &at_of, where_, block.at, result)
+                        || _observed(body, &at_of, where_, block.at, value)
+                })
+            {
                 match split.entry((where_, block.at)).or_insert_with(|| Split::Pairs(Vec::new())) {
                     Split::Pairs(existing) => existing.extend(pairs.iter().copied()),
                     Split::Selected(_) => unreachable!("eliminated only splits pairs"),
@@ -440,6 +456,20 @@ fn _defined_in(
     block.insns.iter().filter(|one| one.defines.contains(&value)).count() == 1
 }
 
+/// The move of an immediate into `value` where it is `block`'s one definition
+/// of it and nothing reads it there: a constant a phi takes from its
+/// predecessor.
+fn _constant_made_in(
+    block: &LirBlock,
+    value: u32,
+) -> Option<Semantics> {
+    let mut defining = block.insns.iter().filter(|one| one.defines.contains(&value));
+    let (Some(one), None) = (defining.next(), defining.next()) else { return None };
+    let what = one.what.as_ref()?;
+    let ([Loc::Held(into)], [Loc::Imm(_)]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
+    (what.op == Operation::Move && into.value == value && one.uses.is_empty()).then(|| what.clone())
+}
+
 /// One instruction defining the phi's result where it defined its own.
 fn _renamed(
     one: &Arc<Insn>,
@@ -669,6 +699,14 @@ pub fn _split_edges(
 ) -> Result<LirBody, String> {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut made: IndexMap<(i64, i64), LirBlock> = IndexMap::default();
+    // The constants moved to their edges: the block they were made in and the
+    // register they were made into.
+    let mut moved: BTreeSet<(i64, u32)> = BTreeSet::new();
+    let read_by_phis = _read_once(body);
+    let depths = crate::analysis::intervals::depths_shared(body);
+    let rare_exit = |from: i64, into: i64| {
+        depths.get(&from) > depths.get(&into) && body.odds.chance(from, &at_of[&from].succ, into) < 0.25
+    };
     let mut landing: IndexMap<(i64, i64), i64> = IndexMap::default();
     let mut edges: Vec<(&(i64, i64), &Split)> = split.iter().collect();
     edges.sort_by_key(|(key, _)| **key);
@@ -690,14 +728,27 @@ pub fn _split_edges(
             (false, Split::Pairs(pairs)) => pairs
                 .iter()
                 .map(|&(a, b)| {
-                    let mut copy = (*_made(
-                        beside,
-                        at,
-                        move_of(Held { value: a, width: widths[&a] }, Held { value: b, width: widths[&a] }),
-                        vec![a],
-                        vec![b],
-                    ))
-                    .clone();
+                    // A constant the predecessor made for this phi alone is
+                    // made on the edge instead: once, not
+                    // every trip.
+                    let constant = (read_by_phis.get(&b).copied() == Some(1) && rare_exit(where_, into))
+                        .then(|| _constant_made_in(at_of[&where_], b))
+                        .flatten();
+                    let mut copy = match constant {
+                        Some(what) => {
+                            moved.insert((where_, b));
+                            let into = Loc::Held(Held { value: a, width: widths[&a] });
+                            (*_made(beside, at, Semantics { dests: vec![into], ..what }, vec![a], vec![])).clone()
+                        }
+                        None => (*_made(
+                            beside,
+                            at,
+                            move_of(Held { value: a, width: widths[&a] }, Held { value: b, width: widths[&a] }),
+                            vec![a],
+                            vec![b],
+                        ))
+                        .clone(),
+                    };
                     copy.group = Some(number);
                     Arc::new(copy)
                 })
@@ -726,6 +777,7 @@ pub fn _split_edges(
         let mut insns: Vec<Arc<Insn>> =
             _before_the_terminator(block, copies.get(&block.at).map_or(&[][..], Vec::as_slice))
                 .iter()
+                .filter(|one| !one.defines.iter().any(|value| moved.contains(&(block.at, *value))))
                 .map(|one| _retargeted(one, &landing, block.at))
                 .collect();
         let last = block.insns.last();
