@@ -123,6 +123,8 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         ("B$SLEP", 4),
         ("B$SOND", 6),
         ("B$DRAW", 2),
+        ("B$VARP", 4),
+        ("B$SADD", 2),
         ("B$SDAT", 2),
         ("B$STIM", 2),
         ("B$FDAT", 0),

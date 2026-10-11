@@ -5667,6 +5667,9 @@ impl Compiler {
             if intrinsic.is_some_and(|one| one.lowering == Lowering::FormatField) {
                 return self.format_field(arguments);
             }
+            if intrinsic.is_some_and(|one| one.lowering == Lowering::VarptrString) {
+                return self.varptr_string(arguments);
+            }
             let runtime = intrinsic.and_then(|intrinsic| match intrinsic.lowering {
                 Lowering::RuntimeString(callee) => Some(callee),
                 Lowering::Character => Some("B$FCHR"),
@@ -6790,6 +6793,34 @@ impl Compiler {
         Ok(())
     }
 
+    /// VARPTR$: B$VARP(address, type) makes the string of the variable's type byte and its address.
+    fn varptr_string(
+        &mut self,
+        arguments: &[Expr],
+    ) -> Result<Operand, SemanticError> {
+        let (place, type_id) = self.destination(&arguments[0])?;
+        let code = match type_id {
+            INTEGER => 2,
+            STRING => 3,
+            SINGLE => 4,
+            DOUBLE => 8,
+            LONG => 0x14,
+            _ => return self.fail("VARPTR$ takes a variable of a simple type"),
+        };
+        let pointer = self.far_address(place, type_id);
+        let word = if self.options.one_space() { integer_type(self.options.near(), true) } else { INTEGER };
+        let address = self.value(word);
+        self.emit("pointer_offset", vec![address], vec![Operand::Value(pointer)]);
+        let result_type = self.pointer_type(STRING);
+        let result = self.value(result_type);
+        self.emit_runtime_call(
+            "B$VARP",
+            vec![result],
+            vec![Operand::Value(address), Operand::Constant(INTEGER, Number::Integer(code))],
+        );
+        Ok(Operand::Value(result))
+    }
+
     fn builtin(
         &mut self,
         name: &str,
@@ -6975,6 +7006,19 @@ impl Compiler {
                 vec![Operand::Value(pointer)],
             );
             return Ok(Some((Operand::Value(result), result_type)));
+        }
+        if intrinsic.lowering == Lowering::VarptrString {
+            let result = self.varptr_string(arguments)?;
+            let result_type = self.pointer_type(STRING);
+            return Ok(Some((result, result_type)));
+        }
+        if intrinsic.lowering == Lowering::StringAddress {
+            // B$SADD(descriptor): where the characters are.
+            let descriptor = self.string_descriptor(&arguments[0])?;
+            let word = if self.options.one_space() { integer_type(self.options.near(), true) } else { INTEGER };
+            let result = self.value(word);
+            self.emit_runtime_call("B$SADD", vec![result], vec![descriptor]);
+            return Ok(Some((Operand::Value(result), word)));
         }
         if matches!(intrinsic.lowering, Lowering::Abs | Lowering::Sqrt) {
             let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;

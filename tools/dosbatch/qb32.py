@@ -205,8 +205,9 @@ BUDGET_INSTRUCTIONS = 12_000_000_000
 
 
 def virtual_conf(rate: int) -> str:
-    conf = dosbatch.CONF.replace("cycles=max", f"virtual time=true\nvirtual time rate={rate}")
-    assert conf != dosbatch.CONF
+    """dosbatch.CONF on virtual time at `rate` guest instructions a millisecond."""
+    conf = re.sub(r"virtual time rate=\d+", f"virtual time rate={rate}", dosbatch.CONF)
+    assert "virtual time=true" in conf, "dosbatch.CONF is not on virtual time"
     return conf
 
 

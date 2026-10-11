@@ -8,6 +8,7 @@
    full. */
 #include "device.h"
 #include "nhstutil.h"
+#include "varptr.h"
 #include "rtinit.h"
 
 enum {
@@ -45,7 +46,7 @@ static char next_command(Player *p)
 {
     char c;
 
-    while (p->at < p->end && *p->at == ' ')
+    while (p->at < p->end && (*p->at == ' ' || *p->at == ';'))
         p->at++;
     if (p->at == p->end)
         return 0;
@@ -64,6 +65,10 @@ static long number(Player *p)
         value = (value < 0 ? 0 : value) * 10 + (*p->at++ - '0');
         if (value > 30000)
             illegal();
+    }
+    if (value < 0 && p->at < p->end && *p->at == '=') {
+        p->at++;
+        value = varptr_integer(&p->at, p->end);
     }
     return value;
 }
@@ -228,6 +233,9 @@ static int named_note(Player *p, char letter)
     return note;
 }
 
+/* How many strings are being executed by X. */
+static int depth;
+
 static void run(Player *p)
 {
     char command;
@@ -289,6 +297,21 @@ static void run(Player *p)
         case 'M':
             style(p);
             break;
+        case 'X': {
+            /* the commands of a string variable, then on with these */
+            const SD *text = varptr_string(&p->at, p->end);
+            const char *at = p->at, *end = p->end;
+
+            if (++depth > 16)
+                illegal();
+            p->at = text->ptr;
+            p->end = text->ptr + text->len;
+            run(p);
+            p->at = at;
+            p->end = end;
+            depth--;
+            break;
+        }
         default:
             illegal();
         }
@@ -305,6 +328,7 @@ static Player player = {0, 0, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NOR
 void B_SPLY(SD *commands)
 {
 
+    depth = 0;
     player.at = commands->ptr;
     player.end = commands->ptr + commands->len;
     run(&player);
