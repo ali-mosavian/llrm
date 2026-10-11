@@ -32,7 +32,12 @@ use crate::profit::OperationCosts;
 /// the exits (`exitsink`), and an inner recurrence's exit value carried
 /// round the loop outside (`rewound`). Which counters the loop keeps is
 /// `lsr`'s.
-pub struct IndVars;
+pub struct IndVars {
+    /// Rewrite a counted exit's affine values as numbers. Off before the
+    /// header copy: a number is a `mov` where the counter's register already
+    /// holds it.
+    pub exit_values: bool,
+}
 
 impl FunctionPass for IndVars {
     fn name(&self) -> &'static str {
@@ -67,7 +72,7 @@ impl FunctionPass for IndVars {
         if folded {
             standing.changed();
         }
-        let valued = exit_values(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        let valued = self.exit_values && exit_values(unit.context, unit.layout, unit.function, &outer, &mut standing);
         if valued {
             standing.changed();
         }
@@ -149,9 +154,11 @@ fn exit_values(
                         let number = match term {
                             AffineOperand::Const(constant) => constant.n.clone(),
                             AffineOperand::Value(counter, _) => match counters.get(counter) {
-                                Some(Affine { start: AffineOperand::Const(start), step: AffineOperand::Const(step), .. }) => {
-                                    &start.n + &step.n * &trips
-                                }
+                                Some(Affine {
+                                    start: AffineOperand::Const(start),
+                                    step: AffineOperand::Const(step),
+                                    ..
+                                }) => &start.n + &step.n * &trips,
                                 _ => {
                                     complete = false;
                                     break;
@@ -161,7 +168,11 @@ fn exit_values(
                         total += coefficient * number;
                     }
                     if complete {
-                        let at = function.instruction(phi).operands.chunks(2).position(|pair| pair[1] == Operand::Block(from));
+                        let at = function
+                            .instruction(phi)
+                            .operands
+                            .chunks(2)
+                            .position(|pair| pair[1] == Operand::Block(from));
                         found.push((phi, at, total, width));
                     }
                 }
@@ -171,7 +182,15 @@ fn exit_values(
     for (phi, at, total, width) in found {
         let Some(at) = at else { continue };
         let constant = counting::constant(context, &total, width);
-        function.set_operand(phi, 2 * at, constant);
+        if function.instruction(phi).operands.len() == 2 {
+            // An exit phi of one arm is its number wherever it is read.
+            let result = function.instruction(phi).result.expect("a phi's value");
+            function.replace_all_uses_with(result, constant);
+            function.set_operands(phi, Vec::new());
+            function.erase(phi).expect("a phi nothing reads");
+        } else {
+            function.set_operand(phi, 2 * at, constant);
+        }
         changed = true;
     }
     changed

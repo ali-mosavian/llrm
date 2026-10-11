@@ -37,8 +37,7 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch,
-    window,
+    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -300,7 +299,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(gvn::Gvn),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
-        Box::new(indvars::IndVars),
+        Box::new(indvars::IndVars { exit_values: false }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size() }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
@@ -437,7 +436,7 @@ pub fn recorded(
         manager.add(algebraic::Algebraic { size: false });
         // A counted exit's values are numbers where the copy made its test
         // the one that leaves.
-        manager.add(indvars::IndVars);
+        manager.add(indvars::IndVars { exit_values: true });
         manager.add(dead::Dead);
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
