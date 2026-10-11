@@ -65,10 +65,10 @@ pub fn without_frame_register(
                     Loc::Mem(cell) if is_frame(cell.through, pointer) && !cell.in_frame() => return false,
                     Loc::Address(address)
                         if is_frame(address.through, pointer)
-                            && address.addr.as_ref().is_none_or(|addr| {
-                                addr.space != crate::model::ir::Space::Frame
-                                    && addr.space != crate::model::ir::Space::Literal
-                            }) =>
+                            && address
+                                .addr
+                                .as_ref()
+                                .is_none_or(|addr| addr.space != crate::model::ir::Space::Frame) =>
                     {
                         return false;
                     }

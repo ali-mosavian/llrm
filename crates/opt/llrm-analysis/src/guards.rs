@@ -457,6 +457,51 @@ pub fn implies(
     false
 }
 
+/// Whether `guard` proves the signed `left predicate right` where the two read
+/// the same values at other constants: `n > 2` proves `1 < n - 1`, as LLVM's
+/// isKnownPredicate compares the sides' difference. Exact only where no side
+/// wraps, which the caller checks of the asked sides (an `nsw` chain); each
+/// guard side is a value or a number, so none of its constant came through a
+/// sum.
+pub fn implies_at_offset(
+    guard: &Guard,
+    predicate: IntPredicate,
+    left: &Scev,
+    right: &Scev,
+) -> bool {
+    // `a < b` or `a <= b` as `(a, b, strict)`.
+    let ordered = |predicate: IntPredicate, left: &Scev, right: &Scev| match predicate {
+        IntPredicate::Slt => Some((left.clone(), right.clone(), true)),
+        IntPredicate::Sle => Some((left.clone(), right.clone(), false)),
+        IntPredicate::Sgt => Some((right.clone(), left.clone(), true)),
+        IntPredicate::Sge => Some((right.clone(), left.clone(), false)),
+        _ => None,
+    };
+    let pure = |one: &Scev| one.terms.is_empty() || one.constant == BigInt::from(0);
+    if !pure(&guard.left) || !pure(&guard.right) {
+        return false;
+    }
+    let (Some((given_a, given_b, given_strict)), Some((asked_a, asked_b, asked_strict))) =
+        (ordered(guard.predicate, &guard.left, &guard.right), ordered(predicate, left, right))
+    else {
+        return false;
+    };
+    if given_a.terms != asked_a.terms || given_b.terms != asked_b.terms || given_a.width != asked_a.width {
+        return false;
+    }
+    let width = given_a.width;
+    let signed = |n: &BigInt| {
+        let modulus = BigInt::from(1) << width;
+        let low = ((n % &modulus) + &modulus) % &modulus;
+        if low >= (BigInt::from(1) << (width - 1)) { low - modulus } else { low }
+    };
+    // `a < b` is `terms(a) - terms(b) + (ca - cb) + 1 <= 0`; the same terms
+    // on both sides, the guard's constant is the lesser.
+    let reach =
+        |a: &Scev, b: &Scev, strict: bool| signed(&a.constant) - signed(&b.constant) + BigInt::from(u8::from(strict));
+    reach(&asked_a, &asked_b, asked_strict) <= reach(&given_a, &given_b, given_strict)
+}
+
 /// Whether `strong` holding of two sides makes `weak` hold of them.
 fn _stronger(
     strong: IntPredicate,

@@ -39,10 +39,10 @@ fn loaded(body: &LirBody) -> Mem {
     sources.find_map(|source| if let Loc::Mem(cell) = source { Some(cell.clone()) } else { None }).expect("a load")
 }
 
-/// An indexed frame cell as isel and addressforms spell it, `[bp+si-30]`:
-/// through BP, with a literal displacement.
+/// An indexed frame cell as isel spells it, `[bp+si-30]`: a frame cell,
+/// through BP, with an index.
 fn indexed_frame_cell() -> Mem {
-    let addr = Addr { segment: (RegId::SS).iced(), ..Addr::new(Space::Literal, -30) };
+    let addr = Addr::new(Space::Frame, -30);
     Mem { through: RegId::BP, disp_width: 2, index: Some(Held { value: 2, width: 2 }), ..Mem::new(Some(addr), 2) }
 }
 
