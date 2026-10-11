@@ -236,7 +236,7 @@ FUNCTION BenchJpegFixed&
     OPEN "PHOTO.JPG" FOR BINARY AS #1
     inFile = 1
     fileLeft = LOF(1)
-    IF Next16% <> &HFFD8 THEN
+    IF NextByte% <> 255 OR NextByte% <> 216 THEN
         PRINT "not a JPEG"
         BenchJpegFixed& = 0
         EXIT FUNCTION

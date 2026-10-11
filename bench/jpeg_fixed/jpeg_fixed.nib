@@ -187,7 +187,7 @@ fn convert_file(file: &mut io.File, out: &mut io.File) -> i32:
     let mut interval: i32 = 0
     let mut scanned: i32 = 0
     let mut comps: i32 = 0
-    if next16(file) != 0xFFD8:
+    if next_byte(file) != 255 || next_byte(file) != 216:
         print("not a JPEG")
         return 0
     while scanned == 0 && bad == 0:

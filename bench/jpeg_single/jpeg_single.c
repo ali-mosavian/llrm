@@ -182,7 +182,7 @@ long bench_jpeg_single(void)
         message("PHOTO.JPG not found\r\n");
         return 0;
     }
-    if (next16() != 0xFFD8) {
+    if (next() != 0xFF || next() != 0xD8) {
         message("not a JPEG\r\n");
         return 0;
     }

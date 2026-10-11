@@ -1,0 +1,50 @@
+reason = "new benches: baseline JPEG to BMP"
+blessed = "2026-10-11"
+
+[bas.O2]
+code_bytes = 5162
+data_bytes = 29635
+bss_bytes = 0
+kernel_ms = 538.1782
+
+[bas.Os]
+code_bytes = 4880
+data_bytes = 29635
+bss_bytes = 0
+kernel_ms = 542.2904
+
+[c.O2]
+code_bytes = 3160
+data_bytes = 634
+bss_bytes = 15849
+kernel_ms = 308.3813
+
+[c.Os]
+code_bytes = 2907
+data_bytes = 634
+bss_bytes = 15849
+kernel_ms = 310.1465
+
+[nib.O2]
+code_bytes = 6303
+data_bytes = 17198
+bss_bytes = 0
+kernel_ms = 392.1257
+
+[nib.Os]
+code_bytes = 5885
+data_bytes = 17198
+bss_bytes = 0
+kernel_ms = 399.1851
+
+[pds71.O2]
+code_bytes = 6139
+data_bytes = 1257
+bss_bytes = 3718
+kernel_ms = 2091.4251
+
+[vbdos.O2]
+code_bytes = 6083
+data_bytes = 1305
+bss_bytes = 3718
+kernel_ms = 2708.6233
