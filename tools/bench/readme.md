@@ -12,7 +12,7 @@ Each variant is built (`-fno-inline-functions`, so the kernel stays a call), run
 The kernel is `bench.toml`'s `[region]`: found by name in the linker map (C, BASIC), or for Nib, which
 publishes no function, as the one function `main` calls from its own segment.
 
-The counts are deterministic: no clock, no DOSBox cycle setting. A count above its baseline fails; one
+The counts are deterministic: no clock, no DOSBox cycle setting. Beside them the run prices the same instruction stream by the 486's clocks (vsgcc's table, `crates/target/llrm-x86-m32/vsgcc/harness.py`, shared with the m32 comparison): `clocks` in `--json`, and a line per benchmark when benchmarks are named on the command line. Reported, not gated or blessed: a change that trades instructions for fewer clocks is judged by it. A count above its baseline fails; one
 below fails too, until it is blessed, so the baseline only ratchets. `--bless` needs `--reason`, which
 lands in the file.
 

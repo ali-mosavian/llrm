@@ -203,7 +203,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     if got != want:
         return {"error": f"prints {got}, want {want}"}
     data, bss = sizes.data_bytes(obj)
-    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
 
 
 def references_available() -> bool:
@@ -571,6 +571,16 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     return problems
 
 
+def clock_lines(measured: dict, selected: list[str]) -> list[str]:
+    """The 486 clocks of each selected benchmark's kernel beside its counts. Reported, not gated: the counts ratchet, and
+    a change that trades instructions for fewer clocks is judged by these."""
+    lines = []
+    for (name, language, opt), got in sorted(measured.items()):
+        if name in selected and language in (*LANGUAGES, *BASIC_LANGUAGES) and "clocks" in got:
+            lines.append(f"{name} {language} -{opt}: {got['clocks']} clocks, {got['instructions']} instructions, {got['memory_operands']} memory operands")
+    return lines
+
+
 def geomean(values: list[float]) -> float:
     return math.exp(sum(map(math.log, values)) / len(values))
 
@@ -635,6 +645,8 @@ def main() -> int:
         return 0
     problems = judge(measured, args.select, args.opt)
     print(*standing(measured, args.select, args.opt), sep="\n")
+    if args.select:
+        print(*clock_lines(measured, args.select), sep="\n")
     for one in problems:
         print("FAIL", one)
     print(f"{len(measured)} measurements: {len(problems)} problems")
