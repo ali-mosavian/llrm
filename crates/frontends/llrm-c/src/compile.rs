@@ -511,7 +511,10 @@ mod tests {
         // The assembly is laid out in columns: its words are what is compared.
         let runtime = |name: &str| {
             let text = std::fs::read_to_string(root.join("runtime").join(name)).unwrap();
-            text.lines().map(|line| line.split_whitespace().collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n")
+            text.lines()
+                .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         assert!(
             runtime("shared/dos/m16/os.asm").contains(&format!("public {}", check.limit))

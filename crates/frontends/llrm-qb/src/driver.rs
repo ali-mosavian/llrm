@@ -69,7 +69,8 @@ pub struct Frontend {
     /// The most bytes the target's data segment holds: its description's, set
     /// by the CLI that bound the target.
     pub segment_bytes: Option<usize>,
-    /// The bytes of the target's near and far pointer, from its description (0: the 16-bit target's).
+    /// The bytes of the target's near and far pointer, from its description (0:
+    /// the 16-bit target's).
     pub near_bytes: usize,
     pub far_bytes: usize,
     pub includes: Vec<PathBuf>,
@@ -223,7 +224,10 @@ pub fn decoded(
     // Where an error is handled the routine raises it, as the checks the
     // frontend writes do.
     program.promises.checked = checked || handles;
-    program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(program.runtime.value(), if near_bytes == 0 { 2 } else { near_bytes });
+    program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(
+        program.runtime.value(),
+        if near_bytes == 0 { 2 } else { near_bytes },
+    );
     program.promises.routines = llrm_core::abi::runtime::semantics::routines();
     program.promises.nounwind = llrm_core::abi::runtime::CONTRACTS
         .iter()
@@ -235,9 +239,10 @@ pub fn decoded(
     Ok(program)
 }
 
-/// The program's runtime calls made as the target calls any function it has not marked: the target's
-/// own convention (`native_cc`, its description's `cc`), the caller popping, the first argument the last pushed. The other runtimes keep their
-/// stack ABI, which the Microsoft routines fix.
+/// The program's runtime calls made as the target calls any function it has not
+/// marked: the target's own convention (`native_cc`, its description's `cc`),
+/// the caller popping, the first argument the last pushed. The other runtimes
+/// keep their stack ABI, which the Microsoft routines fix.
 pub fn natively_called(
     program: &mut model::Program,
     native_cc: Option<&str>,

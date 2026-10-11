@@ -387,8 +387,9 @@ pub fn compile_with_array_order(
     compile_with_options(module, module_name, dialect, runtime, &Options { row_major, ..Options::default() })
 }
 
-/// Where an array descriptor keeps what, byte by byte: QB's AD (inc/array.inc) where a near pointer is two bytes, llrm's
-/// flat one, with whole pointers and no selector, where it is a dword.
+/// Where an array descriptor keeps what, byte by byte: QB's AD (inc/array.inc)
+/// where a near pointer is two bytes, llrm's flat one, with whole pointers and
+/// no selector, where it is a dword.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct AdLayout {
     /// The data pointer, or the data's offset.
@@ -403,18 +404,20 @@ pub(super) struct AdLayout {
     pub element: usize,
     /// The data address already less every lower bound's elements.
     pub origin: usize,
-    /// The first dimension record: a word of count and a word of lower bound each.
+    /// The first dimension record: a word of count and a word of lower bound
+    /// each.
     pub header: usize,
-    /// The bytes of a word: of the element's size, and of each count and lower bound. 2 in real mode, a pointer's
-    /// where there is one space.
+    /// The bytes of a word: of the element's size, and of each count and lower
+    /// bound. 2 in real mode, a pointer's where there is one space.
     pub word: usize,
 }
 
 impl AdLayout {
     pub(super) fn of(options: &Options) -> Self {
         if options.one_space() {
-            // A C struct of whole words: the pointer, the size in bytes, the rank and features bytes, then the
-            // element size, the origin and the dimension records, each a word.
+            // A C struct of whole words: the pointer, the size in bytes, the
+            // rank and features bytes, then the element size, the
+            // origin and the dimension records, each a word.
             let word = options.near();
             Self {
                 data: 0,
@@ -436,7 +439,8 @@ impl AdLayout {
         2 * self.word
     }
 
-    /// Where dimension record `record` keeps its element count, and its lower bound.
+    /// Where dimension record `record` keeps its element count, and its lower
+    /// bound.
     pub(super) fn count(
         &self,
         record: usize,
@@ -493,8 +497,9 @@ pub struct Options {
     /// The most bytes the target's data segment holds, which the near-data and
     /// frame budgets are: none where there are no segments, and no budget.
     pub segment_bytes: Option<usize>,
-    /// The bytes of the target's near and of its far pointer, from its description; 0 for either is the
-    /// 16-bit target's (2 and 4). A far one as wide as the near one is the same space: a flat target.
+    /// The bytes of the target's near and of its far pointer, from its
+    /// description; 0 for either is the 16-bit target's (2 and 4). A far
+    /// one as wide as the near one is the same space: a flat target.
     pub near_bytes: usize,
     pub far_bytes: usize,
     /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
@@ -505,12 +510,20 @@ pub struct Options {
 impl Options {
     /// The bytes of a near pointer.
     pub fn near(&self) -> usize {
-        if self.near_bytes == 0 { 2 } else { self.near_bytes }
+        if self.near_bytes == 0 {
+            2
+        } else {
+            self.near_bytes
+        }
     }
 
     /// The bytes of a far pointer.
     pub fn far(&self) -> usize {
-        if self.far_bytes == 0 { 4 } else { self.far_bytes }
+        if self.far_bytes == 0 {
+            4
+        } else {
+            self.far_bytes
+        }
     }
 
     /// Whether far pointers are near ones: the target has one address space.
@@ -665,8 +678,10 @@ fn built_from(
                 return compiler.fail("array parameters cannot be BYVAL");
             }
             let value_type = if is_array {
-                let descriptor = compiler
-                    .opaque_type(format!("{} descriptor", parameter.declaration.name), AdLayout::of(&compiler.options).bytes(UNSPECIFIED_ARRAY_RANK));
+                let descriptor = compiler.opaque_type(
+                    format!("{} descriptor", parameter.declaration.name),
+                    AdLayout::of(&compiler.options).bytes(UNSPECIFIED_ARRAY_RANK),
+                );
                 compiler.pointer_type(descriptor)
             } else if parameter.segmented {
                 compiler.far_pointer_type(parameter_type)
@@ -1250,7 +1265,11 @@ fn event_traps(module: &Module) -> Result<Module, SemanticError> {
         return Ok(module.clone());
     }
     let mut module = module.clone();
-    let span = module.statements.iter().find_map(|one| matches!(one, Statement::Runtime { name, .. } if name == "EVENT").then(|| one.span())).unwrap_or(Span { line: 0, start: 0, end: 0 });
+    let span = module
+        .statements
+        .iter()
+        .find_map(|one| matches!(one, Statement::Runtime { name, .. } if name == "EVENT").then(|| one.span()))
+        .unwrap_or(Span { line: 0, start: 0, end: 0 });
     rewrite(&mut module.statements, &labels, !labels.is_empty());
     if labels.is_empty() {
         return Ok(module);
@@ -1275,30 +1294,38 @@ fn event_traps(module: &Module) -> Result<Module, SemanticError> {
             }
         })
         .collect();
-    module.procedures.push(Procedure {
-        name: EVENT_DISPATCHER.into(),
-        alias: None,
-        cdecl: false,
-        kind: ProcedureKind::Sub,
-        parameters: Vec::new(),
-        result: None,
-        body,
-        declaration: false,
-        is_static: false,
-        exported: false,
-        private: false,
-        module_scope: true,
-        span,
-    });
+    module
+        .procedures
+        .push(
+            Procedure {
+                name: EVENT_DISPATCHER.into(),
+                alias: None,
+                cdecl: false,
+                kind: ProcedureKind::Sub,
+                parameters: Vec::new(),
+                result: None,
+                body,
+                declaration: false,
+                is_static: false,
+                exported: false,
+                private: false,
+                module_scope: true,
+                span,
+            },
+        );
     // The handlers are GOSUB targets, so that they become procedures.
     for label in &labels {
         for _ in 0..2 {
-            module.statements.push(Statement::Call {
-                name: "GOSUB".into(),
-                arguments: vec![Expr::Name(label.clone(), span)],
-                explicit: false,
-                span,
-            });
+            module
+                .statements
+                .push(
+                    Statement::Call {
+                        name: "GOSUB".into(),
+                        arguments: vec![Expr::Name(label.clone(), span)],
+                        explicit: false,
+                        span,
+                    },
+                );
         }
     }
     Ok(module)
@@ -1571,8 +1598,10 @@ impl Compiler {
         runtime: &str,
         options: Options,
     ) -> Self {
-        // A string is its descriptor, whose size is the runtime's (4 bytes where a near runtime keeps QB's).
-        let string_bytes = llrm_qbruntime::semantics::descriptor(runtime, options.near()).map_or(4, |one| one.size as usize);
+        // A string is its descriptor, whose size is the runtime's (4 bytes
+        // where a near runtime keeps QB's).
+        let string_bytes =
+            llrm_qbruntime::semantics::descriptor(runtime, options.near()).map_or(4, |one| one.size as usize);
         let types = vec![
             scalar(VOID, "void", "void", 0, None, "none"),
             scalar(INTEGER, "integer", "integer", 2, Some(true), "none"),
@@ -2847,7 +2876,8 @@ impl Compiler {
             self.debug_held(held, &source, span, type_id, 0);
         }
         let descriptor_place = if array_element.is_some() {
-            let descriptor_type = self.opaque_type(format!("{} descriptor", declaration.name), self.ad().bytes(bounds.len()));
+            let descriptor_type =
+                self.opaque_type(format!("{} descriptor", declaration.name), self.ad().bytes(bounds.len()));
             let descriptor_extent = self.width(descriptor_type);
             let local_descriptor = matches!(storage, "local" | "parameter");
             let (descriptor_offset, descriptor_storage, descriptor_symbol) = if local_descriptor {
@@ -2996,7 +3026,8 @@ impl Compiler {
         for (record, (low, high)) in records.iter().enumerate() {
             let count = (high - low + 1) as u64;
             bytes[layout.count(record)..layout.count(record) + word].copy_from_slice(&count.to_le_bytes()[..word]);
-            bytes[layout.lower(record)..layout.lower(record) + word].copy_from_slice(&(*low as i64 as u64).to_le_bytes()[..word]);
+            bytes[layout.lower(record)..layout.lower(record) + word]
+                .copy_from_slice(&(*low as i64 as u64).to_le_bytes()[..word]);
         }
         // B$DDIM's bias: the element number of the lower bounds.
         let mut lower_linear = None;
@@ -3015,7 +3046,8 @@ impl Compiler {
             bytes,
             readonly: true,
             relocations: vec![
-                // A whole pointer where the target has one space, else an offset and a selector.
+                // A whole pointer where the target has one space, else an
+                // offset and a selector.
                 DataRelocation {
                     at: layout.data,
                     target: data_symbol,
@@ -3025,7 +3057,12 @@ impl Compiler {
                 // AD_oAdjusted is biased so generic array code can add source
                 // subscripts directly. QB's one-based six-byte DYNARR record
                 // has data at +6 but AD_oAdjusted at +0; TOUCH adds 1*6.
-                DataRelocation { at: layout.origin, target: data_symbol, addend: adjusted_offset as isize, address: "near" },
+                DataRelocation {
+                    at: layout.origin,
+                    target: data_symbol,
+                    addend: adjusted_offset as isize,
+                    address: "near",
+                },
             ],
             linkage: "internal",
             address: "near",
@@ -3745,7 +3782,8 @@ impl Compiler {
                         let [Expr::Name(device, _), number, Expr::Name(verb, _), id] = arguments.as_slice() else {
                             return self.fail("an event statement has its device, number, verb and handler");
                         };
-                        let device = EVENT_DEVICES.iter().find(|(one, _)| one == device).map(|(_, code)| *code).unwrap_or(0);
+                        let device =
+                            EVENT_DEVICES.iter().find(|(one, _)| one == device).map(|(_, code)| *code).unwrap_or(0);
                         let device = Operand::Constant(INTEGER, Number::Integer(device));
                         let number = if matches!(number, Expr::Omitted(_)) {
                             Operand::Constant(LONG, Number::Integer(0))
@@ -3894,7 +3932,8 @@ impl Compiler {
                     }
                     "LINE" => {
                         if !(4..=7).contains(&arguments.len()) {
-                            return self.fail("LINE expects two coordinate pairs, an optional color, B or BF, and a style");
+                            return self
+                                .fail("LINE expects two coordinate pairs, an optional color, B or BF, and a style");
                         }
                         self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
                         self.graphics_coordinate(2, &arguments[2], &arguments[3])?;
@@ -3943,14 +3982,20 @@ impl Compiler {
                             return self.fail(format!("{name} expects coordinates and optional color"));
                         }
                         self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
-                        // Without a colour the point takes the foreground (PSET) or the background (PRESET), which is
-                        // the runtime's to know: B$PSET and B$PRST, not a colour made up here.
+                        // Without a colour the point takes the foreground
+                        // (PSET) or the background (PRESET), which is
+                        // the runtime's to know: B$PSET and B$PRST, not a
+                        // colour made up here.
                         if let Some(argument) = arguments.get(2) {
                             let (value, type_id) = self.expression(argument)?;
                             let color = self.convert(value, type_id, INTEGER)?;
                             self.emit_runtime_call("B$PSTC", Vec::new(), vec![color]);
                         } else {
-                            self.emit_runtime_call(if name == "PRESET" { "B$PRST" } else { "B$PSET" }, Vec::new(), Vec::new());
+                            self.emit_runtime_call(
+                                if name == "PRESET" { "B$PRST" } else { "B$PSET" },
+                                Vec::new(),
+                                Vec::new(),
+                            );
                         }
                     }
                     "GET" | "PUT" => {
@@ -5039,8 +5084,9 @@ impl Compiler {
         if indices.is_empty() {
             return self.fail("array element requires at least one subscript");
         }
-        // Where there is one space every array is one run of memory a pointer reaches: its origin pointer and
-        // the subscripts' offset, as wide as an element number may be.
+        // Where there is one space every array is one run of memory a pointer
+        // reaches: its origin pointer and the subscripts' offset, as
+        // wide as an element number may be.
         let address = if self.options.one_space() { "flat" } else { address };
         let pointer_type = match address {
             "near" | "flat" => self.pointer_type(element),
@@ -5083,7 +5129,8 @@ impl Compiler {
             // distinct descriptor/address policy when that dialect option is
             // introduced rather than changing this default-memory-model rule.
             let layout = self.ad();
-            let selector = self.descriptor_field(descriptor, layout.selector.expect("a far array has a selector"), INTEGER);
+            let selector =
+                self.descriptor_field(descriptor, layout.selector.expect("a far array has a selector"), INTEGER);
             let adjusted = self.descriptor_field(descriptor, layout.origin, INTEGER);
             let offset = self.value(INTEGER);
             self.emit("add", vec![offset], vec![Operand::Value(adjusted), Operand::Value(bytes)]);
@@ -5112,7 +5159,8 @@ impl Compiler {
         subscripts: &[Operand],
         offset_type: u32,
     ) -> Result<(), SemanticError> {
-        // Without elements the selector is 0, or the data pointer where there is none.
+        // Without elements the selector is 0, or the data pointer where there
+        // is none.
         let layout = self.ad();
         let (probe, probe_type) = match layout.selector {
             Some(at) => (self.descriptor_field(descriptor, at, INTEGER), INTEGER),
@@ -5263,7 +5311,8 @@ impl Compiler {
         value
     }
 
-    /// A count, a length or a position as the program and the runtime pass it: a constant of the word type.
+    /// A count, a length or a position as the program and the runtime pass it:
+    /// a constant of the word type.
     fn count(
         &self,
         value: i64,
@@ -5271,15 +5320,25 @@ impl Compiler {
         Operand::Constant(self.word_type(), Number::Integer(value))
     }
 
-    /// The largest count: BC's omitted MID$ length, a signed word's largest value.
+    /// The largest count: BC's omitted MID$ length, a signed word's largest
+    /// value.
     fn largest_count(&self) -> i64 {
         let bits = 8 * self.options.near() as u32;
-        if bits >= 64 { i64::MAX } else { (1i64 << (bits - 1)) - 1 }
+        if bits >= 64 {
+            i64::MAX
+        } else {
+            (1i64 << (bits - 1)) - 1
+        }
     }
 
-    /// The type of a descriptor's count, lower bound and element size: a signed word of the target.
+    /// The type of a descriptor's count, lower bound and element size: a signed
+    /// word of the target.
     fn word_type(&self) -> u32 {
-        if self.options.one_space() { integer_type(self.options.near(), true) } else { INTEGER }
+        if self.options.one_space() {
+            integer_type(self.options.near(), true)
+        } else {
+            INTEGER
+        }
     }
 
     /// Where an array descriptor keeps what.
@@ -5404,7 +5463,8 @@ impl Compiler {
         place: Operand,
     ) -> Operand {
         if let Operand::Indirect { base, offset: 0, .. } = &place {
-            // Where far pointers are near ones a 4-byte descriptor pointer is the near pointer.
+            // Where far pointers are near ones a 4-byte descriptor pointer is
+            // the near pointer.
             if !self.options.one_space()
                 && self
                     .values
@@ -5463,12 +5523,7 @@ impl Compiler {
             self.emit_runtime_call(
                 "B$ASSN",
                 Vec::new(),
-                vec![
-                    source,
-                    self.count(0),
-                    Operand::Value(destination),
-                    self.count(destination_width as i64),
-                ],
+                vec![source, self.count(0), Operand::Value(destination), self.count(destination_width as i64)],
             );
             self.filled(2, destination_width);
             return Ok(());
@@ -5535,13 +5590,7 @@ impl Compiler {
         self.emit_runtime_call(
             "B$SMID",
             Vec::new(),
-            vec![
-                Operand::Value(destination),
-                self.count(destination_width as i64),
-                source,
-                maximum,
-                start,
-            ],
+            vec![Operand::Value(destination), self.count(destination_width as i64), source, maximum, start],
         );
         Ok(())
     }
@@ -5590,8 +5639,10 @@ impl Compiler {
         Ok(Operand::Value(far))
     }
 
-    /// The descriptor of no string. Offset 0 of the 16-bit data segment holds zeros, so BC passes 0; where there
-    /// is one space, address 0 is whatever the machine keeps there, and the empty literal's descriptor stands in.
+    /// The descriptor of no string. Offset 0 of the 16-bit data segment holds
+    /// zeros, so BC passes 0; where there is one space, address 0 is
+    /// whatever the machine keeps there, and the empty literal's descriptor
+    /// stands in.
     fn null_descriptor(
         &mut self,
         span: Span,
@@ -5849,11 +5900,7 @@ impl Compiler {
         let address = self.far_address(place, type_id);
         let pointer_type = self.pointer_type(STRING);
         let result = self.value(pointer_type);
-        self.emit_runtime_call(
-            "B$LDFS",
-            vec![result],
-            vec![Operand::Value(address), self.count(width as i64)],
-        );
+        self.emit_runtime_call("B$LDFS", vec![result], vec![Operand::Value(address), self.count(width as i64)]);
         Ok(Operand::Value(result))
     }
 
@@ -6962,7 +7009,8 @@ impl Compiler {
         ) {
             let (place, type_id) = self.destination(&arguments[0])?;
             let pointer = self.far_address(place, type_id);
-            // One space: an address is as wide as a pointer, and the segment is always 0.
+            // One space: an address is as wide as a pointer, and the segment is
+            // always 0.
             let result_type = if self.options.one_space() && intrinsic.lowering == Lowering::PointerOffset {
                 integer_type(self.options.near(), true)
             } else {
@@ -7405,8 +7453,9 @@ impl Compiler {
         Ok(operands)
     }
 
-    /// A graphics coordinate pair, absolute or (`STEP(x)`) relative to the last point, as the first or second of the
-    /// statement. The runtime keeps the last point and takes the step from it.
+    /// A graphics coordinate pair, absolute or (`STEP(x)`) relative to the last
+    /// point, as the first or second of the statement. The runtime keeps
+    /// the last point and takes the step from it.
     fn graphics_coordinate(
         &mut self,
         which: u8,
@@ -7450,8 +7499,9 @@ impl Compiler {
     /// target can see which device it names.
     /// An address or port, as QB's I4toU2 (qb/ir/exio.asm) takes it: coerced
     /// to LONG, then its low word, if the high word is all zeros or all ones.
-    /// An address a program names to PEEK, POKE, BLOAD or BSAVE: the offset of a segment:offset pair, a word; where
-    /// there is one space the whole address, as wide as a pointer.
+    /// An address a program names to PEEK, POKE, BLOAD or BSAVE: the offset of
+    /// a segment:offset pair, a word; where there is one space the whole
+    /// address, as wide as a pointer.
     fn address_word(
         &mut self,
         expression: &Expr,
@@ -7793,12 +7843,7 @@ impl Compiler {
             self.emit_runtime_call(
                 "B$ASSN",
                 Vec::new(),
-                vec![
-                    source,
-                    self.count(0),
-                    Operand::Value(target),
-                    self.count(width as i64),
-                ],
+                vec![source, self.count(0), Operand::Value(target), self.count(width as i64)],
             );
             self.filled(2, width);
         }

@@ -262,7 +262,8 @@ impl Compiler {
 
         let call = self.options.checked_arrays.then(|| self.error_block());
         if let Some(call) = call {
-            // The selector, or the data pointer where there is none: 0 without elements.
+            // The selector, or the data pointer where there is none: 0 without
+            // elements.
             let layout = self.ad();
             let (data, data_type) = match layout.selector {
                 Some(at) => (self.descriptor_field(descriptor, at, INTEGER), INTEGER),
@@ -325,7 +326,8 @@ impl Compiler {
             _ => {
                 let entry = self.computed("sub", INTEGER, vec![rank, dimension.clone()]);
                 let record = self.ad().record() as i64;
-                let bytes = self.computed("mul", INTEGER, vec![entry, Operand::Constant(INTEGER, Number::Integer(record))]);
+                let bytes =
+                    self.computed("mul", INTEGER, vec![entry, Operand::Constant(INTEGER, Number::Integer(record))]);
                 let pointer_type = self
                     .values
                     .iter()
@@ -341,13 +343,7 @@ impl Compiler {
                     let read = self.computed(
                         "load",
                         word,
-                        vec![Operand::Indirect {
-                            base: at,
-                            offset,
-                            type_id: word,
-                            volatile: false,
-                            inbounds: false,
-                        }],
+                        vec![Operand::Indirect { base: at, offset, type_id: word, volatile: false, inbounds: false }],
                     );
                     if let Some(field) = slot {
                         self.tag_last(Tag::DescriptorField { descriptor, field });

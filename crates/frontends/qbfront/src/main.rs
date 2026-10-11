@@ -31,11 +31,7 @@ fn main() -> ExitCode {
             let width =
                 |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
             let near = width(spaces.near).map_or(0, |bytes| bytes as usize);
-            (
-                bound.target.layout().segment_bytes(),
-                near,
-                width(spaces.far).map_or(near, |bytes| bytes as usize),
-            )
+            (bound.target.layout().segment_bytes(), near, width(spaces.far).map_or(near, |bytes| bytes as usize))
         }
         Err(why) => {
             eprintln!("qbfront: {why}");
