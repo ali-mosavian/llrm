@@ -514,7 +514,7 @@ static const GdOps packed2_ops = {
 };
 
 /* Box fills: one routine for each kind of mode, chosen once by gd_fill_select with the operation patched into the box
-   loop (fill.asm), and run on a box that has already been clipped to the screen.  The geometry is worked out once for
+   loop (gdfill.asm), and run on a box that has already been clipped to the screen.  The geometry is worked out once for
    the box; each row is a straight run of `op mem, imm`, with the byte at each end of a row patched where the pixels in
    it are not all the box's.  An edge byte is old & keep ^ flip, which every operation is: set keeps nothing and flips
    to the pattern; and keeps the pattern; or keeps what the pattern lacks and flips to it; xor keeps all and flips. */
@@ -771,7 +771,7 @@ static void (*const dots[KINDS][2])(const GdFill *fill, unsigned x, unsigned y) 
     { packed2_dot, packed2_dot }
 };
 
-/* Lines: the loops of fill.asm, one for each kind of mode, with Bresenham's terms here.  They draw in the colour, as set. */
+/* Lines: the loops of gdline.asm, one for each kind of mode, with Bresenham's terms here.  They draw in the colour, as set. */
 static void line_terms(FillLine *line, const GdFill *fill, unsigned dx, unsigned dy)
 {
     int major = (int)(dx > dy ? dx : dy), minor = (int)(dx > dy ? dy : dx);
@@ -874,6 +874,7 @@ void gd_fill_select(GdFill *fill, unsigned color, unsigned operation)
     fill->keep = operation == 0 ? 0 : operation == 1 ? byte : operation == 2 ? ~byte & 0xFF : 0xFF;
     fill->flip = operation == 1 ? 0 : byte;
     dev_fill_select(operation, byte);
+    dev_line_select(operation, byte);
 }
 
 /* GET and PUT.  A sub-byte plane (a CGA mode's pixels, an EGA plane's bits) is a run of bits that starts `shift` bits into

@@ -16,7 +16,7 @@ typedef struct BlockOp {
     unsigned count;
     unsigned value;
 } BlockOp;
-/* A box fill (fill.asm): `rows` rows from `dst`, each a run of `middle` bytes of the operation and pattern B$FSEL last set,
+/* A box fill (gdfill.asm): `rows` rows from `dst`, each a run of `middle` bytes of the operation and pattern B$FSEL last set,
    with an edge byte before and after it if `edges` (new = old & and ^ xor, `left` and `right` hold the and low, the xor
    next); a row starts steps[0] after the one before when that is even, steps[1] when odd, `phase` (in bytes) naming
    the first. */
@@ -24,7 +24,7 @@ typedef struct FillBox {
     void QB_FAR *dst;
     unsigned rows, middle, steps[2], phase, edges, left, right;
 } FillBox;
-/* A line (fill.asm), set with the colour B$FSEL last had: `count` pixels from `dst` (the byte holding the first), Bresenham's decision
+/* A line (gdline.asm), set with the colour B$FLSEL last had: `count` pixels from `dst` (the byte holding the first), Bresenham's decision
    value and its two increments (`minor4`, `step4`), `x_major` 1 if the longer side is x, 0 if y, 2 for a vertical line; `style` the 16 bits
    of the line style, the next pixel's the high bit.  `ystep` is the bytes to the next row, down or up (CGA: 80 and -80, the banks
    toggling).  The first pixel's mask in its byte is `pmask` (a bit for the planar modes; the bits of the pixel for CGA, `bpp` wide, and
@@ -35,7 +35,7 @@ typedef struct FillLine {
     int decision, minor4, step4, ystep;
     unsigned style, x_major, pmask, bpp, color;
 } FillLine;
-/* One plane's pass of GET or PUT over `rows` rows (fill.asm): the screen's first byte, the array's run of this plane in the first row, and
+/* One plane's pass of GET or PUT over `rows` rows (gdxfer.asm): the screen's first byte, the array's run of this plane in the first row, and
    for each row `sbytes` screen bytes against `abytes` array bytes, the bits of one starting `shift` bits into the other (a screen byte
    takes the array bit 0 at its bit `shift`); `first` and `last` are the masks of the first and last screen byte, and for GET the
    mask of the last array byte.  Row to row the array run moves `stride` bytes and the screen `step`, or by the CGA banks if `bank`. */
@@ -47,7 +47,7 @@ typedef struct FillXfer {
     unsigned bank;
 } FillXfer;
 /* A scan for the first pixel (or planar byte of pixels) that is of colour `c1` or `c2` (`flags` bit 0) or of neither (bit 0 clear), from
-   `at` forwards or, `flags` bit 1, backwards, over `count` of them (fill.asm).  Planar: `first` and `last` are the masks of the pixels
+   `at` forwards or, `flags` bit 1, backwards, over `count` of them (gdscan.asm).  Planar: `first` and `last` are the masks of the pixels
    to take in the first and last byte, `middle` in the others, and for CGA (`flags` bit 2 for 2-bit pixels) `c1` and `c2` are the byte
    with the colour in every pixel and the masks have a bit for each pixel (its low bit if 2).  Out: `found` the index of the one (a byte, and
    `hits` the pixels of it), -1 if none.  CGA: `at` is the row, and the scan runs over the pixels from `x` to `to` (it makes the
@@ -60,7 +60,7 @@ typedef struct FillScan {
     int found;
     unsigned hits, x, to, left, right, limit;
 } FillScan;
-/* The eight points of a circle step for the planar or CGA modes (fill.asm): the screen's base, the offsets of the four rows (cy-v, cy+v, cy-z,
+/* The eight points of a circle step for the planar or CGA modes (gdcirc.asm): the screen's base, the offsets of the four rows (cy-v, cy+v, cy-z,
    cy+z) and of the four columns' bytes (cx+u, cx-u, cx+w, cx-w) with the mask of the pixel in each, and the colour (CGA: in every pixel
    of a byte); the points are (u,-v) (w,-z) (-w,-z) (-u,-v) (-u,v) (-w,z) (w,z) (u,v). */
 typedef struct FillOct {
@@ -81,6 +81,7 @@ extern void dev_interrupts_on(void);
 extern void dev_move(BlockOp *op);
 extern void dev_fill(BlockOp *op);
 extern void dev_fill_select(unsigned operation, unsigned byte);
+extern void dev_line_select(unsigned operation, unsigned byte);
 extern void dev_fill_box(FillBox *box);
 extern void dev_line_linear(FillLine *line);
 extern void dev_line_packed(FillLine *line);
@@ -109,6 +110,7 @@ extern void dev_sincos(const double *angle, double *sine, double *cosine);
 #pragma aux dev_move "B$MOVE"
 #pragma aux dev_fill "B$FILL"
 #pragma aux dev_fill_select "B$FSEL"
+#pragma aux dev_line_select "B$FLSEL"
 #pragma aux dev_fill_box "B$FBOX"
 #pragma aux dev_line_linear "B$FLIN"
 #pragma aux dev_line_packed "B$FLIC"

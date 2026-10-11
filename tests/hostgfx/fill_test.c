@@ -29,6 +29,7 @@ void dev_fill(BlockOp *op)
 /* fill.asm in C: the run of `op mem, imm`, and the edge bytes. */
 static unsigned fill_operation, fill_byte;
 void dev_fill_select(unsigned operation, unsigned byte) { fill_operation = operation; fill_byte = byte; }
+void dev_line_select(unsigned operation, unsigned byte) { (void)operation; (void)byte; }
 static unsigned apply(unsigned old) { return fill_operation == 0 ? fill_byte : fill_operation == 1 ? old & fill_byte : fill_operation == 2 ? old | fill_byte : old ^ fill_byte; }
 void dev_fill_box(FillBox *box)
 {

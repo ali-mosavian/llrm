@@ -1,6 +1,6 @@
 """The box fills of the graphics screen under DOSBox, m16 and m32: every mode (SCREEN 13, 1, 2, 9, 7) and operation (set, and, or,
 xor) leaves the pixels of a random box, a few dots and a line as the operation says and the others alone.  No BASIC statement fills with and, or or xor, and
-the fills patch the opcode of their loop (fill.asm), so this is the one test of those patches."""
+the fills patch the opcode of their loop (gdfill.asm), so this is the one test of those patches."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import qb32  # noqa: E402
 import qbruntime  # noqa: E402
 
 SOURCE = dosbatch.ROOT / "tests" / "qbgfx" / "fill_ops.c"
-NEEDED = ("gfxdev", "fill", "bios", "ports", "block")
+NEEDED = ("gfxdev", "gdfill", "gdline", "gdxfer", "gdscan", "gdcirc", "bios", "ports", "block")
 
 
 def compile_c(target: str, include: Path, platform: Path, obj: Path) -> None:

@@ -51,6 +51,7 @@ void dev_line_linear(FillLine *line);
 void dev_line_packed(FillLine *line);
 void dev_line_planar(FillLine *line);
 void dev_fill_select(unsigned operation, unsigned byte);
+void dev_line_select(unsigned operation, unsigned byte);
 void dev_fill_box(FillBox *box);
 void dev_int10(Regs *regs);
 void dev_int10r(Regs *regs);
