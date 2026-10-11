@@ -59,7 +59,7 @@ COUNTERS = ("instructions", "memory_operands")
 # Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
 SIZES = ("code_bytes", "data_bytes", "bss_bytes")
 # DOSBox at a fixed 75000 cycles per millisecond: RDTSC cycles / 75000 is milliseconds, the same on any host.
-TIMING_CONF = dosbatch.CONF.replace("cycles=max", "cycles=fixed 75000")
+TIMING_CONF = dosbatch.CONF.replace(dosbatch.CYCLES, "cycles=fixed 75000")
 CYCLES_PER_MS = 75_000
 BCC = Path(os.environ.get("TOOLCHAINS", Path.home() / "work/other/d32x/toolchains")) / "bcpp31"
 TURBO = Path(os.environ.get("TURBO", Path.home() / "scratch/toolchains"))

@@ -34,7 +34,10 @@ QB45 = Path(os.environ.get("QB45_DIR", Path.home() / "work/42-labs/mini-qb/dosbo
 PDS71 = Path(os.environ.get("PDS71_DIR", Path.home() / "work/other/d32x/toolchains/pds71"))
 VBDOS = Path(os.environ.get("VBDOS_DIR", Path.home() / "work/other/d32x/toolchains/vbdos"))
 DOSBOX = Path(os.environ.get("DOSBOX_BIN", BIN / "dosbox-x"))
-CONF = """\
+# A fixed number of cycles per emulated millisecond: a job's `:ms` budget is a fixed amount of work, not what the host
+# gets done in that time (with `cycles=max` a loaded host timed out programs that fit).
+CYCLES = "virtual time=true\nvirtual time rate=20000"
+CONF = f"""\
 [sdl]
 priority=higher,normal
 output=surface
@@ -46,7 +49,7 @@ quit warning=false
 [cpu]
 core=normal
 cputype=pentium
-cycles=max
+{CYCLES}
 [dos]
 xms=true
 ems=true
