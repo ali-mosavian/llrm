@@ -555,3 +555,16 @@ def test_the_steps_run_the_binaries_cargo_linked_before_them_not_the_path_cargo_
     # A second snapshot (another group of the gate) replaces the links.
     (release / "llrm-c").chmod(0o755)
     assert (gate.snapshot_binaries(release, tmp_path / "gate-bins") / "llrm-c").read_text() == "relinked"
+
+
+def test_a_steps_cpu_time_is_its_process_trees_and_not_the_waiting_in_it(tmp_path):
+    """The fast gate went from 170-460 s to 865-1,816 s and the wall clock could not say whether the steps grew or the host (load 52
+    on 32 cores) did. A step's CPU is user+sys of its whole tree: a child's spin counts, a sleep does not."""
+    env = {**__import__("os").environ}
+    spin = 'python3 -c "import time; t = time.process_time()\nwhile time.process_time() - t < 0.6: pass" & wait'
+    _, code, wall, cpu = gate.run_step("spin", spin, tmp_path, env)
+    assert code == 0 and cpu >= 0.5, f"a child spun 0.6 s of CPU and the step read {cpu:.2f} s"
+    _, code, wall, cpu = gate.run_step("sleep", "sleep 0.6", tmp_path, env)
+    assert wall >= 0.6 and cpu < 0.3, f"a step that only waited read {cpu:.2f} s of CPU"
+    table = gate.step_table({"a": (0, 5.0, 2.0), "b": (0, 9.0, 8.0), "skipped": (77, 0, 0)})
+    assert table.splitlines()[1].startswith("[steps] b ") and "skipped" not in table and table.endswith("10 cpu")
