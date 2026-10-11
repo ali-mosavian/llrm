@@ -3116,6 +3116,10 @@ struct Outcome {
     forced: usize,
 }
 
+/// `_emitted`'s prices: one instruction, one memory operand.
+const INSTRUCTION: f64 = 1.0;
+const MEMORY_OPERAND: f64 = 1.0;
+
 /// What a body costs to run: its instructions and memory operands, each
 /// weighted by how often its block runs. Alternatives differ only in what the
 /// allocator added, so this is the cost of that.
@@ -3135,7 +3139,7 @@ fn _emitted(body: &LirBody) -> f64 {
                 .filter_map(|one| one.what.as_ref())
                 .map(|what| what.dests.iter().chain(&what.sources).filter(|place| matches!(place, Loc::Mem(_))).count())
                 .sum();
-            busy.block(block.at) * (printed.count() + memory) as f64
+            busy.block(block.at) * (printed.count() as f64 * INSTRUCTION + memory as f64 * MEMORY_OPERAND)
         })
         .sum()
 }
@@ -3462,12 +3466,12 @@ fn _scoped_foldable_indexes(
     spiller::foldable_indexes(body, &indexes)
 }
 
-/// What holding a value in a register saves at one reference, in reloads: the
-/// instruction that names it takes the memory operand where `_foldable`, and
-/// `_emitted` prices an instruction and a memory operand at one each, so a fold
-/// removes the half of a reload that is the instruction.
+/// What holding a value in a register saves at one reference, in reloads: a
+/// reload is an instruction and a memory operand at `_emitted`'s prices, and an
+/// instruction that names the value takes the memory operand (`_foldable`), so
+/// a fold saves the instruction.
 pub(crate) fn _held_saving(one: &Insn) -> f64 {
-    if _foldable(one) { 0.5 } else { 1.0 }
+    if _foldable(one) { INSTRUCTION / (INSTRUCTION + MEMORY_OPERAND) } else { 1.0 }
 }
 
 /// Whether `one` can name a spilled value as a memory operand: the forms
