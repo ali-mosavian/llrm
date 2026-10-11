@@ -1,4 +1,4 @@
-"""STEP, LINE -(x, y) and the LINE style, against what BC makes of them: tests/qbrt/lastpoint.bas marks the last point after each
+"""STEP, LINE -(x, y) and the LINE style, against what BC makes of them: tests/qbrt/lastpoint_*.bas (one per gap: STEP, style, omitted first point) mark the last point after each
 statement and writes a checksum of each screen row to L.TXT, and the llrm build's file must be BC's.
 
 Before the fix the front end took STEP's operands as absolute and refused the style and the missing first point."""
@@ -16,19 +16,20 @@ import dosbatch  # noqa: E402
 import qbruntime  # noqa: E402
 
 pytestmark = pytest.mark.slow_dos
-SOURCE = dosbatch.ROOT / "tests" / "qbrt" / "lastpoint.bas"
+SOURCES = sorted((dosbatch.ROOT / "tests" / "qbrt").glob("lastpoint_*.bas"))
 
 
-def test_last_point_and_style_are_bcs(tmp_path):
+@pytest.mark.parametrize("source", SOURCES, ids=lambda path: path.stem)
+def test_graphics_statement_matches_bc(tmp_path, source: Path):
     if not dosbatch.QB45.is_dir():
         pytest.skip("QB45_DIR is unavailable")
     obj = tmp_path / "lp.llrm.obj"
-    assert (error := qbruntime.compile_basic(SOURCE, obj, "llrm")) is None, error
+    assert (error := qbruntime.compile_basic(source, obj, "llrm")) is None, error
     archive, _ = qbruntime.build(tmp_path / "archive")
-    source = tmp_path / "LASTPT.BAS"
-    source.write_bytes(SOURCE.read_text().replace("\n", "\r\n").encode())
+    reference = tmp_path / "LASTPT.BAS"
+    reference.write_bytes(source.read_text().replace("\n", "\r\n").encode())
     jobs = [
-        dosbatch.Job("BCREF", "bas", source, screen=True, budget_ms=30000),
+        dosbatch.Job("BCREF", "bas", reference, screen=True, budget_ms=30000),
         dosbatch.Job("LLRM", "obj", obj, runtime="llrmqb", runtime_file=archive, screen=True, budget_ms=30000),
     ]
     texts = []

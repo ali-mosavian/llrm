@@ -1,3 +1,4 @@
+' PSET PRESET LINE CIRCLE GET PUT with STEP, whole and fractional: the last point after each
 DEFINT A-Z
 DECLARE SUB Mark ()
 DIM SHARED hue
@@ -11,8 +12,6 @@ PRESET (30, 40): Mark
 PRESET STEP(-3, 2): Mark
 LINE (50, 60)-(70, 80), 3: Mark
 LINE (50, 60)-STEP(10, 12), 3: Mark
-LINE -(100, 100), 3: Mark
-LINE -STEP(5, 7), 3: Mark
 LINE (10, 10)-(20, 25), 3, B: Mark
 LINE (10, 10)-(20, 25), 3, BF: Mark
 LINE STEP(5, 5)-STEP(5, 5), 3: Mark
@@ -40,12 +39,6 @@ PSET STEP(1, 1), 1: Mark
 PSET (11, 11), 1: PSET STEP(2.5, 2.5), 1: Mark
 PSET STEP(3.5, 3.5), 1: Mark
 PSET STEP(-1.5, -2.5), 1: Mark
-LINE (0, 0)-(31, 0), 4, , &HF0F0: LINE (0, 2)-(31, 2), 4, , &H8888
-LINE (0, 4)-(31, 4), 4, , &H1234
-LINE (0, 6)-(9, 9), 4, B, &HAAAA
-LINE (40, 6)-(49, 9), 4, BF, &H5555
-LINE (100, 120)-(110, 130), , B: Mark
-LINE -(120, 140), 5: Mark
 FOR y = 0 TO 199
     sum& = 0
     FOR x = 0 TO 319: sum& = (sum& * 31 + POINT(x, y) + 1) AND 16777215: NEXT
