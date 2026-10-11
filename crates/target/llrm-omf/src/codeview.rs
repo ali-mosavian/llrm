@@ -84,6 +84,7 @@ fn typed(one: &model::Type) -> Result<Option<Type>, Error> {
         M::Procedure { result, parameters, .. } => Type::Procedure { result: *result, parameters: parameters.clone() },
         M::Enum { name, .. } => return refused(format!("enum {name} is not written yet")),
         M::Typedef { name, .. } => return refused(format!("typedef {name} is not written yet")),
+        M::Described { .. } => return refused("a described array is the standard form's"),
         M::Qualified { .. } => return refused("const and volatile are not written yet"),
     }))
 }

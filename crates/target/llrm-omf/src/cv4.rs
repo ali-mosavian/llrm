@@ -249,6 +249,7 @@ impl Types<'_> {
             }
             Type::Scalar(scalar) | Type::Basic { scalar, .. } => self.primitive(scalar)?,
             Type::Typedef { target, .. } => self.of(target)?,
+            Type::Described { descriptor, .. } => self.of(descriptor)?,
             Type::Pointer { target, bytes, reach } => {
                 // A pointer to a procedure that is far to reach is to one that
                 // is called far.
@@ -409,6 +410,7 @@ impl Types<'_> {
         loop {
             match self.info.types.get(id)? {
                 Type::Typedef { target, .. } => id = *target,
+                Type::Described { descriptor, .. } => id = *descriptor,
                 Type::Procedure { .. } => return Some(id),
                 _ => return None,
             }

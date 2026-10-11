@@ -137,6 +137,8 @@ impl Types<'_> {
             // Const and volatile are not in the records; a typedef is a name,
             // set by `names`.
             Type::Qualified { target, .. } | Type::Typedef { target, .. } => self.code(*target),
+            // BASIC's array is its descriptor, as a debugger reads it.
+            Type::Described { descriptor, .. } => self.code(*descriptor),
             one => {
                 let at = self.next;
                 self.next += 1;
@@ -171,6 +173,7 @@ impl Types<'_> {
         loop {
             match self.info.types.get(id)? {
                 Type::Typedef { target, .. } | Type::Qualified { target, .. } => id = *target,
+                Type::Described { descriptor, .. } => id = *descriptor,
                 Type::Procedure { .. } => return Some(id),
                 _ => return None,
             }
@@ -282,7 +285,11 @@ impl Types<'_> {
             Type::Enum { name, .. } => return refused(format!("enum {name} is not written yet")),
             Type::Reference(_) => return refused("a BASIC reference has no type here"),
             Type::FixedString(_) => return refused("a BASIC STRING * n has no type here"),
-            Type::Scalar(_) | Type::Basic { .. } | Type::Qualified { .. } | Type::Typedef { .. } => {
+            Type::Scalar(_)
+            | Type::Basic { .. }
+            | Type::Qualified { .. }
+            | Type::Typedef { .. }
+            | Type::Described { .. } => {
                 unreachable!("handled by `code`")
             }
         })
