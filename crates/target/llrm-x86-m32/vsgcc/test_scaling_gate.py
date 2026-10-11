@@ -777,3 +777,18 @@ def test_promote_places_phis_only_where_a_cell_is_live_and_keeps_to_the_cells_a_
     small, big = (own[label].get("mir promote", 0.0) - own["empty"].get("mir promote", 0.0) for label in ("n", "2n"))
     assert small > 5.0, f"premise: promote ran ({small:.1f} Minstr)"
     assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_the_counted_proofs_ask_the_congruences_of_the_body_once_not_once_for_each_proof(tmp_path):
+    """unrolled(15) and (31) at -O2 (a quicksort's recursion unrolled: 15 and 31 loops in one function): `analysis counted` proved each loop's
+    trips by asking `alias::congruences` of the WHOLE function (a fixed point over every instruction) at each proof, once for each loop of the
+    function: its own work read 2D/D = 6.7, 7.5 (11 / 72 / 541 Minstr at 7, 15, 31 loops), cubic in the loops. Asked once for the proofs of a
+    body it reads 2.9, 3.2. A step above 4.5 fails; a few Minstr of start-up are allowed."""
+    own = {}
+    for label, loops in (("empty", 0), ("d4", 15), ("d5", 31)):
+        source = tmp_path / f"unrolled_{label}.c"
+        source.write_text("" if loops == 0 else scaling.unrolled(loops))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("analysis counted", 0.0) - own["empty"].get("analysis counted", 0.0) for label in ("d4", "d5"))
+    assert small > 5.0, f"premise: counted ran ({small:.1f} Minstr)"
+    assert big <= 4.5 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
