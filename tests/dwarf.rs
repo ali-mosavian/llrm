@@ -986,3 +986,38 @@ fn nib_dwarf_in_omf_links_into_images_that_independent_readers_read() {
         assert!(text.contains(wanted), "no {wanted:?}:\n{text}");
     }
 }
+
+/// A 16-bit function is far by default (`retf`), its frame address `bp+6` in
+/// the body, so `add(int first, int second)` with `sum`, kept at `[bp-2]`,
+/// `[bp-4]` and `[bp-8]`, is `fbreg -8`, `-10` and `-14`. They were -6, -8 and
+/// -12, the near function's, and a debugger read `first` from the saved BP: the
+/// offsets dosbox-harness measured in a real run (Open Watcom's wdump is the
+/// reader).
+#[test]
+fn a_far_16_bit_functions_cells_are_found_from_its_longer_frame_address() {
+    let wdump = std::env::var_os("WDUMP")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("dos/devtools/dev/c/watcom/binl/wdump")))
+        .filter(|path| path.exists());
+    let jwlink = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("jwlink");
+    let (Some(wdump), true) = (wdump, jwlink.exists()) else {
+        skipped("needs Open Watcom's wdump (WDUMP) and jwlink beside llrm");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");
+    let made = compile(&source, &["-m16", "-O0", "-gdwarf-2", "-fobject-format=omf"], &dir.join("known.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    Command::new(&jwlink)
+        .args(["format", "dos", "debug", "dwarf", "file", "known.obj", "name", "known.exe"])
+        .args(["option", "quiet,start=_main,nodefaultlibs"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    let said = Command::new(wdump).args(["-q", "-d", "-Dx"]).arg(dir.join("known.exe")).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    for wanted in ["Loc expr: fbreg -8", "Loc expr: fbreg -10", "Loc expr: fbreg -14"] {
+        assert!(text.contains(wanted), "no {wanted:?}:\n{text}");
+    }
+}
