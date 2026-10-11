@@ -164,11 +164,13 @@ impl Options {
     }
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
-    /// code, and the larger inline threshold.
+    /// code, and the larger inline threshold; the copy budget is LLVM's -O3
+    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's.
     pub fn speed() -> Self {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
+            limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
         }
     }
