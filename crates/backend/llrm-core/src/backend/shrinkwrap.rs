@@ -198,8 +198,23 @@ pub fn wrapped(
         if returns.iter().all(|&at| from_entry.dominates(home, at)) {
             continue;
         }
-        if closed_at(home, stack_addressed || piece == Piece::Frame).is_some() {
-            homes.insert(piece, home);
+        // Where a return is reached around the home, the set-up goes up to the
+        // nearest block above it that every such return is below: LLVM's
+        // ShrinkWrap moves the save point up the dominators until it reaches
+        // the restores' dominator. A guard that skips the loop a register is
+        // used in joins the returns after it, and kept that register at the
+        // entry.
+        let strict = stack_addressed || piece == Piece::Frame;
+        let mut candidate = Some(home);
+        while let Some(at) = candidate {
+            if returns.iter().all(|&ret| from_entry.dominates(at, ret)) {
+                break;
+            }
+            if closed_at(at, strict).is_some() {
+                homes.insert(piece, at);
+                break;
+            }
+            candidate = idom.get(&at).copied().flatten().filter(|&above| above != body.entry);
         }
     }
     // The frame register addresses the cells and the arguments from the frame's

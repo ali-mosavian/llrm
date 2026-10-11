@@ -320,3 +320,26 @@ fn test_a_counted_inner_loop_tests_its_stepped_counter_after_the_cleanup() {
         );
     assert!(stepped, "{text}");
 }
+
+/// A register only the loop uses was saved at the entry when the copy's guard
+/// skipped the loop and joined the returns after it: the early return
+/// (`hi - lo < 2`, most calls of recchop) paid `push ebp; push edi` and their
+/// pops. The save point goes up the dominators to the block every return it
+/// closes at is below: two registers at the entry, as with the copy off.
+#[test]
+fn test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return() {
+    let source = format!("{}/bench/recchop/recchop.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O1", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let function: Vec<&str> =
+        text.lines().map(str::trim).skip_while(|line| !line.starts_with("_chop proc")).skip(1).collect();
+    let entry =
+        function.iter().take_while(|line| !line.starts_with("jl ")).filter(|line| line.starts_with("push ")).count();
+    assert!(entry <= 2, "{entry} pushes before the early return\n{text}");
+}
