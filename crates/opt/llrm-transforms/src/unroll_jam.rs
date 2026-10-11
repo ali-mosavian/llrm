@@ -24,6 +24,7 @@ use llrm_analysis::dependence::{self, Access, Subscript};
 use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::{cfg, induction, memory};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
@@ -285,7 +286,7 @@ fn inner_is_invariant(
         }
         pending.push(Operand::Value(function.instruction(phi).result.expect("a phi's value")));
     }
-    let mut seen = BTreeSet::new();
+    let mut seen = IdSet::new();
     while let Some(operand) = pending.pop() {
         let Operand::Value(value) = operand else { continue };
         if !seen.insert(value) {
@@ -404,7 +405,7 @@ struct Addresses<'a> {
     unit: &'a memory::Unit<'a>,
     nest: &'a Nest,
     /// The counters of the two headers, as functions of the iteration number.
-    counters: BTreeMap<ValueId, Lin>,
+    counters: IdMap<ValueId, Lin>,
 }
 
 impl<'a> Addresses<'a> {
@@ -413,8 +414,8 @@ impl<'a> Addresses<'a> {
         nest: &'a Nest,
     ) -> Self {
         let function = unit.function;
-        let mut counters = BTreeMap::new();
-        let mut me = Self { unit, nest, counters: BTreeMap::new() };
+        let mut counters = IdMap::new();
+        let mut me = Self { unit, nest, counters: IdMap::new() };
         for (header, latch, outer) in [
             (nest.outer_header(), cfg::block(*nest.outer.latches.first().expect("one")), true),
             (nest.inner_header(), nest.inner_latch(), false),
@@ -655,7 +656,7 @@ fn apply(
     for copy in &copies {
         let hi_k = copy[&cfg::id(hi)];
         let li_k = copy[&cfg::id(li)];
-        let body_k: BTreeSet<BlockId> = nest.inner.body.iter().map(|at| copy[at]).collect();
+        let body_k: IdSet<BlockId> = nest.inner.body.iter().map(|at| copy[at]).collect();
         let entry_k = copy[&cfg::id(entry0)];
         let xi_k = copy[&cfg::id(nest.post[0])];
         // The work between the loops, ahead of the fused loop.

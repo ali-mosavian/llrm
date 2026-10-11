@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::{self, Loop};
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
@@ -277,11 +278,11 @@ pub fn chained(
         blocks[&loop_.header].succ.iter().copied().find(|to| loop_.body.contains(to)).expect("a successor in the loop");
 
     let mut labels: Vec<BTreeMap<i64, BlockId>> = Vec::new();
-    let mut copied: Vec<BTreeMap<ValueId, ValueId>> = Vec::new();
+    let mut copied: Vec<IdMap<ValueId, ValueId>> = Vec::new();
     let mut cloned = Vec::new();
     for copy in 0..copies {
         let map = originals.iter().map(|&at| (at, function.create_block(None))).collect::<BTreeMap<_, _>>();
-        let mut values = BTreeMap::new();
+        let mut values = IdMap::new();
         for &at in &originals {
             function.insert_block(map[&at], None)?;
             for inst in function.block(cfg::block(at)).instructions().to_vec() {
@@ -316,8 +317,8 @@ pub fn chained(
     }
     // `values[k]` reads copy k + 1 (k + 1 of 1..=copies); the header phis of
     // copy k + 1 are what copy k's latch supplied.
-    let mut phi_values: Vec<BTreeMap<ValueId, Operand>> = vec![BTreeMap::new(); copies];
-    let value = |phi_values: &Vec<BTreeMap<ValueId, Operand>>, original: Operand, copy: usize| match original {
+    let mut phi_values: Vec<IdMap<ValueId, Operand>> = vec![IdMap::new(); copies];
+    let value = |phi_values: &[IdMap<ValueId, Operand>], original: Operand, copy: usize| match original {
         Operand::Value(one) => match phi_values[copy].get(&one) {
             Some(&supplied) => supplied,
             None => Operand::Value(copied[copy].get(&one).copied().unwrap_or(one)),
