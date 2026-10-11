@@ -855,6 +855,20 @@ fn test_a_truncated_sum_with_an_extension_of_its_width_is_narrow() {
     );
 }
 
+/// ring's counter: `i + 1` computed in `int` is read twice (`(i + 1) * 3 - 7`
+/// and the counter's own step), so the wide sum stays for its other reader; the
+/// step is `add i16 %i, 1` all the same. Left cut from the wide sum, the
+/// counter's step was not a step, the sum's other reader was not reduced to `3
+/// * i - 4` through the single use it had, and the loop kept a `movsx`/`cmp` of
+/// its counter beside its work: +8.5% clocks at -O1.
+#[test]
+fn test_a_truncated_sum_with_a_constant_is_narrow_where_the_wide_sum_has_other_readers() {
+    let text = "define i32 @f(i16 %x) {\nb0:\n  %w = sext i16 %x to i32\n  %s = add nsw i32 %w, 1\n  %r = trunc i32 %s to i16\n  %m = mul i32 %s, 3\n  %e = sext i16 %r to i32\n  %t = add i32 %m, %e\n  ret i32 %t\n}\n";
+    let inputs = edges(16).iter().map(|&a| vec![a]).collect::<Vec<_>>();
+    let after = checked(text, &inputs);
+    assert!(after.contains("add i16 %x, 1"), "{after}");
+}
+
 /// A byte compared where the extension lives on for an address (grep's
 /// `c == '|'` before `class[c]`) stays wide: narrowed it grew grep by 24
 /// bytes. A counter's compare narrows whatever else reads the extension.

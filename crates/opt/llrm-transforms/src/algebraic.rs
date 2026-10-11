@@ -452,9 +452,10 @@ fn _narrowed_binary(
     inst: InstId,
 ) -> bool {
     let instruction = function.instruction(inst);
-    if instruction.opcode != Opcode::Cast(CastOp::Trunc) || !_single_use(function, instruction.operands[0]) {
+    if instruction.opcode != Opcode::Cast(CastOp::Trunc) {
         return false;
     }
+    let alone = _single_use(function, instruction.operands[0]);
     let narrow = instruction.ty;
     let Some(made) = _definition(function, instruction.operands[0]) else { return false };
     let Some((op, left, right, wide)) = _binary(context, function, made) else { return false };
@@ -474,6 +475,14 @@ fn _narrowed_binary(
     };
     let (a, b) = (source(function, left), source(function, right));
     if a.is_none() && b.is_none() {
+        return false;
+    }
+    // The wide sum has other readers and stays for them: the narrow one is made
+    // only where it needs no cut of its own, an extension of its width and
+    // a constant, so that a counter's step reads as one (`i + 1` in `int`, cut
+    // back to `short`).
+    let free = |known: &Option<Operand>, operand: Operand| known.is_some() || matches!(operand, Operand::Constant(_));
+    if !alone && !(free(&a, left) && free(&b, right)) {
         return false;
     }
     let mut cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
