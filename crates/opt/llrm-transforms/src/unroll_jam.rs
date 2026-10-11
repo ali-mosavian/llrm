@@ -583,10 +583,11 @@ fn one(
     params: &UnrollJam,
     refused: &mut BTreeSet<(i64, i64)>,
 ) -> Result<bool, String> {
-    let facts = analyses.fresh().get::<Registers>(unit.context, unit.layout, unit.function);
     let graph = cfg::graph(unit.function);
     let shape = cfg::Shape::of(unit.function);
     let mut chosen = None;
+    // Computed for the first nest there is: most functions have none.
+    let mut facts = None;
     for inner in &shape.loops {
         if shape.loops.iter().any(|other| other.header != inner.header && inner.body.is_superset(&other.body)) {
             continue;
@@ -603,15 +604,18 @@ fn one(
             continue;
         }
         let Some(nest) = nest_of(unit.function, &graph, outer, inner) else { continue };
+        if !inner_is_invariant(unit.function, &nest) {
+            refused.insert((outer.header, inner.header));
+            continue;
+        }
+        let facts =
+            facts.get_or_insert_with(|| analyses.fresh().get::<Registers>(unit.context, unit.layout, unit.function));
         let memory_unit = memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
-            .with_registers(&facts)
+            .with_registers(facts)
             .with_shape(&shape);
         let planned = (|| {
-            if !inner_is_invariant(unit.function, &nest) {
-                return None;
-            }
-            let trips = induction::trip_count(&memory_unit, outer, &facts)?.to_i64()?;
-            let inner_trips = induction::trip_count(&memory_unit, inner, &facts).and_then(|count| count.to_i64());
+            let trips = induction::trip_count(&memory_unit, outer, facts)?.to_i64()?;
+            let inner_trips = induction::trip_count(&memory_unit, inner, facts).and_then(|count| count.to_i64());
             let list = accesses(&memory_unit, &nest)?;
             if list.is_empty() {
                 return None;
