@@ -289,14 +289,23 @@ static void linear_move_rows(unsigned to, unsigned from, unsigned count)
     dev_move(&op);
 }
 
+/* A glyph row of 8 pixels, a nibble at a time: the 4 pixels of a nibble as 4 bytes, each 0xFF where the pixel is set. */
+static const u32 nibble_bytes[16] = {
+    0x00000000UL, 0xFF000000UL, 0x00FF0000UL, 0xFFFF0000UL, 0x0000FF00UL, 0xFF00FF00UL, 0x00FFFF00UL, 0xFFFFFF00UL,
+    0x000000FFUL, 0xFF0000FFUL, 0x00FF00FFUL, 0xFFFF00FFUL, 0x0000FFFFUL, 0xFF00FFFFUL, 0x00FFFFFFUL, 0xFFFFFFFFUL
+};
+
 static void linear_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, unsigned foreground)
 {
-    while (height--) {
-        Video *at = pixel_at(x, y++);
-        unsigned row = *bits++, bit;
+    u32 ink = (u32)(foreground & 0xFF) * 0x01010101UL;
+    volatile u32 QB_FAR *at = (volatile u32 QB_FAR *)pixel_at(x, y);
 
-        for (bit = 0x80; bit; bit >>= 1)
-            *at++ = row & bit ? (u8)foreground : 0;
+    while (height--) {
+        unsigned row = *bits++;
+
+        at[0] = nibble_bytes[row >> 4] & ink;
+        at[1] = nibble_bytes[row & 15] & ink;
+        at += 320 / 4;
     }
 }
 
@@ -427,7 +436,22 @@ static void packed_move_rows(unsigned to, unsigned from, unsigned count)
 {
     BlockOp op;
 
-    if (to < from) {
+    if (to < from && !((to ^ from) & 1)) {
+        /* a scroll by an even number of rows: the rows of each bank are one block of the bank */
+        unsigned bank, offset, n;
+
+        for (bank = 0; bank < 2; bank++) {
+            offset = (to ^ bank) & 1;
+            if (offset >= count)
+                continue;
+            n = (count - offset + 1) / 2;
+            op.dst = packed_row(to + offset);
+            op.src = packed_row(from + offset);
+            op.count = n * CGA_ROW_BYTES;
+            op.value = 0;
+            dev_move(&op);
+        }
+    } else if (to < from) {
         while (count--) {
             op.dst = packed_row(to++);
             op.src = packed_row(from++);
@@ -448,14 +472,29 @@ static void packed_move_rows(unsigned to, unsigned from, unsigned count)
     }
 }
 
+/* The 4 pixels of a nibble as 4 pixels of 2 bits, 11 where the pixel is set. */
+static const u8 nibble_pairs[16] = {
+    0x00, 0x03, 0x0C, 0x0F, 0x30, 0x33, 0x3C, 0x3F, 0xC0, 0xC3, 0xCC, 0xCF, 0xF0, 0xF3, 0xFC, 0xFF
+};
+
+/* A glyph of 8 pixels a row on the CGA screen: 2 bytes a row of 2-bit pixels, 1 of 1-bit ones, the even and the odd rows in their banks. */
 static void packed_glyph(unsigned x, unsigned y, const u8 QB_FAR *bits, unsigned height, unsigned foreground, unsigned depth)
 {
-    while (height--) {
-        unsigned row = *bits++, bit, at = x;
+    Video *at = packed_row(y) + (x * depth >> 3);
+    unsigned ink = depth == 2 ? (foreground & 3) * 0x55 : foreground & 1 ? 0xFF : 0, row;
 
-        for (bit = 0x80; bit; bit >>= 1)
-            packed_plot(at++, y, row & bit ? foreground : 0, 0, depth);
-        y++;
+    for (; height; height--, bits++, y++) {
+        row = *bits;
+        if (depth == 2) {
+            at[0] = nibble_pairs[row >> 4] & ink;
+            at[1] = nibble_pairs[row & 15] & ink;
+        } else {
+            at[0] = row & ink;
+        }
+        if (y & 1)
+            at += CGA_ROW_BYTES - CGA_ODD_ROWS;
+        else
+            at += CGA_ODD_ROWS;
     }
 }
 
