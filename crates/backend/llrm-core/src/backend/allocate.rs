@@ -2083,6 +2083,7 @@ fn _allocated(
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value_following(&body));
         let changes = before.as_ref().and_then(|before| ranges::changes(before, &body));
+        let earlier_live = Arc::clone(&facts.live);
         facts = Facts::of(
             &body,
             profile,
@@ -2131,7 +2132,16 @@ fn _allocated(
         });
         wanted = llrm_support::debug::timed("after wanted", || _wanted(&facts.hints, &fixed));
         claims = Claims::default();
-        union.refresh();
+        match &changes {
+            // Only the intervals of the values the rewrite named moved.
+            Some(changes) => {
+                union.refresh_among(&changes.touched, &*earlier_live, &*facts.live);
+                if llrm_support::env_set("LLRM_CHECK_HOLDERS") {
+                    union.check_index(&facts.live);
+                }
+            }
+            None => union.refresh(),
+        }
         fenced = fixed.keys().copied().chain(protected.iter().copied()).collect();
         let gone: Vec<u32> = r#where.keys().copied().filter(|one| !facts.live.contains_key(one)).collect();
         let clashing = llrm_support::debug::timed("after overlapping", || {

@@ -219,6 +219,53 @@ impl LiveUnion {
         self.asked.set(0);
     }
 
+    /// The intervals of `changed` moved from what `before` says to what `after`
+    /// does and no others did: the indexes kept stand for the rest. A holder
+    /// that is no longer live in `after` leaves the index.
+    pub fn refresh_among(
+        &mut self,
+        changed: &crate::support::hash::HashSet<u32>,
+        before: &impl crate::backend::live::Ranges,
+        after: &impl crate::backend::live::Ranges,
+    ) {
+        for held in self.registers.values_mut() {
+            let Some(index) = held.index.get_mut() else { continue };
+            for value in changed {
+                let Some(&at) = index.taken.get(value) else { continue };
+                index.remove(*value, before);
+                if after.range(*value).is_some() {
+                    index.add(*value, at, after);
+                }
+            }
+        }
+    }
+
+    /// Every index kept answers as the pairwise look does, for every holder.
+    pub fn check_index(
+        &self,
+        live: &impl crate::backend::live::Ranges,
+    ) {
+        for (register, held) in &self.registers {
+            let Some(index) = held.index.borrow().clone() else { continue };
+            for value in &held.holders {
+                let Some(one) = live.range(*value) else { continue };
+                let mut found = BTreeSet::new();
+                for segment in &one.segments {
+                    index.meeting(segment.start, segment.end, &mut found);
+                }
+                let by_index: BTreeSet<u32> =
+                    found.into_iter().filter_map(|at| index.by_taking.get(&at).copied()).collect();
+                let pairwise: BTreeSet<u32> = held
+                    .holders
+                    .iter()
+                    .copied()
+                    .filter(|other| live.range(*other).is_some_and(|found| found.overlaps(one)))
+                    .collect();
+                assert_eq!(by_index, pairwise, "{register:?}: the holders meeting value#{value} by the index kept");
+            }
+        }
+    }
+
     /// The holders of `register`, in the order they took it.
     pub fn holders(
         &self,
@@ -459,6 +506,41 @@ mod tests {
                     "{query:?} round {round}"
                 );
             }
+        }
+    }
+
+    /// A rewrite moves the intervals of the values it named and no others: the
+    /// index kept for 100 holders is updated for those, not built again, and
+    /// answers as the pairwise look does (the rebuild after every rewrite was
+    /// `regalloc evict` and `recolor`'s share of 4 G on `branches` at 800).
+    #[test]
+    fn test_an_index_kept_across_a_rewrite_moves_the_holders_that_moved_and_answers_as_the_pairwise_look_does() {
+        let mut before: IndexMap<u32, Interval> = IndexMap::default();
+        for value in 1..=100u32 {
+            let start = i64::from(value) * 10;
+            before.insert(value, interval(value, &[(start, start + 7)]));
+        }
+        let mut union = LiveUnion::new();
+        for value in 1..=100u32 {
+            union.add(RegId::AX, value, &before);
+        }
+        // Enough questions to have it indexed.
+        for k in 0..40 {
+            union.busy(&RegId::AX, &interval(0, &[(k * 30, k * 30 + 3)]), &before);
+        }
+        // 7 moves, 9 grows into 10's, 50 is gone.
+        let mut after = before.clone();
+        after.insert(7, interval(7, &[(500, 505)]));
+        after.insert(9, interval(9, &[(90, 112)]));
+        after.shift_remove(&50);
+        let changed: crate::support::hash::HashSet<u32> = [7, 9, 50].into_iter().collect();
+        union.refresh_among(&changed, &before, &after);
+        union.check_index(&after);
+        let holders = union.holders(&RegId::AX);
+        for k in 0..130 {
+            let one = interval(0, &[(k * 8, k * 8 + 1 + k % 7 * 5)]);
+            let found: Vec<u32> = union.meeting(&RegId::AX, &one, &after);
+            assert_eq!(found, pairwise(&holders, &after, &one), "query {k}");
         }
     }
 
