@@ -1350,6 +1350,8 @@ struct Facts {
     /// from it.
     scan: crate::backend::regclass::Scan,
     siblings: Siblings,
+    /// The values whose class moved since the facts these were carried from.
+    reclassed: Option<Vec<u32>>,
 }
 
 impl Facts {
@@ -1489,7 +1491,18 @@ impl Facts {
             }
             None => _copy_hints(body),
         });
-        Self { index, live, folds, masks, widths, confined, hints, scan, siblings }
+        // The values whose register class is not what it was: found from where
+        // they are named, and from what else is live and destroyed
+        // beside them.
+        let reclassed = prior.map(|(before, _, _)| {
+            confined
+                .iter()
+                .filter(|(value, class)| before.confined.get(*value) != Some(*class))
+                .map(|(value, _)| *value)
+                .chain(before.confined.keys().copied().filter(|value| !confined.contains_key(value)))
+                .collect::<Vec<u32>>()
+        });
+        Self { index, live, folds, masks, widths, confined, hints, scan, siblings, reclassed }
     }
 }
 
@@ -1508,6 +1521,74 @@ fn _overlapping(
         );
     }
     found
+}
+
+/// `_overlapping` of what a rewrite may have disturbed only: the values it
+/// named (their intervals and classes moved), and those held across a point it
+/// added that destroys their register. Values placed before it did not clash
+/// (a value is placed free of the others, and of every point), and nothing
+/// else moved, so a value that overlaps a changed one is looked at with it:
+/// each cluster of overlapping holders is judged as `_overlapping` judges the
+/// holders of a whole register, in the order they took it.
+fn _overlapping_after(
+    union: &LiveUnion,
+    r#where: &IndexMap<u32, RegId>,
+    facts: &Facts,
+    touched: &crate::support::hash::HashSet<u32>,
+    reclassed: &[u32],
+    added: &[Arc<Mask>],
+) -> BTreeSet<u32> {
+    let mut asked: IndexMap<RegId, BTreeSet<u32>> = IndexMap::default();
+    for value in touched.iter().chain(reclassed) {
+        if let Some(register) = r#where.get(value) {
+            asked.entry(_whole(*register)).or_default().insert(*value);
+        }
+    }
+    for mask in added {
+        let around = Interval::new(0, vec![ranges::Segment { start: mask.slot - 2, end: mask.slot + 3 }]);
+        for register in mask.before.iter().chain(&mask.during).chain(&mask.high) {
+            for value in union.meeting(register, &around, &facts.live) {
+                asked.entry(*register).or_default().insert(value);
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    for (register, seeds) in asked {
+        let mut cluster: BTreeSet<u32> = BTreeSet::new();
+        let mut work: Vec<u32> = seeds.into_iter().collect();
+        while let Some(value) = work.pop() {
+            if !cluster.insert(value) {
+                continue;
+            }
+            if let Some(mine) = facts.live.get(&value) {
+                work.extend(
+                    union.meeting(&register, mine, &facts.live).into_iter().filter(|other| !cluster.contains(other)),
+                );
+            }
+        }
+        let mut held: Vec<u32> = cluster.into_iter().collect();
+        union.in_taking_order(&register, &mut held);
+        let mut kept: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+        for value in &held {
+            let Some(mine) = facts.live.get(value) else { continue };
+            let width = facts.widths.get(value).copied().unwrap_or(4);
+            let outside = facts
+                .confined
+                .get(value)
+                .is_some_and(|class| !class.iter().any(|one| _whole(*one) == _whole(r#where[value])));
+            let meets = |kept: &std::collections::BTreeMap<i64, i64>| {
+                mine.segments
+                    .iter()
+                    .any(|seg| kept.range(..seg.end).next_back().is_some_and(|(_, end)| *end > seg.start))
+            };
+            if outside || meets(&kept) || _clobbered(mine, r#where[value], &facts.masks, width) {
+                out.insert(*value);
+            } else {
+                kept.extend(mine.segments.iter().map(|seg| (seg.start, seg.end)));
+            }
+        }
+    }
+    out
 }
 
 fn _overlapping_by_start(
@@ -2069,7 +2150,23 @@ fn _allocated(
         union.refresh();
         fenced = fixed.keys().copied().chain(protected.iter().copied()).collect();
         let gone: Vec<u32> = r#where.keys().copied().filter(|one| !facts.live.contains_key(one)).collect();
-        let clashing = llrm_support::debug::timed("after overlapping", || _overlapping(&union, &r#where, &facts));
+        let clashing = llrm_support::debug::timed("after overlapping", || {
+            match (&changes, facts.masks.added(), &facts.reclassed) {
+                (Some(changes), Some(added), Some(reclassed)) => {
+                    let found = _overlapping_after(&union, &r#where, &facts, &changes.touched, reclassed, added);
+                    if llrm_support::env_set("LLRM_CHECK_OVERLAPPING") {
+                        let whole = _overlapping(&union, &r#where, &facts);
+                        assert!(
+                            found == whole,
+                            "{}: the values a rewrite disturbed that share a register differ from those of the whole: {found:?} against {whole:?}",
+                            body.name
+                        );
+                    }
+                    found
+                }
+                _ => _overlapping(&union, &r#where, &facts),
+            }
+        });
         for one in gone.iter().chain(&clashing) {
             if let Some(register) = r#where.shift_remove(one) {
                 union.remove(_whole(register), *one, &facts.live);
@@ -2384,6 +2481,10 @@ pub struct Masks {
     /// walk them all.
     walked: std::cell::Cell<usize>,
     reaching: std::cell::OnceCell<crate::support::hash::HashMap<RegId, Reaching>>,
+    /// The points a rewrite added, where `after` made these from the ones
+    /// before it: what a register held across the rewrite may now be
+    /// destroyed at.
+    added: Option<Vec<Arc<Mask>>>,
 }
 
 /// Where one register is destroyed, sorted: before the point's own reads
@@ -2402,6 +2503,7 @@ impl Masks {
             owners: Vec::new(),
             walked: std::cell::Cell::new(0),
             reaching: std::cell::OnceCell::new(),
+            added: None,
         }
     }
 
@@ -2459,7 +2561,13 @@ impl Masks {
             list.push(put);
             owners.push(owner);
         }
-        let found = Masks { list, owners, walked: std::cell::Cell::new(0), reaching: std::cell::OnceCell::new() };
+        let found = Masks {
+            list,
+            owners,
+            walked: std::cell::Cell::new(0),
+            reaching: std::cell::OnceCell::new(),
+            added: Some(put.clone()),
+        };
         if let Some(mine) = before.reaching.get() {
             let mut reaching = mine.clone();
             for at in &removed {
@@ -2513,6 +2621,12 @@ impl Masks {
 
     pub fn is_empty(&self) -> bool {
         self.list.is_empty()
+    }
+
+    /// The points the rewrite this was made after added; None where it was made
+    /// from a body.
+    pub fn added(&self) -> Option<&[Arc<Mask>]> {
+        self.added.as_deref()
     }
 
     /// Whether these are the same points as `other`, in the same order, and
@@ -2634,7 +2748,7 @@ pub fn _masks(
             }
         }
     }
-    Masks { list, owners, walked: std::cell::Cell::new(0), reaching: std::cell::OnceCell::new() }
+    Masks { list, owners, walked: std::cell::Cell::new(0), reaching: std::cell::OnceCell::new(), added: None }
 }
 
 /// The point `one` is at `slot`, if it destroys a register without naming it.
