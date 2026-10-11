@@ -27,9 +27,10 @@ LIMITS = {
 def timed(tmp_path_factory):
     if not qbruntime.dosbatch.DOSBOX.exists():
         pytest.skip("DOSBox-X is unavailable")
-    import bench  # noqa: E402
+    # Not `bench`: tools/bench has a module of that name, and one pytest process imports both.
+    import gfxbench_run  # noqa: E402
 
-    return bench.run(list(LIMITS), tmp_path_factory.mktemp("gfxspeed"), only=("llrm real", "llrm flat"))
+    return gfxbench_run.run(list(LIMITS), tmp_path_factory.mktemp("gfxspeed"), only=("llrm real", "llrm flat"))
 
 
 @pytest.mark.parametrize("side", ["llrm real", "llrm flat"])

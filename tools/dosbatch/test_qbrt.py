@@ -15,7 +15,11 @@ import qbruntime  # noqa: E402
 # The graphics probes are compared as pictures (test_qbgfx.py).
 PROBES = sorted(path for path in (qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("*.bas") if not path.name.startswith("gfx_"))
 EXAMPLES = sorted((qbruntime.dosbatch.ROOT / "examples" / "basic").glob("*.bas"))
-SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_sources(), *EXAMPLES]}
+# Event trapping, key traps, the absent devices and VARPTR$ are what BC refuses without its /V (test_qbbc.py compares them with BC
+# under it, test_qbkeys.py the keys); they have no BCOM45 run to differ from, but they still call runtime entries.
+LLRM_ONLY = ("events_", "keys_", "llrm_", "bc_nodevices")
+ALL_SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_sources(), *EXAMPLES]}
+SOURCES = {name: path for name, path in ALL_SOURCES.items() if not name.startswith(LLRM_ONLY)}
 
 
 @pytest.fixture(scope="module")
@@ -118,7 +122,7 @@ def test_every_runtime_entry_is_called_by_a_probe_under_llrm(tmp_path_factory):
         exported |= {name for name in symbols(obj, 0x90) if name in entries and not name.endswith("USED")}
     called = set()
     pictures = sorted((qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("gfx_*.bas"))
-    for name, source in {**SOURCES, **{path.stem: path for path in pictures}}.items():
+    for name, source in {**ALL_SOURCES, **{path.stem: path for path in pictures}}.items():
         obj = work / f"{name}.obj"
         assert qbruntime.compile_basic(source, obj, "llrm") is None
         called |= symbols(obj, 0x8C)
