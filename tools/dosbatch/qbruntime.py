@@ -16,6 +16,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import cpulimit
+
 import dosbatch
 
 
@@ -282,7 +284,7 @@ def extras(items: tuple, candidate: bool) -> tuple[Path, ...]:
 
 def compile_basic(source: Path, obj: Path, runtime: str) -> str | None:
     """`source` as llrm-qb compiles it for `runtime` (qb45 or llrm); the reason it did not, or None."""
-    done = subprocess.run(
+    done = cpulimit.run(
         [
             str(dosbatch.BIN / "llrm-qb"),
             str(source),
@@ -294,9 +296,9 @@ def compile_basic(source: Path, obj: Path, runtime: str) -> str | None:
             "-o",
             str(obj),
         ],
+        300,
         capture_output=True,
         text=True,
-        timeout=300,
     )
     return None if done.returncode == 0 and obj.exists() else "compile: " + (done.stderr or done.stdout).strip()[-600:]
 

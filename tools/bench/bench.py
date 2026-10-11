@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # The real-mode DOS emulator is x86-m16 code: it lives with the target.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm-x86-m16/bench"))
 
+import cpulimit  # noqa: E402
 import maps  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
@@ -143,13 +144,13 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
         if variant.language == "nib":
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
-            done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], capture_output=True, text=True, timeout=300,
-                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
+            done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
-        done = subprocess.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], capture_output=True, text=True, timeout=300)
+        done = cpulimit.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], 300, capture_output=True, text=True)
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == "c":
@@ -208,7 +209,7 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
     flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
-    done = subprocess.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], capture_output=True, text=True, timeout=300)
+    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
     try:

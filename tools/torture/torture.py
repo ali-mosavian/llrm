@@ -15,7 +15,6 @@ import ast
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import tomllib
@@ -25,6 +24,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[0] / "dosbatch"))
+import cpulimit  # noqa: E402
 import dosbatch  # noqa: E402
 os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
@@ -39,8 +39,10 @@ COMPILE_SECONDS = 60  # of CPU time, not wall clock: a loaded host runs the same
 def run_within_cpu(command: list[str], seconds: int) -> subprocess.CompletedProcess | None:
     """`command`'s result, or None where it used more than `seconds` of CPU time (the shell's `ulimit -t`, which stops it).
     A wall-clock limit stopped programs that compile in a few seconds whenever the host was busy."""
-    done = subprocess.run(["sh", "-c", f'ulimit -t {seconds}; exec "$@"', "sh", *command], capture_output=True, text=True)
-    return None if done.returncode in (-signal.SIGXCPU, -signal.SIGKILL) else done
+    try:
+        return cpulimit.run(command, seconds, capture_output=True, text=True)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 def programs(names: list[str]) -> list[Path]:
