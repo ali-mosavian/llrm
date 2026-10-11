@@ -24,15 +24,7 @@
 ;;
 ;; Saves:    bx cx dx si di bp es
 ;; Clobbers: ax, flags
-B$FSCL          proc    public
-
-                push    bx
-                push    cx
-                push    dx
-                push    si
-                push    di
-                push    bp
-                push    es
+B$FSCL          proc    public uses bx cx dx si di bp es
                 push    ax
                 mov     bx, ax
                 les     di, [bx].FillScan.at
@@ -106,13 +98,6 @@ B$FSCL          proc    public
                 cld
                 pop     bx
                 mov     [bx].FillScan.found, ax
-                pop     es
-                pop     bp
-                pop     di
-                pop     si
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FSCL          endp
 
@@ -131,15 +116,7 @@ B$FSCL          endp
 ;;
 ;; Saves:    bx cx dx si di bp es
 ;; Clobbers: ax, flags
-B$FSCP          proc    public
-
-                push    bx
-                push    cx
-                push    dx
-                push    si
-                push    di
-                push    bp
-                push    es
+B$FSCP          proc    public uses bx cx dx si di bp es
                 mov     bx, ax
                 les     di, [bx].FillScan.at
                 mov     cl, byte ptr [bx].FillScan.count
@@ -193,13 +170,6 @@ B$FSCP          proc    public
                 movzx   ax, ch
                 mov     [bx].FillScan.hits, ax
 @@done:
-                pop     es
-                pop     bp
-                pop     di
-                pop     si
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FSCP          endp
 
@@ -293,25 +263,9 @@ done:
 ;;
 ;; Saves:    bx cx dx si di bp es
 ;; Clobbers: ax, flags
-B$FSCC          proc    public
-
-
-                push    bx
-                push    cx
-                push    dx
-                push    si
-                push    di
-                push    bp
-                push    es
+B$FSCC          proc    public uses bx cx dx si di bp es
                 mov     bx, ax
                 call    scan_one
-                pop     es
-                pop     bp
-                pop     di
-                pop     si
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FSCC          endp
 
@@ -330,16 +284,7 @@ B$FSCC          endp
 ;;
 ;; Saves:    bx cx dx si di bp es
 ;; Clobbers: ax, flags
-B$FSCR          proc    public
-
-
-                push    bx
-                push    cx
-                push    dx
-                push    si
-                push    di
-                push    bp
-                push    es
+B$FSCR          proc    public uses bx cx dx si di bp es
                 mov     bx, ax
                 call    scan_one
                 mov     ax, [bx].FillScan.found
@@ -370,13 +315,6 @@ B$FSCR          proc    public
                 mov     [bx].FillScan.right, ax
                 mov     [bx].FillScan.found, 0
 @@out:
-                pop     es
-                pop     bp
-                pop     di
-                pop     si
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FSCR          endp
 

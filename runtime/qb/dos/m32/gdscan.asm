@@ -29,14 +29,7 @@
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FSCL          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FSCL          proc uses ebx ecx edx esi edi ebp
                 push    eax
                 mov     ebx, eax
                 mov     edi, [ebx].FillScan.at
@@ -112,12 +105,6 @@ B$FSCL          proc
                 cld
                 pop     ebx
                 mov     [ebx].FillScan.found, eax
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FSCL          endp
 
@@ -136,14 +123,7 @@ B$FSCL          endp
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FSCP          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FSCP          proc    uses ebx ecx edx esi edi ebp
                 mov     ebx, eax
                 mov     edi, [ebx].FillScan.at
                 mov     cl, byte ptr [ebx].FillScan.count
@@ -197,12 +177,6 @@ B$FSCP          proc
                 movzx   eax, ch
                 mov     [ebx].FillScan.hits, eax
 @@done:
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FSCP          endp
 
@@ -297,23 +271,9 @@ done:
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FSCC          proc
-
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FSCC          proc    uses ebx ecx edx esi edi ebp
                 mov     ebx, eax
                 call    scan_one
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FSCC          endp
 
@@ -332,15 +292,7 @@ B$FSCC          endp
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FSCR          proc
-
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FSCR          proc    uses ebx ecx edx esi edi ebp
                 mov     ebx, eax
                 call    scan_one
                 mov     eax, [ebx].FillScan.found
@@ -371,12 +323,6 @@ B$FSCR          proc
                 mov     [ebx].FillScan.right, eax
                 mov     [ebx].FillScan.found, 0
 @@out:
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FSCR          endp
 

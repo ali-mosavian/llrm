@@ -53,13 +53,7 @@ PTC             macro   r, c
 ;;
 ;; Saves:    bx cx dx di es
 ;; Clobbers: ax, flags
-B$FOCP          proc    public
-
-                push    bx
-                push    cx
-                push    dx
-                push    di
-                push    es
+B$FOCP          proc    public uses bx cx dx di es
                 mov     bx, ax
                 les     di, [bx].FillOct.base
                 mov     cl, byte ptr [bx].FillOct.color
@@ -72,11 +66,6 @@ B$FOCP          proc    public
                 PTP     3, 3
                 PTP     3, 2
                 PTP     1, 0
-                pop     es
-                pop     di
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FOCP          endp
 
@@ -89,13 +78,7 @@ B$FOCP          endp
 ;;
 ;; Saves:    bx cx dx di es
 ;; Clobbers: ax, flags
-B$FOCC          proc    public
-
-                push    bx
-                push    cx
-                push    dx
-                push    di
-                push    es
+B$FOCC          proc    public uses bx cx dx di es
                 mov     bx, ax
                 les     di, [bx].FillOct.base
                 mov     cl, byte ptr [bx].FillOct.color
@@ -107,11 +90,6 @@ B$FOCC          proc    public
                 PTC     3, 3
                 PTC     3, 2
                 PTC     1, 0
-                pop     es
-                pop     di
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FOCC          endp
                 end

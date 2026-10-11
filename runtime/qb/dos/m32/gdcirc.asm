@@ -56,12 +56,7 @@ PTC             macro   r, c
 ;;
 ;; Saves:    ebx ecx edx edi
 ;; Clobbers: eax, flags
-B$FOCP          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    edi
+B$FOCP          proc    uses ebx ecx edx edi
                 mov     ebx, eax
                 mov     cl, byte ptr [ebx].FillOct.color
                 mov     edx, 3CEh
@@ -73,10 +68,6 @@ B$FOCP          proc
                 PTP     3, 3
                 PTP     3, 2
                 PTP     1, 0
-                pop     edi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FOCP          endp
 
@@ -89,12 +80,7 @@ B$FOCP          endp
 ;;
 ;; Saves:    ebx ecx edx edi
 ;; Clobbers: eax, flags
-B$FOCC          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    edi
+B$FOCC          proc    uses ebx ecx edx edi
                 mov     ebx, eax
                 mov     cl, byte ptr [ebx].FillOct.color
                 PTC     0, 0
@@ -105,10 +91,6 @@ B$FOCC          proc
                 PTC     3, 3
                 PTC     3, 2
                 PTC     1, 0
-                pop     edi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FOCC          endp
                 end

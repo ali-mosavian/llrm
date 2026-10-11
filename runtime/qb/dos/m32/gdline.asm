@@ -26,9 +26,7 @@
 ;; Saves:    ebx
 ;; Clobbers: eax, flags
 ;; Patches:  the `op mem, imm` sites of B$FLIN, B$FLIC and B$FLIP.
-B$FLSEL          proc
-
-                push    ebx
+B$FLSEL         proc    uses ebx
                 mov     ebx, eax
                 and     ebx, 3
                 mov     ax, word ptr byte_ops[ebx * 2]
@@ -47,7 +45,6 @@ B$FLSEL          proc
                 ;; the patched bytes are not in the prefetch queue
                 jmp     short @F
 @@:
-                pop     ebx
                 ret
 B$FLSEL          endp
 
@@ -60,14 +57,7 @@ B$FLSEL          endp
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FLIN          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FLIN          proc    uses ebx ecx edx esi edi ebp
                 mov     esi, eax
                 push    [esi].FillLine.x_major
                 mov     edi, [esi].FillLine.dst
@@ -177,12 +167,6 @@ sv_imm          db      0
                 jnz     @@sv
 @@done:
                 add     esp, 4
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FLIN          endp
 
@@ -197,14 +181,7 @@ B$FLIN          endp
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FLIC          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FLIC          proc    uses ebx ecx edx esi edi ebp
                 mov     esi, eax
                 mov     eax, [esi].FillLine.minor4
                 mov     [cx_i1v], eax
@@ -329,12 +306,6 @@ cv_sv           dd      0
                 dec     esi
                 jnz     @@vl
 @@done:
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FLIC          endp
 
@@ -349,14 +320,7 @@ B$FLIC          endp
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FLIP          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FLIP          proc    uses ebx ecx edx esi edi ebp
                 mov     esi, eax
                 mov     eax, [esi].FillLine.minor4
                 mov     [ex_i1v], eax
@@ -464,12 +428,6 @@ ev_ysv          dd      0
 @@done:
                 mov     al, 0FFh
                 out     dx, al
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FLIP          endp
 

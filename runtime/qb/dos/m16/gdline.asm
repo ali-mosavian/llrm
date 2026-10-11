@@ -21,9 +21,7 @@
 ;; Saves:    bx
 ;; Clobbers: ax, flags
 ;; Patches:  the `op mem, imm` sites of B$FLIN, B$FLIC and B$FLIP.
-B$FLSEL          proc    public
-
-                push    bx
+B$FLSEL         proc    public uses bx
                 mov     bx, ax
                 and     bx, 3
                 shl     bx, 1
@@ -43,7 +41,6 @@ B$FLSEL          proc    public
                 ;; the patched bytes are not in the prefetch queue
                 jmp     short @F
 @@:
-                pop     bx
                 ret
 B$FLSEL          endp
 
@@ -56,14 +53,7 @@ B$FLSEL          endp
 ;;
 ;; Saves:    bx cx dx si di bp
 ;; Clobbers: ax, flags
-B$FLIN          proc    public
-
-                push    bx
-                push    cx
-                push    dx
-                push    si
-                push    di
-                push    bp
+B$FLIN          proc    public uses bx cx dx si di bp
                 mov     si, ax
                 mov     ax, [si].FillLine.x_major
                 mov     cs:[lin_mode], ax
@@ -179,12 +169,6 @@ sv_imm          db      0
                 dec     cx
                 jnz     @@sv
 @@done:
-                pop     bp
-                pop     di
-                pop     si
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FLIN          endp
 
@@ -199,14 +183,7 @@ B$FLIN          endp
 ;;
 ;; Saves:    bx cx dx si di bp
 ;; Clobbers: ax, flags
-B$FLIC          proc    public
-
-                push    bx
-                push    cx
-                push    dx
-                push    si
-                push    di
-                push    bp
+B$FLIC          proc    public uses bx cx dx si di bp
                 mov     si, ax
                 mov     ax, [si].FillLine.minor4
                 mov     cs:[cx_i1v], ax
@@ -331,12 +308,6 @@ cv_sv           dw      0
                 dec     si
                 jnz     @@vl
 @@done:
-                pop     bp
-                pop     di
-                pop     si
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FLIC          endp
 
@@ -351,14 +322,7 @@ B$FLIC          endp
 ;;
 ;; Saves:    bx cx dx si di bp
 ;; Clobbers: ax, flags
-B$FLIP          proc    public
-
-                push    bx
-                push    cx
-                push    dx
-                push    si
-                push    di
-                push    bp
+B$FLIP          proc    public uses bx cx dx si di bp
                 mov     si, ax
                 mov     ax, [si].FillLine.minor4
                 mov     cs:[ex_i1v], ax
@@ -466,12 +430,6 @@ ev_ysv          dw      0
 @@done:
                 mov     al, 0FFh
                 out     dx, al
-                pop     bp
-                pop     di
-                pop     si
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FLIP          endp
 

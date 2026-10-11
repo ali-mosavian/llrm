@@ -22,9 +22,7 @@
 ;; Saves:    bx
 ;; Clobbers: ax, flags
 ;; Patches:  the opcode, mod/rm and immediate of the box fill's loops.
-B$FSEL          proc    public
-
-                push    bx
+B$FSEL          proc    public uses bx
                 mov     bx, ax
                 and     bx, 3
                 shl     bx, 1
@@ -46,7 +44,6 @@ B$FSEL          proc    public
                 ;; the patched bytes are not in the prefetch queue
                 jmp     short @F
 @@:
-                pop     bx
                 ret
 B$FSEL          endp
 
@@ -61,12 +58,7 @@ B$FSEL          endp
 ;;
 ;; Saves:    si di bp es
 ;; Clobbers: ax bx cx dx, flags
-B$FBOX          proc    public
-
-                push    si
-                push    di
-                push    bp
-                push    es
+B$FBOX          proc    public uses si di bp es
                 cld
                 mov     bx, ax
                 les     si, [bx].FillBox.dst
@@ -130,10 +122,6 @@ byte_imm        db      0
                 mov     [bx].FillBox.phase, ax
                 dec     bp
                 jnz     @@row
-                pop     es
-                pop     bp
-                pop     di
-                pop     si
                 ret
 B$FBOX          endp
 

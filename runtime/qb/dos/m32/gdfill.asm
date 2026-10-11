@@ -25,9 +25,7 @@
 ;; Saves:    ebx
 ;; Clobbers: eax, flags
 ;; Patches:  the opcode, mod/rm and immediate of the box fill's loops.
-B$FSEL          proc
-
-                push    ebx
+B$FSEL          proc    uses ebx
                 mov     ebx, eax
                 and     ebx, 3
                 mov     ax, word ptr dword_ops[ebx * 2]
@@ -47,7 +45,6 @@ B$FSEL          proc
                 ;; the patched bytes are not in the prefetch queue
                 jmp     short @F
 @@:
-                pop     ebx
                 ret
 B$FSEL          endp
 
@@ -62,14 +59,7 @@ B$FSEL          endp
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FBOX          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FBOX          proc    uses ebx ecx edx esi edi ebp
                 cld
                 mov     ebx, eax
                 mov     esi, [ebx].FillBox.dst
@@ -132,12 +122,6 @@ byte_imm        db      0
                 mov     [ebx].FillBox.phase, eax
                 dec     ebp
                 jnz     @@row
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FBOX          endp
 

@@ -21,16 +21,7 @@
 ;;
 ;; Saves:    bx cx dx si di bp es fs
 ;; Clobbers: ax, flags
-B$FGET          proc    public
-
-                push    bx
-                push    cx
-                push    dx
-                push    si
-                push    di
-                push    bp
-                push    es
-                push    fs
+B$FGET          proc    public uses bx cx dx si di bp es fs
                 mov     bx, ax
                 lfs     si, [bx].FillXfer.screen
                 les     di, [bx].FillXfer.array
@@ -70,14 +61,6 @@ B$FGET          proc    public
 @@next:
                 dec     bp
                 jnz     @@row
-                pop     fs
-                pop     es
-                pop     bp
-                pop     di
-                pop     si
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FGET          endp
 
@@ -89,10 +72,7 @@ B$FGET          endp
 ;; Saves:    bx cx
 ;; Clobbers: ax, flags
 ;; Patches:  the write of B$FPUC and B$FPUP.
-B$FPSEL         proc    public
-
-                push    bx
-                push    cx
+B$FPSEL         proc    public uses bx cx
                 mov     bx, ax
                 mov     ax, 9090h               ;; nothing before the write
                 mov     cx, ax
@@ -113,8 +93,6 @@ B$FPSEL         proc    public
                 mov     word ptr cs:[put_mid], ax
                 mov     ax, word ptr cs:put_edges[bx]
                 mov     cs:[put_edge_v], ax
-                pop     cx
-                pop     bx
                 ret
 B$FPSEL         endp
 
@@ -161,16 +139,7 @@ put_xor:
 ;;
 ;; Saves:    bx cx dx si di bp es fs
 ;; Clobbers: ax, flags
-B$FPUC          proc    public
-
-                push    bx
-                push    cx
-                push    dx
-                push    si
-                push    di
-                push    bp
-                push    es
-                push    fs
+B$FPUC          proc    public uses bx cx dx si di bp es fs
                 mov     bx, ax
                 lfs     si, [bx].FillXfer.array
                 les     di, [bx].FillXfer.screen
@@ -231,14 +200,6 @@ put_mid         db      88h, 15h
 @@next:
                 dec     bp
                 jnz     @@row
-                pop     fs
-                pop     es
-                pop     bp
-                pop     di
-                pop     si
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FPUC          endp
 
@@ -254,16 +215,7 @@ B$FPUC          endp
 ;;
 ;; Saves:    bx cx dx si di bp es fs
 ;; Clobbers: ax, flags
-B$FPUP          proc    public
-
-                push    bx
-                push    cx
-                push    dx
-                push    si
-                push    di
-                push    bp
-                push    es
-                push    fs
+B$FPUP          proc    public uses bx cx dx si di bp es fs
                 mov     bx, ax
                 lfs     si, [bx].FillXfer.array
                 les     di, [bx].FillXfer.screen
@@ -347,14 +299,6 @@ pn_last         db      90h, 90h
                 add     di, [bx].FillXfer.step
                 dec     word ptr [bx].FillXfer.rows
                 jnz     @@row
-                pop     fs
-                pop     es
-                pop     bp
-                pop     di
-                pop     si
-                pop     dx
-                pop     cx
-                pop     bx
                 ret
 B$FPUP          endp
 

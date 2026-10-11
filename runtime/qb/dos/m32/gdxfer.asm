@@ -26,14 +26,7 @@
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FGET          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FGET          proc    uses ebx ecx edx esi edi ebp
                 mov     ebx, eax
                 mov     esi, [ebx].FillXfer.screen
                 mov     edi, [ebx].FillXfer.array
@@ -73,12 +66,6 @@ B$FGET          proc
 @@next:
                 dec     ebp
                 jnz     @@row
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FGET          endp
 
@@ -92,10 +79,7 @@ B$FGET          endp
 ;; Saves:    ebx ecx
 ;; Clobbers: eax, flags
 ;; Patches:  the write of B$FPUC and B$FPUP.
-B$FPSEL         proc
-
-                push    ebx
-                push    ecx
+B$FPSEL         proc    uses ebx ecx
                 mov     ebx, eax
                 mov     ax, 9090h               ;; nothing before the write
                 mov     cx, ax
@@ -115,8 +99,6 @@ B$FPSEL         proc
                 mov     word ptr [put_mid], ax
                 mov     eax, dword ptr put_edges[ebx * 4]
                 mov     [put_edge_v], eax
-                pop     ecx
-                pop     ebx
                 ret
 B$FPSEL         endp
 
@@ -163,14 +145,7 @@ put_xor:
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FPUC          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FPUC          proc    uses ebx ecx edx esi edi ebp
                 mov     ebx, eax
                 mov     esi, [ebx].FillXfer.array
                 mov     edi, [ebx].FillXfer.screen
@@ -230,12 +205,6 @@ put_mid         db      88h, 17h
 @@next:
                 dec     ebp
                 jnz     @@row
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FPUC          endp
 
@@ -251,14 +220,7 @@ B$FPUC          endp
 ;;
 ;; Saves:    ebx ecx edx esi edi ebp
 ;; Clobbers: eax, flags
-B$FPUP          proc
-
-                push    ebx
-                push    ecx
-                push    edx
-                push    esi
-                push    edi
-                push    ebp
+B$FPUP          proc    uses ebx ecx edx esi edi ebp
                 mov     ebx, eax
                 mov     esi, [ebx].FillXfer.array
                 mov     edi, [ebx].FillXfer.screen
@@ -342,12 +304,6 @@ pn_last         db      90h, 90h
                 add     edi, [ebx].FillXfer.step
                 dec     dword ptr [ebx].FillXfer.rows
                 jnz     @@row
-                pop     ebp
-                pop     edi
-                pop     esi
-                pop     edx
-                pop     ecx
-                pop     ebx
                 ret
 B$FPUP          endp
 
