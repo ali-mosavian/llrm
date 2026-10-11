@@ -90,16 +90,13 @@ SD *B_FCHR(short code)
 int B_SCMP(SD *first, SD *second)
 {
     unsigned common = first->len < second->len ? first->len : second->len;
-    unsigned at;
-    int order = 0;
+    int order = compare_bytes(first->ptr, second->ptr, common);
 
-    for (at = 0; at < common && order == 0; at++)
-        order = first->ptr[at] - second->ptr[at];
     if (order == 0)
         order = first->len == second->len ? 0 : first->len < second->len ? -1 : 1;
     str_tmp_free(first);
     str_tmp_free(second);
-    return order < 0 ? -1 : order > 0;
+    return order;
 }
 
 #pragma aux B_LEFT "B$LEFT"
