@@ -155,17 +155,36 @@ void f(int n, int cur, int y)
 }
 
 /// mandel's `iteration < 32` behind the copied header, once its exit reads a
-/// number, tested the counter before the step (`cmp dx, 31`), so the step took
-/// a register of its own: `mov ax, dx; inc ax; cmp dx, 31; mov dx, ax`. The
-/// test of the step is `inc dx; cmp dx, 32`: one register (mandel C -O2 m16
-/// +10.1% instructions).
+/// number, tested the counter before the step (`cmp ax, 31`), so the step took
+/// a register of its own: `inc bx; cmp ax, 31` and a copy back. The test of the
+/// step is `inc ax; cmp ax, 32`: one register (mandel C -O2 m16 was +10.1%
+/// instructions). The break reads a table, so only the loop's own test is
+/// copied.
 #[test]
 fn test_a_latch_test_of_a_counter_whose_step_nothing_else_reads_tests_the_step() {
-    let source = format!("{}/bench/mandel/mandel.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "static short tab[8];
+long f(void)
+{
+    long x = 0, y = 0;
+    short it;
+    for (it = 0; it < 32; ++it) {
+        long xx = (x * x) >> 8;
+        long yy = (y * y) >> 8;
+        if (tab[(xx + yy) & 7] > 1024) break;
+        y = ((x * y) >> 7) + 3;
+        x = xx - yy + 5;
+    }
+    return it;
+}
+",
+    )
+    .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(scratch.path())
-        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -175,4 +194,18 @@ fn test_a_latch_test_of_a_counter_whose_step_nothing_else_reads_tests_the_step()
         .windows(2)
         .any(|pair| pair[0].starts_with("inc ") && pair[1].starts_with("cmp ") && pair[1].ends_with(", 32"));
     assert!(stepped, "{text}");
+}
+
+/// gcc copies the chain of header tests (`copy_headers`: each block after the
+/// first with one predecessor and no call, within 20 insns), not only the
+/// loop's own: `for (d = 2; d * d <= i; ++d) if (i % d == 0) break;` has
+/// both its tests copied, so d = 2 folds into them (`test esi, 1`, `cmp esi,
+/// 4`) and the idiv stays for the later trips. x_primes -O1 +25% over gcc with
+/// one test copied.
+#[test]
+fn test_a_loop_with_two_tests_that_leave_it_has_both_copied() {
+    let text = listing("x_primes", &["-ftree-ch", "-O1"]);
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let folded = lines.iter().any(|line| line.starts_with("test e") && line.ends_with(", 1"));
+    assert!(folded, "{text}");
 }
