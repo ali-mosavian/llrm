@@ -298,3 +298,14 @@ fn fwrapv_makes_signed_arithmetic_wrap() {
     assert!(parsed(&["-fwrapv"]).unwrap().wrapv);
     assert!(!parsed(&["-fwrapv", "-fno-wrapv"]).unwrap().wrapv && !parsed(&[]).unwrap().wrapv);
 }
+
+/// gcc turns `-floop-unroll-and-jam` on at -O3 and no lower (opts.cc:678).
+#[test]
+fn only_o3_jams_loop_nests_and_the_flag_overrides_it() {
+    for level in ["-O1", "-O2", "-Os", "-Omax"] {
+        assert!(!pipeline(&[level]).unroll_jam, "{level}");
+        assert!(pipeline(&[level, "-floop-unroll-and-jam"]).unroll_jam, "{level}");
+    }
+    assert!(pipeline(&["-O3"]).unroll_jam);
+    assert!(!pipeline(&["-O3", "-fno-loop-unroll-and-jam"]).unroll_jam);
+}

@@ -82,6 +82,7 @@ const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 20] = [
     }),
     ("strength-reduce", |options, on| options.strength = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
+    ("loop-unroll-and-jam", |options, on| options.unroll_jam = on),
     ("tree-ch", |options, on| options.copy_headers = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
     ("ipa-vrp", |options, on| options.ipa_ranges = on),
