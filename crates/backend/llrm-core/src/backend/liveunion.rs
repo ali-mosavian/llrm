@@ -227,6 +227,44 @@ impl LiveUnion {
         self.registers.get(register).map(|held| held.holders.clone()).unwrap_or_default()
     }
 
+    /// Whether `register` has enough holders to be indexed: fewer are better
+    /// gathered once than asked of one by one.
+    pub fn many(
+        &self,
+        register: &RegId,
+    ) -> bool {
+        self.registers.get(register).is_some_and(|held| held.holders.len() >= BIG)
+    }
+
+    /// `values` (held by `register`) in the order they took it.
+    pub fn in_taking_order(
+        &self,
+        register: &RegId,
+        values: &mut [u32],
+    ) {
+        if let Some(held) = self.registers.get(register) {
+            let mut wanted = values.to_vec();
+            wanted.sort_unstable();
+            let mut seen = 0;
+            let mut order: Vec<(usize, u32)> = Vec::with_capacity(values.len());
+            for (at, value) in held.holders.iter().enumerate() {
+                if wanted.binary_search(value).is_ok() {
+                    order.push((at, *value));
+                    seen += 1;
+                    if seen == wanted.len() {
+                        break;
+                    }
+                }
+            }
+            // A value the register does not hold goes last.
+            let held_here: Vec<u32> = order.iter().map(|(_, value)| *value).collect();
+            let rest: Vec<u32> = values.iter().copied().filter(|value| !held_here.contains(value)).collect();
+            for (slot, value) in values.iter_mut().zip(held_here.into_iter().chain(rest)) {
+                *slot = value;
+            }
+        }
+    }
+
     /// Each register with its holders.
     pub fn registers(&self) -> impl Iterator<Item = (RegId, Vec<u32>)> + '_ {
         self.registers.iter().map(|(register, held)| (*register, held.holders.clone()))

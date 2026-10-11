@@ -516,6 +516,49 @@ impl LiveAt for LiveRows {
     }
 }
 
+/// Where a value is live, from its segments: live into a block when a segment
+/// covers the block's first slot, out of it when one reaches its end (a use at
+/// the last instruction ends a slot before it). The facts the allocator keeps
+/// already say it, so a split asks them and no rows are made of the body.
+pub struct IntervalLive<'a> {
+    pub live: &'a LiveRanges,
+    pub index: &'a Indexes,
+}
+
+impl LiveAt for IntervalLive<'_> {
+    fn live_in(
+        &self,
+        block: i64,
+        value: u32,
+    ) -> bool {
+        let first = self.index.span[&block].0;
+        self.live
+            .get(&value)
+            .is_some_and(
+                |one| {
+                    let at = one.segments.partition_point(|seg| seg.start <= first);
+                    at > 0 && one.segments[at - 1].end > first
+                },
+            )
+    }
+
+    fn live_out(
+        &self,
+        block: i64,
+        value: u32,
+    ) -> bool {
+        let last = self.index.span[&block].1;
+        self.live
+            .get(&value)
+            .is_some_and(
+                |one| {
+                    let at = one.segments.partition_point(|seg| seg.start < last);
+                    at > 0 && one.segments[at - 1].end >= last
+                },
+            )
+    }
+}
+
 impl LiveAt for (&Live, &Live) {
     fn live_in(
         &self,
@@ -1322,6 +1365,8 @@ struct Facts {
     /// from it.
     scan: crate::backend::regclass::Scan,
     siblings: Siblings,
+    /// The values whose class moved since the facts these were carried from.
+    reclassed: Option<Vec<u32>>,
 }
 
 impl Facts {
@@ -1409,8 +1454,29 @@ impl Facts {
                 );
             }
         }
-        let masks =
-            llrm_support::debug::timed("facts masks", || _masks(body, &index, segments, registers.frame_needed()));
+        let masks = llrm_support::debug::timed("facts masks", || {
+            let frame = registers.frame_needed();
+            let found = match prior {
+                Some((before, changes, _)) if before.index.epoch == index.epoch => Masks::after(
+                    &before.masks,
+                    &before.index,
+                    &index,
+                    segments,
+                    frame.map(|one| (one, body.regs())),
+                    changes,
+                ),
+                _ => None,
+            };
+            if let (Some(found), true) = (&found, llrm_support::env_set("LLRM_CHECK_FACTS")) {
+                let whole = _masks(body, &index, segments, frame);
+                assert!(
+                    found.same_points(&whole),
+                    "{}: the points that destroy registers kept from the body before differ",
+                    body.name
+                );
+            }
+            found.unwrap_or_else(|| _masks(body, &index, segments, frame))
+        });
         let widths = llrm_support::debug::timed("facts widths", || match prior {
             Some((before, changes, _)) => {
                 let found = _widest_after(&before.widths, body, &changes.touched);
@@ -1446,7 +1512,18 @@ impl Facts {
             }
             None => _copy_hints(body),
         });
-        Self { index, live, folds, masks, widths, confined, hints, scan, siblings }
+        // The values whose register class is not what it was: found from where
+        // they are named, and from what else is live and destroyed
+        // beside them.
+        let reclassed = prior.map(|(before, _, _)| {
+            confined
+                .iter()
+                .filter(|(value, class)| before.confined.get(*value) != Some(*class))
+                .map(|(value, _)| *value)
+                .chain(before.confined.keys().copied().filter(|value| !confined.contains_key(value)))
+                .collect::<Vec<u32>>()
+        });
+        Self { index, live, folds, masks, widths, confined, hints, scan, siblings, reclassed }
     }
 }
 
@@ -1465,6 +1542,74 @@ fn _overlapping(
         );
     }
     found
+}
+
+/// `_overlapping` of what a rewrite may have disturbed only: the values it
+/// named (their intervals and classes moved), and those held across a point it
+/// added that destroys their register. Values placed before it did not clash
+/// (a value is placed free of the others, and of every point), and nothing
+/// else moved, so a value that overlaps a changed one is looked at with it:
+/// each cluster of overlapping holders is judged as `_overlapping` judges the
+/// holders of a whole register, in the order they took it.
+fn _overlapping_after(
+    union: &LiveUnion,
+    r#where: &IndexMap<u32, RegId>,
+    facts: &Facts,
+    touched: &crate::support::hash::HashSet<u32>,
+    reclassed: &[u32],
+    added: &[Arc<Mask>],
+) -> BTreeSet<u32> {
+    let mut asked: IndexMap<RegId, BTreeSet<u32>> = IndexMap::default();
+    for value in touched.iter().chain(reclassed) {
+        if let Some(register) = r#where.get(value) {
+            asked.entry(_whole(*register)).or_default().insert(*value);
+        }
+    }
+    for mask in added {
+        let around = Interval::new(0, vec![ranges::Segment { start: mask.slot - 2, end: mask.slot + 3 }]);
+        for register in mask.before.iter().chain(&mask.during).chain(&mask.high) {
+            for value in union.meeting(register, &around, &facts.live) {
+                asked.entry(*register).or_default().insert(value);
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    for (register, seeds) in asked {
+        let mut cluster: BTreeSet<u32> = BTreeSet::new();
+        let mut work: Vec<u32> = seeds.into_iter().collect();
+        while let Some(value) = work.pop() {
+            if !cluster.insert(value) {
+                continue;
+            }
+            if let Some(mine) = facts.live.get(&value) {
+                work.extend(
+                    union.meeting(&register, mine, &facts.live).into_iter().filter(|other| !cluster.contains(other)),
+                );
+            }
+        }
+        let mut held: Vec<u32> = cluster.into_iter().collect();
+        union.in_taking_order(&register, &mut held);
+        let mut kept: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+        for value in &held {
+            let Some(mine) = facts.live.get(value) else { continue };
+            let width = facts.widths.get(value).copied().unwrap_or(4);
+            let outside = facts
+                .confined
+                .get(value)
+                .is_some_and(|class| !class.iter().any(|one| _whole(*one) == _whole(r#where[value])));
+            let meets = |kept: &std::collections::BTreeMap<i64, i64>| {
+                mine.segments
+                    .iter()
+                    .any(|seg| kept.range(..seg.end).next_back().is_some_and(|(_, end)| *end > seg.start))
+            };
+            if outside || meets(&kept) || _clobbered(mine, r#where[value], &facts.masks, width) {
+                out.insert(*value);
+            } else {
+                kept.extend(mine.segments.iter().map(|seg| (seg.start, seg.end)));
+            }
+        }
+    }
+    out
 }
 
 fn _overlapping_by_start(
@@ -1566,7 +1711,6 @@ fn _allocated(
     // and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
     let mut splits_made = 0_usize;
-    let mut placing: Option<LiveRows> = None;
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -1747,28 +1891,22 @@ fn _allocated(
         if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
             let _split = llrm_support::debug::span("regalloc split");
             let bundles = spillplacement::edge_bundles(&body);
-            let live_sets =
-                placing.get_or_insert_with(|| llrm_support::debug::timed("split placing", || live_rows(&body)));
-            let spread =
-                llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &*live_sets));
-            let occupied = llrm_support::debug::timed("split occupied", || {
-                splitkit::Occupied::new(
-                    union
-                        .registers()
-                        .map(|(register, held)| {
-                            (
-                                register,
-                                held.iter()
-                                    .filter(|other| **other != value)
-                                    .flat_map(|other| facts.live[other].segments.clone())
-                                    .collect(),
-                            )
-                        })
-                        .collect(),
-                    &facts.masks,
-                )
-            });
-            let sets: &dyn LiveAt = &*live_sets;
+            let live_sets = IntervalLive { live: &facts.live, index: &facts.index };
+            if llrm_support::env_set("LLRM_CHECK_PLACING") {
+                let rows = live_rows_by(&body, |one| one == value);
+                for block in &body.blocks {
+                    assert!(
+                        live_sets.live_in(block.at, value) == rows.live_in(block.at, value)
+                            && live_sets.live_out(block.at, value) == rows.live_out(block.at, value),
+                        "{}: value#{value} is live at block {:#x} by its segments as the rows have it not",
+                        body.name,
+                        block.at
+                    );
+                }
+            }
+            let spread = llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &live_sets));
+            let occupied = splitkit::Occupied::of(&union, &facts.live, value, &facts.masks);
+            let sets: &dyn LiveAt = &live_sets;
             // A range in one block splits locally; any other by region, and
             // failing that block by block. Only a piece that pays is carved.
             // The frame register is a place for a piece too, the last.
@@ -2010,7 +2148,6 @@ fn _allocated(
         // What is done of the rewrite besides its facts: the pins, the placed
         // values it disturbs, the queue.
         let _after = llrm_support::debug::span("regalloc after rewrite");
-        placing = None;
         // `fixed` keeps the first answer of every body this run has seen, so
         // the blocks the rewrite left as they were add nothing to it: a
         // value met in one is already there.
@@ -2049,7 +2186,23 @@ fn _allocated(
         union.refresh();
         fenced = fixed.keys().copied().chain(protected.iter().copied()).collect();
         let gone: Vec<u32> = r#where.keys().copied().filter(|one| !facts.live.contains_key(one)).collect();
-        let clashing = llrm_support::debug::timed("after overlapping", || _overlapping(&union, &r#where, &facts));
+        let clashing = llrm_support::debug::timed("after overlapping", || {
+            match (&changes, facts.masks.added(), &facts.reclassed) {
+                (Some(changes), Some(added), Some(reclassed)) => {
+                    let found = _overlapping_after(&union, &r#where, &facts, &changes.touched, reclassed, added);
+                    if llrm_support::env_set("LLRM_CHECK_OVERLAPPING") {
+                        let whole = _overlapping(&union, &r#where, &facts);
+                        assert!(
+                            found == whole,
+                            "{}: the values a rewrite disturbed that share a register differ from those of the whole: {found:?} against {whole:?}",
+                            body.name
+                        );
+                    }
+                    found
+                }
+                _ => _overlapping(&union, &r#where, &facts),
+            }
+        });
         for one in gone.iter().chain(&clashing) {
             if let Some(register) = r#where.shift_remove(one) {
                 union.remove(_whole(register), *one, &facts.live);
@@ -2484,16 +2637,24 @@ pub struct Mask {
 /// look at every point.
 #[derive(Default)]
 pub struct Masks {
-    list: Vec<Mask>,
+    list: Vec<Arc<Mask>>,
+    /// The instruction each point is of, where the points came from a body:
+    /// what `after` finds the points of the instructions a rewrite removed
+    /// by.
+    owners: Vec<usize>,
     /// Points handed out by `iter`, for a test that a query by span does not
     /// walk them all.
     walked: std::cell::Cell<usize>,
     reaching: std::cell::OnceCell<crate::support::hash::HashMap<RegId, Reaching>>,
+    /// The points a rewrite added, where `after` made these from the ones
+    /// before it: what a register held across the rewrite may now be
+    /// destroyed at.
+    added: Option<Vec<Arc<Mask>>>,
 }
 
 /// Where one register is destroyed, sorted: before the point's own reads
 /// (`read`), during it (`during`), or only its high half (`high`).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Reaching {
     read: Vec<i64>,
     during: Vec<i64>,
@@ -2502,11 +2663,167 @@ struct Reaching {
 
 impl Masks {
     pub fn new(list: Vec<Mask>) -> Self {
-        Self { list, walked: std::cell::Cell::new(0), reaching: std::cell::OnceCell::new() }
+        Self {
+            list: list.into_iter().map(Arc::new).collect(),
+            owners: Vec::new(),
+            walked: std::cell::Cell::new(0),
+            reaching: std::cell::OnceCell::new(),
+            added: None,
+        }
+    }
+
+    /// The points of `body`, which is the body of `before` with the
+    /// instructions of `changes` removed and added, in the same numbering:
+    /// the points of the instructions kept are kept, as LLVM's `SlotIndexes`
+    /// keep an instruction's index across an edit. None where `before` did
+    /// not come from a body.
+    pub fn after(
+        before: &Masks,
+        before_index: &Indexes,
+        index: &Indexes,
+        segments: &Segments,
+        frame: Option<(RegId, llrm_lir::registers::Regs)>,
+        changes: &ranges::Changes,
+    ) -> Option<Masks> {
+        if before.owners.len() != before.list.len() {
+            return None;
+        }
+        let owner_of = |slot: i64, owner: usize, list: &[Arc<Mask>], owners: &[usize]| -> Option<usize> {
+            let from = list.partition_point(|mask| mask.slot < slot);
+            (from..list.len()).take_while(|at| list[*at].slot == slot).find(|at| owners[*at] == owner)
+        };
+        let mut removed: Vec<usize> = Vec::new();
+        for one in &changes.gone {
+            let Some(slot) = before_index.at.get(&ranges::key(one)) else { continue };
+            if let Some(at) = owner_of(*slot, ranges::key(one), &before.list, &before.owners) {
+                removed.push(at);
+            }
+        }
+        removed.sort_unstable();
+        let mut added: Vec<(i64, usize, Arc<Mask>)> = Vec::new();
+        for one in &changes.added {
+            if let Some(mask) = _mask_of(one, index.at.get(&ranges::key(one)).copied()?, segments, frame) {
+                added.push((mask.slot, ranges::key(one), Arc::new(mask)));
+            }
+        }
+        added.sort_by_key(|(slot, owner, _)| (*slot, *owner));
+        let put: Vec<Arc<Mask>> = added.iter().map(|(_, _, mask)| Arc::clone(mask)).collect();
+        let mut list = Vec::with_capacity(before.list.len() + added.len());
+        let mut owners = Vec::with_capacity(before.list.len() + added.len());
+        let (mut gone, mut new) = (removed.iter().peekable(), added.into_iter().peekable());
+        for (at, mask) in before.list.iter().enumerate() {
+            if gone.peek() == Some(&&at) {
+                gone.next();
+                continue;
+            }
+            while let Some((_, owner, put)) = new.next_if(|(slot, _, _)| *slot < mask.slot) {
+                list.push(put);
+                owners.push(owner);
+            }
+            list.push(Arc::clone(mask));
+            owners.push(before.owners[at]);
+        }
+        for (_, owner, put) in new {
+            list.push(put);
+            owners.push(owner);
+        }
+        let found = Masks {
+            list,
+            owners,
+            walked: std::cell::Cell::new(0),
+            reaching: std::cell::OnceCell::new(),
+            added: Some(put.clone()),
+        };
+        if let Some(mine) = before.reaching.get() {
+            let mut reaching = mine.clone();
+            for at in &removed {
+                Self::unreach(&mut reaching, &before.list[*at]);
+            }
+            for mask in &put {
+                Self::reach(&mut reaching, mask);
+            }
+            let _ = found.reaching.set(reaching);
+        }
+        Some(found)
+    }
+
+    fn reach(
+        found: &mut crate::support::hash::HashMap<RegId, Reaching>,
+        mask: &Mask,
+    ) {
+        for register in mask.before.iter().chain(&mask.during).chain(&mask.high) {
+            let one = found.entry(*register).or_default();
+            let list = if mask.before.contains(register) {
+                &mut one.read
+            } else if mask.during.contains(register) {
+                &mut one.during
+            } else {
+                &mut one.high
+            };
+            let at = list.partition_point(|slot| *slot < mask.slot);
+            list.insert(at, mask.slot);
+        }
+    }
+
+    fn unreach(
+        found: &mut crate::support::hash::HashMap<RegId, Reaching>,
+        mask: &Mask,
+    ) {
+        for register in mask.before.iter().chain(&mask.during).chain(&mask.high) {
+            let Some(one) = found.get_mut(register) else { continue };
+            let list = if mask.before.contains(register) {
+                &mut one.read
+            } else if mask.during.contains(register) {
+                &mut one.during
+            } else {
+                &mut one.high
+            };
+            let at = list.partition_point(|slot| *slot < mask.slot);
+            if list.get(at) == Some(&mask.slot) {
+                list.remove(at);
+            }
+        }
     }
 
     pub fn is_empty(&self) -> bool {
         self.list.is_empty()
+    }
+
+    /// The points the rewrite this was made after added; None where it was made
+    /// from a body.
+    pub fn added(&self) -> Option<&[Arc<Mask>]> {
+        self.added.as_deref()
+    }
+
+    /// Whether these are the same points as `other`, in the same order, and
+    /// the registers are reached at the same slots.
+    pub fn same_points(
+        &self,
+        other: &Masks,
+    ) -> bool {
+        let key = |mask: &Mask| (mask.slot, mask.during.clone(), mask.high.clone(), mask.before.clone());
+        let mut mine: Vec<_> = self.list.iter().zip(&self.owners).map(|(mask, owner)| (key(mask), *owner)).collect();
+        let mut theirs: Vec<_> =
+            other.list.iter().zip(&other.owners).map(|(mask, owner)| (key(mask), *owner)).collect();
+        mine.sort_by_key(|(key, owner)| (key.0, *owner));
+        theirs.sort_by_key(|(key, owner)| (key.0, *owner));
+        let reached = |found: &Masks| -> Vec<(RegId, Vec<i64>, Vec<i64>, Vec<i64>)> {
+            let mut all: Vec<_> = found
+                .list
+                .iter()
+                .flat_map(|mask| mask.before.iter().chain(&mask.during).chain(&mask.high))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .filter_map(|register| {
+                    found
+                        .reaching(*register)
+                        .map(|one| (*register, one.read.clone(), one.during.clone(), one.high.clone()))
+                })
+                .collect();
+            all.sort_by_key(|one| format!("{:?}", one.0));
+            all
+        };
+        mine == theirs && reached(self) == reached(other)
     }
 
     /// How many points `iter` has handed out.
@@ -2514,9 +2831,9 @@ impl Masks {
         self.walked.get()
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, Mask> {
+    pub fn iter(&self) -> impl Iterator<Item = &Mask> + '_ {
         self.walked.set(self.walked.get() + self.list.len());
-        self.list.iter()
+        self.list.iter().map(|mask| &**mask)
     }
 
     /// The first and last point in `lo..hi` that destroys `register` (its high
@@ -2556,7 +2873,7 @@ impl Masks {
             .get_or_init(|| {
                 let mut found: crate::support::hash::HashMap<RegId, Reaching> =
                     crate::support::hash::HashMap::default();
-                for mask in &self.list {
+                for mask in self.list.iter().map(|mask| &**mask) {
                     for register in mask.before.iter().chain(&mask.during).chain(&mask.high) {
                         let one = found.entry(*register).or_default();
                         if mask.before.contains(register) {
@@ -2588,27 +2905,38 @@ pub fn _masks(
     segments: &Segments,
     frame: Option<RegId>,
 ) -> Masks {
-    let mut out: Vec<Mask> = Vec::new();
+    let mut list: Vec<Arc<Mask>> = Vec::new();
+    let mut owners: Vec<usize> = Vec::new();
     let regs = frame.map(|_| body.regs());
     for block in &body.blocks {
         for one in &block.insns {
-            let during: BTreeSet<RegId> = one.clobbers.iter().map(|register| _whole(*register)).collect();
-            let high: BTreeSet<RegId> = one.clobbers_high.iter().map(|register| _whole(*register)).collect();
-            // The data segment register is needed where an access names data;
-            // the frame register, where the frame is.
-            let mut before: BTreeSet<RegId> =
-                target::needs_data_group(one).then_some(segments.data).into_iter().collect();
-            if let (Some(frame), Some(regs)) = (frame, regs) {
-                if crate::backend::framefree::needs_frame(one, regs) {
-                    before.insert(frame);
-                }
-            }
-            if !during.is_empty() || !high.is_empty() || !before.is_empty() {
-                out.push(Mask { slot: index.at[&ranges::key(one)], during, high, before });
+            if let Some(mask) = _mask_of(one, index.at[&ranges::key(one)], segments, frame.zip(regs)) {
+                list.push(Arc::new(mask));
+                owners.push(ranges::key(one));
             }
         }
     }
-    Masks::new(out)
+    Masks { list, owners, walked: std::cell::Cell::new(0), reaching: std::cell::OnceCell::new(), added: None }
+}
+
+/// The point `one` is at `slot`, if it destroys a register without naming it.
+fn _mask_of(
+    one: &Arc<Insn>,
+    slot: i64,
+    segments: &Segments,
+    frame: Option<(RegId, llrm_lir::registers::Regs)>,
+) -> Option<Mask> {
+    let during: BTreeSet<RegId> = one.clobbers.iter().map(|register| _whole(*register)).collect();
+    let high: BTreeSet<RegId> = one.clobbers_high.iter().map(|register| _whole(*register)).collect();
+    // The data segment register is needed where an access names data; the frame
+    // register, where the frame is.
+    let mut before: BTreeSet<RegId> = target::needs_data_group(one).then_some(segments.data).into_iter().collect();
+    if let Some((frame, regs)) = frame {
+        if crate::backend::framefree::needs_frame(one, regs) {
+            before.insert(frame);
+        }
+    }
+    (!during.is_empty() || !high.is_empty() || !before.is_empty()).then_some(Mask { slot, during, high, before })
 }
 
 /// The 32-bit register this one is part of.

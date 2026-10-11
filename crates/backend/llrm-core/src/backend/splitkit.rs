@@ -13,6 +13,7 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::intervals::{self as ranges, Indexes, Segment};
 use crate::analysis::loops;
+use crate::backend::liveunion::LiveUnion;
 use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::backend::{allocate, spiller};
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
@@ -1019,13 +1020,27 @@ fn named_in(
 /// What holds a register where: the occupants' segments and the points that
 /// destroy it.
 pub struct Occupied<'a> {
-    /// Each register's occupants' segments, sorted by start.
-    segments: IndexMap<RegId, Vec<Segment>>,
-    /// The furthest end among a register's segments up to each: sorted, so the
-    /// first that reaches a span is found by search. Values of different views
-    /// of one register (`al` and `ah`) overlap, so ends alone are not sorted.
-    reach: IndexMap<RegId, Vec<i64>>,
+    held: Holders<'a>,
     masks: &'a allocate::Masks,
+}
+
+enum Holders<'a> {
+    /// Each register's occupants' segments, sorted by start, and the furthest
+    /// end among a register's segments up to each: sorted, so the first
+    /// that reaches a span is found by search. Values of different views of
+    /// one register (`al` and `ah`) overlap, so ends alone are not sorted.
+    Built { segments: IndexMap<RegId, Vec<Segment>>, reach: IndexMap<RegId, Vec<i64>> },
+    /// The occupants as the allocation keeps them: asked of by the span, not
+    /// gathered for every register at each split (LLVM's
+    /// `LiveIntervalUnion::Query`).
+    Union {
+        union: &'a LiveUnion,
+        live: &'a crate::backend::live::LiveRanges,
+        value: u32,
+        /// A register with few holders is gathered, once, where it is first
+        /// asked.
+        gathered: std::cell::RefCell<IndexMap<RegId, (Vec<Segment>, Vec<i64>)>>,
+    },
 }
 
 impl<'a> Occupied<'a> {
@@ -1047,7 +1062,17 @@ impl<'a> Occupied<'a> {
                     .collect(),
             );
         }
-        Self { segments, reach, masks }
+        Self { held: Holders::Built { segments, reach }, masks }
+    }
+
+    /// The occupants `union` has, but `value`.
+    pub fn of(
+        union: &'a LiveUnion,
+        live: &'a crate::backend::live::LiveRanges,
+        value: u32,
+        masks: &'a allocate::Masks,
+    ) -> Self {
+        Self { held: Holders::Union { union, live, value, gathered: Default::default() }, masks }
     }
 }
 
@@ -1061,28 +1086,82 @@ impl Occupied<'_> {
         span: (i64, i64),
     ) -> Option<(i64, i64)> {
         let whole = allocate::_whole(register);
-        // Sorted by start, those that meet the span lie between the first that
-        // reaches it and the last that starts before its end.
-        let held = self
-            .segments
-            .get(&whole)
-            .map(
-                |all| {
-                    let from = self.reach[&whole].partition_point(|end| *end <= span.0);
-                    let to = from + all[from..].partition_point(|one| one.start < span.1);
-                    all[from..to]
-                        .iter()
-                        .filter(move |one| one.end > span.0)
-                        .map(move |one| (one.start.max(span.0), one.end.min(span.1) - 1))
-                },
-            );
+        let held = self.held(whole, span);
         let destroyed = self.masks.destroyed_within(whole, width, span.0, span.1);
-        let found =
-            held.into_iter().flatten().chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)));
+        let found = held.into_iter().chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)));
         if llrm_support::env_set("LLRM_CHECK_OCCUPIED") {
             assert_eq!(found, self.interference_by_scan(whole, width, span), "interference in span {span:?}");
         }
         found
+    }
+
+    /// The stretches of `span` something holds `whole` for.
+    fn held(
+        &self,
+        whole: RegId,
+        span: (i64, i64),
+    ) -> Vec<(i64, i64)> {
+        match &self.held {
+            // Sorted by start, those that meet the span lie between the first
+            // that reaches it and the last that starts before its end.
+            Holders::Built { segments, reach } => segments
+                .get(&whole)
+                .map(|all| {
+                    let from = reach[&whole].partition_point(|end| *end <= span.0);
+                    let to = from + all[from..].partition_point(|one| one.start < span.1);
+                    all[from..to]
+                        .iter()
+                        .filter(|one| one.end > span.0)
+                        .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Holders::Union { union, live, value, gathered } if !union.many(&whole) => {
+                let mut gathered = gathered.borrow_mut();
+                let (all, reach) = gathered
+                    .entry(whole)
+                    .or_insert_with(
+                        || {
+                            let mut all: Vec<Segment> = union
+                                .holders(&whole)
+                                .into_iter()
+                                .filter(|other| other != value)
+                                .filter_map(|other| live.get(&other))
+                                .flat_map(|one| one.segments.iter().copied())
+                                .collect();
+                            all.sort_by_key(|one| (one.start, one.end));
+                            let mut furthest = i64::MIN;
+                            let reach = all
+                                .iter()
+                                .map(|one| {
+                                    furthest = furthest.max(one.end);
+                                    furthest
+                                })
+                                .collect();
+                            (all, reach)
+                        },
+                    );
+                let from = reach.partition_point(|end| *end <= span.0);
+                let to = from + all[from..].partition_point(|one| one.start < span.1);
+                all[from..to]
+                    .iter()
+                    .filter(|one| one.end > span.0)
+                    .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                    .collect()
+            }
+            Holders::Union { union, live, value, .. } => {
+                let probe = crate::analysis::intervals::Interval::new(0, vec![Segment { start: span.0, end: span.1 }]);
+                union
+                    .meeting(&whole, &probe, *live)
+                    .into_iter()
+                    .filter(|other| other != value)
+                    .filter_map(|other| live.get(&other))
+                    .flat_map(|one| one.segments.iter())
+                    .filter(|one| one.end > span.0 && one.start < span.1)
+                    .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                    .collect()
+            }
+        }
     }
 
     /// `interference`, looking at every segment and point.
@@ -1093,13 +1172,24 @@ impl Occupied<'_> {
         span: (i64, i64),
     ) -> Option<(i64, i64)> {
         let inside = Segment { start: span.0, end: span.1 };
-        let held = self
-            .segments
-            .get(&whole)
-            .into_iter()
-            .flatten()
-            .filter(|one| one.overlaps(&inside))
-            .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1));
+        let held: Vec<(i64, i64)> = match &self.held {
+            Holders::Built { segments, .. } => segments
+                .get(&whole)
+                .into_iter()
+                .flatten()
+                .filter(|one| one.overlaps(&inside))
+                .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                .collect(),
+            Holders::Union { union, live, value, .. } => union
+                .holders(&whole)
+                .into_iter()
+                .filter(|other| other != value)
+                .filter_map(|other| live.get(&other))
+                .flat_map(|one| one.segments.iter())
+                .filter(|one| one.overlaps(&inside))
+                .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                .collect(),
+        };
         let destroyed = self
             .masks
             .iter()
@@ -1111,7 +1201,7 @@ impl Occupied<'_> {
                         || (width > 2 && mask.high.contains(&whole)))
             })
             .map(|mask| (mask.slot, mask.slot));
-        held.chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)))
+        held.into_iter().chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)))
     }
 }
 

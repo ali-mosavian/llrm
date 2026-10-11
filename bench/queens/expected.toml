@@ -1,5 +1,5 @@
-reason = "a comparison another block's branch reads is made again there (CodeGenPrepare's sinkCmpExpression): queens -1.8% clocks, grep -12 bytes; queens nib -Os +551 memory operands (the byte held in memory is a compare made again)"
-blessed = "2026-10-09"
+reason = "the frame register holds a value where nothing touches the frame (push/pop around the stretch): queens nib -Os instructions -3.9% and code -2.2% for memory operands +15.5% (the pushes and pops); sieve bas code -1.4%; quicksort bas +0.6% instructions; 10 rows better, 6 worse"
+blessed = "2026-10-11"
 
 [bas.O2]
 instructions = 338389
@@ -37,9 +37,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 272295
-memory_operands = 36773
-code_bytes = 279
+instructions = 261543
+memory_operands = 42486
+code_bytes = 273
 data_bytes = 0
 bss_bytes = 0
 
