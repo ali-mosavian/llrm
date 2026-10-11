@@ -11,7 +11,7 @@
 
                 public  B$SMID
                 extrn   B$ERROR:near
-                extrn   B$STDALCTMP:near
+                extrn   str_tmp_free_:near
 
 .code
 ;; B$SMID - overwrite the target from `start` with up to `max` bytes of the
@@ -75,7 +75,7 @@ B$SMID          proc
                 and     ecx, 3
 @@:
                 rep     movsb
-                call    B$STDALCTMP
+                call    str_tmp_free_
                 pop     edi
                 pop     esi
                 ret     4

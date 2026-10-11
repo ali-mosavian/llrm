@@ -1255,5 +1255,5 @@ clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 established = true
 inputs = ["ax", "bx", "cx", "dx", "si", "di"]
 evidence = '''
-rt/stcore.asm `cProc SCMP,<FAR>,<ES,SI,DI>` with `parmW psdL` and `parmW psdR`, so RETF 4 and es, si and di come back. It sets ES=DS, compares the shorter length with REPE CMPSB, saves the flags with PUSHF and frees each operand with B$STDALCTMP, which frees a temporary only and raises nothing; no error comes out of it, so a string comparison under ON ERROR is a plain call. The result is the flags (flags_result).
+rt/stcore.asm `cProc SCMP,<FAR>,<ES,SI,DI>` with `parmW psdL` and `parmW psdR`, so RETF 4 and es, si and di come back. It sets ES=DS, compares the shorter length with REPE CMPSB, saves the flags with PUSHF and frees each operand as a temporary only, which raises nothing; no error comes out of it, so a string comparison under ON ERROR is a plain call. The result is the flags (flags_result).
 '''

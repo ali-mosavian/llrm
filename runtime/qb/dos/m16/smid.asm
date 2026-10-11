@@ -13,7 +13,7 @@
                 include qb.inc
 
 extrn           B$ERROR:far
-extrn           B$STDALCTMP:far
+extrn           _str_tmp_free@3:far
 
 .code
 ;; B$SMID - overwrite the target from `start` with up to `max` bytes of the
@@ -86,7 +86,7 @@ B$SMID          proc    public
 @@:
                 rep     movsb
                 pop     ax
-                call    B$STDALCTMP
+                call    _str_tmp_free@3
                 pop     es
                 pop     di
                 pop     si
