@@ -12,7 +12,37 @@ use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 
-pub struct PhiElimination;
+/// What the target charges for a copy and for the `jmp` ending an edge's block,
+/// in clocks.
+#[derive(Clone, Copy, Debug)]
+pub struct EdgePrices {
+    pub copy: f64,
+    pub jump: f64,
+}
+
+impl EdgePrices {
+    pub fn of(cpu: &crate::backend::cpu::Profile) -> Option<Self> {
+        Some(Self { copy: cpu.cost("mov_rr").ok()? as f64, jump: cpu.cost("jmp_short").ok()? as f64 })
+    }
+
+    /// Whether `copies` copies cost less in a block of their own on an edge
+    /// taken `chance` of the times its predecessor runs (the copies and the
+    /// jump that ends it) than in the predecessor (the copies, every time).
+    pub fn cheaper_on_edge(
+        &self,
+        chance: f64,
+        copies: usize,
+    ) -> bool {
+        let copies = copies as f64 * self.copy;
+        chance * (copies + self.jump) < copies
+    }
+}
+
+/// `prices`: where none are known, a copy stays in its predecessor.
+#[derive(Default)]
+pub struct PhiElimination {
+    pub prices: Option<EdgePrices>,
+}
 
 impl LIRTransform for PhiElimination {
     fn class_name(&self) -> &'static str {
@@ -27,7 +57,7 @@ impl LIRTransform for PhiElimination {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        eliminated(&body)
+        eliminated_priced(&body, self.prices)
     }
 }
 
@@ -57,6 +87,14 @@ fn jump_to(target: i64) -> Semantics {
 
 /// `body` with every phi it can lower replaced by copies.
 pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
+    eliminated_priced(body, None)
+}
+
+/// `eliminated`, a copy put on its edge where `prices` say that costs less.
+pub fn eliminated_priced(
+    body: &LirBody,
+    prices: Option<EdgePrices>,
+) -> Result<LirBody, String> {
     let body = &_exits_copied(body);
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let successors: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.succ.len())).collect();
@@ -65,13 +103,12 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
     // (only an edge block); an x87 value has no copy to save.
     let floating = crate::backend::ssaspill::floating(body);
 
-    let depths = crate::analysis::intervals::depths_shared(body);
-    // An edge that leaves a loop and is taken on under a quarter of its trips
-    // (the `jmp` its block costs is paid back by the copy it keeps out of
-    // the loop's trips).
-    let rare_exit = |from: i64, into: i64| {
-        depths.get(&from) > depths.get(&into) && body.odds.chance(from, &at_of[&from].succ, into) < 0.25
+    // `copies` copies on the edge from `from` to `into` cost less than in
+    // `from`.
+    let on_edge = |from: i64, into: i64, copies: usize| {
+        prices.is_some_and(|prices| prices.cheaper_on_edge(body.odds.chance(from, &at_of[&from].succ, into), copies))
     };
+
     let once = _read_once(body);
     // One per predecessor->successor edge. Every move a phi becomes on
     // that edge is simultaneous with the others and with none outside it.
@@ -109,7 +146,7 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                     _defined_in(at_of[&w], v)
                         // A constant made in a loop to leave it runs every
                         // trip.
-                        && !(rare_exit(w, block.at) && _constant_made_in(at_of[&w], v).is_some())
+                        && !(on_edge(w, block.at, 1) && _constant_made_in(at_of[&w], v).is_some())
                         && (once.get(&v).copied() == Some(1)
                             || !floating.contains(&phi.result)
                                 && (_observed(body, &at_of, w, block.at, phi.result)
@@ -167,9 +204,8 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
             // A copy may run in the predecessor only when neither end needs
             // a distinct value on its other paths. Otherwise put it on its
             // actual edge.
-            // A copy goes where it runs least: on an edge leaving a loop, not
-            // in the predecessor, which runs every trip.
-            let leaves = rare_exit(where_, block.at);
+            // A copy goes where it costs least.
+            let leaves = on_edge(where_, block.at, pairs.len());
             if leaves
                 || pairs.iter().any(|&(result, value)| {
                     _observed(body, &at_of, where_, block.at, result)
@@ -205,7 +241,9 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
         return Ok(body.clone());
     }
     if !split.is_empty() {
-        return _split_edges(body, &split, &copies, &rename, &kept, &widths, false);
+        return _split_edges(body, &split, &copies, &rename, &kept, &widths, false, &|from, into| {
+            on_edge(from, into, 1)
+        });
     }
     let mut out = body.clone();
     for block in &mut out.blocks {
@@ -679,7 +717,7 @@ pub fn placed_on_edges(
         return out;
     }
     let kept: IndexMap<i64, Vec<Phi>> = body.blocks.iter().map(|block| (block.at, block.phis.clone())).collect();
-    _split_edges(body, &split, &copies, &IndexMap::default(), &kept, &IndexMap::default(), true)
+    _split_edges(body, &split, &copies, &IndexMap::default(), &kept, &IndexMap::default(), true, &|_, _| false)
         .expect("an empty rename cannot cycle")
 }
 
@@ -696,6 +734,7 @@ pub fn _split_edges(
     kept: &IndexMap<i64, Vec<Phi>>,
     widths: &IndexMap<u32, u32>,
     selected: bool,
+    cheaper_on_edge: &dyn Fn(i64, i64) -> bool,
 ) -> Result<LirBody, String> {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut made: IndexMap<(i64, i64), LirBlock> = IndexMap::default();
@@ -703,10 +742,6 @@ pub fn _split_edges(
     // register they were made into.
     let mut moved: BTreeSet<(i64, u32)> = BTreeSet::new();
     let read_by_phis = _read_once(body);
-    let depths = crate::analysis::intervals::depths_shared(body);
-    let rare_exit = |from: i64, into: i64| {
-        depths.get(&from) > depths.get(&into) && body.odds.chance(from, &at_of[&from].succ, into) < 0.25
-    };
     let mut landing: IndexMap<(i64, i64), i64> = IndexMap::default();
     let mut edges: Vec<(&(i64, i64), &Split)> = split.iter().collect();
     edges.sort_by_key(|(key, _)| **key);
@@ -731,7 +766,7 @@ pub fn _split_edges(
                     // A constant the predecessor made for this phi alone is
                     // made on the edge instead: once, not
                     // every trip.
-                    let constant = (read_by_phis.get(&b).copied() == Some(1) && rare_exit(where_, into))
+                    let constant = (read_by_phis.get(&b).copied() == Some(1) && cheaper_on_edge(where_, into))
                         .then(|| _constant_made_in(at_of[&where_], b))
                         .flatten();
                     let mut copy = match constant {
@@ -1062,6 +1097,7 @@ mod tests {
             &IndexMap::from_iter([(0, vec![])]),
             &IndexMap::from_iter([(2, 2)]),
             false,
+            &|_, _| false,
         )
         .unwrap();
         let edge = &done.blocks[done.blocks.len() - 1];
