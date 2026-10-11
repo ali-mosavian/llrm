@@ -207,3 +207,17 @@ def test_the_points_that_destroy_registers_are_not_looked_for_again_in_every_ins
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["facts masks"] < 100, f"cells N=448 -O2: facts masks cost {run['facts masks']} Minstr (100 allowed; 397 before): {run}"
+
+
+def test_a_split_asks_what_holds_a_register_where_it_splits_and_gathers_none_of_it():
+    """`split occupied` gathered the segments of every value placed in any register, sorted, at each split: 220 Minstr on `branches` at
+    N=400 and 933 at 800 (slope 2.07). The union of holders answers by the span asked, as LLVM's `LiveIntervalUnion::Query` does."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](400))
+        run = steps(compiler, source, "-O2")
+    assert run.get("split occupied", 0.0) < 20, f"branches N=400 -O2: split occupied cost {run.get('split occupied')} Minstr (20 allowed; ~220 before): {run}"
