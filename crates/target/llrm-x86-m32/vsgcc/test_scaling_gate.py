@@ -839,3 +839,13 @@ def test_isel_does_not_narrow_each_blocks_edges_by_the_edges_it_already_has(tmp_
     small, big = (own[label].get("isel", 0.0) - own["empty"].get("isel", 0.0) for label in ("n", "2n"))
     assert small > 5.0, f"premise: isel ran ({small:.1f} Minstr)"
     assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_a_compile_of_one_small_function_does_not_build_a_table_of_the_instruction_forms_names(tmp_path):
+    """`select::_code` built a map of owned names of iced's five thousand instruction forms in the first call of every process: `lir duplicated
+    returns`, the first to ask by name, read 5.0 Minstr of the 19 a compile of `int f(int a, int b) { return a * 3 + b; }` costs at -O2. The names are
+    hashed by the build now: 1.0 (the encoder's own first use). A step above 2.0 fails."""
+    source = tmp_path / "one.c"
+    source.write_text("int f(int a, int b) { return a * 3 + b; }\n")
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["lir duplicated returns"] <= 2.0, f"{own['lir duplicated returns']:.2f} Minstr"
