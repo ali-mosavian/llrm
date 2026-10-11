@@ -41,7 +41,10 @@ def results(tmp_path_factory):
 
 # Programs that wait for something outside the runtime.  Strict: one that starts
 # to pass must leave this table.
-WAITING: dict[str, str] = {}
+WAITING: dict[str, str] = {
+    "color_pairs": "#1488: -O2 reads an array back as 0 after a handled-error loop (dse/gcse)",
+    "color_ranges": "#1488: the same bug; the screen compare differs",
+}
 
 
 def case(name: str):
