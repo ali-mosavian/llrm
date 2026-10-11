@@ -1865,7 +1865,7 @@ fn _allocated(
         let mut rewritten: Option<Vec<u32>> = None;
         // The body as it was before this round rewrote it.
         let mut before: Option<LirBody> = None;
-        if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
+        if splitting && at == Stage::Split && !bound {
             let _split = llrm_support::debug::span("regalloc split");
             let bundles = spillplacement::edge_bundles(&body);
             let live_sets = IntervalLive { live: &facts.live, index: &facts.index };
@@ -1890,6 +1890,9 @@ fn _allocated(
                 splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width)
             }) {
                 Some(found) => vec![found],
+                // As LLVM's `RS_Split2`: a piece made without shrinking is not
+                // split around a region again, but its blocks may be split.
+                None if pieces.contains(&value) => splitkit::per_block(&body, value, sets),
                 None => {
                     let placed = llrm_support::debug::timed("split placed", || {
                         splitkit::placed(
