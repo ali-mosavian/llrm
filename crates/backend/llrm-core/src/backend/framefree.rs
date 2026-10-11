@@ -12,9 +12,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::model::ir::{Loc, Operation};
-use crate::model::lir::LirBody;
+use crate::model::lir::{Insn, LirBody};
 
 /// The registers that are the frame register as LIR names it.
 fn is_frame(
@@ -154,4 +155,127 @@ pub fn without_frame_register(
     }
     llrm_support::debug!("frame", "{}: freed", body.name);
     true
+}
+
+/// Whether `one` needs the frame register to hold the frame: it names a frame
+/// cell, the frame register or the stack pointer, or it is a return, a call,
+/// or an instruction that may trap (a runtime built on the frame chain walks
+/// it from the trap), so no value may be in the frame register across it.
+pub fn needs_frame(
+    one: &Insn,
+    regs: Regs,
+) -> bool {
+    let Some(what) = &one.what else { return true };
+    if matches!(
+        what.op,
+        Operation::Call
+            | Operation::Return
+            | Operation::Leave
+            | Operation::Divide
+            | Operation::Escape
+            | Operation::Barrier
+            | Operation::Data
+            | Operation::Restore
+            | Operation::FloatLoad
+            | Operation::FloatStore
+            | Operation::FloatArith
+            | Operation::FloatArithPop
+            | Operation::FloatUnary
+    ) || what.name.as_deref().is_some_and(|name| ["int", "into", "iret", "enter", "bound"].contains(&name))
+        || one.clobbers.iter().chain(&one.clobbers_high).any(|register| regs.is_frame(*register))
+    {
+        return true;
+    }
+    let named = |register: RegId| register != RegId::None && (regs.is_frame(register) || regs.is_stack(register));
+    what.dests
+        .iter()
+        .chain(&what.sources)
+        .any(
+            |place| place.in_frame()
+                || match place {
+                    Loc::Reg(reg) => named(reg.register),
+                    Loc::Mem(cell) => {
+                        named(cell.through)
+                            || named(cell.index_through)
+                            || cell.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Stack)
+                    }
+                    Loc::Address(address) => named(address.through) || named(address.index_through),
+                    _ => false,
+                },
+        )
+}
+
+/// Whether a function may give its frame register to a value where nothing
+/// touches the frame: it has no inline code, no landing pad, no second return
+/// and is no interrupt handler (which may interrupt anything that reads the
+/// chain of frames).
+pub fn parkable(
+    body: &LirBody,
+    inline: bool,
+    landing: bool,
+    interrupt: bool,
+) -> bool {
+    !(inline || landing || interrupt || body.returns_twice)
+}
+
+/// What a body's parking must keep to (`LLRM_CHECK_PARKED`): the frame register
+/// is saved on every way into a stretch and restored on every way out of it, no
+/// instruction in a stretch needs the frame, and no return is inside one.
+pub fn parking_holds(body: &LirBody) -> Result<(), String> {
+    use std::collections::BTreeMap;
+    let regs = body.regs();
+    let parking = |one: &Insn, op: Operation| {
+        one.frame_adjust
+            && one.what.as_ref().is_some_and(|what| {
+                what.op == op
+                    && what.dests.iter().chain(&what.sources).any(|place| {
+                        matches!(
+                            place,
+                            Loc::Reg(reg) if reg.register != RegId::None && regs.is_frame(reg.register)
+                        )
+                    })
+            })
+    };
+    let mut at: BTreeMap<i64, bool> = BTreeMap::new();
+    let mut pending = vec![(body.entry, false)];
+    while let Some((block, mut parked)) = pending.pop() {
+        // The instruction after a push may read the frame as it makes the value
+        // that takes the register: it reads before it writes.
+        let mut fresh = false;
+        match at.get(&block) {
+            Some(&there) if there != parked => {
+                return Err(format!("{}: block {block} is entered both parked and not", body.name));
+            }
+            Some(_) => continue,
+            None => {
+                at.insert(block, parked);
+            }
+        }
+        let Some(found) = body.blocks.iter().find(|one| one.at == block) else { continue };
+        for one in &found.insns {
+            if parking(one, Operation::Push) {
+                if parked {
+                    return Err(format!("{}: the frame register is saved twice in block {block}", body.name));
+                }
+                parked = true;
+                fresh = true;
+                continue;
+            } else if parking(one, Operation::Pop) {
+                if !parked {
+                    return Err(format!("{}: the frame register is restored unsaved in block {block}", body.name));
+                }
+                parked = false;
+            } else if parked && !fresh && needs_frame(one, regs) {
+                return Err(format!(
+                    "{}: an instruction at {} needs the frame inside a parked stretch",
+                    body.name, one.at
+                ));
+            }
+            fresh = false;
+        }
+        for next in &found.succ {
+            pending.push((*next, parked));
+        }
+    }
+    Ok(())
 }

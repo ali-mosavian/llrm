@@ -592,7 +592,7 @@ fn _word_address_roles(
         None => {
             let numbered = ranges::indexed(body);
             own_live = ranges::intervals(body, Some(&numbered));
-            own_masks = _masks(body, &numbered, segments);
+            own_masks = _masks(body, &numbered, segments, registers.frame_needed());
             (&own_live as &dyn crate::backend::live::Ranges, &own_masks)
         }
     };

@@ -1723,7 +1723,7 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
         let (plain, _) = body(seed, &shape);
         for body in [in_ssa(&plain), plain] {
             let live = intervals(&body, None);
-            let masks = _masks(&body, &indexed(&body), &crate::backend::target::BUILT_IN);
+            let masks = _masks(&body, &indexed(&body), &crate::backend::target::BUILT_IN, None);
             let before = worked(&body);
             let given = classes_given(
                 &body,
@@ -1775,7 +1775,7 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
     let blocks = vec![LirBlock::new(1, vec![Arc::new(define(1, 1)), Arc::new(define(2, 2)), Arc::new(load)])];
     let pairs = LirBody::new("f", 1, blocks, Default::default(), Default::default());
     let live = intervals(&pairs, None);
-    let masks = _masks(&pairs, &indexed(&pairs), &crate::backend::target::BUILT_IN);
+    let masks = _masks(&pairs, &indexed(&pairs), &crate::backend::target::BUILT_IN, None);
     let given = classes_given(
         &pairs,
         &std::collections::BTreeSet::new(),

@@ -884,6 +884,20 @@ fn staged(
         registers.free = true;
         registers.saved.push((registers.pointer, registers.pointer));
         Rc::new(target.classes.with_frame_free())
+    } else if crate::backend::framefree::parkable(
+        &body,
+        !inline.is_empty(),
+        landing.is_some(),
+        module
+            .named(name)
+            .is_some_and(
+                |id| matches!(
+                    &module.global(id).kind,
+                    GlobalKind::Function(function) if function.calling_convention == llrm_mir::opcode::X86_INTR
+                ),
+            ),
+    ) {
+        Rc::new(target.classes.with_parkable_frame())
     } else {
         Rc::clone(target.classes)
     };

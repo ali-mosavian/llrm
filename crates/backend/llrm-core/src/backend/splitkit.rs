@@ -314,14 +314,18 @@ pub fn crossings(
     region: &Region,
     live: &dyn allocate::LiveAt,
 ) -> Vec<(Crossing, bool)> {
-    crossings_in(&Blocks::of(body), value, region, live)
+    crossings_in(&Blocks::of(body), value, region, live, false)
 }
 
+/// `crossings`, where `written` says the region changes the value whether or
+/// not it names it: a parked frame register is overwritten, and restored on
+/// leaving.
 fn crossings_in(
     blocks: &Blocks,
     value: u32,
     region: &Region,
     live: &dyn allocate::LiveAt,
+    forced: bool,
 ) -> Vec<(Crossing, bool)> {
     let (body, graph) = (blocks.body, &blocks.graph);
     // A block is in a crossing only if the region has it or has a successor of
@@ -332,11 +336,11 @@ fn crossings_in(
         near.insert(position);
         near.extend(graph.parents[position].iter().copied());
     }
-    let found = crossings_among(blocks, value, region, live, near.into_iter());
+    let found = crossings_among(blocks, value, region, live, near.into_iter(), forced);
     if llrm_support::env_set("LLRM_CHECK_SPLIT") {
         assert_eq!(
             found,
-            crossings_among(blocks, value, region, live, 0..body.blocks.len()),
+            crossings_among(blocks, value, region, live, 0..body.blocks.len(), forced),
             "{}: the crossings of value#{value} differ from the scan",
             body.name
         );
@@ -350,17 +354,14 @@ fn crossings_among(
     region: &Region,
     live: &dyn allocate::LiveAt,
     among: impl Iterator<Item = usize>,
+    forced: bool,
 ) -> Vec<(Crossing, bool)> {
     let body = blocks.body;
-    let written = region
-        .spans
-        .iter()
-        .any(
-            |(at, ranges)| {
-                let block = blocks.block(*at);
-                ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value)))
-            },
-        );
+    let written = forced
+        || region.spans.iter().any(|(at, ranges)| {
+            let block = blocks.block(*at);
+            ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value)))
+        });
     let mut out = Vec::new();
     // The phis a block's successor arrives with, found by the successor's
     // address: a scan of every block for each edge was the square of the
@@ -453,27 +454,112 @@ pub fn carved_moving(
     width: u32,
     region: &Region,
 ) -> Option<(LirBody, Moved)> {
+    cut_moving(body, value, region, &Cut::Piece { fresh, width })
+}
+
+/// What a cut puts at a crossing of its region.
+enum Cut {
+    /// A fresh value reads the region; copies join it to the value.
+    Piece { fresh: u32, width: u32 },
+    /// The register is saved before the region and restored after it, the
+    /// region keeping what it holds: a `push` and a `pop`.
+    Parked { register: RegId },
+}
+
+/// Live in every block, and never named by an instruction: what is saved
+/// around a stretch of code is its whole, the frame register's old value.
+struct Everywhere;
+
+impl allocate::LiveAt for Everywhere {
+    fn live_in(
+        &self,
+        _block: i64,
+        _value: u32,
+    ) -> bool {
+        true
+    }
+
+    fn live_out(
+        &self,
+        _block: i64,
+        _value: u32,
+    ) -> bool {
+        true
+    }
+}
+
+/// `body` with `register` saved over `region`: pushed where control enters it,
+/// popped where it leaves, so what the region does to the register does not
+/// matter to what runs outside it. None where it cannot be cut.
+pub fn parked(
+    body: &LirBody,
+    register: RegId,
+    region: &Region,
+) -> Option<(LirBody, Moved)> {
+    cut_moving(body, u32::MAX, region, &Cut::Parked { register })
+}
+
+fn cut_moving(
+    body: &LirBody,
+    value: u32,
+    region: &Region,
+    how: &Cut,
+) -> Option<(LirBody, Moved)> {
+    let piece = matches!(how, Cut::Piece { .. });
     // Trimming to the references can end a range inside a parallel group; snap
     // last.
-    let region = region.trimmed(body, value).snapped(body);
+    let region = if piece { region.trimmed(body, value).snapped(body) } else { region.snapped(body) };
     let blocks = Blocks::of(body);
-    let referenced = region
-        .spans
-        .iter()
-        .any(
-            |(at, ranges)| {
-                let block = blocks.block(*at);
-                ranges.iter().any(|(from, to)| {
-                    block.insns[*from..*to].iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value))
-                })
-            },
-        );
+    let referenced = !piece
+        || region.spans.iter().any(|(at, ranges)| {
+            let block = blocks.block(*at);
+            ranges.iter().any(|(from, to)| {
+                block.insns[*from..*to].iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value))
+            })
+        });
     if !referenced {
         return None;
     }
     // Only `value` is asked of: its liveness alone.
-    let live = live_of(body, value);
-    let found = crossings(body, value, &region, &*live);
+    // Control enters a loop that is the entry block from its own back edge as
+    // well as from the function's start: one push at its top would run each
+    // trip.
+    if !piece
+        && region.enters(body.entry)
+        && blocks.graph.predecessors(body, blocks.graph.position[&body.entry]).next().is_some()
+    {
+        return None;
+    }
+    let live: Box<dyn allocate::LiveAt> = if piece { live_of(body, value) } else { Box::new(Everywhere) };
+    let found = crossings_in(&blocks, value, &region, &*live, !piece);
+    if !piece {
+        // Snapping to a parallel group can take an instruction that needs the
+        // frame into the stretch: only the first, which reads before
+        // the value that takes the register is written, may be in it.
+        let regs = body.regs();
+        for (at, ranges) in &region.spans {
+            let block = blocks.block(*at);
+            for (from, to) in ranges {
+                let entered = found
+                    .iter()
+                    .any(
+                        |(crossing, entering)| *entering
+                            && match crossing {
+                                Crossing::Inside { block, position } => block == at && position == from,
+                                Crossing::Edge { to, .. } => to == at && *from == 0,
+                            },
+                    );
+                let first = if entered { *from + 1 } else { *from };
+                if block.insns[*from..*to]
+                    .iter()
+                    .enumerate()
+                    .any(|(offset, one)| from + offset >= first && crate::backend::framefree::needs_frame(one, regs))
+                {
+                    return None;
+                }
+            }
+        }
+    }
     let graph = &blocks.graph;
     let at_of = &blocks;
     // (block, position) -> copies before it; usize::MAX is before the
@@ -494,7 +580,14 @@ pub fn carved_moving(
     for (from, to, entering) in &edges {
         let same = graph.predecessors(body, graph.position[to]).all(|one| edges.contains(&(one, *to, *entering)));
         let every = at_of.block(*from).succ.iter().all(|next| edges.contains(&(*from, *next, *entering)));
-        if every && !at_of.block(*from).insns.is_empty() {
+        // A copy made twice is harmless; a `push` made twice is not, so a
+        // target every edge into which crosses takes it at its top,
+        // from every edge.
+        if !piece && same && *to != body.entry && !at_of.block(*to).arrives().contains(&value) {
+            if !inserted.get(&(*to, 0)).is_some_and(|had| had.contains(entering)) {
+                inserted.entry((*to, 0)).or_default().push(*entering);
+            }
+        } else if every && !at_of.block(*from).insns.is_empty() {
             if !inserted.get(&(*from, usize::MAX)).is_some_and(|had| had.contains(entering)) {
                 inserted.entry((*from, usize::MAX)).or_default().push(*entering);
             }
@@ -511,8 +604,12 @@ pub fn carved_moving(
         }
     }
     // `defFromParent`: a value that reads nothing is remade, not copied.
-    let remade = spiller::recomputed(body, value);
+    let remade = if piece { spiller::recomputed(body, value) } else { None };
     let copy = |beside: &Insn, entering: bool| {
+        let (fresh, width) = match how {
+            Cut::Piece { fresh, width } => (*fresh, *width),
+            Cut::Parked { register } => return _parking(beside, *register, entering),
+        };
         let into = if entering { fresh } else { value };
         match &remade {
             Some(define) => {
@@ -526,7 +623,10 @@ pub fn carved_moving(
             None => _copy(beside, value, fresh, width),
         }
     };
-    let rename = IndexMap::from_iter([(value, fresh)]);
+    let rename = IndexMap::from_iter(match how {
+        Cut::Piece { fresh, .. } => Some((value, *fresh)),
+        Cut::Parked { .. } => None,
+    });
     // The blocks as they were, but those a copy is put in or the region
     // covers, which are in `touched`: the positions of an untouched block stay
     // (`Moved` says nothing of it).
@@ -555,7 +655,11 @@ pub fn carved_moving(
             }
             shift.push(insns.len());
             if let Some(one) = block.insns.get(position) {
-                insns.push(if region.covers(block.at, position) { _renamed(one, &rename) } else { Arc::clone(one) });
+                insns.push(if piece && region.covers(block.at, position) {
+                    _renamed(one, &rename)
+                } else {
+                    Arc::clone(one)
+                });
             }
         }
         moved.insert(block.at, shift);
@@ -628,6 +732,26 @@ pub fn carved_moving(
 
 fn _terminates(one: &Insn) -> bool {
     one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch))
+}
+
+/// A `push` of `register` where the region is entered, a `pop` into it where it
+/// is left: instructions no pass moves (`frame_adjust`).
+fn _parking(
+    beside: &Insn,
+    register: RegId,
+    entering: bool,
+) -> Arc<Insn> {
+    let at = beside.covers.map_or(beside.at, |covers| covers.0);
+    let place = Loc::Reg(ir::Reg { register, width: register.size() as u32 });
+    let what = if entering {
+        Semantics { name: Some("push".to_owned()), sources: vec![place], ..Semantics::new(Operation::Push) }
+    } else {
+        Semantics { name: Some("pop".to_owned()), dests: vec![place], ..Semantics::new(Operation::Pop) }
+    };
+    let mut made = Insn::new(beside.at, Some((at, at)), Some(what), Vec::new(), Vec::new());
+    made.frame_adjust = true;
+    made.call = beside.call.clone();
+    Arc::new(made)
 }
 
 /// A move that claims none of the original bytes.
@@ -1248,8 +1372,19 @@ fn _benefit(
     live: &dyn allocate::LiveAt,
     saving: &dyn Fn(&Insn) -> f64,
 ) -> f64 {
-    let body = blocks.body;
-    let saved: f64 = named_in(body, value)
+    _saved(blocks.body, value, region, frequency, saving)
+        - _copies(&crossings_in(blocks, value, region, live, false), frequency)
+}
+
+/// What holding `value` in a register through `region` saves at its references.
+fn _saved(
+    body: &LirBody,
+    value: u32,
+    region: &Region,
+    frequency: &dyn Fn(i64) -> f64,
+    saving: &dyn Fn(&Insn) -> f64,
+) -> f64 {
+    named_in(body, value)
         .iter()
         .map(|(block, positions)| {
             let at = body.blocks[*block].at;
@@ -1260,15 +1395,49 @@ fn _benefit(
                 .sum::<f64>()
                 * frequency(at)
         })
-        .sum();
-    let copies: f64 = crossings_in(blocks, value, region, live)
+        .sum()
+}
+
+/// What the instructions at `crossings` cost, one each by how often they run.
+fn _copies(
+    crossings: &[(Crossing, bool)],
+    frequency: &dyn Fn(i64) -> f64,
+) -> f64 {
+    crossings
         .iter()
         .map(|(at, _)| match at {
             Crossing::Inside { block, .. } => frequency(*block),
             Crossing::Edge { from, to } => frequency(*from).min(frequency(*to)),
         })
-        .sum();
-    saved - copies
+        .sum()
+}
+
+/// The region `segments` (slots, as `index` numbers them) cover: from the
+/// instruction that makes a range to the one that last reads it.
+pub fn region_of(
+    body: &LirBody,
+    index: &Indexes,
+    segments: &[Segment],
+) -> Region {
+    let mut region = Region::default();
+    for block in &body.blocks {
+        let (first, last) = index.span[&block.at];
+        for segment in segments {
+            if segment.end <= first || segment.start >= last {
+                continue;
+            }
+            let from = if segment.start <= first { 0 } else { index.position(block, segment.start).max(0) as usize };
+            let to = if segment.end >= last {
+                block.insns.len()
+            } else {
+                (index.position(block, segment.end - 1) + 1).max(0) as usize
+            };
+            if from < to {
+                region.add(block.at, from, to);
+            }
+        }
+    }
+    region
 }
 
 /// Whether holding `region` in a register saves more than its copies cost,
@@ -2086,6 +2255,59 @@ mod tests {
         let sets = (&live.0, &live.1);
         assert!(super::pays(&body, 3, &region, &sets, &|_| 1.0), "premise: three reloads outweigh two copies");
         assert!(!super::pays(&body, 3, &region, &sets, &crate::backend::allocate::_held_saving));
+    }
+
+    /// A loop that holds the frame register: it is saved on the one edge that
+    /// enters the loop and restored on the one that leaves it, and not once per
+    /// trip, the loop being entered from its own back edge as well.
+    #[test]
+    fn test_a_parked_loop_is_saved_where_entered_and_restored_where_left() {
+        let body = _pointer_across_a_loop();
+        let (cut, _) = super::parked(&body, RegId::BP, &region(&body, &[0x10])).expect("a cut");
+        let parking = |at: i64, op: Operation| {
+            cut.blocks
+                .iter()
+                .find(|block| block.at == at)
+                .map(|block| {
+                    block
+                        .insns
+                        .iter()
+                        .filter(|one| one.frame_adjust && one.what.as_ref().is_some_and(|what| what.op == op))
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        assert_eq!(parking(0, Operation::Push), 1, "saved at the end of the block that enters the loop");
+        assert_eq!(parking(0x10, Operation::Push) + parking(0x10, Operation::Pop), 0, "nothing per trip");
+        assert_eq!(parking(0x20, Operation::Pop), 1, "restored at the top of the block that leaves it");
+        crate::backend::framefree::parking_holds(&cut).expect("balanced on every path");
+    }
+
+    /// The instruction right after a push may read the frame as it makes the
+    /// value that takes the register; a second one may not.
+    #[test]
+    fn test_only_the_first_instruction_of_a_stretch_may_read_the_frame() {
+        let frame_read = |at: i64, into: u32| {
+            _insn(
+                at,
+                sem(
+                    Operation::Move,
+                    "mov",
+                    vec![held(into, 2)],
+                    vec![Loc::Mem(Mem { through: RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -2)), 2) })],
+                    None,
+                ),
+                &[into],
+                &[],
+            )
+        };
+        let one = |insns: Vec<Arc<Insn>>| {
+            body("one", vec![block(0, vec![move_imm(0, 3, 1), jump(2, 0x10)], &[0x10]), block(0x10, insns, &[])])
+        };
+        let first = one(vec![frame_read(0x10, 4), add(0x12, 4)]);
+        assert!(super::parked(&first, RegId::BP, &region(&first, &[0x10])).is_some());
+        let second = one(vec![add(0x10, 3), frame_read(0x12, 4)]);
+        assert!(super::parked(&second, RegId::BP, &region(&second, &[0x10])).is_none());
     }
 
     /// A value whose register is taken before and after a loop, but free in

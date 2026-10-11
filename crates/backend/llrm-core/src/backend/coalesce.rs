@@ -90,7 +90,7 @@ pub fn joined(
 
     let index = ranges::indexed(body);
     let mut live = ranges::intervals(body, Some(&index));
-    let masks = allocate::_masks(body, &index, segments);
+    let masks = allocate::_masks(body, &index, segments, None);
     let mut widths = allocate::_widest(body);
     let where_of = regclass::classes(body, &BTreeSet::new(), segments, classes);
     let everything: BTreeSet<RegId> = classes.available.iter().copied().collect();

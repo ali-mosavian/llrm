@@ -30,6 +30,14 @@ pub struct RegisterClasses {
     pub word_bases: BTreeSet<RegId>,
     pub word_indexes: BTreeSet<RegId>,
     pub frame: RegId,
+    /// The function may give the frame register to a value where nothing
+    /// touches the frame, saving it with a `push` before and restoring it
+    /// with a `pop` after (`parked`).
+    pub parkable: bool,
+    /// This allocation offers the frame register: it is one more register,
+    /// the last given out, and a point that needs the frame destroys it
+    /// (`masks`).
+    pub offers_frame: bool,
     /// Every register an address may be made of, the frame's included:
     /// `[bx+si]`, `[bp+di]`.
     pub addressing: BTreeSet<RegId>,
@@ -110,6 +118,8 @@ impl RegisterClasses {
             word_bases: words("base"),
             word_indexes: words("index"),
             frame: arch.frame_register(),
+            parkable: false,
+            offers_frame: false,
             addressing,
             encodable_bases,
             byte_words: {
@@ -132,14 +142,31 @@ impl RegisterClasses {
     pub fn with_frame_free(&self) -> Self {
         let whole = self.frame;
         let mut free = self.clone();
-        if !free.available.contains(&whole) {
-            free.available.push(whole);
+        // As every other register of `available` is named: by its root.
+        let root = crate::model::ir::root(whole);
+        if !free.available.contains(&root) {
+            free.available.push(root);
         }
         if let Some(word) = llrm_x86::registers::word_of(whole) {
             free.word_bases.insert(word);
             free.word_indexes.insert(word);
         }
         free
+    }
+
+    /// These classes for a function that may park the frame register.
+    pub fn with_parkable_frame(&self) -> Self {
+        Self { parkable: true, ..self.clone() }
+    }
+
+    /// The register points that need the frame destroy, where it is offered.
+    pub fn frame_needed(&self) -> Option<RegId> {
+        self.offers_frame.then(|| crate::model::ir::root(self.frame))
+    }
+
+    /// These classes with the frame register offered to values.
+    pub fn offering_frame(&self) -> Self {
+        Self { offers_frame: true, ..self.with_frame_free() }
     }
 
     /// 16-bit x86's, which the tests of this crate are written for.

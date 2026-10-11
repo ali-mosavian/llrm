@@ -1394,7 +1394,8 @@ impl Facts {
                 );
             }
         }
-        let masks = llrm_support::debug::timed("facts masks", || _masks(body, &index, segments));
+        let masks =
+            llrm_support::debug::timed("facts masks", || _masks(body, &index, segments, registers.frame_needed()));
         let widths = llrm_support::debug::timed("facts widths", || match prior {
             Some((before, changes, _)) => {
                 let found = _widest_after(&before.widths, body, &changes.touched);
@@ -2037,6 +2038,11 @@ fn _allocated(
     });
     LAST_STATS
         .with(|stats| stats.set((splits_made, pieces.len(), pieces.intersection(&spilled).count(), spilled.len())));
+    if rewrite.is_some() {
+        if let Some(frame) = classes.frame_needed() {
+            body = _frame_parked(&body, &r#where, &facts, frame, classes, segments)?;
+        }
+    }
     Ok((
         Assignment {
             r#where,
@@ -2048,6 +2054,126 @@ fn _allocated(
         body,
         spilled,
     ))
+}
+
+/// Whether the frame register can be of use to the body the base allocation
+/// made from `input`: a loop that needs the frame for nothing in `input` has
+/// frame cells in `out`, which are spill code, where the register is free for
+/// the loop's trips and a `push` and a `pop` run once. Asked before a second
+/// allocation is spent on finding out.
+fn _worth_parking(
+    input: &LirBody,
+    out: &LirBody,
+) -> bool {
+    let regs = input.regs();
+    let needs = |block: &LirBlock| block.insns.iter().any(|one| crate::backend::framefree::needs_frame(one, regs));
+    let framed: BTreeSet<i64> = input.blocks.iter().filter(|block| needs(block)).map(|block| block.at).collect();
+    let spilling: BTreeSet<i64> =
+        out.blocks.iter().filter(|block| !framed.contains(&block.at) && needs(block)).map(|block| block.at).collect();
+    if spilling.is_empty() {
+        return false;
+    }
+    crate::analysis::loops::loops(&out.blocks, Some(out.entry)).iter().any(|found| {
+        found.body.iter().any(|at| spilling.contains(at)) && found.body.iter().all(|at| !framed.contains(at))
+    })
+}
+
+/// `body` with each near cell based on a value in `holders` (the frame register
+/// is theirs) naming the data segment: a cell with none is read through the
+/// register's own, the stack's, which reaches the data group only where the
+/// memory model says it does.
+fn _through_data_segment(
+    body: &LirBody,
+    holders: &BTreeSet<u32>,
+    regs: llrm_lir::registers::Regs,
+    segments: &Segments,
+) -> LirBody {
+    let Some(data) = regs.data_segment else { return body.clone() };
+    if segments.through == regs.stack_segment && regs.stack_segment.is_some() {
+        return body.clone();
+    }
+    let named = |cell: &Mem| {
+        cell.addr.is_none() && cell.selector.is_none() && cell.base.is_some_and(|base| holders.contains(&base.value))
+    };
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let insns: Vec<Arc<Insn>> = block
+                .insns
+                .iter()
+                .map(|one| {
+                    let Some(what) = &one.what else { return Arc::clone(one) };
+                    let places = what.dests.iter().chain(&what.sources);
+                    if !places.clone().any(|place| matches!(place, Loc::Mem(cell) if named(cell))) {
+                        return Arc::clone(one);
+                    }
+                    let spelled = |place: &Loc| match place {
+                        Loc::Mem(cell) if named(cell) => Loc::Mem(Mem {
+                            base: cell.base,
+                            offset: cell.offset,
+                            disp_width: 2,
+                            ..Mem::new(
+                                Some(Addr { segment: data.iced(), ..Addr::new(Space::Literal, cell.offset) }),
+                                cell.width,
+                            )
+                        }),
+                        other => other.clone(),
+                    };
+                    let mut made = (**one).clone();
+                    made.what = Some(Semantics {
+                        dests: what.dests.iter().map(spelled).collect(),
+                        sources: what.sources.iter().map(spelled).collect(),
+                        ..what.clone()
+                    });
+                    Arc::new(made)
+                })
+                .collect();
+            block.with_insns(insns)
+        })
+        .collect();
+    body.with_blocks(blocks)
+}
+
+/// `body` with the frame register saved over every stretch of it a value holds:
+/// a `push` before the stretch and a `pop` after. No point in a stretch needs
+/// the frame (`_masks`), so what the register holds there is the value's alone.
+fn _frame_parked(
+    body: &LirBody,
+    placed: &IndexMap<u32, RegId>,
+    facts: &Facts,
+    frame: RegId,
+    classes: &RegisterClasses,
+    segments: &Segments,
+) -> Result<LirBody, Error> {
+    let holders: BTreeSet<u32> =
+        placed.iter().filter(|(_, register)| _whole(**register) == frame).map(|(value, _)| *value).collect();
+    let body = &_through_data_segment(body, &holders, classes.registers, segments);
+    let segments: Vec<ranges::Segment> = placed
+        .iter()
+        .filter(|(_, register)| _whole(**register) == frame)
+        .filter_map(|(value, _)| facts.live.get(value))
+        .flat_map(|interval| interval.segments.iter().copied())
+        .collect();
+    if segments.is_empty() {
+        return Ok(body.clone());
+    }
+    let region = splitkit::region_of(body, &facts.index, &segments);
+    let register = classes.frame;
+    match splitkit::parked(body, register, &region) {
+        Some((cut, _moved)) => {
+            llrm_support::debug!("park", "{}: the frame register parked over {:?}", body.name, region.spans);
+            if llrm_support::debug::verifying() || llrm_support::env_set("LLRM_CHECK_PARKED") {
+                if let Err(why) = crate::backend::framefree::parking_holds(&cut) {
+                    panic!("{why}");
+                }
+            }
+            Ok(cut)
+        }
+        None => {
+            Err(Unplaced(format!("{}: the frame register cannot be saved over {:?}", body.name, region.spans)).into())
+        }
+    }
 }
 
 thread_local! {
@@ -2410,13 +2536,21 @@ pub fn _masks(
     body: &LirBody,
     index: &Indexes,
     segments: &Segments,
+    frame: Option<RegId>,
 ) -> Masks {
     let mut out: Vec<Mask> = Vec::new();
+    let regs = body.regs();
     for block in &body.blocks {
         for one in &block.insns {
             let during: BTreeSet<RegId> = one.clobbers.iter().map(|register| _whole(*register)).collect();
             let high: BTreeSet<RegId> = one.clobbers_high.iter().map(|register| _whole(*register)).collect();
-            let before: BTreeSet<RegId> = target::needs_data_group(one).then_some(segments.data).into_iter().collect();
+            // The data segment register is needed where an access names data;
+            // the frame register, where the frame is.
+            let before: BTreeSet<RegId> = target::needs_data_group(one)
+                .then_some(segments.data)
+                .into_iter()
+                .chain(frame.filter(|_| crate::backend::framefree::needs_frame(one, regs)))
+                .collect();
             if !during.is_empty() || !high.is_empty() || !before.is_empty() {
                 out.push(Mask { slot: index.at[&ranges::key(one)], during, high, before });
             }
@@ -2958,6 +3092,7 @@ impl RegAlloc {
         // One allocation per candidate body, each splitting and spilling as
         // it goes; the one whose output costs least is kept.
         let run = |name: &'static str,
+                   classes: &RegisterClasses,
                    candidate: &LirBody,
                    unspillable: &BTreeSet<u32>,
                    protected: &BTreeSet<u32>,
@@ -2965,7 +3100,7 @@ impl RegAlloc {
          -> Result<Outcome, Error> {
             let _run = llrm_support::debug::span(name);
             let mut pins = prefer.clone();
-            pins.extend(constrain::required(candidate, &self.classes));
+            pins.extend(constrain::required(candidate, classes));
             let before = last_resorts();
             let (got, out, spilled) = rewritten(
                 candidate,
@@ -2974,14 +3109,14 @@ impl RegAlloc {
                 Some(protected),
                 (&cpu).into(),
                 &segments,
-                &self.classes,
+                classes,
                 &mut frame.borrow_mut(),
                 splitting,
             )?;
             let cost = llrm_support::debug::timed("regalloc cost", || _emitted(&out));
             Ok(Outcome { cost, got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
         };
-        let mut best = run("regalloc base", &body, &reloads, &BTreeSet::new(), true)?;
+        let mut best = run("regalloc base", &self.classes, &body, &reloads, &BTreeSet::new(), true)?;
         llrm_support::debug!(
             "regalloc",
             "{}: {} insns, {} spilled, cost {}, {} forced",
@@ -2994,6 +3129,34 @@ impl RegAlloc {
         let spilled = best.spilled.clone();
         let base_stats = LAST_STATS.with(std::cell::Cell::get);
         BASE_SPLITS.with(|splits| splits.set(base_stats.0));
+        // Where the function may park its frame register and the base
+        // allocation spilled: once more with the register offered, and
+        // kept if cheaper, the pushes and pops it costs included.
+        if !spilled.is_empty() && self.classes.parkable && cpu.routes && _worth_parking(&body, &best.out) {
+            let offering = self.classes.offering_frame();
+            frame.borrow_mut().restore(&start);
+            TRIALS.with(|count| count.set(count.get() + 1));
+            // A stretch that cannot be saved over leaves no trial.
+            if let Ok(trial) = run("regalloc park", &offering, &body, &reloads, &BTreeSet::new(), true) {
+                llrm_support::debug!(
+                    "regalloc",
+                    "  trial park: {} spilled, cost {}, {} forced",
+                    trial.spilled.len(),
+                    trial.cost,
+                    trial.forced
+                );
+                // Only a body that parks it: the register offered may also make
+                // a different allocation, which is the search's
+                // to judge. And by more than the model's
+                // resolution: block frequencies assume a trip count
+                // for every loop, and a push and a pop run once per entry.
+                if trial.out.insns().iter().any(|one| one.frame_adjust) && trial.cost < best.cost * (1.0 - PARK_MARGIN)
+                {
+                    llrm_support::debug!("regalloc", "  kept the trial");
+                    best = trial;
+                }
+            }
+        }
         if !spilled.is_empty() && cpu.search {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
@@ -3056,10 +3219,11 @@ impl RegAlloc {
                     }
                     frame.borrow_mut().restore(&start);
                     TRIALS.with(|count| count.set(count.get() + 1));
-                    let trial = match run("regalloc trial", &candidate, &unspillable, &protected, splitting) {
-                        Ok(trial) => trial,
-                        Err(other) => return Err(other),
-                    };
+                    let trial =
+                        match run("regalloc trial", &self.classes, &candidate, &unspillable, &protected, splitting) {
+                            Ok(trial) => trial,
+                            Err(other) => return Err(other),
+                        };
                     llrm_support::debug!(
                         "regalloc",
                         "  trial {shape:?} (splitting {splitting}): {} spilled, cost {}, {} forced",
@@ -3120,6 +3284,11 @@ struct Outcome {
 const INSTRUCTION: f64 = 1.0;
 const MEMORY_OPERAND: f64 = 1.0;
 
+/// How much cheaper (as a fraction of the cost) a body that parks the frame
+/// register must be: sieve's inner loop gained 1% on the model and lost 8% of
+/// the instructions it runs, where its trip count is two, not ten.
+const PARK_MARGIN: f64 = 0.02;
+
 /// What a body costs to run: its instructions and memory operands, each
 /// weighted by how often its block runs. Alternatives differ only in what the
 /// allocator added, so this is the cost of that.
@@ -3134,10 +3303,15 @@ fn _emitted(body: &LirBody) -> f64 {
         .iter()
         .map(|block| {
             let printed = block.insns.iter().filter(|one| crate::backend::masm::prints(one));
+            // A push or a pop reads or writes the stack: a memory operand it
+            // does not spell.
             let memory: usize = printed
                 .clone()
                 .filter_map(|one| one.what.as_ref())
-                .map(|what| what.dests.iter().chain(&what.sources).filter(|place| matches!(place, Loc::Mem(_))).count())
+                .map(|what| {
+                    what.dests.iter().chain(&what.sources).filter(|place| matches!(place, Loc::Mem(_))).count()
+                        + usize::from(matches!(what.op, Operation::Push | Operation::Pop))
+                })
                 .sum();
             busy.block(block.at) * (printed.count() as f64 * INSTRUCTION + memory as f64 * MEMORY_OPERAND)
         })
@@ -4008,6 +4182,41 @@ mod tests {
         insns: Vec<Insn>,
     ) -> LirBody {
         LirBody::new(name, entry, vec![block(entry, insns)], IndexMap::default(), IndexMap::default())
+    }
+
+    /// A point that needs the frame destroys the register the frame is in, for
+    /// the values that would hold it (where it is offered): a value in it
+    /// across that point would be read as the frame.
+    #[test]
+    fn test_a_point_that_names_the_frame_destroys_the_frame_register_only_where_it_is_offered() {
+        let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -2)), 2) });
+        let body = body_of(
+            "f",
+            0,
+            vec![
+                Insn::new(
+                    0,
+                    Some((0, 1)),
+                    Some(semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell])),
+                    vec![1],
+                    vec![],
+                ),
+                Insn::new(
+                    1,
+                    Some((1, 2)),
+                    Some(semantics(Operation::Binary, "add", vec![held(1, 2)], vec![held(1, 2), imm(1, 2)])),
+                    vec![1],
+                    vec![1],
+                ),
+            ],
+        );
+        let index = ranges::indexed(&body);
+        let offered = _masks(&body, &index, &crate::backend::target::BUILT_IN, Some(_whole(RegId::BP)));
+        let points: Vec<_> = offered.iter().filter(|mask| mask.before.contains(&_whole(RegId::BP))).collect();
+        assert_eq!(points.len(), 1, "the frame cell, not the add");
+        assert_eq!(points[0].slot, index.at[&ranges::key(&body.blocks[0].insns[0])]);
+        let kept = _masks(&body, &index, &crate::backend::target::BUILT_IN, None);
+        assert!(kept.iter().all(|mask| !mask.before.contains(&_whole(RegId::BP))));
     }
 
     /// A spill walked every instruction of the body to learn which of its few
