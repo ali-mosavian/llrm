@@ -226,7 +226,7 @@ fn _numbered(
     let crossed = std::cell::Cell::new(false);
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
-        let mut function = function.clone();
+        let mut function = function.fork();
         let forwarded = transform::forwarded(
             unit.context,
             unit.layout,
