@@ -1,10 +1,10 @@
-reason = "fill: adjacent constant stores are one store of the widest integer where that is fewer bytes tuned for size (gcc store-merging, LLVM MergeConsecutiveStores); several fills in a loop are a memset each where memsets are cheaper in clocks and bytes"
-blessed = "2026-10-10"
+reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
+blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 1036
+instructions = 1059
 memory_operands = 463
-code_bytes = 735
+code_bytes = 697
 data_bytes = 13
 bss_bytes = 0
 
