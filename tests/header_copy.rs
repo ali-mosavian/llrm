@@ -153,3 +153,26 @@ void f(int n, int cur, int y)
     let counted = lines.windows(2).any(|pair| pair[0].starts_with("inc e") && pair[1].starts_with("jne "));
     assert!(counted, "{text}");
 }
+
+/// mandel's `iteration < 32` behind the copied header, once its exit reads a
+/// number, tested the counter before the step (`cmp dx, 31`), so the step took
+/// a register of its own: `mov ax, dx; inc ax; cmp dx, 31; mov dx, ax`. The
+/// test of the step is `inc dx; cmp dx, 32`: one register (mandel C -O2 m16
+/// +10.1% instructions).
+#[test]
+fn test_a_latch_test_of_a_counter_whose_step_nothing_else_reads_tests_the_step() {
+    let source = format!("{}/bench/mandel/mandel.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let stepped = lines
+        .windows(2)
+        .any(|pair| pair[0].starts_with("inc ") && pair[1].starts_with("cmp ") && pair[1].ends_with(", 32"));
+    assert!(stepped, "{text}");
+}
