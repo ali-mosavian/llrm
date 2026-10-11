@@ -1,0 +1,8 @@
+description = "Baseline JPEG (256x192, 4:2:0, restart markers) to 24-bit BMP, streamed an MCU row at a time, IDCT and colour conversion in single-precision floats: Adler-32 of the BMP"
+repetitions = 1
+timed_only = true
+
+[region]
+bas = "BenchJpegSingle"
+c = "bench_jpeg_single"
+nib = "bench_jpeg_single"
