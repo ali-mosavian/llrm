@@ -14,6 +14,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import cpulimit
 import dos
 from build import BIN
 
@@ -162,9 +163,9 @@ def run(path: Path, lang: str, work: Path) -> int:
     text = harness(path.read_text(), lang)
     target = work / f"{path.stem}.run.ll"
     target.write_text(text)
-    done = subprocess.run(
-        [str(BIN / "llrm-mir"), "--run", "--entry", "__loops_entry", "--fuel", str(FUEL), str(target)],
-        capture_output=True, text=True, timeout=600,
+    done = cpulimit.run(
+        [str(BIN / "llrm-mir"), "--run", "--entry", "__loops_entry", "--fuel", str(FUEL), str(target)], 600,
+        capture_output=True, text=True,
     )
     if done.returncode != 0:
         raise RuntimeError(f"{target}: {done.stderr.strip()[:500]}")

@@ -74,14 +74,28 @@ pub(super) enum Slot {
 
 impl Slot {
     /// The field at byte `offset` of an array descriptor.
-    pub fn at(offset: usize) -> Option<Self> {
-        match offset {
-            0 => Some(Self::Data),
-            2 => Some(Self::Selector),
-            8 => Some(Self::Rank),
-            10 => Some(Self::Origin),
-            14.. if (offset - 14).is_multiple_of(4) => Some(Self::Count((offset - 14) / 4)),
-            16.. if (offset - 16).is_multiple_of(4) => Some(Self::Lower((offset - 16) / 4)),
+    pub fn at(
+        layout: &super::AdLayout,
+        offset: usize,
+    ) -> Option<Self> {
+        if offset == layout.data {
+            return Some(Self::Data);
+        }
+        if layout.selector == Some(offset) {
+            return Some(Self::Selector);
+        }
+        if offset == layout.rank {
+            return Some(Self::Rank);
+        }
+        if offset == layout.origin {
+            return Some(Self::Origin);
+        }
+        let size = layout.record();
+        let record =
+            |from: usize| offset.checked_sub(from).filter(|rest| rest.is_multiple_of(size)).map(|rest| rest / size);
+        match (record(layout.header), record(layout.header + layout.word)) {
+            (Some(at), _) => Some(Self::Count(at)),
+            (None, Some(at)) => Some(Self::Lower(at)),
             _ => None,
         }
     }

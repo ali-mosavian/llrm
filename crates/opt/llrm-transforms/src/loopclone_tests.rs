@@ -11,7 +11,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::graph::loops;
 use llrm_mir::module::{Module, Operand};
 
-use super::peeled;
+use super::{chained, peeled};
 use crate::testing::{f, parsed, printed, results};
 
 /// A loop whose body is a diamond, with an early exit from one arm.
@@ -226,4 +226,105 @@ b5:
     assert_eq!(printed(&module).matches("switch i16").count(), 3);
     let inputs: &[&[i128]] = &[&[0, 20, 10], &[2, 20, 7], &[3, 4, 1], &[17, 20, 5], &[400, 20, 3]];
     assert_eq!(results(&module, inputs), results(&parsed(text), inputs));
+}
+
+/// `passes` sweeps of `p[j] += v[j]` over 6 cells, its outer loop counted to
+/// `outer`, and a checksum that reads the cells: the nest bench/particle is.
+fn sweeping(outer: i16) -> String {
+    let cells = |base: i32| (0..6).map(|at| format!("i16 {}", base + at)).collect::<Vec<_>>().join(", ");
+    format!(
+        "@p = global [6 x i16] [{}]
+@v = global [6 x i16] [{}]
+
+define i16 @f(i16 %x, i16 %bias) {{
+b0:
+  br label %b1
+
+b1:
+  %t = phi i16 [ 0, %b0 ], [ %t.next, %b4 ]
+  %run = icmp slt i16 %t, {outer}
+  br i1 %run, label %b2, label %b5
+
+b2:
+  br label %b3
+
+b3:
+  %j = phi i16 [ 0, %b2 ], [ %j.next, %b3.body ]
+  %more = icmp slt i16 %j, 6
+  br i1 %more, label %b3.body, label %b4
+
+b3.body:
+  %o = mul i16 %j, 2
+  %pp = getelementptr i8, ptr @p, i16 %o
+  %pv = getelementptr i8, ptr @v, i16 %o
+  %a = load i16, ptr %pp
+  %b = load i16, ptr %pv
+  %s = add i16 %a, %b
+  %s2 = add i16 %s, %bias
+  store i16 %s2, ptr %pp
+  %j.next = add i16 %j, 1
+  br label %b3
+
+b4:
+  %t.next = add i16 %t, 1
+  br label %b1
+
+b5:
+  %r = phi i16 [ %t, %b1 ]
+  %q = getelementptr i8, ptr @p, i16 4
+  %w = load i16, ptr %q
+  %u = add i16 %w, %r
+  %z = add i16 %u, %x
+  ret i16 %z
+}}
+",
+        cells(1),
+        cells(10)
+    )
+}
+
+const SWEEP_INPUTS: &[&[i128]] = &[&[0, 0], &[3, 1], &[-7, 5]];
+
+fn outer_loop(module: &mut Module) -> loops::Loop {
+    let function = f(module);
+    let mut found = loops::loops(&cfg::graph(function), function.entry().map(cfg::id));
+    found.sort_by_key(|one| one.body.len());
+    found.pop().expect("the outer loop")
+}
+
+/// A loop chained with copies of itself computes what it did, one test of the
+/// outer loop's count to each group of passes: six passes in groups of two and
+/// of three, the exit reading the header's values.
+#[test]
+fn test_chaining_copies_of_a_nest_keeps_what_it_computes() {
+    for copies in [1, 2, 5] {
+        let text = sweeping(6);
+        let mut module = parsed(&text);
+        let outer = outer_loop(&mut module);
+        let blocks = f(&mut module).layout().len();
+        let labels = chained(f(&mut module), &outer, copies).unwrap().expect("chained");
+        assert_eq!(labels.len(), copies);
+        assert_eq!(f(&mut module).layout().len(), blocks + copies * outer.body.len());
+        assert_eq!(results(&module, SWEEP_INPUTS), results(&parsed(&text), SWEEP_INPUTS), "{}", printed(&module));
+    }
+}
+
+/// A loop that leaves from a block other than its header would leave in the
+/// middle of a group, so it is not chained.
+#[test]
+fn test_a_loop_with_a_second_exit_is_not_chained() {
+    let text = sweeping(6).replace(
+        "  %j.next = add i16 %j, 1\n  br label %b3\n",
+        "  %j.next = add i16 %j, 1\n  %leave = icmp eq i16 %s2, 9999\n  br i1 %leave, label %b4, label %b3\n",
+    );
+    let mut module = parsed(&text);
+    let before = printed(&module);
+    let inner = {
+        let function = f(&mut module);
+        let mut found = loops::loops(&cfg::graph(function), function.entry().map(cfg::id));
+        found.sort_by_key(|one| one.body.len());
+        found.remove(0)
+    };
+    assert_eq!(chained(f(&mut module), &inner, 1).unwrap(), None);
+    assert_eq!(printed(&module), before);
 }

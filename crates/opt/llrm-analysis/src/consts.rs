@@ -1029,6 +1029,14 @@ fn provider_of(
     let mut values = Vec::new();
     let mut exact = true;
     let reaching = ask(reference);
+    // Past this many nearest writes a load is not served: a scalar written in
+    // each arm of N joins is reached by N of them at the last, N^2 over the
+    // body (`joins` 256: 10% of the compile). LLVM's walker stops at
+    // `memssa-check-limit` (100) checks, gcc's value numbering at
+    // `sccvn-max-alias-queries-per-access` (1000).
+    if reaching.len() > memoryssa::MAX_NEAREST_WRITES {
+        return None;
+    }
     // A path to the entry that no write meets leaves every byte as it
     // was found, so no byte is a store's.
     if reaching.iter().any(|id| graph.access(*id).kind == memoryssa::Kind::Live) {
@@ -1066,7 +1074,12 @@ fn provider_of(
                 ..reference.clone()
             };
             let mut from = Vec::new();
-            for id in ask(&one) {
+            let nearest = ask(&one);
+            if nearest.len() > memoryssa::MAX_NEAREST_WRITES {
+                bytes.clear();
+                break 'bytes;
+            }
+            for id in nearest {
                 let access = graph.access(id);
                 let Some((site, (cell, _))) = access
                     .site
@@ -1122,7 +1135,7 @@ pub fn load_providers(
         if crate::memory::constant_bits(unit, &reference).is_some() {
             continue;
         }
-        let ask = |one: &MemRef| graph.clobbers_ignoring_invariance(inst, one);
+        let ask = |one: &MemRef| graph.nearest_writes(inst, one);
         if let Some(provider) = provider_of(unit, accesses, &graph, &reference, &ask) {
             providers.insert(result, provider);
         }

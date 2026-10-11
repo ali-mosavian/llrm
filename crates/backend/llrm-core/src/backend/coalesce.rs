@@ -116,7 +116,21 @@ pub fn joined(
     webs.begin(_interference(body), &held);
     let checking = llrm_support::env_set("LLRM_CHECK_COALESCE");
 
-    for block in &body.blocks {
+    // A join is kept, and the first of two that clash is the one that stays:
+    // the deepest loops first, as LLVM's `RegisterCoalescer` orders its
+    // worklist, and in a loop the blocks that run most often.
+    let busy = crate::analysis::frequency::Frequency::of(body);
+    let mut blocks: Vec<&LirBlock> = body.blocks.iter().collect();
+    let depth = ranges::depths_shared(body);
+    blocks.sort_by(|a, b| {
+        let (a_depth, b_depth) = (depth.get(&a.at).copied().unwrap_or(0), depth.get(&b.at).copied().unwrap_or(0));
+        b_depth
+            .cmp(&a_depth)
+            .then_with(
+                || if a_depth == 0 { std::cmp::Ordering::Equal } else { busy.block(b.at).total_cmp(&busy.block(a.at)) },
+            )
+    });
+    for block in blocks {
         for one in &block.insns {
             let Some(pair) = _copy(one) else {
                 continue;

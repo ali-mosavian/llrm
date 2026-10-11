@@ -88,6 +88,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
                 )
             }
             "--os-layer" => os_layer = Some(value("--os-layer")?),
+            "--basic-runtime" => super::standard::set_basic_runtime(&value("--basic-runtime")?)?,
             "-Wno-target-width" => warn_target_width = false,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
             "--unchecked-bounds" => unchecked_bounds = true,

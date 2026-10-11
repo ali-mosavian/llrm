@@ -18,11 +18,14 @@ import json
 import threading
 import time
 import shutil
+import tempfile
 import tomllib
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 from dataclasses import dataclass
+
+import cpulimit
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -100,7 +103,7 @@ _RUNTIME_LOCK = threading.Lock()
 
 
 def _host(command: list[str]) -> None:
-    done = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    done = cpulimit.run(command, 300, capture_output=True, text=True)
     if done.returncode != 0:
         raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
 
@@ -288,11 +291,28 @@ class Job:
     switches: str = "/O /FPi"  # BC's, for a bas job
     libs: tuple[str, ...] = ()  # more libraries to link, by DOS path
     library: str = ""  # the runtime library, where the toolchain's own is not it
+    runtime: str = "bcom45"  # bcom45, llrmqb or empty
+    runtime_file: Path | None = None  # the copied LLRMQB or empty archive
     args: str = ""  # the program's command line
     objects: tuple[Path, ...] = ()  # more objects to link with an obj job's
     files: tuple[Path, ...] = ()  # files the program reads, copied beside it under their upper-case names
     map: bool = False  # LINK /MAP: NAME.MAP lists the public symbols too
     runner: str = ""  # a program that runs this one (it must be among `files`), e.g. a timer
+    screen: bool = False  # standard output stays the screen, so the program draws it and no NAME.TXT is written
+    stdin: bytes | None = None  # what the program reads as its standard input, from NAME.IN
+
+
+def runtime_library(job: Job, tools: Toolchain, work: Path) -> str:
+    """The one runtime LINK receives; replacement archives are always mounted explicitly."""
+    if job.runtime == "bcom45":
+        return job.library or tools.library
+    if job.runtime not in ("llrmqb", "empty"):
+        raise BuildError(f"unknown QB runtime '{job.runtime}'")
+    if job.runtime_file is None or not job.runtime_file.is_file():
+        raise BuildError(f"runtime file for {job.runtime} is missing")
+    name = "LLRMQB.LIB" if job.runtime == "llrmqb" else "EMPTY.LIB"
+    place(job.runtime_file, work / name)
+    return rf"C:\{name}"
 
 
 @dataclass
@@ -330,6 +350,11 @@ def read_dos(workdir: Path, name: str) -> str:
     return ""
 
 
+def link_failed(output: str) -> bool:
+    """Whether LINK reported an error even though it left a partial EXE."""
+    return bool(re.search(r"(?:^|\n).*\berror L\d+\b", output, re.IGNORECASE))
+
+
 _PRIVATE = iter(range(1 << 30))
 
 
@@ -356,11 +381,24 @@ def _oversized(work: Path, cap: int) -> str | None:
     return None
 
 
-def _launch(command: list[str], work: Path, timeout: int, cap: int, **options) -> str | None:
-    """Run `command` until it exits, or until a file in `work` passes `cap` bytes, which stops it: the file's name. A
-    launch that outlives `timeout` is an error."""
+def _cpu_seconds(pid: int) -> float:
+    """The CPU time `pid` has used so far, or 0 where /proc does not say."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+    except (OSError, IndexError, ValueError):
+        return 0.0
+
+
+def _launch(command: list[str], work: Path, timeout: int | None, cap: int, stall: int | None = None, **options) -> str | None:
+    """Run `command` until it exits, or until a file in `work` passes `cap` bytes, which stops it: the file's name. A launch
+    that outlives `timeout` (None: no limit) or that uses `stall` seconds of CPU without its events.txt growing is an error.
+    Each job's own budget is guest time, so how long a launch takes on the wall is the host's load, not a property of the
+    programs: a wall-clock stall stopped emulators that were only waiting for a CPU. One that spins without reporting is
+    stuck, and its own CPU time says so."""
     process = subprocess.Popen(command, **options)
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    seen, spent = -1, 0.0
     while True:
         try:
             process.wait(timeout=0.2)
@@ -371,16 +409,66 @@ def _launch(command: list[str], work: Path, timeout: int, cap: int, **options) -
             process.kill()
             process.wait()
             return over
-        if time.monotonic() > deadline:
+        size = (work / "events.txt").stat().st_size if (work / "events.txt").exists() else 0
+        used = _cpu_seconds(process.pid)
+        if size != seen:
+            seen, spent = size, used
+        if (timeout is not None and time.monotonic() > started + timeout) or (stall is not None and used > spent + stall):
             process.kill()
             process.wait()
-            raise subprocess.TimeoutExpired(command, timeout)
+            raise subprocess.TimeoutExpired(command, timeout if timeout is not None else stall)
 
 
-def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF, cap: int = OUTPUT_CAP) -> dict[str, Result]:
+class BinaryError(Exception):
+    """The emulator binary cannot run the jobs as asked: not a program's failure, so nothing retries it."""
+
+
+_VIRTUAL: dict[tuple[str, int], str | None] = {}
+
+
+def virtual_time_problem(binary: Path | None = None) -> str | None:
+    """Why `binary` cannot give CONF's virtual time, or None when it can. A binary without it ignores the setting
+    quietly and runs every `:ms` budget at the host's speed again: the busy-host flake, back, with nothing said. Asked
+    by running 50 ms of a spinning program: with virtual time that is exactly 50 x the rate in instructions."""
+    binary = binary or DOSBOX
+    stamp = (str(binary), binary.stat().st_mtime_ns) if binary.exists() else (str(binary), 0)
+    if stamp not in _VIRTUAL:
+        _VIRTUAL[stamp] = _probe_virtual_time(binary)
+    return _VIRTUAL[stamp]
+
+
+def _probe_virtual_time(binary: Path, seconds: int = 120) -> str | None:
+    """Why `binary` cannot give virtual time, or None. The 50 ms job is limited to `seconds` of the emulator's CPU time:
+    a start-up that waited for a busy host's CPU is not a binary without virtual time."""
+    if not binary.exists():
+        return f"{binary} does not exist"
+    with tempfile.TemporaryDirectory() as where:
+        work = Path(where)
+        (work / "SPIN.COM").write_bytes(b"\xeb\xfe")
+        (work / "job.conf").write_text(CONF)
+        (work / "jobs.txt").write_text(f":ms 50\nmount c {work}\nc:\nSPIN.COM\n.\n")
+        with open(work / "jobs.txt") as stdin, open(work / "events.txt", "w") as sink:
+            try:
+                cpulimit.run([str(binary), "-nolog", "-conf", str(work / "job.conf")], seconds, stdin=stdin, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
+                             env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
+            except subprocess.TimeoutExpired:
+                return f"{binary} did not finish a 50 ms job in {seconds} s of CPU time"
+        ends = [json.loads(line) for line in (work / "events.txt").read_text().splitlines() if line.startswith('{"ev":"end"')]
+    expected = 50 * int(re.search(r"rate=(\d+)", CYCLES).group(1))
+    if not ends or abs(ends[0].get("instructions", 0) - expected) > expected // 10:
+        got = ends[0].get("instructions") if ends else "no end event"
+        return (f"{binary} ran 50 ms as {got} instructions, not about {expected}: it has no `virtual time` (or no dosrun job "
+                f"runner). Build the fork's dosrun branch at the commit toolchain/dosrunbuild.sh pins, or set DOSBOX_BIN to one")
+    return None
+
+
+def run(jobs: list[Job], work: Path, timeout: int | None = None, stall: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF, cap: int = OUTPUT_CAP) -> dict[str, Result]:
     """Every job's result. One dosrun launch: a first job builds (BC, LINK),
     then each program runs as its own job with `budget_ms` of emulated time, so
     a hang ends that program alone."""
+    if "virtual time=true" in conf and (problem := virtual_time_problem()):
+        raise BinaryError(problem)
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
@@ -388,11 +476,13 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
     building = []
     for job in jobs:
         u = job.stem.upper()
-        libraries = "+".join([job.library or tools.library, *job.libs])
+        libraries = "+".join([runtime_library(job, tools, work), *job.libs])
         more = "".join(f"+{u}X{at}.OBJ" for at in range(len(job.objects)))
         link = f"{tools.link} /NOE{' /MAP' if job.map else ''} {u}.OBJ{more},{u}.EXE,,{libraries}; > {u}.LNK"
         for data in job.files:
             place(data, work / data.name.upper())
+        if job.stdin is not None:
+            (work / f"{u}.IN").write_bytes(job.stdin)
         if job.kind == "exe":
             shutil.copy(job.path, work / f"{u}.EXE")
         elif job.kind == "obj":
@@ -407,17 +497,17 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
     script = [f":ms {build_ms}", *head, *building, "."]
     for job in jobs:
         u = job.stem.upper()
-        script += [f":ms {job.budget_ms or budget_ms}", *head, f"if exist {u}.EXE {job.runner} {u}.EXE {job.args} > {u}.TXT", "."]
+        script += [f":ms {job.budget_ms or budget_ms}", *head, f"if exist {u}.EXE {job.runner} {u}.EXE {job.args}{'' if job.stdin is None else f' < {u}.IN'}{'' if job.screen else f' > {u}.TXT'}", "."]
     (work / "job.conf").write_text(conf)
     (work / "jobs.txt").write_text("\n".join(script) + "\n")
     events = work / "events.txt"
     with open(work / "jobs.txt") as stdin, open(events, "w") as sink:
         try:
-            over = _launch([str(DOSBOX), "-nolog", "-conf", str(work / "job.conf")], work, timeout, cap, stdin=stdin,
+            over = _launch([str(DOSBOX), "-nolog", "-conf", str(work / "job.conf")], work, timeout, cap, stall, stdin=stdin,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
                            env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"DOSBox did not finish in {timeout}s ({work})")
+            raise RuntimeError(f"DOSBox reported nothing for {stall}s or ran past {timeout}s ({work})")
     if over is not None:
         return stopped_for_output(jobs, work, over, cap)
     return collect(jobs, work, events)
@@ -443,11 +533,14 @@ def collect(jobs: list[Job], work: Path, events: Path) -> dict[str, Result]:
     for job, end in zip(jobs, ends[1:]):
         u = job.stem.upper()
         severe = re.search(r"(\d+) Severe\s+Error", read_dos(work, f"{u}.BCO"))
+        link_log = read_dos(work, f"{u}.LNK")
         if severe and int(severe.group(1)):
             # LINK makes an EXE of what BC refused: never run it
             out[job.stem] = Result("not built", detail="BC: " + read_dos(work, f"{u}.BCO").strip()[-600:])
+        elif link_failed(link_log):
+            out[job.stem] = Result("not built", detail="LINK: " + link_log.strip()[-600:])
         elif not (work / f"{u}.EXE").exists():
-            out[job.stem] = Result("not built", detail=(read_dos(work, f"{u}.BCO") + read_dos(work, f"{u}.LNK")).strip()[-600:])
+            out[job.stem] = Result("not built", detail=(read_dos(work, f"{u}.BCO") + link_log).strip()[-600:])
         elif end.get("reason") != "exit":
             out[job.stem] = Result("stopped", written.get(f"{u}.TXT", ""), f"{end.get('reason')} after {end.get('ms')} ms ({events})")
         else:

@@ -259,7 +259,10 @@ impl Peephole {
         let body = zeroed_loads(self.rules, &body, &self.cpu)?;
         let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
         let body = machinecse::eliminated(&body)?;
-        let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
+        let body = waits(&zero_compares(
+            self.rules,
+            &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
+        ));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
@@ -2327,6 +2330,70 @@ pub fn tested(
             ..(*test).clone()
         });
         blocks[block_index].insert(test_index, setter);
+    }
+    body.with_blocks(body.blocks.iter().zip(blocks).map(|(block, insns)| block.with_insns(insns)).collect())
+}
+
+/// `cmp a,b; jl X` falling into `cmp a,b; jle Y` is `cmp a,b; jl X`, `jle Y`.
+///
+/// A block entered from one block alone, whose first work is the compare that
+/// block ended in (a compare, then its conditional jump, then perhaps a jump
+/// to the other side), reads flags that are already its compare's: the jump
+/// changes none. gcc's `cse_condition_code_reg` removes it in its extended
+/// basic blocks, and an else-if on the same two values (a binary search's
+/// `a[m] < k`, then `a[m] > k`) tests them once.
+pub fn compares_again(body: &LirBody) -> LirBody {
+    let mut predecessors = HashMap::<i64, Vec<usize>>::default();
+    for (at, block) in body.blocks.iter().enumerate() {
+        for to in &block.succ {
+            predecessors.entry(*to).or_default().push(at);
+        }
+    }
+    let work = |insns: &[Arc<Insn>]| -> Vec<usize> {
+        insns.iter().enumerate().filter(|(_, one)| !_skippable_nothing(one)).map(|(index, _)| index).collect()
+    };
+    let compare_of = |one: &Insn| -> bool {
+        one.clobbers.is_empty()
+            && one.symbol != Some(true)
+            && !one.volatile
+            && one.what.as_ref().is_some_and(|what| what.op == Operation::Compare)
+    };
+    let mut blocks = body.blocks.iter().map(|block| block.insns.to_vec()).collect::<Vec<_>>();
+    for (index, block) in body.blocks.iter().enumerate() {
+        let Some([from]) = predecessors.get(&block.at).map(Vec::as_slice) else { continue };
+        if *from == index {
+            continue;
+        }
+        // The first work of the block, and the last of the one before: a
+        // compare, a branch on it, and perhaps the jump to the other side.
+        let ahead = work(&blocks[*from]);
+        let mut last = ahead.len();
+        let is =
+            |insns: &[Arc<Insn>], at: usize, op: Operation| insns[at].what.as_ref().is_some_and(|what| what.op == op);
+        if last > 0 && is(&blocks[*from], ahead[last - 1], Operation::Jump) {
+            last -= 1;
+        }
+        if last < 2 || !is(&blocks[*from], ahead[last - 1], Operation::Branch) {
+            continue;
+        }
+        let before = Arc::clone(&blocks[*from][ahead[last - 2]]);
+        let here = work(&blocks[index]);
+        let Some(&first) = here.first() else { continue };
+        let again = Arc::clone(&blocks[index][first]);
+        if !compare_of(&before) || !compare_of(&again) || before.widths != again.widths {
+            continue;
+        }
+        let (Some(was), Some(is_now)) = (before.what.as_ref(), again.what.as_ref()) else { continue };
+        if !was.same_meaning(is_now) {
+            continue;
+        }
+        blocks[index][first] = Arc::new(Insn {
+            what: Some(semantics(Operation::Nothing, "", vec![], vec![])),
+            defines: Vec::new(),
+            uses: Vec::new(),
+            widths: Vec::new(),
+            ..(*again).clone()
+        });
     }
     body.with_blocks(body.blocks.iter().zip(blocks).map(|(block, insns)| block.with_insns(insns)).collect())
 }

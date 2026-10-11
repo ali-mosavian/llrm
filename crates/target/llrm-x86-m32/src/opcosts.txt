@@ -47,6 +47,7 @@ unroll_budget = 150
 # instruction itself. Flat code has no operand-size prefix on a dword and no segment override.
 [bytes]
 alu_rr = 4
+xchg_rr = 4
 imul_r32 = 6
 idiv_r32 = 6
 shift_ri = 6
