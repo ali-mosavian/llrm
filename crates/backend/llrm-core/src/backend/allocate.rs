@@ -2059,11 +2059,13 @@ fn _allocated(
 /// Whether the frame register can be of use to the body the base allocation
 /// made from `input`: a loop that needs the frame for nothing in `input` has
 /// frame cells in `out`, which are spill code, where the register is free for
-/// the loop's trips and a `push` and a `pop` run once. Asked before a second
-/// allocation is spent on finding out.
+/// the loop's trips and a `push` and a `pop` run once; and the most it could
+/// save, all that traffic, is more than a trial must win by. Asked before a
+/// second allocation is spent on finding out.
 fn _worth_parking(
     input: &LirBody,
     out: &LirBody,
+    cost: f64,
 ) -> bool {
     let regs = input.regs();
     let needs = |block: &LirBlock| block.insns.iter().any(|one| crate::backend::framefree::needs_frame(one, regs));
@@ -2073,9 +2075,41 @@ fn _worth_parking(
     if spilling.is_empty() {
         return false;
     }
-    crate::analysis::loops::loops(&out.blocks, Some(out.entry)).iter().any(|found| {
-        found.body.iter().any(|at| spilling.contains(at)) && found.body.iter().all(|at| !framed.contains(at))
-    })
+    let busy = Frequency::of(out);
+    // The frame register has no byte part: what a byte value does with the
+    // frame is not what it could save.
+    let wide = |one: &Insn| {
+        one.what.as_ref().is_some_and(|what| {
+            what.dests.iter().chain(&what.sources).all(|place| !matches!(place, Loc::Held(held) if held.width == 1))
+        })
+    };
+    // A reload or a store is an instruction and a memory operand at most.
+    let traffic = |block: &LirBlock| {
+        let cells = |one: &Insn| {
+            one.what
+                .as_ref()
+                .map_or(0, |what| what.dests.iter().chain(&what.sources).filter(|place| place.in_frame()).count())
+        };
+        busy.block(block.at)
+            * block
+                .insns
+                .iter()
+                .filter(|one| crate::backend::framefree::needs_frame(one, regs) && wide(one))
+                .map(|one| INSTRUCTION + MEMORY_OPERAND * cells(one) as f64)
+                .sum::<f64>()
+    };
+    crate::analysis::loops::loops(&out.blocks, Some(out.entry))
+        .iter()
+        .any(
+            |found| found.body.iter().all(|at| !framed.contains(at))
+                && out
+                    .blocks
+                    .iter()
+                    .filter(|block| found.body.contains(&block.at) && spilling.contains(&block.at))
+                    .map(traffic)
+                    .sum::<f64>()
+                    > PARK_MARGIN * cost,
+        )
 }
 
 /// `body` with each near cell based on a value in `holders` (the frame register
@@ -2546,11 +2580,13 @@ pub fn _masks(
             let high: BTreeSet<RegId> = one.clobbers_high.iter().map(|register| _whole(*register)).collect();
             // The data segment register is needed where an access names data;
             // the frame register, where the frame is.
-            let before: BTreeSet<RegId> = target::needs_data_group(one)
-                .then_some(segments.data)
-                .into_iter()
-                .chain(frame.filter(|_| regs.is_some_and(|regs| crate::backend::framefree::needs_frame(one, regs))))
-                .collect();
+            let mut before: BTreeSet<RegId> =
+                target::needs_data_group(one).then_some(segments.data).into_iter().collect();
+            if let (Some(frame), Some(regs)) = (frame, regs) {
+                if crate::backend::framefree::needs_frame(one, regs) {
+                    before.insert(frame);
+                }
+            }
             if !during.is_empty() || !high.is_empty() || !before.is_empty() {
                 out.push(Mask { slot: index.at[&ranges::key(one)], during, high, before });
             }
@@ -3132,7 +3168,7 @@ impl RegAlloc {
         // Where the function may park its frame register and the base
         // allocation spilled: once more with the register offered, and
         // kept if cheaper, the pushes and pops it costs included.
-        if !spilled.is_empty() && self.classes.parkable && cpu.routes && _worth_parking(&body, &best.out) {
+        if !spilled.is_empty() && self.classes.parkable && cpu.routes && _worth_parking(&body, &best.out, best.cost) {
             let offering = self.classes.offering_frame();
             frame.borrow_mut().restore(&start);
             TRIALS.with(|count| count.set(count.get() + 1));
