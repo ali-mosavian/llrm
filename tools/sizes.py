@@ -29,6 +29,7 @@ COST = re.compile(r"executes (\d+) instructions, (\d+) memory operands")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "dosbatch"))
 
+import cpulimit  # noqa: E402
 from run_tests import compiler_arguments as settings, header  # noqa: E402
 
 
@@ -153,7 +154,7 @@ def data_bytes(obj: Path) -> tuple[int, int]:
 def measure(command: list[str], level: str) -> tuple[int, int, int] | None:
     with tempfile.TemporaryDirectory() as directory:
         obj = f"{directory}/x.obj"
-        done = subprocess.run([*command, level, "-o", obj], capture_output=True, text=True, env={**environ, "LLRM_DEBUG": "cost"}, timeout=300)
+        done = cpulimit.run([*command, level, "-o", obj], 300, capture_output=True, text=True, env={**environ, "LLRM_DEBUG": "cost"})
         if not Path(obj).exists():
             return None
         found = [tuple(map(int, one)) for one in COST.findall(done.stderr)]
@@ -167,7 +168,7 @@ def frame(command: list[str], level: str) -> int | None:
     """Bytes the program's procedures reserve below BP: every `sub sp, N` of its listing."""
     with tempfile.TemporaryDirectory() as directory:
         listing = f"{directory}/x.s"
-        subprocess.run([*command, level, "-S", "-o", listing], capture_output=True, text=True, timeout=300)
+        cpulimit.run([*command, level, "-S", "-o", listing], 300, capture_output=True, text=True)
         return sum(int(one) for one in SUB_SP.findall(Path(listing).read_text())) if Path(listing).exists() else None
 
 

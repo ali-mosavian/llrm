@@ -158,7 +158,40 @@ pub fn _effects(
     bits: u32,
     block: &LirBlock,
 ) -> Vec<Option<Effect>> {
-    block.insns.iter().map(|one| effect(regs, bits, one)).collect()
+    let mut effects: Vec<Option<Effect>> = block.insns.iter().map(|one| effect(regs, bits, one)).collect();
+    // A parallel copy reads every source before it writes any destination,
+    // whatever order its copies are kept in: one effect, at its last copy,
+    // and none at the rest. Walked a copy at a time, a source another copy of
+    // the group writes first in that order was dead before the group, and
+    // the register was handed out as free.
+    let nothing = || Effect { reads: Lanes::new(), writes: Lanes::new(), moved: Vec::new() };
+    let mut at = 0;
+    while at < block.insns.len() {
+        let Some(group) = block.insns[at].group else {
+            at += 1;
+            continue;
+        };
+        let mut end = at + 1;
+        while end < block.insns.len() && block.insns[end].group == Some(group) {
+            end += 1;
+        }
+        if end - at > 1 {
+            let merged = effects[at..end]
+                .iter()
+                .try_fold(
+                    nothing(),
+                    |all, one| one.as_ref().map(|one| Effect {
+                        reads: all.reads.or(&one.reads),
+                        writes: all.writes.or(&one.writes),
+                        moved: [all.moved, one.moved.clone()].concat(),
+                    }),
+                );
+            effects[at..end - 1].iter_mut().for_each(|one| *one = Some(nothing()));
+            effects[end - 1] = merged;
+        }
+        at = end;
+    }
+    effects
 }
 
 /// The lanes live before `effects`, given those live after them. An unknown
@@ -405,6 +438,39 @@ mod tests {
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(regs, RegId::DX).is_disjoint(&into[&1]));
         assert!(_lanes(regs, RegId::AX).is_subset(&into[&1]));
+    }
+
+    /// A parallel copy kept as `bx <- dx` then `ax <- bx` reads bx before it
+    /// writes it: grep at -O2 -m32 saw bx dead before the copy, was told it
+    /// was free, and carried a cycle in it while the next block still read it.
+    #[test]
+    fn test_a_parallel_copy_reads_its_sources_before_any_destination_is_written() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let bx = Reg { register: RegId::BX, width: 2 };
+        let cx = Reg { register: RegId::CX, width: 2 };
+        let grouped = |at: i64, into: Reg, from: Reg| {
+            let mut one = Insn::new(
+                at,
+                Some((at, at)),
+                Some(Semantics {
+                    name: Some("mov".to_owned()),
+                    dests: vec![Loc::Reg(into)],
+                    sources: vec![Loc::Reg(from)],
+                    ..Semantics::new(Operation::Move)
+                }),
+                vec![],
+                vec![],
+            );
+            one.group = Some(1);
+            Arc::new(one)
+        };
+        let first = LirBlock { succ: vec![2], ..LirBlock::new(1, vec![grouped(1, bx, DX), grouped(2, AX, bx)]) };
+        let last = LirBlock::new(2, vec![_insn(3, Operation::Move, "mov", vec![Loc::Reg(cx)], vec![Loc::Reg(AX)])]);
+        let body = LirBody::new("f", 1, vec![first, last], IndexMap::default(), IndexMap::default());
+        let (into, _successors, _universe) = live_into(&body);
+        assert!(_lanes(regs, RegId::BX).is_subset(&into[&1]), "bx is read by `ax <- bx` before `bx <- dx` writes it");
+        assert!(_lanes(regs, RegId::DX).is_subset(&into[&1]));
+        assert!(_lanes(regs, RegId::AX).is_disjoint(&into[&1]));
     }
 
     /// A chain of blocks, the last reading AX and each before it writing a

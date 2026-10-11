@@ -418,6 +418,50 @@ l3:
     assert_eq!(counters(&printed), 1, "{printed}");
 }
 
+/// A loop that keeps `i` and `t = i + 2` as two phis (the header copy reads
+/// `i + 2` in the test) keeps one counter: the other steps from itself, and
+/// what only the first fed goes.
+#[test]
+fn test_a_counter_and_the_counter_plus_two_are_one() {
+    let body = "  %none = icmp sle i16 %n, 2
+  br i1 %none, label %l3, label %pre
+
+pre:
+  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %pre ], [ %i.next, %l1 ]
+  %t = phi i16 [ 2, %pre ], [ %t.next, %l1 ]
+  %s = phi i16 [ 0, %pre ], [ %s.next, %l1 ]
+  %o = getelementptr i8, ptr @a, i16 %i
+  %va = load i8, ptr %o
+  %wa = zext i8 %va to i16
+  %q = getelementptr i8, ptr @a, i16 %t
+  %vb = load i8, ptr %q
+  %wb = zext i8 %vb to i16
+  %m = add i16 %wa, %wb
+  %s.next = add i16 %s, %m
+  %i.next = add i16 %i, 3
+  %t.next = add i16 %i.next, 2
+  %more = icmp slt i16 %t.next, %n
+  br i1 %more, label %l1, label %l2
+
+l2:
+  %s.out = phi i16 [ %s.next, %l1 ]
+  br label %l3
+
+l3:
+  %r = phi i16 [ 0, %start ], [ %s.out, %l2 ]
+  ret i16 %r
+";
+    let printed = same(&program(&[("a", "i8", 1)], "i16", body), TRIPS);
+    let header =
+        printed.split("\nl1:\n").nth(1).expect("the loop").lines().take_while(|l| l.contains(" = phi ")).count();
+    // The counter and the sum: not a counter, the counter plus two, and the
+    // sum.
+    assert_eq!(header, 2, "{printed}");
+}
+
 /// A multiply by an invariant leaves the loop, and a counter read after
 /// the loop is its value as it left.
 #[test]

@@ -1,0 +1,74 @@
+reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
+blessed = "2026-10-11"
+
+[bas.O2]
+code_bytes = 5500
+data_bytes = 29147
+bss_bytes = 0
+kernel_ms = 991.1074
+
+[bas.Os]
+code_bytes = 5235
+data_bytes = 29147
+bss_bytes = 0
+kernel_ms = 990.0649
+
+[c.O2]
+code_bytes = 3235
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 443.741
+
+[c.Os]
+code_bytes = 2999
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 445.4515
+
+[nib.O2]
+code_bytes = 6426
+data_bytes = 17158
+bss_bytes = 0
+kernel_ms = 585.5347
+
+[nib.Os]
+code_bytes = 6058
+data_bytes = 17158
+bss_bytes = 0
+kernel_ms = 591.7232
+
+[bcc.O2]
+code_bytes = 3287
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 641.9222
+
+[bcc.Os]
+code_bytes = 3150
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 801.9115
+
+[tcpp.O2]
+code_bytes = 3528
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5739.5933
+
+[tcpp.Os]
+code_bytes = 3354
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5743.6192
+
+[pds71.O2]
+code_bytes = 6545
+data_bytes = 765
+bss_bytes = 3718
+kernel_ms = 4495.1913
+
+[vbdos.O2]
+code_bytes = 6483
+data_bytes = 813
+bss_bytes = 3718
+kernel_ms = 5360.958

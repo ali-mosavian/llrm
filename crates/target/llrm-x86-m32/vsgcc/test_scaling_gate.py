@@ -769,7 +769,11 @@ def test_promote_places_phis_only_where_a_cell_is_live_and_keeps_to_the_cells_a_
     for label, size in (("empty", 0), ("n", n), ("2n", 2 * n)):
         source = tmp_path / f"cases_{label}.c"
         source.write_text("" if size == 0 else scaling.cases(size))
-        own[label] = gate.own_work(gate.levels_time.command("llrm", "O1", source))
+        # gvn off: -O1's value numbering forwards those cells' stores before promote sees them, and promote's own work is
+        # what this measures
+        command = gate.levels_time.command("llrm", "O1", source)
+        command.insert(1, "-fno-gcse")
+        own[label] = gate.own_work(command)
     small, big = (own[label].get("mir promote", 0.0) - own["empty"].get("mir promote", 0.0) for label in ("n", "2n"))
     assert small > 5.0, f"premise: promote ran ({small:.1f} Minstr)"
     assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"

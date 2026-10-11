@@ -1,0 +1,8 @@
+description = "STFT of 65536 generated samples: 511 frames of a 256-point Hann-windowed FFT, hop 128, read through DOS in 256-byte hops, 129 bins per frame written to a file (single)"
+repetitions = 1
+timed_only = true
+
+[region]
+bas = "BenchStftSingle"
+c = "bench_stft_single"
+nib = "bench_stft_single"

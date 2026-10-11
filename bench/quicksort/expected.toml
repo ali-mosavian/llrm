@@ -16,9 +16,9 @@ data_bytes = 17
 bss_bytes = 0
 
 [c.O2]
-instructions = 157857
-memory_operands = 56152
-code_bytes = 303
+instructions = 157300
+memory_operands = 42257
+code_bytes = 309
 data_bytes = 0
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 163825
-memory_operands = 59388
-code_bytes = 408
+instructions = 164630
+memory_operands = 46174
+code_bytes = 427
 data_bytes = 0
 bss_bytes = 0
 

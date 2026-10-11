@@ -3,10 +3,10 @@
 .model medium
 .386
 
-extrn _llrm_os_open:far
-extrn _llrm_os_read:far
-extrn _llrm_os_write_file:far
-extrn _llrm_os_exit:far
+extrn LL$OPEN:far
+extrn LL$READ:far
+extrn LL$WRITE_FILE:far
+extrn LL$EXIT:far
 
 .data
 ticks   dw 0
@@ -27,9 +27,9 @@ __STKOVERFLOW proc far
     push ds
     push offset stkmsg
     push DOS_STDOUT
-    call far ptr _llrm_os_write_file
+    call far ptr LL$WRITE_FILE
     push 1
-    call far ptr _llrm_os_exit
+    call far ptr LL$EXIT
 __STKOVERFLOW endp
 
 ; void report(long v)
@@ -69,7 +69,7 @@ unsigned:
     push ds
     push di
     push DOS_STDOUT
-    call far ptr _llrm_os_write_file
+    call far ptr LL$WRITE_FILE
     add sp, 8
     pop di
     pop si
@@ -88,7 +88,7 @@ _input_read proc far
     push 0
     push ds
     push offset inname
-    call far ptr _llrm_os_open
+    call far ptr LL$OPEN
     add sp, 6
     test ax, ax
     js failed
@@ -98,7 +98,7 @@ opened:
     push ds
     push word ptr [bp+6]
     push inhandle
-    call far ptr _llrm_os_read
+    call far ptr LL$READ
     add sp, 8
     test dx, dx
     jns done

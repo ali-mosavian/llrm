@@ -6,8 +6,8 @@
 .386
 
 extrn N$EDIV:far
-extrn _llrm_os_set_vector:far
-extrn _llrm_os_restore_vectors:far
+extrn LL$SET_VECTOR:far
+extrn LL$RESTORE_VECTORS:far
 
 public N$INIT
 
@@ -16,11 +16,11 @@ N$INIT proc far
     push cs
     push offset divide_fault
     push 0
-    call far ptr _llrm_os_set_vector
+    call far ptr LL$SET_VECTOR
     push cs
     push offset break_handler
     push 23h
-    call far ptr _llrm_os_set_vector
+    call far ptr LL$SET_VECTOR
     add sp, 12
     retf
 N$INIT endp
@@ -37,7 +37,7 @@ break_handler:
     push ax
     mov ax, DGROUP
     mov ds, ax
-    call far ptr _llrm_os_restore_vectors
+    call far ptr LL$RESTORE_VECTORS
     pop ax
     pop ds
     stc

@@ -16,14 +16,14 @@ data_bytes = 17
 bss_bytes = 0
 
 [c.O2]
-instructions = 57563
-memory_operands = 11227
-code_bytes = 283
+instructions = 59060
+memory_operands = 11825
+code_bytes = 291
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 55535
+instructions = 55236
 memory_operands = 12581
 code_bytes = 243
 data_bytes = 0

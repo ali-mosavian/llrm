@@ -378,7 +378,7 @@ pub fn laid_out(
     // The register the code would address a cell by is the one pushed below the
     // return address: a frame address away.
     if let Some((.., entry)) = debug.frame.filter(|_| debug.cfa) {
-        info.frame_base = model::FrameBase::Cfa { bias: 2 * entry[0] };
+        info.frame_base = model::FrameBase::Cfa { bias: 2 * entry[0], far_bias: entry[1] + entry[0] };
     }
     info.globals = debug
         .globals
@@ -457,7 +457,13 @@ pub fn laid_out(
                     // frame address: the return address and the
                     // register saved.
                     let bias = match (info.frame_base, debug.frame) {
-                        (model::FrameBase::Cfa { bias }, _) => bias,
+                        (model::FrameBase::Cfa { bias, far_bias }, _) => {
+                            if procedure.far {
+                                far_bias
+                            } else {
+                                bias
+                            }
+                        }
                         (_, Some((.., entry))) => entry[usize::from(procedure.far)] + entry[0],
                         _ => continue,
                     };
@@ -589,10 +595,10 @@ pub fn laid_out(
                                     model::FrameBase::Register => {
                                         super::arrival::Cell::Frame { register: frame, disp: addr.disp }
                                     }
-                                    model::FrameBase::Cfa { bias } => super::arrival::Cell::Stack {
+                                    model::FrameBase::Cfa { bias, far_bias } => super::arrival::Cell::Stack {
                                         register: stack,
                                         entry: entry[usize::from(procedure.far)],
-                                        from_cfa: addr.disp - bias,
+                                        from_cfa: addr.disp - if procedure.far { far_bias } else { bias },
                                     },
                                 };
                                 super::arrival::stored(&code.image[start..end], cell, register).map(|at| (register, at))

@@ -35,6 +35,7 @@ pairing                 0    1
 
 [clocks]
 alu_rr       1   1
+xchg_rr      3   3
 alu_ri       1   1
 alu_rm       2   2
 alu_mr       3   3
@@ -108,6 +109,7 @@ udiv_w4         40   41
 
 [latency]
 alu_rr       1   1
+xchg_rr      3   3
 alu_ri       1   1
 alu_rm       2   2
 alu_mr       3   3

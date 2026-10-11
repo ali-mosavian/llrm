@@ -2,16 +2,16 @@ reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; s
 blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 1059
+instructions = 1057
 memory_operands = 463
-code_bytes = 697
+code_bytes = 713
 data_bytes = 13
 bss_bytes = 0
 
 [bas.Os]
 instructions = 1134
 memory_operands = 535
-code_bytes = 656
+code_bytes = 658
 data_bytes = 13
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 311
+instructions = 309
 memory_operands = 82
-code_bytes = 429
+code_bytes = 438
 data_bytes = 0
 bss_bytes = 0
 

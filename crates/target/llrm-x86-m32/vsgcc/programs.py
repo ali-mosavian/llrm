@@ -9,5 +9,6 @@ LLRM_FLAGS = ["-m32", "-mabi=sysv", "-march=i486"]  # build.sh's
 
 def sources() -> dict[str, Path]:
     """Program name -> its source: bench/ and the x_ kernels written for the comparison."""
-    found = {p.name: p / f"{p.name}.c" for p in sorted((REPO / "bench").iterdir()) if p.is_dir() and p.name not in NOT_PROGRAMS}
+    found = {p.name: p / f"{p.name}.c" for p in sorted((REPO / "bench").iterdir())
+             if p.is_dir() and p.name not in NOT_PROGRAMS and "bench_io.h" not in (p / f"{p.name}.c").read_text(errors="replace")}  # files: no gcc build
     return found | {p.name: p / f"{p.name}.c" for p in sorted((HERE / "kernels").iterdir())}

@@ -55,6 +55,7 @@ pairing                 0    0    1    0    0    0    0    0
 
 [clocks]
 alu_rr                  2    1    1    1    1    1    1    1   # add/and/or/xor/sub/cmp reg,reg
+xchg_rr                 3    3    3    3    2    2    2    3   # xchg reg,reg: the 486's is Intel's 3, not an ALU's 1
 alu_ri                  2    1    1    1    1    1    1    1   # ... reg,imm
 alu_rm                  6    2    2    1    1    1    1    1   # ... reg,[mem]
 alu_mr                  8    3    3    1    1    1    1    1   # ... [mem],reg
@@ -128,6 +129,7 @@ udiv_w4                38   40   41    -    -    -    -    -
 
 [latency]
 alu_rr                  2    1    1    1    1    1    1    1   # add/and/or/xor/sub/cmp reg,reg
+xchg_rr                 3    3    3    3    2    2    2    3   # xchg reg,reg: the 486's is Intel's 3, not an ALU's 1
 alu_rm                  6    2    2    4    3    3    3    4   # ... reg,[mem]
 alu_mr                  8    3    3    4    3    3    3    4   # ... [mem],reg
 mov_rr                  2    1    1    1    1    1    1    1
