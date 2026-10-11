@@ -792,3 +792,20 @@ def test_the_counted_proofs_ask_the_congruences_of_the_body_once_not_once_for_ea
     small, big = (own[label].get("analysis counted", 0.0) - own["empty"].get("analysis counted", 0.0) for label in ("d4", "d5"))
     assert small > 5.0, f"premise: counted ran ({small:.1f} Minstr)"
     assert big <= 4.5 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_loopsimplify_does_not_derive_the_shape_of_the_function_again_for_each_loop_it_changes(tmp_path):
+    """nest(N) at -O2 with -ftree-ch: every loop's exit has a second predecessor (the copied header's guard), so `mir loopsimplify` groups
+    every loop's blocks, and after each loop made a new dominance and loop forest of the whole function, twice (the N^3 of N loops, each
+    a pass over blocks times depth): its own work read 29 / 171 / 1,151 Minstr at N=16, 32, 64, a step of 6.7. The loops kept up to
+    date from the blocks it makes: 12 / 46 / 184, a step of 4.0 (each loop still reads the function's graph: N^2). A step above 4.6 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 32), ("2n", 64)):
+        source = tmp_path / f"nest_{label}.c"
+        source.write_text("" if size == 0 else scaling.nest(size))
+        command = gate.levels_time.command("llrm", "O2", source)
+        command.insert(1, "-ftree-ch")
+        own[label] = gate.own_work(command)
+    small, big = (own[label].get("mir loopsimplify", 0.0) - own["empty"].get("mir loopsimplify", 0.0) for label in ("n", "2n"))
+    assert small > 5.0, f"premise: loopsimplify ran ({small:.1f} Minstr)"
+    assert big <= 4.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
