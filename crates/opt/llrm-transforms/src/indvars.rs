@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::graph::loops::Loop;
-use llrm_analysis::induction::{self, AffineOperand};
+use llrm_analysis::induction::{self, Affine, AffineOperand};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
@@ -32,7 +32,12 @@ use crate::profit::OperationCosts;
 /// the exits (`exitsink`), and an inner recurrence's exit value carried
 /// round the loop outside (`rewound`). Which counters the loop keeps is
 /// `lsr`'s.
-pub struct IndVars;
+pub struct IndVars {
+    /// Rewrite a counted exit's affine values as numbers. Off before the
+    /// header copy: a number is a `mov` where the counter's register already
+    /// holds it.
+    pub exit_values: bool,
+}
 
 impl FunctionPass for IndVars {
     fn name(&self) -> &'static str {
@@ -67,6 +72,10 @@ impl FunctionPass for IndVars {
         if folded {
             standing.changed();
         }
+        let valued = self.exit_values && exit_values(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        if valued {
+            standing.changed();
+        }
         let sunk = crate::exitsink::sunk(unit.function);
         if sunk {
             standing.changed();
@@ -80,8 +89,8 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (sunk || rewound || widened) && dead::dead(unit.context, outer.callees(), unit.function);
-        if evaluated || folded {
+        let dead = (sunk || rewound || widened || valued) && dead::dead(unit.context, outer.callees(), unit.function);
+        if evaluated || folded || valued {
             PreservedAnalyses::none()
         } else if sunk || rewound || widened || dead {
             // Blocks and edges are as they were.
@@ -90,6 +99,101 @@ impl FunctionPass for IndVars {
             PreservedAnalyses::all()
         }
     }
+}
+
+/// A counted exit's phi values that are affine in the loop's counters, the
+/// counters' starts and steps constant, are numbers there: LLVM's
+/// `rewriteLoopExitValues`, the SCEV of the value at the exit's count. A
+/// counter stepped and then tested (`i + 1 < 32`) leaves with 32, so what the
+/// exit reads is no longer the counter kept alive past its step.
+fn exit_values(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &passes::Outer,
+    standing: &mut llrm_analysis::memory::Standing,
+) -> bool {
+    let mut changed = false;
+    let shape = cfg::Shape::of(function);
+    let mut found = Vec::new();
+    {
+        let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
+        let facts = standing.of(&unit);
+        let unit = unit.with_registers(facts);
+        let facts = unit.registers();
+        for loop_ in shape.loops.iter() {
+            let counters = induction::basics(&unit, loop_);
+            if counters.is_empty() {
+                continue;
+            }
+            let headers = counters.keys().copied().collect::<BTreeSet<_>>();
+            for count in induction::exits(&unit, loop_, Some(&facts), false) {
+                let Some(taken) = count.taken.as_ref().filter(|taken| taken.iter().all(|one| one.terms.is_empty()))
+                else {
+                    continue;
+                };
+                let Some(trips) = taken.iter().map(|one| one.constant.clone()).min() else { continue };
+                let (from, exit) = (cfg::block(count.block), cfg::block(count.exit));
+                for phi in _phis(function, exit) {
+                    let Some(Operand::Value(value)) = _from(function, phi, from) else { continue };
+                    let Some(width) = unit.int_bits(Operand::Value(value)) else { continue };
+                    let Some(terms) = induction::linear(
+                        &unit,
+                        &AffineOperand::Value(value, width),
+                        &headers,
+                        width,
+                        false,
+                        &BTreeSet::new(),
+                        &mut IndexMap::default(),
+                    ) else {
+                        continue;
+                    };
+                    let mut total = BigInt::zero();
+                    let mut complete = true;
+                    for (term, coefficient) in &terms {
+                        let number = match term {
+                            AffineOperand::Const(constant) => constant.n.clone(),
+                            AffineOperand::Value(counter, _) => match counters.get(counter) {
+                                Some(Affine {
+                                    start: AffineOperand::Const(start),
+                                    step: AffineOperand::Const(step),
+                                    ..
+                                }) => &start.n + &step.n * &trips,
+                                _ => {
+                                    complete = false;
+                                    break;
+                                }
+                            },
+                        };
+                        total += coefficient * number;
+                    }
+                    if complete {
+                        let at = function
+                            .instruction(phi)
+                            .operands
+                            .chunks(2)
+                            .position(|pair| pair[1] == Operand::Block(from));
+                        found.push((phi, at, total, width));
+                    }
+                }
+            }
+        }
+    }
+    for (phi, at, total, width) in found {
+        let Some(at) = at else { continue };
+        let constant = counting::constant(context, &total, width);
+        if function.instruction(phi).operands.len() == 2 {
+            // An exit phi of one arm is its number wherever it is read.
+            let result = function.instruction(phi).result.expect("a phi's value");
+            function.replace_all_uses_with(result, constant);
+            function.set_operands(phi, Vec::new());
+            function.erase(phi).expect("a phi nothing reads");
+        } else {
+            function.set_operand(phi, 2 * at, constant);
+        }
+        changed = true;
+    }
+    changed
 }
 
 fn _phis(

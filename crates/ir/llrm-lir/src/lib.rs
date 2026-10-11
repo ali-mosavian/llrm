@@ -117,7 +117,7 @@ impl AddressRef {
 
     /// Its displacement is BP's: see `Mem::in_frame`.
     pub fn in_frame(&self) -> bool {
-        _in_frame(self.addr, self.through, false)
+        _in_frame(self.addr)
     }
 }
 
@@ -213,21 +213,14 @@ impl Mem {
     /// Its displacement is BP's: a frame cell, or an indexed one, which is
     /// spelled through BP with a literal displacement.
     pub fn in_frame(&self) -> bool {
-        _in_frame(self.addr, self.through, self.base.is_some())
+        _in_frame(self.addr)
     }
 }
 
-fn _in_frame(
-    addr: Option<Addr>,
-    through: RegId,
-    valued: bool,
-) -> bool {
-    // A base value is the register's: the frame register is a frame only where
-    // nothing was given it.
-    addr.is_some_and(|addr| {
-        addr.space == Space::Frame
-            || (addr.space == Space::Literal && !valued && matches!(through, RegId::BP | RegId::EBP))
-    })
+fn _in_frame(addr: Option<Addr>) -> bool {
+    // A frame reference is the frame's until layout resolves it; a register
+    // named in an address is a value, whatever its name.
+    addr.is_some_and(|addr| addr.space == Space::Frame)
 }
 
 /// Every selected machine operand Python LIR may carry.
@@ -623,18 +616,18 @@ mod tests {
     /// An indexed access through a register that holds a value (`[ebp+edx-16]`,
     /// the frame register freed) is not a frame cell: relayout moved its
     /// displacement by the frame's hole and nib's dictionary lookups read 16
-    /// bytes off (tests/run nib/flat_containers at -O2).
+    /// bytes off (tests/run nib/flat_containers at -O2). A frame cell is the
+    /// frame's by its space, indexed or not, never by the register's name.
     #[test]
-    fn a_literal_displacement_through_a_register_holding_a_value_is_not_in_the_frame() {
-        let table = |base| Mem {
+    fn a_frame_cell_is_the_frames_by_its_space_not_by_its_register() {
+        let table = |space| Mem {
             through: RegId::EBP,
-            base,
             index: Some(Held { value: 2, width: 4 }),
             index_through: RegId::EDX,
-            ..Mem::new(Some(Addr::new(Space::Literal, -16)), 4)
+            ..Mem::new(Some(Addr::new(space, -16)), 4)
         };
-        assert!(table(None).in_frame(), "an indexed frame array is BP's");
-        assert!(!table(Some(Held { value: 1, width: 4 })).in_frame(), "a base value is the register's");
+        assert!(table(Space::Frame).in_frame(), "an indexed frame array is the frame's");
+        assert!(!table(Space::Literal).in_frame(), "EBP in a literal address is a value");
     }
 
     #[test]

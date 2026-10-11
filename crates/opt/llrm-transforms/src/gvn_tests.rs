@@ -926,3 +926,84 @@ b0:
     let after = managed(text);
     assert!(!after.contains("load i16"), "the load survives: {after}");
 }
+
+/// Two calls with the same arguments to a function that touches no memory are
+/// one call, as LLVM's GVN numbers a call that `doesNotAccessMemory` and gcc's
+/// FRE a const function's. A callee that reads or writes, an argument that
+/// differs, or another callee keeps both. hanoi's `hanoi(n - 1) + 1 +
+/// hanoi(n - 1)` was two recursions, 2^13 calls for what one makes.
+#[test]
+fn test_equal_calls_to_a_function_that_touches_no_memory_are_one() {
+    let calls = |attrs: &str, second: &str, callee: &str| {
+        numbered(&format!(
+            "@g = global i16 0
+
+define i16 @h(i16 %n) {attrs} {{
+b0:
+  %m = mul i16 %n, 3
+  ret i16 %m
+}}
+
+define i16 @k(i16 %n) {attrs} {{
+b0:
+  %m = mul i16 %n, 5
+  ret i16 %m
+}}
+
+define i16 @f(i16 %x, i16 %y) {{
+b0:
+  %a = call i16 @h(i16 %x)
+  %b = call i16 @{callee}(i16 {second})
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        ))
+    };
+    let count = |text: &str| text.lines().filter(|line| line.contains("call i16 @")).count();
+    assert_eq!(count(&calls("memory(none)", "%x", "h")), 1);
+    assert_eq!(count(&calls("memory(none)", "%y", "h")), 2, "another argument is another call");
+    assert_eq!(count(&calls("memory(none)", "%x", "k")), 2, "another callee is another call");
+    assert_eq!(count(&calls("memory(read)", "%x", "h")), 2, "a callee that reads is not numbered here");
+    assert_eq!(count(&calls("", "%x", "h")), 2, "nor one that says nothing");
+}
+
+/// Equal calls are merged before `tailrec` runs: it makes the second of two
+/// calls a loop's trip, and then the first has no equal to merge with.
+/// `hanoi(n - 1) + 1 + hanoi(n - 1)` ran as a nest of loops and 8,191 calls'
+/// work, 143,747 clocks; one call, `2 * h + 1`, is 103.
+#[test]
+fn test_two_equal_calls_are_one_before_tail_recursion_makes_a_loop_of_one() {
+    use super::EqualCalls;
+    use crate::tailrec::TailRecursion;
+    let text = "define internal i32 @h(i32 %n) memory(none) {
+b0:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %b1, label %b2
+b1:
+  ret i32 0
+b2:
+  %m = sub i32 %n, 1
+  %a = call i32 @h(i32 %m)
+  %p = add i32 %a, 1
+  %b = call i32 @h(i32 %m)
+  %q = add i32 %p, %b
+  ret i32 %q
+}
+";
+    let run = |merge: bool| {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        if merge {
+            manager.add(EqualCalls);
+        }
+        manager.add(TailRecursion);
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+        printed(&module)
+    };
+    let calls = |text: &str| text.lines().filter(|line| line.contains("call i32 @h")).count();
+    let (merged, looped) = (run(true), run(false));
+    assert!(looped.contains("tailrecurse"), "premise: tail recursion makes the second call a loop\n{looped}");
+    assert_eq!((calls(&merged), merged.contains("tailrecurse")), (1, false), "{merged}");
+}

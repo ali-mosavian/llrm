@@ -100,6 +100,7 @@ fn typed(
     one: &di::Type,
     nodes: &IndexMap<MetadataId, model::TypeId>,
     near: u8,
+    dialect: model::Dialect,
 ) -> Result<model::Type, String> {
     let node = |id: MetadataId| nodes.get(&id).copied().ok_or_else(|| format!("debug type !{} is not listed", id.0));
     let target = || one.target.map(node).ok_or_else(|| format!("a {} of nothing", one.kind.value()))?;
@@ -113,7 +114,12 @@ fn typed(
             }
         }
         di::Kind::FixedString => model::Type::FixedString(narrow(one.size, "a STRING's length")?),
-        di::Kind::Array => model::Type::Array { element: target()?, bytes: None },
+        di::Kind::Array => match (dialect, one.members.first()) {
+            (model::Dialect::Cv4, Some(descriptor)) => {
+                model::Type::Described { element: target()?, descriptor: node(descriptor.r#type)? }
+            }
+            _ => model::Type::Array { element: target()?, bytes: None },
+        },
         di::Kind::Sized => model::Type::Array { element: target()?, bytes: Some(narrow(one.size, "an array's size")?) },
         di::Kind::Pointer => {
             let (reach, bytes) = match one.reach {
@@ -178,6 +184,10 @@ pub fn described(
     let symbol = |name: &str| {
         module.named(name).and_then(|id| names.get(&(globals::space(module, id), i64::from(id.0)))).cloned()
     };
+    let dialect = match di::dialect(module) {
+        di::Dialect::Bc => model::Dialect::Bc,
+        di::Dialect::Cv4 => model::Dialect::Cv4,
+    };
     // Every type has its place before any is read: a member may name one made
     // after it.
     let listed = di::types(module);
@@ -185,7 +195,7 @@ pub fn described(
     let mut types = Vec::new();
     for &id in &listed {
         let one = di::read_type(module, id).ok_or_else(|| format!("debug type !{} does not read", id.0))?;
-        types.push(typed(&one, &nodes, (near / 8) as u8)?);
+        types.push(typed(&one, &nodes, (near / 8) as u8, dialect)?);
     }
     let node = |id: MetadataId| nodes.get(&id).copied().ok_or_else(|| format!("debug type !{} unlisted", id.0));
     let mut procedures = IndexMap::default();
@@ -228,10 +238,6 @@ pub fn described(
         Some(di::Language::Basic) => model::Language::Basic,
         Some(di::Language::Nib) => model::Language::Nib,
         None => model::Language::Unknown,
-    };
-    let dialect = match di::dialect(module) {
-        di::Dialect::Bc => model::Dialect::Bc,
-        di::Dialect::Cv4 => model::Dialect::Cv4,
     };
     Ok(Some(Debug {
         format: model::Format::Default,

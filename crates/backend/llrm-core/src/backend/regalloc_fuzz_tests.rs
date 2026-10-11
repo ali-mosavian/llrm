@@ -857,7 +857,7 @@ fn spilled_and_allocated(
             prices: crate::backend::ssaspill::Prices::clocks(),
             run: Default::default(),
         }),
-        Box::new(PhiElimination),
+        Box::new(PhiElimination::default()),
         Box::new(TwoAddress),
         Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::m16())),
         Box::new(RegAlloc::new(

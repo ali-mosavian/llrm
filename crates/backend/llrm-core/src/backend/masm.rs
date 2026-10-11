@@ -1244,7 +1244,9 @@ fn writes_stack_pointer(place: &Loc) -> bool {
 
 /// `place` with a frame cell addressed through the stack pointer; none where it
 /// reads the frame register as anything but a base. The frame register would
-/// have held the entry's stack pointer less `slot`.
+/// have held the entry's stack pointer less `slot`. A frame cell is
+/// `Space::Frame`, indexed or not; a register of the frame register's name in
+/// any other address is a value (`FrameRegisters::free`).
 fn through_stack(
     place: &Loc,
     depth: i64,
@@ -1253,19 +1255,7 @@ fn through_stack(
     free: bool,
 ) -> Option<Loc> {
     let shift = |_disp: i64| depth - slot;
-    // Where the frame register holds a value (`FrameRegisters::free`), only a
-    // frame cell is the frame register's: a register of that name elsewhere
-    // is the value.
     let is_pointer = |one: RegId| (one == FRAME || one == pointer) && !(free && one != RegId::None);
-    // A frame place with no register, or a cell the frame register's own
-    // address names: a 32-bit index has no frame space, only
-    // `[ebp+index+d]`. A cell with a base value is that register's, even
-    // when it was given the frame register.
-    let based = |through: RegId, addr: &Option<Addr>, valued: bool| match addr {
-        Some(addr) if addr.space == Space::Frame => through == RegId::None || through == FRAME || through == pointer,
-        Some(addr) if addr.space == Space::Literal => (through == FRAME || through == pointer) && !(free && valued),
-        _ => false,
-    };
     if matches!(place, Loc::Reg(one) if is_pointer(one.register)) {
         return None;
     }
@@ -1273,11 +1263,7 @@ fn through_stack(
     if is_pointer(at.index_through) {
         return None;
     }
-    // A cell with a base value is that register's, even when it was given the
-    // frame register.
-    let valued = matches!(place, Loc::Mem(cell) if cell.base.is_some());
-    if based(at.through, &at.addr, valued) {
-        let addr = at.addr?;
+    if let Some(addr) = at.addr.filter(|addr| addr.space == Space::Frame) {
         return Some(place.map_address(|one| ir::AddressRef {
             through: STACK,
             addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr }),
@@ -1467,10 +1453,8 @@ fn _roots_of_values(
                     found.insert(ir::root(*register));
                 }
                 Loc::Mem(cell) => {
-                    let frame_cell =
-                        cell.addr.as_ref().is_some_and(|addr| {
-                            addr.space == Space::Frame || (addr.space == Space::Literal && cell.base.is_none())
-                        }) && (cell.through == FRAME || cell.through == pointer || cell.through == RegId::None);
+                    let frame_cell = cell.addr.as_ref().is_some_and(|addr| addr.space == Space::Frame)
+                        && (cell.through == FRAME || cell.through == pointer || cell.through == RegId::None);
                     if !frame_cell {
                         found.insert(ir::root(cell.through));
                     }
@@ -2138,6 +2122,7 @@ mod tests {
                 default: llrm_target::object::Format::Omf,
                 bitness: 32,
                 header: vec![".386".to_owned(), ".model flat".to_owned()],
+                dwarf_version: llrm_target::object::DEFAULT_DWARF_VERSION,
             },
             code: "T_TEXT".into(),
             names: no_names(),

@@ -803,6 +803,28 @@ mod tests {
         assert_eq!(super::Profile::parse(&none, "x").unwrap_err(), "the C runtime description has no [frontend]");
     }
 
+    /// Where EBP is a value (no frame register kept), an `lea` through it is
+    /// the value's address, not the frame's: masm read the register's name and
+    /// the lack of a base value on an `lea`'s operand as a frame cell, and made
+    /// `lea ebp,[ebp+ecx*2]` into `[esp+ecx*2]`.
+    #[test]
+    fn test_m32_an_lea_through_a_value_in_ebp_is_not_a_frame_cell() {
+        let lines = flat_listing_with("sixptr", &["-O2", "-ftree-ch"]);
+        let leas: Vec<&String> = lines.iter().filter(|line| line.starts_with("lea") && line.contains('*')).collect();
+        assert!(!leas.iter().any(|line| line.contains("[esp+")), "{lines:#?}");
+    }
+
+    /// -O3 takes LLVM's copy budget (300, `UnrollThresholdAggressive`), not
+    /// gcc's 200: at 150 the product's middle loop, 328 operations once its
+    /// inner loop is copied out, stayed rolled and `b` was read back from the
+    /// stack by 8 multiplies a trip, 10,399 model clocks against 1,189.
+    #[test]
+    fn test_m32_o3_copies_out_a_product_whose_operand_is_constant() {
+        let lines = flat_listing_at("matmul", "-O3");
+        let multiplies = lines.iter().filter(|line| line.starts_with("imul")).count();
+        assert_eq!(multiplies, 0, "{lines:#?}");
+    }
+
     /// A load whose only reader is an add is the add's memory operand. The
     /// return read the frame register as it does where one is kept, so a load
     /// into EBP, the last register given out where none is, looked live to
@@ -1886,10 +1908,25 @@ mod tests {
     /// tests/fixtures/c32/`fixture`.cgs, as the 386 front end recorded it,
     /// selected for `-m32`.
     fn flat_listing(fixture: &str) -> Vec<String> {
+        flat_listing_with(fixture, &["-O2"])
+    }
+
+    fn flat_listing_at(
+        fixture: &str,
+        level: &str,
+    ) -> Vec<String> {
+        flat_listing_with(fixture, &[level])
+    }
+
+    fn flat_listing_with(
+        fixture: &str,
+        flags: &[&str],
+    ) -> Vec<String> {
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs")))
                 .unwrap();
-        let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let argv: Vec<String> =
+            ["-m32"].into_iter().chain(flags.iter().copied()).chain(["x.c"]).map(str::to_owned).collect();
         let args = super::parse_args(&argv).unwrap();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()

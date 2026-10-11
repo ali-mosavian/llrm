@@ -884,7 +884,7 @@ fn _entered(
     let anchor = |one: &Scev| -> Scev {
         let [(product, factor)] = one.terms.iter().collect::<Vec<_>>()[..] else { return one.clone() };
         let Some(value) = product.single().filter(|_| *factor == BigInt::from(1)) else { return one.clone() };
-        match anchored(unit, &AffineOperand::Value(value, width), width, None) {
+        match anchored(unit, &AffineOperand::Value(value, width), width, None, None) {
             (Some(root), offset) => Scev::unknown(root, width)
                 .plus(&Scev::constant(offset, width))
                 .plus(&Scev::constant(one.constant.clone(), width)),
@@ -896,6 +896,22 @@ fn _entered(
         || _ranged(unit, preheader, value, limit, test, width)
     {
         return true;
+    }
+    // A signed ordered test reads them at an offset too (`n > 2` proves `1 < n
+    // - 1`), where the sides are sums that cannot wrap.
+    if matches!(
+        test,
+        IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
+    ) {
+        let rooted = |one: &AffineOperand| {
+            let (root, offset) = anchored(unit, one, width, None, Some(llrm_mir::opcode::Flags::NSW));
+            let number = Scev::constant(offset, width);
+            root.map_or(number.clone(), |root| Scev::unknown(root, width).plus(&number))
+        };
+        let (start, bound) = (rooted(value), rooted(limit));
+        return crate::guards::guards(unit, preheader)
+            .into_iter()
+            .any(|guard| crate::guards::implies_at_offset(&guard, test, &start, &bound));
     }
     // Only an equality test reads the guards at an offset (`a != 1` proves `a -
     // 1 != 0`), and only where the ones above do not prove it as they
@@ -1307,8 +1323,8 @@ fn _difference(
     if let (Some(begin), Some(limit)) = (begin, limit) {
         return Some(masked(&(limit - begin), width));
     }
-    let (root, ahead) = anchored(unit, bound, width, Some(facts));
-    let (other, behind) = anchored(unit, start, width, Some(facts));
+    let (root, ahead) = anchored(unit, bound, width, Some(facts), None);
+    let (other, behind) = anchored(unit, start, width, Some(facts), None);
     (root == other).then(|| masked(&(ahead - behind), width))
 }
 
@@ -1397,11 +1413,15 @@ pub fn distance(
 ///
 /// Two values with one root are a constant apart, which is how a loop from
 /// `x - 32` to `x` is counted and how two counters starting 4 apart share one.
+/// `anchored`, through the adds and subtractions that carry `no_wrap` only
+/// where it is given: an ordered compare reads a value as its root plus a
+/// constant only where the sum cannot wrap.
 pub fn anchored(
     unit: &Unit,
     term_: &AffineOperand,
     width: u32,
     facts: Option<&IndexMap<ValueId, Known>>,
+    no_wrap: Option<llrm_mir::opcode::Flags>,
 ) -> (Option<ValueId>, BigInt) {
     let empty = IndexMap::default();
     let facts = facts.unwrap_or(&empty);
@@ -1416,7 +1436,9 @@ pub fn anchored(
             break;
         }
         let Some((_, op)) = unit.defining(Operand::Value(value)) else { break };
-        if !matches!(op.opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)) {
+        if !matches!(op.opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub))
+            || no_wrap.is_some_and(|flag| !op.flags.contains(flag))
+        {
             break;
         }
         let (Some(left), Some(right)) = (term(unit, op.operands[0]), term(unit, op.operands[1])) else { break };
