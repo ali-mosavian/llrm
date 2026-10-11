@@ -180,3 +180,26 @@ fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
     let code = crate::backend::select::priced_in(32, &what, 0, None, false, false, None).expect("a price");
     assert_eq!(code.code, [0x8d, 0x34, 0x5b]);
 }
+
+/// A value in the frame register is an address register like another: `lea
+/// cx, [ebp+ebp+9]` had no price (the encoder read EBP in an address as the
+/// frame), so a function that gave a value the frame register compared its
+/// routes unpriced.
+#[test]
+fn test_a_lea_through_the_frame_register_held_as_a_value_has_a_price() {
+    let reg = |register| ir::Loc::Reg(ir::Reg { register, width: 2 });
+    let what = ir::Semantics {
+        name: Some("lea".to_owned()),
+        dests: vec![reg(RegId::CX)],
+        sources: vec![ir::Loc::Address(ir::AddressRef {
+            through: RegId::EBP,
+            index_through: RegId::EBP,
+            scale: 1,
+            offset: 9,
+            ..ir::AddressRef::new(None)
+        })],
+        ..ir::Semantics::new(ir::Operation::Address)
+    };
+    let code = crate::backend::select::priced_in(16, &what, 0, None, false, false, None).expect("a price");
+    assert_eq!(code.code, [0x67, 0x8d, 0x4c, 0x2d, 0x09]);
+}

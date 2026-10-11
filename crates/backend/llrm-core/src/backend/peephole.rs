@@ -2000,9 +2000,6 @@ fn _affine_address(
                 disp = wrapped(disp * factor);
             }
             affine::Step::AddRegister(other) => {
-                if regs.is_frame(other.register) {
-                    break;
-                }
                 let root = full32(other.register);
                 match terms.iter_mut().find(|term| term.0 == root) {
                     Some(term) => term.1 += 1,

@@ -1861,7 +1861,6 @@ fn _allocated(
             // takes.
             if let Some(frame) = frame_register.filter(|_| !fixed.contains_key(&value)) {
                 if _frame_allowed(facts.confined.get(&value), width, frame, classes)
-                    && !_in_an_address_sum(&body, value)
                     && !_clobbered(&mine, frame, &facts.masks, width)
                     && !union.busy(&frame, &mine, &facts.live)
                     && _parking_pays(&body, &facts, value, &mine)
@@ -2113,26 +2112,6 @@ fn _frame_allowed(
 ) -> bool {
     width == classes.frame.size() as u32
         && confined.is_none_or(|registers| registers.iter().any(|one| _whole(*one) == frame))
-}
-
-/// Whether an instruction that makes an address of a sum (`lea`) names `value`:
-/// the encoder prices the frame register in one by its frame meaning, which a
-/// value's is not.
-fn _in_an_address_sum(
-    body: &LirBody,
-    value: u32,
-) -> bool {
-    crate::backend::postings::following(body, |postings| {
-        postings
-            .uses(value)
-            .iter()
-            .any(
-                |&(block, position)| body.blocks[block as usize].insns[position as usize]
-                    .what
-                    .as_ref()
-                    .is_some_and(|what| what.op == Operation::Address),
-            )
-    })
 }
 
 /// Whether holding `value` in the frame register through its range saves more

@@ -77,3 +77,29 @@ fn test_a_near_cell_through_the_frame_register_names_its_segment_unless_the_stac
     assert!(listing(&["-mno-stack-is-data"]).contains("ds:[bp]"));
     assert!(!listing(&["-mstack-is-data"]).contains("ds:[bp]"));
 }
+
+/// A value in the frame register named by an `lea` (`lea cx,[ebp+ebp+9]`) had
+/// no byte price: the encoder read the frame register in an address as the
+/// frame, and the verified compile of matmul stopped on it.
+#[test]
+fn test_a_value_in_the_frame_register_is_priced_in_an_address_sum() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = format!("{}/bench/matmul/matmul.bas", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+        .current_dir(scratch.path())
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_CHECK_PARKED", "1")
+        .args([
+            "--dialect",
+            "qb45",
+            "--runtime",
+            "qb45",
+            "-Os",
+            "-fno-inline-functions",
+            "-fno-inline-functions-called-once",
+        ])
+        .args(["-o", "a.obj", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
