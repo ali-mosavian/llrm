@@ -1,10 +1,10 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
+blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 609551
-memory_operands = 163087
-code_bytes = 381
+instructions = 609948
+memory_operands = 162884
+code_bytes = 375
 data_bytes = 13
 bss_bytes = 0
 
@@ -17,9 +17,9 @@ bss_bytes = 0
 kernel_ms = 9.4315
 
 [c.O2]
-instructions = 569020
-memory_operands = 82606
-code_bytes = 203
+instructions = 569421
+memory_operands = 82405
+code_bytes = 205
 data_bytes = 80400
 bss_bytes = 0
 
@@ -31,9 +31,9 @@ data_bytes = 80400
 bss_bytes = 0
 
 [nib.O2]
-instructions = 569020
-memory_operands = 82606
-code_bytes = 206
+instructions = 569421
+memory_operands = 82405
+code_bytes = 208
 data_bytes = 0
 bss_bytes = 80400
 

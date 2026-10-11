@@ -1,5 +1,5 @@
-reason = "DemandedBits (algebraic): a mask over bits nothing reads is gone. 18 rows better: bintree bas/nib -O2/-Os (-8 B), histo nib (-3 B, -5%), quicksort bas/nib (-7 B). One worse: bintree nib -Os memory_operands 27650 -> 28250, 444 -> 446 B: the LCG state's 'and 65535' went and the allocator then keeps the seed in its slot (add [bp-6],imm) instead of a register."
-blessed = "2026-10-10"
+reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
+blessed = "2026-10-11"
 
 [bas.O2]
 instructions = 144792
@@ -37,9 +37,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 116445
-memory_operands = 28250
-code_bytes = 446
+instructions = 116145
+memory_operands = 28850
+code_bytes = 445
 data_bytes = 0
 bss_bytes = 0
 

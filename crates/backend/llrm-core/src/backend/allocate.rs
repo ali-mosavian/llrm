@@ -1759,7 +1759,17 @@ fn _allocated(
                 Some(found) => vec![found],
                 None => {
                     let placed = llrm_support::debug::timed("split placed", || {
-                        splitkit::placed(&body, value, &facts.index, sets, &bundles, &order, &occupied, width)
+                        splitkit::placed(
+                            &body,
+                            value,
+                            &facts.index,
+                            sets,
+                            &bundles,
+                            &order,
+                            &occupied,
+                            width,
+                            &_held_saving,
+                        )
                     });
                     if placed.is_empty() {
                         llrm_support::debug::timed("split per block", || splitkit::per_block(&body, value, sets))
@@ -1769,7 +1779,7 @@ fn _allocated(
                 }
             };
             let regions: Vec<splitkit::Region> = llrm_support::debug::timed("split pays", || {
-                regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets)).collect()
+                regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets, &_held_saving)).collect()
             });
             for region in &regions {
                 llrm_support::debug!("split", "{}: split {value} at {:?}", body.name, region.spans);
@@ -3450,6 +3460,31 @@ fn _scoped_foldable_indexes(
             .extend(cells.iter().filter(|cell| cell.scale == 1).filter_map(|cell| cell.index.map(|index| index.value)));
     }
     spiller::foldable_indexes(body, &indexes)
+}
+
+/// What holding a value in a register saves at one reference, in reloads: the
+/// instruction that names it takes the memory operand where `_foldable`, and
+/// `_emitted` prices an instruction and a memory operand at one each, so a fold
+/// removes the half of a reload that is the instruction.
+pub(crate) fn _held_saving(one: &Insn) -> f64 {
+    if _foldable(one) { 0.5 } else { 1.0 }
+}
+
+/// Whether `one` can name a spilled value as a memory operand: the forms
+/// `FoldDiscounts` prices.
+fn _foldable(one: &Insn) -> bool {
+    let Some(what) = &one.what else {
+        return false;
+    };
+    match (what.op, what.name.as_deref(), what.sources.as_slice()) {
+        (Operation::Binary | Operation::Compare, name, _) => {
+            matches!(name, Some("add" | "sub" | "and" | "or" | "xor" | "cmp"))
+        }
+        (Operation::Multiply, Some("imul"), [Loc::Held(first), Loc::Held(second)]) => {
+            first.width == 4 && second.width == 4
+        }
+        _ => false,
+    }
 }
 
 /// How much of a spilled read disappears when it becomes a memory operand, for
