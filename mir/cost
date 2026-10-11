@@ -1,2 +1,0 @@
-bench_particle_ executes 83376 instructions, 91602 memory operands; 0 reloads, 0 spill stores, 0 remats; 10333 branches, 10010 taken, 0 jumps, 30353 jump cycles
-_main executes 4 instructions, 0 memory operands; 0 reloads, 0 spill stores, 0 remats; 0 branches, 0 taken, 0 jumps, 0 jump cycles
