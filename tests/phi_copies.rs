@@ -35,8 +35,19 @@ fn test_a_loop_variable_read_after_the_loop_is_not_copied_on_its_back_edge() {
         .skip_while(|line| !line.starts_with("_bench_frames proc"))
         .take_while(|line| !line.starts_with("_bench_frames endp"))
         .collect();
-    let jumps = function.iter().filter(|line| line.trim().starts_with("jmp ")).count();
-    assert_eq!(jumps, 0, "{}", function.join("\n"));
+    // No `jmp` between a loop's label and the branch that closes it: its copies
+    // are not in a block jumped over each trip.
+    let label_of = |line: &str| line.trim().strip_suffix(':').map(str::to_owned);
+    let mut inside_a_loop: Vec<&&str> = Vec::new();
+    for (at, line) in function.iter().enumerate() {
+        let Some(target) = line.trim().split_whitespace().nth(1).filter(|_| line.trim().starts_with('j')) else {
+            continue;
+        };
+        if let Some(head) = function[..at].iter().rposition(|above| label_of(above).as_deref() == Some(target)) {
+            inside_a_loop.extend(function[head..at].iter().filter(|one| one.trim().starts_with("jmp ")));
+        }
+    }
+    assert!(inside_a_loop.is_empty(), "{inside_a_loop:?}\n{}", function.join("\n"));
 }
 
 /// x_life's `cur = 1 - cur` is a variable the loop defines from itself in the
