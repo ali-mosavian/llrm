@@ -172,6 +172,9 @@ pub struct Flags {
     /// `-gcodeview`, `-gdwarf[-N]` or `-gtd` says which.
     pub debug: bool,
     pub debug_format: llrm_object::debug::Format,
+    /// `-gdwarf` without a version: 16-bit code gets the version Open Watcom's
+    /// tools read, 2.
+    dwarf_unversioned: bool,
     /// `-fobject-format=`: the object format to write, where the target has
     /// more than its default.
     pub object_format: Option<Format>,
@@ -203,6 +206,7 @@ impl Default for Flags {
             debug: false,
             abi: None,
             debug_format: Default::default(),
+            dwarf_unversioned: false,
             object_format: None,
             stack_usage: false,
             stack_limit: None,
@@ -238,11 +242,21 @@ impl Flags {
             "-g0" => self.debug = false,
             "-gcodeview" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::CodeView),
             "-gdwarf" | "-gdwarf-5" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 5 })
+                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 5 });
+                self.dwarf_unversioned = flag == "-gdwarf";
             }
-            "-gdwarf-4" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 4 }),
-            "-gdwarf-3" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 3 }),
-            "-gdwarf-2" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 2 }),
+            "-gdwarf-4" => {
+                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 4 });
+                self.dwarf_unversioned = false;
+            }
+            "-gdwarf-3" => {
+                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 3 });
+                self.dwarf_unversioned = false;
+            }
+            "-gdwarf-2" => {
+                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 2 });
+                self.dwarf_unversioned = false;
+            }
             "-gtd" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::TurboDebugger),
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
@@ -394,9 +408,15 @@ impl Flags {
         // about (frame cells, ranges) is that writer's, whichever frontend it
         // is.
         let object_format = self.format(&*arch).map_or("omf", |format| format.name());
+        let debug_format = match self.debug_format {
+            llrm_object::debug::Format::Dwarf { .. } if self.dwarf_unversioned && arch.object().bitness == 16 => {
+                llrm_object::debug::Format::Dwarf { version: 2 }
+            }
+            other => other,
+        };
         super::Options {
             object_format,
-            debug_format: self.debug_format,
+            debug_format,
             pipeline: self.pipeline(),
             stack_usage: self.stack_usage,
             stack_limit: self.stack_limit,
