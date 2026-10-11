@@ -811,7 +811,7 @@ fn allocated(
         &crate::backend::classes::RegisterClasses::m16(),
     )?)];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_none() {
-        phases.push(Box::new(ParallelCopy));
+        phases.push(Box::new(ParallelCopy::default()));
     }
     if std::env::var_os("FUZZ_SHOW").is_some() {
         eprintln!("{}", crate::backend::lirtext::lir_stage("input", &[(body.name.clone(), body.clone())]));
@@ -867,7 +867,7 @@ fn spilled_and_allocated(
             segments,
             &crate::backend::classes::RegisterClasses::m16(),
         )?),
-        Box::new(ParallelCopy),
+        Box::new(ParallelCopy::default()),
     ];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_some() {
         phases.pop();
@@ -1253,6 +1253,28 @@ fn test_the_interference_among_a_web_looks_only_at_the_instructions_that_name_it
         skipped += all.count() - last_visited();
     }
     assert!(skipped > 0, "premise: some instruction names none of the web");
+}
+
+/// The interference among a web of a few values was written a pair at a time
+/// into rows that were trees, and a group of N values live together was N^2
+/// pairs (siblings interference 170 of 1,972 Minstr on a 1.3 KB quicksort).
+/// Asked of a few values the rows are bits, a group written to its
+/// members a mask at a time.
+#[test]
+fn test_the_interference_among_a_web_is_bits_not_a_tree_of_pairs() {
+    use crate::analysis::intervals::intervals;
+    use crate::backend::coalesce::_interference_among;
+    use crate::backend::neighbours::Neighbours;
+    let mut rows = 0;
+    for seed in 0..40u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        let web: std::collections::BTreeSet<u32> = intervals(&plain, None).keys().copied().step_by(2).take(8).collect();
+        for near in _interference_among(&plain, Some(&web)).values() {
+            rows += 1;
+            assert!(matches!(near, Neighbours::Dense { .. }), "seed {seed}: a row of a web is a tree");
+        }
+    }
+    assert!(rows > 0, "premise: some value of a web interferes");
 }
 
 /// The no-split allocation of a body the base allocation split nothing in is
