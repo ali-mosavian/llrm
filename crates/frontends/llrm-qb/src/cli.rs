@@ -45,7 +45,8 @@ pub(super) struct Arguments {
 
 pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut source = None;
-    let mut frontend = Frontend::new("vbdos", "vbdos");
+    // The runtime is llrm's unless `--runtime` or `-fqb-runtime=` names a Microsoft one.
+    let mut frontend = Frontend::new("vbdos", "llrm");
     let (mut dump_hir, mut flags, mut dump) = (None, Flags::default(), None);
     let mut at = 0;
     while at < argv.len() {
@@ -160,5 +161,23 @@ pub fn main(argv: &[String]) -> i32 {
             eprintln!("llrm-qb: {error}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args;
+
+    fn runtime(argv: &[&str]) -> String {
+        let argv: Vec<String> = argv.iter().map(|one| one.to_string()).collect();
+        parse_args(&argv).expect("parses").frontend.runtime
+    }
+
+    /// llrm-qb called the Microsoft VB-DOS runtime unless told otherwise; the default is llrm's.
+    #[test]
+    fn the_runtime_is_llrms_unless_a_microsoft_one_is_named() {
+        assert_eq!(runtime(&["p.bas"]), "llrm");
+        assert_eq!(runtime(&["p.bas", "--runtime", "qb45"]), "qb45");
+        assert_eq!(runtime(&["p.bas", "-fqb-runtime=pds71"]), "pds71");
     }
 }
