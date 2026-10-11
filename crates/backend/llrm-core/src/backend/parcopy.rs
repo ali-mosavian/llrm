@@ -8,10 +8,13 @@
 use std::fmt;
 use std::sync::Arc;
 
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, Regs};
 
-use crate::backend::target;
-use crate::model::ir::{self, Loc, Mem, Operation, Semantics};
+use crate::backend::cpu::Profile;
+use crate::backend::lanes::Lanes;
+use crate::backend::peephole::{_lanes, _register_effects, id};
+use crate::backend::{liveness, masm, regthrash, target};
+use crate::model::ir::{self, Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::hash::{IndexMap, IndexSet};
@@ -32,7 +35,52 @@ impl fmt::Display for Malformed {
 
 impl std::error::Error for Malformed {}
 
-pub struct ParallelCopy;
+/// What the target charges for the ways a cycle of copies is broken, in clocks.
+#[derive(Clone, Copy, Debug)]
+pub struct CyclePrices {
+    pub copy: i64,
+    pub push: i64,
+    pub pop: i64,
+}
+
+impl CyclePrices {
+    /// None tuned for size: a register copy is two bytes, a push or a pop one.
+    pub fn of(cpu: &Profile) -> Option<Self> {
+        if cpu.size {
+            return None;
+        }
+        Some(Self { copy: cpu.cost("mov_rr").ok()?, push: cpu.cost("push_r").ok()?, pop: cpu.cost("pop_r").ok()? })
+    }
+
+    /// Whether a cycle of `moves` is cheaper rotated through a register than
+    /// through the stack.
+    fn register_is_cheaper(
+        &self,
+        moves: usize,
+    ) -> bool {
+        let moves = moves as i64;
+        (moves + 1) * self.copy < self.push + (moves - 1) * self.copy + self.pop
+    }
+}
+
+/// A cycle of copies is broken by exchanges, else through a register that is
+/// dead there where one is and the target's prices say it is cheaper than the
+/// stack, else through the stack. `scratch`: the registers a body may use that
+/// it does not have to save.
+#[derive(Default)]
+pub struct ParallelCopy {
+    pub prices: Option<CyclePrices>,
+    pub available: Vec<RegId>,
+    pub saved: Vec<RegId>,
+}
+
+/// The registers a cycle may be rotated through where it stands, and what
+/// they cost.
+struct Spare<'a> {
+    prices: CyclePrices,
+    /// Registers dead after the group, the group neither reads nor writes.
+    free: &'a [RegId],
+}
 
 impl LIRTransform for ParallelCopy {
     fn class_name(&self) -> &'static str {
@@ -47,14 +95,14 @@ impl LIRTransform for ParallelCopy {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        scheduled(&body).map_err(|refused| refused.to_string())
+        scheduled_with(&body, self.prices, &self.available, &self.saved).map_err(|refused| refused.to_string())
     }
 
     fn transform_raising(
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, Exception> {
-        scheduled(&body)
+        scheduled_with(&body, self.prices, &self.available, &self.saved)
             .map_err(|malformed| Exception::defined_in("qbopt.backend.parcopy", "Malformed", malformed.to_string()))
     }
 }
@@ -89,18 +137,45 @@ fn remove(
 
 /// `body` with every copy group written in an order that computes it.
 pub fn scheduled(body: &LirBody) -> Result<LirBody, Malformed> {
+    scheduled_with(body, None, &[], &[])
+}
+
+/// `scheduled`, a cycle rotated through a dead register where `prices` say that
+/// costs less than the stack: `available` are the registers the body may name
+/// and `saved` those its convention preserves (one it does not use would be
+/// pushed and popped for the cycle).
+pub fn scheduled_with(
+    body: &LirBody,
+    prices: Option<CyclePrices>,
+    available: &[RegId],
+    saved: &[RegId],
+) -> Result<LirBody, Malformed> {
     let regs = body.regs();
     if !body.blocks.iter().any(|block| block.insns.iter().any(|one| one.group.is_some())) {
         return Ok(body.clone());
     }
+    let candidates: Vec<RegId> = match prices {
+        Some(_) => {
+            let used = masm::_roots(body);
+            available.iter().copied().filter(|one| !saved.contains(one) || used.contains(one)).collect()
+        }
+        None => Vec::new(),
+    };
+    let exits = if candidates.is_empty() { None } else { Some(liveness::dead_at_exit(body)) };
     let mut out_body = body.clone();
     for block in &mut out_body.blocks {
+        let dead = exits.as_ref().map(|exits| regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone()));
         let mut out: Vec<Arc<Insn>> = Vec::new();
         let mut run: Vec<Arc<Insn>> = Vec::new();
         for one in block.insns.iter().map(Some).chain([None]) {
             let group = one.and_then(|one| one.group);
             if !run.is_empty() && group != run[0].group {
-                for part in _ordered(regs, &run)? {
+                let free: Vec<RegId> = match (&dead, prices) {
+                    (Some(dead), Some(_)) => _free(regs, body.bits, &run, &candidates, &dead[&id(&run[run.len() - 1])]),
+                    _ => Vec::new(),
+                };
+                let spare = prices.map(|prices| Spare { prices, free: &free });
+                for part in _ordered(regs, &run, spare.as_ref())? {
                     out.extend(_expanded(&part)?);
                 }
                 run = Vec::new();
@@ -115,6 +190,29 @@ pub fn scheduled(body: &LirBody) -> Result<LirBody, Malformed> {
         block.insns = out.into();
     }
     Ok(out_body)
+}
+
+/// Of `candidates`, the registers dead after the group `run` that no copy of it
+/// reads or writes.
+fn _free(
+    regs: Regs,
+    bits: u32,
+    run: &[Arc<Insn>],
+    candidates: &[RegId],
+    dead_after: &Lanes,
+) -> Vec<RegId> {
+    let named = run
+        .iter()
+        .filter_map(|one| _register_effects(regs, bits, one, false, true))
+        .fold(Lanes::new(), |all, (reads, writes)| all.or(&reads).or(&writes));
+    candidates
+        .iter()
+        .copied()
+        .filter(|full| {
+            let lanes = _lanes(regs, *full);
+            lanes.is_subset(dead_after) && lanes.is_disjoint(&named)
+        })
+        .collect()
 }
 
 /// An ordered frame copy needs no scratch register and preserves flags.
@@ -160,6 +258,7 @@ fn ungrouped(one: &Insn) -> Arc<Insn> {
 fn _ordered(
     regs: Regs,
     moves: &[Arc<Insn>],
+    spare: Option<&Spare>,
 ) -> Result<Vec<Arc<Insn>>, Malformed> {
     let mut identities = Vec::new();
     for one in moves {
@@ -184,7 +283,7 @@ fn _ordered(
             .map(|at| Arc::clone(&left[at]))
             .collect();
         if ready.is_empty() {
-            let (made, used) = _rotated(regs, &left)?;
+            let (made, used) = _rotated(regs, &left, spare)?;
             out.extend(made);
             for one in &used {
                 remove(&mut left, one);
@@ -252,6 +351,7 @@ type Rotation = (Vec<Arc<Insn>>, Vec<Arc<Insn>>);
 fn _rotated(
     regs: Regs,
     left: &[Arc<Insn>],
+    spare: Option<&Spare>,
 ) -> Result<Rotation, Malformed> {
     let mut writes: IndexMap<String, &Arc<Insn>> = IndexMap::default();
     for one in left {
@@ -300,6 +400,38 @@ fn _rotated(
         // it still defines the virtual value consumed after this edge.
         made.push(lir::anchor(Arc::clone(&cycle[cycle.len() - 1])));
         return Ok((made, cycle));
+    }
+
+    // Through a dead register, where the target prices that under the stack
+    // (a pop is four clocks on the 486): the closing move's source is saved in
+    // it first, and every other move, in order, writes only what was read.
+    if let Some(spare) = spare.filter(|spare| spare.prices.register_is_cheaper(cycle.len())) {
+        let width = _width(&dest(&cycle[cycle.len() - 1]));
+        let held = spare
+            .free
+            .iter()
+            .find_map(
+                |full| {
+                    let register = regs.named(*full, i64::from(width));
+                    (regs.width_of(register) == Some(i64::from(width))).then_some(Reg { register, width })
+                },
+            );
+        if let Some(held) = held {
+            let count = cycle.len();
+            let (first, last) = (&cycle[0], &cycle[count - 1]);
+            let mut saving = (**first).clone();
+            saving.what = Some(semantics(Operation::Move, "mov", vec![Loc::Reg(held)], vec![source(last)]));
+            saving.group = None;
+            saving.defines = vec![];
+            saving.uses = vec![];
+            let mut restoring = (**last).clone();
+            restoring.what = Some(semantics(Operation::Move, "mov", vec![dest(last)], vec![Loc::Reg(held)]));
+            restoring.group = None;
+            let mut made = vec![Arc::new(saving)];
+            made.extend(cycle[..count - 1].iter().map(|one| ungrouped(one)));
+            made.push(Arc::new(restoring));
+            return Ok((made, cycle));
+        }
     }
 
     // Close the cycle on a move the stack can carry: its source is saved
@@ -390,7 +522,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{_into, _named, _outof, Malformed, scheduled};
+    use super::{_into, _named, _outof, CyclePrices, Malformed, scheduled, scheduled_with};
     use crate::backend::verify;
     use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -491,6 +623,45 @@ mod tests {
 
     fn named(one: &Loc) -> String {
         _named(one).unwrap()
+    }
+
+    /// A cycle of copies of two widths (`mov si, cx` with `mov ecx, esi`) has
+    /// no exchange: it went through the stack, a pop of four clocks on the
+    /// 486, with bx dead and free (the loop-carried registers of mandel's
+    /// latch). Priced by the target, a dead register carries it in three
+    /// moves; where a pop is as cheap as a copy the stack does.
+    #[test]
+    fn test_a_cycle_of_two_widths_goes_through_a_dead_register_where_that_costs_less() {
+        // The block goes on to one that writes bx before reading it.
+        let mut first = LirBlock::new(
+            0,
+            vec![
+                Arc::new(grouped(reg(RegId::SI, 2), reg(RegId::CX, 2), 1)),
+                Arc::new(grouped(reg(RegId::CX, 4), reg(RegId::SI, 4), 1)),
+            ],
+        );
+        first.succ = vec![1];
+        let reader = Insn::new(
+            1,
+            Some((1, 2)),
+            semantics(Operation::Move, "mov", vec![reg(RegId::BX, 2)], vec![reg(RegId::SI, 2)]),
+            vec![],
+            vec![],
+        );
+        let body = LirBody::new(
+            "one",
+            0,
+            vec![first, LirBlock::new(1, vec![Arc::new(reader)])],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let order = |pop: i64| {
+            let done = scheduled_with(&body, Some(CyclePrices { copy: 1, push: 1, pop }), &[RegId::BX], &[]).unwrap();
+            names(&done.blocks[0].insns)
+        };
+        assert_eq!(order(4), ["mov", "mov", "mov"]);
+        assert_eq!(order(1), ["push", "mov", "pop"]);
+        assert_eq!(names(&scheduled(&body).unwrap().blocks[0].insns), ["push", "mov", "pop"]);
     }
 
     #[test]
