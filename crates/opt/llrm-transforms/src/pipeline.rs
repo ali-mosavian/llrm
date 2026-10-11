@@ -114,7 +114,7 @@ impl Default for Options {
             fill: true,
             sibcalls: true,
             unswitch: false,
-            copy_headers: false,
+            copy_headers: true,
             for_size: false,
             expensive: true,
             search: true,
@@ -448,6 +448,12 @@ pub fn recorded(
         manager.add(indvars::IndVars { exit_values: true });
         manager.add(dead::Dead);
     }
+    // A loop entered at its body runs it at least once: what it loads
+    // unchanged leaves it before its counters are chosen, as LLVM runs LICM
+    // before LoopStrengthReduce.
+    if applied.options.wanted("hoist") {
+        manager.add(hoist::Hoist { size: applied.options.prefers_size() });
+    }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
     if applied.options.wanted("fixednarrow") {
@@ -480,11 +486,6 @@ pub fn recorded(
             correlated: applied.options.copy_headers,
             states: applied.options.expensive,
         });
-    }
-    // A loop entered at its body runs it at least once: what it loads
-    // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
-    if applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist { size: applied.options.prefers_size() });
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {

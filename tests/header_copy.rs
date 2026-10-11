@@ -209,3 +209,27 @@ fn test_a_loop_with_two_tests_that_leave_it_has_both_copied() {
     let folded = lines.iter().any(|line| line.starts_with("test e") && line.ends_with(", 1"));
     assert!(folded, "{text}");
 }
+
+/// With no flag the copy is on and `Hoist` runs before the counters are
+/// chosen: `sum_three`'s three row loads leave the loop and its counter runs
+/// to zero, `add ax, [p+i] x3; add i, 2; jne` (5 instructions a trip). Hoist
+/// after LSR, or the copy off, left `inc ecx` beside `add edi, 2` (6).
+#[test]
+fn test_sum_three_loop_is_five_instructions_by_default() {
+    let source = format!("{}/bench/parity/sum_three/sum_three.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let loop_ = lines.windows(5).any(|w| {
+        w[..3].iter().all(|line| line.starts_with("add ax, word ptr"))
+            && w[3].starts_with("add e") && w[3].ends_with(", 2")
+            && w[4].starts_with("jne ")
+    });
+    assert!(loop_, "{text}");
+}
