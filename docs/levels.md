@@ -64,7 +64,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir window` | x | on | on | on | on | on |
 | `mir rotate` | x | on | on | on | on | on |
 | `mir rotate` (header copy, `tree-ch`; `-ftree-ch`, not at -Os) | x | x | x | x | x | x |
-| `mir jumpthread` (a branch; the switch of a loop's state from -O2: `pass_thread_jumps`, `flag_thread_jumps && flag_expensive_optimizations`, [`tree-ssa-threadbackward.cc:1205`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-threadbackward.cc#L1205)) | x | on, no state machines | on | on | on | on |
+| `mir jumpthread` (a branch; the switch of a loop's state from -O2: `pass_thread_jumps`, `flag_thread_jumps && flag_expensive_optimizations`, [`tree-ssa-threadbackward.cc:1072`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-threadbackward.cc#L1072)) | x | on, no state machines | on | on | on | on |
 | `mir gepoffset` | x | on | on | on | on | on |
 | `mir addresssink` | x | on | on | on | on | on |
 | `mir spares` | x | on | on | on | on | on |

@@ -59,7 +59,7 @@ pub struct JumpThread {
     pub correlated: bool,
     /// A switch the paths into it decide is threaded: gcc's
     /// `pass_thread_jumps`, gated on `flag_expensive_optimizations` (-O2
-    /// and up; `tree-ssa-threadbackward.cc:1205`), where -O1 has only its
+    /// and up; `tree-ssa-threadbackward.cc:1072`), where -O1 has only its
     /// early, size-optimising threader.
     pub states: bool,
 }
@@ -118,16 +118,17 @@ pub fn threaded(
 ) -> bool {
     // The common function has nothing to thread: no analysis is made for it.
     let unit = memory::Unit::within(context, layout, function, outer);
-    let any = states
-        && function.walk().any(|(_, inst)| {
-            function.instruction(inst).opcode.is_terminator()
+    let any = function
+        .walk()
+        .any(
+            |(_, inst)| function.instruction(inst).opcode.is_terminator()
                 && decided(function, &unit, inst).is_some_and(|(state, _)| {
                     matches!(
                         function.value(state).def,
                         ValueDef::Instruction(phi) if function.instruction(phi).opcode == Opcode::Phi
                     )
-                })
-        });
+                }),
+        );
     // Or a branch on a compare, at a join of ways that may each settle it.
     let joined = !size
         && correlate
