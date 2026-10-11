@@ -98,3 +98,25 @@ class DifferencesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CompileLimitTests(unittest.TestCase):
+    """`COMPILE_SECONDS` was wall clock: at load 40 a compile that takes a few seconds did not finish in 60 s, at -O0 too."""
+
+    def test_a_compile_the_host_is_slow_to_run_is_not_cut_off_by_the_wall_clock(self):
+        import sys
+
+        done = torture.run_within_cpu([sys.executable, "-c", "import time; time.sleep(3)"], 1)
+        self.assertIsNotNone(done)
+        self.assertEqual(done.returncode, 0)
+
+    def test_a_compile_that_uses_more_cpu_than_its_limit_is_stopped(self):
+        import sys
+
+        self.assertIsNone(torture.run_within_cpu([sys.executable, "-c", "while True: pass"], 1))
+
+    def test_a_compile_that_fails_reports_its_output(self):
+        import sys
+
+        done = torture.run_within_cpu([sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"], 5)
+        self.assertEqual((done.returncode, done.stderr), (3, "boom"))
