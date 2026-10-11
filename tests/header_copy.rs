@@ -176,3 +176,17 @@ fn test_a_latch_test_of_a_counter_whose_step_nothing_else_reads_tests_the_step()
         .any(|pair| pair[0].starts_with("inc ") && pair[1].starts_with("cmp ") && pair[1].ends_with(", 32"));
     assert!(stepped, "{text}");
 }
+
+/// gcc copies the chain of header tests (`copy_headers`: each block after the
+/// first with one predecessor and no call, within 20 insns), not only the
+/// loop's own: `for (d = 2; d * d <= i; ++d) if (i % d == 0) break;` has
+/// both its tests copied, so d = 2 folds into them (`test esi, 1`, `cmp esi,
+/// 4`) and the idiv stays for the later trips. x_primes -O1 +25% over gcc with
+/// one test copied.
+#[test]
+fn test_a_loop_with_two_tests_that_leave_it_has_both_copied() {
+    let text = listing("x_primes", &["-ftree-ch", "-O1"]);
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let folded = lines.iter().any(|line| line.starts_with("test e") && line.ends_with(", 1"));
+    assert!(folded, "{text}");
+}
