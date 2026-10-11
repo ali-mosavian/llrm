@@ -294,7 +294,7 @@ fn found(
                     continue;
                 }
                 let copies: usize = if is_switch {
-                    blocks.iter().map(|&one| function.block(one).instructions().len()).sum()
+                    size_weighted(function, &blocks)
                 } else {
                     // Besides the phis, the branch and its compare, what the
                     // copies hold.
@@ -345,6 +345,16 @@ fn found(
         }
     }
     None
+}
+
+/// The size of `blocks` as GCC counts a threading path: `gcc_insns` over
+/// them, less the switch the threading removes (`m_exit_jump_benefit`).
+fn size_weighted(
+    function: &Function,
+    blocks: &[BlockId],
+) -> usize {
+    let insts = blocks.iter().flat_map(|&one| function.block(one).instructions().iter().copied());
+    (crate::inline::gcc_insns_in(function, insts) as usize).saturating_sub(1)
 }
 
 /// Whether the branch `at` on the compare `condition` has a branch above it, on
