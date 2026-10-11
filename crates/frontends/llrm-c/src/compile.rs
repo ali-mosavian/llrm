@@ -1382,15 +1382,22 @@ mod tests {
     /// it cannot change `*ch` or `*at`. Volatile was a barrier, and
     /// `inttoptr 0xB8000000` was no known segment, so `video` read both
     /// pointers and both cells again every trip, 4 loads (#257's regression).
-    /// At 0x1234, which may be the program's own data, they stay.
+    /// At 0x1234, which may be the program's own data, they stay: the cells are
+    /// read again each trip (the two pointers may be held in registers, the
+    /// frame register's among them, and are not counted: a cell of the
+    /// frame is not the program's).
     #[test]
     fn test_a_volatile_far_store_to_video_memory_leaves_the_loop_its_cells() {
-        let loads = |body: &[String]| body.iter().filter(|one| one.contains("ptr [")).count();
+        let loads = |body: &[String]| {
+            body.iter()
+                .filter(|one| (one.contains("ptr [") || one.contains("ptr ds:[")) && !one.contains("[bp-"))
+                .count()
+        };
         let stores = |body: &[String]| body.iter().filter(|one| one.contains("byte ptr es:[")).count();
         let video = driven_loop("farvolatile", "_video");
         assert_eq!((loads(&video), stores(&video)), (0, 2), "{video:#?}");
         let conventional = driven_loop("farvolatile", "_conventional");
-        assert_eq!((loads(&conventional), stores(&conventional)), (4, 2), "{conventional:#?}");
+        assert_eq!((loads(&conventional), stores(&conventional)), (2, 2), "{conventional:#?}");
     }
 
     /// `die` and `quit` do not return: nothing follows their calls. Without
