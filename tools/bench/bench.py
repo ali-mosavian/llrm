@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # The real-mode DOS emulator is x86-m16 code: it lives with the target.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm-x86-m16/bench"))
 
+import cpulimit  # noqa: E402
 import maps  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
@@ -129,6 +130,11 @@ def nib_extras(source: Path) -> list[str]:
     return [str(one) for one in dosbatch.link_files(source, run_tests.header(source).get("link", "").split(), dosbatch.REAL_MODE)]
 
 
+def c_include_arguments(work: Path) -> list[str]:
+    """`-I` for the OS layer's C header (llrm_os.h), as tests/run gives every C program: a bench that includes bench_io.h needs it."""
+    return ["-I", str(dosbatch.c_include(dosbatch.REAL_MODE, work))]
+
+
 def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
     """(exe, linker map) of the variant at -`opt`, or why it did not build. BASIC is only compiled here: LINK runs in DOSBox."""
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
@@ -143,13 +149,15 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
         if variant.language == "nib":
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
-            done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], capture_output=True, text=True, timeout=300,
-                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
+            done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
-        done = subprocess.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], capture_output=True, text=True, timeout=300)
+        if variant.language == "c":
+            extra += c_include_arguments(work)
+        done = cpulimit.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], 300, capture_output=True, text=True)
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == "c":
@@ -195,7 +203,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     if got != want:
         return {"error": f"prints {got}, want {want}"}
     data, bss = sizes.data_bytes(obj)
-    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
 
 
 def references_available() -> bool:
@@ -208,7 +216,7 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
     flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
-    done = subprocess.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], capture_output=True, text=True, timeout=300)
+    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
     try:
@@ -232,6 +240,13 @@ def c_source(path: Path) -> bytes:
     return b"".join(lines[head:])
 
 
+def stage_shared_headers(folder: Path, text: bytes) -> bytes:
+    """`text`, a program's source, as it builds in `folder` (a DOS volume's root, which has no `..`): the benches' shared header
+    beside it, and `#include "../bench_io.h"` naming it there."""
+    shutil.copy(BENCH / "bench_io.h", folder / "bench_io.h")
+    return text.replace(b'"../bench_io.h"', b'"bench_io.h"')
+
+
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
     """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
     Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
@@ -240,7 +255,7 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
     folder = work / f"{language}{opt}"
     folder.mkdir(parents=True)
     for variant, stem in variants_:
-        text = c_source(variant.source)
+        text = stage_shared_headers(folder, c_source(variant.source))
         if home.name == "tc201":  # TC 2.01 reads a `#` after a bare LF as an illegal character: every program with a #define failed
             text = text.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         (folder / f"{stem}.c").write_bytes(text)
@@ -556,6 +571,16 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     return problems
 
 
+def clock_lines(measured: dict, selected: list[str]) -> list[str]:
+    """The 486 clocks of each selected benchmark's kernel beside its counts. Reported, not gated: the counts ratchet, and
+    a change that trades instructions for fewer clocks is judged by these."""
+    lines = []
+    for (name, language, opt), got in sorted(measured.items()):
+        if name in selected and language in (*LANGUAGES, *BASIC_LANGUAGES) and "clocks" in got:
+            lines.append(f"{name} {language} -{opt}: {got['clocks']} clocks, {got['instructions']} instructions, {got['memory_operands']} memory operands")
+    return lines
+
+
 def geomean(values: list[float]) -> float:
     return math.exp(sum(map(math.log, values)) / len(values))
 
@@ -620,6 +645,8 @@ def main() -> int:
         return 0
     problems = judge(measured, args.select, args.opt)
     print(*standing(measured, args.select, args.opt), sep="\n")
+    if args.select:
+        print(*clock_lines(measured, args.select), sep="\n")
     for one in problems:
         print("FAIL", one)
     print(f"{len(measured)} measurements: {len(problems)} problems")

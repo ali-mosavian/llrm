@@ -74,10 +74,11 @@ pub enum FrameBase {
     #[default]
     Register,
     /// The frame register as the code would set it: `bias` bytes below the
-    /// canonical frame address (the return address and the saved register).
+    /// canonical frame address (the return address and the saved register),
+    /// `far_bias` for a function called far, whose return address is longer.
     /// The code keeps none; a debugger finds the cell from the caller's frame,
     /// which call frame information gives at every address.
-    Cfa { bias: i64 },
+    Cfa { bias: i64, far_bias: i64 },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

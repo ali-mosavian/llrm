@@ -7,7 +7,9 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE / "dosbatch"))
 sys.path.insert(0, str(next((HERE.parent / "crates/target").glob("*/vsgcc"))))
+import cpulimit  # noqa: E402
 import llrmbin  # noqa: E402
 import scaling  # noqa: E402
 
@@ -19,5 +21,5 @@ def test_the_chain_axis_compiles_at_16_bits(tmp_path, level, n):
     register value, which was spilled and merged again (the rewrite made a value it did not report, then spilled it, then ...)."""
     source = tmp_path / "chain.c"
     source.write_text(scaling.AXES["chain"](n))
-    done = subprocess.run([str(llrmbin.bin_dir() / "llrm-c"), "-m16", level, str(source), "-o", str(tmp_path / "chain.obj")], capture_output=True, text=True, timeout=30)
+    done = cpulimit.run([str(llrmbin.bin_dir() / "llrm-c"), "-m16", level, str(source), "-o", str(tmp_path / "chain.obj")], 30, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr[-400:]

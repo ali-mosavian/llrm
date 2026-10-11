@@ -284,6 +284,19 @@ pub fn reduced(
                 done.remove(&loop_.header);
                 continue;
             }
+            // A counter some trips step has no candidate (it is no function of
+            // the trip): where the target's address takes no scale, the pointer
+            // that moves with it is made first, and the loop chosen again.
+            if !size && let Some(plan) = crate::mirror::found(&view, &loop_, &target.forms) {
+                drop(facts);
+                crate::mirror::applied(unit.context, unit.function, &plan);
+                dead::dead(unit.context, outer.callees(), unit.function);
+                analyses.invalidate(unit.function, &PreservedAnalyses::none());
+                whole = Whole::default();
+                changed = true;
+                done.remove(&loop_.header);
+                continue;
+            }
             let pressure = analyses.get::<spill::Pressure>(unit.context, unit.layout, unit.function);
             let (context, layout, function) = (&*unit.context, unit.layout, &*unit.function);
             let mut products = || analyses.get::<Products>(context, layout, function);
@@ -2374,6 +2387,55 @@ fn _applied(
                 .find(|pair| pair[1] == Operand::Block(plan.latch))
                 .map(|pair| pair[0])
                 .expect("a latch arm");
+            // A counter that takes another counter's next value and a constant
+            // more steps from itself, so the other can go.
+            let steps_itself = |next: ValueId| match function.value(next).def {
+                ValueDef::Instruction(made) => {
+                    let op = function.instruction(made);
+                    match op.opcode {
+                        Opcode::Binary(BinaryOp::Add) => op.operands.contains(&Operand::Value(existing)),
+                        Opcode::Binary(BinaryOp::Sub) => op.operands[0] == Operand::Value(existing),
+                        _ => false,
+                    }
+                }
+                _ => false,
+            };
+            let own = matches!(from_latch, Operand::Value(next) if steps_itself(next));
+            if !own && one.pointer.is_none() {
+                let ty = function.value(existing).ty;
+                let step = expander.int(context, function, &one.of.step);
+                let next = function.create_instruction(
+                    Opcode::Binary(BinaryOp::Add),
+                    ty,
+                    vec![Operand::Value(existing), step],
+                    Flags::default(),
+                    Some("lsr.iv.next"),
+                );
+                // Where the step it replaces stood, for what reads it there.
+                let at = match from_latch {
+                    Operand::Value(old) => match function.value(old).def {
+                        ValueDef::Instruction(made) if function.parent(made) == Some(plan.latch) => {
+                            Position::Before(made)
+                        }
+                        _ => Position::Before(back),
+                    },
+                    _ => Position::Before(back),
+                };
+                function.insert(next, at).expect("a latch");
+                let next = Operand::Value(function.instruction(next).result.expect("a value"));
+                let operands = function
+                    .instruction(phi)
+                    .operands
+                    .chunks(2)
+                    .flat_map(
+                        |pair| if pair[1] == Operand::Block(plan.latch) { [next, pair[1]] } else { [pair[0], pair[1]] },
+                    )
+                    .collect();
+                function.set_operands(phi, operands);
+                steps.push(next);
+                stepping.push(None);
+                continue;
+            }
             steps.push(from_latch);
             stepping.push(None);
             continue;

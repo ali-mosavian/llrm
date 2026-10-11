@@ -18,6 +18,7 @@ from build import BIN, HERE, ROOT, CompileError
 
 sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
 
+import cpulimit  # noqa: E402
 import dosbatch  # noqa: E402
 from dosbatch import QB45, Job  # noqa: E402,F401
 
@@ -33,7 +34,7 @@ class Stopped:
 
 
 def _run(command: list[str], cwd: Path | None = None) -> None:
-    done = subprocess.run(command, capture_output=True, text=True, cwd=cwd, timeout=300)
+    done = cpulimit.run(command, 300, capture_output=True, text=True, cwd=cwd)
     if done.returncode != 0:
         raise CompileError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
 

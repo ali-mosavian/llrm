@@ -890,14 +890,18 @@ fn staged(
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
-    let classes: Rc<RegisterClasses> = if crate::backend::framefree::without_frame_register(
-        &body,
-        &registers,
-        &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
-        !inline.is_empty(),
-        false,
-        landing.is_some(),
-    ) {
+    // A BASIC module's frames are BP's (its listing addresses cells through the
+    // frame register and the runtime walks the chain), so its frame
+    // register is never a value register.
+    let classes: Rc<RegisterClasses> = if !target.basic
+        && crate::backend::framefree::without_frame_register(
+            &body,
+            &registers,
+            &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
+            !inline.is_empty(),
+            false,
+            landing.is_some(),
+        ) {
         registers.free = true;
         registers.saved.push((registers.pointer, registers.pointer));
         Rc::new(target.classes.with_frame_free())

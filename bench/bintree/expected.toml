@@ -1,4 +1,4 @@
-reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
+reason = "coalesce takes loop blocks deepest first, the hottest copies first within a loop (x_binsearch -9.4% clocks m32): bintree c -O2 +2.6% instructions (the LCG chain in the loop takes a longer multiply sequence), qbsp/mandel/grep code bytes +0.3..1.9%, fib/crc/jpeg/grep/qbsp nib better"
 blessed = "2026-10-11"
 
 [bas.O2]
@@ -16,14 +16,14 @@ data_bytes = 17
 bss_bytes = 0
 
 [c.O2]
-instructions = 57563
-memory_operands = 11227
-code_bytes = 283
+instructions = 59060
+memory_operands = 11825
+code_bytes = 291
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 55535
+instructions = 55236
 memory_operands = 12581
 code_bytes = 243
 data_bytes = 0

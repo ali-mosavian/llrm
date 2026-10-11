@@ -1924,6 +1924,10 @@ pub fn basics(
     let inside = &loop_.body;
     let still = invariant(function, inside);
     let within = |inst: InstId| function.parent(inst).is_some_and(|block| inside.contains(&cfg::id(block)));
+    // The value each counter takes round the loop, by counter; the phis that
+    // are not `phi + step`, with their start and what they take round.
+    let mut backs: Vec<(ValueId, ValueId)> = Vec::new();
+    let mut derived: Vec<(ValueId, AffineOperand, ValueId)> = Vec::new();
     for &inst in function.block(header).instructions() {
         let phi = function.instruction(inst);
         if phi.opcode != Opcode::Phi {
@@ -1955,10 +1959,38 @@ pub fn basics(
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let (Some(Some(step)), Some(start)) = (steps.first(), term(unit, start)) else { continue };
+        let (Some(Some(step)), Some(start)) = (steps.first(), term(unit, start)) else {
+            // Not `phi + step`: the value round may be another counter's, and
+            // a constant more.
+            if let (&[(Operand::Value(back), _)], Some(start)) = (&around[..], term(unit, start)) {
+                derived.push((result, start, back));
+            }
+            continue;
+        };
         if steps.iter().all(|one| one.as_ref() == Some(step)) {
+            if let [(Operand::Value(back), _)] = around[..] {
+                backs.push((back, result));
+            }
             out.insert(result, Affine { value: result, start, step: step.clone(), header: loop_.header });
         }
+    }
+    // A header phi that is a counter and a constant: round the loop it takes
+    // that counter's next value and a constant more, from a start that is its
+    // start and the constant. A header copy leaves one where the test read
+    // `i + 2` (SCEV's add recurrence `{2,+,3}` beside `{0,+,3}`).
+    for (result, start, back) in derived {
+        let Some(made) = defining(function, back).filter(|&made| within(made)) else { continue };
+        let Some((stepped, constant)) = stepping(unit, function.instruction(made)) else { continue };
+        let (AffineOperand::Value(next, _), AffineOperand::Const(more)) = (&stepped, &constant) else { continue };
+        let Some(counter) = backs.iter().find(|(back, _)| back == next).and_then(|(_, phi)| out.get(phi)).cloned()
+        else {
+            continue;
+        };
+        let (AffineOperand::Const(was), AffineOperand::Const(now)) = (&counter.start, &start) else { continue };
+        if masked(&(&was.n + &more.n), now.width) != masked(&now.n, now.width) {
+            continue;
+        }
+        out.insert(result, Affine { value: result, start, step: counter.step.clone(), header: loop_.header });
     }
     out
 }
@@ -2995,6 +3027,83 @@ impl Walk<'_> {
         }
         carried.then(|| of.offset(&Scev::constant(constant, width)))
     }
+}
+
+/// A header phi that some paths of the loop step and others leave, by
+/// constants: its latch value is a join (phis) of adds of a constant, back to
+/// the phi. `if (c) ++i;` is the common one. It is no `Affine` (its value is no
+/// function of the trip alone), and what it is: on every path, the same phi
+/// plus a constant.
+#[derive(Clone, Debug)]
+pub struct StepCycle {
+    /// The header phi's value, then every phi and add the cycle holds.
+    pub nodes: Vec<ValueId>,
+    /// An add of a constant: its result, what it steps, and the constant.
+    pub adds: Vec<(ValueId, ValueId, BigInt)>,
+    pub phis: Vec<ValueId>,
+    /// What the phi starts from, and its value from the latch.
+    pub start: Operand,
+    pub latch: Operand,
+}
+
+/// The `StepCycle` of `loop_`'s header phi `phi`, where it has one: some phi
+/// joins its steps, and every value of the cycle is made in the loop.
+pub fn step_cycle(
+    unit: &Unit,
+    loop_: &Loop,
+    phi: InstId,
+) -> Option<StepCycle> {
+    let function = unit.function;
+    let header = cfg::block(loop_.header);
+    let inside = &loop_.body;
+    let f = function.instruction(phi).result?;
+    let bits = unit.int_bits(Operand::Value(f))?;
+    let [latch_at] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
+    let (mut start, mut latch) = (None, None);
+    for pair in function.instruction(phi).operands.chunks(2) {
+        let Operand::Block(from) = pair[1] else { return None };
+        if from == header || cfg::id(from) == latch_at {
+            latch = Some(pair[0]);
+        } else if !inside.contains(&cfg::id(from)) {
+            start = Some(pair[0]);
+        }
+    }
+    let (start, latch) = (start?, latch?);
+    let step_of = |operand: Operand| unit.int_constant(operand).map(|value| signed(value, bits));
+    let mut cycle = StepCycle { nodes: vec![f], adds: Vec::new(), phis: Vec::new(), start, latch };
+    let mut pending = vec![latch];
+    while let Some(operand) = pending.pop() {
+        let Operand::Value(x) = operand else { return None };
+        if cycle.nodes.contains(&x) {
+            continue;
+        }
+        let ValueDef::Instruction(inst) = function.value(x).def else { return None };
+        if !function.parent(inst).is_some_and(|block| inside.contains(&cfg::id(block))) {
+            return None;
+        }
+        let op = function.instruction(inst);
+        match op.opcode {
+            Opcode::Phi => {
+                cycle.nodes.push(x);
+                cycle.phis.push(x);
+                pending.extend(op.operands.chunks(2).map(|pair| pair[0]));
+            }
+            Opcode::Binary(kind @ (BinaryOp::Add | BinaryOp::Sub)) => {
+                let (left, right) = (op.operands[0], op.operands[1]);
+                let (stepped, step) = match (step_of(left), step_of(right)) {
+                    (None, Some(c)) => (left, if kind == BinaryOp::Add { c } else { -c }),
+                    (Some(c), None) if kind == BinaryOp::Add => (right, c),
+                    _ => return None,
+                };
+                let Operand::Value(on) = stepped else { return None };
+                cycle.nodes.push(x);
+                cycle.adds.push((x, on, BigInt::from(step)));
+                pending.push(stepped);
+            }
+            _ => return None,
+        }
+    }
+    (!cycle.phis.is_empty()).then_some(cycle)
 }
 
 /// The recurrences of `loop_`'s `counters`, and every read of one by

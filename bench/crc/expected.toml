@@ -1,17 +1,17 @@
-reason = "crc bas: the accumulator is in eax, not a saved register, so its final xor is copied to si for the call that follows (+1 instruction, +2 bytes, once)"
+reason = "coalesce takes loop blocks deepest first, the hottest copies first within a loop (x_binsearch -9.4% clocks m32): bintree c -O2 +2.6% instructions (the LCG chain in the loop takes a longer multiply sequence), qbsp/mandel/grep code bytes +0.3..1.9%, fib/crc/jpeg/grep/qbsp nib better"
 blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 1217
+instructions = 1216
 memory_operands = 71
-code_bytes = 225
+code_bytes = 223
 data_bytes = 31
 bss_bytes = 0
 
 [bas.Os]
-instructions = 1208
+instructions = 1207
 memory_operands = 71
-code_bytes = 222
+code_bytes = 220
 data_bytes = 31
 bss_bytes = 0
 
