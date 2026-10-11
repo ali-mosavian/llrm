@@ -221,16 +221,19 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
+# So there is no `cargo build --bins` here: it made a second set of every crate (238 CPU-s) for binaries the test build then links over
+# (all of them but hir-mir, which the corpus scripts build themselves).
 WARNING_FLAGS = "-D warnings"
 WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
 # Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-c apart from the build step's and put
 # its binary over target/release/llrm-c (the inode changed after `integration`), while `torture`, `run` and the like were running it:
 # "No such file or directory: .../release/llrm-c" in torture. One set of flags, one build, one binary.
-STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS}
+# RUSTC_BOOTSTRAP too, for the lib step's `--shuffle`: libtest reads it when the tests run, but cargo takes it for an input of every
+# crate it builds, so set on the lib step alone it rebuilt the whole workspace there (1,088 CPU-s) and again in the next cargo step.
+STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1"}
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
-    f"{WARNINGS_AS_ERRORS} cargo build --release -q --bins && "
     f"{WARNINGS_AS_ERRORS} cargo test --release -q --workspace --no-run"
 )
 # Measurements compare two revisions, so their historical base is built without
@@ -240,12 +243,13 @@ MEASURE_BUILD = "env -u RUSTFLAGS cargo build --release -q --bins && env -u RUST
 DIST_BUILD = "cargo build --profile dist -q --bins"
 
 
+# What the doc step reports where no doc comment has a fence to run: a log with no result reads as a cut-short run.
+SKIPPED_DOC = "echo 'test result: ok. 0 passed; 0 failed; no doc comment has a fence to run, rustdoc not run'"
+
 # A lib test that depends on the order tests run in passes in the plain order and fails when the threads start in
 # another (llrm-c's m16 tests, 29 of 136, when an m32 test bound the register file first). The lib step runs the
 # tests in a random order; each test binary prints its seed ("running 136 tests (shuffle seed: N)", kept in the
-# failed step's log), and LLRM_SHUFFLE_SEED=N repeats that order. libtest reads RUSTC_BOOTSTRAP when it runs, not
-# when it is built: the build is not redone.
-SHUFFLED = "RUSTC_BOOTSTRAP=1"
+# failed step's log), and LLRM_SHUFFLE_SEED=N repeats that order. (RUSTC_BOOTSTRAP is in STEP_ENV.)
 
 
 def shuffle() -> str:
@@ -272,8 +276,9 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     )
     steps = {
         "build": BUILD,
-        "lib": f"{SHUFFLED} {cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
-        "doc": f"{cargo} {libs} --doc" if libs else "true",
+        "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
+        # rustdoc over every crate costs 456 CPU-s to find no test: it runs when a doc comment has a fence to run.
+        "doc": f"if python3 tools/gate/doctests.py crates src tests; then {cargo} {libs} --doc; else {SKIPPED_DOC}; fi" if libs else "true",
         "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
         # Every scan runs, and any failing fails the step: the first red must not hide the others.
