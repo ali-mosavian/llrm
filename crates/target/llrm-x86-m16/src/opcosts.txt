@@ -53,6 +53,7 @@ unroll_budget = 200
 # 3, a far call 5.
 [bytes]
 alu_rr = 4
+xchg_rr = 4
 mul_r16 = 6
 div_r16 = 6
 shift_ri = 6

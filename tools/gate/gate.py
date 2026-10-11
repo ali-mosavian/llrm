@@ -121,6 +121,12 @@ def verdict_line(tier: str, failed: list[str], cut: list[str], took: float, skip
     )
 
 
+def step_table(results: dict[str, tuple[int, float, float]]) -> str:
+    """Each step's wall and CPU seconds, the most CPU first: where the work is, whatever the host's load made of the wall."""
+    rows = sorted(((n, w, c) for n, (code, w, c) in results.items() if code != 77), key=lambda r: -r[2])
+    return "\n".join(["[steps] step wall(s) cpu(s)", *(f"[steps] {n} {w:.0f} {c:.0f}" for n, w, c in rows), f"[steps] total {sum(r[2] for r in rows):.0f} cpu"])
+
+
 def changed_files(base: str) -> list[str]:
     out = subprocess.run(["git", "diff", "--name-only", base, "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
     return out.split()
@@ -283,6 +289,9 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
         "pytest": "uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py),
+        # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
+        # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
+        "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python -m pytest tools/dosbatch -m slow_dos -q -p no:cacheprovider',
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": "[ -f ~/scratch/qcport-env.sh ] || { echo SKIPPED: no ~/scratch/qcport-env.sh; exit 77; }; . ~/scratch/qcport-env.sh && uv run -q --project tools python tools/qcport-run.py",
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
@@ -395,19 +404,24 @@ def groups_of(p: Plan, skipped: dict[str, str]) -> dict[str, list[str]]:
     return {g: run for g, members in load()["groups"].items() if (run := [s for s in members if s in p.steps and s not in skipped])}
 
 
-def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = ()) -> tuple[str, int, float]:
+def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = ()) -> tuple[str, int, float, float]:
+    """(name, exit code, wall seconds, CPU seconds): the CPU is user+sys of the step's process tree, which a loaded host does not stretch."""
     start = time.time()
     # debug-gate.env makes every tool a requirement; a capability this host lacks is not one.
     prelude = ". tools/debug-gate.env 2>/dev/null; " + "".join(f"unset {v}; " for v in unset) + "set -o pipefail; "
     with open(logs / f"{name}.log", "w") as log:
-        code = subprocess.call(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+        child = subprocess.Popen(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+        # wait4 reports the usage of the child and of every descendant it waited for: the step's whole tree.
+        _, status, usage = os.wait4(child.pid, 0)
+        child.returncode = code = os.waitstatus_to_exitcode(status)
+        cpu = usage.ru_utime + usage.ru_stime
     if code == 0 and check and (why := incomplete((logs / f"{name}.log").read_text(), *check)):
         (logs / f"{name}.log").open("a").write(f"\nINCOMPLETE: {why}\n")
         code = 78
     if code not in (0, 77):
         # The next run of the step overwrites its log; the failure is evidence, kept.
         (logs / f"{name}.failed.log").write_text((logs / f"{name}.log").read_text())
-    return name, code, time.time() - start
+    return name, code, time.time() - start, cpu
 
 
 def snapshot_binaries(release: Path, into: Path) -> Path:
@@ -444,12 +458,12 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         members = [] if group == "build" else load()["groups"][group]  # "build": the build alone, for the job that makes what the others share
         p = Plan(p.tier, p.reason, [s for s in p.steps if s == "build" or s in members], p.packages, p.languages)
     start = time.time()
-    results: dict[str, tuple[int, float]] = {}
+    results: dict[str, tuple[int, float, float]] = {}
 
-    def report(name: str, code: int, took: float) -> None:
-        results[name] = (code, took)
+    def report(name: str, code: int, took: float, cpu: float = 0) -> None:
+        results[name] = (code, took, cpu)
         verdict = "ok" if code == 0 else "SKIPPED" if code == 77 else "INCOMPLETE" if code == 78 else "FAIL"
-        print(f"[time] {name} {verdict} {took:.0f}s", flush=True)
+        print(f"[time] {name} {verdict} {took:.0f}s wall {cpu:.0f}s cpu", flush=True)
         if code not in (0, 77):
             tail = (logs / f"{name}.log").read_text().splitlines()[-30:]
             print("\n".join("    " + line for line in tail), flush=True)
@@ -478,14 +492,15 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     jobs = int(os.environ.get("JOBS", "4"))
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
-        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "measure", "pytest-programs", "turbo", "bench"))
+        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
         for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s), unset) for s in order]):
             report(*future.result())
     for name in alone:
         report(*run_step(name, cmds[name], logs, env, checks.get(name), unset))
-    failed = [n for n, (c, _) in results.items() if c not in (0, 77)]
-    skipped = [n for n, (c, _) in results.items() if c == 77]
+    failed = [n for n, (c, *_) in results.items() if c not in (0, 77)]
+    skipped = [n for n, (c, *_) in results.items() if c == 77]
     cut = [n for n in failed if results[n][0] == 78]
+    print(step_table(results), flush=True)
     print(verdict_line(p.tier, failed, cut, time.time() - start, skipped, head_state()[0]))
     return (1 if failed else 0), failed
 

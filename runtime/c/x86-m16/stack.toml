@@ -1,10 +1,10 @@
-# What `-fsanitize=stack` compares and calls: `_llrm_os_stack_low`, a DGROUP word the OS layer's
+# What `-fsanitize=stack` compares and calls: `LL$STACK_LOW`, a DGROUP word the OS layer's
 # start-up fills with the stack's bottom plus its reserve, which each checked function compares SP with,
 # and `__STKOVERFLOW`, Open Watcom's name for the far routine it enters, which prints "Stack Overflow!"
 # and exits with status 1 (ext.asm). SS is DGROUP, so SP is an offset in it.
 #
 # `red_zone` is 0: nothing is promised below the limit beyond the handler's own frames, so no leaf
 # goes unchecked.
-limit = "_llrm_os_stack_low"
+limit = "LL$STACK_LOW"
 handler = "__STKOVERFLOW"
 red_zone = 0

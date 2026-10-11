@@ -77,7 +77,7 @@ fn test_only_omax_searches_every_shape() {
 /// 2026-10-10; -Og does not.
 #[test]
 fn each_level_selects_gcc_s_passes() {
-    // (scalar passes, last call inlined, inlines at all, gcse, sibling calls,
+    // (scalar passes, last call inlined, inlines at all, pre, sibling calls,
     // fill, peel, unswitch, copies may grow)
     let row = |level: &str| {
         let o = pipeline(&[level]);
@@ -85,7 +85,7 @@ fn each_level_selects_gcc_s_passes() {
             [o.dead, o.promote, o.drop_stores, o.hoist, o.strength],
             o.inline.last,
             o.inline.limit > 0,
-            o.forward && o.drop_loads,
+            o.pre,
             o.sibcalls,
             o.fill,
             o.peel,
@@ -297,4 +297,15 @@ fn a_target_is_named_by_gccs_m_flag() {
 fn fwrapv_makes_signed_arithmetic_wrap() {
     assert!(parsed(&["-fwrapv"]).unwrap().wrapv);
     assert!(!parsed(&["-fwrapv", "-fno-wrapv"]).unwrap().wrapv && !parsed(&[]).unwrap().wrapv);
+}
+
+/// gcc turns `-floop-unroll-and-jam` on at -O3 and no lower (opts.cc:678).
+#[test]
+fn only_o3_jams_loop_nests_and_the_flag_overrides_it() {
+    for level in ["-O1", "-O2", "-Os", "-Omax"] {
+        assert!(!pipeline(&[level]).unroll_jam, "{level}");
+        assert!(pipeline(&[level, "-floop-unroll-and-jam"]).unroll_jam, "{level}");
+    }
+    assert!(pipeline(&["-O3"]).unroll_jam);
+    assert!(!pipeline(&["-O3", "-fno-loop-unroll-and-jam"]).unroll_jam);
 }

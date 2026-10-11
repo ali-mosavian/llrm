@@ -214,7 +214,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -507,6 +507,21 @@ def test_every_step_runs_with_the_flags_the_build_used_and_the_base_build_with_n
     assert "RUSTFLAGS" not in gate.MEASURE_BUILD.replace("env -u RUSTFLAGS", "")
 
 
+def test_the_slow_dos_tier_is_a_heavy_step_selected_by_the_runtime_and_the_dos32_harness():
+    """The demos and graphics sweeps (minutes) ran in the `pytest` step on every change; now they are a step of their own."""
+    assert "dos-slow" in gate.plan(["runtime/qb/gpaint.c"]).steps
+    assert "dos-slow" in gate.plan(["tools/dosbatch/qb32demos.py"]).steps
+    assert "dos-slow" not in gate.plan(["crates/frontends/llrm-c/src/lib.rs"]).steps
+    command = gate.commands(gate.plan(["runtime/qb/gpaint.c"]), gate.load(), gate.packages())["dos-slow"]
+    assert "-m slow_dos" in command and "exit 77" in command, command
+
+
+def test_the_slow_dos_tier_is_skipped_where_the_demo_sources_are_missing(tmp_path):
+    env = {"HOME": str(tmp_path), "QB45_DEMOS_DIR": str(tmp_path / "none"), "QB45_DIR": str(tmp_path / "none"), "GATE_ALLOW_MISSING": "1"}
+    skipped = gate.skipped_steps(["dos-slow"], gate.missing_capabilities(env))
+    assert "QB45_DEMOS_DIR" in skipped["dos-slow"] or "QB45_DIR" in skipped["dos-slow"], skipped
+
+
 def test_a_run_asked_for_another_commit_refuses_and_names_no_pass():
     """A gate started on a checkout that had failed passed on the previous run's log, and the commit it named was never run."""
     done = subprocess.run([sys.executable, str(ROOT / "tools/gate/gate.py"), "run", "--expect", "0000000"], capture_output=True, text=True, cwd=ROOT)
@@ -540,3 +555,16 @@ def test_the_steps_run_the_binaries_cargo_linked_before_them_not_the_path_cargo_
     # A second snapshot (another group of the gate) replaces the links.
     (release / "llrm-c").chmod(0o755)
     assert (gate.snapshot_binaries(release, tmp_path / "gate-bins") / "llrm-c").read_text() == "relinked"
+
+
+def test_a_steps_cpu_time_is_its_process_trees_and_not_the_waiting_in_it(tmp_path):
+    """The fast gate went from 170-460 s to 865-1,816 s and the wall clock could not say whether the steps grew or the host (load 52
+    on 32 cores) did. A step's CPU is user+sys of its whole tree: a child's spin counts, a sleep does not."""
+    env = {**__import__("os").environ}
+    spin = 'python3 -c "import time; t = time.process_time()\nwhile time.process_time() - t < 0.6: pass" & wait'
+    _, code, wall, cpu = gate.run_step("spin", spin, tmp_path, env)
+    assert code == 0 and cpu >= 0.5, f"a child spun 0.6 s of CPU and the step read {cpu:.2f} s"
+    _, code, wall, cpu = gate.run_step("sleep", "sleep 0.6", tmp_path, env)
+    assert wall >= 0.6 and cpu < 0.3, f"a step that only waited read {cpu:.2f} s of CPU"
+    table = gate.step_table({"a": (0, 5.0, 2.0), "b": (0, 9.0, 8.0), "skipped": (77, 0, 0)})
+    assert table.splitlines()[1].startswith("[steps] b ") and "skipped" not in table and table.endswith("10 cpu")

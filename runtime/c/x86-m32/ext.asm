@@ -5,10 +5,10 @@
 .386
 .model flat
 
-extrn _llrm_os_open:near
-extrn _llrm_os_read:near
-extrn _llrm_os_write_file:near
-extrn _llrm_os_exit:near
+extrn LL$OPEN:near
+extrn LL$READ:near
+extrn LL$WRITE_FILE:near
+extrn LL$EXIT:near
 
 .data
 digits  db 12 dup (?)
@@ -25,9 +25,9 @@ __STKOVERFLOW proc
     push 17
     push offset stkmsg
     push DOS_STDOUT
-    call _llrm_os_write_file
+    call LL$WRITE_FILE
     push 1
-    call _llrm_os_exit
+    call LL$EXIT
 __STKOVERFLOW endp
 
 ; void report(long v): v in EAX.
@@ -66,7 +66,7 @@ unsigned:
     push ecx
     push edi
     push DOS_STDOUT
-    call _llrm_os_write_file
+    call LL$WRITE_FILE
     add esp, 12
     pop edi
     pop edx
@@ -89,7 +89,7 @@ input_read_ proc
     jne opened
     push 0
     push offset inname
-    call _llrm_os_open
+    call LL$OPEN
     add esp, 8
     movsx eax, ax
     test eax, eax
@@ -99,7 +99,7 @@ opened:
     push edi
     push esi
     push inhandle
-    call _llrm_os_read
+    call LL$READ
     add esp, 12
     test eax, eax
     jns done

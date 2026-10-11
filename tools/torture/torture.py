@@ -15,6 +15,7 @@ import ast
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tomllib
@@ -32,7 +33,14 @@ CORPUS = Path(os.environ.get("TORTURE_CORPUS", Path.home() / "work/personal/gcc/
 LEVELS = {"O0": "-O0", "O2": "-O2", "Os": "-Os"}
 BATCH = 150
 BUDGET_MS = 15_000
-COMPILE_SECONDS = 60
+COMPILE_SECONDS = 60  # of CPU time, not wall clock: a loaded host runs the same compile slower, not longer
+
+
+def run_within_cpu(command: list[str], seconds: int) -> subprocess.CompletedProcess | None:
+    """`command`'s result, or None where it used more than `seconds` of CPU time (the shell's `ulimit -t`, which stops it).
+    A wall-clock limit stopped programs that compile in a few seconds whenever the host was busy."""
+    done = subprocess.run(["sh", "-c", f'ulimit -t {seconds}; exec "$@"', "sh", *command], capture_output=True, text=True)
+    return None if done.returncode in (-signal.SIGXCPU, -signal.SIGKILL) else done
 
 
 def programs(names: list[str]) -> list[Path]:
@@ -143,11 +151,9 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
     if sized is not None:
         compiled = work / f"{stem}.c"
         compiled.write_text(f"#define STACK_SIZE {sized}\n{text}")
-    try:
-        done = subprocess.run([str(BIN / "llrm-c"), str(compiled), "-I", str(source.parent), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), LEVELS[level], *program_options(text), "-o", str(obj)],
-                              capture_output=True, text=True, timeout=COMPILE_SECONDS)
-    except subprocess.TimeoutExpired:
-        return "compile", f"did not finish in {COMPILE_SECONDS} s", None
+    done = run_within_cpu([str(BIN / "llrm-c"), str(compiled), "-I", str(source.parent), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), LEVELS[level], *program_options(text), "-o", str(obj)], COMPILE_SECONDS)
+    if done is None:
+        return "compile", f"did not finish in {COMPILE_SECONDS} s of CPU", None
     if done.returncode != 0 or not obj.exists():
         found = cause(done.stderr or done.stdout) or f"exit {done.returncode}"
         why = refusal(found, rules)
