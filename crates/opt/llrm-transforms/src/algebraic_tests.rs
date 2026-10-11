@@ -131,7 +131,7 @@ fn test_offset_composition_preserves_modular_values() {
         );
         unchanged(&unary(
             16,
-            &format!("  %m = add i16 %x, -6\n  %r = {op} i16 %m, 20\n  %s = add i16 %m, %r\n  ret i16 %s\n"),
+            &format!("  %m = add i16 %x, -6\n  %r = {op} i16 %m, 20\n  %s = xor i16 %m, %r\n  ret i16 %s\n"),
         ));
     }
 }
@@ -157,6 +157,49 @@ fn test_associative_bitwise_constants_combine() {
 #[test]
 fn test_mixed_bitwise_operations_stay_apart() {
     unchanged(&unary(16, "  %m = and i16 %x, 255\n  %r = or i16 %m, 4096\n  ret i16 %r\n"));
+}
+
+fn binary(
+    width: u32,
+    body: &str,
+) -> String {
+    format!("define i{width} @f(i{width} %x, i{width} %a) {{\nb0:\n{body}}}\n")
+}
+
+fn pairs() -> Vec<Vec<i128>> {
+    edges(16).into_iter().flat_map(|x| edges(16).into_iter().map(move |a| vec![x, a])).collect()
+}
+
+/// `(x + a) + a`: bench/particle's second sweep of a cell adds the same value
+/// again. It is `x + (a << 1)`, so the sum is the cell and one addend, which a
+/// read-modify-write takes.
+#[test]
+fn test_a_value_added_twice_is_added_once_doubled() {
+    let text = binary(16, "  %m = add i16 %x, %a\n  %r = add i16 %m, %a\n  ret i16 %r\n");
+    assert_eq!(checked(&text, &pairs()), binary(16, "  %0 = shl i16 %a, 1\n  %1 = add i16 %x, %0\n  ret i16 %1\n"));
+    // Whichever way round the operands are.
+    let swapped = binary(16, "  %m = add i16 %a, %x\n  %r = add i16 %a, %m\n  ret i16 %r\n");
+    assert_eq!(checked(&swapped, &pairs()), binary(16, "  %0 = shl i16 %a, 1\n  %1 = add i16 %x, %0\n  ret i16 %1\n"));
+}
+
+/// The repeat need not be next to its twin: `((x + a) + b) + a`.
+#[test]
+fn test_a_value_added_twice_through_a_longer_chain_is_doubled() {
+    let text = "define i16 @f(i16 %x, i16 %a, i16 %b) {\nb0:\n  %m = add i16 %x, %a\n  %n = add i16 %m, %b\n  %r = add i16 %n, %a\n  ret i16 %r\n}\n";
+    let inputs: Vec<Vec<i128>> =
+        edges(16).into_iter().flat_map(|x| edges(16).into_iter().map(move |a| vec![x, a, 5 - x])).collect();
+    let after = checked(text, &inputs);
+    assert!(after.contains("shl i16 %a, 1"), "{after}");
+    assert_eq!(after.matches("add i16").count(), 2, "{after}");
+}
+
+/// A sum something else reads is shared work: the value is not doubled out of
+/// it. A constant twice is `offset_chain`'s.
+#[test]
+fn test_a_shared_sum_and_a_constant_are_not_doubled() {
+    unchanged(&binary(16, "  %m = add i16 %x, %a\n  %r = add i16 %m, %a\n  %s = xor i16 %m, %r\n  ret i16 %s\n"));
+    let text = binary(16, "  %m = add i16 %x, 3\n  %r = add i16 %m, 3\n  ret i16 %r\n");
+    assert_eq!(checked(&text, &pairs()), binary(16, "  %0 = add i16 %x, 6\n  ret i16 %0\n"));
 }
 
 #[test]
