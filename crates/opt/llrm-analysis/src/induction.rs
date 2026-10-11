@@ -884,7 +884,7 @@ fn _entered(
     let anchor = |one: &Scev| -> Scev {
         let [(product, factor)] = one.terms.iter().collect::<Vec<_>>()[..] else { return one.clone() };
         let Some(value) = product.single().filter(|_| *factor == BigInt::from(1)) else { return one.clone() };
-        match anchored(unit, &AffineOperand::Value(value, width), width, None) {
+        match anchored(unit, &AffineOperand::Value(value, width), width, None, None) {
             (Some(root), offset) => Scev::unknown(root, width)
                 .plus(&Scev::constant(offset, width))
                 .plus(&Scev::constant(one.constant.clone(), width)),
@@ -904,7 +904,7 @@ fn _entered(
         IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
     ) {
         let rooted = |one: &AffineOperand| {
-            let (root, offset) = anchored_with(unit, one, width, None, Some(llrm_mir::opcode::Flags::NSW));
+            let (root, offset) = anchored(unit, one, width, None, Some(llrm_mir::opcode::Flags::NSW));
             let number = Scev::constant(offset, width);
             root.map_or(number.clone(), |root| Scev::unknown(root, width).plus(&number))
         };
@@ -1323,8 +1323,8 @@ fn _difference(
     if let (Some(begin), Some(limit)) = (begin, limit) {
         return Some(masked(&(limit - begin), width));
     }
-    let (root, ahead) = anchored(unit, bound, width, Some(facts));
-    let (other, behind) = anchored(unit, start, width, Some(facts));
+    let (root, ahead) = anchored(unit, bound, width, Some(facts), None);
+    let (other, behind) = anchored(unit, start, width, Some(facts), None);
     (root == other).then(|| masked(&(ahead - behind), width))
 }
 
@@ -1413,19 +1413,10 @@ pub fn distance(
 ///
 /// Two values with one root are a constant apart, which is how a loop from
 /// `x - 32` to `x` is counted and how two counters starting 4 apart share one.
-pub fn anchored(
-    unit: &Unit,
-    term_: &AffineOperand,
-    width: u32,
-    facts: Option<&IndexMap<ValueId, Known>>,
-) -> (Option<ValueId>, BigInt) {
-    anchored_with(unit, term_, width, facts, None)
-}
-
 /// `anchored`, through the adds and subtractions that carry `no_wrap` only
 /// where it is given: an ordered compare reads a value as its root plus a
 /// constant only where the sum cannot wrap.
-pub fn anchored_with(
+pub fn anchored(
     unit: &Unit,
     term_: &AffineOperand,
     width: u32,
