@@ -1018,6 +1018,9 @@ fn exit_loads(
 /// What serves a read of `reference` (its index placed by `placed`): the stores
 /// `ask` says reach it, whole or byte by byte. None where a path meets no
 /// write.
+/// The nearest writes a load may have and still be served by them.
+const MAX_REACHING: usize = 100;
+
 fn provider_of(
     unit: &Unit,
     accesses: &Accesses,
@@ -1029,6 +1032,14 @@ fn provider_of(
     let mut values = Vec::new();
     let mut exact = true;
     let reaching = ask(reference);
+    // Past this many nearest writes a load is not served: a scalar written in
+    // each arm of N joins is reached by N of them at the last, N^2 over the
+    // body (`joins` 256: 10% of the compile). LLVM's walker stops at
+    // `memssa-check-limit` (100) checks, gcc's value numbering at
+    // `sccvn-max-alias-queries-per-access` (1000).
+    if reaching.len() > MAX_REACHING {
+        return None;
+    }
     // A path to the entry that no write meets leaves every byte as it
     // was found, so no byte is a store's.
     if reaching.iter().any(|id| graph.access(*id).kind == memoryssa::Kind::Live) {
@@ -1066,7 +1077,12 @@ fn provider_of(
                 ..reference.clone()
             };
             let mut from = Vec::new();
-            for id in ask(&one) {
+            let nearest = ask(&one);
+            if nearest.len() > MAX_REACHING {
+                bytes.clear();
+                break 'bytes;
+            }
+            for id in nearest {
                 let access = graph.access(id);
                 let Some((site, (cell, _))) = access
                     .site
