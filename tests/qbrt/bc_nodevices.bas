@@ -16,6 +16,7 @@ t! = TIMER
 DO WHILE TIMER - t! < .5
 LOOP
 PRINT #1, "fired"; fired; "pen"; PEN(0); PEN(3); "trig"; STRIG(0); STRIG(1)
+PRINT #1, "stick"; STICK(0); STICK(1); STICK(2); STICK(3)
 STRIG(0) STOP
 STRIG OFF
 PEN OFF

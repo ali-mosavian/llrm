@@ -21,11 +21,7 @@ fn main() -> ExitCode {
         }
         taken += 1;
     }
-    let (segment_bytes, near_bytes, far_bytes) = match llrm_driver::planned(
-        &flags,
-        Some(&["x86-m16", "x86-m32"]),
-        Some("https://github.com/ali-mosavian/llrm/issues/1160"),
-    ) {
+    let (segment_bytes, near_bytes, far_bytes) = match llrm_driver::target(&flags, None) {
         Ok(bound) => {
             let spaces = &bound.target.layout().spaces;
             let width =

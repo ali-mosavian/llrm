@@ -249,7 +249,7 @@ pub fn natively_called(
 ) {
     let named = native_cc.filter(|cc| *cc != "cdecl").map(str::to_owned);
     for function in program.modules.iter_mut().flat_map(|module| &mut module.functions) {
-        let called: std::collections::HashMap<i64, String> = function
+        let called: llrm_core::support::hash::HashMap<i64, String> = function
             .blocks
             .iter()
             .flat_map(|block| &block.instructions)
