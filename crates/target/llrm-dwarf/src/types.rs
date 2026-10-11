@@ -51,6 +51,9 @@ struct Tree<'a> {
     bad: Vec<Option<String>>,
     version: u16,
     address: usize,
+    /// The function being described is called far: its return address, and
+    /// so the frame address of its cells, is longer.
+    far: bool,
     /// The location lists, in `.debug_loclists` (a header first) or
     /// `.debug_loc`.
     locations: crate::buffer::Buf,
@@ -272,7 +275,7 @@ impl Tree<'_> {
             Location::Frame { disp } => {
                 let from_frame_base = match self.info.frame_base {
                     FrameBase::Register => *disp,
-                    FrameBase::Cfa { bias } => disp - bias,
+                    FrameBase::Cfa { bias, far_bias } => disp - if self.far { far_bias } else { bias },
                 };
                 Ok([vec![0x91], crate::sleb(from_frame_base)].concat())
             }
@@ -451,6 +454,7 @@ impl Tree<'_> {
         let [range] = one.ranges[..] else {
             return refused(format!("function {} has {} ranges: one is written", one.name, one.ranges.len()));
         };
+        self.far = one.far;
         let mut die = Die::new(TAG_SUBPROGRAM);
         if !one.name.is_empty() {
             die.attrs.push((AT_NAME, Value::Str(one.name.clone())));
@@ -565,6 +569,7 @@ pub fn tree(
         bad: vec![None; info.types.len()],
         version,
         address,
+        far: false,
         locations: crate::buffer::Buf::default(),
     };
     let mut unit = Die::new(TAG_COMPILE_UNIT);

@@ -37,7 +37,8 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
+    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unroll_jam, unswitch,
+    window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -62,6 +63,10 @@ pub struct Options {
     pub hoist: bool,
     pub forward: bool,
     pub drop_loads: bool,
+    /// Partial redundancies are made full by inserting a computation or load on
+    /// the path that lacks it: gcc's `-ftree-pre`, -O2 and up. Without it
+    /// `gvn` only removes what is redundant on every path (`-ftree-fre`, -O1).
+    pub pre: bool,
     pub drop_stores: bool,
     pub promote: bool,
     pub strength: bool,
@@ -70,6 +75,9 @@ pub struct Options {
     pub fill: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
+    /// A nest's outer loop unrolled and its inner copies fused (gcc's
+    /// `-floop-unroll-and-jam`, -O3 only).
+    pub unroll_jam: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -106,6 +114,7 @@ impl Default for Options {
             loop_intervals: true,
             forward: true,
             drop_loads: true,
+            pre: true,
             drop_stores: true,
             promote: true,
             strength: true,
@@ -114,6 +123,7 @@ impl Default for Options {
             fill: true,
             sibcalls: true,
             unswitch: false,
+            unroll_jam: false,
             copy_headers: false,
             for_size: false,
             expensive: true,
@@ -134,18 +144,18 @@ impl Options {
     /// loop is copied out completely only where the code does not grow;
     /// nothing is inlined that `early-inlining-insns` (6) over
     /// `max-inline-insns-auto` (15) of the -O2 threshold does not admit,
-    /// and no gcse, sibling calls, peeling or unswitching. Pattern fill is on
-    /// (`LoopIdiomRecognize` is in LLVM's O1 pipeline, PassBuilderPipelines.cpp
-    /// L562): the one departure from gcc's -O1 here, the user's decision of
-    /// 2026-10-10 (docs/levels.md).
+    /// value numbering that inserts nothing (`-ftree-fre`; no
+    /// `-ftree-pre`), and no sibling calls, peeling or unswitching. Pattern
+    /// fill is on (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
+    /// PassBuilderPipelines.cpp L562): the one departure from gcc's -O1
+    /// here, the user's decision of 2026-10-10 (docs/levels.md).
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
             inline: inline::Threshold::new(Self::default().inline.limit * 6 / 15),
             ipa_ranges: false,
             loop_intervals: false,
-            forward: false,
-            drop_loads: false,
+            pre: false,
             sibcalls: false,
             peel: false,
             unswitch: false,
@@ -174,6 +184,7 @@ impl Options {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
+            unroll_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
         }
@@ -305,7 +316,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // one.
         Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),
-        Box::new(gvn::Gvn),
+        Box::new(gvn::Gvn { pre: applied.options.pre }),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
         Box::new(indvars::IndVars { exit_values: false }),
@@ -543,6 +554,7 @@ pub struct Fixed {
     /// Once, after everything else.
     last: Vec<Box<dyn FunctionPass>>,
     unswitch: Option<unswitch::Unswitch>,
+    jam: Option<unroll_jam::UnrollJam>,
     only: bool,
     dump: Option<PathBuf>,
     /// Bodies run, naming each one's dump.
@@ -570,7 +582,7 @@ impl Fixed {
             .unswitch
             .then(
                 || {
-                    let options = Options { unswitch: false, ..applied.options.clone() };
+                    let options = Options { unswitch: false, unroll_jam: false, ..applied.options.clone() };
                     let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
                     unswitch::Unswitch { passes: vec![Box::new(Fixed::new(&reoptimize))] }
                 },
@@ -582,6 +594,7 @@ impl Fixed {
             peelers,
             last,
             unswitch,
+            jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
             only: only.is_some(),
             dump: applied.dump.clone(),
             runs: 0,
@@ -623,6 +636,15 @@ impl Fixed {
         }
         if let Some(unswitch) = &mut self.unswitch {
             run.step(unswitch, "unswitch", unit, analyses);
+        }
+        // After unswitching, as gcc's pass order has it: an invariant guard is
+        // out of the nest by then. The fused copies are cleaned as a peeled
+        // loop is.
+        if let Some(jam) = &mut self.jam {
+            if run.step(jam, "unroll-jam", unit, analyses) {
+                self.scalarized(unit, analyses, run, "jammed");
+                self.fixed(unit, analyses, run, "jammed-")?;
+            }
         }
         for one in &mut self.last {
             let stage = one.name();

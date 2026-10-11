@@ -775,3 +775,26 @@ fn march(cpu: &str) -> String {
     let at = m16.cpus().iter().position(|one| *one == cpu).expect("a CPU m16 prices");
     format!("-march={}", m16.marches()[at])
 }
+
+/// `#include "llrm_os.h"` finds the target's OS layer header with no `-I`: the
+/// benches' bench_io.h includes it, and every test that compiled all of bench/
+/// (dwarf, objwriters, this file's warnings test) stopped on `Unable to open
+/// 'llrm_os.h'`.
+#[test]
+fn test_llrm_os_h_needs_no_include_path() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("io.c");
+    std::fs::write(
+        &source,
+        "#include \"llrm_os.h\"\nint main(void) { return llrm_os_close(llrm_os_open(\"X\", 0)); }\n",
+    )
+    .unwrap();
+    for mode in ["-m16", "-m32"] {
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+            .args([mode, source.to_str().unwrap(), "-o", scratch.path().join("io.obj").to_str().unwrap()])
+            .current_dir(scratch.path())
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "llrm-c {mode}: {}", String::from_utf8_lossy(&done.stdout));
+    }
+}

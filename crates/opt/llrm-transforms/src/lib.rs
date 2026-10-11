@@ -57,6 +57,7 @@ pub mod loopexit;
 pub mod loopmotion;
 pub mod loopsimplify;
 pub mod lsr;
+pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
@@ -78,6 +79,7 @@ pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
 pub mod unroll;
+pub mod unroll_jam;
 pub mod unswitch;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and

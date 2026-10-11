@@ -33,6 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).parent))
 
 import corpus  # noqa: E402
+import cpulimit  # noqa: E402
 import dosbatch  # noqa: E402
 llrmbin = dosbatch.llrmbin
 from dosbatch import BIN, ROOT, Job  # noqa: E402
@@ -159,8 +160,8 @@ def compile_one(program: Program, obj: Path) -> str | None:
     if program.source.suffix == ".c":
         target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
         dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
-    done = subprocess.run([str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)],
-                          capture_output=True, text=True, timeout=300)
+    done = cpulimit.run([str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)], 300,
+                        capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-600:]
     return None
@@ -218,7 +219,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".nib" and target != dosbatch.REAL_MODE:
         exe, obj = work / f"{stem}.exe", work / f"{stem}.obj"
-        done = subprocess.run([str(BIN / "llrm-nib"), str(program.source), *program.flags, "-o", str(obj), "--procedure-segments"], capture_output=True, text=True, timeout=300)
+        done = cpulimit.run([str(BIN / "llrm-nib"), str(program.source), *program.flags, "-o", str(obj), "--procedure-segments"], 300, capture_output=True, text=True)
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-600:]
         try:
@@ -232,8 +233,8 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
         exe = work / f"{stem}.exe"
         extras = [str(one) for one in linked(program, target)]
         nib_flags = " ".join(compiler_arguments(program.source, program.flags))
-        done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(program.source), str(exe), *program.flags[:1], *extras],
-                              capture_output=True, text=True, timeout=300, env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_FLAGS": nib_flags})
+        done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(program.source), str(exe), *program.flags[:1], *extras], 300,
+                            capture_output=True, text=True, env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_FLAGS": nib_flags})
         if done.returncode != 0 or not exe.exists():
             return "build: " + (done.stderr or done.stdout).strip()[-600:]
         try:
@@ -268,7 +269,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
     extras = []
     for at, one in enumerate(program.link):
         extra = work / f"{stem}L{at}.obj"
-        done = subprocess.run([str(BIN / "llrm-nib"), str(program.source.parent / one), "-o", str(extra), "-O2"], capture_output=True, text=True, timeout=300)
+        done = cpulimit.run([str(BIN / "llrm-nib"), str(program.source.parent / one), "-o", str(extra), "-O2"], 300, capture_output=True, text=True)
         if done.returncode != 0 or not extra.exists():
             return f"build {one}: " + (done.stderr or done.stdout).strip()[-600:]
         extras.append(extra)

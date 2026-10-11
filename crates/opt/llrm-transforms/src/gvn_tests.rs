@@ -205,13 +205,20 @@ b0:
 /// `text` through `Gvn` under the pass manager, printed; what `@f` returns
 /// stays.
 fn managed(text: &str) -> String {
+    managed_with(text, Gvn::default())
+}
+
+fn managed_with(
+    text: &str,
+    gvn: Gvn,
+) -> String {
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.verify_invalidation = true;
     manager.require::<Summaries>();
-    manager.add(Gvn::default());
+    manager.add(gvn);
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{after}");
@@ -752,7 +759,7 @@ b0:
     let mut module = parsed(text);
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
-    manager.add(Gvn);
+    manager.add(Gvn::default());
     let (walked, numbered) = (llrm_analysis::avail::walked(), super::numberings());
     manager
         .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 1, ..Default::default() }))
@@ -777,7 +784,7 @@ b0:
     let mut module = before.clone();
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
-    manager.add(Gvn);
+    manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     assert!(printed(&module).contains("  store i16 %x, ptr @g\n  ret i16 %x\n"), "{}", printed(&module));
 }
@@ -1006,4 +1013,42 @@ b2:
     let (merged, looped) = (run(true), run(false));
     assert!(looped.contains("tailrecurse"), "premise: tail recursion makes the second call a loop\n{looped}");
     assert_eq!((calls(&merged), merged.contains("tailrecurse")), (1, false), "{merged}");
+}
+
+/// -O1's `-ftree-fre`: a load a dominating load or store already holds is
+/// served on every path, but nothing is inserted to make a partial redundancy
+/// full. Before, -O1 had no gvn at all (it was gated with `-fgcse`), and the
+/// swap of a sift reloaded the two cells its compare had just loaded.
+#[test]
+fn without_pre_a_load_a_dominator_holds_is_still_served() {
+    let reloaded = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  %first = load i16, ptr @g
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %second = load i16, ptr @g
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %r = add i16 %first, 1
+  ret i16 %r
+}
+";
+    let after = managed_with(
+        &format!("@g = global i16 0\n\n{}", reloaded.replace("%r = add i16 %first, 1", "%r = load i16, ptr @g")),
+        Gvn { pre: false },
+    );
+    assert!(!after.contains("%r = load"), "{after}");
+    assert!(!after.contains("%second = load"), "{after}");
+}
+
+#[test]
+fn without_pre_a_partial_redundancy_is_left_and_with_pre_it_is_made_full() {
+    let text = diamond("  %a = xor i16 %x, %y\n", "", "  %r = xor i16 %x, %y\n");
+    assert_eq!(managed_with(&text, Gvn { pre: false }), printed(&parsed(&text)));
+    assert!(managed_with(&text, Gvn { pre: true }).contains("%r.pre = xor i16 %x, %y"));
 }
