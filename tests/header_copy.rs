@@ -155,18 +155,36 @@ void f(int n, int cur, int y)
 }
 
 /// mandel's `iteration < 32` behind the copied header, once its exit reads a
-/// number, tested the counter before the step (`cmp dx, 31`), so the step took
-/// a register of its own: `mov ax, dx; inc ax; cmp dx, 31; mov dx, ax`. The
-/// test of the step is `inc dx; cmp dx, 32`: one register (mandel C -O2 m16
-/// +10.1% instructions).
+/// number, tested the counter before the step (`cmp ax, 31`), so the step took
+/// a register of its own: `inc bx; cmp ax, 31` and a copy back. The test of the
+/// step is `inc ax; cmp ax, 32`: one register (mandel C -O2 m16 was +10.1%
+/// instructions). The break reads a table, so only the loop's own test is
+/// copied.
 #[test]
-#[ignore = "with gcc's chain mandel's exit test is not its latch: an open row (+3.4% clocks ch on), not the rule"]
 fn test_a_latch_test_of_a_counter_whose_step_nothing_else_reads_tests_the_step() {
-    let source = format!("{}/bench/mandel/mandel.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "static short tab[8];
+long f(void)
+{
+    long x = 0, y = 0;
+    short it;
+    for (it = 0; it < 32; ++it) {
+        long xx = (x * x) >> 8;
+        long yy = (y * y) >> 8;
+        if (tab[(xx + yy) & 7] > 1024) break;
+        y = ((x * y) >> 7) + 3;
+        x = xx - yy + 5;
+    }
+    return it;
+}
+",
+    )
+    .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(scratch.path())
-        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
