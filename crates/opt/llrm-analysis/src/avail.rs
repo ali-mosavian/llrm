@@ -22,6 +22,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{InstId, Operand, ValueId};
@@ -126,9 +127,9 @@ struct Stored {
     private: Bits,
     /// Per cell, lazily: the cells whose store writes all its bytes, the
     /// cells naming its bytes, and those placed to write some of them.
-    covering: RefCell<Vec<Option<Bits>>>,
-    alike: RefCell<Vec<Option<Bits>>>,
-    pieces: RefCell<Vec<Option<Bits>>>,
+    covering: RefCell<Vec<Option<Rc<Bits>>>>,
+    alike: RefCell<Vec<Option<Rc<Bits>>>>,
+    pieces: RefCell<Vec<Option<Rc<Bits>>>>,
 }
 
 impl Stored {
@@ -171,19 +172,34 @@ impl Stored {
 
     fn related(
         &self,
-        memo: &RefCell<Vec<Option<Bits>>>,
+        memo: &RefCell<Vec<Option<Rc<Bits>>>>,
         at: usize,
         related: impl Fn(&MemRef, &MemRef) -> bool,
-    ) -> Bits {
+    ) -> Rc<Bits> {
         if let Some(known) = &memo.borrow()[at] {
             return known.clone();
         }
         let mut found = self.none();
-        self.cells
-            .iter()
-            .enumerate()
-            .filter(|(_, other)| related(&self.cells[at], other))
-            .for_each(|(one, _)| found.insert(one));
+        let mut test = |one: usize| {
+            RELATED.with(|asked| asked.set(asked.get() + 1));
+            if related(&self.cells[at], &self.cells[one]) {
+                found.insert(one);
+            }
+        };
+        // Cells that share bytes share a bucket.
+        match overlap_buckets(&self.cells[at], &self.index.parts) {
+            None => (0..self.cells.len()).for_each(&mut test),
+            Some(buckets) => buckets
+                .iter()
+                .filter_map(|bucket| self.index.buckets.get(bucket))
+                .flat_map(IndexMap::keys)
+                .for_each(|&one| test(one)),
+        }
+        if llrm_support::env_set("LLRM_CHECK_CLOBBERS") {
+            let all = (0..self.cells.len()).filter(|&one| related(&self.cells[at], &self.cells[one])).collect::<Vec<_>>();
+            assert!(found.iter().collect::<Vec<_>>() == all, "LLRM_CHECK_CLOBBERS: cells sharing bytes were in no shared bucket");
+        }
+        let found = Rc::new(found);
         memo.borrow_mut()[at] = Some(found.clone());
         found
     }
@@ -193,7 +209,7 @@ impl Stored {
         &self,
         unit: &Unit,
         at: usize,
-    ) -> Bits {
+    ) -> Rc<Bits> {
         self.related(&self.covering, at, |one, other| covers(unit, other, one))
     }
 
@@ -201,7 +217,7 @@ impl Stored {
         &self,
         unit: &Unit,
         at: usize,
-    ) -> Bits {
+    ) -> Rc<Bits> {
         self.related(&self.alike, at, |one, other| same_bytes(unit, one, other))
     }
 
@@ -218,10 +234,19 @@ impl Stored {
                 .zip(placed(unit, one, one))
                 .is_some_and(|((low, high), (_, size))| low < size && high > 0)
         });
+        if pieces.iter().filter(|piece| overwritten.contains(*piece)).nth(1).is_none() {
+            return false;
+        }
         let written: Vec<&MemRef> =
             pieces.iter().filter(|piece| overwritten.contains(*piece)).map(|piece| &self.cells[piece]).collect();
-        written.len() > 1 && covered(unit, &written, &self.cells[at])
+        covered(unit, &written, &self.cells[at])
     }
+}
+
+/// The cells in the buckets an instruction's accesses reach.
+struct Reached {
+    all: Bits,
+    each: Vec<Bits>,
 }
 
 /// What a dead-store solve reads of the function besides its instructions.
@@ -231,6 +256,12 @@ struct Solve<'a, 'u> {
     private: Option<&'a dyn Fn(&MemRef) -> bool>,
     escaped: Option<&'a EscapedBefore>,
     stored: Stored,
+    /// Per instruction, lazily: the cells in the buckets each of its accesses
+    /// reaches, and all of them together. They do not move with the round, so
+    /// a round asks the live ones of these and not the buckets again.
+    reached: RefCell<HashMap<InstId, Rc<Reached>>>,
+    /// Per instruction, lazily: the cell it purely stores to, as numbered.
+    cell_of: RefCell<HashMap<InstId, Option<usize>>>,
 }
 
 impl Solve<'_, '_> {
@@ -262,8 +293,12 @@ impl Solve<'_, '_> {
                 continue;
             };
 
-            if let Some(cell) = stored_cell(unit, self.accesses, inst) {
-                let at = stored.number[&cell];
+            let cell = *self
+                .cell_of
+                .borrow_mut()
+                .entry(inst)
+                .or_insert_with(|| stored_cell(unit, self.accesses, inst).map(|cell| stored.number[&cell]));
+            if let Some(at) = cell {
                 if stored.covering(unit, at).intersects(&overwritten) || stored.pieced(unit, at, &overwritten) {
                     found.push(inst);
                 }
@@ -273,8 +308,11 @@ impl Solve<'_, '_> {
 
             // Anything this reads or writes puts the cells it may touch back in
             // doubt.
-            for reference in loads.iter().chain(stores) {
-                self.clobber(&mut overwritten, inst, reference, shielded && (call || !reference.named()));
+            let reached = self.reached(inst, loads, stores);
+            if !overwritten.is_empty() && reached.all.intersects(&overwritten) {
+                for (reference, cells) in loads.iter().chain(stores).zip(&reached.each) {
+                    self.clobber(&mut overwritten, inst, cells, reference, shielded && (call || !reference.named()));
+                }
             }
             // What a call fills it writes before reading, unless it may read it
             // otherwise.
@@ -313,34 +351,59 @@ impl Solve<'_, '_> {
         self.within(inst, reference, at, unnamed) && may_clobber(self.unit, None, &self.stored.cells[at], reference)
     }
 
-    /// Forget the cells an access through `reference` at `inst` may touch;
-    /// an `unnamed` one cannot reach a private cell.
+    fn reached(
+        &self,
+        inst: InstId,
+        loads: &[MemRef],
+        stores: &[MemRef],
+    ) -> Rc<Reached> {
+        let stored = &self.stored;
+        self.reached
+            .borrow_mut()
+            .entry(inst)
+            .or_insert_with(|| {
+                let each: Vec<Bits> = loads
+                    .iter()
+                    .chain(stores)
+                    .map(|reference| {
+                        let mut cells = stored.none();
+                        let mut take = |at: &usize| cells.insert(*at);
+                        match overlap_buckets(reference, &stored.index.parts) {
+                            None => stored.index.buckets.values().flat_map(IndexMap::keys).for_each(&mut take),
+                            Some(buckets) => buckets
+                                .iter()
+                                .filter_map(|bucket| stored.index.buckets.get(bucket))
+                                .flat_map(IndexMap::keys)
+                                .for_each(&mut take),
+                        }
+                        cells
+                    })
+                    .collect();
+                let mut all = stored.none();
+                each.iter().for_each(|cells| all.union_with(cells));
+                Rc::new(Reached { all, each })
+            })
+            .clone()
+    }
+
+    /// Forget the cells an access through `reference` at `inst` may touch,
+    /// among those of `reached`; an `unnamed` one cannot reach a private cell.
     fn clobber(
         &self,
         overwritten: &mut Bits,
         inst: InstId,
+        reached: &Bits,
         reference: &MemRef,
         unnamed: bool,
     ) {
-        // Nothing overwritten, nothing to forget: no need to find the cells it
-        // could reach.
-        if overwritten.is_empty() {
+        if !reached.intersects(overwritten) {
             return;
         }
-        let stored = &self.stored;
-        let live = |at: &usize| overwritten.contains(*at) && self.within(inst, reference, *at, unnamed);
-        let reached: Vec<usize> = match overlap_buckets(reference, &stored.index.parts) {
-            None => stored.index.buckets.values().flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),
-            Some(buckets) => buckets
-                .iter()
-                .filter_map(|bucket| stored.index.buckets.get(bucket))
-                .flat_map(IndexMap::keys)
-                .filter(|at| live(at))
-                .copied()
-                .collect(),
-        };
-        for at in reached {
-            if may_clobber(self.unit, None, &stored.cells[at], reference) {
+        let mut live = reached.clone();
+        live.intersect_with(overwritten);
+        for at in live.iter() {
+            if self.within(inst, reference, at, unnamed) && may_clobber(self.unit, None, &self.stored.cells[at], reference)
+            {
                 overwritten.remove(at);
             }
         }
@@ -379,7 +442,15 @@ pub fn dead_stores_escaping(
     private: Option<&dyn Fn(&MemRef) -> bool>,
     escaped: Option<&EscapedBefore>,
 ) -> Vec<InstId> {
-    let solve = Solve { unit, accesses, private, escaped, stored: Stored::new(unit, accesses, private) };
+    let solve = Solve {
+        unit,
+        accesses,
+        private,
+        escaped,
+        stored: Stored::new(unit, accesses, private),
+        reached: RefCell::default(),
+        cell_of: RefCell::default(),
+    };
     let stored = &solve.stored;
     let mut every = stored.none();
     (0..stored.cells.len()).for_each(|at| every.insert(at));
@@ -387,49 +458,88 @@ pub fn dead_stores_escaping(
     let mut entry: IndexMap<i64, Bits> = graph.iter().map(|block| (block.at, every.clone())).collect();
     let unread = if private.is_some() { stored.private.clone() } else { stored.none() };
 
-    let mut found: BTreeSet<InstId> = BTreeSet::new();
-    // A block's answer depends only on what is overwritten after it.
-    let mut last: HashMap<i64, (Bits, Vec<InstId>, Bits)> = HashMap::default();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        found = BTreeSet::new();
-        for block in graph.iter().rev() {
-            let mut out: Option<Bits> = None;
-            for successor in &block.succ {
-                let have = &entry[successor];
-                out = Some(match out {
-                    None => have.clone(),
-                    Some(mut out) => {
-                        for one in out.iter().collect::<Vec<_>>() {
-                            if !stored.alike(unit, one).intersects(have) {
-                                out.remove(one);
-                            }
-                        }
-                        out
-                    }
-                });
-            }
-            // No successor at all: only the caller may read it -- and after an
-            // `unreachable` nothing does, as LLVM's DSE skips such exits; the
-            // noreturn call before it reads what escaped by then.
-            let out = out.unwrap_or_else(|| if aborts(unit, block.at) { every.clone() } else { unread.clone() });
-            let (mine, start) = match last.get(&block.at) {
-                Some((seen, mine, start)) if *seen == out => (mine.clone(), start.clone()),
-                _ => {
-                    let (mine, start) = solve.dead_in(block.at, &out);
-                    last.insert(block.at, (out, mine.clone(), start.clone()));
-                    (mine, start)
-                }
-            };
-            found.extend(mine);
-            if start.len() != entry[&block.at].len() {
-                changing = true;
-            }
-            entry.insert(block.at, start);
+    // A block's answer depends only on what is overwritten after it: worked
+    // out again when a successor's entry shrank, the blocks in the order of a
+    // backward sweep.
+    let by_rank = postorder(&graph);
+    let rank: HashMap<i64, usize> = by_rank.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let mut readers: HashMap<i64, Vec<usize>> = HashMap::default();
+    for block in &graph {
+        for successor in &block.succ {
+            readers.entry(*successor).or_default().push(rank[&block.at]);
         }
     }
+    let mut mines: HashMap<i64, Vec<InstId>> = HashMap::default();
+    let mut last: HashMap<i64, Bits> = HashMap::default();
+    let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> =
+        (0..by_rank.len()).map(std::cmp::Reverse).collect();
+    let mut queued = vec![true; by_rank.len()];
+    while let Some(std::cmp::Reverse(at)) = work.pop() {
+        queued[at] = false;
+        let block = by_rank[at];
+        let mut out: Option<Bits> = None;
+        for successor in &block.succ {
+            let have = &entry[successor];
+            out = Some(match out {
+                None => have.clone(),
+                Some(mut out) => {
+                    for one in out.iter().collect::<Vec<_>>() {
+                        if !stored.alike(unit, one).intersects(have) {
+                            out.remove(one);
+                        }
+                    }
+                    out
+                }
+            });
+        }
+        // No successor at all: only the caller may read it -- and after an
+        // `unreachable` nothing does, as LLVM's DSE skips such exits; the
+        // noreturn call before it reads what escaped by then.
+        let out = out.unwrap_or_else(|| if aborts(unit, block.at) { every.clone() } else { unread.clone() });
+        if last.get(&block.at) == Some(&out) {
+            continue;
+        }
+        let (mine, start) = solve.dead_in(block.at, &out);
+        last.insert(block.at, out);
+        mines.insert(block.at, mine);
+        if start.len() != entry[&block.at].len() {
+            for &reader in readers.get(&block.at).into_iter().flatten() {
+                if !std::mem::replace(&mut queued[reader], true) {
+                    work.push(std::cmp::Reverse(reader));
+                }
+            }
+        }
+        entry.insert(block.at, start);
+    }
+    let found: BTreeSet<InstId> = mines.into_values().flatten().collect();
     unit.function.walk().map(|(_, inst)| inst).filter(|inst| found.contains(inst)).collect()
+}
+
+/// The blocks, each after the ones it reaches (a depth-first postorder from
+/// the first block; those it does not reach, last, in reverse layout).
+fn postorder(graph: &[cfg::Block]) -> Vec<&cfg::Block> {
+    let index: HashMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let mut seen = vec![false; graph.len()];
+    let mut order = Vec::with_capacity(graph.len());
+    let roots = (0..graph.len().min(1)).chain((0..graph.len()).rev());
+    for root in roots {
+        if std::mem::replace(&mut seen[root], true) {
+            continue;
+        }
+        let mut stack = vec![(root, 0usize)];
+        while let Some((at, next)) = stack.pop() {
+            match graph[at].succ.get(next).map(|successor| index[successor]) {
+                Some(one) => {
+                    stack.push((at, next + 1));
+                    if !std::mem::replace(&mut seen[one], true) {
+                        stack.push((one, 0));
+                    }
+                }
+                None => order.push(&graph[at]),
+            }
+        }
+    }
+    order
 }
 
 /// Whether block `at` ends in `unreachable`.
@@ -440,6 +550,16 @@ fn aborts(
     unit.function
         .terminator(cfg::block(at))
         .is_some_and(|last| unit.function.instruction(last).opcode == Opcode::Unreachable)
+}
+
+thread_local! {
+    static RELATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many pairs of cells this thread has asked whether they share bytes, for
+/// a test that a cell is compared with those in its buckets and not with all.
+pub fn related_pairs() -> usize {
+    RELATED.with(std::cell::Cell::get)
 }
 
 thread_local! {
