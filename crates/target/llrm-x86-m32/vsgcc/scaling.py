@@ -138,10 +138,12 @@ def cases(n: int) -> str:
     )
 
 
-def unrolled(depth: int) -> str:
-    """A recursive partition (quicksort's) unrolled DEPTH deep: 2**DEPTH - 1 partition loops, each in a branch of the one before, in one
-    function, as a compiler's recursive inlining makes it. Every analysis of the loops (counted proofs, intervals, products) meets
-    each loop of the function once for each of them."""
+def unrolled(loops: int) -> str:
+    """A recursive partition (quicksort's) unrolled until it has LOOPS partition loops (rounded down to 2**D - 1, D = loops.bit_length()),
+    each in a branch of the one before, in one function, as a compiler's recursive inlining makes it. Every analysis of the loops
+    (counted proofs, intervals, products) meets each loop of the function once for each of them. N is the loops, as in the other axes: the
+    other way (N the depth) made 2**32 loops of the size the generic tests give an axis, a compile that never ended."""
+    depth = max(1, loops.bit_length())
     count = [0]
 
     def body(left: int, lo: str, hi: str) -> str:
