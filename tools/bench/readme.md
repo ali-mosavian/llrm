@@ -45,6 +45,11 @@ and as a ratio to each reference.
 The file is `tools/dosbatch/corpus.py`'s: fetched once from the Silesia site (the GitHub mirror is the fallback), cached in
 `~/.cache/llrm-bench`, and checked against its pinned SHA-256 on every use. Missing and offline, grep is skipped with a message.
 
+`bench/jpeg_single` and `bench/jpeg_fixed` are timed-only too (the 256x192 `photo.jpg`, from `tools/jpeg_image.py`, decoded to
+`OUT.BMP` through DOS; the printed Adler-32 is `tools/jpeg_reference.py`'s). C reads and writes through `bench/bench_io.h`, which maps
+to the OS layer under llrm and to `<io.h>` under the references; `bench.py` copies it beside the Borland builds. Open Watcom has no row:
+its `clibm.lib` cannot link `open` here (`__doserror_`).
+
 ## Size
 
 `code_bytes`, `data_bytes` and `bss_bytes` of each program's own object, from `tools/sizes.py`: the OMF object
