@@ -12,6 +12,15 @@ pub struct CpuTable {
     pub partial_stall: i64,
     pub lcp_stall: i64,
     pub pairing: bool,
+    /// gcc's by-pieces limits for a constant memset of this CPU: stores while
+    /// their number is under the ratio, else the stringop algorithm (`rep
+    /// stos`); `None` where gcc's algorithm for the CPU is not one this target
+    /// emits. `set` is a nonzero byte, `clear` zero; `_size` is the
+    /// optimise-for-size path.
+    pub set_ratio: Option<i64>,
+    pub clear_ratio: Option<i64>,
+    pub set_ratio_size: Option<i64>,
+    pub clear_ratio_size: Option<i64>,
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
@@ -77,6 +86,10 @@ impl Timings {
                     ("scalars", "partial_stall") => table.partial_stall = number()?,
                     ("scalars", "lcp_stall") => table.lcp_stall = number()?,
                     ("scalars", "pairing") => table.pairing = number()? != 0,
+                    ("scalars", "set_ratio") => table.set_ratio = Some(number()?),
+                    ("scalars", "clear_ratio") => table.clear_ratio = Some(number()?),
+                    ("scalars", "set_ratio_size") => table.set_ratio_size = Some(number()?),
+                    ("scalars", "clear_ratio_size") => table.clear_ratio_size = Some(number()?),
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),
@@ -159,5 +172,18 @@ mod tests {
         assert_eq!(Timings::parse("cpus a b\ndefault_cpu b\n").unwrap().default_cpu(), Some("b"));
         assert_eq!(Timings::parse("cpus a\ndefault_cpu z\n").unwrap_err(), "timings.times: default_cpu z is no column");
         assert_eq!(Timings::parse("cpus a\nalu 1 2\n").unwrap_err(), "timings.times:2: 2 values for 1 CPUs");
+    }
+
+    #[test]
+    fn a_cpu_states_gccs_by_pieces_ratios_or_none() {
+        let timings =
+            Timings::parse("cpus a b\nset_ratio 3 -\nclear_ratio 3 6\nset_ratio_size 3 3\nclear_ratio_size 2 2\n")
+                .unwrap();
+        let (a, b) = (timings.cpu("a").unwrap(), timings.cpu("b").unwrap());
+        assert_eq!(
+            (a.set_ratio, a.clear_ratio, a.set_ratio_size, a.clear_ratio_size),
+            (Some(3), Some(3), Some(3), Some(2))
+        );
+        assert_eq!((b.set_ratio, b.clear_ratio), (None, Some(6)));
     }
 }

@@ -885,9 +885,10 @@ out:
     );
 }
 
-/// A memset expands as LLVM's getMemset does: up to 16 stores, widest
-/// first; beyond that `rep stosd` through es:di, the tail by `stosw` and
-/// `stosb`, as the old route's `_fill`.
+/// A constant memset expands as gcc's by-pieces rule says: stores, widest
+/// first, while they number under the CPU's ratio (the 486's `SET_RATIO`, 3:
+/// `i486_cost` in x86-tune-costs.h), else `rep stosd` through es:di, the tail
+/// by `stosw` and `stosb`.
 #[test]
 fn test_a_memset_is_stores_or_a_string_fill() {
     let text = |size: u32| {
@@ -903,39 +904,42 @@ define i16 @f() addrspace(1) {{
         )
     };
     assert_eq!(
-        listing(&text(7), "f"),
+        listing(&text(8), "f"),
         [
             "push bp",
             "mov bp, sp",
             "sub sp, 8",
             "L0_0:",
-            "mov dword ptr [bp-8], 16843009",
-            "mov word ptr [bp-4], 257",
-            "mov byte ptr [bp-2], 1",
+            "mov eax, 16843009",
+            "mov dword ptr [bp-8], eax",
+            "mov dword ptr [bp-4], eax",
             "mov ax, word ptr [bp-8]",
             "leave",
             "retf",
-        ]
+        ],
+        "two stores are under the ratio"
     );
     assert_eq!(
-        listing(&text(70), "f"),
+        listing(&text(7), "f"),
         [
             "push bp",
             "mov bp, sp",
-            "sub sp, 70",
+            "sub sp, 8",
             "push di",
             "L0_0:",
-            "lea di, [bp-70]",
+            "lea di, [bp-8]",
             "mov es, ss",
             "mov eax, 16843009",
-            "mov cx, 17",
+            "mov cx, 1",
             "rep stosd",
             "stosw",
-            "mov ax, word ptr [bp-70]",
+            "stosb",
+            "mov ax, word ptr [bp-8]",
             "pop di",
             "leave",
             "retf",
-        ]
+        ],
+        "a dword, a word and a byte are three stores, not under 3"
     );
 }
 
@@ -2649,28 +2653,29 @@ fn test_an_i64_to_a_float_is_filds_qword() {
     );
 }
 
-/// A zeroed 22-byte array descriptor was five `mov dword ptr [bp-n], 0`, 8
-/// bytes each: qbdemo's WHITEFADE spent 45 bytes clearing it.
+/// A zeroed array descriptor was `mov dword ptr [bp-n], 0` each, 8 bytes each:
+/// qbdemo's WHITEFADE spent 45 bytes clearing 22. Two dwords, the most the
+/// 486's ratio allows as stores, hold the zero in one register.
 #[test]
 fn test_a_memsets_dwords_store_one_register() {
     let text = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
 define i16 @f() addrspace(1) {
-  %a = alloca [12 x i8]
-  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 12, i1 false)
+  %a = alloca [8 x i8]
+  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 8, i1 false)
   %v = load i16, ptr %a
   ret i16 %v
 }
 ";
     let got = listing(text, "f");
     let stores: Vec<&String> = got.iter().filter(|line| line.starts_with("mov dword ptr")).collect();
-    assert_eq!(stores.len(), 3, "{got:?}");
+    assert_eq!(stores.len(), 2, "{got:?}");
     assert!(stores.iter().all(|line| line.ends_with(", eax")), "{got:?}");
 }
 
-/// Tuned for size, a memset is the smaller of its stores and one
-/// `rep stosb`: a 22-byte descriptor's six stores are 31 bytes, the fill
-/// 16. Always stores, qbdemo cleared nine descriptors so and grew 1.5% at
-/// -Os; as `rep stosd` and a tail the fill was 23.
+/// Tuned for size, a memset is stores only under gcc's size ratio (2 for zero,
+/// `CLEAR_RATIO(false)`, i386.h:1871), else one `rep stosb`: a 22-byte
+/// descriptor's six stores are 31 bytes, the fill 16 (qbdemo cleared nine
+/// descriptors with stores and grew 1.5% at -Os).
 #[test]
 fn test_a_memset_tuned_for_size_is_the_smaller_form() {
     let text = |size: u32| {
@@ -2700,8 +2705,9 @@ define i16 @f() addrspace(1) {{
     let filled = sized(22);
     assert!(filled.contains("rep stosb") && !filled.contains("stosd") && !filled.contains("stosw"), "{filled}");
     assert!(filled.contains("mov cx, 22"), "{filled}");
-    assert!(!sized(8).contains("stos"), "{}", sized(8));
-    assert!(!assembled_on("486", &text(22)).contains("stos"));
+    assert!(!sized(4).contains("stos"), "{}", sized(4));
+    assert!(sized(8).contains("rep stosb"), "{}", sized(8));
+    assert!(assembled_on("486", &text(22)).contains("rep stosd"));
 }
 
 /// A far global is `seg name:offset name`, and a memset of a variable

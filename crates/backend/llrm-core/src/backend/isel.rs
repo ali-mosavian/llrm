@@ -603,7 +603,8 @@ const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
 /// The width of a float value in LIR: x87's extended precision.
 const FLOAT: u32 = 10;
 
-/// The most stores a memset expands to, as LLVM's x86 MaxStoresPerMemset.
+/// The most stores a memset expands to where the CPU states no ratio, as
+/// LLVM's x86 MaxStoresPerMemset.
 const MEMSET_STORES: i64 = 16;
 
 /// The most load and store pairs a memcpy expands to, as LLVM's x86
@@ -5383,6 +5384,27 @@ impl Selector<'_, '_, '_> {
         setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
     }
 
+    /// Whether a constant memset of `length` bytes is stores rather than a
+    /// fill: gcc's by-pieces rule (`default_use_by_pieces_infrastructure_p`,
+    /// targhooks.cc:1983): the stores are as many as the dwords and the pieces
+    /// of the tail, and are taken while they number under the CPU's ratio
+    /// (`CLEAR_RATIO` for zero, `SET_RATIO` for any other byte; the size
+    /// table's when tuned for size), else the CPU's stringop algorithm, `rep
+    /// stos`. A CPU whose ratios the description does not state (gcc's
+    /// algorithm for it is a loop or a call) keeps `MEMSET_STORES`.
+    fn stored_by_pieces(
+        &self,
+        zero: bool,
+        length: i64,
+    ) -> bool {
+        let stores = length / 4 + (length % 4).count_ones() as i64;
+        let ratio = self.cpu.operations.pieces(self.cpu.size, zero);
+        match ratio {
+            0 => stores <= MEMSET_STORES && !(self.cpu.size && Self::stored_bytes(length) > FILL_BYTES),
+            ratio => stores < ratio,
+        }
+    }
+
     /// Whether a string operation names its segments: the target has selector
     /// registers.
     fn segmented(&self) -> bool {
@@ -5712,8 +5734,7 @@ impl Selector<'_, '_, '_> {
         let imm = |value: i64, width: u32| Loc::Imm(Imm { value, width, address: None });
         let constant = byte.zip(self.constant(length, self.address_bytes()));
         if let Some((byte, length)) = constant
-            && length / 4 + (length % 4).count_ones() as i64 <= MEMSET_STORES
-            && !(self.cpu.size && Self::stored_bytes(length) > FILL_BYTES)
+            && self.stored_by_pieces(byte == 0, length)
         {
             // Two or more dwords store one register, as LLVM keeps a
             // memset's value in one: a dword immediate is four more bytes

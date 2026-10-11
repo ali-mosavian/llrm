@@ -311,7 +311,11 @@ fn _profile(
 ) -> Result<Profile, String> {
     let table = arch.cpu_table(name).ok_or_else(|| format!("unknown CPU target: {name}"))?;
     let costs: IndexMap<&str, i64> = table.clocks.iter().map(|(form, clocks)| (form.as_str(), *clocks)).collect();
-    let operations = arch.operation_costs(&|form| costs[form], table.prefix);
+    let mut operations = arch.operation_costs(&|form| costs[form], table.prefix);
+    operations.pieces_set = table.set_ratio.unwrap_or(0);
+    operations.pieces_clear = table.clear_ratio.unwrap_or(0);
+    operations.pieces_set_size = table.set_ratio_size.unwrap_or(0);
+    operations.pieces_clear_size = table.clear_ratio_size.unwrap_or(0);
     Ok(Profile {
         pentium_pairing: table.pairing,
         address_forms: _address_forms(arch, &operations, table.prefix, table.lcp_stall),
