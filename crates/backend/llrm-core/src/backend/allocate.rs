@@ -2539,7 +2539,7 @@ pub fn _masks(
     frame: Option<RegId>,
 ) -> Masks {
     let mut out: Vec<Mask> = Vec::new();
-    let regs = body.regs();
+    let regs = frame.map(|_| body.regs());
     for block in &body.blocks {
         for one in &block.insns {
             let during: BTreeSet<RegId> = one.clobbers.iter().map(|register| _whole(*register)).collect();
@@ -2549,7 +2549,7 @@ pub fn _masks(
             let before: BTreeSet<RegId> = target::needs_data_group(one)
                 .then_some(segments.data)
                 .into_iter()
-                .chain(frame.filter(|_| crate::backend::framefree::needs_frame(one, regs)))
+                .chain(frame.filter(|_| regs.is_some_and(|regs| crate::backend::framefree::needs_frame(one, regs))))
                 .collect();
             if !during.is_empty() || !high.is_empty() || !before.is_empty() {
                 out.push(Mask { slot: index.at[&ranges::key(one)], during, high, before });
