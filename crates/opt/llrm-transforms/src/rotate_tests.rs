@@ -228,3 +228,65 @@ fn test_a_copied_header_guard_enters_the_loop_as_the_loop_stays_in() {
     let got = odds.probability(entry, into).unwrap();
     assert!((got - 124.0 / 128.0).abs() < 1e-9, "{got}");
 }
+
+/// `while (i < n && second) { ... }`: `second` reads `what`.
+fn two_tests(what: &str) -> String {
+    format!(
+        "define i16 @f(i16 %x, i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b3 ]
+  %v = phi i16 [ %x, %b0 ], [ %v2, %b3 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b4
+
+b2:
+  %t = and i16 {what}, 3
+  %c = icmp eq i16 %t, 3
+  br i1 %c, label %b4, label %b3
+
+b3:
+  %v2 = mul i16 %v, 3
+  %next = add i16 %i, 1
+  br label %b1
+
+b4:
+  %r = phi i16 [ %v, %b1 ], [ %i, %b2 ]
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// Conditional branches before the loop: the copies of its tests.
+fn guards(module: &Module) -> usize {
+    let function = llrm_analysis::testing::function(module, "f");
+    let inside = only_loop(function).body;
+    function
+        .layout()
+        .iter()
+        .filter(|&&block| !inside.contains(&cfg::id(block)))
+        .filter(|&&block| function.terminator(block).is_some_and(|last| function.instruction(last).operands.len() == 3))
+        .count()
+}
+
+/// gcc copies the chain of header tests, `while (a && b)` both, where `b` reads
+/// a counter (`should_duplicate_loop_header_p`, `copy_headers`): x_primes -O2
+/// +20% over gcc with the one.
+#[test]
+fn test_a_second_test_of_a_counter_is_copied_with_the_first() {
+    let (changed, module) = through(&two_tests("%i"), Rotate { proven: false, copy: true });
+    assert!(changed);
+    assert_eq!(guards(&module), 2);
+}
+
+/// A second test of a value the loop computes from itself is not (mandel's
+/// `xx + yy > 1024`: copied, it folds nothing and costs registers).
+#[test]
+fn test_a_second_test_of_a_loop_varying_value_is_not_copied() {
+    let (changed, module) = through(&two_tests("%v"), Rotate { proven: false, copy: true });
+    assert!(changed);
+    assert_eq!(guards(&module), 1);
+}
