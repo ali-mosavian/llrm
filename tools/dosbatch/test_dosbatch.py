@@ -153,3 +153,24 @@ class LoadedHostTests(unittest.TestCase):
                 one.kill()
                 one.wait()
         self.assertEqual(result.status, "ok", result.detail)
+
+    def test_a_binary_without_virtual_time_is_refused_and_not_run_with_a_flaky_budget(self):
+        """The pinned dosbox-x predated virtual time, so the setting was ignored and the busy-host test failed in every gate with
+        nothing said about why. A binary that cannot give it is named instead."""
+        import dataclasses
+        import stat
+
+        with tempfile.TemporaryDirectory() as where:
+            fake = Path(where) / "dosbox-x"
+            # a runner that ends the job having run 12345 instructions, whatever it was asked
+            fake.write_text('#!/bin/sh\necho \'{"ev":"end","reason":"limit","instructions":12345}\' >&"$DOSRUN_FD"\n')
+            fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+            self.assertIn("no `virtual time`", dosbatch.virtual_time_problem(fake) or "")
+            with mock.patch.object(dosbatch, "DOSBOX", fake), mock.patch.object(dosbatch, "_VIRTUAL", {}):
+                with self.assertRaises(dosbatch.BinaryError):
+                    dosbatch.run([dosbatch.Job("SPIN", "exe", Path(where) / "x")], Path(where) / "run")
+
+    def test_the_binary_the_tools_use_has_virtual_time(self):
+        if not dosbatch.DOSBOX.exists():
+            self.skipTest("no dosbox-x")
+        self.assertIsNone(dosbatch.virtual_time_problem(dosbatch.DOSBOX))

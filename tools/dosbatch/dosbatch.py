@@ -18,6 +18,7 @@ import json
 import threading
 import time
 import shutil
+import tempfile
 import tomllib
 import subprocess
 from collections.abc import Iterable
@@ -377,10 +378,54 @@ def _launch(command: list[str], work: Path, timeout: int, cap: int, **options) -
             raise subprocess.TimeoutExpired(command, timeout)
 
 
+class BinaryError(Exception):
+    """The emulator binary cannot run the jobs as asked: not a program's failure, so nothing retries it."""
+
+
+_VIRTUAL: dict[tuple[str, int], str | None] = {}
+
+
+def virtual_time_problem(binary: Path | None = None) -> str | None:
+    """Why `binary` cannot give CONF's virtual time, or None when it can. A binary without it ignores the setting
+    quietly and runs every `:ms` budget at the host's speed again: the busy-host flake, back, with nothing said. Asked
+    by running 50 ms of a spinning program: with virtual time that is exactly 50 x the rate in instructions."""
+    binary = binary or DOSBOX
+    stamp = (str(binary), binary.stat().st_mtime_ns) if binary.exists() else (str(binary), 0)
+    if stamp not in _VIRTUAL:
+        _VIRTUAL[stamp] = _probe_virtual_time(binary)
+    return _VIRTUAL[stamp]
+
+
+def _probe_virtual_time(binary: Path) -> str | None:
+    if not binary.exists():
+        return f"{binary} does not exist"
+    with tempfile.TemporaryDirectory() as where:
+        work = Path(where)
+        (work / "SPIN.COM").write_bytes(b"\xeb\xfe")
+        (work / "job.conf").write_text(CONF)
+        (work / "jobs.txt").write_text(f":ms 50\nmount c {work}\nc:\nSPIN.COM\n.\n")
+        with open(work / "jobs.txt") as stdin, open(work / "events.txt", "w") as sink:
+            try:
+                subprocess.run([str(binary), "-nolog", "-conf", str(work / "job.conf")], stdin=stdin, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),), timeout=120,
+                               env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
+            except subprocess.TimeoutExpired:
+                return f"{binary} did not finish a 50 ms job in 120 s"
+        ends = [json.loads(line) for line in (work / "events.txt").read_text().splitlines() if line.startswith('{"ev":"end"')]
+    expected = 50 * int(re.search(r"rate=(\d+)", CYCLES).group(1))
+    if not ends or abs(ends[0].get("instructions", 0) - expected) > expected // 10:
+        got = ends[0].get("instructions") if ends else "no end event"
+        return (f"{binary} ran 50 ms as {got} instructions, not about {expected}: it has no `virtual time` (or no dosrun job "
+                f"runner). Build the fork's dosrun branch at the commit toolchain/dosrunbuild.sh pins, or set DOSBOX_BIN to one")
+    return None
+
+
 def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF, cap: int = OUTPUT_CAP) -> dict[str, Result]:
     """Every job's result. One dosrun launch: a first job builds (BC, LINK),
     then each program runs as its own job with `budget_ms` of emulated time, so
     a hang ends that program alone."""
+    if "virtual time=true" in conf and (problem := virtual_time_problem()):
+        raise BinaryError(problem)
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
