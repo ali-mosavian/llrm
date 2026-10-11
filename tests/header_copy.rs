@@ -104,12 +104,11 @@ fn test_a_fixed_point_product_in_a_rotated_loop_is_still_narrowed() {
 }
 
 /// With the header copied, mandel's counter leaves on `i + 1 < 32` false with
-/// 32. The exit's phi read the stepped counter, and the 32 it was given was
-///     made
-/// in the loop's last block (`mov eax, 32; inc edx; je`): every trip, for an
-/// exit taken once.
+/// 32. The exit read the stepped counter, which kept the old one alive past its
+/// step: `lea eax, [edx+1]; or eax, eax; je; mov edx, eax` for the trip
+/// where `inc edx; je` does.
 #[test]
-fn test_a_counted_exits_number_is_not_made_in_the_loop_each_trip() {
+fn test_a_counted_exits_number_lets_its_counter_step_in_place() {
     let source = format!("{}/bench/mandel/mandel.nib", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
@@ -120,12 +119,6 @@ fn test_a_counted_exits_number_is_not_made_in_the_loop_each_trip() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let before_a_test = lines
-        .windows(3)
-        .any(
-            |three| three[0].starts_with("mov ")
-                && three[0].ends_with(", 32")
-                && three[1..].iter().any(|one| one.starts_with("je ")),
-        );
-    assert!(!before_a_test, "{text}");
+    let in_place = lines.windows(2).any(|pair| pair[0].starts_with("inc e") && pair[1].starts_with("je "));
+    assert!(in_place, "{text}");
 }
