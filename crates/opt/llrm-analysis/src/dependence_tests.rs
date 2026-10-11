@@ -15,7 +15,7 @@ fn access(
     subscripts: &[Subscript],
     write: bool,
 ) -> Access {
-    Access { subscripts: subscripts.to_vec(), width: 2, write }
+    Access { object: 0, subscripts: subscripts.to_vec(), symbols: Vec::new(), width: 2, write }
 }
 
 /// `px[j] = px[j] + vx[j]`, the 100 passes of bench/particle: the repeat of
@@ -70,4 +70,18 @@ fn nothing_goes_away_so_nothing_is_jammed() {
     let plan = factor(&nest, 4, 1, Some(8));
     assert_eq!((plan.removed, plan.profit), (0, 1), "{plan:?}");
     assert!(plan.unroll < 2, "{plan:?}");
+}
+
+/// Two arrays are two objects: a write to one never orders a read of the
+/// other, whatever their subscripts, and the same subscripts of one array and
+/// of a second symbolic base are not compared.
+#[test]
+fn accesses_to_different_objects_do_not_depend() {
+    let (mut one, mut other) = (access(&[sub(0, 0, 1)], true), access(&[sub(0, 0, 1)], false));
+    other.object = 1;
+    assert_eq!(distances(&one, &other, 4, None), Distances::Independent);
+    other.object = 0;
+    other.symbols = vec![(7, 1)];
+    one.symbols = vec![(8, 1)];
+    assert_eq!(distances(&one, &other, 4, None), Distances::Unknown);
 }

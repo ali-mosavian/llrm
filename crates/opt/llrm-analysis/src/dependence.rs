@@ -25,7 +25,12 @@ pub struct Subscript {
 /// functions; `a[i][j]` has two, a flattened address one), and its width.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Access {
+    /// The object accessed: accesses to different objects never depend.
+    pub object: u64,
     pub subscripts: Vec<Subscript>,
+    /// Terms that do not change in the nest (a value, its coefficient): two
+    /// accesses whose terms differ are a distance the nest does not know.
+    pub symbols: Vec<(u32, i64)>,
     pub width: u32,
     pub write: bool,
 }
@@ -59,8 +64,11 @@ pub fn distances(
     limit: i64,
     inner_trips: Option<i64>,
 ) -> Distances {
+    if first.object != second.object {
+        return Distances::Independent;
+    }
     let coefficients = |one: &Access| one.subscripts.iter().map(|sub| (sub.outer, sub.inner)).collect::<Vec<_>>();
-    if first.width != second.width || coefficients(first) != coefficients(second) {
+    if first.symbols != second.symbols || first.width != second.width || coefficients(first) != coefficients(second) {
         return Distances::Unknown;
     }
     let moves_outer = first.subscripts.iter().any(|sub| sub.outer != 0);
