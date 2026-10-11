@@ -26,6 +26,7 @@ import importlib.util
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,11 +43,47 @@ CACHE = Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/me
 PROFILE = os.environ.get("LLRM_MEASURE_PROFILE") or "release"
 
 
+def repository_of(root: Path) -> Path:
+    """The repository `root` is a working tree of: its common git directory, which every worktree of it shares (so does every commit made in one),
+    else `root` itself where it is not a repository."""
+    done = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=root, capture_output=True, text=True) if root.is_dir() else None
+    if done is None or done.returncode:
+        return root
+    return (root / done.stdout.strip()).resolve()
+
+
 def build_tree(root: Path = ROOT, env: dict | None = None) -> Path:
-    """Where the base is built: `LLRM_MEASURE_BUILD`, else a tree of this repository's own. Two clones share a tree no `git checkout` of
-    the other's commit can enter ('unable to read tree'), so each is keyed by the path of its working tree."""
+    """Where the base is built: `LLRM_MEASURE_BUILD`, else a tree of this repository's own: one for all its worktrees (a tree for each was
+    10-37 GB each, 489 GB of 48 on one host). Two clones share a tree no `git checkout` of the other's commit can enter ('unable to read
+    tree'), so each repository has its own, keyed by its git directory."""
     env = os.environ if env is None else env
-    return Path(env.get("LLRM_MEASURE_BUILD") or Path.home() / ".cache/llrm/measure-build" / hashlib.sha256(str(root).encode()).hexdigest()[:10])
+    return Path(env.get("LLRM_MEASURE_BUILD") or BUILDS / hashlib.sha256(str(repository_of(root)).encode()).hexdigest()[:10])
+
+
+BUILDS = Path.home() / ".cache/llrm/measure-build"
+# The builds kept, least recently used out first past this many bytes (LLRM_MEASURE_BUILD_CAP_GB): a build tree is 10-37 GB.
+BUILD_CAP = int(float(os.environ.get("LLRM_MEASURE_BUILD_CAP_GB") or 120) * 2**30)
+
+
+def size_of(tree: Path) -> int:
+    return int(subprocess.run(["du", "-sb", str(tree)], capture_output=True, text=True, check=True).stdout.split()[0])
+
+
+def pruned(parent: Path, keep: Path, cap: int) -> list[Path]:
+    """Trees under `parent` other than `keep`, least recently used first, removed until what is left (with `keep`) is within `cap` bytes.
+    A tree's use is the time of its `.used` file, which `built` touches."""
+    trees = [t for t in parent.iterdir() if t.is_dir() and t != keep] if parent.is_dir() else []
+    used = lambda t: (t / ".used").stat().st_mtime if (t / ".used").exists() else t.stat().st_mtime
+    sizes = {t: size_of(t) for t in trees}
+    total = sum(sizes.values()) + (size_of(keep) if keep.exists() else 0)
+    gone = []
+    for tree in sorted(trees, key=used):
+        if total <= cap:
+            break
+        shutil.rmtree(tree, ignore_errors=True)
+        total -= sizes[tree]
+        gone.append(tree)
+    return gone
 
 
 BUILD = build_tree()
@@ -143,7 +180,7 @@ def checked_out(sha: str, tree: Path, source: Path = ROOT) -> Path:
         if origin.returncode == 0:
             git("remote", "add", "upstream", origin.stdout.strip(), cwd=tree)
     if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=tree, capture_output=True).returncode:
-        for remote in ("origin", "upstream"):
+        for remote in (str(source), "origin", "upstream"):
             if subprocess.run(["git", "fetch", "--quiet", remote, sha], cwd=tree, capture_output=True).returncode == 0:
                 break
         else:
@@ -155,6 +192,10 @@ def checked_out(sha: str, tree: Path, source: Path = ROOT) -> Path:
 def built(sha: str) -> Path:
     """`sha` built in a tree and target directory of its own (reused, so each build is an increment); its release directory."""
     BUILD.mkdir(parents=True, exist_ok=True)
+    (BUILD / ".used").touch()
+    if BUILD.parent == BUILDS:
+        for tree in pruned(BUILDS, BUILD, BUILD_CAP):
+            print(f"measure: removed the build tree {tree.name} to keep the cache within {BUILD_CAP >> 30} GB", flush=True)
     tree = checked_out(sha, BUILD / "tree")
     env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
     env.pop("LLRM_BIN", None)
