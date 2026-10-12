@@ -448,6 +448,12 @@ def _graph(nodes, edges, groups, direction, cv: Canvas, pre: str):
         need = tw(e.label) + 8 + 28 if right else nlines(e.label) * LH + 4 + 24
         borders = len(set(items[e.a].gset) ^ set(items[e.b].gset))
         need += borders * (GP if right else GP + CAPH)
+        if right:
+            for gi in set(items[e.a].gset) ^ set(items[e.b].gset):
+                held = {it.layer for layer in layers for it in layer if it.node and gi in it.gset}
+                if len(held) == 1:
+                    span = max(it.ms for it in layers[next(iter(held))])
+                    need += max(0.0, tw(groups[gi].caption) + 20 - (span + 2 * GP))
         gaps[rank[e.a]] = max(gaps[rank[e.a]], need)
     ms = [max(it.ms for it in layer) for layer in layers]
     start, end = [], []
@@ -648,7 +654,7 @@ def _rounded(pts, r, cv) -> str:
 
 def _place_label(cv, e, ei, ca, cb, m0, m1, right, xy, placed, borders=()):
     w, h = tw(e.label) + 8, nlines(e.label) * LH + 4
-    ts = (0.5, 0.3, 0.7, 0.15, 0.85, 0.05, 0.95)
+    ts = sorted((k / 40 for k in range(1, 40)), key=lambda t: abs(t - 0.5))
     opts = [(t, s) for t in ts for s in ((-1, 1) if right else (1, -1))]
     chosen = None
     for t, side in opts:

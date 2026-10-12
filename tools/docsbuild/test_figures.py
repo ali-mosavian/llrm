@@ -406,3 +406,13 @@ def test_fan_out_of_labelled_edges_keeps_every_label_inside_the_gap():
     """Four labelled edges from one node pushed one label down onto its target node (docs/abi/c.md)."""
     spec = 'kind: graph\nnode s "source"\n' + "".join(f'node t{i} "target {i}"\nedge s -> t{i} "label number {i}"\n' for i in range(4))
     check_invariants(build(spec))
+
+
+def test_a_wide_group_caption_does_not_squeeze_the_label_of_an_edge_leaving_the_group():
+    """docs/architecture/split.md: the caption widened the group into the gap and the label crossed its border."""
+    spec = (
+        'kind: graph\ndir: right\nnode a "A"\nnode b "B"\nnode c "C"\n'
+        'edge a -> c "short"\nedge b -> c "decode, lift"\n'
+        'group g "A very wide caption\\nfor a narrow group": a b\ngroup h "H": c\n'
+    )
+    check_invariants(build(spec))
