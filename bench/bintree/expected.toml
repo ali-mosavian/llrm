@@ -1,15 +1,15 @@
-reason = "#1446: a phi whose arms are one address is that address, so the exit block's loads fold it (c -O2/-Os -2.5k instructions, -2 bytes). #1431: gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
+reason = "branch odds combine as gcc 13.4 does (predict.cc combine_predictions_for_bb), a build for size keeps phi copies in the predecessor, an edge copy must win by a tenth, a recursive call is not exceptional against a returning base case; worse rows: bintree -Os instructions +1.3..1.6% (clocks +0.8%)"
 blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 144796
 memory_operands = 62573
-code_bytes = 706
+code_bytes = 708
 data_bytes = 17
 bss_bytes = 0
 
 [bas.Os]
-instructions = 141276
+instructions = 143170
 memory_operands = 63940
 code_bytes = 636
 data_bytes = 17
@@ -23,7 +23,7 @@ data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 52744
+instructions = 52743
 memory_operands = 12581
 code_bytes = 241
 data_bytes = 0
@@ -37,7 +37,7 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 116145
+instructions = 118039
 memory_operands = 28850
 code_bytes = 445
 data_bytes = 0

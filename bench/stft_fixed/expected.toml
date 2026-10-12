@@ -1,4 +1,4 @@
-reason = "a tail is not copied over the likelier way of the branch before its jump: parity/qbsp c -O2 instructions +1.9% (266 -> 271, clocks +0.64%), parity/qbsp nib -O2 code -12 bytes"
+reason = "branch odds combine as gcc 13.4 does (predict.cc combine_predictions_for_bb), a build for size keeps phi copies in the predecessor, an edge copy must win by a tenth, a recursive call is not exceptional against a returning base case; worse rows: bintree -Os instructions +1.3..1.6% (clocks +0.8%)"
 blessed = "2026-10-12"
 
 [bas.O2]
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 1263.1091
 
 [c.O2]
-code_bytes = 1198
+code_bytes = 1193
 data_bytes = 15
 bss_bytes = 5122
 kernel_ms = 518.042
@@ -26,7 +26,7 @@ bss_bytes = 5122
 kernel_ms = 524.8372
 
 [nib.O2]
-code_bytes = 2546
+code_bytes = 2552
 data_bytes = 5149
 bss_bytes = 0
 kernel_ms = 810.366
