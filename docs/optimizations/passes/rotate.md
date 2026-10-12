@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/rotate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/rotate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/rotate.rs sha256:b607296e2ba7f7931adc1cff5a941ed72f1f608bb5868d3282b853dfc9a5ce41 -->
+<!-- src: crates/opt/llrm-transforms/src/rotate.rs sha256:37bfa7352733079fccf06a00350e33ff9244e9b2a434304b9eacb90b00d1cc03 -->
 
 # rotate
 
@@ -151,10 +151,11 @@ always runs, last of the loop passes, after `window`. `LLRM_DEBUG=census`
 prints what the trip-count analyses prove per loop, to compare builds with
 and without `-ftree-ch`.
 
-On by default is the user's decision of 2026-10-12 (docs/reference/levels.md):
-compile +9.3% at -O1 and +14.0% at -O2 over the vsgcc programs, the m16 bench
-rows it moves (#1557), and steeper slopes of rotate, loopslots and `analysis
-registers` on nests and many-loop functions (#1559).
+On by default is the user's decision of 2026-10-12
+(docs/reference/levels.md): compile +9.3% at -O1 and +14.0% at -O2 over the
+vsgcc programs, the m16 bench rows it moves (#1557), and steeper slopes of
+rotate, loopslots and `analysis registers` on nests and many-loop functions
+(#1559).
 
 ## Keeps
 Nothing where it changes a body.
