@@ -1,5 +1,27 @@
 # Compile-time scaling, main aa93a260 (tinytim, instructions:u, median of 3, 6 axes run 6 at a time)
 
+**Current llrm slopes (2026-10-11, main d9afbda99 + #1472, `llrm-c -m32 -O2`, total instructions:u per doubling of N).** The tables below are of aa93a260 and are
+stale where this says otherwise; gcc's columns have not been re-run.
+
+| axis | N, 2N, 4N | Minstr | step 1 | step 2 | note |
+|---|---|---|---|---|---|
+| functions | 128..512 | 2,884 / 5,785 / 11,707 | x2.01 | x2.02 | linear |
+| straight | 1024..4096 | 3,252 / 6,493 / 13,010 | x2.00 | x2.00 | linear (was 1.40 slope at -O2) |
+| mulconst | 128..512 | 748 / 1,463 / 2,928 | x1.96 | x2.00 | linear |
+| callers | 64..256 | 984 / 1,914 / 3,779 | x1.95 | x1.97 | linear |
+| live | 64..256 | 763 / 1,714 / 4,437 | x2.25 | x2.59 | |
+| chain | 64..256 | 627 / 1,289 / 3,245 | x2.06 | x2.52 | |
+| cases | 128..512 | 2,302 / 5,558 / 14,322 | x2.41 | x2.58 | |
+| cells | 64..256 | 660 / 1,671 / 4,690 | x2.53 | x2.81 | |
+| branches | 128..512 | 3,710 / 9,073 / 23,113 | x2.45 | x2.55 | spill rounds: siblings interference, short updates, recolor |
+| fjoins | 64..256 | 2,858 / 6,840 / 18,076 | x2.39 | x2.64 | |
+| joins | 64..256 | 4,065 / 10,649 / 31,337 (26,442 with #1472) | x2.62 | x2.94 (x2.60) | `storedhomes::held` solved every value's liveness per spill round |
+| nest | 16..64 | 788 / 2,415 / 7,628 (`-fno-tree-ch`); 1,277 / 5,091 / 18,259 (`-ftree-ch`) | x3.07 / x3.99 | x3.16 / x3.59 | per-loop passes over a nest's own body; 15,740 with #1462 and the products change |
+
+Rows past x2.5 at the largest step, own Minstr, joins 128 -> 256: gvn 890 -> 2,883, lir coalesce 431 -> 1,637, mir homes 315 -> 1,314, split placed 386 -> 1,431,
+through-memory 335 -> 1,307, dse 349 -> 1,265, decide 483 -> 1,427, sroa 255 -> 943, isel 299 -> 884.
+
+
 Slopes are over the sizes llrm reached; "top 4" is the largest four. "Total" ratios are whole-process instructions; "net" subtract each compiler's empty-file cost. Pass tables: steps of llrm -O2 above exponent 1.15 (own ms, wall, so approximate). `mulconst` is N multiplies by large odd constants (#951: isel's multiply search); `straight` and `branches` use small multipliers. Regenerate: `scaling.py run --programs && scaling.py report`.
 
 ### functions

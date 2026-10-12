@@ -777,3 +777,126 @@ def test_promote_places_phis_only_where_a_cell_is_live_and_keeps_to_the_cells_a_
     small, big = (own[label].get("mir promote", 0.0) - own["empty"].get("mir promote", 0.0) for label in ("n", "2n"))
     assert small > 5.0, f"premise: promote ran ({small:.1f} Minstr)"
     assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_the_counted_proofs_ask_the_congruences_of_the_body_once_not_once_for_each_proof(tmp_path):
+    """unrolled(15) and (31) at -O2 (a quicksort's recursion unrolled: 15 and 31 loops in one function): `analysis counted` proved each loop's
+    trips by asking `alias::congruences` of the WHOLE function (a fixed point over every instruction) at each proof, once for each loop of the
+    function: its own work read 2D/D = 6.7, 7.5 (11 / 72 / 541 Minstr at 7, 15, 31 loops), cubic in the loops. Asked once for the proofs of a
+    body it reads 2.9, 3.2. A step above 4.5 fails; a few Minstr of start-up are allowed."""
+    own = {}
+    for label, loops in (("empty", 0), ("d4", 15), ("d5", 31)):
+        source = tmp_path / f"unrolled_{label}.c"
+        source.write_text("" if loops == 0 else scaling.unrolled(loops))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("analysis counted", 0.0) - own["empty"].get("analysis counted", 0.0) for label in ("d4", "d5"))
+    assert small > 5.0, f"premise: counted ran ({small:.1f} Minstr)"
+    assert big <= 4.5 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_loopsimplify_does_not_derive_the_shape_of_the_function_again_for_each_loop_it_changes(tmp_path):
+    """nest(N) at -O2 with -ftree-ch: every loop's exit has a second predecessor (the copied header's guard), so `mir loopsimplify` groups
+    every loop's blocks, and after each loop made a new dominance and loop forest of the whole function, twice (the N^3 of N loops, each
+    a pass over blocks times depth): its own work read 29 / 171 / 1,151 Minstr at N=16, 32, 64, a step of 6.7. The loops kept up to
+    date from the blocks it makes: 12 / 46 / 184, a step of 4.0 (each loop still reads the function's graph: N^2). A step above 4.6 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 32), ("2n", 64)):
+        source = tmp_path / f"nest_{label}.c"
+        source.write_text("" if size == 0 else scaling.nest(size))
+        command = gate.levels_time.command("llrm", "O2", source)
+        command.insert(1, "-ftree-ch")
+        own[label] = gate.own_work(command)
+    small, big = (own[label].get("mir loopsimplify", 0.0) - own["empty"].get("mir loopsimplify", 0.0) for label in ("n", "2n"))
+    assert small > 5.0, f"premise: loopsimplify ran ({small:.1f} Minstr)"
+    assert big <= 4.6 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_a_spill_round_reads_the_homes_by_the_values_it_asks_not_by_the_liveness_of_every_value(tmp_path):
+    """joins(N) at -O2: `regalloc spill` read which stored homes still held (`storedhomes::held`) by solving the liveness of every value in the
+    body and walking every instruction, for each of its rounds (388 at N=256) to read the few homes among them: its own work read 89 / 780 /
+    6,354 Minstr at N=64, 128, 256, a step of 8.7. Asked of the values it reads, where they occur: 48 / 280 / 1,444, a step of 5.8. A
+    step above 7.0 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 64), ("2n", 128)):
+        source = tmp_path / f"joins_{label}.c"
+        source.write_text("" if size == 0 else scaling.joins(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("regalloc spill", 0.0) - own["empty"].get("regalloc spill", 0.0) for label in ("n", "2n"))
+    assert small > 5.0, f"premise: the allocator spilled ({small:.1f} Minstr)"
+    assert big <= 7.0 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_isel_does_not_narrow_each_blocks_edges_by_the_edges_it_already_has(tmp_path):
+    """joins(N) at -O2: `ranges::scoped`, which isel asks of every function, took the solve's facts of each block (already the edges that dominate
+    it) and narrowed them, entry by entry, by the same edges a second time: for a chain of N branches every block holds all the edges above it, N^2
+    no-op narrowings (`isel` own work 110 / 299 / 884 Minstr at N=64, 128, 256, a step of 2.7, 3.0). Left alone, the blocks no counted loop holds:
+    82 / 171 / 378, a step of 2.1, 2.2. A step above 2.4 fails; a few Minstr of start-up are allowed."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 64), ("2n", 128)):
+        source = tmp_path / f"joins_{label}.c"
+        source.write_text("" if size == 0 else scaling.joins(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("isel", 0.0) - own["empty"].get("isel", 0.0) for label in ("n", "2n"))
+    assert small > 5.0, f"premise: isel ran ({small:.1f} Minstr)"
+    assert big <= 2.4 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_a_compile_of_one_small_function_does_not_build_a_table_of_the_instruction_forms_names(tmp_path):
+    """`select::_code` built a map of owned names of iced's five thousand instruction forms in the first call of every process: `lir duplicated
+    returns`, the first to ask by name, read 5.0 Minstr of the 19 a compile of `int f(int a, int b) { return a * 3 + b; }` costs at -O2. The names are
+    hashed by the build now: 1.0 (the encoder's own first use). A step above 2.0 fails."""
+    source = tmp_path / "one.c"
+    source.write_text("int f(int a, int b) { return a * 3 + b; }\n")
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["lir duplicated returns"] <= 2.0, f"{own['lir duplicated returns']:.2f} Minstr"
+
+
+def test_call_effects_do_not_build_the_modules_callbacks_again_for_each_call(tmp_path):
+    """N functions whose addresses are taken (a table of callbacks that write a global each) and a function with N calls through a pointer: each
+    call may call back, and `analysis call-effects` put the callbacks' N written slices into the call's own set, a tree, to compare and
+    list them: N^2 inserts (QCport's host: 186 slices in each of 9,018 sites, 3.3 Minstr-thousands of 17 G). Its own work read 73 Minstr at
+    N=100 and 276 at 200, a step of 3.8. The sets are put together once and the calls with the same others share the list: 16.6 and 33.2,
+    a step of 2.0. A step above 2.8 fails; a few Minstr of start-up are allowed."""
+
+    def program(n):
+        out = ["extern void report(long value);\n"]
+        for i in range(n):
+            out.append(f"int g{i};\nstatic void cb{i}(void) {{ g{i} += {i + 1}; }}\n")
+        out.append("void (*table[%d])(void) = {%s};\n" % (n, ",".join(f"cb{i}" for i in range(n))))
+        out.append("void (*hook)(void);\nlong run(int k)\n{\n    long t = 0;\n")
+        out += [f"    hook(); t += g{j} + k;\n" for j in range(n)]
+        out.append("    return t;\n}\nint main(void) { report(run(1)); return 0; }\n")
+        return "".join(out)
+
+    own = {}
+    for label, size in (("empty", 0), ("n", 100), ("2n", 200)):
+        source = tmp_path / f"callbacks_{label}.c"
+        source.write_text("" if size == 0 else program(size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("analysis call-effects", 0.0) - own["empty"].get("analysis call-effects", 0.0) for label in ("n", "2n"))
+    assert small > 5.0, f"premise: call-effects ran ({small:.1f} Minstr)"
+    assert big <= 2.8 * small + 5.0, f"{small:.1f} -> {big:.1f} Minstr"
+
+
+def test_a_summary_of_a_function_that_calls_back_does_not_hold_the_callbacks_as_a_set_of_its_own(tmp_path):
+    """150 functions whose addresses are taken (callbacks writing a global each) and 100 functions that each call through a pointer, which may
+    call back: each one's summary held the callbacks' 150 slices in a tree set of its own, built, compared, filtered and coalesced at every
+    visit of the fixed point, and instantiated at every call. `summaries visit` read 321 Minstr; the callbacks held as the one run every
+    summary refers to: 11.5. A bound of 60 fails the first and passes the second with a margin of five."""
+
+    def program(callbacks, callers):
+        out = ["extern void report(long value);\n"]
+        for i in range(callbacks):
+            out.append(f"int g{i};\nstatic void cb{i}(void) {{ g{i} += {i + 1}; }}\n")
+        out.append("void (*table[%d])(void) = {%s};\n" % (callbacks, ",".join(f"cb{i}" for i in range(callbacks))))
+        out.append("void (*hook)(void);\n")
+        out += [f"long run{j}(int k) {{ hook(); return g{j % callbacks} + k; }}\n" for j in range(callers)]
+        out.append("int main(void) { long t = 0;\n" + "".join(f"    t += run{j}({j});\n" for j in range(callers)))
+        out.append("    report(t); return 0; }\n")
+        return "".join(out)
+
+    source = tmp_path / "callers.c"
+    source.write_text(program(150, 100))
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["summaries visit"] > 1.0, f"premise: the fixed point visited ({own['summaries visit']:.1f} Minstr)"
+    assert own["summaries visit"] <= 60.0, f"{own['summaries visit']:.1f} Minstr"

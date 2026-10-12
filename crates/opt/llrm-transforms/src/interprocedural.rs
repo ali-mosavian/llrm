@@ -1708,7 +1708,7 @@ pub fn stamped(
             if !Facts::of(attrs).no_capture() {
                 attrs.extend(Fact::NoCapture.attribute());
             }
-            let through = |slices: &BTreeSet<Slice>| {
+            let through = |slices: &llrm_analysis::sliceset::SliceSet| {
                 slices
                     .iter()
                     .any(
@@ -1807,7 +1807,7 @@ fn _narrowed(
     hidden: Effects,
 ) {
     let local = |one: &Slice| matches!(one.object.kind, MemoryKind::Frame | MemoryKind::Stack);
-    let found = |slices: &BTreeSet<Slice>, parameter: bool| {
+    let found = |slices: &llrm_analysis::sliceset::SliceSet, parameter: bool| {
         slices.iter().filter(|one| !local(one)).any(|one| (one.object.kind == MemoryKind::Parameter) == parameter)
     };
     let (stated_arguments, stated_other) = llrm_mir::memory::located(attrs);

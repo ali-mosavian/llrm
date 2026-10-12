@@ -857,20 +857,25 @@ pub fn propagated_edges(
     // `to` is a loop header and `from` is in its loop.
     let backward =
         |from: i64, to: i64| headed.get(&to).into_iter().flatten().any(|&index| cycles[index].body.contains(&from));
-    // Where each block is in `order`, to take a loop's blocks in order without
-    // walking the function's.
-    let position: BTreeMap<i64, usize> = order.iter().enumerate().map(|(index, &at)| (at, index)).collect();
+    // Each loop's reachable blocks in `order`, found in one pass over it: a
+    // nest of N loops sorted each loop's body by its place, N times over
+    // the same blocks.
+    let mut inside_of: Vec<Vec<i64>> = vec![Vec::new(); cycles.len()];
+    for &at in order {
+        for &index in around.get(&at).into_iter().flatten() {
+            inside_of[index].push(at);
+        }
+    }
     // Innermost first: an inner header's scale is known when its outer loop is
     // weighed.
     let mut scale: BTreeMap<i64, f64> = BTreeMap::new();
-    for found in cycles {
+    for (index, found) in cycles.iter().enumerate() {
         let weighed = |edge: &dyn Fn(i64, i64) -> f64, scale: &BTreeMap<i64, f64>| -> BTreeMap<i64, f64> {
             let mut mass: BTreeMap<i64, f64> = BTreeMap::new();
-            let mut inside: Vec<i64> = found.body.iter().copied().filter(|at| position.contains_key(at)).collect();
-            inside.sort_unstable_by_key(|at| position[at]);
+            let inside = &inside_of[index];
             #[cfg(test)]
             VISITS.with(|visits| visits.set(visits.get() + found.body.len()));
-            for at in inside {
+            for &at in inside {
                 let entering: f64 = if at == found.header {
                     1.0
                 } else {
