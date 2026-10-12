@@ -720,3 +720,39 @@ def test_what_a_runner_lacks_is_a_named_skip_and_what_it_needs_is_installed(tmp_
     for test in ("test_qb32.py", "test_qbgfxspeed.py", "test_qbgfxfill.py", "test_qbgorilla.py", "test_qbkeys.py", "test_qbstrblocks.py", "test_qbentries.py"):
         assert declared.get(f"tools/dosbatch/{test}") is None, test
     assert "gcc-multilib" in (gate.ROOT / ".github/actions/setup/action.yml").read_text()
+
+
+def test_wdump_is_built_from_the_pinned_tree_cached_and_required_in_ci(tmp_path):
+    """tests/dwarf.rs skipped three tests on every runner for want of Open Watcom's wdump. toolchain/wdump.sh builds it from the tree
+    owshim/ow-commit pins (the one wccq is relinked from, about a second once it is cached) and prints its path; the setup action exports
+    that as WDUMP with LLRM_REQUIRE_WDUMP, so a build that failed is a red job and not a skip."""
+    import os
+    import subprocess as sp
+
+    commit = (gate.ROOT / "toolchain/owshim/ow-commit").read_text().strip()
+    tree = tmp_path / "llrm" / f"open-watcom-v2-{commit}"
+    (tree / "build/binbuild").mkdir(parents=True)
+    (tree / "bld/exedump").mkdir(parents=True)
+    (tree / "bld/exedump/binmake").write_text("")
+    (tree / ".complete").write_text("")
+    (tree / "setvars.sh").write_text("")
+    # A wmake that "builds" wdump.exe, once, in the directory it is run in.
+    wmake = tree / "build/binbuild/wmake"
+    wmake.write_text("#!/bin/sh\necho built >> \"$OWROOT_BUILDS\"\necho a-wdump > wdump.exe\n")
+    wmake.chmod(0o755)
+    env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path), "OWROOT_BUILDS": str(tmp_path / "builds")}
+    env.pop("OWROOT", None)
+    script = str(gate.ROOT / "toolchain/wdump.sh")
+    made = sp.run(["sh", script], capture_output=True, text=True, env=env)
+    assert made.returncode == 0, made.stderr
+    path = Path(made.stdout.strip())
+    assert path == tmp_path / "llrm" / f"wdump-{commit}" / "wdump" and path.read_text() == "a-wdump\n"
+    assert sp.run(["sh", script], capture_output=True, text=True, env=env).stdout.strip() == str(path)
+    assert (tmp_path / "builds").read_text() == "built\n", "the second call built it again"
+    # a build that fails fails the script: no path, nothing cached
+    path.parent.joinpath(".complete").unlink()
+    wmake.write_text("#!/bin/sh\nexit 1\n")
+    assert sp.run(["sh", script], capture_output=True, text=True, env=env).returncode != 0
+    action = (gate.ROOT / ".github/actions/setup/action.yml").read_text()
+    assert "sh toolchain/wdump.sh" in action and 'echo "WDUMP=$wdump" >> "$GITHUB_ENV"' in action and "LLRM_REQUIRE_WDUMP=1" in action
+    assert action.count("'toolchain/wdump.sh'") == 2, "both cache keys hold the script that builds it"

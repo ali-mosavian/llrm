@@ -1,0 +1,35 @@
+#!/bin/sh
+# Build Open Watcom's wdump, the dump tool tests/dwarf.rs reads the 16-bit DWARF images with, and print its path.
+# Built as a tool from the tree owshim/ow-commit pins (the same tree wccq is relinked from, cloned and bootstrapped once,
+# cached per commit under ~/.cache/llrm): its bootstrap makefile and the host compiler, a second on a bootstrapped tree.
+# OWROOT is an Open Watcom tree: the user's own when set. Nothing of Open Watcom's is copied into this repository.
+set -eu
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+. "$HERE/cache.sh"
+OW_COMMIT=$(cat "$HERE/owshim/ow-commit")
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/llrm"
+
+# As owshim/build.sh makes it: the same commit, bootstrapped the same way, so whichever runs first leaves the tree the other uses.
+ow_tree() {
+    git clone -q --filter=blob:none https://github.com/open-watcom/open-watcom-v2.git "$1"
+    git -C "$1" checkout -q "$OW_COMMIT"
+    ( set +u; cd "$1" && . ./setvars.sh && ./build.sh boot )
+}
+if [ -z "${OWROOT:-}" ]; then
+    OWROOT="$CACHE/open-watcom-v2-$OW_COMMIT"
+    cached "$OWROOT" ow_tree
+elif [ ! -x "$OWROOT/build/binbuild/wmake" ]; then
+    ( set +u; cd "$OWROOT" && . ./setvars.sh && ./build.sh boot )
+fi
+
+# wdump DIR: bld/exedump built with the bootstrapped wmake and the host compiler, as the front end's objects are, and copied to DIR.
+wdump() {
+    # `cached` runs this in an `if`, where `set -e` is off: each step says so itself, and a wdump.exe left by an earlier build is not one.
+    rm -f "$OWROOT/bld/exedump/binbuild/wdump.exe"
+    ( set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && cd bld/exedump && mkdir -p binbuild && cd binbuild \
+        && "$OWROOT/build/binbuild/wmake" -h -f ../binmake bootstrap=1 >&2 ) || return 1
+    cp "$OWROOT/bld/exedump/binbuild/wdump.exe" "$1/wdump"
+}
+cached "$CACHE/wdump-$OW_COMMIT" wdump
+echo "$CACHE/wdump-$OW_COMMIT/wdump"
