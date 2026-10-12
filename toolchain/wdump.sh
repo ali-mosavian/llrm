@@ -29,7 +29,15 @@ wdump() {
     rm -f "$OWROOT/bld/exedump/binbuild/wdump.exe"
     ( set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && cd bld/exedump && mkdir -p binbuild && cd binbuild \
         && "$OWROOT/build/binbuild/wmake" -h -f ../binmake bootstrap=1 >&2 ) || return 1
-    cp "$OWROOT/bld/exedump/binbuild/wdump.exe" "$1/wdump"
+    # Open Watcom's makefile names a host build wdump.exe on every host; it is the host's own format (ELF, Mach-O), which this checks: a
+    # DOS or Windows image would not run here. Installed without the extension.
+    built="$OWROOT/bld/exedump/binbuild/wdump.exe"
+    magic=$(od -An -tx1 -N4 "$built" | tr -d ' \n')
+    case "$(uname -s):$magic" in
+        Linux:7f454c46 | Darwin:cffaedfe | Darwin:cefaedfe | Darwin:feedfacf | Darwin:feedface | Darwin:cafebabe) ;;
+        *) echo "wdump.sh: $built is not a $(uname -s) executable (starts $magic)" >&2; return 1 ;;
+    esac
+    cp "$built" "$1/wdump"
 }
 cached "$CACHE/wdump-$OW_COMMIT" wdump
 echo "$CACHE/wdump-$OW_COMMIT/wdump"

@@ -738,7 +738,8 @@ def test_wdump_is_built_from_the_pinned_tree_cached_and_required_in_ci(tmp_path)
     (tree / "setvars.sh").write_text("")
     # A wmake that "builds" wdump.exe, once, in the directory it is run in.
     wmake = tree / "build/binbuild/wmake"
-    wmake.write_text("#!/bin/sh\necho built >> \"$OWROOT_BUILDS\"\necho a-wdump > wdump.exe\n")
+    native = {"Linux": r"\177ELF", "Darwin": r"\317\372\355\376"}[sp.run(["uname", "-s"], capture_output=True, text=True).stdout.strip()]
+    wmake.write_text(f"#!/bin/sh\necho built >> \"$OWROOT_BUILDS\"\nprintf '{native}a-wdump' > wdump.exe\n")
     wmake.chmod(0o755)
     env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path), "OWROOT_BUILDS": str(tmp_path / "builds")}
     env.pop("OWROOT", None)
@@ -746,11 +747,16 @@ def test_wdump_is_built_from_the_pinned_tree_cached_and_required_in_ci(tmp_path)
     made = sp.run(["sh", script], capture_output=True, text=True, env=env)
     assert made.returncode == 0, made.stderr
     path = Path(made.stdout.strip())
-    assert path == tmp_path / "llrm" / f"wdump-{commit}" / "wdump" and path.read_text() == "a-wdump\n"
+    assert path == tmp_path / "llrm" / f"wdump-{commit}" / "wdump" and path.read_bytes().endswith(b"a-wdump")
     assert sp.run(["sh", script], capture_output=True, text=True, env=env).stdout.strip() == str(path)
     assert (tmp_path / "builds").read_text() == "built\n", "the second call built it again"
-    # a build that fails fails the script: no path, nothing cached
+    # an image that is not the host's own format (a DOS MZ executable) is refused, and not installed
     path.parent.joinpath(".complete").unlink()
+    wmake.write_text("#!/bin/sh\nprintf 'MZ-a-dos-image' > wdump.exe\n")
+    refused = sp.run(["sh", script], capture_output=True, text=True, env=env)
+    assert refused.returncode != 0 and "is not a" in refused.stderr and "executable" in refused.stderr, refused.stderr
+    assert not path.parent.exists(), "a refused image was cached"
+    # a build that fails fails the script: no path, nothing cached
     wmake.write_text("#!/bin/sh\nexit 1\n")
     assert sp.run(["sh", script], capture_output=True, text=True, env=env).returncode != 0
     action = (gate.ROOT / ".github/actions/setup/action.yml").read_text()
