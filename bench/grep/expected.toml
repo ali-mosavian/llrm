@@ -1,41 +1,67 @@
-reason = "coalesce takes loop blocks deepest first, the hottest copies first within a loop (x_binsearch -9.4% clocks m32): bintree c -O2 +2.6% instructions (the LCG chain in the loop takes a longer multiply sequence), qbsp/mandel/grep code bytes +0.3..1.9%, fib/crc/jpeg/grep/qbsp nib better"
-blessed = "2026-10-11"
+reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
+blessed = "2026-10-12"
 
 [bas.O2]
 code_bytes = 993
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.2019
+kernel_ms = 3753.5253
 
 [bas.Os]
 code_bytes = 942
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3886.6766
+kernel_ms = 3750.7177
+
+[bq16.O2]
+code_bytes = 966
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 3706.6112
+
+[bq16.Os]
+code_bytes = 931
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 3703.8059
+
+[bq32.O2]
+instructions = 627546967
+code_bytes = 1395
+data_bytes = 127
+bss_bytes = 0
+kernel_ms = 9633.6602
+
+[bq32.Os]
+instructions = 627556801
+code_bytes = 1334
+data_bytes = 127
+bss_bytes = 0
+kernel_ms = 9633.7982
 
 [c.O2]
 code_bytes = 544
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3415.7936
+kernel_ms = 3547.0561
 
 [c.Os]
 code_bytes = 513
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3415.6629
+kernel_ms = 3682.6052
 
 [nib.O2]
 code_bytes = 1475
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4239.5804
+kernel_ms = 4514.089
 
 [nib.Os]
 code_bytes = 1398
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4239.6052
+kernel_ms = 4647.9981
 
 [ow.O2]
 code_bytes = 544

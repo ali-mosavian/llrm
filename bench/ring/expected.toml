@@ -1,5 +1,5 @@
-reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
-blessed = "2026-10-11"
+reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 42392
@@ -7,6 +7,7 @@ memory_operands = 11171
 code_bytes = 197
 data_bytes = 13
 bss_bytes = 0
+kernel_ms = 0.5882
 
 [bas.Os]
 instructions = 42407
@@ -16,12 +17,43 @@ data_bytes = 13
 bss_bytes = 0
 kernel_ms = 0.5884
 
+[bq16.O2]
+instructions = 54796
+memory_operands = 9153
+code_bytes = 208
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.7437
+
+[bq16.Os]
+instructions = 54810
+memory_operands = 9166
+code_bytes = 202
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.7439
+
+[bq32.O2]
+instructions = 109054
+code_bytes = 211
+data_bytes = 19
+bss_bytes = 0
+kernel_ms = 1.7938
+
+[bq32.Os]
+instructions = 109054
+code_bytes = 211
+data_bytes = 19
+bss_bytes = 0
+kernel_ms = 1.7939
+
 [c.O2]
 instructions = 40107
 memory_operands = 7024
 code_bytes = 72
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.5363
 
 [c.Os]
 instructions = 40107
@@ -29,6 +61,7 @@ memory_operands = 7024
 code_bytes = 72
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.5363
 
 [nib.O2]
 instructions = 47138
@@ -36,6 +69,7 @@ memory_operands = 8048
 code_bytes = 95
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.6342
 
 [nib.Os]
 instructions = 50210
@@ -43,6 +77,7 @@ memory_operands = 11120
 code_bytes = 93
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.6855
 
 [ow.O2]
 instructions = 75663
