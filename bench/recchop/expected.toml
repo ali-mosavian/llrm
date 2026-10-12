@@ -1,5 +1,5 @@
-reason = "a spill store ahead of a branch is made on the path that reads the slot, off the other (bintree -2.5% instructions, quicksort c -0.8%, queens -0.1%); bintree nib -Os +1 byte (the store's edge block)"
-blessed = "2026-10-09"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+blessed = "2026-10-12"
 
 [c.O2]
 instructions = 5408
@@ -7,6 +7,7 @@ memory_operands = 763
 code_bytes = 162
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.0749
 
 [c.Os]
 instructions = 5920
@@ -14,3 +15,4 @@ memory_operands = 889
 code_bytes = 158
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.0818

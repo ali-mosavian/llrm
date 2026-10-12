@@ -144,15 +144,17 @@ def closure(program: Path, objects: dict[str, Path]) -> list[Path]:
         defined, needed = symbols(obj)
         needs[name] = needed
         owners.update({symbol: name for symbol in defined})
-    chosen: list[str] = []
-    pending = list(symbols(program)[1])
+    chosen: set[str] = set()
+    pending = sorted(symbols(program)[1])
     while pending:
         symbol = pending.pop()
         owner = owners.get(symbol)
         if owner and owner not in chosen:
-            chosen.append(owner)
-            pending.extend(needs[owner])
-    return [objects[name] for name in chosen]
+            chosen.add(owner)
+            pending.extend(sorted(needs[owner]))
+    # the link order is the objects' names': it is the layout, and a layout that followed the hash of a set's strings moved a
+    # program's count by 2% from one run to the next
+    return [objects[name] for name in sorted(chosen)]
 
 
 def data_files(source: Path) -> tuple[Path, ...]:
