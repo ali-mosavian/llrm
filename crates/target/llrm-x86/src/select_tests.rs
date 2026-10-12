@@ -928,3 +928,18 @@ fn test_enter_encodes_its_size_and_nesting_level() {
     let what = sem(Operation::Nothing, Some("enter"), vec![], vec![imm(300, 2), imm(0, 1)], None, false);
     assert_eq!(hex(&made(emitted(&what)).code), "c82c0100");
 }
+
+/// `_code` built a map of owned names of the five thousand forms in the first
+/// call of every process: five million instructions, 26% of a compile of one
+/// small function. Its table is the build's now; every form is found by its
+/// name, and a name no form has is none.
+#[test]
+fn test_every_instruction_form_is_found_by_its_name() {
+    for code in iced_x86::Code::values() {
+        let name = format!("{code:?}").to_uppercase();
+        assert_eq!(super::_code(&name), Some(code), "{name}");
+    }
+    assert_eq!(super::_code("NOT_A_FORM"), None);
+    assert_eq!(super::_code(""), None);
+    assert_eq!(super::_code("mov_r32_rm32"), None, "names are in capitals");
+}

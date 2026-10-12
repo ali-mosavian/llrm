@@ -540,6 +540,11 @@ pub fn counted_renewed(
 ) -> Counted {
     let registers = unit.registers();
     let shape = unit.shape();
+    // One body under one set of facts: what is known of its congruences is
+    // found once for the loops, not once for each proof (610 times, 585 of
+    // 6,449 Minstr, on 32 loops).
+    let congruent = std::cell::OnceCell::new();
+    let unit = &Unit { congruent: Some(&congruent), ..*unit };
     shape
         .loops
         .iter()
@@ -1487,6 +1492,18 @@ fn _solved(
 /// Whether `bound - start` is a multiple of `2**shift`, by what
 /// `congruences` know of each: a value is its residue modulo a modulus, an
 /// exact constant a modulus of 0.
+/// What `find` makes of the unit's congruences: its cell's, made once, where it
+/// carries one.
+fn _congruences<'a>(
+    unit: &Unit<'a>,
+    find: impl FnOnce() -> crate::alias::Congruences,
+) -> std::borrow::Cow<'a, crate::alias::Congruences> {
+    match unit.congruent {
+        Some(cell) => std::borrow::Cow::Borrowed(cell.get_or_init(find)),
+        None => std::borrow::Cow::Owned(find()),
+    }
+}
+
 fn _low_bits_zero(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
@@ -1494,7 +1511,7 @@ fn _low_bits_zero(
     bound: &AffineOperand,
     shift: u32,
 ) -> bool {
-    let known = crate::alias::congruences_with(unit, facts);
+    let known = _congruences(unit, || crate::alias::congruences_with(unit, facts));
     let of = |one: &AffineOperand| match one {
         AffineOperand::Const(constant) => Some((BigInt::from(0), constant.n.clone())),
         AffineOperand::Value(value, _) => {

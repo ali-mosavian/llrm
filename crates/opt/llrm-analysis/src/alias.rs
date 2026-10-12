@@ -60,6 +60,7 @@ use crate::memory::{
 };
 use crate::ranges;
 use crate::regions::{self, ByteRange};
+use crate::sliceset::{Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
 pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::NONLOCAL));
@@ -318,8 +319,8 @@ fn _resolved_reference(
 /// object identities.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Summary {
-    pub reads: BTreeSet<Slice>,
-    pub writes: BTreeSet<Slice>,
+    pub reads: SliceSet,
+    pub writes: SliceSet,
     pub captures: BTreeSet<Option<Identity>>,
     pub unknown_read: bool,
     pub unknown_write: bool,
@@ -360,7 +361,7 @@ impl Summary {
         // A slice of a whole object, any byte of it: an address nothing placed,
         // as a pointer strength reduction made does.
         let unplaced = |one: &Slice| one.low <= -(1_i64 << 31) && one.high >= 1_i64 << 31;
-        let within = |old_unknown: bool, new_unknown: bool, old: &BTreeSet<Slice>, new: &BTreeSet<Slice>| {
+        let within = |old_unknown: bool, new_unknown: bool, old: &SliceSet, new: &SliceSet| {
             old_unknown
                 || new_unknown
                 || new
@@ -376,21 +377,27 @@ impl Summary {
         &self,
         arguments: &[Provenance],
     ) -> Summary {
-        let expand = |items: &BTreeSet<Slice>| {
-            let mut out = BTreeSet::new();
-            for item in items {
+        let expand = |items: &SliceSet| -> SliceSet {
+            // A shared run with a parameter's slice is put into the set to be
+            // instantiated with it; any other passes through as it
+            // is.
+            let mut items = items.clone();
+            if items.has_parameter_run() {
+                items.materialize();
+            }
+            items.mapped(|item, found| {
                 if item.object.kind != MemoryKind::Parameter {
-                    out.insert(item.clone());
-                    continue;
+                    found.push(*item);
+                    return;
                 }
                 let Key::Int(index) = item.object.key else {
-                    continue;
+                    return;
                 };
                 if !(0 <= index && index < arguments.len() as i64) {
-                    continue;
+                    return;
                 }
                 for actual in &arguments[index as usize].slices {
-                    out.insert(
+                    found.push(
                         Slice::new(
                             actual.object.clone(),
                             actual.low + item.low,
@@ -401,8 +408,7 @@ impl Summary {
                         .expect("two valid slices sum to a valid slice"),
                     );
                 }
-            }
-            out
+            })
         };
 
         Summary {
@@ -624,24 +630,35 @@ fn _borrowed(
 /// elsewhere, what a nonlocal reaches, what escaped before the call, and
 /// of the tracked globals what GlobalsAA says it names and what
 /// `callbacks` into the module do, all of them where that is unknown.
+///
+/// Less what a call back into the module adds (`_calling_back`'s), which is the
+/// same set for every call that may call back: whether each of the two is
+/// wanted comes back with them, and the sets are put together once for all the
+/// calls with the same others (`calls_annotated`).
 fn _unknown_visible(
     procedure: &Procedure,
     facts: &PointsTo,
     at: InstId,
     actual: &[Provenance],
-    callbacks: Option<&Summary>,
-) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
+) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>, Back), String> {
     let unit = &procedure.unit;
     let allowed = _allowed(unit, at);
     let (mut reads, mut writes) = _through_arguments(&allowed, actual);
-    let (other_reads, other_writes) = _unknown_other(unit, facts, at, callbacks)?;
+    let (other_reads, other_writes, back) = _unknown_base(unit, facts, at)?;
     if allowed.other.reads {
         reads.extend(other_reads);
     }
     if allowed.other.writes {
         writes.extend(other_writes);
     }
-    Ok((reads, writes))
+    Ok((reads, writes, Back { reads: back && allowed.other.reads, writes: back && allowed.other.writes }))
+}
+
+/// Which of a call's reads and writes a call back into the module adds to.
+#[derive(Clone, Copy, Default)]
+struct Back {
+    reads: bool,
+    writes: bool,
 }
 
 /// What a callee nobody summarized may read and write through each of `actual`,
@@ -664,22 +681,8 @@ fn _through_arguments(
     (reads, writes)
 }
 
-/// What an unsummarized callee may read and write at `at` other than
-/// through its arguments.
-fn _unknown_other(
-    unit: &Unit,
-    facts: &PointsTo,
-    at: InstId,
-    callbacks: Option<&Summary>,
-) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
-    let (mut reads, mut writes, back) = _unknown_base(unit, facts, at)?;
-    if back {
-        _calling_back(unit, callbacks, true, true, &mut reads, &mut writes);
-    }
-    Ok((reads, writes))
-}
-
-/// `_unknown_other` less what a call back into the module adds, which depends
+/// What an unsummarized callee may read and write at `at` other than through
+/// its arguments, less what a call back into the module adds, which depends
 /// on the callbacks and nothing else a revisit changes; and whether the call
 /// may call back.
 fn _unknown_base(
@@ -727,8 +730,8 @@ fn _calling_back(
     callbacks: Option<&Summary>,
     reading: bool,
     writing: bool,
-    reads: &mut BTreeSet<Slice>,
-    writes: &mut BTreeSet<Slice>,
+    reads: &mut SliceSet,
+    writes: &mut SliceSet,
 ) {
     let Some(callbacks) = callbacks else {
         if reading {
@@ -740,13 +743,13 @@ fn _calling_back(
         return;
     };
     if reading {
-        reads.extend(callbacks.reads.iter().cloned());
+        reads.absorb(&callbacks.reads);
         if callbacks.unknown_read {
             reads.extend(_tracked(unit));
         }
     }
     if writing {
-        writes.extend(callbacks.writes.iter().cloned());
+        writes.absorb(&callbacks.writes);
         if callbacks.unknown_write {
             writes.extend(_tracked(unit));
         }
@@ -818,7 +821,9 @@ impl CalledBack {
     }
 
     fn summary(&self) -> Option<Summary> {
-        Some(Summary { reads: _coalesced(&self.out.reads), writes: _coalesced(&self.out.writes), ..self.out.clone() })
+        // The run every summary that calls back holds, made once.
+        let run = |set: &SliceSet| SliceSet::shared(&Shared::of(set.coalesced().to_set()));
+        Some(Summary { reads: run(&self.out.reads), writes: run(&self.out.writes), ..self.out.clone() })
     }
 
     /// Entry `name` is now `summary`: added in when it only grew, else all
@@ -983,15 +988,25 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
             _ => None,
         })
         .collect();
-    Ok(Summary { reads, writes, captures, unknown_read, unknown_write, unknown_write_types: types })
+    Ok(Summary {
+        reads: reads.into(),
+        writes: writes.into(),
+        captures,
+        unknown_read,
+        unknown_write,
+        unknown_write_types: types,
+    })
 }
 
 fn _widen_parameters(summary: Summary) -> Summary {
-    let widened = |items: &BTreeSet<Slice>| {
-        items
-            .iter()
-            .map(|one| if one.object.kind == MemoryKind::Parameter { Slice::whole(one.object) } else { one.clone() })
-            .collect()
+    let widened = |items: &SliceSet| {
+        let mut items = items.clone();
+        if items.has_parameter_run() {
+            items.materialize();
+        }
+        items.mapped(|one, found| {
+            found.push(if one.object.kind == MemoryKind::Parameter { Slice::whole(one.object) } else { *one });
+        })
     };
     Summary { reads: widened(&summary.reads), writes: widened(&summary.writes), ..summary }
 }
@@ -1468,7 +1483,7 @@ struct Visit {
     captured: IndexMap<InstId, Option<BTreeSet<Option<Identity>>>>,
     facts: Rc<PointsTo>,
     version: Option<usize>,
-    unknown: (BTreeSet<Slice>, BTreeSet<Slice>),
+    unknown: (SliceSet, SliceSet),
     /// What the calls to something unknown may do besides calling back, with
     /// whether the reads and the writes of one that does are wanted: found
     /// once from the facts, where `unknown` is found again for each callbacks.
@@ -1562,14 +1577,15 @@ fn _summarized(
         visit.version = None;
     }
     if visit.version != Some(version) {
-        let (mut reads, mut writes, back_reads, back_writes) = visit.base.clone().expect("found above");
+        let (reads, writes, back_reads, back_writes) = visit.base.clone().expect("found above");
+        let (mut reads, mut writes) = (SliceSet::from(reads), SliceSet::from(writes));
         _calling_back(&procedure.unit, callbacks, back_reads, back_writes, &mut reads, &mut writes);
         visit.unknown = (reads, writes);
         visit.version = Some(version);
     }
     let (mut reads, mut writes) = (direct.reads.clone(), direct.writes.clone());
-    reads.extend(visit.unknown.0.iter().cloned());
-    writes.extend(visit.unknown.1.iter().cloned());
+    reads.absorb(&visit.unknown.0);
+    writes.absorb(&visit.unknown.1);
     let captures = facts
         .escaped
         .iter()
@@ -1591,18 +1607,19 @@ fn _summarized(
         if procedures.get_index_of(target).is_some_and(|callee| component[me].1 && component[me] == component[callee]) {
             effect = _widen_parameters(effect);
         }
-        reads.extend(effect.reads);
-        writes.extend(effect.writes);
+        reads.absorb(&effect.reads);
+        writes.absorb(&effect.writes);
         unknown_read |= effect.unknown_read;
         types = merged_types((unknown_write, &types), (effect.unknown_write, &effect.unknown_write_types));
         unknown_write |= effect.unknown_write;
     }
     // A callee's frame is gone when it returns: what its calls touch
     // there, like its own accesses, is no effect of calling it.
-    let (reads, writes) = (reads.into_iter().filter(outlives).collect(), writes.into_iter().filter(outlives).collect());
+    reads.retain_outliving();
+    writes.retain_outliving();
     Ok(Summary {
-        reads: _coalesced(&reads),
-        writes: _coalesced(&writes),
+        reads: reads.coalesced(),
+        writes: writes.coalesced(),
         captures,
         unknown_read,
         unknown_write,
@@ -1659,26 +1676,40 @@ pub fn calls_annotated(
     };
 
     let mut out = IndexMap::default();
-    // Calls reaching the same slices share one list of references.
-    let mut made: HashMap<BTreeSet<Slice>, Rc<[MemRef]>> = HashMap::default();
+    // Calls reaching the same slices share one list of references. A set's
+    // shared run is part of its key by where it is: the same run is the
+    // same slices.
+    let mut made: HashMap<(BTreeSet<Slice>, usize), Rc<[MemRef]>> = HashMap::default();
+    // What a call back into the module adds, found once for the calls that ask:
+    // the run the callbacks' summary holds.
+    let back: std::cell::OnceCell<(SliceSet, SliceSet)> = std::cell::OnceCell::new();
+    let added = || {
+        back.get_or_init(|| {
+            let (mut reads, mut writes) = (SliceSet::new(), SliceSet::new());
+            _calling_back(&procedure.unit, callbacks, true, true, &mut reads, &mut writes);
+            (reads, writes)
+        })
+    };
     for at in procedure.sites.iter().copied() {
         let actual = _actuals(procedure, &facts, at);
+        let mut calling_back = Back::default();
         let mut effect = match callee(&at) {
             Some(callee) => {
                 // A body does no more than its call states.
                 let allowed = _allowed(&procedure.unit, at);
                 let mut effect = callee.instantiated(&actual);
                 if !(allowed.arguments.reads || allowed.other.reads) {
-                    (effect.reads, effect.unknown_read) = (BTreeSet::new(), false);
+                    (effect.reads, effect.unknown_read) = (SliceSet::new(), false);
                 }
                 if !(allowed.arguments.writes || allowed.other.writes) {
-                    (effect.writes, effect.unknown_write) = (BTreeSet::new(), false);
+                    (effect.writes, effect.unknown_write) = (SliceSet::new(), false);
                 }
                 effect
             }
             None => {
-                let (reads, writes) = _unknown_visible(procedure, &facts, at, &actual, callbacks)?;
-                Summary { reads, writes, ..Summary::default() }
+                let (reads, writes, back) = _unknown_visible(procedure, &facts, at, &actual)?;
+                calling_back = back;
+                Summary { reads: reads.into(), writes: writes.into(), ..Summary::default() }
             }
         };
         if effect.unknown_read {
@@ -1713,11 +1744,18 @@ pub fn calls_annotated(
             }
         }
         let fills = _fills(&procedure.unit, &facts, at);
-        let mut shared = |slices: BTreeSet<Slice>, typed: Vec<MemRef>| -> Rc<[MemRef]> {
+        if calling_back.reads {
+            effect.reads.absorb(&added().0);
+        }
+        if calling_back.writes {
+            effect.writes.absorb(&added().1);
+        }
+        let mut shared = |slices: SliceSet, typed: Vec<MemRef>| -> Rc<[MemRef]> {
             if !typed.is_empty() {
                 return slices.iter().map(reference).chain(typed).collect();
             }
-            Rc::clone(made.entry(slices).or_insert_with_key(|slices| slices.iter().map(reference).collect()))
+            let run = slices.base().map_or(0, |run| Rc::as_ptr(run) as usize);
+            Rc::clone(made.entry((slices.own().clone(), run)).or_insert_with(|| slices.iter().map(reference).collect()))
         };
         let (loads, stores) = (shared(effect.reads, Vec::new()), shared(effect.writes, typed));
         out.insert(at, Effect { loads, stores, fills });
@@ -2833,17 +2871,20 @@ fn mod_floor(
 ///
 /// A value wraps at its width, so a modulus holds only where it divides
 /// the width's: each is cut to that divisor, and an exact residue masked.
-pub fn congruences(unit: &Unit) -> IndexMap<ValueId, (BigInt, BigInt)> {
+pub fn congruences(unit: &Unit) -> Congruences {
     congruences_with(unit, &unit.registers())
 }
+
+/// Each value's (residue, modulus): what it is congruent to.
+pub type Congruences = llrm_mir::dense::IdMap<ValueId, (BigInt, BigInt)>;
 
 /// `congruences`, given what `consts::known` finds without memory.
 pub fn congruences_with(
     unit: &Unit,
     constants: &IndexMap<ValueId, Known>,
-) -> IndexMap<ValueId, (BigInt, BigInt)> {
+) -> Congruences {
     let function = unit.function;
-    let mut result = IndexMap::<ValueId, (BigInt, BigInt)>::default();
+    let mut result = Congruences::default();
     let zero = BigInt::from(0);
     for loop_ in &unit.shape().loops {
         for affine in induction::basics(unit, loop_).values() {
