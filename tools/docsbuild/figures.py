@@ -987,7 +987,7 @@ def build(spec: str) -> Figure:
     vb = (x0 - MARGIN, y0 - MARGIN, x1 - x0 + 2 * MARGIN, y1 - y0 + 2 * MARGIN)
     head = (
         f'<svg xmlns="http://www.w3.org/2000/svg" class="fig" role="img" aria-labelledby="{pre}-t {pre}-d" '
-        f'viewBox="{fmt(vb[0])} {fmt(vb[1])} {fmt(vb[2])} {fmt(vb[3])}" style="max-width:{fmt(vb[2])}px">\n'
+        f'viewBox="{fmt(vb[0])} {fmt(vb[1])} {fmt(vb[2])} {fmt(vb[3])}" style="width:{fmt(vb[2])}px;min-width:{fmt(vb[2])}px;max-width:{fmt(vb[2])}px">\n'
         f'<title id="{pre}-t">{_esc(title or default, quote=False)}</title>\n'
         f'<desc id="{pre}-d">{_esc(desc, quote=False)}</desc>\n<style>{CSS}</style>\n'
         f'<defs><marker id="{pre}-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">'

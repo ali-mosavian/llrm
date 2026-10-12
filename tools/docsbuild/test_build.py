@@ -116,3 +116,12 @@ def test_a_page_declares_an_icon_a_viewport_and_both_colour_schemes(tmp_path):
     assert 'rel="icon"' in page and 'name="viewport"' in page
     css = next(out.rglob("*.css")).read_text()
     assert "prefers-color-scheme:dark" in css and "max-width:52rem" in css
+
+
+def test_wide_figures_and_tables_scroll_inside_their_box_not_the_page(tmp_path):
+    """At 390px a wide figure was scaled to 4px text and a table lost its right column: neither scrolled."""
+    out = tmp_path / "site"
+    build.main(["--out", str(out)])
+    css = next(out.rglob("*.css")).read_text()
+    assert "figure{" in css and "overflow-x:auto" in css.split("figure{", 1)[1].split("}", 1)[0]
+    assert ".tbl{overflow-x:auto" in css and "main{min-width:0}" in css
