@@ -16,8 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
-import qb32  # noqa: E402
-import qbruntime  # noqa: E402
+import qbbuild  # noqa: E402
 
 pytestmark = pytest.mark.slow_dos
 N = 2000
@@ -62,7 +61,7 @@ RESUME NEXT
 """
 # The flat runtime ends the program at a second error under ON ERROR (#1482): there only one is raised.
 MORE_ERRORS = 'MID$(b, 41, 1) = "x"\nMID$(b, 1, -1) = "x"'
-EXPECT = {"16": [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 3], "32": [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 1]}
+EXPECT = {qbbuild.REAL: [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 3], qbbuild.FLAT: [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 1]}
 
 
 def instructions(where: Path) -> int:
@@ -78,41 +77,36 @@ def runner(tmp_path_factory):
     if not dosbatch.DOSBOX.exists():
         pytest.skip("DOSBox-X is unavailable")
     work = tmp_path_factory.mktemp("strblocks")
-    archive, _ = qbruntime.build(work / "archive")
-    flat = qb32.build(work / "flat")
-    seen = {}
+    objects = qbbuild.runtimes(work)
 
-    def run(target: str, name: str, text: str):
+    def run(name: str, text: str):
+        """`text` built for both targets and run on each: {target: (result, instructions)}."""
         src = work / f"{name}.bas"
         src.write_text(text)
-        obj = work / f"{name}{target}.obj"
-        flags = ["-O2", "-march=i486"] + ([dosbatch.m_flag(qb32.TARGET)] if target == "32" else [])
-        done = dosbatch.subprocess.run([str(dosbatch.BIN / "llrm-qb"), str(src), "--dialect", "qb45", *flags, "-o", str(obj)], capture_output=True, text=True)
-        assert done.returncode == 0, done.stderr[-300:]
-        where = work / f"run{name}{target}"
-        if target == "32":
-            exe = work / f"{name}.exe"
-            job = dosbatch.Job("J", "exe", exe, files=tuple(qb32.link(obj, flat, exe, work)))
-            result = dosbatch.run([job], where, budget_ms=60000)["J"]
-        else:
-            job = dosbatch.Job("J", "obj", obj, runtime="llrmqb", runtime_file=archive)
-            result = dosbatch.run([job], where, budget_ms=60000, tools=dosbatch.QB45_TOOLS)["J"]
-        assert result.status == "ok", result.detail
-        return result, instructions(where)
+        out = {}
+        for target, built in qbbuild.build(src, work / f"b{name}", objects).items():
+            where = work / f"run{name}{target}"
+            result = dosbatch.run([dosbatch.Job("J", "exe", built.exe, files=built.files)], where, budget_ms=60000)["J"]
+            assert result.status == "ok", f"{target}: {result.detail}"
+            out[target] = (result, instructions(where))
+        return out
 
     return run
 
 
-@pytest.mark.parametrize("target", ["16", "32"])
 @pytest.mark.parametrize("name", list(LIMITS))
-def test_block_string_operations_cost_a_string_instruction_not_a_byte_loop(runner, target: str, name: str):
+def test_block_string_operations_cost_a_string_instruction_not_a_byte_loop(runner, name: str):
     body, limit = LIMITS[name]
-    _, empty = runner(target, "empty", HEAD + "j = j + 1" + TAIL)
-    _, got = runner(target, name.replace("$", "S").replace("(", "").replace(")", "").replace(" ", ""), HEAD + body + TAIL)
-    assert (got - empty) / N <= limit
+    empty = runner("empty", HEAD + "j = j + 1" + TAIL)
+    got = runner(name.replace("$", "S").replace("(", "").replace(")", "").replace(" ", ""), HEAD + body + TAIL)
+    for target in qbbuild.TARGETS:
+        assert (got[target][1] - empty[target][1]) / N <= limit, f"{target}"
 
 
-@pytest.mark.parametrize("target", ["16", "32"])
-def test_comparison_and_fill_results_at_every_length(runner, target: str):
-    result, _ = runner(target, "check", CHECK % (MORE_ERRORS if target == "16" else ""))
-    assert [int(word) for word in result.text.split()] == EXPECT[target]
+def test_comparison_and_fill_results_at_every_length(runner):
+    """The flat runtime ends the program at a second error under ON ERROR (#1482), so it raises one."""
+    got = {}
+    for target, text in ((qbbuild.REAL, CHECK % MORE_ERRORS), (qbbuild.FLAT, CHECK % "")):
+        got[target] = runner(f"check{target}", text)[target][0]
+    for target in qbbuild.TARGETS:
+        assert [int(word) for word in got[target].text.split()] == EXPECT[target], f"{target}"
