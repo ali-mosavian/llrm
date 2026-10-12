@@ -45,6 +45,18 @@ class RuntimeObjectTests(unittest.TestCase):
 
 
 class LinkTests(unittest.TestCase):
+    def test_a_candidate_runtime_is_copied_and_never_falls_back_to_the_toolchain_library(self):
+        """The first candidate link silently used BCOM45 after its replacement archive was not mounted."""
+        with tempfile.TemporaryDirectory() as work:
+            work = Path(work)
+            candidate = work / "LLRMQB.LIB"
+            candidate.write_bytes(b"library")
+            job = dosbatch.Job("T001", "obj", work / "P.OBJ", runtime="llrmqb", runtime_file=candidate)
+            self.assertEqual(dosbatch.runtime_library(job, dosbatch.QB45_TOOLS, work), r"C:\LLRMQB.LIB")
+            self.assertEqual((work / "LLRMQB.LIB").read_bytes(), b"library")
+        with self.assertRaisesRegex(dosbatch.BuildError, "runtime file"):
+            dosbatch.runtime_library(dosbatch.Job("T001", "obj", Path("P.OBJ"), runtime="empty"), dosbatch.QB45_TOOLS, Path("."))
+
     def test_c_runtime_is_each_targets_own_file_and_a_name_is_beside_the_source(self):
         """`link: @c-runtime` reached the compiler as a file name in bench (llrm-c: wccq failed on .../@c-runtime):
         only run_tests resolved it. Every reader resolves it here."""
@@ -190,8 +202,10 @@ class StallTests(unittest.TestCase):
         import subprocess
         import sys
 
+        # Stuck is spinning without a report: stall counts the emulator's CPU seconds (test_hostload.py has the one that
+        # only waits).
         with tempfile.TemporaryDirectory() as where:
             began = time.monotonic()
             with self.assertRaises(subprocess.TimeoutExpired):
-                dosbatch._launch([sys.executable, "-c", "import time; time.sleep(60)"], Path(where), None, 1 << 20, stall=2, cwd=where)
+                dosbatch._launch([sys.executable, "-c", "while True: pass"], Path(where), None, 1 << 20, stall=2, cwd=where)
             self.assertLess(time.monotonic() - began, 20)

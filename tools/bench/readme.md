@@ -1,6 +1,6 @@
 # tools/bench
 
-Executed instructions and memory operands of each benchmark's kernel, per language and optimization
+For contributors measuring a change's effect on code. Executed instructions and memory operands of each benchmark's kernel, per language and optimization
 level, against `bench/NAME/expected.toml`.
 
     uv run --project tools python tools/bench/bench.py                       # the gate
@@ -12,7 +12,7 @@ Each variant is built (`-fno-inline-functions`, so the kernel stays a call), run
 The kernel is `bench.toml`'s `[region]`: found by name in the linker map (C, BASIC), or for Nib, which
 publishes no function, as the one function `main` calls from its own segment.
 
-The counts are deterministic: no clock, no DOSBox cycle setting. A count above its baseline fails; one
+The counts are deterministic: no clock, no DOSBox cycle setting. Beside them the run prices the same instruction stream by the 486's clocks (vsgcc's table, `crates/target/llrm-x86-m32/vsgcc/harness.py`, shared with the m32 comparison): `clocks` in `--json`, and a line per benchmark when benchmarks are named on the command line. Reported, not gated or blessed: a change that trades instructions for fewer clocks is judged by it. A count above its baseline fails; one
 below fails too, until it is blessed, so the baseline only ratchets. `--bless` needs `--reason`, which
 lands in the file.
 
@@ -32,18 +32,22 @@ built here), and BC refuses the VBDOS-style `FUNCTION f (a AS INTEGER) AS LONG` 
 program a reference cannot build has no row, and the geomean covers the programs both sides have (`n=`).
 BCC runs at `-3`, llrm and Open Watcom at 486.
 
-BASIC is built on own frames, the default: no `B$ENRA`/`B$EXSA` where the runtime needs no frame. Recursion paid for the runtime's frame on every call (fib 14.9 ms against 5.0); `--runtime-frames` brings it back and is not benchmarked.
+BASIC is built on `llrm-qb`'s own frames, the default: no `B$ENRA`/`B$EXSA` where the runtime needs no frame. `--runtime-frames` is not benchmarked.
 
 ## Timed-only: grep
 
-`bench/grep` (`timed_only = true` in its bench.toml) is Aho-Corasick over the 10 MB Silesia `dickens` text, read in 1K chunks
-through DOS (`input_read` in ext.asm for C, `OPEN`/`GET` for BASIC, `std.io` for Nib). The emulator would step ~10^8 instructions,
-so it has no counts: it is sized, and timed in DOSBox under `--time` over the whole file (28 s of emulated time in BASIC; the
-`--time` gate takes 2 minutes). Its output is checked there, since nothing else does. Its kernel time gates on its own, both ways,
+`bench/grep` (`timed_only = true` in its bench.toml) is Aho-Corasick over the Silesia `dickens` text (10,192,446 bytes), read in 1K chunks
+through DOS (`input_read` in ext.asm for C, `OPEN`/`GET` for BASIC, `std.io` for Nib). The emulator would step about 10^8 instructions,
+so it has no counts: it is sized, and timed in DOSBox under `--time` over the whole file. Its output is checked there, since nothing else does. Its kernel time gates on its own, both ways,
 and as a ratio to each reference.
 
 The file is `tools/dosbatch/corpus.py`'s: fetched once from the Silesia site (the GitHub mirror is the fallback), cached in
 `~/.cache/llrm-bench`, and checked against its pinned SHA-256 on every use. Missing and offline, grep is skipped with a message.
+
+`bench/jpeg_single` and `bench/jpeg_fixed` are timed-only too (the 256x192 `photo.jpg`, from `tools/jpeg_image.py`, decoded to
+`OUT.BMP` through DOS; the printed Adler-32 is `tools/jpeg_reference.py`'s). C reads and writes through `bench/bench_io.h`, which maps
+to the OS layer under llrm and to `<io.h>` under the references; `bench.py` copies it beside the Borland builds. Open Watcom has no row:
+its `clibm.lib` cannot link `open` here (`__doserror_`).
 
 ## Size
 
@@ -68,9 +72,8 @@ BASIC `huge` is built with `/AH` and builds, returns and prints right on all thr
 `--time` runs `timeit.asm`, a .COM that reads RDTSC around the program, in a DOSBox with a fixed 75000
 cycles per millisecond. The whole program includes its toolchain's start-up (C0M, BC's runtime, llrm's small
 crt), which costs differently, so `startup/` (an empty kernel and one print) is built and timed with each
-toolchain and level and taken out: `kernel_ms`. sieve -O2 read BCC 15% slower than llrm whole-program, and
-2.4% slower by kernel. DOSBox charges about one cycle per instruction, so kernel time follows the counts; it
-adds little: 1.6 points on the C -O2 geomean (-37.5% time, -35.9% instructions). A kernel under ~100 cycles is noise: a change must exceed 1% and 0.001 ms.
+toolchain and level and taken out: `kernel_ms`. DOSBox charges about one cycle per instruction, so kernel time follows the counts. A kernel under about
+100 cycles is noise: a change must exceed 1% and 0.001 ms.
 
 `history.py` installs nothing and schedules nothing. It builds a commit in a scratch worktree, runs that
 commit's own tools/bench, and appends one JSON line per commit x benchmark x language x level to

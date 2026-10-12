@@ -1,10 +1,10 @@
-reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
-blessed = "2026-10-11"
+reason = "#1446: a phi whose arms are one address is that address, so the exit block's loads fold it (c -O2/-Os -2.5k instructions, -2 bytes). #1431: gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
+blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 144792
+instructions = 144796
 memory_operands = 62573
-code_bytes = 715
+code_bytes = 706
 data_bytes = 17
 bss_bytes = 0
 
@@ -16,16 +16,16 @@ data_bytes = 17
 bss_bytes = 0
 
 [c.O2]
-instructions = 57563
-memory_operands = 11227
-code_bytes = 283
+instructions = 56568
+memory_operands = 11825
+code_bytes = 289
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 55535
+instructions = 52744
 memory_operands = 12581
-code_bytes = 243
+code_bytes = 241
 data_bytes = 0
 bss_bytes = 0
 

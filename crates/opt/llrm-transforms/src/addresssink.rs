@@ -18,6 +18,7 @@
 //! what the arms stored, and a sink earlier would be undone by it.
 
 use llrm_analysis::cfg;
+use llrm_analysis::manager::{AssumptionCache, ExposedFrames};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
@@ -40,14 +41,80 @@ impl FunctionPass for AddressSink {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // A closing phi (`lcssa`) whose arms are all one value is that value:
+        // nothing after this needs loop-closed form, and isel cannot
+        // fold a phi into an addressing mode.
+        let closed = trivial_phis(unit.function);
         // Blocks and edges are as they were.
         let sunk_compares = !analyses.outer().target().multiple_condition_registers() && compares_sunk(unit.function);
         if sunk(unit.function) || sunk_compares {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        } else if closed {
+            // A phi's value is replaced by the one it equalled: the blocks and
+            // loops stand, and what is said of an assumption or of
+            // the frame objects reads no phi. What is said of values (their
+            // facts, a loop's bound, the annotations, the edges a
+            // condition dominates) may name the phi, and is worked out again.
+            PreservedAnalyses::none()
+                .preserve::<ExposedFrames>()
+                .preserve::<Dominators>()
+                .preserve::<Loops>()
+                .preserve::<AssumptionCache>()
         } else {
             PreservedAnalyses::all()
         }
     }
+}
+
+/// Each phi read only as an address whose arms are one value, or itself,
+/// replaced by that value, and the phis that read it looked at again; whether
+/// any was. One visit of each phi, not a pass over the function until nothing
+/// changes. A phi of anything else costs the allocator nothing it does not
+/// coalesce, and a changed shape of it costs a search round (nest 32 at -O2:
+/// one more of every machine phase).
+fn trivial_phis(function: &mut Function) -> bool {
+    let mut pending: Vec<InstId> = function
+        .walk()
+        .filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi)
+        .map(|(_, inst)| inst)
+        .collect();
+    let mut changed = false;
+    while let Some(phi) = pending.pop() {
+        if function.is_erased(phi) {
+            continue;
+        }
+        let Some(result) = function.instruction(phi).result else { continue };
+        if !crate::spill::address_only(function, result, 3) {
+            continue;
+        }
+        let mut only: Option<Operand> = None;
+        let mut single = true;
+        for pair in function.instruction(phi).operands.chunks(2) {
+            if pair[0] == Operand::Value(result) {
+                continue;
+            }
+            match only {
+                None => only = Some(pair[0]),
+                Some(seen) if seen == pair[0] => {}
+                Some(_) => {
+                    single = false;
+                    break;
+                }
+            }
+        }
+        let (true, Some(value)) = (single, only) else { continue };
+        pending.extend(
+            function
+                .users(result)
+                .iter()
+                .map(|one| one.user)
+                .filter(|&user| user != phi && function.instruction(user).opcode == Opcode::Phi),
+        );
+        function.replace_all_uses_with(result, value);
+        function.erase(phi).expect("its uses were replaced");
+        changed = true;
+    }
+    changed
 }
 
 /// What the join makes of its phi's arms: a value every arm reads, or an

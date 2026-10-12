@@ -1,0 +1,89 @@
+# C frontend
+
+Audience: users and contributors of `llrm-c`. How C source is compiled, which
+dialect and ABI it follows, and its options.
+
+`llrm-c` compiles C through Open Watcom's own front end and hands MIR to the
+shared optimizer and backend.
+
+```
+ program.c
+     |
+     v  wccq   Open Watcom's C front end (cc/), linked against
+     |         toolchain/owshim/cgshim.c instead of its code generator,
+     |         with llrm's patches (toolchain/owshim/patches)
+     v  stream   one line per cg call: types, symbols, trees, data, debug
+     |
+     v  llrm-c   hir.rs reads the stream, translate.rs makes HIR,
+     |           ow_facts.rs turns the facts it states into MIR facts
+     v
+ HIR -> MIR -> shared optimizer -> backend -> OMF object (or ELF, Mach-O, COFF)
+```
+
+The front end does the parsing, type checking, constant folding and struct
+layout; `cgshim.c` records what it asks of its code generator, and nothing
+generates code there. What the stream carries and what `llrm-c` does with it
+is in [the front end contract](ow-contract.md). `llrm-c` also accepts a
+recorded stream (`.cgs`) as its input.
+
+## Targets and ABI
+
+`-m16` compiles for real-mode DOS and `-m32` for flat 32-bit DOS; the target
+description names which Open Watcom tree builds the front end (`i86` or `386`),
+what `int` is, and the switches `wccq` is given (`runtime/c/x86-m16/c.toml`,
+`runtime/c/x86-m32/c.toml`).
+
+On real mode the default is Borland C 3.1's medium model: far code, near
+data, cdecl, signed `char`, 80-bit `long double`, byte-packed structs, 16-bit
+enums, inline x87 and no stack probes. The patched front end also lays bit
+fields out as Borland C does. `-mabi=ABI` selects another ABI of the target:
+
+| Target | ABIs |
+|---|---|
+| `x86-m16` | `cdecl` (Borland, the default), `watcom`, `ia16`, `regparm3` |
+| `x86-m32` | `watcom`, `sysv` |
+
+The C runtime and its start-up are in `runtime/c`, on top of the OS layer in
+`runtime/shared/dos`.
+
+## Usage
+
+```
+llrm-c SOURCE [-o OUT] [-I DIR]... [options]
+```
+
+`-o OUT.obj` (or `.o`) writes an object; any other output name, or `-S`,
+writes assembly. The object format is `-fobject-format=omf|elf|macho|coff`.
+
+| Option | Does |
+|---|---|
+| `-I DIR`, `--include DIR` | Add an include directory |
+| `-oa` | Open Watcom's relaxed alias checking: an object whose address is never taken is unaliased |
+| `-on` | Open Watcom's relaxed floating point |
+| `--dump DIR` | Write every stage to `DIR` |
+| `--os-layer FIELD` | Print one field of the target's OS layer and exit |
+| `-g` | CodeView line numbers, symbols and types |
+| `-fsanitize=stack` | Check the stack on entry, comparing with Open Watcom's `_STACKLOW` and calling `__STKOVERFLOW` |
+| `-ftrapv`, `-fwrapv` | Signed overflow traps, or wraps |
+
+The shared options of `llrm-qb`, `llrm-c` and `llrm-nib` apply: `-O0` to
+`-O3`, `-Omax`, `-Os`, `-Oz`, `-Og`, `-f[no-]PASS`, `-march`, `-mtune`,
+`-m[no-]stack-is-data`, `-m[no-]far-bss`, `--machine`, `-fstack-usage` and
+`-Wstack-usage`. `llrm-c --help` prints the full list.
+
+A program that includes `llrm_os.h` finds it without `-I`: the header is the
+target's OS layer interface. The target's physical addresses are defined as
+`PHYSICAL_<NAME>`.
+
+## Build
+
+The front end is built by `build.rs` from an Open Watcom tree: `$OWROOT` when
+set, otherwise a tree cached per commit (`toolchain/owshim/ow-commit`) and
+bootstrapped once. `--no-default-features --features wccq` builds only the front
+end. Without the toolchain feature `llrm-c` still reads `.cgs` streams.
+
+## Tests
+
+Unit tests are in `crates/frontends/llrm-c/src/`. Programs in `tests/run/c`
+are compiled, run in DOSBox-X and compared with their `.out` by
+`tools/dosbatch/run_tests.py c`; see [testing](../../working/testing.md).

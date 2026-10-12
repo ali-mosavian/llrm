@@ -1,22 +1,75 @@
-//! Non-wrapping integer intervals, scoped to the branch edges and counted
-//! loops that bound them: llrm-core's `analysis/ranges.rs`, a port of
-//! `qbopt/analysis/ranges.py`, adapted to the rich MIR. A width is in bits.
+//! Non-wrapping integer intervals per block, from the branch edges that
+//! dominate a block and the counted loops that hold it.
 //!
-//! A comparison is an `icmp` feeding a conditional `br`, where the old MIR
-//! read a flags value and a branch's test; an increment is an `add`. Old
-//! `Copy` has no counterpart.
+//! # How it works
+//! An `Interval` is `[low, high]` over mathematical integers at a bit width,
+//! signed. A value's interval is the intersection of what several sources give.
 //!
-//! `exact_offsets` is of an access into its own object's address, the
-//! only root whose offset is known to start at 0; the old far origin has
-//! no counterpart.
+//! Operands. `_operand` reads a constant's, an entry in the scope's
+//! `Intervals`, a parameter's `range` attribute or a `!range` on a load or call
+//! (`declared`), or a single known value from [`crate::consts`]. `_computed`
+//! gives what an instruction computes from its operands' intervals (`add`,
+//! `sub`, `mul`, `shl`, `and`, `sext`, `zext`, fixed-point multiply), and no
+//! interval where the result could wrap.
 //!
-//! Skipped, BC object corpora:
-//! `test_fpdeep_one_based_index_has_a_bounded_byte_offset`,
-//! `test_addrm_long_array_value_keeps_counter_bounds`,
-//! `test_rngarm_writes_its_counter_only_after_the_loop`.
-//! Skipped, `test_non_comparison_flags_do_not_establish_a_bound`: a branch
-//! reads an `i1`, which only an `icmp` makes a comparison of; a flags value
-//! another operation set has no counterpart.
+//! Edges. `dominated_edges` walks the dominator tree. A conditional `br` on an
+//! `icmp` narrows the compared values on each edge (`on_edge`): signed
+//! predicates move bounds, `eq` intersects, `ne` trims an end when the other
+//! side is a point, unsigned ones only decide whether the edge is possible, and
+//! `assume` calls add facts. `_refine_through` pushes a bound back through the
+//! `add` or `sub` that made the value. An edge counts only when its destination
+//! has that one predecessor, because a join is another way around the check; a
+//! block starts from its sole predecessor's facts narrowed by the edge, or else
+//! its immediate dominator's. An edge no execution takes makes the block
+//! unreachable. `EdgeStates` keeps each block's state so a change re-solves
+//! only the blocks it reaches (`edges_solved`).
+//!
+//! Loops. `bounded_solved` handles each counted loop (`induction`'s trip
+//! counts) outer first. A counter that steps by a constant from a known start
+//! gets the interval its trip count allows (`_recurrence_span` refuses
+//! wrapping), a header that tests before the trip also sees the exit value, and
+//! a counter with an `nsw` step never goes back past its start. The loop's
+//! operations are then swept to a fixed point in the scope of each block,
+//! narrowed by the edges inside the loop and above its header. Header phis with
+//! no counted proof that stay inside a box `[-2^k, 2^k)` on every entry and
+//! latch are given the box, grown by powers of two until the latches stay in
+//! it. Two loops whose facts contradict at a block make it `unreachable`.
+//! `Bounds` holds the result: facts from the loops (`within`) over those from
+//! the edges. A change re-solves only the loops it reaches (`loops_reached`).
+//!
+//! ```text
+//!   entry:  ...
+//!   b1:     %c = icmp slt %i, 10         b2 (taken):    %i in [lo, 9]
+//!           br %c, b2, b3                b3 (not taken): %i in [10, hi]
+//!   loop:   %i = phi [0, pre], [%n, latch]; %n = add nsw %i, 1
+//!           counted trips 10    ->  %i in [0, 9] in the body, [0, 10] at exit
+//! ```
+//!
+//! Queries. `scoped` is every block's intervals (loops narrowed by edges);
+//! `operand_at` is one operand's at one block without copying the rest.
+//! `covering` widens an indexed access into its own object to the byte interval
+//! it can touch; `inside_object` says that interval lies inside the object.
+//! `exact_offsets` finds index values whose every access sums, at any wider
+//! width, to the same bytes, because every partial sum is a non-negative
+//! integer below `2**index_bits`; it is used where the object's own address is
+//! the only root known to start at 0.
+//!
+//! # Provides
+//! The interval facts above. In the manager they are `DominatedEdges` and
+//! `Bounded` (both incremental) and `Ranges`, which bundles them with registers
+//! for a pass; `Bounded` is held only when `Outer::loop_intervals` is on (-O2
+//! and up). Consumers: [`crate::alias`], [`crate::regions`], [`crate::guards`],
+//! [`crate::memoryssa`], [`crate::avail`], [`crate::parameter_ranges`], and in
+//! llrm-transforms `algebraic`, `hoist`, `loopexit`, `indvars`, `decide`,
+//! `fixednarrow`, `ports`, `interprocedural`.
+//!
+//! # Needs
+//! [`crate::consts`] (`Known`, the registers), [`crate::induction`] (counted
+//! loops), [`crate::assumptions`], [`crate::cfg`] (shape and dominance).
+//!
+//! # See also
+//! GCC's ranger (`gimple-range-cache.cc`, `ranger_cache::range_on_entry`);
+//! LLVM's LazyValueInfo and ScalarEvolution value ranges.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -2139,9 +2192,18 @@ fn narrow_to(
 /// Every interval known at each block: a loop's counters and what they
 /// compute, narrowed by the branch edges that dominate it.
 pub fn scoped(unit: &Unit) -> Result<Facts, String> {
-    let mut result = bounded(unit)?;
-    for (at, edges) in dominated_edges(unit)? {
-        let known = result.entry(at).or_default();
+    // The solve's own edges are the ones put in: a block no counted loop holds
+    // has them as its facts already, and narrowing a map by itself, entry
+    // by entry for every block of a chain of N branches, was most of the
+    // work (N^2 of them).
+    let bounds = bounded_solved(unit, &unit.registers(), None)?;
+    let mut result = bounds.facts();
+    for (at, edges) in &bounds.edges {
+        if !bounds.within.contains_key(at) {
+            continue;
+        }
+        let edges = (**edges).clone();
+        let known = result.entry(*at).or_default();
         for (value, interval) in edges {
             match known.get(&value) {
                 Some(previous) if previous.width == interval.width => {

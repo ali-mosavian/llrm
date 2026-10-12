@@ -1,10 +1,47 @@
-//! Which blocks are a loop, and how deeply nested each one is: copied from
-//! llrm-core's `analysis/loops.rs`, the port of `qbopt/analysis/loops.py`,
-//! for any IR whose blocks are `Node`s.
+//! Which blocks are a loop, and how deeply nested each one is, for any IR whose
+//! blocks are `Node`s.
 //!
-//! Python's frozensets become `BTreeSet`s and its result dicts `BTreeMap`s:
-//! every caller only looks them up.  `irreducible` keeps block order where
-//! its DFS start order depends on it.
+//! # How it works
+//! Dominance comes from `llrm_support::graph` (re-exported here). A back edge
+//! is an edge whose target dominates its source. Back edges that share a
+//! header are one loop: its `latches` are their sources, and its `body` is the
+//! union of the blocks that reach each latch without passing back through the
+//! header (`_body` puts the header in first, which stops the walk).
+//!
+//! ```text
+//!        b0
+//!         |
+//!         v
+//!    +--> b1 ---> b4          back edges  b3->b1   b2->b2
+//!    |    |
+//!    |    v                   loop h=b1  latches {b3}  body {b1,b2,b3}
+//!    |   b2 <-+  (self loop)  loop h=b2  latches {b2}  body {b2}
+//!    |    |  -+
+//!    |    v
+//!    +--- b3
+//! ```
+//!
+//! `loops` sorts by body size, so an inner loop precedes the loops around it.
+//! `depth` counts the loops each block is in, 0 for straight-line code.
+//! `immediate_dominators` takes, of a block's strict dominators, the one with
+//! the most dominators itself. `frontiers` is the dominance frontier: the
+//! blocks a phi belongs in, found by walking each join's predecessors up to the
+//! join's immediate dominator.
+//!
+//! `irreducible` finds blocks left in a cycle once every back edge is cut. It
+//! cuts them and runs a three-colour DFS on the rest: an edge into a grey block
+//! closes a cycle no natural loop explains, and its target is reported.
+//! Unreachable blocks are ignored. `irreducible_under` takes dominance already
+//! found.
+//!
+//! # Provides
+//! `Loop`, `back_edges`, `loops`, `depth`, `irreducible`, `irreducible_under`,
+//! `immediate_dominators` and `frontiers`. Consumers: [`crate::cfg`]
+//! (`Dominance::irreducible`), [`crate::noreturn`], and the loop passes of
+//! `llrm-transforms` (grep `graph::loops`).
+//!
+//! # See also
+//! LLVM `LoopInfo`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

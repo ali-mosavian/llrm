@@ -1,24 +1,74 @@
-//! Available loads and dead stores, as LLVM's GVN load PRE and DSE find
-//! them through MemoryDependence: llrm-core's `analysis/avail.rs`, adapted
-//! to the rich MIR.
+//! Available loads and dead stores, as LLVM's GVN load forwarding and DSE find
+//! them through MemoryDependence.
 //!
-//! A load is served by the value a MemorySSA walk finds in its bytes
-//! (`forwardable_walk`); `loadjoins` forms a phi where predecessors differ,
-//! from MemorySSA's per-edge proof. A value serves a read only of its own
-//! type. The forward availability map this once solved (`MemRef -> Operand`
-//! at each block) was deleted after the walk served every load it served
-//! (45216 of 45216 over the QCport -O2 compile) and cost more.
+//! # How it works
+//! Two independent queries share the memory model (`MemRef` cells and
+//! [`crate::memoryssa`]'s `Accesses`).
 //!
-//! Dropped, with no rich MIR counterpart: `Holder` (what a store wrote is
-//! an operand, a constant or a global's address included), `_addressing`,
-//! `_real` and `_preserved` (a load defines its whole result from its one
-//! pointer), `_crosses_edges` and every stack exclusion (no push area),
-//! the runtime names in `calls` (what a call touches is `Accesses`'), float
-//! exceptions, `sealed` and `handles_errors` (a handler in this function is
-//! reached along an `invoke`'s unwind edge, which the walk follows),
-//! `bounds` (the region lattice's
-//! landmarks), `Forward::op` (`at` names the instruction) and the
-//! `DEAD_OVERLAPS` counter.
+//! Forwarding. `forwardable_walk` takes a set of loads and, for each plain
+//! (non-volatile) load, asks MemorySSA for the nearest writes that may clobber
+//! its bytes and tries three sources in order:
+//!
+//! 1. One clobber that is a plain store to the same bytes, defined before the
+//!    load, whose value has the load's type: the load is that value.
+//! 2. Two or more clobbers (at most `MAX_NEAREST_WRITES`) that are all exact
+//!    stores of one value defined where the load can read it, such as the arms
+//!    of a join that each stored the same thing.
+//! 3. A dominating load of the same bytes, nearest first, with nothing between
+//!    the two that may change them (`MemorySSA::unchanged`). A candidate whose
+//!    walk fails also fails every load that dominates it.
+//!
+//! A value serves a read only of its own type. Each answer is a `Forward { at,
+//! value }`.
+//!
+//! ```text
+//!    store i32 %v, p          %a = load p     <- 1: %a is %v
+//!    ...                      ...
+//!    %a = load p              %b = load p     <- 3: %b is %a
+//!    ...
+//!    br c, T, F      T: store %v, p   F: store %v, p
+//!    J: %b = load p                                 <- 2: %b is %v
+//! ```
+//!
+//! Dead stores. `dead_stores` is a backward must-overwrite analysis over the
+//! CFG. Every cell a function stores to is numbered once (`Stored`), as LLVM's
+//! DSE numbers its memory locations, and a block's state is a set of numbered
+//! cells overwritten before any read. Walking a block backward:
+//!
+//! - a plain store whose cell is covered by one overwritten cell, or whose
+//!   bytes the overwritten cells together write (`pieced`), is dead; the cell
+//!   then joins the set;
+//! - an instruction that reads or writes anything else removes the cells it may
+//!   touch (`clobber`, using `may_clobber` and `EscapedBefore` where given);
+//! - a fill (what a call writes before it reads) adds its cells.
+//!
+//! At a join the state is the intersection over the successors, computed per
+//! cell with "some cell naming the same bytes" (`alike`) so a spelling
+//! difference does not lose it. The fixed point starts from every stored cell
+//! and shrinks, with a worklist in postorder, and only the last verdicts stand.
+//! A block with no successor starts from nothing, since the caller may read the
+//! cell; with `private` (a predicate for cells nothing outside the function can
+//! read) it starts from the private cells; a block ending in `unreachable`
+//! starts from every cell. A call whose accesses are not known keeps only the
+//! private cells in the set (nothing but a named access can read those); any
+//! other unknown instruction empties it.
+//!
+//! Cells that share bytes share an overlap bucket (`regions`), so a cell is
+//! compared with its bucket and not with all cells.
+//!
+//! # Provides
+//! `forwardable_walk`, `dead_stores`, `dead_stores_escaping`, and the
+//! accessors `loaded_into`, `stored_from`, `stored_cell`. Consumers:
+//! `transform` (load forwarding), `loadjoins` and `dse` in `llrm-transforms`.
+//!
+//! # Needs
+//! [`crate::memoryssa`], [`crate::alias`] (`EscapedBefore`), [`crate::ranges`]
+//! (register constants), [`crate::cellmap`], [`crate::regions`] and
+//! [`crate::cfg`].
+//!
+//! # See also
+//! LLVM `MemoryDependenceAnalysis`, GVN `processLoad` and
+//! `DeadStoreElimination`.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -125,10 +175,15 @@ struct Stored {
     number: IndexMap<MemRef, usize>,
     index: CellMap<usize, (), OverlapBucket>,
     private: Bits,
+    /// The cells that do not certainly name their own bytes.
+    selfless: Bits,
     /// Per cell, lazily: the cells whose store writes all its bytes, the
     /// cells naming its bytes, and those placed to write some of them.
     covering: RefCell<Vec<Option<Rc<Bits>>>>,
     alike: RefCell<Vec<Option<Rc<Bits>>>>,
+    /// `alike`, as the cells it holds, for a test that asks whether one is in a
+    /// set.
+    alike_cells: RefCell<Vec<Option<Rc<[usize]>>>>,
     pieces: RefCell<Vec<Option<Rc<Bits>>>>,
 }
 
@@ -155,13 +210,17 @@ impl Stored {
             cells.iter().enumerate().filter(|(_, one)| private(one)).for_each(|(at, _)| marked.insert(at));
         }
         let size = cells.len();
+        let mut selfless = Bits::new(size);
+        (0..size).filter(|&at| !same_bytes(unit, &cells[at], &cells[at])).for_each(|at| selfless.insert(at));
         Self {
+            selfless,
             cells,
             number,
             index,
             private: marked,
             covering: RefCell::new(vec![None; size]),
             alike: RefCell::new(vec![None; size]),
+            alike_cells: RefCell::new(vec![None; size]),
             pieces: RefCell::new(vec![None; size]),
         }
     }
@@ -223,6 +282,23 @@ impl Stored {
         at: usize,
     ) -> Rc<Bits> {
         self.related(&self.alike, at, |one, other| same_bytes(unit, one, other))
+    }
+
+    /// Whether a cell naming the bytes of cell `at` is in `set`.
+    fn alike_in(
+        &self,
+        unit: &Unit,
+        at: usize,
+        set: &Bits,
+    ) -> bool {
+        ALIKE_ASKS.with(|asked| asked.set(asked.get() + 1));
+        let known = self.alike_cells.borrow()[at].clone();
+        let cells = known.unwrap_or_else(|| {
+            let cells: Rc<[usize]> = self.alike(unit, at).iter().collect();
+            self.alike_cells.borrow_mut()[at] = Some(cells.clone());
+            cells
+        });
+        cells.iter().any(|&one| set.contains(one))
     }
 
     /// Whether the cells in `overwritten` together write every byte of
@@ -490,21 +566,28 @@ pub fn dead_stores_escaping(
     while let Some(std::cmp::Reverse(at)) = work.pop() {
         queued[at] = false;
         let block = by_rank[at];
-        let mut out: Option<Bits> = None;
-        for successor in &block.succ {
-            let have = &entry[successor];
-            out = Some(match out {
-                None => have.clone(),
-                Some(mut out) => {
-                    for one in out.iter().collect::<Vec<_>>() {
-                        if !stored.alike(unit, one).intersects(have) {
-                            out.remove(one);
-                        }
+        // What a cell is overwritten by on every successor path: the first's
+        // entry, less the cells no cell naming their bytes is overwritten in
+        // another's. A cell that names its own bytes and is in the entry
+        // stays, so only the others are asked.
+        let mut haves = block.succ.iter().map(|successor| &entry[successor]);
+        let out = haves
+            .next()
+            .map(
+                |first| {
+                    let mut out = first.clone();
+                    for have in haves {
+                        let mut doubt = out.clone();
+                        doubt.subtract(have);
+                        let mut selfless = out.clone();
+                        selfless.intersect_with(&stored.selfless);
+                        doubt.union_with(&selfless);
+                        let gone: Vec<usize> = doubt.iter().filter(|&one| !stored.alike_in(unit, one, have)).collect();
+                        gone.into_iter().for_each(|one| out.remove(one));
                     }
                     out
-                }
-            });
-        }
+                },
+            );
         // No successor at all: only the caller may read it -- and after an
         // `unreachable` nothing does, as LLVM's DSE skips such exits; the
         // noreturn call before it reads what escaped by then.
@@ -563,6 +646,16 @@ fn aborts(
     unit.function
         .terminator(cfg::block(at))
         .is_some_and(|last| unit.function.instruction(last).opcode == Opcode::Unreachable)
+}
+
+thread_local! {
+    static ALIKE_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has asked whether a cell naming a cell's bytes is
+/// overwritten on a path, for a test that a join asks of the cells that differ.
+pub fn alike_asks() -> usize {
+    ALIKE_ASKS.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -675,7 +768,7 @@ fn memory_providers(
         };
         // A load that is invariant is clobbered by nothing; the store before it
         // that initialised what it reads is still the value it has.
-        let clobbers = graph.clobbers_ignoring_invariance(site, &cell);
+        let clobbers = graph.nearest_writes(site, &cell);
         let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
         if let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site)
             && let Some((stored, value)) = stored_from(unit, accesses, source)
@@ -689,7 +782,7 @@ fn memory_providers(
         // Several clobbers, each an exact store of the one value, and that
         // value defined where it reaches the load: the arms of a join
         // that stored the same thing.
-        if clobbers.len() > 1
+        if (2..=memoryssa::MAX_NEAREST_WRITES).contains(&clobbers.len())
             && let Some(value) = joined_store(unit, accesses, &graph, &clobbers, &cell, site, &available_value)
             && serves(unit, value, result)
         {

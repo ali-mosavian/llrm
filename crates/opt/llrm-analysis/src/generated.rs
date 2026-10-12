@@ -1,13 +1,37 @@
-//! Random loops for checking the recurrence form against the interpreter.
+//! Random loops for checking the recurrence form (`induction::Scev`) against
+//! the interpreter.
 //!
-//! A case is one loop, `i = x; loop { e0..en; i += step }`, whose values are
-//! random expressions of the counter and the invariants `a b c s x`: add,
-//! sub, mul, shl by a constant, sext, zext and trunc, up to three deep.
+//! # How it works
+//! A case is one counted loop over 16-bit values, built from a seed:
+//!
+//! ```text
+//!  b0:  invariants (expressions of the arguments a b c s x and constants)
+//!  b1:  %i = phi [start, b0], [%i + step, b1]      start: %x or a constant
+//!       %t = phi [0, b0], [%t + 1, b1]             step:  %s or a constant
+//!       e0 .. en  random expressions of %i and the invariants
+//!       select chain on %which: returns ej
+//!       br (%t + 1 <u %n), b1, b2
+//! ```
+//!
+//! Each expression is built up to three deep from add, sub, mul, shl by a
+//! constant, `sext`, `zext` and `trunc`, with 16- and 32-bit widths. A
+//! `Tracked` value records its name, width and degree in the counter (0
+//! invariant, 1 affine, more not a recurrence) and whether an extension of a
+//! varying value is on the way (affine only where ranges say it does not
+//! wrap). `Tracked::affine` says a recurrence form should exist for it.
+//!
 //! Evaluating the loop with `which = j` returns `ej` on the last trip, so
-//! any value's form can be compared with what the program computes.
+//! `observed` runs the module in the interpreter and any value's form can be
+//! compared with what the program computes, on inputs from `Inputs::random`.
+//! `Rng` is xorshift64* seeded per case, so a case is the same everywhere.
 //!
 //! Seeds are replayable: `SCEV_SEED=k` runs seed `k` alone and prints its
 //! text; `SCEV_SEEDS=n` runs `n` seeds instead of the default.
+//!
+//! # Provides
+//! `case`, `seeds`, `observed`, `Inputs`, `Rng`, `Tracked`, built only for
+//! tests or the `testing` feature. Consumers: the tests of
+//! [`crate::induction`] and `expand` in `llrm-transforms`.
 
 use llrm_mir::interpret::{Val, run};
 use llrm_mir::module::Module;

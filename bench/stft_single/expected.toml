@@ -1,0 +1,74 @@
+reason = "new benches: STFT of a 64Ki-sample generated signal, single and fixed"
+blessed = "2026-10-11"
+
+[bas.O2]
+code_bytes = 1245
+data_bytes = 4701
+bss_bytes = 0
+kernel_ms = 872.2596
+
+[bas.Os]
+code_bytes = 1203
+data_bytes = 4701
+bss_bytes = 0
+kernel_ms = 871.4081
+
+[c.O2]
+code_bytes = 827
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 325.0169
+
+[c.Os]
+code_bytes = 779
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 322.3455
+
+[nib.O2]
+code_bytes = 2401
+data_bytes = 1089
+bss_bytes = 0
+kernel_ms = 646.3395
+
+[nib.Os]
+code_bytes = 2405
+data_bytes = 1089
+bss_bytes = 0
+kernel_ms = 653.1244
+
+[bcc.O2]
+code_bytes = 1115
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 802.1648
+
+[bcc.Os]
+code_bytes = 1129
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 1101.862
+
+[tcpp.O2]
+code_bytes = 1264
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 1137.2573
+
+[tcpp.Os]
+code_bytes = 1246
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 1179.9877
+
+[bc.O2]
+code_bytes = 2014
+data_bytes = 61
+bss_bytes = 130
+kernel_ms = 2136.2355
+
+[pds71.O2]
+code_bytes = 2036
+data_bytes = 57
+bss_bytes = 130
+kernel_ms = 2036.0259

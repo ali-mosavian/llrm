@@ -3,11 +3,14 @@
 
 use std::process::Command;
 
+// The arguments are read (`a`), so the two calls stay two: with the swapped
+// arguments dead they were one call twice, `h + 1 + h`, which is `2h + 1`, and
+// the function no longer has the shape this tests.
 const KERNEL: &str = "
 static int hanoi(int n, int a, int b, int c)
 {
     if (n == 0) return 0;
-    return hanoi(n - 1, a, c, b) + 1 + hanoi(n - 1, c, b, a);
+    return hanoi(n - 1, a, c, b) + a + hanoi(n - 1, c, b, a);
 }
 int f(int n) { return hanoi(n, 1, 3, 2); }
 ";

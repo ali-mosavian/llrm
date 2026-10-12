@@ -30,6 +30,7 @@ use llrm_analysis::ssa::SsaUpdater;
 use llrm_analysis::{cfg, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
@@ -139,11 +140,19 @@ pub fn threaded(
                 Operand::Value(c) if matches!(function.value(c).def, ValueDef::Instruction(made) if matches!(function.instruction(made).opcode, Opcode::ICmp(_)) && compared_again(function, block, c))
             )
         });
-    if !any && !joined {
-        return false;
-    }
     let mut copied = 0;
     let mut changed = false;
+    // A loop whose header branches on an invariant, its arms rejoining before
+    // the latch: split into a loop for each arm.
+    if correlate && states && !size && split_arms(context, function, &mut copied) {
+        changed = true;
+    }
+    if !any && !joined {
+        if changed {
+            cfg::_unreachable(context, function);
+        }
+        return changed;
+    }
     // The paths of the branches are those of the function as it came: a branch
     // the copies made is not threaded again, or a loop would be peeled one
     // trip at a time. GCC registers its threads once and applies them together.
@@ -798,6 +807,405 @@ fn copy(
         }
     }
     count
+}
+
+/// A loop header's branch on a compare the loop does not change, the two arms
+/// rejoining where a chain of blocks runs to the latch: each arm is given a
+/// copy of the chain and of the header's phis, so the loop of an arm no longer
+/// tests the branch. GCC reaches it by threading the latch's jump to the header
+/// along each arm (`thread1`, `tree-ssa-threadupdate.cc`), the branch being
+/// settled by the arm the trip took.
+struct Arms {
+    header: BlockId,
+    /// The arms' heads, the join and the chain from it to the latch.
+    heads: [BlockId; 2],
+    chain: Vec<BlockId>,
+    /// The arms' blocks, besides the chain.
+    regions: [IdSet<BlockId>; 2],
+    /// The block on each arm that enters the join: the header itself where the
+    /// arm's head is the join.
+    feeders: [BlockId; 2],
+    /// Instructions of the chain, what one copy of it holds.
+    size: usize,
+}
+
+/// `loop_`'s arms, where it has the shape.
+fn arms_of(
+    function: &Function,
+    loop_: &Loop,
+) -> Option<Arms> {
+    let header = cfg::block(loop_.header);
+    let [latch_at] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
+    let latch = cfg::block(latch_at);
+    let body: IdSet<BlockId> = loop_.body.iter().map(|&at| cfg::block(at)).collect();
+    let outside = function.predecessors(header).into_iter().filter(|one| !body.contains(one)).count();
+    if outside != 1 || latch == header {
+        return None;
+    }
+    // The header holds phis and its branch.
+    let last = function.terminator(header)?;
+    if function
+        .block(header)
+        .instructions()
+        .iter()
+        .any(|&inst| inst != last && function.instruction(inst).opcode != Opcode::Phi)
+    {
+        return None;
+    }
+    let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] = function.instruction(last).operands[..]
+    else {
+        return None;
+    };
+    if yes == no || yes == header || no == header || !body.contains(&yes) || !body.contains(&no) {
+        return None;
+    }
+    // The compare is made before the loop, of values made before it.
+    let ValueDef::Instruction(made) = function.value(condition).def else { return None };
+    if !matches!(function.instruction(made).opcode, Opcode::ICmp(_)) {
+        return None;
+    }
+    let inside = |value: ValueId| match function.value(value).def {
+        ValueDef::Instruction(inst) => function.parent(inst).is_some_and(|block| body.contains(&block)),
+        _ => false,
+    };
+    if function.parent(made).is_some_and(|block| body.contains(&block))
+        || function.instruction(made).operands.iter().any(|one| matches!(one, Operand::Value(value) if inside(*value)))
+    {
+        return None;
+    }
+    // Other blocks of the loop are entered from the loop alone.
+    if body.iter().any(|block| block != header && function.predecessors(block).iter().any(|one| !body.contains(one))) {
+        return None;
+    }
+    let reach = |from: BlockId| {
+        let mut seen = IdSet::new();
+        let mut pending = vec![from];
+        while let Some(block) = pending.pop() {
+            if block == header || !body.contains(&block) || !seen.insert(block) {
+                continue;
+            }
+            pending.extend(function.successors(block));
+        }
+        seen
+    };
+    let (from_yes, from_no) = (reach(yes), reach(no));
+    let both: IdSet<BlockId> = from_yes.iter().filter(|block| from_no.contains(block)).collect();
+    // The join: where the common blocks begin; the chain from it to the latch.
+    let heads: Vec<BlockId> =
+        both.iter().filter(|&block| !function.predecessors(block).iter().any(|one| both.contains(one))).collect();
+    let [join] = heads[..] else { return None };
+    let mut chain = vec![join];
+    while *chain.last()? != latch {
+        let here = *chain.last()?;
+        let next: Vec<BlockId> =
+            function.successors(here).into_iter().filter(|one| body.contains(one) && *one != header).collect();
+        let [next] = next[..] else { return None };
+        if function.predecessors(next) != [here] || chain.contains(&next) {
+            return None;
+        }
+        chain.push(next);
+    }
+    if chain.len() != both.len() || chain.iter().any(|block| !both.contains(block)) {
+        return None;
+    }
+    // Only the latch goes back to the header.
+    if chain[..chain.len() - 1].iter().any(|&block| function.successors(block).contains(&header)) {
+        return None;
+    }
+    // Each arm has its blocks, ending at the join by one block.
+    let mut regions = [IdSet::new(), IdSet::new()];
+    let mut feeders = [header, header];
+    for (arm, (head, from)) in [(yes, &from_yes), (no, &from_no)].into_iter().enumerate() {
+        regions[arm] = from.iter().filter(|block| !both.contains(block)).collect();
+        let entering: Vec<BlockId> = function
+            .predecessors(join)
+            .into_iter()
+            .filter(|one| regions[arm].contains(one) || (*one == header && head == join))
+            .collect();
+        let [one] = entering[..] else { return None };
+        feeders[arm] = one;
+        // An arm's blocks go only to its own, the join, or out of the loop.
+        for block in regions[arm].iter() {
+            if function
+                .successors(block)
+                .into_iter()
+                .any(|to| body.contains(&to) && !regions[arm].contains(&to) && to != join)
+            {
+                return None;
+            }
+        }
+    }
+    if function.predecessors(join).len() != 2 || regions[0].iter().any(|block| regions[1].contains(&block)) {
+        return None;
+    }
+    let size = crate::inline::gcc_insns_in(
+        function,
+        chain.iter().flat_map(|&block| function.block(block).instructions().to_vec()),
+    ) as usize;
+    Some(Arms { header, heads: [yes, no], chain, regions, feeders, size })
+}
+
+/// Every loop `arms_of` finds, split into a loop for each arm, within what is
+/// left of `MAX_COPIED`; whether any was.
+fn split_arms(
+    context: &mut Context,
+    function: &mut Function,
+    copied: &mut usize,
+) -> bool {
+    let mut changed = false;
+    let mut done = BTreeSet::new();
+    loop {
+        let shape = cfg::Shape::of(function);
+        let found = shape
+            .loops
+            .iter()
+            .filter(|one| !done.contains(&one.header))
+            .find_map(
+                |one| {
+                    let arms = arms_of(function, one)?;
+                    // Two copies of the chain, in gcc's unit.
+                    let copies = 2 * arms.size.saturating_sub(1).max(1);
+                    (copies <= MAX_PATH && *copied + copies <= MAX_COPIED).then_some((one.header, arms, copies))
+                },
+            );
+        let Some((header, arms, copies)) = found else { break };
+        // Whatever the split loop holds is not split again: its header is gone.
+        done.insert(header);
+        *copied += copies;
+        llrm_support::debug!(
+            "jumpthread",
+            "split the loop headed b{header} by its invariant branch: {copies} instructions copied"
+        );
+        _split(context, function, &arms);
+        changed = true;
+    }
+    if changed {
+        cfg::_unreachable(context, function);
+    }
+    changed
+}
+
+fn _split(
+    context: &mut Context,
+    function: &mut Function,
+    arms: &Arms,
+) {
+    let _ = context;
+    let header = arms.header;
+    let join = arms.chain[0];
+    let latch = *arms.chain.last().expect("a chain");
+    let branch = function.terminator(header).expect("a branch");
+    let void = function.instruction(branch).ty;
+    let phis = crate::edges::phis(function, header);
+    // The header's phis once more at the head of each arm: what the trip
+    // before made, or at the first trip what the header took.
+    let mut heads = Vec::new();
+    for _ in 0..2 {
+        let block = function.create_block(None);
+        function.insert_block(block, Some(header)).expect("a block after the header");
+        heads.push(block);
+    }
+    let mut seen = [IdMap::<ValueId, Operand>::new(), IdMap::<ValueId, Operand>::new()];
+    let mut made_phis: Vec<Vec<InstId>> = vec![Vec::new(), Vec::new()];
+    for arm in 0..2 {
+        for &phi in &phis {
+            let ty = function.instruction(phi).ty;
+            let copy = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), None);
+            function.insert(copy, Position::End(heads[arm])).expect("a new block");
+            let result = function.instruction(phi).result.expect("a phi's value");
+            let made = function.instruction(copy).result.expect("a phi's value");
+            seen[arm].insert(result, Operand::Value(made));
+            made_phis[arm].push(copy);
+        }
+    }
+    // A chain for each arm.
+    let mut chains: Vec<IdMap<BlockId, BlockId>> = Vec::new();
+    let mut values: Vec<IdMap<ValueId, Operand>> = Vec::new();
+    for arm in 0..2 {
+        let mut at = IdMap::new();
+        let mut after = heads[arm];
+        for &block in &arms.chain {
+            let clone = function.create_block(None);
+            function.insert_block(clone, Some(after)).expect("a block after the chain");
+            after = clone;
+            at.insert(block, clone);
+        }
+        let mut map = seen[arm].clone();
+        let mapped = |one: Operand, map: &IdMap<ValueId, Operand>| match one {
+            Operand::Value(value) => map.get(&value).copied().unwrap_or(one),
+            other => other,
+        };
+        let feeder = if arms.feeders[arm] == header { heads[arm] } else { arms.feeders[arm] };
+        for &block in &arms.chain {
+            let clone = at[&block];
+            for inst in function.block(block).instructions().to_vec() {
+                let original = function.instruction(inst).clone();
+                if original.opcode == Opcode::Phi {
+                    // The one way in of the join.
+                    let taken = arms_of_phi(function, inst)
+                        .into_iter()
+                        .find(|(_, from)| *from == arms.feeders[arm])
+                        .expect("an input from the arm");
+                    let copy = function.create_instruction(
+                        Opcode::Phi,
+                        original.ty,
+                        vec![mapped(taken.0, &map), Operand::Block(feeder)],
+                        Flags::default(),
+                        None,
+                    );
+                    function.insert(copy, Position::End(clone)).expect("a new block");
+                    if let (Some(result), Some(made)) = (original.result, function.instruction(copy).result) {
+                        map.insert(result, Operand::Value(made));
+                    }
+                    continue;
+                }
+                let copy = function.clone_instruction(inst);
+                let operands = original
+                    .operands
+                    .iter()
+                    .map(|&one| match one {
+                        Operand::Block(to) if at.contains_key(&to) => Operand::Block(at[&to]),
+                        Operand::Block(to) if to == header => Operand::Block(heads[arm]),
+                        other => mapped(other, &map),
+                    })
+                    .collect();
+                function.set_operands(copy, operands);
+                function.insert(copy, Position::End(clone)).expect("a new block");
+                if let (Some(result), Some(made)) = (original.result, function.instruction(copy).result) {
+                    map.insert(result, Operand::Value(made));
+                }
+            }
+        }
+        chains.push(at);
+        values.push(map);
+    }
+    // The header branches to the heads, each of which goes on into its arm: the
+    // arm's own head, or the copy of the join.
+    let Operand::Value(condition) = function.instruction(branch).operands[0] else { unreachable!("a compare") };
+    let split = function.create_instruction(
+        Opcode::Br,
+        void,
+        vec![Operand::Value(condition), Operand::Block(heads[0]), Operand::Block(heads[1])],
+        Flags::default(),
+        None,
+    );
+    function.insert(split, Position::Before(branch)).expect("the header's branch");
+    function.erase(branch).expect("a branch");
+    for arm in 0..2 {
+        let target = if arms.heads[arm] == join { chains[arm][&join] } else { arms.heads[arm] };
+        let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(target)], Flags::default(), None);
+        function.insert(jump, Position::End(heads[arm])).expect("a new block");
+        // Where the arm ends in the join, it goes to the join's copy.
+        if arms.feeders[arm] != header {
+            let end = function.terminator(arms.feeders[arm]).expect("a terminated block");
+            crate::edges::retarget(function, end, join, chains[arm][&join]);
+        }
+        // The arm's head takes its way in from the arm's header copy.
+        if arms.heads[arm] != join {
+            for phi in crate::edges::phis(function, arms.heads[arm]) {
+                let incoming = arms_of_phi(function, phi)
+                    .into_iter()
+                    .map(|(value, from)| if from == header { (value, heads[arm]) } else { (value, from) })
+                    .collect::<Vec<_>>();
+                function.set_operands(phi, crate::lcssa::from_arms(&incoming));
+            }
+        }
+    }
+    // The header copies' phis: from the header the first time, from the arm's
+    // chain after.
+    for arm in 0..2 {
+        for (&phi, &copy) in phis.iter().zip(&made_phis[arm]) {
+            let result = function.instruction(phi).result.expect("a phi's value");
+            let latch_value = arms_of_phi(function, phi)
+                .into_iter()
+                .find(|(_, from)| *from == latch)
+                .map(|(value, _)| value)
+                .expect("an input from the latch");
+            let back = match latch_value {
+                Operand::Value(value) => values[arm].get(&value).copied().unwrap_or(latch_value),
+                other => other,
+            };
+            let first = Operand::Value(result);
+            function.set_operands(copy, vec![first, Operand::Block(header), back, Operand::Block(chains[arm][&latch])]);
+        }
+    }
+    // The header is entered once now: its phis keep the way in.
+    for &phi in &phis {
+        let incoming = arms_of_phi(function, phi).into_iter().filter(|(_, from)| *from != latch).collect::<Vec<_>>();
+        function.set_operands(phi, crate::lcssa::from_arms(&incoming));
+    }
+    // What the header made, an arm's blocks read as its copy has it.
+    for arm in 0..2 {
+        for block in arms.regions[arm].iter() {
+            for inst in function.block(block).instructions().to_vec() {
+                let operands = function
+                    .instruction(inst)
+                    .operands
+                    .iter()
+                    .map(|&one| match one {
+                        Operand::Value(value) => seen[arm].get(&value).copied().unwrap_or(one),
+                        other => other,
+                    })
+                    .collect();
+                function.set_operands(inst, operands);
+            }
+        }
+    }
+    // Where the chain's blocks leave the loop, the copies leave too, and the
+    // arms' blocks read the header's phis as their copy has them.
+    let body: IdSet<BlockId> = arms
+        .chain
+        .iter()
+        .copied()
+        .chain(arms.regions.iter().flat_map(|region| region.iter()))
+        .chain([header])
+        .collect();
+    let leaving: IdSet<BlockId> = body
+        .iter()
+        .flat_map(|block| function.successors(block))
+        .filter(|to| {
+            !body.contains(to) && !chains.iter().any(|at| at.values().any(|one| one == to)) && !heads.contains(to)
+        })
+        .collect();
+    for to in leaving.iter() {
+        for phi in crate::edges::phis(function, to) {
+            let mut incoming = arms_of_phi(function, phi);
+            let mut extra = Vec::new();
+            for (value, from) in incoming.clone() {
+                for arm in 0..2 {
+                    if let Some(&copy) = chains[arm].get(&from) {
+                        let mapped = match value {
+                            Operand::Value(one) => values[arm].get(&one).copied().unwrap_or(value),
+                            other => other,
+                        };
+                        extra.push((mapped, copy));
+                    }
+                }
+            }
+            // An arm's block leaves with the header's phis as its copy has
+            // them.
+            for (value, from) in &mut incoming {
+                for arm in 0..2 {
+                    if arms.regions[arm].contains(from) {
+                        if let Operand::Value(one) = *value {
+                            if let Some(&copy) = seen[arm].get(&one) {
+                                *value = copy;
+                            }
+                        }
+                    }
+                }
+            }
+            incoming.extend(extra);
+            function.set_operands(phi, crate::lcssa::from_arms(&incoming));
+        }
+    }
+}
+
+fn arms_of_phi(
+    function: &Function,
+    phi: InstId,
+) -> Vec<(Operand, BlockId)> {
+    arms(function, phi)
 }
 
 #[cfg(test)]

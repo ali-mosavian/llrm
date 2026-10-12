@@ -184,31 +184,28 @@ fn _simplified(
         COPIES.with(|copies| copies.set(copies.get() + 1));
         let mut candidate = function.clone();
         let mut grouping = false;
+        // The blocks `grouped` makes, as (block, target, sources): what the
+        // loops of the shape gain from them, without a new shape of the
+        // function.
+        let mut bridges: Vec<(i64, i64, BTreeSet<i64>)> = Vec::new();
         let predecessors = loops::predecessors(&cfg::graph(&candidate));
         let outside = predecessors[&original.header].difference(&original.body).copied().collect::<BTreeSet<_>>();
         let Some(&parent) = outside.first() else { continue };
         if outside.len() != 1 || candidate.successors(cfg::block(parent)) != [cfg::block(original.header)] {
-            if grouped(&mut candidate, original.header, &outside).is_none() {
-                continue;
-            }
+            let Some(bridge) = grouped(&mut candidate, original.header, &outside) else { continue };
+            bridges.push((cfg::id(bridge), original.header, outside));
             grouping = true;
         }
         if original.latches.len() != 1 {
-            if grouped(&mut candidate, original.header, &original.latches).is_none() {
-                continue;
-            }
+            let Some(bridge) = grouped(&mut candidate, original.header, &original.latches) else { continue };
+            bridges.push((cfg::id(bridge), original.header, original.latches.clone()));
             grouping = true;
         }
         let graph = cfg::graph(&candidate);
-        let current = if grouping {
-            cfg::Shape::of(&candidate)
-                .loops
-                .into_iter()
-                .find(|loop_| loop_.header == original.header)
-                .expect("StopIteration")
-        } else {
-            original.clone()
-        };
+        let mut current = original.clone();
+        for (bridge, target, sources) in &bridges {
+            _bridged(&mut current, *bridge, *target, sources);
+        }
         let predecessors = loops::predecessors(&graph);
         let exits = graph
             .iter()
@@ -222,22 +219,68 @@ fn _simplified(
             let reaching = predecessors.get(&target).unwrap_or(&empty);
             let sources = reaching.intersection(&current.body).copied().collect::<BTreeSet<_>>();
             if !reaching.is_subset(&current.body) {
-                if grouped(&mut candidate, target, &sources).is_none() {
+                let Some(bridge) = grouped(&mut candidate, target, &sources) else {
                     broke = true;
                     break;
-                }
+                };
+                bridges.push((cfg::id(bridge), target, sources));
                 grouping = true;
             }
         }
         if !broke && grouping {
             *function = candidate;
             changed = true;
-            shape = cfg::Shape::of(function);
+            for loop_ in &mut shape.loops {
+                for (bridge, target, sources) in &bridges {
+                    _bridged(loop_, *bridge, *target, sources);
+                }
+            }
+            if cfg!(test) || llrm_support::env_set("LLRM_CHECK_SHAPE") {
+                _agrees(&shape, function);
+            }
             whole = cfg::graph(function);
             entered = loops::predecessors(&whole);
         }
     }
     changed
+}
+
+/// What `loop_` is once `bridge` stands on the edges from `sources` to
+/// `target`: the block joins it where `target` and every source are in it (it
+/// reaches the latch through `target`, and what reaches it came from inside),
+/// and becomes its only latch where `target` is its header.
+fn _bridged(
+    loop_: &mut loops::Loop,
+    bridge: i64,
+    target: i64,
+    sources: &BTreeSet<i64>,
+) {
+    if !loop_.body.contains(&target) || !sources.is_subset(&loop_.body) {
+        return;
+    }
+    loop_.body.insert(bridge);
+    if loop_.header == target {
+        loop_.latches = BTreeSet::from([bridge]);
+    }
+}
+
+/// `LLRM_CHECK_SHAPE`: the loops kept up to date are those of a new shape of
+/// the function.
+fn _agrees(
+    kept: &cfg::Shape,
+    function: &Function,
+) {
+    let fresh = cfg::Shape::of(function);
+    let by_header = |loops: &[loops::Loop]| {
+        loops
+            .iter()
+            .map(|one| (one.header, (one.body.clone(), one.latches.clone())))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    assert!(
+        by_header(&kept.loops) == by_header(&fresh.loops),
+        "the loops kept through loopsimplify differ from a new shape's"
+    );
 }
 
 #[cfg(test)]

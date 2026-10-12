@@ -1014,7 +1014,43 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
         let (at, before) = (index[&parent], before.with_insns(insns));
         blocks[at] = before;
         blocks[position] = blocks[position].with_insns(rest);
-        live = None;
+        // What is live of a value depends on that value's own definitions and
+        // reads alone: only the values the moved anchors name changed
+        // (a full dataflow of every value for each hoist was
+        // most of this pass in a nest of copied loops).
+        if let Some(held) = live.as_mut() {
+            let named: BTreeSet<u32> = anchors
+                .iter()
+                .flat_map(|one| {
+                    one.defines
+                        .iter()
+                        .chain(&one.uses)
+                        .copied()
+                        .chain(one.delivers.iter().map(|(held, _)| held.value))
+                        .chain(one.requires.iter().map(|(held, _)| held.value))
+                })
+                .collect();
+            let now = _live_in_of(&blocks, &named);
+            for set in held.values_mut() {
+                set.retain(|value| !named.contains(value));
+            }
+            for (value, entering) in now {
+                for at in entering {
+                    held.entry(at).or_default().insert(value);
+                }
+            }
+        }
+        if llrm_support::env_set("LLRM_CHECK_JUMPS") {
+            if let Some(held) = &live {
+                let fresh = _live_values(&blocks);
+                assert!(
+                    blocks.iter().all(|block| held.get(&block.at).cloned().unwrap_or_default()
+                        == fresh.get(&block.at).cloned().unwrap_or_default()),
+                    "{}: the values live on entry to the blocks, patched past a hoist, are not those of a new solve",
+                    body.name
+                );
+            }
+        }
     }
     body.with_blocks(blocks)
 }
@@ -1022,6 +1058,87 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
 /// An inserted anchor: no bytes, no machine effect, only a virtual definition.
 fn _inert(one: &Insn) -> bool {
     one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing) && one.inserted() && one.spread.is_empty()
+}
+
+/// Where each of `values` is live on entry to a block: `_live_values` for those
+/// alone. A value is live where a path from the start of the block reaches a
+/// read of it that no definition comes before; the block's own instructions
+/// decide, backwards from its end, by the earliest mention.
+fn _live_in_of(
+    blocks: &[LirBlock],
+    values: &BTreeSet<u32>,
+) -> IndexMap<u32, BTreeSet<i64>> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Transfer {
+        Pass,
+        Gen,
+        Kill,
+    }
+    let mut parents: IndexMap<i64, Vec<usize>> = IndexMap::default();
+    for (at, block) in blocks.iter().enumerate() {
+        for to in &block.succ {
+            parents.entry(*to).or_default().push(at);
+        }
+    }
+    let position: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let mut found: IndexMap<u32, BTreeSet<i64>> = IndexMap::default();
+    let mut carried: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
+    for block in blocks {
+        for phi in &block.phis {
+            for (from, value) in &phi.incoming {
+                if values.contains(value) {
+                    if let Some(at) = position.get(from) {
+                        carried.entry(*value).or_default().insert(*at);
+                    }
+                }
+            }
+        }
+    }
+    let mut transfers: IndexMap<u32, Vec<Transfer>> =
+        values.iter().map(|value| (*value, vec![Transfer::Pass; blocks.len()])).collect();
+    for (at, block) in blocks.iter().enumerate() {
+        for one in block.insns.iter().rev() {
+            for value in one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)) {
+                if let Some(each) = transfers.get_mut(&value) {
+                    each[at] = Transfer::Kill;
+                }
+            }
+            for value in one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)) {
+                if let Some(each) = transfers.get_mut(&value) {
+                    each[at] = Transfer::Gen;
+                }
+            }
+        }
+        for phi in &block.phis {
+            if let Some(each) = transfers.get_mut(&phi.result) {
+                each[at] = Transfer::Kill;
+            }
+        }
+    }
+    for (value, each) in &transfers {
+        let mut entering = vec![false; blocks.len()];
+        let mut work: Vec<usize> = Vec::new();
+        for (at, how) in each.iter().enumerate() {
+            let live_out = carried.get(value).is_some_and(|set| set.contains(&at));
+            if *how == Transfer::Gen || (*how == Transfer::Pass && live_out) {
+                entering[at] = true;
+                work.push(at);
+            }
+        }
+        while let Some(at) = work.pop() {
+            for &parent in parents.get(&blocks[at].at).into_iter().flatten() {
+                if !entering[parent] && each[parent] == Transfer::Pass {
+                    entering[parent] = true;
+                    work.push(parent);
+                }
+            }
+        }
+        found.insert(
+            *value,
+            entering.iter().enumerate().filter(|(_, live)| **live).map(|(at, _)| blocks[at].at).collect(),
+        );
+    }
+    found
 }
 
 /// Per block, the virtual values live on entry.

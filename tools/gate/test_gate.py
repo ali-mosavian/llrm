@@ -1,5 +1,6 @@
 """The gate's path map: a change in an area selects that area's tests, and nothing is left out by omission."""
 
+import re
 import pytest
 import sys
 import subprocess
@@ -214,13 +215,14 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
 def test_a_gate_run_makes_a_target_dir_that_does_not_exist_yet(tmp_path, monkeypatch):
     """On a fresh CI runner CARGO_TARGET_DIR is not there: `run` died FileNotFoundError on target/gate-logs before any step."""
     monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "fresh" / "target"))
+    monkeypatch.setenv("LLRM_BIN", str(tmp_path / "bin"))  # the gate sets it; a plain shell does not, and snapshots a release dir that is not there
     code, failed = gate.execute(gate.Plan("fast", "test", steps=[]))
     assert code == 0 and (tmp_path / "fresh/target/gate-logs").is_dir()
 
@@ -250,6 +252,7 @@ def test_a_step_run_by_the_gate_does_not_see_a_requirement_for_a_tool_the_host_l
     for name, value in {"CARGO_TARGET_DIR": str(tmp_path / "t"), "HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1", "TCPP30_DIR": "", "TD_DIR": ""}.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv("LLRM_REQUIRE_TURBO", raising=False)
+    monkeypatch.setenv("LLRM_BIN", str(tmp_path / "bin"))
     monkeypatch.setattr(gate, "commands", lambda *a: {"probe": 'echo "[$LLRM_REQUIRE_TURBO]"'})
     assert gate.execute(gate.Plan("fast", "test", steps=["probe"]))[0] == 0
     assert (tmp_path / "t/gate-logs/probe.log").read_text().strip() == "[]"
@@ -339,8 +342,8 @@ def test_the_measure_step_has_a_command_and_no_baseline_lives_in_the_repository(
 
 def test_steps_asked_for_replace_the_planned_ones_and_the_build_comes_first():
     """Re-running a change to the measurement tools needs build and measure; the full gate took 5-7 minutes."""
-    known = set(gate.commands(gate.plan(["tools/gate/gate.py"]), gate.load(), gate.packages()))
-    p = gate.plan(["tools/gate/gate.py"])
+    known = set(gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages()))
+    p = gate.plan(["tools/gate/gate.py"], "full")
     assert p.tier == "full" and len(p.steps) > 8
     one = gate.restricted(p, ["measure"], known)
     assert one.steps == ["build", "measure"] and one.tier == p.tier and one.languages == p.languages
@@ -420,7 +423,7 @@ def test_a_one_line_change_to_any_rust_file_selects_the_fmt_step_in_the_fast_tie
 
 def test_the_build_rejects_compiler_warnings():
     assert gate.WARNINGS_AS_ERRORS == "RUSTFLAGS='-D warnings'"
-    assert gate.BUILD.count(gate.WARNINGS_AS_ERRORS) == 4
+    assert gate.BUILD.count(gate.WARNINGS_AS_ERRORS) == 3
     assert "cargo check --workspace --all-targets -q" in gate.BUILD
     assert "cargo check --release --workspace --all-targets -q" in gate.BUILD
 
@@ -492,7 +495,7 @@ def test_the_lib_step_runs_tests_in_a_random_order_that_a_seed_repeats(monkeypat
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     monkeypatch.delenv("LLRM_SHUFFLE_SEED", raising=False)
     command = gate.commands(p, cfg, pkgs)["lib"]
-    assert "RUSTC_BOOTSTRAP=1" in command and command.endswith("-Zunstable-options --shuffle"), command
+    assert command.endswith("-Zunstable-options --shuffle"), command
     monkeypatch.setenv("LLRM_SHUFFLE_SEED", "42")
     assert gate.commands(p, cfg, pkgs)["lib"].endswith("-Zunstable-options --shuffle-seed 42")
 
@@ -501,10 +504,25 @@ def test_every_step_runs_with_the_flags_the_build_used_and_the_base_build_with_n
     """`integration` (`cargo test --test X`) without the build step's RUSTFLAGS rebuilt llrm-c and replaced target/release/llrm-c while
     `torture` was starting it ("No such file or directory"): the steps share one set of flags, and the base the measure builds, which
     is historical, has none."""
-    assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS}
+    assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1"}
     assert f"RUSTFLAGS='{gate.WARNING_FLAGS}'" in gate.BUILD
     assert "RUSTFLAGS" in gate.MEASURE_BUILD and "env -u RUSTFLAGS cargo" in gate.MEASURE_BUILD
     assert "RUSTFLAGS" not in gate.MEASURE_BUILD.replace("env -u RUSTFLAGS", "")
+
+
+def test_the_slow_dos_tier_is_a_heavy_step_selected_by_the_runtime_and_the_dos32_harness():
+    """The demos and graphics sweeps (minutes) ran in the `pytest` step on every change; now they are a step of their own."""
+    assert "dos-slow" in gate.plan(["runtime/qb/gpaint.c"]).steps
+    assert "dos-slow" in gate.plan(["tools/dosbatch/qb32demos.py"]).steps
+    assert "dos-slow" not in gate.plan(["crates/frontends/llrm-c/src/lib.rs"]).steps
+    command = gate.commands(gate.plan(["runtime/qb/gpaint.c"]), gate.load(), gate.packages())["dos-slow"]
+    assert "-m slow_dos" in command and "exit 77" in command, command
+
+
+def test_the_slow_dos_tier_is_skipped_where_the_demo_sources_are_missing(tmp_path):
+    env = {"HOME": str(tmp_path), "QB45_DEMOS_DIR": str(tmp_path / "none"), "QB45_DIR": str(tmp_path / "none"), "GATE_ALLOW_MISSING": "1"}
+    skipped = gate.skipped_steps(["dos-slow"], gate.missing_capabilities(env))
+    assert "QB45_DEMOS_DIR" in skipped["dos-slow"] or "QB45_DIR" in skipped["dos-slow"], skipped
 
 
 def test_a_run_asked_for_another_commit_refuses_and_names_no_pass():
@@ -540,3 +558,165 @@ def test_the_steps_run_the_binaries_cargo_linked_before_them_not_the_path_cargo_
     # A second snapshot (another group of the gate) replaces the links.
     (release / "llrm-c").chmod(0o755)
     assert (gate.snapshot_binaries(release, tmp_path / "gate-bins") / "llrm-c").read_text() == "relinked"
+
+
+def test_a_steps_cpu_time_is_its_process_trees_and_not_the_waiting_in_it(tmp_path):
+    """The fast gate went from 170-460 s to 865-1,816 s and the wall clock could not say whether the steps grew or the host (load 52
+    on 32 cores) did. A step's CPU is user+sys of its whole tree: a child's spin counts, a sleep does not."""
+    env = {**__import__("os").environ}
+    spin = 'python3 -c "import time; t = time.process_time()\nwhile time.process_time() - t < 0.6: pass" & wait'
+    _, code, wall, cpu = gate.run_step("spin", spin, tmp_path, env)
+    assert code == 0 and cpu >= 0.5, f"a child spun 0.6 s of CPU and the step read {cpu:.2f} s"
+    _, code, wall, cpu = gate.run_step("sleep", "sleep 0.6", tmp_path, env)
+    assert wall >= 0.6 and cpu < 0.3, f"a step that only waited read {cpu:.2f} s of CPU"
+    table = gate.step_table({"a": (0, 5.0, 2.0), "b": (0, 9.0, 8.0), "skipped": (77, 0, 0)})
+    assert table.splitlines()[1].startswith("[steps] b ") and "skipped" not in table and table.endswith("10 cpu")
+
+
+def test_no_cargo_step_sets_an_environment_the_others_do_not(monkeypatch):
+    """RUSTC_BOOTSTRAP=1 on the lib step alone made cargo rebuild the workspace there (1,088 CPU-s of a 4,340 CPU-s gate) and again for
+    the next step without it: an environment variable is an input of every crate cargo builds. The variables a cargo step needs are in
+    STEP_ENV, for all of them."""
+    cfg, pkgs = gate.load(), gate.packages()
+    monkeypatch.delenv("LLRM_SHUFFLE_SEED", raising=False)
+    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"], "full")
+    for step, command in gate.commands(p, cfg, pkgs).items():
+        assert not re.match(r"\s*[A-Z_]+=\S+\s+cargo", command), f"{step} sets its own environment for cargo: {command[:80]}"
+    assert gate.STEP_ENV["RUSTC_BOOTSTRAP"] == "1"
+
+
+def test_the_doc_step_runs_rustdoc_only_where_a_doc_comment_has_a_fence_to_run(tmp_path):
+    """`cargo test --doc` took 456 CPU-s of a 4,340 CPU-s gate to run no test: every fence in the tree is ```text. Rustdoc runs when a doc
+    comment has a fence it would run: an untagged one, rust, no_run, should_panic, compile_fail, ignore."""
+    import doctests
+
+    def has(text):
+        (tmp_path / "a.rs").write_text(text)
+        return doctests.has_doctests([tmp_path])
+
+    assert not has("//! ```text\n//! a b\n//! ```\n")
+    assert not has("/// ```sh\n/// make\n/// ```\nfn f() {}\n")
+    assert has("//! ```\n//! let a = 1;\n//! ```\n")
+    assert has("/// ```rust\n/// let a = 1;\n/// ```\n") and has("/// ```no_run\n/// f();\n/// ```\n")
+    assert has("/// ```should_panic\n/// f();\n/// ```\n") and has("/// ```edition2021\n/// f();\n/// ```\n")
+    assert not has("/// ```text\n/// x\n/// ```\n/// ```text\n/// y\n/// ```\n"), "a closing fence is not an opening one"
+    command = gate.commands(gate.plan(["crates/frontends/llrm-c/src/lib.rs"], "full"), gate.load(), gate.packages())["doc"]
+    assert command.startswith("if python3 tools/gate/doctests.py") and "--doc" in command, command
+    skipped = subprocess.run(["bash", "-c", command.replace("python3 tools/gate/doctests.py crates src tests", "false")], capture_output=True, text=True)
+    assert skipped.returncode == 0 and gate.incomplete(skipped.stdout, None, False) is None, "a skipped doc step reads as a cut-short run: " + skipped.stdout
+
+
+def test_the_build_makes_one_set_of_crates_for_the_binaries_and_the_tests():
+    """`cargo build --bins` and `cargo test --no-run` each built every crate (238 and 136 CPU-s) and the second linked its llrm-c over
+    the first's: the steps ran the test build's binary and the plain build was waste."""
+    assert "cargo build" not in gate.BUILD and "cargo test --release -q --workspace --no-run" in gate.BUILD
+
+
+def test_a_diff_without_compiler_source_plans_only_the_steps_that_cover_its_files():
+    """The user's rule: a PR that changes nothing under crates/ or in the Cargo files does not run the compiler gate, it merges on narrow
+    tests of what it changed. A gate.py edit planned the full tier (every step, 4,340 CPU-s); its own tests are the pytest step."""
+    assert gate.plan(["tools/gate/gate.py", "tools/gate/test_gate.py"]).steps == ["pytest"]
+    assert gate.plan(["tools/measure.py"]).steps[-1] == "measure" and "lib" not in gate.plan(["tools/measure.py"]).steps
+    narrow = gate.plan(["tests/target_facts.rs"])
+    assert narrow.tier == "fast" and narrow.steps == ["build", "pytest", "integration", "fmt"], narrow
+    assert gate.plan(["tools/torture/torture.py"]).steps == ["build", "pytest", "torture"]
+    assert "build" not in gate.plan(["tools/gate/tiers.toml"]).steps
+    # compiler source, or a Cargo file anywhere, takes the tiers as before
+    assert gate.plan(["crates/ir/llrm-mir/src/lib.rs", "tools/gate/gate.py"]).tier == "full"
+    assert gate.plan(["Cargo.toml"]).tier == "full" and gate.plan(["crates/opt/llrm-analysis/Cargo.toml"]).steps[0] == "build"
+    assert "lib" in gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]).steps
+    # asking for the full tier still runs every step: the gate's own PRs run the gate
+    assert gate.plan(["tools/gate/gate.py"], "full").tier == "full" and len(gate.plan(["tools/gate/gate.py"], "full").steps) > 8
+
+
+def test_a_benchmark_added_on_its_own_plans_every_step_that_reads_bench():
+    """#1458 merged jpeg_single and jpeg_fixed on a run of the bench step alone and broke pytest-programs, measure and the integration tests
+    that iterate bench/ (dwarf, objwriters, toolchain) on main. The steps are the ones whose tests name the directory, found in the tests."""
+    steps = set(gate.plan(["bench/jpeg_single/jpeg_single.c", "bench/jpeg_single/jpeg_single.bas"]).steps)
+    assert {"bench", "pytest-programs", "measure", "integration"} <= steps, steps
+    assert "lib" not in steps or any("bench" in text for path, text in gate.sources().items() if path.startswith("crates/")), steps
+    readers = gate.readers("bench", gate.load())
+    assert "integration" in readers  # pytest-programs and measure come from tiers.toml's owners of bench/
+    assert gate.step_of_source("tests/dwarf.rs", gate.load()) == "integration" and gate.step_of_source("tests/cv4.rs", gate.load()) == "cv4"
+    # a directory no test names adds nothing
+    assert gate.readers("no_such_" + "directory_anywhere", gate.load()) == set()
+    assert "integration" in gate.plan(["examples/hello.c"]).steps or "pytest-programs" in gate.plan(["examples/hello.c"]).steps
+
+
+def test_a_step_with_no_log_growth_and_no_cpu_is_killed_with_its_last_lines(tmp_path):
+    """slopes' gate sat 84 minutes in pytest on a hung test, no output, nothing noticing. A step that neither writes nor computes for the
+    stall time is killed and fails with a line saying why; one that writes, or computes, is not."""
+    import subprocess as sp
+    import time as _time
+
+    def sp_out(command):
+        return sp.run(command, capture_output=True, text=True).stdout
+
+    env = {**__import__("os").environ}
+    began = _time.time()
+    _, code, wall, _ = gate.run_step("hang", "echo before the hang; sleep 63.7", tmp_path, env, stall=2)
+    assert code == gate.STALL_CODE and wall < 20 and _time.time() - began < 20, (code, wall)
+    log = (tmp_path / "hang.failed.log").read_text()
+    assert "before the hang" in log and "STALLED" in log
+    # writing keeps a step alive without CPU; computing keeps it alive without writing
+    assert gate.run_step("chatty", "for i in 1 2 3 4 5 6; do echo $i; sleep 0.5; done", tmp_path, env, stall=2)[1] == 0
+    spin = 'python3 -c "import time; t = time.process_time()\nwhile time.process_time() - t < 4: pass"'
+    assert gate.run_step("spin", spin, tmp_path, env, stall=2)[1] == 0
+    # the killed step took its subprocesses with it
+    assert "sleep 63.7" not in sp_out(["ps", "-eo", "args"]), "the stalled step's sleep outlived it"
+
+
+def test_a_test_over_its_cpu_limit_fails_with_its_name_and_its_subprocess_is_killed(tmp_path):
+    """The pytest step limited nothing: a test that computes without end ran until the gate was killed. The plugin counts CPU, its
+    subprocesses' included, as pytest-timeout cannot, and names the test."""
+    import os
+    import subprocess as sp
+    import sys as _sys
+
+    (tmp_path / "test_spins.py").write_text(
+        "import subprocess, sys\n\ndef test_a_compile_that_never_ends():\n    subprocess.run([sys.executable, '-c', 'while True: pass  # cpulimit-test-spinner'])\n\ndef test_fine():\n    assert True\n"
+    )
+    here = str(Path(gate.__file__).parent)
+    env = {**os.environ, "GATE_TEST_CPU_SECONDS": "1", "PYTHONPATH": here}
+    done = sp.run([_sys.executable, "-m", "pytest", "-p", "pytest_cpulimit", "-p", "no:cacheprovider", "-q", str(tmp_path / "test_spins.py")], capture_output=True, text=True, env=env, timeout=60, cwd=tmp_path)
+    out = done.stdout + done.stderr
+    assert done.returncode == 1 and "1 failed, 1 passed" in out, out
+    assert "CPU LIMIT" in out and "test_a_compile_that_never_ends" in out, out
+    assert "cpulimit-test-spinner" not in sp.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout, "the test's subprocess outlived the limit"
+    assert "-p pytest_cpulimit" in gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["pytest"]
+
+
+def test_a_failed_step_prints_what_its_failing_tests_printed_not_only_the_log_tail():
+    """CI's integration job said `1 target failed: -p llrm --test dwarf` and nothing of why: the gate printed the last 30 lines of the log,
+    and the panic message was far above them."""
+    cargo = "\n".join(
+        ["running 22 tests", "...", "failures:", "", "---- a_test_that_needs_a_tool stdout ----", "",
+         "thread 'a_test_that_needs_a_tool' panicked at tests/dwarf.rs:16:5:", "LLRM_REQUIRE_DWARF is set, and: needs Open Watcom's wdump (WDUMP)", "",
+         "failures:", "    a_test_that_needs_a_tool", "", "test result: FAILED. 21 passed; 1 failed"]
+        + ["running 3 tests"] * 40
+        + ["error: 1 target failed:", "    `-p llrm --test dwarf`"]
+    )
+    shown = gate.failure_text(cargo)
+    assert "LLRM_REQUIRE_DWARF is set, and: needs Open Watcom's wdump" in shown and "a_test_that_needs_a_tool" in shown
+    assert "running 3 tests" not in shown
+    pytest_log = "\n".join(["= FAILURES =", "___ test_x ___", "    def test_x():", ">       assert 1 == 2", "E       assert 1 == 2", "= short test summary info =", "FAILED test_x.py::test_x"])
+    assert "E       assert 1 == 2" in gate.failure_text(pytest_log)
+    assert gate.failure_text("everything passed\n") == ""
+
+
+def test_what_a_runner_lacks_is_a_named_skip_and_what_it_needs_is_installed(tmp_path):
+    """GitHub CI was red on every commit: `tests/dwarf.rs` failed for want of Open Watcom's wdump (LLRM_REQUIRE_DWARF made a missing tool a
+    failure), the QB45 runtime-library tests errored in LIB.EXE for want of QB45 (now only the tests that compare with BCOM45 need it), and the vsgcc harness could not link gcc -m32 programs
+    (no 32-bit libgcc: __divdi3). A tool the runner cannot have is a capability the gate names and skips; one it can have is installed."""
+    host = {"HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1"}
+    assert "wdump" in gate.missing_capabilities(host) and "LLRM_REQUIRE_WDUMP" in gate.load()["capability"]["wdump"]["require"]
+    (tmp_path / "wdump").write_text("")
+    assert "wdump" not in gate.missing_capabilities({**host, "WDUMP": str(tmp_path / "wdump")})
+    assert "LLRM_REQUIRE_WDUMP" in (gate.ROOT / "tools/debug-gate.env").read_text()
+    declared = gate.declared_requirements()
+    # BCOM45 is the oracle of these; the llrm side (jwlink) of every QB test needs no QB45
+    for test in ("test_qbbc.py", "test_qbgfx.py", "test_qbgfxstep.py", "test_qbdemos.py", "test_qbrt.py"):
+        assert declared.get(f"tools/dosbatch/{test}") == ["qb45"], test
+    for test in ("test_qb32.py", "test_qbgfxspeed.py", "test_qbgfxfill.py", "test_qbgorilla.py", "test_qbkeys.py", "test_qbstrblocks.py", "test_qbentries.py"):
+        assert declared.get(f"tools/dosbatch/{test}") is None, test
+    assert "gcc-multilib" in (gate.ROOT / ".github/actions/setup/action.yml").read_text()

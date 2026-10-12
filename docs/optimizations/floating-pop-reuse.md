@@ -1,98 +1,54 @@
-# Preserving popping arithmetic operands
+# x87 stack allocation and popping arithmetic
 
-`crates/backend/llrm-core/src/backend/floatalloc.rs` can now allocate a popping arithmetic operation whose
-left operand, right operand, or both remain live. It duplicates only live
-operands and positions the right operand at the top before the original
-operation. It also separates identical operands into two physical slots:
-computing into ST(0) and then popping it would otherwise lose the result.
+For contributors to the x87 backend. Covers how floating values are assigned to the eight-entry register stack and how a two-operand operation keeps an operand that is still live.
 
-Before, sharing a value across FSUBP and a later store was refused. With
-initial stack `[right, left]` and both values needed later, after:
+## Two passes
 
-```asm
-fld st(1)          ; working left copy
-fld st(1)          ; working right copy
-fsubp st(1),st(0)  ; left-right, originals remain below the result
+Both run in the machine phases ([backend](backend.md)) and only on bodies with floating values.
+
+- `floatassign` ([`floatassign.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/floatassign.rs)) is the allocation step, as gcc's IRA and LRA are for any register class: it decides which floating values hold one of the eight flat stack registers, and every spill, restore and memory operand it needs comes out explicit. It also materialises a floating-to-integer conversion through an owned temporary, with `wait` around the store in a BASIC module ([native-fpu-waits](../reference/semantics/native-fpu-waits.md)), and reads the integer only if something reads it.
+- `floatalloc` ([`floatalloc.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/floatalloc.rs)) converts that to stack form, as gcc's reg-stack does, and decides nothing: it tracks which value is in which stack slot (`_Stack.values`, top first) and emits the `fld`, `fxch`, `fstp st(i)` and arithmetic that put each operand where the instruction needs it.
+
+```
+ LIR with 10-byte held values
+        |  floatassign: values -> stack registers, spills, memory operands
+        v
+ LIR, still values, spills explicit
+        |  floatalloc: blocks in reverse postorder, a _Stack per block
+        v
+ LIR with st(i) operands: fld, fxch, fst/fstp, fadd..., faddp...
 ```
 
-This does not merge arithmetic or change its order, storage conversions or
-rounding. Inserted instructions own no original bytes and use the existing
-emulator-aware encoding path. Insufficient stack capacity still requires
-spilling; this change does not pretend to implement spills or cross-block
-floating allocation.
+## A two-operand operation
 
-Five fail-first cases cover each live-operand combination and identical
-operands with/without a later use. The tests select every instruction and
-simulate the allocated register stack, asserting subtraction and subsequent
-stored values, not merely instruction counts. Focused allocation/selection
-checks: 57 pass. A 154-object audit including the primary corpus and floating
-regressions changes no emitted object or emission outcome. Therefore current
-program metrics and before/after production assembly are unchanged; this
-removes an allocation blocker for future valid FP value reuse.
+`_Stack::arithmetic` ([`floatalloc.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/floatalloc.rs#L713)) follows gcc's `handleTwoArgFP`. An operand dies where nothing reads it again, and the result takes its slot.
 
-## Straight-line block edges
+| Operands | Emitted |
+|---|---|
+| neither on top, one dies | `fxch` the dying one to the top |
+| neither on top, both live | `fld` a copy of the left, which then dies |
+| top is the left, right lives | `op st(0), st(i)` (reversed form where the left is the destination) |
+| both die | popping form: `faddp`, `fsubp`, ... into the deeper slot |
+| the same value twice, still live | copy it; the product replaces the copy, so no exchange |
 
-The allocator now retains its stack across adjacent blocks when the predecessor
-has exactly that successor, the successor has exactly that predecessor, and
-the successor is not the function entry. Remaining-use counts cover the whole
-linear region, so a use in the next block causes the producer to be preserved
-before an earlier destructive operation. No boundary reload or store is added.
+Subtraction and division take their reversed form (`fsubr`, `fdivr`) when the right operand is the one on top, so operand order is never changed by an exchange. For a value used twice, the copy that is read sooner stays on top.
 
-Before, a shared sum consumed by multiplication in one block and division in
-its uniquely connected successor was unavailable at the division. After:
+Initial stack `[right, left]`, both needed later:
 
-```asm
-; first block
-fld dword [input]
-fld st(0)           ; preserve the shared value for the successor
-fmul dword [factor]
-fstp dword [product]
-; unique successor: the original value is still ST(0)
-fdiv dword [factor]
-fstp dword [quotient]
+```
+fld st(1)          ; working copy of left
+fld st(1)          ; working copy of right
+fsubp st(1),st(0)  ; left - right; the originals stay below the result
 ```
 
-The fail-first case verifies the selected sequence; fork, join and entry-edge
-variants remain refused. This does not implement floating PHIs, loop-carried
-stack assignments, arbitrary block ordering or spills. Calls and unmodelled
-operations remain barriers. The focused allocation/selection set has 61 passes.
+Neither pass merges arithmetic or changes its order, rounding or storage conversions.
 
-## Exact-width pressure spills
+## Across blocks and under pressure
 
-When loading or preserving an operand would exceed eight stack entries,
-allocation now evicts a non-operand to an owned 10-byte frame slot. It reloads
-that value when needed and recalculates physical stack positions. Current
-operands are protected from eviction; no frame means an explicit refusal.
-Spill slots have a separate key namespace from integer-to-FP scratch slots,
-so a prior two-byte FILD scratch cannot be reused for a ten-byte value.
+The stack is kept across a block edge only where the predecessor has exactly that successor, the successor exactly that predecessor, and the successor is not the entry; the blocks are processed in reverse postorder with the stack contents each bundle of edges agrees on (`spillplacement::bundles`), and `_Stack::leave` leaves a block with exactly the wanted values. A phi's copies on one edge are simultaneous and taken as a group. A call or an instruction the stack cannot cross needs it empty (`flush`).
 
-Before, nine live FP values were refused. After, the ninth load can be preceded
-by (slot numbers depend on the current stack):
+More than eight live values never reaches `floatalloc`: `floatassign` spills one to a ten-byte frame slot in extended format, so no precision is lost, and reloads it where it is read. An instruction that still needs more than eight stack operands is refused.
 
-```asm
-fxch st(7)
-fstp tword [spill]
-fld dword [ninthInput]
-; later, when the evicted value is consumed:
-fld tword [spill]
-```
+## See it
 
-The spill retains the extended format rather than adding a SINGLE/DOUBLE
-conversion. These are waiting x87 operations at the next modeled FP operation,
-not permission to cross calls or unknown instructions with a live value.
-The fail-first nine-value regression simulates selected stack operations,
-checks all stored values in order, never exceeds eight entries, verifies
-ten-byte memory operands, and checks scratch-slot separation. Allocation,
-selection and integer spiller tests: 85 pass. The 154-object audit remains
-byte-for-byte unchanged; current suite costs are unchanged. Loop PHIs and
-arbitrary CFG stack reconciliation still remain to be implemented.
-
-Spill selection uses the next explicit use across the linear region, excluding
-current operands. In the nine-load/ascending-store case, the initial deepest-slot
-policy evicted value 1, then had to evict value 2 immediately to reload it.
-The farthest-next-use policy evicts value 8 instead; values 1 through 7 free
-space before its reload. Before: two spill stores and two reloads. After: one
-of each, with identical stored answers and no extra frame allocation for the
-second victim. The count regression failed under the old policy; all 85 focused
-checks pass after the change. This is an allocator pressure-case improvement,
-not a claimed suite-program speedup.
+`llrm-c -S` prints the assembly, where the stack form is visible; `--dump DIR` shows MIR only. Tests: `floatalloc_tests.rs`, `floatassign_tests.rs` simulate the allocated stack and assert the stored values.

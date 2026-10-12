@@ -348,11 +348,13 @@ b30:
 fn test_parameter_modref_is_instantiated_at_a_call_site() {
     // A callee writing parameter zero clobbers its actual object and no
     // neighbour.
-    let summary =
-        Summary { writes: BTreeSet::from([Slice::new(parameter(0), 2, 4, 1, 1).unwrap()]), ..Summary::default() };
+    let summary = Summary {
+        writes: BTreeSet::from([Slice::new(parameter(0), 2, 4, 1, 1).unwrap()]).into(),
+        ..Summary::default()
+    };
     let actual = object(MemoryKind::Global, Identity::Global(7), Some(16));
     let effect = summary.instantiated(&[one(&actual, 4, 5)]).writes;
-    assert_eq!(effect, BTreeSet::from([Slice::new(actual, 6, 8, 1, 1).unwrap()]));
+    assert_eq!(effect, BTreeSet::from([Slice::new(actual, 6, 8, 1, 1).unwrap()]).into());
 }
 
 const CALLEE_WRITES_ITS_PARAMETER: &str = "@g = global [16 x i8] zeroinitializer
@@ -407,7 +409,7 @@ b0:
     );
     let procedures = IndexMap::from_iter([("f".to_owned(), Procedure::of(parsed.unit()))]);
     let summary = summaries(&procedures, None).unwrap()["f"].clone();
-    assert_eq!(summary.writes, BTreeSet::from([Slice::whole(parameter(0))]));
+    assert_eq!(summary.writes, BTreeSet::from([Slice::whole(parameter(0))]).into());
 }
 
 #[test]

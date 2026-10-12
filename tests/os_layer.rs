@@ -172,8 +172,7 @@ fn test_the_console_and_its_standard_handles_come_from_the_layer() {
             if let Ok(text) = std::fs::read_to_string(format!("{}/{file}", target.runtime(language).unwrap().directory))
             {
                 let code: Vec<&str> = text.lines().map(|line| line.split(';').next().unwrap().trim()).collect();
-                let literal =
-                    code.windows(2).any(|pair| pair[0] == "push 1" && pair[1].contains("_llrm_os_write_file"));
+                let literal = code.windows(2).any(|pair| pair[0] == "push 1" && pair[1].contains("LL$WRITE_FILE"));
                 assert!(!literal, "{} {language} writes to a literal handle 1", target.name());
             }
         }

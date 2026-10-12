@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import os
+import signal
 import functools
 import re
 import sys
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import Callable
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import proctree
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -121,6 +124,27 @@ def verdict_line(tier: str, failed: list[str], cut: list[str], took: float, skip
     )
 
 
+def failure_text(log: str, limit: int = 80) -> str:
+    """What the failing tests of a cargo test or pytest log printed, at most `limit` lines: the log's last 30 lines name the failed target
+    and not the failure (CI said "1 target failed: -p llrm --test dwarf" and nothing of why)."""
+    lines = log.splitlines()
+    out, keep = [], False
+    for line in lines:
+        if re.match(r"^---- .+ (stdout|stderr) ----$", line) or re.match(r"^_{3,} .+ _{3,}$", line) or re.match(r"^={3,} (FAILURES|ERRORS) ={3,}$", line):
+            keep = True
+        elif re.match(r"^(failures:|test result:|={3,} short test summary info ={3,})", line):
+            keep = False
+        if keep and line.strip():
+            out.append(line)
+    return "\n".join(out[:limit])
+
+
+def step_table(results: dict[str, tuple[int, float, float]]) -> str:
+    """Each step's wall and CPU seconds, the most CPU first: where the work is, whatever the host's load made of the wall."""
+    rows = sorted(((n, w, c) for n, (code, w, c) in results.items() if code != 77), key=lambda r: -r[2])
+    return "\n".join(["[steps] step wall(s) cpu(s)", *(f"[steps] {n} {w:.0f} {c:.0f}" for n, w, c in rows), f"[steps] total {sum(r[2] for r in rows):.0f} cpu"])
+
+
 def changed_files(base: str) -> list[str]:
     out = subprocess.run(["git", "diff", "--name-only", base, "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
     return out.split()
@@ -149,7 +173,9 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     cfg = load()
     pkgs = packages()
     live = [f for f in files if not matches(f, cfg["inert"]["paths"])]
-    shared = [f for f in live if matches(f, cfg["shared"]["paths"])]
+    # Nothing of the compiler changed: the steps that cover the files that did, whatever the shared tests and tools are.
+    narrow = forced == "auto" and not any(matches(f, cfg["compiler"]["paths"]) for f in live)
+    shared = [] if narrow else [f for f in live if matches(f, cfg["shared"]["paths"])]
     unknown = [f for f in live if f not in shared and not matches(f, cfg["plain"]["paths"])]
     if forced != "auto":
         tier, reason = forced, "asked for"
@@ -165,6 +191,8 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     touched = {crate_of(f, pkgs) for f in live} - {None}
     cargo = any(not f.startswith("tools/") or f.startswith("tools/bench/") for f in live)
     p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"} | reading(cfg, pkgs, live))  # the root crate enables features (llrm-c's toolchain) the others lack alone
+    if narrow:
+        return narrowed(p, cfg, live)
     steps = []
     if cargo or p.tier == "full":
         steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture"]
@@ -200,6 +228,84 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     return p
 
 
+def data_dir(path: str) -> str | None:
+    """The directory of inputs `path` belongs to (bench/, examples/, tests/run/, runtime/, ...): what other files read it by, or None for code."""
+    top, _, rest = path.partition("/")
+    if top in ("crates", "src", "tools", "docs") or not rest:
+        return None
+    return "tests/run" if path.startswith("tests/run/") else top if top != "tests" else None
+
+
+def step_of_source(path: str, cfg: dict) -> str | None:
+    """The step that runs the tests in `path`, or None where none does."""
+    name = Path(path).stem
+    if path.startswith("tests/") and path.endswith(".rs") and "/" not in path[len("tests/"):]:
+        whole = {**{v: k for k, v in cfg["whole"].items()}, **{v: k for k, v in cfg["exclusive"].items()}}
+        return whole.get(name, "integration")
+    if path.startswith("crates/") and "/tests/" in path and path.endswith(".rs"):
+        return "crate-tests"
+    if path.startswith("crates/") and path.endswith(".rs"):
+        return "lib"
+    if path.endswith(".py") and (path.startswith("tests/") or Path(path).name.startswith("test_")):
+        return "pytest-programs" if name in ("test_programs_compile", "test_loops", "test_innerloops") else "pytest"
+    return None
+
+
+@functools.cache
+def sources() -> dict[str, str]:
+    """Every file a step's tests are in, with its text: the Rust and Python files under tests/ and crates/, and the tests under tools/."""
+    out = {}
+    for pattern in ("tests/*.rs", "tests/*.py", "crates/**/*.rs", "tools/**/test_*.py"):
+        for f in sorted(ROOT.glob(pattern)):
+            if "target" not in f.parts:
+                out[str(f.relative_to(ROOT))] = f.read_text(errors="replace")
+    return out
+
+
+def readers(directory: str, cfg: dict) -> set[str]:
+    """The steps whose tests name `directory` (as `"bench"` or `bench/...`): the steps that read what is in it, found in the tests and not
+    listed. A benchmark merged on its own runs broke pytest-programs, measure and the integration tests that iterate bench/ (#1458)."""
+    mention = re.compile(rf"(?<![\w./-]){re.escape(directory)}(?:/|[\"'])")
+    return {step for path, text in sources().items() if mention.search(text) and (step := step_of_source(path, cfg))}
+
+
+def narrowed(p: Plan, cfg: dict, live: list[str]) -> Plan:
+    """The steps for a diff with none of the compiler's source: each covers the files it was written for. The binaries are built first
+    where a step runs them."""
+    steps = ["pytest"]
+    if any(f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/")) for f in live):
+        steps.append("integration")
+    for directory in sorted({d for f in live if (d := data_dir(f))}):
+        steps += sorted(readers(directory, cfg))
+    if any(f.startswith(("bench/", "tools/bench/")) for f in live):
+        steps.append("bench")
+    if any(f.startswith("tools/torture/") for f in live):
+        steps.append("torture")
+    if any(matches(f, cfg["fmt"]["paths"]) for f in live):
+        steps.append("fmt")
+    for h in cfg["heavy"]:
+        if any(matches(f, h["owners"]) for f in live):
+            steps.append(h["step"])
+    # The Rust tests under tests/ are the integration step's; the programs under tests/run/ are the run step's.
+    run_affecting = [
+        f
+        for f in live
+        if (not f.startswith("tools/") and not (f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/"))))
+        or f.startswith(("tools/dosbatch/", "tools/linkrecipe"))
+    ]
+    if run_affecting:
+        steps.append("run")
+        langs = set()
+        for f in run_affecting:
+            langs |= {lang for lang, pats in cfg["run_languages"].items() if matches(f, pats)} or set(LANGUAGES)
+        p.languages = [l for l in LANGUAGES if l in langs]
+    p.reason = "no compiler source changed"
+    if any(one not in NO_BINARIES for one in steps):
+        steps.insert(0, "build")
+    p.steps = list(dict.fromkeys(steps))
+    return p
+
+
 def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
     """`p` with only the steps `names` (the tier, the languages and the crates as planned). A step the diff did not select may be named:
     a change to the measurement tools re-runs build and measure, not the other fourteen steps. The build comes
@@ -215,16 +321,19 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
+# So there is no `cargo build --bins` here: it made a second set of every crate (238 CPU-s) for binaries the test build then links over
+# (all of them but hir-mir, which the corpus scripts build themselves).
 WARNING_FLAGS = "-D warnings"
 WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
 # Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-c apart from the build step's and put
 # its binary over target/release/llrm-c (the inode changed after `integration`), while `torture`, `run` and the like were running it:
 # "No such file or directory: .../release/llrm-c" in torture. One set of flags, one build, one binary.
-STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS}
+# RUSTC_BOOTSTRAP too, for the lib step's `--shuffle`: libtest reads it when the tests run, but cargo takes it for an input of every
+# crate it builds, so set on the lib step alone it rebuilt the whole workspace there (1,088 CPU-s) and again in the next cargo step.
+STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1"}
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
-    f"{WARNINGS_AS_ERRORS} cargo build --release -q --bins && "
     f"{WARNINGS_AS_ERRORS} cargo test --release -q --workspace --no-run"
 )
 # Measurements compare two revisions, so their historical base is built without
@@ -234,12 +343,13 @@ MEASURE_BUILD = "env -u RUSTFLAGS cargo build --release -q --bins && env -u RUST
 DIST_BUILD = "cargo build --profile dist -q --bins"
 
 
+# What the doc step reports where no doc comment has a fence to run: a log with no result reads as a cut-short run.
+SKIPPED_DOC = "echo 'test result: ok. 0 passed; 0 failed; no doc comment has a fence to run, rustdoc not run'"
+
 # A lib test that depends on the order tests run in passes in the plain order and fails when the threads start in
 # another (llrm-c's m16 tests, 29 of 136, when an m32 test bound the register file first). The lib step runs the
 # tests in a random order; each test binary prints its seed ("running 136 tests (shuffle seed: N)", kept in the
-# failed step's log), and LLRM_SHUFFLE_SEED=N repeats that order. libtest reads RUSTC_BOOTSTRAP when it runs, not
-# when it is built: the build is not redone.
-SHUFFLED = "RUSTC_BOOTSTRAP=1"
+# failed step's log), and LLRM_SHUFFLE_SEED=N repeats that order. (RUSTC_BOOTSTRAP is in STEP_ENV.)
 
 
 def shuffle() -> str:
@@ -266,8 +376,9 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     )
     steps = {
         "build": BUILD,
-        "lib": f"{SHUFFLED} {cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
-        "doc": f"{cargo} {libs} --doc" if libs else "true",
+        "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
+        # rustdoc over every crate costs 456 CPU-s to find no test: it runs when a doc comment has a fence to run.
+        "doc": f"if python3 tools/gate/doctests.py crates src tests; then {cargo} {libs} --doc; else {SKIPPED_DOC}; fi" if libs else "true",
         "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
         # Every scan runs, and any failing fails the step: the first red must not hide the others.
@@ -282,7 +393,10 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         if cfg["fmt"]["enforced"]
         else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
-        "pytest": "uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py),
+        "pytest": "PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider -p pytest_cpulimit --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py),
+        # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
+        # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
+        "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python -m pytest tools/dosbatch -m slow_dos -q -p no:cacheprovider',
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": "[ -f ~/scratch/qcport-env.sh ] || { echo SKIPPED: no ~/scratch/qcport-env.sh; exit 77; }; . ~/scratch/qcport-env.sh && uv run -q --project tools python tools/qcport-run.py",
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
@@ -395,19 +509,56 @@ def groups_of(p: Plan, skipped: dict[str, str]) -> dict[str, list[str]]:
     return {g: run for g, members in load()["groups"].items() if (run := [s for s in members if s in p.steps and s not in skipped])}
 
 
-def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = ()) -> tuple[str, int, float]:
+STALL_CODE = 79
+
+
+def stall_seconds() -> float:
+    """How long a step may go with no log growth and no CPU in its process tree: GATE_STALL_MINUTES (10)."""
+    return float(os.environ.get("GATE_STALL_MINUTES") or 10) * 60
+
+
+def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = (), stall: float | None = None) -> tuple[str, int, float, float]:
+    """(name, exit code, wall seconds, CPU seconds): the CPU is user+sys of the step's process tree, which a loaded host does not stretch.
+    A step that neither writes to its log nor uses CPU for `stall` seconds is killed (a pytest step sat 84 minutes on a hung test with
+    nothing to say so); it ends as STALL_CODE with the reason at the end of its log."""
     start = time.time()
+    stall = stall_seconds() if stall is None else stall
     # debug-gate.env makes every tool a requirement; a capability this host lacks is not one.
     prelude = ". tools/debug-gate.env 2>/dev/null; " + "".join(f"unset {v}; " for v in unset) + "set -o pipefail; "
-    with open(logs / f"{name}.log", "w") as log:
-        code = subprocess.call(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
-    if code == 0 and check and (why := incomplete((logs / f"{name}.log").read_text(), *check)):
-        (logs / f"{name}.log").open("a").write(f"\nINCOMPLETE: {why}\n")
+    path = logs / f"{name}.log"
+    with open(path, "w") as log:
+        child = subprocess.Popen(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        seen, active, used = -1, time.time(), 0.0
+        stalled = False
+        try:
+            while True:
+                # wait4 reports the usage of the child and of every descendant it waited for: the step's whole tree.
+                done, status, usage = os.wait4(child.pid, os.WNOHANG)
+                if done:
+                    break
+                time.sleep(min(1.0, stall / 4))
+                grown, burned = path.stat().st_size, proctree.tree_cpu(child.pid)
+                if grown != seen or burned - used >= 0.1:
+                    seen, used, active = grown, burned, time.time()
+                elif time.time() - active > stall:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    _, status, usage = os.wait4(child.pid, 0)
+                    stalled = True
+                    break
+        except BaseException:
+            os.killpg(child.pid, signal.SIGKILL)
+            raise
+        child.returncode = code = STALL_CODE if stalled else os.waitstatus_to_exitcode(status)
+        cpu = usage.ru_utime + usage.ru_stime
+    if stalled:
+        path.open("a").write(f"\nSTALLED: no log growth and no CPU in the step's process tree for {stall / 60:g} min; killed\n")
+    if code == 0 and check and (why := incomplete(path.read_text(), *check)):
+        path.open("a").write(f"\nINCOMPLETE: {why}\n")
         code = 78
     if code not in (0, 77):
         # The next run of the step overwrites its log; the failure is evidence, kept.
-        (logs / f"{name}.failed.log").write_text((logs / f"{name}.log").read_text())
-    return name, code, time.time() - start
+        (logs / f"{name}.failed.log").write_text(path.read_text())
+    return name, code, time.time() - start, cpu
 
 
 def snapshot_binaries(release: Path, into: Path) -> Path:
@@ -444,15 +595,17 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         members = [] if group == "build" else load()["groups"][group]  # "build": the build alone, for the job that makes what the others share
         p = Plan(p.tier, p.reason, [s for s in p.steps if s == "build" or s in members], p.packages, p.languages)
     start = time.time()
-    results: dict[str, tuple[int, float]] = {}
+    results: dict[str, tuple[int, float, float]] = {}
 
-    def report(name: str, code: int, took: float) -> None:
-        results[name] = (code, took)
+    def report(name: str, code: int, took: float, cpu: float = 0) -> None:
+        results[name] = (code, took, cpu)
         verdict = "ok" if code == 0 else "SKIPPED" if code == 77 else "INCOMPLETE" if code == 78 else "FAIL"
-        print(f"[time] {name} {verdict} {took:.0f}s", flush=True)
+        print(f"[time] {name} {verdict} {took:.0f}s wall {cpu:.0f}s cpu", flush=True)
         if code not in (0, 77):
-            tail = (logs / f"{name}.log").read_text().splitlines()[-30:]
-            print("\n".join("    " + line for line in tail), flush=True)
+            text = (logs / f"{name}.log").read_text()
+            if failures := failure_text(text):
+                print(f"    [{name}: what the failing tests printed]\n" + "\n".join("    " + line for line in failures.splitlines()), flush=True)
+            print("\n".join("    " + line for line in text.splitlines()[-30:]), flush=True)
 
     for name, why in skipped.items():
         if name in p.steps:
@@ -478,14 +631,15 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     jobs = int(os.environ.get("JOBS", "4"))
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
-        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "measure", "pytest-programs", "turbo", "bench"))
+        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
         for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s), unset) for s in order]):
             report(*future.result())
     for name in alone:
         report(*run_step(name, cmds[name], logs, env, checks.get(name), unset))
-    failed = [n for n, (c, _) in results.items() if c not in (0, 77)]
-    skipped = [n for n, (c, _) in results.items() if c == 77]
+    failed = [n for n, (c, *_) in results.items() if c not in (0, 77)]
+    skipped = [n for n, (c, *_) in results.items() if c == 77]
     cut = [n for n in failed if results[n][0] == 78]
+    print(step_table(results), flush=True)
     print(verdict_line(p.tier, failed, cut, time.time() - start, skipped, head_state()[0]))
     return (1 if failed else 0), failed
 

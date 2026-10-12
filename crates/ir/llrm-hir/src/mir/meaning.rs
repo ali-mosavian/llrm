@@ -21,7 +21,7 @@ pub(super) fn defined(
     let Some(descriptor) = promises.descriptor else { return };
     for meaning in &promises.routines {
         let Some(global) = module.named(&format!("{RUNTIME}{}", meaning.routine)) else { continue };
-        if !declares(module, global, meaning) {
+        if !declares(module, global, meaning, 8 * descriptor.word as u32) {
             continue;
         }
         let raise = if promises.checked && meaning.check.is_some() { raiser(module, spaces) } else { None };
@@ -34,10 +34,12 @@ fn declares(
     module: &mut Module,
     global: GlobalId,
     meaning: &Meaning,
+    bits: u32,
 ) -> bool {
     let Some(function) = module.global(global).function().filter(|one| one.is_declaration()) else { return false };
     let ty = function.ty;
-    let (ptr, word) = (module.context.types.ptr(0), module.context.types.int(16));
+    // The routines' integers are words of the target: 16 bits in real mode.
+    let (ptr, word) = (module.context.types.ptr(0), module.context.types.int(bits));
     let returns = match meaning.result {
         Returns::Value(_) => word,
         Returns::View { .. } => ptr,
@@ -83,7 +85,7 @@ fn define(
     let mut builder = module.builder(global);
     let entry = builder.block("entry");
     builder.position(entry);
-    let mut body = Body { b: builder, descriptor, parameters: &meaning.parameters };
+    let mut body = Body { b: builder, descriptor, parameters: &meaning.parameters, bits: 8 * descriptor.word as u32 };
     if let (Some((callee, ty, conv)), Some((when, number))) = (raise, &meaning.check) {
         let condition = body.condition(when);
         let (fail, go) = (body.b.block("raise"), body.b.block("go"));
@@ -125,6 +127,8 @@ struct Body<'a, 'm> {
     b: Builder<'m>,
     descriptor: Descriptor,
     parameters: &'a [Parameter],
+    /// The width of a word of the target, the routines' integer.
+    bits: u32,
 }
 
 impl Body<'_, '_> {
@@ -135,7 +139,7 @@ impl Body<'_, '_> {
     ) -> Operand {
         let ty = self.b.type_of(operand);
         if self.b.context.types.int_bits(ty) == Some(8) {
-            let word = self.b.context.types.int(16);
+            let word = self.b.context.types.int(self.bits);
             return self.b.cast(CastOp::ZExt, operand, word, "");
         }
         operand
@@ -163,9 +167,9 @@ impl Body<'_, '_> {
         &mut self,
         expr: &Expr,
     ) -> Operand {
-        let word = self.b.context.types.int(16);
+        let word = self.b.context.types.int(self.bits);
         match expr {
-            Expr::Int(value) => self.b.int(16, i128::from(*value)),
+            Expr::Int(value) => self.b.int(self.bits, i128::from(*value)),
             Expr::Param(at) => {
                 debug_assert_eq!(self.parameters[*at], Parameter::Int);
                 self.b.parameter(*at)

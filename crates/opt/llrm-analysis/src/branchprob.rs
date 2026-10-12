@@ -2,26 +2,74 @@
 //! `BranchProbabilityInfo` and `BlockFrequencyInfo` estimate them when no
 //! profile says otherwise.
 //!
-//! Each block with more than one successor takes the first heuristic that
-//! applies, in LLVM's order, then GCC's call and return heuristics (from
-//! Ball and Larus; LLVM has neither):
-//! - a successor every path of which ends in `unreachable`, a `noreturn` or a
-//!   `cold` call (`noreturn::cold`) is all but never taken;
-//! - in a loop, staying in it is taken 124 times to every 4 exits;
-//! - a branch decided by the counters of the loop around it, which induction
-//!   proves counts a known number of trips, is taken on the share of those
-//!   trips the compare holds on;
-//! - `p == q` on pointers fails (20:12), as do `x == 0`, `x == -1`, `x < 0` and
-//!   `x <= 0` on integers but truth values and one-bit tests, and `x == y` on
-//!   floats; `isnan` is all but never;
-//! - a successor that calls, where the other does not, is not taken (67%);
-//! - a successor that returns, where the other does not, is not taken (66%):
-//!   98% where it returns a negative number, 71% null, 65% another constant
-//!   (GCC's `PRED_NEGATIVE_RETURN`, `PRED_NULL_RETURN`, `PRED_CONST_RETURN`).
+//! # How it works
+//! `estimated` gives every edge a probability and every block a frequency. A
+//! block with one successor takes 1. A block with several takes the first
+//! heuristic that tells its successors apart, in this order (`Heuristic`
+//! records which one fired):
 //!
-//! Frequencies are relative to the entry's 1. A loop header runs
-//! 1 / (1 - p) times per entry, `p` the probability of coming back round,
-//! capped as LLVM caps a loop's scale.
+//! 1. `Declared`: `!prof` `branch_weights` on the terminator, one per named
+//!    target, summed per distinct successor. Weights that do not name every
+//!    target, or sum to zero, say nothing.
+//! 2. `Invoke`: an invoke's unwind edge is taken 1 in 2^20.
+//! 3. `Unreachable`: a successor every path of which ends in `unreachable`, a
+//!    `noreturn` call or a `cold` call (`noreturn::cold`) is all but never
+//!    taken.
+//! 4. `Loop`: in a loop, staying is 124 to 4 for leaving (`LOOP`, LLVM's
+//!    weights).
+//! 5. `Counted`: a branch on a compare of the counters of an enclosing loop
+//!    whose trip count induction proved (`trips`, at most 4096). The counters
+//!    (header phis from a constant start) are stepped trip by trip and the edge
+//!    is taken on the share of trips the compare holds on, clamped away from 0
+//!    and 1.
+//! 6. `Pointer`, `Zero`, `Float`, from the compare feeding a `br`: `p == q` on
+//!    pointers fails (20:12), as do `x == 0`, `x == -1`, `x < 0` and `x <= 0`
+//!    on integers, and `x == y` on floats; `isnan` (`uno`) is 1 in 2^20. Truth
+//!    values (0 or all ones, 0 or 1, a compare, or a call whose `range` says
+//!    so), one-bit tests (`x & 2^n`) and the sign of a three-way compare are no
+//!    quantity and say nothing.
+//! 7. `Call` (GCC, from Ball and Larus; LLVM has no such heuristic): a
+//!    successor that calls, where the other does not, is not taken (67:33).
+//! 8. `Return` (GCC): a successor that returns, where the other does not, is
+//!    not taken (66:34); where it only returns a constant, 98% not taken if
+//!    negative, 71% if null, 65% if another constant (`PRED_NEGATIVE_RETURN`,
+//!    `PRED_NULL_RETURN`, `PRED_CONST_RETURN`).
+//! 9. `Even`: equal weights.
+//!
+//! Frequencies are relative to the entry's 1 (`propagated`). Blocks go in
+//! reverse postorder and a block's frequency is the sum over its non-back edges
+//! of predecessor frequency times edge probability, times its loop's scale if
+//! it is a header. A loop's scale is 1 / (1 - p), `p` the probability of coming
+//! back round, capped at 4096 (`LOOP_SCALE`, LLVM's cap). Inner loops are
+//! scaled first. With proven trips the scale is the trips (or trips + 1 when
+//! the only exit is a test at a non-latch header), and the exit test takes `1 /
+//! (trips + 1 - tested)` of the mass, so the trips stay.
+//!
+//! ```text
+//!  entry 1 --> H (scale 1/(1-0.969) = 32) --> body --+
+//!               ^                                     |  stay 124/128
+//!               +-------------------------------------+
+//!               |
+//!               +--> exit: 1   (entering once)
+//! ```
+//!
+//! The propagation takes edge probabilities as a function, so the backend uses
+//! it too (`propagated_edges`, `Cycle`) and MIR and LIR estimates agree.
+//!
+//! # Provides
+//! `Odds { taken, frequency, by }` from `estimated`, `propagated` and
+//! `propagated_edges`, and the constants `LOOP` and `LIKELY` (0.8, the edge
+//! probability above which machine block placement trades the shorter layout
+//! for it). Consumers: `profit` and `rotate` in `llrm-transforms`; the
+//! backend's `isel`, `jumps` and `analysis/frequency` (grep `branchprob::`).
+//!
+//! # Needs
+//! [`crate::cfg::Shape`] for loops, [`crate::noreturn`] (`terminal_sites`,
+//! `cold`), [`crate::effects::Declarations`] and the trip counts the caller
+//! takes from [`crate::induction`].
+//!
+//! # See also
+//! LLVM `BranchProbabilityInfo.cpp`, `BlockFrequencyInfo`; GCC `predict.def`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -132,6 +180,40 @@ pub fn estimated(
     }
     odds.frequency = frequencies(function, shape, &odds, trips);
     odds
+}
+
+/// The probability of each edge out of `blocks`, as `estimated` gives them.
+pub fn taken_from(
+    context: &Context,
+    metadata: &[MetadataNode],
+    declarations: &Declarations,
+    function: &Function,
+    shape: &Shape,
+    trips: &BTreeMap<i64, i64>,
+    blocks: &[BlockId],
+) -> BTreeMap<(i64, i64), f64> {
+    let terminal = noreturn::terminal_sites(context, declarations, function, &BTreeSet::new());
+    let cold = noreturn::cold(context, declarations, function, &terminal);
+    let runs = Runs::default();
+    let mut taken = BTreeMap::new();
+    for &block in blocks {
+        let successors: Vec<i64> = function.successors(block).into_iter().map(id).collect();
+        match successors.as_slice() {
+            [] => {}
+            [only] => {
+                taken.insert((id(block), *only), 1.0);
+            }
+            _ => {
+                let (_, weights) =
+                    weighed(context, metadata, declarations, function, shape, trips, &cold, &runs, block, &successors);
+                let total: f64 = weights.iter().sum();
+                for (to, weight) in successors.iter().zip(&weights) {
+                    *taken.entry((id(block), *to)).or_default() += weight / total;
+                }
+            }
+        }
+    }
+    taken
 }
 
 /// What an invoke's normal edge weighs against its unwind edge's one.
@@ -857,20 +939,25 @@ pub fn propagated_edges(
     // `to` is a loop header and `from` is in its loop.
     let backward =
         |from: i64, to: i64| headed.get(&to).into_iter().flatten().any(|&index| cycles[index].body.contains(&from));
-    // Where each block is in `order`, to take a loop's blocks in order without
-    // walking the function's.
-    let position: BTreeMap<i64, usize> = order.iter().enumerate().map(|(index, &at)| (at, index)).collect();
+    // Each loop's reachable blocks in `order`, found in one pass over it: a
+    // nest of N loops sorted each loop's body by its place, N times over
+    // the same blocks.
+    let mut inside_of: Vec<Vec<i64>> = vec![Vec::new(); cycles.len()];
+    for &at in order {
+        for &index in around.get(&at).into_iter().flatten() {
+            inside_of[index].push(at);
+        }
+    }
     // Innermost first: an inner header's scale is known when its outer loop is
     // weighed.
     let mut scale: BTreeMap<i64, f64> = BTreeMap::new();
-    for found in cycles {
+    for (index, found) in cycles.iter().enumerate() {
         let weighed = |edge: &dyn Fn(i64, i64) -> f64, scale: &BTreeMap<i64, f64>| -> BTreeMap<i64, f64> {
             let mut mass: BTreeMap<i64, f64> = BTreeMap::new();
-            let mut inside: Vec<i64> = found.body.iter().copied().filter(|at| position.contains_key(at)).collect();
-            inside.sort_unstable_by_key(|at| position[at]);
+            let inside = &inside_of[index];
             #[cfg(test)]
             VISITS.with(|visits| visits.set(visits.get() + found.body.len()));
-            for at in inside {
+            for &at in inside {
                 let entering: f64 = if at == found.header {
                     1.0
                 } else {
