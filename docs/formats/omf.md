@@ -128,7 +128,10 @@ block-beta
 
 Any other kind, such as `PcRel` with `from != width`, is refused. The target is a segment (a defined symbol,
 with the symbol's offset added to the field), a group, or an external (EXTDEF index). A segment-relative
-offset to a symbol in a group takes the group as its frame; everything else uses the target's frame. The
+offset to a symbol in a group takes the group as its frame, and so does a segment address in a debug
+section (`$$SYMBOLS`, `.debug_*`): jwlink writes the frame's group index, and a frame that is the segment
+itself, where the segment is not first in its group, gives it 0 (a CodeView variable at segment 0). Everything
+else uses the target's frame. The
 field holds the addend plus the symbol's own offset. A fixup is never split across LEDATA records: a record
 that would end inside a field ends before it. LEDATA records hold at most 1000 bytes, because a fixup's
 offset into its record has ten bits.
