@@ -65,6 +65,7 @@ From the `//!` headers of `crates/opt/llrm-transforms/src`.
 - [unswitch](#unswitch): Adapted from llrm-core's `optimize/unswitch.rs`, the port of `qbopt/optimize/unswitch.py`: specialize a loop around a pure invariant condition, entirely in MIR.
 - [window](#window): A counted loop's huge pointers split into windows: LLVM's IRCE, with the carry into the selector as the check that cannot fire inside one.
 
+<!-- src: crates/opt/llrm-transforms/src/addresssink.rs sha256:50eb6c6d4b19f7cf303718a577f13f8a54638564fe706b4bd362969cf2d199ec -->
 ## addresssink
 
 Source: [`crates/opt/llrm-transforms/src/addresssink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/addresssink.rs)
@@ -88,6 +89,7 @@ It runs last, with `gepoffset`: until then gvn's partial redundancy
 elimination makes exactly this phi, so that a load after the join reads
 what the arms stored, and a sink earlier would be undone by it.
 
+<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:6f04dab91505e297441a7ebe6850e72a3fc4d0eb0d11bd6fa7640c62a2bf995e -->
 ## algebraic
 
 Source: [`crates/opt/llrm-transforms/src/algebraic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/algebraic.rs)
@@ -114,6 +116,7 @@ Gone with the old MIR:
   snapshot and rewrote one op each, so both ops of a pair had to agree to
   change. Here a rewrite replaces both at once, on the current function.
 
+<!-- src: crates/opt/llrm-transforms/src/argpromotion.rs sha256:1aa8bff9d392e780656405ffbd6b0a6e6459ac1db3b06ca79640288070105256 -->
 ## argpromotion
 
 Source: [`crates/opt/llrm-transforms/src/argpromotion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/argpromotion.rs)
@@ -131,6 +134,7 @@ function that writes nothing), and there are few of them. Priced by the
 target for the level being built: the loads each caller gains against the
 loads the function loses, in clocks or in bytes.
 
+<!-- src: crates/opt/llrm-transforms/src/availableexternally.rs sha256:968a28bca6dd3f49f9a62551147e1539ae86400e18d5267e85c551c69374eb05 -->
 ## availableexternally
 
 Source: [`crates/opt/llrm-transforms/src/availableexternally.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/availableexternally.rs)
@@ -139,6 +143,7 @@ LLVM's EliminateAvailableExternally: a body the program holds only to
 inline from is a declaration again once inlining is done, so no copy of
 it is emitted and what calls it still reaches the runtime's own routine.
 
+<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:a6e6a29f80da2ff05769fc306ece80b5035cd844d8bae3ab027f387a29f4c2b0 -->
 ## calleepop
 
 Source: [`crates/opt/llrm-transforms/src/calleepop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/calleepop.rs)
@@ -158,6 +163,7 @@ program has. No price is asked: registers cost no more than the stack at
 either end. LLVM's `fastcc` here is x86's ECX/EDX; gcc's `regparm(3)` for a
 `local` function, EAX/EDX/ECX; this is the description's.
 
+<!-- src: crates/opt/llrm-transforms/src/canonical.rs sha256:9683d66a8be574a74b440f5699d0f846338d277c6c5315e17ee5f9eca5e7d094 -->
 ## canonical
 
 Source: [`crates/opt/llrm-transforms/src/canonical.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/canonical.rs)
@@ -179,6 +185,7 @@ the compare's own, and every compare can be swapped. A compare of two
 constants is left to folding. A neutral term's raised source bytes, and
 its flags read by a carry, have no counterpart either.
 
+<!-- src: crates/opt/llrm-transforms/src/cfg.rs sha256:041f696202e36a01d99f7c6ef29e65c5a45bc037c99c8d5c3bef4fc2a50b1ef2 -->
 ## cfg
 
 Source: [`crates/opt/llrm-transforms/src/cfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cfg.rs)
@@ -215,6 +222,7 @@ Tests that stay behind, each of the old byte ownership or the BC raise:
   test_localp_keeps_termination_after_interleaved_procedure: they read BC
   fixtures through the raise and the old pipeline, not `merged`.
 
+<!-- src: crates/opt/llrm-transforms/src/counting.rs sha256:8334efcf0a7905077aac429ef847e2e3a55e68555ab072d113e8a9db10dec4b6 -->
 ## counting
 
 Source: [`crates/opt/llrm-transforms/src/counting.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/counting.rs)
@@ -234,6 +242,7 @@ counterpart: a value is its instruction's result, and a phi takes a
 constant as it takes a value. `skip_guard` gives the compare; the
 caller branches on it, as the old caller placed the branch it returned.
 
+<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:38695f22e45f9dd42a7b56dec5f606ad3804774c25a28e4007db228d2c4758e4 -->
 ## dead
 
 Source: [`crates/opt/llrm-transforms/src/dead.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dead.rs)
@@ -261,6 +270,7 @@ Tests, in `dead_tests.rs`:
 Skipped: `test_dead_code_leaves_a_body_it_cannot_read_alone` (the limited
 mode).
 
+<!-- src: crates/opt/llrm-transforms/src/deadargs.rs sha256:fd7a977c48ec2c3f95470420801aa09d7b4070c956cbd40a67dd37f0792f7b53 -->
 ## deadargs
 
 Source: [`crates/opt/llrm-transforms/src/deadargs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadargs.rs)
@@ -271,6 +281,7 @@ itself) goes, and with it the argument of every call. Promotion and the
 constants propagated into a body leave them: a length every caller passes as
 12, folded into the body, is still pushed at every call.
 
+<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:8aedb5405e31ed01bbf126e00de46b1f99ea68d26883b6cb82f9536585f04926 -->
 ## decide
 
 Source: [`crates/opt/llrm-transforms/src/decide.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/decide.rs)
@@ -306,6 +317,7 @@ other old tests of `_outcome`, `_switch_target` and `_executable_successors`
 read BC objects through the raise (`raising_dispatch_tests`) or belong to
 `peelsize`, whose own tests cover them.
 
+<!-- src: crates/opt/llrm-transforms/src/dse.rs sha256:90be005e8dd3cad5bc7dce78cf1985dbac17a4b533bfdd488d29aff248a57a98 -->
 ## dse
 
 Source: [`crates/opt/llrm-transforms/src/dse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dse.rs)
@@ -322,6 +334,7 @@ callee is unknown.
 Dropped with the BC frontend: the data-segment bounds and the error
 handlers' contracts.
 
+<!-- src: crates/opt/llrm-transforms/src/edges.rs sha256:1d403ad5b30b0d6fd143575e88f8c39a020abd36dcf0a9e26c67ec974e6724c0 -->
 ## edges
 
 Source: [`crates/opt/llrm-transforms/src/edges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/edges.rs)
@@ -334,6 +347,7 @@ edges, not on either arm.
 is the fresh label. Its old callers were unswitch, loadjoins, inline,
 loopclone, loopsimplify, lower_switches and the BC raise's dispatch.
 
+<!-- src: crates/opt/llrm-transforms/src/exitfold.rs sha256:65fba4d7b81694f7fef63e6a2800514375a6f0828b8709bcb694f0df4be5f036 -->
 ## exitfold
 
 Source: [`crates/opt/llrm-transforms/src/exitfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitfold.rs)
@@ -375,6 +389,7 @@ the exit it would have left by: each exit, in dominance order, leaves
 where its count is the loop's. LLVM's `predicateLoopExits`, with its
 traps.
 
+<!-- src: crates/opt/llrm-transforms/src/exitsink.rs sha256:7699aa96d03ac223fee4846792dbfb7f5351870e666fa3ced7299a41e53faa21 -->
 ## exitsink
 
 Source: [`crates/opt/llrm-transforms/src/exitsink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitsink.rs)
@@ -399,6 +414,7 @@ elsewhere, and its stack and x87 effects.
 The old test is skipped there: its fixture spied on `strength.reduced`.
 These are new.
 
+<!-- src: crates/opt/llrm-transforms/src/expand.rs sha256:a4decfd66c27472f7ae9e81857cfbcc32353a99e8a3d96e1cbac73a1949dca1f -->
 ## expand
 
 Source: [`crates/opt/llrm-transforms/src/expand.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/expand.rs)
@@ -407,6 +423,7 @@ Values placed from their sums: LLVM's `SCEVExpander`. A `Scev` is
 built of its terms scaled and added once each, before one instruction,
 and the least of several as compares and selects.
 
+<!-- src: crates/opt/llrm-transforms/src/fill.rs sha256:2a138e602c0f6f63c5a52385aafef054475352abc9f46dab87eb3de7c7849cfd -->
 ## fill
 
 Source: [`crates/opt/llrm-transforms/src/fill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fill.rs)
@@ -442,6 +459,7 @@ llrm-mir has no idiom pass.
 Straight-line stores of one repeated byte to adjacent bytes of one
 object are one memset too: LLVM's MemCpyOpt, `tryMergingIntoMemset`.
 
+<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:240020857c232bf5f58368aa5fafcc04835758ee238f9f9e6e517e03647dc4bf -->
 ## fixednarrow
 
 Source: [`crates/opt/llrm-transforms/src/fixednarrow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fixednarrow.rs)
@@ -461,6 +479,7 @@ interval fits, leaves it for the scale: `(v * 2^k * b) >> s` is `(v * b) >>
 made by `<< s` and scaled back costs nothing. It runs once, before LSR,
 which would hide such a shift in an induction variable.
 
+<!-- src: crates/opt/llrm-transforms/src/floatfold.rs sha256:82a46fe6c79e43de59b1d47df3137a726520a80027caa37b4db16bbaa2b3129f -->
 ## floatfold
 
 Source: [`crates/opt/llrm-transforms/src/floatfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/floatfold.rs)
@@ -489,6 +508,7 @@ their checks. Skipped: the `checks` tests, and BC object corpora
 `test_collapsed_fpcse_has_no_empty_jump_trampoline`,
 `test_original_wait_is_an_explicit_checkpoint_with_encoding_provenance`).
 
+<!-- src: crates/opt/llrm-transforms/src/floatloop.rs sha256:5c4edf0e1574e4b83d585b7e19a28a289c276947030ade65ca7ce5789fb8d4da -->
 ## floatloop
 
 Source: [`crates/opt/llrm-transforms/src/floatloop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/floatloop.rs)
@@ -528,6 +548,7 @@ options) and
 `test_checkpoint_keeps_initial_memory_and_counter_stores_for_an_error_handler`
 (loopmotion's ON ERROR stores).
 
+<!-- src: crates/opt/llrm-transforms/src/fold.rs sha256:51b78fa553ea39d277eed3337fddf08864537b5724e5372eba66ab87f7014d79 -->
 ## fold
 
 Source: [`crates/opt/llrm-transforms/src/fold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fold.rs)
@@ -569,6 +590,7 @@ and consts' tests that waited for this port:
 replaced at once, so no reader keeps an orphaned value), and the width
 halves (a fact here is as wide as its value).
 
+<!-- src: crates/opt/llrm-transforms/src/gepoffset.rs sha256:40a5f1e47165c600a64993b718a92d01d276b1604765a5c5a7b41382bc8950c8 -->
 ## gepoffset
 
 Source: [`crates/opt/llrm-transforms/src/gepoffset.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gepoffset.rs)
@@ -599,6 +621,7 @@ read `i` where it read the sum, one register more. Neither new `gep` is
 It runs last, after `hoist`: a hoisted constant `gep` would be a register
 held across the loop instead of a displacement.
 
+<!-- src: crates/opt/llrm-transforms/src/globaldce.rs sha256:7af9f4ce28ddbfd54fe06a850dc951679100101efcf1b50548b96aa53b5cee40 -->
 ## globaldce
 
 Source: [`crates/opt/llrm-transforms/src/globaldce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globaldce.rs)
@@ -607,6 +630,7 @@ LLVM's GlobalDCE: a module's own body or variable that nothing live
 names -- no code outside the program, no live body, no live initializer
 -- is deleted. A declaration stays: naming one asks the linker for it.
 
+<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:f4dab19bb9baed5b585c15292c70a68641b8b6c60bd48d25f2c2c996dd67950f -->
 ## globalopt
 
 Source: [`crates/opt/llrm-transforms/src/globalopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globalopt.rs)
@@ -617,6 +641,7 @@ its initializer's bytes (`memory::constant_bits`). The old BC raise
 exposed BC_CN's loader bytes at the program's entry
 (`raising_literals`); a global's initializer is those bytes here.
 
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:fd181be80f2fcb908f306b6bdba8296138bc562b3eab3fa3ad2933788e0abdb5 -->
 ## gvn
 
 Source: [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs)
@@ -651,6 +676,7 @@ to an unknown callee.
 The old module had no tests of its own; `subexpressions`' are in
 `transform` and these in `gvn_tests.rs`.
 
+<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:1573cea2c21410dd3ff0ad91393b0dd2cabe75bea173ccfcfea096b9eb554f1c -->
 ## hoist
 
 Source: [`crates/opt/llrm-transforms/src/hoist.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hoist.rs)
@@ -682,6 +708,7 @@ What changed with the IR:
   volatile access never moves), and `loopmotion::sunk_stores`, which the old
   `Hoist` ran after this and loopmotion's port owns.
 
+<!-- src: crates/opt/llrm-transforms/src/homes.rs sha256:6fc49c6c3c3e8e7455493618291332f9655bfb3d50375406038cb9e3bf57643c -->
 ## homes
 
 Source: [`crates/opt/llrm-transforms/src/homes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/homes.rs)
@@ -698,6 +725,7 @@ nothing has written `c` since, at the end of the block `v` comes from, and
 nothing writes `c` while `p` is live: `p` is then what `c` holds at
 every point it is read. A store of `p` itself writes what is there.
 
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:6da05ff513d3f5e52e60844636b5bcadcb9a5a4733850a1d3e423f8b93130199 -->
 ## indvars
 
 Source: [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs)
@@ -709,6 +737,7 @@ proof. `rewound` carries an exact inner recurrence's exit value
 around the outer loop, less its distance, in place of its saved start.
 Which counters a loop keeps, and which ends it, is `lsr`'s.
 
+<!-- src: crates/opt/llrm-transforms/src/inferspace.rs sha256:136dc4d246af0b3d1b2d2d15522e08c5d95cccee5cb13dd814c7d2a94fcbf84d -->
 ## inferspace
 
 Source: [`crates/opt/llrm-transforms/src/inferspace.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inferspace.rs)
@@ -734,6 +763,7 @@ far copy kept beside the near one for a call would cost a register. A cast
 back to the near space, which the narrowing of a parameter leaves at each
 call, is the near pointer itself.
 
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:605f37f3620bf9bde4b3fb664300fdf942b573d47942ce3c2979ec85067da60e -->
 ## inline
 
 Source: [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs)
@@ -771,6 +801,7 @@ which replaces admitting only formal loads.  The clone is llrm-mir's
 `splice`.  SSA is checked by the verifier
 after each pass, not here.
 
+<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:529ffad7585d2681ed166da5cdfeea801e513cfb47877d87d62d898757657ddf -->
 ## interprocedural
 
 Source: [`crates/opt/llrm-transforms/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/interprocedural.rs)
@@ -797,6 +828,7 @@ the name being llrm-mir's. `Interprocedural` is the step as a
 
 The old module had no tests of its own.
 
+<!-- src: crates/opt/llrm-transforms/src/ipacp.rs sha256:d253ec2cedd320a555874b039d06ce0bcf8befffd4a2e1fdbbdcd667dba1032a -->
 ## ipacp
 
 Source: [`crates/opt/llrm-transforms/src/ipacp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ipacp.rs)
@@ -819,6 +851,7 @@ constants the caller's own folding proved (`current_call_constants`), and
 the benefit is the clocks `inline::folded` finds the callee no longer does,
 by the site's frequency. The thresholds are GCC's.
 
+<!-- src: crates/opt/llrm-transforms/src/jumpthread.rs sha256:04416355e5f99ec89f936310cd6b69b7b4f0230de727b1d199ae2410f0d1e2e3 -->
 ## jumpthread
 
 Source: [`crates/opt/llrm-transforms/src/jumpthread.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumpthread.rs)
@@ -848,6 +881,7 @@ joins the two where the paths meet. The result is not a natural loop any
 more where several cases lead back: later loop passes skip it, as after
 LLVM's.
 
+<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:f939f6d976681991ddd9cb43b069fdc8e0ea8463dd9ec69a6b49155e90e7cad0 -->
 ## lcssa
 
 Source: [`crates/opt/llrm-transforms/src/lcssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssa.rs)
@@ -864,6 +898,7 @@ no counterpart: a condition is an ordinary `i1` value.
 
 Every old test is ported, in `lcssa_tests.rs`.
 
+<!-- src: crates/opt/llrm-transforms/src/lcssamerges.rs sha256:599b37e511e10bbf0db2a5343e6749c29caab42e3f2c49dc8313d2988869c620 -->
 ## lcssamerges
 
 Source: [`crates/opt/llrm-transforms/src/lcssamerges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssamerges.rs)
@@ -880,6 +915,7 @@ Ported tests are in `lcssamerges_tests.rs`. Stays behind, reading a BC
 corpus: `test_compiled_early_exit_accumulator_is_closed`
 (`lcmerge-p-g2.obj`; ignored there too).
 
+<!-- src: crates/opt/llrm-transforms/src/loadjoins.rs sha256:80bb7532f7741928ab4af8f00ff3cf680073bdced7e165d1465d1b2f5b316e39 -->
 ## loadjoins
 
 Source: [`crates/opt/llrm-transforms/src/loadjoins.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loadjoins.rs)
@@ -907,6 +943,7 @@ A call's footprint is its `CallEffects`: without `Summaries` required,
 an unknown callee's. An address translated onto an edge carries
 alias's provenance, as every access does.
 
+<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:c8ac2b9bf3d983cd9fa99869c653d3b5353b20b8d7062b2b5870e485a5a8aa27 -->
 ## loopclone
 
 Source: [`crates/opt/llrm-transforms/src/loopclone.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopclone.rs)
@@ -933,6 +970,7 @@ and `test_peeling_accepts_block_local_floating_values_behind_a_branch`
 (x87 regions), and the byte-ownership half of
 `test_clones_read_their_own_values_and_do_not_duplicate_byte_ownership`.
 
+<!-- src: crates/opt/llrm-transforms/src/loopexit.rs sha256:a95ced72d12943e548e47f7030e0834a31c48f80064d897446369ed4a4a3596b -->
 ## loopexit
 
 Source: [`crates/opt/llrm-transforms/src/loopexit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopexit.rs)
@@ -962,6 +1000,7 @@ llrm-mir's `loopdeletion` deletes a loop of any shape whose exit values
 come from outside it; it evaluates none, so a loop computing what is
 read after it stays there.
 
+<!-- src: crates/opt/llrm-transforms/src/loopmotion.rs sha256:0dc94ddb15a3da950b129cd679f99b0955e3bad16863c58865fedc721478b3d2 -->
 ## loopmotion
 
 Source: [`crates/opt/llrm-transforms/src/loopmotion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopmotion.rs)
@@ -993,6 +1032,7 @@ carry (a hole of the x86 region lattice), and the per-block intervals
 llrm-mir's `licm` hoists invariant instructions and loads to the
 preheader; it sinks no store.
 
+<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:e43b7451e2fb59a832140ede97252caabff3511281d069160cbc25c9c1cc0764 -->
 ## loopsimplify
 
 Source: [`crates/opt/llrm-transforms/src/loopsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopsimplify.rs)
@@ -1007,6 +1047,7 @@ grouping it needed went through. Every block ends in a terminator, so the
 old fall-through source, a block whose last operation merely precedes
 `target`, is a `br label`.
 
+<!-- src: crates/opt/llrm-transforms/src/lsr.rs sha256:db72818b85f4e56df629561e191cb39f60efc4acae99462d84b99500c5416297 -->
 ## lsr
 
 Source: [`crates/opt/llrm-transforms/src/lsr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr.rs)
@@ -1034,6 +1075,7 @@ target's; the counters left unread go to `dead`.
 It runs once, after the loop passes, on each loop innermost first, as
 LLVM runs its LSR late: nothing after it chooses a loop's counters.
 
+<!-- src: crates/opt/llrm-transforms/src/mirror.rs sha256:b20d711205f307d4e361d524472a7168c1a7d70c094ee40631c46fda6e8cab18 -->
 ## mirror
 
 Source: [`crates/opt/llrm-transforms/src/mirror.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/mirror.rs)
@@ -1057,6 +1099,7 @@ takes the scale in its addresses (`AddressForm::scales`)
 there is nothing to save and the loop is left. The counter itself stays, for
 whatever else reads it; a loop that reads it nowhere loses it to `Dead`.
 
+<!-- src: crates/opt/llrm-transforms/src/narrowspace.rs sha256:a8a769d5cabd168089d88e15466feaf5c683a467c1e300a3bbd00f7b98a1eee5 -->
 ## narrowspace
 
 Source: [`crates/opt/llrm-transforms/src/narrowspace.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/narrowspace.rs)
@@ -1071,6 +1114,7 @@ parameter an earlier round narrowed is its own space's. One actual that may
 be elsewhere, or in the other space, keeps it far. `inferspace` then folds
 the accesses in the callee and the casts at each call.
 
+<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:252391ca53f079244d6de491020fab2acfaee71abdd62a12eed39e4cce449ceb -->
 ## peel
 
 Source: [`crates/opt/llrm-transforms/src/peel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/peel.rs)
@@ -1095,6 +1139,7 @@ pass manager's dump and change log. Dropped:
 `MAX_CONDITIONAL_FLOAT_OPERATIONS`, a limit on the x87 strict-FP fixed
 point a floating branch crossed; a float is an ordinary value here.
 
+<!-- src: crates/opt/llrm-transforms/src/phiopt.rs sha256:d1a04427462ecacf0a1547d70f5b3d123631af5e5c7d10c57576d9b0442ff8c7 -->
 ## phiopt
 
 Source: [`crates/opt/llrm-transforms/src/phiopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/phiopt.rs)
@@ -1121,6 +1166,7 @@ backend's `selects`); this is what the branch is worth when it is not one.
 LLVM's `two-entry-phi-node-folding-threshold` (4) is the same test with
 its own unit.
 
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:61026ebe3221368cb8a01f0f175241b7c4774777c80c78033c5b8d17f8c775e4 -->
 ## pipeline
 
 Source: [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs)
@@ -1148,6 +1194,7 @@ What changed with the IR:
 - The old `_Transaction` verified nothing; `applied`'s manager verifies the
   module after the pipeline.
 
+<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:0e8b16948de462797e7ac2cacc8de2a7f8d362e647a3c6e9fdff4cb6943b09c8 -->
 ## ports
 
 Source: [`crates/opt/llrm-transforms/src/ports.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ports.rs)
@@ -1157,6 +1204,7 @@ target describes the port. One with no path to memory touches only its
 own state, `inaccessiblemem`, which keeps port calls in order. A port
 that is not a constant is narrowed where `ranges` bounds it.
 
+<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:d82384e99a4da16bf3af39b13f8f9d7200ad83b381b4e6fb34b1d76f17fce1b6 -->
 ## profit
 
 Source: [`crates/opt/llrm-transforms/src/profit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/profit.rs)
@@ -1182,6 +1230,7 @@ is the spill model's (`spill`) over the whole body. `trips` is induction's
 proven counts (`proven_trips`); a loop it does not name gets the
 conventional ten.
 
+<!-- src: crates/opt/llrm-transforms/src/promote.rs sha256:24503a091ba0950ca5853181f4dfb78a937a8f07f10d0eb11769cf4a2055d8c6 -->
 ## promote
 
 Source: [`crates/opt/llrm-transforms/src/promote.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/promote.rs)
@@ -1222,6 +1271,7 @@ Dropped, with no rich MIR counterpart:
 - `_split_copies` and its helpers: `splitcopy`, for a `llvm.memcpy`.
 - `loop_only`: no caller set it.
 
+<!-- src: crates/opt/llrm-transforms/src/rotate.rs sha256:5fbb536d7eee9fdc27d2bc7db6d9e11ebd820f217f7864bc432c630b8b582163 -->
 ## rotate
 
 Source: [`crates/opt/llrm-transforms/src/rotate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/rotate.rs)
@@ -1247,6 +1297,7 @@ included. Dropped: `_step_test` -- an `icmp` is a value, and reusing a
 step's flags is isel's; the old body's `loop_trip_counts` and
 `integer_ranges` side tables; clearing a private start (Dead's).
 
+<!-- src: crates/opt/llrm-transforms/src/spares.rs sha256:52a71dfeb8805c6b84ca9ed04b374d6195b2c23c65cc1e76298a0b4d90a4371c -->
 ## spares
 
 Source: [`crates/opt/llrm-transforms/src/spares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/spares.rs)
@@ -1257,6 +1308,7 @@ LLVM's `MachineMemOperand` keeps the IR value for the same use,
 alias queries at the machine level (`MachineInstr::mayAlias`). Last, so the
 instruction ids it names are the ones selection sees.
 
+<!-- src: crates/opt/llrm-transforms/src/spill.rs sha256:709c228f1a24b7d850bc5013271e8a2c11187ad1a64ba4096a69ab9a89c94396 -->
 ## spill
 
 Source: [`crates/opt/llrm-transforms/src/spill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/spill.rs)
@@ -1273,6 +1325,7 @@ move nothing. Where more values live than the target's registers hold,
 or than a call leaves across it, the cheapest are spilled, and stay
 spilled.
 
+<!-- src: crates/opt/llrm-transforms/src/splitcopy.rs sha256:abbb649c92f9ecdf605c9a3ec272994de7b4209fd7f0d85833285a04c3925fcf -->
 ## splitcopy
 
 Source: [`crates/opt/llrm-transforms/src/splitcopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/splitcopy.rs)
@@ -1296,6 +1349,7 @@ What changed with the IR:
 Left whole: a destination that is passed, stored, compared or read by
 another memcpy; a volatile copy; loads that overlap in part.
 
+<!-- src: crates/opt/llrm-transforms/src/tailrec.rs sha256:956883564aec92fb40d34ee693ff231f4eecd43d7b7509b0169b8ac5de9a5ef0 -->
 ## tailrec
 
 Source: [`crates/opt/llrm-transforms/src/tailrec.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/tailrec.rs)
@@ -1325,6 +1379,7 @@ What changed with the IR:
 The loop is the ordinary loop passes' to improve: the pass names nothing
 about the machine.
 
+<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:95f65584c97bf58154dae6b0186760e0c469c386e2a7bbcd56c9a469a1e510c2 -->
 ## transform
 
 Source: [`crates/opt/llrm-transforms/src/transform.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/transform.rs)
@@ -1377,6 +1432,7 @@ tests `subexpressions`, which serves a divide here. Stay behind:
 - test_a_served_read_names_the_value_and_not_a_register: a BC corpus, and a
   load here is replaced by its value outright.
 
+<!-- src: crates/opt/llrm-transforms/src/trivialunswitch.rs sha256:67b4f46bf2ff942edf665ebb0cc8e11a29bae6591ee0ec899353bd4c1c357a62 -->
 ## trivialunswitch
 
 Source: [`crates/opt/llrm-transforms/src/trivialunswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/trivialunswitch.rs)
@@ -1398,6 +1454,7 @@ exit's phis take their value on the new edge only from a value defined
 outside the loop or a header phi's value on entry; any other value keeps the
 branch.
 
+<!-- src: crates/opt/llrm-transforms/src/unroll.rs sha256:fd728bf3af4165e4d68c6e4977eb08a5ddb7912daa495c5cf1527220bbed5d79 -->
 ## unroll
 
 Source: [`crates/opt/llrm-transforms/src/unroll.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll.rs)
@@ -1435,6 +1492,7 @@ Tests, in `unroll_tests.rs`, are new: the old ones read BC fixtures
 checkpoints. `unroll_budget_tests.rs` was `profit::spill_risk`'s, in
 `profit_tests.rs`.
 
+<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:74bd41af6ea1b7347df40d9c4c634727c0ea25ec16d56331272f942359178d43 -->
 ## unroll_jam
 
 Source: [`crates/opt/llrm-transforms/src/unroll_jam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll_jam.rs)
@@ -1459,6 +1517,7 @@ epilogue), loads between the loops, a rotated (guarded) inner loop, and an
 access whose address is not an affine function of the two counters over
 an identified object.
 
+<!-- src: crates/opt/llrm-transforms/src/unswitch.rs sha256:f2c7bbb82f066ab3dc131bca78ceb7f52862989025b6d86fd91c541f7297202d -->
 ## unswitch
 
 Source: [`crates/opt/llrm-transforms/src/unswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unswitch.rs)
@@ -1499,6 +1558,7 @@ corpora (`ivarm-*.obj`, `ivproc-*.obj`):
 `test_cloning_provenance_survives_ssa_reconstruction` and
 `test_implicit_edge_bridge_does_not_retarget_the_taken_arm`.
 
+<!-- src: crates/opt/llrm-transforms/src/window.rs sha256:cc95b16a5a93938479d3d88ac82601623fe68be832bc0dd8f44dd51e0fdbbc5f -->
 ## window
 
 Source: [`crates/opt/llrm-transforms/src/window.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/window.rs)

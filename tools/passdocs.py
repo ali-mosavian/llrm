@@ -34,18 +34,23 @@ def sources(directory: Path) -> list[Path]:
     )
 
 
-def header(path: Path) -> list[str]:
-    """The leading `//!` block of `path`, prefix stripped."""
+def header_of(text: str) -> list[str]:
+    """The leading `//!` block of source `text`, prefix stripped."""
     lines: list[str] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        text = raw.strip()
-        if not text.startswith("//!"):
-            if lines or text:
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped.startswith("//!"):
+            if lines or stripped:
                 break
             continue
-        text = text[3:]
-        lines.append(text[1:] if text.startswith(" ") else text)
+        stripped = stripped[3:]
+        lines.append(stripped[1:] if stripped.startswith(" ") else stripped)
     return lines
+
+
+def header(path: Path) -> list[str]:
+    """The leading `//!` block of `path`, prefix stripped."""
+    return header_of(path.read_text(encoding="utf-8"))
 
 
 def summary(lines: list[str]) -> str:
@@ -97,38 +102,55 @@ def render(lines: list[str]) -> list[str]:
     return out
 
 
+def toc_line(stem: str, lines: list[str]) -> str:
+    return f"- [{stem}](#{stem}): {summary(lines)}"
+
+
+def section(rel: str, lines: list[str], sha: str) -> list[str]:
+    """The page lines of one documented source file `rel`."""
+    stem = Path(rel).stem
+    return [f"## {stem}", "", f"Source: [`{rel}`]({REPO}/blob/{sha}/{rel})", "", *render(lines), ""]
+
+
+def assemble(title: str, directory: str, toc: list[str], body: list[str], bare: list[str], sha: str) -> str:
+    """Markdown of one page from its table of contents, sections and undocumented files."""
+    out = [f"# {title}", "", f"From the `//!` headers of `{directory}`.", "", *toc, "", *body]
+    if bare:
+        out += ["## Undocumented", "", *[f"- [`{rel}`]({REPO}/blob/{sha}/{rel})" for rel in bare], ""]
+    return "\n".join(out)
+
+
+def index_line(name: str, title: str, documented: int, undocumented: int) -> str:
+    return f"- [{title}]({name}.md): {documented} documented, {undocumented} undocumented"
+
+
+def index_text(entries: list[str]) -> str:
+    head = ["# Pass, analysis and backend reference", "", "Generated from the module header of each source file.", ""]
+    return "\n".join([*head, *entries]) + "\n"
+
+
 def page(title: str, directory: str, kind: str, root: Path, sha: str) -> tuple[str, int, int]:
     """Markdown of one page, and the counts of documented and undocumented files."""
     toc, body, bare = [], [], []
     for path in sources(root / directory):
         lines = header(path)
-        stem, rel = path.stem, f"{directory}/{path.name}"
+        rel = f"{directory}/{path.name}"
         if not lines:
             bare.append(rel)
             continue
-        toc.append(f"- [{stem}](#{stem}): {summary(lines)}")
-        body += [
-            f"## {stem}",
-            "",
-            f"Source: [`{rel}`]({REPO}/blob/{sha}/{rel})",
-            "",
-            *render(lines),
-            "",
-        ]
-    out = [f"# {title}", "", f"From the `//!` headers of `{directory}`.", "", *toc, "", *body]
-    if bare:
-        out += ["## Undocumented", "", *[f"- [`{rel}`]({REPO}/blob/{sha}/{rel})" for rel in bare], ""]
-    return "\n".join(out), len(toc), len(bare)
+        toc.append(toc_line(path.stem, lines))
+        body += section(rel, lines, sha)
+    return assemble(title, directory, toc, body, bare, sha), len(toc), len(bare)
 
 
 def write(out: Path, root: Path, sha: str) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    index = ["# Pass, analysis and backend reference", "", "Generated from the module header of each source file.", ""]
+    entries = []
     for name, title, directory, kind in PAGES:
         text, done, bare = page(title, directory, kind, root, sha)
         (out / f"{name}.md").write_text(text, encoding="utf-8")
-        index.append(f"- [{title}]({name}.md): {done} documented, {bare} undocumented")
-    (out / "index.md").write_text("\n".join(index) + "\n", encoding="utf-8")
+        entries.append(index_line(name, title, done, bare))
+    (out / "index.md").write_text(index_text(entries), encoding="utf-8")
 
 
 def check(required: list[str], root: Path) -> list[str]:

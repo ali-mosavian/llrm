@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Keep the generated documentation current.
 
-    python3 tools/docsbuild/build.py --sync     write the generated files into docs/
-    python3 tools/docsbuild/build.py --check    exit 1 if --sync would change a file, or a source is wrong
+    python3 tools/docsbuild/build.py --sync            write the generated files into docs/
+    python3 tools/docsbuild/build.py --sync --force    ... ignoring the keys that say what is up to date
+    python3 tools/docsbuild/build.py --check           exit 1 if --sync would change a file, or a source is wrong
 
 --sync draws every figure source (docs/assets/figures/*.fig, and the ```fig fences in
 `//!` headers) to a PNG, writes the pass, analysis and backend reference to
 docs/optimizations/reference/ from the headers, and moves a ```fig fence found in a
 document to a .fig, leaving the image reference. Commit what it writes: docs/ is read
 as committed.
+
+Only what changed is drawn or extracted again: each PNG carries a key of its spec and of the
+tools that drew it, each reference section a digest of its header. --check compares keys and
+never draws.
 """
 from __future__ import annotations
 
@@ -27,10 +32,11 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sync", action="store_true", help="write the generated files into docs/")
     ap.add_argument("--check", action="store_true", help="fail on stale generated files or a bad figure source")
+    ap.add_argument("--force", action="store_true", help="with --sync, draw and extract everything again")
     args = ap.parse_args(argv)
     if not (args.sync or args.check):
         ap.error("give --sync or --check")
-    p = sync.plan(ROOT)
+    p = sync.plan(ROOT, render=args.sync, force=args.force)
     errors = list(p.errors)
     if args.sync and not errors:
         sync.apply(ROOT, p)

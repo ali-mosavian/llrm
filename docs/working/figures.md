@@ -107,3 +107,14 @@ and the compressed stream depend only on the spec.
   slightly apart, and italic is sheared.
 - `png.py` writes the file: our own deflate, because zlib's output differs between
   zlib builds, and no timestamps or other chunks.
+
+## What is drawn again
+
+`--sync` draws and extracts only what changed. Each PNG holds one `tEXt` chunk, `llrm-fig`,
+with the SHA-256 of its spec and of the tools that draw it (`figures.py`, `raster.py`,
+`png.py`, `ttf.py`, the font); each section of a reference page is preceded by
+`<!-- src: PATH sha256:... -->`, the digest of that file's `//!` block and of
+`passdocs.py` and the sync code. A PNG or section whose key is unchanged is left as
+committed, a section of a removed file is dropped, and the output is byte for byte what a
+run from scratch writes. `--check` compares keys and never draws, so it takes well under
+a second. `--sync --force` ignores the keys.
