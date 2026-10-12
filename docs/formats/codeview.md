@@ -34,11 +34,13 @@ Records are Open Watcom's `cv4f.h`; each shape was also read from objects ML 6.1
   `LF_FIELDLIST`, `LF_PROCEDURE`, `LF_ARGLIST`; `S_GPROC`, `S_LPROC`, `S_BPREL`, `S_REGISTER`, `S_BLOCK`,
   `S_UDT`, statics.
 - CodeView 4 names one place per scope: a variable in a register for part of a scope, or removed by the
-  optimizer, is left out.
+  optimizer, is left out. A parameter that arrives in one register and stays there for the whole body is an
+  `S_REGISTER` (Nib m16 `regparm3`: `b` in EDX); one the code overwrites, or one in a register pair, is not
+  written ([#883](https://github.com/ali-mosavian/llrm/issues/883)).
 
 Read by real CodeView (`tests/cv4.rs`, driven in DOSBox-X): enums (`color e = 5`), `const` (`const short k`),
 register variables (`SI reg short r = 42`), block scopes (`k` is listed only while the program is in its
-block), structs, and a Nib program (`bp add`, parameters and a local with values). `LINK /CO` runs CVPACK,
+block), structs, and a Nib program (`bp add`: the local, and the register parameter `EDX reg long b = 3`). `LINK /CO` runs CVPACK,
 which rewrites the table (`NB08` trailer); CodeView then breaks at a function by name.
 
 Still from the Open Watcom headers alone: `LF_UNION` and `LF_BITFIELD` (CodeView accepts them; its locals
@@ -108,8 +110,9 @@ names with offsets as two parallel records. A BYREF parameter is two hops on VBD
 (`INTEGER` `0xa1`, `LONG` `0xa2`, `STRING` `0xb7`) and an array parameter by a bare `0x7a` pointer.
 
 Packed by `LINK /CO`, the result has an `NBxx` trailer, a subsection directory, real `S_LPROC16`, `S_BPREL16`
-and `S_LDATA16` records with scope links, and `sstGlobalTypes` with numbered `LF_` leaves. VBDOS's LINK 5.31
-runs CVPACK itself; PDS 7.1's needs `CVPACK /P`; QB 4.5 ships none.
+and `S_LDATA16` records with scope links, and `sstGlobalTypes` with numbered `LF_` leaves. MS LINK 5.31 (`LINK /CO`) runs
+CVPACK and keeps the CodeView 4 records (`tests/cv4.rs`). `jwlink debug codeview` takes them too and Open
+Watcom `cvpack` packs its image (`tools/debug-matrix.py`).
 
 ## Screenshots
 

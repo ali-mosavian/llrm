@@ -132,6 +132,8 @@ How they are launched: `toolchain/dosrunbuild.sh` builds the fork at a pinned co
 | `-gtd` | Turbo Debugger records, 16-bit OMF | `TLINK /v`, `TDUMP`, Turbo Debugger (`tests/turbo.rs`) |
 | `-gdwarf` | DWARF | gdb, llvm-dwarfdump (`tests/dwarf.rs`) |
 
+The debugger side is the fork. It reads CodeView 3 scalar types in BC-dialect images, DWARF module arrays, and follows near pointers through DS; its EXE loader no longer loads bytes after the image (fork #26-#29).
+
 The records are described in [debug-info](../formats/debug-info.md) and [turbo-debugger](../formats/turbo-debugger.md). `tools/debug-matrix.py [--llrm DIR] [--only fe,bits]` prints, per frontend, width, object format and debug format, whether an independent reader finds the names, lines, parameters and locals of a known program (`tests/fixtures/matrix`).
 
 ### A session: break, read a local
