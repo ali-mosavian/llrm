@@ -55,6 +55,23 @@ INITS = {
     "sequenceDiagram": SEQUENCE_INIT,
 }
 
+def normalize_init(fence_text: str) -> str:
+    """`fence_text` with its first `%%{init` line replaced by the INITS entry of its diagram type.
+
+    Only flowchart, block-beta, gantt and sequenceDiagram figures change; others and figures without
+    an init line are returned as they are.
+    """
+    lines = fence_text.split("\n")
+    at = next((i for i, line in enumerate(lines) if line.startswith("%%{init")), None)
+    if at is None:
+        return fence_text
+    kind = next((w for line in lines[at + 1 :] if line.strip() for w in line.split()[:1]), None)
+    if kind not in INITS:
+        return fence_text
+    lines[at] = INITS[kind]
+    return "\n".join(lines)
+
+
 # class -> (fill, stroke, text); the meaning is in docs/working/figures.md
 CLASSES = {
     "src": ("#2563eb", "#1e40af", "#ffffff"),

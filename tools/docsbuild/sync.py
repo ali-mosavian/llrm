@@ -219,6 +219,17 @@ def plan(root: Path, force: bool = False) -> Plan:
     return out
 
 
+def missing_example(root: Path) -> list[str]:
+    """`file: no # Example` for each documented source file whose header lacks the heading."""
+    found = []
+    for _name, _title, directory, _kind in passdocs.PAGES:
+        for src in passdocs.sources(root / directory):
+            lines = passdocs.header_of(src.read_text(encoding="utf-8"))
+            if lines and "Example" not in passdocs.sections(lines):
+                found.append(f"{directory}/{src.name}: no # Example")
+    return found
+
+
 def apply(root: Path, p: Plan) -> None:
     for path, content in p.writes.items():
         (root / path).parent.mkdir(parents=True, exist_ok=True)

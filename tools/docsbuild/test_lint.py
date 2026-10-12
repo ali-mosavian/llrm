@@ -33,11 +33,16 @@ def test_unbalanced_quote_and_bracket_are_reported():
     assert any("[]" in e for e in lint.check(swap('c["C"]', 'c["C"')))
 
 
-def test_raw_semicolon_and_angle_bracket_in_a_label_are_reported():
-    """A raw `;` ended the statement and cut the label."""
-    assert any("';'" in e for e in lint.check(swap('"C"', '"C; D"')))
+def test_raw_angle_bracket_in_a_label_is_reported_and_a_quoted_semicolon_is_not():
     assert any("angle" in e for e in lint.check(swap('"C"', '"a < b"')))
     assert lint.check(swap('"C"', '"a #lt; b#59; c"')) == []
+    assert lint.check(swap('"C"', '"C; D"')) == []
+
+
+def test_a_bare_semicolon_outside_quotes_is_reported():
+    """`;` ends a statement in mermaid: a bare one splits the line."""
+    assert any("';'" in e for e in lint.check(swap("b -.-> c", "b -.-> c; a --> b")))
+    assert any("';'" in e for e in lint.check(swap("b -.-> c", 'b -.-> c; x["a;b"]')))
 
 
 def test_an_undefined_class_is_reported_and_a_defined_one_is_not():
@@ -121,3 +126,50 @@ def test_render_accepts_a_good_figure_and_flags_a_bad_one(tmp_path):
     assert lint.render_errors(tmp_path) == []
     (tmp_path / "docs/a.md").write_text("```mermaid\n" + tm.INIT + "\nflowchart TB\n  a -->\n```\n")
     assert lint.render_errors(tmp_path)
+
+
+def flow(*edges):
+    return "\n".join([tm.INIT, "flowchart TB", '  a["A"]', '  b["B"]', '  c["C"]', *("  " + e for e in edges)])
+
+
+@pytest.mark.parametrize("edge", [
+    "a -->|no| b", "a -- keep it --> b", "a ==>|x| b", "a -.->|x| b", "a -- text --- b",
+    "a -->|x| b -->|y| c", "a -- p --> b -- q --> c", "a ==>|x| b ==>|y| c", "a -->|no keep| b & c",
+])
+def test_edge_labels_are_not_nodes(edge):
+    """`|no| keep` was reported as an undeclared node."""
+    assert lint.check(flow(edge)) == []
+
+
+def test_an_undeclared_node_in_a_labelled_chain_is_still_reported():
+    errs = lint.check(flow("a -->|x| b -->|y| zz"))
+    assert any("'zz'" in e for e in errs)
+
+
+def test_inline_declared_ids_and_subgraph_ids_count_as_declared():
+    body = "\n".join([
+        tm.INIT, "flowchart TB", "  classDef k fill:#000",
+        '  subgraph s1 ["Group"]', '    b2["x"]:::k --> b3["y;z"]:::k', "  end",
+        "  subgraph s2", "    q1((c))", "  end", "  b3 -->|go| s2", "  s1 --> q1",
+    ])
+    assert lint.check(body) == []
+
+
+def test_fix_style_normalizes_the_figures_of_a_markdown_text_and_nothing_else():
+    old = "%%{init: {'theme':'base'}}%%"
+    text = f"a\n```mermaid\n{old}\nflowchart LR\n  a --> b\n```\n\n```text\n{old}\nflowchart LR\n```\n"
+    fixed = lint.fix_style(text)
+    assert fixed == text.replace(old, tm.INIT, 1)
+    assert lint.fix_style(fixed) == fixed
+
+
+def test_fix_style_rewrites_only_tracked_docs_pages(tmp_path):
+    old = "%%{init: {'theme':'base'}}%%"
+    fig = f"```mermaid\n{old}\nflowchart LR\n  a --> b\n```\n"
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/a.md").write_text(fig)
+    (tmp_path / "README.md").write_text(fig)
+    assert lint.fix_style_tree(tmp_path) == ["docs/a.md"]
+    assert tm.INIT in (tmp_path / "docs/a.md").read_text()
+    assert (tmp_path / "README.md").read_text() == fig
+    assert lint.fix_style_tree(tmp_path) == []

@@ -26,6 +26,8 @@ KNOWN_CLASSES = set(tm.CLASSES) | set(tm.BLOCK_CLASSES) | {"cell"}
 ENTITY = re.compile(r"#\w+;")
 QUOTED = re.compile(r'"[^"]*"')
 TAGS = re.compile(r"</?(?:b|small|br/?)>")
+EDGE_LABEL = re.compile(r"\|[^|]*\|")
+EDGE_TEXT = re.compile(r"(?:--|==|-\.)\s+.+?\s*(?:-->|==>|\.->|---|===|\.-)")
 ARROW = re.compile(r"\s*(?:<?-->|<?-\.->|<?==>|---|-\.-|===)\s*(?:\|\s*\|)?\s*")
 FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})\s*(\S*)\s*$")
 
@@ -91,12 +93,10 @@ def _syntax(lines: list[str]) -> list[str]:
             errs.append(f"unbalanced |: {line.strip()}")
         for label in QUOTED.findall(line):
             inner = TAGS.sub("", ENTITY.sub("", label[1:-1]))
-            if ";" in inner:
-                errs.append(f"';' in a label: {label}")
             if "<" in inner or ">" in inner:
                 errs.append(f"raw angle bracket in a label: {label}")
-        if ";" in ENTITY.sub("", line) and not QUOTED.search(line):
-            errs.append(f"';' in a line: {line.strip()}")
+        if ";" in ENTITY.sub("", flat):
+            errs.append(f"';' outside a quoted label: {line.strip()}")
     return errs
 
 
@@ -121,7 +121,7 @@ def _flowchart(lines: list[str]) -> list[str]:
             continue
         if re.match(r"(classDef|class|style|linkStyle|end|direction|flowchart)\b", s) or not s:
             continue
-        flat = QUOTED.sub('""', s)
+        flat = EDGE_TEXT.sub(" --> ", EDGE_LABEL.sub("", QUOTED.sub('""', s)))
         for decl in re.finditer(r"(\w+)(?=\s*(?:\[|\(|\{|:::))", flat):
             declared.add(decl.group(1))
         flat = re.sub(r":::\w+", "", flat)
@@ -130,7 +130,6 @@ def _flowchart(lines: list[str]) -> list[str]:
             if new == flat:
                 break
             flat = new
-        flat = re.sub(r'\|\s*(?:"")?\s*\|', "", flat)
         parts = [p.strip() for p in ARROW.split(flat)]
         if len(parts) > 1:
             edges.append((s, [x for p in parts for x in p.split("&") if x.strip()]))
@@ -198,6 +197,34 @@ def documents(root: Path) -> list[tuple[str, str]]:
 def figures_of(root: Path) -> list[tuple[str, str]]:
     """(label, mermaid text) of every figure in the tree, labelled `path:line`."""
     return [(f"{label}:{line}", body) for label, text in documents(root) for line, lang, body in fences(text) if lang == "mermaid"]
+
+
+GENERATED = re.compile(r"docs/optimizations/(?:passes|analyses|backend)/")
+
+
+def fix_style(text: str) -> str:
+    """`text` with the init line of each of its mermaid fences made the shared one (`tomermaid.normalize_init`)."""
+    lines = text.split("\n")
+    for line, lang, body in reversed(fences(text)):
+        if lang == "mermaid":
+            n = len(body.split("\n"))
+            lines[line : line + n] = tm.normalize_init(body).split("\n")
+    return "\n".join(lines)
+
+
+def fix_style_tree(root: Path) -> list[str]:
+    """Apply `fix_style` to each tracked Markdown file of docs/ that is not generated; the paths it changed."""
+    changed = []
+    for p in tracked(root, "docs/**/*.md"):
+        rel = p.relative_to(root).as_posix()
+        if not rel.startswith("docs/") or GENERATED.match(rel):
+            continue
+        old = p.read_text(encoding="utf-8")
+        new = fix_style(old)
+        if new != old:
+            p.write_text(new, encoding="utf-8")
+            changed.append(rel)
+    return changed
 
 
 def check_tree(root: Path) -> list[str]:

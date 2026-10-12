@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import passdocs  # noqa: E402
 
-GOOD = "//! Does a thing.\n//!\n//! # How it works\n//! Steps.\n//!\n//! # Runs\n//! Once.\n"
+GOOD = "//! Does a thing.\n//!\n//! # How it works\n//! Steps.\n//!\n//! # Runs\n//! Once.\n//!\n//! # Example\n//! None.\n"
 
 
 def tree(tmp_path, files):
@@ -18,15 +18,23 @@ def tree(tmp_path, files):
 
 def test_a_header_with_a_missing_section_is_reported(tmp_path, monkeypatch):
     """A header with no `# Runs` passed unnoticed, so a pass shipped without saying where it runs."""
-    root = tree(tmp_path, {"a.rs": GOOD, "b.rs": "//! Does b.\n//!\n//! # How it works\n//! x\n", "c.rs": "fn f() {}\n"})
+    root = tree(tmp_path, {"a.rs": GOOD, "b.rs": "//! Does b.\n//!\n//! # How it works\n//! x\n//!\n//! # Example\n//! y\n", "c.rs": "fn f() {}\n"})
     monkeypatch.setattr(passdocs, "PAGES", [("p", "P", "src", "Runs")])
-    assert passdocs.check(["src"], root) == ["src/b.rs: missing # Runs", "src/c.rs: missing summary, # How it works, # Runs"]
+    assert passdocs.check(["src"], root) == ["src/b.rs: missing # Runs", "src/c.rs: missing summary, # How it works, # Runs, # Example"]
 
 
 def test_analyses_need_provides_not_runs():
     lines = [line[4:] for line in GOOD.splitlines()]
     assert passdocs.missing(lines, "Provides") == ["# Provides"]
     assert passdocs.missing([x.replace("Runs", "Provides") for x in lines], "Provides") == []
+
+
+def test_a_header_without_an_example_section_is_reported(tmp_path, monkeypatch):
+    """Pages shipped with no `# Example`: the generated page showed the pass on no input at all."""
+    no_example = GOOD.split("//!\n//! # Example")[0]
+    root = tree(tmp_path, {"a.rs": no_example, "b.rs": GOOD})
+    monkeypatch.setattr(passdocs, "PAGES", [("p", "P", "src", "Runs")])
+    assert passdocs.check(["src"], root) == ["src/a.rs: missing # Example"]
 
 
 

@@ -248,3 +248,23 @@ def test_unknown_kind_and_missing_kind_are_errors():
         tm.convert("kind: pie")
     with pytest.raises(tm.FigureError):
         tm.convert('node a "x"')
+
+
+OLD = "%%{init: {'theme':'base','themeVariables':{'fontSize':'15px'}}}%%"
+
+
+@pytest.mark.parametrize("kind", list(tm.INITS))
+def test_normalize_init_swaps_an_old_init_for_the_shared_one(kind):
+    """Hand-written figures carried an older init line the lint rejected."""
+    out = tm.normalize_init(f"{OLD}\n{kind}\n  x")
+    assert out == f"{tm.INITS[kind]}\n{kind}\n  x"
+    assert tm.normalize_init(out) == out
+
+
+def test_normalize_init_leaves_other_types_and_initless_figures_alone():
+    for text in (f"{OLD}\npie\n  a", "flowchart LR\n  a --> b"):
+        assert tm.normalize_init(text) == text
+
+
+def test_normalize_init_takes_the_type_from_the_line_after_the_init():
+    assert tm.normalize_init(f"{OLD}\n\nflowchart TB\n  a").startswith(tm.INIT + "\n")

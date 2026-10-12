@@ -3,7 +3,8 @@
 
     python3 tools/docsbuild/build.py --sync            write the pass, analysis and backend pages
     python3 tools/docsbuild/build.py --sync --force    ... ignoring the digests that say what is up to date
-    python3 tools/docsbuild/build.py --check           exit 1 if --sync would change a file or a figure is malformed
+    python3 tools/docsbuild/build.py --check           exit 1 if --sync would change a file, a figure is malformed or a header has no `# Example`
+    python3 tools/docsbuild/build.py --fix-style       give the figures of docs/ (not the generated pages) the shared init line
     python3 tools/docsbuild/build.py --check --render  also draw each figure with mmdc ($MMDC or PATH; skipped if absent)
 
 --sync writes one page per documented source file under docs/optimizations/{passes,analyses,backend}/ from its
@@ -31,9 +32,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check", action="store_true", help="fail on stale pages or a malformed figure")
     ap.add_argument("--force", action="store_true", help="with --sync, write every page again")
     ap.add_argument("--render", action="store_true", help="with --check, draw each figure with mmdc")
+    ap.add_argument("--fix-style", action="store_true", help="give the hand-written figures the shared init line")
     args = ap.parse_args(argv)
+    if args.fix_style:
+        print("\n".join(lint.fix_style_tree(ROOT)))
+        return 0
     if not (args.sync or args.check):
-        ap.error("give --sync or --check")
+        ap.error("give --sync, --check or --fix-style")
     p = sync.plan(ROOT, force=args.force)
     errors = list(p.errors)
     if args.sync and not errors:
@@ -42,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         if p.drift:
             errors.append(sync.drift_message(p))
+        errors += sync.missing_example(ROOT)
         errors += lint.check_tree(ROOT)
         if args.render:
             errors += lint.render_errors(ROOT)

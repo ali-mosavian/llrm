@@ -8,8 +8,9 @@ BACKEND = "crates/backend/llrm-core/src/backend"
 OUT = "docs/optimizations"
 
 
-def header(summary, runs="Once.", extra=""):
-    return f"//! {summary}\n//!\n//! # How it works\n//! Steps.\n//!\n{extra}//! # Provides\n//! {runs}\n"
+def header(summary, runs="Once.", extra="", example="No honest example: a helper.\n"):
+    tail = f"//!\n//! # Example\n//! {example}" if example else ""
+    return f"//! {summary}\n//!\n//! # How it works\n//! Steps.\n//!\n{extra}//! # Provides\n//! {runs}\n{tail}"
 
 
 def repo(tmp_path, files):
@@ -233,6 +234,19 @@ def test_check_fails_on_a_malformed_figure_and_a_legacy_fence_in_a_header(tmp_pa
     capsys.readouterr()
     assert build.main(["--check"]) == 1
     assert "legacy" in capsys.readouterr().out
+
+
+def test_check_lists_every_generated_page_without_an_example_heading(tmp_path, monkeypatch, capsys):
+    """Pages shipped with no `## Example`; --check said nothing."""
+    files = dict(BASE, **{f"{ANALYSIS}/a.rs": header("S.", example=""), f"{PASSES}/b.rs": header("T.", example="")})
+    root = repo(tmp_path, files)
+    monkeypatch.setattr(build, "ROOT", root)
+    build.main(["--sync"])
+    capsys.readouterr()
+    assert build.main(["--check"]) == 1
+    out = capsys.readouterr().out
+    assert f"{ANALYSIS}/a.rs" in out and f"{PASSES}/b.rs" in out and "fold.rs" not in out
+    assert sync.missing_example(root) == [f"{PASSES}/b.rs: no # Example", f"{ANALYSIS}/a.rs: no # Example"]
 
 
 def test_check_with_render_runs_without_mmdc(tmp_path, monkeypatch, capsys):
