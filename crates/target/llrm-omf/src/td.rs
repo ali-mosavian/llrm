@@ -1,7 +1,7 @@
 //! [`llrm_object::debug::Info`] as Borland's debug information in an OMF
 //! object: the `COMENT` records of classes 0xE1-0xE8 and 0xEA that Turbo C++
 //! writes under `-v`, which `TLINK /v` turns into the table Turbo Debugger
-//! reads. docs/machine/turbo-debugger.md has the measurements behind
+//! reads. docs/formats/turbo-debugger.md has the measurements behind
 //! every byte. 16-bit only. A fact these records cannot say is refused, with
 //! what it was.
 

@@ -95,25 +95,62 @@ fn broken(dir: &Path) -> Vec<String> {
     found
 }
 
-/// `file path` of each `docs/…md` named in the text, as a link or not, that
-/// is not a file. A URL naming a doc of another commit is not a path here.
+/// The `docs/…md` paths `text` names, as a link or not, that are not files
+/// under `dir`. A URL naming a doc of another commit is not a path here, and
+/// an upper-case segment (`NAME.md`) is a placeholder.
+fn missing_in(
+    dir: &Path,
+    text: &str,
+) -> Vec<String> {
+    let mut found = Vec::new();
+    for line in text.lines() {
+        for (at, _) in line.match_indices("docs/") {
+            if line[..at].ends_with(|c: char| c.is_alphanumeric() || "/._-".contains(c)) {
+                continue;
+            }
+            let tail = &line[at..];
+            let end = tail.find(|c: char| !(c.is_alphanumeric() || "/._-".contains(c))).unwrap_or(tail.len());
+            let path = tail[..end].trim_end_matches('.');
+            let placeholder =
+                path.split('/').any(|part| part.len() > 2 && part.chars().all(|c| c.is_ascii_uppercase() || c == '_'));
+            if path.ends_with(".md") && !placeholder && !dir.join(path).is_file() {
+                found.push(path.to_owned());
+            }
+        }
+    }
+    found
+}
+
+/// `file path` of each `docs/…md` a tracked markdown file names that is not a
+/// file.
 fn named_missing(dir: &Path) -> Vec<String> {
     let mut found = Vec::new();
     for file in tracked_markdown(dir) {
         let text = fs::read_to_string(dir.join(&file)).unwrap_or_default();
-        for line in text.lines() {
-            for (at, _) in line.match_indices("docs/") {
-                if line[..at].ends_with(|c: char| c.is_alphanumeric() || "/._-".contains(c)) {
-                    continue;
-                }
-                let tail = &line[at..];
-                let end = tail.find(|c: char| !(c.is_alphanumeric() || "/._-".contains(c))).unwrap_or(tail.len());
-                let path = tail[..end].trim_end_matches('.');
-                if path.ends_with(".md") && !dir.join(path).is_file() {
-                    found.push(format!("{file} {path}"));
-                }
-            }
+        found.extend(missing_in(dir, &text).into_iter().map(|path| format!("{file} {path}")));
+    }
+    found
+}
+
+/// Files whose text names docs on purpose, as a fixture (and the `test_*.py`
+/// files).
+const FIXTURE_FILES: [&str; 2] = ["tests/docs_links.rs", "tests/no_local_paths.rs"];
+
+/// `file path` of each `docs/…md` that tracked code or data (comments, strings,
+/// golden files) names and that is not a file.
+fn named_missing_in_code(dir: &Path) -> Vec<String> {
+    let out = Command::new("git").args(["ls-files", "-z"]).current_dir(dir).output().expect("git runs");
+    assert!(out.status.success(), "git ls-files failed");
+    let mut found = Vec::new();
+    for file in String::from_utf8_lossy(&out.stdout).split('\0').filter(|name| !name.is_empty()) {
+        let code =
+            ["rs", "py", "sh", "toml", "txt", "yml", "json"].iter().any(|ext| file.ends_with(&format!(".{ext}")));
+        let fixture = file.rsplit('/').next().is_some_and(|name| name.starts_with("test_") && name.ends_with(".py"));
+        if !code || fixture || FIXTURE_FILES.contains(&file) {
+            continue;
         }
+        let Ok(text) = fs::read_to_string(dir.join(file)) else { continue };
+        found.extend(missing_in(dir, &text).into_iter().map(|path| format!("{file} {path}")));
     }
     found
 }
@@ -157,6 +194,12 @@ fn test_every_markdown_link_resolves() {
 fn test_every_doc_path_named_in_markdown_exists() {
     let found = named_missing(Path::new(ROOT));
     assert!(found.is_empty(), "docs named that are not there (update or remove):\n{}", found.join("\n"));
+}
+
+#[test]
+fn test_no_code_or_data_names_a_doc_that_is_not_there() {
+    let found = named_missing_in_code(Path::new(ROOT));
+    assert!(found.is_empty(), "code names docs that are not there (update or remove):\n{}", found.join("\n"));
 }
 
 #[test]
@@ -215,4 +258,17 @@ fn test_a_doc_path_named_in_prose_that_is_gone_is_found() {
         ("docs/here.md", "x\n"),
     ]);
     assert_eq!(named_missing(dir.path()), ["a.md docs/gone.md", "a.md docs/gone2.md"]);
+}
+
+/// Two strings of the QB runtime's contracts named
+/// `docs/optimizations/event-entry-blocker.md` after the note was deleted.
+#[test]
+fn test_a_doc_named_in_code_that_is_gone_is_found() {
+    let dir = repo(&[
+        ("a.rs", "// see docs/gone.md\nlet s = \"docs/here.md. docs/gone2.md.\";\n"),
+        ("b.txt", "evidence: docs/gone3.md.\n"),
+        ("c.md", "docs/not-code.md\n"),
+        ("docs/here.md", "x\n"),
+    ]);
+    assert_eq!(named_missing_in_code(dir.path()), ["a.rs docs/gone.md", "a.rs docs/gone2.md", "b.txt docs/gone3.md"]);
 }

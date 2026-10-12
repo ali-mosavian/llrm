@@ -44,7 +44,7 @@ def test_a_path_no_table_knows_takes_the_full_tier():
 
 
 def test_only_docs_run_nothing():
-    assert gate.plan(["docs/testing.md", "readme.md"]).tier == "none"
+    assert gate.plan(["docs/working/testing.md", "readme.md"]).tier == "none"
 
 
 def test_lib_tests_run_in_the_changed_crate_and_its_dependents_only():
@@ -363,7 +363,7 @@ def test_a_one_line_change_to_any_source_runs_every_source_scan_in_the_fast_tier
     for one in cfg["scan"]:
         if "package" in one:
             assert one["package"] in command and (one.get("lib") or one["test"]) in command, one
-    assert "scans" not in gate.plan(["tools/measure.py"]).steps and "scans" not in gate.plan(["docs/testing.md"]).steps
+    assert "scans" not in gate.plan(["tools/measure.py"]).steps and "scans" not in gate.plan(["docs/working/testing.md"]).steps
 
 
 def test_every_scan_names_a_test_that_exists():
@@ -418,7 +418,7 @@ def test_a_one_line_change_to_any_rust_file_selects_the_fmt_step_in_the_fast_tie
         assert "fmt" in gate.plan([touched]).steps, touched
     assert gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]).tier == "fast"
     assert "fmt" in gate.plan(["rustfmt.toml"]).steps and "fmt" in gate.plan(["tools/fmt.sh"]).steps
-    assert "fmt" not in gate.plan(["tools/measure.py"]).steps and "fmt" not in gate.plan(["docs/testing.md"]).steps
+    assert "fmt" not in gate.plan(["tools/measure.py"]).steps and "fmt" not in gate.plan(["docs/working/testing.md"]).steps
 
 
 def test_the_build_rejects_compiler_warnings():
