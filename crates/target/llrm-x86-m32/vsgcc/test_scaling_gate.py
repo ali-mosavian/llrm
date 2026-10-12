@@ -953,3 +953,16 @@ def test_lsr_does_not_weigh_every_branch_again_for_each_loop_it_changes(tmp_path
     own = gate.own_work(command)
     assert own["analysis loop-products"] > 5.0, f"premise: products were derived ({own['analysis loop-products']:.1f} Minstr)"
     assert own["analysis loop-products"] <= 45.0, f"{own['analysis loop-products']:.1f} Minstr"
+
+
+def test_a_loops_invariants_are_a_bit_set_not_a_hash_set(tmp_path):
+    """nest(32) at -O2 with -ftree-ch: every counted proof of a loop collected the values its body defines into a hash set (each of the N
+    loops of a nest, each time lsr changed one): `analysis counted` read 123 Minstr at N=32 and 799 at N=64. As a bit set: 78 and 493.
+    A bound of 100 at N=32 fails the first."""
+    source = tmp_path / "nest32.c"
+    source.write_text(scaling.nest(32))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["analysis counted"] > 10.0, f"premise: loops were counted ({own['analysis counted']:.1f} Minstr)"
+    assert own["analysis counted"] <= 100.0, f"{own['analysis counted']:.1f} Minstr"
