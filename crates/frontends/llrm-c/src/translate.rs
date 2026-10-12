@@ -878,7 +878,7 @@ fn passed_as_scalar(
 /// words for every aggregate up to 128 bits, fields as they are: the stack
 /// bytes are the same either way, the front end here has no field list (its
 /// debug types are not always there), and the words are what its listings and
-/// tests have been. docs/targets.md.
+/// tests have been. docs/machine/targets.md.
 const BYVAL_ABOVE: i64 = 16;
 
 /// Whether an aggregate of `size` bytes passed to `callee` under `convention`

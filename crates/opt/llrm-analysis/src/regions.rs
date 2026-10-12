@@ -1,5 +1,6 @@
-//! Whether two memory references can meet: `may_alias`, `overlapping`, and the
-//! indexes that find the candidates without comparing every pair.
+//! Decides whether a write through one memory reference can land on another
+//! (`may_alias`, `overlapping`), and indexes cells so a write checks only those
+//! that might meet it instead of every pair.
 //!
 //! # How it works
 //! `overlapping(one, other, known, other_known, program)` asks whether a write
@@ -48,6 +49,29 @@
 //! Which linear memory holds no program data is the target's fact, and which
 //! address spaces hold program data the segment layout's; both come from the
 //! program the manager hands analyses as `Outer::program`.
+//!
+//! # Example
+//! Three 4-byte stores off `@g`:
+//!
+//! ```mir
+//! @g = global [64 x i8] zeroinitializer
+//!
+//! define void @f() {
+//! b0:
+//!   store i32 0, ptr getelementptr (i8, ptr @g, i16 10)
+//!   store i32 0, ptr getelementptr (i8, ptr @g, i16 13)
+//!   store i32 0, ptr getelementptr (i8, ptr @g, i16 14)
+//!   ret void
+//! }
+//! ```
+//!
+//! | `overlapping(first, ..)` | bytes vs first's [10, 14) | answer      |
+//! |--------------------------|---------------------------|-------------|
+//! | second store             | [13, 17)                  | `Ok(true)`  |
+//! | third store              | [14, 18)                  | `Ok(false)` |
+//!
+//! From unit test `overlapping_same_base_statics_use_half_open_byte_ranges` in
+//! `regions.rs`.
 //!
 //! # Provides
 //! `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`,

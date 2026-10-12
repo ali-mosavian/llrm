@@ -4,26 +4,32 @@ For maintainers comparing `llrm-qb` with BC of QuickBASIC 4.5, PDS 7.1 and VBDOS
 
 ## Flow
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  src["<b>bench/NAME/NAME.bas</b>"]:::src
+  qb["<b>llrm-qb --dialect D --runtime D</b><br/><small>-O2 or -Os<br/>-fno-inline-functions<br/>-fno-inline-functions-<br/>called-once</small>"]:::opt
+  bc["<b>BC /O /FPi [/AH]</b><br/><small>one DOSBox-X boot per dialect</small>"]:::out
+  qbl["<b>LINK in DOSBox-X</b><br/><small>llrm's runtime</small>"]:::mid
+  bcl["<b>LINK with D's own runtime</b>"]:::mid
+  run["<b>real-mode unicorn</b><br/><small>crates/target/llrm-x86-m16<br/>/bench/icount.py<br/>counts the kernel BenchName:<br/>entry to return,<br/>runtime calls included</small>"]:::data
+  out["<b>instructions, memory ops,</b><br/><small>code/data/bss bytes<br/>of the program's OBJ<br/>-#gt; bench/NAME/expected.toml</small>"]:::mid
+  src --> qb
+  src --> bc
+  qb -->|"OBJ"| qbl
+  bc -->|"OBJ"| bcl
+  qbl --> run
+  bcl --> run
+  run -->|"[bas.*] beside [bc.O2] [pds71.O2] [vbdos.O2]"| out
 ```
- bench/NAME/NAME.bas
-        |
-   +----+----------------------------------+
-   v                                         v
- llrm-qb --dialect D --runtime D        BC /O /FPi [/AH]   (D = qb45 | pds71 | vbdos)
-   -O2 | -Os -fno-inline-functions         one DOSBox-X boot per dialect
-   -fno-inline-functions-called-once       |  OBJ
-   |  OBJ                                  v
-   v                                   LINK with D's own runtime
- LINK in DOSBox-X, llrm's runtime
-   +--------------------+------------------+
-                        v
-     real-mode unicorn (crates/target/llrm-x86-m16/bench/icount.py)
-     count the kernel (`BenchName`): entry to return, runtime calls included
-                        |
-                        v
-     instructions, memory ops, code/data/bss bytes of the program's OBJ
-     -> bench/NAME/expected.toml  [bas.*] beside [bc.O2] [pds71.O2] [vbdos.O2]
-```
+
+*One BASIC source through llrm-qb and BC (D is qb45, pds71 or vbdos)*
 
 ## Generated instructions and size
 

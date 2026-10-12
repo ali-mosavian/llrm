@@ -1,5 +1,6 @@
-//! Non-wrapping integer intervals per block, from the branch edges that
-//! dominate a block and the counted loops that hold it.
+//! Bounds each integer value in each block by a non-wrapping interval, from the
+//! branch edges that dominate the block and the counted loops that hold it. A
+//! bounds check or overlap test that the interval decides can then go.
 //!
 //! # How it works
 //! An `Interval` is `[low, high]` over mathematical integers at a bit width,
@@ -53,6 +54,50 @@
 //! width, to the same bytes, because every partial sum is a non-negative
 //! integer below `2**index_bits`; it is used where the object's own address is
 //! the only root known to start at 0.
+//!
+//! # Example
+//! `for i = 0 while i < 10: if i < 4: off = i * 2`:
+//!
+//! ```mir
+//! define void @f() {
+//! b0:
+//!   br label %b10
+//!
+//! b10:
+//!   %i = phi i16 [ 0, %b0 ], [ %next, %b40 ]
+//!   %c = icmp slt i16 %i, 10
+//!   br i1 %c, label %b20, label %b50
+//!
+//! b20:
+//!   %g = icmp slt i16 %i, 4
+//!   br i1 %g, label %b30, label %b40
+//!
+//! b30:
+//!   %off = mul i16 %i, 2
+//!   br label %b40
+//!
+//! b40:
+//!   %next = add i16 %i, 1
+//!   br label %b10
+//!
+//! b50:
+//!   ret void
+//! }
+//! ```
+//!
+//! `bounded` gives:
+//!
+//! | block | `%i`        | `%off`   |
+//! |-------|-------------|----------|
+//! | `b30` | [0, 3]      | [0, 6]   |
+//! | `b40` | [0, 9]      |          |
+//! | `b50` | [10, 32767] |          |
+//!
+//! The guard bounds `%off` to 0..6 in `b30` without leaking into the join
+//! `b40`.
+//!
+//! From unit test `test_guard_refines_subscript_without_leaking_to_the_join` in
+//! `ranges_tests.rs`.
 //!
 //! # Provides
 //! The interval facts above. In the manager they are `DominatedEdges` and

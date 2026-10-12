@@ -8,18 +8,26 @@
 //! union of the blocks that reach each latch without passing back through the
 //! header (`_body` puts the header in first, which stops the walk).
 //!
-//! ```text
-//!        b0
-//!         |
-//!         v
-//!    +--> b1 ---> b4          back edges  b3->b1   b2->b2
-//!    |    |
-//!    |    v                   loop h=b1  latches {b3}  body {b1,b2,b3}
-//!    |   b2 <-+  (self loop)  loop h=b2  latches {b2}  body {b2}
-//!    |    |  -+
-//!    |    v
-//!    +--- b3
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   b0["<b>b0</b>"]:::mid
+//!   b1["<b>b1</b><br/><small>loop header</small>"]:::mid
+//!   b2["<b>b2</b><br/><small>loop header, self loop</small>"]:::mid
+//!   b3["<b>b3</b>"]:::mid
+//!   b4["<b>b4</b>"]:::mid
+//!   b0 --> b1
+//!   b1 --> b4
+//!   b1 --> b2
+//!   b2 --> b2
+//!   b2 --> b3
+//!   b3 --> b1
 //! ```
+//!
+//! *Back edges b3->b1 and b2->b2. Loop h=b1 has latches {b3} and body
+//! {b1,b2,b3}; loop h=b2 has latches {b2} and body {b2}*
 //!
 //! `loops` sorts by body size, so an inner loop precedes the loops around it.
 //! `depth` counts the loops each block is in, 0 for straight-line code.
@@ -33,6 +41,30 @@
 //! closes a cycle no natural loop explains, and its target is reported.
 //! Unreachable blocks are ignored. `irreducible_under` takes dominance already
 //! found.
+//!
+//! # Example
+//! A graph given as `block(at, succ)` pairs, with a loop nested in a loop:
+//!
+//! ```text
+//! 0 -> 1
+//! 1 -> 2
+//! 2 -> 3
+//! 3 -> 2, 4
+//! 4 -> 1, 5
+//! 5 ->
+//! ```
+//!
+//! | Query | Result |
+//! | --- | --- |
+//! | `loops` headers, in order | 2, 1 |
+//! | body of loop 2 | {2, 3} |
+//! | body of loop 1 | {1, 2, 3, 4} |
+//! | `depth` of blocks 0..5 | 0, 1, 2, 2, 1, 0 |
+//! | `irreducible` | none |
+//!
+//! From unit test
+//! `nested_loops_come_innermost_first_and_the_outer_body_holds_the_inner` in
+//! `loops_tests.rs`.
 //!
 //! # Provides
 //! `Loop`, `back_edges`, `loops`, `depth`, `irreducible`, `irreducible_under`,

@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Pass, analysis and backend reference, extracted from the `//!` header of each source file.
+"""Pass, analysis and backend headers: which source files have one, and what each lacks.
 
-    tools/passdocs.py --out DIR                    write DIR/index.md, passes.md, analyses.md, backend.md
     tools/passdocs.py --check [--require DIR...]   list files lacking a summary or a required section
 
-A header needs a summary line and `# How it works`, plus `# Runs` (transforms, backend) or `# Provides` (analyses).
+A header needs a summary line and `# How it works`, plus one of `# Runs` (a pass), `# Used by` (a helper) or `# Provides` (an analysis), and `# Example`.
 `--check` exits 1 on a gap in a `--require` directory; without `--require` it only reports.
+The pages are written from these headers by `tools/docsbuild/build.py --sync`.
 """
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sys
 from pathlib import Path
@@ -34,18 +33,23 @@ def sources(directory: Path) -> list[Path]:
     )
 
 
-def header(path: Path) -> list[str]:
-    """The leading `//!` block of `path`, prefix stripped."""
+def header_of(text: str) -> list[str]:
+    """The leading `//!` block of source `text`, prefix stripped."""
     lines: list[str] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        text = raw.strip()
-        if not text.startswith("//!"):
-            if lines or text:
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped.startswith("//!"):
+            if lines or stripped:
                 break
             continue
-        text = text[3:]
-        lines.append(text[1:] if text.startswith(" ") else text)
+        stripped = stripped[3:]
+        lines.append(stripped[1:] if stripped.startswith(" ") else stripped)
     return lines
+
+
+def header(path: Path) -> list[str]:
+    """The leading `//!` block of `path`, prefix stripped."""
+    return header_of(path.read_text(encoding="utf-8"))
 
 
 def summary(lines: list[str]) -> str:
@@ -72,63 +76,28 @@ def sections(lines: list[str]) -> set[str]:
     return found
 
 
+def section_line(lines: list[str], names: tuple[str, ...]) -> str:
+    """The first non-blank line under the first of the `# ` headings `names` that the header has, else ''."""
+    for name in names:
+        fenced, inside = False, False
+        for line in lines:
+            if line.lstrip().startswith("```"):
+                fenced = not fenced
+            if not fenced and line.startswith("# "):
+                inside = line[2:].strip() == name
+            elif inside and not fenced and line.strip() and not line.lstrip().startswith("```"):
+                return line.strip()
+    return ""
+
+
 def missing(lines: list[str], runs_or_provides: str) -> list[str]:
-    """What the header lacks: `summary`, `# How it works`, `# Runs` or `# Provides`."""
+    """What the header lacks: `summary`, `# How it works`, `# Runs`, `# Provides` or `# Example`."""
     gaps = [] if summary(lines) else ["summary"]
     have = sections(lines)
-    gaps += [f"# {name}" for name in ("How it works", runs_or_provides) if name not in have]
+    gaps += [f"# {name}" for name in ("How it works", "Example") if name not in have]
+    if not any(name in have for name in ("Runs", "Used by", "Provides")):
+        gaps.append(f"# {runs_or_provides} (or # Used by)")
     return gaps
-
-
-LINK = re.compile(r"\[(`[^`\]]+`)\](?:\[[^\]]*\])?(?!\()")
-
-
-def render(lines: list[str]) -> list[str]:
-    """Demote `# ` headings by two levels and turn rustdoc intra-doc links into plain code."""
-    out, fenced = [], False
-    for line in lines:
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
-        elif not fenced:
-            if line.startswith("#"):
-                line = "##" + line
-            line = LINK.sub(r"\1", line)
-        out.append(line)
-    return out
-
-
-def page(title: str, directory: str, kind: str, root: Path, sha: str) -> tuple[str, int, int]:
-    """Markdown of one page, and the counts of documented and undocumented files."""
-    toc, body, bare = [], [], []
-    for path in sources(root / directory):
-        lines = header(path)
-        stem, rel = path.stem, f"{directory}/{path.name}"
-        if not lines:
-            bare.append(rel)
-            continue
-        toc.append(f"- [{stem}](#{stem}): {summary(lines)}")
-        body += [
-            f"## {stem}",
-            "",
-            f"Source: [`{rel}`]({REPO}/blob/{sha}/{rel})",
-            "",
-            *render(lines),
-            "",
-        ]
-    out = [f"# {title}", "", f"From the `//!` headers of `{directory}`.", "", *toc, "", *body]
-    if bare:
-        out += ["## Undocumented", "", *[f"- [`{rel}`]({REPO}/blob/{sha}/{rel})" for rel in bare], ""]
-    return "\n".join(out), len(toc), len(bare)
-
-
-def write(out: Path, root: Path, sha: str) -> None:
-    out.mkdir(parents=True, exist_ok=True)
-    index = ["# Pass, analysis and backend reference", "", "Generated from the module header of each source file.", ""]
-    for name, title, directory, kind in PAGES:
-        text, done, bare = page(title, directory, kind, root, sha)
-        (out / f"{name}.md").write_text(text, encoding="utf-8")
-        index.append(f"- [{title}]({name}.md): {done} documented, {bare} undocumented")
-    (out / "index.md").write_text("\n".join(index) + "\n", encoding="utf-8")
 
 
 def check(required: list[str], root: Path) -> list[str]:
@@ -146,19 +115,14 @@ def check(required: list[str], root: Path) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", type=Path, help="write the pages here")
     ap.add_argument("--check", action="store_true", help="list files with a gap")
     ap.add_argument("--require", nargs="*", default=[], metavar="DIR", help="directories where a gap fails")
     args = ap.parse_args(argv)
-    if not args.out and not args.check:
-        ap.error("give --out or --check")
-    if args.out:
-        write(args.out, ROOT, os.environ.get("GITHUB_SHA") or "main")
-    if args.check:
-        found = check([d.rstrip("/") for d in args.require], ROOT)
-        print("\n".join(found))
-        return 1 if any(f.startswith(tuple(d.rstrip("/") + "/" for d in args.require)) for f in found) else 0
-    return 0
+    if not args.check:
+        ap.error("give --check")
+    found = check([d.rstrip("/") for d in args.require], ROOT)
+    print("\n".join(found))
+    return 1 if any(f.startswith(tuple(d.rstrip("/") + "/" for d in args.require)) for f in found) else 0
 
 
 if __name__ == "__main__":

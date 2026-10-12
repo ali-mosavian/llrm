@@ -4,13 +4,26 @@ For contributors to the BC object path (`crates/target/llrm-x86-bc`), which turn
 
 ## Where it sits
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  obj["<b>BC .OBJ</b>"]:::src
+  bod["<b>bodies + runtime contracts</b><br/><small>(llrm-qbruntime/runtime.toml)</small>"]:::mid
+  raise["<b>llrm-x86-bc</b><br/><small>one MIR function per body<br/>recognizers: pairs, longs,<br/>floats, access, arrays</small>"]:::opt
+  mir["<b>MIR</b><br/><small>@llrm.qb.#lt;routine#gt; calls<br/>with their contract</small>"]:::out
+  pas["<b>passes.md</b>"]:::mid
+  obj -->|"omf"| bod
+  bod --> raise
+  raise --> mir
+  mir --> pas
 ```
- BC .OBJ --omf--> bodies + runtime contracts (llrm-qbruntime/runtime.toml)
-                    |  llrm-x86-bc: one MIR function per body
-                    |    pairs / longs / floats / access / arrays recognizers
-                    v
-                  MIR (@llrm.qb.<routine> calls with their contract) --> passes.md
-```
+
+*Where the raise sits*
 
 Each body is raised by walking its nodes with a set of recognizers (`Recognizer` in [`sites.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-x86-bc/src/sites.rs)); one that cannot express a function refuses it and says why. No optimization pass sees a register convention or a machine instruction: the raise emits values.
 
@@ -37,4 +50,4 @@ BC passes and computes a long as two words. `pairs.rs` finds the pair of word op
 
 `llrm-omf` and the `llrm-bcdriver` crate drive the path; `crates/target/llrm-x86-bc/tests/raise.rs` raises fixture objects and checks the printed answers. `--dump DIR` shows MIR after each pass.
 
-Catalog: [passes](passes.md), [constant-propagation](constant-propagation.md), [gvn](gvn.md).
+Passes: [index](passes/readme.md), [fold](passes/fold.md), [gvn](passes/gvn.md).

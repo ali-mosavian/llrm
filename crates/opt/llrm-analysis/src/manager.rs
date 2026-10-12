@@ -23,19 +23,34 @@
 //! - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
 //!   fresh `run`.
 //!
-//! ```text
-//!  pass runs ---> PreservedAnalyses
-//!                   |
-//!    entry named? --yes--> kept
-//!         |no
-//!    READS_OUTER=false and function unchanged? --yes--> kept
-//!         |no
-//!    SKIPS and depends.unaffected(changes)? ------yes--> kept, stands again
-//!         |no                                              if changes undone
-//!    INCREMENTAL and update(previous, changes)? --Some--> updated
-//!         |no
-//!    dropped; recomputed on the next get
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   run["<b>pass runs</b><br/><small>PreservedAnalyses</small>"]:::mid
+//!   q1["<b>entry named?</b>"]:::mid
+//!   q2["<b>READS_OUTER=false and</b><br/><small>function unchanged?</small>"]:::mid
+//!   q3["<b>SKIPS and depends</b><br/><small>.unaffected(changes)?</small>"]:::mid
+//!   q4["<b>INCREMENTAL and</b><br/><small>update(previous, changes)?</small>"]:::mid
+//!   kept["<b>kept</b>"]:::opt
+//!   kept2["<b>kept, stands again</b><br/><small>if changes undone</small>"]:::opt
+//!   upd["<b>updated</b>"]:::opt
+//!   drop["<b>dropped#59; recomputed</b><br/><small>on the next get</small>"]:::warn
+//!   run --> q1
+//!   q1 -->|"yes"| kept
+//!   q1 -->|"no"| q2
+//!   q2 -->|"yes"| kept
+//!   q2 -->|"no"| q3
+//!   q3 -->|"yes"| kept2
+//!   q3 -->|"no"| q4
+//!   q4 -->|"Some"| upd
+//!   q4 -->|"no"| drop
 //! ```
+//!
+//! *What happens to a cached analysis when a pass runs*
 //!
 //! Function entries and what each asks for (every one also asks `Shape`, and
 //! most `AssumptionCache` and `ExposedFrames`, which are omitted):
@@ -73,6 +88,31 @@
 //! holds. `Held` and `Ranges` bundle the cached results a pass passes on to a
 //! `Unit`, so the facts are the manager's and not a solve of the pass's own.
 //! `Bounded` is empty where `Outer::loop_intervals` is off (-O1).
+//!
+//! # Example
+//! A pass replaces the uses of `%x` by `%a`, an integer edit:
+//!
+//! ```mir
+//! declare void @use(ptr)
+//! define i32 @f(ptr %p, i32 %a) {
+//! entry:
+//!   %x = add i32 %a, 1
+//!   %y = mul i32 %x, 3
+//!   %q = getelementptr i32, ptr %p, i32 1
+//!   call void @use(ptr %q)
+//!   ret i32 %y
+//! }
+//! ```
+//!
+//! | change                       | `Pointers`, `CallEffects`, `Writes`, `ExposedFrames` |
+//! |------------------------------|------------------------------------------------------|
+//! | `%x` replaced by `%a`        | kept (`unaffected` is true)                          |
+//! | `%q`, the address, rewritten | `CallEffects::unaffected` is false: recomputed        |
+//!
+//! From unit test
+//! `an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not`
+//! in
+//! `manager_tests.rs`.
 //!
 //! # Provides
 //! The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,

@@ -17,13 +17,13 @@ MIR has `getelementptr` on a pointer of the huge space (`Spaces::huge`, from `da
 
 Every huge pointer is made this way, so selector:offset is canonical within an object: comparison is lexicographic, and a difference is `((selector - selector') >> shift << 16) + (offset - offset')` (`pointer_difference`). Both temporary arithmetic and the packed result wrap at the target widths: `2000:fffe + 2` is `3000:0000`, and `2000:0004 - 8` is `1000:fffc`. A huge pointer is not an integer: casting it to one is refused, because its packed bits are not its address. Memory access through a huge pointer loads the selector into a segment register around the access; register allocation chooses every register.
 
-Code: `carried`, `window` and `pointer_difference` in [`isel.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/isel.rs#L3280).
+Code: `carried`, `window` and `pointer_difference` in [`isel.rs`](../optimizations/backend/isel.md).
 
 ## Making the carry cheap
 
-Built from a counter, each use pays the whole carry (`OperationCosts::carry`); stepped by a constant, the step pays a borrow spread to a mask, cut to the selector's stride and added to it (`carry_step`). So `lsr` walks a huge array with a huge pointer ([lsr](../optimizations/lsr.md)).
+Built from a counter, each use pays the whole carry (`OperationCosts::carry`); stepped by a constant, the step pays a borrow spread to a mask, cut to the selector's stride and added to it (`carry_step`). So `lsr` walks a huge array with a huge pointer ([lsr](../optimizations/passes/lsr.md)).
 
-`window` ([`window.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/window.rs)) runs after `lsr`: a counted loop's huge recurrences are split into windows. Inside a window every recurrence is normalized (`llrm.ia16.window`) and the loop runs as many whole trips as the target's window holds (`Machine::huge_window`) on far pointers that never carry; an outer loop walks the windows. The split is priced: a window's setup against the carries it saves.
+`window` ([`window.rs`](../optimizations/passes/window.md)) runs after `lsr`: a counted loop's huge recurrences are split into windows. Inside a window every recurrence is normalized (`llrm.ia16.window`) and the loop runs as many whole trips as the target's window holds (`Machine::huge_window`) on far pointers that never carry; an outer loop walks the windows. The split is priced: a window's setup against the carries it saves.
 
 ```
  for i in 0..n: a[i] = ...         for w in windows:

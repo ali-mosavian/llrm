@@ -36,6 +36,29 @@
 //! `removed * 100 / accesses` is below `min_percent`. `min_percent = 0` applies
 //! always, with at least 2. The result is `min(unroll, profit, max_unroll)`.
 //!
+//! # Example
+//! The 100 passes of `px[j] = px[j] + vx[j]` (bench/particle). The nest has no
+//! MIR form here: the caller hands `Access`es, each a `Subscript { constant,
+//! outer, inner }` per dimension, width 2:
+//!
+//! ```text
+//! nest[0]  read   px[j]   subscripts [ (0, 0, 1) ]
+//! nest[1]  write  px[j]   subscripts [ (0, 0, 1) ]
+//! nest[2]  read   vx[j]   subscripts [ (0, 0, 1) ]    (same object as the others)
+//! ```
+//!
+//! | Query | Result |
+//! | --- | --- |
+//! | `distances(nest[0], nest[1], 4, Some(101))` | `Vectors([(0, 0), (1, 0)])` |
+//! | `factor(nest, 4, 1, Some(101))` | `unroll = 2`, `profit = 2` |
+//!
+//! The write of `px[j]` is read again by the next outer pass at `(1, 0)`, so
+//! two copies make a reference go away.
+//!
+//! From unit test
+//! `an_array_walked_again_by_each_outer_pass_allows_a_jam_by_two` in
+//! `dependence_tests.rs`.
+//!
 //! # Provides
 //! `distances`, `factor`. Consumer: `unroll_jam`
 //! (`crates/opt/llrm-transforms/src/unroll_jam.rs`).

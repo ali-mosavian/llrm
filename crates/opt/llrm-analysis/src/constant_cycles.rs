@@ -34,6 +34,34 @@
 //! branch `choose` defers (`None`) keeps every successor once nothing else is
 //! left to resolve.
 //!
+//! # Example
+//! A loop whose carried value adds 0 to itself, so only the cycle proves it:
+//!
+//! ```mir
+//! define void @f(i32 %incoming, i1 %more) {
+//! b0:
+//!   br label %b10
+//!
+//! b10:
+//!   %joined = phi i32 [ 7, %b0 ], [ %carried, %b10 ]
+//!   %carried = add i32 %joined, 0
+//!   br i1 %more, label %b10, label %b20
+//!
+//! b20:
+//!   ret void
+//! }
+//! ```
+//!
+//! | Value | Fact |
+//! | --- | --- |
+//! | `%joined` | `Known { n: 7, width: 32 }` |
+//! | `%carried` | `Known { n: 7, width: 32 }` |
+//!
+//! With step 1, or with `%incoming` as the source of the add, neither is known.
+//!
+//! From unit test `test_unchanged_loop_value_is_constant_through_its_backedge`
+//! in `constant_cycles_tests.rs`.
+//!
 //! # Provides
 //! `State`, `Successors` and `propagated`. Consumers: [`crate::consts`]
 //! (`known`, with no evaluator) and `decide` in `llrm-transforms`, which
