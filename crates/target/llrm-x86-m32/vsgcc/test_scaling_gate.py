@@ -112,7 +112,8 @@ def test_a_count_does_not_depend_on_the_size_of_the_callers_environment(monkeypa
     sizes = set()
     for width in (0, 3, 40, 300):
         monkeypatch.setenv("CALLERS_PADDING", "x" * width)
-        monkeypatch.setenv("LLRM_BIN", "/kept" + "b" * width)
+        # A name past 255 bytes is no path (NAME_MAX): the caller's LLRM_BIN is as long as a directory name can be.
+        monkeypatch.setenv("LLRM_BIN", "/kept" + "b" * min(width, 200))
         sizes.add(scaling.sample([sys.executable, "-I", "-c", code], {"LLRM_DEBUG": "time"})[2].strip())
     assert len(sizes) == 1, sizes
 

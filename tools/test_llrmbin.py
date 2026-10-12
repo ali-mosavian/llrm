@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import unittest
@@ -67,4 +68,4 @@ def test_a_pinned_binary_has_a_path_of_one_length_whatever_directory_it_is_in(tm
         (folder / "llrm-c").write_text("")
     first, second = llrmbin.pinned(short / "llrm-c"), llrmbin.pinned(long / "llrm-c")
     assert len(str(first)) == len(str(second)) == llrmbin.PINNED_BYTES
-    assert first.resolve() == (short / "llrm-c").resolve() and second.resolve() == (long / "llrm-c").resolve()
+    assert os.readlink(first) == str(short / "llrm-c") and os.readlink(second) == str(long / "llrm-c")

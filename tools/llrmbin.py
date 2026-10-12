@@ -86,7 +86,7 @@ def pinned(binary: Path) -> Path:
     folder.mkdir(exist_ok=True)
     link = folder / binary.name
     try:
-        link.symlink_to(binary.resolve())
+        link.symlink_to(os.path.abspath(binary))
     except FileExistsError:  # another thread of this process pinned it first
         pass
     return link
