@@ -1,8 +1,8 @@
 //! -O1 turns a loop that copies or fills into a memmove, a memcpy or a memset:
 //! clang's O1 pipeline has `LoopIdiomRecognize` (PassBuilderPipelines.cpp
 //! L562), gcc's -O1 does not (`-ftree-loop-distribute-patterns` is -O2, opts.cc
-//! L653). The user's decision of 2026-10-10, recorded in docs/reference/levels.md; -Og
-//! keeps the loops.
+//! L653). The user's decision of 2026-10-10, recorded in
+//! docs/reference/levels.md; -Og keeps the loops.
 
 use std::process::Command;
 
