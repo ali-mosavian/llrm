@@ -659,6 +659,9 @@ def _place_label(cv, e, ei, ca, cb, m0, m1, right, xy, placed, borders=()):
         else:
             box = Box("label", f"{e.a}->{e.b}", c + 6 if side > 0 else c - 6 - w, m - h / 2, w, h)
         chosen = chosen or box
+        lo, hi = (box.x, box.x + box.w) if right else (box.y, box.y + box.h)
+        if lo < m0 + 2 or hi > m1 - 2:
+            continue
         if not any(_overlap(box, p) for p in placed) and not any(crosses_border(box, g) for g in borders):
             chosen = box
             break

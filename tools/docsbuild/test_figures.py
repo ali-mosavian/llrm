@@ -389,3 +389,20 @@ def test_lanes_make_room_for_multiline_mark_and_message_labels():
             assert t.y1 <= lanes["b"].y + lanes["b"].h
         if t.text.startswith("m1"):
             assert t.y0 >= lanes["a"].y + lanes["a"].h and t.y1 <= lanes["b"].y
+
+
+def repo_figures():
+    root = Path(__file__).resolve().parents[2]
+    return [pytest.param(f.read_text(), id=f.name) for f in sorted((root / "docs" / "assets" / "figures").glob("*.fig"))]
+
+
+@pytest.mark.parametrize("spec", repo_figures())
+def test_every_figure_in_the_docs_holds_the_layout_invariants(spec):
+    """A converted diagram that overlaps itself reads as a defect in the page, and nobody lays out every figure by hand."""
+    check_invariants(build(spec))
+
+
+def test_fan_out_of_labelled_edges_keeps_every_label_inside_the_gap():
+    """Four labelled edges from one node pushed one label down onto its target node (docs/abi/c.md)."""
+    spec = 'kind: graph\nnode s "source"\n' + "".join(f'node t{i} "target {i}"\nedge s -> t{i} "label number {i}"\n' for i in range(4))
+    check_invariants(build(spec))
