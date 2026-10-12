@@ -853,3 +853,94 @@ fn test_a_loop_is_weighed_by_its_own_blocks_not_the_functions() {
     let (small, large) = (visits(40), visits(80));
     assert!(small > 0 && large <= 2 * small + 8, "{small} visits for 40 loops, {large} for 80");
 }
+
+/// queens -O2 at -m16: `IF SAFE(..) THEN` tests the call's result against zero
+/// (the value heuristic says it holds, 62.5%) and the arm it enters calls
+/// (the call heuristic says not taken, 33%). First-match put 62.5% on the
+/// arm, which in fact runs on a minority of the calls; GCC combines the two
+/// predictors (Dempster-Shafer): .625 * .33 / (.625 * .33 + .375 * .67), under
+/// a half, the other way.
+#[test]
+fn test_a_zero_test_and_a_call_on_the_taken_arm_are_combined() {
+    let (odds, at) = estimate(
+        "declare void @log(i16)
+define i16 @f(i16 %x) {
+entry:
+  %c = icmp ne i16 %x, 0
+  br i1 %c, label %then, label %else
+then:
+  call void @log(i16 %x)
+  br label %join
+else:
+  br label %join
+join:
+  ret i16 %x
+}
+",
+    );
+    let (zero, call) = (20.0 / 32.0, 33.0 / 100.0);
+    let want = zero * call / (zero * call + (1.0 - zero) * (1.0 - call));
+    assert!(want < 0.5, "the premise: the arm that calls ends up unlikelier");
+    assert!(close(odds.probability(at("entry"), at("then")), want), "{:?}", odds.probability(at("entry"), at("then")));
+}
+
+/// Predictors that agree strengthen each other: the zero test favours the arm,
+/// and the other arm calls.
+#[test]
+fn test_agreeing_predictors_are_stronger_than_either() {
+    let (odds, at) = estimate(
+        "declare void @log(i16)
+define i16 @f(i16 %x) {
+entry:
+  %c = icmp ne i16 %x, 0
+  br i1 %c, label %then, label %else
+then:
+  br label %join
+else:
+  call void @log(i16 %x)
+  br label %join
+join:
+  ret i16 %x
+}
+",
+    );
+    let (zero, call) = (20.0 / 32.0, 67.0 / 100.0);
+    let want = zero * call / (zero * call + (1.0 - zero) * (1.0 - call));
+    assert!(want > zero && want > call);
+    assert!(close(odds.probability(at("entry"), at("then")), want));
+}
+
+/// A first-match predictor (the loop's) decides alone: a call on the way out
+/// does not move its 124:4.
+#[test]
+fn test_a_loop_branch_is_not_combined_with_a_call() {
+    let (odds, at) = estimate(
+        "declare void @log(i16)
+define i16 @f(i16 %n) {
+entry:
+  br label %head
+head:
+  %i = phi i16 [ 0, %entry ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ne i16 %next, %n
+  br i1 %more, label %head, label %out
+out:
+  call void @log(i16 %i)
+  ret i16 %i
+}
+",
+    );
+    assert_eq!(odds.by.get(&at("head")), Some(&Heuristic::Loop));
+    assert!(close(odds.probability(at("head"), at("head")), 124.0 / 128.0));
+}
+
+/// The fold is order free, and two certainties that disagree say nothing.
+#[test]
+fn test_combining_is_symmetric_and_certain_disagreement_is_even() {
+    let (a, b, c) = (0.625, 0.33, 0.66);
+    let one = combined([a, b, c].into_iter());
+    assert!((one - combined([c, a, b].into_iter())).abs() < 1e-12);
+    assert!((one - combined([b, c, a].into_iter())).abs() < 1e-12);
+    assert_eq!(combined([1.0, 0.0].into_iter()), 0.5);
+    assert_eq!(combined(std::iter::empty()), 0.5);
+}

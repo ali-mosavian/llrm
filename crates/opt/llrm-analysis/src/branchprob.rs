@@ -266,7 +266,8 @@ fn declared(
 }
 
 /// The first heuristic that tells `block`'s successors apart, and their
-/// weights.
+/// weights; below the loop and trip heuristics, which first-match, the
+/// predictors of a branch of two ways combined.
 fn weighed(
     context: &Context,
     metadata: &[MetadataNode],
@@ -311,11 +312,16 @@ fn weighed(
     if let Some(weights) = counted(context, function, shape, trips, runs, block, successors) {
         return (Heuristic::Counted, weights);
     }
+    // The predictors left do not first-match: on a branch of two ways every one
+    // that applies votes, and the votes are combined as GCC's
+    // `combine_predictions_for_bb` does (Dempster-Shafer, predict.cc:1213).
+    // Each vote is the probability of the first successor.
+    let mut votes: Vec<(Heuristic, f64)> = Vec::new();
     if successors.len() == 2 {
         if let Some((heuristic, likely, nan)) = compared(context, declarations, function, block) {
             let weights = if nan { ORDERED } else { OPCODE };
             let (when_true, when_false) = if likely { weights } else { weights.swap() };
-            return (heuristic, vec![when_true, when_false]);
+            votes.push((heuristic, when_true / (when_true + when_false)));
         }
     }
     let calls = |at: i64| {
@@ -329,7 +335,10 @@ fn weighed(
             ))
     };
     if let Some(weights) = split(&|at| !calls(at), CALL) {
-        return (Heuristic::Call, weights);
+        if successors.len() != 2 {
+            return (Heuristic::Call, weights);
+        }
+        votes.push((Heuristic::Call, weights[0] / (weights[0] + weights[1])));
     }
     let returns = |at: i64| {
         function.terminator(cfg::block(at)).is_some_and(|last| function.instruction(last).opcode == Opcode::Ret)
@@ -342,10 +351,15 @@ fn weighed(
         let mut weights = vec![0.0; 2];
         weights[leaving] = odds.0;
         weights[staying] = odds.1;
-        return (Heuristic::Return, weights);
+        votes.push((Heuristic::Return, weights[0] / (weights[0] + weights[1])));
+    } else if successors.len() != 2 {
+        if let Some(weights) = split(&|at| !returns(at), RETURN) {
+            return (Heuristic::Return, weights);
+        }
     }
-    if let Some(weights) = split(&|at| !returns(at), RETURN) {
-        return (Heuristic::Return, weights);
+    if let Some(&(heuristic, _)) = votes.first() {
+        let combined = combined(votes.iter().map(|&(_, vote)| vote));
+        return (heuristic, vec![combined, 1.0 - combined]);
     }
     (Heuristic::Even, vec![1.0; successors.len()])
 }
@@ -607,6 +621,17 @@ fn returned(
         }
         _ => None,
     }
+}
+
+/// The probability of the first way, from the probabilities each predictor
+/// gives it: Dempster-Shafer, as `combine_predictions_for_bb` folds them (from
+/// one half, `p' = p * q / (p * q + (1 - p) * (1 - q))`; two certainties that
+/// disagree leave one half).
+fn combined(votes: impl Iterator<Item = f64>) -> f64 {
+    votes.fold(0.5, |p, q| {
+        let d = p * q + (1.0 - p) * (1.0 - q);
+        if d == 0.0 { 0.5 } else { p * q / d }
+    })
 }
 
 trait Swap {
