@@ -33,16 +33,21 @@ impl EdgePrices {
 
     /// Whether `copies` copies cost less in a block of their own on an edge
     /// taken `chance` of the times its predecessor runs (the copies and the
-    /// jump that ends it) than in the predecessor (the copies, every time).
+    /// jump that ends it) than in the predecessor (the copies, every time),
+    /// by a tenth at least: the odds are a guess, and an edge that wins by
+    /// less costs a block and a jump for nothing the clocks show.
     pub fn cheaper_on_edge(
         &self,
         chance: f64,
         copies: usize,
     ) -> bool {
         let copies = copies as f64 * self.copy;
-        chance * (copies + self.jump) < copies
+        chance * (copies + self.jump) < copies * EDGE_MARGIN
     }
 }
+
+/// What an edge copy must cost, of the predecessor's, to be made there.
+const EDGE_MARGIN: f64 = 0.9;
 
 /// `prices`: where none are known, a copy stays in its predecessor.
 #[derive(Default)]
@@ -1405,5 +1410,18 @@ mod tests {
         use crate::backend::cpu;
         assert!(EdgePrices::of(cpu::tuned("486", false).unwrap()).is_some());
         assert!(EdgePrices::of(cpu::tuned("486", true).unwrap()).is_none());
+    }
+
+    /// An edge taken 24% of the time won by 0.06 clocks of 1 (`24% * (1 + 3) <
+    /// 1`): x_binsearch grew a block and a `jmp` for clocks the model could not
+    /// tell, and 25 of the 67 programs +1% in code once the guards' odds moved
+    /// to it.
+    #[test]
+    fn test_an_edge_that_wins_by_less_than_a_tenth_keeps_its_copy_in_the_predecessor() {
+        use super::EdgePrices;
+        let prices = EdgePrices { copy: 1.0, jump: 3.0 };
+        assert!(!prices.cheaper_on_edge(0.24, 1));
+        assert!(prices.cheaper_on_edge(0.1, 1));
+        assert!(prices.cheaper_on_edge(0.33, 2));
     }
 }
