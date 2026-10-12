@@ -480,7 +480,6 @@ fn rotated(
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
     let found = forest.shape(context, layout, function, &mut fresh);
-    let facts = fresh.get::<Registers>(context, layout, function);
     for loop_ in found.loops.clone() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
@@ -488,19 +487,22 @@ fn rotated(
         let Some(shape) = _shape(function, &loop_) else {
             continue;
         };
+        // Asked of the first loop that could be rotated: a body with none
+        // derives nothing.
+        let facts = fresh.get::<Registers>(context, layout, function);
         let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
-        if induction::trip_count(&unit, &loop_, &facts).is_none() {
+        let proven = induction::trip_count(&unit, &loop_, &facts).is_some();
+        drop((unit, facts));
+        if !proven {
             continue;
         }
         _rotate(context, function, &shape, None, &[])?;
         done.insert(shape.first);
-        drop(facts);
         drop(fresh);
         forest.keep(found);
         forest.rotated(function, cfg::id(shape.header), cfg::id(shape.first), cfg::id(shape.header));
         return Ok(true);
     }
-    drop(facts);
     drop(fresh);
     forest.keep(found);
     Ok(false)
@@ -563,14 +565,6 @@ fn copied(
         let Some(shape) = _shape_of(function, &loop_, false, true) else {
             continue;
         };
-        // A loop proven to run needs no guard: it is entered at its body once
-        // the loop passes are done (`rotated`, which unroll, peel and
-        // fill wait for), as gcc's value propagation leaves it after its copy.
-        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
-        let facts = fresh.get::<Registers>(context, layout, function);
-        if induction::trip_count(&unit, &loop_, &facts).is_some() {
-            continue;
-        }
         let insns = function
             .block(shape.header)
             .instructions()
@@ -578,6 +572,14 @@ fn copied(
             .filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
             .count();
         if insns > MAX_HEADER_INSNS {
+            continue;
+        }
+        // A loop proven to run needs no guard: it is entered at its body once
+        // the loop passes are done (`rotated`, which unroll, peel and
+        // fill wait for), as gcc's value propagation leaves it after its copy.
+        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
+        let facts = fresh.get::<Registers>(context, layout, function);
+        if induction::trip_count(&unit, &loop_, &facts).is_some() {
             continue;
         }
         let Some((guard, copies)) = _copy_test(function, &shape) else {
