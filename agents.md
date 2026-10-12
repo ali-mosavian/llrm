@@ -143,6 +143,8 @@ A hand-derived optimal listing for each suite program is the target. Done means 
   80; `tools/fmt.sh` enforces both.
 - **Tests sit beside their module** (`*_tests.rs`, or `#[cfg(test)]` in it). Python tools' tests sit beside the
   tool, as `test_*.py`, written as pytest functions.
+- **Docs are committed as GitHub shows them.** After editing a `fig` fence or a `//!` header, run
+  `python3 tools/docsbuild/build.py --sync` and commit what it writes; [figures](docs/working/figures.md).
 - **While working, run only the tests for the files being changed**: `cargo test --release <filter>`. See
   [testing](docs/working/testing.md).
 

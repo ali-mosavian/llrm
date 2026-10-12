@@ -1,7 +1,7 @@
 //! Port of `qbopt/backend/timing.py`: audited instruction core-clock
 //! bounds, separate from scoreboard estimates.
 //!
-//! Sources and limitations: docs/measurement/timing-audit.md. Bounds exclude
+//! Where it is used: docs/machine/arithmetic-targets.md. Bounds exclude
 //! decode, prefix, memory and scheduling costs.
 
 use crate::backend::cpu::{self as targets, ProfileOrName};

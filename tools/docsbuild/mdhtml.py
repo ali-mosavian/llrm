@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from html import escape as _esc
 
-from . import figures
+from . import figblock, figures
 
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(.*)$")
 ATX = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$")
@@ -401,6 +401,7 @@ class Converter:
 
 def convert(text: str, link_hook: Callable[[str], str] | None = None) -> Result:
     c = Converter(link_hook)
+    text = figblock.unwrap(text)
     lines = [(n, s.rstrip("\r")) for n, s in enumerate(text.expandtabs(4).split("\n"), 1)]
     c.res.html = c.blocks(lines)
     return c.res

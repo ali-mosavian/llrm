@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """Build the documentation site.
 
+    python3 tools/docsbuild/build.py --sync         write the pass reference and the figure images into docs/
+    python3 tools/docsbuild/build.py --check        fail if --sync would change a file, then check the site
     python3 tools/docsbuild/build.py --out DIR      write the site to DIR
-    python3 tools/docsbuild/build.py --check        build to a temporary directory, print problems
 
-Converts readme.md, agents.md and docs/**/*.md, plus the pass reference that
-tools/passdocs.py extracts from the source headers. Exits 1 on a figure that does
-not parse, a link that does not resolve, or a construct the converter does not know.
+--sync is what contributors run after editing a figure or a `//!` header: GitHub shows
+docs/ as committed, without a build. The site converts the same Markdown. Exits 1 on a
+figure that does not parse, a link that does not resolve, a construct the converter does
+not know, or generated files that are stale.
 """
 from __future__ import annotations
 
 import argparse
 import html
-import os
 import posixpath
 import re
 import shutil
@@ -25,11 +26,9 @@ from urllib.parse import unquote
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 REPO = "https://github.com/ali-mosavian/llrm"
-GENERATED = "docs/optimizations/reference"
 sys.path.insert(0, str(HERE.parent))
 
-import passdocs  # noqa: E402
-from docsbuild import mdhtml  # noqa: E402
+from docsbuild import mdhtml, sync  # noqa: E402
 
 SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
@@ -38,7 +37,6 @@ SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 class Page:
     src: str
     text: str
-    virtual: bool = False
     res: mdhtml.Result | None = None
     title: str = ""
     ids: set[str] = field(default_factory=set)
@@ -54,16 +52,9 @@ def site_path(src: str) -> str:
     return rel[:-3] + ".html" if rel.endswith(".md") else rel
 
 
-def collect(root: Path, generated: Path | None) -> dict[str, Page]:
-    pages: dict[str, Page] = {}
-    for p in ["readme.md", "agents.md", *sorted(x.relative_to(root).as_posix() for x in (root / "docs").rglob("*.md"))]:
-        if (root / p).is_file():
-            pages[p] = Page(p, (root / p).read_text(encoding="utf-8"))
-    if generated:
-        for f in sorted(generated.glob("*.md")):
-            src = f"{GENERATED}/{f.name}"
-            pages[src] = Page(src, f.read_text(encoding="utf-8"), virtual=True)
-    return pages
+def collect(root: Path) -> dict[str, Page]:
+    paths = ["readme.md", "agents.md", *sorted(x.relative_to(root).as_posix() for x in (root / "docs").rglob("*.md"))]
+    return {p: Page(p, (root / p).read_text(encoding="utf-8")) for p in paths if (root / p).is_file()}
 
 
 class Site:
@@ -148,7 +139,7 @@ class Site:
                     continue
                 kid = mk(t)
                 node["kids"].append(kid)
-                if posixpath.basename(t) == "readme.md":
+                if posixpath.basename(t) in ("readme.md", "index.md"):
                     expand(kid, lambda _t: True)
 
         top = []
@@ -162,19 +153,12 @@ class Site:
             top.append(mk("agents.md"))
         # anything a readme did not reach goes under its nearest readme
         for src in self.pages:
-            if src in placed or self.pages[src].virtual:
+            if src in placed:
                 continue
             d = posixpath.dirname(src)
             while d and f"{d}/readme.md" not in nodes:
                 d = posixpath.dirname(d)
             (nodes.get(f"{d}/readme.md") or top[-1])["kids"].append(mk(src))
-        ref = [s for s in self.pages if self.pages[s].virtual]
-        if ref:
-            idx = f"{GENERATED}/index.md"
-            parent = nodes.get("docs/optimizations/readme.md") or top[-1]
-            head = mk(idx) if idx in self.pages else {"src": ref[0], "kids": []}
-            head["kids"] = [mk(s) for s in ref if s != idx]
-            parent["kids"].append(head)
         return top
 
     def nav_html(self, cur: str, top: list[dict]) -> str:
@@ -210,7 +194,7 @@ class Site:
     def page_html(self, page: Page, top: list[dict]) -> str:
         css = posixpath.relpath("site.css", posixpath.dirname(site_path(page.src)) or ".")
         home = posixpath.relpath("index.html", posixpath.dirname(site_path(page.src)) or ".")
-        source = "" if page.virtual else f'<p class="src"><a href="{REPO}/blob/main/{page.src}">Source of this page</a></p>'
+        source = f'<p class="src"><a href="{REPO}/blob/main/{page.src}">Source of this page</a></p>'
         return (
             '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
             '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
@@ -250,30 +234,38 @@ img{max-width:100%;height:auto}figure{margin:1.2em 0;text-align:center;overflow-
 """
 
 
-def build(root: Path, out: Path, sha: str = "main") -> list[str]:
+def build(root: Path, out: Path) -> list[str]:
     """Write the site of repository `root` to `out`; the problems found."""
-    with tempfile.TemporaryDirectory() as tmp:
-        gen = Path(tmp)
-        passdocs.write(gen, root, sha)
-        site = Site(root, collect(root, gen))
-        site.convert()
-        site.write(out)
+    site = Site(root, collect(root))
+    site.convert()
+    site.write(out)
     return site.errors
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, help="write the site here")
-    ap.add_argument("--check", action="store_true", help="build to a temporary directory and report problems")
+    ap.add_argument("--check", action="store_true", help="fail on stale generated files and on site problems")
+    ap.add_argument("--sync", action="store_true", help="write the pass reference and the figure images into docs/")
     args = ap.parse_args(argv)
-    if not args.out and not args.check:
-        ap.error("give --out or --check")
-    sha = os.environ.get("GITHUB_SHA") or "main"
-    if args.check:
-        with tempfile.TemporaryDirectory() as tmp:
-            errors = build(ROOT, Path(tmp), sha)
-    else:
-        errors = build(ROOT, args.out, sha)
+    if not (args.out or args.check or args.sync):
+        ap.error("give --sync, --check or --out")
+    errors: list[str] = []
+    if args.sync or args.check:
+        p = sync.plan(ROOT)
+        errors += p.errors
+        if args.sync and not p.errors:
+            sync.apply(ROOT, p)
+            print(f"synced {len(p.writes)} written, {len(p.deletes)} deleted")
+        elif args.check and p.drift and not p.errors:
+            errors.append(sync.drift_message(p))
+    if (args.check or args.out) and not (args.sync and errors):
+        if args.check:
+            with tempfile.TemporaryDirectory() as tmp:
+                errors += build(ROOT, Path(tmp))
+        else:
+            errors += build(ROOT, args.out)
+    errors = list(dict.fromkeys(errors))
     print("\n".join(errors))
     if errors:
         print(f"{len(errors)} problem(s)", file=sys.stderr)

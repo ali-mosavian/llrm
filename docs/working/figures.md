@@ -1,15 +1,30 @@
 # Figures and the docs site
 
-For contributors who add a diagram to a document or build the site. Figures are
-written as short text specs in a `fig` fence; the site build renders each one to an
-inline SVG that follows the reader's light or dark setting. Nothing is rendered in
-the repository.
+For contributors who add a diagram to a document or build the site. A figure is a
+short text spec in a `fig` fence; `--sync` draws it to an SVG that follows the
+reader's light or dark setting, commits it beside the document and shows it on GitHub
+with the spec collapsed under it. The docs read the same on GitHub with no build.
+
+## Adding a figure
+
+1. Write the spec as a `fig` fence in a Markdown file or in a Rust `//!` header.
+2. Run `python3 tools/docsbuild/build.py --sync`.
+3. Commit the changed Markdown, `docs/assets/figures/*.svg` and
+   `docs/optimizations/reference/*.md`.
+
+`--sync` replaces each fence with an image and the fence inside `<details>`; run
+again it changes nothing. Edit the spec inside the `<details>` block and sync
+again. An image that no block refers to is deleted. `--check` (and CI) fails when
+`--sync` would change a file.
+
+The pass, analysis and backend pages in `docs/optimizations/reference/` are written
+by `--sync` from the `//!` headers (extracted by `tools/passdocs.py`); edit the
+header, not the page. A figure in a header lands on those pages the same way.
 
 ## Writing a figure
 
 A figure is a fenced block whose language is `fig`, in a Markdown file or in a
-Rust `//!` header (the [pass reference](../optimizations/readme.md) is built from
-those headers). The first line names the kind. Lines starting with `#` are comments.
+Rust `//!` header. The first line names the kind. Lines starting with `#` are comments.
 
 ```text
 kind: graph | stack | lanes
@@ -31,6 +46,11 @@ Boxes and arrows, laid out in layers. Back edges become arcs around the drawing.
 | `group NAME "caption": ID ID ...` | A labelled container around the nodes |
 
 The fills `a` to `e` are a fixed categorical palette; without `fill` a node is neutral.
+
+<!-- figure:docs-working-figures-1 -->
+![From source to object file](../assets/figures/docs-working-figures-1.svg)
+
+<details><summary>Figure source</summary>
 
 ```fig
 kind: graph
@@ -57,6 +77,9 @@ group front "Source front ends": qb nib c
 group back "Backend": sel ph obj
 ```
 
+</details>
+<!-- /figure -->
+
 ### stack
 
 A memory, stack or record layout, top to bottom as written.
@@ -68,6 +91,11 @@ A memory, stack or record layout, top to bottom as written.
 | `arrow "label" up\|down` | A growth direction |
 | `bracket "label" from=N to=M` | Spans cells N to M, counting `cell` and `gap` lines from 1 |
 | `scale: yes` | Cell heights follow `size` (8 pixels a unit, at most 160) |
+
+<!-- figure:docs-working-figures-2 -->
+![Frame of a QuickBASIC procedure (far call, Pascal order)](../assets/figures/docs-working-figures-2.svg)
+
+<details><summary>Figure source</summary>
 
 ```fig
 kind: stack
@@ -84,6 +112,9 @@ bracket "pushed by the caller" from=1 to=3
 bracket "B$ENRA" from=4 to=5
 ```
 
+</details>
+<!-- /figure -->
+
 ### lanes
 
 A timeline of lanes over numbered columns, or a call and return sequence.
@@ -95,6 +126,11 @@ A timeline of lanes over numbered columns, or a call and return sequence.
 | `span LANE FROM TO "label" [kind=shared\|mut\|owner\|info]` | A bar over columns FROM to TO |
 | `mark LANE N "label" [kind=error\|ok]` | A point in column N |
 | `msg FROMLANE TOLANE N "label" [kind=call\|ret]` | An arrow between two lanes in column N; `ret` is dashed |
+
+<!-- figure:docs-working-figures-3 -->
+![A change while a shared borrow is still used](../assets/figures/docs-working-figures-3.svg)
+
+<details><summary>Figure source</summary>
 
 ```fig
 kind: lanes
@@ -110,24 +146,28 @@ span r 2 4 "shared borrow, live to its last use" kind=shared
 mark v 3 "refused: r is used later" kind=error
 ```
 
+</details>
+<!-- /figure -->
+
 ## Building the site
 
 ```sh
 python3 tools/docsbuild/build.py --out site
 ```
 
-writes the site to `site/`; open `site/index.html`. `--check` builds to a temporary
-directory and fails on a figure that does not parse, a link that does not resolve
-in the site, or a Markdown construct the converter does not know. Links to files
-outside `docs/` become links to the repository on GitHub.
+writes the site to `site/`; open `site/index.html`. The site draws each figure
+inline from its spec. `--check` fails on stale generated files, a figure that does
+not parse, a link that does not resolve in the site, or a Markdown construct the
+converter does not know. Links to files outside `docs/` become links to the
+repository on GitHub.
 
 The converter's tests run with `uv run --project tools pytest tools/docsbuild`.
 
 ## Publishing
 
-The `docs` workflow builds the site on every change to the documents, the build
-tools or the crate sources, and keeps it as an artifact. The deploy job runs on
-`main` only when the repository variable `DOCS_PAGES` is `true`; otherwise it
+The `docs` workflow runs `--check` on every change to the documents, the build
+tools or the crate sources, and keeps the site as an artifact. The deploy job runs
+on `main` only when the repository variable `DOCS_PAGES` is `true`; otherwise it
 is skipped and the run summary says so. To publish, set Pages source to GitHub
 Actions (Settings, Pages) and add the variable `DOCS_PAGES` with the value `true`
 (Settings, Secrets and variables, Actions, Variables).
