@@ -900,3 +900,16 @@ def test_a_summary_of_a_function_that_calls_back_does_not_hold_the_callbacks_as_
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["summaries visit"] > 1.0, f"premise: the fixed point visited ({own['summaries visit']:.1f} Minstr)"
     assert own["summaries visit"] <= 60.0, f"{own['summaries visit']:.1f} Minstr"
+
+
+def test_the_proof_of_a_loop_does_not_prove_the_loops_around_it_again_for_each_of_them(tmp_path):
+    """fib at -O2 with -ftree-ch: the recursion inlined into itself is a nest of nine loops, and a loop's proof asks those of the loops around it
+    (`_ranged`), each of which asks those around it: 2^depth proofs of the outermost, never held. `mir indvars` read 141 Minstr (2.8 without ch) and
+    `mir lsr` 119; once each is held, 35 and 38. A bound of 70 on indvars fails the first."""
+    source = tmp_path / "fib.c"
+    source.write_text(wrap.wrapped("fib", programs.sources()["fib"].read_text()))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["mir indvars"] > 5.0, f"premise: indvars ran ({own['mir indvars']:.1f} Minstr)"
+    assert own["mir indvars"] <= 70.0, f"{own['mir indvars']:.1f} Minstr"

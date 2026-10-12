@@ -602,14 +602,22 @@ pub fn counted_renewed(
     // 6,449 Minstr, on 32 loops).
     let congruent = std::cell::OnceCell::new();
     let unit = &Unit { congruent: Some(&congruent), ..*unit };
-    shape
-        .loops
-        .iter()
-        .map(|loop_| match previous.get(&loop_.header) {
-            Some(proofs) if !dirty(loop_) => (loop_.header, proofs.clone()),
-            _ => (loop_.header, _counted_unless_stopped(unit, loop_, &registers, false, false)),
-        })
-        .collect()
+    // A proof asks the proofs of the loops around it (`_ranged`), each of which
+    // asks those around it: the outer loops first, so that each is asked of
+    // what is already found and not proved again (a nest of D loops proved
+    // the outermost 2^D times: 40% of the compile of fib at -O2 with header
+    // copy).
+    let mut order: Vec<&Loop> = shape.loops.iter().collect();
+    order.sort_by_key(|one| std::cmp::Reverse(one.body.len()));
+    let mut found = Counted::default();
+    for loop_ in order {
+        let proofs = match previous.get(&loop_.header) {
+            Some(proofs) if !dirty(loop_) => proofs.clone(),
+            _ => _counted_unless_stopped(&Unit { counted: Some(&found), ..*unit }, loop_, &registers, false, false),
+        };
+        found.insert(loop_.header, proofs);
+    }
+    shape.loops.iter().map(|loop_| (loop_.header, found[&loop_.header].clone())).collect()
 }
 
 /// `counted`, also for a loop that may leave into a block that never returns.
@@ -633,6 +641,15 @@ pub fn counted_unless_stopped(
             }
         }
     }
+    let local = std::cell::RefCell::new(Counted::default());
+    let unit = &match unit.proved {
+        Some(_) => *unit,
+        None => Unit { proved: Some(&local), ..*unit },
+    };
+    let cache = unit.proved.filter(|_| !inbounds && facts.is_none());
+    if let Some(found) = cache.and_then(|cache| cache.borrow().get(&loop_.header).cloned()) {
+        return found;
+    }
     let computed;
     let facts = match facts {
         Some(facts) => facts,
@@ -641,7 +658,11 @@ pub fn counted_unless_stopped(
             &*computed
         }
     };
-    _counted_unless_stopped(unit, loop_, facts, inbounds, false)
+    let proofs = _counted_unless_stopped(unit, loop_, facts, inbounds, false);
+    if let Some(cache) = cache {
+        cache.borrow_mut().insert(loop_.header, proofs.clone());
+    }
+    proofs
 }
 
 /// `counted_unless_stopped`, also for a loop that has other ways out that go
@@ -655,6 +676,11 @@ pub fn counted_leaving(
     facts: Option<&IndexMap<ValueId, Known>>,
     inbounds: bool,
 ) -> Vec<CountedLoop> {
+    let local = std::cell::RefCell::new(Counted::default());
+    let unit = &match unit.proved {
+        Some(_) => *unit,
+        None => Unit { proved: Some(&local), ..*unit },
+    };
     let computed;
     let facts = match facts {
         Some(facts) => facts,
@@ -1097,6 +1123,11 @@ pub fn exits(
     facts: Option<&IndexMap<ValueId, Known>>,
     inbounds: bool,
 ) -> Vec<ExitCount> {
+    let local = std::cell::RefCell::new(Counted::default());
+    let unit = &match unit.proved {
+        Some(_) => *unit,
+        None => Unit { proved: Some(&local), ..*unit },
+    };
     let function = unit.function;
     let computed;
     let facts = match facts {

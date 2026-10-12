@@ -150,6 +150,7 @@ impl<'a> Unit<'a> {
             callbacks: outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()),
             loop_intervals: outer.loop_intervals(),
             congruent: None,
+            proved: None,
         }
     }
 }
