@@ -6,6 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 
 FONT = Path(__file__).resolve().parent / "fonts" / "DejaVuSans.ttf"
+U16 = (1 << 16) - 1  # largest 16-bit value: the mask of glyph arithmetic and the cmap's end marker
 Contour = list[tuple[float, float, bool]]  # x, y (y up, font units), on the curve
 
 
@@ -63,14 +64,14 @@ class Font:
         out = {}
         for s in range(segs):
             for c in range(starts[s], ends[s] + 1):
-                if c == 0xFFFF:
+                if c == U16:
                     continue
                 if offsets[s] == 0:
-                    g = (c + deltas[s]) & 0xFFFF
+                    g = (c + deltas[s]) & U16
                 else:
                     q = ro + 2 * s + offsets[s] + 2 * (c - starts[s])
                     g = struct.unpack(">H", d[q : q + 2])[0]
-                    g = (g + deltas[s]) & 0xFFFF if g else 0
+                    g = (g + deltas[s]) & U16 if g else 0
                 if g:
                     out[c] = g
         return out
