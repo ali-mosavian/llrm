@@ -208,6 +208,45 @@ fn a_result_a_change_leaves_true_stands_past_the_pass_that_made_it() {
     }
 }
 
+/// Rewrites the entry's branch `times` over to what it already is.
+struct Rewrite(usize);
+
+impl FunctionPass for Rewrite {
+    fn name(&self) -> &'static str {
+        "rewrite"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let function = &mut *unit.function;
+        let branch = function.terminator(function.entry().unwrap()).unwrap();
+        let at = function.instruction(branch).operands.len() - 1;
+        let same = function.instruction(branch).operands[at];
+        for _ in 0..self.0 {
+            function.set_operand(branch, at, same);
+        }
+        PreservedAnalyses::none()
+    }
+}
+
+/// The log tells what an operand was before each rewrite, which doubled its
+/// length: 200 rewrites were over the 256 changes up to which a result is asked
+/// if it stands (`unaffected`), and `gvn` and the analyses that skip lost
+/// the skip on d_faces (+1.9% of its compile).
+#[test]
+fn the_entries_that_tell_what_an_operand_was_are_not_counted_as_changes() {
+    (KEPT.set(0), SAME.set(true));
+    let mut passes = PassManager::default();
+    passes.add(LookSteady);
+    passes.add(Rewrite(200));
+    passes.add(LookSteady);
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(KEPT.get(), 1, "200 rewrites were taken for more than 256 changes");
+}
+
 /// The ledger reads which pass made which change from here.
 #[test]
 fn each_stage_carries_its_own_changes() {

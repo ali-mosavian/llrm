@@ -555,7 +555,9 @@ impl Function {
     /// The log of changes since the last `take_changes`. They stay in the log,
     /// to `changes_since`, until it holds more than `LOG` of them.
     pub fn take_changes(&mut self) -> Vec<Change> {
-        const LOG: usize = 1 << 16;
+        // Twice what it was: the entries that tell what an operand was go with
+        // every rewrite.
+        const LOG: usize = 1 << 17;
         let kept_from = self.lineage.logged - self.changes.0.len();
         let out = self.changes.0[self.taken.max(kept_from) - kept_from..].to_vec();
         self.taken = self.lineage.logged;

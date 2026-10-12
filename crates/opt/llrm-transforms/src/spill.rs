@@ -1200,7 +1200,7 @@ pub struct Pressure {
     found: Liveness,
     /// The blocks each value is live into and out of, which `found` has by
     /// block: what a value that a change touched is taken out of.
-    placed: IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
+    placed: Placed,
     cells: BTreeMap<ValueId, ValueId>,
     counted: IdSet<ValueId>,
     addressed: IdSet<ValueId>,
@@ -1213,6 +1213,22 @@ pub struct Pressure {
     /// What changes in the live set across each instruction of a block, and
     /// what changes from one block's end to another's start: the same.
     stepped: Stepped,
+}
+
+/// The blocks each value is live into and out of, made from `found` when a
+/// change first brings it up to date and kept from then on: a cache of what
+/// `found` says, so two `Pressure`s of one function are equal whatever was
+/// asked.
+#[derive(Clone, Debug, Default)]
+struct Placed(Option<IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>>);
+
+impl PartialEq for Placed {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
 }
 
 /// The live sets of each block's instructions: a cache of what `found` says,
@@ -1347,18 +1363,7 @@ impl Pressure {
         scales: u8,
         found: Liveness,
     ) -> Self {
-        let mut placed = IdMap::<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>::new();
-        for (at, values) in &found.live_in {
-            for value in values {
-                placed.get_or_insert_with(*value, Default::default).0.insert(*at);
-            }
-        }
-        for (at, values) in &found.live_out {
-            for value in values {
-                placed.get_or_insert_with(*value, Default::default).1.insert(*at);
-            }
-        }
-        Self::with(context, function, scales, found, placed)
+        Self::with(context, function, scales, found, Placed::default())
     }
 
     /// `of`, the liveness being `found` and `placed` the blocks each value is
@@ -1368,7 +1373,7 @@ impl Pressure {
         function: &Function,
         scales: u8,
         found: Liveness,
-        placed: IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
+        placed: Placed,
     ) -> Self {
         let (addressed, folds) = addressed_by(function, &mut |value| folded_in(context, function, value, scales));
         Self {
@@ -1514,8 +1519,26 @@ impl llrm_mir::passes::Analysis for Pressure {
                 }
             }
         }
-        let (mut found, mut placed) = std::rc::Rc::try_unwrap(previous)
+        let (mut found, placed) = std::rc::Rc::try_unwrap(previous)
             .map_or_else(|kept| (kept.found.clone(), kept.placed.clone()), |owned| (owned.found, owned.placed));
+        let mut placed = placed
+            .0
+            .unwrap_or_else(
+                || {
+                    let mut index = IdMap::<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>::new();
+                    for (at, values) in &found.live_in {
+                        for value in values {
+                            index.get_or_insert_with(*value, Default::default).0.insert(*at);
+                        }
+                    }
+                    for (at, values) in &found.live_out {
+                        for value in values {
+                            index.get_or_insert_with(*value, Default::default).1.insert(*at);
+                        }
+                    }
+                    index
+                },
+            );
         for value in named.iter() {
             let (into, out) = placed.remove(&value).unwrap_or_default();
             for at in into {
@@ -1538,7 +1561,7 @@ impl llrm_mir::passes::Analysis for Pressure {
             }
             found.live_out.entry(at).or_default().extend(values);
         }
-        Some(Pressure::with(context, function, Room::of(analyses.outer()).index_scales, found, placed))
+        Some(Pressure::with(context, function, Room::of(analyses.outer()).index_scales, found, Placed(Some(placed))))
     }
 }
 
