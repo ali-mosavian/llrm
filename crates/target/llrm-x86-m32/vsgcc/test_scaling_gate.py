@@ -1058,3 +1058,19 @@ def test_pressure_is_brought_up_to_date_for_the_values_a_change_named(tmp_path):
 
     assert own["analysis pressure"] > 20.0, f"premise: pressure was derived ({own['analysis pressure']:.1f} Minstr)"
     assert own["analysis pressure"] <= 200.0, f"{own['analysis pressure']:.1f} Minstr"
+
+
+def test_rotate_takes_the_dominators_the_manager_brings_up_to_date(tmp_path):
+    """branches(512) at -O2 with -ftree-ch: each of the rotations built the dominator tree of the whole function afresh (a reverse postorder
+    and the iteration over it) to ask whether a loop is entered: `mir rotate` read 303 Minstr, x3.9 for the doubling to 1024. The manager's tree
+    is brought up to date from the edges the log tells the rotation changed, working out again the blocks under the nearest common dominator
+    of the blocks they join: rotate 22 and the tree's updates 99 Minstr, a third of it. A bound of 250 on the two together fails the first
+    (335 before)."""
+    source = tmp_path / "branches512.c"
+    source.write_text(gate.generated("branches", 512))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["mir rotate"] > 5.0, f"premise: rotate ran ({own['mir rotate']:.1f} Minstr)"
+    both = own["mir rotate"] + own["analysis dominators"]
+    assert both <= 250.0, f"rotate {own['mir rotate']:.1f} + dominators {own['analysis dominators']:.1f} Minstr"

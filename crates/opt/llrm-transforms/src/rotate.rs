@@ -256,13 +256,16 @@ impl Forest {
         layout: &DataLayout,
         function: &Function,
         fresh: &mut Analyses,
+        analyses: &mut Analyses,
     ) -> std::rc::Rc<cfg::Shape> {
         let loops = match self.loops.take() {
             Some(loops) => loops,
             None => fresh.get::<cfg::Shape>(context, layout, function).loops.clone(),
         };
         let shape = std::rc::Rc::new(cfg::Shape {
-            dominance: cfg::Dominance::of(function),
+            // The manager's, brought up to date from the edges the rotations
+            // changed.
+            dominance: cfg::Dominance::new(analyses.get::<llrm_mir::passes::Dominators>(context, layout, function)),
             loops,
             reaching: Default::default(),
         });
@@ -618,7 +621,7 @@ fn rotated(
     done: &mut llrm_mir::dense::IdSet<BlockId>,
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
-    let found = forest.shape(context, layout, function, &mut fresh);
+    let found = forest.shape(context, layout, function, &mut fresh, analyses);
     for loop_ in found.loops.iter() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
@@ -697,7 +700,7 @@ fn copied(
     done: &mut llrm_mir::dense::IdSet<BlockId>,
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
-    let found = forest.shape(context, layout, function, &mut fresh);
+    let found = forest.shape(context, layout, function, &mut fresh, analyses);
     for loop_ in found.loops.iter() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
@@ -777,7 +780,7 @@ fn _chained(
     });
     let Some(preheader) = preheader else { return Ok(None) };
     let mut fresh = analyses.fresh();
-    let found = forest.shape(context, layout, function, &mut fresh);
+    let found = forest.shape(context, layout, function, &mut fresh, analyses);
     let loop_ = found.loops.iter().find(|one| one.header == cfg::id(first)).cloned();
     drop(fresh);
     forest.keep(found);
