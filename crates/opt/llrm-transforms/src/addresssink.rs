@@ -18,6 +18,7 @@
 //! what the arms stored, and a sink earlier would be undone by it.
 
 use llrm_analysis::cfg;
+use llrm_analysis::manager::{Annotated, AssumptionCache, Bounded, Counted, DominatedEdges, ExposedFrames, Registers};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
@@ -46,23 +47,76 @@ impl FunctionPass for AddressSink {
         let closed = trivial_phis(unit.function);
         // Blocks and edges are as they were.
         let sunk_compares = !analyses.outer().target().multiple_condition_registers() && compares_sunk(unit.function);
-        if sunk(unit.function) || sunk_compares || closed {
+        if sunk(unit.function) || sunk_compares {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        } else if closed {
+            // A value is replaced by the one it equalled: what is known of
+            // values, blocks and loops stands.
+            PreservedAnalyses::none()
+                .preserve::<ExposedFrames>()
+                .preserve::<Annotated>()
+                .preserve::<Dominators>()
+                .preserve::<Loops>()
+                .preserve::<Registers>()
+                .preserve::<AssumptionCache>()
+                .preserve::<Counted>()
+                .preserve::<DominatedEdges>()
+                .preserve::<Bounded>()
         } else {
             PreservedAnalyses::all()
         }
     }
 }
 
-/// Each phi whose arms are one value, or itself, replaced by that value;
-/// whether any was.
+/// Each phi read only as an address whose arms are one value, or itself,
+/// replaced by that value, and the phis that read it looked at again; whether
+/// any was. One visit of each phi, not a pass over the function until nothing
+/// changes. A phi of anything else costs the allocator nothing it does not
+/// coalesce, and a changed shape of it costs a search round (nest 32 at -O2:
+/// one more of every machine phase).
 fn trivial_phis(function: &mut Function) -> bool {
-    let phis = function.walk().filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi).count();
-    if phis == 0 {
-        return false;
+    let mut pending: Vec<InstId> = function
+        .walk()
+        .filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi)
+        .map(|(_, inst)| inst)
+        .collect();
+    let mut changed = false;
+    while let Some(phi) = pending.pop() {
+        if function.is_erased(phi) {
+            continue;
+        }
+        let Some(result) = function.instruction(phi).result else { continue };
+        if !crate::spill::address_only(function, result, 3) {
+            continue;
+        }
+        let mut only: Option<Operand> = None;
+        let mut single = true;
+        for pair in function.instruction(phi).operands.chunks(2) {
+            if pair[0] == Operand::Value(result) {
+                continue;
+            }
+            match only {
+                None => only = Some(pair[0]),
+                Some(seen) if seen == pair[0] => {}
+                Some(_) => {
+                    single = false;
+                    break;
+                }
+            }
+        }
+        let (true, Some(value)) = (single, only) else { continue };
+        pending.extend(
+            function
+                .users(result)
+                .iter()
+                .map(|one| one.user)
+                .filter(|&user| user != phi && function.instruction(user).opcode == Opcode::Phi),
+        );
+        function.replace_all_uses_with(result, value);
+        function.erase(phi).expect("its uses were replaced");
+        changed = true;
     }
-    crate::transform::_trivial_phis(function).expect("a phi of one value is replaced");
-    function.walk().filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi).count() != phis
+    changed
 }
 
 /// What the join makes of its phi's arms: a value every arm reads, or an
