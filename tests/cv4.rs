@@ -269,9 +269,11 @@ fn os_layer(field: &str) -> String {
 #[test]
 fn codeview_debugs_a_nib_program_as_it_does_a_c_one() {
     let Some(screen) = nib_in_codeview("p", &["-O0"], &["bp add", "g", "p"]) else { return };
-    // `add`'s parameters arrive in registers (regparm3); `-g` stores them to no cell (it changes no code). `b` stays in EDX
-    // over the whole function, a register variable CodeView reads; `a` is overwritten by the first instruction, has no
-    // place for a scope, and is left out. The local is in a cell.
+    // `add`'s parameters arrive in registers (regparm3); `-g` stores them to no
+    // cell (it changes no code). `b` stays in EDX over the whole function,
+    // a register variable CodeView reads; `a` is overwritten by the first
+    // instruction, has no place for a scope, and is left out. The local is
+    // in a cell.
     for expected in ["long s = 2", "EDX reg long b = 3"] {
         assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
     }
