@@ -1,6 +1,83 @@
-//! i64 as two dwords, low first, as LLVM's type legalizer expands an
-//! integer no register holds. What a value's sign bits prove lets a product
-//! or quotient of 32-bit values take one 32-bit instruction.
+//! Selects `i64` as two dwords, low first, as LLVM's type legalizer expands an
+//! integer no register holds.
+//!
+//! # How it works
+//! A wide value is a pair of 32-bit values (`Selector::wides`); `wide` returns
+//! the pair of an operand, a constant being two immediate moves. Operations are
+//! built from the halves (the split itself is `expand.rs`):
+//!
+//! - Add, subtract and the bit operations are `chain` patterns: `add`/`adc`,
+//!   `sub`/`sbb` (`wide_chain`).
+//! - A shift by a constant moves bits between the halves; by a variable it
+//!   shifts each half by the count's low five bits and uses its sixth bit,
+//!   spread over a register as a mask, to choose between the halves and the
+//!   fill, as LLVM's `ExpandShiftWithUnknownAmountBit` does but without a
+//!   select.
+//! - A product is `mul` of the low halves plus the two cross `imul`s added into
+//!   the high half. Where both operands are an `i32` sign-extended (sign bits
+//!   prove it, `narrow`), it is one widening `imul`.
+//! - A division by a power of two is shifts, biased for a negative dividend;
+//!   one of an `i32` sign-extended by two dword `div`s (or one `idiv` where the
+//!   quotient provably fits) on the magnitudes, with the sign put back; any
+//!   other is the helper in `lower_int64`, which leaves quotient and remainder
+//!   both. A quotient and a remainder of the same operands share one division.
+//! - A compare is the or of the halves' differences for equality, and `sub`
+//!   then `sbb` of the halves for an order, read from the flags; a greater-than
+//!   compares the other way.
+//! - Casts to and from `i64` are `wide_cast`; loads and stores are the
+//!   `wide_load` and `wide_store` hooks.
+//!
+//! ```text
+//!  i32 * i32 -> i64, both known sign-extended:
+//!      imul  lo, hi <- a, b           one instruction
+//!
+//!  any i64 * i64:
+//!      mul   lo, c  <- a.lo, b.lo     c: carry into the high half
+//!      imul  x      <- a.lo, b.hi
+//!      imul  y      <- a.hi, b.lo
+//!      add   z <- x, y ;  add hi <- c, z
+//! ```
+//!
+//! `unread_halves_dropped` removes at the end what no one reads, as LLVM's DAG
+//! drops the dead half the legalizer split off, together with the carry an
+//! `adc` or `sbb` read.
+//!
+//! # Example
+//! Before, from the unit test, a product and a quotient of `i32` values taken
+//! as `i64`:
+//!
+//! ```mir
+//!   %2 = sext i32 %0 to i64
+//!   %3 = sext i32 %1 to i64
+//!   %4 = mul i64 %2, %3
+//!   %5 = ashr i64 %4, 16
+//!   ; ...
+//! ```
+//!
+//! After, the x86 listing of the same function:
+//!
+//! ```text
+//!   mov eax, dword ptr [bp+6]
+//!   mov ebx, dword ptr [bp+10]
+//!   imul ebx
+//!   mov ecx, eax
+//!   shrd ecx, edx, 16
+//!   ; ...
+//! ```
+//!
+//! Both factors are sign-extended `i32`, so the product is one `imul` that
+//! leaves its halves in `edx:eax`.
+//!
+//! From unit test `test_a_fixed_product_and_quotient_take_dword_pairs` in
+//! `isel_tests.rs`.
+//!
+//! # Runs
+//! During `Selector::body`, from the `wide_*` patterns and hooks, for each
+//! `i64` instruction; `unread_halves_dropped` once after the blocks are made.
+//!
+//! # Needs
+//! `isel/expand.rs` for the halves; `llrm_mir::valuetracking` for sign bits;
+//! the `lower_int64` helper contracts for the general division.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

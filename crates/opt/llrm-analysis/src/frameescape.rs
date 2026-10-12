@@ -35,6 +35,26 @@
 //! a non-address definition (a parameter, a load, a call) or an input that is
 //! a number, and refutation repeats until what remains is stable.
 //!
+//! # Example
+//! Storing a slot's address exposes that slot; storing through a slot does not
+//! expose it:
+//!
+//! ```mir
+//! define void @f() {
+//! b:
+//!   %kept = alloca ptr
+//!   %leaked = alloca i16
+//!   store ptr %leaked, ptr %kept
+//!   ret void
+//! }
+//! ```
+//!
+//! `analysed(f).exposed` is `{%leaked}`.
+//!
+//! From unit test
+//! `storing_a_slots_address_exposes_it_but_storing_through_it_does_not` in
+//! `frameescape.rs`.
+//!
 //! # Provides
 //! `exposed_allocas`, `exposes`, `framed`, `analysed`. Consumers:
 //! [`crate::memory`] (`object_of` marks an object captured when exposed), the

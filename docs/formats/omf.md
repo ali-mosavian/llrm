@@ -5,14 +5,23 @@ Microsoft and Open Watcom linkers take it) is the default object format of both 
 
 ## Record layout
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 9
+  o1[" "] c1["type"]:3 s1["1"] b1_0["┐"] n1[" "]:3
+  o2[" "] c2["length"]:3 s2["2"] b2_0["│"] n2["little endian#59; counts the body and the checksum byte<br/><b>record: 3 + length bytes</b>"]:3
+  o3[" "] c3["body"]:3 s3[" "] b3_0["│"] n3["length - 1 bytes"]:3
+  o4[" "] c4["checksum"]:3 s4["1"] b4_0["┘"] n4["all bytes of the record sum to 0 mod 256"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class b1_0,o1,n1,b2_0,o2,n2,b3_0,o3,n3,s3,b4_0,o4,n4 off
+  class c1,c2,c3,c4 cell
+  class s1,s2,s4 size
 ```
- type  length   body ...                          checksum
-+-----+--------+-------------------------------+----------+
-| 1 B | 2 B LE | length - 1 bytes              |   1 B    |
-+-----+--------+-------------------------------+----------+
-  length counts the body and the checksum byte; a record is 3 + length bytes.
-  The checksum makes all bytes of the record sum to 0 mod 256.
-```
+
+*An OMF record*
 
 `llrm-omf/src/omf.rs` reads, edits and emits records (`Record`, `parse`, `emit`). A record keeps its raw
 bytes, so a file read and written again is identical. The odd twin of a type (`type + 1`) is its 32-bit
@@ -34,19 +43,29 @@ form: `SEGDEF`, `PUBDEF`, `LINNUM`, `FIXUPP`, `LEDATA`, `MODEND`.
 
 ## Layout of an object
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1[" "] c1["THEADR"]:3 s1[" "] n1[" "]:3
+  o2[" "] c2["COMENT"]:3 s2[" "] n2["Turbo Debugger #quot;before#quot; records, for -gtd"]:3
+  o3[" "] c3["LNAMES"]:3 s3[" "] n3["#quot;#quot;, class and segment names, then group names, or DGROUP if none"]:3
+  o4[" "] c4["COMENT 0x80 0xFE 'F'"]:3 s4[" "] n4["DWARF in a 32-bit object only: flat addresses"]:3
+  o5[" "] c5["COMENT 0x00 0xA1 1 'C' 'V'"]:3 s5[" "] n5["CodeView object only: LINK /CO reads debug info after it"]:3
+  o6[" "] c6["SEGDEF*"]:3 s6[" "] n6["one per section, in order"]:3
+  o7[" "] c7["GRPDEF*"]:3 s7[" "] n7[" "]:3
+  o8[" "] c8["EXTDEF"]:3 s8[" "] n8[" "]:3
+  o9[" "] c9["PUBDEF*"]:3 s9[" "] n9["per segment (a Turbo Debugger type record follows its symbol)"]:3
+  o10[" "] c10["LEDATA, FIXUPP, LEDATA, FIXUPP ..."]:3 s10[" "] n10["per section, per span, per 1000-byte chunk"]:3
+  o11[" "] c11["LINNUM*"]:3 s11[" "] n11["per segment that has lines"]:3
+  o12[" "] c12["MODEND"]:3 s12[" "] n12[" "]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  class o1,n1,s1,o2,n2,s2,o3,n3,s3,o4,n4,s4,o5,n5,s5,o6,n6,s6,o7,n7,s7,o8,n8,s8,o9,n9,s9,o10,n10,s10,o11,n11,s11,o12,n12,s12 off
+  class c1,c2,c3,c4,c5,c6,c7,c8,c9,c10,c11,c12 cell
 ```
-THEADR
-COMENT   (Turbo Debugger "before" records, for -gtd)
-LNAMES   "" , class and segment names, then group names, or DGROUP if none
-COMENT   0x80 0xFE 'F'   DWARF in a 32-bit object only: flat addresses
-COMENT   0x00 0xA1 1 'C' 'V'   CodeView object only: LINK /CO reads debug info after it
-SEGDEF*  one per section, in order        GRPDEF*
-EXTDEF
-PUBDEF*  per segment (a Turbo Debugger type record follows its symbol)
-LEDATA, FIXUPP, LEDATA, FIXUPP ...        per section, per span, per 1000-byte chunk
-LINNUM*  per segment that has lines
-MODEND
-```
+
+*Layout of an OMF object, first record on top*
 
 The writer is [`llrm_omf::write::write`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-omf/src/write.rs#L273).
 It takes an [`Object`](object-model.md) and returns bytes, or `Error::Unencodable(what)`.
@@ -81,13 +100,23 @@ linker's `option eliminate` drops each procedure nothing calls.
 A FIXUPP follows the LEDATA it patches. A subrecord is a location, a fix-data byte, a frame datum and a
 target datum.
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1[" "] c1["locat"]:3 s1["2"] n1["bits: 1, M, loc (4), offset (10). M: 1 segment-relative, 0 self-relative. loc: 1 offset16, 2 base, 3 pointer 16:16, 9 offset32"]:3
+  o2[" "] c2["fix data"]:3 s2["1"] n2["F, T, P and method bits"]:3
+  o3[" "] c3["frame datum"]:3 s3[" "] n3["index"]:3
+  o4[" "] c4["target datum"]:3 s4[" "] n4["index"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2,o3,n3,s3,o4,n4,s4 off
+  class c1,c2,c3,c4 cell
+  class s1,s2 size
 ```
- locat (2 bytes)            fix data   frame    target
- 1 M loc(4) offset(10)      F T P      index    index
-   |  |                     method bits
-   |  +-- location: 1 offset16, 2 base, 3 pointer 16:16, 9 offset32
-   +-- M = 1 segment-relative, 0 self-relative
-```
+
+*A FIXUPP subrecord*
 
 | `Kind` | location | mode |
 |---|---|---|
@@ -99,7 +128,10 @@ target datum.
 
 Any other kind, such as `PcRel` with `from != width`, is refused. The target is a segment (a defined symbol,
 with the symbol's offset added to the field), a group, or an external (EXTDEF index). A segment-relative
-offset to a symbol in a group takes the group as its frame; everything else uses the target's frame. The
+offset to a symbol in a group takes the group as its frame, and so does a segment address in a debug
+section (`$$SYMBOLS`, `.debug_*`): jwlink writes the frame's group index, and a frame that is the segment
+itself, where the segment is not first in its group, gives it 0 (a CodeView variable at segment 0). Everything
+else uses the target's frame. The
 field holds the addend plus the symbol's own offset. A fixup is never split across LEDATA records: a record
 that would end inside a field ends before it. LEDATA records hold at most 1000 bytes, because a fixup's
 offset into its record has ten bits.

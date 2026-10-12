@@ -4,9 +4,21 @@ For contributors: the QB 4.5, PDS 7.1 and VBDOS 1.0 cases `llrm-qb` is held to, 
 
 The suites are additive:
 
-```text
-QB 4.5 (base) <- PDS 7.1 additions <- VBDOS 1.0 additions
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  qb["<b>QB 4.5 (base)</b>"]:::src
+  pds["<b>PDS 7.1 additions</b>"]:::opt
+  vb["<b>VBDOS 1.0 additions</b>"]:::out
+  qb --> pds
+  pds --> vb
 ```
+
+*The suites are additive*
 
 A construct is not copied into each directory. Each `suite.toml` records a case's source, level, feature tags, the original compiler's switches, the expected console output, linker libraries, DOS arguments and environment, and its `parser`, `lowering` and `runtime` obligations. `coverage.toml` maps the installed Microsoft help topics to cases or to a stated reason they have none.
 

@@ -615,12 +615,25 @@ A function value is a small integer that names one of the functions
 converted to its type. The program is compiled whole, so a call through it is
 a `match` over those functions and a direct call of each:
 
-```text
-  inc  ---+                       apply(f, x)  =>  match f:
-  dec  ---+--> fn(i16) -> i16                          0: inc(x)
-  |x| x*2 +    (an index, 1 word)                      1: dec(x)
-                                                       2: lambda(x)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  inc["<b>inc</b>"]:::src
+  dec["<b>dec</b>"]:::src
+  lam["<b>#124;x#124; x*2</b>"]:::src
+  fv["<b>fn(i16) -#gt; i16</b><br/><small>an index, 1 word</small>"]:::opt
+  call_["<b>apply(f, x)</b><br/><small>match f:<br/>0: inc(x)<br/>1: dec(x)<br/>2: lambda(x)</small>"]:::mid
+  inc -->|"0"| fv
+  dec -->|"1"| fv
+  lam -->|"2"| fv
+  fv --> call_
 ```
+
+*A call through a function value is a match over the converted functions*
 
 The language has no heap-allocated closures and no currying; partial
 application is written with a lambda.
@@ -693,14 +706,24 @@ Layout. A field is aligned to the smaller of its size and the struct's
 packing, which is 2 unless `@repr` says otherwise (section 15.2); the
 struct's size is rounded up to its widest alignment. Nothing is reordered.
 
-```text
-struct Mixed:  a: u8   b: i16   c: u8        offsets and size (pack 2)
-
-  0     1     2     3     4     5
-  +-----+-----+-----------+-----+-----+
-  |  a  | pad |     b     |  c  | pad |      size 6
-  +-----+-----+-----------+-----+-----+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1["0"] c1["a"]:3 s1["1"] n1[" "]:3
+  o2["1"] c2["pad"]:3 s2["1"] n2[" "]:3
+  o3["2"] c3["b"]:3 s3["2"] n3[" "]:3
+  o4["4"] c4["c"]:3 s4["1"] n4[" "]:3
+  o5["5"] c5["pad"]:3 s5["1"] n5[" "]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2,o3,n3,o4,n4,o5,n5 off
+  class c1,c2,c3,c4,c5 cell
+  class s1,s2,s3,s4,s5 size
 ```
+
+*struct Mixed (a: u8, b: i16, c: u8), pack 2, size 6*
 
 `size_of[T]()` gives the size (section 8.6).
 
@@ -756,14 +779,23 @@ next two-byte boundary; the variants' payloads overlap and the size is that
 of the largest, rounded to two. `Option[i16]` takes four bytes: the tag byte,
 a pad byte, and the `i16`.
 
-```text
-Shape.circle(center, radius)                    (sizes, pack 2)
-
-  0     1     2           6      8
-  +-----+-----+-----------+------+
-  | tag | pad |  center   | radius|       the variants overlap from byte 2
-  +-----+-----+-----------+------+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1["0"] c1["tag"]:3 s1["1"] n1[" "]:3
+  o2["1"] c2["pad"]:3 s2["1"] n2[" "]:3
+  o3["2"] c3["center"]:3 s3["4"] n3["the variants overlap from byte 2"]:3
+  o4["6"] c4["radius"]:3 s4["2"] n4[" "]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2,o3,n3,o4,n4 off
+  class c1,c2,c3,c4 cell
+  class s1,s2,s3,s4 size
 ```
+
+*Shape.circle(center, radius), pack 2*
 
 An enum may be generic: `Option[T]` and `Result[T, E]` are. Its methods are
 declared like a struct's.
@@ -797,14 +829,22 @@ bits struct Video: u16
     mut level: i5             # bits 10-14
 ```
 
-```text
-Attr, backing u8:
-
-   7      6   5   4     3   2   1   0
-  +-----+-----------+---------------+
-  |blink|    bg     |      fg       |
-  +-----+-----------+---------------+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1["bit 7"] c1["blink"]:3 s1["1 bit"] n1[" "]:3
+  o2["bits 4-6"] c2["bg"]:3 s2["3 bits"] n2[" "]:3
+  o3["bits 0-3"] c3["fg"]:3 s3["4 bits"] n3[" "]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2,o3,n3 off
+  class c1,c2,c3 cell
+  class s1,s2,s3 size
 ```
+
+*Attr, backing u8*
 
 Reading a field gives the smallest standard type that holds it: `u4` reads as
 `u8`, `i12` as `i16`. Writing a value that does not fit is a compile-time
@@ -1639,14 +1679,24 @@ so it is placed as section 9 places any such value. `next()` is a call that
 jumps to the saved resume point and returns an `Option`; `next` is one loop
 over a `match` of the resume point, so no loop is entered at its middle.
 
-```text
-fn countdown(start: u16) -> iter[u16]      the state of an escaping countdown (sketch)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1[" "] c1["$resume"]:3 s1[" "] n1["where next() continues"]:3
+  o2[" "] c2["start"]:3 s2[" "] n2[" "]:3
+  o3[" "] c3["n"]:3 s3[" "] n3["lives across the yield, so it is kept"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  class o1,n1,s1,o2,n2,s2,o3,n3,s3 off
+  class c1,c2,c3 cell
+```
 
-  +----------+--------+--------+
-  | $resume  | start  |   n    |      $resume: where next() continues
-  +----------+--------+--------+      n lives across the yield, so it is kept
-        |
-        v
+*State of an escaping countdown(start: u16) -> iter[u16] (sketch)*
+
+`next()` over that state:
+
+```text
   next(): loop:
             match $resume:
               0: n = start               # first call
@@ -1831,15 +1881,47 @@ indexed or iterated only: no view or pointer to it may be taken.
 An owned `vec`, `string` or `dict` is one allocation, and its value is a
 near pointer to the data. Its descriptor sits immediately before the data:
 
-```text
-  m16, 6-byte header                      m32, 12-byte header
-
-  +-------+-----+--------+--------+       +-------+-----+--------+--------+
-  | flags | pad | length |capacity|       | flags | pad | length |capacity|
-  |  1 B  | 1 B |  2 B   |  2 B   |       |  1 B  | 3 B |  4 B   |  4 B   |
-  +-------+-----+--------+--------+       +-------+-----+--------+--------+
-                                 ^ data...[NUL]                          ^ data
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1["0"] c1["flags"]:3 s1["1"] n1[" "]:3
+  o2["1"] c2["pad"]:3 s2["1"] n2[" "]:3
+  o3["2"] c3["length"]:3 s3["2"] n3[" "]:3
+  o4["4"] c4["capacity"]:3 s4["2"] n4[" "]:3
+  o5["6"] c5["data ... [NUL]"]:3 s5[" "] n5["the value points here"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff
+  class o1,n1,o2,n2,o3,n3,o4,n4,o5,n5,s5 off
+  class c1,c2,c3,c4 cell
+  class s1,s2,s3,s4 size
+  class c5 src
 ```
+
+*Descriptor on m16, a 6-byte header*
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1["0"] c1["flags"]:3 s1["1"] n1[" "]:3
+  o2["1"] c2["pad"]:3 s2["3"] n2[" "]:3
+  o3["4"] c3["length"]:3 s3["4"] n3[" "]:3
+  o4["8"] c4["capacity"]:3 s4["4"] n4[" "]:3
+  o5["12"] c5["data ... [NUL]"]:3 s5[" "] n5["the value points here"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff
+  class o1,n1,o2,n2,o3,n3,o4,n4,o5,n5,s5 off
+  class c1,c2,c3,c4 cell
+  class s1,s2,s3,s4 size
+  class c5 src
+```
+
+*Descriptor on m32, a 12-byte header*
 
 `flags` is one byte of facts for the runtime:
 
@@ -1870,14 +1952,22 @@ A borrowed `&T[N]` needs no descriptor: its dimensions are in its type, so it
 is a pointer to the array. An unsized view, `&[T]` or `&string`, is a
 descriptor of its dimensions, capacity, and data pointer:
 
-```text
-  &[T], rank 1 (m16, 8 bytes)         &string
-
-  +--------+----------+-------------------+
-  | length | capacity |   data pointer    |      capacity equals length
-  |  2 B   |   2 B    | offset 2 B seg 2 B|      12 bytes on m32
-  +--------+----------+-------------------+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1["0"] c1["length"]:3 s1["2"] n1[" "]:3
+  o2["2"] c2["capacity"]:3 s2["2"] n2["equals length"]:3
+  o3["4"] c3["data pointer"]:3 s3["4"] n3["offset 2 B, segment 2 B"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2,o3,n3 off
+  class c1,c2,c3 cell
+  class s1,s2,s3 size
 ```
+
+*Descriptor of &[T] (rank 1) and &string on m16, 8 bytes (12 bytes on m32)*
 
 That descriptor lives on the stack of the frame that creates it and has no
 allocator or destructor. A call passes one pointer to it, and a function
@@ -2197,14 +2287,38 @@ An unmarked struct is packed to 2 bytes on both targets (section 5.1).
 `@repr("c16", pack=1)` has no padding. `@repr("c")` follows the target's C
 compiler: with no `pack=`, the target's own alignment.
 
-```text
-@repr("c16", pack=1)           @repr("c16")  (pack 2)
-struct S: a: u8  b: i16        struct S: a: u8  b: i16
-
-  +---+-----------+              +---+---+-----------+
-  | a |     b     |  3 bytes     | a |pad|     b     |  4 bytes
-  +---+-----------+              +---+---+-----------+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1["0"] c1["a"]:3 s1["1"] n1[" "]:3
+  o2["1"] c2["b"]:3 s2["2"] n2[" "]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2 off
+  class c1,c2 cell
+  class s1,s2 size
 ```
+
+*struct S: a: u8, b: i16 under @repr("c16", pack=1), 3 bytes*
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1["0"] c1["a"]:3 s1["1"] n1[" "]:3
+  o2["1"] c2["pad"]:3 s2["1"] n2[" "]:3
+  o3["2"] c3["b"]:3 s3["2"] n3[" "]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2,o3,n3 off
+  class c1,c2,c3 cell
+  class s1,s2,s3 size
+```
+
+*The same struct under @repr("c16") (pack 2), 4 bytes*
 
 ### 15.3 Calling conventions
 
