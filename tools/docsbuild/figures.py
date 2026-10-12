@@ -886,7 +886,7 @@ def _lanes(opts, body, cv: Canvas, pre: str) -> str:
     order = list(lanes)
     lw = max(tw(v) for v in lanes.values()) + 20
     x0 = lw
-    gap = 26 if msgs else 10
+    gap = max(26, max(nlines(m[4]) for m in msgs) * LH + 8) if msgs else 10
     SH = 26
     layout = {}
     y = 0.0
@@ -903,7 +903,8 @@ def _lanes(opts, body, cv: Canvas, pre: str) -> str:
             else:
                 rowsend.append(s[3])
                 place[s[0]] = len(rowsend) - 1
-        markrow = 26 if any(m[1] == lid for m in marks) else 0
+        lines = max((nlines(m[3]) for m in marks if m[1] == lid), default=0)
+        markrow = max(26, 7 + lines * LH) if lines else 0
         h = max(40, 8 + markrow + len(rowsend) * SH + 8)
         layout[lid] = (y, h, markrow, place)
         y += h + gap
@@ -948,7 +949,7 @@ def _lanes(opts, body, cv: Canvas, pre: str) -> str:
             gy = ay - gap / 2
         cv.grow(x, ys, x, ye)
         cv.add(f'<path class="{ecls("dash" if kind == "ret" else "")}" d="M{fmt(x)} {fmt(ys)}V{fmt(ye)}" marker-end="url(#{pre}-ar)"/>')
-        t = cv.text(x + 8, gy - LH / 2, label, "start", "t lbl")
+        t = cv.text(x + 8, gy - nlines(label) * LH / 2, label, "start", "t lbl")
         cv.fig.labels.append(Box("label", f"msg{no}", t.x0, t.y0, t.x1 - t.x0, t.y1 - t.y0))
     if ticks:
         ay = total + 10

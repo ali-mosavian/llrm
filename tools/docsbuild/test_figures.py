@@ -374,3 +374,18 @@ def test_edge_label_crossing_a_group_border_keeps_clear_of_it():
         'edge A -> B\nedge B -> C "lowering boundary"\nedge C -> D\ngroup back "Backend": C D\n'
     )
     check_invariants(build(spec))
+
+
+def test_lanes_make_room_for_multiline_mark_and_message_labels():
+    """A three-line mark label ran over the axis and the lane below; a four-line message label over a lane."""
+    spec = (
+        'kind: lanes\nlane a "a"\nlane b "b"\ntick 1 "one"\ntick 2 "two"\n'
+        'mark b 1 "l1\\nl2\\nl3"\nmsg a b 2 "m1\\nm2\\nm3\\nm4" kind=ret\n'
+    )
+    fig = build(spec)
+    lanes = {b.id: b for b in fig.boxes if b.kind == "lane"}
+    for t in fig.texts:
+        if t.text.startswith("l1"):
+            assert t.y1 <= lanes["b"].y + lanes["b"].h
+        if t.text.startswith("m1"):
+            assert t.y0 >= lanes["a"].y + lanes["a"].h and t.y1 <= lanes["b"].y
