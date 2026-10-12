@@ -9,6 +9,9 @@ from pathlib import Path
 
 import pytest
 
+# BCOM45 (BC, LINK and its runtime) is the oracle these tests compare against: the gate drops the file where QB45 is not installed.
+REQUIRES = ["qb45"]
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
