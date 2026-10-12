@@ -26,6 +26,12 @@
 //! Definitions are rewritten from the last in each block to the first, so
 //! inserting a follower does not move one still waiting.
 //!
+//! # Example
+//! No honest example: no dump or test prints the body before and after
+//! `promote`. `isel_tests.rs`
+//! `test_a_non_negative_typed_index_is_scaled_in_the_67h_form` asserts the
+//! `movzx` it makes and the `[ebx+eax*2]` form that reads it.
+//!
 //! # Used by
 //! `isel.rs`, after a function is selected, for the values the selector
 //! marked; with none marked the blocks pass through unchanged.

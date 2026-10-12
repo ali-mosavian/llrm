@@ -25,6 +25,40 @@
 //! `retarget` redirects every operand of a terminator that names one block to
 //! another, and `phis` lists a block's leading phis.
 //!
+//! # Example
+//! Before, `%x` is loaded at the join of `b1` and `b2`, where only `b1` has the
+//! cell's value:
+//!
+//! ```mir
+//! b2:
+//!   br i1 %d, label %b3, label %b4
+//!
+//! b3:
+//!   %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+//! ; ...
+//! ```
+//!
+//! After `loadjoins` inserts the missing load on the `b2`-to-`b3` edge:
+//!
+//! ```mir
+//! b2:
+//!   br i1 %d, label %0, label %b4
+//!
+//! 0:
+//!   %1 = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+//!   br label %b3
+//!
+//! b3:
+//!   %x1 = phi i16 [ %y, %b1 ], [ %1, %0 ]
+//! ; ...
+//! ```
+//!
+//! `b2` has another successor, so the load goes in a new block `0` on the edge,
+//! not in `b2`.
+//!
+//! From unit test `test_missing_conditional_edge_gets_its_own_load_block` in
+//! `loadjoins_tests.rs`.
+//!
 //! # Runs
 //! Not a pass: a library. `split` is called by `loadjoins`, `rotate` and
 //! `unswitch`; `phis` and `retarget` by most of the CFG-rewriting passes.

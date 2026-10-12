@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/expand.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/expand.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/expand.rs sha256:e8153cb2718fae5f95f00caf594ba9debd3b2dfc3675387144f6b1ce7b095d59 -->
+<!-- src: crates/opt/llrm-transforms/src/expand.rs sha256:cddddfe290bdf3b3c893d587391df6e13089b87dfdea34761d2b9e7313f8a4bd -->
 
 # expand
 
@@ -30,6 +30,13 @@ term is variable the result is the constant.
 `value` is `pointer + sum` as an `i8` GEP (or the integer sum where there is
 no pointer). `least` is the least of several sums as unsigned numbers, an
 `icmp ult` and a `select` per further sum.
+
+## Example
+None: `expand` is infrastructure and has no pass-level before and after of
+its own. Its `test_generated_recurrences_expand_to_what_the_loop_computes`
+in `expand_tests.rs` checks expanded values against the interpreter; the
+passes that use it show it at work, see [`crate::lsr`](lsr.md) and
+[`crate::exitfold`](exitfold.md).
 
 ## Used by
 [`crate::lsr`](lsr.md) and [`crate::exitfold`](exitfold.md), while they rewrite a loop, and

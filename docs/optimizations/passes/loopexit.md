@@ -1,11 +1,13 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopexit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopexit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopexit.rs sha256:e792e860f12a3cf7048cb667062cd05baba56dc3db6239a6f0605d20ae474ae6 -->
+<!-- src: crates/opt/llrm-transforms/src/loopexit.rs sha256:85e9b7275ce3cfc7f737bb93e5a01636a2164193c7d369140e7fc994be29ef1a -->
 
 # loopexit
 
-Affine exit values evaluated, and a counted loop that only counts deleted:
-LLVM's IndVarSimplify exit-value rewriting and LoopDeletion for loops that
-compute only what is read after them.
+Replaces what a counted loop computes, as read after it, by an expression of
+its trip count, and deletes a loop that only counts, so the code after the
+loop does not wait for the loop to produce a number the compiler can write
+down. LLVM's IndVarSimplify exit-value rewriting and LoopDeletion for loops
+that compute only what is read after them.
 
 ## How it works
 A loop is considered when it has two blocks (a header and one latch with no
@@ -41,14 +43,52 @@ With the exit values, one of two things happens.
 The pass repeats one loop at a time until nothing changes, deriving what is
 known of the body again after each.
 
-```text
-  s = 0; for (i = 0; i < 4; i++) s += i;  return s;
+## Example
+`s = 0; for (i = 0; i < 4; i++) s += i; return s`. Before:
 
-  h: i = phi [0,pre] [i+1,l]            h: br exit            ; 0+1+2+3
-     s = phi [0,pre] [s+i,l]     =>     exit: ret 6
-     br i < 4, l, exit
-  l: ...  br h
+```mir
+@g = global i16 0
+
+define i16 @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %s = phi i16 [ 0, %b0 ], [ %s1, %b2 ]
+  %c = icmp uge i16 %i, 4
+  br i1 %c, label %b3, label %b2
+
+b2:
+  %s1 = add i16 %s, %i
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %s
+}
 ```
+
+After:
+
+```mir
+define i16 @f() {
+b0:
+  br label %b1
+
+b1:
+  br label %b3
+
+b3:
+  ret i16 6
+}
+```
+
+Every header phi has an exit value (`0 + 1 + 2 + 3` is 6), so the header
+branches to the exit and the latch is gone.
+
+From unit test `disposable_loop_becomes_its_exit_values` in
+`loopexit_tests.rs`.
 
 ## Runs
 Not a pipeline pass of its own: [`crate::indvars`](indvars.md) calls

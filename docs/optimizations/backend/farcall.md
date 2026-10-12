@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/farcall.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/farcall.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/farcall.rs sha256:037e6e54a95d7eb3b6067457ab43eb8b0b3daf64000f2c5e1f4e0bd6ba5e976d -->
+<!-- src: crates/backend/llrm-core/src/backend/farcall.rs sha256:530670e4ffcaebe048eb8e8f38c818e73c3b4d8f1e27705255b87f0f796dc993 -->
 
 # farcall
 
@@ -22,6 +22,26 @@ the one cell (`("far-indirect-call", 0)`, four bytes), made on first use.
 The call stops reading the pointer's value but keeps reading
 its register arguments. This is form selection, not spilling: the store
 is not a spill and the allocator treats the cell as any frame slot.
+
+## Example
+`int apply(int (__far *f)(int), int x) { return f(x) + 1; }` on `-m16`. No
+dump prints the body before this phase, so this is what it leaves: the
+pointer is stored to the frame cell `[bp-0x4]` and the call reads the cell.
+
+```lir
+_apply@3: 8 instructions
+  block 0x0000
+    0x0000     ; inserted; delivers v3@AX
+    0x0000  v1 := mov [[bp+0x6]]  ; inserted
+    0x0000  v2 := mov [[bp+0x8]]  ; inserted
+    0x0000  [[bp-0x4]] := mov v1  ; inserted
+    0x0000  [[bp-0x2]] := mov v2  ; inserted
+    0x0000  call [[bp-0x4]]  ; inserted; requires v3@AX; delivers v4@EAX; ...
+    0x0001  v5 := add v4, 0x1  ; inserted
+    0x0002     ; inserted; requires v5@EAX
+```
+
+From `ISEL_DUMP=1` of that function, stage `FarIndirectCalls`, at -O2.
 
 ## Runs
 First machine phase (`far-indirect-calls`), before `ssaspill`, once per

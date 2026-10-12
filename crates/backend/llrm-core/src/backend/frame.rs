@@ -14,8 +14,8 @@
 //!   o2["bp+0"] c2["caller's bp"]:3 s2[" "] n2[" "]:3
 //!   o3[" "] c3["hole"]:3 s3[" "] n3["spill slots fill this first#59; ends at bp-hole"]:3
 //!   o4[" "] c4["selector slots"]:3 s4[" "] n4["allocas, homed arguments (extents)"]:3
-//!   o5[" "] c5["runtime frame"]:3 s5[" "] n5["BASIC: fixed size, from the runtime entry call#59; floor = lowest displacement already reached"]:3
-//!   o6[" "] c6["spill slots"]:3 s6[" "] n6["one per value, at least a word (slot)#59; lowest: size() below the floor"]:3
+//!   o5[" "] c5["runtime frame"]:3 s5[" "] n5["BASIC: fixed size, from the runtime entry call"]:3
+//!   o6[" "] c6["spill slots"]:3 s6[" "] n6["one per value, at least a word (slot)"]:3
 //!   classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
 //!   classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
 //!   class o1,n1,s1,o2,n2,s2,o3,n3,s3,o4,n4,s4,o5,n5,s5,o6,n6,s6 off
@@ -42,6 +42,26 @@
 //! `extents` entry), so later phases and the verifier can tell which stack
 //! object an address belongs to; a cell in no slot is refused. A pointer one
 //! past a slot's end or one before its start belongs to that slot.
+//!
+//! # Example
+//! `keep(a: f64, b: f64)` on `-m32 -O0` already uses the cells `[bp-0x10]` and
+//! `[bp-0x8]`. When `FloatAssign` has to store `a` across a call, it asks the
+//! frame for a slot and gets `[bp-0x18]`, the next eight bytes below the lowest
+//! in use.
+//!
+//! ```lir
+//! keep: 14 instructions
+//!   block 0x0000
+//!     0x0000  v1 := fld [[bp+0x8]]  ; inserted
+//!     0x0003  [[bp-0x10]] := fstp v3  ; inserted
+//!     0x0005  [[bp-0x8]] := fstp v4  ; inserted
+//!     ; ...
+//!     0x0007  [[bp-0x18]] := fstp v1  ; inserted
+//!     0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
+//!     0x0009  v1 := fld [[bp-0x18]]  ; inserted
+//! ```
+//!
+//! From `ISEL_DUMP=1` of that function, stage `FloatAssign`.
 //!
 //! # Runs
 //! `lir frame` in `assemble::staged`, once per function after selection and

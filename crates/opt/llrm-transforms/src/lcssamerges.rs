@@ -56,6 +56,54 @@
 //! Everything is resolved to a supplier before any phi is created, so a
 //! refused merge leaves the function untouched. Phi names take `.lcssa`.
 //!
+//! # Example
+//! A loop with two exits, `b3` from the header and `b4` from the latch, that
+//! join in `b5`, where `%carried` is read. Before:
+//!
+//! ```mir
+//! ; ... b0, then:
+//! b1:
+//!   %carried = phi i16 [ %seed, %b0 ], [ %stepped, %b2 ]
+//!   %more = icmp ult i16 %carried, %n
+//!   br i1 %more, label %b2, label %b3
+//!
+//! b2:
+//!   %stepped = add i16 %carried, 1
+//!   %stay = icmp ult i16 %stepped, %m
+//!   br i1 %stay, label %b1, label %b4
+//!
+//! b3:
+//!   br label %b5
+//!
+//! b4:
+//!   br label %b5
+//!
+//! b5:
+//!   %answer = add i16 %carried, 7
+//!   ret i16 %answer
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! ; ... b0 to b2 unchanged, then:
+//! b3:
+//!   %carried.lcssa = phi i16 [ %carried, %b1 ]
+//!   br label %b5
+//!
+//! b4:
+//!   %carried.lcssa1 = phi i16 [ %carried, %b2 ]
+//!   br label %b5
+//!
+//! b5:
+//!   %carried.lcssa2 = phi i16 [ %carried.lcssa, %b3 ], [ %carried.lcssa1, %b4 ]
+//!   %answer = add i16 %carried.lcssa2, 7
+//!   ret i16 %answer
+//! ```
+//!
+//! From unit test `test_distinct_exits_merge_before_the_downstream_use` in
+//! `lcssamerges_tests.rs`.
+//!
 //! # Runs
 //! Called from [`crate::lcssa`] for each multi-exit loop, so wherever `lcssa`
 //! runs.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/alias.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/alias.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:ab28c0ae5ea8d238a13dfc81a0e03ede38a0c2368b9e2fe270efc32346c18688 -->
+<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:250b273f2f910869c8762466aed495905c68753285e424fc9a9ecec8461089f7 -->
 
 # alias
 
@@ -78,6 +78,37 @@ Access annotation (`annotated`). Each load and store gets its provenance;
 where a range bounds its index the slice narrows to the bytes the index can
 reach, using strides from `congruences` (a value's residue modulo a
 modulus). Far or fixed-address accesses name linear memory.
+
+## Example
+A pointer spilled to a slot, reloaded on one arm and joined with the
+original:
+
+```mir
+define void @f(i1 %c) {
+b0:
+  %root = alloca [4 x i8]
+  %slot = alloca ptr
+  store ptr %root, ptr %slot
+  br i1 %c, label %b10, label %b20
+
+b10:
+  %loaded = load ptr, ptr %slot
+  br label %b30
+
+b20:
+  br label %b30
+
+b30:
+  %joined = phi ptr [ %loaded, %b10 ], [ %root, %b20 ]
+  ret void
+}
+```
+
+`points_to(..).values` gives `%loaded` and `%joined` the same `Provenance`
+as `%root`, the frame object it allocates.
+
+From unit test `test_points_to_flows_through_memory_and_a_phi` in
+`alias_tests.rs`.
 
 ## Provides
 `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`,

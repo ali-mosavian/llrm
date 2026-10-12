@@ -52,6 +52,10 @@
 //! mnemonics named in the `.peep`, and for a family such as `far_loads` the
 //! fixed register that selects each member.
 //!
+//! # Example
+//! The rule above is the text of `loaded_extension` in `peephole.peep`. The
+//! engine has no LIR of its own to show: the rewrites it produces are in the `#
+//! Example` of `crate::backend::peephole`.
 //! # Used by
 //! `peephole` calls `rewritten` for each `body` group, in a fixed order among
 //! the hand-written sub-passes. `isel/combined` calls `rewritten_insns` for the

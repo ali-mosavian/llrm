@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/schedule.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/schedule.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/schedule.rs sha256:db3acc9061bfe0dce74ac1125c83fa0c983d656908a0c9419a41c3ceee4531d3 -->
+<!-- src: crates/backend/llrm-core/src/backend/schedule.rs sha256:54bac31cd265dd5e1f7cf084889abde957cdc44366d6060320a73b11f2a38b2c -->
 
 # schedule
 
@@ -44,6 +44,28 @@ for forms with an operand or address-size prefix or a shift, `np` for
 immediate forms, multiplies and funnel shifts, `uv` otherwise. A U-only or
 `uv` form starts a pair when a `uv` form is also ready, and a `uv` form
 fills the V slot.
+
+## Example
+`imul` has a long latency and `add` needs its result; the `mov` is
+independent. The addresses on the left are the original positions:
+
+```lir
+=== before
+    block 0x0000
+      0x0000  EAX := imul EAX, ECX
+      0x0001  EAX := add EAX, EDX
+      0x0002  EBX := mov ESI
+=== after
+    block 0x0000
+      0x0000  EAX := imul EAX, ECX
+      0x0002  EBX := mov ESI
+      0x0001  EAX := add EAX, EDX
+```
+
+The `mov` now runs while the multiply finishes.
+
+From unit test `test_out_of_order_profile_fills_an_imul_dependency_gap` in
+`schedule_tests.rs` (P6 profile).
 
 ## Runs
 Once per body, the machine phase after `loopslots` and before `jumps`

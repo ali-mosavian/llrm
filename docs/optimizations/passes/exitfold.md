@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/exitfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitfold.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/exitfold.rs sha256:4347173d04e60bbd51f4401fa905b1e90b81d3ae2b862618e14b920d8b36d567 -->
+<!-- src: crates/opt/llrm-transforms/src/exitfold.rs sha256:1d55cf2defe785cf9567f32bae7e4f094a9ca8650b5d605dbcccecad7e1ac6e7 -->
 
 # exitfold
 
@@ -61,6 +61,36 @@ count is the loop's, tested in the preheader. LLVM's `predicateLoopExits`,
 with its traps.
 
 Values are built before the loop by `expand`'s `Expander`.
+
+## Example
+Before, `entry` proves `n < len`:
+
+```mir
+head:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i16 %i, %n
+  br i1 %more, label %check, label %done
+
+check:
+  %inside = icmp ult i16 %i, %len
+  br i1 %inside, label %body, label %done
+; ...
+```
+
+After:
+
+```mir
+check:
+  %inside = icmp ult i16 %i, %len
+  br i1 true, label %body, label %done
+```
+
+The header leaves at `i == n`, before `i < len` can fail, so the check's
+exit never leaves and its branch is the constant `true`; `decide` then makes
+it a jump.
+
+From unit test `test_an_exit_the_guard_proves_later_never_leaves` in
+`exitfold_tests.rs`.
 
 ## Runs
 Step 2 of [`crate::indvars`](indvars.md), so on whenever `indvars` is, in the fixed

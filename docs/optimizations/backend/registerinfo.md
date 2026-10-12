@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/registerinfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/registerinfo.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/registerinfo.rs sha256:2c610642e637360e6d426fcef1467c525071926ea013832323512f601949adf0 -->
+<!-- src: crates/backend/llrm-core/src/backend/registerinfo.rs sha256:9e29e650c190be42fad4d23527916004885b4023a1a4a8d30f887bf8dda38c36 -->
 
 # registerinfo
 
@@ -26,6 +26,10 @@ This file re-exports `Entry`, `FRAME`, `Info`, `RegId`, `Regs`, `STACK` and
 under test, `test_regs()`, m16's file for tests that compile for no target.
 Its tests check the description against the hand tables in
 `llrm_x86::registers`.
+
+## Example
+None: it holds re-exports, so there is no before and after. Read
+`registers.regs` of a target for the table `Info` is generated from.
 
 ## Used by
 [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md),

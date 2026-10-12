@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/cfi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/cfi.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/cfi.rs sha256:0f961743b75385aa14bf5fd0da6fd6a7916480f7c47342892eb877a867c4a09d -->
+<!-- src: crates/backend/llrm-core/src/backend/cfi.rs sha256:c9fe0fa7ca4ac018545e791d58b99ce6df74e6257073b634c67478c9c46ffb5d -->
 
 # cfi
 
@@ -37,6 +37,22 @@ forms above, a write to the frame register while it is the base, invalid
 code. A jump out of the function (a tail call) ends that path. Code no path
 reaches (jump table targets) gets no row and takes the rule of the code
 before it.
+
+## Example
+`push ebp; mov ebp,esp; sub esp,8; nop; leave; ret` and the rows `rows`
+returns for it (`ebp` is saved at 8 below the CFA):
+
+```text
+offset  bytes           rule from this offset
+0       55              cfa = esp+4
+1       89 E5           cfa = esp+8, ebp saved at cfa-8
+3       83 EC 08        cfa = ebp+8, ebp saved at cfa-8     (also covers nop, leave)
+8       C3              cfa = esp+4
+```
+
+From unit test
+`a_frame_register_function_is_the_stack_pointer_then_the_frame_register_then_the_stack_pointer`
+in `cfi_tests.rs`.
 
 ## Used by
 `debuginfo.rs`, under `-g`.

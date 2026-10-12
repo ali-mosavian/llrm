@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/copysink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/copysink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/copysink.rs sha256:f04dc13d6d20094b14b4e0d4aceaee623738a1fea11efd33191530db008f3a40 -->
+<!-- src: crates/backend/llrm-core/src/backend/copysink.rs sha256:77770200bddfefb7d6a769ff0d3afcde85c48d72507528f5952883000c433a40 -->
 
 # copysink
 
@@ -38,6 +38,12 @@ rest:
 
 A copy that passes is removed and put first in the exit block, in the
 order found.
+
+## Example
+No honest example: the pass runs inside the peephole phase, whose dump mixes
+it with every other rewrite, and its unit tests build the loop in Rust. They
+assert where each copy
+ends up: `test_copy_read_only_after_its_loop_moves_to_the_exit`.
 
 ## Runs
 Inside the peephole phase, after copy propagation and extension

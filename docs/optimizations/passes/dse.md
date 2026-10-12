@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dse.rs sha256:5b1a311ce3d648d97aca7cc4789308cc3af73255f706b41987044469a825c36b -->
+<!-- src: crates/opt/llrm-transforms/src/dse.rs sha256:2c5e8dccd38bbc0eea3120379199ff4a243776259d97cfe4e03fd98fe0c2a4e6 -->
 
 # dse
 
@@ -32,6 +32,33 @@ overwrite goes.
 
 `promote` leaves every store when it replaces loads by values; this is the
 pass that removes those that are now read by nothing.
+
+## Example
+Before:
+```mir
+define i16 @f(i16 %x) {
+b0:
+  %s = alloca [8 x i8]
+  call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 8, i1 false)
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %w = sext i16 %i to i32
+  store i32 %w, ptr %s
+  %next = add i16 %i, 1
+  %go = icmp slt i16 %next, %x
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i16 %x
+}
+```
+Nothing reads the slot, so the memset and the loop's store are dead; the
+test runs `dse` then `dead` and asserts that no `alloca`, `store` or `call
+void` is left.
+
+From unit test `test_a_zeroed_slot_nothing_reads_goes` in `dse_tests.rs`.
 
 ## Runs
 Once per pass of the function fixed point, after `trivialunswitch` and

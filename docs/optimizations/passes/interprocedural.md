@@ -1,12 +1,14 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:ba4bba59b407206de5b490411385b044c201a074af6e50c812a97c8b44a7bda0 -->
+<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:2d26d75476bc1e6494f8cb2312d058c94c257765369b496fbc7c10cbe25048f5 -->
 
 # interprocedural
 
 The whole-program step run once every body has reached its own fixed point:
 states what each body does, inlines, carries constants across direct calls,
 drops dead pure calls and the tails of calls that never return, and sends
-each changed body back through its pipeline.
+each changed body back through its pipeline. What one body proves about its
+callees or callers is invisible to a pass that sees one body; this step
+carries it across the calls.
 
 ## How it works
 A frontend hands in its pipeline; nothing here names a language or a
@@ -91,6 +93,52 @@ flowchart TB
 
 The step returns `Proved`: the bodies that cannot return, and the ones a
 root still reaches.
+
+## Example
+The stage `ipa-noreturn.` on a call to a body every path of which stops.
+Before:
+
+```mir
+define internal void @spin() {
+b:
+  br label %l
+
+l:
+  br label %l
+}
+
+define i16 @f(i16 %a) {
+b:
+  call void @spin()
+  %s = add i16 %a, 1
+  ret i16 %s
+}
+```
+
+After:
+
+```mir
+define internal void @spin() memory(none) nounwind norecurse {
+b:
+  br label %l
+
+l:
+  br label %l
+}
+
+define i16 @f(i16 %a) memory(none) nounwind norecurse {
+b:
+  call void @spin()
+  unreachable
+}
+```
+
+The stamp states each body's attributes, and the code after the call that
+never returns is cut; the call stays. `@f` is run through its pipeline again
+as `ipa-noreturn.`.
+
+From unit test `test_a_private_terminal_body_cuts_its_callers_tail` in
+`interprocedural_tests.rs`.
 
 ## Runs
 A `ProgramPass` after the per-body fixed point and before `globaldce`,

@@ -52,6 +52,20 @@
 //! `MultiplyChains` caches the constant-multiply chains found under this
 //! profile's prices (GCC's `alg_hash`); a clone starts with an empty cache.
 //!
+//! # Example
+//! Facts the profiles state (from the target's timing tables):
+//!
+//! ```text
+//! address_prefix_stall            P6 6, Core 3, 386 486 P5 K5 K6 K7 0
+//! 67h form beats a spill (before_spill)   386 K5 K6 K7 Core
+//! call / size call on a 486       18 / 5
+//! ```
+//!
+//! From unit tests
+//! `test_medium_model_profiles_distinguish_native_and_67h_addressing`,
+//! `test_secondary_address_form_is_ranked_against_reload_and_spill_work` and
+//! `test_the_lowered_target_forwards_its_size_costs` in `cpu.rs`.
+//!
 //! # Used by
 //! The driver (`driver/mod.rs`, `Options::cpu`) builds it from the machine's
 //! CPU name. Consumers by grep: `allocate`, `schedule`, `peephole`,

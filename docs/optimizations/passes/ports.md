@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ports.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ports.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:d67f0ed023e05f24271ea37ea5d3772bfef57d68915591bebbd368c4a2f0a2a8 -->
+<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:62bd017226526720a2f12e921dea5304748a667db1568915feb047b68f8f40b7 -->
 
 # ports
 
@@ -27,6 +27,61 @@ nothing.
  out 11, v     ; the 8237's mode: may start DMA
    => unchanged
 ```
+
+## Example
+Before:
+```mir
+define void @f(i16 %p, i8 %v) {
+b0:
+  call void @llrm.ia16.out.i8(i16 968, i8 %v)
+  call void @llrm.ia16.out.i8(i16 11, i8 %v)
+  %low = icmp sge i16 %p, 960
+  br i1 %low, label %b1, label %b3
+
+b1:
+  %high = icmp sle i16 %p, 975
+  br i1 %high, label %b2, label %b3
+
+b2:
+  call void @llrm.ia16.out.i8(i16 %p, i8 %v)
+  br label %b3
+
+b3:
+  call void @llrm.ia16.out.i8(i16 %p, i8 %v)
+  ret void
+}
+```
+After:
+```mir
+define void @f(i16 %p, i8 %v) {
+b0:
+  call void @llrm.ia16.out.i8(i16 968, i8 %v) memory(inaccessiblemem: readwrite)
+  call void @llrm.ia16.out.i8(i16 11, i8 %v)
+  %low = icmp sge i16 %p, 960
+  br i1 %low, label %b1, label %b3
+
+b1:
+  %high = icmp sle i16 %p, 975
+  br i1 %high, label %b2, label %b3
+
+b2:
+  call void @llrm.ia16.out.i8(i16 %p, i8 %v) memory(inaccessiblemem: readwrite)
+  br label %b3
+
+b3:
+  call void @llrm.ia16.out.i8(i16 %p, i8 %v)
+  ret void
+}
+```
+Port 968 (the VGA's DAC write index) and the call in `b2`, which the
+branches bound to the VGA's 960..975, are narrowed. Port 11 (the 8237's mode
+register, which can start DMA) and the call in `b3`, whose port nothing
+bounds, keep the unknown effect.
+
+From unit test
+`test_a_port_call_is_narrowed_only_where_the_target_says_its_device_reaches_no_memory`
+in
+`ports_tests.rs`, on the x86-16 DOS target.
 
 ## Runs
 Twice: once over every body before the per-body pipeline, so a caller's

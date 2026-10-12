@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/liveunion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/liveunion.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/liveunion.rs sha256:176bbcb95faa44f597fc48b9fbdbe06223fee39f3255f4a4dcb2e049a913daee -->
+<!-- src: crates/backend/llrm-core/src/backend/liveunion.rs sha256:73a7aaf2d4a353ab5cf459264b34e0a5d4bddcf800390c0a8b90b513a69e784f -->
 
 # liveunion
 
-What each register holds, by where: LLVM's `LiveIntervalUnion` and the
-`LiveRegMatrix` over it.
+Answers which values already hold a register where an interval lies, so the
+allocator can test an assignment without visiting every holder. LLVM's
+`LiveIntervalUnion` and the `LiveRegMatrix` over it.
 
 ## How it works
 The union keeps, per register, the values that hold it in the order they
@@ -35,6 +36,11 @@ no length still meets another it lies inside.
 `refresh` drops the indexes after the intervals move; `refresh_among` moves
 only the changed values. `check_index` asserts every index against the
 pairwise answer.
+
+## Example
+No honest example: the index answers queries inside the allocator and prints
+no LIR. Read `tests` in this file, which assert every index against the
+pairwise answer (`check_index`).
 
 ## Used by
 `allocate` and `splitkit`.

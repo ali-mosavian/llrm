@@ -27,6 +27,12 @@
 //! ownership and emits no bytes. A sweep can expose more dead work, so sweeps
 //! repeat, at most once per instruction, until one changes nothing.
 //!
+//! # Example
+//! No honest example: it is one sub-pass of `peephole`, whose `ISEL_DUMP=1`
+//! stage shows all the sub-passes' work together, and its tests build bodies by
+//! hand and assert on the operations. A removed instruction prints in the dump
+//! as an empty line (`0x0003     ; inserted`).
+//!
 //! # Runs
 //! The last body rewrite of `peephole` before `popped_arguments`, and
 //! `jumps::optimized` after each tail merge.

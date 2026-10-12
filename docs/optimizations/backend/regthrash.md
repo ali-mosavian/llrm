@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/regthrash.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regthrash.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/regthrash.rs sha256:29e4f127b1574af339d36614b97a4cc454edfeb5aaefd40d85603d8eace7c0d1 -->
+<!-- src: crates/backend/llrm-core/src/backend/regthrash.rs sha256:4585be77c88dcbb2007a34d05522239f5919b0d43d368fec6b7c1086294b4309 -->
 
 # regthrash
 
@@ -46,6 +46,34 @@ each instruction is worked out again only for the stretch the rename moved,
 and the search resumes at the first instruction whose liveness moved.
 `LLRM_CHECK_THRASH` (always under test) asserts that equals a full
 recompute.
+
+## Example
+A value is built in EAX, copied to EDI and read later as EDI (the first
+block of the fixture; the second block, which reads EDI and then overwrites
+every other register, is trimmed):
+
+```lir
+=== before
+    block 0x0000
+      0x0000  EAX := mov 0x7  ; inserted
+      0x0001  EDI := mov EAX  ; inserted
+    block 0x0001
+      0x0009  push EDI  ; inserted
+      ; ...
+=== after
+    block 0x0000
+      0x0000  EDI := mov 0x7  ; inserted
+      0x0001     ; inserted
+    block 0x0001
+      0x0009  push EDI  ; inserted
+      ; ...
+```
+
+The producer writes EDI directly. The copy is left as an anchor with no
+operation, which keeps the virtual value it defined.
+
+From unit test `test_removed_copy_keeps_its_virtual_definition` in
+`regthrash.rs`.
 
 ## Runs
 First sub-pass of [`crate::backend::peephole`](peephole.md), gated on a register copy

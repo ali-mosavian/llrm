@@ -48,6 +48,32 @@
 //!   body, of some blocks, or of only the instructions added since a previous
 //!   body.
 //!
+//! # Example
+//! A call that takes `ax` and returns `eax` (`bump`). Before, it names the
+//! values `v6`, `v7`; after allocation it names fresh ones, `v14`, `v15`,
+//! copied in and out. `; inserted` notes are dropped.
+//!
+//! Before (`Coalescer`):
+//!
+//! ```lir
+//! 0x000c  v6 := mov 0x1
+//! 0x000c  call   requires v6@AX; delivers v7@EAX; clobbers EAX
+//! 0x000e  cmp v5, 0x1
+//! ```
+//!
+//! After (`RegAlloc`):
+//!
+//! ```lir
+//! 0x000c  AX := mov 0x1
+//! 0x000c  call   requires v14@AX; delivers v15@EAX; clobbers EAX
+//! 0x000c  CX := mov AX
+//! 0x000e  cmp BX, 0x1
+//! ```
+//!
+//! From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
+//! -fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+//! -march=i386` of the program under `calleefacts`.
+//!
 //! # Used by
 //! Register allocation (`allocate.rs`), which calls `distinct_roles`,
 //! `distinct_classes` and `constrained` on the body entering allocation, the

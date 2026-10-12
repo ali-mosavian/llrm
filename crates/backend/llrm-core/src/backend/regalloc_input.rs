@@ -35,6 +35,10 @@
 //! convention keeps everything but ax, bx, cx, dx, es and the flags; a Nib or
 //! BASIC program's keeps nothing. `through` runs a body through given phases.
 //!
+//! # Example
+//! None: a test-support module with no transformation of its own. Its callers
+//! show the LIR it hands over; read `lirtext.rs` for the text format.
+//!
 //! # Used by
 //! Tests of [`crate::backend::allocate`], [`crate::backend::ssaspill`],
 //! [`crate::backend::loopslots`] and the jumps and total-allocation test files.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/frameescape.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/frameescape.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/frameescape.rs sha256:4ab924cd74173df8319987ad31b7639e43c513faf0511efb8f352a5e02f4dae9 -->
+<!-- src: crates/opt/llrm-analysis/src/frameescape.rs sha256:888bc9009c05f5ef11d64097b88f626a1f2f093e9468069fe0c620be886d7c32 -->
 
 # frameescape
 
@@ -39,6 +39,26 @@ and moved by an integer still reaches only that local's bytes. It is
 optimistic: phis and moves start unrefuted, a value is refuted when it has
 a non-address definition (a parameter, a load, a call) or an input that is
 a number, and refutation repeats until what remains is stable.
+
+## Example
+Storing a slot's address exposes that slot; storing through a slot does not
+expose it:
+
+```mir
+define void @f() {
+b:
+  %kept = alloca ptr
+  %leaked = alloca i16
+  store ptr %leaked, ptr %kept
+  ret void
+}
+```
+
+`analysed(f).exposed` is `{%leaked}`.
+
+From unit test
+`storing_a_slots_address_exposes_it_but_storing_through_it_does_not` in
+`frameescape.rs`.
 
 ## Provides
 `exposed_allocas`, `exposes`, `framed`, `analysed`. Consumers:

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/storecombine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/storecombine.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/storecombine.rs sha256:f0c97c74c28a0324bd70b4d7f25d3f926008829e255c558e3f8c6effd40e380d -->
+<!-- src: crates/backend/llrm-core/src/backend/storecombine.rs sha256:64dabf63bcd7a43105647cc5e6100e55ba2c479790770a84c7471063c7c9d8e6 -->
 
 # storecombine
 
@@ -21,6 +21,25 @@ its address bookkeeping is kept.
 
 Anything else between the two ends the pair: a read, a call or an address
 that may differ. The low store's `disp` must be at most 0xfffc.
+
+## Example
+Two literal word stores to adjacent fixed cells, `x` and `x+2`, with an
+empty anchor between them:
+
+```lir
+before:  mov word [x], -1           ; low
+         (anchor)
+         mov word [x+2], 2          ; high
+after:   mov dword [x], 0x2ffff
+         (anchor)
+         (anchor)
+```
+
+The two words became one dword store, low word first, and the second store
+stayed as an anchor so the instruction spans are unchanged.
+
+From unit test `test_only_adjacent_unobserved_static_literals_are_packed` in
+`storecombine.rs`.
 
 ## Runs
 A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after

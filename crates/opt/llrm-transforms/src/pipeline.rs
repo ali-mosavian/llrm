@@ -71,6 +71,12 @@
 //! `gepoffset` follows it because it would move a constant `gep` out of its
 //! loop; `addresssink` follows the last `gvn`, which makes the phis it sinks.
 //!
+//! # Example
+//! No honest example: the pipeline is the order of the passes, not one rewrite,
+//! and no one function shows it. `llrm-c --dump DIR` writes the module after
+//! each stage (`NN-stage.ll`) and, for each body, each changed step of the
+//! fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
+//!
 //! # Runs
 //! Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
 //! maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to

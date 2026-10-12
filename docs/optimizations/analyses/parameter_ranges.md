@@ -1,10 +1,10 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/parameter_ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/parameter_ranges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/parameter_ranges.rs sha256:6b0a9597f892f80b2067c8bc8aa26f630b466f77448d0cc64c188099ca406af8 -->
+<!-- src: crates/opt/llrm-analysis/src/parameter_ranges.rs sha256:5c233cca72f848e19d6af976d34d5d79d5e60de5cfc7b405bf923d80eae319bb -->
 
 # parameter_ranges
 
-The range of each integer parameter of a body only the program calls, from
-what its callers pass.
+Bounds each integer parameter of a body only the program calls by what its
+callers pass, so the body's own checks on it can be decided.
 
 ## How it works
 `stamp` takes the bodies that are neither exported nor address-taken. For
@@ -39,6 +39,40 @@ point every stamp of the call is withdrawn and nothing is returned: a stamp
 is a promise, and only a fixed point keeps it. A parameter seen to be
 `Anything` loses an earlier stamp. A range covering the whole type states
 nothing and is not stamped.
+
+## Example
+`@place` is called from `@f` with 0 and from itself with `%row + 1`:
+
+```mir
+define internal i16 @place(i16 %row, i16 %n) {
+b:
+  %done = icmp eq i16 %row, %n
+  br i1 %done, label %leaf, label %more
+more:
+  %fits = icmp ult i16 %row, 12
+  br i1 %fits, label %next, label %crash
+next:
+  %up = add nsw i16 %row, 1
+  %r = call i16 @place(i16 %up, i16 %n)
+  ret i16 %r
+leaf:
+  ret i16 1
+crash:
+  ret i16 99
+}
+
+define i16 @f(i16 %a) {
+b:
+  %x = call i16 @place(i16 0, i16 7)
+  ret i16 %x
+}
+```
+
+The printed body then declares the parameter as `range(i16 0, 8) %row`.
+
+From unit test
+`test_what_the_callers_pass_bounds_a_parameter_the_body_checks` in
+`crates/opt/llrm-transforms/src/interprocedural_tests.rs`.
 
 ## Provides
 `stamp`: a `range` attribute on each integer parameter whose callers all

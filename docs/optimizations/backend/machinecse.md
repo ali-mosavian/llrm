@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinecse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinecse.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinecse.rs sha256:94e2e8315484b7e8b9a0c8b9d1264ebe4e1dbd6f639df0d893353a771964f397 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinecse.rs sha256:8c2ebc8bca64007bea677cd8133278d81f622ad8875f2f409d8e81c2dd245da1 -->
 
 # machinecse
 
@@ -39,6 +39,12 @@ Layout order is iterated to a fixed point; if it does not settle within
 four rounds per block the body is returned unchanged. A redundant
 instruction is replaced by an anchor (`lir::anchor`) that keeps its virtual
 definition and source ownership but emits no bytes.
+
+## Example
+No honest example: it is one sub-pass of `peephole`, whose `ISEL_DUMP=1`
+stage shows all the sub-passes' work together, and its tests build bodies by
+hand and assert on the operations. A removed instruction prints in the dump
+as an empty line (`0x0003     ; inserted`).
 
 ## Runs
 A peephole sub-pass, once per `peephole` run, after `sharedstores` and

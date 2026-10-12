@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/peel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/peel.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:0d98f2e1b0da6bbb29e3a68dccd498684f475cd31b603cb8462d5612158d26db -->
+<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:39878aff378f2c17053cd7585857cf00f176c1f580871c445b2739ab369df755 -->
 
 # peel
 
@@ -88,6 +88,67 @@ The one machine number is the target's: a function with an instruction the
 target does not price (`profit::priced`) is left alone, since
 `peelsize` cannot size it. The target's `unroll_budget` is scaled by
 `Limits::target_percent`.
+
+## Example
+Before:
+```mir
+define ... @pipeline.body() ... {
+  ; ...
+b2:
+  %0 = phi i16 [ 0, %b1 ], [ %6, %b5 ]
+  %1 = icmp slt i16 %0, 2
+  br i1 %1, label %b4, label %b3
+
+  ; ...
+b4:
+  %2 = mul i16 %0, 2
+  %3 = getelementptr inbounds i8, ptr @_a, i16 %2
+  %4 = load i16, ptr %3, !tbaa !9
+  %5 = icmp slt i16 %4, 0
+  br i1 %5, label %b6, label %b5
+
+b5:
+  %6 = add nsw i16 %0, 1
+  br label %b2
+
+  ; ...
+b7:
+  %7 = phi i16 [ 0, %b3 ], [ 1, %b6 ]
+  ret i16 %7
+}
+```
+After:
+```mir
+define ... @pipeline.body() ... {
+b1:
+  %0 = getelementptr inbounds i8, ptr @_a, i16 0
+  %1 = load i16, ptr %0, !tbaa !9
+  %2 = icmp slt i16 %1, 0
+  br i1 %2, label %b6, label %4
+
+b6:
+  br label %b7
+
+b7:
+  %3 = phi i16 [ 0, %8 ], [ 1, %b6 ]
+  ret i16 %3
+
+4:
+  %5 = getelementptr inbounds i8, ptr @_a, i16 2
+  %6 = load i16, ptr %5, !tbaa !9
+  %7 = icmp slt i16 %6, 0
+  br i1 %7, label %b6, label %8
+
+8:
+  br label %b7
+}
+```
+The loop of two trips is two copies of its test and body: the branch back
+into the loop is gone.
+
+From `--dump` of `hit` (`for (i = 0; i < 2; i++) if (a[i] < 0) return 1;`)
+at -O3 -m16: stage `dead` before `peel`, and `peeled-r01-dead`, which is
+`peel`'s copy after `fold`, `decide` and `dead` have cleaned it.
 
 ## Runs
 In [`crate::pipeline`](pipeline.md)'s per-body fixed point `Fixed`, after the scalar

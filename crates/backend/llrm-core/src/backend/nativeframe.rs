@@ -28,6 +28,10 @@
 //! `Frame::native` is always `None` in the compiler and the paths above are
 //! not taken.
 //!
+//! # Example
+//! No honest example: no caller builds a plan, so no LIR is ever shaped by it.
+//! Read `frame::of` for where a plan would enter.
+//!
 //! # Used by
 //! `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and
 //! `flow::machine_with` (which adds `native_pins` to the allocator's pins).

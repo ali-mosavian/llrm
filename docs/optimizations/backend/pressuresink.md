@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/pressuresink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/pressuresink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/pressuresink.rs sha256:6578dd7472437f6372dfc0e163203518f48cf14a9b8e728f2f180803363c0bcb -->
+<!-- src: crates/backend/llrm-core/src/backend/pressuresink.rs sha256:9887a372f6fe1440129d6957e9db129779b691f7008f4a93bb223350df680f43 -->
 
 # pressuresink
 
@@ -41,6 +41,10 @@ The load moves where no class rises and at least one falls; the sets tried
 are the general set, the x87 stack and the classes of `d` and of those dying
 address operands. The moved load takes `u`'s `at`, so a block's instructions
 stay in order by it.
+
+## Example
+None: no test fixture exercises `sunk` on a body whose LIR it prints, and
+the sketch above is not program output. Read `sunk` for the candidate test.
 
 ## Runs
 A machine phase after `phielim` and before `floatfold`

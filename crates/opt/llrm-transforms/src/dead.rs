@@ -1,4 +1,5 @@
-//! Instructions nothing needs, removed: LLVM's ADCE and DCE.
+//! Instructions nothing needs, removed: LLVM's ADCE and DCE. Work whose result
+//! no one reads only costs code and clocks, and other passes leave it behind.
 //!
 //! # How it works
 //! An instruction stays whatever reads it when `llrm_mir::memory::only_value`
@@ -26,6 +27,29 @@
 //! `assumptions_dropped` is a separate step over a module. It erases every call
 //! of `llvm.assume` and then runs `dead` on each function until nothing
 //! changes, so a condition kept alive only by its assume costs no compare.
+//!
+//! # Example
+//! Before:
+//! ```mir
+//! define i16 @f(i16 %x) {
+//! b0:
+//!   %doomed = mul i16 %x, 3
+//!   %kept = add i16 %x, 1
+//!   ret i16 %kept
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define i16 @f(i16 %x) {
+//! b0:
+//!   %kept = add i16 %x, 1
+//!   ret i16 %kept
+//! }
+//! ```
+//! `%doomed` has no reader and no effect, so it goes.
+//!
+//! From unit test `test_dead_code_goes_and_the_bytes_are_still_accounted_for`
+//! in `dead_tests.rs`.
 //!
 //! # Runs
 //! Once per pass of the function fixed point, after `algebraic`, and again

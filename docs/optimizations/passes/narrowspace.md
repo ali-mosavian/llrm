@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/narrowspace.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/narrowspace.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/narrowspace.rs sha256:0bd113bfa26bb97585e269bf4368a80cd217196efcf33ac812ff4da6b4f57d58 -->
+<!-- src: crates/opt/llrm-transforms/src/narrowspace.rs sha256:902bf1aaad7b256d4dce753061ebe617b3a51577e5caf267446f56b85ed73207 -->
 
 # narrowspace
 
@@ -39,6 +39,52 @@ reads a cast of it to the far pointer, and the recursive calls that passed
 it pass the near one. Each other call passes a cast of its actual to the
 near pointer. [`crate::inferspace`](inferspace.md) then folds the accesses in the callee
 and the casts at each call, so the segment is neither pushed nor loaded.
+
+## Example
+Before:
+```mir
+define ... @"_next@3"(ptr addrspace(1) nocapture readonly %0, i16 %1) ... {
+b1:
+  %2 = mul i16 %1, 2
+  %3 = getelementptr inbounds i8, ptr addrspace(1) %0, i16 %2
+  %4 = load i16, ptr addrspace(1) %3, !tbaa !9
+  ret i16 %4
+}
+
+define ... @"_walk@3"(i16 %0) ... {
+b1:
+  %1 = addrspacecast ptr @_table to ptr addrspace(1)
+  %2 = call regparm3cc i16 @"_next@3"(ptr addrspace(1) %1, i16 %0)
+  %3 = call regparm3cc i16 @"_next@3"(ptr addrspace(1) %1, i16 1)
+  %4 = add nsw i16 %2, %3
+  ret i16 %4
+}
+```
+After:
+```mir
+define ... @"_next@3"(ptr nocapture readonly %0, i16 %1) ... {
+b1:
+  %2 = mul i16 %1, 2
+  %3 = getelementptr inbounds i8, ptr %0, i16 %2
+  %4 = load i16, ptr %3, !tbaa !9
+  ret i16 %4
+}
+
+define ... @"_walk@3"(i16 %0) ... {
+b1:
+  %1 = call regparm3cc i16 @"_next@3"(ptr @_table, i16 %0)
+  %2 = call regparm3cc i16 @"_next@3"(ptr @_table, i16 1)
+  %3 = add nsw i16 %1, %2
+  ret i16 %3
+}
+```
+Both calls pass the near `@_table`, so `_next@3` takes a near pointer: the
+casts and the segment the far parameter carried are gone from the callee and
+from each call.
+
+From `--dump` of a program whose static `next(int far *p, int n)` is called
+twice with the near global `table`, at -O2 -m16 with inlining off, stages
+`pipeline` and `interprocedural`.
 
 ## Runs
 In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion

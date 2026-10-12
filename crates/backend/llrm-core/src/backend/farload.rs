@@ -26,6 +26,27 @@
 //! load named by the target's far-segment load form; the second load
 //! turns into an anchor so source ownership is kept.
 //!
+//! # Example
+//! `world->words[i]` and `rdr->flags[...]` load far pointer fields of near
+//! structs. No dump prints the body before this pass, so this is its result:
+//! each pointer is one `les` defining the offset and the selector (`v11, v12
+//! :=`), followed by the anchor the second word load became. The first stage
+//! dump of `mark`:
+//!
+//! ```lir
+//! _mark@3: 26 instructions
+//!   ; ...
+//!   block 0x0007
+//!     ; ...
+//!     0x0009  v11, v12 := les [None v1@unplaced]  ; inserted
+//!     0x0009     ; inserted
+//!     0x000b  v13 := mov [[es:r0+0x0] v11@unplaced]  ; inserted
+//!     0x000c  v14, v15 := les [None v2@unplaced]  ; inserted
+//!     0x000c     ; inserted
+//! ```
+//!
+//! From `ISEL_DUMP=1` of `tests/fixtures/c/farloadloop.c` with `-m16 -O2`.
+//!
 //! # Runs
 //! Per block in isel's cross-instruction selection (`isel/combined.rs`),
 //! first, before [`crate::backend::comparefold`]. Every optimization level.

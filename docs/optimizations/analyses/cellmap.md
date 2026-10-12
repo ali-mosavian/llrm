@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/cellmap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/cellmap.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/cellmap.rs sha256:c578749c791ac1a812b8fca9d6db40a98d8c2dc2bb72ccc38a52b57b95622a3b -->
+<!-- src: crates/opt/llrm-analysis/src/cellmap.rs sha256:3b0e672d34880a870ebbae37ecbbee145f4280b9afadc2c7d91495df99ec3199 -->
 
 # cellmap
 
@@ -33,6 +33,10 @@ those further, in the buckets it names, to cells whose span meets its span.
 `asked` returns the same candidates without deleting. The index may only
 skip work: under test a flag makes `kill` ask the exact test of every cell
 it skipped.
+
+## Example
+No honest example: `CellMap` is a container with no printed form, and no
+test shows it alone. Read the tests of its users, such as `consts_tests.rs`.
 
 ## Provides
 The container. Consumers: [`crate::alias`](alias.md), [`crate::consts`](consts.md),

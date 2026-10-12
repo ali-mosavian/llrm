@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/farload.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/farload.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/farload.rs sha256:bfec1fc00b55bcee8a9c4b54ac2b18f036081c3d5aba2f047ecdb70cb9d09b82 -->
+<!-- src: crates/backend/llrm-core/src/backend/farload.rs sha256:d8d8f7f24ee27242404e39651e80d07bf0b46c4bfa0d9309b243b37a2fd75ec4 -->
 
 # farload
 
@@ -30,6 +30,27 @@ name at least one virtual register (a fixed address survives allocation
 unchanged) that neither load defines. The pair becomes one four-byte
 load named by the target's far-segment load form; the second load
 turns into an anchor so source ownership is kept.
+
+## Example
+`world->words[i]` and `rdr->flags[...]` load far pointer fields of near
+structs. No dump prints the body before this pass, so this is its result:
+each pointer is one `les` defining the offset and the selector (`v11, v12
+:=`), followed by the anchor the second word load became. The first stage
+dump of `mark`:
+
+```lir
+_mark@3: 26 instructions
+  ; ...
+  block 0x0007
+    ; ...
+    0x0009  v11, v12 := les [None v1@unplaced]  ; inserted
+    0x0009     ; inserted
+    0x000b  v13 := mov [[es:r0+0x0] v11@unplaced]  ; inserted
+    0x000c  v14, v15 := les [None v2@unplaced]  ; inserted
+    0x000c     ; inserted
+```
+
+From `ISEL_DUMP=1` of `tests/fixtures/c/farloadloop.c` with `-m16 -O2`.
 
 ## Runs
 Per block in isel's cross-instruction selection (`isel/combined.rs`),

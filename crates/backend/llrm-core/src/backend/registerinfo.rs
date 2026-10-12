@@ -22,6 +22,10 @@
 //! Its tests check the description against the hand tables in
 //! `llrm_x86::registers`.
 //!
+//! # Example
+//! None: it holds re-exports, so there is no before and after. Read
+//! `registers.regs` of a target for the table `Info` is generated from.
+//!
 //! # Used by
 //! [`crate::backend::allocate`], [`crate::backend::coalesce`],
 //! [`crate::backend::liveness`], [`crate::backend::loopslots`],

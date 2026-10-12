@@ -66,6 +66,10 @@
 //! asks [`memoryssa`] when it solves through memory, so the layers are
 //! conceptual, not a strict order.
 //!
+//! # Example
+//! None: this is the crate index. Each module's own page has its example; start
+//! with [`manager`] for how a pass asks for a fact.
+//!
 //! # Provides
 //! Invalidation and caching, in [`manager`]. A pass asks
 //! `analyses.get::<A>(..)` and gets one shared result per function. After each

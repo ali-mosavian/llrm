@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lower_int64.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lower_int64.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lower_int64.rs sha256:7f4d51822a7176fff0a478d8e63bd2a63faa2bf986d4af8b94cba316a494c563 -->
+<!-- src: crates/backend/llrm-core/src/backend/lower_int64.rs sha256:7a650b160c2b5c668687a0bcfd4aa86431cb89575953ce5173278a0824266820 -->
 
 # lower_int64
 
@@ -14,6 +14,10 @@ states, and the clobber list describes the inline bytes exactly (it is not
 a separately called routine). `runtime_registers` maps register views
 (`AX`, `BL`, ...) to the runtime registers they belong to, and adds the
 flags where the routine changes them.
+
+## Example
+No honest example: this builds a routine's contract and rewrites no LIR.
+Read `isel/wide.rs` for the instructions that name it.
 
 ## Used by
 `isel/wide` (64-bit arithmetic helpers) and `isel/unwind`.

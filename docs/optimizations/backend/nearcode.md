@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/nearcode.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/nearcode.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/nearcode.rs sha256:a695fe7e5dd51700d69d1404846b7c54acbdf353650436a33351ec5c3284fa23 -->
+<!-- src: crates/backend/llrm-core/src/backend/nearcode.rs sha256:d97dc552a2c77c3364cf198ffa114118dc355b1b66697e0af109db070b93d68a -->
 
 # nearcode
 
@@ -23,6 +23,10 @@ is, borrowed.
 
 A far caller needs no segment in the return address because every caller is
 in the same module, and so in the same code segment.
+
+## Example
+No honest example: the pass changes the address space of MIR functions and
+touches no LIR. Read `test_*` in this file for the MIR it accepts.
 
 ## Runs
 Once per module at the start of `assemble::assembled_by` (`mir near code`),

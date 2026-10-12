@@ -20,6 +20,17 @@
 //! register: the frame register becomes one more general register, last to
 //! be given out, and an address may be made of its word.
 //!
+//! # Example
+//! What `RegisterClasses::of` says of the real-mode target:
+//!
+//! ```text
+//! addressing   BX BP SI DI
+//! status_word  AX
+//! ```
+//!
+//! From unit tests `m16_registers_are_its_description` and
+//! `the_status_word_is_where_the_form_table_stores_it` in `classes.rs`.
+//!
 //! # Used by
 //! `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller
 //! (`ssaspill.rs`), `pressuresink.rs`, `floatalloc.rs`, `sharedstores.rs`,

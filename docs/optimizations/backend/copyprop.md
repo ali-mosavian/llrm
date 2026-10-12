@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/copyprop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/copyprop.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/copyprop.rs sha256:3f66e39d818bb1ae79bc05ae522812311b236bb1692035b37b7c5cbb2414967f -->
+<!-- src: crates/backend/llrm-core/src/backend/copyprop.rs sha256:613289f6630c671a3ba65306c7f5be4b9d2784209146efceec5d1021d95d6ced -->
 
 # copyprop
 
@@ -46,6 +46,12 @@ register constraints (`requires`, `delivers`, clobbers, spreads, groups)
 or a relocation are left alone.
 
 A body with phis is returned unchanged.
+
+## Example
+No honest example: the pass runs inside the peephole phase, whose dump mixes
+it with every other rewrite, and its unit test builds the body in Rust. Run
+a program with `ISEL_DUMP=1` and compare the `ParallelCopy` and `Peephole`
+stages for the renamed operands.
 
 ## Runs
 Inside the peephole phase, after register thrashing and frame copies.

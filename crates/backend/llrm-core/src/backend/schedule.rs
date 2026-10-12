@@ -40,6 +40,28 @@
 //! `uv` form starts a pair when a `uv` form is also ready, and a `uv` form
 //! fills the V slot.
 //!
+//! # Example
+//! `imul` has a long latency and `add` needs its result; the `mov` is
+//! independent. The addresses on the left are the original positions:
+//!
+//! ```lir
+//! === before
+//!     block 0x0000
+//!       0x0000  EAX := imul EAX, ECX
+//!       0x0001  EAX := add EAX, EDX
+//!       0x0002  EBX := mov ESI
+//! === after
+//!     block 0x0000
+//!       0x0000  EAX := imul EAX, ECX
+//!       0x0002  EBX := mov ESI
+//!       0x0001  EAX := add EAX, EDX
+//! ```
+//!
+//! The `mov` now runs while the multiply finishes.
+//!
+//! From unit test `test_out_of_order_profile_fills_an_imul_dependency_gap` in
+//! `schedule_tests.rs` (P6 profile).
+//!
 //! # Runs
 //! Once per body, the machine phase after `loopslots` and before `jumps`
 //! (`flow::machine_with`), in every machine at every -O level. A body is

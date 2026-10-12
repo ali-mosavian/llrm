@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/tailrec.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/tailrec.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/tailrec.rs sha256:5e116714eabcd36a72b7acba3bbeda068e1c8dda051e85144004624bb7362435 -->
+<!-- src: crates/opt/llrm-transforms/src/tailrec.rs sha256:2bb6a05df52332a34720fb0303222596eb65104262b04df911e4c42c815f0a01 -->
 
 # tailrec
 
@@ -52,6 +52,59 @@ spare; otherwise in any register (`profit::registers`, [`crate::spill`](spill.md
 Spilled, the loop costs the stores and reloads the pushed arguments were.
 A target that prices no registers always passes. `LLRM_DEBUG=tailrec`
 prints the carried count and the room.
+
+## Example
+Before:
+```mir
+define ... @pipeline.body(i16 %0, i16 %1) ... {
+b1:
+  %2 = icmp eq i16 %0, 0
+  br i1 %2, label %b3, label %b2
+
+b2:
+  %3 = add nsw i16 %1, %0
+  %4 = sub nsw i16 %0, 1
+  %5 = call regparm3cc addrspace(1) i16 @"_sumto@3"(i16 %4, i16 %3)
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %6 = phi i16 [ %5, %b2 ], [ %1, %b3 ]
+  ret i16 %6
+}
+```
+After:
+```mir
+define ... @pipeline.body(i16 %0, i16 %1) ... {
+b1:
+  br label %tailrecurse
+
+tailrecurse:
+  %2 = phi i16 [ %0, %b1 ], [ %6, %b2 ]
+  %3 = phi i16 [ %1, %b1 ], [ %5, %b2 ]
+  %4 = icmp eq i16 %2, 0
+  br i1 %4, label %b3, label %b2
+
+b2:
+  %5 = add nsw i16 %3, %2
+  %6 = sub nsw i16 %2, 1
+  br label %tailrecurse
+
+b3:
+  br label %b4
+
+b4:
+  %7 = phi i16 [ %3, %b3 ]
+  ret i16 %7
+}
+```
+The self call is a branch to the new header `tailrecurse`; `%2` and `%3`
+carry `n` and the accumulated `x` round the loop.
+
+From `--dump` of `sumto` (`if (n == 0) return x; return sumto(n - 1, x +
+n);`) at -O2 -m16, stages `dead` and `tailrec`.
 
 ## Runs
 In the function pipeline after `gvn::EqualCalls`, so two equal calls are

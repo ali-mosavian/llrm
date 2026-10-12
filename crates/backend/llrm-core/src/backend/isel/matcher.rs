@@ -38,6 +38,10 @@
 //!   far loads, stores and casts, `getelementptr`, `setcc`, `br`, `ret`,
 //!   landing pads, scaled multiplies, float bit patterns.
 //!
+//! # Example
+//! No example: the runtime of the generated tables, with no output of its own.
+//! The example in `isel.rs` shows what it selects.
+//!
 //! # Used by
 //! `isel.rs` (`Selector::instruction` and `covered_by_pattern`) and the
 //! emitters generated into each target's selector.

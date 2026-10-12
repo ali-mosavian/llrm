@@ -1,10 +1,10 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/slots.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/slots.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/slots.rs sha256:f5f94876cc5616772f88727fb1e44fbc49ed979cd670178e17729532d5320de7 -->
+<!-- src: crates/backend/llrm-core/src/backend/slots.rs sha256:744d199c94ed1b2b677dac8ecfe0dbe297e58fc4b46dd5b8f9d69cd7d54e2397 -->
 
 # slots
 
-Frame slot sharing: two things share a slot when they are never live
-together.
+Lets two values share one frame slot when they are never live together, so
+a frame holds the most that is live at once, not the sum of all spills.
 
 ## How it works
 A slot (`Color`) is its home, the capacity in bytes of the largest holder,
@@ -27,6 +27,11 @@ gantt
 ```
 
 *Slots shared by intervals that do not overlap*
+
+## Example
+None: this is a helper that answers one question per call and has no output
+of its own. Its effect shows in the spill slots of the `spiller` and
+`ssaspill` examples.
 
 ## Used by
 - [`crate::backend::spiller`](spiller.md), which shares spill slots by the live range of

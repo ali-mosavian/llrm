@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/liveness.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/liveness.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/liveness.rs sha256:83cdca11ed110d25f42d4528f5044ad29055781252b5070a8e8f86832828726e -->
+<!-- src: crates/backend/llrm-core/src/backend/liveness.rs sha256:91f8f92a6392f86f6f75f5e49b57ab740c23ff4fc291eb2f53adcec26283a060 -->
 
 # liveness
 
@@ -38,6 +38,10 @@ was.
 
 SI, DI and the frame register are not return inputs: their incoming values
 live in the prologue's saves, so a dead final write to one stays removable.
+
+## Example
+No example: the lane sets it computes are printed by no dump, and the tests
+assert them without printing. See `lanes.rs` for the lane model.
 
 ## Used by
 `peephole` and the sub-passes it runs (`regthrash`, `copysink`,

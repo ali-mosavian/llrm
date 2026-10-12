@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:1c756ba614db8a3266508b8b41878b191ce01dcf0950b464089f300674c8ed3c -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:2b6d923be7fde2bbdd786d3c445202d031d3eebacc892140fd026259c6ccf98e -->
 
 # manager
 
@@ -93,6 +93,31 @@ module, target and program), carrying whichever cached results the caller
 holds. `Held` and `Ranges` bundle the cached results a pass passes on to a
 `Unit`, so the facts are the manager's and not a solve of the pass's own.
 `Bounded` is empty where `Outer::loop_intervals` is off (-O1).
+
+## Example
+A pass replaces the uses of `%x` by `%a`, an integer edit:
+
+```mir
+declare void @use(ptr)
+define i32 @f(ptr %p, i32 %a) {
+entry:
+  %x = add i32 %a, 1
+  %y = mul i32 %x, 3
+  %q = getelementptr i32, ptr %p, i32 1
+  call void @use(ptr %q)
+  ret i32 %y
+}
+```
+
+| change                       | `Pointers`, `CallEffects`, `Writes`, `ExposedFrames` |
+|------------------------------|------------------------------------------------------|
+| `%x` replaced by `%a`        | kept (`unaffected` is true)                          |
+| `%q`, the address, rewritten | `CallEffects::unaffected` is false: recomputed        |
+
+From unit test
+`an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not`
+in
+`manager_tests.rs`.
 
 ## Provides
 The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,

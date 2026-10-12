@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/spiller.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/spiller.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/spiller.rs sha256:563b7fcc489db49fab86061940604cf67fa38f24fb3da52840cfeecc3fce855b -->
+<!-- src: crates/backend/llrm-core/src/backend/spiller.rs sha256:31d2d42287f7fad3aadfb6fb9404bd316fb3977645b902c6aa73dd2a0e9e2227 -->
 
 # spiller
 
@@ -46,6 +46,54 @@ allocator to place.
 
 `siblings` finds the values copied to and from a spilled value that are
 cheaper sharing its slot; the allocator spills them together.
+
+## Example
+Eight values loaded from `p` are live across a call to `g`; the allocator
+has fewer registers than that. Before, the allocator's input:
+
+```lir
+=== Coalescer
+    block 0x0000
+      0x0009  v6 := mov [None v1@unplaced]  ; inserted
+      0x000b  v7 := mov [None v1@unplaced]  ; inserted
+      0x000d  v8 := mov [None v1@unplaced]  ; inserted
+      0x000f  v9 := mov [None v1@unplaced]  ; inserted
+      0x0010  call   ; inserted; requires v2@EAX; delivers v10@EAX; clobbers EAX
+      ; ...
+      0x0015  v15 := mov v6  ; inserted
+      0x0015  v15 := imul v15, v7  ; inserted
+      ; ...
+      0x0017  v17 := mov v8  ; inserted
+      0x0017  v17 := imul v17, v9  ; inserted
+```
+
+After:
+
+```lir
+=== RegAlloc
+    block 0x0000
+      0x0009  EBX := mov [None v1@EAX]  ; inserted
+      0x0009  [[bp-0xc]] := mov EBX  ; inserted
+      0x000b  ESI := mov [None v1@EAX]  ; inserted
+      0x000d  EBX := mov [None v1@EAX]  ; inserted
+      0x000d  [[bp-0x4]] := mov EBX  ; inserted
+      0x000f  EAX := mov [None v1@EAX]  ; inserted
+      0x000f  [[bp-0x8]] := mov EAX  ; inserted
+      0x0010  EAX := mov ECX  ; inserted
+      0x0010  call   ; inserted; requires v19@EAX; delivers v20@EAX; clobbers EAX
+      ; ...
+      0x0015  EBX := mov [[bp-0xc]]  ; inserted
+      0x0015  EBX := imul EBX, ESI  ; inserted
+      ; ...
+      0x0017  ECX := mov [[bp-0x4]]  ; inserted
+      0x0017  ECX := imul ECX, [[bp-0x8]]  ; inserted
+```
+
+`v6`, `v8` and `v9` got slots and a store after their definitions. `v6` and
+`v8` are reloaded before their uses; `v9`'s use reads its slot directly.
+
+From `ISEL_DUMP=1` of the function in the `ssaspill` example at -O2 -m32,
+allocator route.
 
 ## Runs
 Inside the register allocator ([`crate::backend::allocate`](allocate.md)): once for the

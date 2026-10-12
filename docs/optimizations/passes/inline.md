@@ -1,10 +1,12 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:2f8b2e86d659a21cd82d96d563faea08d3abc41d912a8bbb6b68e45cf7d231b5 -->
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:49efbf05a4cbef0134f7b32109bda97eb7d67df81008f58e16e057df5345a7dd -->
 
 # inline
 
 Whole-module MIR inlining: chooses the calls worth replacing by a copy of
-the callee's body, and makes the copies.
+the callee's body, and makes the copies. A call costs its own instructions
+and hides the callee from the caller's passes; the copy saves the first and
+exposes the second.
 
 ## How it works
 Inlining is a CFG operation: the caller's block is split at the call, the
@@ -87,6 +89,72 @@ stays under 450 operations and the call's block runs on more than a tenth of
 the function's calls;
 `peeled_into` gives a caller one copy of a recursive callee. `UnitSize`
 bounds the unit's growth as `inline-unit-growth` (40%).
+
+## Example
+Before:
+
+```mir
+define i16 @min(ptr %x, ptr %y) {
+b1:
+  %a = load i16, ptr %x
+  %b = load i16, ptr %y
+  %less = icmp slt i16 %a, %b
+  br i1 %less, label %b2, label %b3
+
+b2:
+  ret i16 %a
+
+b3:
+  ret i16 %b
+}
+
+define i16 @main(i16 %p, i16 %q) {
+b1:
+  %x = alloca i16
+  %y = alloca i16
+  store i16 %p, ptr %x
+  store i16 %q, ptr %y
+  %r = call i16 @min(ptr %x, ptr %y)
+  ret i16 %r
+}
+```
+
+After, `@min` unchanged:
+
+```mir
+define i16 @main(i16 %p, i16 %q) {
+b1:
+  %x = alloca i16
+  %y = alloca i16
+  store i16 %p, ptr %x
+  store i16 %q, ptr %y
+  br label %0
+
+0:
+  %a = load i16, ptr %x
+  %b = load i16, ptr %y
+  %less = icmp slt i16 %a, %b
+  br i1 %less, label %1, label %2
+
+1:
+  br label %3
+
+2:
+  br label %3
+
+3:
+  %4 = phi i16 [ %a, %1 ], [ %b, %2 ]
+  ret i16 %4
+}
+```
+
+The call is the callee's blocks with the formals bound to `%x` and `%y`; its
+two `ret`s branch to the block `3`, which takes the call's result as a phi
+of what they returned.
+
+From unit test
+`test_a_public_callee_reading_through_its_arguments_inlines_and_stays_defined`
+in `inline_tests.rs`.
 
 ## Runs
 Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has

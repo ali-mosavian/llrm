@@ -20,6 +20,32 @@
 //!                                      form  [eax*2+4]  (67h)
 //! ```
 //!
+//! # Example
+//! A copy and a shift that make `cx*2`, before and after the peephole's address
+//! chain. `; ...` marks lines left out; the `; inserted` notes are dropped.
+//!
+//! Before (`ParallelCopy`):
+//!
+//! ```lir
+//! 0x0000  CX := mov [None v2@SI]
+//! ; ...
+//! 0x0007  BX := mov CX
+//! 0x0007  BX := shl BX, 0x1
+//! ```
+//!
+//! After (`Peephole`):
+//!
+//! ```lir
+//! 0x0000  CX := mov [None v2@SI]
+//! ; ...
+//! 0x0007  BX := lea Address(addr=None, through=38, index=38, scale=1, offset=0, disp_width=0)
+//! ```
+//!
+//! The chain is one `lea` in the listing: `lea bx, [ecx+ecx]`.
+//!
+//! From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of a BASIC function that sums an
+//! INTEGER array (`Total%`).
+//!
 //! # Used by
 //! `exactaddress.rs`, which folds the chain into a memory operand, and the
 //! peephole's address chains (`peephole.rs`), which replace a chain by one

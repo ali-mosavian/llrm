@@ -41,6 +41,23 @@
 //! 486's early-out reads the operand's length, so the multiply is priced by
 //! the dividend's bits and not the magic's 31.
 //!
+//! # Example
+//! `Tenth& = x \ 10` on a LONG: the divide is a multiply by `0x66666667`, a
+//! shift by 2 and the sign. `x` is the loaded dword `v2`. `; inserted` notes
+//! are dropped.
+//!
+//! ```lir
+//! v2 := mov [None v1@unplaced]
+//! v5 := mov 0x66666667
+//! v6, v7 := imul v5, v2
+//! v8 := shr v7, 0x1f
+//! v9 := sar v7, 0x2
+//! v4 := add v9, v8
+//! ```
+//!
+//! From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of function `TENTH&`, stage
+//! `FarIndirectCalls`.
+//!
 //! # Used by
 //! `isel.rs` (`divide`), for each division by a constant.
 //!

@@ -29,6 +29,20 @@
 //! Results are kept in the profile, as a multiply is asked about again and
 //! again.
 //!
+//! # Example
+//! What the ranking answers on a 486 (`targets::tuned_for(M32, "486")`):
+//!
+//! ```text
+//! cheapest_chain(3, 5, 9)          one lea each: [x+x*2], [x+x*4], [x+x*8]
+//! cheapest_narrow_chain(-15)       shl 4 ; rsub        (x - x*16, no lea in a word)
+//! immediate_multiply, clocks       3 -> 13   10 -> 14   -3 -> 15   1103515245 -> 41
+//! ```
+//!
+//! From unit tests `test_a_factor_of_one_more_than_a_scale_is_one_lea`,
+//! `test_synthesized_chains_are_the_product_and_shorter_than_horner` and
+//! `test_a_multiply_by_a_wide_constant_is_priced_by_its_multiplier_on_a_486` in
+//! `arithmetic.rs`.
+//!
 //! # Used by
 //! `isel/matcher.rs` (which multiply to select), `division.rs` (a divisor's
 //! multiply chain), and the QB ABI (`abi/qb.rs`) for its multiply costs.

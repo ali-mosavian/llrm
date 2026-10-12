@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/memoryssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memoryssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/memoryssa.rs sha256:3592d038ba3c654cb6e1dd33f55e7c8207e0e83267c344b85ecf87f4ed9f6736 -->
+<!-- src: crates/opt/llrm-analysis/src/memoryssa.rs sha256:72641f568162d4684d61e22a7605202b544c2d44959a4c9d5f0cf54caaa2a7fe -->
 
 # memoryssa
 
@@ -65,6 +65,35 @@ dominance and equal addresses.
 Predicates shared with the passes: `changes`, `spares`, `covers`/`covered`
 (outer references certainly hold every byte of the inner), `placed`,
 `same_bytes`, `byte_keys`, and `Writers`, which indexes writes by object.
+
+## Example
+A diamond whose arms store to the same cell of `@g` and whose join loads it:
+
+```mir
+define i16 @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 1, ptr getelementptr (i8, ptr @g, i16 32)
+  br label %b3
+
+b2:
+  store i16 2, ptr getelementptr (i8, ptr @g, i16 32)
+  br label %b3
+
+b3:
+  %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+  ret i16 %x
+}
+```
+
+| access      | kind  | incoming or defining                           |
+|-------------|-------|------------------------------------------------|
+| `b3` entry  | `Phi` | (`b1`, the `b1` store), (`b2`, the `b2` store) |
+| `%x = load` | `Use` | the `b3` `Phi`                                 |
+
+From unit test `test_a_join_gets_one_memory_phi` in `memoryssa_tests.rs`.
 
 ## Provides
 `Accesses` (analysis `accesses`), `MemorySSA` via `built`, `Kind`, `Access`,

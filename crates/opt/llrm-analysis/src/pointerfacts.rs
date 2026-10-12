@@ -1,5 +1,5 @@
-//! Constant byte offsets between pointer values, and disjointness of two
-//! accesses that share a base.
+//! Finds constant byte offsets between pointer values, and so whether two
+//! accesses off one base overlap, without any alias reasoning.
 //!
 //! # How it works
 //! `Offsets::relative(pointer)` walks `getelementptr inbounds` chains whose
@@ -33,6 +33,33 @@
 //!
 //! Facts are read from the current SSA on each call, not stored on operands a
 //! later transformation could retarget.
+//!
+//! # Example
+//! ```mir
+//! target datalayout = "e-p:16:16-p1:32:16:16:16"
+//!
+//! define void @f(ptr %p, i16 %i) {
+//! b:
+//!   %a = getelementptr inbounds i8, ptr %p, i16 2
+//!   %b = getelementptr inbounds i16, ptr %a, i16 1
+//!   %c = getelementptr i8, ptr %p, i16 4
+//!   %d = getelementptr inbounds i8, ptr %p, i16 %i
+//!   %e = getelementptr inbounds [2 x i16], ptr %p, i16 0, i16 2
+//!   ret void
+//! }
+//! ```
+//!
+//! | query                                       | answer    |
+//! |---------------------------------------------|-----------|
+//! | `relative(%b)`                              | (`%p`, 4) |
+//! | `relative(%c)`, not `inbounds`              | (`%c`, 0) |
+//! | `relative(%d)`, variable index              | (`%d`, 0) |
+//! | `disjoint` of `%a` and `%b`, 2 bytes each   | true      |
+//! | `disjoint` of `%a`, 4 bytes, and `%b`, 2    | false     |
+//! | `same_bytes` of `%b` and `%e`, 2 bytes each | true      |
+//!
+//! From unit test `offsets_follow_constant_inbounds_steps_only` in
+//! `pointerfacts.rs`.
 //!
 //! # Provides
 //! `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`],

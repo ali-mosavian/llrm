@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/sliceset.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/sliceset.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/sliceset.rs sha256:276d2c86e553196a42e6f6bf96428480668252e458912f7b31d559400ac944fa -->
+<!-- src: crates/opt/llrm-analysis/src/sliceset.rs sha256:a6fef2ae97240ade2c19754fb6410990d837b90c79546b1f301a7f553d38bcce -->
 
 # sliceset
 
 An ordered set of memory slices that holds most of itself as a run shared
-with other sets.
+with other sets, so the callback effects every call summary repeats are
+built, compared and listed once.
 
 ## How it works
 A function that may call back into the module (an address-taken function or
@@ -45,6 +46,12 @@ own wholes and parts disagree or the set's own wholes cover a part of it.
 `mapped` rewrites `own` and keeps the run, so the map must not change what
 the run holds. Equality compares by `Rc::ptr_eq` and `own` when the runs are
 the same.
+
+## Example
+None: this is a container, with no MIR input and no printed output. Its
+test, `a_set_with_a_shared_run_is_the_union_of_it_and_its_own` in
+`sliceset.rs`, checks a `SliceSet` holding a shared run against a `BTreeSet`
+of the same slices.
 
 ## Provides
 `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call

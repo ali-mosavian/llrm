@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/layout.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/layout.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/layout.rs sha256:c9bed141200db01432c914b2a5b51f4f9e728eae849d82e25d8111f5c7756776 -->
+<!-- src: crates/backend/llrm-core/src/backend/layout.rs sha256:1d3067c119c329926da391ae09a43dc5d89591e71a4368df2eb5101689e4c3d9 -->
 
 # layout
 
@@ -11,6 +11,10 @@ when it is false (`je`/`jne`, `jb`/`jae`, and the aliases of each).
 `_OPPOSITE` is the table in both directions. `jcxz` and `loop*` are absent
 on purpose: they have no inverse to name, so a block ending in one keeps its
 jump.
+
+## Example
+No example: a table of condition names. See `jumps.rs` for the inversions it
+serves.
 
 ## Used by
 `jumps`, to invert a branch when it makes the other successor the

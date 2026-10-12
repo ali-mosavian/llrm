@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/inline_asm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/inline_asm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/inline_asm.rs sha256:2f4ddc81fad6b6b78a0866a17345f58860205dcafb575b1aed62a8233ee10ed3 -->
+<!-- src: crates/backend/llrm-core/src/backend/inline_asm.rs sha256:0bb3a42f2ad16f9169e90ec1774f7ef07192bf5340b0765a1729070d9546464e -->
 
 # inline_asm
 
@@ -22,6 +22,11 @@ runtime routine's contract names:
   its root `Reg` and the bits of the view (`eax` is `(Ax, 32)`, `al` is
   `(Ax, 8)`); the names are x86's whatever the target.
 - `machine` is the inverse: the machine register for a root and a width.
+
+## Example
+No honest example: the module is a table of register names, and the
+assembler that turns an inline block into bytes is `llrm_x86::asm`. Read its
+tests for inputs and bytes.
 
 ## Used by
 `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`).

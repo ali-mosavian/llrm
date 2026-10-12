@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lcssamerges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssamerges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lcssamerges.rs sha256:02c2257d90280c4b456aba050d013f50ce124260d7f29c2751e6ece622e2bd70 -->
+<!-- src: crates/opt/llrm-transforms/src/lcssamerges.rs sha256:bea0caf156545fb93484e7eaa6a32be4629b5f43fc82c69c69991eee40d21992 -->
 
 # lcssamerges
 
@@ -60,6 +60,54 @@ flowchart TB
 
 Everything is resolved to a supplier before any phi is created, so a
 refused merge leaves the function untouched. Phi names take `.lcssa`.
+
+## Example
+A loop with two exits, `b3` from the header and `b4` from the latch, that
+join in `b5`, where `%carried` is read. Before:
+
+```mir
+; ... b0, then:
+b1:
+  %carried = phi i16 [ %seed, %b0 ], [ %stepped, %b2 ]
+  %more = icmp ult i16 %carried, %n
+  br i1 %more, label %b2, label %b3
+
+b2:
+  %stepped = add i16 %carried, 1
+  %stay = icmp ult i16 %stepped, %m
+  br i1 %stay, label %b1, label %b4
+
+b3:
+  br label %b5
+
+b4:
+  br label %b5
+
+b5:
+  %answer = add i16 %carried, 7
+  ret i16 %answer
+```
+
+After:
+
+```mir
+; ... b0 to b2 unchanged, then:
+b3:
+  %carried.lcssa = phi i16 [ %carried, %b1 ]
+  br label %b5
+
+b4:
+  %carried.lcssa1 = phi i16 [ %carried, %b2 ]
+  br label %b5
+
+b5:
+  %carried.lcssa2 = phi i16 [ %carried.lcssa, %b3 ], [ %carried.lcssa1, %b4 ]
+  %answer = add i16 %carried.lcssa2, 7
+  ret i16 %answer
+```
+
+From unit test `test_distinct_exits_merge_before_the_downstream_use` in
+`lcssamerges_tests.rs`.
 
 ## Runs
 Called from [`crate::lcssa`](lcssa.md) for each multi-exit loop, so wherever `lcssa`

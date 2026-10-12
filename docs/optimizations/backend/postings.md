@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postings.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postings.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postings.rs sha256:f2afca75e51e773e8e7aa240d7f435e6728e193d40d93af504f9911b2e59bfb7 -->
+<!-- src: crates/backend/llrm-core/src/backend/postings.rs sha256:a05c2172d0a8a94e59074bfae7d1e3727734cc0ff7cb01c8d0223daef7edf358 -->
 
 # postings
 
@@ -39,6 +39,9 @@ ones' put in, so the cost is the block's entries and not a hash insert each.
 equal ones worked out whole. `redone()` counts the blocks worked again, for
 a test that a rewrite redoes only the blocks it changed.
 
+## Example
+None: the index is plumbing that changes no instruction, so there is no LIR
+to show before and after. Read `Postings::of` for what it holds.
 ## Used by
 [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md),
 [`crate::backend::splitkit`](splitkit.md), [`crate::backend::spiller`](spiller.md) and

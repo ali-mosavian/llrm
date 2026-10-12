@@ -1,5 +1,6 @@
-//! What each register holds, by where: LLVM's `LiveIntervalUnion` and the
-//! `LiveRegMatrix` over it.
+//! Answers which values already hold a register where an interval lies, so the
+//! allocator can test an assignment without visiting every holder. LLVM's
+//! `LiveIntervalUnion` and the `LiveRegMatrix` over it.
 //!
 //! # How it works
 //! The union keeps, per register, the values that hold it in the order they
@@ -30,6 +31,11 @@
 //! `refresh` drops the indexes after the intervals move; `refresh_among` moves
 //! only the changed values. `check_index` asserts every index against the
 //! pairwise answer.
+//!
+//! # Example
+//! No honest example: the index answers queries inside the allocator and prints
+//! no LIR. Read `tests` in this file, which assert every index against the
+//! pairwise answer (`check_index`).
 //!
 //! # Used by
 //! `allocate` and `splitkit`.

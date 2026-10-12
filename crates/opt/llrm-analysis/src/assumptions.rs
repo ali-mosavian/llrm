@@ -23,6 +23,30 @@
 //! `here` for the part of the block it is in. `above` returns early when no
 //! block assumes anything.
 //!
+//! # Example
+//! The assume in `entry` holds in every block `entry` dominates:
+//!
+//! ```mir
+//! declare void @llvm.assume(i1)
+//!
+//! define i16 @f(i16 %n, i16 %len, i1 %c) {
+//! entry:
+//!   %fits = icmp ult i16 %n, %len
+//!   call void @llvm.assume(i1 %fits)
+//!   br i1 %c, label %loop, label %done
+//! loop:
+//!   br label %done
+//! done:
+//!   ret i16 0
+//! }
+//! ```
+//!
+//! `here(entry)` is `[%fits]`, and `above` of `loop` and of `done` is
+//! `[%fits]`. `guards::holds` then proves `n <u len` in both blocks.
+//!
+//! From unit test `test_an_assume_proves_its_compare_below_its_block` in
+//! `guards_tests.rs`.
+//!
 //! # Provides
 //! The assumed conditions per block. Consumers: [`crate::guards`] turns them
 //! into `Guard`s, and [`crate::ranges`] narrows value ranges with them. The

@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopclone.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopclone.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:15a077f6aef5defe0155bc913bf8a02c6ae24c56ac74cd9412ce44d3461991d4 -->
+<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:8bf5a6bfa8cd25b56dd0303f0d6fe6921dfd4e446897a26ba47a357c32619607 -->
 
 # loopclone
 
-Loop iterations cloned as CFG: `peeled` copies whole iterations ahead of a
-loop, `chained` copies bodies inside it, keeping the loop and every exit.
+Clones loop iterations as CFG, for the passes that peel, unswitch or jam a
+loop: `peeled` copies whole iterations ahead of a loop, `chained` copies
+bodies inside it, keeping the loop and every exit.
 
 ## How it works
 This is the mechanism for peeling, unswitching and unroll-and-jam; it makes
@@ -77,6 +78,59 @@ header, by a conditional branch. The copies hold no header test: the
 original latch runs on into the first copy's header work, each copy's latch
 into the next, and the last into the header. That is right only where the
 trip count is a multiple of `copies + 1`, which the caller proves.
+
+## Example
+`peeled(.., 1)` on a loop whose body is a diamond with an early exit.
+Before:
+
+```mir
+define i16 @f(i16 %seed, i16 %n, i16 %limit) {
+b0:
+  br label %b1
+
+b1:
+  %carried = phi i16 [ %seed, %b0 ], [ %stepped, %b5 ]
+  %go = icmp ult i16 %carried, %n
+  br i1 %go, label %b2, label %b6
+; ... b2 to b5: the diamond, leaving from b3 to b6 or going on to b5
+b6:
+  %answer = phi i16 [ %carried, %b1 ], [ %left, %b3 ]
+  ret i16 %answer
+}
+```
+
+After:
+
+```mir
+define i16 @f(i16 %seed, i16 %n, i16 %limit) {
+b0:
+  br label %0
+
+b1:
+  %carried = phi i16 [ %stepped, %b5 ], [ %13, %11 ]
+  ; ...
+b6:
+  %answer = phi i16 [ %carried, %b1 ], [ %left, %b3 ], [ %1, %0 ], [ %7, %6 ]
+  ret i16 %answer
+
+0:
+  %1 = phi i16 [ %seed, %b0 ]
+  %2 = icmp ult i16 %1, %n
+  br i1 %2, label %3, label %b6
+; ... 3 to 9: the copy of b2 to b4
+11:
+  %12 = phi i16 [ %7, %6 ], [ %10, %9 ]
+  %13 = add i16 %12, 1
+  br label %b1
+}
+```
+
+`b0` enters the copy `0`, whose last block `11` enters the residual loop at
+`b1`; `b6` gains an arm for each of the copy's two exits.
+
+From the fixture of unit test
+`test_peeling_clones_diamond_and_early_exit_phis` in `loopclone_tests.rs`,
+peeled once where the test peels twice.
 
 ## Runs
 Called by [`crate::peel`](peel.md) and [`crate::unswitch`](unswitch.md) (`peeled`) and

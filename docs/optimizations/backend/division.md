@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/division.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/division.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/division.rs sha256:0186f19402e09535fa786505850332886262e37b29c0184f59544d89e48b8f51 -->
+<!-- src: crates/backend/llrm-core/src/backend/division.rs sha256:ccc4d84a3ad2709a9de9831152e4ce7582fb23dce4cff377ad048567946e03ab -->
 
 # division
 
@@ -45,6 +45,23 @@ division.
 The multiplier is placed in the accumulator and the dividend where the
 486's early-out reads the operand's length, so the multiply is priced by
 the dividend's bits and not the magic's 31.
+
+## Example
+`Tenth& = x \ 10` on a LONG: the divide is a multiply by `0x66666667`, a
+shift by 2 and the sign. `x` is the loaded dword `v2`. `; inserted` notes
+are dropped.
+
+```lir
+v2 := mov [None v1@unplaced]
+v5 := mov 0x66666667
+v6, v7 := imul v5, v2
+v8 := shr v7, 0x1f
+v9 := sar v7, 0x2
+v4 := add v9, v8
+```
+
+From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of function `TENTH&`, stage
+`FarIndirectCalls`.
 
 ## Used by
 `isel.rs` (`divide`), for each division by a constant.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/globaldce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globaldce.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/globaldce.rs sha256:1379a64cc01112b6b740663047eb46dd7fb083b3063f6f19d51c64291a63d584 -->
+<!-- src: crates/opt/llrm-transforms/src/globaldce.rs sha256:f9f4ee488d2983ca18bcaf7e34731bf38c57afced16e45a8f22a3e4db4dcbade -->
 
 # globaldce
 
@@ -37,6 +37,54 @@ flowchart LR
 A declaration is never deleted: naming one asks the linker for it.
 Deleting renumbers the module's globals, so the program analyses are
 invalidated.
+
+## Example
+Before, with `@entered` an entry point and `@kept` in `exports.kept`:
+
+```mir
+@table = internal global [2 x i16] [i16 1, i16 2]
+@unused = internal global i16 7
+@kept = internal global i16 9
+declare i16 @outside()
+
+define internal i16 @helper() {
+b:
+  %v = load i16, ptr @table
+  ret i16 %v
+}
+
+define internal i16 @orphan() {
+b:
+  %v = load i16, ptr @unused
+  %w = call i16 @outside()
+  ret i16 %v
+}
+
+; ... @entered, and @f which calls @helper
+```
+
+After:
+
+```mir
+@table = internal global [2 x i16] [i16 1, i16 2]
+@kept = internal global i16 9
+
+declare i16 @outside()
+
+define internal i16 @helper() {
+b:
+  %v = load i16, ptr @table
+  ret i16 %v
+}
+
+; ... @entered and @f unchanged
+```
+
+`@orphan` and the `@unused` it alone reads are deleted; the declaration
+stays.
+
+From unit test `test_what_nothing_live_names_is_deleted` in
+`globaldce_tests.rs`.
 
 ## Runs
 Once, as a program pass after the interprocedural step, so the bodies that

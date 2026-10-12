@@ -37,6 +37,10 @@
 //! address operands. The moved load takes `u`'s `at`, so a block's instructions
 //! stay in order by it.
 //!
+//! # Example
+//! None: no test fixture exercises `sunk` on a body whose LIR it prints, and
+//! the sketch above is not program output. Read `sunk` for the candidate test.
+//!
 //! # Runs
 //! A machine phase after `phielim` and before `floatfold`
 //! (`flow::machine_with`), in every machine, before values are placed.

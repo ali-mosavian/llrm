@@ -34,6 +34,9 @@
 //! equal ones worked out whole. `redone()` counts the blocks worked again, for
 //! a test that a rewrite redoes only the blocks it changed.
 //!
+//! # Example
+//! None: the index is plumbing that changes no instruction, so there is no LIR
+//! to show before and after. Read `Postings::of` for what it holds.
 //! # Used by
 //! [`crate::backend::allocate`], [`crate::backend::coalesce`],
 //! [`crate::backend::splitkit`], [`crate::backend::spiller`] and

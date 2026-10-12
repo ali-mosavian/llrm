@@ -39,6 +39,11 @@
 //! `written_in` hands the object to the writer crate of the target's format
 //! (OMF, ELF32/64, COFF32/64, Mach-O x86-64), or refuses a pair none writes.
 //!
+//! # Example
+//! No honest example: its output is the bytes and relocations of an object, not
+//! LIR. `-S` prints the items it encodes (see `masm`); `tests` in this file
+//! assert the bytes.
+//!
 //! # Runs
 //! Once per module, after `assemble` and `data layout` have produced the masm
 //! module, when a frontend writes the object (`llrm-c`'s `compile.rs` calls

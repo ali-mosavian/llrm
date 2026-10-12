@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinedce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinedce.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinedce.rs sha256:2f84a793e6cfdf31435abc18de0e930d3ac77f27cc515daf29e0bb5486926c76 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinedce.rs sha256:869f80799da60549467e9cf79c23fe47b07aa89d7aae0a6c24866ef85a6f3f92 -->
 
 # machinedce
 
@@ -31,6 +31,12 @@ trapping arithmetic and x87 work are never removed.
 A removed instruction becomes an anchor (`lir::anchor`) that keeps source
 ownership and emits no bytes. A sweep can expose more dead work, so sweeps
 repeat, at most once per instruction, until one changes nothing.
+
+## Example
+No honest example: it is one sub-pass of `peephole`, whose `ISEL_DUMP=1`
+stage shows all the sub-passes' work together, and its tests build bodies by
+hand and assert on the operations. A removed instruction prints in the dump
+as an empty line (`0x0003     ; inserted`).
 
 ## Runs
 The last body rewrite of `peephole` before `popped_arguments`, and

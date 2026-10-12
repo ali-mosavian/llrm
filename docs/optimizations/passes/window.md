@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/window.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/window.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/window.rs sha256:454817aecc6ccb00a329834420ffde722d97cc64c8e2b76b041d1001e83a7d8f -->
+<!-- src: crates/opt/llrm-transforms/src/window.rs sha256:e5317f2cfda097986b12fd35b80b9ea5130a896f31b8a699719b826a4bc20c07 -->
 
 # window
 
@@ -30,17 +30,27 @@ pointer.
 
 Otherwise an outer loop walks the windows:
 
-```text
-  preheader:  trips = <count>; (unless guarded, br trips==0 -> exit)
-  windows:    remaining = phi [trips, pre], [left, window.next]
-              here = min(remaining, most)
-              origin_k = window(huge_k)   ; each walk, normalized
-              left = remaining - here
-  header..latch:  far_k = phi [origin_k], [far_k + step]
-              window.trips counts down from `here`, tested after each trip
-  window.next: huge_k = far_k, less the accesses' lowest byte
-              br left != 0, windows, exit
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  pre["<b>preheader</b><br/><small>trips = count</small>"]:::mid
+  w["<b>windows</b><br/><small>here = min(remaining, most)<br/>left = remaining - here<br/>origin = window(huge)</small>"]:::opt
+  l["<b>loop</b><br/><small>far = phi [origin] [far + step]<br/>here trips</small>"]:::mid
+  n["<b>window.next</b><br/><small>huge = far, less the<br/>accesses#39; lowest byte<br/>br left != 0</small>"]:::mid
+  x["<b>exit</b>"]:::mid
+  pre --> w
+  pre -->|"no trips"| x
+  w --> l
+  l -->|"next trip"| l
+  l --> n
+  n -->|"left != 0"| w
+  n -->|"left = 0"| x
 ```
+
+*The windows: one far-pointer loop inside each window*
 
 Every other header phi is carried across windows by a phi in `windows`.
 The exit's phis read the outer latch; values the loop computes may be read
@@ -54,6 +64,70 @@ saving must exceed the windows (`trips / most`, rounded up) times the setup,
 where an unknown count is taken as its bound or `profit::UNKNOWN_TRIPS`.
 For size (-Os), the saving must exceed one setup. A loop that fails is
 left alone. The new branches carry `branch_weights`.
+
+## Example
+Before:
+```mir
+define ... @"_clear@3"(ptr addrspace(3) nocapture writeonly %0, i16 %1) ... {
+b1:
+  %2 = sub i16 0, %1
+  %3 = icmp ule i16 %1, 0
+  br i1 %3, label %b3, label %5
+
+b3:
+  ret void
+
+b4:
+  %lsr.iv2 = phi ptr addrspace(3) [ %lsr.iv.next, %b4 ], [ %0, %5 ]
+  %lsr.iv11 = phi i16 [ %lsr.iv.next1, %b4 ], [ %2, %5 ]
+  store i8 0, ptr addrspace(3) %lsr.iv2, !tbaa !7
+  %lsr.iv.next = getelementptr i8, ptr addrspace(3) %lsr.iv2, i32 1
+  %lsr.iv.next1 = add i16 %lsr.iv11, 1
+  %4 = icmp ne i16 %lsr.iv.next1, 0
+  br i1 %4, label %b4, label %6
+
+5:
+  br label %b4
+
+6:
+  br label %b3
+}
+```
+After:
+```mir
+define ... @"_clear@3"(ptr addrspace(3) nocapture writeonly %0, i16 %1) ... {
+  ; ...
+b4:
+  %window.trips = phi i16 [ %14, %windows ], [ %5, %b4 ]
+  %window = phi ptr addrspace(1) [ %4, %b4 ], [ %15, %windows ]
+  store i8 0, ptr addrspace(1) %window, !tbaa !7
+  %4 = getelementptr i8, ptr addrspace(1) %window, i16 1
+  %5 = sub i16 %window.trips, 1
+  %6 = icmp ne i16 %5, 0
+  br i1 %6, label %b4, label %window.next, !prof !24
+
+window.next:
+  %7 = addrspacecast ptr addrspace(1) %4 to ptr addrspace(3)
+  %8 = icmp ne i16 %16, 0
+  br i1 %8, label %windows, label %17, !prof !25
+  ; ...
+windows:
+  %remaining = phi i16 [ %12, %9 ], [ %16, %window.next ]
+  %carried = phi ptr addrspace(3) [ %0, %9 ], [ %7, %window.next ]
+  %13 = icmp ult i16 %remaining, -16
+  %14 = select i1 %13, i16 %remaining, i16 -16
+  %15 = call ptr addrspace(1) @llrm.ia16.window.p1.p3(ptr addrspace(3) %carried)
+  %16 = sub i16 %remaining, %14
+  br label %b4
+  ; ...
+```
+The huge pointer `%lsr.iv2` becomes a far pointer `%window` that steps
+inside `b4`. Each trip of `windows` normalizes the pointer with
+`llrm.ia16.window` and runs at most 65520 trips (`-16`) before the next
+window.
+
+From `--dump` of `clear` (`char huge *p; for (i = 0; i < n; i++) p[i] = 0;`)
+at -O2 -m16, stages `differences` and `window`.
 
 ## Runs
 Once per function, after LSR chose the pointers (the windows are made over

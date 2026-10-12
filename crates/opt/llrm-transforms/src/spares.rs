@@ -1,6 +1,7 @@
-//! What the optimizer proved of a fixed-cell load, kept for instruction
+//! Keeps what the optimizer proved of a fixed-cell load for instruction
 //! selection: each write that leaves the load's bytes as they were, as
-//! `!llrm.spares` on the load.
+//! `!llrm.spares` on the load, so the spiller can rematerialize the load past
+//! those writes.
 //!
 //! # How it works
 //! In each function with a loop, for each non-volatile load whose address is
@@ -20,6 +21,56 @@
 //! instructions' positions (`Body::spares`). The spiller reads them
 //! (`_keeps`): a spilled load is rematerialized past a write that spares its
 //! cell, where the LIR cannot place the write's address itself.
+//!
+//! # Example
+//! Before:
+//! ```mir
+//! define ... @"_f@3"(i16 %0, ptr nocapture writeonly %1) ... {
+//!   ; ...
+//! b4:
+//!   %8 = phi i16 [ %14, %b4 ], [ 0, %17 ]
+//!   %9 = phi i16 [ %15, %b4 ], [ 0, %17 ]
+//!   %lsr.iv1 = phi i16 [ %lsr.iv.next, %b4 ], [ %3, %17 ]
+//!   %10 = load i16, ptr @_g, !tbaa !9
+//!   %11 = getelementptr i8, ptr %4, i16 %lsr.iv1
+//!   store i16 %10, ptr %11, !tbaa !9
+//!   %12 = getelementptr i8, ptr %5, i16 %lsr.iv1
+//!   store i16 %9, ptr %12, !tbaa !9
+//!   %13 = load i16, ptr @_g, !tbaa !9
+//!   %14 = add nsw i16 %8, %13
+//!   %15 = add nsw i16 %9, 1
+//!   %lsr.iv.next = add i16 %lsr.iv1, 2
+//!   %16 = icmp ne i16 %lsr.iv.next, 0
+//!   br i1 %16, label %b4, label %18
+//!   ; ...
+//! ```
+//! After:
+//! ```mir
+//! define ... @"_f@3"(i16 %0, ptr nocapture writeonly %1) ... {
+//!   ; ...
+//! b4:
+//!   %8 = phi i16 [ %14, %b4 ], [ 0, %17 ]
+//!   %9 = phi i16 [ %15, %b4 ], [ 0, %17 ]
+//!   %lsr.iv1 = phi i16 [ %lsr.iv.next, %b4 ], [ %3, %17 ]
+//!   %10 = load i16, ptr @_g, !tbaa !9, !llrm.spares !24
+//!   %11 = getelementptr i8, ptr %4, i16 %lsr.iv1
+//!   store i16 %10, ptr %11, !tbaa !9
+//!   %12 = getelementptr i8, ptr %5, i16 %lsr.iv1
+//!   store i16 %9, ptr %12, !tbaa !9
+//!   %13 = load i16, ptr @_g, !tbaa !9, !llrm.spares !25
+//!   %14 = add nsw i16 %8, %13
+//!   %15 = add nsw i16 %9, 1
+//!   %lsr.iv.next = add i16 %lsr.iv1, 2
+//!   %16 = icmp ne i16 %lsr.iv.next, 0
+//!   br i1 %16, label %b4, label %18
+//!   ; ...
+//! ```
+//! Both loads of `@_g` name the one write that cannot touch it, the store into
+//! `a`; the store through the caller's pointer may write `@_g`, so it is not
+//! named.
+//!
+//! From `--dump` of `f` (`p[i] = g; a[i] = i; s += g;` in a loop, `p` a
+//! parameter) at -O2 -m16, stages `addresssink` and `spares`.
 //!
 //! # Runs
 //! Once, last in [`crate::pipeline`] with `homes`, so the instruction ids it

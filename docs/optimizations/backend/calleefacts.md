@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/calleefacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/calleefacts.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/calleefacts.rs sha256:c897e3b3efaf3c4e09a283acd46fda3fd8bdda37d1d3f9c5b54405c46e2b7301 -->
+<!-- src: crates/backend/llrm-core/src/backend/calleefacts.rs sha256:a3cf6ea2527b87730ec78f57c241b19d0f41116538cf37cf2464beb22f9e6d01 -->
 
 # calleefacts
 
@@ -33,6 +33,29 @@ functions in, callees before callers, so a caller finds its callee's fact
 when it is selected (`isel.rs` reads `written`). A function that is
 exported, has its address taken, is an interrupt handler or is in a cycle
 takes no part and keeps the full convention.
+
+## Example
+`bump` (`return x + 1`) is private and called twice from `main`. Its fact is
+one register:
+
+```text
+bump   writes eax      callers: clobbers EAX
+```
+
+The two kinds of call in `main`, after selection (`; inserted` notes
+dropped), the runtime's `N$BGRW` first, then `bump`:
+
+```lir
+call   requires v1@AX,v2@DX,v3@CX; delivers v4@EAX; clobbers EAX,ECX,EDX,EBX,ES,FS,GS
+call   requires v6@AX; delivers v7@EAX; clobbers EAX
+```
+
+`main` keeps a value in `bx` across both calls of `bump`: its listing has
+`mov bx, word ptr [si-4]` before the first and `cmp bx, 2` after the second.
+
+From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
+-fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+-march=i386` of that program.
 
 ## Runs
 Per function in `assemble.rs`: `record` after the function is machined.

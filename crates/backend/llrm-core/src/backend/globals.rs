@@ -31,6 +31,31 @@
 //! constant to its global and byte offset through constant GEPs; `absolute`
 //! resolves a constant that names no global (null, an integer made a pointer).
 //!
+//! # Example
+//! A C module on `-m16` with an array, a near pointer into it and a long.
+//!
+//! MIR:
+//!
+//! ```mir
+//! @_table = global [6 x i8] c"\01\00\02\00\03\00"
+//! @_second = global ptr getelementptr (i8, ptr @_table, i16 2)
+//! @_big = global [4 x i8] c"p\11\01\00"
+//! ```
+//!
+//! Data the masm listing prints for it. The pointer is a `dw` relocation
+//! against `_table`, plus the constant offset:
+//!
+//! ```asm
+//! _table label byte
+//! db 001h,000h,002h,000h,003h,000h
+//! _second label byte
+//!     dw _table+2
+//! _big label byte
+//! db 070h,011h,001h,000h
+//! ```
+//!
+//! From `-S` and `LLRM_MIR_STAGES` of that module at -O2.
+//!
 //! # Runs
 //! `global names` and the data loop in `assemble::assembled_by`, once per
 //! module after `nearcode`. Isel uses `space`, `target` and `absolute` for

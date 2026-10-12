@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unroll_jam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll_jam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:2cc6a69e36813877376345be2ba14a3781f20cb279ffbdd1a8b871276a37caf8 -->
+<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:09fe8a679816f4e92f80a7b83e742c263557dad8dd6669e27384876e8f2d3cbd -->
 
 # unroll_jam
 
@@ -51,6 +51,66 @@ an access whose address is not an affine function of the two counters
 over an identified object.
 
 `LLRM_DEBUG=unroll-jam` prints `jammed a nest` for each nest fused.
+
+## Example
+Before:
+```mir
+b3:
+  %j = phi i16 [ 0, %b2 ], [ %j.next, %b3.body ]
+  %more = icmp slt i16 %j, 8
+  br i1 %more, label %b3.body, label %b4
+
+b3.body:
+  %o = mul i16 %j, 2
+  %pp = getelementptr i8, ptr @p, i16 %o
+  %pv = getelementptr i8, ptr @v, i16 %o
+  %a = load i16, ptr %pp
+  %b = load i16, ptr %pv
+  %s = add i16 %a, %b
+  %s2 = add i16 %s, %bias
+  store i16 %s2, ptr %pp
+  %j.next = add i16 %j, 1
+  br label %b3
+
+b4:
+  %t.next = add i16 %t, 1
+  br label %b1
+```
+After:
+```mir
+b3:
+  %j = phi i16 [ 0, %b2 ], [ %j.next, %3 ]
+  %more = icmp slt i16 %j, 8
+  br i1 %more, label %b3.body, label %b4
+
+b3.body:
+  %o = mul i16 %j, 2
+  ; ...
+  %a = load i16, ptr %pp
+  %b = load i16, ptr %pv
+  ; ...
+  store i16 %s2, ptr %pp
+  %j.next = add i16 %j, 1
+  br label %3
+
+3:
+  %4 = icmp slt i16 %j, 8
+  %5 = mul i16 %j, 2
+  ; ...
+  %8 = load i16, ptr %6
+  %9 = load i16, ptr %7
+  ; ...
+  store i16 %11, ptr %6
+  %12 = add i16 %j, 1
+  br label %b3
+```
+Two sweeps of `p[j] += v[j] + bias` run in one pass over `j`: `b3.body` is
+the sweep of outer trip `t`, block `3` that of `t + 1`, and the outer loop
+now steps by two.
+
+From unit test `sweeps_of_the_same_cells_are_made_two_at_a_time` in
+`unroll_jam_tests.rs`, six sweeps over eight cells; the blocks of the nest
+are shown.
 
 ## Runs
 Once per body, after `unswitch`, so an invariant guard is out of the

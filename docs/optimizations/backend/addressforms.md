@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/addressforms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/addressforms.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/addressforms.rs sha256:87150661e8b245e76fb4c93bbb845297233c3b40163276ad462d00f230bad662 -->
+<!-- src: crates/backend/llrm-core/src/backend/addressforms.rs sha256:1a52870780360b57dc06f108a3847baa18f155f4997a23e14e5dfecb137ab158 -->
 
 # addressforms
 
@@ -30,6 +30,12 @@ error: the selector only marks values that are one of these.
 
 Definitions are rewritten from the last in each block to the first, so
 inserting a follower does not move one still waiting.
+
+## Example
+No honest example: no dump or test prints the body before and after
+`promote`. `isel_tests.rs`
+`test_a_non_negative_typed_index_is_scaled_in_the_67h_form` asserts the
+`movzx` it makes and the `[ebx+eax*2]` form that reads it.
 
 ## Used by
 `isel.rs`, after a function is selected, for the values the selector

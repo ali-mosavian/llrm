@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/globalsaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/globalsaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/globalsaa.rs sha256:7b9324eac96ff29831ee32e702aadffea2b6fe19ed4bb75b34215a5186b852f9 -->
+<!-- src: crates/opt/llrm-analysis/src/globalsaa.rs sha256:250f24a5ebc21c7f9660b1380587e73c3a2920335e5198f54a5aaae7740eefea -->
 
 # globalsaa
 
@@ -44,6 +44,32 @@ address of, comparing globals by the definition they resolve to. A global
 passed to a callee that is `noretain` is not named for this purpose. Each
 body's contribution is kept while its history is unchanged, and `covers`
 says whether a held result still claims no more than a fresh one would.
+
+## Example
+`@g` is internal and no body leaks its address, so a call that cannot name
+it keeps the 7:
+
+```mir
+@g = internal global i16 0
+
+declare void @outside(ptr) nocallback
+
+define i16 @f() {
+b0:
+  store i16 7, ptr @g
+  call void @outside(ptr null)
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+```
+
+`%r` is `Known { n: 7, width: 16 }`. Passing `@g` to `@outside`, storing
+`@g` anywhere, or holding it in another global's initializer makes `%r`
+unknown.
+
+From unit tests `a_private_global_is_kept_across_a_call_that_cannot_name_it`
+and `a_private_global_whose_address_leaves_is_forgotten` in
+`globalsaa_tests.rs`.
 
 ## Provides
 `Globals` (`tracked`, `unsummarized`, `entries`, `covers`), `analysis`,

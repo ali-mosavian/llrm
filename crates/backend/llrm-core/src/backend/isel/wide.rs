@@ -42,6 +42,35 @@
 //! drops the dead half the legalizer split off, together with the carry an
 //! `adc` or `sbb` read.
 //!
+//! # Example
+//! Before, from the unit test, a product and a quotient of `i32` values taken
+//! as `i64`:
+//!
+//! ```mir
+//!   %2 = sext i32 %0 to i64
+//!   %3 = sext i32 %1 to i64
+//!   %4 = mul i64 %2, %3
+//!   %5 = ashr i64 %4, 16
+//!   ; ...
+//! ```
+//!
+//! After, the x86 listing of the same function:
+//!
+//! ```text
+//!   mov eax, dword ptr [bp+6]
+//!   mov ebx, dword ptr [bp+10]
+//!   imul ebx
+//!   mov ecx, eax
+//!   shrd ecx, edx, 16
+//!   ; ...
+//! ```
+//!
+//! Both factors are sign-extended `i32`, so the product is one `imul` that
+//! leaves its halves in `edx:eax`.
+//!
+//! From unit test `test_a_fixed_product_and_quotient_take_dword_pairs` in
+//! `isel_tests.rs`.
+//!
 //! # Runs
 //! During `Selector::body`, from the `wide_*` patterns and hooks, for each
 //! `i64` instruction; `unread_halves_dropped` once after the blocks are made.

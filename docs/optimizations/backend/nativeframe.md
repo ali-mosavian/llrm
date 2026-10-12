@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/nativeframe.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/nativeframe.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/nativeframe.rs sha256:c49f239b378bba86b526bcc96bbeca72276505f5ba05caf22a1d102a3fc3cda6 -->
+<!-- src: crates/backend/llrm-core/src/backend/nativeframe.rs sha256:34e822f899afe8f0d5020ee594f8b49ea342c2745520959ddaa942eb71cf5e1a -->
 
 # nativeframe
 
@@ -32,6 +32,10 @@ A plan changes the other frame phases:
 No caller builds a plan: `assemble` passes none to `frame::of`, so
 `Frame::native` is always `None` in the compiler and the paths above are
 not taken.
+
+## Example
+No honest example: no caller builds a plan, so no LIR is ever shaped by it.
+Read `frame::of` for where a plan would enter.
 
 ## Used by
 `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and

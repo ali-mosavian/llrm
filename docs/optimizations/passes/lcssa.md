@@ -1,9 +1,10 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lcssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:920c7cda5fac3f227c99e4d4cddaaf7eccf5bf092b3200af236472723b8f9297 -->
+<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:f1b1184f03dfe7164c624e87b1fe2cdddf411a8a755748c8c9b0b12efbbb19c4 -->
 
 # lcssa
 
-Put every natural loop in loop-closed SSA form.
+Puts every natural loop in loop-closed SSA form, so loop passes can change a
+loop without rewriting the readers of its values elsewhere.
 
 ## How it works
 A value defined in a loop and read outside it is read through a phi in the
@@ -23,19 +24,51 @@ definition of the enclosing loop. For one loop:
 - With several exit blocks, [`crate::lcssamerges`](lcssamerges.md) makes a phi at each and
   merges them where the exits' paths join.
 
-```text
- b1: %c = phi ..                    b1: %c = phi ..
-     br %more, b2, b3                   br %more, b2, b3
- b3: %a = add %c, 7        =>       b3: %c.lcssa = phi [ %c, %b1 ]
-                                        %a = add %c.lcssa, 7
-```
-
 First, a phi outside any loop exit whose inputs are all one value is
 replaced by that value: no loop closes there any more. The new phi is named
 after its value with `.lcssa`. The pass is idempotent.
 
 The helpers `arms`, `from_arms`, `operations`, `definitions`, `exit_phi` and
 `place_phi` read and build phis for many other loop passes.
+
+## Example
+Before:
+
+```mir
+define i16 @f(i16 %seed, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %carried = phi i16 [ %seed, %b0 ], [ %stepped, %b2 ]
+  %more = icmp ult i16 %carried, %n
+  br i1 %more, label %b2, label %b3
+
+b2:
+  %stepped = add i16 %carried, 1
+  br label %b1
+
+b3:
+  %answer = add i16 %carried, 7
+  ret i16 %answer
+}
+```
+
+After:
+
+```mir
+b3:
+  %carried.lcssa = phi i16 [ %carried, %b1 ]
+  %answer = add i16 %carried.lcssa, 7
+  ret i16 %answer
+; ... b0 to b2 unchanged
+```
+
+`%carried` is read in `b3`, outside the loop, so the exit block gets a phi
+of it and the reader reads the phi.
+
+From unit test `test_a_loop_value_used_after_the_exit_gets_an_exit_phi` in
+`lcssa_tests.rs`.
 
 ## Runs
 In every body's pipeline after `loopsimplify`, unless `lcssa` is turned off,

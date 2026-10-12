@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/prologue.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/prologue.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/prologue.rs sha256:002723e42a501a45d68fe08de01980a7c58dab677c4d37319a05f2cb3ec38357 -->
+<!-- src: crates/backend/llrm-core/src/backend/prologue.rs sha256:6025b8b92ff669cd05e62799e48930e4cb9ba60d5a2f312761fc86a915566c80 -->
 
 # prologue
 
@@ -38,6 +38,34 @@ runtime's exit (`B$CEND`, `B$CENP`), unless it is marked `noreturn`; or when
 the entry block is empty; or when an anchor was lost or a native plan is
 combined with a runtime entry. Where the body ends the program, `sp` is
 lowered and never put back.
+
+## Example
+The `procedure` fixture, a runtime-framed body (`call` at 0x0001 is
+`B$ENRA`, at 0x0002 `B$EXSA`), with one two-byte spill slot:
+
+```lir
+=== before
+  f: 4 instructions
+    block 0x0000
+      0x0000  v1 := mov 0x6
+      0x0001  call v1  ; requires v1@CX
+      0x0002  call
+      0x0003  retf
+=== after
+  f: 6 instructions
+    block 0x0000
+      0x0000  v1 := mov 0x6
+      0x0001  call v1  ; requires v1@CX
+      0x0002  SP := sub SP, 0x2  ; inserted; frame adjust
+      0x0002  SP := add SP, 0x2  ; inserted; frame adjust
+      0x0002  call
+      0x0003  retf
+```
+
+`sub sp, 2` follows the entry call and `add sp, 2` precedes the exit call.
+
+From unit test `test_spill_reservation_is_inside_the_runtime_frame` in
+`prologue.rs`.
 
 ## Runs
 A machine phase after `parcopy` and before `peephole`, in every machine

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/availableexternally.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/availableexternally.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/availableexternally.rs sha256:8bead6c322dac1ee4c0e9382e01c780faf82d7613a8a6cccfac8ff1943980771 -->
+<!-- src: crates/opt/llrm-transforms/src/availableexternally.rs sha256:849d5d148554fe32984349432dcb0862c2c9e482c83a5e532cf8eb9c9fae83e1 -->
 
 # availableexternally
 
@@ -21,6 +21,39 @@ analyses only if it changed something.
  define available_externally @rt(..) { .. }       declare @rt(..)
  call @rt(..)  (not inlined)               ==>    call @rt(..)
 ```
+
+## Example
+Before:
+
+```mir
+define available_externally i16 @rt(i16 %x) {
+b:
+  ret i16 %x
+}
+
+define i16 @f(i16 %x) {
+b:
+  %v = call i16 @rt(i16 %x)
+  ret i16 %v
+}
+```
+
+After:
+
+```mir
+declare i16 @rt(i16)
+
+define i16 @f(i16 %x) {
+b:
+  %v = call i16 @rt(i16 %x)
+  ret i16 %v
+}
+```
+
+The body is gone and the call stays a call of the runtime's routine.
+
+From unit test `a_body_held_to_inline_from_is_a_declaration_after` in
+`availableexternally_tests.rs`.
 
 ## Runs
 A program pass. At -O1 and above it runs after the interprocedural step and

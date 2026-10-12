@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/neighbours.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/neighbours.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/neighbours.rs sha256:a22b9a92e1f2f4fd4267445a2d84155fd66571b894c6bbc516ce30a3c4ac5be3 -->
+<!-- src: crates/backend/llrm-core/src/backend/neighbours.rs sha256:b657a1a19c4a19c5275b1f49be669c36848e4c329b2db664eaec84ffa7e29ec8 -->
 
 # neighbours
 
@@ -31,6 +31,10 @@ flowchart LR
 `join` adds a whole group at once: every value in a mask except one becomes
 a neighbour, a word at a time when the set is dense. Iteration is ascending
 in both forms.
+
+## Example
+No honest example: a set type inside the allocator's interference graph,
+with no LIR of its own. Read `tests` in this file.
 
 ## Used by
 `coalesce`, for its interference graph.

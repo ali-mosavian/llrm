@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/algebraic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/algebraic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:ff675402cdb4ebd45672b4972624058734c610bf79b5d5fea13604e1e40566c7 -->
+<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:05f0f594ccaa419b5aa8bd4ff67b577622c14dc487910d8584f944600159cb3f -->
 
 # algebraic
 
@@ -57,6 +57,34 @@ inner sum can be invariant and leave the loop:
 A mask whose operand advances by a constant each trip moves after its scale,
 `(x & m) * 2^k` as `(x * 2^k) & (m * 2^k)`, so the scale can fold into the
 loop's step.
+
+## Example
+Before:
+
+```mir
+define i16 @f(i16 %x, i16 %a) {
+b0:
+  %m = add i16 %x, %a
+  %r = add i16 %m, %a
+  ret i16 %r
+}
+```
+
+After:
+
+```mir
+define i16 @f(i16 %x, i16 %a) {
+b0:
+  %0 = shl i16 %a, 1
+  %1 = add i16 %x, %0
+  ret i16 %1
+}
+```
+
+A value added twice is added once, doubled.
+
+From unit test `test_a_value_added_twice_is_added_once_doubled` in
+`algebraic_tests.rs`.
 
 ## Runs
 `algebraic` runs once in each pass of the fixed point, after `indvars` and

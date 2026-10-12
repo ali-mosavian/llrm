@@ -43,6 +43,63 @@
 //!      %y = add %x, 1                           %y = add %x, 1
 //! ```
 //!
+//! # Example
+//! Before:
+//! ```mir
+//! define ... @pipeline.body() ... {
+//! b1:
+//!   %0 = alloca i16
+//!   %1 = alloca i16
+//!   store i16 0, ptr %1, !tbaa !9
+//!   br label %b2
+//!
+//! b2:
+//!   %2 = load i16, ptr %1, !tbaa !9
+//!   %3 = icmp slt i16 %2, 10
+//!   %4 = zext i1 %3 to i16
+//!   br i1 %3, label %b4, label %b3
+//!
+//! b3:
+//!   ret void
+//!
+//! b4:
+//!   store i16 %2, ptr @_n, !tbaa !9
+//!   %5 = add nsw i16 %2, 1
+//!   store i16 %5, ptr %1, !tbaa !9
+//!   br label %b2
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define ... @pipeline.body() ... {
+//! b1:
+//!   %0 = alloca i16
+//!   %1 = alloca i16
+//!   store i16 0, ptr %1, !tbaa !9
+//!   br label %b2
+//!
+//! b2:
+//!   %2 = phi i16 [ 0, %b1 ], [ %5, %b4 ]
+//!   %3 = icmp slt i16 %2, 10
+//!   %4 = zext i1 %3 to i16
+//!   br i1 %3, label %b4, label %b3
+//!
+//! b3:
+//!   ret void
+//!
+//! b4:
+//!   store i16 %2, ptr @_n, !tbaa !9
+//!   %5 = add nsw i16 %2, 1
+//!   store i16 %5, ptr %1, !tbaa !9
+//!   br label %b2
+//! }
+//! ```
+//! The load of the counter's slot `%1` is the phi `%2`. Every store stays;
+//! `dse` removes the ones nothing reads.
+//!
+//! From `--dump` of `ten` (`for (i = 0; i < 10; i++) n = i;`) at -O2 -m16,
+//! stages `gvn` and `promote` of the first body.
+//!
 //! # Runs
 //! In [`crate::pipeline`]'s per-body fixed point: `Sroa` at the boundaries of
 //! `Fixed` (start, after a peel, an unroll or a jam), before any pass asks

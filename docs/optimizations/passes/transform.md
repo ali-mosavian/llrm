@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/transform.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/transform.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:2ad2aa13c654f3a7b1c19c1a628f090fea8a853d524b04bc9e05453a360dd9a7 -->
+<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:a0be1a748abe3a3423d3cdb3fd0e43ca401e5dfbef6eb14392072ade5b1e6c28 -->
 
 # transform
 
@@ -47,6 +47,10 @@ defines a branch's condition. `_trivial_phis` resolves joins after an edge
 disappears: each phi keeps only the inputs of its remaining predecessors, a
 phi with one other value is that value, and a phi with the arms of an
 earlier phi in its block is that phi (LLVM's `EliminateDuplicatePHINodes`).
+
+## Example
+No honest example: these are helpers shared by passes, and none changes a
+function on its own. Read [`crate::gvn`](gvn.md) and its tests for them in use.
 
 ## Provides
 `subexpressions`, `equal_calls`, `forwarded` ([`crate::gvn`](gvn.md)); `live` and

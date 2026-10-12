@@ -21,6 +21,26 @@
 //! promotion are what leave these behind: a length every caller passes as 12,
 //! folded into the body, is still pushed at every call.
 //!
+//! # Example
+//! Before:
+//! ```mir
+//! define internal i16 @f(i16 %a, i16 %unused) {
+//! b0:
+//!   %r = add i16 %a, 1
+//!   ret i16 %r
+//! }
+//! define i16 @top(i16 %x) {
+//! b0:
+//!   %r = call i16 @f(i16 %x, i16 12)
+//!   ret i16 %r
+//! }
+//! ```
+//! After, as the test asserts: `@f` takes only `%a`, and `@top` holds
+//! `call i16 @f(i16 %x)`; the `12` is no longer pushed.
+//!
+//! From unit test `a_parameter_nothing_reads_is_not_passed` in
+//! `deadargs_tests.rs`.
+//!
 //! # Runs
 //! In the interprocedural step, after the callers' arguments have been
 //! propagated as constants and ranges, and before recursive inlining. Each

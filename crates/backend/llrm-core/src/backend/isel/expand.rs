@@ -19,6 +19,10 @@
 //! The split is the same for every target. The target maps each half to a form:
 //! x86's `add` then `adc`, from the `chain` lines of its `patterns.isel`.
 //!
+//! # Example
+//! No example: a pure function on widths. Its result shows in the `add` and
+//! `adc` of the example in `isel/wide.rs`.
+//!
 //! # Used by
 //! `isel/wide.rs` (`Selector::wide_halves`, `wide_chain`).
 

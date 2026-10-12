@@ -76,6 +76,66 @@
 //! (`LLRM_CHECK_SHAPE` compares them with a new shape). A function with an
 //! irreducible loop is left alone.
 //!
+//! # Example
+//! Before:
+//! ```mir
+//! define i16 @f(i1 %c, i16 %s, i16 %t) {
+//! b0:
+//!   br i1 %c, label %b5, label %b4
+//!
+//! b5:
+//!   br label %b1
+//!
+//! b4:
+//!   br label %b1
+//!
+//! b1:
+//!   %carried = phi i16 [ %s, %b5 ], [ %t, %b4 ], [ %stepped, %b2 ]
+//!   br i1 %c, label %b2, label %b3
+//!
+//! b2:
+//!   %stepped = add i16 %carried, 1
+//!   br label %b1
+//!
+//! b3:
+//!   ret i16 %carried
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define i16 @f(i1 %c, i16 %s, i16 %t) {
+//! b0:
+//!   br i1 %c, label %b5, label %b4
+//!
+//! b5:
+//!   br label %0
+//!
+//! b4:
+//!   br label %0
+//!
+//! b1:
+//!   %carried = phi i16 [ %stepped, %b2 ], [ %1, %0 ]
+//!   br i1 %c, label %b2, label %b3
+//!
+//! b2:
+//!   %stepped = add i16 %carried, 1
+//!   br label %b1
+//!
+//! b3:
+//!   ret i16 %carried
+//!
+//! 0:
+//!   %1 = phi i16 [ %s, %b5 ], [ %t, %b4 ]
+//!   br label %b1
+//! }
+//! ```
+//! `b1` was entered from `b5` and `b4`. Both now jump to the new preheader
+//! `%0`, whose phi holds the two seeds, so the header's phi has one arm from
+//! outside the loop.
+//!
+//! From unit test `test_grouping_preserves_each_phi_edge_value` in
+//! `loopsimplify_tests.rs`.
+//!
 //! # Runs
 //! In [`crate::pipeline`]'s per-body fixed point, after `tailrec` and before
 //! `lcssa`; again after the header copy of `-ftree-ch`, where it

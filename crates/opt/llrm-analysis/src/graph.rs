@@ -24,6 +24,9 @@
 //! `crates/backend/llrm-core/src/analysis/loops.rs`; both build on
 //! `llrm_support::graph`.
 //!
+//! # Example
+//! No honest example: this module only holds [`loops`]. Read the example there.
+//!
 //! # Provides
 //! The algorithms of [`loops`]. Consumers: [`crate::cfg`] (`Loop`, `Node`,
 //! `irreducible_under`) and the loop passes of `llrm-transforms`, which read

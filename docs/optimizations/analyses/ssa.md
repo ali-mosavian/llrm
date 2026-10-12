@@ -1,10 +1,10 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ssa.rs sha256:6afe4abbfa6817bfbed3bfd60199f89867fe92df9b2ce6b3a370895a7e469763 -->
+<!-- src: crates/opt/llrm-analysis/src/ssa.rs sha256:a52d2d8b0eb41d8f603eee9289e821b024a495c65a0d5b9cf9d6810d45747478 -->
 
 # ssa
 
-SSA helpers: use lists, dead-phi pruning, value substitution and an SSA
-updater.
+SSA helpers the transformations share: use lists, dead-phi pruning, value
+substitution and an updater that places the phis a new definition needs.
 
 ## How it works
 `use_index` maps each value to the non-phi instructions that read it, in
@@ -51,6 +51,32 @@ flowchart TB
 
 *Available A -> v1, B -> v2. Asking for D finds preds B and C and places D:
 %p = phi [v2, B], [v1', C]; C has one pred A and passes v1 up*
+
+## Example
+`pruned_phis` on two phis that only read each other:
+
+```mir
+define void @f(ptr %seed, i1 %c) {
+b0:
+  br label %b1
+
+b1:
+  %first = phi ptr [ %seed, %b0 ], [ %second, %b1 ]
+  %second = phi ptr [ %seed, %b0 ], [ %first, %b1 ]
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret void
+}
+```
+
+No root and no non-phi instruction reads either phi, so both are erased and
+the call returns true. If the body also held `call void @use(ptr %first)` or
+`%loaded = load i16, ptr %first`, or `%first` were a root, both phis stay.
+
+From unit test
+`test_unused_phi_cycles_are_pruned_but_real_dependencies_survive` in
+`ssa.rs`.
 
 ## Provides
 The helpers above. Consumers in llrm-transforms: `dead`, `promote`

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fpconvert.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fpconvert.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fpconvert.rs sha256:7ad0f13bef1afef3788a2159c831287aedf259183e891a0fc07212af981f8335 -->
+<!-- src: crates/backend/llrm-core/src/backend/fpconvert.rs sha256:f18187fcf9658c9fced7859fb71fa5462f14486f6ed569da714750a13c9e503b -->
 
 # fpconvert
 
@@ -27,6 +27,39 @@ gcc's `fixuns` expansion do the same: where `x < 2^63` the conversion is
 Uses of the old result are redirected to the `xor`. The selects are then
 lowered by `selects` as any other (a branch and phi on a 486, which has no
 conditional move), so select has one answer.
+
+## Example
+Before:
+
+```mir
+define i64 @f(double %d) {
+entry:
+  %u = fptoui double %d to i64
+  ret i64 %u
+}
+```
+
+After:
+
+```mir
+define i64 @f(double %d) {
+entry:
+  %0 = fcmp olt double %d, 0x43E0000000000000
+  %1 = select i1 %0, double 0.000000e+00, double 0x43E0000000000000
+  %2 = fsub double %d, %1
+  %3 = fptosi double %2 to i64
+  %4 = select i1 %0, i64 0, i64 -9223372036854775808
+  %5 = xor i64 %3, %4
+  ret i64 %5
+}
+```
+
+The `fptoui` is gone: below 2^63 the answer is the signed conversion, above
+it the signed conversion of `d - 2^63` with the top bit set by the `xor`.
+
+From unit test
+`test_a_float_to_unsigned_qword_is_signed_conversions_and_a_select` in
+this file, printed after `expanded`.
 
 ## Runs
 `mir fp to unsigned` in `driver::optimized`, after `ehprepare` and before

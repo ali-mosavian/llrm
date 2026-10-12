@@ -13,6 +13,11 @@
 //! `Raised` is the error of those two passes: an operand that cannot be lowered
 //! (`Unlowered`), a frame cell refused (`frame::Refused`), or a bad value.
 //!
+//! # Example
+//! No honest example: `boundary` is a predicate and `Raised` an error type, so
+//! neither rewrites LIR. The effect of a boundary is visible in the
+//! `floatassign` example, where the call ends the register stretch of `a`.
+//!
 //! # Used by
 //! `floatassign`, `floatalloc`, `pressuresink`.
 

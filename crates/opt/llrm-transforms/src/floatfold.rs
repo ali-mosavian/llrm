@@ -29,6 +29,36 @@
 //! a sum or product when both carry `reassoc`; the new flags are the
 //! intersection.
 //!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! @g = global float 0.0
+//!
+//! define i32 @f() {
+//! b0:
+//!   store float 1.440000e+02, ptr @g
+//!   %x = load float, ptr @g
+//!   %i = fptosi float %x to i32
+//!   ret i32 %i
+//! }
+//! ```
+//!
+//! After, with the dead load and conversion removed:
+//!
+//! ```mir
+//! define i32 @f() {
+//! b0:
+//!   store float 1.440000e+02, ptr @g
+//!   ret i32 144
+//! }
+//! ```
+//!
+//! The exact conversion of the stored 144.0 reads as 144.
+//!
+//! From unit test `test_an_exact_conversion_reads_as_its_number` in
+//! `floatfold_tests.rs`.
+//!
 //! # Runs
 //! Inside [`crate::fold`], every time fold runs, which is the pass list's
 //! second entry and after the header copy; there is no pass-list entry of its

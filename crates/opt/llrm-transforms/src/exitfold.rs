@@ -57,6 +57,36 @@
 //!
 //! Values are built before the loop by `expand`'s `Expander`.
 //!
+//! # Example
+//! Before, `entry` proves `n < len`:
+//!
+//! ```mir
+//! head:
+//!   %i = phi i16 [ 0, %entry ], [ %j, %body ]
+//!   %more = icmp ult i16 %i, %n
+//!   br i1 %more, label %check, label %done
+//!
+//! check:
+//!   %inside = icmp ult i16 %i, %len
+//!   br i1 %inside, label %body, label %done
+//! ; ...
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! check:
+//!   %inside = icmp ult i16 %i, %len
+//!   br i1 true, label %body, label %done
+//! ```
+//!
+//! The header leaves at `i == n`, before `i < len` can fail, so the check's
+//! exit never leaves and its branch is the constant `true`; `decide` then makes
+//! it a jump.
+//!
+//! From unit test `test_an_exit_the_guard_proves_later_never_leaves` in
+//! `exitfold_tests.rs`.
+//!
 //! # Runs
 //! Step 2 of [`crate::indvars`], so on whenever `indvars` is, in the fixed
 //! point and after the loop-header copy: not at -O0, and off with

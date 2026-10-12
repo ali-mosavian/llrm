@@ -10,6 +10,10 @@
 //! (`AX`, `BL`, ...) to the runtime registers they belong to, and adds the
 //! flags where the routine changes them.
 //!
+//! # Example
+//! No honest example: this builds a routine's contract and rewrites no LIR.
+//! Read `isel/wide.rs` for the instructions that name it.
+//!
 //! # Used by
 //! `isel/wide` (64-bit arithmetic helpers) and `isel/unwind`.
 

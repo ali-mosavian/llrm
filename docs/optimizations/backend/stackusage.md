@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/stackusage.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/stackusage.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/stackusage.rs sha256:9af67dc324dd65253635a0267df485ffccaac9ca73ea129c2f0cfefab984befa -->
+<!-- src: crates/backend/llrm-core/src/backend/stackusage.rs sha256:a127af24537ccf5e71969201a77491473f48cad1936dd87855a14a995b30848a -->
 
 # stackusage
 
@@ -45,6 +45,25 @@ within the runtime's red zone. `stack_to_add` is the bytes a frontend adds
 to the base stack the runtime links, so the deepest chain fits, or an error
 if it cannot fit a stack segment (`stack_limit`: the segment size less
 0x1000).
+
+## Example
+A program whose `main` calls `f` and `g`, `f` calls `h` and the undefined
+`ext`, and `g` calls `ext`:
+
+```text
+stack usage, bytes: procedure, its frame, the most it can reach
+_f@3  6  >= 6 (and _ext@3)
+_g@3  4  >= 4 (and _ext@3)
+_h@3  4  4
+_main  6  >= 10 (and _ext@3)
+```
+
+`_h@3` calls nothing, so its bound equals its frame. `ext` is not defined
+in the program, so every procedure that reaches it has only a lower bound,
+and the report names it.
+
+From `-fstack-usage` of a C program (`main` calls `f` and `g`; `f` calls
+`h` and `ext`; `g` calls `ext`) at -O2 -m16.
 
 ## Runs
 `elide_checks` is the `stack checks` step of assembly, once per module.

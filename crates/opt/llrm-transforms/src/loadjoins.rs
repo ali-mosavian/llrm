@@ -30,16 +30,54 @@
 //!   anywhere (`llrm_mir::memory::only_value`) and no load;
 //! - the pointer is defined above the edge.
 //!
-//! ```text
-//!  b0: br c, b1, b2                  b0: br c, b1, b2
-//!  b1: %y = load @g                  b1: %y = load @g
-//!      br b3                             br b3
-//!  b2: br d, b3, b4          =>      b2: br d, b5, b4
-//!  b3: %x = load @g                  b5: %n = load @g ; the edge's own
-//!      ret %x                            br b3
-//!                                    b3: %x = phi [%y, b1], [%n, b5]
-//!                                        ret %x
+//! # Example
+//! `@g + 32` is a cell stored in `b0`. The load in `b3` is reached along `b1`,
+//! which loads it, and along the edge from `b2`, which does not; with `insert`
+//! that edge gets a load of its own. Before:
+//!
+//! ```mir
+//! define i16 @f(i1 %c, i1 %d, i16 %v, i16 %s) {
+//! b0:
+//!   store i16 %v, ptr getelementptr (i8, ptr @g, i16 32)
+//!   br i1 %c, label %b1, label %b2
+//!
+//! b1:
+//!   %y = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+//!   br label %b3
+//!
+//! b2:
+//!   br i1 %d, label %b3, label %b4
+//!
+//! b3:
+//!   %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+//!   ret i16 %x
+//!
+//! b4:
+//!   ret i16 0
+//! }
 //! ```
+//!
+//! After:
+//!
+//! ```mir
+//! b2:
+//!   br i1 %d, label %0, label %b4
+//!
+//! b3:
+//!   %x1 = phi i16 [ %y, %b1 ], [ %1, %0 ]
+//!   ret i16 %x1
+//!
+//! 0:
+//!   %1 = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+//!   br label %b3
+//! ; ... b0, b1 and b4 unchanged
+//! ```
+//!
+//! `b2` also leads to `b4`, so its edge to `b3` is split and the new block `0`
+//! loads; `b4` reads nothing new.
+//!
+//! From unit test `test_missing_conditional_edge_gets_its_own_load_block` in
+//! `loadjoins_tests.rs`.
 //!
 //! # Runs
 //! Not a pass of the pipeline: [`crate::gvn`] calls [`reused`] after its

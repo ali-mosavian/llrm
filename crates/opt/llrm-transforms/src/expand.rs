@@ -26,6 +26,13 @@
 //! no pointer). `least` is the least of several sums as unsigned numbers, an
 //! `icmp ult` and a `select` per further sum.
 //!
+//! # Example
+//! None: `expand` is infrastructure and has no pass-level before and after of
+//! its own. Its `test_generated_recurrences_expand_to_what_the_loop_computes`
+//! in `expand_tests.rs` checks expanded values against the interpreter; the
+//! passes that use it show it at work, see [`crate::lsr`] and
+//! [`crate::exitfold`].
+//!
 //! # Used by
 //! [`crate::lsr`] and [`crate::exitfold`], while they rewrite a loop, and
 //! [`crate::counting`], which builds its seeds with it. Not a pass: it runs

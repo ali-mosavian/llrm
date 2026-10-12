@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/deadargs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadargs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/deadargs.rs sha256:9ff504ddd26456f4d343dc14f11b16b7669d2caae621266bc8ebb3ff04929e90 -->
+<!-- src: crates/opt/llrm-transforms/src/deadargs.rs sha256:5aa93685999a2c5ca093f5e6515699972cd2add080930253dd5903e4f027c8de -->
 
 # deadargs
 
@@ -25,6 +25,26 @@ Each dead parameter is removed from the function and the argument from every
 call, in the function itself and its callers. Constant propagation and
 promotion are what leave these behind: a length every caller passes as 12,
 folded into the body, is still pushed at every call.
+
+## Example
+Before:
+```mir
+define internal i16 @f(i16 %a, i16 %unused) {
+b0:
+  %r = add i16 %a, 1
+  ret i16 %r
+}
+define i16 @top(i16 %x) {
+b0:
+  %r = call i16 @f(i16 %x, i16 12)
+  ret i16 %r
+}
+```
+After, as the test asserts: `@f` takes only `%a`, and `@top` holds
+`call i16 @f(i16 %x)`; the `12` is no longer pushed.
+
+From unit test `a_parameter_nothing_reads_is_not_passed` in
+`deadargs_tests.rs`.
 
 ## Runs
 In the interprocedural step, after the callers' arguments have been

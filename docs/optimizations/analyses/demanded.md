@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/demanded.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/demanded.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/demanded.rs sha256:c15ed9eb52406fcf70e25f5e69a014d50312444e7b05dac2a5b59d7c7a358d9d -->
+<!-- src: crates/opt/llrm-analysis/src/demanded.rs sha256:aabbc99406d2f09e1579d1872b78e71700a249e377d29491ef9044588081972d -->
 
 # demanded
 
@@ -31,6 +31,11 @@ fixed point: demand only grows and is bounded by the width.
 
 Only integers of at most 128 bits are tracked (`u128` masks). A value that
 is absent from the map is not read at all.
+
+## Example
+No honest example: no test asks `demanded` for its map. The listing above
+shows the rule by hand; its only consumer is `algebraic` in
+`llrm-transforms`.
 
 ## Provides
 `demanded(context, function)`: a `ValueId -> u128` map. Cached as

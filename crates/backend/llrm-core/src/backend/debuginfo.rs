@@ -56,6 +56,20 @@
 //! The segments' line tables become `Info::lines`, and the code each
 //! segment holds becomes `Info::code`.
 //!
+//! # Example
+//! One place for a scope (`stable`): `k` was computed in `ax` and copied to
+//! `bx` for a call that clobbers `ax`. The last statement is 11.
+//!
+//! ```text
+//! range     places held
+//! [2, 6)    ax, bx
+//! [6, 12)   bx
+//! stable -> Some((2, bx))     the place every range holds, from the first range
+//! ```
+//!
+//! From unit test `the_place_a_scope_is_given_is_one_every_range_holds` in
+//! `debuginfo.rs`.
+//!
 //! # Runs
 //! `described` when a module is assembled (`assemble.rs`; `driver/basic.rs`
 //! for the BASIC path), `laid_out` when the object is built (`objbuild.rs`).

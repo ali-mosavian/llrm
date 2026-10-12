@@ -1,5 +1,6 @@
 //! What the machine has for the register allocator: operand needs, the segment
-//! registers, and the facts the allocator asks of each instruction.
+//! registers, and the facts the allocator asks of each instruction, so it can
+//! place operands without knowing x86.
 //!
 //! # How it works
 //! The module has two halves. The first describes where an operand may live.
@@ -27,6 +28,11 @@
 //! operands, the width `push` and `pop` carry a place at, whether an x87
 //! compare reaches the flags through the status word (`fnstsw`, `sahf`), and
 //! which operands are positions in the x87 stack, which no pass may rename.
+//!
+//! # Example
+//! No honest example: the module is tables and queries (`Need`, `order`,
+//! `reads`, `writes`, `Segments`) that change no LIR. Its tests in `target.rs`
+//! show each answer.
 //!
 //! # Used by
 //! [`crate::backend::allocate`], [`crate::backend::coalesce`],

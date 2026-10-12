@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/shrinkwrap.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/shrinkwrap.rs sha256:481429fe753f4917cd0f3e0114aee48c7886d1a6691c2b09007182ed0010b88d -->
+<!-- src: crates/backend/llrm-core/src/backend/shrinkwrap.rs sha256:14e4ac8f4cb4ef5c720d01770f5f0728e8a11fa52ed8b158634ecee800649132 -->
 
 # shrinkwrap
 
@@ -58,6 +58,39 @@ and is reached by two or more paths (at most `MAX_GROW` = 8 instructions) is
 copied for each way into it, when that raises `worth`, how much of the
 procedure is set up late, to at least `WORTH` (three pieces). The early path
 then returns through a copy that nothing was saved for.
+
+## Example
+The pass places pieces while masm builds the procedure, after LIR is
+final, so its result is in the assembly, not in a LIR dump. A function that
+returns `k` at once when `n` is 0 and otherwise loops over calls to `g`:
+
+```asm
+f_ proc near
+L0_0:
+    or eax, eax
+    je L0_13          ; early return: no push, no pop
+L0_2:
+    push ecx          ; set-up in the home block
+    push ebx
+    push esi
+    ; ... loop with `call g_`
+L0_14:
+    mov eax, edx
+    pop esi           ; taken back only on this return
+    pop ebx
+    pop ecx
+    ret
+L0_13:
+    mov eax, edx
+    ret
+f_ endp
+```
+
+The three pushes sit in `L0_2`, which the early return does not reach, and
+the early return leaves with a bare `ret`.
+
+From `-S` of a C function (`if (n == 0) return k;` then a loop calling `g`)
+at -O2 -m32; the comments are added.
 
 ## Runs
 `wrapped` runs when masm builds a procedure's items, for a procedure that

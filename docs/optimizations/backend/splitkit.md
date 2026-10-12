@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/splitkit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/splitkit.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:5e669699d83c9bef11717e2a515ddfffd1933dc4b7eda983ca4782b44b84215f -->
+<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:75d1c2f12c25ce90f666ac1fef99d96c2667fe5a6010363cc8f00a74df8a30d9 -->
 
 # splitkit
 
@@ -72,6 +72,11 @@ value.
 `loop_bases` is a separate use of the same editor: a spilled address operand
 (base, index or selector) used inside a natural loop and outside it is
 carved into the loop as a piece, so the loop reads it from a register once.
+
+## Example
+None: the tests build bodies in code and assert on structure, and a stage
+dump does not say which copy a split made. Read the figures above for the
+shape.
 
 ## Runs
 Inside the register allocator ([`crate::backend::allocate`](allocate.md)), at the split

@@ -63,6 +63,54 @@
 //! jump is bypassed, so the jump is not taken on every pass. The peephole calls
 //! it first.
 //!
+//! # Example
+//! A loop carrying three values has three phis at its head:
+//!
+//! Before:
+//!
+//! ```lir
+//! block 0x0000
+//!   0x0000  v2 := mov 0x1  ; inserted
+//!   0x0000  v3 := mov 0x0  ; inserted
+//!   0x0000  jmp   ; inserted
+//! block 0x0001
+//!   v5 := phi 0x0000:v2 0x0009:v4
+//!   v6 := phi 0x0000:v3 0x0009:v5
+//!   v8 := phi 0x0000:v1 0x0009:v7
+//!   ; ...
+//! block 0x0009
+//!   0x0009  v4 := add v6, v5  ; inserted
+//!   0x000a  jmp   ; inserted
+//! ```
+//!
+//! After:
+//!
+//! ```lir
+//! block 0x0000
+//!   0x0000  v2 := mov 0x1  ; inserted
+//!   0x0000  v3 := mov 0x0  ; inserted
+//!   0x0000  v5 := mov v2  ; inserted; parallel-copy 1
+//!   0x0000  v6 := mov v3  ; inserted; parallel-copy 1
+//!   0x0000  v8 := mov v1  ; inserted; parallel-copy 1
+//!   0x0000  jmp   ; inserted
+//! block 0x0001
+//!   ; ...
+//! block 0x0009
+//!   0x0009  v4 := add v6, v5  ; inserted
+//!   0x000a  v5 := mov v4  ; inserted; parallel-copy 2
+//!   0x000a  v6 := mov v5  ; inserted; parallel-copy 2
+//!   0x000a  v8 := mov v7  ; inserted; parallel-copy 2
+//!   0x000a  jmp   ; inserted
+//! ```
+//!
+//! Each phi became one copy at the end of each predecessor, one group per edge.
+//! The copies of group 2 read values (`v5`) that others write, which
+//! [`crate::backend::parcopy`] orders after allocation.
+//!
+//! From `ISEL_DUMP=1` of a C Fibonacci loop (`t = a + b; a = b; b = t;`)
+//! compiled with `llrm-c -O2 -m16`: the stage before `PhiElimination`, and
+//! `PhiElimination`.
+//!
 //! # Runs
 //! A machine phase after `ssaspill` (spiller route only) and before
 //! `pressuresink`, in every machine (`flow::machine_with`); `EdgePrices` come

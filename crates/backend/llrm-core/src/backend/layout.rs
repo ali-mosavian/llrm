@@ -7,6 +7,10 @@
 //! on purpose: they have no inverse to name, so a block ending in one keeps its
 //! jump.
 //!
+//! # Example
+//! No example: a table of condition names. See `jumps.rs` for the inversions it
+//! serves.
+//!
 //! # Used by
 //! `jumps`, to invert a branch when it makes the other successor the
 //! fall-through.

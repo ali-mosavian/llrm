@@ -27,6 +27,10 @@
 //! a neighbour, a word at a time when the set is dense. Iteration is ascending
 //! in both forms.
 //!
+//! # Example
+//! No honest example: a set type inside the allocator's interference graph,
+//! with no LIR of its own. Read `tests` in this file.
+//!
 //! # Used by
 //! `coalesce`, for its interference graph.
 

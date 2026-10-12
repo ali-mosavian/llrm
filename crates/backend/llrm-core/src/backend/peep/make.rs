@@ -19,6 +19,10 @@
 //! width where both name one value. Together they keep the value numbering
 //! of the fused instruction consistent for later phases.
 //!
+//! # Example
+//! None: the makers are helpers that build pieces of a rewrite, and only a
+//! whole rule gives LIR to show. See the `# Example` of [`super`] and of
+//! `crate::backend::peephole`.
 //! # Used by
 //! The code generated from `peephole.peep`, through [`super::walk`].
 

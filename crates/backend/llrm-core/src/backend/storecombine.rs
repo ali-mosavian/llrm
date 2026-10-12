@@ -17,6 +17,25 @@
 //! Anything else between the two ends the pair: a read, a call or an address
 //! that may differ. The low store's `disp` must be at most 0xfffc.
 //!
+//! # Example
+//! Two literal word stores to adjacent fixed cells, `x` and `x+2`, with an
+//! empty anchor between them:
+//!
+//! ```lir
+//! before:  mov word [x], -1           ; low
+//!          (anchor)
+//!          mov word [x+2], 2          ; high
+//! after:   mov dword [x], 0x2ffff
+//!          (anchor)
+//!          (anchor)
+//! ```
+//!
+//! The two words became one dword store, low word first, and the second store
+//! stayed as an anchor so the instruction spans are unchanged.
+//!
+//! From unit test `test_only_adjacent_unobserved_static_literals_are_packed` in
+//! `storecombine.rs`.
+//!
 //! # Runs
 //! A sub-pass of [`crate::backend::peephole`], once per body, after
 //! `postrasink` and before `pushed_constants`. It has no level switch.

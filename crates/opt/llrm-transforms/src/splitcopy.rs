@@ -30,6 +30,52 @@
 //! split once that later copy has been, so a copy of a copy is the loads of
 //! the first source.
 //!
+//! # Example
+//! Before:
+//! ```mir
+//! define i16 @f(i16 %x) {
+//!   %from = alloca [8 x i8]
+//!   %to = alloca [8 x i8]
+//!   store i16 %x, ptr %from
+//!   %p = getelementptr i8, ptr %from, i16 4
+//!   store i16 7, ptr %p
+//!   call void @llvm.memcpy.p0.p0.i16(ptr %to, ptr %from, i16 8, i1 false)
+//!   %a = load i16, ptr %to
+//!   %q = getelementptr i8, ptr %to, i16 4
+//!   %b = load i16, ptr %q
+//!   %r = add i16 %a, %b
+//!   ret i16 %r
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define i16 @f(i16 %x) {
+//!   %from = alloca [8 x i8]
+//!   %to = alloca [8 x i8]
+//!   store i16 %x, ptr %from
+//!   %p = getelementptr i8, ptr %from, i16 4
+//!   store i16 7, ptr %p
+//!   %1 = load i16, ptr %from
+//!   store i16 %1, ptr %to
+//!   %2 = getelementptr i8, ptr %from, i16 4
+//!   %3 = load i16, ptr %2
+//!   %4 = getelementptr i8, ptr %to, i16 4
+//!   store i16 %3, ptr %4
+//!   %a = load i16, ptr %to
+//!   %q = getelementptr i8, ptr %to, i16 4
+//!   %b = load i16, ptr %q
+//!   %r = add i16 %a, %b
+//!   ret i16 %r
+//! }
+//! ```
+//! `%to` is read as two words, at 0 and 4, so the 8-byte `memcpy` is a load and
+//! a store of each; the bytes nothing reads are not copied. `Sroa` then
+//! promotes the words.
+//!
+//! From unit test
+//! `test_a_memcpy_into_a_private_local_is_the_loads_of_what_is_read` in
+//! `splitcopy_tests.rs`.
+//!
 //! # Runs
 //! Inside [`crate::promote`]'s `Sroa`, before it scalarizes the aggregate's
 //! leaves, so the new loads and stores are promoted by the same run. `Sroa`

@@ -1,5 +1,6 @@
 //! An ordered set of memory slices that holds most of itself as a run shared
-//! with other sets.
+//! with other sets, so the callback effects every call summary repeats are
+//! built, compared and listed once.
 //!
 //! # How it works
 //! A function that may call back into the module (an address-taken function or
@@ -40,6 +41,12 @@
 //! `mapped` rewrites `own` and keeps the run, so the map must not change what
 //! the run holds. Equality compares by `Rc::ptr_eq` and `own` when the runs are
 //! the same.
+//!
+//! # Example
+//! None: this is a container, with no MIR input and no printed output. Its
+//! test, `a_set_with_a_shared_run_is_the_union_of_it_and_its_own` in
+//! `sliceset.rs`, checks a `SliceSet` holding a shared run against a `BTreeSet`
+//! of the same slices.
 //!
 //! # Provides
 //! `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`] (call

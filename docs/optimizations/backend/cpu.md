@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/cpu.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/cpu.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/cpu.rs sha256:6895f41075b5d864a8f6a4fecd3195f5b1cbe3ef3d7c632ca993bf1013c43ddb -->
+<!-- src: crates/backend/llrm-core/src/backend/cpu.rs sha256:f886ce3f13cba5b9b2e7ec1979cb23b3c915e79aa7d7b1995d647839b7d571ed -->
 
 # cpu
 
@@ -56,6 +56,20 @@ or `shl r,1`), `Profile::clears_before_byte_load` (`xor r,r; mov rl,m`
 or `movzx`) and `Profile::pops_arguments` (pops against `add sp`).
 `MultiplyChains` caches the constant-multiply chains found under this
 profile's prices (GCC's `alg_hash`); a clone starts with an empty cache.
+
+## Example
+Facts the profiles state (from the target's timing tables):
+
+```text
+address_prefix_stall            P6 6, Core 3, 386 486 P5 K5 K6 K7 0
+67h form beats a spill (before_spill)   386 K5 K6 K7 Core
+call / size call on a 486       18 / 5
+```
+
+From unit tests
+`test_medium_model_profiles_distinguish_native_and_67h_addressing`,
+`test_secondary_address_form_is_ranked_against_reload_and_spill_work` and
+`test_the_lowered_target_forwards_its_size_costs` in `cpu.rs`.
 
 ## Used by
 The driver (`driver/mod.rs`, `Options::cpu`) builds it from the machine's

@@ -17,6 +17,39 @@
 //!  call @rt(..)  (not inlined)               ==>    call @rt(..)
 //! ```
 //!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! define available_externally i16 @rt(i16 %x) {
+//! b:
+//!   ret i16 %x
+//! }
+//!
+//! define i16 @f(i16 %x) {
+//! b:
+//!   %v = call i16 @rt(i16 %x)
+//!   ret i16 %v
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! declare i16 @rt(i16)
+//!
+//! define i16 @f(i16 %x) {
+//! b:
+//!   %v = call i16 @rt(i16 %x)
+//!   ret i16 %v
+//! }
+//! ```
+//!
+//! The body is gone and the call stays a call of the runtime's routine.
+//!
+//! From unit test `a_body_held_to_inline_from_is_a_declaration_after` in
+//! `availableexternally_tests.rs`.
+//!
 //! # Runs
 //! A program pass. At -O1 and above it runs after the interprocedural step and
 //! `globaldce`, before `calleepop`; at -O0 it is the only pass that runs.

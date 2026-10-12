@@ -52,6 +52,24 @@
 //! the target does not price are `None`. A load or store touches memory, so no
 //! operation carries a folded memory operand.
 //!
+//! # Example
+//! ```mir
+//! define double @f(double %x) {
+//! b0:
+//!   %y = frem double %x, 3.000000e+00
+//!   ret double %y
+//! }
+//! ```
+//! Facts:
+//! ```text
+//! profit::static(@f, OperationCosts::default()) = None
+//! ```
+//! The body has an instruction no price covers, so the answer is `None`, not a
+//! small number.
+//!
+//! From unit test `an_unpriced_instruction_makes_the_body_unpriced` in
+//! `profit_tests.rs`.
+//!
 //! # Provides
 //! `costs`, `registers`, `operation`, `static`, `priced`, `weighted`,
 //! `spill_forecast`, `pressure_adjusted`, `motion_price`, `advance`, `site`,

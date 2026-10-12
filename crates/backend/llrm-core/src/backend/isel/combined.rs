@@ -33,6 +33,26 @@
 //! Use counts are recomputed between steps, counting instruction reads, fixed
 //! register inputs and phi inputs.
 //!
+//! # Example
+//! The first three lines of the MIR below (a load, an add and a store of one
+//! cell) leave `isel` as separate selections and step 4 makes them one:
+//!
+//! ```mir
+//!   %3 = load i16, ptr addrspace(5) %1
+//!   %4 = add i16 %3, 3
+//!   store i16 %4, ptr addrspace(5) %1
+//! ```
+//!
+//! ```lir
+//!       0x0007  [[abs+0x0] v2@unplaced] := add [[abs+0x0] v2@unplaced], 0x3  ; inserted
+//! ```
+//!
+//! No dump prints the body before this step, so the result is shown against the
+//! MIR it came from.
+//!
+//! From `ISEL_DUMP=1` of a nib program (a struct method with a `while` loop,
+//! called from `main`) at `-m16 -O2`, stage `FarIndirectCalls`.
+//!
 //! # Runs
 //! Once per function, at the end of `Selector::body`, after unread wide halves
 //! are dropped and before address promotion (`widen`).

@@ -24,6 +24,11 @@
 //! `LLRM_CHECK_NEEDS` runs a skipped pass anyway and asserts it changed
 //! nothing.
 //!
+//! # Example
+//! No honest example: the bits steer which sub-pass of `peephole` runs and
+//! change no instruction. `LLRM_CHECK_NEEDS` checks a skipped pass against its
+//! bits.
+//!
 //! # Used by
 //! `peephole`.
 

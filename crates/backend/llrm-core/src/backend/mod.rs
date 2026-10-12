@@ -89,6 +89,30 @@
 //! (what a candidate costs) and `effects` (what an instruction reads and
 //! writes). `needs` lets the peephole skip a sub-pass with nothing to act on.
 //!
+//! # Example
+//! The LIR of one function after each machine phase on the allocator route, as
+//! `ISEL_DUMP=1` prints it (the instruction count follows the stage name):
+//!
+//! ```text
+//! === FarIndirectCalls   total: 18 instructions
+//! === PhiElimination     total: 27 instructions
+//! === PressureSink       total: 27 instructions
+//! === FloatFold          total: 27 instructions
+//! === FloatAssign        total: 27 instructions
+//! === FloatAlloc         total: 27 instructions
+//! === TwoAddress         total: 27 instructions
+//! === Coalescer          total: 19 instructions
+//! === RegAlloc           total: 21 instructions
+//! === ParallelCopy       total: 21 instructions
+//! === Peephole           total: 21 instructions
+//! === LoopSlots          total: 21 instructions
+//! === Scheduler          total: 21 instructions
+//! === ControlFlow        total: 25 instructions
+//! ```
+//!
+//! From `ISEL_DUMP=1` of a `total` over a `&[u16]` (`-fno-inline-functions`) at
+//! `-m16 -O2`.
+//!
 //! # Runs
 //! `assemble::assembled_by` runs it once per module. The gating of the two
 //! allocation routes (`-fallocation-routes`, `-fallocation-search`,

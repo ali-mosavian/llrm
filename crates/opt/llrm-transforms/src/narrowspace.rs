@@ -35,6 +35,52 @@
 //! near pointer. [`crate::inferspace`] then folds the accesses in the callee
 //! and the casts at each call, so the segment is neither pushed nor loaded.
 //!
+//! # Example
+//! Before:
+//! ```mir
+//! define ... @"_next@3"(ptr addrspace(1) nocapture readonly %0, i16 %1) ... {
+//! b1:
+//!   %2 = mul i16 %1, 2
+//!   %3 = getelementptr inbounds i8, ptr addrspace(1) %0, i16 %2
+//!   %4 = load i16, ptr addrspace(1) %3, !tbaa !9
+//!   ret i16 %4
+//! }
+//!
+//! define ... @"_walk@3"(i16 %0) ... {
+//! b1:
+//!   %1 = addrspacecast ptr @_table to ptr addrspace(1)
+//!   %2 = call regparm3cc i16 @"_next@3"(ptr addrspace(1) %1, i16 %0)
+//!   %3 = call regparm3cc i16 @"_next@3"(ptr addrspace(1) %1, i16 1)
+//!   %4 = add nsw i16 %2, %3
+//!   ret i16 %4
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define ... @"_next@3"(ptr nocapture readonly %0, i16 %1) ... {
+//! b1:
+//!   %2 = mul i16 %1, 2
+//!   %3 = getelementptr inbounds i8, ptr %0, i16 %2
+//!   %4 = load i16, ptr %3, !tbaa !9
+//!   ret i16 %4
+//! }
+//!
+//! define ... @"_walk@3"(i16 %0) ... {
+//! b1:
+//!   %1 = call regparm3cc i16 @"_next@3"(ptr @_table, i16 %0)
+//!   %2 = call regparm3cc i16 @"_next@3"(ptr @_table, i16 1)
+//!   %3 = add nsw i16 %1, %2
+//!   ret i16 %3
+//! }
+//! ```
+//! Both calls pass the near `@_table`, so `_next@3` takes a near pointer: the
+//! casts and the segment the far parameter carried are gone from the callee and
+//! from each call.
+//!
+//! From `--dump` of a program whose static `next(int far *p, int n)` is called
+//! twice with the near global `table`, at -O2 -m16 with inlining off, stages
+//! `pipeline` and `interprocedural`.
+//!
 //! # Runs
 //! In [`crate::interprocedural`] as stage `narrow.`, after argument promotion
 //! and before the constant-return rounds; the functions it changes go back

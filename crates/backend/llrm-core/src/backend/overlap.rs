@@ -44,6 +44,10 @@
 //! the stack, so stack spans are removed from the comparison. An unknown
 //! address or an end past 2^63 may overlap anything.
 //!
+//! # Example
+//! No honest example: a yes-or-no answer about two operands, with no LIR of its
+//! own. Read `tests` in this file for the operand pairs and the answers.
+//!
 //! # Used by
 //! `spiller`, `floatassign`, `storedhomes`.
 

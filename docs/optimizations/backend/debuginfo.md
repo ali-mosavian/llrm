@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/debuginfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/debuginfo.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/debuginfo.rs sha256:615fce739ac31d713623ecff96c176f7c6d8e6c6677f5af695bf7997ae2bf7f8 -->
+<!-- src: crates/backend/llrm-core/src/backend/debuginfo.rs sha256:a5a690d75d6115559d1398de61cde3f51b0389af884599bcfea1df9bd0a7e836 -->
 
 # debuginfo
 
@@ -60,6 +60,20 @@ variable sayable.
 
 The segments' line tables become `Info::lines`, and the code each
 segment holds becomes `Info::code`.
+
+## Example
+One place for a scope (`stable`): `k` was computed in `ax` and copied to
+`bx` for a call that clobbers `ax`. The last statement is 11.
+
+```text
+range     places held
+[2, 6)    ax, bx
+[6, 12)   bx
+stable -> Some((2, bx))     the place every range holds, from the first range
+```
+
+From unit test `the_place_a_scope_is_given_is_one_every_range_holds` in
+`debuginfo.rs`.
 
 ## Runs
 `described` when a module is assembled (`assemble.rs`; `driver/basic.rs`

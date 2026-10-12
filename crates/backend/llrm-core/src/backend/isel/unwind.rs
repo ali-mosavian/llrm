@@ -27,6 +27,24 @@
 //!
 //! *Landing-pad root block*
 //!
+//! # Example
+//! A QB program with `ON ERROR GOTO`. After selection the root block holds the
+//! never-taken branch, and the pad is a block that begins with the clobbering
+//! pseudo-call:
+//!
+//! ```lir
+//!     block 0x001d
+//!       0x001d  cmp SP, 0x0  ; inserted
+//!       0x001d  je   ; inserted
+//!     block 0x0000
+//!       ; ...
+//!     block 0x0007
+//!       0x0007  call   ; inserted; clobbers EAX,ECX,EDX,EBX,ES,DS,FS,GS
+//! ```
+//!
+//! From `ISEL_DUMP=1` of a QB program (`ON ERROR GOTO handler`, an `OPEN`, a
+//! `RESUME NEXT` handler) at `-O2`, stage `FarIndirectCalls`.
+//!
 //! # Runs
 //! During `Selector::body` (`pads`, `landing_pad`) and at its end (`rooted`);
 //! only in functions with a `landingpad`, which `ehprepare` has made enterable.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/exitsink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitsink.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/exitsink.rs sha256:9d52456193ebc0db3f5e96a1c5ab12a9e38ff2e3da680dd243fd39de52bd4e49 -->
+<!-- src: crates/opt/llrm-transforms/src/exitsink.rs sha256:c430d334d6d91a73dee8391fea50094b5ba7908e31b283896c316968b02ec2c1 -->
 
 # exitsink
 
@@ -28,6 +28,36 @@ The last trip's update of a pointer strength reduction carried is computed
 once, on the way out, and so is the `sext` of a narrow counter whose value
 `work += i` reads after the loop (mandel: `inc cx; movsx eax,cx; cmp cx,20h`
 every trip).
+
+## Example
+Before (`looped("add i16 %i, 40", "%i.next")`):
+
+```mir
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b1 ]
+  %i.next = add i16 %i, 1
+  %last = add i16 %i, 40
+  %more = icmp ult i16 %i.next, %n
+  br i1 %more, label %b1, label %b2
+
+b2:
+  %e = phi i16 [ %last, %b1 ]
+  ret i16 %e
+}
+```
+
+After, `b2` as the test asserts it (`%last` leaves `b1` once nothing reads
+it):
+
+```mir
+b2:
+  %i.lcssa = phi i16 [ %i, %b1 ]
+  %0 = add i16 %i.lcssa, 40
+  ret i16 %0
+}
+```
+
+From unit test `test_final_update_moves_to_the_exit` in `exitsink_tests.rs`.
 
 ## Runs
 Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point

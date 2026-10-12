@@ -33,6 +33,22 @@
 //! reaches (jump table targets) gets no row and takes the rule of the code
 //! before it.
 //!
+//! # Example
+//! `push ebp; mov ebp,esp; sub esp,8; nop; leave; ret` and the rows `rows`
+//! returns for it (`ebp` is saved at 8 below the CFA):
+//!
+//! ```text
+//! offset  bytes           rule from this offset
+//! 0       55              cfa = esp+4
+//! 1       89 E5           cfa = esp+8, ebp saved at cfa-8
+//! 3       83 EC 08        cfa = ebp+8, ebp saved at cfa-8     (also covers nop, leave)
+//! 8       C3              cfa = esp+4
+//! ```
+//!
+//! From unit test
+//! `a_frame_register_function_is_the_stack_pointer_then_the_frame_register_then_the_stack_pointer`
+//! in `cfi_tests.rs`.
+//!
 //! # Used by
 //! `debuginfo.rs`, under `-g`.
 //!

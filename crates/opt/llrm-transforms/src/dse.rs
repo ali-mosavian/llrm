@@ -28,6 +28,33 @@
 //! `promote` leaves every store when it replaces loads by values; this is the
 //! pass that removes those that are now read by nothing.
 //!
+//! # Example
+//! Before:
+//! ```mir
+//! define i16 @f(i16 %x) {
+//! b0:
+//!   %s = alloca [8 x i8]
+//!   call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 8, i1 false)
+//!   br label %b1
+//!
+//! b1:
+//!   %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+//!   %w = sext i16 %i to i32
+//!   store i32 %w, ptr %s
+//!   %next = add i16 %i, 1
+//!   %go = icmp slt i16 %next, %x
+//!   br i1 %go, label %b1, label %b2
+//!
+//! b2:
+//!   ret i16 %x
+//! }
+//! ```
+//! Nothing reads the slot, so the memset and the loop's store are dead; the
+//! test runs `dse` then `dead` and asserts that no `alloca`, `store` or `call
+//! void` is left.
+//!
+//! From unit test `test_a_zeroed_slot_nothing_reads_goes` in `dse_tests.rs`.
+//!
 //! # Runs
 //! Once per pass of the function fixed point, after `trivialunswitch` and
 //! `inferspace` and before `gvn`. Off with `-fno-tree-dse`; nothing runs at

@@ -40,6 +40,36 @@
 //! word) becomes `push` then `pop`, which needs no scratch register and keeps
 //! the flags.
 //!
+//! # Example
+//! `swaps` in a loop exchanges `a` and `b` each trip. The back edge's three
+//! copies are one group, and `AX`, `DX` form a cycle (`BX` only reads `CX`):
+//!
+//! Before:
+//!
+//! ```lir
+//! block 0x000b
+//!   0x000b  BX := mov CX  ; inserted; parallel-copy 2
+//!   0x000b  DX := mov AX  ; inserted; parallel-copy 2
+//!   0x000b  AX := mov DX  ; inserted; parallel-copy 2
+//!   0x000b  jmp   ; inserted
+//! ```
+//!
+//! After:
+//!
+//! ```lir
+//! block 0x000b
+//!   0x000b  BX := mov CX  ; inserted
+//!   0x000b  DX, AX := xchg AX, DX  ; inserted
+//!   0x000b     ; inserted
+//!   0x000b  jmp   ; inserted
+//! ```
+//!
+//! The ready copy is written first, the cycle becomes one `xchg`, and an anchor
+//! keeps the virtual definition the dropped copies stood for.
+//!
+//! From `ISEL_DUMP=1` of a C function whose loop does `t = a; a = b; b = t;`,
+//! compiled with `llrm-c -O2 -m16`: the `RegAlloc` and `ParallelCopy` stages.
+//!
 //! # Runs
 //! After `regalloc`, before `prologue` and the peephole, once per body, at
 //! every level. A body with no group is returned as it is. `parcopy` is the

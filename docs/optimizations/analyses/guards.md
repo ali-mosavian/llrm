@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/guards.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/guards.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/guards.rs sha256:2c4653f7b6009e6b9b260f756c121ba4528dfaaf0aa5b13d824fe681cf616ff5 -->
+<!-- src: crates/opt/llrm-analysis/src/guards.rs sha256:40d9fe2066a41ba27e21218f23c2645ccf3f8d128a09f436c8cf47085148204f -->
 
 # guards
 
@@ -49,6 +49,31 @@ the guards on each loop's followers of its counters (`start <= follower <=
 counter`) and the program's stated ranges, and ask
 [`crate::difference::proves`](difference.md); `Given` finds the guards of a block once for
 as many questions as are asked of it.
+
+## Example
+The edge into `loop` is the only way there, so its branch holds in `loop`
+but not in `done`:
+
+```mir
+define i16 @f(i16 %n, i16 %len) {
+entry:
+  %fits = icmp ult i16 %n, %len
+  br i1 %fits, label %loop, label %done
+loop:
+  br label %done
+done:
+  ret i16 0
+}
+```
+
+| Query | Result |
+| --- | --- |
+| `holds` in `loop`: `n <u len`, `n <=u len`, `len >u n` | true |
+| `holds` in `loop`: `len <u n` | false |
+| `guards(done)` | empty (the other edge reaches `done`) |
+
+From unit test `test_a_branch_proves_its_compare_where_its_edge_alone_leads`
+in `guards_tests.rs`.
 
 ## Provides
 Guard facts and the implication queries above. Consumers: `decide`,

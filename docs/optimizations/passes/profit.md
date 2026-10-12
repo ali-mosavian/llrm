@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/profit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/profit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:48a760aee9ea81e697690d721c0881c440e5984141e282ddc50941b766139b9e -->
+<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:8dbbd120f7101434b80e11bf2323d4865fd0ca38a3bef2a84f431d7e4b3545b2 -->
 
 # profit
 
@@ -56,6 +56,24 @@ bytes the cells, `fill + cells * fill_cell`; a `select` is a branch and a
 move, and has no cheaper form here; `frem`, `landingpad` and other kinds
 the target does not price are `None`. A load or store touches memory, so no
 operation carries a folded memory operand.
+
+## Example
+```mir
+define double @f(double %x) {
+b0:
+  %y = frem double %x, 3.000000e+00
+  ret double %y
+}
+```
+Facts:
+```text
+profit::static(@f, OperationCosts::default()) = None
+```
+The body has an instruction no price covers, so the answer is `None`, not a
+small number.
+
+From unit test `an_unpriced_instruction_makes_the_body_unpriced` in
+`profit_tests.rs`.
 
 ## Provides
 `costs`, `registers`, `operation`, `static`, `priced`, `weighted`,

@@ -51,6 +51,50 @@
 //! of the area instead (`moved_return`). `return_overhead_bytes` is the size of
 //! the leave sequence, which `jumps::duplicated_returns` needs.
 //!
+//! # Example
+//! The allocated LIR has no frame sequences. `listing` adds the `push` and
+//! `pop` of the callee-saved `si` the body uses, a `ret` after each leave, and
+//! the labels.
+//!
+//! Before:
+//! ```lir
+//! === ControlFlow
+//!   total: 25 instructions
+//!     block 0x0000
+//!       0x0000     ; inserted; delivers v19@AX
+//!       0x0000  SI := mov AX  ; inserted
+//!       ; ...
+//!       0x0003  cmp DX, 0x4  ; inserted
+//!       0x0003  jne   ; inserted
+//!       0x0003     ; inserted
+//!       0x0003     ; inserted
+//!       0x0003     ; inserted; requires v20@EAX
+//!     block 0x0009
+//!       0x000a  cmp DX, CX  ; inserted
+//!       0x000a  jae   ; inserted
+//!     ; ...
+//! ```
+//!
+//! After:
+//! ```asm
+//! _total proc near
+//!     push si
+//! L0_0:
+//!     mov si, ax
+//!     ; ...
+//!     cmp dx, 4
+//!     jne L0_9
+//!     pop si
+//!     ret
+//! L0_9:
+//!     cmp dx, cx
+//!     jae L0_18
+//!     ; ...
+//! ```
+//!
+//! From `ISEL_DUMP=1` and `-S` of a `total` over a `&[u16]`
+//! (`-fno-inline-functions`) at `-m16 -O2`.
+//!
 //! # Runs
 //! Once per procedure after the machine phases. `cleaned_returns` runs in
 //! `assemble::assembled_by` (`masm cleaned returns`), before the return

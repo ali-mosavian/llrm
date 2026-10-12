@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:1be3e73afb6cee1a808fc1b4acdc7a4181dbc3328fb7852f491114d063821e53 -->
+<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:54e90065cabd9f80e2691ce13184a8f064f3c2a4c456a7a41a01faa4f156b2e8 -->
 
 # interprocedural
 
-Facts that cross direct procedure boundaries: constant arguments, constant
-returns, purity and termination of calls.
+Finds what the two sides of a direct call make certain: constant arguments,
+constant returns, purity and termination. Intra-procedural passes cannot see
+across a call, so these facts are written into the bodies for them to fold.
 
 ## How it works
 A direct call is opaque to ordinary SCCP even when every return of the named
@@ -49,6 +50,35 @@ Noreturn. `noreturn_procedures` and `program_noreturn` are
 
 A body is exactly defined when its linkage says the definition here is the
 one that runs (LLVM's `hasExactDefinition`).
+
+## Example
+`constant_returns` over a module of two private bodies:
+
+```mir
+define internal i16 @yes() {
+b1:
+  ret i16 37
+}
+
+define internal i16 @no(i1 %c) {
+b1:
+  br i1 %c, label %b2, label %b3
+
+b2:
+  ret i16 37
+
+b3:
+  ret i16 38
+}
+```
+
+| body   | constant return                |
+|--------|--------------------------------|
+| `@yes` | 37                             |
+| `@no`  | none (its two `ret`s disagree) |
+
+From unit test `test_module_constant_returns_require_every_exit_to_agree` in
+`interprocedural_tests.rs`.
 
 ## Provides
 The functions above, and the re-export of `noreturn::terminal_sites`.

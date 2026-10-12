@@ -41,6 +41,25 @@
 //! if it cannot fit a stack segment (`stack_limit`: the segment size less
 //! 0x1000).
 //!
+//! # Example
+//! A program whose `main` calls `f` and `g`, `f` calls `h` and the undefined
+//! `ext`, and `g` calls `ext`:
+//!
+//! ```text
+//! stack usage, bytes: procedure, its frame, the most it can reach
+//! _f@3  6  >= 6 (and _ext@3)
+//! _g@3  4  >= 4 (and _ext@3)
+//! _h@3  4  4
+//! _main  6  >= 10 (and _ext@3)
+//! ```
+//!
+//! `_h@3` calls nothing, so its bound equals its frame. `ext` is not defined
+//! in the program, so every procedure that reaches it has only a lower bound,
+//! and the report names it.
+//!
+//! From `-fstack-usage` of a C program (`main` calls `f` and `g`; `f` calls
+//! `h` and `ext`; `g` calls `ext`) at -O2 -m16.
+//!
 //! # Runs
 //! `elide_checks` is the `stack checks` step of assembly, once per module.
 //! `Usage::of` runs after every module is assembled, only with `-fstack-usage`

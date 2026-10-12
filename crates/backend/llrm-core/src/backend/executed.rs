@@ -33,6 +33,34 @@
 //! [`pressure`] prints that forecast beside the reloads and stores the
 //! allocator left.
 //!
+//! # Example
+//! A QB `__main` that fills `S(0..100)` and sums it, two loops of 101 trips,
+//! on `-m16 -march=i386 -O2`. The allocator's output, as masm prints it:
+//!
+//! ```asm
+//! L0_2:
+//!     mov word ptr S%+202[ebx*2], ax
+//!     inc ax
+//!     inc ebx
+//!     jne L0_2
+//! ; ...
+//! L0_15:
+//!     add ax, word ptr S%+202[ebx*2]
+//!     inc ebx
+//!     jne L0_15
+//! ```
+//!
+//! `LLRM_DEBUG=cost` prints what `summary` makes of it:
+//!
+//! ```text
+//! [cost] __main executes 717 instructions, 206 memory operands; 0 reloads, ...; 202 branches, ...
+//! ```
+//!
+//! The loops weigh 4 and 3 instructions at 101 each, 3 + 3 set up before them
+//! and 4 after: 404 + 303 + 6 + 4 = 717. Each `jne` is one of the 202 branches.
+//!
+//! From `LLRM_DEBUG=cost` of that program.
+//!
 //! # Runs
 //! Not a pass: `assemble.rs` calls it on each finished body to choose
 //! between routes, at every -O level; `LLRM_DEBUG=cost` and

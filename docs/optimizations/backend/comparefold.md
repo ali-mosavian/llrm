@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/comparefold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/comparefold.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/comparefold.rs sha256:fff5a9587bf0f48394dfe345be1d6d6bda9b7284211fbd5540f8c485a87d5212 -->
+<!-- src: crates/backend/llrm-core/src/backend/comparefold.rs sha256:9b97e63ca74d2d62638bf3c0ef5f7d57e854f6496f172e943b091fba24f58d50 -->
 
 # comparefold
 
@@ -34,6 +34,12 @@ The load is replaced by an anchor, keeping source ownership, so the
 instruction numbering stays. The folded compare reads the cell's address
 values. The pair is left alone when both instructions own a relocation,
 since LIR names one owner per instruction.
+
+## Example
+No honest example: the fold runs inside selection, no dump holds the body
+before it, and the unit tests build their fixtures in Rust. `comparefold.rs`
+`test_one_use_memory_comparison_is_selected_before_allocation` asserts the
+result: the load becomes an anchor and the `cmp` reads the cell.
 
 ## Runs
 Per block, inside isel's cross-instruction selection

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/loopslots.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/loopslots.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/loopslots.rs sha256:989f239b24dc455c1e16ad4e0fd97a7740608acab978b49f2fe2198b7e4d3065 -->
+<!-- src: crates/backend/llrm-core/src/backend/loopslots.rs sha256:6bea01c716b7158afd3c93e4d7a5a6352aa616a9eb7c2f8efb2d8e599cf1104d -->
 
 # loopslots
 
@@ -66,6 +66,53 @@ instruction reaches in a way a register cannot stand in for (an x87 store,
 a far-pointer load, a dword access) is never promoted. A loop needs entry
 blocks that go only to the header, exits reached only from the loop, and no
 block without a successor.
+
+## Example
+The loop's bound sits in a frame cell. The phase parks it in `BP`: pushed on
+entry, loaded once, and the header compares against the register.
+
+Before:
+```lir
+=== Peephole
+  SORTSCORES: 38 instructions
+    block 0x0000
+      ; ...
+      0x0001  [[bp-0x2]] := mov AX  ; inserted
+      0x0002  CX := mov 0x1  ; inserted
+      0x0002  jmp   ; inserted
+    block 0x0003
+      0x0005  cmp CX, [[bp-0x2]]  ; inserted
+      0x0005  jb   ; inserted
+    ; ...
+    block 0x000d
+      0x000d     ; inserted
+```
+
+After:
+```lir
+=== LoopSlots
+  SORTSCORES: 41 instructions
+    block 0x0000
+      ; ...
+      0x0001  [[bp-0x2]] := mov AX  ; inserted
+      0x0002  CX := mov 0x1  ; inserted
+      0x0002  push BP  ; inserted
+      0x0002  BP := mov [[bp-0x2]]  ; inserted
+      0x0002  jmp   ; inserted
+    block 0x0003
+      0x0005  cmp CX, BP  ; inserted
+      0x0005  jb   ; inserted
+    ; ...
+    block 0x000d
+      0x000d  BP := pop   ; inserted
+      0x000d     ; inserted
+```
+
+The cell is read from `BP` in the loop, and `BP` is saved and restored
+around it.
+
+From `ISEL_DUMP=1` of `examples/basic/sortlib.nib` (`SORTSCORES`) at `-m16
+-O2`.
 
 ## Runs
 After `peephole` (spill traffic is final), before `schedule`. Always on;

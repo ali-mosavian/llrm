@@ -27,6 +27,21 @@
 //! with one successor, or else before the first such cell in the block. It
 //! repeats until no cell lacks the fact.
 //!
+//! # Example
+//! `mov ecx, 2; xchg esi, ecx; nop` in one block, nothing known on entry:
+//!
+//! ```lir
+//! mov ecx, 2          ; ecx is zero above bit 15
+//! xchg esi, ecx       ; the two bits swap: esi zero, ecx not
+//! nop                 ; before here: esi in the set, ecx not
+//! ```
+//!
+//! The exchange moves the zero upper half from `ecx` to `esi`, so a `movzx` of
+//! `esi` before it indexes would be redundant.
+//!
+//! From unit test `test_an_exchange_swaps_the_zero_upper_halves` in
+//! `upperzero.rs`.
+//!
 //! # Provides
 //! `before`, the zero roots before each instruction, keyed by instruction
 //! identity. `preheaded` places `movzx` in loop preheaders for roots a caller

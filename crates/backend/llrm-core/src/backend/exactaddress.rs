@@ -49,6 +49,14 @@
 //! round folds one register of a cell; up to four rounds run, so the other
 //! register folds next.
 //!
+//! # Example
+//! No honest LIR example. The LIR text (`lir_stage`, `ISEL_DUMP=1`) prints a
+//! memory operand without its index registers and scale, so the dump of the
+//! phase before and after it is the same text where the fold happened. Read the
+//! unit test `test_a_copied_scaled_index_folds_into_every_symbolic_reader` in
+//! this file: it builds the `mov si,ax; shl si,1` chain and asserts the cell's
+//! registers and scale after the fold.
+//!
 //! # Runs
 //! Inside the peephole phase, after the pattern rewrites, before
 //! `addresses`. Skipped when the body has no exact cell

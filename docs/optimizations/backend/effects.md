@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/effects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/effects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/effects.rs sha256:454ed81053d1e23b830f82a08b1c94e7c7d6a3187b279151f7634a623bf6a88c -->
+<!-- src: crates/backend/llrm-core/src/backend/effects.rs sha256:02cf852805d2e90b4737434dd0e097cf5f1ed5c8d19bcdb700711a5e282be187 -->
 
 # effects
 
@@ -34,6 +34,12 @@ as a repeated string operation's pointers. The table itself lives in
 `llrm_x86::effects`; this module picks the rows of the register file
 asked, since two targets compiled in one process have different rows
 (real mode has `les`, a flat target has none).
+
+## Example
+No honest example: the module answers one lookup and rewrites nothing, so
+there is no LIR before and after. Its test
+`the_rows_are_those_of_the_register_file_asked` shows the answer for a
+real-mode `les` and a flat target.
 
 ## Provides
 The effects of one instruction as register roots and flag masks.

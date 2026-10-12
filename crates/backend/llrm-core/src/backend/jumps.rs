@@ -53,6 +53,34 @@
 //! predecessor edge, where the bytes saved are more than the extra copies
 //! cost.
 //!
+//! # Example
+//! The `Scheduler` stage ends with the loop entered by an explicit jump.
+//! `ControlFlow` places the blocks and drops the jump to the block that
+//! follows:
+//!
+//! ```lir
+//! === Scheduler
+//!     block 0x0000
+//!       ; ...
+//!       0x0003  AX := mov -7  ; inserted
+//!       0x0003  jmp   ; inserted
+//!     block 0x0004
+//!       ; ...
+//!       0x0008  AX := inc AX  ; inserted
+//!       0x000a  jne   ; inserted
+//! === ControlFlow
+//!     block 0x0000
+//!       ; ...
+//!       0x0003  AX := mov -7  ; inserted
+//!     block 0x0004
+//!       ; ...
+//!       0x0008  AX := inc AX  ; inserted
+//!       0x000a  jne   ; inserted
+//! ```
+//!
+//! From `ISEL_DUMP=1` of a nib program (a struct method with a `while` loop,
+//! called from `main`) at `-m16 -O2`, stages `Scheduler` and `ControlFlow`.
+//!
 //! # Runs
 //! `ControlFlow` is the last machine phase, because this physical order
 //! decides which explicit edge is the fall-through. `jumps` shows as the

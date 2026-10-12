@@ -69,6 +69,66 @@
 //! proves. A body holding an operation the target does not price is never
 //! better. Otherwise the original stays untouched.
 //!
+//! # Example
+//! Before:
+//! ```mir
+//! define i16 @f(i16 %n, i16 %k) {
+//! b0:
+//!   br label %b1
+//!
+//! b1:
+//!   %i = phi i16 [ 0, %b0 ], [ %next, %b4 ]
+//!   %sum = phi i16 [ 0, %b0 ], [ %total, %b4 ]
+//!   %more = icmp ult i16 %i, %n
+//!   br i1 %more, label %b2, label %b5
+//!
+//! b2:
+//!   %flag = icmp eq i16 %k, 0
+//!   br i1 %flag, label %b3, label %b4
+//!
+//! b3:
+//!   %bumped = add i16 %sum, %i
+//!   br label %b4
+//!   ; ...
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define i16 @f(i16 %n, i16 %k) {
+//! b0:
+//!   %0 = icmp eq i16 %k, 0
+//!   br i1 %0, label %12, label %11
+//!
+//! b1:
+//!   %i = phi i16 [ 0, %11 ], [ %next, %b4 ]
+//!   ; ...
+//! b2:
+//!   %flag = icmp eq i16 %k, 0
+//!   br label %b4
+//!   ; ...
+//! 1:
+//!   %2 = phi i16 [ 0, %12 ], [ %10, %9 ]
+//!   %3 = phi i16 [ 0, %12 ], [ %8, %9 ]
+//!   ; ...
+//! 5:
+//!   %6 = icmp eq i16 %k, 0
+//!   br label %7
+//!
+//! 7:
+//!   %8 = add i16 %3, %2
+//!   br label %9
+//!   ; ...
+//! }
+//! ```
+//! The test of `%k` is made once, in `b0`. `b1` to `b4` are the loop for `k !=
+//! 0`, with the arm that adds gone; `1` to `9` are the copy for `k == 0`, whose
+//! branch is now the add alone. The pipeline then keeps this candidate only if
+//! it has fewer loops and no higher price.
+//!
+//! From unit test `test_an_invariant_branch_specializes_the_loop` in
+//! `unswitch_tests.rs`, the candidate `specialized` makes, before it is
+//! re-optimized.
+//!
 //! # Runs
 //! Once per body, after the fixed point and the peel rounds settle and before
 //! unroll-jam. -O3 only: `-funswitch-loops`. -Omax does not set it.

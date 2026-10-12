@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/floatbounds.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/floatbounds.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/floatbounds.rs sha256:2459eb9a0db4574f77915e9d0e029d19fa9a19596736064f0f56b886fd98096c -->
+<!-- src: crates/opt/llrm-analysis/src/floatbounds.rs sha256:2eda5c78f612562512db853b8dc8036b73dede15e5be1390125fd5f10d906bed -->
 
 # floatbounds
 
@@ -32,6 +32,33 @@ every pending instruction, so a result proven in one round feeds the next.
    %g = fmul double %f, %f     Mul          -> [0, 10000]  < 2^53: exact
    %h = fadd double %g, 0.5    0.5 not an integer: not exact
 ```
+
+## Example
+Floats converted from 16-bit integers (`%a`, `%b`) are bounded integers, so
+sums stay exact:
+
+```mir
+define void @f(i16 %a, i16 %b, i1 %c) {
+b0:
+  %x = sitofp i16 %a to float
+  %y = sitofp i16 %b to float
+  %sum = fadd float %x, %y
+  %product = fmul float %x, %y
+  ; ...
+  %half = fmul float %x, 0.5
+  ; ...
+}
+```
+
+| Value | `exact` | Why |
+| --- | --- | --- |
+| `%x` | yes | in `[-32768, 32767]` |
+| `%sum` | yes | in `[-65536, 65534]` |
+| `%product` | no | up to 2^30, past 2^24 |
+| `%half` | no | 0.5 is not an integer |
+
+From unit test `test_integer_inputs_bound_their_float_work` in
+`floatbounds_tests.rs`.
 
 ## Provides
 `exact`, `evaluated`, `_memory`. No pass consumes them: only this module's

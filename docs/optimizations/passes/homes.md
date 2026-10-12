@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/homes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/homes.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/homes.rs sha256:a8568e7d773e2a6160645e6bdfa30eae378d3e0e611834a4719943a3cffd98b5 -->
+<!-- src: crates/opt/llrm-transforms/src/homes.rs sha256:dc938834f52976af855a90590bedcba3d0a54fa206cb75f13ab1a3f8892e1742 -->
 
 # homes
 
@@ -16,16 +16,56 @@ cell (an object's own bytes at a constant offset, non-volatile) are
 candidates; liveness and the paths between a store and a block are computed
 once per function.
 
-```text
- loop:  %s = phi [0.0,%pre],[%t,%loop]      %s = phi ... !llrm.home !{store}
-        %t = fadd %s, %d             =>     (same body)
-        store %t, ptr %cell
-```
-
 The mark is a hint. The backend re-checks it against the body as selection
 leaves it (`storedhomes`: nothing writes the cell while the value lives, and
 every definition is a plain copy). Where such a value is spilled it has no
 store of its own and its restore is the load promotion removed.
+
+## Example
+Before:
+
+```mir
+define double @f(i32 %n, double %d) {
+pre:
+  %cell = alloca double
+  %other = alloca double
+  store double 0.0, ptr %cell
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %pre ], [ %j, %loop ]
+  %s = phi double [ 0.0, %pre ], [ %t, %loop ]
+  %t = fadd double %s, %d
+  store double %t, ptr %cell
+  store double %d, ptr %other
+  %j = add i32 %i, 1
+  %c = icmp slt i32 %j, %n
+  br i1 %c, label %loop, label %done
+
+done:
+  ret double %t
+}
+```
+
+After:
+
+```mir
+loop:
+  %i = phi i32 [ 0, %pre ], [ %j, %loop ]
+  %s = phi double [ 0.000000e+00, %pre ], [ %t, %loop ], !llrm.home !0
+  %t = fadd double %s, %d
+  store double %t, ptr %cell
+; ...
+
+!0 = !{i32 7}
+```
+
+`%s` is what `%cell` holds whenever it is read: `%t` is stored to the cell
+on every trip and nothing else writes it. `!0` is the id of that store. The
+counter `%i` is stored nowhere and is not marked.
+
+From unit test `test_a_stored_loop_carried_value_is_its_cells` in
+`homes_tests.rs`.
 
 ## Runs
 Last in the module pipeline, after `spares`, so the instruction ids it names

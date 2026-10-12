@@ -40,6 +40,10 @@
 //! The runtime's interrupt handlers load their own data segment, so a value
 //! held in DS is safe from them.
 //!
+//! # Example
+//! No honest example: the file has no unit test, and a small program that makes
+//! the allocator put a selector in `ds` under `-mstack-is-data` was not found.
+//!
 //! # Used by
 //! Register allocation (`allocate.rs`): `names_data_segment` before it,
 //! `restored` on the allocated body it keeps.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lifetimes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lifetimes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lifetimes.rs sha256:fb1c01990d5df26aec178027ba14ed4845578e34961c38968269167396bffc40 -->
+<!-- src: crates/backend/llrm-core/src/backend/lifetimes.rs sha256:f28d8c86a77d4a1f3f06596f2a5305f21da1c0bc72ec3baaa3184688a3e260ea -->
 
 # lifetimes
 
@@ -38,6 +38,10 @@ gantt
 An access at a position where the object is not live (a use before its
 start, or after its end) disqualifies it: it is dropped from the result and
 so shares nothing.
+
+## Example
+No example: no dump prints the intervals, and no test compares them as text.
+Read `slots.rs`, where they decide which locals share a cell.
 
 ## Used by
 `isel` takes the intervals in its own instruction numbering; `slots` then

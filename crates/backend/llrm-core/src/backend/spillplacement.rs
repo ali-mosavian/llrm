@@ -41,6 +41,11 @@
 //! The result drives [`crate::backend::splitkit`]: blocks whose borders are in
 //! registers form the region a piece holds.
 //!
+//! # Example
+//! None: this module answers a placement query for `splitkit` and prints
+//! nothing, and the tests build bodies in code and assert on the bundles. Read
+//! `splitkit` for the effect.
+//!
 //! # Runs
 //! Not a pass: [`crate::backend::splitkit`] queries it for each value it
 //! splits, and `floatalloc` asks for the bundles of a body, at every -O level.

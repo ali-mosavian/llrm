@@ -33,6 +33,54 @@
 //! Deleting renumbers the module's globals, so the program analyses are
 //! invalidated.
 //!
+//! # Example
+//! Before, with `@entered` an entry point and `@kept` in `exports.kept`:
+//!
+//! ```mir
+//! @table = internal global [2 x i16] [i16 1, i16 2]
+//! @unused = internal global i16 7
+//! @kept = internal global i16 9
+//! declare i16 @outside()
+//!
+//! define internal i16 @helper() {
+//! b:
+//!   %v = load i16, ptr @table
+//!   ret i16 %v
+//! }
+//!
+//! define internal i16 @orphan() {
+//! b:
+//!   %v = load i16, ptr @unused
+//!   %w = call i16 @outside()
+//!   ret i16 %v
+//! }
+//!
+//! ; ... @entered, and @f which calls @helper
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! @table = internal global [2 x i16] [i16 1, i16 2]
+//! @kept = internal global i16 9
+//!
+//! declare i16 @outside()
+//!
+//! define internal i16 @helper() {
+//! b:
+//!   %v = load i16, ptr @table
+//!   ret i16 %v
+//! }
+//!
+//! ; ... @entered and @f unchanged
+//! ```
+//!
+//! `@orphan` and the `@unused` it alone reads are deleted; the declaration
+//! stays.
+//!
+//! From unit test `test_what_nothing_live_names_is_deleted` in
+//! `globaldce_tests.rs`.
+//!
 //! # Runs
 //! Once, as a program pass after the interprocedural step, so the bodies that
 //! inlining made unreachable go before selection. Not run at -O0.

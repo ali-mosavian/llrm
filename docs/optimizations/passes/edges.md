@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/edges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/edges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/edges.rs sha256:005a9a99d2a3e8e3a40ed3ccf11d381a875ac2c37b7712503173bcb842e4d1c4 -->
+<!-- src: crates/opt/llrm-transforms/src/edges.rs sha256:1ca7d77a4fc741109ac9b98cae77ae6d169af2df170c97fc2a9b07b73c77d2c3 -->
 
 # edges
 
@@ -29,6 +29,40 @@ edge that is not a conditional one. Block ids are never reused, so
 
 `retarget` redirects every operand of a terminator that names one block to
 another, and `phis` lists a block's leading phis.
+
+## Example
+Before, `%x` is loaded at the join of `b1` and `b2`, where only `b1` has the
+cell's value:
+
+```mir
+b2:
+  br i1 %d, label %b3, label %b4
+
+b3:
+  %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+; ...
+```
+
+After `loadjoins` inserts the missing load on the `b2`-to-`b3` edge:
+
+```mir
+b2:
+  br i1 %d, label %0, label %b4
+
+0:
+  %1 = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+  br label %b3
+
+b3:
+  %x1 = phi i16 [ %y, %b1 ], [ %1, %0 ]
+; ...
+```
+
+`b2` has another successor, so the load goes in a new block `0` on the edge,
+not in `b2`.
+
+From unit test `test_missing_conditional_edge_gets_its_own_load_block` in
+`loadjoins_tests.rs`.
 
 ## Runs
 Not a pass: a library. `split` is called by `loadjoins`, `rotate` and

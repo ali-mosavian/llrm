@@ -47,6 +47,27 @@
 //! Under `cfg(test)`, `live` is checked against a bit-set fixed point
 //! (`live_dense`) on every function a test gives it.
 //!
+//! # Example
+//! A phi arm is live out of the predecessor it comes from:
+//!
+//! ```mir
+//! define i16 @f(i16 %x) {
+//! b0:
+//!   %incoming = add i16 %x, 1
+//!   br label %b1
+//!
+//! b1:
+//!   %merged = phi i16 [ %incoming, %b0 ]
+//!   ret i16 %merged
+//! }
+//! ```
+//!
+//! `%incoming` is in `live_out(b0)`. With `ret void` in place of `ret i16
+//! %merged` the phi is dead and `%incoming` is not in `live_out(b0)`.
+//!
+//! From unit test `test_a_dead_phi_does_not_keep_its_edge_operand_live` in
+//! `liveness.rs`.
+//!
 //! # Provides
 //! `Liveness`, `live`, `live_where`, `pressure`, `pressure_of`, `entry_values`,
 //! `live_points`, `each_across`, `live_steps`, `pressure_points`, `phi_inputs`.

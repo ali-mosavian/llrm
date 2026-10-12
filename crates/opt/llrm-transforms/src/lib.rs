@@ -63,6 +63,10 @@
 //! `counting` and `expand` (what a counted-loop rewrite places before a loop),
 //! `transform` (value reuse and phi cleanup).
 //!
+//! # Example
+//! None: this is the crate's index, with no transformation of its own. Read a
+//! module's own header, or `docs/optimizations/passes/readme.md`.
+//!
 //! # See also
 //! `docs/reference/levels.md` for which pass runs at which level, and each
 //! module's own header.

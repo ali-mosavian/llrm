@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/arrival.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/arrival.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/arrival.rs sha256:c16d5b4075426aa8f7148cb50818e6a9da987979b749229ed790653d6c477ceb -->
+<!-- src: crates/backend/llrm-core/src/backend/arrival.rs sha256:e2c74369af57d82d04c5b34ca369689a93aea2fa1cc6d021cd267ff169cdff3e -->
 
 # arrival
 
@@ -28,6 +28,24 @@ pointer ends the search.
  ^ entry                                                ^ eax is in the
    eax holds the argument                                 home from here
 ```
+
+## Example
+A function that stores `eax` and `edx` to its frame cells (`stored` returns
+the offset after the store):
+
+```text
+ 0  55            push ebp
+ 1  89 E5         mov  ebp,esp
+ 3  83 EC 08      sub  esp,8
+ 6  89 45 FC      mov  [ebp-4],eax      stored(cell ebp-4, eax) = Some(9)
+ 9  89 55 F8      mov  [ebp-8],edx      stored(cell ebp-8, edx) = Some(12)
+12  C3            ret                   stored(cell ebp-8, eax) = None
+```
+
+From unit test
+`the_first_store_of_the_arrival_register_into_the_home_ends_its_stay_in_the_register`
+in
+`arrival.rs`.
 
 ## Used by
 `debuginfo.rs`, for 32-bit `-g` output: the parameter's location list is

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/objbuild.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/objbuild.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/objbuild.rs sha256:0ea57dfdf870927fcbff2d956e6ad070e1a4ee625037e0660d2bbf557b8fd374 -->
+<!-- src: crates/backend/llrm-core/src/backend/objbuild.rs sha256:26f4246973dba4229407c002b9f5164a10aa5ea0e58583399a95a39f86db2a67 -->
 
 # objbuild
 
@@ -43,6 +43,11 @@ the near kind join the `DGROUP` group.
 
 `written_in` hands the object to the writer crate of the target's format
 (OMF, ELF32/64, COFF32/64, Mach-O x86-64), or refuses a pair none writes.
+
+## Example
+No honest example: its output is the bytes and relocations of an object, not
+LIR. `-S` prints the items it encodes (see `masm`); `tests` in this file
+assert the bytes.
 
 ## Runs
 Once per module, after `assemble` and `data layout` have produced the masm

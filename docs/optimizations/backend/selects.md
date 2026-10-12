@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:8be332dc63282220a9ed34ed4e1124d52f6f15efbcc81371939d3a726fb97881 -->
+<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:99e5aac9aa9799926f44464d17604cb73e7905277dbd7fd598b7d125b28d7ca9 -->
 
 # selects
 
@@ -25,6 +25,46 @@ replaces the select's uses:
 The loop is repeated until no select is left in any function, so two selects
 in one block each get their own split. The result is checked by an
 interpreter test that runs a function before and after.
+
+## Example
+Before:
+
+```mir
+define i16 @f(i16 %a, i16 %b) {
+entry:
+  %less = icmp ult i16 %a, %b
+  %least = select i1 %less, i16 %a, i16 %b
+  %twice = add i16 %least, %least
+  br label %done
+done:
+  %r = phi i16 [ %twice, %entry ]
+  ret i16 %r
+}
+```
+
+After:
+
+```mir
+define i16 @f(i16 %a, i16 %b) {
+entry:
+  %less = icmp ult i16 %a, %b
+  br i1 %less, label %0, label %1
+0:
+  br label %1
+1:
+  %2 = phi i16 [ %a, %0 ], [ %b, %entry ]
+  %twice = add i16 %2, %2
+  br label %done
+done:
+  %r = phi i16 [ %twice, %1 ]
+  ret i16 %r
+}
+```
+
+The select became a branch to the empty block `0` and a phi in `1`; the phi
+of `done` now names `1` as its predecessor.
+
+From unit test `test_a_select_becomes_a_branch_and_a_phi` in `selects.rs`.
 
 ## Runs
 Once per program in `driver::optimized`, after `fpconvert` and before the

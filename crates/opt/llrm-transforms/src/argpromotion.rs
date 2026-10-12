@@ -48,6 +48,66 @@
 //! pointer in C, a BASIC array descriptor) is the case it was written for: each
 //! call pushed a far pointer that the callee loaded one word through.
 //!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(6) nocapture %d,
+//!                          i16 %n) {
+//! b0:
+//!   %at = getelementptr i8, ptr addrspace(1) %d, i16 4
+//!   %len = load i16, ptr addrspace(1) %at
+//!   %done = icmp sle i16 %n, 0
+//!   br i1 %done, label %out, label %again
+//! again:
+//!   %m = sub i16 %n, 1
+//!   %r = call i16 @sum(ptr addrspace(1) %d, i16 %m)
+//!   %s = add i16 %r, %len
+//!   ret i16 %s
+//! out:
+//!   ret i16 %len
+//! }
+//! define i16 @top(ptr addrspace(1) %p) {
+//! b0:
+//!   %r = call i16 @sum(ptr addrspace(1) %p, i16 3)
+//!   ret i16 %r
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! define internal i16 @sum(i16 %0, i16 %n) {
+//! b0:
+//!   %done = icmp sle i16 %n, 0
+//!   br i1 %done, label %out, label %again
+//!
+//! again:
+//!   %m = sub i16 %n, 1
+//!   %r = call i16 @sum(i16 %0, i16 %m)
+//!   %s = add i16 %r, %0
+//!   ret i16 %s
+//!
+//! out:
+//!   ret i16 %0
+//! }
+//!
+//! define i16 @top(ptr addrspace(1) %p) {
+//! b0:
+//!   %0 = getelementptr i8, ptr addrspace(1) %p, i16 4
+//!   %1 = load i16, ptr addrspace(1) %0
+//!   %r = call i16 @sum(i16 %1, i16 3)
+//!   ret i16 %r
+//! }
+//! ```
+//!
+//! `@top` loads the length once and `@sum` takes it in the descriptor's place;
+//! the recursive call passes it on.
+//!
+//! From unit test
+//! `a_recursive_function_reading_a_descriptor_takes_its_fields_instead` in
+//! `argpromotion_tests.rs`.
+//!
 //! # Runs
 //! In the interprocedural step, once, after its inlining loop and before
 //! constant propagation of the callers' arguments, so that a length that now

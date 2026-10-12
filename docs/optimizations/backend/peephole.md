@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/peephole.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:254c6651d87b8a6d9657eb32e5118bc4ca615e251267398176c250c7e0927c95 -->
+<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:d77d0b30312362f6b6aa6040f64a2e0e6760a38060f8736f7ef3cfd2fa7ebc23 -->
 
 # peephole
 
@@ -62,6 +62,43 @@ reservations (`frame_adjust`) are dropped. A native target returns before
 the last pass: its addresses read whole registers, where a 16-bit target's
 32-bit address is the prefixed form of a 16-bit one and needs the upper half
 proven zero (`upperzero.rs`).
+
+## Example
+A loop counting `n` down, after allocation:
+
+Before:
+
+```lir
+block 0x0000
+  0x0000  AX := mov 0x1  ; inserted
+  0x0000  BX := mov 0x0  ; inserted
+  0x0000  jmp   ; inserted
+block 0x0001
+  0x0004  CX := mov DX  ; inserted
+  0x0004  CX := sub CX, 0x1  ; inserted
+  0x0006  cmp DX, 0x0  ; inserted
+  0x0006  jne   ; inserted
+```
+
+After:
+
+```lir
+block 0x0000
+  0x0000  AX := mov 0x1  ; inserted
+  0x0000  BX := xor BX, BX  ; inserted
+  0x0000  jmp   ; inserted
+block 0x0001
+  0x0004  CX := mov DX  ; inserted
+  0x0004  CX := dec CX  ; inserted
+  0x0006  DX := or DX, DX  ; inserted
+  0x0006  jne   ; inserted
+```
+
+The zero load became `xor`, the subtraction of one `dec`, and the compare
+with zero `or`, which sets the flags `jne` reads as `cmp` did.
+
+From `ISEL_DUMP=1` of a C countdown loop compiled with `llrm-c -O2 -m16`:
+the `ParallelCopy` and `Peephole` stages.
 
 ## Runs
 Once per body, as the machine phase after `prologue` and before `loopslots`

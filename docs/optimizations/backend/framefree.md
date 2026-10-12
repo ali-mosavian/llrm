@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/framefree.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/framefree.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/framefree.rs sha256:46a1ba1fef7a493e9abbb9d5b4fd31af4624e6ddb026dcd0263c239a43f5af02 -->
+<!-- src: crates/backend/llrm-core/src/backend/framefree.rs sha256:5af7448025320b51eaec908399871c6b29fbd4fb8eb9c5c5481f43d78a01449c -->
 
 # framefree
 
@@ -47,6 +47,35 @@ than 2 or 4, or two edges disagree on the depth.
 
 When freed, the frame register joins the allocatable set and the saved
 registers (the prologue pushes it where it is used).
+
+## Example
+`mix(a, b, c, d, n)` on `-m32 -O2` updates four accumulators in a loop. The
+body has no push, pop or indirect call, so the stack depth is known at every
+instruction and the frame register is free: the prologue saves `ebp` with
+the other callee-saved registers, the loop uses it as a value register, and
+the argument is read through `esp`. The decision itself is not printed; this
+is the listing it leads to.
+
+```asm
+_mix proc near
+    push esi
+    push edi
+    push ebp
+L0_0:
+    mov esi, dword ptr [esp+16]
+    ; ...
+L0_8:
+    mov ebp, edx
+    imul ebp, edi
+    add eax, ebp
+    ; ...
+    lea ebp, [ecx+edx]
+    xor eax, ebp
+    inc edi
+```
+
+From `-S` of a nib function with four accumulators updated in a `for` loop,
+with `-m32 -O2 -fno-inline-functions -fno-inline-functions-called-once`.
 
 ## Runs
 In `assemble::staged`, after isel and before `frame::of`, once per function.

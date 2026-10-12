@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatregions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatregions.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatregions.rs sha256:6d8160ead4279f8e0ff751e1b0330f1a585467a74ea3a21d72cf752f1a6b7adb -->
+<!-- src: crates/backend/llrm-core/src/backend/floatregions.rs sha256:12adbc33b165a044487ebd39f6942a60fb378c5dd6360e137d199f62ffdd19e9 -->
 
 # floatregions
 
@@ -17,6 +17,11 @@ stretch there, [`crate::backend::floatalloc`](floatalloc.md) flushes the stack t
 
 `Raised` is the error of those two passes: an operand that cannot be lowered
 (`Unlowered`), a frame cell refused (`frame::Refused`), or a bad value.
+
+## Example
+No honest example: `boundary` is a predicate and `Raised` an error type, so
+neither rewrites LIR. The effect of a boundary is visible in the
+`floatassign` example, where the call ends the register stretch of `a`.
 
 ## Used by
 `floatassign`, `floatalloc`, `pressuresink`.

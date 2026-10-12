@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/live.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/live.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/live.rs sha256:735cd500d08e04b35c3614296082ba70e079b4fa021a94891519bd3c46410fd3 -->
+<!-- src: crates/backend/llrm-core/src/backend/live.rs sha256:012408ce7cac0a7e96562218b4e8c9a52275f326e73d17dbdd04b6b46913b76e -->
 
 # live
 
@@ -33,6 +33,11 @@ values and puts the recomputed ones in; the rest are shared by `Arc`. The
 allocator also leaves its latest intervals in a thread-local (`hold`); the
 spiller it calls takes them back (`held`) when the body is exactly the one
 they were made of, instead of working them out again.
+
+## Example
+No example: the intervals and weights are internal to the allocator and
+printed by no dump. See the `RegAlloc` stage in `lirtext.rs` for the
+allocator's result.
 
 ## Used by
 `allocate` builds and edits it; `spiller`, `splitkit`, `regclass` and

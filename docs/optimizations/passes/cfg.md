@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cfg.rs sha256:60664597dbbf158e82b94b91bed0c5b701bde7ee939de608bb615951799b1a10 -->
+<!-- src: crates/opt/llrm-transforms/src/cfg.rs sha256:e055e5df33920edfe7e88d802af5864e163942750652384e02de2f5d18b27838 -->
 
 # cfg
 
@@ -35,6 +35,32 @@ merged.
 ```
 
 The merged block keeps `first`'s place in the layout.
+
+## Example
+Before:
+```mir
+define i16 @f(i16 %x) {
+b0:
+  %v = add i16 %x, 7
+  br label %b1
+
+b1:
+  %joined = phi i16 [ %v, %b0 ]
+  ret i16 %joined
+}
+```
+After:
+```mir
+define i16 @f(i16 %x) {
+b0:
+  %v = add i16 %x, 7
+  ret i16 %v
+}
+```
+`b1` had `b0` as its only predecessor, so its phi became `%v` and its `ret`
+joined `b0`.
+
+From unit test `test_single_entry_phi_is_replaced` in `cfg_tests.rs`.
 
 ## Runs
 A library function, called by `decide` after it decides branches and by

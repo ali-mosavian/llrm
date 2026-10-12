@@ -42,6 +42,30 @@
 //! Unreachable blocks are ignored. `irreducible_under` takes dominance already
 //! found.
 //!
+//! # Example
+//! A graph given as `block(at, succ)` pairs, with a loop nested in a loop:
+//!
+//! ```text
+//! 0 -> 1
+//! 1 -> 2
+//! 2 -> 3
+//! 3 -> 2, 4
+//! 4 -> 1, 5
+//! 5 ->
+//! ```
+//!
+//! | Query | Result |
+//! | --- | --- |
+//! | `loops` headers, in order | 2, 1 |
+//! | body of loop 2 | {2, 3} |
+//! | body of loop 1 | {1, 2, 3, 4} |
+//! | `depth` of blocks 0..5 | 0, 1, 2, 2, 1, 0 |
+//! | `irreducible` | none |
+//!
+//! From unit test
+//! `nested_loops_come_innermost_first_and_the_outer_body_holds_the_inner` in
+//! `loops_tests.rs`.
+//!
 //! # Provides
 //! `Loop`, `back_edges`, `loops`, `depth`, `irreducible`, `irreducible_under`,
 //! `immediate_dominators` and `frontiers`. Consumers: [`crate::cfg`]

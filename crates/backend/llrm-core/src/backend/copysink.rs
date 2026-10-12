@@ -34,6 +34,12 @@
 //! A copy that passes is removed and put first in the exit block, in the
 //! order found.
 //!
+//! # Example
+//! No honest example: the pass runs inside the peephole phase, whose dump mixes
+//! it with every other rewrite, and its unit tests build the loop in Rust. They
+//! assert where each copy
+//! ends up: `test_copy_read_only_after_its_loop_moves_to_the_exit`.
+//!
 //! # Runs
 //! Inside the peephole phase, after copy propagation and extension
 //! rewrites, before `spillforward`. Once per peephole run. No flag of its own.

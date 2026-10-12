@@ -68,6 +68,11 @@
 //! (base, index or selector) used inside a natural loop and outside it is
 //! carved into the loop as a piece, so the loop reads it from a register once.
 //!
+//! # Example
+//! None: the tests build bodies in code and assert on structure, and a stage
+//! dump does not say which copy a split made. Read the figures above for the
+//! shape.
+//!
 //! # Runs
 //! Inside the register allocator ([`crate::backend::allocate`]), at the split
 //! stage of a value that no register took and no eviction made room for; the

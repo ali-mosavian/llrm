@@ -53,6 +53,34 @@
 //! `(x & m) * 2^k` as `(x * 2^k) & (m * 2^k)`, so the scale can fold into the
 //! loop's step.
 //!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! define i16 @f(i16 %x, i16 %a) {
+//! b0:
+//!   %m = add i16 %x, %a
+//!   %r = add i16 %m, %a
+//!   ret i16 %r
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! define i16 @f(i16 %x, i16 %a) {
+//! b0:
+//!   %0 = shl i16 %a, 1
+//!   %1 = add i16 %x, %0
+//!   ret i16 %1
+//! }
+//! ```
+//!
+//! A value added twice is added once, doubled.
+//!
+//! From unit test `test_a_value_added_twice_is_added_once_doubled` in
+//! `algebraic_tests.rs`.
+//!
 //! # Runs
 //! `algebraic` runs once in each pass of the fixed point, after `indvars` and
 //! before `dead`; it has no flag of its own, so it is on whenever the optimizer

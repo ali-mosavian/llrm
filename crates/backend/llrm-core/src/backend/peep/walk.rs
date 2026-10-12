@@ -37,7 +37,10 @@
 //! registers have a zero upper half ([`crate::backend::upperzero`]). [`Cx`]
 //! is the same for one block, with the lanes dead after any instruction.
 //!
-//! # Used by
+//! # Example
+//! None: a walk chooses which instructions a rule sees and holds no rewrite of
+//! its own. See the `# Example` of `crate::backend::peephole` for rules at
+//! work. # Used by
 //! The code `build.rs` generates for each group, called from `peephole` and
 //! `isel/combined`.
 

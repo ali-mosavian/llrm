@@ -1,9 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumpthread.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumpthread.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumpthread.rs sha256:143482ee0e80a994a31c81cfe13e6883dabe0ab2ec04fe94076fa7dd37e0b273 -->
+<!-- src: crates/opt/llrm-transforms/src/jumpthread.rs sha256:4494a86dbd064e513ed546dac85cbb3eaf4af807d26696f59b3bf3cf42c4d73d -->
 
 # jumpthread
 
-Threading through a branch or switch that the way into it decides: LLVM's
+Threads a path through a branch or switch that the way into it decides: the
+blocks between the deciding value and the test are copied for that path,
+which jumps straight to its target and does not run the test. LLVM's
 `DFAJumpThreading` and gcc's backward (FSM) threader
 (`tree-ssa-threadbackward.cc`).
 
@@ -92,6 +94,64 @@ copies is taken; a branch whose copies hold nothing still is, as gcc does.
 
 Where anything was copied, `fold`, `algebraic`, `decide` and `dead` run once
 over the function, since each copy knows its state.
+
+## Example
+The branch case, on `r = phi(1, 0); if (r != 0)` after an inlined call.
+Before:
+
+```mir
+; ... b0, head (the loop header, branching to test or done)
+test:
+  %c = icmp sgt i16 %k, %i
+  br i1 %c, label %yes, label %no
+
+yes:
+  br label %join
+
+no:
+  br label %join
+
+join:
+  %r = phi i16 [ 1, %yes ], [ 0, %no ]
+  %t = icmp ne i16 %r, 0
+  br i1 %t, label %hit, label %step
+
+hit:
+  %h = add i16 %acc, %i
+  br label %step
+
+step:
+  %acc1 = phi i16 [ %acc, %join ], [ %h, %hit ]
+  %i1 = add nsw i16 %i, 1
+  br label %head
+```
+
+After:
+
+```mir
+test:
+  %c = icmp sgt i16 %k, %i
+  br i1 %c, label %yes, label %no
+
+yes:
+  %h = add i16 %acc, %i
+  br label %step
+
+no:
+  br label %step
+
+step:
+  %acc1 = phi i16 [ %h, %yes ], [ %acc, %no ]
+  %i1 = add nsw i16 %i, 1
+  br label %head
+```
+
+`%r` is 1 on `yes` and 0 on `no`, so each path decides `%t` itself: `yes`
+runs `hit`'s work and `no` skips it, and `join` and its compare are gone.
+
+From unit test
+`test_a_branch_on_a_compare_of_a_phi_of_constants_is_decided_on_each_path`
+in `jumpthread_tests.rs`.
 
 ## Runs
 After the loop passes and `rotate`, before the last `hoist`. Switch state

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/classes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/classes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/classes.rs sha256:9c9777e30ffb0d9162f96ebe8a519224e671956a4d668fcbf212efa6d2d33e36 -->
+<!-- src: crates/backend/llrm-core/src/backend/classes.rs sha256:1e8c02389155f54ccbed75e1f93d70e5788a5a7cb5476a3f8244ff3549a2e878 -->
 
 # classes
 
@@ -24,6 +24,17 @@ a segment register is pinned only while it is a held value.
 `with_frame_free` is the same classes for a function with no frame
 register: the frame register becomes one more general register, last to
 be given out, and an address may be made of its word.
+
+## Example
+What `RegisterClasses::of` says of the real-mode target:
+
+```text
+addressing   BX BP SI DI
+status_word  AX
+```
+
+From unit tests `m16_registers_are_its_description` and
+`the_status_word_is_where_the_form_table_stores_it` in `classes.rs`.
 
 ## Used by
 `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller

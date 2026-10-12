@@ -56,6 +56,29 @@
 //! stack checks the program proves unneeded are elided, undefined names
 //! become externs, and debug info is described.
 //!
+//! # Example
+//! A MIR function and the masm it becomes (`bump`, called twice from `main`):
+//!
+//! ```mir
+//! define internal regparm3cc i16 @bump(i16 %0) addrspace(1) nearcode ... {
+//! b1:
+//!   %1 = add i16 %0, 1
+//!   ret i16 %1
+//! }
+//! ```
+//!
+//! ```text
+//! _bump proc near
+//! L0_0:
+//!     inc ax
+//!     ret
+//! _bump endp
+//! ```
+//!
+//! From `--dump` (`mir/21-homes.ll`) and `-S` of a nib program at -O2 with
+//! `-fno-inline-functions -fno-inline-functions-called-once -fno-ipa-cp-clone
+//! -fno-ipa-vrp -march=i386`.
+//!
 //! # Runs
 //! Once per module. Per-function candidates are described above; the gating
 //! flags are in [`crate::backend`].

@@ -30,6 +30,12 @@
 //! values. The pair is left alone when both instructions own a relocation,
 //! since LIR names one owner per instruction.
 //!
+//! # Example
+//! No honest example: the fold runs inside selection, no dump holds the body
+//! before it, and the unit tests build their fixtures in Rust. `comparefold.rs`
+//! `test_one_use_memory_comparison_is_selected_before_allocation` asserts the
+//! result: the load becomes an anchor and the `cmp` reads the cell.
+//!
 //! # Runs
 //! Per block, inside isel's cross-instruction selection
 //! (`isel/combined.rs`), after [`crate::backend::farload`] and before

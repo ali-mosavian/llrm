@@ -43,10 +43,10 @@
 //!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
 //!   linkStyle default stroke:#64748b,stroke-width:2.2px
 //!   a["<b>floating LIR</b><br/><small>values, 10-byte</small>"]:::mid
-//!   b["<b>allocnos per register</b><br/><small>stretch, joined at<br/>bundle borders</small>"]:::mid
-//!   c["<b>rewritten</b><br/><small>fst/fstp after defs,<br/>fld before reads,<br/>memory operands</small>"]:::mid
+//!   b["<b>allocnos</b><br/><small>one per register stretch,<br/>joined at borders</small>"]:::mid
+//!   c["<b>rewritten</b><br/><small>fstp after defs,<br/>fld before reads</small>"]:::mid
 //!   d["<b>_crowded: more than</b><br/><small>eight live at a step?</small>"]:::mid
-//!   e["<b>spill the allocno read</b><br/><small>furthest ahead<br/>(none left: error)</small>"]:::mid
+//!   e["<b>spill the allocno</b><br/><small>read furthest ahead<br/>(none left: error)</small>"]:::mid
 //!   f["<b>explicit LIR</b><br/><small>at most eight live<br/>at any step</small>"]:::mid
 //!   a -->|"_integer_loads,<br/>_integer_stores,<br/>_aliased"| b
 //!   b -->|"priced: register vs memory<br/>start spilled where<br/>memory wins"| c
@@ -60,6 +60,44 @@
 //!
 //! A spilled value takes a ten-byte frame cell in extended format, so no
 //! precision is lost.
+//!
+//! # Example
+//! `keep(a, b)` multiplies two doubles, calls `show` with the product and adds
+//! `a` to it. `a` is live in an x87 register across the call, which leaves the
+//! stack empty, so it is stored before the call and loaded back after it.
+//!
+//! Before (after `FloatFold`):
+//!
+//! ```lir
+//! keep: 12 instructions
+//!   block 0x0000
+//!     0x0000  v1 := fld [[bp+0x8]]  ; inserted
+//!     0x0002  v3 := fmul v1, [[bp+0x10]]  ; inserted
+//!     0x0003  [[bp-0x10]] := fstp v3  ; inserted
+//!     ; ...
+//!     0x0007  [None] := fstp v5  ; inserted
+//!     0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
+//!     0x0009  v8 := fadd v1, [[bp-0x10]]  ; inserted
+//! ```
+//!
+//! After (`FloatAssign`):
+//!
+//! ```lir
+//! keep: 14 instructions
+//!   block 0x0000
+//!     0x0000  v1 := fld [[bp+0x8]]  ; inserted
+//!     0x0002  v3 := fmul v1, [[bp+0x10]]  ; inserted
+//!     0x0003  [[bp-0x10]] := fstp v3  ; inserted
+//!     ; ...
+//!     0x0007  [None] := fstp v5  ; inserted
+//!     0x0007  [[bp-0x18]] := fstp v1  ; inserted
+//!     0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
+//!     0x0009  v1 := fld [[bp-0x18]]  ; inserted
+//!     0x0009  v8 := fadd v1, [[bp-0x10]]  ; inserted
+//! ```
+//!
+//! From `ISEL_DUMP=1` of the nib function `keep(a: f64, b: f64)` with `-m32
+//! -O0`.
 //!
 //! # Runs
 //! Machine phase after `floatfold` and `phielim`, before `floatalloc`, once per

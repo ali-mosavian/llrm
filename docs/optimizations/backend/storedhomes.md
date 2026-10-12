@@ -1,9 +1,10 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/storedhomes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/storedhomes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/storedhomes.rs sha256:377ba4c2019fb9cb8fafd7798b06238b44e077e6e442c33d38802ce9e1f11e84 -->
+<!-- src: crates/backend/llrm-core/src/backend/storedhomes.rs sha256:144c414d28fb06430c5c6d74091cd5f3bf63452417d1e0d32476c1e721cbf1a3 -->
 
 # storedhomes
 
-The cells the optimizer proved hold a phi's value, as the body now stands.
+Finds the memory cells that provably still hold a phi's value, so a spilled
+value read from one needs no store and no slot of its own.
 
 ## How it works
 MIR proves, for a phi, that a memory cell already holds its value
@@ -27,6 +28,11 @@ memory that is not certainly elsewhere. `apart` says two cells are certainly
 different bytes: both are fixed addresses that `overlap` separates. A
 pointer, or two elements of an array, are never apart; what a pointer
 reaches is the optimizer's proof, not checked here.
+
+## Example
+No honest example: `held`, `may_write` and `apart` answer queries and print
+no LIR of their own. Read the spiller's `ISEL_DUMP=1` output (see
+[`crate::backend::lirtext`](lirtext.md)) to see a spilled phi read from its home cell.
 
 ## Used by
 [`crate::backend::spiller`](spiller.md) and [`crate::backend::floatassign`](floatassign.md) (`held`);

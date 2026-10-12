@@ -31,6 +31,32 @@
 //!
 //! The merged block keeps `first`'s place in the layout.
 //!
+//! # Example
+//! Before:
+//! ```mir
+//! define i16 @f(i16 %x) {
+//! b0:
+//!   %v = add i16 %x, 7
+//!   br label %b1
+//!
+//! b1:
+//!   %joined = phi i16 [ %v, %b0 ]
+//!   ret i16 %joined
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define i16 @f(i16 %x) {
+//! b0:
+//!   %v = add i16 %x, 7
+//!   ret i16 %v
+//! }
+//! ```
+//! `b1` had `b0` as its only predecessor, so its phi became `%v` and its `ret`
+//! joined `b0`.
+//!
+//! From unit test `test_single_entry_phi_is_replaced` in `cfg_tests.rs`.
+//!
 //! # Runs
 //! A library function, called by `decide` after it decides branches and by
 //! `phiopt`, `rotate` and `lsr` after their rewrites. The pass `Merged` wraps

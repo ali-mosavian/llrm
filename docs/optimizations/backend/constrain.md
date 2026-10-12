@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/constrain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/constrain.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/constrain.rs sha256:f11141e6ec4f5676082f7f2b00e810606565474ea6ddebe8f3b68e830023f967 -->
+<!-- src: crates/backend/llrm-core/src/backend/constrain.rs sha256:f30395dd561bb101fe357be7534ebbde437a32c4771f84ab19b66ec22d9353fe -->
 
 # constrain
 
@@ -52,6 +52,32 @@ before it places values:
 - `required`, `required_in` and `required_added`: the pin map of a
   body, of some blocks, or of only the instructions added since a previous
   body.
+
+## Example
+A call that takes `ax` and returns `eax` (`bump`). Before, it names the
+values `v6`, `v7`; after allocation it names fresh ones, `v14`, `v15`,
+copied in and out. `; inserted` notes are dropped.
+
+Before (`Coalescer`):
+
+```lir
+0x000c  v6 := mov 0x1
+0x000c  call   requires v6@AX; delivers v7@EAX; clobbers EAX
+0x000e  cmp v5, 0x1
+```
+
+After (`RegAlloc`):
+
+```lir
+0x000c  AX := mov 0x1
+0x000c  call   requires v14@AX; delivers v15@EAX; clobbers EAX
+0x000c  CX := mov AX
+0x000e  cmp BX, 0x1
+```
+
+From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
+-fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+-march=i386` of the program under `calleefacts`.
 
 ## Used by
 Register allocation (`allocate.rs`), which calls `distinct_roles`,

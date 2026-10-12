@@ -30,6 +30,41 @@
 //! A seed is placed as it is made, so a caller asks for one only once it will
 //! commit to its rewrite.
 //!
+//! # Example
+//! Before:
+//! ```mir
+//! define i16 @f(i16 %s, i16 %n) {
+//! b0:
+//!   br label %b1
+//!
+//! b1:
+//!   %i = phi i16 [ %s, %b0 ], [ %next, %b2 ]
+//!   %c = icmp slt i16 %i, %n
+//!   br i1 %c, label %b2, label %b3
+//! ; ...
+//! b3:
+//!   %e = phi i16 [ %i, %b1 ]
+//!   ret i16 %e
+//! }
+//! ```
+//! After `skip_guard` and `leaving` (the lines the test asserts):
+//! ```mir
+//! b0:
+//!   %0 = icmp sle i16 %n, %s
+//!   %1 = add i16 %n, 0
+//!   br i1 %0, label %b3, label %b1
+//! ; ...
+//! b3:
+//!   %e = phi i16 [ %1, %b1 ], [ %s, %b0 ]
+//! ```
+//! The preheader tests for no trips and branches to the exit, and the exit phi
+//! takes the exit value `%n` (from `add %n, 0`, left to
+//! `canonical::identities`) or, with no trip, the start `%s`.
+//!
+//! From unit test
+//! `a_symbolic_exit_value_and_skip_test_are_placed_before_the_loop` in
+//! `counting_tests.rs`.
+//!
 //! # Used by
 //! [`crate::fill`], [`crate::loopexit`], [`crate::window`] and [`crate::lsr`]
 //! build `Seeds` when they commit to replacing a loop's counter, and

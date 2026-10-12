@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/regclass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regclass.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/regclass.rs sha256:7dea3c9832de33c8822ad112ab093994acca04d7315e2754861ef2ee464ecdaf -->
+<!-- src: crates/backend/llrm-core/src/backend/regclass.rs sha256:1c20548548a88f9499edf85b15cf8dca02c6341ab98b56e42bd62fb0b6ec1a20 -->
 
 # regclass
 
@@ -51,6 +51,35 @@ registers of their classes, a bipartite matching (`Unmatched`). A body with
 none can be coloured with copies; one with some cannot, whatever the
 allocator does. `LLRM_DEBUG=regclass` runs it after the phases from
 `ssaspill` to `coalesce`.
+
+## Example
+A far pointer's segment `v1` enters a loop through the phi `v2`, which a far
+load reads as the selector of `[es:v3]`:
+
+```lir
+=== body
+    block 0x0000
+      0x0001  v1 := mov 0x1
+      0x0002  v3 := mov 0x2
+      0x0003  jmp
+    block 0x0001
+      v2 := phi 0x0000:v1 0x0001:v2
+      0x0004  v4 := mov [[es:r0+0x0] v3@unplaced]
+      0x0005  jne
+    block 0x0002
+      0x0006  ret
+```
+
+| value | class            | why                       |
+|-------|------------------|---------------------------|
+| v1    | {ES, FS, GS}     | the web of the phi `v2`   |
+| v2    | {ES, FS, GS}     | read only as a selector   |
+| v3    | {BX, BP, SI, DI} | address base              |
+| v4    | none             | a plain loaded word       |
+
+From unit test `test_a_segment_only_a_phi_reads_has_the_class_of_its_web` in
+`regclass.rs`; the classes are what `classes` returns for the m16 register
+sets.
 
 ## Runs
 Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate` and

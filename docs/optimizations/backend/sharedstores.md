@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/sharedstores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/sharedstores.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/sharedstores.rs sha256:7ec4c076ee651e9bd60cad6af3526e599298e236546aefeca80543c7ed2d807e -->
+<!-- src: crates/backend/llrm-core/src/backend/sharedstores.rs sha256:12074e2d12f21c85f7b760390b15fa5c848b8a2039a7a2a33d990a4075f64987 -->
 
 # sharedstores
 
@@ -31,6 +31,42 @@ narrower stores use the matching sub-register.
 The load is `xor r,r` when the literal is zero and the flags are dead at the
 run's start, else `mov r,imm`. The change is made only if the encoded sizes,
 priced by the selector, are strictly smaller than the run's.
+
+## Example
+Four stores of zero through `BX`, with `AX` dead after the argument is
+copied. Before, the input of `Peephole`:
+
+```lir
+=== ParallelCopy
+  _f@3: 7 instructions
+    block 0x0000
+      0x0000     ; inserted; delivers v2@AX
+      0x0000  BX := mov AX  ; inserted
+      0x0001  [None v1@BX] := mov 0x0  ; inserted
+      0x0003  [None v1@BX] := mov 0x0  ; inserted
+      0x0005  [None v1@BX] := mov 0x0  ; inserted
+      0x0007  [None v1@BX] := mov 0x0  ; inserted
+```
+
+After:
+
+```lir
+=== Peephole
+  _f@3: 8 instructions
+    block 0x0000
+      0x0000  BX := mov AX  ; inserted
+      0x0001  AX := xor AX, AX  ; inserted
+      0x0001  [None v1@BX] := mov AX  ; inserted
+      0x0003  [None v1@BX] := mov AX  ; inserted
+      0x0005  [None v1@BX] := mov AX  ; inserted
+      0x0007  [None v1@BX] := mov AX  ; inserted
+```
+
+One `xor` and four register stores replace four immediate stores. The dump
+omits the stores' displacements.
+
+From `ISEL_DUMP=1` of `void f(struct s *p)` storing 0 to four `int` fields
+at -Os -m16.
 
 ## Runs
 A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after

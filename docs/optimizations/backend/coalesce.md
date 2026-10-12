@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/coalesce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/coalesce.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:1cbb806e57b8661e8d36838cef024de4afb8587c97c8e85886dc290e045b04b8 -->
+<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:7e6087baa3fba7bd2e750a580b7514234ccaef7a7f23633617680970a4f38e39 -->
 
 # coalesce
 
@@ -49,6 +49,39 @@ joined web's interval is the union of the two (`_merged`), its pin is the
 pin of either, and the web kept is the one with more neighbours. At the
 end every value is renamed to its web's root and identity moves are
 dropped. `LLRM_CHECK_COALESCE=1` checks each count against a scan.
+
+## Example
+A multiply by 5: `v3` joins `v4`, so `v3 := mov v4` goes and the add updates
+`v4`. `v5 := mov v4` stays: `v4` and `v5` are pinned to EAX and EDX. `;
+inserted` notes are dropped.
+
+Before (`TwoAddress`):
+
+```lir
+; ...
+0x0001  v4 := mov v2
+0x0001  v4 := shl v4, 0x2
+0x0001  v3 := mov v4
+0x0001  v3 := add v3, v2
+0x0002  v5 := mov v3
+0x0002  v5 := shr v5, 0x10
+0x0002     ; requires v3@EAX,v5@EDX
+```
+
+After (`Coalescer`):
+
+```lir
+; ...
+0x0001  v4 := mov v2
+0x0001  v4 := shl v4, 0x2
+0x0001  v4 := add v4, v2
+0x0002  v5 := mov v4
+0x0002  v5 := shr v5, 0x10
+0x0002     ; requires v4@EAX,v5@EDX
+```
+
+From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of `Times5& = x * 5` (function
+`TIMES5&`).
 
 ## Runs
 Once per function, in the machine phases after `twoaddr` and before

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/branchprob.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/branchprob.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/branchprob.rs sha256:121daf6d7358538b531f297e07d85007285f59b6fb53fb86edc58c127913b446 -->
+<!-- src: crates/opt/llrm-analysis/src/branchprob.rs sha256:cb8fbebfca4229a742a1275b235427f3fa5416606cf2bff48ac4f720f0153b96 -->
 
 # branchprob
 
@@ -69,6 +69,33 @@ flowchart TB
 
 The propagation takes edge probabilities as a function, so the backend uses
 it too (`propagated_edges`, `Cycle`) and MIR and LIR estimates agree.
+
+## Example
+A one-block loop with no proven trip count:
+
+```mir
+define i16 @f(i16 %n) {
+entry:
+  br label %head
+head:
+  %i = phi i16 [ 0, %entry ], [ %j, %head ]
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %head, label %out
+out:
+  ret i16 %j
+}
+```
+
+| Fact | Value |
+| --- | --- |
+| heuristic at `head` | `Loop` |
+| probability `head -> head` | 124/128 |
+| frequency of `head` | 32 |
+| frequency of `out` | 1 |
+
+From unit test `test_a_loop_stays_in_31_of_32_and_its_header_runs_32_times`
+in `branchprob_tests.rs`.
 
 ## Provides
 `Odds { taken, frequency, by }` from `estimated`, `propagated` and

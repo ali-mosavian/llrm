@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/regalloc_input.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regalloc_input.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/regalloc_input.rs sha256:3bdc7f232b9ec608a88fec37b5774e731d620edfae981fa3a7ce1bfddc10a5c2 -->
+<!-- src: crates/backend/llrm-core/src/backend/regalloc_input.rs sha256:4bf7292667410e09e1209cc93c7e7619c7139fec3010783f4a44ce4d3f80e202 -->
 
 # regalloc_input
 
@@ -39,6 +39,10 @@ allocator the pressure the spiller removes, for tests of the allocator that
 must hold for any input. `Calls` states what a call leaves alone: C's
 convention keeps everything but ax, bx, cx, dx, es and the flags; a Nib or
 BASIC program's keeps nothing. `through` runs a body through given phases.
+
+## Example
+None: a test-support module with no transformation of its own. Its callers
+show the LIR it hands over; read `lirtext.rs` for the text format.
 
 ## Used by
 Tests of [`crate::backend::allocate`](allocate.md), [`crate::backend::ssaspill`](ssaspill.md),

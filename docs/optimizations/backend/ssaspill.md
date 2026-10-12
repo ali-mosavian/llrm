@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/ssaspill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ssaspill.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/ssaspill.rs sha256:6655a5962218061fb5c3a00815ca7eaf0396cedacf317a40b511fa5651baeb14 -->
+<!-- src: crates/backend/llrm-core/src/backend/ssaspill.rs sha256:2b1e3ac0b93b6f6c76de5e142ba34070dd5b2abb17321f610d6163c3af6296fc -->
 
 # ssaspill
 
@@ -65,6 +65,54 @@ and [`crate::backend::ssarepair`](ssarepair.md) restores SSA.
 For selector values, whether a loop's entry loads what the loop reads is
 tried none, all, or loop by loop, and the cheaper by the level's measure
 (bytes at -Os, then trips on a tie) is kept.
+
+## Example
+Eight values loaded from `p` are live across a call to `g`, more than the
+general registers hold. Before, the phase's input:
+
+```lir
+=== FarIndirectCalls
+  f_: 19 instructions
+    block 0x0000
+      0x0000     ; inserted; delivers v1@EAX
+      0x0001  v2 := mov [None v1@unplaced]  ; inserted
+      ; ... v3 to v6, loaded the same way
+      0x000b  v7 := mov [None v1@unplaced]  ; inserted
+      0x000d  v8 := mov [None v1@unplaced]  ; inserted
+      0x000f  v9 := mov [None v1@unplaced]  ; inserted
+      0x0010  call   ; inserted; requires v2@EAX; delivers v10@EAX; clobbers EAX
+      ; ... v11 to v14
+      0x0015  v15 := imul v6, v7  ; inserted
+      0x0016  v16 := add v14, v15  ; inserted
+      0x0017  v17 := imul v8, v9  ; inserted
+      0x0018  v18 := add v16, v17  ; inserted
+```
+
+After:
+
+```lir
+=== SsaSpill
+  f_: 21 instructions
+    block 0x0000
+      0x000b  v7 := mov [None v1@unplaced]  ; inserted
+      0x000b  [[bp-0x4]] := mov v7  ; inserted
+      0x000d  v8 := mov [None v1@unplaced]  ; inserted
+      0x000f  v9 := mov [None v1@unplaced]  ; inserted
+      0x000f  [[bp-0x8]] := mov v9  ; inserted
+      0x0010  call   ; inserted; requires v2@EAX; delivers v10@EAX; clobbers EAX
+      ; ... v11 to v14
+      0x0015  v15 := imul v6, [[bp-0x4]]  ; inserted
+      0x0016  v16 := add v14, v15  ; inserted
+      0x0017  v17 := imul v8, [[bp-0x8]]  ; inserted
+      0x0018  v18 := add v16, v17  ; inserted
+```
+
+`v7` and `v9` are stored to `[bp-0x4]` and `[bp-0x8]` after their
+definitions, and their uses read the slot as a memory operand, so no reload
+is needed. The dump prints the loads' addresses as `[None v1@unplaced]`.
+
+From `ISEL_DUMP=1 LLRM_CANDIDATES=spiller` of `int f(int *p)` (`g(p[0])`
+plus products of `p[0]..p[7]`) at -O2 -m32.
 
 ## Runs
 The first machine phase after `far-indirect-calls`, before `phielim`, on the

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/floatloop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/floatloop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/floatloop.rs sha256:6669d1e5a8dda3584ce18f02a8b4c7c147fb3b0e5d2c5d7c1ad551da8f78a3f2 -->
+<!-- src: crates/opt/llrm-transforms/src/floatloop.rs sha256:6381d12d9ba8b00ea1613ed41960d249e765c46c76a7378f38c603ed4887ccc1 -->
 
 # floatloop
 
@@ -38,8 +38,6 @@ flowchart LR
 
 *Before, a loop of 10 trips*
 
-//!
-
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
 flowchart LR
@@ -64,6 +62,46 @@ final number through `SsaUpdater`. The header's phis lose the latch arm and,
 left with one input, are that value. The header's counter stores are
 repeated before the exit with the final number. What nothing reads is
 [`crate::dead`](dead.md)'s.
+
+## Example
+Before, the counter stored in the header and 48.75 added ten times:
+
+```mir
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b2 ]
+  store i16 %i, ptr getelementptr (i8, ptr @m, i16 4)
+  %c = icmp slt i16 %i, 10
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %v = load float, ptr @m
+  %w = fadd float %v, 4.875000e+01
+  store float %w, ptr @m
+  %n = add i16 %i, 1
+  br label %b1
+```
+
+After:
+
+```mir
+b2:
+  store float 4.387500e+02, ptr @m
+  %v = load float, ptr @m
+  %w = fadd float %v, 4.875000e+01
+  store float %w, ptr @m
+  %n = add i16 0, 1
+  br label %b3
+
+b3:
+  store i16 10, ptr getelementptr (i8, ptr @m, i16 4)
+  ; ...
+```
+
+One trip runs from the 438.75 the first nine leave, and the counter is
+stored as 10.
+
+From unit test `test_exact_loop_runs_its_last_trip_alone` in
+`floatloop_tests.rs`.
 
 ## Runs
 Per-body pipeline, after `lcssa` and before `hoist`: LICM may move an

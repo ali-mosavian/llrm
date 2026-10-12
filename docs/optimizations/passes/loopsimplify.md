@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:bac4368078ce0eeb449df694020ea6bef5f122d19605f905f46ddaa0dc87cc93 -->
+<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:f094c479f798cff2b5f3c763e8599c19cb1af6e96ffe30c813385ce1b9f89a74 -->
 
 # loopsimplify
 
@@ -80,6 +80,66 @@ the body as it was. A loop already in the form makes no copy. The loops of
 the shape are updated for the new blocks rather than found again
 (`LLRM_CHECK_SHAPE` compares them with a new shape). A function with an
 irreducible loop is left alone.
+
+## Example
+Before:
+```mir
+define i16 @f(i1 %c, i16 %s, i16 %t) {
+b0:
+  br i1 %c, label %b5, label %b4
+
+b5:
+  br label %b1
+
+b4:
+  br label %b1
+
+b1:
+  %carried = phi i16 [ %s, %b5 ], [ %t, %b4 ], [ %stepped, %b2 ]
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %stepped = add i16 %carried, 1
+  br label %b1
+
+b3:
+  ret i16 %carried
+}
+```
+After:
+```mir
+define i16 @f(i1 %c, i16 %s, i16 %t) {
+b0:
+  br i1 %c, label %b5, label %b4
+
+b5:
+  br label %0
+
+b4:
+  br label %0
+
+b1:
+  %carried = phi i16 [ %stepped, %b2 ], [ %1, %0 ]
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %stepped = add i16 %carried, 1
+  br label %b1
+
+b3:
+  ret i16 %carried
+
+0:
+  %1 = phi i16 [ %s, %b5 ], [ %t, %b4 ]
+  br label %b1
+}
+```
+`b1` was entered from `b5` and `b4`. Both now jump to the new preheader
+`%0`, whose phi holds the two seeds, so the header's phi has one arm from
+outside the loop.
+
+From unit test `test_grouping_preserves_each_phi_edge_value` in
+`loopsimplify_tests.rs`.
 
 ## Runs
 In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `tailrec` and before

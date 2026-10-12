@@ -42,6 +42,34 @@
 //! `LLRM_CHECK_THRASH` (always under test) asserts that equals a full
 //! recompute.
 //!
+//! # Example
+//! A value is built in EAX, copied to EDI and read later as EDI (the first
+//! block of the fixture; the second block, which reads EDI and then overwrites
+//! every other register, is trimmed):
+//!
+//! ```lir
+//! === before
+//!     block 0x0000
+//!       0x0000  EAX := mov 0x7  ; inserted
+//!       0x0001  EDI := mov EAX  ; inserted
+//!     block 0x0001
+//!       0x0009  push EDI  ; inserted
+//!       ; ...
+//! === after
+//!     block 0x0000
+//!       0x0000  EDI := mov 0x7  ; inserted
+//!       0x0001     ; inserted
+//!     block 0x0001
+//!       0x0009  push EDI  ; inserted
+//!       ; ...
+//! ```
+//!
+//! The producer writes EDI directly. The copy is left as an anchor with no
+//! operation, which keeps the virtual value it defined.
+//!
+//! From unit test `test_removed_copy_keeps_its_virtual_definition` in
+//! `regthrash.rs`.
+//!
 //! # Runs
 //! First sub-pass of [`crate::backend::peephole`], gated on a register copy
 //! being present. It is the only pass there that removes a copy the coalescer

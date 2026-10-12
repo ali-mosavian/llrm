@@ -25,6 +25,23 @@
 //! moves down past those instructions. Widths and the absence of relocations
 //! must agree.
 //!
+//! # Example
+//! The names of the instructions of a block before and after, for a step `sub
+//! j, 1` (or `add j, -1`) and the compare `cmp j, 1`:
+//!
+//! ```text
+//! before: sub, cmp, jle          after: sub, jle
+//! before: add, cmp, jl           after: add, jl
+//! before: add, cmp, jb           after: add, cmp, jb     (carry differs)
+//! before: sub, mov, cmp, jle     after: sub, mov, cmp, jle   (result read between)
+//! ```
+//!
+//! The compare is gone where the step's own flags answer the branch.
+//!
+//! From unit tests `test_the_step_of_a_compared_value_takes_the_compares_place`
+//! and `test_a_step_is_not_the_compare_where_the_carry_or_a_reader_differs` in
+//! `stepflags.rs`.
+//!
 //! # Runs
 //! Once per block in instruction selection, after `comparefold` and before
 //! `rmw`, in `isel/combined.rs`, on SSA values before allocation.

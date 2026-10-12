@@ -30,6 +30,10 @@
 //! [`super::field`]; a rule names a `meta` set of them so a rewrite cannot
 //! drop a call's clobbers, a spill role or a group number.
 //!
+//! # Example
+//! None: a guard answers a question and rewrites nothing. A rule that uses
+//! guards, with the LIR it produces, is the `# Example` of [`super`] and of
+//! `crate::backend::peephole`.
 //! # Used by
 //! The code generated from `peephole.peep`, through [`super::walk`].
 

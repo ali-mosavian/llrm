@@ -54,6 +54,39 @@
 //! procedure is set up late, to at least `WORTH` (three pieces). The early path
 //! then returns through a copy that nothing was saved for.
 //!
+//! # Example
+//! The pass places pieces while masm builds the procedure, after LIR is
+//! final, so its result is in the assembly, not in a LIR dump. A function that
+//! returns `k` at once when `n` is 0 and otherwise loops over calls to `g`:
+//!
+//! ```asm
+//! f_ proc near
+//! L0_0:
+//!     or eax, eax
+//!     je L0_13          ; early return: no push, no pop
+//! L0_2:
+//!     push ecx          ; set-up in the home block
+//!     push ebx
+//!     push esi
+//!     ; ... loop with `call g_`
+//! L0_14:
+//!     mov eax, edx
+//!     pop esi           ; taken back only on this return
+//!     pop ebx
+//!     pop ecx
+//!     ret
+//! L0_13:
+//!     mov eax, edx
+//!     ret
+//! f_ endp
+//! ```
+//!
+//! The three pushes sit in `L0_2`, which the early return does not reach, and
+//! the early return leaves with a bare `ret`.
+//!
+//! From `-S` of a C function (`if (n == 0) return k;` then a loop calling `g`)
+//! at -O2 -m32; the comments are added.
+//!
 //! # Runs
 //! `wrapped` runs when masm builds a procedure's items, for a procedure that
 //! saves a register or has a frame, whose blocks are all reachable from the

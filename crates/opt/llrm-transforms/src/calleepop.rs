@@ -33,6 +33,49 @@
 //! A function some call of which is not a plain call in its convention keeps
 //! its convention.
 //!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! define internal i16 @work(i16 %a, i16 %b, i16 %c) {
+//! b0:
+//!   %x = add i16 %a, %b
+//!   %y = add i16 %x, %c
+//!   ret i16 %y
+//! }
+//!
+//! define i16 @f(i16 %x) {
+//! b0:
+//!   %p = call i16 @work(i16 %x, i16 2, i16 3)
+//!   %q = call i16 @work(i16 3, i16 %x, i16 1)
+//!   %s = add i16 %p, %q
+//!   ret i16 %s
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! define internal fastcc i16 @work(i16 %a, i16 %b, i16 %c) {
+//! ; ...
+//! }
+//!
+//! define i16 @f(i16 %x) {
+//! b0:
+//!   %p = call fastcc i16 @work(i16 %x, i16 2, i16 3)
+//!   %q = call fastcc i16 @work(i16 3, i16 %x, i16 1)
+//!   %s = add i16 %p, %q
+//!   ret i16 %s
+//! }
+//! ```
+//!
+//! The function and both calls take the `fastcc` convention, so isel emits `ret
+//! N` once and no cleanup after either call.
+//!
+//! From unit test
+//! `an_internal_function_called_directly_twice_pops_its_own_arguments` in
+//! `calleepop_tests.rs`.
+//!
 //! # Runs
 //! A module pass, once, after the interprocedural step, `globaldce` and
 //! `available-externally`, so the callers that remain are the ones that stay.

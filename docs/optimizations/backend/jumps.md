@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/jumps.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/jumps.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:4a5bd9a99e7fa2dd54d0a5d5b11ccb011280d50e95edce22e65373016504e59a -->
+<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:9c53a5dc4aab14e6298eb79008337338911fc680af74e664de9d52c47794b177 -->
 
 # jumps
 
@@ -57,6 +57,34 @@ the frame teardown is emitted around `ret` and its size is known only to
 `max-grow-copy-bb-insns`) is copied into each parent that is its only
 predecessor edge, where the bytes saved are more than the extra copies
 cost.
+
+## Example
+The `Scheduler` stage ends with the loop entered by an explicit jump.
+`ControlFlow` places the blocks and drops the jump to the block that
+follows:
+
+```lir
+=== Scheduler
+    block 0x0000
+      ; ...
+      0x0003  AX := mov -7  ; inserted
+      0x0003  jmp   ; inserted
+    block 0x0004
+      ; ...
+      0x0008  AX := inc AX  ; inserted
+      0x000a  jne   ; inserted
+=== ControlFlow
+    block 0x0000
+      ; ...
+      0x0003  AX := mov -7  ; inserted
+    block 0x0004
+      ; ...
+      0x0008  AX := inc AX  ; inserted
+      0x000a  jne   ; inserted
+```
+
+From `ISEL_DUMP=1` of a nib program (a struct method with a `while` loop,
+called from `main`) at `-m16 -O2`, stages `Scheduler` and `ControlFlow`.
 
 ## Runs
 `ControlFlow` is the last machine phase, because this physical order

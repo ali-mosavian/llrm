@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/nearest.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/nearest.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/nearest.rs sha256:fcd5daca3b71d92f11af1021171f837b6da9ecaf5cf8fb69992f105b586c2224 -->
+<!-- src: crates/opt/llrm-analysis/src/nearest.rs sha256:cd37d7b10956a6982150aff3f1e56affc759419904a9a223e929c5e6bb7809e7 -->
 
 # nearest
 
@@ -41,6 +41,12 @@ largest preorder number first, and within a block the last item first. An
 item reached through two keys is returned once. A block the dominator tree
 does not reach is left out of the chains and, as the query, yields nothing:
 everything dominates it, so the caller decides.
+
+## Example
+None: the module has no MIR input of its own. Its test,
+`test_the_items_that_dominate_a_block_are_found_nearest_first` in
+`nearest.rs`, places items in a generated chain of diamonds and compares
+`dominating` with a scan of every item. The figure above is the worked case.
 
 ## Provides
 The `Nearest` index and its `Walk` iterator. Consumers: [`crate::avail`](avail.md) and

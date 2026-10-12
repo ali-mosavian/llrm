@@ -1,10 +1,10 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/peelsize.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/peelsize.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/peelsize.rs sha256:79989c120a14483b8c69613a4ac3fa3b50d40eb12df32363de52dfad0683aca1 -->
+<!-- src: crates/opt/llrm-analysis/src/peelsize.rs sha256:a80c7c9bdb05a50c6386110806ba1124564e1846645b4bec89fcd7da851ea029 -->
 
 # peelsize
 
-Whether a loop is worth copying out completely, decided before anything is
-cloned.
+Decides whether a counted loop is worth copying out completely, from the
+size the copy would have once constants fold, before anything is cloned.
 
 ## How it works
 `admitted(unit, loop, count, facts, limits, site)` answers for a loop whose
@@ -50,6 +50,40 @@ The tests, in order:
 `Limits::on` replaces `max_unrolled_operations` by `target_percent` of the
 target's `unroll_budget` where both are set. Each decision is logged under
 the `unroll` debug tag.
+
+## Example
+Ten trips, `%acc` starting at 0, under `-Os` (`grows: false`):
+
+```mir
+define i16 @f(i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %b2 ]
+  %go = icmp slt i16 %i, 10
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %sum = add i16 %acc, %i
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}
+```
+
+| loop                                  | `admitted` under `-Os` |
+|---------------------------------------|------------------------|
+| as above: every add folds             | yes                    |
+| 16 trips, `%acc` starting at `%x`     | no                     |
+
+From unit tests
+`a_copy_that_folds_away_is_admitted_whatever_it_would_have_grown_to`
+and `a_copy_no_larger_than_the_loop_is_admitted_even_under_os` in
+`peelsize_tests.rs`.
 
 ## Provides
 `admitted`, `Limits`, `Site`. Consumers: the `peel` and `unroll` passes in

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/upperzero.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/upperzero.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:cf41b0107bd25f2d93aa79405080f5518818baf48f803415e4fbc80e80b0c000 -->
+<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:50f82e5e58d0788d6e9b9facecf113649a068f26fdd06db05ac6cfa7e229713c -->
 
 # upperzero
 
@@ -31,6 +31,21 @@ inserts `movzx r32,r16`: in the preheader of the outermost loop around the
 cell in which nothing disturbs the root, when the loop's entry is one block
 with one successor, or else before the first such cell in the block. It
 repeats until no cell lacks the fact.
+
+## Example
+`mov ecx, 2; xchg esi, ecx; nop` in one block, nothing known on entry:
+
+```lir
+mov ecx, 2          ; ecx is zero above bit 15
+xchg esi, ecx       ; the two bits swap: esi zero, ecx not
+nop                 ; before here: esi in the set, ecx not
+```
+
+The exchange moves the zero upper half from `ecx` to `esi`, so a `movzx` of
+`esi` before it indexes would be redundant.
+
+From unit test `test_an_exchange_swaps_the_zero_upper_halves` in
+`upperzero.rs`.
 
 ## Provides
 `before`, the zero roots before each instruction, keyed by instruction

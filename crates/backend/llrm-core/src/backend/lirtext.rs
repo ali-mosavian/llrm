@@ -17,6 +17,26 @@
 //!       0x0004  v5 := mov v2  ; inserted; parallel-copy 1
 //! ```
 //!
+//! # Example
+//! The first block of `main` after phi elimination:
+//!
+//! ```lir
+//! === PhiElimination
+//!   main: 18 instructions
+//!     block 0x0000
+//!       0x0001  [[bp-0x4]] := mov 0x30000  ; inserted
+//!       ; ...
+//!       0x0002  v2 := mov v3  ; inserted
+//!       0x0003  v1 := mov -7  ; inserted
+//!       0x0003  v5 := mov v1  ; inserted; parallel-copy 1
+//!       0x0003  jmp   ; inserted
+//! ```
+//!
+//! The `v5 := mov v1` is the copy that replaced the loop header's phi.
+//!
+//! From `ISEL_DUMP=1` of a nib program (a struct method with a `while` loop,
+//! called from `main`) at `-m16 -O2`.
+//!
 //! # Used by
 //! `assemble` after each machine phase when `ISEL_DUMP` is set; the register
 //! allocator's tests print input and result with it.

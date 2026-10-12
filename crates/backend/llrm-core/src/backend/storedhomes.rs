@@ -1,4 +1,5 @@
-//! The cells the optimizer proved hold a phi's value, as the body now stands.
+//! Finds the memory cells that provably still hold a phi's value, so a spilled
+//! value read from one needs no store and no slot of its own.
 //!
 //! # How it works
 //! MIR proves, for a phi, that a memory cell already holds its value
@@ -22,6 +23,11 @@
 //! different bytes: both are fixed addresses that `overlap` separates. A
 //! pointer, or two elements of an array, are never apart; what a pointer
 //! reaches is the optimizer's proof, not checked here.
+//!
+//! # Example
+//! No honest example: `held`, `may_write` and `apart` answer queries and print
+//! no LIR of their own. Read the spiller's `ISEL_DUMP=1` output (see
+//! [`crate::backend::lirtext`]) to see a spilled phi read from its home cell.
 //!
 //! # Used by
 //! [`crate::backend::spiller`] and [`crate::backend::floatassign`] (`held`);

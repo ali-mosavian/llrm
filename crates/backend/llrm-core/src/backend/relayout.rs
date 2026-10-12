@@ -50,6 +50,11 @@
 //!
 //! *Laying the frame out a second time*
 //!
+//! # Example
+//! None: the unit tests of this file check the pricing of a frame cell and the
+//! move of a call-private range, not a relaid function, and no test prints one.
+//! Read `Moves` for the displacement rule in the table above.
+//!
 //! # Runs
 //! In `machined_once` (`assemble.rs`), after the first layout is chosen, unless
 //! the target is basic, the frame is native, nothing is spilled, or no frame

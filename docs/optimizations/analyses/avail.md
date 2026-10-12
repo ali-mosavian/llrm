@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/avail.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/avail.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/avail.rs sha256:a7cbbb1e7572b421c74e22c9dec65eda10cd3570e0f4090a38a7f505c8d76da0 -->
+<!-- src: crates/opt/llrm-analysis/src/avail.rs sha256:f6cb42570164208573a2b23817d73ad65d7eacc4bd84edf6854db432064e8ef6 -->
 
 # avail
 
@@ -60,6 +60,49 @@ other unknown instruction empties it.
 
 Cells that share bytes share an overlap bucket (`regions`), so a cell is
 compared with its bucket and not with all cells.
+
+## Example
+Forwarding. Both arms of a join store `%v` to the cell, so the load at the
+join is `%v` (with `%w` on one arm instead, it is not forwarded):
+
+```mir
+define i16 @f(i1 %c, i16 %v, i16 %w) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 %v, ptr getelementptr (i8, ptr @g, i16 32)
+  br label %b3
+
+b2:
+  store i16 %v, ptr getelementptr (i8, ptr @g, i16 32)
+  br label %b3
+
+b3:
+  %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+  ret i16 %x
+}
+```
+
+`forwardable_walk` returns `Forward { at: the load in b3, value: %v }`.
+
+From unit test `test_a_join_keeps_what_every_predecessor_agrees_on` in
+`avail_tests.rs`.
+
+Dead store. The first store is overwritten before any read, so `dead_stores`
+returns it:
+
+```mir
+define void @f(ptr %p) {
+b0:
+  store i16 1, ptr getelementptr (i8, ptr @g, i16 32)
+  store i16 2, ptr getelementptr (i8, ptr @g, i16 32)
+  ret void
+}
+```
+
+From unit test `test_a_store_is_dead_only_when_overwritten_before_any_read`
+in `avail_tests.rs`.
 
 ## Provides
 `forwardable_walk`, `dead_stores`, `dead_stores_escaping`, and the

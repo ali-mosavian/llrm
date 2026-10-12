@@ -1,4 +1,5 @@
-//! Which memory cells nothing outside a function can read.
+//! Finds the memory cells nothing outside a function can read, so dead store
+//! elimination can drop a store that no later code observes.
 //!
 //! # How it works
 //! A store is dead when everything after it overwrites the cell before reading
@@ -28,6 +29,39 @@
 //!    %s  published (read argument) ----------------+
 //!    %buf published (stored into %s, step 3)
 //! ```
+//!
+//! # Example
+//! `%x` is never read and its address never leaves the function, so it is
+//! private:
+//!
+//! ```mir
+//! define void @f(i1 %c, i1 %d) {
+//! b0:
+//!   %x = alloca i16
+//!   br label %b1
+//!
+//! b1:
+//!   br i1 %c, label %b2, label %b3
+//!
+//! b2:
+//!   store i16 1, ptr %x
+//!   br label %b3
+//!
+//! b3:
+//!   br i1 %d, label %b1, label %b4
+//!
+//! b4:
+//!   ret void
+//! }
+//! ```
+//!
+//! | `avail::dead_stores`     | dead stores |
+//! |--------------------------|-------------|
+//! | with `private(..)`       | `b2`[0]     |
+//! | without                  | none        |
+//!
+//! From unit test `test_a_store_no_iteration_reads_is_dead_inside_its_loop` in
+//! `observers_tests.rs`.
 //!
 //! # Provides
 //! `private` and `private_of` (the same test with `Published`, the manager's

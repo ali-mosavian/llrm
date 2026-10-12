@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/stepflags.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/stepflags.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/stepflags.rs sha256:7981d907375af0f2aded9133dfb0da7dbd1531acfa30792590f7785f44d2dfab -->
+<!-- src: crates/backend/llrm-core/src/backend/stepflags.rs sha256:cb6adc026568702359dbae2b3b210aac2ad14f6248e0ca0f29994fa2a6479890 -->
 
 # stepflags
 
@@ -29,6 +29,23 @@ constant is the most negative value, whose negation overflows. The step's
 result must not be read between the step and the compare, since the step
 moves down past those instructions. Widths and the absence of relocations
 must agree.
+
+## Example
+The names of the instructions of a block before and after, for a step `sub
+j, 1` (or `add j, -1`) and the compare `cmp j, 1`:
+
+```text
+before: sub, cmp, jle          after: sub, jle
+before: add, cmp, jl           after: add, jl
+before: add, cmp, jb           after: add, cmp, jb     (carry differs)
+before: sub, mov, cmp, jle     after: sub, mov, cmp, jle   (result read between)
+```
+
+The compare is gone where the step's own flags answer the branch.
+
+From unit tests `test_the_step_of_a_compared_value_takes_the_compares_place`
+and `test_a_step_is_not_the_compare_where_the_carry_or_a_reader_differs` in
+`stepflags.rs`.
 
 ## Runs
 Once per block in instruction selection, after `comparefold` and before

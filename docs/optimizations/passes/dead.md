@@ -1,9 +1,10 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dead.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dead.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:438f097ce93f60b604c4e8a4dd4b9df906d2c826c4ba93dd96d74f1cc9d282e1 -->
+<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:a4e4885bee5affa06a7e5490491073349414bd371082cc3f04cc85358bdb63a4 -->
 
 # dead
 
-Instructions nothing needs, removed: LLVM's ADCE and DCE.
+Instructions nothing needs, removed: LLVM's ADCE and DCE. Work whose result
+no one reads only costs code and clocks, and other passes leave it behind.
 
 ## How it works
 An instruction stays whatever reads it when `llrm_mir::memory::only_value`
@@ -31,6 +32,29 @@ nothing that stays reads are erased with it.
 `assumptions_dropped` is a separate step over a module. It erases every call
 of `llvm.assume` and then runs `dead` on each function until nothing
 changes, so a condition kept alive only by its assume costs no compare.
+
+## Example
+Before:
+```mir
+define i16 @f(i16 %x) {
+b0:
+  %doomed = mul i16 %x, 3
+  %kept = add i16 %x, 1
+  ret i16 %kept
+}
+```
+After:
+```mir
+define i16 @f(i16 %x) {
+b0:
+  %kept = add i16 %x, 1
+  ret i16 %kept
+}
+```
+`%doomed` has no reader and no effect, so it goes.
+
+From unit test `test_dead_code_goes_and_the_bytes_are_still_accounted_for`
+in `dead_tests.rs`.
 
 ## Runs
 Once per pass of the function fixed point, after `algebraic`, and again

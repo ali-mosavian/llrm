@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/needs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/needs.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/needs.rs sha256:ec164b0c0068f37be04946426cac0a07d536ce49f7d0a287c1db44ad50f00094 -->
+<!-- src: crates/backend/llrm-core/src/backend/needs.rs sha256:610ffc9e5892d6004dd93acf57eee09b0c36fc5546171f04e3e13bebbcf135e2 -->
 
 # needs
 
@@ -28,6 +28,11 @@ changes one block recomputes one block.
 
 `LLRM_CHECK_NEEDS` runs a skipped pass anyway and asserts it changed
 nothing.
+
+## Example
+No honest example: the bits steer which sub-pass of `peephole` runs and
+change no instruction. `LLRM_CHECK_NEEDS` checks a skipped pass against its
+bits.
 
 ## Used by
 `peephole`.

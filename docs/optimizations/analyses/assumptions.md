@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/assumptions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/assumptions.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/assumptions.rs sha256:f9bf0248051a5445f811c5c918a2fe387f1ca059f0b73fadf9962e571e9a4a43 -->
+<!-- src: crates/opt/llrm-analysis/src/assumptions.rs sha256:b1276cb7b089da7cba3cd896bc80daf6e8080e078ea8561207494317951f0aa6 -->
 
 # assumptions
 
@@ -27,6 +27,30 @@ A block's own assumes are not part of `above` for that block, so a use
 before an assume in the same block is not covered by it. The caller reads
 `here` for the part of the block it is in. `above` returns early when no
 block assumes anything.
+
+## Example
+The assume in `entry` holds in every block `entry` dominates:
+
+```mir
+declare void @llvm.assume(i1)
+
+define i16 @f(i16 %n, i16 %len, i1 %c) {
+entry:
+  %fits = icmp ult i16 %n, %len
+  call void @llvm.assume(i1 %fits)
+  br i1 %c, label %loop, label %done
+loop:
+  br label %done
+done:
+  ret i16 0
+}
+```
+
+`here(entry)` is `[%fits]`, and `above` of `loop` and of `done` is
+`[%fits]`. `guards::holds` then proves `n <u len` in both blocks.
+
+From unit test `test_an_assume_proves_its_compare_below_its_block` in
+`guards_tests.rs`.
 
 ## Provides
 The assumed conditions per block. Consumers: [`crate::guards`](guards.md) turns them

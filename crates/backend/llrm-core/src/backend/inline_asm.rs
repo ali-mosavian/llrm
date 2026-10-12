@@ -18,6 +18,11 @@
 //!   `(Ax, 8)`); the names are x86's whatever the target.
 //! - `machine` is the inverse: the machine register for a root and a width.
 //!
+//! # Example
+//! No honest example: the module is a table of register names, and the
+//! assembler that turns an inline block into bytes is `llrm_x86::asm`. Read its
+//! tests for inputs and bytes.
+//!
 //! # Used by
 //! `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`).
 

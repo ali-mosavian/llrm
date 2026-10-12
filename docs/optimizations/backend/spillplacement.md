@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/spillplacement.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/spillplacement.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/spillplacement.rs sha256:60111e5197b1533427e627c126275e39be3dd421709b1ee49c7245d796c5ef43 -->
+<!-- src: crates/backend/llrm-core/src/backend/spillplacement.rs sha256:8e9d2cd356d38dd415325679505e026fbbfabbfb1f78455d6cd9e1cdc28ce4f6 -->
 
 # spillplacement
 
@@ -45,6 +45,11 @@ register.
 
 The result drives [`crate::backend::splitkit`](splitkit.md): blocks whose borders are in
 registers form the region a piece holds.
+
+## Example
+None: this module answers a placement query for `splitkit` and prints
+nothing, and the tests build bodies in code and assert on the bundles. Read
+`splitkit` for the effect.
 
 ## Runs
 Not a pass: [`crate::backend::splitkit`](splitkit.md) queries it for each value it

@@ -25,6 +25,9 @@
 //! Union, difference, intersection, subset and disjointness are single word
 //! operations. Inserting a lane that is none of the 72 panics.
 //!
+//! # Example
+//! No example: a bit set type. `liveness.rs` shows what it holds.
+//!
 //! # Used by
 //! `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`,
 //! `regthrash`, `exactaddress`, `sharedstores`, `machinecse`), `loopslots`,

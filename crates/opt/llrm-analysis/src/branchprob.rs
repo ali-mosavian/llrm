@@ -65,6 +65,33 @@
 //! The propagation takes edge probabilities as a function, so the backend uses
 //! it too (`propagated_edges`, `Cycle`) and MIR and LIR estimates agree.
 //!
+//! # Example
+//! A one-block loop with no proven trip count:
+//!
+//! ```mir
+//! define i16 @f(i16 %n) {
+//! entry:
+//!   br label %head
+//! head:
+//!   %i = phi i16 [ 0, %entry ], [ %j, %head ]
+//!   %j = add i16 %i, 1
+//!   %c = icmp slt i16 %j, %n
+//!   br i1 %c, label %head, label %out
+//! out:
+//!   ret i16 %j
+//! }
+//! ```
+//!
+//! | Fact | Value |
+//! | --- | --- |
+//! | heuristic at `head` | `Loop` |
+//! | probability `head -> head` | 124/128 |
+//! | frequency of `head` | 32 |
+//! | frequency of `out` | 1 |
+//!
+//! From unit test `test_a_loop_stays_in_31_of_32_and_its_header_runs_32_times`
+//! in `branchprob_tests.rs`.
+//!
 //! # Provides
 //! `Odds { taken, frequency, by }` from `estimated`, `propagated` and
 //! `propagated_edges`, and the constants `LOOP` and `LIKELY` (0.8, the edge

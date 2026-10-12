@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lanes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lanes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lanes.rs sha256:a67bb8a714ce20f748e4764a140e7888ea60a7bb8e185241d0cbb1ee51a6c4f9 -->
+<!-- src: crates/backend/llrm-core/src/backend/lanes.rs sha256:3709eeac9053ef3cfa98b24265cd03940577cca170cea01fd940ce33ac903f37 -->
 
 # lanes
 
@@ -29,6 +29,9 @@ block-beta
 
 Union, difference, intersection, subset and disjointness are single word
 operations. Inserting a lane that is none of the 72 panics.
+
+## Example
+No example: a bit set type. `liveness.rs` shows what it holds.
 
 ## Used by
 `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`,

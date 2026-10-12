@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/calleepop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/calleepop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:c3a244a56354ffa80c2dd5360707ce480edce050e06c6d2e114947565727e49d -->
+<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:2e8179f57139722bf3ddc55c79063f77365a120f2785b1e1c80139275565ddd9 -->
 
 # calleepop
 
@@ -37,6 +37,49 @@ registers cost no more than the stack at either end.
 
 A function some call of which is not a plain call in its convention keeps
 its convention.
+
+## Example
+Before:
+
+```mir
+define internal i16 @work(i16 %a, i16 %b, i16 %c) {
+b0:
+  %x = add i16 %a, %b
+  %y = add i16 %x, %c
+  ret i16 %y
+}
+
+define i16 @f(i16 %x) {
+b0:
+  %p = call i16 @work(i16 %x, i16 2, i16 3)
+  %q = call i16 @work(i16 3, i16 %x, i16 1)
+  %s = add i16 %p, %q
+  ret i16 %s
+}
+```
+
+After:
+
+```mir
+define internal fastcc i16 @work(i16 %a, i16 %b, i16 %c) {
+; ...
+}
+
+define i16 @f(i16 %x) {
+b0:
+  %p = call fastcc i16 @work(i16 %x, i16 2, i16 3)
+  %q = call fastcc i16 @work(i16 3, i16 %x, i16 1)
+  %s = add i16 %p, %q
+  ret i16 %s
+}
+```
+
+The function and both calls take the `fastcc` convention, so isel emits `ret
+N` once and no cleanup after either call.
+
+From unit test
+`an_internal_function_called_directly_twice_pops_its_own_arguments` in
+`calleepop_tests.rs`.
 
 ## Runs
 A module pass, once, after the interprocedural step, `globaldce` and

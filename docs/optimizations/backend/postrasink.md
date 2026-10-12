@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postrasink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:14fe44369eefbb49c528c2e4fc83e1d4b475584d88288654767a17a7ff64aca1 -->
+<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:51611f17411436a6c1940681a5dd8294727ca8f48026f10a2b4bfe0aa33504e8 -->
 
 # postrasink
 
@@ -44,6 +44,45 @@ The point is shrink wrapping. A path that returns at once then has no copy
 and no store of a saved register, and the prologue can be placed after the
 test, as gcc and LLVM do. A store of a slot only one successor reads can be
 the only thing that made a frame necessary on the other path.
+
+## Example
+A function copies its argument into `DI`, then either returns at once or
+loops reading `DI`:
+
+Before:
+
+```lir
+block 0x0001
+  0x0001  DI := mov DX
+  0x0002  cmp AX, BX
+  0x0003  jl
+block 0x0005
+  0x0005  ret
+block 0x0009
+  0x0009  AX := add AX, DI
+  0x000a  jmp
+```
+
+After:
+
+```lir
+block 0x0001
+  0x0002  cmp AX, BX
+  0x0003  jl
+block 0x0005
+  0x0005  ret
+block 0x0009
+  0x0001  DI := mov DX
+  0x0009  AX := add AX, DI
+  0x000a  jmp
+```
+
+Only block 0x0009 reads `DI` and has no other predecessor, so the copy moves
+there and the path through 0x0005 runs without it.
+
+From unit test `test_a_copy_only_one_successor_reads_moves_into_it` in
+`postrasink.rs`, which asserts the copy count per block (0 in 0x0001, 1 in
+0x0009).
 
 ## Runs
 A sub-pass of [`crate::backend::peephole`](peephole.md), after `spillforward`: a reload

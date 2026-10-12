@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/regions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/regions.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/regions.rs sha256:db1557b9f79b101e64abf7ca9893a0c1c96cdb172fb5645fc8009db005b67cb9 -->
+<!-- src: crates/opt/llrm-analysis/src/regions.rs sha256:1780a27faaf58584b11e9b7179a5b1167ebd91e58999a6ece0a35ff7c876af02 -->
 
 # regions
 
-Whether two memory references can meet: `may_alias`, `overlapping`, and the
-indexes that find the candidates without comparing every pair.
+Decides whether a write through one memory reference can land on another
+(`may_alias`, `overlapping`), and indexes cells so a write checks only those
+that might meet it instead of every pair.
 
 ## How it works
 `overlapping(one, other, known, other_known, program)` asks whether a write
@@ -53,6 +54,29 @@ entry without provenance; more than needed, never fewer.
 Which linear memory holds no program data is the target's fact, and which
 address spaces hold program data the segment layout's; both come from the
 program the manager hands analyses as `Outer::program`.
+
+## Example
+Three 4-byte stores off `@g`:
+
+```mir
+@g = global [64 x i8] zeroinitializer
+
+define void @f() {
+b0:
+  store i32 0, ptr getelementptr (i8, ptr @g, i16 10)
+  store i32 0, ptr getelementptr (i8, ptr @g, i16 13)
+  store i32 0, ptr getelementptr (i8, ptr @g, i16 14)
+  ret void
+}
+```
+
+| `overlapping(first, ..)` | bytes vs first's [10, 14) | answer      |
+|--------------------------|---------------------------|-------------|
+| second store             | [13, 17)                  | `Ok(true)`  |
+| third store              | [14, 18)                  | `Ok(false)` |
+
+From unit test `overlapping_same_base_statics_use_half_open_byte_ranges` in
+`regions.rs`.
 
 ## Provides
 `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`,

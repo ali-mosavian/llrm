@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/floatfacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/floatfacts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/floatfacts.rs sha256:811310dcfd6dffbc3d44c8d3356b02740fb1ba0a1d4c19ab185296162a176b81 -->
+<!-- src: crates/opt/llrm-analysis/src/floatfacts.rs sha256:1a006e7ed716a5870d16a666b4d0ac9d4c9e3c4ef0265d457a5e91dc456d9459 -->
 
 # floatfacts
 
@@ -46,6 +46,39 @@ preheader) whose float state lives in memory. If induction proves the trip
 count it replays the latch `count` times over the cells found before the
 loop (`repeated`) and reports what each stored cell holds at exit as a
 `LoopExit`. `cells_before` reads the cells one point holds over these facts.
+
+## Example
+Float values stored and loaded through memory, with exact and inexact
+results:
+
+```mir
+@m = global [12 x i8] zeroinitializer
+
+define double @f() {
+b0:
+  store float 2.0, ptr @m
+  store double 4.0, ptr getelementptr (i8, ptr @m, i16 4)
+  %a = load float, ptr @m
+  %b = load double, ptr getelementptr (i8, ptr @m, i16 4)
+  %wide = fpext float %a to double
+  %sum = fadd double %wide, %b
+  %product = fmul double %sum, 8.0
+  %quotient = fdiv double %sum, 8.0
+  %third = fdiv double 1.0, 3.0
+  ; ...
+}
+```
+
+| Value | `known` |
+| --- | --- |
+| `%wide` | 2 |
+| `%sum` | 6 |
+| `%product` | 48 |
+| `%quotient` | 3/4 |
+| `%third` | none (1/3 is not a binary fraction) |
+
+From unit test `test_known_inputs_reach_float_computations` in
+`floatfacts_tests.rs`.
 
 ## Provides
 `Solved { integers, facts }`, `solved_with`, `solved_over`, `known`,

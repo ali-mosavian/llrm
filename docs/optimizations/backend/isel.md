@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/isel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/isel.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/isel.rs sha256:547a3588b20ac3d000ada4b05212ef655df08caed2a8bd7e4be06c6a17cd17b7 -->
+<!-- src: crates/backend/llrm-core/src/backend/isel.rs sha256:c394c4c7415c94774aa3283c36abb252a1d171e6b2a411e701cfaa65d677599a -->
 
 # isel
 
@@ -105,6 +105,38 @@ value used as a dword address component a dword one
 (`addressforms::promote`); if the function has a landing pad, `rooted` adds
 a root block that reaches it. Block frequencies and branch odds are set from
 the MIR's.
+
+## Example
+Before, the loop of `Acc.run` inlined into `main` (the MIR `-O2` leaves):
+
+```mir
+2:
+  %lsr.iv1 = phi i16 [ -7, %b1 ], [ %lsr.iv.next, %2 ]
+  %3 = load i16, ptr addrspace(5) %1
+  %4 = add i16 %3, 3
+  store i16 %4, ptr addrspace(5) %1
+  %lsr.iv.next = add i16 %lsr.iv1, 1
+  %5 = icmp ne i16 %lsr.iv.next, 0
+  br i1 %5, label %2, label %6
+```
+
+After, the block as the first machine phase receives it:
+
+```lir
+    block 0x0004
+      v5 := phi 0x0000:v1 0x0004:v4
+      ; ...
+      0x0007  [[abs+0x0] v2@unplaced] := add [[abs+0x0] v2@unplaced], 0x3  ; inserted
+      0x0008  v4 := add v5, 0x1  ; inserted
+      0x000a  cmp v4, 0x0  ; inserted
+      0x000a  jne   ; inserted
+```
+
+The load, add and store of one cell are one `add` on memory, and the
+compare and branch are `cmp` and `jne`; registers are still virtual.
+
+From `ISEL_DUMP=1` of a nib program (a struct method with a `while` loop,
+called from `main`) at `-m16 -O2`, stage `FarIndirectCalls`.
 
 ## Runs
 First of the staged phases in `assemble::staged`, once per function and

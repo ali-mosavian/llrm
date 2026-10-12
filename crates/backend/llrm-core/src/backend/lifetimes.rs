@@ -34,6 +34,10 @@
 //! start, or after its end) disqualifies it: it is dropped from the result and
 //! so shares nothing.
 //!
+//! # Example
+//! No example: no dump prints the intervals, and no test compares them as text.
+//! Read `slots.rs`, where they decide which locals share a cell.
+//!
 //! # Used by
 //! `isel` takes the intervals in its own instruction numbering; `slots` then
 //! lets the locals whose intervals do not overlap share a slot.

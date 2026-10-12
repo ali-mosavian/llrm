@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/graph.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/graph.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/graph.rs sha256:0c445f7a2cc15a906eb30fa4191f48c67a776f5174d24916efb89fbb3c963d86 -->
+<!-- src: crates/opt/llrm-analysis/src/graph.rs sha256:b89bf8ff41ef66afefdbdf70defe7be46e0cdf926a8733920ab93de401bebafd -->
 
 # graph
 
@@ -28,6 +28,9 @@ flowchart LR
 The backend's `LirBlock` has its own copy of these walks in
 `crates/backend/llrm-core/src/analysis/loops.rs`; both build on
 `llrm_support::graph`.
+
+## Example
+No honest example: this module only holds `loops`. Read the example there.
 
 ## Provides
 The algorithms of `loops`. Consumers: [`crate::cfg`](cfg.md) (`Loop`, `Node`,

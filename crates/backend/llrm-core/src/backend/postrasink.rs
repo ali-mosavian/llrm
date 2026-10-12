@@ -40,6 +40,45 @@
 //! test, as gcc and LLVM do. A store of a slot only one successor reads can be
 //! the only thing that made a frame necessary on the other path.
 //!
+//! # Example
+//! A function copies its argument into `DI`, then either returns at once or
+//! loops reading `DI`:
+//!
+//! Before:
+//!
+//! ```lir
+//! block 0x0001
+//!   0x0001  DI := mov DX
+//!   0x0002  cmp AX, BX
+//!   0x0003  jl
+//! block 0x0005
+//!   0x0005  ret
+//! block 0x0009
+//!   0x0009  AX := add AX, DI
+//!   0x000a  jmp
+//! ```
+//!
+//! After:
+//!
+//! ```lir
+//! block 0x0001
+//!   0x0002  cmp AX, BX
+//!   0x0003  jl
+//! block 0x0005
+//!   0x0005  ret
+//! block 0x0009
+//!   0x0001  DI := mov DX
+//!   0x0009  AX := add AX, DI
+//!   0x000a  jmp
+//! ```
+//!
+//! Only block 0x0009 reads `DI` and has no other predecessor, so the copy moves
+//! there and the path through 0x0005 runs without it.
+//!
+//! From unit test `test_a_copy_only_one_successor_reads_moves_into_it` in
+//! `postrasink.rs`, which asserts the copy count per block (0 in 0x0001, 1 in
+//! 0x0009).
+//!
 //! # Runs
 //! A sub-pass of [`crate::backend::peephole`], after `spillforward`: a reload
 //! on the other path is gone by then, so the store need not run there. Once per

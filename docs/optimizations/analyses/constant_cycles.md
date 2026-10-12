@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/constant_cycles.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/constant_cycles.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/constant_cycles.rs sha256:b8b4df06d313b762c6f97968544e77df6fd9e0cdf39d0f717e1d6bc7a3bd1d82 -->
+<!-- src: crates/opt/llrm-analysis/src/constant_cycles.rs sha256:fb14965f0b42cc75d2b8f4cd40711a14e489272667da6b26332ec0db3dd5e8ab -->
 
 # constant_cycles
 
@@ -38,6 +38,34 @@ incoming values of executable edges, and the entry's phis also meet
 `Overdefined`, since the entry runs before any back edge. A block whose
 branch `choose` defers (`None`) keeps every successor once nothing else is
 left to resolve.
+
+## Example
+A loop whose carried value adds 0 to itself, so only the cycle proves it:
+
+```mir
+define void @f(i32 %incoming, i1 %more) {
+b0:
+  br label %b10
+
+b10:
+  %joined = phi i32 [ 7, %b0 ], [ %carried, %b10 ]
+  %carried = add i32 %joined, 0
+  br i1 %more, label %b10, label %b20
+
+b20:
+  ret void
+}
+```
+
+| Value | Fact |
+| --- | --- |
+| `%joined` | `Known { n: 7, width: 32 }` |
+| `%carried` | `Known { n: 7, width: 32 }` |
+
+With step 1, or with `%incoming` as the source of the add, neither is known.
+
+From unit test `test_unchanged_loop_value_is_constant_through_its_backedge`
+in `constant_cycles_tests.rs`.
 
 ## Provides
 `State`, `Successors` and `propagated`. Consumers: [`crate::consts`](consts.md)

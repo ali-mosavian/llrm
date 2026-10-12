@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/overlap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/overlap.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/overlap.rs sha256:261c21f221ad31248d34f3db86097edf6e56a68dbb4c5e1b10f073e78723035e -->
+<!-- src: crates/backend/llrm-core/src/backend/overlap.rs sha256:906f906b28290d04c726cdc5c12e29814780e637d205dfb804f6e6d597f5582d -->
 
 # overlap
 
@@ -48,6 +48,10 @@ they may meet. An address with a base register, or in the root or `Named`
 region, covers its whole region. A root-region address is known not to be
 the stack, so stack spans are removed from the comparison. An unknown
 address or an end past 2^63 may overlap anything.
+
+## Example
+No honest example: a yes-or-no answer about two operands, with no LIR of its
+own. Read `tests` in this file for the operand pairs and the answers.
 
 ## Used by
 `spiller`, `floatassign`, `storedhomes`.

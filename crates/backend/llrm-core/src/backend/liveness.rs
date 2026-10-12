@@ -34,6 +34,10 @@
 //! SI, DI and the frame register are not return inputs: their incoming values
 //! live in the prologue's saves, so a dead final write to one stays removable.
 //!
+//! # Example
+//! No example: the lane sets it computes are printed by no dump, and the tests
+//! assert them without printing. See `lanes.rs` for the lane model.
+//!
 //! # Used by
 //! `peephole` and the sub-passes it runs (`regthrash`, `copysink`,
 //! `postrasink`, `exactaddress`, `upperzero`, `sharedstores`, `machinedce`),

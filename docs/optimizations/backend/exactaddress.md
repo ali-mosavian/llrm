@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/exactaddress.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/exactaddress.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/exactaddress.rs sha256:d7c2d0de818c467bff0d0802c1054906265015b39c592a4799a80c8cb9841b25 -->
+<!-- src: crates/backend/llrm-core/src/backend/exactaddress.rs sha256:06aa4566b5618b6f2ecd04769eb0a1dcdb089ee741b81eaa07de3e104cafb2c4 -->
 
 # exactaddress
 
@@ -53,6 +53,14 @@ requirement the analysis cannot prove over the extended body is dropped.
 Folds that share an instruction are not made in the same round, and a
 round folds one register of a cell; up to four rounds run, so the other
 register folds next.
+
+## Example
+No honest LIR example. The LIR text (`lir_stage`, `ISEL_DUMP=1`) prints a
+memory operand without its index registers and scale, so the dump of the
+phase before and after it is the same text where the fold happened. Read the
+unit test `test_a_copied_scaled_index_folds_into_every_symbolic_reader` in
+this file: it builds the `mov si,ax; shl si,1` chain and asserts the cell's
+registers and scale after the fold.
 
 ## Runs
 Inside the peephole phase, after the pattern rewrites, before

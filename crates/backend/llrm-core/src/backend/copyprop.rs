@@ -42,6 +42,12 @@
 //!
 //! A body with phis is returned unchanged.
 //!
+//! # Example
+//! No honest example: the pass runs inside the peephole phase, whose dump mixes
+//! it with every other rewrite, and its unit test builds the body in Rust. Run
+//! a program with `ISEL_DUMP=1` and compare the `ParallelCopy` and `Peephole`
+//! stages for the renamed operands.
+//!
 //! # Runs
 //! Inside the peephole phase, after register thrashing and frame copies.
 //! Skipped when the body holds no register copy (`needs::COPY`). Runs again

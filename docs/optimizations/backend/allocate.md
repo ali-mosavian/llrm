@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:0bbe9eaca9c348ecbb43c890558d2eb85a6440f29c615279f3b40a20835d98f7 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:ceb88247ffba91aa633726dabf78a538f6df60ee966b600c1b15f08d6996a4f4 -->
 
 # allocate
 
@@ -147,6 +147,75 @@ protected values. The frame is restored between trials.
 (selector and address registers included), deletes identity moves and
 dead allocator copies, and refuses a body with a spill left. `datagroup`
 then restores DS where a value held it.
+
+## Example
+A dword multiply by 5 (`Times5& = x * 5`), before and after. `; inserted`
+notes are dropped. `v4` and `v5` are pinned to EAX and EDX (`requires`) and
+everything else is free.
+
+Before (`Coalescer`):
+
+```lir
+0x0000  v1 := mov [[bp+0x6]]
+0x0000  v2 := mov [None v1@unplaced]
+0x0001  v4 := mov v2
+0x0001  v4 := shl v4, 0x2
+0x0001  v4 := add v4, v2
+0x0002  v5 := mov v4
+0x0002  v5 := shr v5, 0x10
+0x0002     ; requires v4@EAX,v5@EDX
+```
+
+After (`RegAlloc`):
+
+```lir
+0x0000  BX := mov [[bp+0x6]]
+0x0000  EBX := mov [None v1@BX]
+0x0001  EAX := mov EBX
+0x0001  EAX := shl EAX, 0x2
+0x0001  EAX := add EAX, EBX
+0x0002  EDX := mov EAX
+0x0002  EDX := shr EDX, 0x10
+0x0002     ; ...
+0x0002     ; requires v6@EAX,v7@EDX
+```
+
+Every value is a register; the pinned values are fresh ones (`v6`, `v7`),
+see `constrain`.
+
+When registers run out, values get frame cells. Eight LONG parameters
+multiplied in pairs (`Mix&`), the first lines, before (`Coalescer`):
+
+```lir
+0x0000  v1 := mov [[bp+0x14]]
+0x0000  v9 := mov [None v1@unplaced]
+0x0001  v2 := mov [[bp+0x12]]
+0x0001  v10 := mov [None v2@unplaced]
+0x0002  v11 := mov v9
+0x0002  v11 := imul v11, v10
+; ...
+```
+
+After (`RegAlloc`): `v9` and `v11` are stored to frame cells, and `v11` is
+read back before its update (`spill reload`):
+
+```lir
+0x0000  BX := mov [[bp+0x14]]
+0x0000  ECX := mov [None v1@BX]
+0x0001  BX := mov [[bp+0x12]]
+0x0001  EAX := mov [None v2@BX]
+0x0002  EBX := mov ECX
+0x0002  [[bp-0x18]] := mov EBX
+0x0002     ; ...
+0x0002  [[bp-0x4]] := mov ECX
+0x0002  EBX := mov [[bp-0x18]]  ; spill reload
+0x0002  EBX := imul EBX, EAX
+0x0002  [[bp-0x18]] := mov EBX
+; ...
+```
+
+From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of `Times5&` and of `Mix&`, first
+route.
 
 ## Runs
 Once per function and route in the machine phases (`regalloc`), after

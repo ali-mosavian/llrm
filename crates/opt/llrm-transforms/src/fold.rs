@@ -1,6 +1,8 @@
 //! Replaces every integer value [`llrm_analysis::consts`] knows by its
 //! constant, folds a pure operation on each edge of a join, and puts compares
-//! and identities in canonical form.
+//! and identities in canonical form. A constant operand is free to encode and
+//! lets the later passes see through the computation; the definition it
+//! replaces is left dead.
 //!
 //! # How it works
 //! Facts come from `consts`: "the low `width` bits of this value are `n`",
@@ -35,18 +37,50 @@
 //! incoming edge, becomes a phi of those numbers. An operation that also reads
 //! an unknown value stays.
 //!
-//! ```text
-//!  b3:                                 b3:
-//!    %p = phi [1,%b1], [2,%b2]           %p  = phi [1,%b1], [2,%b2]
-//!    %y = add %p, %x                     %s1 = phi [11,%b1], [12,%b2]
-//!    %s = add %p, 10          ==>        %y  = add %p, %x
-//!    %t = add %s, %y                     %t  = add %s1, %y
-//! ```
-//!
 //! Then [`crate::floatfold`] runs on the same body (exact floats, and the
 //! integers of exact conversions), and [`crate::canonical`] swaps a compare
 //! whose constant is on the left and simplifies identities. The pass reports
 //! every analysis invalid when anything changed.
+//!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! define i16 @f(i1 %c, i16 %x) {
+//! b0:
+//!   br i1 %c, label %b1, label %b2
+//!
+//! b1:
+//!   br label %b3
+//!
+//! b2:
+//!   br label %b3
+//!
+//! b3:
+//!   %p = phi i16 [ 1, %b1 ], [ 2, %b2 ]
+//!   %y = add i16 %p, %x
+//!   %s = add i16 %p, 10
+//!   %t = add i16 %s, %y
+//!   ret i16 %t
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! b3:
+//!   %p = phi i16 [ 1, %b1 ], [ 2, %b2 ]
+//!   %s1 = phi i16 [ 11, %b1 ], [ 12, %b2 ]
+//!   %y = add i16 %p, %x
+//!   %t = add i16 %s1, %y
+//!   ret i16 %t
+//! ```
+//!
+//! `%s` is a number on both edges, so it becomes the phi `%s1`; `%y` reads
+//! the unknown `%x` and stays. Blocks `b0` to `b2` are unchanged.
+//!
+//! From unit test `test_an_operation_on_a_join_is_folded_on_its_edges` in
+//! `fold_tests.rs`.
 //!
 //! # Runs
 //! Second in the per-body pipeline, after `sroa`, and again after the header

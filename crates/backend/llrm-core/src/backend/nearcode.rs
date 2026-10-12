@@ -19,6 +19,10 @@
 //! A far caller needs no segment in the return address because every caller is
 //! in the same module, and so in the same code segment.
 //!
+//! # Example
+//! No honest example: the pass changes the address space of MIR functions and
+//! touches no LIR. Read `test_*` in this file for the MIR it accepts.
+//!
 //! # Runs
 //! Once per module at the start of `assemble::assembled_by` (`mir near code`),
 //! before global names are made and before any function is selected. Whether

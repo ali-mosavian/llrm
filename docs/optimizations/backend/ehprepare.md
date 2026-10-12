@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/ehprepare.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ehprepare.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/ehprepare.rs sha256:f28001276b489adf095283dab925993a20e1eea1a375f21adcc95fd3a7102222 -->
+<!-- src: crates/backend/llrm-core/src/backend/ehprepare.rs sha256:c039ead1ca6d356c3087db682439e90e3ab682d09818e350e97dc7531c54ecc6 -->
 
 # ehprepare
 
@@ -47,6 +47,61 @@ shape of LLVM's SjLjEHPrepare, with the runtime as the longjmp.
   register: each such value is stored where it is made and reloaded where
   the pad reads it. An entry-block alloca is the frame's own address and
   stays.
+
+## Example
+A function that registers a handler, reads `A&`, and reads `%x` again in the
+pad. The registration becomes a call of `B$OEGA`, the selector becomes a
+load of `$QB$LANDED`, and `%x`, live into the pad, goes through the slot
+`%demoted`.
+
+Before:
+
+```mir
+define void @main() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  %site = alloca i16
+  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 true)
+  %x = load i32, ptr @"A&"
+  %y = add i32 %x, 1
+  ; ...
+landing:
+  %e = landingpad { ptr, i32 } catch ptr null
+  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 false)
+  %err = extractvalue { ptr, i32 } %e, 1
+  %code = trunc i32 %err to i16
+  store i16 %code, ptr @"CAUGHT%"
+  store i32 %x, ptr @"A&"
+  ; ...
+```
+
+After:
+
+```mir
+define void @main() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  %demoted = alloca i32
+  %site = alloca i16
+  call cc1000 addrspace(1) void @llrm.qb.B$OEGA(ptr addrspace(1) @$QB$LANDING)
+  %x = load i32, ptr @"A&"
+  store i32 %x, ptr %demoted
+  %reloaded = load i32, ptr %demoted
+  %y = add i32 %reloaded, 1
+  ; ...
+landing:
+  %e = landingpad { ptr, i32 } catch ptr null
+  call cc1000 addrspace(1) void @llrm.qb.B$OEGA(ptr addrspace(1) null)
+  %err1 = load i16, ptr @$QB$LANDED
+  %0 = sext i16 %err1 to i32
+  %code = trunc i32 %0 to i16
+  store i16 %code, ptr @"CAUGHT%"
+  %reloaded1 = load i32, ptr %demoted
+  store i32 %reloaded1, ptr @"A&"
+  ; ...
+```
+
+From unit test
+`the_handler_registered_is_the_landing_and_err_is_what_it_kept` in
+`ehprepare_tests.rs`: its fixture `HANDLED` and the printed module.
 
 ## Runs
 In `driver::optimized` (`mir ehprepare`), once per module after the MIR

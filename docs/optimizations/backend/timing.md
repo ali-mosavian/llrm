@@ -1,9 +1,10 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/timing.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/timing.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/timing.rs sha256:ba8a5c2aa14ba65c53bab15a9c1d2373f416ef0b68d7a224939d071a46382824 -->
+<!-- src: crates/backend/llrm-core/src/backend/timing.rs sha256:188b2efeaeac5cabf91aae6144e4e80ec8a10c2f921fbea1112fd355544f7bc0 -->
 
 # timing
 
-Core-clock bounds of multiplies and divides, read from the CPU profile.
+Core-clock bounds of multiplies and divides, read from the CPU profile, so
+the compiler can pick a multiply or divide form by cost.
 
 ## How it works
 A CPU description states a price per key (`smul_min_w4`, `smul_max_w2`,
@@ -17,6 +18,25 @@ A multiply that ends early on a short multiplier (the 486's `10 + max(bits,
 maximum at the full width. A negative multiplier takes the profile's
 `smul_negative_bits` as the floor. An unknown multiplier is priced at the
 middle of the range.
+
+## Example
+The bounds `signed_multiply` returns for a full product, in core clocks:
+
+```text
+cpu   width   minimum   maximum
+386   2       9         22
+386   4       9         38
+486   2       13        26
+486   4       13        42
+P5    2       11        11
+P5    4       10        10
+```
+
+A 486 dword multiply may take 42 clocks, so a reciprocal sequence is
+compared against 42, not the midpoint.
+
+From unit tests `test_full_product_bounds_follow_operand_width` and
+`test_486_reciprocal_does_not_win_using_midpoint_multiply` in `timing.rs`.
 
 ## Used by
 [`crate::backend::division`](division.md) (multiply by reciprocal against a divide) and

@@ -1,10 +1,10 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/asm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/asm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/asm.rs sha256:8db2aabaf72a79efadc1fb86d1b7b30b63038f28b5d36d1aa55b0f5e2213d967 -->
+<!-- src: crates/backend/llrm-core/src/backend/asm.rs sha256:c858ffba541b9ce4dd1a545f1398184947485e93ffe8bd424c700ab8592af097 -->
 
 # asm
 
-The types a laid-out body is handed over in: bytes, moved addresses and
-relocations.
+The result of code layout: a body's bytes, where each instruction landed and
+the relocations that must follow, as the object writer needs them.
 
 ## How it works
 `layout.rs` places the blocks, measures, shrinks branches to a fixed point
@@ -24,6 +24,10 @@ them.
 
 `dropped` is reported rather than omitted so `objbuild` can tell a fixup
 meant to go from one it cannot place, which it refuses.
+
+## Example
+No honest example: the module declares types and has no behaviour. Read
+`layout.rs`, which builds a `Laid`, for the bytes and fixups of a real body.
 
 ## Used by
 `layout.rs`, `objbuild.rs`.

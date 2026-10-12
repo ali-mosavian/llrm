@@ -1,11 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/canonical.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/canonical.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/canonical.rs sha256:106a832eb78e4195fac43e83b3d83a3f520d4e31dfbc5c61016a1bb5f655f759 -->
+<!-- src: crates/opt/llrm-transforms/src/canonical.rs sha256:e9b416ce0942448f28d960f8dd2c4975d978ddcde25d83f8fa86b8aa06dd1a09 -->
 
 # canonical
 
 Canonical forms, as LLVM's InstCombine puts them: compares with the constant
 on the right, no neutral terms, and a zero test at the width of what it
-tests.
+tests, so that every later pass matches one shape of each.
 
 ## How it works
 Two steps, run together by `Canonical` and, as functions, by `fold` and
@@ -33,6 +33,31 @@ of two constants is left to folding, and one of two values stays.
  %c = icmp ne i8 %e, 0         ==>
  br i1 %c, ...                           (the compare induction reads)
 ```
+
+## Example
+Before:
+```mir
+define i16 @f(i16 %x) {
+b0:
+  %a = add i16 0, %x
+  %m = mul i16 1, %a
+  %n = sub i16 0, %m
+  ret i16 %n
+}
+```
+After:
+```mir
+define i16 @f(i16 %x) {
+b0:
+  %n = sub i16 0, %x
+  ret i16 %n
+}
+```
+The neutral `add 0` and `mul 1` are their operands; `sub 0, x` is not
+neutral and stays.
+
+From unit test `neutral_terms_fold_on_either_side_but_zero_minus_x_stays` in
+`canonical_tests.rs`.
 
 ## Runs
 Not a step of the fixed point on its own: `fold` runs `compares` and

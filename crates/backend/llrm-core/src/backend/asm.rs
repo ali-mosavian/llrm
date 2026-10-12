@@ -1,5 +1,5 @@
-//! The types a laid-out body is handed over in: bytes, moved addresses and
-//! relocations.
+//! The result of code layout: a body's bytes, where each instruction landed and
+//! the relocations that must follow, as the object writer needs them.
 //!
 //! # How it works
 //! `layout.rs` places the blocks, measures, shrinks branches to a fixed point
@@ -19,6 +19,10 @@
 //!
 //! `dropped` is reported rather than omitted so `objbuild` can tell a fixup
 //! meant to go from one it cannot place, which it refuses.
+//!
+//! # Example
+//! No honest example: the module declares types and has no behaviour. Read
+//! `layout.rs`, which builds a `Laid`, for the bytes and fixups of a real body.
 //!
 //! # Used by
 //! `layout.rs`, `objbuild.rs`.

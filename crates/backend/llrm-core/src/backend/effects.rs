@@ -30,6 +30,12 @@
 //! asked, since two targets compiled in one process have different rows
 //! (real mode has `les`, a flat target has none).
 //!
+//! # Example
+//! No honest example: the module answers one lookup and rewrites nothing, so
+//! there is no LIR before and after. Its test
+//! `the_rows_are_those_of_the_register_file_asked` shows the answer for a
+//! real-mode `les` and a flat target.
+//!
 //! # Provides
 //! The effects of one instruction as register roots and flag masks.
 //!

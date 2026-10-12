@@ -22,6 +22,21 @@
 //! other than the stack's or data's, and no base or index register is narrower
 //! than the target's addresses.
 //!
+//! # Example
+//! A body whose only instruction, `v2 := mov v1`, reads a value nothing
+//! defines:
+//!
+//! ```lir
+//! v2 := mov v1
+//! ```
+//!
+//! ```text
+//! value#1 is read but never defined or supplied
+//! ```
+//!
+//! From unit test `test_a_read_value_must_be_defined_or_an_explicit_body_input`
+//! in `verify.rs`.
+//!
 //! # Runs
 //! After instruction selection and after every machine phase when `LLRM_VERIFY`
 //! is set to anything but `0` (`flow::verified`, `flow::checked`). Tests, the

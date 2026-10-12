@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ipacp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ipacp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ipacp.rs sha256:2ec3f90960c370865cb32b69d5ad96c5954930d7abf7f91ffc26f3ef70158e65 -->
+<!-- src: crates/opt/llrm-transforms/src/ipacp.rs sha256:dd43db91108202c7c4f27099783197143a26bd955a7fc4c6909211d8f292e284 -->
 
 # ipacp
 
 Copies a function for the constants its callers pass and redirects those
-calls to the copy: GCC's `ipa-cp` cloning.
+calls to the copy, so the copy's loops and branches fold on values the
+original cannot assume: GCC's `ipa-cp` cloning.
 
 ## How it works
 Each call whose callee is defined and copyable, and has at least one
@@ -30,12 +31,6 @@ that pass the same constants. A group is a clone candidate when
 A callee that is private, not addressed, and called only from the group
 needs no growth test: every call goes to the copy and the original dies.
 
-```text
-  f:  call g(4, x)                    f:  call g.constprop.1(x)
-      call g(5, x)          ==>           call g.constprop.2(x)
-  g(k, x): loop k times               g.constprop.N: g with k := 4 or 5
-```
-
 The copy is an internal function `<origin>.constprop.N` with each known
 parameter replaced by its constant. A later call with the same constants
 (`Cloning::contexts`) goes to the copy already made. A function gets at
@@ -50,6 +45,49 @@ each function's time and size summaries under the context
 (`good_cloning_opportunity_p`). Here a site's constants are those the
 caller's own folding proved, and `saved` is the clocks `time_saved` finds
 the callee no longer spends. The thresholds are GCC's.
+
+## Example
+With `Threshold::cp_clone` on. Before:
+
+```mir
+define i16 @g(i16 %k, i16 %x) {
+; ... a loop that runs %k trips
+}
+
+define i16 @f(i16 %x) {
+b0:
+  %a = call i16 @g(i16 4, i16 %x)
+  %b = call i16 @g(i16 5, i16 %x)
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+```
+
+After:
+
+```mir
+define i16 @f(i16 %x) memory(none) willreturn nounwind norecurse {
+b0:
+  %a = call i16 @g.constprop.1(i16 %x)
+  %b = call i16 @g.constprop.2(i16 %x)
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+
+define internal i16 @g.constprop.1(i16 %x) memory(none) willreturn nounwind norecurse {
+; ...
+head:
+  ; ...
+  %go = icmp slt i16 %i, 4
+; ...
+}
+```
+
+`@g` stays for other callers; `@g.constprop.2` is the same with 5.
+
+From unit test
+`test_a_function_called_with_two_constants_is_cloned_for_each_at_o3` in
+`interprocedural_tests.rs`.
 
 ## Runs
 In [`crate::interprocedural`](../analyses/interprocedural.md)'s constants loop, after constant arguments are

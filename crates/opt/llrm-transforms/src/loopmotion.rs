@@ -1,6 +1,6 @@
-//! Stores nothing inside a loop observes, sunk to the loop's single exit: the
-//! store half of LICM, as `promoteLoopAccessesToScalars` leaves one store
-//! after the loop.
+//! Sinks the stores nothing in a loop observes to the loop's single exit, so a
+//! counter or accumulator is written once, not every trip: the store half of
+//! LICM, as `promoteLoopAccessesToScalars` leaves one store after the loop.
 //!
 //! # How it works
 //! A loop is taken when it has exactly one exit edge `source -> destination`,
@@ -37,6 +37,59 @@
 //! Alias is asked again after each loop that changed, because a moved store's
 //! narrowing was its old block's. A moved store keeps the blocks, values and
 //! facts about them: only the points-to solve and memory results are dropped.
+//!
+//! # Example
+//! Before:
+//! ```mir
+//! define ... @pipeline.body() ... {
+//! b1:
+//!   %0 = alloca i16
+//!   store i16 0, ptr %0, !tbaa !9
+//!   br label %b2
+//!
+//! b2:
+//!   %1 = phi i16 [ 0, %b1 ], [ %3, %b4 ]
+//!   %2 = icmp slt i16 %1, 10
+//!   br i1 %2, label %b4, label %b3
+//!
+//! b3:
+//!   ret void
+//!
+//! b4:
+//!   store i16 %1, ptr @_n, !tbaa !9
+//!   %3 = add nsw i16 %1, 1
+//!   store i16 %3, ptr %0, !tbaa !9
+//!   br label %b2
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define ... @pipeline.body() ... {
+//! b1:
+//!   %0 = alloca i16
+//!   store i16 0, ptr %0, !tbaa !9
+//!   br label %b2
+//!
+//! b2:
+//!   %1 = phi i16 [ 0, %b1 ], [ %3, %b4 ]
+//!   %2 = icmp slt i16 %1, 10
+//!   br i1 %2, label %b4, label %b3
+//!
+//! b3:
+//!   store i16 9, ptr @_n, !tbaa !9
+//!   store i16 %1, ptr %0, !tbaa !9
+//!   ret void
+//!
+//! b4:
+//!   %3 = add nsw i16 %1, 1
+//!   br label %b2
+//! }
+//! ```
+//! The loop runs ten times, so the store to `n` leaves it as the counter's last
+//! value, `9`; the store to the counter's own slot is sunk the same way.
+//!
+//! From `--dump` of `ten` (`for (i = 0; i < 10; i++) n = i;`, `n` global) at
+//! -O2 -m16, stages `dead` and `loopmotion` of the first body.
 //!
 //! # Runs
 //! In [`crate::pipeline`]'s per-body fixed point, after `hoist` and

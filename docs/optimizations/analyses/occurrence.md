@@ -1,9 +1,10 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/occurrence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/occurrence.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/occurrence.rs sha256:29581e17c0e17da8fad20b8db7fa9f67d86e2bd098fde079c87b62968aac3454 -->
+<!-- src: crates/opt/llrm-analysis/src/occurrence.rs sha256:6ac06e5c23be0470be41b0f43e59edc04bd70fb30cf9860f2df557e760f5d64a -->
 
 # occurrence
 
-The instructions of a function as occurrences: operations and phis, apart.
+Walks a function's instructions as occurrences, operations and phis apart,
+so an analysis can key by identity and keep two equal instructions distinct.
 
 ## How it works
 An `InstId` names an instruction and outlives rewrites, so it is the key
@@ -18,6 +19,31 @@ yields the phis in layout order. Operations and phis are separate walks.
             %y = add ...   <- operations()
             ret %y         <- operations()
 ```
+
+## Example
+```mir
+define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b2:
+  %p = phi i16 [ %x, %b0 ], [ 1, %b1 ]
+  %y = add i16 %p, 1
+  ret i16 %y
+}
+```
+
+| walk           | yields, in layout order                              |
+|----------------|------------------------------------------------------|
+| `phis`         | `%p`, with block `b2`                                |
+| `operations`   | the two `br`s, `%y`, the `ret`                       |
+
+From unit test
+`operations_and_phis_partition_every_instruction_in_layout_order`
+in `occurrence.rs`.
 
 ## Provides
 The three walks. Consumers: [`crate::induction`](induction.md), [`crate::ssa`](ssa.md), and the

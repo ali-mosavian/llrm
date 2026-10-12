@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/induction.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/induction.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:b4446f05b4fcfa1dcffb82640e03b44ac2e7b1f14208e5821c2f910ffb4c48bc -->
+<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:d5d3a974137210381c29b2de25e5fcd07769ce9bcf822557c4e1538beb20ef3f -->
 
 # induction
 
@@ -62,6 +62,40 @@ Proofs of removal are `control_replacement` (the counter's phi is read only
 by its compare, its step and the exit's phis, so the loop's own control may
 go) and `zero_terminating_control` (a counter reaching its final value ends
 control and takes no value twice in the trip count).
+
+## Example
+A loop that steps by 24 until it reaches `%start + 768`, tested after the
+step:
+
+```mir
+define i32 @f(i32 %start) {
+b0:
+  %end = add i32 %start, 768
+  br label %b1
+
+b1:
+  %i = phi i32 [ %start, %b0 ], [ %next, %b2 ]
+  %trips = phi i32 [ 0, %b0 ], [ %up, %b2 ]
+  br label %b2
+
+b2:
+  %up = add i32 %trips, 1
+  %next = add i32 %i, 24
+  %c = icmp ne i32 %next, %end
+  br i1 %c, label %b1, label %b3
+
+b3:
+  %t = phi i32 [ %up, %b2 ]
+  ret i32 %t
+}
+```
+
+`trip_count` is 32, whatever `%start` is (768 / 24). The interpreter returns
+32 for starts 0, -5 and 0x7FFFFFF0.
+
+From unit test
+`test_posttested_symbolic_sentinel_keeps_its_exact_trip_count` in
+`induction_tests.rs`.
 
 ## Provides
 `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`,

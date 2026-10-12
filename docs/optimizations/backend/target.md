@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/target.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/target.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/target.rs sha256:efccc036ff42762ffaccea8ac21496e780825df510a4792e6857af765f53a37a -->
+<!-- src: crates/backend/llrm-core/src/backend/target.rs sha256:60cee5e22f9ef6ec23cc9b3e49a365ca5a662d4aaed9f40b221cab9782d7152d -->
 
 # target
 
 What the machine has for the register allocator: operand needs, the segment
-registers, and the facts the allocator asks of each instruction.
+registers, and the facts the allocator asks of each instruction, so it can
+place operands without knowing x86.
 
 ## How it works
 The module has two halves. The first describes where an operand may live.
@@ -32,6 +33,11 @@ The remaining functions answer encoding questions: whether `xchg` takes two
 operands, the width `push` and `pop` carry a place at, whether an x87
 compare reaches the flags through the status word (`fnstsw`, `sahf`), and
 which operands are positions in the x87 stack, which no pass may rename.
+
+## Example
+No honest example: the module is tables and queries (`Need`, `order`,
+`reads`, `writes`, `Segments`) that change no LIR. Its tests in `target.rs`
+show each answer.
 
 ## Used by
 [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md),

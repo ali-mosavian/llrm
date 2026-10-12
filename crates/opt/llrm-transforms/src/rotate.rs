@@ -19,12 +19,41 @@
 //! `a` as it left the preheader and `b'` as it left the latch. Afterwards the
 //! test is reached only from the latch, and `cfg::merged` merges it into it.
 //!
-//! ```text
-//!   before                           after (rotated)
-//!   pre -> H: p = phi [a,pre][b,L]   pre -> F: p' = phi [a,pre][b',L]
-//!          if t(p) -> F else X              ...   (the body)
-//!   F: ... -> L -> H                 L: b' = ...; if t(b') -> F else X
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   pre["<b>pre</b>"]:::mid
+//!   h["<b>H</b><br/><small>p = phi [a, pre] [b, L]<br/>if t(p)</small>"]:::mid
+//!   f["<b>F</b><br/><small>the body</small>"]:::mid
+//!   l["<b>L</b><br/><small>b = ...</small>"]:::mid
+//!   x["<b>X</b><br/><small>the exit</small>"]:::mid
+//!   pre --> h
+//!   h -->|"true"| f
+//!   h -->|"false"| x
+//!   f --> l
+//!   l --> h
 //! ```
+//!
+//! *Before: the test is in the header*
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   pre["<b>pre</b>"]:::mid
+//!   f["<b>F</b><br/><small>p2 = phi [a, pre] [b2, L]<br/>the body</small>"]:::mid
+//!   l["<b>L</b><br/><small>b2 = ...<br/>if t(b2)</small>"]:::mid
+//!   x["<b>X</b><br/><small>the exit</small>"]:::mid
+//!   pre --> f
+//!   f --> l
+//!   l -->|"true"| f
+//!   l -->|"false"| x
+//! ```
+//!
+//! *After: rotated, the test is in the latch*
 //!
 //! Two modes, set by the fields of `Rotate`:
 //! - `proven` (`rotated`): the loop has a proven trip count
@@ -45,6 +74,62 @@
 //! analyses, [`crate::peel`] and [`crate::unroll`] read, so rotation goes
 //! after them. [`crate::lsr`] enters a loop it counts to zero at its body too,
 //! behind a skip guard, with the same `_rotate`.
+//!
+//! # Example
+//! Before:
+//! ```mir
+//! define ... @"_sum@3"(ptr nocapture readonly %0, i16 %1) ... {
+//! b1:
+//!   br label %b2
+//!
+//! b2:
+//!   %2 = phi i16 [ 0, %b1 ], [ %10, %b4 ]
+//!   %3 = phi i16 [ 0, %b1 ], [ %9, %b4 ]
+//!   %4 = icmp slt i16 %2, %1
+//!   br i1 %4, label %b4, label %b3
+//!
+//! b3:
+//!   %5 = phi i16 [ %3, %b2 ]
+//!   ret i16 %5
+//!
+//! b4:
+//!   %6 = mul i16 %2, 2
+//!   %7 = getelementptr inbounds i8, ptr %0, i16 %6
+//!   %8 = load i16, ptr %7, !tbaa !9
+//!   %9 = add nsw i16 %3, %8
+//!   %10 = add nsw i16 %2, 1
+//!   br label %b2
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define ... @"_sum@3"(ptr nocapture readonly %0, i16 %1) ... {
+//! b1:
+//!   %2 = icmp slt i16 0, %1
+//!   br i1 %2, label %b4, label %b3, !prof !24
+//!
+//! b3:
+//!   %3 = phi i16 [ %9, %b4 ], [ 0, %b1 ]
+//!   ret i16 %3
+//!
+//! b4:
+//!   %4 = phi i16 [ 0, %b1 ], [ %9, %b4 ]
+//!   %5 = phi i16 [ 0, %b1 ], [ %10, %b4 ]
+//!   %6 = mul i16 %5, 2
+//!   %7 = getelementptr inbounds i8, ptr %0, i16 %6
+//!   %8 = load i16, ptr %7, !tbaa !9
+//!   %9 = add nsw i16 %4, %8
+//!   %10 = add nsw i16 %5, 1
+//!   %11 = icmp slt i16 %10, %1
+//!   br i1 %11, label %b4, label %b3
+//! }
+//! ```
+//! The loop test is copied into the preheader (`%2`) as a guard. The header
+//! phis moved into the body `b4`, and the test now sits at the latch, so each
+//! trip runs one branch.
+//!
+//! From `--dump` of `sum` (`for (i = 0; i < n; i++) s += a[i];`) at -O2 -m16
+//! -ftree-ch, stages `calleepop` and `rotate`.
 //!
 //! # Runs
 //! Twice in [`crate::pipeline`], outside the per-body fixed point. `copy` runs

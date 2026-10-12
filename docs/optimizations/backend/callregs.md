@@ -1,9 +1,10 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/callregs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/callregs.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/callregs.rs sha256:cdb8ffffbc28927b83f9a99e7d1a200fdcfabddc32bc338fafba8d36edcc0c16 -->
+<!-- src: crates/backend/llrm-core/src/backend/callregs.rs sha256:9ffb9a7772b2ee581ea0235c93395fad9a947f91532d5da5710b77758ed4201c -->
 
 # callregs
 
-Which registers a runtime call destroys or keeps, read from its contract.
+Which registers a runtime call destroys or keeps, read from its contract, so
+the allocator knows what may stay live across it.
 
 ## How it works
 A runtime routine's contract names the registers it disturbs. Each
@@ -20,6 +21,22 @@ too (`unnamed_selectors_clobbered`). For an i386 contract
 of: every general register it does not clobber whole.
 `call_clobbered_high_keeping` removes those the callee's convention saves
 in full.
+
+## Example
+No honest example for the contract tables: they are data in the runtime
+description, and no unit test prints a set. The result is in the dump. In a
+nib `main`, the two runtime calls `N$BGRW` and `N$EBND` (the listing's `call
+far ptr` order) are
+
+```lir
+call   requires v1@AX,v2@DX,v3@CX; delivers v4@EAX; clobbers EAX,ECX,EDX,EBX,ES,FS,GS
+call   clobbers EAX,ECX,EDX,EBX,ES,FS,GS
+```
+
+`FS` and `GS` are in the set though no 8086 contract names them.
+
+From `ISEL_DUMP=1 llrm-nib -O2 -march=i386` of the program under
+`calleefacts`.
 
 ## Used by
 `isel.rs`, `isel/wide.rs`, `isel/unwind.rs` (the clobber sets of a call

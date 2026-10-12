@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/consts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/consts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/consts.rs sha256:b11fc84c42a223db0e85f38e78ddab266936a4d7db8983bdc61e69cecf23a487 -->
+<!-- src: crates/opt/llrm-analysis/src/consts.rs sha256:fab9bfae2dcd6a9951e45adc963def448baccb73794583f26cc090920c46b22b -->
 
 # consts
 
@@ -47,6 +47,29 @@ made again without any such selector that did not resolve to a number.
 of one solved epoch, each cell carrying its object, for passes that walk
 instructions with a fact table ([`crate::cellmap`](cellmap.md) indexes the cells by
 overlap bucket).
+
+## Example
+A load of a global that a constant-index store wrote:
+
+```mir
+@g = global [128 x i8] zeroinitializer
+
+define i16 @f() {
+b0:
+  %index = add i16 2, 2
+  %p = getelementptr i8, ptr @g, i16 %index
+  store i16 9, ptr %p
+  %loaded = load i16, ptr getelementptr (i8, ptr @g, i16 4)
+  ret i16 %loaded
+}
+```
+
+| Value | `known` | `known_walked` |
+| --- | --- | --- |
+| `%loaded` | none | `Known { n: 9, width: 16 }` |
+
+From unit test `a_store_through_a_constant_index_is_read_back` in
+`consts_tests.rs`.
 
 ## Provides
 `Known`, `known` (registers, cached as [`crate::manager::Registers`](manager.md)),

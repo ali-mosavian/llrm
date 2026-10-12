@@ -66,6 +66,51 @@
 //! holds, so merging sooner would lose a store's value to the forwarding after
 //! it.
 //!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! b1:
+//!   %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+//!   %c = icmp slt i16 %i, 10
+//!   br i1 %c, label %b2, label %b3
+//!
+//! b2:
+//!   %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i
+//!   store i16 0, ptr %p
+//!   %next = add i16 %i, 1
+//!   br label %b1
+//!
+//! b3:
+//!   %e = phi i16 [ %i, %b1 ]
+//!   ; ...
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! b1:
+//!   %c = icmp slt i16 0, 10
+//!   br label %b2
+//!
+//! b2:
+//!   %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 0
+//!   %0 = add i16 0, 10
+//!   call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 20, i1 false)
+//!   %next = add i16 0, 1
+//!   br label %b3
+//!
+//! b3:
+//!   %e = phi i16 [ %0, %b2 ]
+//!   ; ...
+//! ```
+//!
+//! Ten word stores are one memset of 20 bytes; the loop stays as one trip and
+//! the counter leaves with its exit value 10.
+//!
+//! From unit test `a_counted_word_loop_is_one_memset_of_its_bytes` in
+//! `fill_tests.rs` (first case; the printed text was taken from a run).
+//!
 //! # Runs
 //! Last in the function fixed point: `Fill`, then `Merge`, after `unroll` and
 //! `peel`. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og, on

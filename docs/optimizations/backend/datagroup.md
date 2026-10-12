@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/datagroup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/datagroup.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/datagroup.rs sha256:be1dd9a66263a81985e39c155bdb8253373f6d9bb759240a28e9a0f056db3be8 -->
+<!-- src: crates/backend/llrm-core/src/backend/datagroup.rs sha256:52a64db2b1079d5d4cea660b541f44def3df7bea5274cb24a58ec505e85ae7ff -->
 
 # datagroup
 
@@ -44,6 +44,10 @@ itself, and then `data_free` is false here.
 
 The runtime's interrupt handlers load their own data segment, so a value
 held in DS is safe from them.
+
+## Example
+No honest example: the file has no unit test, and a small program that makes
+the allocator put a selector in `ds` under `-mstack-is-data` was not found.
 
 ## Used by
 Register allocation (`allocate.rs`): `names_data_segment` before it,

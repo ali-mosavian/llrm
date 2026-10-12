@@ -29,6 +29,29 @@
 //! exported, has its address taken, is an interrupt handler or is in a cycle
 //! takes no part and keeps the full convention.
 //!
+//! # Example
+//! `bump` (`return x + 1`) is private and called twice from `main`. Its fact is
+//! one register:
+//!
+//! ```text
+//! bump   writes eax      callers: clobbers EAX
+//! ```
+//!
+//! The two kinds of call in `main`, after selection (`; inserted` notes
+//! dropped), the runtime's `N$BGRW` first, then `bump`:
+//!
+//! ```lir
+//! call   requires v1@AX,v2@DX,v3@CX; delivers v4@EAX; clobbers EAX,ECX,EDX,EBX,ES,FS,GS
+//! call   requires v6@AX; delivers v7@EAX; clobbers EAX
+//! ```
+//!
+//! `main` keeps a value in `bx` across both calls of `bump`: its listing has
+//! `mov bx, word ptr [si-4]` before the first and `cmp bx, 2` after the second.
+//!
+//! From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
+//! -fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+//! -march=i386` of that program.
+//!
 //! # Runs
 //! Per function in `assemble.rs`: `record` after the function is machined.
 //! With `-fallocation-search-all` (-Omax) a caller of a known callee is also

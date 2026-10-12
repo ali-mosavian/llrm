@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/dependence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/dependence.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:6929d7688eb39dcff5b0ea059617505270b40fa968a9a5c88312a09a25b7cef9 -->
+<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:0d89805ca351ef4c35f6362a82c1a31d42643f57d02985049455630137a2bc8f -->
 
 # dependence
 
@@ -40,6 +40,29 @@ a reference repeats at `y = 0` (copies that make it go away), `removed`
 counts such vectors, and the factor is refused (`profit = 1`) if
 `removed * 100 / accesses` is below `min_percent`. `min_percent = 0` applies
 always, with at least 2. The result is `min(unroll, profit, max_unroll)`.
+
+## Example
+The 100 passes of `px[j] = px[j] + vx[j]` (bench/particle). The nest has no
+MIR form here: the caller hands `Access`es, each a `Subscript { constant,
+outer, inner }` per dimension, width 2:
+
+```text
+nest[0]  read   px[j]   subscripts [ (0, 0, 1) ]
+nest[1]  write  px[j]   subscripts [ (0, 0, 1) ]
+nest[2]  read   vx[j]   subscripts [ (0, 0, 1) ]    (same object as the others)
+```
+
+| Query | Result |
+| --- | --- |
+| `distances(nest[0], nest[1], 4, Some(101))` | `Vectors([(0, 0), (1, 0)])` |
+| `factor(nest, 4, 1, Some(101))` | `unroll = 2`, `profit = 2` |
+
+The write of `px[j]` is read again by the next outer pass at `(1, 0)`, so
+two copies make a reference go away.
+
+From unit test
+`an_array_walked_again_by_each_outer_pass_allows_a_jam_by_two` in
+`dependence_tests.rs`.
 
 ## Provides
 `distances`, `factor`. Consumer: `unroll_jam`

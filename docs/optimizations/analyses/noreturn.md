@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/noreturn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/noreturn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/noreturn.rs sha256:fe06059a71a46215da6c56ac458188dcd934c3ae4cd6da29b5296368757061d6 -->
+<!-- src: crates/opt/llrm-analysis/src/noreturn.rs sha256:dbe088e6cbec407ea18e9e05140035227ae6ec119fdbf1aee6dbaf841dad06c0 -->
 
 # noreturn
 
-Which bodies and blocks cannot reach a normal return, and the edit that cuts
-a block after a call that cannot return.
+Finds the bodies and blocks that cannot reach a normal return, and cuts a
+block after a call that cannot return, so the code after it and the paths
+into it fold away.
 
 ## How it works
 A call is terminal when its callee is in the given `noreturn` set or the
@@ -39,6 +40,40 @@ as the observable action, and the block ends in `unreachable`.
      store %b, %p
      br %next                  %next loses bb as a predecessor
 ```
+
+## Example
+`after_terminal_calls` at the call to `@exit`:
+
+Before:
+
+```mir
+define i16 @f() {
+b0:
+  call void @exit()
+  %x = add i16 1, 2
+  br label %b1
+
+b1:
+  store i16 %x, ptr @g
+  ret i16 %x
+}
+```
+
+After:
+
+```mir
+define i16 @f() {
+b0:
+  call void @exit()
+  unreachable
+}
+```
+
+The tail of `b0` is gone, so `b1` is unreachable and removed; the call stays
+and still runs first.
+
+From unit test `test_terminal_call_removes_its_newly_unreachable_successor`
+in `noreturn_tests.rs`.
 
 ## Provides
 `TerminalSites` (analysis of the function with no body proven noreturn),

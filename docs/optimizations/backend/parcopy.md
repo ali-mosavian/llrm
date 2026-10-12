@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/parcopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/parcopy.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/parcopy.rs sha256:6fbfcd138f4871e09510f40fa58048e6f8e22ec6103e47852534dd78c596d688 -->
+<!-- src: crates/backend/llrm-core/src/backend/parcopy.rs sha256:ada8e6ffc8c4ed0f238ec02e76239bfd505dfb39e5894a4c89a67e0513e3e75b -->
 
 # parcopy
 
@@ -44,6 +44,36 @@ permutation of its places.
 A frame-to-frame copy of equal width (1, 2 or 4 bytes, a byte moved as a
 word) becomes `push` then `pop`, which needs no scratch register and keeps
 the flags.
+
+## Example
+`swaps` in a loop exchanges `a` and `b` each trip. The back edge's three
+copies are one group, and `AX`, `DX` form a cycle (`BX` only reads `CX`):
+
+Before:
+
+```lir
+block 0x000b
+  0x000b  BX := mov CX  ; inserted; parallel-copy 2
+  0x000b  DX := mov AX  ; inserted; parallel-copy 2
+  0x000b  AX := mov DX  ; inserted; parallel-copy 2
+  0x000b  jmp   ; inserted
+```
+
+After:
+
+```lir
+block 0x000b
+  0x000b  BX := mov CX  ; inserted
+  0x000b  DX, AX := xchg AX, DX  ; inserted
+  0x000b     ; inserted
+  0x000b  jmp   ; inserted
+```
+
+The ready copy is written first, the cycle becomes one `xchg`, and an anchor
+keeps the virtual definition the dropped copies stood for.
+
+From `ISEL_DUMP=1` of a C function whose loop does `t = a; a = b; b = t;`,
+compiled with `llrm-c -O2 -m16`: the `RegAlloc` and `ParallelCopy` stages.
 
 ## Runs
 After `regalloc`, before `prologue` and the peephole, once per body, at

@@ -1,5 +1,6 @@
-//! Move the constant an index adds into a `gep` of its own, where address modes
-//! take it as a displacement.
+//! Moves the constant an index adds into a `gep` of its own, where address
+//! modes take it as a displacement: `a[i + 8]` then needs no add, and no
+//! register for the sum, to reach its element.
 //!
 //! # How it works
 //! An index is read as `rest + constant`: the walk goes through add, sub, a
@@ -8,10 +9,6 @@
 //! multiply: the rest would wrap where the whole does not). An index narrower
 //! than its pointer's is sign-extended by the `gep`, so it is read as under a
 //! `sext`. The width is the address space's, from the datalayout.
-//!
-//! ```text
-//! gep T, p, (i + 8) * 2   =>   gep T, (gep i8, p, 32), i * 2
-//! ```
 //!
 //! The constant `gep` is free where isel folds it, so a split is kept when it
 //! frees something and the instructions it makes cost no more than those it
@@ -22,17 +19,49 @@
 //! the constant may take the first outside the object. A negative constant
 //! drops `inbounds` too.
 //!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! define i16 @f(i16 %i) {
+//! b0:
+//!   %s = add i16 %i, 8
+//!   %m = mul i16 %s, 2
+//!   %p = getelementptr i16, ptr @g, i16 %m
+//!   %a = ptrtoint ptr %p to i16
+//!   ret i16 %a
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! define i16 @f(i16 %i) {
+//! b0:
+//!   %0 = mul i16 %i, 2
+//!   %1 = getelementptr i8, ptr @g, i16 32
+//!   %p = getelementptr i16, ptr %1, i16 %0
+//!   %a = ptrtoint ptr %p to i16
+//!   ret i16 %a
+//! }
+//! ```
+//!
+//! The `+ 8` under the scales is 32 bytes, now a constant `gep` of its own; the
+//! add is gone.
+//!
+//! From unit test `test_a_constant_added_under_a_scale_is_a_displacement` in
+//! `gepoffset_tests.rs`.
+//!
 //! # Runs
-//! Once, after the body fixed point and after `hoist`: a
-//! hoisted constant `gep` would be a register held across the loop instead of a
-//! displacement. Off with the `gepoffset` or strength-reduction option.
+//! Once, after the body fixed point and after `hoist`: a hoisted constant `gep`
+//! would be a register held across the loop instead of a displacement. Off with
+//! `-fno-strength-reduce`.
 //!
 //! # Keeps
 //! Dominators and loops stay valid.
 //!
 //! # See also
-//! LLVM's SeparateConstOffsetFromGEP
-//! (SeparateConstOffsetFromGEP.cpp).
+//! LLVM's SeparateConstOffsetFromGEP (SeparateConstOffsetFromGEP.cpp).
 
 use std::collections::BTreeSet;
 

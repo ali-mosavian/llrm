@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/affine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/affine.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/affine.rs sha256:07d344283edf5b4107d4ad88bcc308a19538f0c481b603f95ae1c7a6ab3ad7fa -->
+<!-- src: crates/backend/llrm-core/src/backend/affine.rs sha256:20d722f729bf2e97d28dcfdc1d450a0a9845cec4b3e4f740e5f9937b5380535b -->
 
 # affine
 
@@ -24,6 +24,32 @@ or one base and one index, with no scale and no prefix.
  mov si,ax ; shl si,1 ; add si,4     terms [(ax,2)], disp 4
                                      form  [eax*2+4]  (67h)
 ```
+
+## Example
+A copy and a shift that make `cx*2`, before and after the peephole's address
+chain. `; ...` marks lines left out; the `; inserted` notes are dropped.
+
+Before (`ParallelCopy`):
+
+```lir
+0x0000  CX := mov [None v2@SI]
+; ...
+0x0007  BX := mov CX
+0x0007  BX := shl BX, 0x1
+```
+
+After (`Peephole`):
+
+```lir
+0x0000  CX := mov [None v2@SI]
+; ...
+0x0007  BX := lea Address(addr=None, through=38, index=38, scale=1, offset=0, disp_width=0)
+```
+
+The chain is one `lea` in the listing: `lea bx, [ecx+ecx]`.
+
+From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of a BASIC function that sums an
+INTEGER array (`Total%`).
 
 ## Used by
 `exactaddress.rs`, which folds the chain into a memory operand, and the

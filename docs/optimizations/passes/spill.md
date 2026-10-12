@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/spill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/spill.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/spill.rs sha256:552c7fd7c68ea784375baa69c89bd2f8431d141136416dd77409bceaadfaa963 -->
+<!-- src: crates/opt/llrm-transforms/src/spill.rs sha256:cf015b2e6b69460e534e9934b4ab3754848faa0097edbd1a221c8073669bda91 -->
 
 # spill
 
@@ -60,6 +60,42 @@ costs what changed at it, not what is live.
                       spill the cheapest of a b c e
   cost = price(victim at i2) + price(victim at i3)
 ```
+
+## Example
+```mir
+define i16 @f(i16 %n) {
+entry:
+  %a = alloca [32 x i8]
+  %p = getelementptr inbounds i16, ptr %a, i16 3
+  %q = getelementptr inbounds i16, ptr %a, i16 5
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %latch ]
+  %v = load i16, ptr %p
+  %at = getelementptr i16, ptr %a, i16 %i
+  %u = load i16, ptr %at
+  %more = icmp ult i16 %i, %n
+  br i1 %more, label %latch, label %exit
+latch:
+  %t = add i16 %v, %u
+  %w = add i16 %t, %i
+  store i16 %w, ptr %q
+  %next = add i16 %i, 1
+  br label %loop
+exit:
+  ret i16 %n
+}
+```
+Facts:
+```text
+Room { registers: 4, across_call: 2 }  =>  peak 0 (nothing spills)
+```
+`%n`, `%i`, `%v` and `%u` fit the four registers; `%a`, `%p` and `%q` are
+`[bp+disp]`, so they take none.
+
+From unit test
+`test_a_constant_offset_into_a_frame_object_takes_no_register` in
+`spill_tests.rs`.
 
 ## Provides
 `Room` (what the target holds), `Traffic` and `traffic`, the free

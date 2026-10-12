@@ -29,6 +29,11 @@
 //! spiller it calls takes them back (`held`) when the body is exactly the one
 //! they were made of, instead of working them out again.
 //!
+//! # Example
+//! No example: the intervals and weights are internal to the allocator and
+//! printed by no dump. See the `RegAlloc` stage in `lirtext.rs` for the
+//! allocator's result.
+//!
 //! # Used by
 //! `allocate` builds and edits it; `spiller`, `splitkit`, `regclass` and
 //! `liveunion` read it (through the [`Ranges`] trait where only the intervals

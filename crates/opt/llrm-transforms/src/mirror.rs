@@ -1,5 +1,6 @@
-//! A pointer that follows a counter which only some trips step: the address
-//! `base + k * i` on a target whose addresses take no scale `k`.
+//! Turns an index that only some trips step into a pointer that steps with it,
+//! so a target whose addresses take no scale `k` does not shift the index on
+//! every access of `base + k * i`.
 //!
 //! # How it works
 //! In `if (a[j] < p) { ...; ++i; }` the counter `i` is stepped on some paths
@@ -34,6 +35,59 @@
 //! one of which may leave the object where no access follows. The counter
 //! stays for whatever else reads it; a loop that reads it nowhere loses it to
 //! `dead`.
+//!
+//! # Example
+//! Before:
+//! ```mir
+//! define ... @"_keep@3"(ptr %0, ptr %1, i16 %2, i16 %3) ... {
+//!   ; ...
+//! b2:
+//!   %4 = phi i16 [ 0, %b1 ], [ %13, %b5 ]
+//!   %5 = phi i16 [ 0, %b1 ], [ %12, %b5 ]
+//!   ; ...
+//! b5:
+//!   %12 = phi i16 [ %5, %b4 ], [ %16, %b6 ]
+//!   %13 = add nsw i16 %4, 1
+//!   br label %b2
+//!
+//! b6:
+//!   %14 = mul i16 %5, 2
+//!   %15 = getelementptr inbounds i8, ptr %1, i16 %14
+//!   store i16 %10, ptr %15, !tbaa !9
+//!   %16 = add nsw i16 %5, 1
+//!   br label %b5
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define ... @"_keep@3"(ptr %0, ptr %1, i16 %2, i16 %3) ... {
+//! b1:
+//!   %4 = getelementptr i8, ptr %1, i16 0
+//!   ; ...
+//! b4:
+//!   %10 = phi i16 [ %16, %b5 ], [ 0, %20 ]
+//!   %11 = phi ptr [ %15, %b5 ], [ %4, %20 ]
+//!   %lsr.iv1 = phi i16 [ %lsr.iv.next, %b5 ], [ %6, %20 ]
+//!   ; ...
+//! b5:
+//!   %15 = phi ptr [ %11, %b4 ], [ %19, %b6 ]
+//!   %16 = phi i16 [ %10, %b4 ], [ %18, %b6 ]
+//!   ; ...
+//! b6:
+//!   store i16 %13, ptr %11, !tbaa !9
+//!   %18 = add nsw i16 %10, 1
+//!   %19 = getelementptr i8, ptr %11, i16 2
+//!   br label %b5
+//!   ; ...
+//! }
+//! ```
+//! `i` is stepped only on the trips that store, so `lsr` could not reduce
+//! `out[i]`. `%11` is the same cycle over pointers: it starts at `out` and
+//! steps by 2 where `i` steps by 1. `i` stays for the return value.
+//!
+//! From `--dump` of `keep` (`if (a[j] < p) { out[i] = a[j]; ++i; }` in a loop
+//! over `j`) at -O2 -m16, stages `fixednarrow` and `lsr` (the other changes of
+//! `lsr` are left out).
 //!
 //! # Runs
 //! Not a pass: [`crate::lsr`] calls `found` and `applied` on each loop before

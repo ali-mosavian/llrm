@@ -1,5 +1,5 @@
-//! Frame slot sharing: two things share a slot when they are never live
-//! together.
+//! Lets two values share one frame slot when they are never live together, so
+//! a frame holds the most that is live at once, not the sum of all spills.
 //!
 //! # How it works
 //! A slot (`Color`) is its home, the capacity in bytes of the largest holder,
@@ -22,6 +22,11 @@
 //! ```
 //!
 //! *Slots shared by intervals that do not overlap*
+//!
+//! # Example
+//! None: this is a helper that answers one question per call and has no output
+//! of its own. Its effect shows in the spill slots of the `spiller` and
+//! `ssaspill` examples.
 //!
 //! # Used by
 //! - [`crate::backend::spiller`], which shares spill slots by the live range of

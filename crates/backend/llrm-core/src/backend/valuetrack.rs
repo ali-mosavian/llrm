@@ -27,6 +27,31 @@
 //! somewhere unrecorded costs the variable its location there, never a wrong
 //! one.
 //!
+//! # Example
+//! Value 7 is defined in `eax` at offset 8 and tracked over this code:
+//!
+//! ```text
+//!  0  push ebp
+//!  1  mov ebp, esp
+//!  3  mov eax, 5
+//!  8  mov [ebp-4], eax      ; Def: value 7 in eax; Note: x takes value 7
+//! 11  add eax, 1            ; eax now holds something else
+//! 14  ret
+//! ```
+//!
+//! ```text
+//! variable x   from  to   place
+//!              8     14   eax
+//!              14    15   [ebp-4] (4 bytes)
+//! ```
+//!
+//! The variable moves to the cell the `mov` copied it to once `eax` is
+//! rewritten.
+//!
+//! From unit test
+//! `a_variable_follows_its_value_from_the_register_to_the_cell_a_move_copied_it_to`
+//! in `valuetrack_tests.rs`.
+//!
 //! # Runs
 //! On the emitted code of a procedure, from `debuginfo`, when `-g` places
 //! variables. A variable any of whose notes was not emitted gets no location.

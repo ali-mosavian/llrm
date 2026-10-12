@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/verify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/verify.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/verify.rs sha256:d159e7bbdffb545be047498d67162bee546020945c7d794806a9b9564b5a39d6 -->
+<!-- src: crates/backend/llrm-core/src/backend/verify.rs sha256:819069667180db9c0c3c01d96c312c669aac57fb127e0ed065c60fd88b37c941 -->
 
 # verify
 
@@ -26,6 +26,21 @@ checks:
 no operand is a segment register, no cell has a selector or an override
 other than the stack's or data's, and no base or index register is narrower
 than the target's addresses.
+
+## Example
+A body whose only instruction, `v2 := mov v1`, reads a value nothing
+defines:
+
+```lir
+v2 := mov v1
+```
+
+```text
+value#1 is read but never defined or supplied
+```
+
+From unit test `test_a_read_value_must_be_defined_or_an_explicit_body_input`
+in `verify.rs`.
 
 ## Runs
 After instruction selection and after every machine phase when `LLRM_VERIFY`

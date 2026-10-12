@@ -35,6 +35,12 @@
 //! instruction is replaced by an anchor (`lir::anchor`) that keeps its virtual
 //! definition and source ownership but emits no bytes.
 //!
+//! # Example
+//! No honest example: it is one sub-pass of `peephole`, whose `ISEL_DUMP=1`
+//! stage shows all the sub-passes' work together, and its tests build bodies by
+//! hand and assert on the operations. A removed instruction prints in the dump
+//! as an empty line (`0x0003     ; inserted`).
+//!
 //! # Runs
 //! A peephole sub-pass, once per `peephole` run, after `sharedstores` and
 //! before the final `machinedce`.

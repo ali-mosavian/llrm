@@ -1,10 +1,12 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr.rs sha256:4b665ae66f1f4bf361b7b980c75abf3d4e47d2eedc9148254d79899949700243 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr.rs sha256:16febb8bbc1d6c016807c7164b5338940b6ccd8a59032f15541721cb6ee4c140 -->
 
 # lsr
 
-A loop's induction variables chosen once, by cost: LLVM's
-LoopStrengthReduce and GCC's ivopts.
+Strength reduction: replaces a loop's induction variables, and the address
+arithmetic built from them, with the cheapest set of counters the target
+can address, so the loop carries few registers and no multiply (LLVM's
+LoopStrengthReduce, gcc's ivopts).
 
 ## How it works
 Every read of a counter, or of a value affine in one, is one
@@ -112,6 +114,65 @@ In a space where a pointer carries into its selector, an integer cannot
 index a pair: the use advances the pointer, and pays what an advance
 costs there (`profit::advance`). `crate::window` splits the huge pointers
 this chooses.
+
+## Example
+Before:
+```mir
+define ... @"_sum@3"(ptr nocapture readonly %0, i16 %1) ... {
+b1:
+  br label %b2
+
+b2:
+  %2 = phi i16 [ 0, %b1 ], [ %10, %b4 ]
+  %3 = phi i16 [ 0, %b1 ], [ %9, %b4 ]
+  %4 = icmp slt i16 %2, %1
+  br i1 %4, label %b4, label %b3
+
+b3:
+  %5 = phi i16 [ %3, %b2 ]
+  ret i16 %5
+
+b4:
+  %6 = mul i16 %2, 2
+  %7 = getelementptr inbounds i8, ptr %0, i16 %6
+  %8 = load i16, ptr %7, !tbaa !9
+  %9 = add nsw i16 %3, %8
+  %10 = add nsw i16 %2, 1
+  br label %b2
+}
+```
+After:
+```mir
+define ... @"_sum@3"(ptr nocapture readonly %0, i16 %1) ... {
+b1:
+  %2 = shl i16 %1, 1
+  %3 = sub i16 0, %2
+  %4 = getelementptr i8, ptr %0, i16 %2
+  %5 = icmp sle i16 %1, 0
+  br i1 %5, label %b3, label %12
+
+b3:
+  %6 = phi i16 [ 0, %b1 ], [ %10, %13 ]
+  ret i16 %6
+
+b4:
+  %7 = phi i16 [ %10, %b4 ], [ 0, %12 ]
+  %lsr.iv1 = phi i16 [ %lsr.iv.next, %b4 ], [ %3, %12 ]
+  %8 = getelementptr i8, ptr %4, i16 %lsr.iv1
+  %9 = load i16, ptr %8, !tbaa !9
+  %10 = add nsw i16 %7, %9
+  %lsr.iv.next = add i16 %lsr.iv1, 2
+  %11 = icmp ne i16 %lsr.iv.next, 0
+  br i1 %11, label %b4, label %13
+  ; ...
+}
+```
+The counters `i` and `2 * i` are one: `%lsr.iv1` runs from `-2n` to zero,
+the address is `%4 + %lsr.iv1` with `%4 = a + 2n`, and the loop ends when
+`%lsr.iv1` reaches zero.
+
+From `--dump` of `sum` (`for (i = 0; i < n; i++) s += a[i];`, `int *a`) at
+-O2 -m16, stages `fixednarrow` and `lsr`.
 
 ## Runs
 Once per body, after the interprocedural step and `fixednarrow`, before

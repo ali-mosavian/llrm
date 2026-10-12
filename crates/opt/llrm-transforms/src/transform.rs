@@ -43,6 +43,10 @@
 //! phi with one other value is that value, and a phi with the arms of an
 //! earlier phi in its block is that phi (LLVM's `EliminateDuplicatePHINodes`).
 //!
+//! # Example
+//! No honest example: these are helpers shared by passes, and none changes a
+//! function on its own. Read [`crate::gvn`] and its tests for them in use.
+//!
 //! # Provides
 //! `subexpressions`, `equal_calls`, `forwarded` ([`crate::gvn`]); `live` and
 //! `live_except` ([`crate::dead`], [`crate::floatloop`]); `_comparison`

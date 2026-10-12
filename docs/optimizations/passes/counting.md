@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/counting.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/counting.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/counting.rs sha256:265890dd82583a0eb89c9a0a43a6c38d34fc63f8973f6c79ebc46864a63d4a94 -->
+<!-- src: crates/opt/llrm-transforms/src/counting.rs sha256:57efbbb32948bbdeabf06ba124014565f2a0390eb9ff9710c7ea6528cf859142 -->
 
 # counting
 
@@ -34,6 +34,41 @@ that replaces a loop's counter enters and leaves the loop the same way. A
 
 A seed is placed as it is made, so a caller asks for one only once it will
 commit to its rewrite.
+
+## Example
+Before:
+```mir
+define i16 @f(i16 %s, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ %s, %b0 ], [ %next, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+; ...
+b3:
+  %e = phi i16 [ %i, %b1 ]
+  ret i16 %e
+}
+```
+After `skip_guard` and `leaving` (the lines the test asserts):
+```mir
+b0:
+  %0 = icmp sle i16 %n, %s
+  %1 = add i16 %n, 0
+  br i1 %0, label %b3, label %b1
+; ...
+b3:
+  %e = phi i16 [ %1, %b1 ], [ %s, %b0 ]
+```
+The preheader tests for no trips and branches to the exit, and the exit phi
+takes the exit value `%n` (from `add %n, 0`, left to
+`canonical::identities`) or, with no trip, the start `%s`.
+
+From unit test
+`a_symbolic_exit_value_and_skip_test_are_placed_before_the_loop` in
+`counting_tests.rs`.
 
 ## Used by
 [`crate::fill`](fill.md), [`crate::loopexit`](loopexit.md), [`crate::window`](window.md) and [`crate::lsr`](lsr.md)

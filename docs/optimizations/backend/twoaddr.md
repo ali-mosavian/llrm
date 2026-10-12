@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/twoaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/twoaddr.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/twoaddr.rs sha256:b38baa3e3aec52c2a68a61dc31a3c994443063ad72679abdf023967d8eae4cb3 -->
+<!-- src: crates/backend/llrm-core/src/backend/twoaddr.rs sha256:c0aafc71e3937bfbd309a2e572bf4ce82d4f967031da524c793b7d75ad5a5fb6 -->
 
 # twoaddr
 
@@ -33,6 +33,22 @@ Three things happen first so the copy is less often needed.
 
 A source that is not a value (an immediate) is copied the same way. The
 inserted copies own no bytes of the input.
+
+## Example
+The body of a counted loop, before and after. Update in place made `v4 :=
+add v5, v7; v5 := mov v4` into `v5 := add v5, v7`, leaving self-moves for
+the coalescer:
+
+```lir
+; before (stage FloatAlloc)          ; after (stage TwoAddress)
+block 0x0005                         block 0x0005
+  v4 := add v5, v7                     v5 := add v5, v7
+  v6 := add v7, 0x1                    v7 := add v7, 0x1
+  v5 := mov v4   ; parallel-copy 2     v5 := mov v5   ; parallel-copy 2
+  v7 := mov v6   ; parallel-copy 2     v7 := mov v7   ; parallel-copy 2
+```
+
+From `ISEL_DUMP=1` of unit test `test_a_counted_loop` in `isel_tests.rs`.
 
 ## Runs
 A machine phase after `floatalloc` and before `coalesce`

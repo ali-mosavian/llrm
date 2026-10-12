@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/effects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/effects.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/effects.rs sha256:772689e9cc6ecaaabcf3fd2e656fca31337f9eb182e277c7f54ce0b8c94c5232 -->
+<!-- src: crates/opt/llrm-analysis/src/effects.rs sha256:7527e7c266961e9a2d75f511de20f749d8f8800d6f6794b0f7361d438815084f -->
 
 # effects
 
@@ -26,6 +26,37 @@ are accessed through bytes the pointer names; what is left is memory no
 operand names. `exposes_memory` asks whether a raise can reach a handler in
 this body, which reads memory: only an `invoke` not stated `nounwind`
 (along its unwind edge).
+
+## Example
+What each instruction may do to memory no operand names:
+
+```mir
+declare void @anything()
+declare void @arguments(ptr) memory(argmem: readwrite)
+declare i16 @reads() memory(read)
+
+define void @f(ptr %p) {
+b:
+  call void @anything()
+  call void @arguments(ptr %p)
+  %r = call i16 @reads()
+  call void @anything() memory(none)
+  store volatile i16 1, ptr %p
+  store i16 1, ptr %p
+  ret void
+}
+```
+
+| Instruction | `unmodeled_read` | `unmodeled_write` |
+| --- | --- | --- |
+| `call @anything()` | true | true |
+| `call @arguments(%p)` | false | false |
+| `call @reads()` | true | false |
+| `call @anything() memory(none)` | false | false |
+| both stores, `ret` | false | false |
+
+From unit test `a_calls_unmodeled_memory_is_what_its_attributes_leave_open`
+in `effects.rs`.
 
 ## Provides
 `call`, `touches_memory`, `writes_memory`, `unmodeled_read`,

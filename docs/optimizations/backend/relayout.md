@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/relayout.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/relayout.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/relayout.rs sha256:88414f0bea44c7daa04d71544802577c957f3a164a03b697333e9815e3952c3e -->
+<!-- src: crates/backend/llrm-core/src/backend/relayout.rs sha256:30d10ddf6aedaec7797a59d9fe3ca1e275e1529e11c23c201afa0ec7a8f8c947 -->
 
 # relayout
 
@@ -54,6 +54,11 @@ flowchart TB
 ```
 
 *Laying the frame out a second time*
+
+## Example
+None: the unit tests of this file check the pricing of a frame cell and the
+move of a call-private range, not a relaid function, and no test prints one.
+Read `Moves` for the displacement rule in the table above.
 
 ## Runs
 In `machined_once` (`assemble.rs`), after the first layout is chosen, unless

@@ -54,6 +54,50 @@
 //! itself) and renames every use to that value, repeated to a fixed point
 //! because one removal can make another phi trivial.
 //!
+//! # Example
+//! `v5` and `v6` are live across a call in one arm of an `if`. The spiller
+//! stores them before the call and reloads them after it, and repair gives the
+//! join a phi for each. Before, the spiller's input:
+//!
+//! ```lir
+//! === FarIndirectCalls
+//!     block 0x0013
+//!       v15 := phi 0x001f:v12 0x001c:v14
+//!       0x0019  v21 := add v20, v5  ; inserted
+//!       0x001a  v22 := add v21, v6  ; inserted
+//!     block 0x001c
+//!       0x001c  call   ; inserted; requires v3@AX; delivers v13@EAX; clobbers ...
+//!       0x001d  v14 := add v12, v13  ; inserted
+//!       0x001e  jmp   ; inserted
+//! ```
+//!
+//! After, with the reloads and the repaired phis:
+//!
+//! ```lir
+//! === SsaSpill
+//!     block 0x0013
+//!       v15 := phi 0x001f:v12 0x001c:v14
+//!       v23 := phi 0x001c:v26 0x001f:v5
+//!       v24 := phi 0x001c:v27 0x001f:v6
+//!       0x0019  v21 := add v20, v23  ; inserted
+//!       0x001a  v22 := add v21, v24  ; inserted
+//!     block 0x001c
+//!       0x001c  [[bp-0x8]] := mov v6  ; inserted
+//!       0x001c  [[bp-0x6]] := mov v5  ; inserted
+//!       0x001c  call   ; inserted; requires v3@AX; delivers v13@EAX; clobbers ...
+//!       0x001d  v14 := add v12, v13  ; inserted
+//!       0x001e  v26 := mov [[bp-0x6]]  ; inserted; spill reload
+//!       0x001e  v27 := mov [[bp-0x8]]  ; inserted; spill reload
+//!       0x001e  jmp   ; inserted
+//! ```
+//!
+//! The arm through the call reads the reloads `v26` and `v27`, the other arm
+//! still has `v5` and `v6`, so the uses in the join read the phis `v23` and
+//! `v24`.
+//!
+//! From `ISEL_DUMP=1 LLRM_CANDIDATES=spiller` of a C function with
+//! `if (c) s += g(a);` and seven loads from `p`, at -O2 -m16, trimmed.
+//!
 //! # Runs
 //! Inside [`crate::backend::ssaspill`]: `simplified` first, `repaired` last.
 

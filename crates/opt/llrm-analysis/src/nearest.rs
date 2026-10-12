@@ -37,6 +37,12 @@
 //! does not reach is left out of the chains and, as the query, yields nothing:
 //! everything dominates it, so the caller decides.
 //!
+//! # Example
+//! None: the module has no MIR input of its own. Its test,
+//! `test_the_items_that_dominate_a_block_are_found_nearest_first` in
+//! `nearest.rs`, places items in a generated chain of diamonds and compares
+//! `dominating` with a scan of every item. The figure above is the worked case.
+//!
 //! # Provides
 //! The `Nearest` index and its `Walk` iterator. Consumers: [`crate::avail`] and
 //! `loadjoins` in llrm-transforms.

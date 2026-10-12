@@ -21,6 +21,46 @@
 //! in one block each get their own split. The result is checked by an
 //! interpreter test that runs a function before and after.
 //!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! define i16 @f(i16 %a, i16 %b) {
+//! entry:
+//!   %less = icmp ult i16 %a, %b
+//!   %least = select i1 %less, i16 %a, i16 %b
+//!   %twice = add i16 %least, %least
+//!   br label %done
+//! done:
+//!   %r = phi i16 [ %twice, %entry ]
+//!   ret i16 %r
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! define i16 @f(i16 %a, i16 %b) {
+//! entry:
+//!   %less = icmp ult i16 %a, %b
+//!   br i1 %less, label %0, label %1
+//! 0:
+//!   br label %1
+//! 1:
+//!   %2 = phi i16 [ %a, %0 ], [ %b, %entry ]
+//!   %twice = add i16 %2, %2
+//!   br label %done
+//! done:
+//!   %r = phi i16 [ %twice, %1 ]
+//!   ret i16 %r
+//! }
+//! ```
+//!
+//! The select became a branch to the empty block `0` and a phi in `1`; the phi
+//! of `done` now names `1` as its predecessor.
+//!
+//! From unit test `test_a_select_becomes_a_branch_and_a_phi` in `selects.rs`.
+//!
 //! # Runs
 //! Once per program in `driver::optimized`, after `fpconvert` and before the
 //! spill-model dump, only where the target's `datalayout.toml` lists `select`

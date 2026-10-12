@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/floatfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/floatfold.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/floatfold.rs sha256:0b6feec07af4f6f29f2858d6f06830d8863d6f239050a02eb0d75c34b67eca8a -->
+<!-- src: crates/opt/llrm-transforms/src/floatfold.rs sha256:6710e903bfffa1282b1ff8097b2aea1aa19c29469be9c4792a9e770ae22a77de -->
 
 # floatfold
 
@@ -33,6 +33,36 @@ with `arcp`, or without it when the reciprocal is exact (a normal power of
 two whose reciprocal is normal). `(x op c1) op c2` is `x op (c1 op c2)` for
 a sum or product when both carry `reassoc`; the new flags are the
 intersection.
+
+## Example
+Before:
+
+```mir
+@g = global float 0.0
+
+define i32 @f() {
+b0:
+  store float 1.440000e+02, ptr @g
+  %x = load float, ptr @g
+  %i = fptosi float %x to i32
+  ret i32 %i
+}
+```
+
+After, with the dead load and conversion removed:
+
+```mir
+define i32 @f() {
+b0:
+  store float 1.440000e+02, ptr @g
+  ret i32 144
+}
+```
+
+The exact conversion of the stored 144.0 reads as 144.
+
+From unit test `test_an_exact_conversion_reads_as_its_number` in
+`floatfold_tests.rs`.
 
 ## Runs
 Inside [`crate::fold`](fold.md), every time fold runs, which is the pass list's

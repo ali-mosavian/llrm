@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/globalopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globalopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:d82de11c7382672c77395adf501ad3bc79df3fea53342c7b99a797c594eade27 -->
+<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:ea3a6b15c6aea0b2b8de1f26dba2f1b4e8058cd8be13931a79f7e509ec8c4caa -->
 
 # globalopt
 
@@ -18,10 +18,42 @@ initializer's bytes (`memory::constant_bits`), which the body passes fold.
 Every defined function is reported as changed so each body is run through
 its pipeline again.
 
-```text
-@w = internal global i16 5       @w = internal constant i16 5
-load i16, ptr @w          =>     load i16, ptr @w   (reads as 5)
+## Example
+Before:
+
+```mir
+@c = internal global [2 x i16] [i16 5, i16 12]
+@w = internal global i16 7
+
+define i16 @f(i16 %x) {
+b0:
+  %at = getelementptr i8, ptr @c, i16 2
+  %a = load i16, ptr %at
+  %b = load i16, ptr @w
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+
+define void @g(i16 %x) {
+b0:
+  store i16 %x, ptr @w
+  ret void
+}
 ```
+
+After:
+
+```mir
+@c = internal constant [2 x i16] [i16 5, i16 12]
+@w = internal global i16 7
+; ... @f and @g unchanged
+```
+
+`@c` is only loaded and becomes `constant`; `@w` is stored by `@g` and stays
+a variable. The body passes then fold the load of `@c` to 12.
+
+From the fixture of unit test `a_global_only_loaded_is_its_initializer` in
+`globalopt_tests.rs`, run through `GlobalOpt` alone.
 
 ## Runs
 Once, as a module pass before the per-body pipeline and before the

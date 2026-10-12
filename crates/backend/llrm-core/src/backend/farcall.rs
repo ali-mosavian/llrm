@@ -18,6 +18,26 @@
 //! its register arguments. This is form selection, not spilling: the store
 //! is not a spill and the allocator treats the cell as any frame slot.
 //!
+//! # Example
+//! `int apply(int (__far *f)(int), int x) { return f(x) + 1; }` on `-m16`. No
+//! dump prints the body before this phase, so this is what it leaves: the
+//! pointer is stored to the frame cell `[bp-0x4]` and the call reads the cell.
+//!
+//! ```lir
+//! _apply@3: 8 instructions
+//!   block 0x0000
+//!     0x0000     ; inserted; delivers v3@AX
+//!     0x0000  v1 := mov [[bp+0x6]]  ; inserted
+//!     0x0000  v2 := mov [[bp+0x8]]  ; inserted
+//!     0x0000  [[bp-0x4]] := mov v1  ; inserted
+//!     0x0000  [[bp-0x2]] := mov v2  ; inserted
+//!     0x0000  call [[bp-0x4]]  ; inserted; requires v3@AX; delivers v4@EAX; ...
+//!     0x0001  v5 := add v4, 0x1  ; inserted
+//!     0x0002     ; inserted; requires v5@EAX
+//! ```
+//!
+//! From `ISEL_DUMP=1` of that function, stage `FarIndirectCalls`, at -O2.
+//!
 //! # Runs
 //! First machine phase (`far-indirect-calls`), before `ssaspill`, once per
 //! body in `machine_with` (`flow.rs`). Every optimization level.

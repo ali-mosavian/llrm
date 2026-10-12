@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatalloc.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatalloc.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatalloc.rs sha256:02caa4e1285e33c1c93f21ff9b519d1f5ac8d79bc606862289fc1a27183472da -->
+<!-- src: crates/backend/llrm-core/src/backend/floatalloc.rs sha256:f2b7a2f416f82124f1d521eae8e9a3f2c375e00f9f1412068531240b37c3c944 -->
 
 # floatalloc
 
@@ -55,6 +55,45 @@ Afterwards `fisttp` is made as a 387 has it: `fistp` between `fldcw` of a
 control word with rounding set toward zero and a `fldcw` of the saved one.
 The two words are saved once at entry, and a run of conversions switches
 once.
+
+## Example
+The same `keep` as in `floatassign`. Each value becomes `ST0`, the stack
+position implied by the order of the instructions. `a` is read again after
+the multiply, so the multiply works on a copy pushed first (`fld ST0`).
+
+Before (after `FloatAssign`):
+
+```lir
+keep: 14 instructions
+  block 0x0000
+    0x0000  v1 := fld [[bp+0x8]]  ; inserted
+    0x0002  v3 := fmul v1, [[bp+0x10]]  ; inserted
+    0x0003  [[bp-0x10]] := fstp v3  ; inserted
+    ; ...
+    0x0007  [[bp-0x18]] := fstp v1  ; inserted
+    0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
+    0x0009  v1 := fld [[bp-0x18]]  ; inserted
+    0x0009  v8 := fadd v1, [[bp-0x10]]  ; inserted
+```
+
+After (`FloatAlloc`):
+
+```lir
+keep: 14 instructions
+  block 0x0000
+    0x0000  ST0 := fld [[bp+0x8]]  ; inserted
+    0x0002  ST0 := fld ST0  ; inserted
+    0x0002  ST0 := fmul ST0, [[bp+0x10]]  ; inserted
+    0x0003  [[bp-0x10]] := fstp ST0  ; inserted
+    ; ...
+    0x0007  [[bp-0x18]] := fstp ST0  ; inserted
+    0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
+    0x0009  ST0 := fld [[bp-0x18]]  ; inserted
+    0x0009  ST0 := fadd ST0, [[bp-0x10]]  ; inserted
+```
+
+From `ISEL_DUMP=1` of the nib function `keep(a: f64, b: f64)` with `-m32
+-O0`.
 
 ## Runs
 After `floatassign` in the machine phases, once per function, on bodies with

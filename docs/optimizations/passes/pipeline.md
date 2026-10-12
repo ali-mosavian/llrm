@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:1e1445deaea4735d33e7984359cd456e6d9709ae77cad3bf24f82a5fdce45b80 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:a18bbcb00f90e46d08502c67028dc5c364384661a8059a21c6c2c8fa3383e729 -->
 
 # pipeline
 
@@ -75,6 +75,12 @@ passes because `unroll` and `peel` refuse a rotated loop; `hoist`
 runs again to lift what a rotated loop (run at least once) may now leave;
 `gepoffset` follows it because it would move a constant `gep` out of its
 loop; `addresssink` follows the last `gvn`, which makes the phis it sinks.
+
+## Example
+No honest example: the pipeline is the order of the passes, not one rewrite,
+and no one function shows it. `llrm-c --dump DIR` writes the module after
+each stage (`NN-stage.ll`) and, for each body, each changed step of the
+fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 
 ## Runs
 Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`

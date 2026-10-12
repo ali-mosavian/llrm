@@ -1,5 +1,6 @@
-//! Loop-invariant work done once, before the loop: LLVM's LICM hoisting and
-//! gcc's `-fmove-loop-invariants`.
+//! Moves work whose operands do not change in a loop, and loads nothing in it
+//! writes, to before the loop, so it runs once and not every trip: LLVM's LICM
+//! hoisting and gcc's `-fmove-loop-invariants`.
 //!
 //! # How it works
 //! Loops are taken inner first, so what leaves one may leave the next. A loop
@@ -11,16 +12,6 @@
 //! non-volatile load that nothing in the loop may write (`memoryssa::Accesses`;
 //! a load from a `noalias readonly` parameter or marked invariant needs no such
 //! proof). A call in the loop blocks only the loads it may write.
-//!
-//! ```text
-//!  b0:                        b0:
-//!    br b1                      %k = mul i16 %a, 3
-//!  b1:                          %v = add i16 %k, 1
-//!    %i = phi ...      =>       br b1
-//!    %k = mul i16 %a, 3       b1:
-//!    %v = add i16 %k, 1         %i = phi ...
-//!    ...                        ...
-//! ```
 //!
 //! What may fault moves only where the loop certainly runs it, as the preheader
 //! would otherwise run it on a path that did not. That is a load of what is not
@@ -39,6 +30,53 @@
 //! fold, or a value rebuilt at each read, is not charged. A floating value held
 //! across the loop is charged its release. At -Os the run is priced in bytes,
 //! every block once.
+//!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! define i16 @f(i16 %n, i16 %a) {
+//! b0:
+//!   br label %b1
+//!
+//! b1:
+//!   %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+//!   %s = phi i16 [ 0, %b0 ], [ %s1, %b2 ]
+//!   %c = icmp slt i16 %i, %n
+//!   br i1 %c, label %b2, label %b3
+//!
+//! b2:
+//!   %k = mul i16 %a, 3
+//!   %v = add i16 %k, 1
+//!   %s1 = add i16 %s, %v
+//!   %i1 = add i16 %i, 1
+//!   br label %b1
+//!
+//! b3:
+//!   ret i16 %s
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! b0:
+//!   %k = mul i16 %a, 3
+//!   %v = add i16 %k, 1
+//!   br label %b1
+//!
+//! b2:
+//!   %s1 = add i16 %s, %v
+//!   %i1 = add i16 %i, 1
+//!   br label %b1
+//! ; ... b1 and b3 unchanged
+//! ```
+//!
+//! `%k` and `%v` read only `%a`, which the loop does not define; they leave in
+//! order into the preheader `b0`.
+//!
+//! From unit test `test_invariant_arithmetic_leaves_its_loop_in_order` in
+//! `hoist_tests.rs`.
 //!
 //! # Runs
 //! Early, after `floatloop` and before `loopmotion`; and again after
