@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/live.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/live.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/live.rs sha256:5d14dc82ce6e7dc47013001df9d2a9763bbd1b1ebdba54e8500a66692a5e1e48 -->
+<!-- src: crates/backend/llrm-core/src/backend/live.rs sha256:9fc20955a5e24ab9b36de4f7c9f36f6e25381709e759f69db792ef74ea1fc52e -->
 
 # live
 
@@ -19,7 +19,7 @@ but worked out when it is read, from what it is made of.
   weight = (-------  -  -------  - -----)  floored at 0
             size         size       size
 
-  size   = slots the value is live for + GRACE   (Interval::spill_size)
+  size   = slots the value is live for + the grace the numbering adds   (Interval::spill_size)
   pinned = INF                                    (never spilled)
 ```
 

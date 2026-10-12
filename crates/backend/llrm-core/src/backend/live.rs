@@ -14,7 +14,7 @@
 //!   weight = (-------  -  -------  - -----)  floored at 0
 //!             size         size       size
 //!
-//!   size   = slots the value is live for + GRACE   (Interval::spill_size)
+//!   size   = slots the value is live for + the grace the numbering adds   (Interval::spill_size)
 //!   pinned = INF                                    (never spilled)
 //! ```
 //!
