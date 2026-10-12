@@ -51,7 +51,7 @@ Neither pass merges arithmetic or changes its order, rounding or storage convers
 
 ## Across blocks and under pressure
 
-The stack is kept across a block edge only where the predecessor has exactly that successor, the successor exactly that predecessor, and the successor is not the entry; the blocks are processed in reverse postorder with the stack contents each bundle of edges agrees on (`spillplacement::bundles`), and `_Stack::leave` leaves a block with exactly the wanted values. A phi's copies on one edge are simultaneous and taken as a group. A call or an instruction the stack cannot cross needs it empty (`flush`).
+Across a block edge the stack contents are kept per edge bundle: blocks that share an edge share one stack layout, and a value that cannot stay on the stack goes to an 8-byte cell, which rounds it to double. [x87](../machine/register-allocation/x87.md) has the rules and the cases that are refused.
 
 More than eight live values never reaches `floatalloc`: `floatassign` spills one to a ten-byte frame slot in extended format, so no precision is lost, and reloads it where it is read. An instruction that still needs more than eight stack operands is refused.
 
