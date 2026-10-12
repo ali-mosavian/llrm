@@ -9,5 +9,6 @@ What the x86 backend must know about the targets and their hardware. For contrib
 | [metal](metal.md) | The operand-size prefix and what only hardware can answer |
 | [pointer-lowering](pointer-lowering.md) | Huge pointers: carry into the selector, windows |
 | [arithmetic-targets](arithmetic-targets.md) | CPU-dependent constant multiply and divide |
+| [register-allocation](register-allocation/readme.md) | The register allocator: classes, live ranges, assignment, splitting, spilling, copies, the two routes, x87 |
 
 The calling conventions of each target are in [abi](../abi/readme.md).

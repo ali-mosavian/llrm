@@ -206,7 +206,7 @@ pub type CostModel = fn(&CpuPrices) -> Rc<dyn llrm_mir::target::Machine>;
 
 /// A target, as the driver picks one by name: what a frontend of it starts
 /// from. The passes' view of a target grows here as the backend stops naming
-/// one (docs/targets.md).
+/// one (docs/machine/targets.md).
 pub trait Target {
     /// The target's name, for messages.
     fn name(&self) -> &'static str;

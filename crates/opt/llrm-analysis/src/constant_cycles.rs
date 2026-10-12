@@ -4,13 +4,14 @@
 //! # How it works
 //! Each value has a state: `Pending` (nothing met yet), `Known(fact)` or
 //! `Overdefined`, with `Pending` the identity of the meet and two different
-//! facts meeting to `Overdefined`. `propagated(unit, seeds, successors, only)` takes
-//! the facts already known (`seeds`, from [`crate::consts`]) and settles the
-//! rest, which are the phis no seed has and the operations that depend on
+//! facts meeting to `Overdefined`. `propagated(unit, seeds, successors, only)`
+//! takes the facts already known (`seeds`, from [`crate::consts`]) and settles
+//! the rest, which are the phis no seed has and the operations that depend on
 //! them: all of them, or the values `only` names (an incremental `Registers`
 //! brings up to date the values a change reached and no others). Values that
 //! cannot come out known (one made from an argument, a load or a call) are left
-//! out of the propagation. A body with no such open phi returns its seeds at once.
+//! out of the propagation. A body with no such open phi returns its seeds at
+//! once.
 //!
 //! A worklist re-evaluates a value when one of its inputs changes. A phi meets
 //! the facts of its incoming values (constants evaluate through
@@ -36,6 +37,34 @@
 //! `Overdefined`, since the entry runs before any back edge. A block whose
 //! branch `choose` defers (`None`) keeps every successor once nothing else is
 //! left to resolve.
+//!
+//! # Example
+//! A loop whose carried value adds 0 to itself, so only the cycle proves it:
+//!
+//! ```mir
+//! define void @f(i32 %incoming, i1 %more) {
+//! b0:
+//!   br label %b10
+//!
+//! b10:
+//!   %joined = phi i32 [ 7, %b0 ], [ %carried, %b10 ]
+//!   %carried = add i32 %joined, 0
+//!   br i1 %more, label %b10, label %b20
+//!
+//! b20:
+//!   ret void
+//! }
+//! ```
+//!
+//! | Value | Fact |
+//! | --- | --- |
+//! | `%joined` | `Known { n: 7, width: 32 }` |
+//! | `%carried` | `Known { n: 7, width: 32 }` |
+//!
+//! With step 1, or with `%incoming` as the source of the add, neither is known.
+//!
+//! From unit test `test_unchanged_loop_value_is_constant_through_its_backedge`
+//! in `constant_cycles_tests.rs`.
 //!
 //! # Provides
 //! `State`, `Successors` and `propagated`. Consumers: [`crate::consts`]

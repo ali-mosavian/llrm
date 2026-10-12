@@ -175,7 +175,7 @@ FE opcode -> cg_op table: `copcodes.h:34-131`; note `OPR_CMP`, `OPR_QUESTION`, `
 | `__based` pointers | lowered in FE before CG: `OPR_FARPTR` (segment :> offset), or `OPR_ADD` of base var, `OPR_DUPE` for `__self`, `OPR_PUSHSEG` for `__segname`; CG sees `CGBinary(O_CONVERT, off, seg, TY_LONG_POINTER)` and/or `O_PLUS`. Segment value = `CGFEName(seg sym, TY_UINT_2)`, CS = `CGFEName(func, TY_LONG_CODE_PTR)`, SS = a saved `TY_UINT_2` temp | `__based(...)` deref | cexpr.c:BasedPtrNode:859-947, MakeFarOp:847-857; cgen.c:1443-1458,1507-1511, PushSymSeg:358-381 |
 | pointer -> segment | `O_CONVERT` to TY_LONG_POINTER, `O_CONVERT` to TY_UINT_4, `O_RSHIFT` 16 | `OPR_CONVERT_SEG` | cgen.c:1474-1477 |
 | `__far16` (386) | `O_PTR_TO_NATIVE` around pointers dereferenced or indexed; `O_PTR_TO_FOREIGN` when converting flat -> far16; function far16 pointers excluded | x86-32 | cgen.c:683,705,900,920-922 |
-| varargs callee | no CG call for `va_start` on x86 (macro over the param area). Symbol gets `FE_VARARGS` via `FEAttr`; call class `FECALL_GEN_HAS_VARARGS|CALLER_POPS`; `...` terminates `CGParmDecl` list | x86 | cinfo.c:FESymAttr:223-224; cfeinfo.c:getCallClass:517-519; cgen.c:1244 |
+| varargs callee | no CG call for `va_start` on x86 (macro over the param area). Symbol gets `FE_VARARGS` via `FEAttr`; call class `FECALL_GEN_HAS_VARARGS\|CALLER_POPS`; `...` terminates `CGParmDecl` list | x86 | cinfo.c:FESymAttr:223-224; cfeinfo.c:getCallClass:517-519; cgen.c:1244 |
 | varargs RISC | `CGVarargsBasePtr` plus assigns (AXP/MIPS), `O_VA_START` (PPC) | `OPR_VASTART` | cgen.c:GenVaStart:509-541 |
 | alloca | `O_STACK_ALLOC` on RISC only; on x86 it is an ordinary call | `__builtin_alloca` | cgen.c:1590 |
 | math intrinsics | `CGUnary/CGBinary(O_SIN.., TY_DOUBLE)` replacing the libm call | only when not `-od` and extensions on; matched by name (`__SIN` or `sin`) and parm count | cexpr.c:2286-2303 |
@@ -990,7 +990,7 @@ Order from `PreOptimize`/`PostOptimize`/`Generate` (c/generate.c:152-300,640-740
 | variable-length arrays | not supported: array dimension must fold to a constant (`ERR_NOT_A_CONSTANT_EXPR`/`ERR_INVALID_DIMENSION`) | cdecl2.c:ArrayDecl:1319; cexpr.c:ConstExprAndType:1174 |
 | `volatile`/`setjmp` | `_try` marks all locals `SYM_TRY_VOLATILE` | cstmt.c:MarkTryVolatile:868 |
 | register / storage hints | `SC_REGISTER` only affects `&` checks and far-SS; no `FE_` bit sent. `sym.weight` via `IncSymWeight` computed but only for FE use (not checked if read by cgen) | cexpr.c:IncSymWeight:470 |
-| line numbers / unroll count | `src_loc` per statement | `DBSrcCue`, `BEUnrollCount` | cgen.c:GenOptimizedCode:1608 |
+| line numbers / unroll count | `src_loc` per statement (`DBSrcCue`, `BEUnrollCount`) | cgen.c:GenOptimizedCode:1608 |
 | `sizeof` of expression | operand parsed with `SizeOfCount++` so no warnings/codegen, operand freed | cexpr.c:GetExpr:1252 (TC_SIZEOF) |
 
 ### What a back end could optimise harder with

@@ -21,6 +21,7 @@ For readers and contributors of llrm. Read in this order; each section's readme 
 | [optimizations](optimizations/readme.md) | One note per optimization, each measured on a program |
 | [formats](formats/readme.md) | The object model and its writers; debug information |
 | [machine](machine/readme.md) | x86 real mode: prefixes, pointer lowering, targets |
+| [register allocation](machine/register-allocation/readme.md) | How values get registers and frame slots, and how to debug it |
 | [abi](abi/readme.md) | Calling conventions: registers, stacks, near and far calls, how a convention is chosen, the tests that pin them |
 | [reference](reference/readme.md) | Optimization levels, the switches that change what a program means, the tools, the crates |
 | [comparison](comparison/readme.md) | llrm's output beside other compilers' |

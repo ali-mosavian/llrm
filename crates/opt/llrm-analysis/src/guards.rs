@@ -45,6 +45,31 @@
 //! [`crate::difference::proves`]; `Given` finds the guards of a block once for
 //! as many questions as are asked of it.
 //!
+//! # Example
+//! The edge into `loop` is the only way there, so its branch holds in `loop`
+//! but not in `done`:
+//!
+//! ```mir
+//! define i16 @f(i16 %n, i16 %len) {
+//! entry:
+//!   %fits = icmp ult i16 %n, %len
+//!   br i1 %fits, label %loop, label %done
+//! loop:
+//!   br label %done
+//! done:
+//!   ret i16 0
+//! }
+//! ```
+//!
+//! | Query | Result |
+//! | --- | --- |
+//! | `holds` in `loop`: `n <u len`, `n <=u len`, `len >u n` | true |
+//! | `holds` in `loop`: `len <u n` | false |
+//! | `guards(done)` | empty (the other edge reaches `done`) |
+//!
+//! From unit test `test_a_branch_proves_its_compare_where_its_edge_alone_leads`
+//! in `guards_tests.rs`.
+//!
 //! # Provides
 //! Guard facts and the implication queries above. Consumers: `decide`,
 //! `exitfold` and `jumpthread` in `llrm-transforms`, and

@@ -1,11 +1,38 @@
-//! The cells the optimizer proved hold a phi's value (`!llrm.home`,
-//! `LirBody.homes`), as the body now stands: the one fact both spillers ask. A
-//! spilled value read from its cell needs no store of its own and no cell of
-//! its own.
+//! Finds the memory cells that provably still hold a phi's value, so a spilled
+//! value read from one needs no store and no slot of its own.
 //!
-//! The proof is the optimizer's, over MIR. What is checked here is what a later
-//! pass may have changed: nothing writes the cell while the value lives, and
-//! every definition of the value is a plain copy, which spilling removes.
+//! # How it works
+//! MIR proves, for a phi, that a memory cell already holds its value
+//! (`!llrm.home`, carried into the body as `LirBody.homes`). A spilled value
+//! read from such a cell needs no store and no slot of its own. This module
+//! re-checks the proof against the machine code, since later phases may have
+//! changed it:
+//!
+//! ```text
+//!  held(body, wanted):
+//!    homes the body names, filtered by the caller's `wanted`
+//!      drop a value with a definition that is not a plain copy
+//!        (a spilled value's definitions are removed by spilling)
+//!      walk each block backward with the values live there
+//!        drop a value when an instruction may write its cell
+//!        and is not itself a store of that value to the cell
+//! ```
+//!
+//! `may_write` is the spiller's own test for the frame, plus any store to other
+//! memory that is not certainly elsewhere. `apart` says two cells are certainly
+//! different bytes: both are fixed addresses that `overlap` separates. A
+//! pointer, or two elements of an array, are never apart; what a pointer
+//! reaches is the optimizer's proof, not checked here.
+//!
+//! # Example
+//! No honest example: `held`, `may_write` and `apart` answer queries and print
+//! no LIR of their own. Read the spiller's `ISEL_DUMP=1` output (see
+//! [`crate::backend::lirtext`]) to see a spilled phi read from its home cell.
+//!
+//! # Used by
+//! [`crate::backend::spiller`] and [`crate::backend::floatassign`] (`held`);
+//! [`crate::backend::floatfold`] and [`crate::backend::pressuresink`]
+//! (`may_write`); [`crate::backend::postrasink`] (`apart`).
 
 use std::collections::BTreeSet;
 

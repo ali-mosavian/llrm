@@ -128,15 +128,32 @@ for the offset.
 
 The `AD` descriptor of a numeric array, from the measured `ARRAY.INC` layout:
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1["+0"] c1["offset"]:3 s1["2"] n1["data far pointer: offset"]:3
+  o2["+2"] c2["segment"]:3 s2["2"] n2["data far pointer: segment"]:3
+  o3["+4"] c3["link"]:3 s3["2"] n3[" "]:3
+  o4["+6"] c4["total size"]:3 s4["2"] n4[" "]:3
+  o5["+8"] c5["rank"]:3 s5["1"] n5[" "]:3
+  o6["+9"] c6["flags"]:3 s6["1"] n6["FADF_STATIC = 40h"]:3
+  o7["+0Ah"] c7["adjusted offset"]:3 s7["2"] n7[" "]:3
+  o8["+0Ch"] c8["element width"]:3 s8["2"] n8[" "]:3
+  o9["+0Eh"] c9["(count, lower) ..."]:3 s9["4"] n9["one 4-byte record per dimension"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff
+  class o1,n1,o2,n2,o3,n3,o4,n4,o5,n5,o6,n6,o7,n7,o8,n8,o9,n9 off
+  class c1,c2 src
+  class s1,s2,s3,s4,s5,s6,s7,s8,s9 size
+  class c3,c4,c5,c6,c7,c8 cell
+  class c9 opt
 ```
- +0   +2   +4    +6     +8    +9      +0Ah       +0Ch    +0Eh
- +----+----+-----+------+-----+-------+----------+-------+-----------+
- | off| seg| link| total| rank| flags | adjusted | elem  | (count,   |
- |    |    |     | size |     |       | offset   | width | lower)... |
- +----+----+-----+------+-----+-------+----------+-------+-----------+
- data far pointer                  FADF_STATIC = 40h    one 4-byte record
-                                                        per dimension
-```
+
+*AD descriptor of a numeric array*
 
 An array of unspecified rank reserves BASCOM's eight dimension records: a
 14-byte header plus eight four-byte records, 46 bytes. That is an ABI storage
@@ -171,20 +188,27 @@ guarantee.
 
 ### Runtime frames
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  space:1 a3["▲ higher addresses"]:3 space:4
+  o1[" "] c1["parameters"]:3 s1[" "] n1["Pascal: first formal furthest from [bp+6]"]:3
+  o2[" "] c2["return address"]:3 s2[" "] n2["far"]:3
+  o3[" "] c3["runtime header"]:3 s3[" "] n3["BP at its top#59; 10 bytes QB 4.5 / llrm, 18 bytes PDS 7.1, 20 bytes VBDOS#59; holds saved BP, frame chain, SI, DI"]:3
+  o4[" "] c4["source locals and spills"]:3 s4[" "] n4["SP at the bottom"]:3
+  space:1 a8["▼ stack grows down"]:3 space:4
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff
+  class a3,o1,n1,s1,o2,n2,s2,o3,n3,s3,o4,n4,s4,a8 off
+  class c1,c4 cell
+  class c2 src
+  class c3 opt
 ```
-  high   +--------------------+
-         | parameters         |  Pascal: first formal furthest from [bp+6]
-         +--------------------+
-         | return address     |  far
-         +--------------------+
-         | runtime header     |  <- BP at its top; 10 bytes QB 4.5 / llrm,
-         |  (saved BP, frame  |  18 bytes PDS 7.1, 20 bytes VBDOS
-         |   chain, SI, DI)   |
-         +--------------------+
-         | source locals and  |
-         | spills             |
-  low    +--------------------+  <- SP
-```
+
+*Frame of a QB procedure (far call, Pascal order)*
 
 `B$ENRA` pushes BP, installs the BASIC frame chain, saves SI and DI, and
 allocates and zeroes the locals; `B$EXSA` reverses it before the far return.

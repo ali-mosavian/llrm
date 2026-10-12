@@ -74,6 +74,37 @@
 //! reach, using strides from `congruences` (a value's residue modulo a
 //! modulus). Far or fixed-address accesses name linear memory.
 //!
+//! # Example
+//! A pointer spilled to a slot, reloaded on one arm and joined with the
+//! original:
+//!
+//! ```mir
+//! define void @f(i1 %c) {
+//! b0:
+//!   %root = alloca [4 x i8]
+//!   %slot = alloca ptr
+//!   store ptr %root, ptr %slot
+//!   br i1 %c, label %b10, label %b20
+//!
+//! b10:
+//!   %loaded = load ptr, ptr %slot
+//!   br label %b30
+//!
+//! b20:
+//!   br label %b30
+//!
+//! b30:
+//!   %joined = phi ptr [ %loaded, %b10 ], [ %root, %b20 ]
+//!   ret void
+//! }
+//! ```
+//!
+//! `points_to(..).values` gives `%loaded` and `%joined` the same `Provenance`
+//! as `%root`, the frame object it allocates.
+//!
+//! From unit test `test_points_to_flows_through_memory_and_a_phi` in
+//! `alias_tests.rs`.
+//!
 //! # Provides
 //! `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`,
 //! `escaped_before`, `nonnull`), `seeds`, `summaries`, `calls_annotated`,

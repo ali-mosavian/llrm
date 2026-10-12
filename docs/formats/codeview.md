@@ -5,12 +5,25 @@ segments, `$$SYMBOLS` (class `DEBSYM`) and `$$TYPES` (class `DEBTYP`), plus LINN
 COMENT ([omf](omf.md)). The linker (`LINK /CO`, then CVPACK, or `jwlink debug codeview`) turns them into the
 packed table a debugger reads. COFF objects carry C13 instead ([debug-info](debug-info.md)).
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  info["<b>debug::Info</b>"]:::src
+  cv4["<b>cv4.rs</b><br/><small>C7-era CodeView 4:<br/>C, Nib, QB default</small>"]:::opt
+  bc["<b>cvwrite.rs</b><br/><small>BC's pre-link layout:<br/>llrm-qb --bc-codeview</small>"]:::opt
+  cv4i["<b>cv4info.rs</b>"]:::mid
+  cvi["<b>cvinfo.rs</b>"]:::mid
+  info -->|"dialect Cv4"| cv4
+  info -->|"dialect Bc"| bc
+  cv4 -.->|"read back"| cv4i
+  bc -.->|"read back"| cvi
 ```
- debug::Info --+-- dialect Cv4 --> cv4.rs      C7-era CodeView 4: C, Nib, QB default
-               |
-               +-- dialect Bc  --> cvwrite.rs  BC's pre-link layout: llrm-qb --bc-codeview
-                                   (read back by cvinfo.rs; cv4info.rs reads the Cv4 form)
-```
+
+*Two CodeView dialects of debug::Info*
 
 `codeview::sections` ([source](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-omf/src/codeview.rs#L216))
 picks by `Info.dialect`. Each frontend states it: C and Nib `Cv4`; QB `Cv4`, or `Bc` under `--bc-codeview`.
@@ -34,11 +47,13 @@ Records are Open Watcom's `cv4f.h`; each shape was also read from objects ML 6.1
   `LF_FIELDLIST`, `LF_PROCEDURE`, `LF_ARGLIST`; `S_GPROC`, `S_LPROC`, `S_BPREL`, `S_REGISTER`, `S_BLOCK`,
   `S_UDT`, statics.
 - CodeView 4 names one place per scope: a variable in a register for part of a scope, or removed by the
-  optimizer, is left out.
+  optimizer, is left out. A parameter that arrives in one register and stays there for the whole body is an
+  `S_REGISTER` (Nib m16 `regparm3`: `b` in EDX); one the code overwrites, or one in a register pair, is not
+  written (pairs: [#1368](https://github.com/ali-mosavian/llrm/issues/1368)).
 
 Read by real CodeView (`tests/cv4.rs`, driven in DOSBox-X): enums (`color e = 5`), `const` (`const short k`),
 register variables (`SI reg short r = 42`), block scopes (`k` is listed only while the program is in its
-block), structs, and a Nib program (`bp add`, parameters and a local with values). `LINK /CO` runs CVPACK,
+block), structs, and a Nib program (`bp add`: the local, and the register parameter `EDX reg long b = 3`). `LINK /CO` runs CVPACK,
 which rewrites the table (`NB08` trailer); CodeView then breaks at a function by name.
 
 Still from the Open Watcom headers alone: `LF_UNION` and `LF_BITFIELD` (CodeView accepts them; its locals
@@ -68,9 +83,22 @@ it, and `crates/target/llrm-omf/src/cvwrite_tests.rs` checks that the writer inv
 
 ### `$$SYMBOLS`
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1[" "] c1["len"]:3 s1["1"] n1[" "]:3
+  o2[" "] c2["kind"]:3 s2["1"] n2[" "]:3
+  o3[" "] c3["data"]:3 s3[" "] n3["len - 1 bytes"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2,o3,n3,s3 off
+  class c1,c2,c3 cell
+  class s1,s2 size
 ```
-[len:u8][kind:u8][data, len - 1 bytes]
-```
+
+*A $$SYMBOLS record*
 
 | kind | meaning | data |
 |---|---|---|
@@ -87,9 +115,22 @@ record. QB 4.5 writes a label for each resumable statement under `ON ERROR`.
 
 ### `$$TYPES`
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1[" "] c1["kind = 1"]:3 s1["1"] n1["type indices start at 0x0200, a fixed first record"]:3
+  o2[" "] c2["length"]:3 s2["2"] n2[" "]:3
+  o3[" "] c3["data"]:3 s3[" "] n3["length bytes"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2,o3,n3,s3 off
+  class c1,c2,c3 cell
+  class s1,s2 size
 ```
-[kind:u8 = 1][length:u16][data, length bytes]      indices from 0x0200; 0x0200 is a fixed first record
-```
+
+*A $$TYPES record*
 
 | tag | meaning | data |
 |---|---|---|
@@ -108,8 +149,9 @@ names with offsets as two parallel records. A BYREF parameter is two hops on VBD
 (`INTEGER` `0xa1`, `LONG` `0xa2`, `STRING` `0xb7`) and an array parameter by a bare `0x7a` pointer.
 
 Packed by `LINK /CO`, the result has an `NBxx` trailer, a subsection directory, real `S_LPROC16`, `S_BPREL16`
-and `S_LDATA16` records with scope links, and `sstGlobalTypes` with numbered `LF_` leaves. VBDOS's LINK 5.31
-runs CVPACK itself; PDS 7.1's needs `CVPACK /P`; QB 4.5 ships none.
+and `S_LDATA16` records with scope links, and `sstGlobalTypes` with numbered `LF_` leaves. MS LINK 5.31 (`LINK /CO`) runs
+CVPACK and keeps the CodeView 4 records (`tests/cv4.rs`). `jwlink debug codeview` takes them too and Open
+Watcom `cvpack` packs its image (`tools/debug-matrix.py`). What the image keeps is pinned in the emulator fork's symbol tests ([`tests/symbols/qb`](https://github.com/ali-mosavian/dosbox-x/blob/main/tests/symbols/qb/README.md)): QB 4.5 LINK 3.69 and PDS LINK 5.10 drop the CodeView 4 records and keep BC-dialect names and offsets; MS LINK 5.31 and jwlink keep CodeView 4.
 
 ## Screenshots
 
