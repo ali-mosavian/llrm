@@ -114,6 +114,10 @@ the first case either missed. Design by SRP, DRY, Open/Closed and separation of 
 - **New cases extend the analysis, not its callers.** When a pass needs a fact the analysis cannot give, the
   analysis grows; the pass does not.
 
+## The docs -- the eighth rule
+
+**A change updates the doc of the thing it changes, in the same PR.** A pass, analysis, flag, level, tool, target or runtime that changes behaviour changes its doc with it: a pass's `//!` header is its doc (purpose, how it works, example, where it runs), and `python3 tools/docsbuild/build.py --sync` output is committed with it. The stale-page and missing-section tests fail the PR where they can; where they cannot, the reviewer asks.
+
 ## The goal
 
 **Produce what a modern optimising compiler would have produced.** Integers, longs, floats, array addressing,
