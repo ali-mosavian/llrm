@@ -4,7 +4,7 @@ For contributors to `crates/opt/llrm-transforms`: the order the MIR optimizer ru
 
 ## How a body is optimized
 
-`pipeline::recorded` ([`pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/pipeline.rs#L367)) drives llrm-mir's pass manager over a module. At -O0 only `available-externally` runs. Above it the order is:
+`pipeline::recorded` ([`pipeline.rs`](passes/pipeline.md)) drives llrm-mir's pass manager over a module. At -O0 only `available-externally` runs. Above it the order is:
 
 ```
  module     available-externally, globalopt, ports, stamp
@@ -17,7 +17,7 @@ For contributors to `crates/opt/llrm-transforms`: the order the MIR optimizer ru
  then       lowering for selection and the backend
 ```
 
-`Fixed` ([`pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/pipeline.rs#L549)) is one function pass, `mir pipeline`:
+`Fixed` ([`pipeline.rs`](passes/pipeline.md)) is one function pass, `mir pipeline`:
 
 ```
  sroa                              structural boundary, outside the rounds
@@ -32,7 +32,7 @@ For contributors to `crates/opt/llrm-transforms`: the order the MIR optimizer ru
 
 A pass is skipped in a round when nothing it reads has changed since it last made no change. The fixed point ends when a round changes nothing; a body that does not settle in a size-scaled number of rounds is a compiler error.
 
-Every pass in the pipeline can be removed with `-fno-NAME` where the table below gives one; the `-f` names are `PASSES` in [`driver/flags.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/flags.rs#L67), the per-level options are `Level::options` ([`flags.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/flags.rs#L51)) over `pipeline::Options` ([`pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/pipeline.rs#L47)).
+Every pass in the pipeline can be removed with `-fno-NAME` where the table below gives one; the `-f` names are `PASSES` in [`driver/flags.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/flags.rs#L67), the per-level options are `Level::options` ([`flags.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/flags.rs#L51)) over `pipeline::Options` ([`pipeline.rs`](passes/pipeline.md)).
 
 ## Seeing a pass
 

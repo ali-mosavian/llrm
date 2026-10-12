@@ -4,7 +4,29 @@ For contributors: which tests exist, how to run the narrowest one that answers a
 
 ## Layers
 
-![What the gate runs for a diff, and what executes the program under test](../assets/figures/docs-working-testing-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  gate["<b>gate.py plan/run</b><br/><small>(tools/gate, tiers.toml)<br/>picks steps from the diff</small>"]:::src
+  cheap["<b>cheap steps, every diff</b><br/><small>build: cargo check/test<br/>  --no-run<br/>lib, doc: unit tests, doctests<br/>crate-tests, integration<br/>  (tests/*.rs)<br/>scans: source-text ratchets<br/>run: tests/run in DOSBox<br/>pytest: tools/, crates/,<br/>  tests/*.py<br/>bench, torture, fmt</small>"]:::opt
+  heavy["<b>heavy steps, when owner</b><br/><small>paths change<br/>turbo, cv4: Turbo Debugger,<br/>  CodeView<br/>identity: compiler vs itself<br/>qcport: QCport vs Borland<br/>dos-slow: demos, graphics<br/>  sweeps<br/>pytest-programs, measure,<br/>  rfmt-post</small>"]:::out
+  host["<b>host</b><br/><small>unit tests, llrm-mir<br/>interpreter, unicorn<br/>(bench counts)</small>"]:::data
+  dosbox["<b>DOSBox-X fork</b><br/><small>tools/dosbatch: one launch<br/>builds and runs many programs</small>"]:::data
+  ref["<b>reference tools</b><br/><small>Turbo Debugger, CodeView,<br/>BC, Borland C, gcc, clang,<br/>gdb</small>"]:::data
+  gate --> cheap
+  gate --> heavy
+  cheap --> host
+  cheap --> dosbox
+  heavy --> dosbox
+  heavy --> ref
+```
+
+*What the gate runs for a diff, and what executes the program under test*
 
 A step whose tool is not in the repository is SKIPPED with the reason (see CI).
 

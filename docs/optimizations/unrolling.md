@@ -6,9 +6,9 @@ For contributors to `crates/opt`. Covers the passes that copy a loop out complet
 
 | Pass | File | What it copies | Levels |
 |---|---|---|---|
-| `unroll` | [`unroll.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/unroll.rs) | a loop with an exact trip count, tested in its header, whose body is a chain of blocks to the latch: one straight line | -O1 and up (`-funroll-loops`); grows code only at -O3 and -Omax |
-| `peel` | [`peel.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/peel.rs) | every block of a loop with an exact or bounded trip count of at least 2, once per trip, keeping the loop as a residual that `fold`, `decide` and `dead` then prove unreachable | -O3 and -Omax (`-fpeel-loops`) |
-| `unroll-jam` | [`unroll_jam.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/unroll_jam.rs) | the outer loop of a perfect two-loop nest by N, the N inner loops fused | -O3 only (`-floop-unroll-and-jam`) |
+| `unroll` | [`unroll.rs`](passes/unroll.md) | a loop with an exact trip count, tested in its header, whose body is a chain of blocks to the latch: one straight line | -O1 and up (`-funroll-loops`); grows code only at -O3 and -Omax |
+| `peel` | [`peel.rs`](passes/peel.md) | every block of a loop with an exact or bounded trip count of at least 2, once per trip, keeping the loop as a residual that `fold`, `decide` and `dead` then prove unreachable | -O3 and -Omax (`-fpeel-loops`) |
+| `unroll-jam` | [`unroll_jam.rs`](passes/unroll_jam.md) | the outer loop of a perfect two-loop nest by N, the N inner loops fused | -O3 only (`-floop-unroll-and-jam`) |
 
 ```
  unroll (trip count 3)                    peel
@@ -24,7 +24,7 @@ For contributors to `crates/opt`. Covers the passes that copy a loop out complet
 
 ## Whether a copy pays
 
-`peelsize::admitted` ([`peelsize.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-analysis/src/peelsize.rs)) follows gcc's `try_unroll_loop_completely` with LLVM's size estimate: each iteration is run over the values `consts` knows, what folds is free, and only the successors a folded branch leaves are followed. The budgets count MIR instructions, so no machine number enters but the target's `unroll_budget`.
+`peelsize::admitted` ([`peelsize.rs`](analyses/peelsize.md)) follows gcc's `try_unroll_loop_completely` with LLVM's size estimate: each iteration is run over the values `consts` knows, what folds is free, and only the successors a folded branch leaves are followed. The budgets count MIR instructions, so no machine number enters but the target's `unroll_budget`.
 
 1. The language may say how many copies it permits, or never; fewer than the trip count is a refusal (there is no partial unroll).
 2. More than `max_unroll_iterations` (16) trips: refused.

@@ -22,7 +22,21 @@ Each name is a convention of the target's `calling.toml`: [x86-m16](x86-m16.md) 
 
 `any` lets a function that only its own module calls, and only directly, be entered by a near `call` and left by `ret` ([x86-m16](x86-m16.md#near-and-far-calls)); `tests/nearcalls.rs` pins it. A float result goes through a hidden near pointer for the BASIC marks and in `st(0)` for the rest (`float_return`).
 
-![An exported watcall32 function and its caller](../assets/figures/docs-abi-nib-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  fn["<b>@export(#quot;watcall32#quot;)</b><br/><small>fn f(a: i32, b: i32) -#gt; i32</small>"]:::src
+  abi["<b>ProcedureAbi</b><br/><small>distance: far,<br/>cleanup: callee,<br/>convention: watcall</small>"]:::mid
+  caller["<b>caller (any language)</b>"]:::src
+  asm["<b>mov eax, a #59; mov edx, b</b><br/><small>call f_<br/>(nothing to pop)</small>"]:::mid
+  fn --> abi
+  caller --> asm
+```
+
+*An exported watcall32 function and its caller*
 
 ## Interrupt handlers
 

@@ -6,7 +6,31 @@ dialect and ABI it follows, and its options.
 `llrm-c` compiles C through Open Watcom's own front end and hands MIR to the
 shared optimizer and backend.
 
-![From C source to an object file](../../assets/figures/docs-frontends-c-readme-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  src["<b>program.c</b>"]:::src
+  wccq["<b>wccq: Open Watcom's C front end (cc/)</b><br/><small>linked against toolchain/owshim/cgshim.c<br/>instead of its code generator,<br/>with llrm's patches<br/>(toolchain/owshim/patches)</small>"]:::opt
+  stream["<b>stream: one line per cg call</b><br/><small>types, symbols, trees, data, debug</small>"]:::mid
+  llrm["<b>llrm-c</b><br/><small>hir.rs reads the stream<br/>translate.rs makes HIR<br/>ow_facts.rs turns the facts it<br/>states into MIR facts</small>"]:::out
+  mir["<b>HIR -#gt; MIR</b>"]:::mid
+  opt["<b>shared optimizer, backend</b>"]:::mid
+  obj["<b>OMF object</b><br/><small>(or ELF, Mach-O, COFF)</small>"]:::data
+  src --> wccq
+  wccq --> stream
+  stream --> llrm
+  llrm --> mir
+  mir --> opt
+  opt --> obj
+```
+
+*From C source to an object file*
 
 The front end does the parsing, type checking, constant folding and struct
 layout; `cgshim.c` records what it asks of its code generator, and nothing

@@ -1,8 +1,0 @@
-kind: graph
-dir: down
-title: &mut p.x and &mut p.y are disjoint, both accepted; &mut p.x and p overlap
-node p "p"
-node x "p.x" fill=a
-node y "p.y" fill=b
-edge p -> x
-edge p -> y

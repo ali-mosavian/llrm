@@ -1,6 +1,0 @@
-kind: stack
-title: Shape.circle(center, radius), pack 2
-cell "tag" off="0" size="1"
-cell "pad" off="1" size="1"
-cell "center" off="2" size="4" note="the variants overlap from byte 2"
-cell "radius" off="6" size="2"

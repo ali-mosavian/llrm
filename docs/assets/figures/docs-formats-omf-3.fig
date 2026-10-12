@@ -1,6 +1,0 @@
-kind: stack
-title: A FIXUPP subrecord
-cell "locat" size="2" note="bits: 1, M, loc (4), offset (10). M: 1 segment-relative, 0 self-relative. loc: 1 offset16, 2 base, 3 pointer 16:16, 9 offset32"
-cell "fix data" size="1" note="F, T, P and method bits"
-cell "frame datum" note="index"
-cell "target datum" note="index"

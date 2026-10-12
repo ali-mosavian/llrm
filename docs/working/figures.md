@@ -1,120 +1,147 @@
 # Figures
 
-For contributors who add a diagram to a document. A figure is a
-short text spec in `docs/assets/figures/NAME.fig`; `--sync` draws it to `NAME.png`
-beside it. A document holds only the image, so any Markdown viewer shows it with no
-build step.
+For contributors who draw a diagram in a document or in a `//!` header. A figure is an inline
+`mermaid` fence: GitHub draws it in its light and dark themes, so there is no image to build
+or commit. Every figure uses one shared style, so a figure names a meaning, never a colour.
 
-## Adding a figure
+## The style
 
-1. Write the spec in `docs/assets/figures/NAME.fig`.
-2. Reference the image from the document: `![what it shows](../assets/figures/NAME.png)`,
-   with the path relative to the document.
-3. Run `python3 tools/docsbuild/build.py --sync` and commit the `.fig`, the `.png` and
-   the document.
+The style lives in one module, `tools/docsbuild/tomermaid.py`. Nothing else spells a colour, and
+this page names the constants rather than copying them.
 
-To change a figure, edit its `.fig` and run `--sync` again. A spec written as a `fig`
-fence in a document works too: `--sync` moves it to a `.fig` named after the document
-(`docs-working-figures-1`) and leaves the image reference. A `.png` with no `.fig` (or an old `.svg`) is
-deleted.
+- `INIT` is the first line of every flowchart: font, sizes, neutral line and caption colours
+  that read on both themes, smooth edges. A block, gantt or sequence figure starts with its own
+  init line, the entry of `INITS` for its type.
+- `CLASSES` names the node classes. Write the class, not a fill:
 
-`--check` exits 1, and the test `test_repository_is_in_sync` fails, when a generated file is
-stale, a `fig` fence is left in a document, a `.fig` is referenced by no document, or an
-image has no `.fig`.
+| Class | Meaning |
+|---|---|
+| `src` | input, a front end, a source |
+| `mid` | an ordinary stage or value |
+| `opt` | the optimizer, the thing being explained |
+| `out` | output, a written file |
+| `data` | a table, a description, generated input |
+| `warn` | refused, an error, a hazard |
+| `note` | free text beside a figure, no box |
 
-The pass, analysis and backend pages in `docs/optimizations/reference/` are written
-by `--sync` from the `//!` headers (extracted by `tools/passdocs.py`); edit the
-header, not the page. A `fig` fence stays in the header: it becomes an image on those
-pages, named after the crate and file (`llrm-analysis-cfg-1`), with no `.fig`.
+- A node label is a bold first line and small lines under it, written `<b>..</b><br/><small>..</small>`.
+- A group is a `subgraph` tinted by `style` in the colour of what it holds (`TINT`): the commonest class
+  of its nodes, grey for `mid`. A fan of three or more equal edges into one group ends at its border, so
+  none crosses the caption.
+- Number stages (①, ②) when the order matters. Put the title in an italic line under the fence, not in
+  the diagram.
+- Text in a label is escaped: `"`, `#`, `;`, `<`, `>`, braces and `|` as `#quot;`, `#35;`, `#59;`, `#lt;`,
+  `#gt;`, `#123;`, `#125;`, `#124;`; a line break is `<br/>`.
 
-## Writing a figure
+## Which diagram
 
-A spec is the text of a `.fig` file, or the body of a `fig` fence in a Rust `//!`
-header. The first line names the kind. Lines starting with `#` are comments.
+| Draw | With |
+|---|---|
+| Stages, data flow, a decision, a layering | `flowchart` (`LR` or `TB`) |
+| A memory, stack or record layout | `block-beta`: offset, cell, size, note in 8 columns |
+| Lifetimes over a numbered axis | `gantt`: a lane is a section, a span a task, a point a milestone |
+| Calls and returns between parties | `sequenceDiagram` |
 
-```text
-kind: graph | stack | lanes
-title: caption under the figure, also the accessible title
+A flowchart:
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  fe["<b>Front end</b><br/><small>llrm-c</small>"]:::src
+  mir["<b>MIR</b><br/><small>SSA</small>"]:::mid
+  opt["<b>Optimizer</b><br/><small>llrm-transforms</small>"]:::opt
+  obj["<b>Object file</b>"]:::out
+  fe --> mir
+  mir --> opt
+  opt ==>|"lowering"| obj
 ```
 
-A quoted string takes `\n` for a line break. A spec that does not parse fails
-`--sync` with the line of the figure that is wrong.
+*A front end, the optimizer and a written file*
 
-### graph
+A stack, with the offset on the left, the size at the cell's right and the note after it:
 
-Boxes and arrows, laid out in layers. Back edges become arcs around the drawing.
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  space:1 a3["▲ higher addresses"]:3 space:4
+  o1["bp+4"] c1["argument"]:3 s1["2"] n1[" "]:3
+  o2["bp+2"] c2["return IP"]:3 s2["2"] n2[" "]:3
+  o3["bp+0"] c3["caller's BP"]:3 s3["2"] n3["BP points here"]:3
+  space:1 a7["▼ stack grows down"]:3 space:4
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff
+  class a3,o1,n1,o2,n2,o3,n3,a7 off
+  class c1,c3 cell
+  class s1,s2,s3 size
+  class c2 src
+```
 
-| Line | Meaning |
-|---|---|
-| `dir: down` or `dir: right` | Direction of flow, default `down` |
-| `node ID "label" [fill=a..e] [shape=box\|round\|note]` | A node |
-| `edge A -> B "label"` | An edge; `..>` is dashed, `==>` is bold; the label is optional |
-| `group NAME "caption": ID ID ...` | A labelled container around the nodes |
+*A two-word frame*
 
-The fills `a` to `e` are a fixed categorical palette; without `fill` a node is neutral.
+A lifetime, one section per lane. The axis shows numbers; the tick labels go in the caption:
 
-![From source to object file](../assets/figures/docs-working-figures-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','textColor':'#64748b','titleColor':'#64748b','gridColor':'#94a3b8','sectionBkgColor':'transparent','sectionBkgColor2':'transparent','altSectionBkgColor':'transparent','taskTextColor':'#ffffff','taskTextOutsideColor':'#64748b','taskTextLightColor':'#ffffff','taskTextDarkColor':'#ffffff','doneTaskBkgColor':'#16a34a','doneTaskBorderColor':'#166534','activeTaskBkgColor':'#2563eb','activeTaskBorderColor':'#1e40af','critBkgColor':'#dc2626','critBorderColor':'#991b1b','taskBkgColor':'#475569','taskBorderColor':'#334155','todayLineColor':'transparent'},'gantt':{'barHeight':34,'barGap':12,'topPadding':48,'leftPadding':150,'fontSize':14,'sectionFontSize':14,'numberSectionStyles':2}}}%%
+gantt
+  dateFormat X
+  axisFormat %s
+  tickInterval 1second
+  section v (owner)
+  owner :done, t8, 1, 3
+  ✗ push is refused :milestone, crit, t10, 3, 3
+  section r = &v[0]
+  shared borrow :active, t9, 2, 3
+```
 
-Source: [docs-working-figures-1.fig](../assets/figures/docs-working-figures-1.fig)
+*A borrow ends at its last use* Axis: 1 let; 2 borrow; 3 last use.
 
-### stack
+A call and its return:
 
-A memory, stack or record layout, top to bottom as written.
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','actorBkg':'#2563eb','actorBorder':'#1e40af','actorTextColor':'#ffffff','actorLineColor':'#94a3b8','signalColor':'#64748b','signalTextColor':'#64748b','noteBkgColor':'#ea580c','noteBorderColor':'#9a3412','noteTextColor':'#ffffff','activationBkgColor':'#cbd5e1','activationBorderColor':'#64748b','lineColor':'#64748b'},'sequence':{'mirrorActors':false,'messageAlign':'center','actorMargin':70,'boxMargin':10,'width':170,'height':46,'noteMargin':12}}}%%
+sequenceDiagram
+  participant c as caller
+  participant f as callee
+  c->>f: call f
+  Note over f: body
+  f-->>c: ret
+```
 
-| Line | Meaning |
-|---|---|
-| `cell "label" [off="bp+4"] [size="2"] [note="text"] [fill=a..e]` | A cell; the offset is on the left, the size inside the cell at its right, the note on the right |
-| `gap "..."` | A cell that stands for omitted cells |
-| `arrow "label" up\|down` | A growth direction |
-| `bracket "label" from=N to=M` | Spans cells N to M, counting `cell` and `gap` lines from 1 |
-| `scale: yes` | Cell heights follow `size` (8 pixels a unit, at most 160) |
+*A call and its return*
 
-![Frame of a QuickBASIC procedure (far call, Pascal order)](../assets/figures/docs-working-figures-2.png)
+## Checking a figure
 
-Source: [docs-working-figures-2.fig](../assets/figures/docs-working-figures-2.fig)
+`python3 tools/docsbuild/build.py --check` lints every `mermaid` fence of a tracked Markdown file and of
+a `//!` header, without mermaid: the first lines are the init line and a diagram type, quotes and brackets
+balance, classes are defined, flowchart edges join declared nodes, a block row fits its `columns`, and no
+label holds a raw `;`. It also rejects a legacy `fig` fence.
 
-### lanes
+To see a figure, open the page on GitHub, or draw it locally with mermaid-cli: `mmdc -i fig.mmd -o fig.png`.
+`build.py --check --render` draws every figure with the `mmdc` found through `$MMDC` or `PATH` (set
+`PUPPETEER_CONFIG` for a puppeteer config) and fails on a parse error. It says so and skips when `mmdc` is
+absent; the tests and CI never need it.
 
-A timeline of lanes over numbered columns, or a call and return sequence.
+## Pass pages
 
-| Line | Meaning |
-|---|---|
-| `lane ID "label"` | A lane, top to bottom in the order written |
-| `tick N "label"` | Column N, with its label under the axis |
-| `span LANE FROM TO "label" [kind=shared\|mut\|owner\|info]` | A bar over columns FROM to TO |
-| `mark LANE N "label" [kind=error\|ok]` | A point in column N |
-| `msg FROMLANE TOLANE N "label" [kind=call\|ret]` | An arrow between two lanes in column N; `ret` is dashed |
+The pass, analysis and backend pages in `docs/optimizations/passes/`, `analyses/` and `backend/` are
+written by `python3 tools/docsbuild/build.py --sync` from the `//!` headers, one page per file, with a
+`readme.md` index in each; edit the header, not the page. A `mermaid` fence in a header is copied to the page
+as it is. A rustdoc link such as `crate::cfg` becomes a link to the sibling page, or to the source on
+GitHub when there is no page. Each page holds a digest of its header, of the tool and of the names it can
+link to; `--sync` rewrites only a page whose digest changed and deletes the page of a removed file, and
+`--check` fails when a page is stale.
 
-![A change while a shared borrow is still used](../assets/figures/docs-working-figures-3.png)
+## Converting older figures
 
-Source: [docs-working-figures-3.fig](../assets/figures/docs-working-figures-3.fig)
-
-## How a figure is drawn
-
-`tools/docsbuild/figures.py` lays the figure out and writes an SVG as an intermediate;
-`raster.py` draws that SVG to the PNG. It is written with the standard library only,
-so the PNG is the same bytes on every machine: nothing is installed, and the pixels
-and the compressed stream depend only on the spec.
-
-- Shapes are filled by scanline with four sub-scanlines per pixel row and exact
-  horizontal coverage, at 1.5 pixels per unit, in four coverage steps. That keeps
-  every figure within a 256-colour palette; one that needs more is written as RGB.
-- The background is opaque white, so a figure reads on a dark page too.
-- Text is set in DejaVu Sans (`tools/docsbuild/fonts/`, with its licence), read by a
-  small TrueType parser (`ttf.py`). The font is vendored because text drawn from a
-  font on the contributor's machine would differ between machines, and the layout
-  measures text with the same advance widths it is drawn with. Bold is drawn twice,
-  slightly apart, and italic is sheared.
-- `png.py` writes the file: our own deflate, because zlib's output differs between
-  zlib builds, and no timestamps or other chunks.
-
-## What is drawn again
-
-`--sync` draws and extracts only what changed. Each PNG holds one `tEXt` chunk, `llrm-fig`,
-with the SHA-256 of its spec and of the tools that draw it (`figures.py`, `raster.py`,
-`png.py`, `ttf.py`, the font); each section of a reference page is preceded by
-`<!-- src: PATH sha256:... -->`, the digest of that file's `//!` block and of
-`passdocs.py` and the sync code. A PNG or section whose key is unchanged is left as
-committed, a section of a removed file is dropped, and the output is byte for byte what a
-run from scratch writes. `--check` compares keys and never draws, so it takes well under
-a second. `--sync --force` ignores the keys.
+A figure was once a short text spec (`kind: graph|stack|lanes`) drawn to a PNG. `tools/docsbuild/mdfigs.py
+--convert` turns the image of such a figure, or a `fig` fence, into a `mermaid` fence and an italic caption,
+and `--headers FILE...` does the same for the `//!` headers of Rust files. `tomermaid.convert` is the
+converter; read it for the spec language.

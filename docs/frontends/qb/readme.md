@@ -18,7 +18,40 @@ The BC-object input route is [bc](../bc.md).
 
 ## Pipeline
 
-![From PROGRAM.BAS to a linked program](../../assets/figures/docs-frontends-qb-readme-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  src["<b>PROGRAM.BAS</b>"]:::src
+  qbf["<b>qbfront</b><br/><small>lexer: generated_parser/lexer.rs<br/>parser: engine.rs, ast.rs<br/>semantic.rs: names, types,<br/>storage, CFG</small>"]:::opt
+  hir["<b>HIR</b><br/><small>versioned text, crates/ir/llrm-hir,<br/>decoded in llrm-qb</small>"]:::mid
+  qb["<b>llrm-qb</b><br/><small>QB ABI adapter: llrm-core/src/abi/qb.rs<br/>runtime contracts: llrm-qbruntime<br/>frame and call lowering</small>"]:::out
+  mir["<b>MIR</b>"]:::mid
+  opt["<b>shared optimizer</b>"]:::mid
+  lir["<b>LIR</b>"]:::mid
+  be["<b>x86-m16 backend</b>"]:::mid
+  obj["<b>OMF object</b>"]:::data
+  lib["<b>selected runtime library</b>"]:::warn
+  link["<b>LINK</b>"]:::mid
+  src --> qbf
+  qbf -->|"syntax tree"| hir
+  hir --> qb
+  qb --> mir
+  mir --> opt
+  opt --> lir
+  lir --> be
+  be --> obj
+  obj --> link
+  lib --> link
+```
+
+*From PROGRAM.BAS to a linked program*
 
 `qbfront` owns everything that varies by language and is a library plus a
 `qbfront` binary that prints HIR. `llrm-qb` decodes that HIR, adds what the

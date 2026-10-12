@@ -3,7 +3,35 @@
 For contributors changing a writer or the backend's object layout. The backend lays code and data out
 once as a format-neutral `Object`; one writer crate per format serializes it.
 
-![From MIR to an object file](../assets/figures/docs-formats-object-model-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  mir["<b>MIR</b>"]:::mid
+  isel["<b>isel</b>"]:::mid
+  masm["<b>masm::Module</b>"]:::mid
+  ob["<b>objbuild</b><br/><small>layout, relaxation</small>"]:::mid
+  obj["<b>Object</b><br/><small>sections, symbols,<br/>omf_groups,<br/>debug: Some(Info)</small>"]:::opt
+  subgraph g_wr["WRITERS BY -FOBJECT-FORMAT=<br/>(OBJECT.TOML)#59; EACH ENCODES<br/>THE DEBUG INFO"]
+    omf["<b>omf</b><br/><small>.obj/.o</small>"]:::out
+    e32["<b>elf32</b><br/><small>.o</small>"]:::out
+    e64["<b>elf64</b><br/><small>.o</small>"]:::out
+    mo["<b>macho</b><br/><small>.o</small>"]:::out
+    c32["<b>coff32</b><br/><small>.obj</small>"]:::out
+    c64["<b>coff64</b><br/><small>.obj</small>"]:::out
+  end
+  mir --> isel
+  isel --> masm
+  masm --> ob
+  ob --> obj
+  obj --> g_wr
+  style g_wr fill:#16a34a12,stroke:#16a34a,stroke-width:1.6px,stroke-dasharray:7 5,color:#16a34a
+```
+
+*From MIR to an object file*
 
 `objbuild::written_in` ([source](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/objbuild.rs#L434))
 builds the `Object` and calls the writer for the chosen format and the object's `Arch`. A pair with no

@@ -6,14 +6,28 @@ For contributors to the x87 backend. Covers how floating values are assigned to 
 
 Both run in the machine phases ([backend](backend.md)) and only on bodies with floating values.
 
-- `floatassign` ([`floatassign.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/floatassign.rs)) is the allocation step, as gcc's IRA and LRA are for any register class: it decides which floating values hold one of the eight flat stack registers, and every spill, restore and memory operand it needs comes out explicit. It also materialises a floating-to-integer conversion through an owned temporary, with `wait` around the store in a BASIC module ([native-fpu-waits](../reference/semantics/native-fpu-waits.md)), and reads the integer only if something reads it.
-- `floatalloc` ([`floatalloc.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/floatalloc.rs)) converts that to stack form, as gcc's reg-stack does, and decides nothing: it tracks which value is in which stack slot (`_Stack.values`, top first) and emits the `fld`, `fxch`, `fstp st(i)` and arithmetic that put each operand where the instruction needs it.
+- `floatassign` ([`floatassign.rs`](backend/floatassign.md)) is the allocation step, as gcc's IRA and LRA are for any register class: it decides which floating values hold one of the eight flat stack registers, and every spill, restore and memory operand it needs comes out explicit. It also materialises a floating-to-integer conversion through an owned temporary, with `wait` around the store in a BASIC module ([native-fpu-waits](../reference/semantics/native-fpu-waits.md)), and reads the integer only if something reads it.
+- `floatalloc` ([`floatalloc.rs`](backend/floatalloc.md)) converts that to stack form, as gcc's reg-stack does, and decides nothing: it tracks which value is in which stack slot (`_Stack.values`, top first) and emits the `fld`, `fxch`, `fstp st(i)` and arithmetic that put each operand where the instruction needs it.
 
-![The two x87 passes](../assets/figures/docs-optimizations-floating-pop-reuse-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  in["<b>LIR with 10-byte held values</b>"]:::src
+  mid["<b>LIR, still values,</b><br/><small>spills explicit</small>"]:::opt
+  out["<b>LIR with st(i) operands:</b><br/><small>fld, fxch, fst/fstp,<br/>fadd..., faddp...</small>"]:::out
+  in -->|"floatassign: values -#gt; stack<br/>registers, spills, memory operands"| mid
+  mid -->|"floatalloc: blocks in reverse<br/>postorder, a _Stack per block"| out
+```
+
+*The two x87 passes*
 
 ## A two-operand operation
 
-`_Stack::arithmetic` ([`floatalloc.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/floatalloc.rs#L713)) follows gcc's `handleTwoArgFP`. An operand dies where nothing reads it again, and the result takes its slot.
+`_Stack::arithmetic` ([`floatalloc.rs`](backend/floatalloc.md)) follows gcc's `handleTwoArgFP`. An operand dies where nothing reads it again, and the result takes its slot.
 
 | Operands | Emitted |
 |---|---|

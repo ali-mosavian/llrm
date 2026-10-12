@@ -3,7 +3,28 @@
 For contributors changing `-g`, its model or a writer. Debug information is built once, in a format-neutral
 model, and each object format's writer encodes it. State described here is the code at commit `c341bd6e3`.
 
-![Debug information from frontend to writers](../assets/figures/docs-formats-debug-info-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  fe["<b>Frontends</b><br/><small>llrm-c, llrm-nib, llrm-qb:<br/>HIR debug Builder</small>"]:::src
+  mir["<b>MIR</b><br/><small>!types !functions !globals<br/>#35;dbg_declare<br/>#35;dbg_value/_piece/_gone<br/>lines</small>"]:::mid
+  be["<b>Backend</b><br/><small>debuginfo::described<br/>(types, procedures)<br/>valuetrack (ranges)<br/>cfi (frame rows)<br/>debuginfo::laid_out<br/>-#gt; debug::Info</small>"]:::opt
+  dw["<b>llrm-dwarf</b><br/><small>.debug_*<br/>ELF, Mach-O,<br/>OMF (-gdwarf)</small>"]:::out
+  co["<b>llrm-coff</b><br/><small>C13<br/>COFF</small>"]:::out
+  om["<b>llrm-omf</b><br/><small>CV4 / TD<br/>OMF</small>"]:::out
+  fe --> mir
+  mir --> be
+  be --> dw
+  be --> co
+  be --> om
+```
+
+*Debug information from frontend to writers*
 
 ## The model
 

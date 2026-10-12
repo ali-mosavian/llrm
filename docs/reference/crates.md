@@ -8,15 +8,157 @@ lives; [source layout](../architecture/source-layout.md) says what sits inside `
 The compiler is a pipeline: source frontend, HIR, MIR, optimizer, x86 backend, object writer. BC objects enter by a
 small separate route (`llrm-bcdriver`).
 
-![The pipeline and the crate of each stage](../assets/figures/docs-reference-crates-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  src["<b>source</b><br/><small>qb, c, nib</small>"]:::src
+  fe["<b>frontend</b><br/><small>llrm-qb, -c, -nib</small>"]:::src
+  hir["<b>HIR</b>"]:::mid
+  mir["<b>MIR</b>"]:::mid
+  opt["<b>optimizer</b><br/><small>llrm-transforms</small>"]:::opt
+  be["<b>backend</b><br/><small>llrm-core</small>"]:::out
+  obj["<b>object</b><br/><small>llrm-omf, ...</small>"]:::data
+  src --> fe
+  fe --> hir
+  hir --> mir
+  mir --> opt
+  opt --> be
+  be --> obj
+```
+
+*The pipeline and the crate of each stage*
 
 An arrow reads "depends on" (normal dependencies only; an edge implied by a path through other drawn crates is left out). `llrm-support`, `llrm-mir` and `llrm-object` have no workspace dependencies.
 
-![Programs, driver and targets](../assets/figures/docs-reference-crates-2.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  subgraph g_fe["PROGRAMS"]
+    qb["<b>llrm-qb</b>"]:::src
+    c["<b>llrm-c</b>"]:::src
+    nib["<b>llrm-nib</b>"]:::src
+    bcd["<b>llrm-bcdriver</b>"]:::src
+  end
+  drv["<b>llrm-driver</b>"]:::opt
+  subgraph g_tg["TARGETS"]
+    s16["<b>llrm-x86-m16-select</b>"]:::mid
+    s32["<b>llrm-x86-m32-select</b>"]:::mid
+    m16["<b>llrm-x86-m16</b>"]:::mid
+    m32["<b>llrm-x86-m32</b>"]:::mid
+    x86["<b>llrm-x86</b>"]:::mid
+  end
+  subgraph g_bcg["BC ROUTE"]
+    bc["<b>llrm-x86-bc</b>"]:::data
+    bcm["<b>llrm-x86-bcmachine</b>"]:::data
+    qbrt["<b>llrm-qbruntime</b>"]:::data
+  end
+  core["<b>llrm-core</b>"]:::out
+  qb --> drv
+  c --> drv
+  nib --> drv
+  bcd --> drv
+  bcd --> bc
+  drv --> g_tg
+  s16 --> core
+  s32 --> core
+  m16 --> x86
+  m32 --> x86
+  bc --> m16
+  bc --> bcm
+  bcm --> qbrt
+  style g_fe fill:#2563eb12,stroke:#2563eb,stroke-width:1.6px,stroke-dasharray:7 5,color:#2563eb
+  style g_tg fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+  style g_bcg fill:#7c3aed12,stroke:#7c3aed,stroke-width:1.6px,stroke-dasharray:7 5,color:#7c3aed
+```
 
-![llrm-core and the representations](../assets/figures/docs-reference-crates-3.png)
+*Programs, driver and targets*
 
-![Object writers](../assets/figures/docs-reference-crates-4.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  core["<b>llrm-core</b>"]:::out
+  tr["<b>llrm-transforms</b>"]:::opt
+  an["<b>llrm-analysis</b>"]:::opt
+  mir["<b>llrm-mir</b>"]:::mid
+  hir["<b>llrm-hir</b>"]:::mid
+  tgt["<b>llrm-target</b>"]:::mid
+  lir["<b>llrm-lir</b>"]:::mid
+  x86["<b>llrm-x86</b>"]:::mid
+  bcm["<b>llrm-x86-bcmachine</b>"]:::data
+  qbrt["<b>llrm-qbruntime</b>"]:::data
+  sup["<b>llrm-support</b>"]:::mid
+  core --> tr
+  core --> x86
+  core --> bcm
+  tr --> an
+  an --> mir
+  an --> sup
+  x86 --> tgt
+  bcm --> qbrt
+  qbrt --> hir
+  hir --> tgt
+  tgt --> mir
+  tgt --> lir
+  lir --> sup
+```
+
+*llrm-core and the representations*
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  core["<b>llrm-core</b>"]:::out
+  lir["<b>llrm-lir</b>"]:::mid
+  omf["<b>llrm-omf</b>"]:::data
+  dwarf["<b>llrm-dwarf</b>"]:::mid
+  obj["<b>llrm-object</b>"]:::mid
+  elf["<b>llrm-elf</b>"]:::mid
+  e32["<b>llrm-elf32</b>"]:::mid
+  e64["<b>llrm-elf64</b>"]:::mid
+  macho["<b>llrm-macho</b>"]:::mid
+  coff["<b>llrm-coff</b>"]:::mid
+  c32["<b>llrm-coff32</b>"]:::mid
+  c64["<b>llrm-coff64</b>"]:::mid
+  core --> lir
+  core --> e32
+  core --> e64
+  core --> macho
+  core --> c32
+  core --> c64
+  lir --> omf
+  omf --> dwarf
+  e32 --> elf
+  e64 --> elf
+  elf --> dwarf
+  macho --> dwarf
+  dwarf --> obj
+  c32 --> coff
+  c64 --> coff
+  coff --> obj
+```
+
+*Object writers*
 
 `llrm-core` names no `llrm-x86-m*` crate among its dependencies (`tests/core_depends_on_no_target.rs`). A target
 reaches it only through `llrm-driver`, which is why `llrm-x86-m16-select` and `llrm-x86-m32-select`, written against

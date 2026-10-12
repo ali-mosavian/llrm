@@ -4,7 +4,7 @@ For contributors to `crates/opt`. Covers `gvn` and `equalcalls`: one pass owns r
 
 ## What it does
 
-`Gvn` ([`gvn.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/gvn.rs#L56)) runs these steps on a body, in order:
+`Gvn` ([`gvn.rs`](passes/gvn.md)) runs these steps on a body, in order:
 
 1. **Branch equality.** In what the edge to a successor dominates, a branch's condition is that edge's constant (LLVM's `propagateEquality`).
 2. **Numbering** (`transform::forwarded`, `transform::subexpressions`, `transform::equal_calls`). A load a known value serves becomes that value: a dominating store of the same bytes and type, or an earlier load of them, with nothing in between that may write them. Two pure operations on the same operands are one, with a copy counting as its source and a commutative pair ordered. Two calls with the same callee and arguments that touch no memory are one.
@@ -32,7 +32,7 @@ A value held across a store saves a load but lengthens a live range. gvn numbers
 
 ## `equalcalls`
 
-`EqualCalls` ([`gvn.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/gvn.rs#L125)) is the call part alone, run before `tailrec` so that two equal calls are one before one of them becomes the loop's next trip (EarlyCSE precedes tail-recursion elimination in LLVM and FRE does in gcc). It asks no analysis unless the body has two such calls.
+`EqualCalls` ([`gvn.rs`](passes/gvn.md)) is the call part alone, run before `tailrec` so that two equal calls are one before one of them becomes the loop's next trip (EarlyCSE precedes tail-recursion elimination in LLVM and FRE does in gcc). It asks no analysis unless the body has two such calls.
 
 ## Levels and flags
 

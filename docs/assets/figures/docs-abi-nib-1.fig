@@ -1,9 +1,0 @@
-kind: graph
-dir: right
-title: An exported watcall32 function and its caller
-node fn "@export(\"watcall32\")\nfn f(a: i32, b: i32) -> i32" fill=a
-node abi "ProcedureAbi\ndistance: far,\ncleanup: callee,\nconvention: watcall"
-node caller "caller (any language)" fill=a
-node asm "mov eax, a ; mov edx, b\ncall f_\n(nothing to pop)"
-edge fn -> abi
-edge caller -> asm

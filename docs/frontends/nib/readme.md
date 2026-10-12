@@ -22,7 +22,33 @@ The frontend lexes, parses and checks a module, resolves its imports, and
 writes common HIR. HIR goes through the shared MIR optimizer and backend like
 every other frontend's.
 
-![From Nib source to a DOS program](../../assets/figures/docs-frontends-nib-readme-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  src["<b>.nib source</b><br/><small>+ imports</small>"]:::mid
+  syn["<b>lexer, parser/, desugar,</b><br/><small>modules (syntax, one module)</small>"]:::src
+  sem["<b>semantic/</b><br/><small>types, borrow checker</small>"]:::src
+  hir["<b>HIR</b><br/><small>common, typed, name-resolved</small>"]:::mid
+  run["<b>llrm-run</b><br/><small>host interpreter</small>"]:::data
+  mir["<b>MIR, optimizer, backend</b><br/><small>shared with llrm-qb, llrm-c</small>"]:::opt
+  obj["<b>object file</b><br/><small>OMF for m16</small>"]:::out
+  dos["<b>link with runtime,</b><br/><small>run in DOS</small>"]:::mid
+  src --> syn
+  syn --> sem
+  sem --> hir
+  hir --> mir
+  hir -.-> run
+  mir --> obj
+  obj --> dos
+```
+
+*From Nib source to a DOS program*
 
 ## Tools
 

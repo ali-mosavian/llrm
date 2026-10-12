@@ -8,7 +8,21 @@ Proposed in [#1189](https://github.com/ali-mosavian/llrm/pull/1189).
 
 `Summaries` and `GlobalsAA` are required module analyses, so the manager makes them before the next function pass whenever a pass changed a body ([module-analyses](module-analyses.md) makes each remake incremental). After the interprocedural step the module summaries are frozen: passes that add no memory operation (`FunctionPass::adds_memory_operations`) read the frozen ones, and `LLRM_CHECK_STALE` recomputes them after such a pass and checks the held result still covers the fresh one.
 
-![Where summaries are made today](../assets/figures/docs-optimizations-early-summaries-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  early["<b>early pipeline per body</b><br/><small>summaries remade after<br/>any change</small>"]:::src
+  ipa["<b>interprocedural step</b><br/><small>every splice drops them#59;<br/>dead, decide rerun on a<br/>changed body remake them</small>"]:::opt
+  late["<b>late passes</b><br/><small>frozen summaries,<br/>LLRM_CHECK_STALE</small>"]:::out
+  early --> ipa
+  ipa --> late
+```
+
+*Where summaries are made today*
 
 ## What gcc does
 

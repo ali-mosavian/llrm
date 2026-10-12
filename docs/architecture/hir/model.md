@@ -6,7 +6,29 @@ which every source frontend constructs. Overview: [readme.md](readme.md).
 
 ## Ownership
 
-![What owns what in HIR; each child kind is a list](../../assets/figures/docs-architecture-hir-model-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  prog["<b>Program</b><br/><small>dialect, runtime profile,<br/>target, array order,<br/>float mode, frames,<br/>promises, entries,<br/>stack check</small>"]:::src
+  mod["<b>Module</b><br/><small>types, callables, alias<br/>classes, facts, debug,<br/>line numbers</small>"]:::opt
+  ty["<b>Type</b><br/><small>kind, width, signedness,<br/>float evaluation,<br/>address kind</small>"]:::mid
+  data["<b>DataObject</b><br/><small>bytes, relocations,<br/>linkage, readonly, segment</small>"]:::mid
+  call_["<b>Callable</b><br/><small>name, signature, defined?,<br/>returns_twice</small>"]:::mid
+  fn["<b>Function</b><br/><small>values, places, parameters,<br/>ProcedureAbi, call ABIs</small>"]:::mid
+  blk["<b>Block</b><br/><small>Instruction list,<br/>one Terminator</small>"]:::mid
+  prog --> mod
+  mod --> ty
+  mod --> data
+  mod --> call_
+  mod --> fn
+  fn --> blk
+```
+
+*What owns what in HIR; each child kind is a list*
 
 Every entity has an integer id local to its owner; names and spans annotate.
 The JSON codec (`codec.rs`) is deterministic and strict: it rejects an unknown

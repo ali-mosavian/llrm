@@ -8,7 +8,23 @@ The gate is `tools/gate/gate.py`; `tools/gate/tiers.toml` is the only table that
 
 `.github/workflows/ci.yml` runs on every pull request, on pushes to main and on `workflow_dispatch`; a new push to a pull request cancels its running one.
 
-![The jobs of a pull request](../assets/figures/docs-working-gate-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  plan["<b>plan</b>"]:::src
+  build["<b>build</b>"]:::opt
+  gate["<b>gate</b><br/><small>one job per group,<br/>in parallel</small>"]:::opt
+  ci["<b>ci</b>"]:::out
+  plan --> build
+  build --> gate
+  gate --> ci
+```
+
+*The jobs of a pull request*
 
 | Job | Does | Passes when |
 |---|---|---|
@@ -25,7 +41,33 @@ Caches (the forks `~/.cache/llrm`, the workspace `target`, the cargo registry, `
 
 ## Tiers
 
-![How the changed paths select the tier](../assets/figures/docs-working-gate-2.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  p["<b>changed paths</b>"]:::src
+  inert["<b>[inert] only?</b>"]:::mid
+  none["<b>none</b><br/><small>docs, *.md, editors,<br/>.github, .zed</small>"]:::out
+  comp["<b>any [compiler] path?</b>"]:::mid
+  narrow["<b>narrow: pytest + the steps</b><br/><small>that read what changed (data<br/>dirs, tests/*.rs, bench, torture,<br/>fmt, owning heavy steps, run)</small>"]:::out
+  sh["<b>[shared] or unknown path?</b>"]:::mid
+  full["<b>FULL: every step</b>"]:::data
+  fast["<b>FAST: cheap steps + each</b><br/><small>heavy step whose owner<br/>paths changed</small>"]:::opt
+  p --> inert
+  inert -->|"yes"| none
+  inert -->|"no"| comp
+  comp -->|"no"| narrow
+  comp -->|"yes"| sh
+  sh -->|"yes"| full
+  sh -->|"no"| fast
+```
+
+*How the changed paths select the tier*
 
 `[compiler]` is `crates/**`, `src/**`, `build.rs`, the manifests, `rust-toolchain.toml`, `.cargo/**`. `[shared]` is the manifests, `src/**`, `tests/common/**`, `crates/ir/**`, `crates/support/**`, `crates/target/llrm-target/**`, `crates/target/llrm-object/**` and `tools/gate/**`. A path in no table is unknown and selects full. Backend and transform changes are not shared: they take fast plus every codegen heavy step (`run`, `qcport`, `pytest-programs`).
 

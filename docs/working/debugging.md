@@ -2,7 +2,23 @@
 
 For contributors with a DOS program that behaves differently when built by llrm: narrow the fault to one module, stop the program where it goes wrong, then find the pass.
 
-![From a differing program to the pass](../assets/figures/docs-working-debugging-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  a["<b>program differs</b>"]:::src
+  b["<b>one module</b><br/><small>llrm-c -S: listing, is the<br/>code wrong?</small>"]:::opt
+  c["<b>the function</b><br/><small>--dump DIR: MIR after each pass,<br/>first wrong dump<br/>ISEL_DUMP=1: LIR after each<br/>machine phase</small>"]:::opt
+  d["<b>the pass or phase</b><br/><small>reduce, fixture,<br/>test that fails first</small>"]:::out
+  a -->|"swap one module at a time between<br/>the reference build and llrm's"| b
+  b -->|"stop at the first bad write<br/>or jump (dosrun)"| c
+  c --> d
+```
+
+*From a differing program to the pass*
 
 ## 1. The runner: dosrun
 
@@ -82,7 +98,26 @@ Reduce the module to the smallest source that still shows the fault, record the 
 
 Beside dosrun jobs, the fork has a debug socket for driving a DOS program or debugger interactively: set `DOSBOX_DEBUG_PORT=PORT` in the environment and the emulator listens on `127.0.0.1:PORT`. Commands and replies are one JSON object per line; replies come back in the order commands went out; events (`{"event":"stopped","int":3}`) arrive unprompted.
 
-![The debug socket between the host and the DOSBox-X fork](../assets/figures/docs-working-debugging-2.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef note fill:transparent,stroke:transparent,color:#64748b
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  host["<b>host: cargo test</b><br/><small>(tests/common/dosbox.rs)<br/>tools/dosbatch/qbplay.py</small>"]:::src
+  sess["<b>Session::command</b><br/><small>continue, dos_cmd,<br/>key, key_hw, text_screen,<br/>mem_read_linear, screenshot</small>"]:::src
+  sock["reader thread<br/>answers every INT 3"]:::note
+  dos["<b>DOS shell</b><br/><small>TD.EXE / CV.EXE / program<br/>(llrm object linked with<br/>TLINK /v or LINK /CO)<br/>INT 3 -#gt; #quot;stopped#quot;, int 3<br/>mounts: c: toolchain,<br/>d: TD, w: work directory</small>"]:::opt
+  fork["<b>DOSBox-X fork</b><br/><small>target/release/dosbox-x</small>"]:::opt
+  host --> sess
+  sess -->|"JSON lines / TCP<br/>#123;#quot;cmd#quot;:#quot;continue#quot;#125;"| dos
+  dos -.->|"replies, events"| sess
+  sock -.-> sess
+  dos --> fork
+```
+
+*The debug socket between the host and the DOSBox-X fork*
 
 The commands the tests use:
 

@@ -4,7 +4,7 @@ How the compiler turns MIR into x86 code: the SSA optimizer in `crates/opt`, the
 
 ## Reference
 
-The reference for every pass, analysis and backend phase is the `//!` header at the top of its source file: what it does, how, where it runs, what it needs and keeps. `python3 tools/docsbuild/build.py --sync` extracts the headers into committed pages: [reference](reference/index.md), with one page each for [passes](reference/passes.md), [analyses](reference/analyses.md) and [backend phases](reference/backend.md). The tests fail when those pages are stale, or when a file of a required directory has no header.
+The reference for every pass, analysis and backend phase is the `//!` header at the top of its source file: what it does, how, where it runs, what it needs and keeps. `python3 tools/docsbuild/build.py --sync` writes one page per header, with an index for each directory: [passes](passes/readme.md), [analyses](analyses/readme.md) and [backend phases](backend/readme.md). The tests fail when a page is stale, or when a file of a required directory has no header.
 
 | Source | Holds |
 |---|---|

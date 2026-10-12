@@ -5,7 +5,40 @@ this compiler: on one side a program is values and operations, on the other it
 is machine instructions. **Nothing crosses except at the two doors:** MIR
 construction and lowering.
 
-![The two doors between source, abstract and machine](../assets/figures/docs-architecture-split-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  subgraph g_src["SOURCE: MIR CONSTRUCTION<br/>(ONE DOOR)"]
+    hir["<b>HIR</b><br/><small>QB, Nib, C</small>"]:::mid
+    bc["<b>BC objects</b>"]:::mid
+  end
+  subgraph g_abs["ABSTRACT"]
+    opt["<b>llrm-transforms</b><br/><small>pipeline</small>"]:::opt
+  end
+  subgraph g_mach["MACHINE"]
+    isel["<b>isel</b>"]:::mid
+    lir["<b>LIR</b>"]:::mid
+    ph["<b>phases</b>"]:::mid
+    lay["<b>layout</b>"]:::mid
+    wr["<b>writer</b>"]:::out
+  end
+  hir -->|"emit"| opt
+  bc -->|"decode, lift"| opt
+  opt -->|"lowering<br/>(the other door)"| isel
+  isel --> lir
+  lir --> ph
+  ph --> lay
+  lay --> wr
+  style g_src fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+  style g_abs fill:#ea580c12,stroke:#ea580c,stroke-width:1.6px,stroke-dasharray:7 5,color:#ea580c
+  style g_mach fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+```
+
+*The two doors between source, abstract and machine*
 
 ## The rule
 

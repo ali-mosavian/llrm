@@ -4,7 +4,31 @@ For contributors changing one of the three flat-address writers. Each takes the 
 and refuses what only [OMF](omf.md) can say: segments with their own selector (`near == false`), groups,
 `Role::Stack`, `SegmentBase` and `FarPointer`.
 
-![One Object, three containers, machine tables below](../assets/figures/docs-formats-coff-elf-macho-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  obj["<b>Object</b>"]:::src
+  elf["<b>llrm-elf</b><br/><small>container, generic<br/>over Machine</small>"]:::opt
+  coff["<b>llrm-coff</b><br/><small>container, generic<br/>over Machine</small>"]:::opt
+  mo["<b>llrm-macho</b><br/><small>container, generic<br/>over Machine</small>"]:::opt
+  e32["<b>elf32</b><br/><small>machine tables</small>"]:::mid
+  e64["<b>elf64</b><br/><small>machine tables</small>"]:::mid
+  c32["<b>coff32</b><br/><small>machine tables</small>"]:::mid
+  c64["<b>coff64</b><br/><small>machine tables</small>"]:::mid
+  obj --> elf
+  obj --> coff
+  obj --> mo
+  elf --> e32
+  elf --> e64
+  coff --> c32
+  coff --> c64
+```
+
+*One Object, three containers, machine tables below*
 
 ## Which exist
 

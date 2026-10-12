@@ -1,8 +1,0 @@
-kind: graph
-dir: down
-title: How callee facts are computed
-node a "CallGraph::bottom_up\ncallees machined first"
-node b "for each eligible callee:\nmachine it, then record\nwhat it wrote" fill=b
-node c "each direct caller:\na value may stay in any\nregister the callee did not\nwrite, scratch ones too" fill=c
-edge a -> b
-edge b -> c "written = registers written\nby body and its calls,\nminus those its prologue\nsaves whole"

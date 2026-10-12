@@ -1,0 +1,13 @@
+> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinecse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinecse.rs); edit the header, not this file.
+<!-- src: crates/backend/llrm-core/src/backend/machinecse.rs sha256:384238b92dd7df963aed1a8b503714ff2ba46212f6e048095406dda31fc2460e -->
+
+# machinecse
+
+Port of `qbopt/backend/machinecse.py`: eliminate repeated deterministic
+computations after register allocation.
+
+MIR GVN sees values, not the physical instructions lowering and allocation
+create.  At this point the question is entirely physical: value-number the
+byte lanes read and written by independently reproducible instructions, and
+retain an anchor for the virtual/data-source ownership of a redundant
+occurrence.

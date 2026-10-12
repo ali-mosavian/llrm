@@ -4,7 +4,7 @@ For contributors to `crates/opt`. Covers `fold` (integers), `floatfold` (floats)
 
 ## What it does
 
-`fold` ([`fold.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/fold.rs#L60)) replaces every value whose number `consts` knows by that constant. Every use sees the constant, and `dead` takes the definition. It also folds a pure operation that a join feeds on each incoming edge, replacing it by a phi of the per-edge numbers, then runs `floatfold` and puts compares and identities in canonical form (`canonical.rs`).
+`fold` ([`fold.rs`](passes/fold.md)) replaces every value whose number `consts` knows by that constant. Every use sees the constant, and `dead` takes the definition. It also folds a pure operation that a join feeds on each incoming edge, replacing it by a phi of the per-edge numbers, then runs `floatfold` and puts compares and identities in canonical form (`canonical.rs`).
 
 ```
  define i16 @f(i1 %c, i16 %x)           define i16 @f(i1 %c, i16 %x)
@@ -19,7 +19,7 @@ For contributors to `crates/opt`. Covers `fold` (integers), `floatfold` (floats)
 
 ## Facts
 
-`consts::Known` is "the low `width` bits of this value are `n`" ([`consts.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-analysis/src/consts.rs#L274)). An operation folds only where its operands' widths agree, and a shift keeps the width of the value shifted, not of its count. `consts::known` solves registers to a fixed point (phis are known where every arm agrees; `constant_cycles` handles recurrences that return to a constant).
+`consts::Known` is "the low `width` bits of this value are `n`" ([`consts.rs`](analyses/consts.md)). An operation folds only where its operands' widths agree, and a shift keeps the width of the value shifted, not of its count. `consts::known` solves registers to a fixed point (phis are known where every arm agrees; `constant_cycles` handles recurrences that return to a constant).
 
 Memory is solved alongside. A cell is an address root plus displacement and a width in bytes (`Cells`); a store puts byte facts into the cells it covers, and a store to an unresolved address, or an indexed access, kills the cells it may overlap (`regions::overlapping`, with `ranges` intervals narrowing an index). An indexed cell whose index is a known number resolves to a constant offset; an unknown index, an incomplete value or an unresolved root stays unknown.
 
@@ -38,15 +38,15 @@ Here `%a` becomes 9 and `%b` is not folded (`test_a_load_of_a_known_cell_is_its_
 
 ## Intervals
 
-`ranges` ([`ranges.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-analysis/src/ranges.rs)) gives non-wrapping intervals: from the branch edges that dominate a block (`dominated_edges`), from counted loops (`bounded`: the counter, and what the loop computes from it, narrowed by the dominating edges), from `range` attributes and `!range` metadata, and, at -O2 and up, from the ranges every caller passes a parameter (`ipa-ranges`). Add and subtract by a constant step compute their interval and refuse a result that could wrap, so a counter's interval survives its `add i, 1` and `sub i, 1`; a value derived from it by a shift or multiply has the interval of that operation. Consumers: alias decisions (index extent of an access), `decide`, `indvars`, `loopexit`, `hoist`, `algebraic`.
+`ranges` ([`ranges.rs`](analyses/ranges.md)) gives non-wrapping intervals: from the branch edges that dominate a block (`dominated_edges`), from counted loops (`bounded`: the counter, and what the loop computes from it, narrowed by the dominating edges), from `range` attributes and `!range` metadata, and, at -O2 and up, from the ranges every caller passes a parameter (`ipa-ranges`). Add and subtract by a constant step compute their interval and refuse a result that could wrap, so a counter's interval survives its `add i, 1` and `sub i, 1`; a value derived from it by a shift or multiply has the interval of that operation. Consumers: alias decisions (index extent of an access), `decide`, `indvars`, `loopexit`, `hoist`, `algebraic`.
 
 At -O1 and -Og the loop intervals are off (`Options::loop_intervals`); `indvars`, `loopexit`, `hoist` and `algebraic` still ask `Bounded`, which then holds the edge facts and counted-loop counters only.
 
 ## Floating point
 
-`floatfacts` proves a float result exact in its format, so it holds under any rounding mode: arithmetic, `fneg`, `llvm.fabs`, `llvm.sqrt`, the casts, `llvm.lrint`, and loads and stores of floats through memory the integer solve knows. `floatfold` ([`floatfold.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/floatfold.rs)) replaces a value so proven by its constant, and an exact conversion's integer by its number; fractional or out-of-range results stay unknown. `floatloop` runs a counted loop of exact float work once, at its last trip, from the memory the earlier trips leave.
+`floatfacts` proves a float result exact in its format, so it holds under any rounding mode: arithmetic, `fneg`, `llvm.fabs`, `llvm.sqrt`, the casts, `llvm.lrint`, and loads and stores of floats through memory the integer solve knows. `floatfold` ([`floatfold.rs`](passes/floatfold.md)) replaces a value so proven by its constant, and an exact conversion's integer by its number; fractional or out-of-range results stay unknown. `floatloop` runs a counted loop of exact float work once, at its last trip, from the memory the earlier trips leave.
 
-`floatbounds::exact` ([`floatbounds.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-analysis/src/floatbounds.rs)) proves float operations exact over a range of integer values: an array element loaded at an index in a known interval, with at most 64 candidate offsets, each decoding to an integer, and results inside the format's exact integer range (2^24 for binary32, 2^53 for binary64). No pass calls it today.
+`floatbounds::exact` ([`floatbounds.rs`](analyses/floatbounds.md)) proves float operations exact over a range of integer values: an array element loaded at an index in a known interval, with at most 64 candidate offsets, each decoding to an integer, and results inside the format's exact integer range (2^24 for binary32, 2^53 for binary64). No pass calls it today.
 
 ## Levels and flags
 

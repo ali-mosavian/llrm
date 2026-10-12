@@ -6,7 +6,35 @@ Files are under `crates/backend/llrm-core/src/backend/` unless named otherwise.
 
 ## Overview
 
-![From optimized MIR to masm](../assets/figures/docs-optimizations-backend-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  mir["<b>MIR after the pipeline</b><br/><small>(passes.md)</small>"]:::src
+  pre["<b>driver::optimized</b><br/><small>assumptions, ehprepare,<br/>fpconvert, selects</small>"]:::mid
+  near["<b>nearcode, globals::names</b>"]:::mid
+  subgraph g_mach["MACHINED (ASSEMBLE.RS)"]
+    st["<b>staged (LIR, SSA, virtual regs)</b><br/><small>isel, framefree, frame::of</small>"]:::mid
+    ch["<b>machined_once</b><br/><small>cheaper: route A allocator alone,<br/>route B spiller (ssaspill)</small>"]:::opt
+    rl["<b>relayout</b><br/><small>second frame, if far frame operands</small>"]:::mid
+    om["<b>-Omax: again without callee facts</b><br/><small>cheaper kept</small>"]:::mid
+  end
+  masm["<b>masm</b><br/><small>cleaned and duplicated returns,<br/>shrink-wrap, stack checks</small>"]:::out
+  mir --> pre
+  pre --> near
+  near -->|"callees first, per function"| st
+  st --> ch
+  ch -->|"keep the cheaper"| rl
+  rl --> om
+  om --> masm
+  style g_mach fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+```
+
+*From optimized MIR to masm*
 
 Both routes run the same machine phases (next section); the spiller route adds `ssaspill`. [`flow.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/flow.rs#L56) `machine_with` holds the list.
 
@@ -19,7 +47,7 @@ Both routes run the same machine phases (next section); the spiller route adds `
 | exhaustive | `-fallocation-search-all`, -Omax | every shape; both routes always; a second whole run without callee facts |
 | size | -Os, -Oz | candidates are priced in bytes, every block counted once |
 
-Below -Omax, `directed` ([`assemble.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/assemble.rs#L517)) runs the allocator alone first and runs the spiller route only where at least 0.5% of the weighted instructions are spill or frame-cell traffic. Levels per phase: [levels](../reference/levels.md).
+Below -Omax, `directed` ([`assemble.rs`](backend/assemble.md)) runs the allocator alone first and runs the spiller route only where at least 0.5% of the weighted instructions are spill or frame-cell traffic. Levels per phase: [levels](../reference/levels.md).
 
 ## Lowering for selection (MIR)
 
@@ -100,7 +128,30 @@ In `machine_with` order. Each phase's result is verified (`verify.rs`) under `LL
 
 ## Choosing a route and a frame
 
-![The cheaper decision and the second layout](../assets/figures/docs-optimizations-backend-2.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  st["<b>staged(hole=0)</b>"]:::mid
+  ch["<b>cheaper</b><br/><small>below -Omax: directed</small>"]:::opt
+  al["<b>allocator alone</b><br/><small>traffic #gt;= 0.5%?</small>"]:::mid
+  sp["<b>spiller route</b><br/><small>keep the cheaper<br/>(clocks, or bytes at -Os)</small>"]:::mid
+  fl["<b>first layout</b>"]:::mid
+  rl["<b>relayout::laid_again</b><br/><small>(second-frame.md)</small>"]:::mid
+  keep["<b>keep the layout with</b><br/><small>fewer far operands</small>"]:::out
+  st --> ch
+  ch --> al
+  al -->|"yes"| sp
+  al -->|"no: keep it"| fl
+  sp --> fl
+  fl -->|"far frame operands<br/>and a spill area"| rl
+  rl --> keep
+```
+
+*The cheaper decision and the second layout*
 
 `cost`, `route_cost` and `executed.rs` price a candidate: expected executions per block (branch heuristics, proven trips) weigh each instruction by the CPU's timings (`timing.rs`, `cpu.rs`, the target's `timings.times`). [second-frame](second-frame.md) describes `relayout.rs`.
 

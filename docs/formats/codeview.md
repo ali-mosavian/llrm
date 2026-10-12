@@ -5,7 +5,25 @@ segments, `$$SYMBOLS` (class `DEBSYM`) and `$$TYPES` (class `DEBTYP`), plus LINN
 COMENT ([omf](omf.md)). The linker (`LINK /CO`, then CVPACK, or `jwlink debug codeview`) turns them into the
 packed table a debugger reads. COFF objects carry C13 instead ([debug-info](debug-info.md)).
 
-![Two CodeView dialects of debug::Info](../assets/figures/docs-formats-codeview-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  info["<b>debug::Info</b>"]:::src
+  cv4["<b>cv4.rs</b><br/><small>C7-era CodeView 4:<br/>C, Nib, QB default</small>"]:::opt
+  bc["<b>cvwrite.rs</b><br/><small>BC's pre-link layout:<br/>llrm-qb --bc-codeview</small>"]:::opt
+  cv4i["<b>cv4info.rs</b>"]:::mid
+  cvi["<b>cvinfo.rs</b>"]:::mid
+  info -->|"dialect Cv4"| cv4
+  info -->|"dialect Bc"| bc
+  cv4 -.->|"read back"| cv4i
+  bc -.->|"read back"| cvi
+```
+
+*Two CodeView dialects of debug::Info*
 
 `codeview::sections` ([source](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-omf/src/codeview.rs#L216))
 picks by `Info.dialect`. Each frontend states it: C and Nib `Cv4`; QB `Cv4`, or `Bc` under `--bc-codeview`.
@@ -63,7 +81,22 @@ it, and `crates/target/llrm-omf/src/cvwrite_tests.rs` checks that the writer inv
 
 ### `$$SYMBOLS`
 
-![A $$SYMBOLS record](../assets/figures/docs-formats-codeview-2.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1[" "] c1["len"]:3 s1["1"] n1[" "]:3
+  o2[" "] c2["kind"]:3 s2["1"] n2[" "]:3
+  o3[" "] c3["data"]:3 s3[" "] n3["len - 1 bytes"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2,o3,n3,s3 off
+  class c1,c2,c3 cell
+  class s1,s2 size
+```
+
+*A $$SYMBOLS record*
 
 | kind | meaning | data |
 |---|---|---|
@@ -80,7 +113,22 @@ record. QB 4.5 writes a label for each resumable statement under `ON ERROR`.
 
 ### `$$TYPES`
 
-![A $$TYPES record](../assets/figures/docs-formats-codeview-3.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1[" "] c1["kind = 1"]:3 s1["1"] n1["type indices start at 0x0200, a fixed first record"]:3
+  o2[" "] c2["length"]:3 s2["2"] n2[" "]:3
+  o3[" "] c3["data"]:3 s3[" "] n3["length bytes"]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  classDef size fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#e2e8f0
+  class o1,n1,o2,n2,o3,n3,s3 off
+  class c1,c2,c3 cell
+  class s1,s2 size
+```
+
+*A $$TYPES record*
 
 | tag | meaning | data |
 |---|---|---|

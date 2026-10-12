@@ -58,7 +58,24 @@ Four questions are asked of roots:
 
 An owner is in one of three states:
 
-![States of an owner. A use of a moved owner, or of a partly moved one, is refused.](../../assets/figures/docs-frontends-nib-borrowing-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  whole["<b>whole</b>"]:::out
+  part["<b>partly moved</b>"]:::opt
+  moved["<b>moved</b>"]:::data
+  whole -->|"move a field"| part
+  part -->|"assign that field"| whole
+  whole -->|"move the whole"| moved
+  part -->|"move the whole"| moved
+  moved -->|"assign the whole"| whole
+```
+
+*States of an owner. A use of a moved owner, or of a partly moved one, is refused.*
 
 A moved binding cannot be used until it is assigned again. The moved set is
 kept per HIR block and flows along every edge, so a move on one branch reaches
@@ -170,12 +187,38 @@ fn main() -> i16:
     return 0
 ```
 
-![A change while a shared borrow is used later](../../assets/figures/docs-frontends-nib-borrowing-2.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','textColor':'#64748b','titleColor':'#64748b','gridColor':'#94a3b8','sectionBkgColor':'transparent','sectionBkgColor2':'transparent','altSectionBkgColor':'transparent','taskTextColor':'#ffffff','taskTextOutsideColor':'#64748b','taskTextLightColor':'#ffffff','taskTextDarkColor':'#ffffff','doneTaskBkgColor':'#16a34a','doneTaskBorderColor':'#166534','activeTaskBkgColor':'#2563eb','activeTaskBorderColor':'#1e40af','critBkgColor':'#dc2626','critBorderColor':'#991b1b','taskBkgColor':'#475569','taskBorderColor':'#334155','todayLineColor':'transparent'},'gantt':{'barHeight':34,'barGap':12,'topPadding':48,'leftPadding':150,'fontSize':14,'sectionFontSize':14,'numberSectionStyles':2}}}%%
+gantt
+  dateFormat X
+  axisFormat %s
+  tickInterval 1second
+  section v (owner)
+  owner :done, t8, 3, 5
+  ✗ refused∶ r is used later :milestone, crit, t10, 4, 4
+  section r = &v[0]
+  shared borrow∶ opens, last use closes :active, t9, 3, 5
+```
+
+*A change while a shared borrow is used later* Axis: 3 let r = &v[0]; 4 v.push(3); 5 print(r).
 
 Move the use above the change and the program is accepted; the borrow has
 ended:
 
-![The same change after the last use of the borrow](../../assets/figures/docs-frontends-nib-borrowing-3.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','textColor':'#64748b','titleColor':'#64748b','gridColor':'#94a3b8','sectionBkgColor':'transparent','sectionBkgColor2':'transparent','altSectionBkgColor':'transparent','taskTextColor':'#ffffff','taskTextOutsideColor':'#64748b','taskTextLightColor':'#ffffff','taskTextDarkColor':'#ffffff','doneTaskBkgColor':'#16a34a','doneTaskBorderColor':'#166534','activeTaskBkgColor':'#2563eb','activeTaskBorderColor':'#1e40af','critBkgColor':'#dc2626','critBorderColor':'#991b1b','taskBkgColor':'#475569','taskBorderColor':'#334155','todayLineColor':'transparent'},'gantt':{'barHeight':34,'barGap':12,'topPadding':48,'leftPadding':150,'fontSize':14,'sectionFontSize':14,'numberSectionStyles':2}}}%%
+gantt
+  dateFormat X
+  axisFormat %s
+  tickInterval 1second
+  section v (owner)
+  owner :done, t8, 3, 5
+  ✓ accepted∶ no live borrow :milestone, done, t10, 5, 5
+  section r = &v[0]
+  shared borrow :active, t9, 3, 4
+```
+
+*The same change after the last use of the borrow* Axis: 3 let r = &v[0]; 4 print(r); 5 v.push(3).
 
 The same holds for `&mut`:
 
@@ -185,7 +228,20 @@ The same holds for `&mut`:
     m.inc()
 ```
 
-![A change of c while an exclusive borrow is used later](../../assets/figures/docs-frontends-nib-borrowing-4.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','textColor':'#64748b','titleColor':'#64748b','gridColor':'#94a3b8','sectionBkgColor':'transparent','sectionBkgColor2':'transparent','altSectionBkgColor':'transparent','taskTextColor':'#ffffff','taskTextOutsideColor':'#64748b','taskTextLightColor':'#ffffff','taskTextDarkColor':'#ffffff','doneTaskBkgColor':'#16a34a','doneTaskBorderColor':'#166534','activeTaskBkgColor':'#2563eb','activeTaskBorderColor':'#1e40af','critBkgColor':'#dc2626','critBorderColor':'#991b1b','taskBkgColor':'#475569','taskBorderColor':'#334155','todayLineColor':'transparent'},'gantt':{'barHeight':34,'barGap':12,'topPadding':48,'leftPadding':150,'fontSize':14,'sectionFontSize':14,'numberSectionStyles':2}}}%%
+gantt
+  dateFormat X
+  axisFormat %s
+  tickInterval 1second
+  section c (owner)
+  owner :done, t8, 9, 11
+  ✗ refused∶ m is used later :milestone, crit, t10, 10, 10
+  section m = &mut c
+  exclusive borrow∶ opens, last use closes :crit, t9, 9, 11
+```
+
+*A change of c while an exclusive borrow is used later* Axis: 9 let m = &mut c; 10 c.inc(); 11 m.inc().
 
 Swapping the two calls (`m.inc()` then `c.inc()`) is accepted.
 
@@ -232,7 +288,22 @@ it conflicts: the holder must not outlive what it borrows. Each root has a
  Scope(depth)  a local, by the nesting depth of its block
 ```
 
-![Life of each root in fn f(p: &T, q: U)](../../assets/figures/docs-frontends-nib-borrowing-5.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','textColor':'#64748b','titleColor':'#64748b','gridColor':'#94a3b8','sectionBkgColor':'transparent','sectionBkgColor2':'transparent','altSectionBkgColor':'transparent','taskTextColor':'#ffffff','taskTextOutsideColor':'#64748b','taskTextLightColor':'#ffffff','taskTextDarkColor':'#ffffff','doneTaskBkgColor':'#16a34a','doneTaskBorderColor':'#166534','activeTaskBkgColor':'#2563eb','activeTaskBorderColor':'#1e40af','critBkgColor':'#dc2626','critBorderColor':'#991b1b','taskBkgColor':'#475569','taskBorderColor':'#334155','todayLineColor':'transparent'},'gantt':{'barHeight':34,'barGap':12,'topPadding':48,'leftPadding':150,'fontSize':14,'sectionFontSize':14,'numberSectionStyles':2}}}%%
+gantt
+  dateFormat X
+  axisFormat %s
+  tickInterval 1second
+  section Frame
+  Frame :done, t8, 1, 3
+  p's referent∶ Lent； q∶ Frame :milestone, t10, 1, 1
+  a∶ Scope(0) :milestone, t11, 2, 2
+  section block, depth 1
+  block :t9, 3, 4
+  b∶ Scope(1) :milestone, t12, 3, 3
+```
+
+*Life of each root in fn f(p: &T, q: U)* Axis: 1 fn f(p: &T, q: U); 2 let a; 3 let b.
 
 A holder may keep a borrow of a root only if the root lives at least as long
 as the holder ([`Life::may_hold`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/frontends/llrm-nib/src/semantic/borrows.rs#L132)).
@@ -253,7 +324,20 @@ fn main() -> i16:
     return 0
 ```
 
-![h.r = &b stores a Scope(1) root in a Scope(0) holder](../../assets/figures/docs-frontends-nib-borrowing-6.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','textColor':'#64748b','titleColor':'#64748b','gridColor':'#94a3b8','sectionBkgColor':'transparent','sectionBkgColor2':'transparent','altSectionBkgColor':'transparent','taskTextColor':'#ffffff','taskTextOutsideColor':'#64748b','taskTextLightColor':'#ffffff','taskTextDarkColor':'#ffffff','doneTaskBkgColor':'#16a34a','doneTaskBorderColor':'#166534','activeTaskBkgColor':'#2563eb','activeTaskBorderColor':'#1e40af','critBkgColor':'#dc2626','critBorderColor':'#991b1b','taskBkgColor':'#475569','taskBorderColor':'#334155','todayLineColor':'transparent'},'gantt':{'barHeight':34,'barGap':12,'topPadding':48,'leftPadding':150,'fontSize':14,'sectionFontSize':14,'numberSectionStyles':2}}}%%
+gantt
+  dateFormat X
+  axisFormat %s
+  tickInterval 1second
+  section h Scope(0)
+  h lives :done, t10, 1, 5
+  ✗ refused∶ h would outlive b :milestone, crit, t12, 3, 3
+  section b Scope(1)
+  b lives :done, t11, 2, 4
+```
+
+*h.r = &b stores a Scope(1) root in a Scope(0) holder* Axis: 1 let mut h; 2 let b (block depth 1); 3 h.r = &b; 4 block ends; 5 print(h.r).
 
 The same rule governs every store of a borrow: assignment, a struct literal,
 a variant, `push`, and a generator's state
@@ -306,7 +390,21 @@ reseat on one branch only keeps the old borrow on the other.
 A borrow roots at a place path: an owner and the fields below it. Two
 borrows overlap when one path is a prefix of the other.
 
-![&mut p.x and &mut p.y are disjoint, both accepted; &mut p.x and p overlap](../../assets/figures/docs-frontends-nib-borrowing-7.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  p["<b>p</b>"]:::mid
+  x["<b>p.x</b>"]:::src
+  y["<b>p.y</b>"]:::opt
+  p --> x
+  p --> y
+```
+
+*&mut p.x and &mut p.y are disjoint, both accepted; &mut p.x and p overlap*
 
 ```text
     let mut p = P(x=1, y=2)

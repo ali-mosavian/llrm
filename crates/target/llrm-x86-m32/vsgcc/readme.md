@@ -21,23 +21,29 @@ For maintainers running llrm's `m32` output against gcc and clang. Method, comma
 
 A rerun with another llrm shows a change in the table's llrm columns; gcc and clang do not move.
 
-```fig
-kind: graph
-dir: right
-title: The vsgcc scripts, in the order they run
-node run "run.sh" fill=a
-node build "build.sh"
-node wrap "wrap.py"
-node comp "llrm-c, gcc, clang" fill=b
-node har "harness.py\nunicorn"
-node res "results.jsonl"
-node tab "table.py" fill=c
-node loops "loops.py"
-edge run -> build
-edge build -> wrap
-edge wrap -> comp
-edge comp -> har
-edge har -> res
-edge res -> tab
-edge comp ..> loops "ELF of llrm, gcc, clang"
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  run["<b>run.sh</b>"]:::src
+  build["<b>build.sh</b>"]:::mid
+  wrap["<b>wrap.py</b>"]:::mid
+  comp["<b>llrm-c, gcc, clang</b>"]:::opt
+  har["<b>harness.py</b><br/><small>unicorn</small>"]:::mid
+  res["<b>results.jsonl</b>"]:::mid
+  tab["<b>table.py</b>"]:::out
+  loops["<b>loops.py</b>"]:::mid
+  run --> build
+  build --> wrap
+  wrap --> comp
+  comp --> har
+  har --> res
+  res --> tab
+  comp -.->|"ELF of llrm, gcc, clang"| loops
 ```
+
+*The vsgcc scripts, in the order they run*

@@ -4,7 +4,27 @@ For contributors changing `crates/target/llrm-omf/src/td.rs` or checking its out
 records Turbo C++ 3.0 writes under `-v` into a 16-bit OMF object; `TLINK /v` turns them into the table Turbo
 Debugger reads.
 
-![From Info to the Turbo Debugger table](../assets/figures/docs-formats-turbo-debugger-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  info["<b>Info</b>"]:::src
+  rec["<b>COMENT records</b><br/><small>class 0xE1..0xEA, among<br/>the object's own</small>"]:::mid
+  tl["<b>TLINK /v</b>"]:::mid
+  exe["<b>EXE + Turbo Debugger</b><br/><small>table</small>"]:::opt
+  td["<b>TD (DOSBox-X)</b>"]:::mid
+  dump["<b>TDUMP</b><br/><small>prints the table</small>"]:::mid
+  info -->|"td::records"| rec
+  rec --> tl
+  tl --> exe
+  exe --> td
+  exe -.-> dump
+```
+
+*From Info to the Turbo Debugger table*
 
 The records are `COMENT` records of attribute 0 ("Purge: Yes, List: Yes"). They were measured on `tcc -v`
 objects (TC++ 3.0, `-ml` to `-mh`, `-a`) with `TDUMP` as the reader, by linking the object and dumping the

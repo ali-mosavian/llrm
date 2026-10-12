@@ -1,5 +1,0 @@
-kind: stack
-title: The same struct under @repr("c16") (pack 2), 4 bytes
-cell "a" off="0" size="1"
-cell "pad" off="1" size="1"
-cell "b" off="2" size="2"

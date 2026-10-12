@@ -13,7 +13,44 @@ For contributors adding or changing a target. A target is a set of description f
 
 ## Crate graph
 
-![Crate graph of the targets; an arrow reads "depends on"](../assets/figures/docs-machine-targets-1.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  drv["<b>llrm-driver</b><br/><small>the one crate that<br/>names targets</small>"]:::src
+  core["<b>llrm-core (backend)</b><br/><small>depends on no target crate</small>"]:::opt
+  s16["<b>llrm-x86-m16-select</b><br/><small>SELECT crate: build.rs<br/>runs llrm-iselgen</small>"]:::mid
+  s32["<b>llrm-x86-m32-select</b><br/><small>SELECT crate: build.rs<br/>runs llrm-iselgen</small>"]:::mid
+  d16["<b>llrm-x86-m16</b><br/><small>DATA crate: descriptions<br/>+ Target impl#59; no llrm-core</small>"]:::mid
+  d32["<b>llrm-x86-m32</b><br/><small>DATA crate: descriptions<br/>+ Target impl#59; no llrm-core</small>"]:::mid
+  x86["<b>llrm-x86</b><br/><small>form schema and parser,<br/>encoder, x87 and i64 hooks,<br/>family.isel, helpers</small>"]:::mid
+  tgt["<b>llrm-target</b><br/><small>Target trait, layout,<br/>registers, calling, timings,<br/>opcosts, object, OS</small>"]:::mid
+  subgraph g_irs["IRS#59; NAME NO TARGET"]
+    lir["<b>llrm-lir</b>"]:::mid
+    mir["<b>llrm-mir</b>"]:::mid
+  end
+  drv --> s16
+  drv --> s32
+  drv --> d16
+  drv --> d32
+  drv --> core
+  s16 --> core
+  s32 --> core
+  s16 --> x86
+  s32 --> x86
+  d16 --> x86
+  d32 --> x86
+  x86 --> tgt
+  core --> tgt
+  tgt --> lir
+  tgt --> mir
+  style g_irs fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+```
+
+*Crate graph of the targets; an arrow reads "depends on"*
 
 A data crate does not depend on `llrm-core`; a select crate does, and only `llrm-driver` depends on a select crate. `llrm-core` has no target among its normal dependencies (`tests/core_depends_on_no_target.rs`). Its own unit tests need a selector, so a `fixtures` feature generates the m16 and m32 selectors inside `llrm-core` for them, and nothing else turns it on (`tests/core_fixtures_are_for_core_tests.rs`). The data/select split is held by a manifest test proposed in [#1273](https://github.com/ali-mosavian/llrm/pull/1273).
 
@@ -38,7 +75,29 @@ The family crate `llrm-x86` holds the forms and peephole rules every x86 target 
 
 ## From description to compiler
 
-![From target description to compiler](../assets/figures/docs-machine-targets-2.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  src["<b>Description files</b><br/><small>*.regs *.instr *.isel *.peep<br/>timings.times opcosts.txt<br/>*.toml</small>"]:::src
+  gen["<b>llrm-iselgen</b><br/><small>(build.rs of the select crate)</small>"]:::mid
+  out["<b>SELECTOR, RULES,</b><br/><small>effect rows</small>"]:::opt
+  impl["<b>Target impl (data crate)</b><br/><small>read by the passes</small>"]:::opt
+  drv["<b>llrm-driver binds</b>"]:::mid
+  core["<b>llrm-core backend</b>"]:::out
+  src --> gen
+  gen --> out
+  src --> impl
+  out --> drv
+  impl --> drv
+  drv --> core
+```
+
+*From target description to compiler*
 
 A pattern names a hook (`call NAME`, `when NAME`): a name `llrm-core` exports becomes a call on its selection context; any other resolves to the target crate's hook function, and a missing one is a compile error. Cost expressions, loops and searches are hooks, not description.
 

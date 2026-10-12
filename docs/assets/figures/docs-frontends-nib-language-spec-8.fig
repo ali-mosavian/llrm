@@ -1,5 +1,0 @@
-kind: stack
-title: Descriptor of &[T] (rank 1) and &string on m16, 8 bytes (12 bytes on m32)
-cell "length" off="0" size="2"
-cell "capacity" off="2" size="2" note="equals length"
-cell "data pointer" off="4" size="4" note="offset 2 B, segment 2 B"

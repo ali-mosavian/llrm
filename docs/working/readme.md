@@ -9,5 +9,5 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [debugging](debugging.md) | Finding a miscompile in a DOS program, the debug socket and debug symbols |
 | [measurement](measurement/readme.md) | How we measure, the instruments, compile time, comparison with gcc |
 | [fragility](fragility.md) | What broke, or hid a break, and what guards it |
-| [figures](figures.md) | Writing a figure for a document, and the generated docs files |
+| [figures](figures.md) | Drawing a figure as mermaid, and the generated pass pages |
 | [codegen-improvements](codegen-improvements.md) | Backend ideas drawn from other compilers |
