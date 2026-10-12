@@ -94,28 +94,42 @@ fn _possible(
             && op.operands[0] == op.operands[1]
     };
     let mut possible = IdSet::<ValueId>::new();
-    let mut operands = Vec::<(ValueId, Vec<ValueId>)>::new();
+    fn named<'a>(
+        op: &'a llrm_mir::module::Instruction,
+        zero: bool,
+    ) -> impl Iterator<Item = ValueId> + 'a {
+        let step = if op.opcode == Opcode::Phi { 2 } else { 1 };
+        let kept = if zero { 0 } else { op.operands.len() };
+        op.operands
+            .iter()
+            .take(kept)
+            .step_by(step)
+            .filter_map(
+                |one| match one {
+                    Operand::Value(one) => Some(*one),
+                    _ => None,
+                },
+            )
+    }
+    let mut candidates = Vec::<(ValueId, InstId)>::new();
     for (_, inst) in function.walk() {
         let op = function.instruction(inst);
         let Some(value) = consts::_defined(unit, inst).filter(|value| !seeded(value)) else { continue };
         if op.opcode == Opcode::Phi || _supported(&op.opcode) || zeroes(op) {
             possible.insert(value);
-            let from: &mut dyn Iterator<Item = &Operand> =
-                if op.opcode == Opcode::Phi { &mut op.operands.iter().step_by(2) } else { &mut op.operands.iter() };
-            let named = from.filter_map(|one| if let Operand::Value(one) = one { Some(*one) } else { None });
-            operands.push((value, if zeroes(op) { Vec::new() } else { named.collect() }));
+            candidates.push((value, inst));
         }
     }
     let mut users = IdMap::<ValueId, Vec<ValueId>>::new();
     let mut gone = Vec::<ValueId>::new();
-    for (value, named) in &operands {
-        for one in named {
-            if !seeded(one) && !possible.contains(one) {
-                if possible.remove(value) {
-                    gone.push(*value);
+    for &(value, inst) in &candidates {
+        for one in named(function.instruction(inst), zeroes(function.instruction(inst))) {
+            if !seeded(&one) && !possible.contains(&one) {
+                if possible.remove(&value) {
+                    gone.push(value);
                 }
             } else {
-                users.get_or_insert_with(*one, Vec::new).push(*value);
+                users.get_or_insert_with(one, Vec::new).push(value);
             }
         }
     }
@@ -149,14 +163,22 @@ pub fn propagated(
         assert!(found == whole, "constant cycles: leaving out the values that cannot be known changed the facts");
         return found;
     }
-    let possible =
-        (successors.is_none() && CHECKING.get() != 2).then(|| _possible(unit, &|value| seeds.contains_key(value)));
-    let possible = possible.as_ref();
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else {
         return seeds.clone();
     };
     let is_phi = |inst: InstId| function.instruction(inst).opcode == Opcode::Phi;
+    // A body with no phi that lacks a seed has nothing to settle: no more is
+    // set up for it.
+    let unseeded = |(_, inst): &(_, InstId)| {
+        is_phi(*inst) && consts::_defined(unit, *inst).is_some_and(|value| !seeds.contains_key(&value))
+    };
+    if !function.walk().any(|one| unseeded(&one)) && !llrm_support::env_set("LLRM_CHECK_CYCLES") {
+        return seeds.clone();
+    }
+    let possible =
+        (successors.is_none() && CHECKING.get() != 2).then(|| _possible(unit, &|value| seeds.contains_key(value)));
+    let possible = possible.as_ref();
     // What is left to propagate is a phi no seed has: every other value is as
     // `seeds` has it, or derives from them. Setting the propagation up (a
     // recipe for every value, the consumers, a copy of the graph) was 1.8% of

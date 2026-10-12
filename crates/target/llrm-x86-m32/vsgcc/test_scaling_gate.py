@@ -966,3 +966,14 @@ def test_a_loops_invariants_are_a_bit_set_not_a_hash_set(tmp_path):
     own = gate.own_work(command)
     assert own["analysis counted"] > 10.0, f"premise: loops were counted ({own['analysis counted']:.1f} Minstr)"
     assert own["analysis counted"] <= 100.0, f"{own['analysis counted']:.1f} Minstr"
+
+
+def test_registers_of_a_body_with_no_open_phi_set_nothing_up(tmp_path):
+    """straight(512) at -Os: leaving out the values that cannot be known walked the body, and kept a vector of operands for each candidate,
+    before asking whether a phi was open at all: `analysis registers` read 31.7 Minstr, 19.8 on main, +1.3% on the whole compile of every
+    body without a loop. The question comes first: 19.8. A bound of 25 fails the first."""
+    source = tmp_path / "straight512.c"
+    source.write_text(gate.generated("straight", 512))
+    own = gate.own_work(gate.levels_time.command("llrm", "Os", source))
+    assert own["analysis registers"] > 5.0, f"premise: registers were derived ({own['analysis registers']:.1f} Minstr)"
+    assert own["analysis registers"] <= 25.0, f"{own['analysis registers']:.1f} Minstr"
