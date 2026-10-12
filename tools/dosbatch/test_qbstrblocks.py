@@ -61,7 +61,7 @@ RESUME NEXT
 """
 # The flat runtime ends the program at a second error under ON ERROR (#1482): there only one is raised.
 MORE_ERRORS = 'MID$(b, 41, 1) = "x"\nMID$(b, 1, -1) = "x"'
-EXPECT = {"16": [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 3], "32": [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 1]}
+EXPECT = {qbbuild.REAL: [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 3], qbbuild.FLAT: [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 1]}
 
 
 def instructions(where: Path) -> int:
@@ -87,7 +87,7 @@ def runner(tmp_path_factory):
         for target, built in qbbuild.build(src, work / f"b{name}", objects).items():
             where = work / f"run{name}{target}"
             result = dosbatch.run([dosbatch.Job("J", "exe", built.exe, files=built.files)], where, budget_ms=60000)["J"]
-            assert result.status == "ok", f"m{target}: {result.detail}"
+            assert result.status == "ok", f"{target}: {result.detail}"
             out[target] = (result, instructions(where))
         return out
 
@@ -100,13 +100,13 @@ def test_block_string_operations_cost_a_string_instruction_not_a_byte_loop(runne
     empty = runner("empty", HEAD + "j = j + 1" + TAIL)
     got = runner(name.replace("$", "S").replace("(", "").replace(")", "").replace(" ", ""), HEAD + body + TAIL)
     for target in qbbuild.TARGETS:
-        assert (got[target][1] - empty[target][1]) / N <= limit, f"m{target}"
+        assert (got[target][1] - empty[target][1]) / N <= limit, f"{target}"
 
 
 def test_comparison_and_fill_results_at_every_length(runner):
     """The flat runtime ends the program at a second error under ON ERROR (#1482), so it raises one."""
     got = {}
-    for target, text in (("16", CHECK % MORE_ERRORS), ("32", CHECK % "")):
+    for target, text in ((qbbuild.REAL, CHECK % MORE_ERRORS), (qbbuild.FLAT, CHECK % "")):
         got[target] = runner(f"check{target}", text)[target][0]
     for target in qbbuild.TARGETS:
-        assert [int(word) for word in got[target].text.split()] == EXPECT[target], f"m{target}"
+        assert [int(word) for word in got[target].text.split()] == EXPECT[target], f"{target}"

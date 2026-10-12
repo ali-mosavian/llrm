@@ -28,5 +28,5 @@ def test_a_program_that_assigns_to_mid_links_and_runs_on_both_targets(tmp_path):
     for target in qbbuild.TARGETS:
         one = built[target]
         result = dosbatch.run([dosbatch.Job("J", "exe", one.exe, files=one.files)], tmp_path / f"run{target}", budget_ms=3000)["J"]
-        assert result.status == "ok", f"m{target}: {result.detail}"
-        assert result.text.split() == ["hEllo", "3"], f"m{target}: {result.text!r}"
+        assert result.status == "ok", f"{target}: {result.detail}"
+        assert result.text.split() == ["hEllo", "3"], f"{target}: {result.text!r}"

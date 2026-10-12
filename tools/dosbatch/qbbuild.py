@@ -1,7 +1,8 @@
 """The llrm side of the QB tests: a BASIC program on our runtime for both targets, linked by jwlink.
 
-m16 is real mode (llrm-qb, llrm-c -m16, the target's own start-up), m32 the flat target under DOS/32A.  Neither goes through
-Microsoft's LINK or LIB; BCOM45 (BC, LINK and its runtime) stays what a test compares against, built by dosbatch."""
+The real-mode target is built with llrm-qb and llrm-c and the target's own start-up, the flat one runs under DOS/32A.  Neither
+goes through Microsoft's LINK or LIB; BCOM45 (BC, LINK and its runtime) stays what a test compares against, built by
+dosbatch.  The targets are the ones the link recipes name."""
 
 from __future__ import annotations
 
@@ -15,12 +16,13 @@ import dosbatch  # noqa: E402
 import qb32  # noqa: E402
 import qbruntime  # noqa: E402
 
-TARGETS = ("16", "32")
+REAL, FLAT = dosbatch.REAL_MODE, qb32.TARGET
+TARGETS = (REAL, FLAT)
 
 
 @dataclass(frozen=True)
 class Built:
-    """A linked program and the files that must sit beside it (DOS/32A for m32)."""
+    """A linked program and the files that must sit beside it (DOS/32A for the flat target)."""
 
     exe: Path
     files: tuple[Path, ...] = ()
@@ -35,7 +37,7 @@ def runtime16(work: Path) -> dict[str, Path]:
 
     def make(name: str, source: Path, produce) -> None:
         obj = work / f"{name}.obj"
-        qb32.cached(qb32.runtime_key(source, tree, tools) + f"|m16|{name}", obj, lambda: produce(obj))
+        qb32.cached(qb32.runtime_key(source, tree, tools) + f"|{dosbatch.REAL_MODE}|{name}", obj, lambda: produce(obj))
         made[name] = obj
 
     shared = qbruntime.shared_sources()
@@ -58,7 +60,7 @@ def runtime16(work: Path) -> dict[str, Path]:
 
 def runtimes(work: Path) -> dict[str, dict[str, Path]]:
     """Both targets' runtime objects."""
-    return {"16": runtime16(work / "rt16"), "32": qb32.build(work / "rt32")}
+    return {REAL: runtime16(work / "real"), FLAT: qb32.build(work / "flat")}
 
 
 def build(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...] = ("-O2",)) -> dict[str, Built]:
@@ -67,15 +69,15 @@ def build(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: 
     built = {}
     for target in TARGETS:
         obj, exe = work / f"{source.stem}.{target}.obj", work / f"{source.stem}.{target}.EXE"
-        extra = ["-march=i486", dosbatch.m_flag(qb32.TARGET)] if target == "32" else []
+        extra = ["-march=i486", dosbatch.m_flag(FLAT)] if target == FLAT else []
         done = dosbatch.subprocess.run(
             [str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", *qbruntime.frontend_flags(source), *flags, *extra, "-o", str(obj)],
             capture_output=True,
             text=True,
         )
         if done.returncode != 0 or not obj.exists():
-            raise dosbatch.BuildError(f"{source.name} m{target}: {(done.stderr or done.stdout).strip()[-400:]}")
-        if target == "32":
+            raise dosbatch.BuildError(f"{source.name} {target}: {(done.stderr or done.stdout).strip()[-400:]}")
+        if target == FLAT:
             built[target] = Built(exe, tuple(qb32.link(obj, objects[target], exe, work)))
         else:
             link16(obj, objects[target], exe)

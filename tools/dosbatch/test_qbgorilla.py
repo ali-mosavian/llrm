@@ -34,10 +34,10 @@ import qbruntime  # noqa: E402
 pytestmark = pytest.mark.slow_dos
 
 # By target: the gorillas (GorillaX, GorillaY) and the wind of the seeded game, then the shots (angle, velocity).
-SCENES = {"16": ((141, 223), (449, 147), -1), "32": ((71, 248), (559, 198), 3)}
-HIT = {"16": [("75", "83")], "32": [("80", "104")]}
+SCENES = {qbbuild.REAL: ((141, 223), (449, 147), -1), qbbuild.FLAT: ((71, 248), (559, 198), 3)}
+HIT = {qbbuild.REAL: [("75", "83")], qbbuild.FLAT: [("80", "104")]}
 # The first lands on a building (m16: x 290, y 158; m32: x 250, y 123), the second is the other player's, into the gorilla.
-BUILDING = {"16": [("73", "56"), ("83", "102")], "32": [("35", "182"), ("63", "81")]}
+BUILDING = {qbbuild.REAL: [("73", "56"), ("83", "102")], qbbuild.FLAT: [("35", "182"), ("63", "81")]}
 
 
 @pytest.fixture(scope="module")
@@ -95,12 +95,12 @@ def scores(screen: str) -> tuple[int, int]:
 def test_a_banana_that_hits_the_other_gorilla_scores_and_ends_the_game(game, tmp_path):
     for target in qbbuild.TARGETS:
         screen = play(game[target], tmp_path / f"hit{target}", SCENES[target], HIT[target])
-        assert "Illegal function call" not in screen, f"m{target}"
-        assert scores(screen) == (1, 0), f"m{target}: {screen}"
+        assert "Illegal function call" not in screen, f"{target}"
+        assert scores(screen) == (1, 0), f"{target}: {screen}"
 
 
 def test_a_banana_that_hits_a_building_scores_nothing_and_the_turn_passes(game, tmp_path):
     for target in qbbuild.TARGETS:
         screen = play(game[target], tmp_path / f"building{target}", SCENES[target], BUILDING[target])
-        assert "Illegal function call" not in screen, f"m{target}"
-        assert scores(screen) == (0, 1), f"m{target}: {screen}"
+        assert "Illegal function call" not in screen, f"{target}"
+        assert scores(screen) == (0, 1), f"{target}: {screen}"

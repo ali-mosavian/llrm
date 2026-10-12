@@ -40,4 +40,4 @@ def test_trapped_keys_run_their_handlers_and_are_not_read(tmp_path):
             screen = " ".join(session.screen().split())
         finally:
             session.close()
-        assert "f1 = 2 f2 = 1 other = a" in screen, f"m{target}: {screen}"
+        assert "f1 = 2 f2 = 1 other = a" in screen, f"{target}: {screen}"
