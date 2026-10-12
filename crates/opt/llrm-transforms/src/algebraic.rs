@@ -145,6 +145,15 @@ pub fn simplified(
         }
         round |= _reassociated_recurrences(function);
         round |= _shared_shifts(context, function);
+        // Last, when no other rule has anything to do: a repeat may be a
+        // difference the other rules cancel (`x - (x + 5 + x)`).
+        if !round {
+            for (_, inst) in function.walk().collect::<Vec<_>>() {
+                if !function.is_erased(inst) {
+                    round |= _doubled_addend(context, function, inst);
+                }
+            }
+        }
         if !round {
             return changed;
         }
@@ -1248,6 +1257,74 @@ fn _offset_chain(
     let width = _width(context, function, inst).expect("an integer");
     let amount = _constant(context, function, inst, first.wrapping_add(last) & mask(width));
     _replace(function, inst, Opcode::Binary(BinaryOp::Add), vec![source, amount]);
+    true
+}
+
+/// The operands of the tree of single-use `add`s `inst` roots:
+/// `((x + a) + b) + a` is `x`, `a`, `b`, `a`.
+fn _addends(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+    out: &mut Vec<Operand>,
+) {
+    let Some((BinaryOp::Add, left, right, _)) = _binary(context, function, inst) else {
+        return;
+    };
+    for operand in [left, right] {
+        let inner = _definition(function, operand)
+            .filter(|_| _single_use(function, operand) && out.len() < 8)
+            .filter(|&made| matches!(_binary(context, function, made), Some((BinaryOp::Add, ..))));
+        match inner {
+            Some(made) => _addends(context, function, made, out),
+            None => out.push(operand),
+        }
+    }
+}
+
+/// A value added twice through single-use `add`s is added once, doubled:
+/// `(x + a) + a` is `x + (a << 1)`, and `((x + a) + b) + a` is
+/// `(x + b) + (a << 1)`. LLVM's InstCombine (`X + Y + Y` is `X + (Y << 1)`) and
+/// Reassociate, which ranks the repeats together. The sum has the operations it
+/// had, and the doubled value is one a read-modify-write of a cell can take as
+/// its addend (bench/particle's second sweep of the same cells).
+fn _doubled_addend(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    let mut addends = Vec::new();
+    _addends(context, function, inst, &mut addends);
+    let repeated = addends
+        .iter()
+        .enumerate()
+        .find(|&(at, one)| {
+            // A value the loop carries is Reassociate's: its own rule keeps it
+            // at the root.
+            matches!(one, Operand::Value(_))
+                && addends[..at].contains(one)
+                && _definition(function, *one).is_none_or(|made| function.instruction(made).opcode != Opcode::Phi)
+        })
+        .map(|(_, one)| *one);
+    let Some(repeat) = repeated else { return false };
+    // Both uses of the repeated value leave; the doubled one is built first,
+    // before the sum it joins.
+    let mut kept: Vec<Operand> = Vec::new();
+    let mut seen = 0;
+    for &one in &addends {
+        if one == repeat && seen < 2 {
+            seen += 1;
+            continue;
+        }
+        kept.push(one);
+    }
+    let one = _constant(context, function, inst, 1);
+    let doubled = _before(function, inst, Opcode::Binary(BinaryOp::Shl), vec![repeat, one]);
+    let mut sum = doubled;
+    for operand in kept.into_iter().rev() {
+        sum = _before(function, inst, Opcode::Binary(BinaryOp::Add), vec![operand, sum]);
+    }
+    _forward(function, inst, sum);
     true
 }
 
