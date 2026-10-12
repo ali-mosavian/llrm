@@ -57,3 +57,14 @@ class ResolverTests(unittest.TestCase):
         scripts = [*Path(llrmbin.__file__).parent.glob("*.sh"), *Path(llrmbin.__file__).parent.glob("*/*.sh"), *(llrmbin.REPO / "crates/target/llrm-x86-m32/vsgcc").glob("*.sh")]
         spelled = [one.name for one in scripts if "target/release" in one.read_text() or "LLRM_BIN:-" in one.read_text()]
         self.assertEqual(spelled, [])
+
+
+def test_a_pinned_binary_has_a_path_of_one_length_whatever_directory_it_is_in(tmp_path):
+    """The compiler's argv[0] moved an instruction count by up to 5e-4 with its length: a gate's tree and a base's differ in it."""
+    short, long = tmp_path / "a", tmp_path / ("a-much-longer-directory-name-" * 3)
+    for folder in (short, long):
+        folder.mkdir()
+        (folder / "llrm-c").write_text("")
+    first, second = llrmbin.pinned(short / "llrm-c"), llrmbin.pinned(long / "llrm-c")
+    assert len(str(first)) == len(str(second)) == llrmbin.PINNED_BYTES
+    assert first.resolve() == (short / "llrm-c").resolve() and second.resolve() == (long / "llrm-c").resolve()
