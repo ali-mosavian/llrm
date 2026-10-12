@@ -1,6 +1,10 @@
 //! The dominator tree, as LLVM's `DominatorTree`: by Cooper, Harvey and
 //! Kennedy's iteration over reverse postorder. Unreachable blocks are in no
 //! tree, and, as in LLVM, everything dominates them.
+//!
+//! A tree is also brought up to date from the edges the change log tells of
+//! (`updated`): the blocks under the nearest common dominator of the blocks the
+//! changed edges join are worked out again, and nothing else can move.
 
 use crate::module::{BlockId, Change, Function, InstId, Operand};
 
