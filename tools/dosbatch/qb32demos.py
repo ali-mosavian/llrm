@@ -84,6 +84,7 @@ def ready(session, since: int, shown: str | None) -> None:
         deadline = time.monotonic() + LONGEST
         while shown not in session.screen():
             if time.monotonic() > deadline:
+                # `IBM ROM BASIC NOT IMPLEMENTED` on the screen is the fork's flake, ali-mosavian/llrm#1570.
                 raise TimeoutError(f"{shown!r} never appeared")
         since = len(session.events)
         session.send({"cmd": "key_wait_arm"})
