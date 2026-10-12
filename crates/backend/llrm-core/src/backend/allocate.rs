@@ -609,20 +609,23 @@ pub fn live_rows_by(
             body.facts.0.bump("live-rows-walks");
             let found = crate::analysis::occurrences::Occurrences::scan(body, &keep);
             let places = found.occurrences();
-            // Following the values costs about a step for each value and each
-            // block between its first and last occurrence; few blocks and many
-            // values (a straight line of cells) are the rows'.
-            let steps = values.len()
-                + places
-                    .values()
-                    .map(|named| {
-                        let blocks = named.iter().map(|one| (one.0).0);
-                        blocks.clone().max().unwrap_or(0) - blocks.min().unwrap_or(0) + 1
-                    })
-                    .sum::<usize>();
-            if checking || steps <= rows {
-                let web = live_rows_within(body, &values, &places, &Phis::of(body, &keep), usize::MAX)
-                    .expect("no budget to run out of");
+            // Following the values costs a step for each block a value is live
+            // in; where that comes to more than the rows, the rows
+            // are the cheaper way, and the walk is given up at the budget.
+            // (Estimated from where the values first and last occur, it took a
+            // value whose uses lie far apart in the layout for one
+            // live in the blocks between: 2.4 M steps against 0.04 M on
+            // branches(1024) with the header copy, which then solved the rows,
+            // 3,457 blocks times 190 words.)
+            let web = if checking {
+                Some(
+                    live_rows_within(body, &values, &places, &Phis::of(body, &keep), usize::MAX)
+                        .expect("no budget to run out of"),
+                )
+            } else {
+                live_rows_within(body, &values, &places, &Phis::of(body, &keep), rows)
+            };
+            if let Some(web) = web {
                 let found = LiveRows(Found::Web(web));
                 if llrm_support::env_set("LLRM_CHECK_LIVE") {
                     let walk = live_rows_dense(body, &keep);

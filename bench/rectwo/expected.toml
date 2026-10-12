@@ -1,5 +1,5 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
+blessed = "2026-10-12"
 
 [c.O2]
 instructions = 1458578
@@ -7,6 +7,7 @@ memory_operands = 97238
 code_bytes = 79
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 19.4563
 
 [c.Os]
 instructions = 1896158
@@ -14,3 +15,4 @@ memory_operands = 97238
 code_bytes = 80
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 25.2926

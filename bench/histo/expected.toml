@@ -1,5 +1,5 @@
-reason = "DemandedBits (algebraic): a mask over bits nothing reads is gone. 18 rows better: bintree bas/nib -O2/-Os (-8 B), histo nib (-3 B, -5%), quicksort bas/nib (-7 B). One worse: bintree nib -Os memory_operands 27650 -> 28250, 444 -> 446 B: the LCG state's 'and 65535' went and the allocator then keeps the seed in its slot (add [bp-6],imm) instead of a register."
-blessed = "2026-10-10"
+reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 83615
@@ -7,6 +7,7 @@ memory_operands = 12675
 code_bytes = 245
 data_bytes = 8719
 bss_bytes = 0
+kernel_ms = 1.2015
 
 [bas.Os]
 instructions = 75807
@@ -14,6 +15,37 @@ memory_operands = 13059
 code_bytes = 239
 data_bytes = 8719
 bss_bytes = 0
+kernel_ms = 1.0986
+
+[bq16.O2]
+instructions = 83617
+memory_operands = 12675
+code_bytes = 250
+data_bytes = 8719
+bss_bytes = 0
+kernel_ms = 1.1233
+
+[bq16.Os]
+instructions = 75809
+memory_operands = 13059
+code_bytes = 244
+data_bytes = 8719
+bss_bytes = 0
+kernel_ms = 1.0204
+
+[bq32.O2]
+instructions = 124011
+code_bytes = 284
+data_bytes = 8725
+bss_bytes = 0
+kernel_ms = 2.2218
+
+[bq32.Os]
+instructions = 115815
+code_bytes = 276
+data_bytes = 8725
+bss_bytes = 0
+kernel_ms = 2.1116
 
 [c.O2]
 instructions = 79504
@@ -21,6 +53,7 @@ memory_operands = 12672
 code_bytes = 125
 data_bytes = 0
 bss_bytes = 4608
+kernel_ms = 1.1388
 
 [c.Os]
 instructions = 71696
@@ -28,6 +61,7 @@ memory_operands = 13056
 code_bytes = 119
 data_bytes = 0
 bss_bytes = 4608
+kernel_ms = 1.0359
 
 [nib.O2]
 instructions = 79505
@@ -35,6 +69,7 @@ memory_operands = 12672
 code_bytes = 128
 data_bytes = 4608
 bss_bytes = 0
+kernel_ms = 1.0627
 
 [nib.Os]
 instructions = 71697
@@ -42,6 +77,7 @@ memory_operands = 13056
 code_bytes = 122
 data_bytes = 4608
 bss_bytes = 0
+kernel_ms = 0.9599
 
 [ow.O2]
 instructions = 88353
