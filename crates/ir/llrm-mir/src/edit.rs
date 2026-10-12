@@ -343,6 +343,7 @@ impl Function {
         let old = std::mem::replace(&mut self.instructions[inst.0 as usize].operands[index], operand);
         self.remove_use(old, at);
         self.add_use(operand, at);
+        self.log(Change::Operand { inst, index: index as u32, was: old });
         self.log(Change::Rewritten(inst));
     }
 
@@ -354,6 +355,7 @@ impl Function {
         operands: Vec<Operand>,
     ) {
         let old = std::mem::take(&mut self.instructions[inst.0 as usize].operands);
+        let was: Box<[Operand]> = old.as_slice().into();
         if old.len() > 4 {
             // A phi of N inputs names a few values and N blocks: each list is
             // scanned once for all the places `inst` names it, not
@@ -379,6 +381,7 @@ impl Function {
             self.add_use(operand, Use { user: inst, index: index as u32 });
         }
         self.instructions[inst.0 as usize].operands = operands;
+        self.log(Change::Operands { inst, was });
         self.log(Change::Rewritten(inst));
     }
 
@@ -459,6 +462,7 @@ impl Function {
             for one in uses {
                 self.instructions[one.user.0 as usize].operands[one.index as usize] = with;
                 self.add_use(with, one);
+                self.log(Change::Operand { inst: one.user, index: one.index, was: Operand::Value(value) });
                 self.log(Change::Rewritten(one.user));
             }
         }

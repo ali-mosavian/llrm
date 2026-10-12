@@ -133,11 +133,41 @@ pub struct Use {
 /// end when `next` is `None`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Change {
-    Inserted { inst: InstId, block: BlockId, next: Option<InstId> },
-    Cloned { from: InstId, to: InstId },
-    Moved { inst: InstId, block: BlockId, next: Option<InstId>, from: BlockId },
+    Inserted {
+        inst: InstId,
+        block: BlockId,
+        next: Option<InstId>,
+    },
+    Cloned {
+        from: InstId,
+        to: InstId,
+    },
+    Moved {
+        inst: InstId,
+        block: BlockId,
+        next: Option<InstId>,
+        from: BlockId,
+    },
     Rewritten(InstId),
-    Erased { inst: InstId, block: BlockId, next: Option<InstId> },
+    /// Operand `index` of `inst` was `was`: logged before the `Rewritten` of
+    /// the change, by what reads what an instruction read before (the
+    /// liveness of a value it stopped reading, the edge a branch stopped
+    /// taking).
+    Operand {
+        inst: InstId,
+        index: u32,
+        was: Operand,
+    },
+    /// The operands of `inst` were `was`, before the `Rewritten` that follows.
+    Operands {
+        inst: InstId,
+        was: Box<[Operand]>,
+    },
+    Erased {
+        inst: InstId,
+        block: BlockId,
+        next: Option<InstId>,
+    },
     BlockCreated(BlockId),
     BlockErased(BlockId),
 }

@@ -221,7 +221,19 @@ fn each_stage_carries_its_own_changes() {
     passes.add(Retarget(PreservedAnalyses::none()));
     let stages = passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
     let changes: Vec<(&str, &[Change])> = stages.iter().map(|one| (one.pass, one.changes.as_slice())).collect();
-    assert_eq!(changes, [("look", &[][..]), ("retarget", &[Change::Rewritten(branch)][..])]);
+    assert_eq!(
+        changes,
+        [
+            ("look", &[][..]),
+            (
+                "retarget",
+                &[
+                    Change::Operand { inst: branch, index: 1, was: Operand::Block(crate::module::BlockId(1)) },
+                    Change::Rewritten(branch)
+                ][..]
+            )
+        ]
+    );
 }
 
 #[test]

@@ -278,7 +278,8 @@ impl Analysis for Accesses {
             .iter()
             .all(
                 |change| match *change {
-                    Change::Moved { .. } => true,
+                    // What an operand was is the record of a `Rewritten`, which decides.
+                    Change::Moved { .. } | Change::Operand { .. } | Change::Operands { .. } => true,
                     Change::Rewritten(inst) => matches!(function.instruction(inst).opcode, Opcode::Store { .. }),
                     _ => false,
                 },
