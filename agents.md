@@ -170,8 +170,7 @@ of the goal rather than the goal itself. Integers, longs, floats, array
 addressing, loops -- all of it, judged against what a good backend would
 emit for the same source, not against what BC emitted.
 
-`docs/measurement/targets.md` carries a hand-derived optimal listing for each suite
-program and `tools/opportunity.py --targets` scores against it. Done means
+A hand-derived optimal listing for each suite program is the target. Done means
 **every program within 1.5x**. Today the spread is 1.3x to 8.8x with a
 median above 4x, so most of the distance is still ahead.
 
@@ -314,7 +313,7 @@ register once the first of them is written.
 `lir` exists and is right. `regalloc` has liveness, interference,
 congruence classes and splitting. What it does not have is spilling, and
 `opt` passes still name registers because the migration that stops them is
-unfinished -- see `docs/architecture/variables.md` and the strict xfails in
+unfinished -- see the strict xfails in
 `tests/test_allocation.py`, which name the remaining defects and the
 programs that exposed them.
 
@@ -361,8 +360,7 @@ the pass; the machine arm is legacy and is retired last.
 
 ## What BC actually emits
 
-Measured across QB 4.5, PDS 7.1 and VBDOS. `docs/history/inherited-plan.md` has the
-full matrix.
+Measured across QB 4.5, PDS 7.1 and VBDOS. 
 
 - A long lives in a register pair, `ax:dx` or `cx:bx`, and every operation is
   done twice. `cx:bx` is a temporary: across four programs it is **never**
@@ -641,7 +639,7 @@ than the runtime pass's blunter option of costing the whole module.
   live in this file or in `docs/`, not in a docstring.
 - **Tests sit beside their module** (`*_tests.rs`, or `#[cfg(test)]` in it).
 - **While working, run only the tests for the files being changed**:
-  `cargo test --release <filter>`. See `docs/testing.md`.
+  `cargo test --release <filter>`. See [testing](docs/working/testing.md).
 
 ## Writing
 

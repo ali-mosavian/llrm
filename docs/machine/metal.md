@@ -37,7 +37,7 @@ form and the widened form back to back and print both.
 | multiply | `push / push / call B$MUI4` | `mov eax,[a] / imul eax,[b]` |
 
 Time with `RDTSC` where the part has it (Pentium and later) and the 8253
-otherwise -- see `docs/measurement/readme.md` for the PIT sequence. Warm the caches,
+otherwise -- see [measurement](../working/measurement/readme.md) for the PIT sequence. Warm the caches,
 take the median of five, and report the spread.
 
 ## What to record

@@ -1,5 +1,7 @@
 # Nib frontend
 
+Contents: [language-spec](language-spec.md), [lsp](lsp.md), [borrowck-vs-rust](borrowck-vs-rust.md).
+
 
 This root-package frontend implements the first source-language slice:
 

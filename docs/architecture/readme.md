@@ -1,5 +1,10 @@
 # Architecture
 
+Contents: [split](split.md), [compiler-foundations](compiler-foundations.md), [rich-mir](rich-mir.md),
+[hir](hir/readme.md), [hir model](hir/model.md), [modref](modref.md), [points-to-lifetime](points-to-lifetime.md),
+[strong-alias](strong-alias.md), [tables](tables.md), [packages](packages.md), [source-layout](source-layout.md),
+[object model](../formats/object-model.md).
+
 llrm, the Low Level Real Machine, is a compiler suite for 16-bit real-mode DOS.
 Four frontends raise their input to SSA-based MIR; one optimizer improves whole
 bodies, lowers them to x86 LIR, allocates physical resources and writes a
@@ -10,9 +15,8 @@ The architectural rule is simple:
 > Recognition happens while raising. Program optimization is machine-independent
 > MIR. Machine choices return only at lowering and remain below it.
 
-This document describes the production path in the current source tree. Historical
-measurements and milestones belong in `docs/history/takeover-progress.md`; optimization
-targets and their evidence belong in `docs/measurement/targets.md`.
+This document describes the production path in the current source tree. Git history
+keeps measurements and milestones.
 
 ## End-to-end pipeline
 
@@ -1260,7 +1264,7 @@ one documented target without materially regressing another.
   The current uncommitted qrender rollout removes 10,590 code bytes across
   all 21 BASIC modules and restores E1M1 screenshot completion. Three dedicated
   QGL checks match baseline; broader renderer acceptance remains open. See
-  [the integration evidence](../qrender/readme.md) for assembly and runtime
+  the integration evidence for assembly and runtime
   results. This does not complete general spill optimization or copy propagation.
 - [ ] Add instruction scheduling for 486/P5/P6 only after their latency,
   dependency and pairing models are validated against primary sources.
