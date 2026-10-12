@@ -1,9 +1,9 @@
-# Figures and the docs site
+# Figures
 
-For contributors who add a diagram to a document or build the site. A figure is a
+For contributors who add a diagram to a document. A figure is a
 short text spec in `docs/assets/figures/NAME.fig`; `--sync` draws it to `NAME.svg`
 beside it, in the reader's light or dark setting. A document holds only the image,
-so GitHub shows it with no build.
+so GitHub shows it with no build step.
 
 ## Adding a figure
 
@@ -16,7 +16,11 @@ so GitHub shows it with no build.
 To change a figure, edit its `.fig` and run `--sync` again. A spec written as a `fig`
 fence in a document works too: `--sync` moves it to a `.fig` named after the document
 (`docs-working-figures-1`) and leaves the image reference. An `.svg` with no `.fig` is
-deleted, and a `.fig` no document references fails `--check`, which CI runs.
+deleted.
+
+`--check` exits 1, and the test `test_repository_is_in_sync` fails, when a generated file is
+stale, a `fig` fence is left in a document, a `.fig` is referenced by no document, or an
+image has no `.fig`.
 
 The pass, analysis and backend pages in `docs/optimizations/reference/` are written
 by `--sync` from the `//!` headers (extracted by `tools/passdocs.py`); edit the
@@ -34,7 +38,7 @@ title: caption under the figure, also the accessible title
 ```
 
 A quoted string takes `\n` for a line break. A spec that does not parse fails
-the build with the line of the figure that is wrong.
+`--sync` with the line of the figure that is wrong.
 
 ### graph
 
@@ -84,26 +88,3 @@ A timeline of lanes over numbered columns, or a call and return sequence.
 ![A change while a shared borrow is still used](../assets/figures/docs-working-figures-3.svg)
 
 Source: [docs-working-figures-3.fig](../assets/figures/docs-working-figures-3.fig)
-
-## Building the site
-
-```sh
-python3 tools/docsbuild/build.py --out site
-```
-
-writes the site to `site/`; open `site/index.html`. `--check` fails on stale generated
-files, a `fig` fence left in a document, a `.fig` no document uses, a figure that does
-not parse, a link that does not resolve in the site, or a Markdown construct the
-converter does not know. Links to files outside `docs/` become links to the repository
-on GitHub.
-
-The converter's tests run with `uv run --project tools pytest tools/docsbuild`.
-
-## Publishing
-
-The `docs` workflow runs `--check` on every change to the documents, the build
-tools or the crate sources, and keeps the site as an artifact. The deploy job runs
-on `main` only when the repository variable `DOCS_PAGES` is `true`; otherwise it
-is skipped and the run summary says so. To publish, set Pages source to GitHub
-Actions (Settings, Pages) and add the variable `DOCS_PAGES` with the value `true`
-(Settings, Secrets and variables, Actions, Variables).
