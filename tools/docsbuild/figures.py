@@ -195,6 +195,15 @@ def _overlap(a, b, pad=0.0) -> bool:
     return a.x < b.x + b.w + pad and b.x < a.x + a.w + pad and a.y < b.y + b.h + pad and b.y < a.y + a.h + pad
 
 
+def crosses_border(box, group, pad=4.0) -> bool:
+    """True when `box` touches `group`'s outline: not wholly inside, not wholly outside."""
+    if not _overlap(box, group, pad):
+        return False
+    inside = (box.x >= group.x + pad and box.y >= group.y + pad
+              and box.x + box.w <= group.x + group.w - pad and box.y + box.h <= group.y + group.h - pad)
+    return not inside
+
+
 # ---------------------------------------------------------------- graph
 
 
@@ -433,6 +442,8 @@ def _graph(nodes, edges, groups, direction, cv: Canvas, pre: str):
     gaps = [RANKSEP + 8 * len(back)] * max(nl - 1, 0)
     for ei, e in labelled:
         need = tw(e.label) + 8 + 28 if right else nlines(e.label) * LH + 4 + 24
+        borders = len(set(items[e.a].gset) ^ set(items[e.b].gset))
+        need += borders * (GP if right else GP + CAPH)
         gaps[rank[e.a]] = max(gaps[rank[e.a]], need)
     ms = [max(it.ms for it in layer) for layer in layers]
     start, end = [], []
@@ -529,7 +540,7 @@ def _graph(nodes, edges, groups, direction, cv: Canvas, pre: str):
             d.append(f"L{P(cp, end[p.layer])}")
             d.append(f"C{P(cp, mid)} {P(cq, mid)} {P(cq, start[q.layer])}")
             if p is a and e.label:
-                _place_label(cv, e, ei, cp, cq, end[p.layer], start[q.layer], right, xy, placed)
+                _place_label(cv, e, ei, cp, cq, end[p.layer], start[q.layer], right, xy, placed, [grect(i) for i in range(len(groups))])
             cp = cq
         d.append(f"L{P(cp, mc(b) - ms_half(b))}")
         paths.append(
@@ -631,11 +642,10 @@ def _rounded(pts, r, cv) -> str:
     return " ".join(d)
 
 
-def _place_label(cv, e, ei, ca, cb, m0, m1, right, xy, placed):
+def _place_label(cv, e, ei, ca, cb, m0, m1, right, xy, placed, borders=()):
     w, h = tw(e.label) + 8, nlines(e.label) * LH + 4
-    opts = [(0.5, 1)] if not right else [(0.5, -1), (0.5, 1)]
-    if not right:
-        opts = [(t, s) for t in (0.5, 0.3, 0.7, 0.15, 0.85) for s in (1, -1)]
+    ts = (0.5, 0.3, 0.7, 0.15, 0.85, 0.05, 0.95)
+    opts = [(t, s) for t in ts for s in ((-1, 1) if right else (1, -1))]
     chosen = None
     for t, side in opts:
         m = m0 + (m1 - m0) * t
@@ -645,7 +655,7 @@ def _place_label(cv, e, ei, ca, cb, m0, m1, right, xy, placed):
         else:
             box = Box("label", f"{e.a}->{e.b}", c + 6 if side > 0 else c - 6 - w, m - h / 2, w, h)
         chosen = chosen or box
-        if not any(_overlap(box, p) for p in placed):
+        if not any(_overlap(box, p) for p in placed) and not any(crosses_border(box, g) for g in borders):
             chosen = box
             break
     placed.append(chosen)

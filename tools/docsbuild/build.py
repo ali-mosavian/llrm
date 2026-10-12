@@ -223,7 +223,7 @@ class Site:
 
 
 CSS = """:root{--bg:#fff;--fg:#1f2328;--mu:#57606a;--bd:#d0d7de;--sf:#f6f8fa;--ln:#0969da}
-@media (prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#e6edf3;--mu:#9da7b3;--bd:#30363d;--sf:#1b1f24;--ln:#58a6ff}}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#14161a;--fg:#e6edf3;--mu:#9da7b3;--bd:#30363d;--sf:#1b1f24;--ln:#58a6ff}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{color:var(--ln)}

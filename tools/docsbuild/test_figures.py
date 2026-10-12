@@ -38,6 +38,8 @@ def check_invariants(fig):
     for lab in fig.labels:
         for b in solids:
             assert not overlap(lab, b), f"label {lab.id} overlaps {b.id}"
+        for g in (b for b in fig.boxes if b.kind == "group"):
+            assert not figures.crosses_border(lab, g, pad=0.0), f"label {lab.id} crosses the border of group {g.id}"
 
 
 def members(spec, group):
@@ -362,3 +364,12 @@ def test_a_figure_keeps_its_natural_size_so_text_stays_readable():
     svg = figures.render("kind: stack\ncell \"a long label to make this wide\" off=\"bp+4\" note=\"and a long note on the right\"\n")
     width = re.search(r'viewBox="[-\d. ]+? ([\d.]+) [\d.]+"', svg).group(1)
     assert f"min-width:{width}px" in svg and f"max-width:{width}px" in svg
+
+
+def test_edge_label_crossing_a_group_border_keeps_clear_of_it():
+    """In the pipeline figure the label "lowering boundary" sat on the Backend group's top border."""
+    spec = (
+        'kind: graph\nnode A "front"\nnode B "optimizer"\nnode C "selection"\nnode D "phases"\n'
+        'edge A -> B\nedge B -> C "lowering boundary"\nedge C -> D\ngroup back "Backend": C D\n'
+    )
+    check_invariants(build(spec))
