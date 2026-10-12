@@ -1,5 +1,5 @@
-reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
-blessed = "2026-10-11"
+reason = "a tail is not copied over the likelier way of the branch before its jump (#1535): parity/qbsp c -O2 instructions +1.9% (clocks +0.64%), the other moved rows smaller or equal"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 86
@@ -7,6 +7,7 @@ memory_operands = 42
 code_bytes = 316
 data_bytes = 103
 bss_bytes = 0
+kernel_ms = 0.0109
 
 [bas.Os]
 instructions = 86
@@ -14,6 +15,36 @@ memory_operands = 44
 code_bytes = 301
 data_bytes = 103
 bss_bytes = 0
+kernel_ms = 0.0109
+
+[bq16.O2]
+instructions = 88
+memory_operands = 42
+code_bytes = 313
+data_bytes = 103
+bss_bytes = 0
+kernel_ms = 0.0072
+
+[bq16.Os]
+instructions = 87
+memory_operands = 44
+code_bytes = 298
+data_bytes = 103
+bss_bytes = 0
+kernel_ms = 0.0072
+
+[bq32.O2]
+instructions = 43247
+code_bytes = 319
+data_bytes = 139
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 43206
+code_bytes = 314
+data_bytes = 139
+bss_bytes = 0
+kernel_ms = 0.1156
 
 [c.O2]
 instructions = 92
@@ -21,6 +52,7 @@ memory_operands = 38
 code_bytes = 191
 data_bytes = 24
 bss_bytes = 0
+kernel_ms = 0.0019
 
 [c.Os]
 instructions = 95
@@ -28,6 +60,7 @@ memory_operands = 41
 code_bytes = 188
 data_bytes = 24
 bss_bytes = 0
+kernel_ms = 0.0019
 
 [nib.O2]
 instructions = 71
@@ -35,6 +68,7 @@ memory_operands = 29
 code_bytes = 171
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0019
 
 [nib.Os]
 instructions = 73
@@ -42,6 +76,7 @@ memory_operands = 30
 code_bytes = 172
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.002
 
 [ow.O2]
 instructions = 123

@@ -209,3 +209,29 @@ class StallTests(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired):
                 dosbatch._launch([sys.executable, "-c", "while True: pass"], Path(where), None, 1 << 20, stall=2, cwd=where)
             self.assertLess(time.monotonic() - began, 20)
+
+
+def test_a_program_run_on_its_own_is_not_given_the_microsoft_install_as_v(tmp_path):
+    """V: was mounted for every launch, so the same flat program counted 458341 or 458306 instructions by whether the host had
+    QB45: its count is the benchmark, and the path that needs no QB45 must not depend on it."""
+    exe = tmp_path / "P.EXE"
+    exe.write_bytes(b"MZ")
+
+    def script(kind: str) -> str:
+        work = tmp_path / kind
+        with mock.patch.object(dosbatch, "_launch", return_value=None), mock.patch.object(dosbatch, "collect", return_value={}):
+            dosbatch.run([dosbatch.Job("J", kind, exe)], work)
+        return (work / "jobs.txt").read_text()
+
+    assert "mount v" not in script("exe")
+    assert "mount v" in script("obj")
+
+
+def test_a_program_whose_screen_is_compared_keeps_the_mount_so_its_rows_line_up_with_the_reference(tmp_path):
+    """Dropping V: for every exe job emptied the rows the mount messages had filled: 71 test_qbrt programs failed
+    "row 3: want 80 cells got 0" against BCOM45's screen."""
+    exe = tmp_path / "P.EXE"
+    exe.write_bytes(b"MZ")
+    with mock.patch.object(dosbatch, "_launch", return_value=None), mock.patch.object(dosbatch, "collect", return_value={}):
+        dosbatch.run([dosbatch.Job("J", "exe", exe, screen=True)], tmp_path / "w")
+    assert "mount v" in (tmp_path / "w" / "jobs.txt").read_text()

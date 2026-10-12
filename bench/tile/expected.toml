@@ -1,5 +1,5 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 4181
@@ -7,6 +7,7 @@ memory_operands = 1000
 code_bytes = 167
 data_bytes = 8205
 bss_bytes = 0
+kernel_ms = 0.4701
 
 [bas.Os]
 instructions = 4181
@@ -14,6 +15,37 @@ memory_operands = 1000
 code_bytes = 167
 data_bytes = 8205
 bss_bytes = 0
+kernel_ms = 0.4701
+
+[bq16.O2]
+instructions = 4181
+memory_operands = 1000
+code_bytes = 172
+data_bytes = 8205
+bss_bytes = 0
+kernel_ms = 0.3962
+
+[bq16.Os]
+instructions = 4181
+memory_operands = 1000
+code_bytes = 172
+data_bytes = 8205
+bss_bytes = 0
+kernel_ms = 0.3962
+
+[bq32.O2]
+instructions = 73468
+code_bytes = 189
+data_bytes = 8211
+bss_bytes = 0
+kernel_ms = 1.5282
+
+[bq32.Os]
+instructions = 73468
+code_bytes = 189
+data_bytes = 8211
+bss_bytes = 0
+kernel_ms = 1.5282
 
 [c.O2]
 instructions = 4155
@@ -21,6 +53,7 @@ memory_operands = 1000
 code_bytes = 97
 data_bytes = 0
 bss_bytes = 8192
+kernel_ms = 0.526
 
 [c.Os]
 instructions = 4155
@@ -28,6 +61,7 @@ memory_operands = 1000
 code_bytes = 97
 data_bytes = 0
 bss_bytes = 8192
+kernel_ms = 0.5261
 
 [nib.O2]
 instructions = 4180
@@ -35,6 +69,7 @@ memory_operands = 1000
 code_bytes = 101
 data_bytes = 8192
 bss_bytes = 0
+kernel_ms = 0.3905
 
 [nib.Os]
 instructions = 4180
@@ -42,6 +77,7 @@ memory_operands = 1000
 code_bytes = 101
 data_bytes = 8192
 bss_bytes = 0
+kernel_ms = 0.3906
 
 [ow.O2]
 instructions = 11265

@@ -82,3 +82,7 @@ results.jsonl on an orphan branch that holds only that file. A commit already th
 
 When a benchmark's program changes its trend has a step, and its `expected.toml` reason says why: read a
 step in the dashboard against the `git log` of that benchmark.
+
+## BASIC languages
+
+`bas` is BASIC on Microsoft's runtime (BC and LINK in DOSBox); it is skipped, with a `SKIP` line naming the directory and the variable (`QB45_DIR`, `PDS71_DIR`, `VBDOS_DIR`), where that install is absent. `bq16` and `bq32` are the same source on our runtime, linked by jwlink, and need no install: `bq16` is real mode, counted by the emulator between the kernel's entry and return; `bq32` is flat under DOS/32A, counted as the whole run's guest instructions in DOSBox on virtual time less the empty start-up program's. Both are deterministic.

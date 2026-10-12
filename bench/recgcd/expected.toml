@@ -1,4 +1,4 @@
-reason = "a tail is not copied over the likelier way of the branch before its jump: parity/qbsp c -O2 instructions +1.9% (266 -> 271, clocks +0.64%), parity/qbsp nib -O2 code -12 bytes"
+reason = "a tail is not copied over the likelier way of the branch before its jump (#1535): parity/qbsp c -O2 instructions +1.9% (clocks +0.64%), the other moved rows smaller or equal"
 blessed = "2026-10-12"
 
 [c.O2]
@@ -7,6 +7,7 @@ memory_operands = 1204
 code_bytes = 136
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.3212
 
 [c.Os]
 instructions = 24328
@@ -14,3 +15,4 @@ memory_operands = 1205
 code_bytes = 126
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.3252

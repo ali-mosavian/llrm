@@ -1,41 +1,66 @@
-reason = "a tail is not copied over the likelier way of the branch before its jump: parity/qbsp c -O2 instructions +1.9% (266 -> 271, clocks +0.64%), parity/qbsp nib -O2 code -12 bytes"
+reason = "a tail is not copied over the likelier way of the branch before its jump (#1535): parity/qbsp c -O2 instructions +1.9% (clocks +0.64%), the other moved rows smaller or equal"
 blessed = "2026-10-12"
 
 [bas.O2]
 code_bytes = 5177
 data_bytes = 29635
 bss_bytes = 0
-kernel_ms = 538.1787
+kernel_ms = 538.2701
 
 [bas.Os]
 code_bytes = 4904
 data_bytes = 29635
 bss_bytes = 0
-kernel_ms = 542.2903
+kernel_ms = 542.2897
+
+[bq16.O2]
+code_bytes = 5213
+data_bytes = 29635
+bss_bytes = 0
+kernel_ms = 597.9628
+
+[bq16.Os]
+code_bytes = 4936
+data_bytes = 29635
+bss_bytes = 0
+kernel_ms = 602.1462
+
+[bq32.O2]
+instructions = 64111644
+code_bytes = 6649
+data_bytes = 29697
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 64374214
+code_bytes = 6225
+data_bytes = 29697
+bss_bytes = 0
+kernel_ms = 888.4602
 
 [c.O2]
 code_bytes = 3152
 data_bytes = 634
 bss_bytes = 15849
-kernel_ms = 308.3818
+kernel_ms = 308.3791
 
 [c.Os]
 code_bytes = 2917
 data_bytes = 634
 bss_bytes = 15849
-kernel_ms = 310.146
+kernel_ms = 310.1458
 
 [nib.O2]
 code_bytes = 6264
 data_bytes = 17198
 bss_bytes = 0
-kernel_ms = 392.1256
+kernel_ms = 392.1278
 
 [nib.Os]
 code_bytes = 5900
 data_bytes = 17198
 bss_bytes = 0
-kernel_ms = 399.1848
+kernel_ms = 399.1843
 
 [bcc.O2]
 code_bytes = 3192

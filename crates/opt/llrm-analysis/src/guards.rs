@@ -240,6 +240,19 @@ pub fn holds(
     holds_in(unit, at, &guards(unit, at), predicate, left, right)
 }
 
+/// `holds`, the guards on entry to `at` being those given: a caller that asks
+/// more than once of the block finds them once.
+pub fn holds_with(
+    unit: &Unit,
+    at: i64,
+    found: &[Guard],
+    predicate: IntPredicate,
+    left: &Scev,
+    right: &Scev,
+) -> bool {
+    holds_in(unit, at, found, predicate, left, right)
+}
+
 /// `holds`, given the guards on entry to `at` (`guards`), which a caller asking
 /// of one block again and again finds once: they were found four times for each
 /// branch `decide` asked of (half of its time on QCport's sc).

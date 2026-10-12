@@ -62,3 +62,28 @@ def test_a_cached_object_is_not_made_again(tmp_path, monkeypatch):
     assert made == [1] and two.read_bytes() == b"object"
     qb32.cached("other", tmp_path / "three.obj", lambda: produce(tmp_path / "three.obj"))
     assert made == [1, 1]
+
+
+def test_the_runtime_objects_a_program_links_come_in_the_same_order_whatever_the_hash_seed(tmp_path):
+    """closure followed a set's iteration order, so the link order, the layout and a program's instruction count changed from
+    one process to the next (fpbench on the flat target, 72548 or 74166 net instructions by PYTHONHASHSEED)."""
+    import os
+    import subprocess
+
+    source = tmp_path / "T.BAS"
+    source.write_text('a$ = "hello"\nMID$(a$, 2, 1) = "E"\nPRINT a$; LEN(SPACE$(3)); STR$(12)\nEND\n')
+    script = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "import qb32\n"
+        "from pathlib import Path\n"
+        "work = Path(%r)\n"
+        "objects = qb32.build(work / 'rt')\n"
+        "obj = work / 't.obj'\n"
+        "assert qb32.compile_basic(Path(%r), obj) is None\n"
+        "print([one.name for one in qb32.closure(obj, objects)])\n"
+    ) % (str(Path(__file__).parent), str(tmp_path), str(source))
+    seen = {
+        subprocess.run([sys.executable, "-c", script], env={**os.environ, "PYTHONHASHSEED": str(seed)}, capture_output=True, text=True, check=True).stdout
+        for seed in (1, 2, 3, 4)
+    }
+    assert len(seen) == 1, seen

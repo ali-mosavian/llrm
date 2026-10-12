@@ -1,5 +1,5 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+blessed = "2026-10-12"
 
 [c.O2]
 instructions = 14009
@@ -7,6 +7,7 @@ memory_operands = 0
 code_bytes = 53
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.1876
 
 [c.Os]
 instructions = 14009
@@ -14,3 +15,4 @@ memory_operands = 0
 code_bytes = 52
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.1876
