@@ -11,7 +11,7 @@ For contributors to `crates/opt/llrm-transforms`: the order the MIR optimizer ru
  each body  Fixed  (below), to a fixed point
  module     interprocedural   (inline, ipa-*; reruns Fixed on bodies it changed)
  module     globaldce, available-externally, calleepop
- each body  [rotate+cleanup if -ftree-ch], fixednarrow, lsr, differences,
+ each body  [rotate+cleanup, header copy: -O1 and up, not -Os], fixednarrow, lsr, differences,
             window, rotate, jumpthread, hoist, gepoffset, addresssink
  module     spares, homes
  then       lowering for selection and the backend
@@ -114,7 +114,7 @@ Every pass in the pipeline can be removed with `-fno-NAME` where the table below
 |---|---|---|---|---|
 | `globaldce.rs` | `globaldce` | Deletes a module body or variable nothing live names; a declaration stays. | above -O0 | call graph |
 | `calleepop.rs` | `calleepop` | An internal function whose callers are all seen pops its own arguments (`ret N`), and no call cleans up. Priced in clocks or bytes. | above -O0 | target calling description |
-| `rotate.rs` | `rotate` | With `proven`, a loop proven to run once is entered at its body, its test merging into the latch. With `copy` (`-ftree-ch`) an unproven loop is entered behind a copy of its test. `unroll` and `peel` refuse a rotated loop, so the proven form runs last. | `-ftree-ch` off at every level; `proven` always | `induction::guards`, ranges |
+| `rotate.rs` | `rotate` | With `proven`, a loop proven to run once is entered at its body, its test merging into the latch. With `copy` (`-ftree-ch`, the default above -Os) an unproven loop is entered behind a copy of its test. `unroll` and `peel` refuse a rotated loop, so the proven form runs last. | header copy on at -O1 and up, not at -Os (`-fno-tree-ch` off; user decision 2026-10-12: compile +9.3% -O1, +14.0% -O2, slopes #1559); `proven` always | `induction::guards`, ranges |
 | `fixednarrow.rs` | `fixednarrow` | `llvm.smul.fix(a, b, s)` whose 64-bit product `ranges` proves fits 32 bits becomes `mul` and `ashr`, avoiding the EAX:EDX form. | above -O0 | `ranges` |
 | `lsr.rs`, `expand.rs`, `counting.rs`, `mirror.rs` | `lsr`, `differences` | Chooses each loop's induction variables once, by cost. See [lsr](lsr.md). `mirror.rs` gives a pointer to a counter that only some trips step, on targets whose addresses take no scale (not at -Os). `expand.rs` places a computed sum; `counting.rs` builds what a counted-loop rewrite puts before the loop. `algebraic::Differences` cleans bounds subtracted from rebased counters. | `-fstrength-reduce`; unbounded search at -Omax | `induction::Scev`, `guards`, spill model |
 | `window.rs` | `window` | Splits a counted loop's huge pointers into windows with an outer loop, normalising each recurrence so no carry into the selector happens inside one. | `-fstrength-reduce` | `Machine::huge_window`, costs |

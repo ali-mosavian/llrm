@@ -10,6 +10,12 @@
 //! test is then reached only from the latch, which it merges into. `lsr`
 //! enters a loop it counts to zero at its body too, behind a skip guard.
 //!
+//! The copy is on at -O1 and up, not at -Os (`-fno-tree-ch` turns it off): the
+//! user's decision of 2026-10-12 (docs/reference/levels.md) accepts its compile
+//! cost (+9.3% at -O1, +14.0% at -O2 over the vsgcc programs) and the m16 bench
+//! rows it moves (#1557); the steeper slopes of rotate, loopslots and
+//! `analysis registers` on nests and many-loop functions are #1559.
+//!
 //! A rotated loop is no longer the pre-tested shape the counted-loop
 //! analyses, peel and unroll read, so this goes after them.
 //!

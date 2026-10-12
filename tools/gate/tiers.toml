@@ -285,7 +285,7 @@ why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the heade
 
 [[measure.accepted]]
 row = "branches O1"
-excess = 0.0286
+excess = 0.0287
 worst = 1.0937
 step_excess = 0.012
 pass_slack = 1.616

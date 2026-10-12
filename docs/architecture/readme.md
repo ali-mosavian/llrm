@@ -124,7 +124,7 @@ lists the module steps. Which passes a level enables is in
         a changed body goes through Fixed again
      -> globaldce -> availableexternally -> calleepop
      -> [freeze summaries and GlobalsAA]
-     -> rotate with header copy (when on) -> fixednarrow -> lsr
+     -> rotate with header copy (on at -O1 and up, not -Os) -> fixednarrow -> lsr
      -> window -> rotate -> jumpthread -> hoist -> gepoffset
      -> addresssink -> spares -> homes
 ```
