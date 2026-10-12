@@ -11,10 +11,11 @@ in sorted order.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import posixpath
 import re
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,13 +23,13 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 import passdocs  # noqa: E402
-from docsbuild import figblock, figures, raster  # noqa: E402
+from docsbuild import figblock, figures, png, raster  # noqa: E402
 
 REFERENCE = "docs/optimizations/reference"
 FIGURES = "docs/assets/figures"
 COMMAND = "python3 tools/docsbuild/build.py --sync"
 IMAGE = re.compile(r"!\[[^\]]*\]\([^)\s]*assets/figures/([^/)\s]+)\.png\)")
-SOURCE = re.compile(r"^Source: \[`([^`]+)`\]")
+KEYWORD = "llrm-fig"  # the tEXt keyword that holds a PNG's build key
 
 
 @dataclass
@@ -61,46 +62,149 @@ def image(slug: str, fig: figures.Figure, from_dir: str) -> str:
     return f"![{alt(fig)}]({posixpath.relpath(f'{FIGURES}/{slug}.png', from_dir or '.')})"
 
 
-def reference_pages(root: Path) -> tuple[dict[str, str], dict[str, str], list[str]]:
-    """The pass, analysis and backend pages with their figures as images, the SVGs by slug, problems."""
-    with tempfile.TemporaryDirectory() as tmp:
-        passdocs.write(Path(tmp), root, "main")
-        pages = {f.name: f.read_text(encoding="utf-8") for f in sorted(Path(tmp).glob("*.md"))}
-    dirs = {name: directory for name, _title, directory, _kind in passdocs.PAGES}
+COMMENT = re.compile(r"^<!-- src: (\S+) sha256:([0-9a-f]{64}) -->$")
+TOC = re.compile(r"^- \[([^\]]+)\]\(#\1\): ")
+STALE = b""  # stands for a PNG that --check found out of date and did not draw
+
+
+def _digest(files: list[Path]) -> str:
+    h = hashlib.sha256()
+    for f in files:
+        h.update(f.name.encode() + b"\0" + f.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+@functools.lru_cache(maxsize=1)
+def figure_digest() -> str:
+    """What a PNG depends on besides its spec: the layout, the drawing, the encoder, the font and the stylesheet."""
+    fonts = sorted((HERE / "fonts").glob("*.ttf"))
+    return _digest([HERE / n for n in ("figures.py", "raster.py", "png.py", "ttf.py")] + fonts)
+
+
+@functools.lru_cache(maxsize=1)
+def section_digest() -> str:
+    """What a reference section depends on besides its header."""
+    return _digest([HERE.parent / "passdocs.py", HERE / "sync.py", HERE / "figblock.py"])
+
+
+def key_of(*parts: str) -> str:
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()
+
+
+def png_key(path: Path) -> str | None:
+    """The build key stored in a PNG, read from its first bytes; None when there is no such file."""
+    try:
+        with open(path, "rb") as f:
+            return png.text_of(f.read(512), KEYWORD)
+    except FileNotFoundError:
+        return None
+
+
+@dataclass
+class Ctx:
+    """What one --sync run knows about the images: those that must exist and those it drew again."""
+
+    root: Path
+    render: bool
+    force: bool
+    keep: set[str] = field(default_factory=set)
+    fresh: dict[str, bytes] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+
+    def current(self, slug: str, key: str) -> bool:
+        return not self.force and png_key(self.root / FIGURES / f"{slug}.png") == key
+
+    def ensure(self, slug: str, key: str, svg_of) -> None:
+        """Make sure `slug`'s PNG carries `key`: keep it when it does, draw it again when not."""
+        self.keep.add(slug)
+        if not self.current(slug, key):
+            self.fresh[slug] = raster.render_png(svg_of(), key) if self.render else STALE
+
+
+def parse_page(text: str) -> tuple[dict[str, tuple[str, list[str]]], dict[str, str]]:
+    """The sections of a committed reference page by source path (digest, lines), and its table of contents."""
+    sections: dict[str, tuple[str, list[str]]] = {}
+    toc: dict[str, str] = {}
+    cur = None
+    for line in text.split("\n"):
+        m = COMMENT.match(line)
+        if m:
+            cur = m.group(1)
+            sections[cur] = (m.group(2), [line])
+        elif line.startswith("## Undocumented"):
+            cur = None
+        elif cur is not None:
+            sections[cur][1].append(line)
+        elif (t := TOC.match(line)):
+            toc[t.group(1)] = line
+    return sections, toc
+
+
+def make_section(rel: str, lines: list[str], digest: str, ctx: Ctx) -> list[str]:
+    """The page lines of one source file, its header figures drawn and replaced by images."""
+    body = passdocs.section(rel, lines, "main")
+    found, _ = figblock.find("\n".join(body))
+    parts = rel.split("/")
+    base = f"{parts[parts.index('src') - 1]}-{Path(rel).stem}"
+    replace = []
+    for n, f in enumerate(found, 1):
+        slug = f"{base}-{n}"
+        try:
+            fig = figures.build(f.spec)
+        except figures.FigureError as e:
+            ctx.errors.append(f"{rel}: figure {n}: line {e.line}: {e.message}")
+            continue
+        ctx.ensure(slug, key_of(digest, slug, figure_digest()), lambda fig=fig: fig.svg)
+        replace.append((f, image(slug, fig, REFERENCE)))
+    for f, img in reversed(replace):
+        body[f.start : f.end] = [img]
+    return [f"<!-- src: {rel} sha256:{digest} -->", *body]
+
+
+def reference_pages(root: Path, ctx: Ctx) -> dict[str, str]:
+    """The pass, analysis and backend pages and the index, under a banner naming where they come from.
+
+    A section is kept as committed when its header's digest is unchanged and its images are current.
+    """
+    dirs = [d for _n, _t, d, _k in passdocs.PAGES]
     out: dict[str, str] = {}
-    svgs: dict[str, bytes] = {}
-    problems: list[str] = []
-    for name, text in pages.items():
-        path = f"{REFERENCE}/{name}"
-        lines = text.split("\n")
-        found, _ = figblock.find(text)
-        seen: dict[str, int] = {}
-        replace: list[tuple[figblock.Fig, str]] = []
-        for f in found:
-            rel = next((m.group(1) for ln in reversed(lines[: f.start]) if (m := SOURCE.match(ln))), None)
-            if rel is None:
-                problems.append(f"{path}:{f.start + 1}: figure outside a source file's header")
+    entries = []
+    for name, title, directory, kind in passdocs.PAGES:
+        path = f"{REFERENCE}/{name}.md"
+        committed = (root / path).read_text(encoding="utf-8") if (root / path).is_file() else ""
+        old, old_toc = parse_page(committed)
+        toc, body, bare = [], [], []
+        for src in passdocs.sources(root / directory):
+            rel = f"{directory}/{src.name}"
+            lines = passdocs.header_of(src.read_text(encoding="utf-8"))
+            if not lines:
+                bare.append(rel)
                 continue
-            parts = rel.split("/")
-            base = f"{parts[parts.index('src') - 1]}-{Path(rel).stem}"
-            seen[base] = seen.get(base, 0) + 1
-            slug = f"{base}-{seen[base]}"
-            try:
-                fig = figures.build(f.spec)
-            except figures.FigureError as e:
-                problems.append(f"{rel}: figure {seen[base]}: line {e.line}: {e.message}")
-                continue
-            svgs[slug] = raster.render_png(fig.svg)
-            replace.append((f, image(slug, fig, REFERENCE)))
-        for f, img in reversed(replace):
-            lines[f.start : f.end] = [img]
-        where = ", ".join(f"`{d}`" for d in ([dirs[name[:-3]]] if name[:-3] in dirs else dirs.values()))
+            digest = key_of("\n".join(lines), section_digest())
+            kept = old.get(rel)
+            slugs = [m.group(1) for m in IMAGE.finditer("\n".join(kept[1]))] if kept else []
+            if (
+                kept
+                and kept[0] == digest
+                and src.stem in old_toc
+                and all(ctx.current(s, key_of(digest, s, figure_digest())) for s in slugs)
+            ):
+                ctx.keep.update(slugs)
+                body += kept[1]
+                toc.append(old_toc[src.stem])
+            else:
+                body += make_section(rel, lines, digest, ctx)
+                toc.append(passdocs.toc_line(src.stem, lines))
         banner = (
             "> Generated by `tools/docsbuild/build.py --sync` from the `//!` headers of "
-            f"{where}; edit the headers, not this file.\n\n"
+            f"`{directory}`; edit the headers, not this file.\n\n"
         )
-        out[path] = banner + "\n".join(lines)
-    return out, svgs, problems
+        out[path] = banner + passdocs.assemble(title, directory, toc, body, bare, "main")
+        entries.append(passdocs.index_line(name, title, len(toc), len(bare)))
+    where = ", ".join(f"`{d}`" for d in dirs)
+    banner = f"> Generated by `tools/docsbuild/build.py --sync` from the `//!` headers of {where}; edit the headers, not this file.\n\n"
+    out[f"{REFERENCE}/index.md"] = banner + passdocs.index_text(entries)
+    return out
 
 
 def slug_base(path: str) -> str:
@@ -154,13 +258,14 @@ def migrate(path: str, text: str, taken: set[str]) -> tuple[str, dict[str, str],
     return "\n".join(lines), specs, problems
 
 
-def plan(root: Path) -> Plan:
+def plan(root: Path, render: bool = True, force: bool = False) -> Plan:
+    """What --sync would write and delete; with `render` false (--check) PNGs are compared by key, never drawn."""
     out = Plan()
-    generated, svgs, problems = reference_pages(root)
-    out.errors += problems
+    ctx = Ctx(root, render, force)
+    generated = reference_pages(root, ctx)
     folder = root / FIGURES
     specs = {f.stem: f.read_text(encoding="utf-8").rstrip("\n") for f in sorted(folder.glob("*.fig"))} if folder.is_dir() else {}
-    taken = set(specs) | set(svgs)
+    taken = set(specs) | ctx.keep
     texts: dict[str, str] = {}
     for path in markdown_files(root, generated):
         if path in generated:
@@ -181,7 +286,7 @@ def plan(root: Path) -> Plan:
     for slug, spec in sorted(specs.items()):
         file = f"{FIGURES}/{slug}.fig"
         try:
-            svgs[slug] = raster.render_png(figures.build(spec).svg)
+            ctx.ensure(slug, key_of(spec, figure_digest()), lambda spec=spec: figures.build(spec).svg)
         except figures.FigureError as e:
             out.errors.append(f"{file}:{e.line}: figure: {e.message}")
         if not (root / file).is_file() or (root / file).read_text(encoding="utf-8") != spec + "\n":
@@ -189,16 +294,17 @@ def plan(root: Path) -> Plan:
         if slug not in refs:
             out.errors.append(f"{file}: not referenced by any document")
     for slug, path in sorted(refs.items()):
-        if slug not in svgs and slug not in specs:
+        if slug not in ctx.keep:
             out.errors.append(f"{path}: {FIGURES}/{slug}.png has no {slug}.fig")
-    for slug, data in sorted(svgs.items()):
-        file = f"{FIGURES}/{slug}.png"
-        if not (root / file).is_file() or (root / file).read_bytes() != data:
-            out.writes[file] = data
+    out.errors += ctx.errors
+    for slug, data in sorted(ctx.fresh.items()):
+        file = root / FIGURES / f"{slug}.png"
+        if data == STALE or not file.is_file() or file.read_bytes() != data:
+            out.writes[f"{FIGURES}/{slug}.png"] = data
     out.deletes = sorted(
         p.relative_to(root).as_posix()
         for p in sorted([*folder.glob("*.svg"), *folder.glob("*.png")])
-        if p.suffix == ".svg" or p.stem not in svgs
+        if p.suffix == ".svg" or p.stem not in ctx.keep
     ) if folder.is_dir() else []
     return out
 

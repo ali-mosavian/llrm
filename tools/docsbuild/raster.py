@@ -511,11 +511,12 @@ def draw(svg: str, indexed: bool) -> Canvas:
     return cv
 
 
-def render_png(svg: str) -> bytes:
-    """The PNG of `svg`: indexed colour when 256 colours are enough, RGB otherwise."""
+def render_png(svg: str, key: str | None = None) -> bytes:
+    """The PNG of `svg`: indexed colour when 256 colours are enough, RGB otherwise; `key` rides in a tEXt chunk."""
+    text = ("llrm-fig", key) if key else None
     try:
         cv = draw(svg, True)
-        return png.encode(cv.w, cv.h, cv.rows, cv.palette)
+        return png.encode(cv.w, cv.h, cv.rows, cv.palette, text)
     except PaletteFull:
         cv = draw(svg, False)
-        return png.encode(cv.w, cv.h, cv.rows, None)
+        return png.encode(cv.w, cv.h, cv.rows, None, text)

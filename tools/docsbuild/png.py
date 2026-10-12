@@ -248,13 +248,35 @@ def chunk(kind: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
 
-def encode(width: int, height: int, rows: list[bytes], palette: list[tuple[int, int, int]] | None) -> bytes:
-    """A PNG of `rows` (one byte per pixel into `palette`, or three bytes RGB when it is None)."""
+def encode(width: int, height: int, rows: list[bytes], palette: list[tuple[int, int, int]] | None, text: tuple[str, str] | None = None) -> bytes:
+    """A PNG of `rows` (one byte per pixel into `palette`, or three bytes RGB when it is None).
+
+    `text` is a (keyword, value) pair kept in one tEXt chunk, ahead of the palette, where a reader finds it
+    in the first few hundred bytes.
+    """
     framed = [b"\0" + bytes(r) for r in rows]
     raw = deflate(framed)
     z = b"\x78\xda" + raw + struct.pack(">I", zlib.adler32(b"".join(framed)))
     head = struct.pack(">IIBBBBB", width, height, 8, 3 if palette else 2, 0, 0, 0)
     out = SIGNATURE + chunk(b"IHDR", head)
+    if text:
+        out += chunk(b"tEXt", text[0].encode("latin-1") + b"\0" + text[1].encode("latin-1"))
     if palette:
         out += chunk(b"PLTE", bytes(c for rgb in palette for c in rgb))
     return out + chunk(b"IDAT", z) + chunk(b"IEND", b"")
+
+
+def text_of(head: bytes, keyword: str) -> str | None:
+    """The value of the tEXt chunk `keyword` among the leading chunks of a PNG, from its first bytes."""
+    i = 8
+    while i + 8 <= len(head):
+        (n,) = struct.unpack(">I", head[i : i + 4])
+        kind = head[i + 4 : i + 8]
+        if kind in (b"IDAT", b"IEND"):
+            return None
+        if kind == b"tEXt":
+            key, _, value = head[i + 8 : i + 8 + n].partition(b"\0")
+            if key.decode("latin-1") == keyword:
+                return value.decode("latin-1")
+        i += 12 + n
+    return None

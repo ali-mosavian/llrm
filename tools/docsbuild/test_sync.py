@@ -203,3 +203,129 @@ HEADERS_REQUIRED = ["crates/opt/llrm-analysis/src"]
 def test_every_file_of_a_required_directory_has_a_header():
     """A pass without its `//!` summary, `# How it works` and `# Runs`/`# Provides` is missing from the reference."""
     assert passdocs.check(HEADERS_REQUIRED, build.ROOT) == []
+
+
+# ---- incremental: only what changed is drawn or extracted again
+
+TREE = dict(BASE, **{
+    "crates/opt/llrm-analysis/src/other.rs": HEADER.replace("Walks the thing.", "Another one."),
+    f"{FIGS}/hand.fig": SPEC + "\n",
+    "docs/a/hand.md": "# Hand\n\n![t](../assets/figures/hand.png)\n",
+    "docs/readme.md": "# Docs\n\n[x](a/b/c.md) [h](a/hand.md)\n",
+})
+
+
+class Counter:
+    """Counts calls of a function while still making them."""
+
+    def __init__(self, monkeypatch, module, name):
+        self.calls = 0
+        real = getattr(module, name)
+
+        def counted(*a, **k):
+            self.calls += 1
+            return real(*a, **k)
+
+        monkeypatch.setattr(module, name, counted)
+
+
+def tree_of(root):
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_an_untouched_tree_draws_and_extracts_nothing(tmp_path, monkeypatch):
+    root = repo(tmp_path, TREE)
+    synced(root)
+    draws = Counter(monkeypatch, sync.raster, "render_png")
+    sections = Counter(monkeypatch, sync.passdocs, "section")
+    p = sync.plan(root)
+    assert (draws.calls, sections.calls, p.writes, p.deletes, p.errors) == (0, 0, {}, [], [])
+
+
+def test_an_incremental_sync_is_byte_identical_to_a_cold_one(tmp_path):
+    """Touch one header and one .fig: the tree must equal one made from scratch from the same sources."""
+    warm = repo(tmp_path / "warm", TREE)
+    synced(warm)
+    edits = {
+        "crates/opt/llrm-analysis/src/walk.rs": HEADER.replace("Text.", "Other text.").replace('node A "a"', 'node A "aa"'),
+        f"{FIGS}/hand.fig": SPEC + '\nlane b "bee"\n',
+    }
+    for name, text in edits.items():
+        (warm / name).write_text(text)
+    synced(warm)
+    cold = repo(tmp_path / "cold", dict(TREE, **edits))
+    synced(cold)
+    assert tree_of(warm) == tree_of(cold)
+
+
+def test_touching_one_header_extracts_that_file_and_draws_its_figures_only(tmp_path, monkeypatch):
+    root = repo(tmp_path, TREE)
+    synced(root)
+    (root / "crates/opt/llrm-analysis/src/walk.rs").write_text(HEADER.replace("Text.", "Changed."))
+    draws = Counter(monkeypatch, sync.raster, "render_png")
+    sections = Counter(monkeypatch, sync.passdocs, "section")
+    synced(root)
+    assert sections.calls == 1 and draws.calls == 1  # walk.rs has one figure; other.rs and hand.fig are kept
+
+
+def test_a_changed_spec_draws_that_figure_alone(tmp_path, monkeypatch):
+    root = repo(tmp_path, TREE)
+    synced(root)
+    (root / f"{FIGS}/hand.fig").write_text(SPEC + '\nlane b "bee"\n')
+    draws = Counter(monkeypatch, sync.raster, "render_png")
+    assert sorted(synced(root).writes) == [f"{FIGS}/hand.png"] and draws.calls == 1
+
+
+def test_a_changed_toolchain_invalidates_every_image_and_section(tmp_path, monkeypatch):
+    """Changing raster.py must redraw everything: simulated by the digest that stands for it."""
+    root = repo(tmp_path, TREE)
+    synced(root)
+    monkeypatch.setattr(sync, "figure_digest", lambda: "another toolchain")
+    draws = Counter(monkeypatch, sync.raster, "render_png")
+    sections = Counter(monkeypatch, sync.passdocs, "section")
+    synced(root)
+    assert draws.calls == 4 and sections.calls == 2  # hand, c, and the header figures of walk.rs and other.rs
+
+
+def test_check_compares_keys_and_never_draws(tmp_path, monkeypatch, capsys):
+    root = repo(tmp_path, TREE)
+    monkeypatch.setattr(build, "ROOT", root)
+    assert build.main(["--sync"]) == 0
+    (root / f"{FIGS}/hand.fig").write_text(SPEC + '\nlane b "bee"\n')
+
+    def refuse(*a, **k):
+        raise AssertionError("--check drew a figure")
+
+    monkeypatch.setattr(sync.raster, "render_png", refuse)
+    assert build.main(["--check"]) == 1
+    out = capsys.readouterr().out
+    assert "run python3 tools/docsbuild/build.py --sync" in out and "hand.png" in out
+
+
+def test_the_build_key_is_in_the_png_and_changes_with_spec_and_toolchain(tmp_path, monkeypatch):
+    root = repo(tmp_path, TREE)
+    synced(root)
+    key = sync.png_key(root / f"{FIGS}/hand.png")
+    assert key == sync.key_of(SPEC, sync.figure_digest())
+    monkeypatch.setattr(sync, "figure_digest", lambda: "other")
+    assert key != sync.key_of(SPEC, sync.figure_digest())
+
+
+def test_force_draws_everything_again_to_the_same_bytes(tmp_path, monkeypatch):
+    root = repo(tmp_path, TREE)
+    synced(root)
+    before = tree_of(root)
+    draws = Counter(monkeypatch, sync.raster, "render_png")
+    p = sync.plan(root, force=True)
+    sync.apply(root, p)
+    assert draws.calls == 4 and p.writes == {} and tree_of(root) == before
+
+
+def test_a_section_of_a_removed_source_file_is_dropped(tmp_path):
+    root = repo(tmp_path, TREE)
+    synced(root)
+    (root / "crates/opt/llrm-analysis/src/other.rs").unlink()
+    synced(root)
+    page = (root / "docs/optimizations/reference/analyses.md").read_text()
+    assert "other.rs" not in page and "walk.rs" in page
+    assert "1 documented" in (root / "docs/optimizations/reference/index.md").read_text()

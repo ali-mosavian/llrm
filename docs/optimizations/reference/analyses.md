@@ -41,6 +41,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`.
 - [sliceset](#sliceset): An ordered set of memory slices that holds most of itself as a run shared with other sets.
 - [ssa](#ssa): SSA helpers: use lists, dead-phi pruning, value substitution and an SSA updater.
 
+<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:a9b7e16491a63ecd75d15af3e56c2f54088a3d74b433d97228dd67de71fa3c29 -->
 ## alias
 
 Source: [`crates/opt/llrm-analysis/src/alias.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/alias.rs)
@@ -143,6 +144,7 @@ what attributes state.
 LLVM `BasicAA`, `GlobalsAA`, `EarliestEscapeInfo`, `FunctionAttrs`
 `initializes`; GCC `tree-ssa-structalias.cc` (field sensitivity cap).
 
+<!-- src: crates/opt/llrm-analysis/src/assumptions.rs sha256:7a2eeb8f1a92233e43ddb65904128ab8b44320234c4eedada1425bf81afb4a86 -->
 ## assumptions
 
 Source: [`crates/opt/llrm-analysis/src/assumptions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/assumptions.rs)
@@ -184,6 +186,7 @@ builds its own on first ask, which `built()` counts for tests.
 ### See also
 LLVM `AssumptionCache`.
 
+<!-- src: crates/opt/llrm-analysis/src/avail.rs sha256:b161c811b8f1455f68bbe1fbc7704ff593623d7e44254fed33f6c09609b06c45 -->
 ## avail
 
 Source: [`crates/opt/llrm-analysis/src/avail.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/avail.rs)
@@ -260,6 +263,7 @@ accessors `loaded_into`, `stored_from`, `stored_cell`. Consumers:
 LLVM `MemoryDependenceAnalysis`, GVN `processLoad` and
 `DeadStoreElimination`.
 
+<!-- src: crates/opt/llrm-analysis/src/branchprob.rs sha256:5ecbf5f83bc7185d21cb8d786c7c73fc6b5d7b6c4b405dbf4cc019872b5d88bc -->
 ## branchprob
 
 Source: [`crates/opt/llrm-analysis/src/branchprob.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/branchprob.rs)
@@ -337,6 +341,7 @@ takes from `crate::induction`.
 ### See also
 LLVM `BranchProbabilityInfo.cpp`, `BlockFrequencyInfo`; GCC `predict.def`.
 
+<!-- src: crates/opt/llrm-analysis/src/cellmap.rs sha256:e6aa61e8da0d284edaa66926770dc52b6be4f3ac4c41f05e11d8b4ad7cd9a21e -->
 ## cellmap
 
 Source: [`crates/opt/llrm-analysis/src/cellmap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/cellmap.rs)
@@ -379,6 +384,7 @@ The container. Consumers: `crate::alias`, `crate::consts`,
 ### Needs
 `crate::regions::ByteRange`.
 
+<!-- src: crates/opt/llrm-analysis/src/cfg.rs sha256:29955ddaf90811338f370f0d18da9ae10232d8863e9446f72a772decaeb1f2e8 -->
 ## cfg
 
 Source: [`crates/opt/llrm-analysis/src/cfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/cfg.rs)
@@ -432,6 +438,7 @@ llrm-mir's `Dominators` and `Loops`.
 `Shape` is preserved when it is kept, or when both `Dominators` and `Loops`
 are. It does not read the outer (module) analyses.
 
+<!-- src: crates/opt/llrm-analysis/src/constant_cycles.rs sha256:181e0be1766bb201fe827106ba4ef3df36366c6cea20470bb922e737cffc9edf -->
 ## constant_cycles
 
 Source: [`crates/opt/llrm-analysis/src/constant_cycles.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/constant_cycles.rs)
@@ -485,6 +492,7 @@ LLVM SCCP (`SCCPSolver`) and its `unknown`, `constant`, `overdefined`
 lattice. `LLRM_CHECK_CYCLES` re-derives the result without the early
 return and asserts it matches.
 
+<!-- src: crates/opt/llrm-analysis/src/consts.rs sha256:fbcf58e2a9fa03b4e126307496440e7046ed8ebd750b74735c0c75745b15c192 -->
 ## consts
 
 Source: [`crates/opt/llrm-analysis/src/consts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/consts.rs)
@@ -551,6 +559,7 @@ LLVM `SCCP`/`ConstantFolding`; GCC FRE walks the same virtual use-def chain
 for a load's value (`vn_reference_lookup`). `LLRM_CHECK_CYCLES` in
 `crate::constant_cycles`.
 
+<!-- src: crates/opt/llrm-analysis/src/demanded.rs sha256:37800ec5aa8baac0a9752fac17a86b397e88f80b6cc947752c79849ec3e0ba33 -->
 ## demanded
 
 Source: [`crates/opt/llrm-analysis/src/demanded.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/demanded.rs)
@@ -595,6 +604,7 @@ and operands over unread bits (`algebraic` in `llrm-transforms`).
 ### See also
 LLVM `DemandedBits` and `SimplifyDemandedBits`.
 
+<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:b2ab06f54373476c0a2391ba4b6d9a33ace2d1653bff0e5d14953a5013988a8f -->
 ## dependence
 
 Source: [`crates/opt/llrm-analysis/src/dependence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/dependence.rs)
@@ -648,6 +658,7 @@ gcc `tree-data-ref.cc` distance vectors read by `adjust_unroll_factor`
 ([`gimple-loop-jam.cc:504`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/gimple-loop-jam.cc#L504));
 LLVM `DependenceAnalysis` and `LoopUnrollAndJam`.
 
+<!-- src: crates/opt/llrm-analysis/src/difference.rs sha256:eccfc8f8e9750704a29b9ca0b74e010809a792b15997586706ca5de0629e0043 -->
 ## difference
 
 Source: [`crates/opt/llrm-analysis/src/difference.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/difference.rs)
@@ -701,6 +712,7 @@ declared ranges.
 ### See also
 LLVM `ConstraintElimination`.
 
+<!-- src: crates/opt/llrm-analysis/src/effects.rs sha256:6e7724dc3d257587a79b938d10f7c05f348f74737908b2f3dedff78f49d270ba -->
 ## effects
 
 Source: [`crates/opt/llrm-analysis/src/effects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/effects.rs)
@@ -744,6 +756,7 @@ own function mutably while asking about the others). Consumers include
 ### See also
 LLVM `MemoryEffects`, `FunctionAttrs`.
 
+<!-- src: crates/opt/llrm-analysis/src/floatbounds.rs sha256:777d63b11f8fe70c8efc719f8b4e3ce49f32e4be08c252488aa0dbab02a7bda5 -->
 ## floatbounds
 
 Source: [`crates/opt/llrm-analysis/src/floatbounds.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/floatbounds.rs)
@@ -790,6 +803,7 @@ bounds in `Unit::bounds`.
 ### See also
 LLVM ValueTracking's `computeKnownFPClass` with `isKnownExactCastIntToFP`.
 
+<!-- src: crates/opt/llrm-analysis/src/floatfacts.rs sha256:1f676f14c40344504a053491c98c745447823a852e18f7633e50bd9669361540 -->
 ## floatfacts
 
 Source: [`crates/opt/llrm-analysis/src/floatfacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/floatfacts.rs)
@@ -854,6 +868,7 @@ body with none skips the solve). The manager entry is
 ### See also
 LLVM ValueTracking's `computeKnownFPClass`, narrowed to one exact value.
 
+<!-- src: crates/opt/llrm-analysis/src/frameescape.rs sha256:10f830076dfe44d03f9cc58715e412df6975700d00d18ea471263c6db4e2bb98 -->
 ## frameescape
 
 Source: [`crates/opt/llrm-analysis/src/frameescape.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/frameescape.rs)
@@ -902,6 +917,7 @@ manager entry `crate::manager::ExposedFrames`, `crate::interprocedural`
 (`framed`) and the backend's `isel` (which frame objects are exposed).
 `scans` counts `exposes` calls, for tests.
 
+<!-- src: crates/opt/llrm-analysis/src/generated.rs sha256:b7863bcf4588beecbd2dce8ae9a797f3d6586920bcf4ae08f4147d40d81beb65 -->
 ## generated
 
 Source: [`crates/opt/llrm-analysis/src/generated.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/generated.rs)
@@ -941,6 +957,7 @@ text; `SCEV_SEEDS=n` runs `n` seeds instead of the default.
 tests or the `testing` feature. Consumers: the tests of
 `crate::induction` and `expand` in `llrm-transforms`.
 
+<!-- src: crates/opt/llrm-analysis/src/globalsaa.rs sha256:89b24d6dc9a53bf0e69c9165a6ca0bd9ad67846729e2a3b68a7dcedc3f18fcec -->
 ## globalsaa
 
 Source: [`crates/opt/llrm-analysis/src/globalsaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/globalsaa.rs)
@@ -1001,6 +1018,7 @@ and module analyses.
 ### See also
 LLVM `GlobalsAA`; GCC `ipa-reference.cc`.
 
+<!-- src: crates/opt/llrm-analysis/src/graph.rs sha256:124455ec9de9f9bf8b986f5bb42f258069c65b1c8239bf44548dfdc0489f264a -->
 ## graph
 
 Source: [`crates/opt/llrm-analysis/src/graph.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/graph.rs)
@@ -1027,6 +1045,7 @@ The algorithms of `loops`. Consumers: `crate::cfg` (`Loop`, `Node`,
 `irreducible_under`) and the loop passes of `llrm-transforms`, which read
 `Loop` out of `crate::cfg::Shape`.
 
+<!-- src: crates/opt/llrm-analysis/src/guards.rs sha256:5d121e62b0162ec0bfc192961210db0ae2275a6327e8596f6d233285dd06ee0c -->
 ## guards
 
 Source: [`crates/opt/llrm-analysis/src/guards.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/guards.rs)
@@ -1094,6 +1113,7 @@ LLVM `isBasicBlockEntryGuardedByCond`, as far as direct implication goes;
 chain only
 ([`ScalarEvolution.cpp:16199`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L16199)).
 
+<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:c3ac923dbea8cca1d50bb41b3a079f3ec54f89fb5553ce0cf5994a3088ac301e -->
 ## induction
 
 Source: [`crates/opt/llrm-analysis/src/induction.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/induction.rs)
@@ -1176,6 +1196,7 @@ llrm-transforms `indvars`, `lsr`, `loopexit`, `peel`, `unroll`,
 LLVM ScalarEvolution add recurrences and trip counts, InductionDescriptor,
 IVUsers.
 
+<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:c5db4f9e188d54229482467867075e8e8c21e1abbc63cc5b1def37f3bc8e513b -->
 ## interprocedural
 
 Source: [`crates/opt/llrm-analysis/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/interprocedural.rs)
@@ -1239,6 +1260,7 @@ llrm-transforms.
 ### See also
 LLVM's IPSCCP.
 
+<!-- src: crates/opt/llrm-analysis/src/liveness.rs sha256:74949def0cc709c4617af847345ceb43e12d14ed700bf4aca1f7c3eb69a760ae -->
 ## liveness
 
 Source: [`crates/opt/llrm-analysis/src/liveness.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/liveness.rs)
@@ -1301,6 +1323,7 @@ The machine phases use `backend/liveness.rs`, over physical register lanes.
 ### See also
 GCC `calculate_live_on_exit` (`tree-ssa-live.cc`); LLVM `LiveVariables`.
 
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:9f67964d6883d87d8227b8e52f3c5d4ea3bc77dcad6e0ed23aa651e882d03559 -->
 ## manager
 
 Source: [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs)
@@ -1400,6 +1423,7 @@ are entries defined beside their analyses.
 LLVM's new pass manager `AnalysisManager` and `PreservedAnalyses`; the trait
 is in `crates/ir/llrm-mir/src/passes.rs`.
 
+<!-- src: crates/opt/llrm-analysis/src/memory.rs sha256:c7e60b94b3d957ce59c1357aeec52071316c49d5549efa8cf9ef222232ed8788 -->
 ## memory
 
 Source: [`crates/opt/llrm-analysis/src/memory.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memory.rs)
@@ -1475,6 +1499,7 @@ passes of llrm-transforms.
 LLVM BasicAA `DecomposeGEPExpression` and `MemoryLocation`
 (`llvm/lib/Analysis/BasicAliasAnalysis.cpp`).
 
+<!-- src: crates/opt/llrm-analysis/src/memoryssa.rs sha256:b29b3ced3341aa2ceceb4f9633befde7d7fd7732d1c50935018b295d271e0ed6 -->
 ## memoryssa
 
 Source: [`crates/opt/llrm-analysis/src/memoryssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memoryssa.rs)
@@ -1552,6 +1577,7 @@ the slow ones.
 LLVM `MemorySSA` and its `ClobberWalker`
 (`llvm/lib/Analysis/MemorySSA.cpp`).
 
+<!-- src: crates/opt/llrm-analysis/src/nearest.rs sha256:b250ff579faf94a90e3338bd491514b011cc38890d7b3da5de94e7c2b859b5af -->
 ## nearest
 
 Source: [`crates/opt/llrm-analysis/src/nearest.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/nearest.rs)
@@ -1595,6 +1621,7 @@ The `Nearest` index and its `Walk` iterator. Consumers: `crate::avail` and
 `llrm_mir::dominators::DominatorTree` (`span`, the preorder interval of a
 block).
 
+<!-- src: crates/opt/llrm-analysis/src/noreturn.rs sha256:75ad8367588804778327e24faf803584dbb8c99f259594e22b3721fd40662b9c -->
 ## noreturn
 
 Source: [`crates/opt/llrm-analysis/src/noreturn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/noreturn.rs)
@@ -1647,6 +1674,7 @@ as the observable action, and the block ends in `unreachable`.
 `crate::effects` (`callee`, `states` for the `noreturn` and `cold`
 attributes), `crate::cfg`.
 
+<!-- src: crates/opt/llrm-analysis/src/observers.rs sha256:0ea79ed35d1716ee1093c0711ca3e5c33f43ceb1eb6884f1cc2e296995f23302 -->
 ## observers
 
 Source: [`crates/opt/llrm-analysis/src/observers.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/observers.rs)
@@ -1691,6 +1719,7 @@ pass in llrm-transforms.
 `crate::manager`'s `Pointers` (points-to) and `ExposedFrames`,
 `crate::alias`, `crate::memory`.
 
+<!-- src: crates/opt/llrm-analysis/src/occurrence.rs sha256:1cb544cffaa075fffaebed5f1ad1d21fbde7b643675696d05c654a933c3e43a8 -->
 ## occurrence
 
 Source: [`crates/opt/llrm-analysis/src/occurrence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/occurrence.rs)
@@ -1715,6 +1744,7 @@ yields the phis in layout order. Operations and phis are separate walks.
 The three walks. Consumers: `crate::induction`, `crate::ssa`, and the
 `unswitch` and `loopexit` passes in llrm-transforms.
 
+<!-- src: crates/opt/llrm-analysis/src/parameter_ranges.rs sha256:7ed93ced3eb05c9a83451a618227145eef45b1596214e8f01e5d0ceb4a927a5c -->
 ## parameter_ranges
 
 Source: [`crates/opt/llrm-analysis/src/parameter_ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/parameter_ranges.rs)
@@ -1772,6 +1802,7 @@ and stops when none.
 LLVM's IPSCCP, which states an argument's range as a `range` attribute where
 it has no single constant.
 
+<!-- src: crates/opt/llrm-analysis/src/peelsize.rs sha256:bcfd2ad2aff54016bcdf59e37d1b1d3e4257b6e6b44303807f858460ea398223 -->
 ## peelsize
 
 Source: [`crates/opt/llrm-analysis/src/peelsize.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/peelsize.rs)
@@ -1838,6 +1869,7 @@ GCC `try_unroll_loop_completely`, `estimated_unrolled_size`
 (`gcc/tree-ssa-loop-ivcanon.cc`); LLVM `analyzeLoopUnrollCost` and
 `shouldFullUnroll` in `LoopUnrollPass`.
 
+<!-- src: crates/opt/llrm-analysis/src/pointerfacts.rs sha256:0e46cb15a041339f85e84a1146a3c85d8b7a5d0db59d0f73f922afe0ffc9ca8f -->
 ## pointerfacts
 
 Source: [`crates/opt/llrm-analysis/src/pointerfacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/pointerfacts.rs)
@@ -1879,6 +1911,7 @@ llrm-transforms.
 ### Needs
 `llrm_mir::datalayout::DataLayout` for offsets and index widths.
 
+<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:a699bd15137273a34cebebae351cbfe3e3a074b6d392ed446a878bce5460a423 -->
 ## ranges
 
 Source: [`crates/opt/llrm-analysis/src/ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranges.rs)
@@ -1956,6 +1989,7 @@ loops), `crate::assumptions`, `crate::cfg` (shape and dominance).
 GCC's ranger (`gimple-range-cache.cc`, `ranger_cache::range_on_entry`);
 LLVM's LazyValueInfo and ScalarEvolution value ranges.
 
+<!-- src: crates/opt/llrm-analysis/src/regions.rs sha256:ceb55fd16561aa167b717d604b238ea6584d232c456e258e307cbb981b302d1f -->
 ## regions
 
 Source: [`crates/opt/llrm-analysis/src/regions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/regions.rs)
@@ -2026,6 +2060,7 @@ llrm-transforms `promote`, `transform`, `homes`, `loopmotion`, `fill`,
 ### See also
 LLVM BasicAA's constant-offset GEP comparison and TypeBasedAA.
 
+<!-- src: crates/opt/llrm-analysis/src/sliceset.rs sha256:35a37468caae90fba5359bb2a7ddb1dad35cd4a350d70ac49c37a9c46242fe68 -->
 ## sliceset
 
 Source: [`crates/opt/llrm-analysis/src/sliceset.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/sliceset.rs)
@@ -2070,6 +2105,7 @@ the same.
 summaries and `callbacks_over`, via `crate::manager`'s `Callbacks`) and
 the `interprocedural` pass in llrm-transforms.
 
+<!-- src: crates/opt/llrm-analysis/src/ssa.rs sha256:a7daf23dba55a7e9abfb6940e92ef2a330cc936d095366351fa9b5fae89d53e5 -->
 ## ssa
 
 Source: [`crates/opt/llrm-analysis/src/ssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ssa.rs)

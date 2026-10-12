@@ -97,6 +97,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`.
 - [valuetrack](#valuetrack): Where the value a variable has is, over the code as it was emitted: LLVM's instruction-referencing LiveDebugValues (`InstrRefBasedLDV`), after the allocator and every pass that follows it.
 - [verify](#verify): Port of `qbopt/backend/verify.py`: whether a lowered body is well formed, checked where it was made.
 
+<!-- src: crates/backend/llrm-core/src/backend/addressforms.rs sha256:62d74aa88b8937cf4a58435926b45ed3f0057025b4ebf2285dd6c61d04df588f -->
 ## addressforms
 
 Source: [`crates/backend/llrm-core/src/backend/addressforms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/addressforms.rs)
@@ -104,6 +105,7 @@ Source: [`crates/backend/llrm-core/src/backend/addressforms.rs`](https://github.
 Port of `qbopt/backend/addressforms.py`: fold address arithmetic into
 the memory operands that read it.
 
+<!-- src: crates/backend/llrm-core/src/backend/addressvalues.rs sha256:867efa09a5d26ac49fd02094a598fd32ec0164a91f191028ebbea2a2561cfcf3 -->
 ## addressvalues
 
 Source: [`crates/backend/llrm-core/src/backend/addressvalues.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/addressvalues.rs)
@@ -111,6 +113,7 @@ Source: [`crates/backend/llrm-core/src/backend/addressvalues.rs`](https://github
 Port of `qbopt/backend/addressvalues.py`: spell allocated address-valued
 memory operands as machine addresses.
 
+<!-- src: crates/backend/llrm-core/src/backend/affine.rs sha256:d56a7b7e464954ff2355d0756ba6b8c8d4cc38c3d4b4aa69fce5379ddfa39ae9 -->
 ## affine
 
 Source: [`crates/backend/llrm-core/src/backend/affine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/affine.rs)
@@ -118,6 +121,7 @@ Source: [`crates/backend/llrm-core/src/backend/affine.rs`](https://github.com/al
 Allocated instructions that keep a register an affine sum of registers,
 and the 32-bit addresses that name such a sum.
 
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:e4d80de57990c7b17126be718d96fc1061330a0aa197ac3cbac926bde64b06a5 -->
 ## allocate
 
 Source: [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs)
@@ -128,6 +132,7 @@ greedy allocation with eviction.
 LLVM's `RegAllocGreedy`: spilling is priced by `intervals::weights`, and
 fixed intervals go first.
 
+<!-- src: crates/backend/llrm-core/src/backend/arithmetic.rs sha256:8e5767163a7037352de9b35a36f4bbb192d9f014288daec82dabbbcb06f4dec4 -->
 ## arithmetic
 
 Source: [`crates/backend/llrm-core/src/backend/arithmetic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/arithmetic.rs)
@@ -135,6 +140,7 @@ Source: [`crates/backend/llrm-core/src/backend/arithmetic.rs`](https://github.co
 Port of `qbopt/backend/arithmetic.py`: target-dependent ranking of
 constant arithmetic, not MIR semantics.
 
+<!-- src: crates/backend/llrm-core/src/backend/arrival.rs sha256:eada49c50e83f13ec85f79ca19162a56d48f83f332d0d4c8f5010ae55e18a3ff -->
 ## arrival
 
 Source: [`crates/backend/llrm-core/src/backend/arrival.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/arrival.rs)
@@ -143,6 +149,7 @@ Where a parameter is while the function has not yet stored it into its home:
 in the register the convention passed it in, from the entry until the
 instruction that stores it. Read back from the code, like the frame rows.
 
+<!-- src: crates/backend/llrm-core/src/backend/asm.rs sha256:7025008411ea2d7d849372e205c67b925dd2537942620ffc6e1a2bd92a1ea393 -->
 ## asm
 
 Source: [`crates/backend/llrm-core/src/backend/asm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/asm.rs)
@@ -160,6 +167,7 @@ chosen.
 
 Python's `id(op)` is the `Arc` pointer of an LIR occurrence.
 
+<!-- src: crates/backend/llrm-core/src/backend/assemble.rs sha256:d3ed424bf423067d87179ce3f7500f80cda8dfbecc0afaaf29665db35c694098 -->
 ## assemble
 
 Source: [`crates/backend/llrm-core/src/backend/assemble.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/assemble.rs)
@@ -168,6 +176,7 @@ A MIR module to masm, as LLVM's `llc` takes a module to an object:
 each defined function selected and run through the machine phases, each
 defined variable's data, and the symbols both name.
 
+<!-- src: crates/backend/llrm-core/src/backend/calleefacts.rs sha256:94f0c48bb2fb53d31cb1b6d930a1c50189c18048e48b9b36427048dd5360c7a5 -->
 ## calleefacts
 
 Source: [`crates/backend/llrm-core/src/backend/calleefacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/calleefacts.rs)
@@ -188,12 +197,14 @@ at a time; this one asks the call graph for the order, so no caller meets a
 callee whose fact is not yet made, and leaves a function in a cycle with its
 convention.
 
+<!-- src: crates/backend/llrm-core/src/backend/callregs.rs sha256:529c6bd548fc825dbf5499e9b611f7234e478541e0f8d65cdf15853862c4f625 -->
 ## callregs
 
 Source: [`crates/backend/llrm-core/src/backend/callregs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/callregs.rs)
 
 The registers a runtime call destroys or keeps, read from its contract.
 
+<!-- src: crates/backend/llrm-core/src/backend/cfi.rs sha256:0c41586bc4ecf161611306e97868c7fbf2d197180b906f5f6d093819c0ef79eb -->
 ## cfi
 
 Source: [`crates/backend/llrm-core/src/backend/cfi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/cfi.rs)
@@ -209,6 +220,7 @@ where first needed and restored before the return that needs it. A rule the
 code does not make single-valued (two paths reach a place with different
 stack depths) is refused: no information is better than a wrong one.
 
+<!-- src: crates/backend/llrm-core/src/backend/classes.rs sha256:7060646f7279523614d3764b2de8ecfde1a586a54544b8c1ac0becf4858f98e2 -->
 ## classes
 
 Source: [`crates/backend/llrm-core/src/backend/classes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/classes.rs)
@@ -218,6 +230,7 @@ around it read: which operand of which instruction form lives in which
 register. Built from the selected target (`RegisterClasses::of`) and handed
 down beside `Segments`; no pass reads another target's.
 
+<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:c3d2ffc778b8a5951017fd617c7dc8bb1e89f8f1dce4d2237618d3426a7daf88 -->
 ## coalesce
 
 Source: [`crates/backend/llrm-core/src/backend/coalesce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/coalesce.rs)
@@ -228,6 +241,7 @@ register is not a copy.
 LLVM's `RegisterCoalescer`, conservative: Briggs and George before the
 join, since there is no undo.
 
+<!-- src: crates/backend/llrm-core/src/backend/comparefold.rs sha256:14dc070533ccc68f4c42b7adf2a3c8add83653769416181324203bb9f35b5dbe -->
 ## comparefold
 
 Source: [`crates/backend/llrm-core/src/backend/comparefold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/comparefold.rs)
@@ -235,6 +249,7 @@ Source: [`crates/backend/llrm-core/src/backend/comparefold.rs`](https://github.c
 Port of `qbopt/backend/comparefold.py`: select one-use memory comparisons
 before register allocation.
 
+<!-- src: crates/backend/llrm-core/src/backend/constpool.rs sha256:b1c545a5b5c6ae9d36e74c31bbadc2acdbdead34ecd3f593dbd970cdb2f080c3 -->
 ## constpool
 
 Source: [`crates/backend/llrm-core/src/backend/constpool.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/constpool.rs)
@@ -243,6 +258,7 @@ Readonly constants the machine phases put in memory, as GCC's
 `force_const_mem`: one datum per distinct bytes, which the driver names
 and emits with the module's other readonly data.
 
+<!-- src: crates/backend/llrm-core/src/backend/constrain.rs sha256:e3c668dfa74cf31fe4a40a69853aca275a17234619bd211454a6e07f9bb9df15 -->
 ## constrain
 
 Source: [`crates/backend/llrm-core/src/backend/constrain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/constrain.rs)
@@ -253,6 +269,7 @@ of its own.
 The value an instruction requires in one register is a value of its own,
 live across that instruction and nothing else, copied in and out.
 
+<!-- src: crates/backend/llrm-core/src/backend/copyprop.rs sha256:72df76a776e82fd572aa69deba31ba78ce87995f77ce36525fafa5727de65b4e -->
 ## copyprop
 
 Source: [`crates/backend/llrm-core/src/backend/copyprop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/copyprop.rs)
@@ -266,6 +283,7 @@ redundant copies, while a second must-analysis retains the reaching copy's
 direction for operand substitution.  Selection and decoded effects are both
 checked again before a source is renamed.
 
+<!-- src: crates/backend/llrm-core/src/backend/copysink.rs sha256:8946643ac80ae420aca13bb2c0e6e95a8bb21e86beb6b2105d11fface0d7c50a -->
 ## copysink
 
 Source: [`crates/backend/llrm-core/src/backend/copysink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/copysink.rs)
@@ -282,6 +300,7 @@ the destination must keep what it held), the destination is read nowhere
 in the loop, and the source is not written between the copy and the exit,
 which is what this checks.
 
+<!-- src: crates/backend/llrm-core/src/backend/cpu.rs sha256:2f260eb29ba23854524a3df898795731de04acf61020a533b2fdfe838c06013f -->
 ## cpu
 
 Source: [`crates/backend/llrm-core/src/backend/cpu.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/cpu.rs)
@@ -292,6 +311,7 @@ code-generation tuning target.
 Costs from `cycles::timings` are rankings; `timing` holds the smaller
 audited subset used for legality-changing decisions.
 
+<!-- src: crates/backend/llrm-core/src/backend/datagroup.rs sha256:c347a6e040dbd0c1c04027b82d872c907bc1b218225059a665fc7d1761cb4feb -->
 ## datagroup
 
 Source: [`crates/backend/llrm-core/src/backend/datagroup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/datagroup.rs)
@@ -309,6 +329,7 @@ it is restored before each point that needs it and at each exit.
 The runtime's interrupt handlers load their own data segment, so a value
 held here is safe from them.
 
+<!-- src: crates/backend/llrm-core/src/backend/debuginfo.rs sha256:7b195e207a3297892414fb9941130f6772e8c4145c647ef9b6330c778c179398 -->
 ## debuginfo
 
 Source: [`crates/backend/llrm-core/src/backend/debuginfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/debuginfo.rs)
@@ -318,6 +339,7 @@ whichever format a writer encodes it in. `described` reads MIR's metadata
 (`llrm_mir::debuginfo`); once the code is laid out, `laid_out` adds each
 procedure's place, variables and lines.
 
+<!-- src: crates/backend/llrm-core/src/backend/division.rs sha256:60f32fc320a94cf20c64b74c8227c858f22cb1796e14c58d91ce5d91eaf9167c -->
 ## division
 
 Source: [`crates/backend/llrm-core/src/backend/division.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/division.rs)
@@ -325,6 +347,7 @@ Source: [`crates/backend/llrm-core/src/backend/division.rs`](https://github.com/
 Port of `qbopt/backend/division.py`: select signed constant division
 without exposing machine choices to MIR.
 
+<!-- src: crates/backend/llrm-core/src/backend/effects.rs sha256:ec6f80da68783de8e09132557c19d87cbc4fda7e6005af10fd52aa2abd45e4ab -->
 ## effects
 
 Source: [`crates/backend/llrm-core/src/backend/effects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/effects.rs)
@@ -333,6 +356,7 @@ The registers and flags an instruction reads and writes, as `x86.instr`
 states them: the rows the target's register file carries
 (`Info::effects`), for the code of `bits` bits.
 
+<!-- src: crates/backend/llrm-core/src/backend/ehprepare.rs sha256:3ebe695b766516dcf882871466e59e9b8cc997d71e66a2d29da2e19e8fdcfbcc -->
 ## ehprepare
 
 Source: [`crates/backend/llrm-core/src/backend/ehprepare.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ehprepare.rs)
@@ -350,6 +374,7 @@ calls B$RESN, and the landing pad is its function's
 row. The pad is entered with nothing the function left in a register, so
 each value live into it goes to the stack, as DemoteRegToStack puts it.
 
+<!-- src: crates/backend/llrm-core/src/backend/exactaddress.rs sha256:55a2ac1c2acfa68964d1029c018b245fe757f50fb2369c3bf8c01265a867b020 -->
 ## exactaddress
 
 Source: [`crates/backend/llrm-core/src/backend/exactaddress.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/exactaddress.rs)
@@ -365,6 +390,7 @@ keeps its origin as the base; only its offset folds. Where the access's
 loop writes a leaf only below its upper half, one `movzx` in the loop's
 preheader makes it zero for every trip.
 
+<!-- src: crates/backend/llrm-core/src/backend/executed.rs sha256:6519569282cf648007248a23a0bee1cf27ab9ea471c93fc89491e0de4824801c -->
 ## executed
 
 Source: [`crates/backend/llrm-core/src/backend/executed.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/executed.rs)
@@ -376,6 +402,7 @@ branch heuristics, a loop's proven trips) weigh its instructions and memory
 operands, so spill code the MIR estimate cannot see is counted. On the
 placed body, each edge's odds say how often a branch is taken.
 
+<!-- src: crates/backend/llrm-core/src/backend/farcall.rs sha256:8f65c463b791a2fc4bab5752735bbb590d34301046e2b90aa6baea01d0fb625b -->
 ## farcall
 
 Source: [`crates/backend/llrm-core/src/backend/farcall.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/farcall.rs)
@@ -388,6 +415,7 @@ pointer as one four-byte value. Lower that target through one reusable
 owned frame cell before allocation; this is target form selection, not
 spilling.
 
+<!-- src: crates/backend/llrm-core/src/backend/farload.rs sha256:bacf7a63244c4f8801272bfadc654661051d80dd14d4eeae41c7cce0ef83280e -->
 ## farload
 
 Source: [`crates/backend/llrm-core/src/backend/farload.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/farload.rs)
@@ -395,6 +423,7 @@ Source: [`crates/backend/llrm-core/src/backend/farload.rs`](https://github.com/a
 Port of `qbopt/backend/farload.py`: select complete far-pointer loads
 before allocation loses their address.
 
+<!-- src: crates/backend/llrm-core/src/backend/floatalloc.rs sha256:079f5dc0822ef1b6a0f233d174cf288ea2b8eeb50abb764db212d9c536ec963a -->
 ## floatalloc
 
 Source: [`crates/backend/llrm-core/src/backend/floatalloc.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatalloc.rs)
@@ -402,6 +431,7 @@ Source: [`crates/backend/llrm-core/src/backend/floatalloc.rs`](https://github.co
 Port of `qbopt/backend/floatalloc.py`: assign floating LIR values to the
 target register stack.
 
+<!-- src: crates/backend/llrm-core/src/backend/floatassign.rs sha256:f3815fe3250d7400efdc99af16b628aaea48d3c95475f90de8868ac7e3ad6eb6 -->
 ## floatassign
 
 Source: [`crates/backend/llrm-core/src/backend/floatassign.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatassign.rs)
@@ -412,6 +442,7 @@ and where. Every spill, restore and memory operand comes out
 explicit, so `floatalloc` converts to stack form and decides nothing, as
 reg-stack does.
 
+<!-- src: crates/backend/llrm-core/src/backend/floatfold.rs sha256:ed5d5dd3b4fa2f8d5117b22acad8d40d102a818fbe3619fd54edc6551d63393b -->
 ## floatfold
 
 Source: [`crates/backend/llrm-core/src/backend/floatfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatfold.rs)
@@ -427,12 +458,14 @@ is the same fold for any load, before the values are placed: it saves the
 load and the x87 register the loaded value held. Sound when nothing between
 the load and its reader may write what it reads.
 
+<!-- src: crates/backend/llrm-core/src/backend/floatregions.rs sha256:08e88ba608c74be0fd4485322d3a557610c253d48f4af1416e42f6e2675c93aa -->
 ## floatregions
 
 Source: [`crates/backend/llrm-core/src/backend/floatregions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatregions.rs)
 
 What the x87 allocator raises, and where its stack cannot reach.
 
+<!-- src: crates/backend/llrm-core/src/backend/fpconvert.rs sha256:aa381b9d010fbc2d2db502b9198365643a22bfe64610461996f816c5d5281074 -->
 ## fpconvert
 
 Source: [`crates/backend/llrm-core/src/backend/fpconvert.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fpconvert.rs)
@@ -445,6 +478,7 @@ same: where `x < 2^63` the conversion is `fptosi x`; else it is `fptosi (x -
 (`selects`: a branch on a 486, which has no conditional move), so there is
 one answer for select.
 
+<!-- src: crates/backend/llrm-core/src/backend/frame.rs sha256:8b8f2d46fe8aded93c66259363a27df026319e6865791f890a63f9c3355ce855 -->
 ## frame
 
 Source: [`crates/backend/llrm-core/src/backend/frame.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/frame.rs)
@@ -455,6 +489,7 @@ they are.
 A slot is two bytes at `[bp-n]`, and `size` is what the prologue has to
 take off sp.
 
+<!-- src: crates/backend/llrm-core/src/backend/framefree.rs sha256:1cea71be1613d139961f0e8c8103ad49455f00da2f0de14f10de4b9d3e29a387 -->
 ## framefree
 
 Source: [`crates/backend/llrm-core/src/backend/framefree.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/framefree.rs)
@@ -470,6 +505,7 @@ code adds cells and moves, no push or pop. What cannot be known here (a
 stack pointer written another way, an indirect call that may pop, inline
 code, a frame register read as a value) keeps the frame register.
 
+<!-- src: crates/backend/llrm-core/src/backend/globals.rs sha256:ec6214dc7e954a9cc994eb2be9c22d96c0574375036485ee92b756feb5d3ff21 -->
 ## globals
 
 Source: [`crates/backend/llrm-core/src/backend/globals.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/globals.rs)
@@ -478,6 +514,7 @@ A MIR module's globals as masm symbols and data, as LLVM's AsmPrinter
 emits a global's initializer: its bytes, and a relocation for each
 address in it.
 
+<!-- src: crates/backend/llrm-core/src/backend/inline_asm.rs sha256:d7541c39eebeb4a818f3a4d1b1f52c6d9aa1a5665d8f8f14afa1c5f2914aeed5 -->
 ## inline_asm
 
 Source: [`crates/backend/llrm-core/src/backend/inline_asm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/inline_asm.rs)
@@ -486,6 +523,7 @@ Inline assembly: the x86 assembler is `llrm_x86::asm`; what is here is the
 QB runtime's naming of registers around it (`Reg`, the registers a runtime
 routine's contract names).
 
+<!-- src: crates/backend/llrm-core/src/backend/isel.rs sha256:3529631942ca202010a7e2a40c57c3aaf3cd881112833390b8818d0bf678913a -->
 ## isel
 
 Source: [`crates/backend/llrm-core/src/backend/isel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/isel.rs)
@@ -495,6 +533,7 @@ virtual registers, as LLVM's SelectionDAG makes MachineInstrs. It chooses
 instructions and addressing only; two-address form, registers and the
 frame's size are the machine phases'.
 
+<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:bc93072571b38bab3ab14b9ffbacb4ead043a870a78a46e9d4ac173a8025b25b -->
 ## jumps
 
 Source: [`crates/backend/llrm-core/src/backend/jumps.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/jumps.rs)
@@ -508,6 +547,7 @@ raise's `if false goto` beside a `goto` leaves a `jcc` over a block that
 only jumps. `placed` orders the blocks; `threaded` keeps that order and
 drops the jumps and the blocks nothing reaches.
 
+<!-- src: crates/backend/llrm-core/src/backend/lanes.rs sha256:b78eeb4cc95b434c4d9fa2c60dfee41cbc9c539a81822b2a17e56808a242cf27 -->
 ## lanes
 
 Source: [`crates/backend/llrm-core/src/backend/lanes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lanes.rs)
@@ -520,6 +560,7 @@ a segment register, or a flag bit against `RegId::None`: 72 in all. Bit
 `i` is the `i`-th lane in `(RegId, u32)` order, so iteration visits lanes
 in the order a `BTreeSet<Lane>` would.
 
+<!-- src: crates/backend/llrm-core/src/backend/layout.rs sha256:a7572c55f650b6f268203aea79fd7b1c35b16b357282110bddf7e35a90215e97 -->
 ## layout
 
 Source: [`crates/backend/llrm-core/src/backend/layout.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/layout.rs)
@@ -536,6 +577,7 @@ Refuses the whole body where it cannot emit one op.
 
 Python's `id(op)` is the `Arc` pointer of an LIR occurrence.
 
+<!-- src: crates/backend/llrm-core/src/backend/lifetimes.rs sha256:e42425f22c74aae5976a7e438015eabdc3292c4ce71a629903dc0c412a27d74e -->
 ## lifetimes
 
 Source: [`crates/backend/llrm-core/src/backend/lifetimes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lifetimes.rs)
@@ -548,6 +590,7 @@ A local is tracked only if it has a marker and nothing but loads, stores and
 pointer arithmetic on it and its markers touch it, and each access is where
 it is live; any other local is live throughout and shares with none.
 
+<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:ad161235e4021bb7b48099856f03c9ba240e43ca1d1bb5b6df91ed0dcca8c675 -->
 ## lirtext
 
 Source: [`crates/backend/llrm-core/src/backend/lirtext.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lirtext.rs)
@@ -555,6 +598,7 @@ Source: [`crates/backend/llrm-core/src/backend/lirtext.rs`](https://github.com/a
 LIR as text, one stage at a time: what `ISEL_DUMP` prints after each
 machine phase.
 
+<!-- src: crates/backend/llrm-core/src/backend/live.rs sha256:ebac856ab49b68987362873b15e49bd5fb472db5603d64aabd7cc34d466304b4 -->
 ## live
 
 Source: [`crates/backend/llrm-core/src/backend/live.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/live.rs)
@@ -570,6 +614,7 @@ but worked out when it is read, from what it is made of: the references the
 value has (`total`), what its copies and folds save (`sibling`, `fold`),
 whether it may be spilled (`pinned`), and its size in the numbering.
 
+<!-- src: crates/backend/llrm-core/src/backend/liveness.rs sha256:7b2465585098b0fc5868ab89c2d4d14cca5a9620ddcab35ffa38b4ccae380e22 -->
 ## liveness
 
 Source: [`crates/backend/llrm-core/src/backend/liveness.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/liveness.rs)
@@ -583,6 +628,7 @@ parallel copy for a phi is written exactly there. deedlines' plasmablobs
 ends its inner loop with `mov di,bx` whose destination no path reads before
 writing it again.
 
+<!-- src: crates/backend/llrm-core/src/backend/liveunion.rs sha256:2881719ed9de5fa166004ed7b019af7f05dd85c63a26443d124842872af0b690 -->
 ## liveunion
 
 Source: [`crates/backend/llrm-core/src/backend/liveunion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/liveunion.rs)
@@ -598,6 +644,7 @@ rewrite moves every interval, and leaves the clashes for the allocator to
 find) is kept apart and looked at one by one, so the answers are the
 pairwise ones in every case.
 
+<!-- src: crates/backend/llrm-core/src/backend/loopslots.rs sha256:c8860a6e794ce89a83e7058e647e642595431a76f2c97352dda8b13dedd7ef9f -->
 ## loopslots
 
 Source: [`crates/backend/llrm-core/src/backend/loopslots.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/loopslots.rs)
@@ -618,6 +665,7 @@ reaches any slot this moves.
 A register live through the loop but untouched in it is one more, parked
 on the stack: pushed on entry and popped on exit.
 
+<!-- src: crates/backend/llrm-core/src/backend/lower_int64.rs sha256:8bde0e991e6840c1dbb062bdd20acf19c3024614088086747953ea14523d4b7d -->
 ## lower_int64
 
 Source: [`crates/backend/llrm-core/src/backend/lower_int64.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lower_int64.rs)
@@ -625,6 +673,7 @@ Source: [`crates/backend/llrm-core/src/backend/lower_int64.rs`](https://github.c
 The contract of an inline routine the compiler places where an operation has
 no instruction (`llrm_x86::helpers`): what it reads and what it changes.
 
+<!-- src: crates/backend/llrm-core/src/backend/machinecse.rs sha256:6e7bbfa5a741fb1197768b1b1f56e4a194de6d571f5b82eeb026825dd4aa87d9 -->
 ## machinecse
 
 Source: [`crates/backend/llrm-core/src/backend/machinecse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinecse.rs)
@@ -638,6 +687,7 @@ byte lanes read and written by independently reproducible instructions, and
 retain an anchor for the virtual/data-source ownership of a redundant
 occurrence.
 
+<!-- src: crates/backend/llrm-core/src/backend/machinedce.rs sha256:569de926d870a330a214989e393329b60e7440060152a5732fb179b550a3490d -->
 ## machinedce
 
 Source: [`crates/backend/llrm-core/src/backend/machinedce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinedce.rs)
@@ -652,6 +702,7 @@ are all dead. This pass answers only that machine question. Source memory
 reads, control flow, trapping arithmetic, x87 work and relocations are
 deliberately outside it.
 
+<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:2d9c5014587220c3e7417d566dbe5f1e0612122df76b39c79fcb025358854c67 -->
 ## masm
 
 Source: [`crates/backend/llrm-core/src/backend/masm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/masm.rs)
@@ -663,12 +714,14 @@ frame and all; this prints it and objbuild.rs encodes it, so the two
 cannot drift. Every operand is already placed; an unplaced one is an
 error.
 
+<!-- src: crates/backend/llrm-core/src/backend/nativeframe.rs sha256:d380299364071beaf75adf13c63017a3cd328f9481c8e83f49ac31a963b4fd9f -->
 ## nativeframe
 
 Source: [`crates/backend/llrm-core/src/backend/nativeframe.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/nativeframe.rs)
 
 Port of `qbopt/backend/nativeframe.py`.
 
+<!-- src: crates/backend/llrm-core/src/backend/nearcode.rs sha256:67b5bab73458727b4a27c399e047c6b17d4c199c0f94680c810cd7876e4a8117 -->
 ## nearcode
 
 Source: [`crates/backend/llrm-core/src/backend/nearcode.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/nearcode.rs)
@@ -678,6 +731,7 @@ and only directly, is entered by a near call: its callers share its code
 segment, so a return address needs no segment. MIR states linkage and calls;
 which instruction enters the code is chosen here, as a target fact.
 
+<!-- src: crates/backend/llrm-core/src/backend/needs.rs sha256:ecf02b3d154d7499ac5dba3f6c4ad04eaf87e6899c8f629db36ef94bb9ea0183 -->
 ## needs
 
 Source: [`crates/backend/llrm-core/src/backend/needs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/needs.rs)
@@ -694,6 +748,7 @@ facts are.
 `LLRM_CHECK_NEEDS` runs a skipped pass anyway and asserts it changed
 nothing.
 
+<!-- src: crates/backend/llrm-core/src/backend/neighbours.rs sha256:209648a9e2a39b2b3d91ea2782b1d46bd7c980d1ae7a2687168a9b499dee3009 -->
 ## neighbours
 
 Source: [`crates/backend/llrm-core/src/backend/neighbours.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/neighbours.rs)
@@ -705,6 +760,7 @@ of ids, or a bit vector over its id range, whichever is smaller:
 live together has N^2 pairs; as tree sets each costs a node and a descent,
 as bits one shift.
 
+<!-- src: crates/backend/llrm-core/src/backend/objbuild.rs sha256:05646991ab1b04c485af9627760cf799e6e69520d03339cd5b5cdbdc2d139d87 -->
 ## objbuild
 
 Source: [`crates/backend/llrm-core/src/backend/objbuild.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/objbuild.rs)
@@ -716,6 +772,7 @@ crate turns it into bytes. A reference to anything the module defines is a
 relocation against its section with the addend in the code, as jwasm writes
 it; anything else is an undefined symbol.
 
+<!-- src: crates/backend/llrm-core/src/backend/overlap.rs sha256:0c1360172b7394c28ac7d388fd48879aca3746c3bd382b456e52681a1ac72e5a -->
 ## overlap
 
 Source: [`crates/backend/llrm-core/src/backend/overlap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/overlap.rs)
@@ -729,6 +786,7 @@ outside the frame (two globals, a pointer) gets it from the rich MIR,
 carried on the instruction as `CallMemory` carries a call's effects,
 never re-derived here.
 
+<!-- src: crates/backend/llrm-core/src/backend/parcopy.rs sha256:483b1fedeed131d29d8a1651564c7a1fa7d338fe6d26ca6bf28f7b1d178b6b7b -->
 ## parcopy
 
 Source: [`crates/backend/llrm-core/src/backend/parcopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/parcopy.rs)
@@ -740,6 +798,7 @@ After allocation: which moves conflict is a question about locations. A
 move may go once nothing left in the group reads what it writes; a cycle
 is exchanged or rotated through the machine stack: every cycle can be.
 
+<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:761b35f87fd5554872f4436b1e0db40fc9090225784e2e25d87cf7828942efb5 -->
 ## peephole
 
 Source: [`crates/backend/llrm-core/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/peephole.rs)
@@ -747,6 +806,7 @@ Source: [`crates/backend/llrm-core/src/backend/peephole.rs`](https://github.com/
 Port of `qbopt/backend/peephole.py`: simplifications that depend on the
 final physical register assignment.
 
+<!-- src: crates/backend/llrm-core/src/backend/phielim.rs sha256:b216995c8e1dfb3a1d4fb2829b302f329382f77825670ddc60a5f7c612d74bf3 -->
 ## phielim
 
 Source: [`crates/backend/llrm-core/src/backend/phielim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/phielim.rs)
@@ -757,6 +817,7 @@ Each phi becomes a copy at the end of every predecessor it names. A copy
 on a critical edge goes in a block of its own, labelled above physical
 offsets in a namespace per body entry. LLVM's `PHIElimination`.
 
+<!-- src: crates/backend/llrm-core/src/backend/pointers.rs sha256:2e31de12d90941f918a3209a5c2151ccbe87b70f1ca0f3f8cf34f382ec64ad5f -->
 ## pointers
 
 Source: [`crates/backend/llrm-core/src/backend/pointers.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/pointers.rs)
@@ -764,6 +825,7 @@ Source: [`crates/backend/llrm-core/src/backend/pointers.rs`](https://github.com/
 Port of `qbopt/backend/pointers.py`: target pointer representation, kept
 below the MIR boundary.
 
+<!-- src: crates/backend/llrm-core/src/backend/postings.rs sha256:f689a6d0017d440c8c272cb11250db6f2c7d504537ebd230f91f97076fccc522 -->
 ## postings
 
 Source: [`crates/backend/llrm-core/src/backend/postings.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postings.rs)
@@ -778,6 +840,7 @@ about: asked of a body, they compare each block's instructions by identity
 with the body they were made of and redo only the blocks that differ (all of
 them, for another function).
 
+<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:8584096cb6681fc12d7b245d60fb44c8b176f47583564e5147987670eca778e0 -->
 ## postrasink
 
 Source: [`crates/backend/llrm-core/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postrasink.rs)
@@ -795,6 +858,7 @@ do. Sound while the successor is entered only from here, nothing between the
 copy and the branch reads its result or writes its source, and no other
 successor has the result live.
 
+<!-- src: crates/backend/llrm-core/src/backend/pressuresink.rs sha256:4d2fedde1a1fe7abb4d8395eafadf2170e6b967e43ace37c0f7ec7c96b726180 -->
 ## pressuresink
 
 Source: [`crates/backend/llrm-core/src/backend/pressuresink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/pressuresink.rs)
@@ -812,6 +876,7 @@ the stretch, and keeps each address operand that died at the load live to
 by `-[d in S] + #{operands in S that die at the load}`. The load moves where
 no class rises and one falls.
 
+<!-- src: crates/backend/llrm-core/src/backend/prologue.rs sha256:35b58b40e1a42440b19f2121bf8766addb6b9abf29d46448ac012230adf496d7 -->
 ## prologue
 
 Source: [`crates/backend/llrm-core/src/backend/prologue.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/prologue.rs)
@@ -823,6 +888,7 @@ For a runtime-framed procedure, reserve after B$ENRA establishes BP and
 release before B$EXSA tears it down. Refused where the body's exits
 cannot all be found.
 
+<!-- src: crates/backend/llrm-core/src/backend/regalloc_input.rs sha256:a11c2185184b55b98e3eebcb5e3e00b0644e4f38616594f54a72abc37e8ca724 -->
 ## regalloc_input
 
 Source: [`crates/backend/llrm-core/src/backend/regalloc_input.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regalloc_input.rs)
@@ -830,6 +896,7 @@ Source: [`crates/backend/llrm-core/src/backend/regalloc_input.rs`](https://githu
 Test support: a function of a MIR fixture as the register allocator
 receives it, and the allocator phase itself.
 
+<!-- src: crates/backend/llrm-core/src/backend/regclass.rs sha256:8992207e32eef55e2482f97cdb20e7c9da08751e411cd144956fb922bc2bac77 -->
 ## regclass
 
 Source: [`crates/backend/llrm-core/src/backend/regclass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regclass.rs)
@@ -842,6 +909,7 @@ Owned here, read by the spiller (`ssaspill`) and the allocator (`allocate`),
 (`target::ADDRESSING`, `target::BYTE`, `Segments::selectors`) are the
 vocabulary; what an operand needs of them comes from the instruction.
 
+<!-- src: crates/backend/llrm-core/src/backend/registerinfo.rs sha256:41fcdc3792df1f3f17f179911f2589bd537d55650c847dffc8b615d27769bfb9 -->
 ## registerinfo
 
 Source: [`crates/backend/llrm-core/src/backend/registerinfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/registerinfo.rs)
@@ -851,6 +919,7 @@ A target's register file, as its description states it
 out and every query of a register asks. A `RegId` is iced's `Register`
 until the newtype (row 11).
 
+<!-- src: crates/backend/llrm-core/src/backend/regthrash.rs sha256:dee73e3bb72b0cd641241f947e333b1be9331038337cb60103418ee84e311970 -->
 ## regthrash
 
 Source: [`crates/backend/llrm-core/src/backend/regthrash.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regthrash.rs)
@@ -870,6 +939,7 @@ copying Z to itself. Between the definition and the move, Y has to stay
 live and untouched and Z has to be dead, and the rewritten instruction has
 to still exist: `select.emit` is that check here.
 
+<!-- src: crates/backend/llrm-core/src/backend/relayout.rs sha256:5d295e083a4a004f6d77e5b30fad07c00b832a0fddf2ae969e122bcbfe41f9f5 -->
 ## relayout
 
 Source: [`crates/backend/llrm-core/src/backend/relayout.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/relayout.rs)
@@ -888,6 +958,7 @@ cell in no known slot, a set of call-private ranges that is not what
 `outside` makes) makes it give up, and the caller runs the backend again as
 before. `LLRM_CHECK_FRAME=1` runs it again either way and compares.
 
+<!-- src: crates/backend/llrm-core/src/backend/rmw.rs sha256:daeeacf88d2dc38f35899ffb64cbd1fa02197b866a64a7cbd00c8842af8b7caa -->
 ## rmw
 
 Source: [`crates/backend/llrm-core/src/backend/rmw.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/rmw.rs)
@@ -895,6 +966,7 @@ Source: [`crates/backend/llrm-core/src/backend/rmw.rs`](https://github.com/ali-m
 Port of `qbopt/backend/rmw.py`: select exact read-modify-write chains
 before register allocation.
 
+<!-- src: crates/backend/llrm-core/src/backend/schedule.rs sha256:304057009d47d418a161e09d5c3c5630ccbdfcbb0c53a9cf02888c1ed1d4d960 -->
 ## schedule
 
 Source: [`crates/backend/llrm-core/src/backend/schedule.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/schedule.rs)
@@ -911,6 +983,7 @@ lanes are the complete dependency graph, so a later independent operation
 can fill the latency of an earlier producer without changing memory or
 ABI behaviour.
 
+<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:30bd382d35f885f9743bb4171bb7a6556c884497dfdbd50b354d36390d5bfd5c -->
 ## selects
 
 Source: [`crates/backend/llrm-core/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selects.rs)
@@ -920,6 +993,7 @@ c, a, b` becomes a branch on `c` around an empty block into a phi of
 `a` and `b`, before instruction selection. LLVM's CodeGenPrepare does
 the same where the target prices a branch below a conditional move.
 
+<!-- src: crates/backend/llrm-core/src/backend/sharedstores.rs sha256:9058d264eae1c4f605c513eea5a8fc4ddce97099885405034e2beeb708370489 -->
 ## sharedstores
 
 Source: [`crates/backend/llrm-core/src/backend/sharedstores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/sharedstores.rs)
@@ -929,6 +1003,7 @@ register, loaded once, then register stores: `mov dword ptr [bp-8],0` is 8
 bytes, `mov [bp-8],eax` 4, and the one `xor eax,eax` 3. Two stores or more
 (one dword zero, too) are fewer bytes; the load costs a clock, so -Os only.
 
+<!-- src: crates/backend/llrm-core/src/backend/shrinkwrap.rs sha256:f2485dcf48b2827a42412ad8511ee26d3a5393127319c4cdf7293bb48f836aa5 -->
 ## shrinkwrap
 
 Source: [`crates/backend/llrm-core/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/shrinkwrap.rs)
@@ -948,6 +1023,7 @@ piece is set up at the entry as before. One piece's entry use no longer
 holds the others there: `paths(n, m)` named ECX at its entry, and paid the
 frame and four more pushes for its `n == 0` answer.
 
+<!-- src: crates/backend/llrm-core/src/backend/slots.rs sha256:c822f24b8ef1e5822a4b86b840d1b619670e26e7ce1204742a812335157ffa5d -->
 ## slots
 
 Source: [`crates/backend/llrm-core/src/backend/slots.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/slots.rs)
@@ -957,6 +1033,7 @@ live together. A slot is a home, the most bytes any holder needs, and what
 its holders occupy over time; `spiller` shares spill slots by it and `isel`
 the slots of block locals by their lifetimes.
 
+<!-- src: crates/backend/llrm-core/src/backend/spiller.rs sha256:f8928a23f26e7a34162f4d168be63ec2dc913d1f6add9f64c6dbc81fefb63bc8 -->
 ## spiller
 
 Source: [`crates/backend/llrm-core/src/backend/spiller.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/spiller.rs)
@@ -968,6 +1045,7 @@ LLVM's `InlineSpiller`: every definition of a spilled value becomes a
 store into its frame slot, and every use a load into a fresh value that
 lives only across that one instruction.
 
+<!-- src: crates/backend/llrm-core/src/backend/spillforward.rs sha256:8cdf1be8e0167f21210f7bc1879c321b01e8588d8169541918a862e054b313ac -->
 ## spillforward
 
 Source: [`crates/backend/llrm-core/src/backend/spillforward.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/spillforward.rs)
@@ -981,6 +1059,7 @@ of or written into since. Across blocks that fact has to be met at every
 incoming edge, which is an availability problem and not something the first
 instruction of a block and the last of its predecessor can answer.
 
+<!-- src: crates/backend/llrm-core/src/backend/spillplacement.rs sha256:56b66494dbc90eba4c9ba4d5cac826cd3606bd082c225956ada24edceae59544 -->
 ## spillplacement
 
 Source: [`crates/backend/llrm-core/src/backend/spillplacement.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/spillplacement.rs)
@@ -994,6 +1073,7 @@ stack. Blocks bias the bundles at their borders; a block the value only
 passes through links its two bundles. A Hopfield network settles each
 bundle's sign.
 
+<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:e21279af9a586899b6d6d1b8160a2665c3ce857e80136cfdf0ad38f44ca331cc -->
 ## splitkit
 
 Source: [`crates/backend/llrm-core/src/backend/splitkit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/splitkit.rs)
@@ -1005,6 +1085,7 @@ LLVM's `SplitKit`: `placed`, `local` and `per_block` choose where a piece
 holds the value (`tryRegionSplit`, `tryLocalSplit`, `tryBlockSplit`), and
 `carved` makes it (`SplitEditor`).
 
+<!-- src: crates/backend/llrm-core/src/backend/ssarepair.rs sha256:0eabc5421d9eb0b2a481e0c73627fe1b6f2e09c087912e1001f7644f6d1ce9a4 -->
 ## ssarepair
 
 Source: [`crates/backend/llrm-core/src/backend/ssarepair.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ssarepair.rs)
@@ -1022,6 +1103,7 @@ each value keeps its name, and each reload is named afresh. A block that
 holds the value in no register on entry (`held`) reloads it before every
 use, so it needs no phi for it.
 
+<!-- src: crates/backend/llrm-core/src/backend/ssaspill.rs sha256:75e86eab0e340c4964e06493201d9a4046d0ca8a7a23684245a77ef29b91139b -->
 ## ssaspill
 
 Source: [`crates/backend/llrm-core/src/backend/ssaspill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ssaspill.rs)
@@ -1040,6 +1122,7 @@ What a later phase will take (x87 compares' AX, constrained registers) is
 stated on the instruction as `requires`, `delivers` and `clobbers`; this
 reserves what the instruction states and nothing else.
 
+<!-- src: crates/backend/llrm-core/src/backend/stackusage.rs sha256:08c7033aeffb07a59c85df9e64ce2c58a217796e4cf0390205c4ab5e43b483eb -->
 ## stackusage
 
 Source: [`crates/backend/llrm-core/src/backend/stackusage.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/stackusage.rs)
@@ -1054,6 +1137,7 @@ arguments hold at once. A routine the program does not define has a frame
 this cannot know, so a bound through one is a lower bound, and a cycle of
 calls has none.
 
+<!-- src: crates/backend/llrm-core/src/backend/stepflags.rs sha256:a3723e7a5ddecce3bccd707c7418e14d49664f931b692a56a168693a618a4182 -->
 ## stepflags
 
 Source: [`crates/backend/llrm-core/src/backend/stepflags.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/stepflags.rs)
@@ -1067,6 +1151,7 @@ run before allocation as LLVM runs it). Left in, the compare reads `j`
 after the step defined `j1`, so the two cannot share a register and the
 counter is stepped through a `lea` and copied back.
 
+<!-- src: crates/backend/llrm-core/src/backend/storecombine.rs sha256:fdce47cb20ea9768009a9f96af288d98c86baa2611dd275951dbd6ab958c0af7 -->
 ## storecombine
 
 Source: [`crates/backend/llrm-core/src/backend/storecombine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/storecombine.rs)
@@ -1074,6 +1159,7 @@ Source: [`crates/backend/llrm-core/src/backend/storecombine.rs`](https://github.
 Port of `qbopt/backend/storecombine.py`: pack neighboring literal word
 stores after allocation.
 
+<!-- src: crates/backend/llrm-core/src/backend/storedhomes.rs sha256:0e9d099570d8cdd18d29616fa38fdcff07045ad9b415468db337811164085a34 -->
 ## storedhomes
 
 Source: [`crates/backend/llrm-core/src/backend/storedhomes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/storedhomes.rs)
@@ -1087,6 +1173,7 @@ The proof is the optimizer's, over MIR. What is checked here is what a later
 pass may have changed: nothing writes the cell while the value lives, and
 every definition of the value is a plain copy, which spilling removes.
 
+<!-- src: crates/backend/llrm-core/src/backend/target.rs sha256:e65d29b6fbc1ab420c0b0853a0142aeeaa62dc2eada93c05183e057ee4a35dc7 -->
 ## target
 
 Source: [`crates/backend/llrm-core/src/backend/target.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/target.rs)
@@ -1099,6 +1186,7 @@ halves are the two sections below. A register class is the unit an
 allocator works in: 16-bit addressing reaches memory through bx, bp, si
 and di and nothing else.
 
+<!-- src: crates/backend/llrm-core/src/backend/timing.rs sha256:8172ef8dab6886cc09eeaad81a2efe8cdb87b3a4f1b1be96a0a4f0fbd6230ddb -->
 ## timing
 
 Source: [`crates/backend/llrm-core/src/backend/timing.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/timing.rs)
@@ -1109,6 +1197,7 @@ bounds, separate from scoreboard estimates.
 Where it is used: docs/machine/arithmetic-targets.md. Bounds exclude
 decode, prefix, memory and scheduling costs.
 
+<!-- src: crates/backend/llrm-core/src/backend/twoaddr.rs sha256:6e70306b58660f0a99f42a5c9586899558fc66bde775386450728d13bc9f4dcc -->
 ## twoaddr
 
 Source: [`crates/backend/llrm-core/src/backend/twoaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/twoaddr.rs)
@@ -1119,6 +1208,7 @@ it reads.
 LLVM's `TwoAddressInstructionPass`: `c := a + b` becomes `c := a` then
 `c := c + b`.
 
+<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:884989d59b8f7fcb35699dab4287ffa79f8917124d776176d31c98b1a318e87f -->
 ## upperzero
 
 Source: [`crates/backend/llrm-core/src/backend/upperzero.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/upperzero.rs)
@@ -1132,6 +1222,7 @@ the upper lanes, and anything whose effects are unknown, loses it. The
 entry knows nothing. A 32-bit effective address names the same byte as
 the 16-bit one only through registers this proves.
 
+<!-- src: crates/backend/llrm-core/src/backend/valuetrack.rs sha256:45713561f647aca3b9d3bdeb358b9f0126fc11bc849fa7b330f7ae7bae5a52c2 -->
 ## valuetrack
 
 Source: [`crates/backend/llrm-core/src/backend/valuetrack.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/valuetrack.rs)
@@ -1154,6 +1245,7 @@ No value is the answer wherever the code cannot be followed or the value is
 in no register or cell. An optimizer that wrote the value somewhere
 unrecorded costs the variable its location there, never a wrong one.
 
+<!-- src: crates/backend/llrm-core/src/backend/verify.rs sha256:8cfd2fde38f1566b5aea6ccfec7ba244aacb48fae9ed4e2616e9b0f61f517a58 -->
 ## verify
 
 Source: [`crates/backend/llrm-core/src/backend/verify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/verify.rs)
