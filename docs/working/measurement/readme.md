@@ -62,3 +62,7 @@ A reference that cannot be built records why: Open Watcom needs its 16-bit libra
 Every row in `numbers.md` carries the dosbox-x version, the sha256 of the conf, of BC.EXE, LINK.EXE and the
 runtime library, the configuration tag, the llrm git revision, the host and the date. A number without that stamp
 is not quotable. `tools/bench` counts need only the commit: they do not depend on the host.
+
+## More
+
+[compile-time](compile-time.md) is what the compiler costs; [vs-gcc](vs-gcc.md) compares the code with gcc and clang.

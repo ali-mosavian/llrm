@@ -24,8 +24,7 @@
   sheet names the multiplier beside the register or memory operand, not the accumulator, so `harness.multiplier_of`
   reads the r/m source of `imul r/m32` and the immediate of the three-operand form. recmany shows what rests on it:
   gcc's reciprocal multiply holds the magic number in EAX and the numerator in the r/m operand (about 14 clocks),
-  clang's the reverse (10 + 32 = 42, the same as `idiv`). The rounding of the logarithm is not stated, see
-  docs/measurement/timing-audit.md; a program whose ratio rests on an `imul` is not read as a compiler finding
+  clang's the reverse (10 + 32 = 42, the same as `idiv`). The rounding of the logarithm is not stated; a program whose ratio rests on an `imul` is not read as a compiler finding
   until its operand order is.
 
 ## Table (-O2; -Os and memory operands in table.md)

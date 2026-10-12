@@ -1,5 +1,10 @@
 # Architecture
 
+Contents: [split](split.md), [compiler-foundations](compiler-foundations.md), [rich-mir](rich-mir.md),
+[hir](hir/readme.md), [hir model](hir/model.md), [modref](modref.md), [points-to-lifetime](points-to-lifetime.md),
+[strong-alias](strong-alias.md), [tables](tables.md), [packages](packages.md), [source-layout](source-layout.md),
+[object model](../formats/object-model.md).
+
 llrm, the Low Level Real Machine, is a compiler suite for 16-bit real-mode DOS.
 Four frontends raise their input to SSA-based MIR; one optimizer improves whole
 bodies, lowers them to x86 LIR, allocates physical resources and writes a
@@ -10,9 +15,8 @@ The architectural rule is simple:
 > Recognition happens while raising. Program optimization is machine-independent
 > MIR. Machine choices return only at lowering and remain below it.
 
-This document describes the production path in the current source tree. Historical
-measurements and milestones belong in `docs/history/takeover-progress.md`; optimization
-targets and their evidence belong in `docs/measurement/targets.md`.
+This document describes the production path in the current source tree. Git history
+keeps measurements and milestones.
 
 ## End-to-end pipeline
 

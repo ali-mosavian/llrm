@@ -180,6 +180,6 @@ the per-case table, the sharing matrix and the coverage of each dimension.
 
 ## Measuring
 
-`docs/measurement/readme.md` says what each kind of number means and which are
-quotable; `docs/measurement/numbers.md` holds the results. `docs/machine/metal.md` is the protocol
+[measurement](measurement/readme.md) says what each kind of number means and which are
+quotable. [metal](../machine/metal.md) is the protocol
 for the one question a model cannot answer.

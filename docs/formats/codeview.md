@@ -178,7 +178,7 @@ record -- never touching `$$TYPES` -- and BYREF `INTEGER`/`STRING` get
 `SINGLE`/`DOUBLE` (`0x88`+`0x20` = `0xa8`, `0x89`+`0x20` = `0xa9`,
 `tests/run/qb/byref2.bas`'s `Half!`/`Doubled#`). `STRING`(far) is still unmeasured:
 forcing a far string needs `/Fs`, and PDS is the only one of the three that
-accepts it (`docs/history/inherited-plan.md`'s own switch matrix), so there is no
+accepts it, so there is no
 QB 4.5 switch that reaches that code path at all.
 
 ## Types

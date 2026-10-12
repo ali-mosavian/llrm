@@ -728,7 +728,7 @@ returns as any other enum does.
 
 ### 9.1 Calling convention
 
-- Every call is `call far`. Under the default convention (regparm3, `docs/targets.md`) the first three
+- Every call is `call far`. Under the default convention (regparm3, [targets](../../machine/targets.md)) the first three
   integer or pointer arguments, left to right, are in EAX, EDX, ECX (AL, AX or EAX by size); every other
   argument is pushed right to left, each at least one word, and the caller removes them (`-mabi=cdecl`
   pushes them all; with a frame the first is then at `[bp+6]`).

@@ -11,6 +11,8 @@ registers or instructions. See [the MIR boundary](docs/architecture/split.md). T
 output within 1.5× a hand-derived modern-compiler listing for every suite
 program; [measurement](docs/working/measurement/readme.md) says how it is measured.
 
+Documentation starts at [docs](docs/readme.md).
+
 ## Frontends
 
 | Tool | Input |
@@ -343,4 +345,4 @@ tools.
 
 For every failure, dump every stage and diff the first changed pair. Every fix
 needs a regression that fails before the fix. Testing details are in
-[docs/testing.md](docs/working/testing.md).
+[testing](docs/working/testing.md).

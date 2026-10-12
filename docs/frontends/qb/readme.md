@@ -1,5 +1,9 @@
 # QB source frontend
 
+Contents: [abi](abi.md), [dialects](dialects.md), [divergences](divergences.md),
+[memory-model](memory-model.md), [generated-parser](generated-parser.md),
+[parser-provenance](parser-provenance.md), [parser-coverage-audit](parser-coverage-audit.md).
+
 Small BC-compared runtime probes are required before qrender or qb-quake module
 substitution.
 Status: implementation in progress. The common HIR boundary and an in-tree,
@@ -311,7 +315,7 @@ compiler must not depend on a sibling checkout at build time.
 
 The existing OMF frontend already answers the difficult lowering questions
 for compiler output. Its main raising sequence in
-[`mir.rs`](../../../crates/backend/llrm-core/src/model/mir.rs) recognizes whole LONG values,
+`mir.rs` recognizes whole LONG values,
 arithmetic runtime helpers, floating evaluation, and numeric array access.
 
 For a small program accepted by a legacy compiler, the validation loop is:

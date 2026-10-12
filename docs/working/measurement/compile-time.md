@@ -34,7 +34,7 @@ Each is a pull request of this series; every one is byte-identical on the 272 pr
 - [#1101](https://github.com/ali-mosavian/llrm/pull/1101) branch probability: an edge's trips are worked out once (lir jumps on a 16-deep nest -27%).
 - [#1104](https://github.com/ali-mosavian/llrm/pull/1104) a store moved to a loop's exit keeps the ranges and facts held (a 32-deep nest -23%).
 - [#1115](https://github.com/ali-mosavian/llrm/pull/1115) -O1 states no parameter ranges from callers' arguments (gcc's `-fipa-vrp` is -O2; -1.0%).
-- [#1122](https://github.com/ali-mosavian/llrm/pull/1122) docs/levels.md: the passes gcc leaves to -O2 that ours runs at -O1, each with its `opts.cc` line.
+- [#1122](https://github.com/ali-mosavian/llrm/pull/1122) [levels](../../reference/levels.md): the passes gcc leaves to -O2 that ours runs at -O1, each with its `opts.cc` line.
 - [#1128](https://github.com/ali-mosavian/llrm/pull/1128) the change log is filtered against what each analysis declares it reads (`Depends`); `LLRM_WHY` counts recomputations (-0.6%).
 - [#1134](https://github.com/ali-mosavian/llrm/pull/1134) `LLRM_DEBUG=runs` reports a pass's own work apart from the analyses it computed first (the earlier reading of 63% idle was 6.1% of the compile).
 - [#1142](https://github.com/ali-mosavian/llrm/pull/1142) the constant-cycle propagation is set up only where a phi has no fact (-0.9%).
