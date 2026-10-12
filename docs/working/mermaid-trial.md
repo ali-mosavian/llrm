@@ -1,6 +1,6 @@
 # Mermaid figures: trial
 
-Audience: the maintainers choosing how docs draw figures. GitHub renders a `mermaid` fence in markdown, sized to the page, in its light and dark themes, with no generated file. This page draws four of our figures that way, with styling by classes. Compare with [figures](figures.md) (generated PNG).
+Audience: the maintainers choosing how docs draw figures. GitHub renders a `mermaid` fence in markdown, sized to the page, in its light and dark themes, with no generated file. This page draws four of our figures that way, with styling by classes. Compare with the generated PNG figures in #1546.
 
 ## Pipeline (graph with groups)
 
