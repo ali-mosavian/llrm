@@ -80,7 +80,7 @@ def missing(lines: list[str], runs_or_provides: str) -> list[str]:
     return gaps
 
 
-LINK = re.compile(r"\[(`[^`\]]+`)\](?:\[[^\]]*\])?(?!\()")
+LINK = re.compile(r"\[(`[^`\]]+`)\](?:\[[^\]]*\]|\([\w:]+\))?(?!\()")
 
 
 def render(lines: list[str]) -> list[str]:

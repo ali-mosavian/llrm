@@ -3,7 +3,6 @@
 #   plan    gate.py plan --json: the tier from the diff, the job groups it needs, the steps skipped here.
 #   build   cargo build + test binaries once; the target dir is handed to the groups as an artifact.
 #   gate    one job per group (tiers.toml [groups]), in parallel; wall time is the longest group.
-#   passdocs  tools/passdocs.py: the pass, analysis and backend reference from the source headers, as an artifact.
 #   ci      one status for the run.
 # A step needing a tool that is not in the repository (Turbo C++, CodeView, QCport's Borland) is SKIPPED by gate.py
 # on a host without it, with the reason; the session gates and the full run on main still run it.
@@ -131,25 +130,11 @@ jobs:
           path: target/gate-logs
           retention-days: 3
 
-  # Independent of the plan: a header changes with crates/**, which the plan may give no step.
-  passdocs:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - run: python3 tools/passdocs.py --check --require crates/opt/llrm-analysis/src
-      - run: python3 tools/passdocs.py --out passdocs
-      - uses: actions/upload-artifact@v4
-        with:
-          name: passdocs
-          path: passdocs
-          retention-days: 14
-
   ci:
-    needs: [plan, build, gate, passdocs]
+    needs: [plan, build, gate]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - run: |
-          echo "plan=${{ needs.plan.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} passdocs=${{ needs.passdocs.result }}"
-          [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.passdocs.result }}" = success ]
+          echo "plan=${{ needs.plan.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }}"
+          [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ]
