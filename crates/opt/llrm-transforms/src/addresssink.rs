@@ -18,7 +18,7 @@
 //! what the arms stored, and a sink earlier would be undone by it.
 
 use llrm_analysis::cfg;
-use llrm_analysis::manager::{Annotated, AssumptionCache, Bounded, Counted, DominatedEdges, ExposedFrames, Registers};
+use llrm_analysis::manager::{AssumptionCache, ExposedFrames};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
@@ -50,18 +50,16 @@ impl FunctionPass for AddressSink {
         if sunk(unit.function) || sunk_compares {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
-            // A value is replaced by the one it equalled: what is known of
-            // values, blocks and loops stands.
+            // A phi's value is replaced by the one it equalled: the blocks and
+            // loops stand, and what is said of an assumption or of
+            // the frame objects reads no phi. What is said of values (their
+            // facts, a loop's bound, the annotations, the edges a
+            // condition dominates) may name the phi, and is worked out again.
             PreservedAnalyses::none()
                 .preserve::<ExposedFrames>()
-                .preserve::<Annotated>()
                 .preserve::<Dominators>()
                 .preserve::<Loops>()
-                .preserve::<Registers>()
                 .preserve::<AssumptionCache>()
-                .preserve::<Counted>()
-                .preserve::<DominatedEdges>()
-                .preserve::<Bounded>()
         } else {
             PreservedAnalyses::all()
         }

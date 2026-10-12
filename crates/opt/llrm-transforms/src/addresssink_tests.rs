@@ -233,3 +233,58 @@ b3:
 ";
     assert!(sunk(text, &[&[1, 5], &[1, -5], &[2, 9]]).contains("phi i16"));
 }
+
+/// Asks for each load's and store's reference, and changes nothing.
+struct Warm;
+
+impl llrm_mir::passes::FunctionPass for Warm {
+    fn name(&self) -> &'static str {
+        "warm"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let _ = analyses.get::<llrm_analysis::manager::Annotated>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// `addresssink left annotated held but stale` on 47 objects (bintree -O2): the
+/// pass said it kept every load's reference while it replaced the pointer a
+/// load reads, so the next pass was handed the reference through the phi that
+/// was gone.
+#[test]
+fn test_replacing_a_phi_leaves_no_stale_reference_held() {
+    let text = format!(
+        "{HEAD}define i16 @f(i16 %i, i16 %c) {{
+b0:
+  %p = getelementptr inbounds i16, ptr @g, i16 %i
+  %x = load i16, ptr %p
+  %t = icmp slt i16 %x, %c
+  br i1 %t, label %b1, label %b2
+
+b1:
+  %u = icmp sgt i16 %x, 7
+  br i1 %u, label %b2, label %b3
+
+b2:
+  %q = phi ptr [ %p, %b0 ], [ %p, %b1 ]
+  %y = load i16, ptr %q
+  ret i16 %y
+
+b3:
+  ret i16 0
+}}
+"
+    );
+    let mut module = parsed(&text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.verify_invalidation = true;
+    manager.add(Warm);
+    manager.add(AddressSink);
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    assert!(!crate::testing::printed(&module).contains("phi"));
+}
