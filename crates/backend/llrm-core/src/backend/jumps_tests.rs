@@ -1166,7 +1166,7 @@ fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
         }
         let whole = _live_values(&blocks);
         let some: BTreeSet<u32> = (0..9).filter(|_| next(2) == 0).collect();
-        let found = _live_in_of(&blocks, &some);
+        let found = Mentions::of(&blocks).live_in_of(&blocks, &some);
         for value in &some {
             for block in &blocks {
                 assert_eq!(

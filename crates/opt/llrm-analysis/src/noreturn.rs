@@ -1,5 +1,6 @@
-//! Which bodies and blocks cannot reach a normal return, and the edit that cuts
-//! a block after a call that cannot return.
+//! Finds the bodies and blocks that cannot reach a normal return, and cuts a
+//! block after a call that cannot return, so the code after it and the paths
+//! into it fold away.
 //!
 //! # How it works
 //! A call is terminal when its callee is in the given `noreturn` set or the
@@ -34,6 +35,40 @@
 //!      store %b, %p
 //!      br %next                  %next loses bb as a predecessor
 //! ```
+//!
+//! # Example
+//! `after_terminal_calls` at the call to `@exit`:
+//!
+//! Before:
+//!
+//! ```mir
+//! define i16 @f() {
+//! b0:
+//!   call void @exit()
+//!   %x = add i16 1, 2
+//!   br label %b1
+//!
+//! b1:
+//!   store i16 %x, ptr @g
+//!   ret i16 %x
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! define i16 @f() {
+//! b0:
+//!   call void @exit()
+//!   unreachable
+//! }
+//! ```
+//!
+//! The tail of `b0` is gone, so `b1` is unreachable and removed; the call stays
+//! and still runs first.
+//!
+//! From unit test `test_terminal_call_removes_its_newly_unreachable_successor`
+//! in `noreturn_tests.rs`.
 //!
 //! # Provides
 //! `TerminalSites` (analysis of the function with no body proven noreturn),

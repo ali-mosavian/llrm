@@ -5,23 +5,33 @@ they are built and checked, and how they become the syntax tree.
 
 ## Pipeline
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  g1["<b>grammar/qbasbnf.prs</b><br/><small>grammar/peropcod.txt</small>"]:::src
+  g2["<b>grammar/ast-actions.toml</b><br/><small>grammar/dialect-extensions.toml</small>"]:::src
+  gen["<b>crates/buildprs</b><br/><small>(vendored generator)</small>"]:::opt
+  tab["<b>build.rs -#gt;</b><br/><small>OUT_DIR/qbasic_parser_tables.rs<br/>state and dispatch tables,<br/>anchors, tokens, AstAction,<br/>ExternalAction</small>"]:::out
+  src["<b>source text</b>"]:::mid
+  lex["<b>generated_parser/lexer.rs</b><br/><small>tokens with spans</small>"]:::mid
+  eng["<b>generated_parser/engine.rs</b><br/><small>table interpreter<br/>checkpoint / rollback<br/>per alternative</small>"]:::mid
+  ast["<b>generated_parser/ast.rs</b><br/><small>(builder)<br/>-#gt; syntax::Module</small>"]:::data
+  g1 --> gen
+  g2 --> gen
+  gen --> tab
+  src --> lex
+  lex --> eng
+  tab --> eng
+  eng --> ast
 ```
- grammar/qbasbnf.prs ----+
- grammar/peropcod.txt ---+--> crates/buildprs (vendored generator)
- grammar/ast-actions.toml-+        |
- grammar/dialect-extensions.toml   v
-                         build.rs --> OUT_DIR/qbasic_parser_tables.rs
-                                       T_STATE, T_INT_NT_DISP, T_EXT_NT_DISP,
-                                       statement/function anchors, tokens,
-                                       AstAction, ExternalAction
-                                              |
- source text --> generated_parser/lexer.rs --> tokens with spans
-                                              |
-                      generated_parser/engine.rs (table interpreter)
-                        checkpoint / rollback per alternative
-                                              |
-                      generated_parser/ast.rs (builder) --> syntax::Module
-```
+
+*From grammar to syntax tree*
 
 `build.rs` runs the vendored generator over the grammar and opcode catalog and
 emits the state table, the internal and external nonterminal dispatch tables,
@@ -65,12 +75,24 @@ and word buffers do not enter syntax, HIR or MIR.
 
 ## Speculative parsing
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  cp["<b>token cursor +</b><br/><small>builder checkpoint</small>"]:::src
+  alt["<b>table alternative /</b><br/><small>internal NT / external action</small>"]:::mid
+  rej["<b>restore both</b>"]:::out
+  acc["<b>commit both</b>"]:::opt
+  cp --> alt
+  alt -->|"reject"| rej
+  alt -->|"accept"| acc
 ```
- token cursor + builder checkpoint
-        | table alternative / internal NT / external action
-        +-- reject -> restore both
-        `-- accept -> commit both
-```
+
+*An alternative checkpoints the token cursor and the builder*
 
 An alternative checkpoints the token cursor, the `AstSink` and every builder
 collection or mode it can change (expressions, statements, declarations,

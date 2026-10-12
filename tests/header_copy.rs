@@ -209,3 +209,158 @@ fn test_a_loop_with_two_tests_that_leave_it_has_both_copied() {
     let folded = lines.iter().any(|line| line.starts_with("test e") && line.ends_with(", 1"));
     assert!(folded, "{text}");
 }
+
+/// With no flag the copy is on and `Hoist` runs before the counters are
+/// chosen: `sum_three`'s three row loads leave the loop and its counter runs
+/// to zero, `add ax, [p+i] x3; add i, 2; jne` (5 instructions a trip). Hoist
+/// after LSR, or the copy off, left `inc ecx` beside `add edi, 2` (6).
+#[test]
+fn test_sum_three_loop_is_five_instructions_by_default() {
+    let source = format!("{}/bench/parity/sum_three/sum_three.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let loop_ = lines
+        .windows(5)
+        .any(
+            |w| w[..3].iter().all(|line| line.starts_with("add ax, word ptr"))
+                && w[3].starts_with("add e")
+                && w[3].ends_with(", 2")
+                && w[4].starts_with("jne "),
+        );
+    assert!(loop_, "{text}");
+}
+
+/// Tuned for size the copy is off and the loop is entered at its body only
+/// after the last `Rotate`: `Hoist` ahead of it found no loop it could take
+/// the three row loads out of, and the loop reloaded `[row+4]` each trip
+/// (`mov ebp, [ecx+4]; add ax, [ebp+edi]` three times).
+#[test]
+fn test_tuned_for_size_the_row_loads_still_leave_the_loop() {
+    let source = format!("{}/bench/parity/sum_three/sum_three.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-Os", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let loop_ = lines.windows(3).any(|w| w.iter().all(|line| line.starts_with("add ax, word ptr")));
+    assert!(loop_, "{text}");
+}
+
+/// A loop entered behind its copied tests leaves from its header, where the
+/// counter is tested after the step that is made for it anyway: `lea cx,
+/// [si+1]; cmp si, 31; ...; mov si, cx` held the counter in two registers.
+/// gcc's ivopts tests the stepped value, `inc dx; cmp dx, 32`. mandel's m16
+/// loop ran 200737 instructions against 172712 with the copy off.
+#[test]
+fn test_a_counter_tested_in_the_header_after_its_step_is_tested_stepped() {
+    let source = format!("{}/bench/mandel/mandel.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let stepped = lines
+        .windows(2)
+        .any(|pair| pair[0].strip_prefix("inc ").is_some_and(|register| pair[1] == format!("cmp {register}, 32")));
+    assert!(stepped, "{text}");
+}
+
+/// A path that returns early stored its result in the frame cell the other
+/// paths' sum lives in, and the shared return reloaded it: the path touched the
+/// frame, so the registers and the frame were set up on it too (queens' leaf
+/// call: `push si; push di; ... pop di; pop si; leave`, the most frequent
+/// path). With the return copied for the path, the reload is forwarded and the
+/// store dead before the pieces it needs are counted: `mov ax, 1; ret`.
+#[test]
+fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
+    let source = format!("{}/bench/queens/queens.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.ends_with(':')).collect();
+    let early = lines.windows(2).any(|pair| pair[0] == "mov ax, 1" && pair[1] == "ret");
+    assert!(early, "{text}");
+}
+
+/// Behind the copy `JumpThread` cleans the function with `Algebraic` after
+/// LSR, and `icmp ne (x + 1), 2` became `icmp ne x, 1` for the counter's own
+/// next value: `lea eax,[ecx+1]; add edi,24; cmp ecx,1; mov ecx,eax; jne`, the
+/// counter in two registers (x_life +5% clocks). The step is tested where it
+/// is made: `inc ecx; add edi,24; cmp ecx,2; jne`.
+#[test]
+fn test_a_counted_inner_loop_tests_its_stepped_counter_after_the_cleanup() {
+    let text = listing("x_life", &["-ftree-ch"]);
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let stepped = lines
+        .windows(4)
+        .any(
+            |w| w[0].strip_prefix("inc ")
+                .is_some_and(|register| w[1..3].iter().any(|line| *line == format!("cmp {register}, 2")))
+                && w[3].starts_with("jne "),
+        );
+    assert!(stepped, "{text}");
+}
+
+/// A register only the loop uses was saved at the entry when the copy's guard
+/// skipped the loop and joined the returns after it: the early return
+/// (`hi - lo < 2`, most calls of recchop) paid `push ebp; push edi` and their
+/// pops. The save point goes up the dominators to the block every return it
+/// closes at is below: two registers at the entry, as with the copy off.
+#[test]
+fn test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return() {
+    let source = format!("{}/bench/recchop/recchop.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O1", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let function: Vec<&str> =
+        text.lines().map(str::trim).skip_while(|line| !line.starts_with("_chop proc")).skip(1).collect();
+    let entry =
+        function.iter().take_while(|line| !line.starts_with("jl ")).filter(|line| line.starts_with("push ")).count();
+    assert!(entry <= 2, "{entry} pushes before the early return\n{text}");
+}
+
+/// A loop the guard enters at its second block (`while (at >= gap &&
+/// values[at - gap] > value)`: the test of the value follows the guard) was
+/// laid out [guard][body][test] and entered by a `jmp` to the test, one taken
+/// jump a loop entry (shellsort -O1 +3.5% instructions). Turned to start at the
+/// block it is entered at, the guard falls into the test and the bottom test
+/// jumps back, as gcc's `rotate_loop` does for a loop entered in its middle.
+#[test]
+fn test_a_loop_entered_at_its_second_block_is_laid_out_from_it() {
+    let source = format!("{}/bench/shellsort/shellsort.c", env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O1", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let jumps = text.lines().filter(|line| line.trim().starts_with("jmp ")).count();
+    assert_eq!(jumps, 0, "{text}");
+}

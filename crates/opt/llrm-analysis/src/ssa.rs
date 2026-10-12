@@ -1,5 +1,5 @@
-//! SSA helpers: use lists, dead-phi pruning, value substitution and an SSA
-//! updater.
+//! SSA helpers the transformations share: use lists, dead-phi pruning, value
+//! substitution and an updater that places the phis a new definition needs.
 //!
 //! # How it works
 //! `use_index` maps each value to the non-phi instructions that read it, in
@@ -29,14 +29,49 @@
 //! the end of the block it comes from, any other at the middle of its block.
 //! `inserted_phis` lists the phis placed that stand.
 //!
-//! ```text
-//!       A: v1 = ...          available: A -> v1, B -> v2
-//!      / \
-//!     B   C                  value_in_middle_of_block(D):
-//!     v2  |                    preds B, C -> phi placed in D
-//!      \ /                       D: %p = phi [v2, B], [v1', C]
-//!       D: use v             C has one pred A -> passes v1 up
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   a["<b>A: v1 = ...</b>"]:::mid
+//!   b["<b>B</b><br/><small>v2</small>"]:::mid
+//!   c["<b>C</b>"]:::mid
+//!   d["<b>D: use v</b><br/><small>%p = phi [v2, B], [v1', C]</small>"]:::mid
+//!   a --> b
+//!   a --> c
+//!   b --> d
+//!   c --> d
 //! ```
+//!
+//! *Available A -> v1, B -> v2. Asking for D finds preds B and C and places D:
+//! %p = phi [v2, B], [v1', C]; C has one pred A and passes v1 up*
+//!
+//! # Example
+//! `pruned_phis` on two phis that only read each other:
+//!
+//! ```mir
+//! define void @f(ptr %seed, i1 %c) {
+//! b0:
+//!   br label %b1
+//!
+//! b1:
+//!   %first = phi ptr [ %seed, %b0 ], [ %second, %b1 ]
+//!   %second = phi ptr [ %seed, %b0 ], [ %first, %b1 ]
+//!   br i1 %c, label %b1, label %b2
+//!
+//! b2:
+//!   ret void
+//! }
+//! ```
+//!
+//! No root and no non-phi instruction reads either phi, so both are erased and
+//! the call returns true. If the body also held `call void @use(ptr %first)` or
+//! `%loaded = load i16, ptr %first`, or `%first` were a root, both phis stay.
+//!
+//! From unit test
+//! `test_unused_phi_cycles_are_pruned_but_real_dependencies_survive` in
+//! `ssa.rs`.
 //!
 //! # Provides
 //! The helpers above. Consumers in llrm-transforms: `dead`, `promote`

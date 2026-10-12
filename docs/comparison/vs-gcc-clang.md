@@ -6,29 +6,36 @@ No result is kept here. Each tool prints its own table; a number in a document s
 
 ## Flow
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  src["<b>bench/NAME/NAME.c</b><br/><small>+ vsgcc/kernels/x_*/x_*.c</small>"]:::src
+  wrap["<b>wrapped source: one copy,</b><br/><small>every compiler builds it<br/>(wrap.py: main calls<br/>bench_NAME through a<br/>volatile pointer)</small>"]:::mid
+  llrm["<b>llrm-c -m32 -mabi=sysv</b><br/><small>-O1/-O2/-O3/-Os<br/>-march=i486<br/>OMF object<br/>harness.py links it</small>"]:::opt
+  gcc["<b>gcc -m32 -march=i486</b><br/><small>-O1/-O2/-O3/-Os<br/>ELF object<br/>ld -static + stub.elf</small>"]:::out
+  clang["<b>clang -m32 ...</b><br/><small>-O1/-O2/-O3/-Os<br/>ELF object<br/>ld -static + stub.elf</small>"]:::data
+  run["<b>unicorn, 32-bit protected</b><br/><small>mode: run main#59; count<br/>bench_NAME from entry to<br/>its own return</small>"]:::warn
+  per["<b>per variant: ins, mem ops,</b><br/><small>nops, 486 clocks (estimate),<br/>code bytes</small>"]:::mid
+  tab["<b>table.py:</b><br/><small>llrm / gcc, llrm / clang</small>"]:::mid
+  src --> wrap
+  wrap --> llrm
+  wrap --> gcc
+  wrap --> clang
+  llrm --> run
+  gcc --> run
+  clang --> run
+  run --> per
+  per --> tab
 ```
- bench/NAME/NAME.c  +  vsgcc/kernels/x_*/x_*.c
-          |
-          v  wrap.py: main calls bench_NAME through a volatile pointer
- wrapped source (one copy, every compiler builds it)
-          |
-   +------+---------------------------+-----------------------+
-   v                                  v                       v
- llrm-c -m32 -mabi=sysv         gcc -m32 -march=i486     clang -m32 ...
-   -O1/-O2/-O3/-Os -march=i486    -O1/-O2/-O3/-Os          -O1/-O2/-O3/-Os
-   |  OMF object                  |  ELF object            |  ELF object
-   v                              v                        v
- harness.py links it           ld -static + stub.elf    ld -static + stub.elf
-   +------------------------------+------------------------+
-                                  v
-                 unicorn, 32-bit protected mode: run main
-                 count bench_NAME from entry to its own return
-                                  |
-                                  v
-     per variant: ins, mem ops, nops, 486 clocks (estimate), code bytes
-                                  |
-                       table.py: llrm / gcc, llrm / clang
-```
+
+*One C source through llrm-c, gcc and clang, counted in 32-bit unicorn*
 
 Compile time is a separate flow: the same sources go to each compiler under `perf stat`, and only the compile is counted.
 

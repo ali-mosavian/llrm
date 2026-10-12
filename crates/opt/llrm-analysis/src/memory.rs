@@ -1,5 +1,7 @@
 //! The memory model every alias query reads: objects, byte slices, provenance,
-//! accesses (`MemRef`) and the `Unit` that carries a function's facts.
+//! accesses (`MemRef`) and the `Unit` that carries a function's facts. It gives
+//! every analysis one description of what an access touches, so none re-derives
+//! it from the pointer.
 //!
 //! # How it works
 //! An object is what LLVM calls an underlying object (`MemoryObject`, interned
@@ -57,6 +59,41 @@
 //! `constant_bytes` read a `constant` global's initializer. `own_bytes` is the
 //! one statement of what a load or store does to its bytes, and
 //! `unmodeled_write` says whether any other instruction may write.
+//!
+//! # Example
+//! `MemRef::of` on the two loads below, under the DOS data layout (address
+//! space 1 is far pointers):
+//!
+//! ```mir
+//! @g = global [8 x i16] zeroinitializer
+//!
+//! define i16 @f(i16 %sel, i16 %i) {
+//! b0:
+//!   %s = inttoptr i16 %sel to ptr addrspace(2)
+//!   %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+//!   %e = getelementptr inbounds i16, ptr addrspace(1) %far, i16 %i
+//!   %f = getelementptr inbounds i8, ptr addrspace(1) %e, i16 -2
+//!   %x = load i16, ptr addrspace(1) %f
+//!   %y = load i16, ptr getelementptr (i8, ptr @g, i16 6)
+//!   %z = add i16 %x, %y
+//!   ret i16 %z
+//! }
+//! ```
+//!
+//! | `MemRef` of | `%x` load | `%y` load |
+//! |------------|-----------|-----------|
+//! | `root`     | `%far`    | -         |
+//! | `disp`     | -2        | 6         |
+//! | `base`     | `%i`      | none      |
+//! | `scale`    | 2         | -         |
+//! | `segment`  | `%sel`    | -         |
+//! | `width`    | -         | 2         |
+//! | `object`   | false     | true      |
+//! | `addr()`   | none      | some      |
+//!
+//! From unit test
+//! `a_far_element_access_decomposes_to_its_segment_index_and_displacement`
+//! in `memory.rs`.
 //!
 //! # Provides
 //! The types above; `exposed_frames`, `object_of`, `global_object`, `typed`,

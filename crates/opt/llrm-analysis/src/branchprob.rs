@@ -54,16 +54,52 @@
 //! the only exit is a test at a non-latch header), and the exit test takes `1 /
 //! (trips + 1 - tested)` of the mass, so the trips stay.
 //!
-//! ```text
-//!  entry 1 --> H (scale 1/(1-0.969) = 32) --> body --+
-//!               ^                                     |  stay 124/128
-//!               +-------------------------------------+
-//!               |
-//!               +--> exit: 1   (entering once)
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   entry["<b>entry</b><br/><small>frequency 1</small>"]:::mid
+//!   h["<b>H</b><br/><small>scale 1/(1-0.969) = 32</small>"]:::mid
+//!   body["<b>body</b>"]:::mid
+//!   exit["<b>exit</b><br/><small>frequency 1<br/>(entering once)</small>"]:::mid
+//!   entry --> h
+//!   h --> body
+//!   body -->|"stay 124/128"| h
+//!   h --> exit
 //! ```
+//!
+//! *Frequencies around a loop with a header scale of 32*
 //!
 //! The propagation takes edge probabilities as a function, so the backend uses
 //! it too (`propagated_edges`, `Cycle`) and MIR and LIR estimates agree.
+//!
+//! # Example
+//! A one-block loop with no proven trip count:
+//!
+//! ```mir
+//! define i16 @f(i16 %n) {
+//! entry:
+//!   br label %head
+//! head:
+//!   %i = phi i16 [ 0, %entry ], [ %j, %head ]
+//!   %j = add i16 %i, 1
+//!   %c = icmp slt i16 %j, %n
+//!   br i1 %c, label %head, label %out
+//! out:
+//!   ret i16 %j
+//! }
+//! ```
+//!
+//! | Fact | Value |
+//! | --- | --- |
+//! | heuristic at `head` | `Loop` |
+//! | probability `head -> head` | 124/128 |
+//! | frequency of `head` | 32 |
+//! | frequency of `out` | 1 |
+//!
+//! From unit test `test_a_loop_stays_in_31_of_32_and_its_header_runs_32_times`
+//! in `branchprob_tests.rs`.
 //!
 //! # Provides
 //! `Odds { taken, frequency, by }` from `estimated`, `propagated` and

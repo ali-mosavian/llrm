@@ -1,5 +1,6 @@
-//! Facts that cross direct procedure boundaries: constant arguments, constant
-//! returns, purity and termination of calls.
+//! Finds what the two sides of a direct call make certain: constant arguments,
+//! constant returns, purity and termination. Intra-procedural passes cannot see
+//! across a call, so these facts are written into the bodies for them to fold.
 //!
 //! # How it works
 //! A direct call is opaque to ordinary SCCP even when every return of the named
@@ -44,6 +45,35 @@
 //!
 //! A body is exactly defined when its linkage says the definition here is the
 //! one that runs (LLVM's `hasExactDefinition`).
+//!
+//! # Example
+//! `constant_returns` over a module of two private bodies:
+//!
+//! ```mir
+//! define internal i16 @yes() {
+//! b1:
+//!   ret i16 37
+//! }
+//!
+//! define internal i16 @no(i1 %c) {
+//! b1:
+//!   br i1 %c, label %b2, label %b3
+//!
+//! b2:
+//!   ret i16 37
+//!
+//! b3:
+//!   ret i16 38
+//! }
+//! ```
+//!
+//! | body   | constant return                |
+//! |--------|--------------------------------|
+//! | `@yes` | 37                             |
+//! | `@no`  | none (its two `ret`s disagree) |
+//!
+//! From unit test `test_module_constant_returns_require_every_exit_to_agree` in
+//! `interprocedural_tests.rs`.
 //!
 //! # Provides
 //! The functions above, and the re-export of `noreturn::terminal_sites`.

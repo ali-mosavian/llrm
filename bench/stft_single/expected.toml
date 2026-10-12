@@ -2,19 +2,19 @@ reason = "branch odds combine as gcc 13.4 does (predict.cc combine_predictions_f
 blessed = "2026-10-12"
 
 [bas.O2]
-code_bytes = 1245
+code_bytes = 1267
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 872.2605
 
 [bas.Os]
-code_bytes = 1203
+code_bytes = 1206
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 871.4082
 
 [bq16.O2]
-code_bytes = 1222
+code_bytes = 1243
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 1132.917
@@ -26,21 +26,19 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 73220779
-code_bytes = 1400
+instructions = 73139541
+code_bytes = 1380
 data_bytes = 4733
 bss_bytes = 0
-kernel_ms = 1022.1031
 
 [bq32.Os]
-instructions = 73534577
-code_bytes = 1381
+instructions = 73469018
+code_bytes = 1379
 data_bytes = 4733
 bss_bytes = 0
-kernel_ms = 1026.2896
 
 [c.O2]
-code_bytes = 823
+code_bytes = 810
 data_bytes = 39
 bss_bytes = 5122
 kernel_ms = 325.0158
@@ -52,7 +50,7 @@ bss_bytes = 5122
 kernel_ms = 322.3449
 
 [nib.O2]
-code_bytes = 2403
+code_bytes = 2343
 data_bytes = 1089
 bss_bytes = 0
 kernel_ms = 646.3399

@@ -671,6 +671,23 @@ thread_local! {
     static BURNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+thread_local! {
+    /// How long `Costly` burns, in loop trips.
+    static BURN: std::cell::Cell<u64> = const { std::cell::Cell::new(2_000_000) };
+}
+
+/// The work of `trips` of `Costly`'s loop in the unit the clock reads
+/// (instructions, or CPU nanoseconds where there is no counter).
+fn burnt(trips: u64) -> u64 {
+    let start = llrm_support::debug::work();
+    let mut sum = 0u64;
+    for at in 0..trips {
+        sum = std::hint::black_box(sum.wrapping_add(at));
+    }
+    BURNED.with(|burned| burned.set(sum));
+    llrm_support::debug::work() - start
+}
+
 /// An analysis that costs a lot.
 struct Costly;
 
@@ -684,7 +701,7 @@ impl llrm_mir::passes::Analysis for Costly {
         _: &mut llrm_mir::passes::Analyses,
     ) -> u64 {
         let mut sum = 0u64;
-        for at in 0..2_000_000u64 {
+        for at in 0..BURN.with(std::cell::Cell::get) {
             sum = std::hint::black_box(sum.wrapping_add(at));
         }
         BURNED.with(|burned| burned.set(sum));
@@ -714,8 +731,9 @@ impl llrm_mir::passes::FunctionPass for Asks {
 /// the pipeline's work read as idle (floatloop 5.7 G, sroa 5.0 G) when the
 /// passes' own work was 3% and the analyses were reused by the next pass to
 /// ask. A step now says how much of its work was its own.
-#[test]
-fn test_a_steps_own_work_leaves_out_the_analyses_it_computed() {
+fn billed_asking_for_costly(trips: u64) -> (super::Run, u64) {
+    BURN.with(|burn| burn.set(trips));
+    let reference = burnt(trips);
     use llrm_mir::module::{GlobalKind, Module};
     use llrm_mir::passes::{Analyses, Declared, Outer, Unit};
     llrm_mir::passes::observe(llrm_mir::passes::Observer {
@@ -748,8 +766,54 @@ fn test_a_steps_own_work_leaves_out_the_analyses_it_computed() {
         unreached: 0,
     };
     run.step(&mut Asks, "asks", &mut unit, &mut analyses);
-    assert!(run.idle_with_analyses > 1_000_000, "premise: the analysis cost {} ", run.idle_with_analyses);
+    (run, reference)
+}
+
+#[test]
+fn test_a_steps_own_work_leaves_out_the_analyses_it_computed() {
+    let (run, reference) = billed_asking_for_costly(2_000_000);
+    assert!(
+        analysis_was_billed(run.idle_with_analyses, reference),
+        "premise: the analysis cost {} of {reference}",
+        run.idle_with_analyses
+    );
     assert!(run.idle * 10 < run.idle_with_analyses, "own {} of {} with the analysis", run.idle, run.idle_with_analyses);
+}
+
+/// A fixed floor on the analysis's work (1,000,000) read "instructions" with a
+/// counter and "CPU nanoseconds" without one, where a fast runner spends
+/// 790,710 on 2,000,000 trips: the premise failed there though the step billed
+/// the analysis. A short analysis is billed too, whatever the unit.
+#[test]
+fn test_the_premise_of_an_analysis_is_its_cost_in_the_clocks_unit_not_a_number_of_them() {
+    let (run, reference) = billed_asking_for_costly(100_000);
+    assert!(
+        analysis_was_billed(run.idle_with_analyses, reference),
+        "the analysis cost {} of {reference}",
+        run.idle_with_analyses
+    );
+}
+
+/// The step billed the analysis, read in the clock's own unit against the same
+/// loop measured alone. CPU nanoseconds of one loop differ by more than 2x from
+/// one read to the next on a shared runner (1,351,415 against 2,947,056,
+/// #1442's CI): the floor is an eighth of the reference, which still
+/// tells a billed analysis from none.
+fn analysis_was_billed(
+    billed: u64,
+    reference: u64,
+) -> bool {
+    billed > 0 && billed * 8 >= reference
+}
+
+/// A noisy clock reads the analysis at 0.3 of its reference and the step still
+/// counts as billed; a step that billed nothing, or a tenth, does not.
+#[test]
+fn test_a_noisy_clock_still_shows_the_analysis_billed_and_none_does_not() {
+    assert!(analysis_was_billed(300_000, 1_000_000));
+    assert!(analysis_was_billed(1_351_415, 2_947_056));
+    assert!(!analysis_was_billed(0, 1_000_000));
+    assert!(!analysis_was_billed(100_000, 1_000_000));
 }
 
 /// Finds nothing to do, and counts how often it was asked.

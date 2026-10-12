@@ -2,7 +2,11 @@
 
 The one resolver every Python tool and test uses; a tree built elsewhere (the gate's) has no ./target.
 """
+import atexit
+import hashlib
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -63,3 +67,26 @@ if __name__ == "__main__":
     if len(sys.argv) != 2 or sys.argv[1] not in kinds:
         sys.exit("usage: llrmbin.py bin|target")
     print(kinds[sys.argv[1]]())
+
+
+PINNED_BYTES = 120
+_pins: list[str] = []
+
+
+def pinned(binary: Path) -> Path:
+    """`binary` by a path of PINNED_BYTES bytes, a symlink of this process's own. The compiler reads its argv[0] at start-up and the
+    length of it moved an instruction count by 1.6e-4 to 5e-4 (`functions` at 2N: 3,192,407,376 from a short directory, 3,192,925,702
+    from a long one), the size of a tolerance on a ratio: the tree a gate builds in and the one a base was measured in differ in it."""
+    if not _pins:
+        _pins.append(tempfile.mkdtemp(prefix="llrm-pin-", dir="/tmp"))
+        atexit.register(shutil.rmtree, _pins[0], True)
+    key = hashlib.sha256(str(binary).encode()).hexdigest()[:8]
+    room = PINNED_BYTES - len(_pins[0]) - len("/llrm-c") - 1
+    folder = Path(_pins[0]) / (key + "p" * (room - len(key)))
+    folder.mkdir(exist_ok=True)
+    link = folder / binary.name
+    try:
+        link.symlink_to(os.path.abspath(binary))
+    except FileExistsError:  # another thread of this process pinned it first
+        pass
+    return link

@@ -32,17 +32,16 @@ data_bytes = 15
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 771388
+instructions = 771379
 code_bytes = 405
 data_bytes = 21
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 812346
+instructions = 812337
 code_bytes = 389
 data_bytes = 21
 bss_bytes = 0
-kernel_ms = 10.3676
 
 [c.O2]
 instructions = 98

@@ -1,10 +1,10 @@
-reason = "a tail is not copied over the likelier way of the branch before its jump (#1535): parity/qbsp c -O2 instructions +1.9% (clocks +0.64%), the other moved rows smaller or equal"
+reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
 blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 143
 memory_operands = 14
-code_bytes = 249
+code_bytes = 263
 data_bytes = 13
 bss_bytes = 0
 kernel_ms = 0.0149
@@ -20,7 +20,7 @@ kernel_ms = 0.0149
 [bq16.O2]
 instructions = 145
 memory_operands = 14
-code_bytes = 254
+code_bytes = 268
 data_bytes = 13
 bss_bytes = 0
 kernel_ms = 0.0094
@@ -34,22 +34,21 @@ bss_bytes = 0
 kernel_ms = 0.0094
 
 [bq32.O2]
-instructions = 42450
-code_bytes = 211
+instructions = 42440
+code_bytes = 220
 data_bytes = 19
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 42449
+instructions = 42437
 code_bytes = 202
 data_bytes = 19
 bss_bytes = 0
-kernel_ms = 0.0732
 
 [c.O2]
 instructions = 127
 memory_operands = 10
-code_bytes = 140
+code_bytes = 148
 data_bytes = 0
 bss_bytes = 4
 kernel_ms = 0.0027
@@ -65,7 +64,7 @@ kernel_ms = 0.0027
 [nib.O2]
 instructions = 111
 memory_operands = 0
-code_bytes = 99
+code_bytes = 106
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0032

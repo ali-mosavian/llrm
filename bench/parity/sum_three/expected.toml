@@ -1,13 +1,12 @@
-reason = "a tail is not copied over the likelier way of the branch before its jump (#1535): parity/qbsp c -O2 instructions +1.9% (clocks +0.64%), the other moved rows smaller or equal"
+reason = "ch default (user decision 2026-10-12) and the shrinkwrap, frequency and layout fixes landed with it: the rows main's bq16/bq32 columns add moved by -0.1% to +0.05% except nbody bq32 -O2 (+4.6%, the guard and rotated loops of the BASIC loops); the rest fewer instructions"
 blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 86
-memory_operands = 42
-code_bytes = 316
+instructions = 84
+memory_operands = 38
+code_bytes = 294
 data_bytes = 103
 bss_bytes = 0
-kernel_ms = 0.0109
 
 [bas.Os]
 instructions = 86
@@ -18,12 +17,11 @@ bss_bytes = 0
 kernel_ms = 0.0109
 
 [bq16.O2]
-instructions = 88
-memory_operands = 42
-code_bytes = 313
+instructions = 86
+memory_operands = 38
+code_bytes = 291
 data_bytes = 103
 bss_bytes = 0
-kernel_ms = 0.0072
 
 [bq16.Os]
 instructions = 87
@@ -34,25 +32,23 @@ bss_bytes = 0
 kernel_ms = 0.0072
 
 [bq32.O2]
-instructions = 43247
-code_bytes = 319
+instructions = 43282
+code_bytes = 344
 data_bytes = 139
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 43206
+instructions = 43196
 code_bytes = 314
 data_bytes = 139
 bss_bytes = 0
-kernel_ms = 0.1156
 
 [c.O2]
-instructions = 92
-memory_operands = 38
-code_bytes = 191
+instructions = 90
+memory_operands = 34
+code_bytes = 199
 data_bytes = 24
 bss_bytes = 0
-kernel_ms = 0.0019
 
 [c.Os]
 instructions = 95
@@ -65,7 +61,7 @@ kernel_ms = 0.0019
 [nib.O2]
 instructions = 71
 memory_operands = 29
-code_bytes = 171
+code_bytes = 174
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0019

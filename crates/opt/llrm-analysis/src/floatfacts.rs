@@ -42,6 +42,39 @@
 //! loop (`repeated`) and reports what each stored cell holds at exit as a
 //! `LoopExit`. `cells_before` reads the cells one point holds over these facts.
 //!
+//! # Example
+//! Float values stored and loaded through memory, with exact and inexact
+//! results:
+//!
+//! ```mir
+//! @m = global [12 x i8] zeroinitializer
+//!
+//! define double @f() {
+//! b0:
+//!   store float 2.0, ptr @m
+//!   store double 4.0, ptr getelementptr (i8, ptr @m, i16 4)
+//!   %a = load float, ptr @m
+//!   %b = load double, ptr getelementptr (i8, ptr @m, i16 4)
+//!   %wide = fpext float %a to double
+//!   %sum = fadd double %wide, %b
+//!   %product = fmul double %sum, 8.0
+//!   %quotient = fdiv double %sum, 8.0
+//!   %third = fdiv double 1.0, 3.0
+//!   ; ...
+//! }
+//! ```
+//!
+//! | Value | `known` |
+//! | --- | --- |
+//! | `%wide` | 2 |
+//! | `%sum` | 6 |
+//! | `%product` | 48 |
+//! | `%quotient` | 3/4 |
+//! | `%third` | none (1/3 is not a binary fraction) |
+//!
+//! From unit test `test_known_inputs_reach_float_computations` in
+//! `floatfacts_tests.rs`.
+//!
 //! # Provides
 //! `Solved { integers, facts }`, `solved_with`, `solved_over`, `known`,
 //! `converted` (exact float-to-integer results), `loop_exits`, `exits`,

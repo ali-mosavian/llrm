@@ -1,13 +1,12 @@
-reason = "a tail is not copied over the likelier way of the branch before its jump (#1535): parity/qbsp c -O2 instructions +1.9% (clocks +0.64%), the other moved rows smaller or equal"
+reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
 blessed = "2026-10-12"
 
 [c.O2]
-instructions = 24031
-memory_operands = 1204
-code_bytes = 136
+instructions = 24028
+memory_operands = 1203
+code_bytes = 150
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.3212
 
 [c.Os]
 instructions = 24328
