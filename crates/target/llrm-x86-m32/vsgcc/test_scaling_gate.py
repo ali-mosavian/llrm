@@ -992,6 +992,23 @@ def test_registers_of_a_body_with_no_open_phi_set_nothing_up(tmp_path):
     assert own["analysis registers"] <= 25.0, f"{own['analysis registers']:.1f} Minstr"
 
 
+def test_lir_jumps_does_not_search_the_body_for_what_each_threaded_jump_strands(tmp_path):
+    """branches at -O2 with -ftree-ch: threading a jump past a block that only jumps pruned the whole body (a hash set of the reachable blocks
+    and the blocks moved into a new vector) for each, and hoisting an anchor solved the liveness of the values it names over every
+    instruction of the body for each: `lir jumps` read 327 -> 902 Minstr for N=256 -> 512 (x2.76; x2.04 without the copy). The blocks reached
+    are followed over the positions kept, the ones stranded are made bytes in place, and the liveness of a few values is found from the blocks
+    that name them: 249 -> 585 (x2.35). A bound of 2.55 on the doubling fails the first."""
+    own = {}
+    for n in (256, 512):
+        source = tmp_path / f"branches{n}.c"
+        source.write_text(gate.generated("branches", n))
+        command = gate.levels_time.command("llrm", "O2", source)
+        command.insert(1, "-ftree-ch")
+        own[n] = gate.own_work(command)["lir jumps"]
+    assert own[256] > 20.0, f"premise: jumps ran ({own[256]:.1f} Minstr)"
+    assert own[512] <= 2.55 * own[256], f"lir jumps {own[256]:.0f} -> {own[512]:.0f} Minstr"
+
+
 def test_liveness_of_a_body_is_followed_when_the_values_are_live_in_few_blocks(tmp_path):
     """branches(512) at -O2 with -ftree-ch: the choice between following each value through the blocks it is live in and solving rows of bits
     was made from where each value first and last occurs in the layout, and a value whose uses lie far apart (the copy of a header test) read as
