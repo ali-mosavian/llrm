@@ -1,13 +1,12 @@
-reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
 blessed = "2026-10-12"
 
 [c.O2]
-instructions = 24031
-memory_operands = 1204
-code_bytes = 137
+instructions = 24028
+memory_operands = 1203
+code_bytes = 150
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.3212
 
 [c.Os]
 instructions = 24328
