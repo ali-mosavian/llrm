@@ -39,7 +39,7 @@ def test_slope_of_exact_powers():
 def test_the_generated_work_is_still_there_after_optimisation(axis, tmp_path):
     """A generator whose program folds away measures nothing: llrm -O2's MIR must grow with N (it was 0 growth for a constant chain)."""
     sizes = {}
-    small, large = (8, 16) if axis == "nest" else (32, 64)  # a nest 64 deep is a minute's compile
+    small, large = (8, 16) if axis in ("nest", "unrolled") else (32, 64)  # a nest 64 deep is a minute's compile; 31 loops of a recursion unrolled a few seconds
     for n in (small, large):
         source = tmp_path / f"{axis}{n}.c"
         source.write_text(scaling.AXES[axis](n))

@@ -151,12 +151,20 @@ impl<'a> Scan<'a> {
         if all.is_empty() {
             return None;
         }
+        // Only a phi's value is a candidate: its liveness is all that is asked.
+        let phis: llrm_mir::dense::IdSet<ValueId> = function
+            .walk()
+            .filter_map(|(_, inst)| {
+                let instruction = function.instruction(inst);
+                (instruction.opcode == Opcode::Phi).then_some(instruction.result).flatten()
+            })
+            .collect();
         Some(Self {
             function,
             all,
             graph: cfg::graph(function),
             dominance: cfg::Dominance::of(function),
-            found: liveness::live(function),
+            found: liveness::live_where(function, &|value| phis.contains(&value)),
             accesses,
             program,
         })
@@ -252,6 +260,12 @@ impl<'a> Scan<'a> {
                 break;
             }
             liveness::each_across(self.function, &self.found, block, &mut |inst, across| {
+                // An instruction that writes nothing disturbs no cell: the
+                // candidates, hundreds of them on a function of
+                // many joins, are asked of the writers alone.
+                if self.accesses.writes(inst).is_some_and(<[MemRef]>::is_empty) {
+                    return;
+                }
                 for (at, candidate) in candidates.iter().enumerate() {
                     if !disturbed[at]
                         && across(candidate.result)

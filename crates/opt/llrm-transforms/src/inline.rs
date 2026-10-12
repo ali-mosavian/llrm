@@ -970,6 +970,11 @@ fn executed(
     }
     let anchor = placed.stack.range(..seq).next_back().map(|(_, &one)| one).or(placed.base);
     let copies = splice_before(context, function, call, &planned.candidate.body, anchor);
+    // The call was the entry's first instruction and is gone: the copies that
+    // come out of this one are anchored on what the entry starts with now.
+    if placed.base == Some(call) {
+        placed.base = function.entry().and_then(|entry| function.block(entry).instructions().first().copied());
+    }
     let body = &*planned.candidate.body;
     let entry = body.entry();
     let first = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret).zip(&copies).find(

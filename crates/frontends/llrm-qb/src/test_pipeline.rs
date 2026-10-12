@@ -23,6 +23,41 @@ fn test_a_constant_offset_rebased_onto_the_counter_stays_defined() {
     .unwrap();
 }
 
+/// A string comparison in a program with ON ERROR was refused, "a call that
+/// may raise an error where ON ERROR is on, which is no invoke to the pad":
+/// B$SCMP had no row, so it was taken to raise. Any `IF a$ < b$` in such a
+/// program failed to compile.
+#[test]
+fn test_a_string_comparison_compiles_where_on_error_is_on() {
+    use std::path::Path;
+
+    use crate::{compile as qb_compile, driver as qb_driver};
+
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = directory.path().join("CMP.BAS");
+    let lines = [
+        "DEFINT A-Z",
+        "DIM a AS STRING, b AS STRING",
+        "a = \"x\": b = \"y\"",
+        "ON ERROR GOTO oops",
+        "IF a < b THEN k = 1",
+        "END",
+        "oops:",
+        "RESUME NEXT",
+    ];
+    std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
+    for runtime in ["qb45", "llrm"] {
+        let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", runtime), None).unwrap();
+        qb_compile::object_bytes(
+            &program,
+            Path::new("CMP.BAS"),
+            None,
+            &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()),
+        )
+        .unwrap_or_else(|error| panic!("{runtime}: {error}"));
+    }
+}
+
 mod decided_tests {
 
     use crate::driver as qb_driver;
