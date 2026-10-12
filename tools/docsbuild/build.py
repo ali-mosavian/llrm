@@ -4,8 +4,8 @@
     python3 tools/docsbuild/build.py --sync     write the generated files into docs/
     python3 tools/docsbuild/build.py --check    exit 1 if --sync would change a file, or a source is wrong
 
---sync renders every figure source (docs/assets/figures/*.fig, and the ```fig fences in
-`//!` headers) to an SVG, writes the pass, analysis and backend reference to
+--sync draws every figure source (docs/assets/figures/*.fig, and the ```fig fences in
+`//!` headers) to a PNG, writes the pass, analysis and backend reference to
 docs/optimizations/reference/ from the headers, and moves a ```fig fence found in a
 document to a .fig, leaving the image reference. Commit what it writes: docs/ is read
 as committed.

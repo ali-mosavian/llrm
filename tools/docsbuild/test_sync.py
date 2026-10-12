@@ -43,7 +43,7 @@ BASE = {
     "docs/a/b/c.md": "# C\n\ntext\n\n" + FENCE + "\nafter\n",
     "crates/opt/llrm-analysis/src/walk.rs": HEADER,
 }
-IMG = "![A timeline](../../assets/figures/docs-a-b-c-1.svg)"
+IMG = "![A timeline](../../assets/figures/docs-a-b-c-1.png)"
 
 
 def test_reference_pages_are_written_under_a_banner(tmp_path):
@@ -64,7 +64,7 @@ def test_bare_fence_moves_to_a_fig_and_leaves_the_image(tmp_path):
     synced(root)
     assert (root / "docs/a/b/c.md").read_text() == f"# C\n\ntext\n\n{IMG}\n\nafter\n"
     assert (root / f"{FIGS}/docs-a-b-c-1.fig").read_text() == SPEC + "\n"
-    assert (root / f"{FIGS}/docs-a-b-c-1.svg").read_text().startswith("<svg")
+    assert (root / f"{FIGS}/docs-a-b-c-1.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_old_figure_block_moves_to_a_fig_too(tmp_path):
@@ -78,7 +78,7 @@ def test_old_figure_block_moves_to_a_fig_too(tmp_path):
 def test_image_path_is_relative_to_the_document(tmp_path):
     root = repo(tmp_path, dict(BASE, **{"readme.md": "# Home\n\n" + FENCE}))
     synced(root)
-    assert "![A timeline](docs/assets/figures/readme-1.svg)" in (root / "readme.md").read_text()
+    assert "![A timeline](docs/assets/figures/readme-1.png)" in (root / "readme.md").read_text()
 
 
 def test_a_new_fence_takes_the_next_free_slug(tmp_path):
@@ -87,7 +87,7 @@ def test_a_new_fence_takes_the_next_free_slug(tmp_path):
     doc = root / "docs/a/b/c.md"
     doc.write_text(doc.read_text() + "\n" + FENCE.replace("A timeline", "Second"))
     synced(root)
-    assert "docs-a-b-c-2.svg" in doc.read_text() and (root / f"{FIGS}/docs-a-b-c-2.fig").is_file()
+    assert "docs-a-b-c-2.png" in doc.read_text() and (root / f"{FIGS}/docs-a-b-c-2.fig").is_file()
     assert "A timeline" in (root / f"{FIGS}/docs-a-b-c-1.fig").read_text()
 
 
@@ -95,9 +95,9 @@ def test_header_figure_becomes_an_image_on_the_generated_page_without_a_fig(tmp_
     root = repo(tmp_path, BASE)
     synced(root)
     page = (root / "docs/optimizations/reference/analyses.md").read_text()
-    assert "![Graph, 1 nodes](../../assets/figures/llrm-analysis-walk-1.svg)" in page
+    assert "![Graph, 1 nodes](../../assets/figures/llrm-analysis-walk-1.png)" in page
     assert "```fig" not in page
-    assert (root / f"{FIGS}/llrm-analysis-walk-1.svg").is_file()
+    assert (root / f"{FIGS}/llrm-analysis-walk-1.png").is_file()
     assert not (root / f"{FIGS}/llrm-analysis-walk-1.fig").exists()
 
 
@@ -108,22 +108,31 @@ def test_sync_twice_changes_nothing(tmp_path):
     assert again.writes == {} and again.deletes == [] and again.errors == []
 
 
-def test_edited_fig_redraws_its_svg(tmp_path):
+def test_edited_fig_redraws_its_png(tmp_path):
     root = repo(tmp_path, BASE)
     synced(root)
     fig = root / f"{FIGS}/docs-a-b-c-1.fig"
     fig.write_text(SPEC + '\nlane b "bee"\n')
     p = synced(root)
-    assert f"{FIGS}/docs-a-b-c-1.svg" in p.writes
-    assert ">bee<" in (root / f"{FIGS}/docs-a-b-c-1.svg").read_text()
+    assert f"{FIGS}/docs-a-b-c-1.png" in p.writes
+    assert (root / f"{FIGS}/docs-a-b-c-1.png").read_bytes() == p.writes[f"{FIGS}/docs-a-b-c-1.png"]
 
 
-def test_svg_with_no_source_is_deleted(tmp_path):
+def test_image_with_no_source_is_deleted(tmp_path):
     root = repo(tmp_path, BASE)
     synced(root)
-    stale = root / f"{FIGS}/gone-1.svg"
-    stale.write_text("<svg/>")
-    assert synced(root).deletes == [f"{FIGS}/gone-1.svg"] and not stale.exists()
+    stale = root / f"{FIGS}/gone-1.png"
+    stale.write_bytes(b"x")
+    assert synced(root).deletes == [f"{FIGS}/gone-1.png"] and not stale.exists()
+
+
+def test_the_svg_of_an_earlier_sync_is_deleted_and_its_reference_moves_to_the_png(tmp_path):
+    """Figures were committed as SVG; a PNG works in every Markdown viewer, so the SVG and its references go."""
+    files = dict(BASE, **{"docs/a/b/c.md": "# C\n\n![t](../../assets/figures/z.svg)\n", f"{FIGS}/z.fig": SPEC + "\n", f"{FIGS}/z.svg": "<svg/>"})
+    root = repo(tmp_path, files)
+    p = synced(root)
+    assert f"{FIGS}/z.svg" in p.deletes and not (root / f"{FIGS}/z.svg").exists()
+    assert "![t](../../assets/figures/z.png)" in (root / "docs/a/b/c.md").read_text()
 
 
 def test_fig_no_document_uses_is_flagged(tmp_path):
@@ -134,13 +143,13 @@ def test_fig_no_document_uses_is_flagged(tmp_path):
 
 
 def test_image_without_a_source_is_flagged(tmp_path):
-    root = repo(tmp_path, dict(BASE, **{"docs/a/b/c.md": "# C\n\n![x](../../assets/figures/nope.svg)\n"}))
-    assert sync.plan(root).errors == [f"docs/a/b/c.md: {FIGS}/nope.svg has no nope.fig"]
+    root = repo(tmp_path, dict(BASE, **{"docs/a/b/c.md": "# C\n\n![x](../../assets/figures/nope.png)\n"}))
+    assert sync.plan(root).errors == [f"docs/a/b/c.md: {FIGS}/nope.png has no nope.fig"]
 
 
 def test_fig_error_names_the_fig_line_and_writes_nothing(tmp_path, monkeypatch):
     bad = 'kind: graph\nnode A "a"\nedge A -> Z\n'
-    root = repo(tmp_path, dict(BASE, **{"docs/a/b/c.md": f"# C\n\n![x](../../assets/figures/z.svg)\n", f"{FIGS}/z.fig": bad}))
+    root = repo(tmp_path, dict(BASE, **{"docs/a/b/c.md": f"# C\n\n![x](../../assets/figures/z.png)\n", f"{FIGS}/z.fig": bad}))
     assert sync.plan(root).errors == [f"{FIGS}/z.fig:3: figure: unknown node 'Z'"]
     monkeypatch.setattr(build, "ROOT", root)
     assert build.main(["--sync"]) == 1
@@ -181,8 +190,8 @@ def test_repository_is_in_sync():
 
 
 def test_image_syntax_in_code_is_not_a_reference(tmp_path):
-    """A doc showing `![x](a/assets/figures/n.svg)` in code was flagged as an image with no source."""
-    doc = "# C\n\nWrite `![x](../assets/figures/n.svg)`.\n\n```text\n![x](../assets/figures/m.svg)\n```\n"
+    """A doc showing `![x](a/assets/figures/n.png)` in code was flagged as an image with no source."""
+    doc = "# C\n\nWrite `![x](../assets/figures/n.png)`.\n\n```text\n![x](../assets/figures/m.png)\n```\n"
     root = repo(tmp_path, dict(BASE, **{"docs/a/b/c.md": doc}))
     assert sync.plan(root).errors == []
 
