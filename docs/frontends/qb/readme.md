@@ -18,24 +18,7 @@ The BC-object input route is [bc](../bc.md).
 
 ## Pipeline
 
-```
- PROGRAM.BAS
-     |
-     v
- qbfront   lexer (generated_parser/lexer.rs)
-     |     table-driven parser (engine.rs, ast.rs)  -> syntax tree
-     |     semantic analysis (semantic.rs): names, types, storage, CFG
-     v
- HIR  (versioned text; crates/ir/llrm-hir, decoded in llrm-qb)
-     |
-     v
- llrm-qb   QB ABI adapter (crates/backend/llrm-core/src/abi/qb.rs)
-     |     runtime contracts (llrm-qbruntime), frame and call lowering
-     v
- MIR ---> shared optimizer ---> LIR ---> x86-m16 backend ---> OMF object
-                                                                |
-                      selected runtime library  ----------------+--> LINK
-```
+![From PROGRAM.BAS to a linked program](../../assets/figures/docs-frontends-qb-readme-1.png)
 
 `qbfront` owns everything that varies by language and is a library plus a
 `qbfront` binary that prints HIR. `llrm-qb` decodes that HIR, adds what the

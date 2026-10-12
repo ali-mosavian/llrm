@@ -1,0 +1,18 @@
+kind: graph
+dir: down
+title: From grammar to syntax tree
+node g1 "grammar/qbasbnf.prs\ngrammar/peropcod.txt" fill=a
+node g2 "grammar/ast-actions.toml\ngrammar/dialect-extensions.toml" fill=a
+node gen "crates/buildprs\n(vendored generator)" fill=b
+node tab "build.rs ->\nOUT_DIR/qbasic_parser_tables.rs\nstate and dispatch tables,\nanchors, tokens, AstAction,\nExternalAction" fill=c
+node src "source text"
+node lex "generated_parser/lexer.rs\ntokens with spans"
+node eng "generated_parser/engine.rs\ntable interpreter\ncheckpoint / rollback\nper alternative"
+node ast "generated_parser/ast.rs\n(builder)\n-> syntax::Module" fill=d
+edge g1 -> gen
+edge g2 -> gen
+edge gen -> tab
+edge src -> lex
+edge lex -> eng
+edge tab -> eng
+edge eng -> ast

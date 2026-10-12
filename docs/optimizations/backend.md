@@ -6,25 +6,7 @@ Files are under `crates/backend/llrm-core/src/backend/` unless named otherwise.
 
 ## Overview
 
-```
- MIR after the pipeline (passes.md)
-   |  driver::optimized: assumptions, ehprepare, fpconvert, selects
-   v
- nearcode -> globals::names -> callees first, per function:
-   |
-   |  machined (assemble.rs)
-   |    staged:  isel -> framefree -> frame::of          (LIR, SSA, virtual regs)
-   |    machined_once:
-   |       cheaper -- route A: allocator alone ---------+
-   |               -- route B: spiller (ssaspill) ------+--> keep the cheaper
-   |       relayout (second frame) if far frame operands
-   |    -Omax: again without callee facts, cheaper kept
-   v
- masm: cleaned returns, duplicated returns, shrink-wrap, stack checks
-   |
-   v
- objbuild -> llrm_object::Object -> writer crate (OMF/ELF/COFF/Mach-O)
-```
+![From optimized MIR to masm](../assets/figures/docs-optimizations-backend-1.png)
 
 Both routes run the same machine phases (next section); the spiller route adds `ssaspill`. [`flow.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/flow.rs#L56) `machine_with` holds the list.
 
@@ -118,21 +100,7 @@ In `machine_with` order. Each phase's result is verified (`verify.rs`) under `LL
 
 ## Choosing a route and a frame
 
-```
- staged(hole=0)
-      |
-      v
-   cheaper ---- below -Omax: directed
-      |            allocator alone
-      |            traffic >= 0.5% ? --no--> keep it
-      |                  | yes
-      |                  v
-      |            spiller route; keep the cheaper (cost: clocks, or bytes at -Os)
-      v
-   first layout --far frame operands and a spill area?--> relayout::laid_again
-                                                           (second-frame.md)
-                                         keep the layout with fewer far operands
-```
+![The cheaper decision and the second layout](../assets/figures/docs-optimizations-backend-2.png)
 
 `cost`, `route_cost` and `executed.rs` price a candidate: expected executions per block (branch heuristics, proven trips) weigh each instruction by the CPU's timings (`timing.rs`, `cpu.rs`, the target's `timings.times`). [second-frame](second-frame.md) describes `relayout.rs`.
 

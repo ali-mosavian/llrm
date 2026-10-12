@@ -1,0 +1,12 @@
+kind: graph
+dir: right
+title: A call through a function value is a match over the converted functions
+node inc "inc" fill=a
+node dec "dec" fill=a
+node lam "|x| x*2" fill=a
+node fv "fn(i16) -> i16\nan index, 1 word" fill=b
+node call "apply(f, x)\nmatch f:\n0: inc(x)\n1: dec(x)\n2: lambda(x)"
+edge inc -> fv "0"
+edge dec -> fv "1"
+edge lam -> fv "2"
+edge fv -> call

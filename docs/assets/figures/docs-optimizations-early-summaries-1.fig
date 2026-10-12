@@ -1,0 +1,8 @@
+kind: graph
+dir: right
+title: Where summaries are made today
+node early "early pipeline per body\nsummaries remade after\nany change" fill=a
+node ipa "interprocedural step\nevery splice drops them;\ndead, decide rerun on a\nchanged body remake them" fill=b
+node late "late passes\nfrozen summaries,\nLLRM_CHECK_STALE" fill=c
+edge early -> ipa
+edge ipa -> late

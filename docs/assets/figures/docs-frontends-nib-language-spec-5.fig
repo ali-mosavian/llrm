@@ -1,0 +1,5 @@
+kind: stack
+title: State of an escaping countdown(start: u16) -> iter[u16] (sketch)
+cell "$resume" note="where next() continues"
+cell "start"
+cell "n" note="lives across the yield, so it is kept"

@@ -5,12 +5,7 @@ memory. One machine-independent vocabulary answers every such question, for
 every frontend; it lives in `crates/opt/llrm-analysis/src/` (`memory.rs`,
 `regions.rs`, `alias.rs`, `memoryssa.rs`).
 
-```
- pointer value --points_to--> Provenance { slices, restrict roots }
- load/store    --MemRef::of--> root + constant offset + one index, width
- two MemRefs   --regions::overlapping--> may they meet?   (GVN, DSE, LICM,
- call          --Summary/Effect--> bytes of objects read/written  promote)
-```
+![From pointer values to answers about memory](../assets/figures/docs-architecture-strong-alias-1.png)
 
 ## Objects and slices
 

@@ -1,0 +1,5 @@
+kind: stack
+title: Attr, backing u8
+cell "blink" off="bit 7" size="1 bit"
+cell "bg" off="bits 4-6" size="3 bits"
+cell "fg" off="bits 0-3" size="4 bits"

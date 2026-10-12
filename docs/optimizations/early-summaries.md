@@ -8,12 +8,7 @@ Proposed in [#1189](https://github.com/ali-mosavian/llrm/pull/1189).
 
 `Summaries` and `GlobalsAA` are required module analyses, so the manager makes them before the next function pass whenever a pass changed a body ([module-analyses](module-analyses.md) makes each remake incremental). After the interprocedural step the module summaries are frozen: passes that add no memory operation (`FunctionPass::adds_memory_operations`) read the frozen ones, and `LLRM_CHECK_STALE` recomputes them after such a pass and checks the held result still covers the fresh one.
 
-```
- early pipeline per body ------> interprocedural step ----------> late passes
- (summaries remade after         (every splice drops them;        (frozen summaries,
-  any change)                     dead, decide rerun on a          LLRM_CHECK_STALE)
-                                  changed body remake them)
-```
+![Where summaries are made today](../assets/figures/docs-optimizations-early-summaries-1.png)
 
 ## What gcc does
 

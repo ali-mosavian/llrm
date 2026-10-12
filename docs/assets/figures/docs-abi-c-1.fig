@@ -1,0 +1,20 @@
+kind: graph
+dir: down
+title: From a recorded C function to a convention
+node abi "-mabi=FAMILY\n[frontend.abi.FAMILY].flags\n(e.g. -ecc)" fill=a
+node ow "Open Watcom front end\n(patched)\nint __cdecl f(int);" fill=b
+node cl "translate::cleanup"
+node r1 "profile.cdecl"
+node r2 "pascal order"
+node r3 "profile.registers"
+node r4 "refused"
+node hir "HIR function\nconvention name, cleanup,\ndistance, then MIR\n(selection.md)" fill=c
+edge abi -> ow
+edge ow -> cl "Symbol { call_class,\ncall_target,\nregister_parms,\nregister_list }"
+edge cl -> r1 "stack args,\ncaller pops"
+edge cl -> r2 "stack args reversed,\ncallee pops"
+edge cl -> r3 "default register list"
+edge cl -> r4 "anything else"
+edge r1 -> hir
+edge r2 -> hir
+edge r3 -> hir

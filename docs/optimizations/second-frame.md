@@ -8,21 +8,7 @@ A frame operand past `[bp-128]` needs a four-byte displacement. When a function 
 
 ## How the second layout is made
 
-```
- isel + allocation (cheaper: spiller route / allocator alone)
-        |
-        v
-   first body + Frame{floor, hole = 0}
-        |  far_frame(first) > 0 and spilled > 0
-        v
-   relayout::laid_again(first, frame, hole)       <-- moves each cell by its slot
-        |                                              incoming arguments stay
-        |                                              isel slots move down by hole
-        |                                              spill slots go where Frame::slot
-        |                                              would put them with the hole
-        v
-   second body   --- far_frame(second) < far_frame(first) ? second : first
-```
+![The second layout](../assets/figures/docs-optimizations-second-frame-1.png)
 
 [`relayout.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/relayout.rs#L26) works because every frame cell names the slot it lies in. It gives up, and the first layout stands, on bytes of inline code that name a displacement, a cell in no known slot, or call-private ranges it cannot move. Every pricing and encodability decision treats a frame cell as near, so the two layouts decide alike.
 

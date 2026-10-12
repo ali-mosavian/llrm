@@ -1,0 +1,27 @@
+kind: graph
+dir: down
+title: Crate layering; an arrow reads "depends on"
+node fe "Tools (src/bin) and frontends\nllrm-qb llrm-nib llrm-c\nllrm-omf llrm-mir llrm-run\nnibfront nib-lsp\nllrm-bcdriver qbfront" fill=a
+node drv "llrm-driver"
+node sel "llrm-x86-m16-select\nllrm-x86-m32-select\n(generated selector,\npeephole rules)"
+node core "llrm-core\ndriver, isel, machine phases,\nobjbuild, HIR interpreter" fill=b
+node hir "llrm-hir"
+node tr "llrm-transforms"
+node tgt "llrm-target\nllrm-lir"
+node x86 "llrm-x86"
+node wr "Writers: llrm-omf,\nllrm-elf*, llrm-coff*,\nllrm-macho, llrm-dwarf" fill=c
+node an "llrm-analysis"
+node obj "llrm-object"
+node mir "llrm-mir\n(no dependencies)"
+edge fe -> drv
+edge drv -> sel
+edge drv -> core
+edge core -> hir
+edge core -> tr
+edge core -> tgt
+edge core -> x86
+edge core -> wr
+edge wr -> obj
+edge hir -> mir
+edge tr -> an
+edge an -> mir

@@ -1,0 +1,13 @@
+kind: graph
+dir: down
+title: The rich MIR module and what works on it
+node text "text\n(.ll subset)"
+node mod "Module\narenas, ids, use lists" fill=a
+node ver "verify\n(LLVM Verifier rules)"
+node interp "interpret\n(poison, datalayout)"
+node pm "PassManager\nfunction and module passes,\ncached analyses,\nPreservedAnalyses,\nverify-each,\nverify-analysis-invalidation" fill=b
+edge text -> mod "parse"
+edge mod ..> text "print"
+edge mod -> ver
+edge mod -> interp
+edge mod -> pm

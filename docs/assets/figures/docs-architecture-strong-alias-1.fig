@@ -1,0 +1,17 @@
+kind: graph
+dir: right
+title: From pointer values to answers about memory
+node pv "pointer value"
+node prov "Provenance\nslices, restrict roots"
+node ls "load/store"
+node mr "MemRef\nroot + constant offset\n+ one index, width"
+node ov "may they meet?\n(two MemRefs)"
+node call "call"
+node eff "bytes of objects\nread or written"
+node cons "GVN, DSE, LICM,\npromote" fill=b
+edge pv -> prov "points_to"
+edge ls -> mr "MemRef::of"
+edge mr -> ov "regions::overlapping"
+edge call -> eff "Summary/Effect"
+edge ov -> cons
+edge eff -> cons

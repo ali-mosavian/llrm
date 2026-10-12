@@ -1,0 +1,24 @@
+kind: graph
+dir: down
+title: From source to object file
+node qb "QB, QBasic, PDS, VBDOS\nqbfront parser (llrm-qb)" fill=a
+node nib "Nib\nllrm-nib: lexer, parser,\nsemantics" fill=a
+node c "C\npatched Open Watcom front\nend (llrm-c translate)" fill=a
+node bc "BC .OBJ (side input)\nllrm-x86-bc:\ndecode and lift" fill=a
+node hir "HIR\nllrm-hir: model, verify,\nJSON codec"
+node mir "MIR\nllrm-mir"
+node opt "Optimized MIR\nllrm-transforms: module\nsteps, per-body fixed point" fill=b
+node lir "LIR over virtual values\nllrm-lir, llrm-core backend"
+node ph "Machine phases (flow.rs)\nphi elimination, two-address,\ncoalescing, register\nallocation, parallel copies,\nprologue, peephole,\nscheduling, jumps"
+node obj "llrm_object::Object\nformat-neutral (objbuild.rs)" fill=c
+node wr "Object writer\nomf, elf32, elf64, coff32,\ncoff64, macho" fill=c
+edge qb -> hir
+edge nib -> hir
+edge c -> hir
+edge hir -> mir "llrm_hir::mir::emit"
+edge bc -> mir
+edge mir -> opt
+edge opt -> lir "lowering boundary:\nisel, a selector\ngenerated per target"
+edge lir -> ph
+edge ph -> obj "layout + branch relaxation\n(asm.rs, layout.rs)"
+edge obj -> wr

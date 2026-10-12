@@ -1,0 +1,14 @@
+kind: graph
+dir: down
+title: How a call's reads and writes are computed and consumed
+node bodies "callee bodies"
+node sum "Summary per function"
+node gaa "GlobalsAA, callbacks"
+node site "call site + actuals'\nprovenance (points_to)"
+node eff "Effect per call\nloads, stores, fills" fill=b
+node users "memoryssa, gvn, dse,\npromote, loopmotion,\nconsts, avail" fill=c
+edge bodies -> sum "summaries\n(fixed point)"
+edge gaa -> sum
+edge sum -> eff "calls_annotated"
+edge site -> eff
+edge eff -> users

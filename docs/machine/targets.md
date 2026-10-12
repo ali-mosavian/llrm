@@ -13,24 +13,7 @@ For contributors adding or changing a target. A target is a set of description f
 
 ## Crate graph
 
-```
- llrm-lir  llrm-mir  llrm-hir            IRs; name no target
-      \        |        /
-       llrm-target          what a description is: Target trait, layout,
-            |               registers, calling, timings, opcosts, object, OS
-        llrm-x86            x86 family: form schema and parser, encoder,
-         /      \           x87 and i64 hooks, family.isel, helpers
-        /        \
- llrm-x86-m16   llrm-x86-m32            DATA crates: descriptions + Target impl;
-        |            |                  no llrm-core
-        |            |
- llrm-x86-m16-select  llrm-x86-m32-select   SELECT crates: build.rs runs
-        \            /                  llrm-iselgen over the descriptions,
-         \          /                   written against llrm-core's isel API
-          llrm-driver                   the one crate that names targets
-               |
-        llrm-core (backend)             depends on no target crate
-```
+![Crate graph of the targets; an arrow reads "depends on"](../assets/figures/docs-machine-targets-1.png)
 
 A data crate does not depend on `llrm-core`; a select crate does, and only `llrm-driver` depends on a select crate. `llrm-core` has no target among its normal dependencies (`tests/core_depends_on_no_target.rs`). Its own unit tests need a selector, so a `fixtures` feature generates the m16 and m32 selectors inside `llrm-core` for them, and nothing else turns it on (`tests/core_fixtures_are_for_core_tests.rs`). The data/select split is held by a manifest test proposed in [#1273](https://github.com/ali-mosavian/llrm/pull/1273).
 
@@ -55,15 +38,7 @@ The family crate `llrm-x86` holds the forms and peephole rules every x86 target 
 
 ## From description to compiler
 
-```
- *.regs *.instr *.isel *.peep  timings.times opcosts.txt  *.toml
-        |                          |             |            |
-        |  llrm-iselgen (build.rs of the select crate)        |
-        v                          v             v            v
-  SELECTOR, RULES, effect rows   Target impl (data crate), read by passes
-        \                                |
-         +-------- llrm-driver binds ----+--> llrm-core backend ([backend](../optimizations/backend.md))
-```
+![From target description to compiler](../assets/figures/docs-machine-targets-2.png)
 
 A pattern names a hook (`call NAME`, `when NAME`): a name `llrm-core` exports becomes a call on its selection context; any other resolves to the target crate's hook function, and a missing one is a compile error. Cost expressions, loops and searches are hooks, not description.
 

@@ -2,27 +2,7 @@
 
 For contributors changing a target's `calling.toml`, a frontend's marks or the interprocedural passes. How a function and each call of it get a convention, and how the compiler learns which registers a call leaves alone.
 
-```
- -mabi=FAMILY ----> calling.toml [abi.FAMILY].convention
- (else `default`)              |
-                               v
-              unmarked C function, Nib "c"          marked function
-                               |                    (__cdecl, __pascal,
-                               |                     @export("x"), ...)
-                               +----------+---------------+
-                                          v
-                MIR: calling_convention on the function and on every call
-                                          |
-                     mir calleepop: private convention, or callee-pop twin
-                     mir deadargs, argpromotion: change which arguments exist
-                                          |
-                                          v
-        selection: Convention::place puts each argument in a register
-        or a stack slot; the call and the function agree on cleanup
-                                          |
-                                          v
-        backend: callee facts say which registers a direct call changes
-```
+![From a source mark to a call's registers](../assets/figures/docs-abi-selection-1.png)
 
 ## ABI families
 
@@ -80,17 +60,7 @@ Both change which arguments a function takes, so the convention places the new l
 
 ## Register facts
 
-```
- CallGraph::bottom_up        callees machined first
-        |
-        v
- for each eligible callee:   machine it, then record what it wrote
-        |                    = registers written by body and its calls
-        |                      minus those its prologue saves whole
-        v
- each direct caller:         a value may stay in any register the
-                             callee did not write, scratch ones too
-```
+![How callee facts are computed](../assets/figures/docs-abi-selection-2.png)
 
 [`CalleeFacts`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/calleefacts.rs#L57) records, for each function nothing outside the module reaches and that is in no cycle of calls, the registers its final body writes and does not save and restore. A call of it clobbers those, no more. A function that is exported, has its address taken or calls itself tells nothing, and its callers assume the convention's `clobbered` list. A function that saves only the 16-bit half of a register (`push si` for ESI) and writes it loses the upper half for its caller (`Written.high`). Nothing gates it. `LLRM_DEBUG=facts` prints what each function wrote.
 

@@ -1,0 +1,29 @@
+kind: graph
+dir: down
+title: Crate graph of the targets; an arrow reads "depends on"
+node drv "llrm-driver\nthe one crate that\nnames targets" fill=a
+node core "llrm-core (backend)\ndepends on no target crate" fill=b
+node s16 "llrm-x86-m16-select\nSELECT crate: build.rs\nruns llrm-iselgen"
+node s32 "llrm-x86-m32-select\nSELECT crate: build.rs\nruns llrm-iselgen"
+node d16 "llrm-x86-m16\nDATA crate: descriptions\n+ Target impl; no llrm-core"
+node d32 "llrm-x86-m32\nDATA crate: descriptions\n+ Target impl; no llrm-core"
+node x86 "llrm-x86\nform schema and parser,\nencoder, x87 and i64 hooks,\nfamily.isel, helpers"
+node tgt "llrm-target\nTarget trait, layout,\nregisters, calling, timings,\nopcosts, object, OS"
+node lir "llrm-lir"
+node mir "llrm-mir"
+edge drv -> s16
+edge drv -> s32
+edge drv -> d16
+edge drv -> d32
+edge drv -> core
+edge s16 -> core
+edge s32 -> core
+edge s16 -> x86
+edge s32 -> x86
+edge d16 -> x86
+edge d32 -> x86
+edge x86 -> tgt
+edge core -> tgt
+edge tgt -> lir
+edge tgt -> mir
+group irs "IRs; name no target": lir mir

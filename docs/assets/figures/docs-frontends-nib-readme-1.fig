@@ -1,0 +1,18 @@
+kind: graph
+dir: down
+title: From Nib source to a DOS program
+node src ".nib source\n+ imports"
+node syn "lexer, parser/, desugar,\nmodules (syntax, one module)" fill=a
+node sem "semantic/\ntypes, borrow checker" fill=a
+node hir "HIR\ncommon, typed, name-resolved"
+node run "llrm-run\nhost interpreter" fill=d
+node mir "MIR, optimizer, backend\nshared with llrm-qb, llrm-c" fill=b
+node obj "object file\nOMF for m16" fill=c
+node dos "link with runtime,\nrun in DOS"
+edge src -> syn
+edge syn -> sem
+edge sem -> hir
+edge hir -> mir
+edge hir ..> run
+edge mir -> obj
+edge obj -> dos

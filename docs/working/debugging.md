@@ -2,18 +2,7 @@
 
 For contributors with a DOS program that behaves differently when built by llrm: narrow the fault to one module, stop the program where it goes wrong, then find the pass.
 
-```
- program differs
-      |  swap one module at a time between the reference build and llrm's
-      v
- one module            llrm-c -S           listing: is the code wrong?
-      |  stop at the first bad write or jump (dosrun)
-      v
- the function          --dump DIR          MIR after each pass: first wrong dump
-      |                ISEL_DUMP=1          LIR after each machine phase
-      v
- the pass or phase  ->  reduce, fixture, test that fails first
-```
+![From a differing program to the pass](../assets/figures/docs-working-debugging-1.png)
 
 ## 1. The runner: dosrun
 
@@ -93,19 +82,7 @@ Reduce the module to the smallest source that still shows the fault, record the 
 
 Beside dosrun jobs, the fork has a debug socket for driving a DOS program or debugger interactively: set `DOSBOX_DEBUG_PORT=PORT` in the environment and the emulator listens on `127.0.0.1:PORT`. Commands and replies are one JSON object per line; replies come back in the order commands went out; events (`{"event":"stopped","int":3}`) arrive unprompted.
 
-```
- host: cargo test (tests/common/dosbox.rs)      DOSBox-X fork (target/release/dosbox-x)
-       tools/dosbatch/qbplay.py                +---------------------------------+
- +-----------------------+   JSON lines / TCP  |  DOS shell                      |
- | Session::command      |-------------------->|    TD.EXE / CV.EXE / program    |
- |  continue, dos_cmd,   |<--------------------|    (llrm object linked with     |
- |  key, key_hw,         |   replies, events   |     TLINK /v or LINK /CO)       |
- |  text_screen,         |                     |  INT 3 --> "stopped", int 3     |
- |  mem_read_linear,     |  {"cmd":"continue"} |  mounts: c: toolchain, d: TD,   |
- |  screenshot           |-------------------->|          w: work directory      |
- +-----------------------+  (reader thread     +---------------------------------+
-                             answers every INT 3)
-```
+![The debug socket between the host and the DOSBox-X fork](../assets/figures/docs-working-debugging-2.png)
 
 The commands the tests use:
 

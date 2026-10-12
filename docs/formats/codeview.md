@@ -5,12 +5,7 @@ segments, `$$SYMBOLS` (class `DEBSYM`) and `$$TYPES` (class `DEBTYP`), plus LINN
 COMENT ([omf](omf.md)). The linker (`LINK /CO`, then CVPACK, or `jwlink debug codeview`) turns them into the
 packed table a debugger reads. COFF objects carry C13 instead ([debug-info](debug-info.md)).
 
-```
- debug::Info --+-- dialect Cv4 --> cv4.rs      C7-era CodeView 4: C, Nib, QB default
-               |
-               +-- dialect Bc  --> cvwrite.rs  BC's pre-link layout: llrm-qb --bc-codeview
-                                   (read back by cvinfo.rs; cv4info.rs reads the Cv4 form)
-```
+![Two CodeView dialects of debug::Info](../assets/figures/docs-formats-codeview-1.png)
 
 `codeview::sections` ([source](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-omf/src/codeview.rs#L216))
 picks by `Info.dialect`. Each frontend states it: C and Nib `Cv4`; QB `Cv4`, or `Bc` under `--bc-codeview`.
@@ -68,9 +63,7 @@ it, and `crates/target/llrm-omf/src/cvwrite_tests.rs` checks that the writer inv
 
 ### `$$SYMBOLS`
 
-```
-[len:u8][kind:u8][data, len - 1 bytes]
-```
+![A $$SYMBOLS record](../assets/figures/docs-formats-codeview-2.png)
 
 | kind | meaning | data |
 |---|---|---|
@@ -87,9 +80,7 @@ record. QB 4.5 writes a label for each resumable statement under `ON ERROR`.
 
 ### `$$TYPES`
 
-```
-[kind:u8 = 1][length:u16][data, length bytes]      indices from 0x0200; 0x0200 is a fixed first record
-```
+![A $$TYPES record](../assets/figures/docs-formats-codeview-3.png)
 
 | tag | meaning | data |
 |---|---|---|

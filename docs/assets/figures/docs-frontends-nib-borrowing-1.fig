@@ -1,0 +1,11 @@
+kind: graph
+dir: right
+title: States of an owner. A use of a moved owner, or of a partly moved one, is refused.
+node whole "whole" fill=c
+node part "partly moved" fill=b
+node moved "moved" fill=d
+edge whole -> part "move a field"
+edge part -> whole "assign that field"
+edge whole -> moved "move the whole"
+edge part -> moved "move the whole"
+edge moved -> whole "assign the whole"

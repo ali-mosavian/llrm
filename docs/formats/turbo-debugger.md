@@ -4,13 +4,7 @@ For contributors changing `crates/target/llrm-omf/src/td.rs` or checking its out
 records Turbo C++ 3.0 writes under `-v` into a 16-bit OMF object; `TLINK /v` turns them into the table Turbo
 Debugger reads.
 
-```
- Info --td::records--> COMENT records (class 0xE1..0xEA) among the object's own
-                              |
-                         TLINK /v  -->  EXE + Turbo Debugger table  -->  TD (DOSBox-X)
-                              |
-                            TDUMP prints the table
-```
+![From Info to the Turbo Debugger table](../assets/figures/docs-formats-turbo-debugger-1.png)
 
 The records are `COMENT` records of attribute 0 ("Purge: Yes, List: Yes"). They were measured on `tcc -v`
 objects (TC++ 3.0, `-ml` to `-mh`, `-a`) with `TDUMP` as the reader, by linking the object and dumping the

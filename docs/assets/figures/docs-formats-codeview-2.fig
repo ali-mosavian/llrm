@@ -1,0 +1,5 @@
+kind: stack
+title: A $$SYMBOLS record
+cell "len" size="1"
+cell "kind" size="1"
+cell "data" note="len - 1 bytes"

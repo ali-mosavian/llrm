@@ -5,14 +5,7 @@ Microsoft and Open Watcom linkers take it) is the default object format of both 
 
 ## Record layout
 
-```
- type  length   body ...                          checksum
-+-----+--------+-------------------------------+----------+
-| 1 B | 2 B LE | length - 1 bytes              |   1 B    |
-+-----+--------+-------------------------------+----------+
-  length counts the body and the checksum byte; a record is 3 + length bytes.
-  The checksum makes all bytes of the record sum to 0 mod 256.
-```
+![An OMF record](../assets/figures/docs-formats-omf-1.png)
 
 `llrm-omf/src/omf.rs` reads, edits and emits records (`Record`, `parse`, `emit`). A record keeps its raw
 bytes, so a file read and written again is identical. The odd twin of a type (`type + 1`) is its 32-bit
@@ -34,19 +27,7 @@ form: `SEGDEF`, `PUBDEF`, `LINNUM`, `FIXUPP`, `LEDATA`, `MODEND`.
 
 ## Layout of an object
 
-```
-THEADR
-COMENT   (Turbo Debugger "before" records, for -gtd)
-LNAMES   "" , class and segment names, then group names, or DGROUP if none
-COMENT   0x80 0xFE 'F'   DWARF in a 32-bit object only: flat addresses
-COMENT   0x00 0xA1 1 'C' 'V'   CodeView object only: LINK /CO reads debug info after it
-SEGDEF*  one per section, in order        GRPDEF*
-EXTDEF
-PUBDEF*  per segment (a Turbo Debugger type record follows its symbol)
-LEDATA, FIXUPP, LEDATA, FIXUPP ...        per section, per span, per 1000-byte chunk
-LINNUM*  per segment that has lines
-MODEND
-```
+![Layout of an OMF object, first record on top](../assets/figures/docs-formats-omf-2.png)
 
 The writer is [`llrm_omf::write::write`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-omf/src/write.rs#L273).
 It takes an [`Object`](object-model.md) and returns bytes, or `Error::Unencodable(what)`.
@@ -81,13 +62,7 @@ linker's `option eliminate` drops each procedure nothing calls.
 A FIXUPP follows the LEDATA it patches. A subrecord is a location, a fix-data byte, a frame datum and a
 target datum.
 
-```
- locat (2 bytes)            fix data   frame    target
- 1 M loc(4) offset(10)      F T P      index    index
-   |  |                     method bits
-   |  +-- location: 1 offset16, 2 base, 3 pointer 16:16, 9 offset32
-   +-- M = 1 segment-relative, 0 self-relative
-```
+![A FIXUPP subrecord](../assets/figures/docs-formats-omf-3.png)
 
 | `Kind` | location | mode |
 |---|---|---|

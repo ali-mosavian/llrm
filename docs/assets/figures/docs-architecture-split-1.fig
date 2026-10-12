@@ -1,0 +1,21 @@
+kind: graph
+dir: right
+title: The two doors between source, abstract and machine
+node hir "HIR\nQB, Nib, C"
+node bc "BC objects"
+node opt "llrm-transforms\npipeline" fill=b
+node isel "isel"
+node lir "LIR"
+node ph "phases"
+node lay "layout"
+node wr "writer" fill=c
+edge hir -> opt "emit"
+edge bc -> opt "decode, lift"
+edge opt -> isel "lowering\n(the other door)"
+edge isel -> lir
+edge lir -> ph
+edge ph -> lay
+edge lay -> wr
+group src "Source: MIR construction\n(one door)": hir bc
+group abs "Abstract": opt
+group mach "Machine": isel lir ph lay wr

@@ -6,11 +6,9 @@ For maintainers: how to measure what the compiler costs, per level and per pass,
 
 User instructions retired (`perf stat -e instructions:u`, children included), one process per compile, source to object. A count of work done, so a loaded host does not move it. Each tool exits 77 where perf cannot count. Address-space randomisation moves a count, so the measured command runs under `setarch -R`.
 
-```
- source --> llrm-c --> HIR --> MIR passes --> isel --> regalloc --> OMF
-            |<------------- one process, one perf count ----------->|
- gcc -c  = driver + cc1 + as        clang -c = driver + cc1 (integrated as)
-```
+![What one count covers](../../assets/figures/docs-working-measurement-compile-time-1.png)
+
+`gcc -c` is the driver, `cc1` and `as`; `clang -c` is the driver and `cc1` with its integrated assembler.
 
 ## Instruments
 

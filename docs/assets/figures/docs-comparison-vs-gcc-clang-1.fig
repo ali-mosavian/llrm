@@ -1,0 +1,20 @@
+kind: graph
+dir: down
+title: One C source through llrm-c, gcc and clang, counted in 32-bit unicorn
+node src "bench/NAME/NAME.c\n+ vsgcc/kernels/x_*/x_*.c" fill=a
+node wrap "wrapped source: one copy,\nevery compiler builds it\n(wrap.py: main calls\nbench_NAME through a\nvolatile pointer)"
+node llrm "llrm-c -m32 -mabi=sysv\n-O1/-O2/-O3/-Os\n-march=i486\nOMF object\nharness.py links it" fill=b
+node gcc "gcc -m32 -march=i486\n-O1/-O2/-O3/-Os\nELF object\nld -static + stub.elf" fill=c
+node clang "clang -m32 ...\n-O1/-O2/-O3/-Os\nELF object\nld -static + stub.elf" fill=d
+node run "unicorn, 32-bit protected\nmode: run main; count\nbench_NAME from entry to\nits own return" fill=e
+node per "per variant: ins, mem ops,\nnops, 486 clocks (estimate),\ncode bytes"
+node tab "table.py:\nllrm / gcc, llrm / clang"
+edge src -> wrap
+edge wrap -> llrm
+edge wrap -> gcc
+edge wrap -> clang
+edge llrm -> run
+edge gcc -> run
+edge clang -> run
+edge run -> per
+edge per -> tab

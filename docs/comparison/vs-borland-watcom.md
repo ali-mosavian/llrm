@@ -4,29 +4,7 @@ For maintainers comparing llrm's 16-bit C output with BCC 3.1, Turbo C 2.01, Tur
 
 ## Flow
 
-```
- bench/NAME/NAME.c
-        |
-   +----+-----------------------+----------------------------------+
-   v                            v                                  v
- llrm-c -O2 | -Os           bcc.sh in DOSBox-X                  bwcc (host)
-   -fno-inline-functions   bcc / tcc  -mm, 8087             Open Watcom -mm -4 -fpi87
-   |                          |  OBJ                           |  OBJ
-   v                          v                                v
- llrm's own link           jwlink + that toolchain's        jwlink + OW's CLIBM,
-                           C0M, CM, FP87, MATHM             MATH87M, NOEMU87
-   +------------------------------+--------------------------+
-                                  v
-            real-mode unicorn (crates/target/llrm-x86-m16/bench/icount.py)
-            count bench_NAME: entry to return, runtime calls included
-                                  |
-        +-------------------------+----------------------+
-        v                         v                      v
- instructions, memory ops   486 clocks (estimate)    sizes.py: code, data,
- -> bench/NAME/expected.toml  (not gated)            bss of the program's OBJ
-        |
-        +--> with --time: RDTSC in DOSBox-X -> kernel_ms
-```
+![One C source through llrm-c, Borland C and Open Watcom, counted by the same emulator](../assets/figures/docs-comparison-vs-borland-watcom-1.png)
 
 ## Generated instructions and size
 

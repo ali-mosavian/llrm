@@ -128,15 +128,7 @@ for the offset.
 
 The `AD` descriptor of a numeric array, from the measured `ARRAY.INC` layout:
 
-```
- +0   +2   +4    +6     +8    +9      +0Ah       +0Ch    +0Eh
- +----+----+-----+------+-----+-------+----------+-------+-----------+
- | off| seg| link| total| rank| flags | adjusted | elem  | (count,   |
- |    |    |     | size |     |       | offset   | width | lower)... |
- +----+----+-----+------+-----+-------+----------+-------+-----------+
- data far pointer                  FADF_STATIC = 40h    one 4-byte record
-                                                        per dimension
-```
+![AD descriptor of a numeric array](../../assets/figures/docs-frontends-qb-memory-model-1.png)
 
 An array of unspecified rank reserves BASCOM's eight dimension records: a
 14-byte header plus eight four-byte records, 46 bytes. That is an ABI storage
@@ -171,20 +163,7 @@ guarantee.
 
 ### Runtime frames
 
-```
-  high   +--------------------+
-         | parameters         |  Pascal: first formal furthest from [bp+6]
-         +--------------------+
-         | return address     |  far
-         +--------------------+
-         | runtime header     |  <- BP at its top; 10 bytes QB 4.5 / llrm,
-         |  (saved BP, frame  |  18 bytes PDS 7.1, 20 bytes VBDOS
-         |   chain, SI, DI)   |
-         +--------------------+
-         | source locals and  |
-         | spills             |
-  low    +--------------------+  <- SP
-```
+![Frame of a QB procedure (far call, Pascal order)](../../assets/figures/docs-frontends-qb-memory-model-2.png)
 
 `B$ENRA` pushes BP, installs the BASIC frame chain, saves SI and DI, and
 allocates and zeroes the locals; `B$EXSA` reverses it before the far return.

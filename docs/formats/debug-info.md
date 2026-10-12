@@ -3,17 +3,7 @@
 For contributors changing `-g`, its model or a writer. Debug information is built once, in a format-neutral
 model, and each object format's writer encodes it. State described here is the code at commit `c341bd6e3`.
 
-```
- frontend                 MIR                       backend                  writers
-+----------+   +---------------------+   +-------------------------+   +--------------+
-| llrm-c   |   | !types !functions   |   | debuginfo::described    |   | llrm-dwarf   |-> ELF, Mach-O,
-| llrm-nib |-->| !globals            |-->|   (types, procedures)   |   |  .debug_*    |   OMF (-gdwarf)
-| llrm-qb  |   | #dbg_declare        |   | valuetrack (ranges)     |-->| llrm-coff    |-> COFF
-|  HIR     |   | #dbg_value/_piece/  |   | cfi (frame rows)        |   |  C13         |
-|  debug   |   | _gone               |   | debuginfo::laid_out     |   | llrm-omf     |-> OMF
-|  Builder |   | lines               |   |   -> debug::Info        |   |  CV4 / TD    |
-+----------+   +---------------------+   +-------------------------+   +--------------+
-```
+![Debug information from frontend to writers](../assets/figures/docs-formats-debug-info-1.png)
 
 ## The model
 

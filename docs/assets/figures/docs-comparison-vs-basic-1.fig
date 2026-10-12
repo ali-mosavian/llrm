@@ -1,0 +1,17 @@
+kind: graph
+dir: down
+title: One BASIC source through llrm-qb and BC (D is qb45, pds71 or vbdos)
+node src "bench/NAME/NAME.bas" fill=a
+node qb "llrm-qb --dialect D --runtime D\n-O2 or -Os\n-fno-inline-functions\n-fno-inline-functions-\ncalled-once" fill=b
+node bc "BC /O /FPi [/AH]\none DOSBox-X boot per dialect" fill=c
+node qbl "LINK in DOSBox-X\nllrm's runtime"
+node bcl "LINK with D's own runtime"
+node run "real-mode unicorn\ncrates/target/llrm-x86-m16\n/bench/icount.py\ncounts the kernel BenchName:\nentry to return,\nruntime calls included" fill=d
+node out "instructions, memory ops,\ncode/data/bss bytes\nof the program's OBJ\n-> bench/NAME/expected.toml"
+edge src -> qb
+edge src -> bc
+edge qb -> qbl "OBJ"
+edge bc -> bcl "OBJ"
+edge qbl -> run
+edge bcl -> run
+edge run -> out "[bas.*] beside [bc.O2] [pds71.O2] [vbdos.O2]"

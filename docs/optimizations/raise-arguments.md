@@ -4,13 +4,7 @@ For contributors to the BC object path (`crates/target/llrm-x86-bc`), which turn
 
 ## Where it sits
 
-```
- BC .OBJ --omf--> bodies + runtime contracts (llrm-qbruntime/runtime.toml)
-                    |  llrm-x86-bc: one MIR function per body
-                    |    pairs / longs / floats / access / arrays recognizers
-                    v
-                  MIR (@llrm.qb.<routine> calls with their contract) --> passes.md
-```
+![Where the raise sits](../assets/figures/docs-optimizations-raise-arguments-1.png)
 
 Each body is raised by walking its nodes with a set of recognizers (`Recognizer` in [`sites.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-x86-bc/src/sites.rs)); one that cannot express a function refuses it and says why. No optimization pass sees a register convention or a machine instruction: the raise emits values.
 

@@ -1,0 +1,14 @@
+kind: graph
+dir: down
+title: The second layout
+node isel "isel + allocation\ncheaper: spiller route /\nallocator alone" fill=a
+node first "first body\nFrame{floor, hole = 0}"
+node rel "relayout::laid_again\n(first, frame, hole)" fill=b
+node note "moves each cell by its slot:\nincoming arguments stay;\nisel slots move down by hole;\nspill slots go where Frame::slot\nwould put them with the hole" shape=note
+node second "second body"
+node pick "far_frame(second) <\nfar_frame(first) ?\nsecond : first" fill=c
+edge isel -> first
+edge first -> rel "far_frame(first) > 0\nand spilled > 0"
+edge rel -> second
+edge second -> pick
+edge note ..> rel

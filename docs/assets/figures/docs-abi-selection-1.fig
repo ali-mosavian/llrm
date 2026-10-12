@@ -1,0 +1,16 @@
+kind: graph
+dir: down
+title: From a source mark to a call's registers
+node abi "-mabi=FAMILY (else default)\ncalling.toml\n[abi.FAMILY].convention" fill=a
+node unm "Unmarked C function,\nNib \"c\""
+node mark "Marked function\n(__cdecl, __pascal,\n@export(\"x\"), ...)"
+node mir "MIR: calling_convention\non the function and\non every call" fill=b
+node pass "mir calleepop: private\nconvention, or callee-pop\ntwin; mir deadargs,\nargpromotion: change which\narguments exist"
+node sel "selection\nConvention::place puts each\nargument in a register or\nstack slot; call and\nfunction agree on cleanup"
+node be "backend: callee facts say\nwhich registers a direct\ncall changes" fill=c
+edge abi -> unm
+edge unm -> mir
+edge mark -> mir
+edge mir -> pass
+edge pass -> sel
+edge sel -> be

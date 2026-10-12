@@ -5,23 +5,7 @@ they are built and checked, and how they become the syntax tree.
 
 ## Pipeline
 
-```
- grammar/qbasbnf.prs ----+
- grammar/peropcod.txt ---+--> crates/buildprs (vendored generator)
- grammar/ast-actions.toml-+        |
- grammar/dialect-extensions.toml   v
-                         build.rs --> OUT_DIR/qbasic_parser_tables.rs
-                                       T_STATE, T_INT_NT_DISP, T_EXT_NT_DISP,
-                                       statement/function anchors, tokens,
-                                       AstAction, ExternalAction
-                                              |
- source text --> generated_parser/lexer.rs --> tokens with spans
-                                              |
-                      generated_parser/engine.rs (table interpreter)
-                        checkpoint / rollback per alternative
-                                              |
-                      generated_parser/ast.rs (builder) --> syntax::Module
-```
+![From grammar to syntax tree](../../assets/figures/docs-frontends-qb-generated-parser-1.png)
 
 `build.rs` runs the vendored generator over the grammar and opcode catalog and
 emits the state table, the internal and external nonterminal dispatch tables,
@@ -65,12 +49,7 @@ and word buffers do not enter syntax, HIR or MIR.
 
 ## Speculative parsing
 
-```
- token cursor + builder checkpoint
-        | table alternative / internal NT / external action
-        +-- reject -> restore both
-        `-- accept -> commit both
-```
+![An alternative checkpoints the token cursor and the builder](../../assets/figures/docs-frontends-qb-generated-parser-2.png)
 
 An alternative checkpoints the token cursor, the `AstSink` and every builder
 collection or mode it can change (expressions, statements, declarations,

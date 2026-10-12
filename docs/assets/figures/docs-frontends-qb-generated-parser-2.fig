@@ -1,0 +1,10 @@
+kind: graph
+dir: down
+title: An alternative checkpoints the token cursor and the builder
+node cp "token cursor +\nbuilder checkpoint" fill=a
+node alt "table alternative /\ninternal NT / external action"
+node rej "restore both" fill=c
+node acc "commit both" fill=b
+edge cp -> alt
+edge alt -> rej "reject"
+edge alt -> acc "accept"

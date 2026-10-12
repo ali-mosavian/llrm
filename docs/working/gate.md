@@ -8,9 +8,7 @@ The gate is `tools/gate/gate.py`; `tools/gate/tiers.toml` is the only table that
 
 `.github/workflows/ci.yml` runs on every pull request, on pushes to main and on `workflow_dispatch`; a new push to a pull request cancels its running one.
 
-```
- plan ──► build ──► gate (one job per group, in parallel) ──► ci
-```
+![The jobs of a pull request](../assets/figures/docs-working-gate-1.png)
 
 | Job | Does | Passes when |
 |---|---|---|
@@ -27,18 +25,7 @@ Caches (the forks `~/.cache/llrm`, the workspace `target`, the cargo registry, `
 
 ## Tiers
 
-```
- changed paths ──► [inert] only? ──yes──► none  (docs, *.md, editors, .github, .zed)
-                        │no
-                        ▼
-              any [compiler] path? ──no──► narrow: pytest + the steps that read
-                        │yes                  what changed (data dirs, tests/*.rs, bench, torture,
-                        ▼                     fmt, owning heavy steps, run)
-          [shared] or unknown path? ──yes──► FULL: every step
-                        │no
-                        ▼
-                      FAST: cheap steps + each heavy step whose owner paths changed
-```
+![How the changed paths select the tier](../assets/figures/docs-working-gate-2.png)
 
 `[compiler]` is `crates/**`, `src/**`, `build.rs`, the manifests, `rust-toolchain.toml`, `.cargo/**`. `[shared]` is the manifests, `src/**`, `tests/common/**`, `crates/ir/**`, `crates/support/**`, `crates/target/llrm-target/**`, `crates/target/llrm-object/**` and `tools/gate/**`. A path in no table is unknown and selects full. Backend and transform changes are not shared: they take fast plus every codegen heavy step (`run`, `qcport`, `pytest-programs`).
 

@@ -1,0 +1,27 @@
+kind: graph
+dir: down
+title: llrm-core and the representations
+node core "llrm-core" fill=c
+node tr "llrm-transforms" fill=b
+node an "llrm-analysis" fill=b
+node mir "llrm-mir"
+node hir "llrm-hir"
+node tgt "llrm-target"
+node lir "llrm-lir"
+node x86 "llrm-x86"
+node bcm "llrm-x86-bcmachine" fill=d
+node qbrt "llrm-qbruntime" fill=d
+node sup "llrm-support"
+edge core -> tr
+edge core -> x86
+edge core -> bcm
+edge tr -> an
+edge an -> mir
+edge an -> sup
+edge x86 -> tgt
+edge bcm -> qbrt
+edge qbrt -> hir
+edge hir -> tgt
+edge tgt -> mir
+edge tgt -> lir
+edge lir -> sup

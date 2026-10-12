@@ -1,0 +1,16 @@
+kind: graph
+dir: down
+title: What owns what in HIR; each child kind is a list
+node prog "Program\ndialect, runtime profile,\ntarget, array order,\nfloat mode, frames,\npromises, entries,\nstack check" fill=a
+node mod "Module\ntypes, callables, alias\nclasses, facts, debug,\nline numbers" fill=b
+node ty "Type\nkind, width, signedness,\nfloat evaluation,\naddress kind"
+node data "DataObject\nbytes, relocations,\nlinkage, readonly, segment"
+node call "Callable\nname, signature, defined?,\nreturns_twice"
+node fn "Function\nvalues, places, parameters,\nProcedureAbi, call ABIs"
+node blk "Block\nInstruction list,\none Terminator"
+edge prog -> mod
+edge mod -> ty
+edge mod -> data
+edge mod -> call
+edge mod -> fn
+edge fn -> blk
