@@ -900,3 +900,17 @@ def test_a_summary_of_a_function_that_calls_back_does_not_hold_the_callbacks_as_
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["summaries visit"] > 1.0, f"premise: the fixed point visited ({own['summaries visit']:.1f} Minstr)"
     assert own["summaries visit"] <= 60.0, f"{own['summaries visit']:.1f} Minstr"
+
+
+def test_lir_jumps_does_not_solve_the_liveness_of_every_value_for_each_anchor_it_hoists(tmp_path):
+    """nest(32) at -O2 with -ftree-ch: every copied loop leaves anchors on its exit edges, and `lir jumps` hoisted each above the branch,
+    solving the liveness of every value of the body afresh for each (the values live are read again for the next): its own work read 276
+    Minstr at N=32 and 1,055 at N=64. Only the values the moved anchors name are solved again: 179 and 628. A bound of 230 at N=32
+    fails the first and passes the second."""
+    source = tmp_path / "nest32.c"
+    source.write_text(scaling.nest(32))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["lir jumps"] > 20.0, f"premise: jumps ran ({own['lir jumps']:.1f} Minstr)"
+    assert own["lir jumps"] <= 230.0, f"{own['lir jumps']:.1f} Minstr"
