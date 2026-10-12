@@ -237,7 +237,11 @@ pub fn duplicated_tails(body: &LirBody) -> LirBody {
 }
 
 /// `duplicated_tails`, or only the tails that return: the jump a copied tail
-/// ended in may reach one.
+/// ended in may reach one. A tail is not copied into a jump after a branch
+/// whose other way is likelier than the tail (and is not the block itself): the
+/// copy would leave code between that branch and what follows it, and the
+/// likelier way would be taken whatever is laid next (x_adler's `jne top; jmp
+/// exit` latch).
 fn duplicated(
     body: &LirBody,
     returns: bool,
