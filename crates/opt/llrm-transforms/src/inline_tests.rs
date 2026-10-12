@@ -1487,3 +1487,34 @@ b2:
     };
     assert_eq!((of(0), of(1), of(2)), (1, 1, 2));
 }
+
+/// qb's events.c: a caller whose first instruction is the call that is inlined,
+/// into a callee whose own call carries a stack object, panicked in `splice`
+/// ("instruction 2 is not placed"): the anchor the nested copy's alloca goes
+/// before was the call already gone.
+#[test]
+fn test_a_nested_copy_with_stack_is_placed_where_the_entrys_first_call_stood() {
+    let source = "define internal i16 @leaf() {
+b1:
+  %cell = alloca [4 x i8]
+  store i16 5, ptr %cell
+  %v = load i16, ptr %cell
+  ret i16 %v
+}
+
+define internal i16 @mid() {
+b1:
+  %r = call i16 @leaf()
+  ret i16 %r
+}
+
+define i16 @main() {
+b1:
+  %r = call i16 @mid()
+  ret i16 %r
+}
+";
+    let want = assert_the_one_scan_is_the_repeated_one(source, &["@mid(", "@leaf("], Threshold::default());
+    let main = want.split("define i16 @main").nth(1).expect("main");
+    assert!(!main.contains("call i16"), "{want}");
+}

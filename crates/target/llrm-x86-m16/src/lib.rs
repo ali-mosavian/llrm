@@ -221,6 +221,22 @@ impl llrm_target::Target for M16 {
 
 #[cfg(test)]
 mod tests {
+    /// gcc's by-pieces ratios of a constant memset where its algorithm is `rep
+    /// stos` (`i386_cost`, `i486_cost`, `pentium_cost`); none where it is a
+    /// loop or a libcall (`pentiumpro_memset`).
+    #[test]
+    fn test_the_memset_ratios_are_gccs_per_cpu() {
+        let ratio = |name: &str| {
+            let table = timings::TABLE.cpu(name).expect("a CPU");
+            (table.set_ratio, table.clear_ratio)
+        };
+        assert_eq!(
+            (ratio("386"), ratio("486"), ratio("P5")),
+            ((Some(3), Some(3)), (Some(3), Some(3)), (Some(6), Some(6)))
+        );
+        assert_eq!(ratio("P6"), (None, None));
+    }
+
     const EAX: RegId = RegId::EAX;
     const EDX: RegId = RegId::EDX;
     use llrm_target::Target;

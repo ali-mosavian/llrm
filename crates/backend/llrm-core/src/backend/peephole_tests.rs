@@ -1708,11 +1708,13 @@ fn test_zeroing_before_a_jump_asks_what_the_target_reads() {
 }
 
 #[test]
-fn test_zero_compare_before_its_branch_is_or() {
-    // `cmp ax,0; jl` is three bytes where `or ax,ax; jl` is two. Only AF
-    // differs.
+fn test_zero_compare_before_its_branch_is_test() {
+    // `cmp ax,0; jl` is three bytes where `test ax,ax; jl` is two, and writes
+    // no register as `or ax,ax` did. Only AF differs. The branch need not end
+    // its block: `-ftree-ch` left `cmp ecx, 0; je` before a jump.
     for (variant, rewritten) in [
         ("plain", true),
+        ("jumped", true),
         ("moves", true),
         ("call", true),
         ("return", true),
@@ -1744,8 +1746,11 @@ fn test_zero_compare_before_its_branch_is_or() {
             _ => Some(after.clone()),
         };
         let compare = Arc::new(compare);
+        let jump = insn(7, Some((7, 8)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(9))), vec![], vec![]);
         let head = if ["moves", "between"].contains(&variant) {
             vec![Arc::clone(&compare), Arc::new(between), Arc::new(branch)]
+        } else if variant == "jumped" {
+            vec![Arc::clone(&compare), Arc::new(branch), Arc::new(jump)]
         } else {
             vec![Arc::clone(&compare), Arc::new(branch)]
         };
@@ -1766,7 +1771,7 @@ fn test_zero_compare_before_its_branch_is_or() {
         if rewritten {
             assert_eq!(
                 (what.op, what.name.as_deref(), &what.dests, &what.sources),
-                (Operation::Binary, Some("or"), &vec![ax.clone()], &vec![ax.clone(), ax]),
+                (Operation::Compare, Some("test"), &Vec::new(), &vec![ax.clone(), ax]),
                 "{variant}"
             );
         } else {

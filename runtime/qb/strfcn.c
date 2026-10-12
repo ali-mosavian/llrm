@@ -36,13 +36,11 @@ static SD *repeated(int n, char c)
 {
     char *data;
     SD *result;
-    int i;
 
     if (n < 0)
         qb_error(BE_ILLFUN);
     result = str_tmp(n, &data);
-    for (i = 0; i < n; i++)
-        data[i] = c;
+    fill_bytes(data, c, n);
     return result;
 }
 

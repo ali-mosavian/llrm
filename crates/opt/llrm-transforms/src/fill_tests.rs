@@ -780,3 +780,66 @@ fn a_pair_of_constants_is_one_store_tuned_for_size_where_the_bytes_are_fewer() {
     assert_eq!(stores(held, true), 4, "size: a register already holds the 4");
     assert_eq!(stores(unique, true), 1, "size: nine bytes against twelve");
 }
+
+/// lru's init: `lhead` and `ltail` are adjacent arrays of one struct, a loop of
+/// `trips` stores `-1` to each.
+fn adjacent_fills(trips: i32) -> String {
+    format!(
+        "%S = type {{ [{trips} x i16], [{trips} x i16] }}
+@s = global %S zeroinitializer
+
+{MEMSET}define i16 @f(i16 %n, i16 %q) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp slt i16 %i, {trips}
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %p = getelementptr inbounds %S, ptr @s, i16 0, i32 0, i16 %i
+  store i16 -1, ptr %p
+  %r = getelementptr inbounds %S, ptr @s, i16 0, i32 1, i16 %i
+  store i16 -1, ptr %r
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %a = getelementptr %S, ptr @s, i16 0, i32 0, i16 %q
+  %b = getelementptr %S, ptr @s, i16 0, i32 1, i16 %q
+  %v = load i16, ptr %a
+  %w = load i16, ptr %b
+  %x = add i16 %v, %w
+  ret i16 %x
+}}
+"
+    )
+}
+
+/// The streams of a loop that tile their bytes with one byte are one memset:
+/// gcc distributes lru's 7-trip loop of two word stores into two memsets and
+/// merges them, adjacent as they are, into one 28-byte `rep stosl`. Kept as two
+/// stores a trip it ran 150 clocks against gcc's 127.
+#[test]
+fn a_loop_of_two_adjacent_fills_is_one_memset_of_both() {
+    let before = parsed(&format!("{DOS}{}", adjacent_fills(7)));
+    let mut module = before.clone();
+    let (layout, outer) = (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
+    let callees = llrm_mir::memory::callees(&module);
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let changed = filled(context, &layout, &callees, function, &outer, &mut declared, false);
+    let after = printed(&module);
+    assert!(changed, "{after}");
+    assert_eq!(after.matches("call void @llvm.memset").count(), 1, "{after}");
+    assert!(after.contains("i8 -1, i16 28, i1 false)") && !after.contains("store"), "{after}");
+    assert_eq!(results(&module, CELLS), results(&before, CELLS), "{after}");
+}
+
+/// Streams with a gap between them are two memsets, not one over the gap.
+#[test]
+fn a_loop_of_two_fills_with_a_gap_is_not_one_memset() {
+    let (text, changed) = fill(&two_fills(30, "-1", "-1", "%i"), CELLS);
+    assert!(changed && text.matches("call void @llvm.memset").count() == 2, "{text}");
+}

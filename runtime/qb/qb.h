@@ -64,6 +64,15 @@ enum {
 void copy_bytes(char *to, const char *from, unsigned n);
 #pragma aux copy_bytes "B$COPY"
 
+/* `n` bytes at `to` set to `value`, by dwords (block.asm). */
+void fill_bytes(char *to, int value, unsigned n);
+#pragma aux fill_bytes "B$FILLB"
+
+/* -1, 0 or 1 as the `n` bytes at `a` sort before, with or after those at `b`,
+   as unsigned (block.asm). */
+int compare_bytes(const char *a, const char *b, unsigned n);
+#pragma aux compare_bytes "B$CMPB"
+
 /* error.c: raise run-time error `n`.  It does not return: control goes to the
    ON ERROR handler, or the program ends. */
 void qb_error(unsigned n);

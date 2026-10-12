@@ -33,6 +33,17 @@ pub static PARTIAL_STALL: LazyLock<[i64; 7]> = LazyLock::new(|| scalars(|table| 
 /// stalls the decoder on P6 and Core.
 pub static LCP_STALL: LazyLock<[i64; 7]> = LazyLock::new(|| scalars(|table| table.lcp_stall));
 
+/// gcc's by-pieces ratios for a constant memset (0 where the table states
+/// none): see `timings.times`.
+fn ratios(of: impl Fn(&CpuTable) -> Option<i64>) -> [i64; 7] {
+    scalars(|table| of(table).unwrap_or(0))
+}
+
+pub static SET_RATIO: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.set_ratio));
+pub static CLEAR_RATIO: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.clear_ratio));
+pub static SET_RATIO_SIZE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.set_ratio_size));
+pub static CLEAR_RATIO_SIZE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.clear_ratio_size));
+
 /// Instructions retired per cycle.
 pub static ISSUE: LazyLock<[i64; 7]> = LazyLock::new(|| scalars(|table| table.issue));
 

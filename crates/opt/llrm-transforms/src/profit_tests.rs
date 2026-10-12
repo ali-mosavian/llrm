@@ -352,6 +352,42 @@ out:
     );
 }
 
+/// `Products` derived the function's loops three times over for each call
+/// (`_loop_products`, `_frequencies`, and the scaling by branch), beside the
+/// one the manager holds: lsr asks it after each loop it changes, and a nest of
+/// 64 loops spent a third of its products in it. Given the shape, none is
+/// derived, and the weights are those of the shape found each time.
+#[test]
+fn test_the_products_of_a_function_with_its_shape_derive_no_other() {
+    let text = "define void @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret void
+}
+";
+    let module = module(text);
+    let f = function(&module);
+    let shape = cfg::Shape::of(f);
+    let before = llrm_analysis::cfg::shapes_derived();
+    let given = super::_loop_products_by_branch_in(&module.context, &module.metadata, &module.globals, f, &shape, None);
+    assert_eq!(llrm_analysis::cfg::shapes_derived(), before, "a shape was derived for a call given one");
+    let own = super::_loop_products_by_branch(&module.context, &module.metadata, &module.globals, f, None);
+    assert_eq!(
+        llrm_analysis::cfg::shapes_derived(),
+        before + 1,
+        "premise: the call without one derives it once (it was once for each part: three)"
+    );
+    assert_eq!(given, own);
+}
+
 /// A cold arm priced as whole executions, floor 1, weighed what the code
 /// before it did; and a branch's arms each weighed the whole loop's 32 rather
 /// than their share. Now a block's weight is its share of the entry's, in

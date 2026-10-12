@@ -1,4 +1,4 @@
-;; name: B$MOVE, B$FILL, B$COPY
+;; name: B$MOVE, B$FILL, B$COPY, B$FILLB, B$CMPB
 ;; desc: string moves by dwords
 ;;
 ;; chng: oct/26 written [ali]
@@ -92,7 +92,7 @@ B$FILL          endp
 ;; B$COPY - copy `count` bytes from `from` to `to`, forward.
 ;;
 ;; By dwords and then the bytes left; byte by byte when `to` is 0 to 3 above
-;; `from`, as a loop would.
+;; `from`, as a loop would, or when there are fewer than 4.
 ;;
 ;; Args:
 ;;     to    (ax): near ptr.
@@ -108,6 +108,9 @@ B$COPY          proc    public uses bx cx si di es
                 mov     di, ax
                 mov     si, dx
                 cld
+                ;; under a dword: bytes alone, no split
+                cmp     cx, 4
+                jb      @F
                 mov     ax, di
                 sub     ax, si
                 cmp     ax, 4
@@ -122,4 +125,77 @@ B$COPY          proc    public uses bx cx si di es
                 rep     movsb
                 ret
 B$COPY          endp
+
+;; B$FILLB - set `count` bytes at `to` to the byte `value`.
+;;
+;; By dwords and then the bytes left.
+;;
+;; Args:
+;;     to    (ax): near ptr.
+;;     value (dx): the byte, in dl.
+;;     count (cx): bytes.
+;;
+;; Saves:    bx cx dx di es
+;; Clobbers: eax, flags
+B$FILLB         proc    public uses bx cx dx di es
+
+                push    ds
+                pop     es
+                mov     di, ax
+                movzx   eax, dl
+                mov     ah, al
+                mov     edx, eax
+                shl     eax, 16
+                or      eax, edx                ;; the byte four times; imul costs 9 to 40 clocks
+                mov     bx, cx
+                cld
+                shr     cx, 2
+                rep     stosd
+                mov     cx, bx
+                and     cx, 3
+                rep     stosb
+                ret
+B$FILLB         endp
+
+;; B$CMPB - compare `count` bytes at `first` and `second`, as signed bytes: BCOM45
+;; compares so (CHR$(200) < "a"), the flags of its REPE CMPSB read with JG and JL.
+;;
+;; By dwords until one differs, then the four bytes it is in.
+;;
+;; Args:
+;;     first  (ax): near ptr.
+;;     second (dx): near ptr.
+;;     count  (cx): bytes.
+;;
+;; Returns:  ax: -1, 0 or 1 as `first` sorts before, with or after `second`.
+;; Saves:    bx cx si di es
+;; Clobbers: flags
+B$CMPB          proc    public uses bx cx si di es
+
+                push    ds
+                pop     es
+                mov     si, ax
+                mov     di, dx
+                mov     bx, cx
+                cld
+                shr     cx, 2                   ;; ZF set when no dwords: nothing differs yet
+                repe    cmpsd
+                je      @F
+                sub     si, 4
+                sub     di, 4
+                mov     cx, 4
+                jmp     lastbytes
+@@:
+                mov     cx, bx
+                and     cx, 3
+lastbytes:
+                repe    cmpsb
+                mov     ax, 0
+                je      @F
+                mov     ax, 1
+                jg      @F
+                mov     ax, -1
+@@:
+                ret
+B$CMPB          endp
                 end

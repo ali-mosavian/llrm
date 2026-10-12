@@ -1,10 +1,10 @@
-reason = "quicksort's m16 partition keeps a pointer for the counter some trips step (lsr): memory operands -25%, 486 clocks -5.0% (C) and -4.3% (Nib), code +6 and +19 bytes"
+reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
 blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 227220
+instructions = 227226
 memory_operands = 113692
-code_bytes = 552
+code_bytes = 545
 data_bytes = 17
 bss_bytes = 0
 

@@ -1,13 +1,12 @@
-reason = "guards prove more (a phi tested on every edge into its block): shellsort nib loses a bounds check (-1.0% instructions) and the CFG it leaves loads values[at - gap] twice (4 loads in the pipeline MIR, 3 before): memory operands +17%"
-blessed = "2026-10-09"
+reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
+blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 10449
+instructions = 10453
 memory_operands = 2001
-code_bytes = 342
+code_bytes = 333
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 0.1557
 
 [bas.Os]
 instructions = 10795
