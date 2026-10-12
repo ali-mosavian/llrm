@@ -323,7 +323,11 @@ pub fn duplicated_tails(body: &LirBody) -> LirBody {
 }
 
 /// `duplicated_tails`, or only the tails that return: the jump a copied tail
-/// ended in may reach one.
+/// ended in may reach one. A tail is not copied into a jump after a branch
+/// whose other way is likelier than the tail (and is not the block itself): the
+/// copy would leave code between that branch and what follows it, and the
+/// likelier way would be taken whatever is laid next (x_adler's `jne top; jmp
+/// exit` latch).
 fn duplicated(
     body: &LirBody,
     returns: bool,
@@ -358,6 +362,26 @@ fn duplicated(
             else {
                 return None;
             };
+            // A conditional branch before this jump leaves by its way when
+            // that way is the likelier, and it falls through to its block when
+            // that block is laid next (`inverted`, `rotated` lay it so): the
+            // jump is the cold way's. A copy of the tail in the jump's place
+            // leaves code between the branch and what follows it, so the branch
+            // is taken whatever is laid next: not where its way is the likelier
+            // (a latch with a short exit tail paid a taken back edge every trip
+            // to save the exit's one jump).
+            if let (_, Some(branch)) = _real_tail(parent) {
+                let way = branch.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect);
+                if let Some(way) = way.and_then(|what| what.target)
+                    && way != tail.at
+                    // A block cannot fall into itself: a loop of one block is a
+                    // taken branch back whatever is laid next.
+                    && way != parent.at
+                    && frequency.edge(parent.at, way) > frequency.edge(parent.at, tail.at)
+                {
+                    return None;
+                }
+            }
             // Per run of the jump: the fall-through's jump runs as often as the
             // tail falls through.
             if let Some(next) = falls {

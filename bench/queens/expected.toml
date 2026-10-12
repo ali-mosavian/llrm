@@ -1,10 +1,10 @@
-reason = "ch default (user decision 2026-10-12): the rotated loops expose m16 allocator register choice (#1557)"
+reason = "a tail is not copied over the likelier way of the branch before its jump (#1535): parity/qbsp c -O2 instructions +1.9% (clocks +0.64%), the other moved rows smaller or equal"
 blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 343083
+instructions = 344226
 memory_operands = 102510
-code_bytes = 456
+code_bytes = 454
 data_bytes = 15
 bss_bytes = 0
 
@@ -17,9 +17,9 @@ bss_bytes = 0
 kernel_ms = 4.278
 
 [bq16.O2]
-instructions = 347416
+instructions = 352694
 memory_operands = 102524
-code_bytes = 464
+code_bytes = 462
 data_bytes = 15
 bss_bytes = 0
 
@@ -31,8 +31,8 @@ data_bytes = 15
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 413967
-code_bytes = 582
+instructions = 415153
+code_bytes = 577
 data_bytes = 21
 bss_bytes = 0
 

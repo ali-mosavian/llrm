@@ -1053,6 +1053,71 @@ fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_tim
     assert!(visits <= 3 * (count as usize + 1), "{visits} block visits for {count} removable jumps");
 }
 
+/// The ends of a block's real instructions, by name.
+fn named(block: &LirBlock) -> Vec<String> {
+    block.insns.iter().filter_map(|one| one.what.as_ref()).map(|what| what.name.clone().unwrap_or_default()).collect()
+}
+
+fn with_odds(
+    mut made: LirBody,
+    edges: &[(i64, i64, f64)],
+) -> LirBody {
+    for &(from, to, chance) in edges {
+        made.odds.taken.insert((from, to), (chance * crate::model::lir::BlockOdds::CERTAIN) as u32);
+    }
+    made
+}
+
+/// x_adler's loop: the latch `jne top; jmp exit` with a short return as the
+/// exit. The copy of the return in the jump's place left the loop's back
+/// branch taken over the copy on every trip (9 clocks a trip, not 7): the
+/// likelier way of a branch before the jump is not given up for the jump's.
+#[test]
+fn test_a_tail_is_not_copied_over_the_likelier_way_of_the_branch_before_its_jump() {
+    let looped = with_odds(
+        body(
+            "f",
+            1,
+            vec![
+                block(1, vec![_move(1, imm(0))], vec![10]),
+                block(10, vec![_move(10, cx())], vec![20]),
+                block(20, vec![_compare(20), _branch(21, "jne", 10), _inserted(_jump(22, 30))], vec![10, 30]),
+                block(30, vec![_inserted(_return(30))], vec![]),
+            ],
+        ),
+        &[(20, 10, 31.0 / 32.0), (20, 30, 1.0 / 32.0)],
+    );
+    let copied = duplicated(&looped, true);
+    assert_eq!(named(&copied.blocks[2]), ["cmp", "jne", "jmp"], "the exit's return was copied into the latch");
+}
+
+/// Not a loop: the same rule on a guard whose branch is the likelier way, and,
+/// for the other way round, a copy that is made.
+#[test]
+fn test_a_tail_is_copied_where_the_jump_is_the_likelier_way() {
+    let make = |branch: f64| {
+        with_odds(
+            body(
+                "f",
+                1,
+                vec![
+                    block(1, vec![_compare(1), _branch(2, "je", 10), _inserted(_jump(3, 30))], vec![10, 30]),
+                    block(10, vec![_move(10, cx()), _jump(11, 40)], vec![40]),
+                    block(30, vec![_inserted(_return(30))], vec![]),
+                    block(40, vec![_return(40)], vec![]),
+                ],
+            ),
+            &[(1, 10, branch), (1, 30, 1.0 - branch)],
+        )
+    };
+    assert_eq!(named(&duplicated(&make(0.9), true).blocks[0]), ["cmp", "je", "jmp"], "copied over the likelier branch");
+    assert_eq!(
+        named(&duplicated(&make(0.1), true).blocks[0]),
+        ["cmp", "je", "", "ret"],
+        "not copied where the jump is likelier"
+    );
+}
+
 /// Every hoisted anchor solved the liveness of every value of the body afresh
 /// (a nest of 64 copied loops: a third of `lir jumps`); a value is live where
 /// its own reads and definitions say, so only the values a moved instruction
