@@ -91,6 +91,200 @@ and event poll are there to debug against. `--own-frames` is accepted and does n
 One loop in three languages, compiled with `-S` and compared: [examples/dot](examples/dot).
 [Loop strength reduction](docs/optimizations/lsr.md) says what the backend does with it.
 
+## Example
+
+One loop in three languages: a dot product of two `int` arrays, returned as a
+`long`. The sources are in [examples/dot](examples/dot); each listing is what `-S`
+prints with `-march=i486`, and the comments are added by hand. C is in the medium model.
+
+C, `llrm-c dot.c -march=i486 -S`:
+
+```c
+long dot(const int *a, const int *b, int n)
+{
+    long total = 0;
+    int i;
+    for (i = 0; i < n; i++)
+        total += (long)a[i] * b[i];
+    return total;
+}
+```
+
+```asm
+_dot@3 proc far
+    push si                         ; a is in ax, b in dx, n in cx (regparm3); si and di are callee-saved
+    push di
+L0_0:
+    mov si, ax                      ; si = a, an address register: ax cannot address
+    mov di, dx                      ; di = b
+    lea ax, [ecx+ecx]               ; ax = 2n, the byte length of each array
+    mov bx, ax
+    neg bx                          ; [one induction variable] bx = -2n is the counter and the offset
+    add si, ax                      ; [biased] a + 2n, so a[i] is at [bx+si]
+    add di, ax                      ; [biased] b + 2n
+    xor eax, eax                    ; total = 0
+    test cx, cx
+    jle L0_6                        ; [loop rotation] one guard for n <= 0; the test moves to the bottom
+L0_21:
+L0_8:
+    movsx ecx, word ptr [bx+si]     ; a[i], sign-extended to 32 bits
+    movsx edx, word ptr [bx+di]     ; b[i]
+    imul ecx, edx                   ; (long)a[i] * b[i]: a 32-bit multiply, no runtime helper
+    add eax, ecx                    ; total += product
+    add bx, 2                       ; step one int; [flag reuse] its flags end the loop at 0
+    jne L0_8
+L0_6:
+    pop di                          ; the long is already in eax: it returns there
+    pop si                          ; no frame: nothing is on the stack
+    retf
+_dot@3 endp
+```
+
+Nib, `llrm-nib dot.nib --entry dot -march=i486 -S`:
+
+```
+fn dot(a: &[i16], b: &[i16]) -> i32:
+    let mut total: i32 = 0
+    for (x, y) in zip(a, b):
+        total += i32(x) * i32(y)
+    return total
+```
+
+```asm
+_dot proc far
+    push bp                         ; a is the far pointer [bp+6], b [bp+10]
+    mov bp, sp
+    push si
+    push di
+L0_0:
+    les bx, dword ptr [bp+6]        ; es:bx = a's slice: length, then data pointer
+    lfs si, dword ptr [bp+10]       ; fs:si = b's slice
+    mov cx, word ptr es:[bx]        ; len(a)
+    mov dx, word ptr fs:[si]        ; len(b)
+    les ax, dword ptr es:[bx+4]     ; [hoisted] es:ax = a's data
+    lfs di, dword ptr fs:[si+4]     ; [hoisted] fs:di = b's data
+    cmp cx, dx
+    mov bx, dx
+    jae L0_9
+L0_8:
+    mov bx, cx
+L0_9:                               ; bx = min(len(a), len(b)): zip ends with the shorter slice,
+    lea dx, [ebx+ebx]               ; decided once, not tested in the loop
+    mov cx, dx
+    neg cx                          ; [one induction variable] cx = -2*count
+    lea si, [eax+edx]               ; [biased] a's data + 2*count
+    add di, dx                      ; [biased] b's data + 2*count
+    xor eax, eax                    ; total = 0
+    test bx, bx
+    je L0_29                        ; [loop rotation] no elements: skip the loop
+L0_31:
+    mov bx, cx
+L0_16:
+    movsx ecx, word ptr es:[bx+si]  ; a[i]
+    movsx edx, word ptr fs:[bx+di]  ; b[i]
+    imul ecx, edx
+    add eax, ecx                    ; total += product
+    add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
+    jne L0_16                       ; zip pairs the elements: no index, no bounds check
+L0_29:
+    pop di                          ; the long is in eax, where it returns
+    pop si
+    pop bp
+    retf
+_dot endp
+```
+
+A Nib slice is a far pointer to its length and data pointer. `zip` pairs the
+elements until the shorter slice ends, so there is no `n`, and no index to check.
+Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
+
+BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 -march=i486 -O3 --whole-program -fno-inline-functions-called-once -S` (DOT is called once, and would go into its caller):
+
+```basic
+DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
+DECLARE FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
+
+n = 9: m = 7
+REDIM p(n) AS INTEGER, q(m) AS INTEGER
+PRINT Dot&(p(), q())
+
+FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
+    IF x < y THEN Min% = x ELSE Min% = y
+END FUNCTION
+
+FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
+    DIM total AS LONG, i AS INTEGER
+    FOR i = 0 TO Min%(UBOUND(a), UBOUND(b))
+        total = total + CLNG(a(i)) * b(i)
+    NEXT
+    Dot& = total
+END FUNCTION
+```
+
+```asm
+DOT proc near
+    push bp                         ; a plain frame, not B$ENRA; near, as --whole-program
+    mov bp, sp                      ; sees every caller. a() is [bp+6], b() [bp+4]
+    push si
+    push di
+L1_0:
+    mov si, word ptr [bp+6]         ; a() descriptor: the arguments were pushed left to right
+    mov bx, word ptr [bp+4]         ; b() descriptor
+    mov cx, word ptr [si+14]        ; UBOUND(a): one dimension, so its slot is fixed, from 0,
+    dec cx                          ; so the bound is its count less 1; no allocated test
+    mov ax, word ptr [bx+14]
+    dec ax                          ; UBOUND(b)
+    cmp cx, ax                      ; [inlined] Min%: no call, cx = the smaller bound
+    jl L1_12
+L1_11:
+    mov cx, ax
+L1_12:
+    mov es, word ptr [si+2]         ; [hoisted] es = a's data segment
+    mov si, word ptr [si+10]        ; [hoisted] a's data offset
+    mov fs, word ptr [bx+2]         ; [hoisted] fs = b's data segment
+    mov di, word ptr [bx+10]        ; [hoisted] di = b's data offset
+    lea ax, [ecx+ecx]               ; ax = 2 * bound
+    mov bx, ax
+    neg bx
+    add bx, -2                      ; [one induction variable] bx = -2 * (bound + 1)
+    add si, ax                      ; [biased] a's offset + 2 * bound; the +2 is in the loop's
+    add di, ax                      ; [biased] b's offset + 2 * bound; displacement
+    xor eax, eax                    ; total = 0
+    test cx, cx
+    jl L1_49                        ; [loop rotation] bound < 0: no iterations
+L1_34:
+    movsx ecx, word ptr es:[bx+si+2] ; a(i), sign-extended
+    movsx edx, word ptr fs:[bx+di+2] ; b(i)
+    imul ecx, edx                   ; CLNG(a(i)) * b(i)
+    add eax, ecx                    ; total += product
+    add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
+    jne L1_34
+L1_49:
+    shld edx, eax, 16               ; the long returns in DX:AX
+    pop di
+    pop si
+    pop bp
+    ret 4                           ; the callee pops the two arguments
+DOT endp
+```
+
+An array is a descriptor: its segment goes in `es` or `fs` before the loop.
+`UBOUND` is two loads and a decrement: the rank is the declaration's, so the count's
+slot is fixed, and nothing tests that the array is allocated, as BC does not without
+`/D`. `-fsanitize=bounds` brings the test and the cold `B$UBND` call back, except
+where every caller passes an array a `DIM` or `REDIM` dominates, as here. Where a
+procedure's own `DIM` or `REDIM` states a bound, `UBOUND` is that value and reads nothing.
+The frame is a plain one, not the runtime's `B$ENRA` and `B$EXSA`.
+`Min%` takes its arguments `BYVAL` and the build is `--whole-program`, which is what
+lets the inliner take it; by reference it stays a call
+([#114](https://github.com/ali-mosavian/llrm/issues/114)).
+
+All three compile to the same loop: six instructions, one induction variable.
+Loop strength reduction ([#98](https://github.com/ali-mosavian/llrm/issues/98))
+biases each array's base by its byte length, so the counter, running from minus
+that length up to zero, is also the offset of every access, and its flags end the
+loop. The product is a 32-bit `imul` in `eax`, without a runtime call.
+
 ## Validate
 
 ```sh
