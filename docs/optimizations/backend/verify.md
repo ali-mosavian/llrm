@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/verify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/verify.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/verify.rs sha256:819069667180db9c0c3c01d96c312c669aac57fb127e0ed065c60fd88b37c941 -->
+<!-- src: crates/backend/llrm-core/src/backend/verify.rs sha256:82392acc24212d35c5cd81cd66be146327d480eda79c1c5d98be25503bc66a57 -->
 
 # verify
 
@@ -29,8 +29,11 @@ than the target's addresses.
 
 ## Example
 A body whose only instruction, `v2 := mov v1`, reads a value nothing
-defines:
+defines.
 
+Schematic, from the fixture of test
+`test_a_read_value_must_be_defined_or_an_explicit_body_input` (not printer
+output):
 ```lir
 v2 := mov v1
 ```

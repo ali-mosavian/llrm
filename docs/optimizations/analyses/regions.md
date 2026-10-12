@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/regions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/regions.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/regions.rs sha256:1780a27faaf58584b11e9b7179a5b1167ebd91e58999a6ece0a35ff7c876af02 -->
+<!-- src: crates/opt/llrm-analysis/src/regions.rs sha256:0ba16fd8ea8d4f2e64a787b45a750621691d1982d5e972150e49d518eac93963 -->
 
 # regions
 

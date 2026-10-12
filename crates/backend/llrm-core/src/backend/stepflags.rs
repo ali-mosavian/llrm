@@ -27,8 +27,11 @@
 //!
 //! # Example
 //! The names of the instructions of a block before and after, for a step `sub
-//! j, 1` (or `add j, -1`) and the compare `cmp j, 1`:
+//! j, 1` (or `add j, -1`) and the compare `cmp j, 1`.
 //!
+//! Schematic, from the fixture of test
+//! `test_the_step_of_a_compared_value_takes_the_compares_place` (not printer
+//! output):
 //! ```text
 //! before: sub, cmp, jle          after: sub, jle
 //! before: add, cmp, jl           after: add, jl

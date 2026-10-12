@@ -248,7 +248,7 @@ impl Options {
     /// `-ftree-pre`), and no sibling calls, peeling or unswitching. Pattern
     /// fill is on (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
     /// PassBuilderPipelines.cpp L562): the one departure from gcc's -O1
-    /// here, the user's decision of 2026-10-10 (docs/levels.md).
+    /// here, the user's decision of 2026-10-10 (docs/reference/levels.md).
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },

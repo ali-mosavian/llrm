@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/addressvalues.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/addressvalues.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/addressvalues.rs sha256:f3f9f64b925ae55c969ceebe1f1011851c9c75432b2aa532f8ae727866189823 -->
+<!-- src: crates/backend/llrm-core/src/backend/addressvalues.rs sha256:2d26f5de7f6e3d7b8b9551bec7fe5b53c3bec29934785d096de7a1520d34c06a -->
 
 # addressvalues
 
@@ -24,7 +24,8 @@ other cell keeps its address and registers. Instructions that are not
 
 ## Example
 An `Address` operation whose source is a frame cell with a base value,
-before and after (`Address` registers are numbered: 26 is bp, 27 is si):
+before and after (`Address` registers print as iced-x86 `Register` numbers:
+26 is `BP`, 27 is `SI`):
 
 Before:
 

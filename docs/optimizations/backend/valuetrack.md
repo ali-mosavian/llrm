@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/valuetrack.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/valuetrack.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/valuetrack.rs sha256:abb940be823517eda60d30f3708678a08024f5ed92061ed67198f286d0ba8aee -->
+<!-- src: crates/backend/llrm-core/src/backend/valuetrack.rs sha256:1bf36abda43728f87b3a56861a2a5ae0638129cca7ba57bda115ebf81982abc1 -->
 
 # valuetrack
 
@@ -33,8 +33,11 @@ somewhere unrecorded costs the variable its location there, never a wrong
 one.
 
 ## Example
-Value 7 is defined in `eax` at offset 8 and tracked over this code:
+Value 7 is defined in `eax` at offset 8 and tracked over this code.
 
+Schematic, from the fixture of test
+`a_variable_follows_its_value_from_the_register_to_the_cell_a_move_copied_it_to`
+(not printer output):
 ```text
  0  push ebp
  1  mov ebp, esp

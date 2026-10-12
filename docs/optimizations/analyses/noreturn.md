@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/noreturn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/noreturn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/noreturn.rs sha256:dbe088e6cbec407ea18e9e05140035227ae6ec119fdbf1aee6dbaf841dad06c0 -->
+<!-- src: crates/opt/llrm-analysis/src/noreturn.rs sha256:3625a0fc169eb07d942dd749c5a2f7807b16fc2471bda9697d3346faac4f811d -->
 
 # noreturn
 

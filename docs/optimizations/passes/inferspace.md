@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inferspace.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inferspace.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inferspace.rs sha256:b3153ee81c36eec7f538a74c93eb8be0dcd6d35992a5e6e2898b95f75f1211b7 -->
+<!-- src: crates/opt/llrm-transforms/src/inferspace.rs sha256:1eb428310953140e3e441aae03cc9062943e6ad3f035610bb9506d8cf78b7936 -->
 
 # inferspace
 

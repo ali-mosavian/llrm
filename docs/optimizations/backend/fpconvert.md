@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fpconvert.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fpconvert.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fpconvert.rs sha256:f18187fcf9658c9fced7859fb71fa5462f14486f6ed569da714750a13c9e503b -->
+<!-- src: crates/backend/llrm-core/src/backend/fpconvert.rs sha256:5c6294f6e580793156380a6d1602f3d444ac3bc70b7def8da7d96d6c27614a86 -->
 
 # fpconvert
 

@@ -3,7 +3,7 @@
 
     tools/passdocs.py --check [--require DIR...]   list files lacking a summary or a required section
 
-A header needs a summary line and `# How it works`, plus `# Runs` (transforms, backend) or `# Provides` (analyses), and `# Example`.
+A header needs a summary line and `# How it works`, plus one of `# Runs` (a pass), `# Used by` (a helper) or `# Provides` (an analysis), and `# Example`.
 `--check` exits 1 on a gap in a `--require` directory; without `--require` it only reports.
 The pages are written from these headers by `tools/docsbuild/build.py --sync`.
 """
@@ -94,7 +94,9 @@ def missing(lines: list[str], runs_or_provides: str) -> list[str]:
     """What the header lacks: `summary`, `# How it works`, `# Runs`, `# Provides` or `# Example`."""
     gaps = [] if summary(lines) else ["summary"]
     have = sections(lines)
-    gaps += [f"# {name}" for name in ("How it works", runs_or_provides, "Example") if name not in have]
+    gaps += [f"# {name}" for name in ("How it works", "Example") if name not in have]
+    if not any(name in have for name in ("Runs", "Used by", "Provides")):
+        gaps.append(f"# {runs_or_provides} (or # Used by)")
     return gaps
 
 

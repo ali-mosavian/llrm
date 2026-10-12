@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/calleefacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/calleefacts.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/calleefacts.rs sha256:a3cf6ea2527b87730ec78f57c241b19d0f41116538cf37cf2464beb22f9e6d01 -->
+<!-- src: crates/backend/llrm-core/src/backend/calleefacts.rs sha256:653390a4ea08285700723b76e259dd75bae4e5dd6769c5a3b981ccc3bbcf1637 -->
 
 # calleefacts
 
@@ -55,7 +55,8 @@ call   requires v6@AX; delivers v7@EAX; clobbers EAX
 
 From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
 -fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
--march=i386` of that program.
+-march=i386` of `examples/pass-docs/calleefacts.nib`, stage
+`FarIndirectCalls`.
 
 ## Runs
 Per function in `assemble.rs`: `record` after the function is machined.

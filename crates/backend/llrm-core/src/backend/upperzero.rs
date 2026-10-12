@@ -28,8 +28,10 @@
 //! repeats until no cell lacks the fact.
 //!
 //! # Example
-//! `mov ecx, 2; xchg esi, ecx; nop` in one block, nothing known on entry:
+//! `mov ecx, 2; xchg esi, ecx; nop` in one block, nothing known on entry.
 //!
+//! Schematic, from the fixture of test
+//! `test_an_exchange_swaps_the_zero_upper_halves` (not printer output):
 //! ```lir
 //! mov ecx, 2          ; ecx is zero above bit 15
 //! xchg esi, ecx       ; the two bits swap: esi zero, ecx not

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/algebraic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/algebraic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:05f0f594ccaa419b5aa8bd4ff67b577622c14dc487910d8584f944600159cb3f -->
+<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:f064f212b5189854fd16ff147a0bca97b18b545b66d0dd25afb03433295d3991 -->
 
 # algebraic
 

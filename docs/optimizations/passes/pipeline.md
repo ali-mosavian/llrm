@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:a18bbcb00f90e46d08502c67028dc5c364384661a8059a21c6c2c8fa3383e729 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:77814018c46cf618a27c159102b9c89272ab7b834022e2c53582a0ee28e272bb -->
 
 # pipeline
 

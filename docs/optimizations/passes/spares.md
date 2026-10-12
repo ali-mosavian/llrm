@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/spares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/spares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/spares.rs sha256:a09c029bfe49d6c5b53ae34c3ed34978e359193a5a9159795277ee22fd0a70e8 -->
+<!-- src: crates/opt/llrm-transforms/src/spares.rs sha256:a61bdb922da361a5e42382088ed3f45ed3f55a724379632649a86fb374e5a307 -->
 
 # spares
 
@@ -30,52 +30,52 @@ cell, where the LIR cannot place the write's address itself.
 ## Example
 Before:
 ```mir
-define ... @"_f@3"(i16 %0, ptr nocapture writeonly %1) ... {
+define ... @"_f@3"(ptr nocapture writeonly %0, i16 %1) ... {
   ; ...
 b4:
-  %8 = phi i16 [ %14, %b4 ], [ 0, %17 ]
-  %9 = phi i16 [ %15, %b4 ], [ 0, %17 ]
-  %lsr.iv1 = phi i16 [ %lsr.iv.next, %b4 ], [ %3, %17 ]
-  %10 = load i16, ptr @_g, !tbaa !9
-  %11 = getelementptr i8, ptr %4, i16 %lsr.iv1
-  store i16 %10, ptr %11, !tbaa !9
-  %12 = getelementptr i8, ptr %5, i16 %lsr.iv1
-  store i16 %9, ptr %12, !tbaa !9
-  %13 = load i16, ptr @_g, !tbaa !9
-  %14 = add nsw i16 %8, %13
-  %15 = add nsw i16 %9, 1
+  %10 = phi i16 [ %16, %b4 ], [ 0, %19 ]
+  %11 = phi i16 [ %17, %b4 ], [ 0, %19 ]
+  %lsr.iv1 = phi i16 [ %lsr.iv.next, %b4 ], [ 0, %19 ]
+  %12 = load i16, ptr @_g, !tbaa !9
+  %13 = getelementptr i8, ptr %0, i16 %lsr.iv1
+  store i16 %12, ptr %13, !tbaa !9
+  %14 = getelementptr i8, ptr %2, i16 %lsr.iv1
+  store i16 %11, ptr %14, !tbaa !9
+  %15 = load i16, ptr @_g, !tbaa !9
+  %16 = add nsw i16 %10, %15
+  %17 = add nsw i16 %11, 1
   %lsr.iv.next = add i16 %lsr.iv1, 2
-  %16 = icmp ne i16 %lsr.iv.next, 0
-  br i1 %16, label %b4, label %18
+  %18 = icmp ne i16 %17, %1
+  br i1 %18, label %b4, label %20
   ; ...
 ```
 After:
 ```mir
-define ... @"_f@3"(i16 %0, ptr nocapture writeonly %1) ... {
+define ... @"_f@3"(ptr nocapture writeonly %0, i16 %1) ... {
   ; ...
 b4:
-  %8 = phi i16 [ %14, %b4 ], [ 0, %17 ]
-  %9 = phi i16 [ %15, %b4 ], [ 0, %17 ]
-  %lsr.iv1 = phi i16 [ %lsr.iv.next, %b4 ], [ %3, %17 ]
-  %10 = load i16, ptr @_g, !tbaa !9, !llrm.spares !24
-  %11 = getelementptr i8, ptr %4, i16 %lsr.iv1
-  store i16 %10, ptr %11, !tbaa !9
-  %12 = getelementptr i8, ptr %5, i16 %lsr.iv1
-  store i16 %9, ptr %12, !tbaa !9
-  %13 = load i16, ptr @_g, !tbaa !9, !llrm.spares !25
-  %14 = add nsw i16 %8, %13
-  %15 = add nsw i16 %9, 1
+  %10 = phi i16 [ %16, %b4 ], [ 0, %19 ]
+  %11 = phi i16 [ %17, %b4 ], [ 0, %19 ]
+  %lsr.iv1 = phi i16 [ %lsr.iv.next, %b4 ], [ 0, %19 ]
+  %12 = load i16, ptr @_g, !tbaa !9, !llrm.spares !24
+  %13 = getelementptr i8, ptr %0, i16 %lsr.iv1
+  store i16 %12, ptr %13, !tbaa !9
+  %14 = getelementptr i8, ptr %2, i16 %lsr.iv1
+  store i16 %11, ptr %14, !tbaa !9
+  %15 = load i16, ptr @_g, !tbaa !9, !llrm.spares !25
+  %16 = add nsw i16 %10, %15
+  %17 = add nsw i16 %11, 1
   %lsr.iv.next = add i16 %lsr.iv1, 2
-  %16 = icmp ne i16 %lsr.iv.next, 0
-  br i1 %16, label %b4, label %18
+  %18 = icmp ne i16 %17, %1
+  br i1 %18, label %b4, label %20
   ; ...
 ```
-Both loads of `@_g` name the one write that cannot touch it, the store into
-`a`; the store through the caller's pointer may write `@_g`, so it is not
-named.
+Both loads of `@_g` gain `!llrm.spares`; the dump prints the metadata as
+`!{i32 37}` on each, and does not say which instruction has that id.
 
-From `--dump` of `f` (`p[i] = g; a[i] = i; s += g;` in a loop, `p` a
-parameter) at -O2 -m16, stages `addresssink` and `spares`.
+From `--dump` of `examples/pass-docs/spares.c` (`p[i] = g; a[i] = i; s +=
+g;` in a loop, `p` a parameter) at -O2 -m16, stages `addresssink` and
+`spares`.
 
 ## Runs
 Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it

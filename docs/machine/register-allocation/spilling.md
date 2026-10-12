@@ -2,7 +2,7 @@
 
 Audience: an engineer changing what the allocator does with a value it chose not to keep in a register. This page states how a spill is planned and written, where its slot comes from, and how its code is kept short.
 
-The code is LLVM's `InlineSpiller`: [`spiller.rs`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/spiller.rs). The allocator calls `spiller::siblings` then `spiller::spilled_apart` for the value it spills ([assignment](assignment.md)); the SSA-spill route has its own spiller ([ssa-spill-route](ssa-spill-route.md)). Every instruction the spiller writes is marked: `spill_store`, `spill_reload` or `rematerialized`, which the cost model and the dump read.
+The code is LLVM's `InlineSpiller`: [`spiller.rs`](../../optimizations/backend/spiller.md). The allocator calls `spiller::siblings` then `spiller::spilled_apart` for the value it spills ([assignment](assignment.md)); the SSA-spill route has its own spiller ([ssa-spill-route](ssa-spill-route.md)). Every instruction the spiller writes is marked: `spill_store`, `spill_reload` or `rematerialized`, which the cost model and the dump read.
 
 ## Plan, then write
 
@@ -39,7 +39,7 @@ Then [`materialized`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b
 * where the reading instruction can take a memory operand, it takes the slot (`_source`), so the reload is no instruction at all; a two-address instruction whose destination is the spilled value is done in memory (`_in_place`, `_tied`);
 * a move between two spilled values that share a slot is removed (`_identity`).
 
-The fresh values are returned; each is unspillable, so the allocator cannot spill a reload and loop. A spill that makes values it spills in its turn is stopped by the `plain` set. Instructions that name none of the values are left as the same `Arc`, which is how the rest of the body's facts survive ([`postings.rs`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/postings.rs) keeps where each value is defined and read as the body changes).
+The fresh values are returned; each is unspillable, so the allocator cannot spill a reload and loop. A spill that makes values it spills in its turn is stopped by the `plain` set. Instructions that name none of the values are left as the same `Arc`, which is how the rest of the body's facts survive ([`postings.rs`](../../optimizations/backend/postings.md) keeps where each value is defined and read as the body changes).
 
 ### Short updates
 

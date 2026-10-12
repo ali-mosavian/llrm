@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:b6d28496e4498838676cde94ea4391c599503ebafdaac05a7878d8ed0c521eb0 -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:84b2143a9ef47753cfd8443c2ee7e974559b3ddfda7938eac16869397e52e2e6 -->
 
 # indvars
 

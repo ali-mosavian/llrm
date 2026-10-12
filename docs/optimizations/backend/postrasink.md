@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postrasink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:51611f17411436a6c1940681a5dd8294727ca8f48026f10a2b4bfe0aa33504e8 -->
+<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:5079e30a28ff36aa42dc84d3b38d7d9c3a43d14e8993dcc8a2bba50ffecee0fb -->
 
 # postrasink
 
@@ -47,8 +47,10 @@ the only thing that made a frame necessary on the other path.
 
 ## Example
 A function copies its argument into `DI`, then either returns at once or
-loops reading `DI`:
+loops reading `DI`.
 
+Schematic, from the fixture of test
+`test_a_copy_only_one_successor_reads_moves_into_it` (not printer output):
 Before:
 
 ```lir

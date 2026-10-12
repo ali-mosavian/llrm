@@ -270,8 +270,8 @@ def test_repository_figures_are_well_formed():
     assert lint.check_tree(build.ROOT) == []
 
 
-# Directories whose every file has the header; add transforms and the backend phases as theirs are written.
-HEADERS_REQUIRED = ["crates/opt/llrm-analysis/src"]
+# Directories whose every file has the header.
+HEADERS_REQUIRED = ["crates/opt/llrm-analysis/src", "crates/opt/llrm-transforms/src", "crates/backend/llrm-core/src/backend"]
 
 
 def test_every_file_of_a_required_directory_has_a_header():
@@ -280,10 +280,10 @@ def test_every_file_of_a_required_directory_has_a_header():
 
 
 def test_docs_name_a_pass_through_its_page_not_its_source_file():
-    """Docs linked `fold.rs` on GitHub where a page explains the pass."""
+    """Docs linked `fold.rs` on GitHub where a page explains the pass; a permalink to a line is a code citation and stays."""
     import re
     stems = {f"{d}/{p.stem}" for d in ("passes", "analyses", "backend") for p in (build.ROOT / sync.OUT / d).glob("*.md")}
-    pat = re.compile(r"\[`?(\w+)\.rs`?\]\(https://github\.com/[^)]*/crates/(?:opt/llrm-transforms/src|opt/llrm-analysis/src|backend/llrm-core/src/backend)/\1\.rs[^)]*\)")
+    pat = re.compile(r"\[`?(\w+)\.rs`?\]\(https://github\.com/[^)]*/crates/(?:opt/llrm-transforms/src|opt/llrm-analysis/src|backend/llrm-core/src/backend)/\1\.rs\)")
     bad = []
     for md in sorted((build.ROOT / "docs").rglob("*.md")):
         if "/optimizations/" in md.as_posix() and md.parent.name in ("passes", "analyses", "backend"):

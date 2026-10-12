@@ -24,8 +24,11 @@
 //!
 //! # Example
 //! A body whose only instruction, `v2 := mov v1`, reads a value nothing
-//! defines:
+//! defines.
 //!
+//! Schematic, from the fixture of test
+//! `test_a_read_value_must_be_defined_or_an_explicit_body_input` (not printer
+//! output):
 //! ```lir
 //! v2 := mov v1
 //! ```

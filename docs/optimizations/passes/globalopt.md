@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/globalopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globalopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:ea3a6b15c6aea0b2b8de1f26dba2f1b4e8058cd8be13931a79f7e509ec8c4caa -->
+<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:afd7ef2255a4f828315d14b0a36be0e8d1983eb9eb786ab1abfbdd63d7f05e40 -->
 
 # globalopt
 

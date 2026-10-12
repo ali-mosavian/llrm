@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/assumptions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/assumptions.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/assumptions.rs sha256:b1276cb7b089da7cba3cd896bc80daf6e8080e078ea8561207494317951f0aa6 -->
+<!-- src: crates/opt/llrm-analysis/src/assumptions.rs sha256:cd7b41a14f1b84e075be7ae17dde784578ed771d9974646fea923cc27a33e2a7 -->
 
 # assumptions
 
@@ -46,8 +46,9 @@ done:
 }
 ```
 
-`here(entry)` is `[%fits]`, and `above` of `loop` and of `done` is
-`[%fits]`. `guards::holds` then proves `n <u len` in both blocks.
+The test asserts that `guards::holds` proves `n <u len` in `loop` and in
+`done`, and that `entry` itself has no guards: its own assume does not cover
+earlier code.
 
 From unit test `test_an_assume_proves_its_compare_below_its_block` in
 `guards_tests.rs`.

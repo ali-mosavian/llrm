@@ -28,8 +28,11 @@
 //! one.
 //!
 //! # Example
-//! Value 7 is defined in `eax` at offset 8 and tracked over this code:
+//! Value 7 is defined in `eax` at offset 8 and tracked over this code.
 //!
+//! Schematic, from the fixture of test
+//! `a_variable_follows_its_value_from_the_register_to_the_cell_a_move_copied_it_to`
+//! (not printer output):
 //! ```text
 //!  0  push ebp
 //!  1  mov ebp, esp

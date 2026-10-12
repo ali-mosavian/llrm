@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopclone.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopclone.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:8bf5a6bfa8cd25b56dd0303f0d6fe6921dfd4e446897a26ba47a357c32619607 -->
+<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:958e2c7c331017ec62640a7c832e0f9ae4456df168fdcb382701cf1f02f3c1b2 -->
 
 # loopclone
 

@@ -42,8 +42,10 @@
 //!
 //! # Example
 //! A function copies its argument into `DI`, then either returns at once or
-//! loops reading `DI`:
+//! loops reading `DI`.
 //!
+//! Schematic, from the fixture of test
+//! `test_a_copy_only_one_successor_reads_moves_into_it` (not printer output):
 //! Before:
 //!
 //! ```lir

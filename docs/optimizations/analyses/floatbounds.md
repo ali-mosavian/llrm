@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/floatbounds.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/floatbounds.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/floatbounds.rs sha256:2eda5c78f612562512db853b8dc8036b73dede15e5be1390125fd5f10d906bed -->
+<!-- src: crates/opt/llrm-analysis/src/floatbounds.rs sha256:54264f8f864f8e76f2a42691a126894e56f1334da255c567b63bc8002c5013eb -->
 
 # floatbounds
 

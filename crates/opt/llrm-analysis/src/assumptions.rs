@@ -41,8 +41,9 @@
 //! }
 //! ```
 //!
-//! `here(entry)` is `[%fits]`, and `above` of `loop` and of `done` is
-//! `[%fits]`. `guards::holds` then proves `n <u len` in both blocks.
+//! The test asserts that `guards::holds` proves `n <u len` in `loop` and in
+//! `done`, and that `entry` itself has no guards: its own assume does not cover
+//! earlier code.
 //!
 //! From unit test `test_an_assume_proves_its_compare_below_its_block` in
 //! `guards_tests.rs`.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/tailrec.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/tailrec.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/tailrec.rs sha256:2bb6a05df52332a34720fb0303222596eb65104262b04df911e4c42c815f0a01 -->
+<!-- src: crates/opt/llrm-transforms/src/tailrec.rs sha256:579f4bdd145ae6966b256b2bc3ffbe80fb85d6c0b5e54ee5e193787c91ea6e16 -->
 
 # tailrec
 

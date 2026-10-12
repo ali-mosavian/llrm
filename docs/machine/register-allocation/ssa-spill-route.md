@@ -26,7 +26,7 @@ flowchart TB
 
 ## Route B: Braun and Hack spilling
 
-[`SsaSpill`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/ssaspill.rs#L95) runs first of the allocation phases, on SSA with phis ([`ssaspill.rs`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/ssaspill.rs): "Register Spilling and Live-Range Splitting for SSA-Form Programs", CC 2009). It decides, before any register is chosen, which values are in registers where, and writes the stores and reloads.
+[`SsaSpill`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/ssaspill.rs#L95) runs first of the allocation phases, on SSA with phis ([`ssaspill.rs`](../../optimizations/backend/ssaspill.md): "Register Spilling and Live-Range Splitting for SSA-Form Programs", CC 2009). It decides, before any register is chosen, which values are in registers where, and writes the stores and reloads.
 
 1. Blocks are walked in reverse postorder. At a block's entry the values held are those every predecessor ends with, then those some do, nearest next use first; a loop header keeps through the loop only what fits (`loop_room` is the peak pressure inside, printed on `LLRM_DEBUG=ssaspill`).
 2. Inside a block, a use of a value not held is a reload; a fold into the instruction's memory operand is taken where the form allows (`folds`). When the held set no longer fits, Belady's rule evicts the value whose next use is furthest, with a value that is stored where it is defined as often as the block runs evicted last (`hot`).

@@ -19,7 +19,8 @@
 //!
 //! # Example
 //! An `Address` operation whose source is a frame cell with a base value,
-//! before and after (`Address` registers are numbered: 26 is bp, 27 is si):
+//! before and after (`Address` registers print as iced-x86 `Register` numbers:
+//! 26 is `BP`, 27 is `SI`):
 //!
 //! Before:
 //!

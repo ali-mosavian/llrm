@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/callregs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/callregs.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/callregs.rs sha256:9ffb9a7772b2ee581ea0235c93395fad9a947f91532d5da5710b77758ed4201c -->
+<!-- src: crates/backend/llrm-core/src/backend/callregs.rs sha256:b46444c2bba1611f0d3904d95d956109aa443d0b326d0709b21a584db9614010 -->
 
 # callregs
 
@@ -25,8 +25,9 @@ in full.
 ## Example
 No honest example for the contract tables: they are data in the runtime
 description, and no unit test prints a set. The result is in the dump. In a
-nib `main`, the two runtime calls `N$BGRW` and `N$EBND` (the listing's `call
-far ptr` order) are
+nib `main`, the first runtime call is `N$BGRW` (the dump's call at 0x0001,
+the first `call far ptr` of the listing) and a bounds-failure call is
+`N$EBND` (the dump's call in block 0x000f, label `L1_15` of the listing):
 
 ```lir
 call   requires v1@AX,v2@DX,v3@CX; delivers v4@EAX; clobbers EAX,ECX,EDX,EBX,ES,FS,GS
@@ -35,8 +36,10 @@ call   clobbers EAX,ECX,EDX,EBX,ES,FS,GS
 
 `FS` and `GS` are in the set though no 8086 contract names them.
 
-From `ISEL_DUMP=1 llrm-nib -O2 -march=i386` of the program under
-`calleefacts`.
+From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
+-fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+-march=i386` of `examples/pass-docs/calleefacts.nib`, stage
+`FarIndirectCalls`.
 
 ## Used by
 `isel.rs`, `isel/wide.rs`, `isel/unwind.rs` (the clobber sets of a call

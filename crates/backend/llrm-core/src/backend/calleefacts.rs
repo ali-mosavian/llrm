@@ -50,7 +50,8 @@
 //!
 //! From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
 //! -fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
-//! -march=i386` of that program.
+//! -march=i386` of `examples/pass-docs/calleefacts.nib`, stage
+//! `FarIndirectCalls`.
 //!
 //! # Runs
 //! Per function in `assemble.rs`: `record` after the function is machined.

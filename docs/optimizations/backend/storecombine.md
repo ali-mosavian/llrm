@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/storecombine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/storecombine.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/storecombine.rs sha256:64dabf63bcd7a43105647cc5e6100e55ba2c479790770a84c7471063c7c9d8e6 -->
+<!-- src: crates/backend/llrm-core/src/backend/storecombine.rs sha256:6a5074810d8cdc9e062b3dfac76c511b25a1ee97bc6d3f53bd07f34ba397dbe6 -->
 
 # storecombine
 
@@ -24,8 +24,11 @@ that may differ. The low store's `disp` must be at most 0xfffc.
 
 ## Example
 Two literal word stores to adjacent fixed cells, `x` and `x+2`, with an
-empty anchor between them:
+empty anchor between them.
 
+Schematic, from the fixture of test
+`test_only_adjacent_unobserved_static_literals_are_packed` (not printer
+output):
 ```lir
 before:  mov word [x], -1           ; low
          (anchor)

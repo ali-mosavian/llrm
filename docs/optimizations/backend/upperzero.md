@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/upperzero.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/upperzero.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:50f82e5e58d0788d6e9b9facecf113649a068f26fdd06db05ac6cfa7e229713c -->
+<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:1d2b7c9c6d7ed01bc591d0c2c68536bdaeb69527568c833970886dae7124b303 -->
 
 # upperzero
 
@@ -33,8 +33,10 @@ with one successor, or else before the first such cell in the block. It
 repeats until no cell lacks the fact.
 
 ## Example
-`mov ecx, 2; xchg esi, ecx; nop` in one block, nothing known on entry:
+`mov ecx, 2; xchg esi, ecx; nop` in one block, nothing known on entry.
 
+Schematic, from the fixture of test
+`test_an_exchange_swaps_the_zero_upper_halves` (not printer output):
 ```lir
 mov ecx, 2          ; ecx is zero above bit 15
 xchg esi, ecx       ; the two bits swap: esi zero, ecx not

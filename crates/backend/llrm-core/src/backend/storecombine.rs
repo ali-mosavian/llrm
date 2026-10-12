@@ -19,8 +19,11 @@
 //!
 //! # Example
 //! Two literal word stores to adjacent fixed cells, `x` and `x+2`, with an
-//! empty anchor between them:
+//! empty anchor between them.
 //!
+//! Schematic, from the fixture of test
+//! `test_only_adjacent_unobserved_static_literals_are_packed` (not printer
+//! output):
 //! ```lir
 //! before:  mov word [x], -1           ; low
 //!          (anchor)

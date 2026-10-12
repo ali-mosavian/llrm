@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/stepflags.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/stepflags.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/stepflags.rs sha256:cb6adc026568702359dbae2b3b210aac2ad14f6248e0ca0f29994fa2a6479890 -->
+<!-- src: crates/backend/llrm-core/src/backend/stepflags.rs sha256:7b5299c47c0f250c312d4d9775079fdd970e202fcb5c9a5dbef24ebe2dda1d1f -->
 
 # stepflags
 
@@ -32,8 +32,11 @@ must agree.
 
 ## Example
 The names of the instructions of a block before and after, for a step `sub
-j, 1` (or `add j, -1`) and the compare `cmp j, 1`:
+j, 1` (or `add j, -1`) and the compare `cmp j, 1`.
 
+Schematic, from the fixture of test
+`test_the_step_of_a_compared_value_takes_the_compares_place` (not printer
+output):
 ```text
 before: sub, cmp, jle          after: sub, jle
 before: add, cmp, jl           after: add, jl
