@@ -4,13 +4,14 @@
 //! # How it works
 //! Each value has a state: `Pending` (nothing met yet), `Known(fact)` or
 //! `Overdefined`, with `Pending` the identity of the meet and two different
-//! facts meeting to `Overdefined`. `propagated(unit, seeds, successors, only)` takes
-//! the facts already known (`seeds`, from [`crate::consts`]) and settles the
-//! rest, which are the phis no seed has and the operations that depend on
+//! facts meeting to `Overdefined`. `propagated(unit, seeds, successors, only)`
+//! takes the facts already known (`seeds`, from [`crate::consts`]) and settles
+//! the rest, which are the phis no seed has and the operations that depend on
 //! them: all of them, or the values `only` names (an incremental `Registers`
 //! brings up to date the values a change reached and no others). Values that
 //! cannot come out known (one made from an argument, a load or a call) are left
-//! out of the propagation. A body with no such open phi returns its seeds at once.
+//! out of the propagation. A body with no such open phi returns its seeds at
+//! once.
 //!
 //! A worklist re-evaluates a value when one of its inputs changes. A phi meets
 //! the facts of its incoming values (constants evaluate through
