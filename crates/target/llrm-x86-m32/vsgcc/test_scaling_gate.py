@@ -900,3 +900,93 @@ def test_a_summary_of_a_function_that_calls_back_does_not_hold_the_callbacks_as_
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["summaries visit"] > 1.0, f"premise: the fixed point visited ({own['summaries visit']:.1f} Minstr)"
     assert own["summaries visit"] <= 60.0, f"{own['summaries visit']:.1f} Minstr"
+
+
+def test_the_proof_of_a_loop_does_not_prove_the_loops_around_it_again_for_each_of_them(tmp_path):
+    """fib at -O2 with -ftree-ch: the recursion inlined into itself is a nest of nine loops, and a loop's proof asks those of the loops around it
+    (`_ranged`), each of which asks those around it: 2^depth proofs of the outermost, never held. `mir indvars` read 141 Minstr (2.8 without ch) and
+    `mir lsr` 119; once each is held, 35 and 38. A bound of 70 on indvars fails the first."""
+    source = tmp_path / "fib.c"
+    source.write_text(wrap.wrapped("fib", programs.sources()["fib"].read_text()))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["mir indvars"] > 5.0, f"premise: indvars ran ({own['mir indvars']:.1f} Minstr)"
+    assert own["mir indvars"] <= 70.0, f"{own['mir indvars']:.1f} Minstr"
+
+
+def test_lir_jumps_does_not_solve_the_liveness_of_every_value_for_each_anchor_it_hoists(tmp_path):
+    """nest(32) at -O2 with -ftree-ch: every copied loop leaves anchors on its exit edges, and `lir jumps` hoisted each above the branch,
+    solving the liveness of every value of the body afresh for each (the values live are read again for the next): its own work read 276
+    Minstr at N=32 and 1,055 at N=64. Only the values the moved anchors name are solved again: 179 and 628. A bound of 230 at N=32
+    fails the first and passes the second."""
+    source = tmp_path / "nest32.c"
+    source.write_text(scaling.nest(32))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["lir jumps"] > 20.0, f"premise: jumps ran ({own['lir jumps']:.1f} Minstr)"
+    assert own["lir jumps"] <= 230.0, f"{own['lir jumps']:.1f} Minstr"
+
+
+def test_header_copy_does_not_derive_the_loops_again_for_each_loop_it_copies(tmp_path):
+    """nest(32) at -O2 with -ftree-ch: each copied loop derived the loops of the whole function afresh (and each lsr'd loop once more): `analysis loops`
+    read 106 Minstr at N=32 and 789 at N=64. The loops are held through a run of rotations and edited as the rotation edits them: 20 and 82.
+    A bound of 50 at N=32 fails the first and passes the second."""
+    source = tmp_path / "nest32.c"
+    source.write_text(scaling.nest(32))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["analysis loops"] > 5.0, f"premise: loops were derived ({own['analysis loops']:.1f} Minstr)"
+    assert own["analysis loops"] <= 50.0, f"{own['analysis loops']:.1f} Minstr"
+
+
+def test_registers_set_up_a_recipe_only_for_the_values_that_can_be_known(tmp_path):
+    """nest(32) at -O2 with -ftree-ch: `analysis registers` set the cycle propagation up for every value of the body (a recipe, its consumers,
+    a copy of the graph) though only the phis of the counted loops are left to settle and most values read a load, an argument or a call: 242
+    Minstr at N=32 and 901 at N=64. Values that cannot be known are left out: 81 and 290. A bound of 150 at N=32 fails the first and passes the second."""
+    source = tmp_path / "nest32.c"
+    source.write_text(scaling.nest(32))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["analysis registers"] > 10.0, f"premise: registers were derived ({own['analysis registers']:.1f} Minstr)"
+    assert own["analysis registers"] <= 150.0, f"{own['analysis registers']:.1f} Minstr"
+
+
+def test_lsr_does_not_weigh_every_branch_again_for_each_loop_it_changes(tmp_path):
+    """nest(32) at -O2 with -ftree-ch: lsr changes a counter of each loop, and the block frequencies its prices read were worked out again over
+    the whole function each time, to what they were (the branches it touched weigh as they did): `analysis loop-products` read 91 Minstr at N=32
+    and 802 at N=64. Only the branches that read what it touched are weighed again: 17 and 76. A bound of 45 at N=32 fails the first."""
+    source = tmp_path / "nest32.c"
+    source.write_text(scaling.nest(32))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["analysis loop-products"] > 5.0, f"premise: products were derived ({own['analysis loop-products']:.1f} Minstr)"
+    assert own["analysis loop-products"] <= 45.0, f"{own['analysis loop-products']:.1f} Minstr"
+
+
+def test_a_loops_invariants_are_a_bit_set_not_a_hash_set(tmp_path):
+    """nest(32) at -O2 with -ftree-ch: every counted proof of a loop collected the values its body defines into a hash set (each of the N
+    loops of a nest, each time lsr changed one): `analysis counted` read 123 Minstr at N=32 and 799 at N=64. As a bit set: 78 and 493.
+    A bound of 100 at N=32 fails the first."""
+    source = tmp_path / "nest32.c"
+    source.write_text(scaling.nest(32))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["analysis counted"] > 10.0, f"premise: loops were counted ({own['analysis counted']:.1f} Minstr)"
+    assert own["analysis counted"] <= 100.0, f"{own['analysis counted']:.1f} Minstr"
+
+
+def test_registers_of_a_body_with_no_open_phi_set_nothing_up(tmp_path):
+    """straight(512) at -Os: leaving out the values that cannot be known walked the body, and kept a vector of operands for each candidate,
+    before asking whether a phi was open at all: `analysis registers` read 31.7 Minstr, 19.8 on main, +1.3% on the whole compile of every
+    body without a loop. The question comes first: 19.8. A bound of 25 fails the first."""
+    source = tmp_path / "straight512.c"
+    source.write_text(gate.generated("straight", 512))
+    own = gate.own_work(gate.levels_time.command("llrm", "Os", source))
+    assert own["analysis registers"] > 5.0, f"premise: registers were derived ({own['analysis registers']:.1f} Minstr)"
+    assert own["analysis registers"] <= 25.0, f"{own['analysis registers']:.1f} Minstr"

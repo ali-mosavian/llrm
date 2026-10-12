@@ -182,6 +182,40 @@ pub fn estimated(
     odds
 }
 
+/// The probability of each edge out of `blocks`, as `estimated` gives them.
+pub fn taken_from(
+    context: &Context,
+    metadata: &[MetadataNode],
+    declarations: &Declarations,
+    function: &Function,
+    shape: &Shape,
+    trips: &BTreeMap<i64, i64>,
+    blocks: &[BlockId],
+) -> BTreeMap<(i64, i64), f64> {
+    let terminal = noreturn::terminal_sites(context, declarations, function, &BTreeSet::new());
+    let cold = noreturn::cold(context, declarations, function, &terminal);
+    let runs = Runs::default();
+    let mut taken = BTreeMap::new();
+    for &block in blocks {
+        let successors: Vec<i64> = function.successors(block).into_iter().map(id).collect();
+        match successors.as_slice() {
+            [] => {}
+            [only] => {
+                taken.insert((id(block), *only), 1.0);
+            }
+            _ => {
+                let (_, weights) =
+                    weighed(context, metadata, declarations, function, shape, trips, &cold, &runs, block, &successors);
+                let total: f64 = weights.iter().sum();
+                for (to, weight) in successors.iter().zip(&weights) {
+                    *taken.entry((id(block), *to)).or_default() += weight / total;
+                }
+            }
+        }
+    }
+    taken
+}
+
 /// What an invoke's normal edge weighs against its unwind edge's one.
 const INVOKE_NORMAL: f64 = 1048575.0;
 

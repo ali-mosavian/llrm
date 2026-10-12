@@ -288,6 +288,15 @@ pub fn _frequencies_in(
     shape: &cfg::Shape,
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
+    _odds_in(context, metadata, globals, function, shape, trips).map(|(frequency, _)| frequency)
+}
+
+/// Each loop's proven trips by its header: none for loops whose latches
+/// disagree.
+pub fn counted_by_header(
+    shape: &cfg::Shape,
+    trips: Option<&IndexMap<i64, i64>>,
+) -> Option<BTreeMap<i64, i64>> {
     let empty = IndexMap::default();
     let trips = trips.unwrap_or(&empty);
     let mut counted = BTreeMap::new();
@@ -300,8 +309,21 @@ pub fn _frequencies_in(
             counted.insert(loop_.header, count);
         }
     }
+    Some(counted)
+}
+
+/// `_frequencies_in`, and the odds of each edge they were worked out from.
+fn _odds_in(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    globals: &Declarations,
+    function: &Function,
+    shape: &cfg::Shape,
+    trips: Option<&IndexMap<i64, i64>>,
+) -> Option<(BTreeMap<i64, i64>, BTreeMap<(i64, i64), f64>)> {
+    let counted = counted_by_header(shape, trips)?;
     let odds = branchprob::estimated(context, metadata, globals, function, shape, &counted);
-    Some(
+    Some((
         cfg::graph(function)
             .iter()
             .map(|block| {
@@ -311,7 +333,8 @@ pub fn _frequencies_in(
                 )
             })
             .collect(),
-    )
+        odds.taken,
+    ))
 }
 
 /// Block frequencies as a product of the trips of each loop around a block, ten
@@ -374,8 +397,20 @@ pub fn _loop_products_by_branch_in(
     shape: &cfg::Shape,
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
+    _products_with_odds_in(context, metadata, globals, function, shape, trips).map(|(weight, _)| weight)
+}
+
+/// `_loop_products_by_branch_in`, and the odds of each edge it came from.
+pub fn _products_with_odds_in(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    globals: &Declarations,
+    function: &Function,
+    shape: &cfg::Shape,
+    trips: Option<&IndexMap<i64, i64>>,
+) -> Option<(BTreeMap<i64, i64>, BTreeMap<(i64, i64), f64>)> {
     let mut weight = _loop_products_in(function, shape, trips)?;
-    let odds = _frequencies_in(context, metadata, globals, function, shape, trips)?;
+    let (odds, taken) = _odds_in(context, metadata, globals, function, shape, trips)?;
     let loops = &shape.loops;
     for (at, count) in weight.iter_mut() {
         let Some(innermost) = loops.iter().filter(|one| one.body.contains(at)).min_by_key(|one| one.body.len()) else {
@@ -387,7 +422,7 @@ pub fn _loop_products_by_branch_in(
             *count = (*count * here / trip).max(1);
         }
     }
-    Some(weight)
+    Some((weight, taken))
 }
 
 /// Profile-free expected work at `frequency`, a block's executions per entry
