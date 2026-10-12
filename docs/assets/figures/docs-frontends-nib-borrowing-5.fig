@@ -1,0 +1,12 @@
+kind: lanes
+title: Life of each root in fn f(p: &T, q: U)
+lane f "Frame"
+lane b0 "block, depth 1"
+tick 1 "fn f(p: &T, q: U)"
+tick 2 "let a"
+tick 3 "let b"
+span f 1 3 "Frame" kind=owner
+span b0 3 3 "block" kind=info
+mark f 1 "p's referent: Lent; q: Frame"
+mark f 2 "a: Scope(0)"
+mark b0 3 "b: Scope(1)"

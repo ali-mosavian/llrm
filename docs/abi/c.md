@@ -4,21 +4,7 @@ For contributors to `llrm-c`. How the patched Open Watcom front end's record of 
 
 `llrm-c` does not run Open Watcom's code generator: it records the front end's calls and translates them ([ow-contract](../frontends/c/ow-contract.md)). A function arrives as a symbol with a call class (`CALLER_POPS`, `REVERSE_PARMS`, `HAS_VARARGS`), a call target (`FAR_CALL`, `INTERRUPT`) and the register list the front end gave it. The front end is asked for the target's ABI with the switches in the target's `runtime/c/<target>/c.toml`, under `[frontend.abi.<family>]`.
 
-```
- source: int __cdecl f(int);    -mabi=FAMILY --> [frontend.abi.FAMILY].flags
-        |                                          (e.g. -ecc)
-        v
- Open Watcom front end (patched)
-        |  Symbol { call_class, call_target, register_parms, register_list }
-        v
- translate::cleanup          caller pops, stack        --> profile.cdecl
-                             reversed, callee pops     --> pascal order
-                             default register list     --> profile.registers
-                             anything else             --> refused
-        |
-        v
- HIR function: convention name, cleanup, distance --> MIR (selection.md)
-```
+![From a recorded C function to a convention](../assets/figures/docs-abi-c-1.png)
 
 ## What each record becomes
 

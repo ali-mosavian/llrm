@@ -3,19 +3,7 @@
 For contributors changing a writer or the backend's object layout. The backend lays code and data out
 once as a format-neutral `Object`; one writer crate per format serializes it.
 
-```
- MIR --> isel --> masm::Module --> objbuild (layout, relaxation)
-                                        |
-                                        v
-                    Object { sections, symbols, omf_groups, debug }
-                                        |
-        -fobject-format=  +-------+------+------+-------+-------+
-        (object.toml)     |       |      |      |       |       |
-                        omf    elf32  elf64   macho  coff32  coff64
-                         |       |      |       |       |       |
-                      .obj/.o  .o     .o      .o     .obj    .obj
-                         \_______ debug: Some(Info) is encoded by the writer _/
-```
+![From MIR to an object file](../assets/figures/docs-formats-object-model-1.png)
 
 `objbuild::written_in` ([source](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/objbuild.rs#L434))
 builds the `Object` and calls the writer for the chosen format and the object's `Arch`. A pair with no

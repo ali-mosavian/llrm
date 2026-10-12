@@ -8,22 +8,7 @@ The interprocedural stage ([`interprocedural.rs`](https://github.com/ali-mosavia
 
 ## Mechanism
 
-```
- pass edits body f
-      |  changed(f) / body_edited(f)        ModuleAnalyses.edited += f
-      v
- next consumer asks  get::<Summaries>()
-      |
-      +-- result held?                      yes: reuse
-      +-- dropped result, kind.unchanged()? yes: reuse it
-      +-- else run():
-             dirty = bodies whose mark differs from the memo's
-                     (+ declarations that differ by value)
-             alias::summaries_updating(procedures, known, memo, dirty)
-                closure = dirty + every body that reads them through calls
-                          (+ all entries' callbacks if an entry is in it)
-                closure restarts from its direct summary; the rest is kept
-```
+![What a body edit costs the next consumer of Summaries](../assets/figures/docs-optimizations-module-analyses-1.png)
 
 - `ModuleAnalyses::memo<T>` ([`passes.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/ir/llrm-mir/src/passes.rs#L1264)) holds what an analysis keeps for its next run, by type; `invalidate` does not drop it.
 - `Summaries::run` ([`manager.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-analysis/src/manager.rs#L139)) keeps each body's calls and exposed-frame facts while the body's `mark` and the declarations are unchanged, and passes the dirty set to `alias::summaries_updating` ([`alias.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-analysis/src/alias.rs#L1080)). A body outside the closure reads nothing inside it, so its summary stands. A change of the globals' facts, an added or removed global, or a missing memo makes it a whole run.

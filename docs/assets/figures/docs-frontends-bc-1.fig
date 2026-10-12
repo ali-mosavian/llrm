@@ -1,0 +1,12 @@
+kind: graph
+dir: down
+title: A BC object recompiled
+node obj "BC .OBJ ...\n[runtime .LIB]" fill=a
+node bc "llrm-x86-bc\ndecode: declen, blocks, extent\nfind the module header\nraise each body to MIR" fill=b
+node mir "MIR: one function per body\nmain, each procedure by name\nDGROUP variables are globals\nruntime routines are\n@llrm.qb.* declarations"
+node sh "shared optimizer, isel,\nmachine phases\n(as for any frontend)"
+node out "fresh BASIC-envelope OMF\nobject, one per input" fill=c
+edge obj -> bc
+edge bc -> mir
+edge mir -> sh
+edge sh -> out

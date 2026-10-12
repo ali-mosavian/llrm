@@ -6,29 +6,7 @@ No result is kept here. Each tool prints its own table; a number in a document s
 
 ## Flow
 
-```
- bench/NAME/NAME.c  +  vsgcc/kernels/x_*/x_*.c
-          |
-          v  wrap.py: main calls bench_NAME through a volatile pointer
- wrapped source (one copy, every compiler builds it)
-          |
-   +------+---------------------------+-----------------------+
-   v                                  v                       v
- llrm-c -m32 -mabi=sysv         gcc -m32 -march=i486     clang -m32 ...
-   -O1/-O2/-O3/-Os -march=i486    -O1/-O2/-O3/-Os          -O1/-O2/-O3/-Os
-   |  OMF object                  |  ELF object            |  ELF object
-   v                              v                        v
- harness.py links it           ld -static + stub.elf    ld -static + stub.elf
-   +------------------------------+------------------------+
-                                  v
-                 unicorn, 32-bit protected mode: run main
-                 count bench_NAME from entry to its own return
-                                  |
-                                  v
-     per variant: ins, mem ops, nops, 486 clocks (estimate), code bytes
-                                  |
-                       table.py: llrm / gcc, llrm / clang
-```
+![One C source through llrm-c, gcc and clang, counted in 32-bit unicorn](../assets/figures/docs-comparison-vs-gcc-clang-1.png)
 
 Compile time is a separate flow: the same sources go to each compiler under `perf stat`, and only the compile is counted.
 

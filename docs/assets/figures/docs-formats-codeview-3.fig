@@ -1,0 +1,5 @@
+kind: stack
+title: A $$TYPES record
+cell "kind = 1" size="1" note="type indices start at 0x0200, a fixed first record"
+cell "length" size="2"
+cell "data" note="length bytes"

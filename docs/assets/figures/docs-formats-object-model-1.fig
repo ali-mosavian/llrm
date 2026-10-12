@@ -1,0 +1,25 @@
+kind: graph
+dir: down
+title: From MIR to an object file
+node mir "MIR"
+node isel "isel"
+node masm "masm::Module"
+node ob "objbuild\nlayout, relaxation"
+node obj "Object\nsections, symbols,\nomf_groups,\ndebug: Some(Info)" fill=b
+node omf "omf\n.obj/.o" fill=c
+node e32 "elf32\n.o" fill=c
+node e64 "elf64\n.o" fill=c
+node mo "macho\n.o" fill=c
+node c32 "coff32\n.obj" fill=c
+node c64 "coff64\n.obj" fill=c
+edge mir -> isel
+edge isel -> masm
+edge masm -> ob
+edge ob -> obj
+edge obj -> omf
+edge obj -> e32
+edge obj -> e64
+edge obj -> mo
+edge obj -> c32
+edge obj -> c64
+group wr "Writers by -fobject-format=\n(object.toml); each encodes\nthe debug info": omf e32 e64 mo c32 c64

@@ -1,0 +1,31 @@
+kind: graph
+dir: down
+title: Object writers
+node core "llrm-core" fill=c
+node lir "llrm-lir"
+node omf "llrm-omf" fill=d
+node dwarf "llrm-dwarf"
+node obj "llrm-object"
+node elf "llrm-elf"
+node e32 "llrm-elf32"
+node e64 "llrm-elf64"
+node macho "llrm-macho"
+node coff "llrm-coff"
+node c32 "llrm-coff32"
+node c64 "llrm-coff64"
+edge core -> lir
+edge core -> e32
+edge core -> e64
+edge core -> macho
+edge core -> c32
+edge core -> c64
+edge lir -> omf
+edge omf -> dwarf
+edge e32 -> elf
+edge e64 -> elf
+edge elf -> dwarf
+edge macho -> dwarf
+edge dwarf -> obj
+edge c32 -> coff
+edge c64 -> coff
+edge coff -> obj

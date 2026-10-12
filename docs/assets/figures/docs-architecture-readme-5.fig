@@ -1,0 +1,18 @@
+kind: graph
+dir: down
+title: Machine phase order (first half)
+node a "FarIndirectCalls"
+node b "SsaSpill (when on)"
+node c "PhiElimination"
+node d "PressureSink"
+node e "FloatFold"
+node f "FloatAssign"
+node g "FloatAlloc"
+node h "TwoAddress"
+edge a -> b
+edge b -> c
+edge c -> d
+edge d -> e
+edge e -> f
+edge f -> g
+edge g -> h

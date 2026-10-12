@@ -6,20 +6,7 @@ For users choosing check policy and for frontend authors. A subscript is checked
 
 `-fsanitize=bounds` (or `-fsanitize=undefined`; `-fno-sanitize=bounds` turns it off) is the one switch, parsed with the other gcc options in [`flags.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/flags.rs#L96). It is off by default. A frontend reads `Flags::sanitize.bounds` and marks its own semantics: `llrm-qb` sets `checked_arrays` ([`cli.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/frontends/llrm-qb/src/cli.rs#L108)), which is BC's `/D` subscript check. The two other `/D` checks are separate switches ([integer-overflow-policy](integer-overflow-policy.md)).
 
-```
- -fsanitize=bounds
-        |
-        v
- Flags.sanitize.bounds --> llrm-qb: Frontend.checked_arrays
-                                |
-                                v
-                  qbfront semantic Options.checked_arrays
-                    unchecked: subscript = address arithmetic from the descriptor
-                    checked:   branch to an error block (error 9) before it
-                                |
-                                v
-                       HIR -> MIR: ordinary compares, loads, geps
-```
+![From the switch to the check](../../assets/figures/docs-reference-semantics-bounds-checks-1.png)
 
 ## What the frontend emits
 

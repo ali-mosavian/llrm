@@ -1,0 +1,17 @@
+kind: graph
+dir: down
+title: From the switch to the check
+node sw "-fsanitize=bounds" fill=a
+node fl "Flags.sanitize.bounds" 
+node fe "llrm-qb\nFrontend.checked_arrays" fill=b
+node sem "qbfront semantic\nOptions.checked_arrays" fill=b
+node un "unchecked: subscript = address\narithmetic from the descriptor" fill=c
+node ch "checked: branch to an error\nblock (error 9) before it" fill=d
+node mir "HIR -> MIR: ordinary\ncompares, loads, geps"
+edge sw -> fl
+edge fl -> fe
+edge fe -> sem
+edge sem -> un "off"
+edge sem -> ch "on"
+edge un -> mir
+edge ch -> mir

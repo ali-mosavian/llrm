@@ -5,18 +5,7 @@ object (QB 4.5, PDS 7.1 or VBDOS `BC` output) is recompiled with llrm's
 optimizer and backend. Source programs go through [llrm-qb](qb/readme.md)
 instead; this route is for programs whose source is not at hand.
 
-```
- BC .OBJ ... [runtime .LIB]
-     |
-     v  llrm-x86-bc          decode (declen, blocks, extent), find the module
-     |                       header, raise each body to MIR
-     v  MIR                  one function per body: `main`, each procedure
-     |                       by name; DGROUP variables are globals; runtime
-     |                       routines are `@llrm.qb.*` declarations
-     v  shared optimizer, isel, machine phases   (as for any frontend)
-     v
- fresh BASIC-envelope OMF object, one per input
-```
+![A BC object recompiled](../assets/figures/docs-frontends-bc-1.png)
 
 ## Usage
 

@@ -1,0 +1,24 @@
+kind: graph
+dir: down
+title: From PROGRAM.BAS to a linked program
+node src "PROGRAM.BAS" fill=a
+node qbf "qbfront\nlexer: generated_parser/lexer.rs\nparser: engine.rs, ast.rs\nsemantic.rs: names, types,\nstorage, CFG" fill=b
+node hir "HIR\nversioned text, crates/ir/llrm-hir,\ndecoded in llrm-qb"
+node qb "llrm-qb\nQB ABI adapter: llrm-core/src/abi/qb.rs\nruntime contracts: llrm-qbruntime\nframe and call lowering" fill=c
+node mir "MIR"
+node opt "shared optimizer"
+node lir "LIR"
+node be "x86-m16 backend"
+node obj "OMF object" fill=d
+node lib "selected runtime library" fill=e
+node link "LINK"
+edge src -> qbf
+edge qbf -> hir "syntax tree"
+edge hir -> qb
+edge qb -> mir
+edge mir -> opt
+edge opt -> lir
+edge lir -> be
+edge be -> obj
+edge obj -> link
+edge lib -> link

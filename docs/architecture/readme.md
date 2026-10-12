@@ -20,35 +20,7 @@ COFF or Mach-O) with debug info (`-g`). The rule that shapes everything:
 
 ## Pipeline
 
-```
- QB/QBasic/PDS/VBDOS    Nib            C                    BC .OBJ (side)
-        |                |             |                       |
-   qbfront parser    llrm-nib       Open Watcom front     decode and lift
-   (llrm-qb)         lexer, parser, end, patched          (llrm-x86-bc)
-        |            semantics      (llrm-c translate)         |
-        |                |             |                       |
-        +-------+--------+-------------+                       |
-                v                                              |
-        HIR  (llrm-hir: model, verify, JSON codec)             |
-                | llrm_hir::mir::emit                          |
-                v                                              v
-  ====================== MIR  (llrm-mir) ========================
-                | llrm-transforms: module steps + per-body fixed point
-                v
-        optimized MIR            <-- the lowering boundary (split.md)
-                | isel (selector generated per target)
-                v
-        LIR over virtual values  (llrm-lir, llrm-core backend)
-                | machine phases (flow.rs): phi elimination, two-address,
-                |   coalescing, register allocation, parallel copies,
-                |   prologue, peephole, scheduling, jumps
-                v
-        allocated LIR
-                | layout + branch relaxation (asm.rs, layout.rs)
-                | objbuild.rs: one format-neutral llrm_object::Object
-                v
-        object writer: omf | elf32 | elf64 | coff32 | coff64 | macho
-```
+![From source to object file](../assets/figures/docs-architecture-readme-1.png)
 
 | Tool | Frontend | Reaches MIR by |
 | --- | --- | --- |
@@ -68,26 +40,7 @@ exits nonzero; no partial output is written.
 
 An arrow reads "depends on". Verified against each crate's `Cargo.toml`.
 
-```
- src/bin: llrm-qb llrm-nib llrm-c llrm-omf llrm-mir llrm-run nibfront nib-lsp
- llrm-qb   llrm-nib   llrm-c   llrm-bcdriver   qbfront
-     \         |         |           |           /
-      v        v         v           v          v
-                      llrm-driver ----> llrm-x86-m16-select
-                           |            llrm-x86-m32-select
-                           v            (generated selector, peephole rules)
-                       llrm-core
-          driver, isel, machine phases, objbuild, HIR interpreter
-     |            |             |            |               |
-     v            v             v            v               v
- llrm-hir   llrm-transforms  llrm-target  llrm-x86    writers: llrm-omf,
-     |            |          llrm-lir                 llrm-elf*, llrm-coff*,
-     |            v                                   llrm-macho, llrm-dwarf
-     |       llrm-analysis                                   |
-     |            |                                          v
-     v            v                                     llrm-object
-  llrm-mir (no dependencies)
-```
+![Crate layering; an arrow reads "depends on"](../assets/figures/docs-architecture-readme-2.png)
 
 Three edges carry the architecture:
 
@@ -116,33 +69,11 @@ prints the per-body list, and
 lists the module steps. Which passes a level enables is in
 [levels](../reference/levels.md).
 
-```
- module steps, in order
-   globalopt -> ports (every body) -> interprocedural stamp
-     -> per body: Fixed (below)
-     -> interprocedural: inline, parameter ranges, specialisation;
-        a changed body goes through Fixed again
-     -> globaldce -> availableexternally -> calleepop
-     -> [freeze summaries and GlobalsAA]
-     -> rotate with header copy (when on) -> fixednarrow -> lsr
-     -> window -> rotate -> jumpthread -> hoist -> gepoffset
-     -> addresssink -> spares -> homes
-```
+![Module steps of the optimizer, in order](../assets/figures/docs-architecture-readme-3.png)
 
 `Fixed` runs one body:
 
-```
- sroa --> +-- one round --------------------------------------------+
-          | fold ports decide phiopt equalcalls tailrec loopsimplify |
-          | lcssa floatloop hoist loopmotion trivialunswitch         |
-          | inferspace dse gvn promote indvars algebraic dead fill   |
-          | unroll (after the round; a copy goes back through sroa)  |
-          +--------------------- changed? --yes--> next round -------+
-                                     |no
-                                     v
-                 peel (repeat while loops drop) --> unswitch (-O3)
-                 --> unroll-jam (-O3) --> merge
-```
+![Fixed, the passes that run on one body](../assets/figures/docs-architecture-readme-4.png)
 
 A round is repeated until the body prints the same. A repeated state is an
 error (a pass oscillates), as is exceeding `max(16, size + 1)` rounds. A pass
@@ -165,12 +96,9 @@ descriptions (`calling`, `datalayout`, `dos`, `object`).
 [`flow::machine_with`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/flow.rs#L56)
 is the phase order:
 
-```
- FarIndirectCalls -> SsaSpill (when on) -> PhiElimination -> PressureSink
- -> FloatFold -> FloatAssign -> FloatAlloc -> TwoAddress -> Coalescer
- -> RegAlloc -> ParallelCopy -> Prologue -> Peephole -> LoopSlots
- -> Scheduler -> ControlFlow
-```
+![Machine phase order (first half)](../assets/figures/docs-architecture-readme-5.png)
+
+![Machine phase order (second half)](../assets/figures/docs-architecture-readme-6.png)
 
 `RegAlloc` places every value; nothing before it picks a register for an
 unconstrained value, and `Peephole` runs after it because its rewrites depend

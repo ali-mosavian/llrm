@@ -6,19 +6,7 @@ dialect and ABI it follows, and its options.
 `llrm-c` compiles C through Open Watcom's own front end and hands MIR to the
 shared optimizer and backend.
 
-```
- program.c
-     |
-     v  wccq   Open Watcom's C front end (cc/), linked against
-     |         toolchain/owshim/cgshim.c instead of its code generator,
-     |         with llrm's patches (toolchain/owshim/patches)
-     v  stream   one line per cg call: types, symbols, trees, data, debug
-     |
-     v  llrm-c   hir.rs reads the stream, translate.rs makes HIR,
-     |           ow_facts.rs turns the facts it states into MIR facts
-     v
- HIR -> MIR -> shared optimizer -> backend -> OMF object (or ELF, Mach-O, COFF)
-```
+![From C source to an object file](../../assets/figures/docs-frontends-c-readme-1.png)
 
 The front end does the parsing, type checking, constant folding and struct
 layout; `cgshim.c` records what it asks of its code generator, and nothing

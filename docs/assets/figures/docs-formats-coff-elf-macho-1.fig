@@ -1,0 +1,18 @@
+kind: graph
+dir: down
+title: One Object, three containers, machine tables below
+node obj "Object" fill=a
+node elf "llrm-elf\ncontainer, generic\nover Machine" fill=b
+node coff "llrm-coff\ncontainer, generic\nover Machine" fill=b
+node mo "llrm-macho\ncontainer, generic\nover Machine" fill=b
+node e32 "elf32\nmachine tables"
+node e64 "elf64\nmachine tables"
+node c32 "coff32\nmachine tables"
+node c64 "coff64\nmachine tables"
+edge obj -> elf
+edge obj -> coff
+edge obj -> mo
+edge elf -> e32
+edge elf -> e64
+edge coff -> c32
+edge coff -> c64

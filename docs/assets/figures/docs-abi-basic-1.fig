@@ -1,0 +1,10 @@
+kind: stack
+title: Far BASIC procedure at entry (SUB pDbl(h, v, t))
+arrow "higher addresses" up
+cell "caller's frame"
+cell "&h" off="sp+8" size="2" note="first formal, pushed first"
+cell "&v" off="sp+6" size="2"
+cell "&t" off="sp+4" size="2" note="last formal, pushed last"
+cell "return CS" off="sp+2" size="2" fill=a
+cell "return IP" off="sp+0" size="2" note="SP on entry" fill=a
+arrow "lower addresses" down

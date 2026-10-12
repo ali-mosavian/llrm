@@ -1,0 +1,7 @@
+kind: stack
+title: Descriptor on m16, a 6-byte header
+cell "flags" off="0" size="1"
+cell "pad" off="1" size="1"
+cell "length" off="2" size="2"
+cell "capacity" off="4" size="2"
+cell "data ... [NUL]" off="6" note="the value points here" fill=a

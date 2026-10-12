@@ -22,19 +22,7 @@ The frontend lexes, parses and checks a module, resolves its imports, and
 writes common HIR. HIR goes through the shared MIR optimizer and backend like
 every other frontend's.
 
-```text
- .nib source + imports
-      |
-      v   lexer, parser/, desugar, modules       syntax, one module
-      |
-      v   semantic/                              types, borrow checker
-      |
-      v   HIR (common, typed, name-resolved)  --> llrm-run: host interpreter
-      |
-      v   MIR, optimizer, backend                (shared with llrm-qb, llrm-c)
-      |
-      v   object file (OMF for m16)           --> link with runtime, run in DOS
-```
+![From Nib source to a DOS program](../../assets/figures/docs-frontends-nib-readme-1.png)
 
 ## Tools
 

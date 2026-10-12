@@ -4,14 +4,7 @@ For contributors working on interprocedural analyses or their compile time.
 How a call's reads and writes are computed and consumed, and what is still
 open.
 
-```
- callee bodies --summaries (fixed point)--> Summary per function
-                                              |  + GlobalsAA, callbacks
- call site + actuals' provenance (points_to)  v
-        --calls_annotated--> Effect { loads, stores, fills } per call
-                                              |
-   memoryssa, gvn, dse, promote, loopmotion, consts, avail  <--+
-```
+![How a call's reads and writes are computed and consumed](../assets/figures/docs-architecture-modref-1.png)
 
 ## What exists
 

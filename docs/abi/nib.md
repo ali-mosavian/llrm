@@ -22,15 +22,7 @@ Each name is a convention of the target's `calling.toml`: [x86-m16](x86-m16.md) 
 
 `any` lets a function that only its own module calls, and only directly, be entered by a near `call` and left by `ret` ([x86-m16](x86-m16.md#near-and-far-calls)); `tests/nearcalls.rs` pins it. A float result goes through a hidden near pointer for the BASIC marks and in `st(0)` for the rest (`float_return`).
 
-```
- @export("watcall32")                 caller (any language)
- fn f(a: i32, b: i32) -> i32
-        |                                  |
-        v                                  v
- ProcedureAbi { distance: far,       mov eax, a ; mov edx, b
-   cleanup: callee,                  call f_
-   convention: watcall }             (nothing to pop)
-```
+![An exported watcall32 function and its caller](../assets/figures/docs-abi-nib-1.png)
 
 ## Interrupt handlers
 

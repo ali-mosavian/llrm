@@ -21,8 +21,23 @@ For maintainers running llrm's `m32` output against gcc and clang. Method, comma
 
 A rerun with another llrm shows a change in the table's llrm columns; gcc and clang do not move.
 
-```
- run.sh -> build.sh -> wrap.py -> {llrm-c, gcc, clang} -> harness.py (unicorn)
-                                                     -> results.jsonl -> table.py
-                                          loops.py <-- ELF of llrm, gcc, clang
+```fig
+kind: graph
+dir: right
+title: The vsgcc scripts, in the order they run
+node run "run.sh" fill=a
+node build "build.sh"
+node wrap "wrap.py"
+node comp "llrm-c, gcc, clang" fill=b
+node har "harness.py\nunicorn"
+node res "results.jsonl"
+node tab "table.py" fill=c
+node loops "loops.py"
+edge run -> build
+edge build -> wrap
+edge wrap -> comp
+edge comp -> har
+edge har -> res
+edge res -> tab
+edge comp ..> loops "ELF of llrm, gcc, clang"
 ```

@@ -1,0 +1,16 @@
+kind: graph
+dir: right
+title: The pipeline and the crate of each stage
+node src "source\nqb, c, nib" fill=a
+node fe "frontend\nllrm-qb, -c, -nib" fill=a
+node hir "HIR"
+node mir "MIR"
+node opt "optimizer\nllrm-transforms" fill=b
+node be "backend\nllrm-core" fill=c
+node obj "object\nllrm-omf, ..." fill=d
+edge src -> fe
+edge fe -> hir
+edge hir -> mir
+edge mir -> opt
+edge opt -> be
+edge be -> obj

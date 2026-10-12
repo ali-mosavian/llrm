@@ -1,0 +1,15 @@
+kind: graph
+dir: down
+title: From target description to compiler
+node src "Description files\n*.regs *.instr *.isel *.peep\ntimings.times opcosts.txt\n*.toml" fill=a
+node gen "llrm-iselgen\n(build.rs of the select crate)"
+node out "SELECTOR, RULES,\neffect rows" fill=b
+node impl "Target impl (data crate)\nread by the passes" fill=b
+node drv "llrm-driver binds"
+node core "llrm-core backend" fill=c
+edge src -> gen
+edge gen -> out
+edge src -> impl
+edge out -> drv
+edge impl -> drv
+edge drv -> core

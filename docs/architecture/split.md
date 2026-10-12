@@ -5,15 +5,7 @@ this compiler: on one side a program is values and operations, on the other it
 is machine instructions. **Nothing crosses except at the two doors:** MIR
 construction and lowering.
 
-```
- -------- source ---------+------- abstract -------+-------- machine --------
-                          |                        |
- HIR (QB, Nib, C) -emit --+-> llrm-transforms ------+-> isel -> LIR -> phases
- BC objects -decode-lift -+->   pipeline            |   -> layout -> writer
-                          |                        |
-                    MIR construction            lowering
-                    (one door)               (the other door)
-```
+![The two doors between source, abstract and machine](../assets/figures/docs-architecture-split-1.png)
 
 ## The rule
 

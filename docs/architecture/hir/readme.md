@@ -4,13 +4,7 @@ For frontend authors and anyone reading how source becomes MIR. HIR is the
 typed, name-resolved, non-SSA control-flow graph between a source frontend and
 MIR. It lives in `crates/ir/llrm-hir`; the schema is in [model.md](model.md).
 
-```
- QB source --qbfront--> resolve --+
- Nib source --lex/parse/sema -----+--> HIR Program --verify--> mir::emit
- C source --Open Watcom--translate+     (JSON codec,            |
-                                         --dump-hir)            v
-                                                          MIR modules
-```
+![Producers of HIR and the way to MIR](../../assets/figures/docs-architecture-hir-readme-1.png)
 
 Producers: `llrm-qb` (parser `qbfront`), `llrm-nib` and `llrm-c`
 (`crates/frontends/llrm-c/src/translate.rs`, from Open Watcom's

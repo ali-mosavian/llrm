@@ -1,0 +1,6 @@
+kind: stack
+title: Stack at entry of a function with no frame register
+arrow "higher addresses" up
+cell "stack argument 1" off="esp+8" size="4"
+cell "stack argument 0" off="esp+4" size="4" note="[esp+4] on entry, [esp+8] ..."
+cell "return EIP" off="esp+0" size="4" fill=a

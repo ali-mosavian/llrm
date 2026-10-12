@@ -4,23 +4,7 @@ For contributors: which tests exist, how to run the narrowest one that answers a
 
 ## Layers
 
-```
- gate.py plan/run  (tools/gate, tiers.toml)      picks steps from the diff
-   |
-   +-- cheap steps, every diff            heavy steps, when owner paths change
-   |     build      cargo check/test --no-run     turbo, cv4   Turbo Debugger, CodeView
-   |     lib, doc   unit tests, doctests          identity     compiler vs itself
-   |     crate-tests, integration (tests/*.rs)    qcport       QCport vs Borland
-   |     scans      source-text ratchets          dos-slow     demos, graphics sweeps
-   |     run        tests/run in DOSBox           pytest-programs, measure, rfmt-post
-   |     pytest     tools/, crates/, tests/*.py
-   |     bench, torture, fmt
-   v
- what executes the program under test
-   host            unit tests, llrm-mir interpreter, unicorn (bench counts)
-   DOSBox-X fork   tools/dosbatch: one launch builds and runs many programs
-   reference tools Turbo Debugger, CodeView, BC, Borland C, gcc, clang, gdb
-```
+![What the gate runs for a diff, and what executes the program under test](../assets/figures/docs-working-testing-1.png)
 
 A step whose tool is not in the repository is SKIPPED with the reason (see CI).
 

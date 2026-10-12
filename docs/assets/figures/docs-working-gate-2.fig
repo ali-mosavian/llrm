@@ -1,0 +1,18 @@
+kind: graph
+dir: down
+title: How the changed paths select the tier
+node p "changed paths" fill=a
+node inert "[inert] only?" 
+node none "none\ndocs, *.md, editors,\n.github, .zed" fill=c
+node comp "any [compiler] path?"
+node narrow "narrow: pytest + the steps\nthat read what changed (data\ndirs, tests/*.rs, bench, torture,\nfmt, owning heavy steps, run)" fill=c
+node sh "[shared] or unknown path?"
+node full "FULL: every step" fill=d
+node fast "FAST: cheap steps + each\nheavy step whose owner\npaths changed" fill=b
+edge p -> inert
+edge inert -> none "yes"
+edge inert -> comp "no"
+edge comp -> narrow "no"
+edge comp -> sh "yes"
+edge sh -> full "yes"
+edge sh -> fast "no"

@@ -1,0 +1,7 @@
+kind: stack
+title: An OMF record
+cell "type" size="1"
+cell "length" size="2" note="little endian; counts the body and the checksum byte"
+cell "body" note="length - 1 bytes"
+cell "checksum" size="1" note="all bytes of the record sum to 0 mod 256"
+bracket "record: 3 + length bytes" from=1 to=4

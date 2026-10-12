@@ -1,0 +1,12 @@
+kind: stack
+title: Frame of an x86-m32 function with a frame register
+arrow "higher addresses" up
+cell "caller's frame"
+cell "stack argument 2" off="ebp+16" size="4" note="pushed right to left: the first stack argument is the lowest"
+cell "stack argument 1" off="ebp+12" size="4"
+cell "stack argument 0" off="ebp+8" size="4" note="first_argument_offset = 8"
+cell "return EIP" off="ebp+4" size="4" fill=a
+cell "caller's EBP" off="ebp+0" size="4" note="EBP after push ebp; mov ebp, esp"
+cell "locals, spills" off="ebp-4"
+cell "saved registers" note="ESP points below; outgoing arguments are pushed below ESP at each call"
+arrow "stack grows down" down

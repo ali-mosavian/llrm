@@ -4,26 +4,7 @@ For maintainers comparing `llrm-qb` with BC of QuickBASIC 4.5, PDS 7.1 and VBDOS
 
 ## Flow
 
-```
- bench/NAME/NAME.bas
-        |
-   +----+----------------------------------+
-   v                                         v
- llrm-qb --dialect D --runtime D        BC /O /FPi [/AH]   (D = qb45 | pds71 | vbdos)
-   -O2 | -Os -fno-inline-functions         one DOSBox-X boot per dialect
-   -fno-inline-functions-called-once       |  OBJ
-   |  OBJ                                  v
-   v                                   LINK with D's own runtime
- LINK in DOSBox-X, llrm's runtime
-   +--------------------+------------------+
-                        v
-     real-mode unicorn (crates/target/llrm-x86-m16/bench/icount.py)
-     count the kernel (`BenchName`): entry to return, runtime calls included
-                        |
-                        v
-     instructions, memory ops, code/data/bss bytes of the program's OBJ
-     -> bench/NAME/expected.toml  [bas.*] beside [bc.O2] [pds71.O2] [vbdos.O2]
-```
+![One BASIC source through llrm-qb and BC (D is qb45, pds71 or vbdos)](../assets/figures/docs-comparison-vs-basic-1.png)
 
 ## Generated instructions and size
 

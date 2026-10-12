@@ -1,0 +1,18 @@
+kind: graph
+dir: down
+title: Module steps of the optimizer, in order
+node a "globalopt\nports (every body)\ninterprocedural stamp"
+node b "per body: Fixed\n(next figure)" fill=b
+node c "interprocedural: inline,\nparameter ranges,\nspecialisation\n(a changed body goes\nthrough Fixed again)"
+node d "globaldce\navailableexternally\ncalleepop"
+node e "[freeze summaries\nand GlobalsAA]" shape=note
+node f "rotate with header copy\n(when on), fixednarrow, lsr"
+node g "window, rotate, jumpthread,\nhoist, gepoffset"
+node h "addresssink, spares, homes"
+edge a -> b
+edge b -> c
+edge c -> d
+edge d -> e
+edge e -> f
+edge f -> g
+edge g -> h

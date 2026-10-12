@@ -1,0 +1,19 @@
+
+kind: graph
+dir: down
+title: Machine phase order (second half)
+node a "Coalescer"
+node b "RegAlloc"
+node c "ParallelCopy"
+node d "Prologue"
+node e "Peephole"
+node f "LoopSlots"
+node g "Scheduler"
+node h "ControlFlow"
+edge a -> b
+edge b -> c
+edge c -> d
+edge d -> e
+edge e -> f
+edge f -> g
+edge g -> h

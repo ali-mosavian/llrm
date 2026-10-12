@@ -1,0 +1,19 @@
+kind: graph
+dir: down
+title: From optimized MIR to masm
+node mir "MIR after the pipeline\n(passes.md)" fill=a
+node pre "driver::optimized\nassumptions, ehprepare,\nfpconvert, selects"
+node near "nearcode, globals::names"
+node st "staged (LIR, SSA, virtual regs)\nisel, framefree, frame::of"
+node ch "machined_once\ncheaper: route A allocator alone,\nroute B spiller (ssaspill)" fill=b
+node rl "relayout\nsecond frame, if far frame operands"
+node om "-Omax: again without callee facts\ncheaper kept"
+node masm "masm\ncleaned and duplicated returns,\nshrink-wrap, stack checks" fill=c
+edge mir -> pre
+edge pre -> near
+edge near -> st "callees first, per function"
+edge st -> ch
+edge ch -> rl "keep the cheaper"
+edge rl -> om
+edge om -> masm
+group mach "machined (assemble.rs)": st ch rl om

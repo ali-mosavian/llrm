@@ -16,14 +16,7 @@ The form is LLVM's; the compiler is llrm's. Its analyses, passes and code
 generation are its own, because LLVM has no segmented 16-bit x86 target. LLVM
 is a reference and an oracle, never a dependency.
 
-```
- text (.ll subset)  <--parse/print-->  Module (arenas, ids, use lists)
-                                          |
-        verify (LLVM Verifier rules)  <---+---> interpret (poison, datalayout)
-                                          |
-        PassManager: function and module passes, cached analyses,
-        PreservedAnalyses, verify-each, verify-analysis-invalidation
-```
+![The rich MIR module and what works on it](../assets/figures/docs-architecture-rich-mir-1.png)
 
 Independent oracles, pinned to LLVM 20: `opt -passes=verify` checks stage
 dumps, `lli -force-interpreter` runs what it can, `llc -mtriple=msp430`

@@ -1,0 +1,8 @@
+kind: stack
+title: Frame of a QB procedure (far call, Pascal order)
+arrow "higher addresses" up
+cell "parameters" note="Pascal: first formal furthest from [bp+6]"
+cell "return address" note="far" fill=a
+cell "runtime header" note="BP at its top; 10 bytes QB 4.5 / llrm, 18 bytes PDS 7.1, 20 bytes VBDOS; holds saved BP, frame chain, SI, DI" fill=b
+cell "source locals and spills" note="SP at the bottom"
+arrow "stack grows down" down

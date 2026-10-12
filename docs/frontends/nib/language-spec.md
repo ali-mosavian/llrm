@@ -615,12 +615,7 @@ A function value is a small integer that names one of the functions
 converted to its type. The program is compiled whole, so a call through it is
 a `match` over those functions and a direct call of each:
 
-```text
-  inc  ---+                       apply(f, x)  =>  match f:
-  dec  ---+--> fn(i16) -> i16                          0: inc(x)
-  |x| x*2 +    (an index, 1 word)                      1: dec(x)
-                                                       2: lambda(x)
-```
+![A call through a function value is a match over the converted functions](../../assets/figures/docs-frontends-nib-language-spec-1.png)
 
 The language has no heap-allocated closures and no currying; partial
 application is written with a lambda.
@@ -693,14 +688,7 @@ Layout. A field is aligned to the smaller of its size and the struct's
 packing, which is 2 unless `@repr` says otherwise (section 15.2); the
 struct's size is rounded up to its widest alignment. Nothing is reordered.
 
-```text
-struct Mixed:  a: u8   b: i16   c: u8        offsets and size (pack 2)
-
-  0     1     2     3     4     5
-  +-----+-----+-----------+-----+-----+
-  |  a  | pad |     b     |  c  | pad |      size 6
-  +-----+-----+-----------+-----+-----+
-```
+![struct Mixed (a: u8, b: i16, c: u8), pack 2, size 6](../../assets/figures/docs-frontends-nib-language-spec-2.png)
 
 `size_of[T]()` gives the size (section 8.6).
 
@@ -756,14 +744,7 @@ next two-byte boundary; the variants' payloads overlap and the size is that
 of the largest, rounded to two. `Option[i16]` takes four bytes: the tag byte,
 a pad byte, and the `i16`.
 
-```text
-Shape.circle(center, radius)                    (sizes, pack 2)
-
-  0     1     2           6      8
-  +-----+-----+-----------+------+
-  | tag | pad |  center   | radius|       the variants overlap from byte 2
-  +-----+-----+-----------+------+
-```
+![Shape.circle(center, radius), pack 2](../../assets/figures/docs-frontends-nib-language-spec-3.png)
 
 An enum may be generic: `Option[T]` and `Result[T, E]` are. Its methods are
 declared like a struct's.
@@ -797,14 +778,7 @@ bits struct Video: u16
     mut level: i5             # bits 10-14
 ```
 
-```text
-Attr, backing u8:
-
-   7      6   5   4     3   2   1   0
-  +-----+-----------+---------------+
-  |blink|    bg     |      fg       |
-  +-----+-----------+---------------+
-```
+![Attr, backing u8](../../assets/figures/docs-frontends-nib-language-spec-4.png)
 
 Reading a field gives the smallest standard type that holds it: `u4` reads as
 `u8`, `i12` as `i16`. Writing a value that does not fit is a compile-time
@@ -1639,14 +1613,11 @@ so it is placed as section 9 places any such value. `next()` is a call that
 jumps to the saved resume point and returns an `Option`; `next` is one loop
 over a `match` of the resume point, so no loop is entered at its middle.
 
-```text
-fn countdown(start: u16) -> iter[u16]      the state of an escaping countdown (sketch)
+![State of an escaping countdown(start: u16) -> iter(u16) (sketch)](../../assets/figures/docs-frontends-nib-language-spec-5.png)
 
-  +----------+--------+--------+
-  | $resume  | start  |   n    |      $resume: where next() continues
-  +----------+--------+--------+      n lives across the yield, so it is kept
-        |
-        v
+`next()` over that state:
+
+```text
   next(): loop:
             match $resume:
               0: n = start               # first call
@@ -1831,15 +1802,9 @@ indexed or iterated only: no view or pointer to it may be taken.
 An owned `vec`, `string` or `dict` is one allocation, and its value is a
 near pointer to the data. Its descriptor sits immediately before the data:
 
-```text
-  m16, 6-byte header                      m32, 12-byte header
+![Descriptor on m16, a 6-byte header](../../assets/figures/docs-frontends-nib-language-spec-6.png)
 
-  +-------+-----+--------+--------+       +-------+-----+--------+--------+
-  | flags | pad | length |capacity|       | flags | pad | length |capacity|
-  |  1 B  | 1 B |  2 B   |  2 B   |       |  1 B  | 3 B |  4 B   |  4 B   |
-  +-------+-----+--------+--------+       +-------+-----+--------+--------+
-                                 ^ data...[NUL]                          ^ data
-```
+![Descriptor on m32, a 12-byte header](../../assets/figures/docs-frontends-nib-language-spec-7.png)
 
 `flags` is one byte of facts for the runtime:
 
@@ -1870,14 +1835,7 @@ A borrowed `&T[N]` needs no descriptor: its dimensions are in its type, so it
 is a pointer to the array. An unsized view, `&[T]` or `&string`, is a
 descriptor of its dimensions, capacity, and data pointer:
 
-```text
-  &[T], rank 1 (m16, 8 bytes)         &string
-
-  +--------+----------+-------------------+
-  | length | capacity |   data pointer    |      capacity equals length
-  |  2 B   |   2 B    | offset 2 B seg 2 B|      12 bytes on m32
-  +--------+----------+-------------------+
-```
+![Descriptor of &(T) (rank 1) and &string on m16, 8 bytes (12 bytes on m32)](../../assets/figures/docs-frontends-nib-language-spec-8.png)
 
 That descriptor lives on the stack of the frame that creates it and has no
 allocator or destructor. A call passes one pointer to it, and a function
@@ -2197,14 +2155,9 @@ An unmarked struct is packed to 2 bytes on both targets (section 5.1).
 `@repr("c16", pack=1)` has no padding. `@repr("c")` follows the target's C
 compiler: with no `pack=`, the target's own alignment.
 
-```text
-@repr("c16", pack=1)           @repr("c16")  (pack 2)
-struct S: a: u8  b: i16        struct S: a: u8  b: i16
+![struct S: a: u8, b: i16 under @repr("c16", pack=1), 3 bytes](../../assets/figures/docs-frontends-nib-language-spec-9.png)
 
-  +---+-----------+              +---+---+-----------+
-  | a |     b     |  3 bytes     | a |pad|     b     |  4 bytes
-  +---+-----------+              +---+---+-----------+
-```
+![The same struct under @repr("c16") (pack 2), 4 bytes](../../assets/figures/docs-frontends-nib-language-spec-10.png)
 
 ### 15.3 Calling conventions
 

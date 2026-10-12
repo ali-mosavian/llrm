@@ -1,0 +1,16 @@
+kind: graph
+dir: down
+title: From C source to an object file
+node src "program.c" fill=a
+node wccq "wccq: Open Watcom's C front end (cc/)\nlinked against toolchain/owshim/cgshim.c\ninstead of its code generator,\nwith llrm's patches\n(toolchain/owshim/patches)" fill=b
+node stream "stream: one line per cg call\ntypes, symbols, trees, data, debug"
+node llrm "llrm-c\nhir.rs reads the stream\ntranslate.rs makes HIR\now_facts.rs turns the facts it\nstates into MIR facts" fill=c
+node mir "HIR -> MIR"
+node opt "shared optimizer, backend"
+node obj "OMF object\n(or ELF, Mach-O, COFF)" fill=d
+edge src -> wccq
+edge wccq -> stream
+edge stream -> llrm
+edge llrm -> mir
+edge mir -> opt
+edge opt -> obj

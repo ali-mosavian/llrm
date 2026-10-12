@@ -17,15 +17,7 @@ A procedure keeps SI, DI, BP, SP, DS, SS and the direction flag (the `keeps` row
 
 A far procedure, SUB `pDbl(h AS INTEGER, v AS DOUBLE, t AS INTEGER)`, at entry (BC's listing: `far pops 6`, the arguments at `in+8`, `in+6`, `in+4` from SP):
 
-```
- high   | caller's frame        |
- sp+8   | &h   first formal     |   pushed first
- sp+6   | &v                    |
- sp+4   | &t   last formal      |   pushed last
- sp+2   | return CS             |
- sp+0   | return IP             | <- SP on entry
- low
-```
+![Far BASIC procedure at entry (SUB pDbl(h, v, t))](../assets/figures/docs-abi-basic-1.png)
 
 A private procedure that frames itself is called near: no CS, so the arguments start 2 bytes closer (`[bp+4]` after `push bp; mov bp,sp`).
 
@@ -33,33 +25,11 @@ A private procedure that frames itself is called near: no CS, so the arguments s
 
 A procedure whose errors can land in it, or that has a local string, calls `B$ENRA` and leaves with `B$EXSA`; any other frames itself with `push bp`, `mov bp,sp`, `sub sp`. `B$ENRA` takes CX = bytes of locals (even) and builds the frame below. Its header is 10 bytes in QB 4.5 and in the llrm runtime, 18 in PDS 7.1 and 20 in VBDOS (`_RUNTIME_FRAME_HEADER` in `crates/backend/llrm-core/src/driver/basic.rs`); the llrm runtime's flat header is 32. `B$EXSA` takes BP and the result in DX:AX, restores SI, DI and BP and leaves BP and SP as the procedure used them.
 
-```
- high   | arguments             |
- bp+4   | return CS             |
- bp+2   | return IP             |
- bp+0   | caller's BP           | <- BP
- bp-2   | previous BASIC frame  |   b$curframe chain
- bp-4   | SI                    |
- bp-6   | DI                    |
- bp-8   | bytes of locals       |
- bp-10  | GOSUB count           |   header ends: FR_SIZE = 10
- bp-12  | locals, zeroed        |
-  ...   |                       | <- SP
- low
-```
+![Frame B$ENRA builds (llrm runtime, 16-bit)](../assets/figures/docs-abi-basic-2.png)
 
 The diagram is the llrm runtime's, `runtime/qb/dos/m16/frame.asm`; its flat counterpart is `runtime/qb/dos/m32/frame.asm`. The backend's names for the entries are `ENTER` and `LEAVE` in `backend/frame.rs`.
 
-```
- caller                         PROC                          runtime
- push &arg0 ... push &argN-1
- call far PROC      -------->   call far B$ENRA  ------->     build frame,
-                                  (CX = locals)  <-------      zero locals
-                                body
-                                call far B$EXSA  ------->     restore SI DI BP
-                                retf n           <-------
- (nothing to pop)
-```
+![A BASIC procedure call through the runtime](../assets/figures/docs-abi-basic-3.png)
 
 ## Calls into a runtime
 

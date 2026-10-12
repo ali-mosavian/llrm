@@ -1,0 +1,13 @@
+kind: graph
+dir: right
+title: The debug socket between the host and the DOSBox-X fork
+node host "host: cargo test\n(tests/common/dosbox.rs)\ntools/dosbatch/qbplay.py" fill=a
+node sess "Session::command\ncontinue, dos_cmd,\nkey, key_hw, text_screen,\nmem_read_linear, screenshot" fill=a
+node sock "reader thread\nanswers every INT 3"  shape=note
+node dos "DOS shell\nTD.EXE / CV.EXE / program\n(llrm object linked with\nTLINK /v or LINK /CO)\nINT 3 -> \"stopped\", int 3\nmounts: c: toolchain,\nd: TD, w: work directory" fill=b
+node fork "DOSBox-X fork\ntarget/release/dosbox-x" fill=b
+edge host -> sess
+edge sess -> dos "JSON lines / TCP\n{\"cmd\":\"continue\"}"
+edge dos ..> sess "replies, events"
+edge sock ..> sess
+edge dos -> fork

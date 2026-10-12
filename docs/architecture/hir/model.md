@@ -6,16 +6,7 @@ which every source frontend constructs. Overview: [readme.md](readme.md).
 
 ## Ownership
 
-```
-Program        dialect, runtime profile, target, array order, float mode,
-  |            frames, promises, entries, stack check
-  +- Module*   types, callables, alias classes, facts, debug, line numbers
-       +- Type*        kind, width, signedness, float evaluation, address kind
-       +- DataObject*  bytes, relocations, linkage, readonly, segment
-       +- Callable*    name, signature, defined?, returns_twice
-       +- Function*    values, places, parameters, ProcedureAbi, call ABIs
-            +- Block*  Instruction*, one Terminator
-```
+![What owns what in HIR; each child kind is a list](../../assets/figures/docs-architecture-hir-model-1.png)
 
 Every entity has an integer id local to its owner; names and spans annotate.
 The JSON codec (`codec.rs`) is deterministic and strict: it rejects an unknown

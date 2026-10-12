@@ -4,14 +4,7 @@ For contributors changing one of the three flat-address writers. Each takes the 
 and refuses what only [OMF](omf.md) can say: segments with their own selector (`near == false`), groups,
 `Role::Stack`, `SegmentBase` and `FarPointer`.
 
-```
-                 Object
-   +-----------+----+------+-----------+
-   |           |           |           |
- llrm-elf    llrm-coff   llrm-macho   (container, generic over Machine)
-  /     \      /    \
-elf32  elf64 coff32 coff64             (machine tables)
-```
+![One Object, three containers, machine tables below](../assets/figures/docs-formats-coff-elf-macho-1.png)
 
 ## Which exist
 

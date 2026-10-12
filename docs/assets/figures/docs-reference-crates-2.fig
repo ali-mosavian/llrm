@@ -1,0 +1,36 @@
+kind: graph
+dir: down
+title: Programs, driver and targets
+node qb "llrm-qb" fill=a
+node c "llrm-c" fill=a
+node nib "llrm-nib" fill=a
+node bcd "llrm-bcdriver" fill=a
+node drv "llrm-driver" fill=b
+node s16 "llrm-x86-m16-select"
+node s32 "llrm-x86-m32-select"
+node m16 "llrm-x86-m16"
+node m32 "llrm-x86-m32"
+node x86 "llrm-x86"
+node bc "llrm-x86-bc" fill=d
+node bcm "llrm-x86-bcmachine" fill=d
+node qbrt "llrm-qbruntime" fill=d
+node core "llrm-core" fill=c
+edge qb -> drv
+edge c -> drv
+edge nib -> drv
+edge bcd -> drv
+edge bcd -> bc
+edge drv -> s16
+edge drv -> s32
+edge drv -> m16
+edge drv -> m32
+edge s16 -> core
+edge s32 -> core
+edge m16 -> x86
+edge m32 -> x86
+edge bc -> m16
+edge bc -> bcm
+edge bcm -> qbrt
+group fe "Programs": qb c nib bcd
+group tg "Targets": s16 s32 m16 m32 x86
+group bcg "BC route": bc bcm qbrt

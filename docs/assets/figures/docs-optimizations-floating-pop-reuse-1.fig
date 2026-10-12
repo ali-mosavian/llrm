@@ -1,0 +1,8 @@
+kind: graph
+dir: down
+title: The two x87 passes
+node in "LIR with 10-byte held values" fill=a
+node mid "LIR, still values,\nspills explicit" fill=b
+node out "LIR with st(i) operands:\nfld, fxch, fst/fstp,\nfadd..., faddp..." fill=c
+edge in -> mid "floatassign: values -> stack\nregisters, spills, memory operands"
+edge mid -> out "floatalloc: blocks in reverse\npostorder, a _Stack per block"

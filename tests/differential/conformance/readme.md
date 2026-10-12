@@ -4,8 +4,15 @@ For contributors: the QB 4.5, PDS 7.1 and VBDOS 1.0 cases `llrm-qb` is held to, 
 
 The suites are additive:
 
-```text
-QB 4.5 (base) <- PDS 7.1 additions <- VBDOS 1.0 additions
+```fig
+kind: graph
+dir: right
+title: The suites are additive
+node qb "QB 4.5 (base)" fill=a
+node pds "PDS 7.1 additions" fill=b
+node vb "VBDOS 1.0 additions" fill=c
+edge qb -> pds
+edge pds -> vb
 ```
 
 A construct is not copied into each directory. Each `suite.toml` records a case's source, level, feature tags, the original compiler's switches, the expected console output, linker libraries, DOS arguments and environment, and its `parser`, `lowering` and `runtime` obligations. `coverage.toml` maps the installed Microsoft help topics to cases or to a stated reason they have none.

@@ -8,35 +8,15 @@ lives; [source layout](../architecture/source-layout.md) says what sits inside `
 The compiler is a pipeline: source frontend, HIR, MIR, optimizer, x86 backend, object writer. BC objects enter by a
 small separate route (`llrm-bcdriver`).
 
-```
- source -> frontend -> HIR -> MIR -> optimizer -> backend -> object
- (qb, c, nib)  (llrm-qb, -c, -nib)   (llrm-transforms)  (llrm-core)  (llrm-omf, ...)
-```
+![The pipeline and the crate of each stage](../assets/figures/docs-reference-crates-1.png)
 
-An arrow reads "depends on" (normal dependencies; tests and build scripts left out).
+An arrow reads "depends on" (normal dependencies only; an edge implied by a path through other drawn crates is left out). `llrm-support`, `llrm-mir` and `llrm-object` have no workspace dependencies.
 
-```
- programs (src/bin)   llrm-qb  llrm-c  llrm-nib  llrm-omf  llrm-mir ...
- --------------------------------------------------------------------------
- frontends    llrm-qb       llrm-c     llrm-nib     llrm-bcdriver
-                 |            |           |          |         |
-              qbfront         |           |     llrm-x86-bc    |
-                 |            |           |          |         |
-           llrm-qbruntime     |           |    llrm-x86-bcmachine
- --------------------------------------------------------------------------
- llrm-driver ---> llrm-x86-m16-select, llrm-x86-m32-select (these -> core)
-             ---> llrm-x86-m16, llrm-x86-m32 ---> llrm-x86
- --------------------------------------------------------------------------
- llrm-core ---> llrm-transforms ---> llrm-analysis ---> llrm-mir
-           ---> llrm-hir ---> llrm-target ---> llrm-lir
-           ---> llrm-x86, llrm-x86-bcmachine, llrm-qbruntime
- --------------------------------------------------------------------------
- objects   llrm-lir ---> llrm-omf ---> llrm-dwarf ---> llrm-object
-           llrm-elf, llrm-macho ---> llrm-dwarf
-           llrm-elf32/64 ---> llrm-elf        llrm-coff32/64 ---> llrm-coff
- --------------------------------------------------------------------------
- llrm-support, llrm-mir, llrm-object: no workspace dependencies
-```
+![Programs, driver and targets](../assets/figures/docs-reference-crates-2.png)
+
+![llrm-core and the representations](../assets/figures/docs-reference-crates-3.png)
+
+![Object writers](../assets/figures/docs-reference-crates-4.png)
 
 `llrm-core` names no `llrm-x86-m*` crate among its dependencies (`tests/core_depends_on_no_target.rs`). A target
 reaches it only through `llrm-driver`, which is why `llrm-x86-m16-select` and `llrm-x86-m32-select`, written against
