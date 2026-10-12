@@ -641,3 +641,46 @@ def test_a_benchmark_added_on_its_own_plans_every_step_that_reads_bench():
     # a directory no test names adds nothing
     assert gate.readers("no_such_" + "directory_anywhere", gate.load()) == set()
     assert "integration" in gate.plan(["examples/hello.c"]).steps or "pytest-programs" in gate.plan(["examples/hello.c"]).steps
+
+
+def test_a_step_with_no_log_growth_and_no_cpu_is_killed_with_its_last_lines(tmp_path):
+    """slopes' gate sat 84 minutes in pytest on a hung test, no output, nothing noticing. A step that neither writes nor computes for the
+    stall time is killed and fails with a line saying why; one that writes, or computes, is not."""
+    import subprocess as sp
+    import time as _time
+
+    def sp_out(command):
+        return sp.run(command, capture_output=True, text=True).stdout
+
+    env = {**__import__("os").environ}
+    began = _time.time()
+    _, code, wall, _ = gate.run_step("hang", "echo before the hang; sleep 63.7", tmp_path, env, stall=2)
+    assert code == gate.STALL_CODE and wall < 20 and _time.time() - began < 20, (code, wall)
+    log = (tmp_path / "hang.failed.log").read_text()
+    assert "before the hang" in log and "STALLED" in log
+    # writing keeps a step alive without CPU; computing keeps it alive without writing
+    assert gate.run_step("chatty", "for i in 1 2 3 4 5 6; do echo $i; sleep 0.5; done", tmp_path, env, stall=2)[1] == 0
+    spin = 'python3 -c "import time; t = time.process_time()\nwhile time.process_time() - t < 4: pass"'
+    assert gate.run_step("spin", spin, tmp_path, env, stall=2)[1] == 0
+    # the killed step took its subprocesses with it
+    assert "sleep 63.7" not in sp_out(["ps", "-eo", "args"]), "the stalled step's sleep outlived it"
+
+
+def test_a_test_over_its_cpu_limit_fails_with_its_name_and_its_subprocess_is_killed(tmp_path):
+    """The pytest step limited nothing: a test that computes without end ran until the gate was killed. The plugin counts CPU, its
+    subprocesses' included, as pytest-timeout cannot, and names the test."""
+    import os
+    import subprocess as sp
+    import sys as _sys
+
+    (tmp_path / "test_spins.py").write_text(
+        "import subprocess, sys\n\ndef test_a_compile_that_never_ends():\n    subprocess.run([sys.executable, '-c', 'while True: pass  # cpulimit-test-spinner'])\n\ndef test_fine():\n    assert True\n"
+    )
+    here = str(Path(gate.__file__).parent)
+    env = {**os.environ, "GATE_TEST_CPU_SECONDS": "1", "PYTHONPATH": here}
+    done = sp.run([_sys.executable, "-m", "pytest", "-p", "pytest_cpulimit", "-p", "no:cacheprovider", "-q", str(tmp_path / "test_spins.py")], capture_output=True, text=True, env=env, timeout=60, cwd=tmp_path)
+    out = done.stdout + done.stderr
+    assert done.returncode == 1 and "1 failed, 1 passed" in out, out
+    assert "CPU LIMIT" in out and "test_a_compile_that_never_ends" in out, out
+    assert "cpulimit-test-spinner" not in sp.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout, "the test's subprocess outlived the limit"
+    assert "-p pytest_cpulimit" in gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["pytest"]

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import os
+import signal
 import functools
 import re
 import sys
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import Callable
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import proctree
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -375,7 +378,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         if cfg["fmt"]["enforced"]
         else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
-        "pytest": "uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py),
+        "pytest": "PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider -p pytest_cpulimit --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py),
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
         "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python -m pytest tools/dosbatch -m slow_dos -q -p no:cacheprovider',
@@ -491,23 +494,55 @@ def groups_of(p: Plan, skipped: dict[str, str]) -> dict[str, list[str]]:
     return {g: run for g, members in load()["groups"].items() if (run := [s for s in members if s in p.steps and s not in skipped])}
 
 
-def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = ()) -> tuple[str, int, float, float]:
-    """(name, exit code, wall seconds, CPU seconds): the CPU is user+sys of the step's process tree, which a loaded host does not stretch."""
+STALL_CODE = 79
+
+
+def stall_seconds() -> float:
+    """How long a step may go with no log growth and no CPU in its process tree: GATE_STALL_MINUTES (10)."""
+    return float(os.environ.get("GATE_STALL_MINUTES") or 10) * 60
+
+
+def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = (), stall: float | None = None) -> tuple[str, int, float, float]:
+    """(name, exit code, wall seconds, CPU seconds): the CPU is user+sys of the step's process tree, which a loaded host does not stretch.
+    A step that neither writes to its log nor uses CPU for `stall` seconds is killed (a pytest step sat 84 minutes on a hung test with
+    nothing to say so); it ends as STALL_CODE with the reason at the end of its log."""
     start = time.time()
+    stall = stall_seconds() if stall is None else stall
     # debug-gate.env makes every tool a requirement; a capability this host lacks is not one.
     prelude = ". tools/debug-gate.env 2>/dev/null; " + "".join(f"unset {v}; " for v in unset) + "set -o pipefail; "
-    with open(logs / f"{name}.log", "w") as log:
-        child = subprocess.Popen(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
-        # wait4 reports the usage of the child and of every descendant it waited for: the step's whole tree.
-        _, status, usage = os.wait4(child.pid, 0)
-        child.returncode = code = os.waitstatus_to_exitcode(status)
+    path = logs / f"{name}.log"
+    with open(path, "w") as log:
+        child = subprocess.Popen(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        seen, active, used = -1, time.time(), 0.0
+        stalled = False
+        try:
+            while True:
+                # wait4 reports the usage of the child and of every descendant it waited for: the step's whole tree.
+                done, status, usage = os.wait4(child.pid, os.WNOHANG)
+                if done:
+                    break
+                time.sleep(min(1.0, stall / 4))
+                grown, burned = path.stat().st_size, proctree.tree_cpu(child.pid)
+                if grown != seen or burned - used >= 0.1:
+                    seen, used, active = grown, burned, time.time()
+                elif time.time() - active > stall:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    _, status, usage = os.wait4(child.pid, 0)
+                    stalled = True
+                    break
+        except BaseException:
+            os.killpg(child.pid, signal.SIGKILL)
+            raise
+        child.returncode = code = STALL_CODE if stalled else os.waitstatus_to_exitcode(status)
         cpu = usage.ru_utime + usage.ru_stime
-    if code == 0 and check and (why := incomplete((logs / f"{name}.log").read_text(), *check)):
-        (logs / f"{name}.log").open("a").write(f"\nINCOMPLETE: {why}\n")
+    if stalled:
+        path.open("a").write(f"\nSTALLED: no log growth and no CPU in the step's process tree for {stall / 60:g} min; killed\n")
+    if code == 0 and check and (why := incomplete(path.read_text(), *check)):
+        path.open("a").write(f"\nINCOMPLETE: {why}\n")
         code = 78
     if code not in (0, 77):
         # The next run of the step overwrites its log; the failure is evidence, kept.
-        (logs / f"{name}.failed.log").write_text((logs / f"{name}.log").read_text())
+        (logs / f"{name}.failed.log").write_text(path.read_text())
     return name, code, time.time() - start, cpu
 
 
