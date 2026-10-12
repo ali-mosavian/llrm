@@ -940,3 +940,16 @@ def test_registers_set_up_a_recipe_only_for_the_values_that_can_be_known(tmp_pat
     own = gate.own_work(command)
     assert own["analysis registers"] > 10.0, f"premise: registers were derived ({own['analysis registers']:.1f} Minstr)"
     assert own["analysis registers"] <= 150.0, f"{own['analysis registers']:.1f} Minstr"
+
+
+def test_lsr_does_not_weigh_every_branch_again_for_each_loop_it_changes(tmp_path):
+    """nest(32) at -O2 with -ftree-ch: lsr changes a counter of each loop, and the block frequencies its prices read were worked out again over
+    the whole function each time, to what they were (the branches it touched weigh as they did): `analysis loop-products` read 91 Minstr at N=32
+    and 802 at N=64. Only the branches that read what it touched are weighed again: 17 and 76. A bound of 45 at N=32 fails the first."""
+    source = tmp_path / "nest32.c"
+    source.write_text(scaling.nest(32))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["analysis loop-products"] > 5.0, f"premise: products were derived ({own['analysis loop-products']:.1f} Minstr)"
+    assert own["analysis loop-products"] <= 45.0, f"{own['analysis loop-products']:.1f} Minstr"
