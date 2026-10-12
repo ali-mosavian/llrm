@@ -40,4 +40,4 @@ flowchart TB
 
 Readers that still take a concrete displacement (overlap tests, adjacency arithmetic, encoding sizes, debug homes) could take slot ids and offsets and leave the numbering to one finalisation pass. Today the layout is decided where each cell is made and moved by `relayout`.
 
-See [backend](backend.md) for the phases around it.
+See [the backend phases](backend/readme.md) around it.

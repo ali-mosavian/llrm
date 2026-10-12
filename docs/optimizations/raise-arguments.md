@@ -50,4 +50,4 @@ BC passes and computes a long as two words. `pairs.rs` finds the pair of word op
 
 `llrm-omf` and the `llrm-bcdriver` crate drive the path; `crates/target/llrm-x86-bc/tests/raise.rs` raises fixture objects and checks the printed answers. `--dump DIR` shows MIR after each pass.
 
-Catalog: [passes](passes.md), [constant-propagation](constant-propagation.md), [gvn](gvn.md).
+Passes: [index](passes/readme.md), [fold](passes/fold.md), [gvn](passes/gvn.md).

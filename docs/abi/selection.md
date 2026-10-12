@@ -63,7 +63,7 @@ A MIR function and each call of it carry a numbered calling convention (`ccc`, `
 
 ## Private functions and `calleepop`
 
-[`calleepop`](../optimizations/passes.md#after-the-interprocedural-stage) is the one place a convention is assigned after the frontend. Isel takes both ends' cleanup from it, so a call and the function it names agree. It runs above `-O0`.
+[`calleepop`](../optimizations/passes/calleepop.md) is the one place a convention is assigned after the frontend. Isel takes both ends' cleanup from it, so a call and the function it names agree. It runs above `-O0`.
 
 A function is eligible when nothing outside the module reaches it (`direct_only`: no export, no address taken) and every call names it in its own convention.
 
@@ -78,8 +78,8 @@ Sources: [`privately`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de0581
 
 Both change which arguments a function takes, so the convention places the new list.
 
-- [`deadargs`](../optimizations/passes.md#interprocedural-stage) (`ipa-deadargs`): a parameter nothing reads goes, with the argument at every call, round a recursion too (`tests/dead_arguments.rs`).
-- [`argpromotion`](../optimizations/passes.md#interprocedural-stage) (`promote.`): a pointer parameter only read at fixed offsets becomes the fields it reads; callers load them (`tests/nearcalls.rs`: a struct's field in C, a slice's pointer and length in Nib).
+- [`deadargs`](../optimizations/passes/deadargs.md) (`ipa-deadargs`): a parameter nothing reads goes, with the argument at every call, round a recursion too (`tests/dead_arguments.rs`).
+- [`argpromotion`](../optimizations/passes/argpromotion.md) (`promote.`): a pointer parameter only read at fixed offsets becomes the fields it reads; callers load them (`tests/nearcalls.rs`: a struct's field in C, a slice's pointer and length in Nib).
 
 ## Register facts
 

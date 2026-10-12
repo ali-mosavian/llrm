@@ -16,28 +16,27 @@ The reference for every pass, analysis and backend phase is the `//!` header at 
 
 Levels and flags: [levels](../reference/levels.md).
 
-| Stage | Passes | Reference |
+| Stage | Passes | Notes |
 |---|---|---|
-| Module, before bodies | `available-externally`, `globalopt`, `ports`, `stamp` | [passes](passes.md) |
-| Body rounds | `sroa`, `fold` (+ `floatfold`), `decide`, `phiopt` | [constant-propagation](constant-propagation.md) |
-| | `equalcalls`, `gvn` (+ load and expression PRE) | [gvn](gvn.md) |
-| | `tailrec`, `loopsimplify`, `lcssa`, `floatloop`, `trivialunswitch`, `inferspace` | [passes](passes.md) |
-| | `hoist`, `loopmotion`, `indvars`, `algebraic` | [lsr](lsr.md), [passes](passes.md) |
-| | `dse`, `promote`, `dead`, `fill`, `merge` | [dead-code](dead-code.md) |
-| | `unroll`, `peel`, `unswitch`, `unroll-jam` | [unrolling](unrolling.md) |
-| Module, interprocedural | `inline`, `ipa-*`, argument promotion, dead arguments, `ipacp` | [passes](passes.md), [module-analyses](module-analyses.md), [early-summaries](early-summaries.md) |
-| After the interprocedural step | `globaldce`, `calleepop`, `fixednarrow`, `lsr`, `differences`, `window`, `rotate`, `jumpthread`, `hoist`, `gepoffset`, `addresssink`, `spares`, `homes` | [lsr](lsr.md), [passes](passes.md) |
-| Backend | `isel`, spiller, `allocate`, `floatassign`, `floatalloc`, `coalesce`, peephole, `schedule`, `jumps`, frame layout | [backend](backend.md), [floating-pop-reuse](floating-pop-reuse.md), [second-frame](second-frame.md) |
+| Module, before bodies | `available-externally`, [`globalopt`](passes/globalopt.md), [`ports`](passes/ports.md), `stamp` |  |
+| Body rounds | `sroa`, [`fold`](passes/fold.md), [`floatfold`](passes/floatfold.md), [`decide`](passes/decide.md), [`phiopt`](passes/phiopt.md) |  |
+|  | `equalcalls`, [`gvn`](passes/gvn.md) |  |
+|  | [`tailrec`](passes/tailrec.md), [`loopsimplify`](passes/loopsimplify.md), [`lcssa`](passes/lcssa.md), [`floatloop`](passes/floatloop.md), [`trivialunswitch`](passes/trivialunswitch.md), [`inferspace`](passes/inferspace.md) |  |
+|  | [`hoist`](passes/hoist.md), [`loopmotion`](passes/loopmotion.md), [`indvars`](passes/indvars.md), [`algebraic`](passes/algebraic.md) |  |
+|  | [`dse`](passes/dse.md), [`promote`](passes/promote.md), [`dead`](passes/dead.md), [`fill`](passes/fill.md) |  |
+|  | [`unroll`](passes/unroll.md), [`peel`](passes/peel.md), [`unswitch`](passes/unswitch.md), `unroll-jam` |  |
+| Module, interprocedural | [`inline`](passes/inline.md), [`argpromotion`](passes/argpromotion.md), [`deadargs`](passes/deadargs.md), [`ipacp`](passes/ipacp.md), [`interprocedural`](passes/interprocedural.md) | [module-analyses](module-analyses.md), [early-summaries](early-summaries.md) |
+| After the interprocedural step | [`globaldce`](passes/globaldce.md), [`calleepop`](passes/calleepop.md), [`fixednarrow`](passes/fixednarrow.md), [`lsr`](passes/lsr.md), [`window`](passes/window.md), [`rotate`](passes/rotate.md), [`jumpthread`](passes/jumpthread.md), [`gepoffset`](passes/gepoffset.md), [`addresssink`](passes/addresssink.md), [`spares`](passes/spares.md), [`homes`](passes/homes.md) |  |
+| Backend | see the [backend phases](backend/readme.md) | [floating-pop-reuse](floating-pop-reuse.md), [second-frame](second-frame.md) |
 
-## Per-pass references
+## Reference pages
+
+Each pass, analysis and backend phase has one page, generated from the `//!` header of its source file: [passes](passes/readme.md), [analyses](analyses/readme.md), [backend phases](backend/readme.md). Edit the header, then run `python3 tools/docsbuild/build.py --sync` and commit what it writes.
+
+## Notes
 
 | Doc | Subject |
 |---|---|
-| [constant-propagation](constant-propagation.md) | `fold`, `floatfold`, `floatloop`; `consts`, `ranges`, `floatfacts`, `floatbounds` |
-| [gvn](gvn.md) | Value numbering, store-to-load forwarding, PRE |
-| [lsr](lsr.md) | Loop strength reduction, exit tests, invariant hoisting, huge pointers |
-| [dead-code](dead-code.md) | `dead`, `dse`, `promote`, `loopmotion` |
-| [unrolling](unrolling.md) | `unroll`, `peel`, `unroll-jam`, and the size model |
 | [raise-arguments](raise-arguments.md) | Word pairs, runtime helpers and numeric arguments of BC objects |
 | [floating-pop-reuse](floating-pop-reuse.md) | x87 stack allocation and popping arithmetic |
 | [second-frame](second-frame.md) | The second frame layout without a second backend run |

@@ -4,7 +4,7 @@ For contributors to the x87 backend. Covers how floating values are assigned to 
 
 ## Two passes
 
-Both run in the machine phases ([backend](backend.md)) and only on bodies with floating values.
+Both run in the machine phases ([backend phases](backend/readme.md)) and only on bodies with floating values.
 
 - `floatassign` ([`floatassign.rs`](backend/floatassign.md)) is the allocation step, as gcc's IRA and LRA are for any register class: it decides which floating values hold one of the eight flat stack registers, and every spill, restore and memory operand it needs comes out explicit. It also materialises a floating-to-integer conversion through an owned temporary, with `wait` around the store in a BASIC module ([native-fpu-waits](../reference/semantics/native-fpu-waits.md)), and reads the integer only if something reads it.
 - `floatalloc` ([`floatalloc.rs`](backend/floatalloc.md)) converts that to stack form, as gcc's reg-stack does, and decides nothing: it tracks which value is in which stack slot (`_Stack.values`, top first) and emits the `fld`, `fxch`, `fstp st(i)` and arithmetic that put each operand where the instruction needs it.
