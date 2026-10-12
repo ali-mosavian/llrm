@@ -47,7 +47,7 @@ fn test_a_spill_store_ahead_of_a_branch_is_made_on_the_path_that_reads_the_slot(
         .lines()
         .skip_while(|line| !line.starts_with("_hanoi proc"))
         .skip_while(|line| !line.trim().starts_with("L0_0:"))
-        .take_while(|line| !line.trim().starts_with("jne"))
+        .take_while(|line| !line.trim().starts_with("jne") && !line.trim().starts_with("je "))
         .collect();
     assert!(!entry.is_empty(), "no entry block: {text}");
     assert!(entry.iter().all(|line| !line.contains("[esp+")), "the entry stores a slot: {entry:?}\n{text}");
