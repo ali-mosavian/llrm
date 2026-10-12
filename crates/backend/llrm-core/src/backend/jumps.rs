@@ -202,7 +202,8 @@ pub fn optimized(
 /// the opposite branch to the jump's target, and no jump (LLVM's
 /// `analyzeBranch` / `reverseBranchCondition` in BranchFolding). `_step` does
 /// this while it places blocks; copying a tail afterwards (`duplicated`) makes
-/// more of them.
+/// more of them. Where neither way is laid out next, the likelier one becomes
+/// the conditional jump, so the trip that goes on pays one taken branch.
 fn inverted(body: &LirBody) -> LirBody {
     let mut blocks = body.blocks.clone();
     let mut changed = false;
