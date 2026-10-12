@@ -13,7 +13,9 @@ import re
 from dataclasses import dataclass, field
 from html import escape as _esc
 
-CW = 7.2  # estimated width of one character at 13px system sans
+from . import ttf
+
+CW = 7.2  # a character's width at 13px; text is measured with the vendored font (ttf.py)
 LH = 17  # line height
 PAD_X, PAD_Y = 14, 9
 NODESEP, EDGESEP, RANKSEP = 34, 22, 64
@@ -69,7 +71,7 @@ def fmt(v: float) -> str:
 
 
 def tw(s: str) -> float:
-    return max((len(x) for x in s.split("\n")), default=0) * CW
+    return max((ttf.font().width(x, 13) for x in s.split("\n")), default=0)
 
 
 def nlines(s: str) -> int:

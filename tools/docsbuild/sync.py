@@ -2,8 +2,8 @@
 
 `plan(root)` computes every file `--sync` writes or deletes; `apply` writes them.
 
-A hand-written figure is a spec in `docs/assets/figures/SLUG.fig`, drawn to `SLUG.svg`
-beside it; the document holds only `![ALT](../assets/figures/SLUG.svg)`. A ```fig fence
+A hand-written figure is a spec in `docs/assets/figures/SLUG.fig`, drawn to `SLUG.png`
+beside it; the document holds only `![ALT](../assets/figures/SLUG.png)`. A ```fig fence
 (or an older figure block) found in a document is moved to a `.fig` and replaced by the
 image. The pass reference is written from the `//!` headers, whose ```fig fences stay in
 the source; each becomes an image there. Everything is a pure function of those inputs,
@@ -22,18 +22,18 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 import passdocs  # noqa: E402
-from docsbuild import figblock, figures  # noqa: E402
+from docsbuild import figblock, figures, raster  # noqa: E402
 
 REFERENCE = "docs/optimizations/reference"
 FIGURES = "docs/assets/figures"
 COMMAND = "python3 tools/docsbuild/build.py --sync"
-IMAGE = re.compile(r"!\[[^\]]*\]\([^)\s]*assets/figures/([^/)\s]+)\.svg\)")
+IMAGE = re.compile(r"!\[[^\]]*\]\([^)\s]*assets/figures/([^/)\s]+)\.png\)")
 SOURCE = re.compile(r"^Source: \[`([^`]+)`\]")
 
 
 @dataclass
 class Plan:
-    writes: dict[str, str] = field(default_factory=dict)  # changed or new text files, by repository path
+    writes: dict[str, str | bytes] = field(default_factory=dict)  # changed or new text files, by repository path
     deletes: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -58,7 +58,7 @@ def alt(fig: figures.Figure) -> str:
 
 
 def image(slug: str, fig: figures.Figure, from_dir: str) -> str:
-    return f"![{alt(fig)}]({posixpath.relpath(f'{FIGURES}/{slug}.svg', from_dir or '.')})"
+    return f"![{alt(fig)}]({posixpath.relpath(f'{FIGURES}/{slug}.png', from_dir or '.')})"
 
 
 def reference_pages(root: Path) -> tuple[dict[str, str], dict[str, str], list[str]]:
@@ -68,7 +68,7 @@ def reference_pages(root: Path) -> tuple[dict[str, str], dict[str, str], list[st
         pages = {f.name: f.read_text(encoding="utf-8") for f in sorted(Path(tmp).glob("*.md"))}
     dirs = {name: directory for name, _title, directory, _kind in passdocs.PAGES}
     out: dict[str, str] = {}
-    svgs: dict[str, str] = {}
+    svgs: dict[str, bytes] = {}
     problems: list[str] = []
     for name, text in pages.items():
         path = f"{REFERENCE}/{name}"
@@ -90,7 +90,7 @@ def reference_pages(root: Path) -> tuple[dict[str, str], dict[str, str], list[st
             except figures.FigureError as e:
                 problems.append(f"{rel}: figure {seen[base]}: line {e.line}: {e.message}")
                 continue
-            svgs[slug] = fig.svg + "\n"
+            svgs[slug] = raster.render_png(fig.svg)
             replace.append((f, image(slug, fig, REFERENCE)))
         for f, img in reversed(replace):
             lines[f.start : f.end] = [img]
@@ -110,6 +110,22 @@ def slug_base(path: str) -> str:
 def markdown_files(root: Path, generated: dict[str, str]) -> list[str]:
     on_disk = [p.relative_to(root).as_posix() for p in (root / "docs").rglob("*.md")]
     return sorted({*(p for p in ("readme.md", "agents.md") if (root / p).is_file()), *on_disk, *generated})
+
+
+def png_refs(text: str) -> str:
+    """Image references to a figure's SVG become references to its PNG, outside code."""
+    keep, fenced = [], False
+    for line in text.split("\n"):
+        if line.startswith(("```", "~~~")):
+            fenced = not fenced
+        elif not fenced:
+            parts = line.split("`")
+            line = "`".join(
+                re.sub(r"(!\[[^\]]*\]\([^)\s]*assets/figures/[^/)\s]+)\.svg\)", r"\1.png)", p) if i % 2 == 0 else p
+                for i, p in enumerate(parts)
+            )
+        keep.append(line)
+    return "\n".join(keep)
 
 
 def migrate(path: str, text: str, taken: set[str]) -> tuple[str, dict[str, str], list[str]]:
@@ -152,7 +168,7 @@ def plan(root: Path) -> Plan:
             old = (root / path).read_text(encoding="utf-8") if (root / path).is_file() else None
         else:
             old = (root / path).read_text(encoding="utf-8")
-            text, new, problems = migrate(path, old, taken)
+            text, new, problems = migrate(path, png_refs(old), taken)
             out.errors += problems
             specs.update(new)
             texts[path] = text
@@ -165,7 +181,7 @@ def plan(root: Path) -> Plan:
     for slug, spec in sorted(specs.items()):
         file = f"{FIGURES}/{slug}.fig"
         try:
-            svgs[slug] = figures.build(spec).svg + "\n"
+            svgs[slug] = raster.render_png(figures.build(spec).svg)
         except figures.FigureError as e:
             out.errors.append(f"{file}:{e.line}: figure: {e.message}")
         if not (root / file).is_file() or (root / file).read_text(encoding="utf-8") != spec + "\n":
@@ -174,13 +190,15 @@ def plan(root: Path) -> Plan:
             out.errors.append(f"{file}: not referenced by any document")
     for slug, path in sorted(refs.items()):
         if slug not in svgs and slug not in specs:
-            out.errors.append(f"{path}: {FIGURES}/{slug}.svg has no {slug}.fig")
-    for slug, svg in sorted(svgs.items()):
-        file = f"{FIGURES}/{slug}.svg"
-        if not (root / file).is_file() or (root / file).read_text(encoding="utf-8") != svg:
-            out.writes[file] = svg
+            out.errors.append(f"{path}: {FIGURES}/{slug}.png has no {slug}.fig")
+    for slug, data in sorted(svgs.items()):
+        file = f"{FIGURES}/{slug}.png"
+        if not (root / file).is_file() or (root / file).read_bytes() != data:
+            out.writes[file] = data
     out.deletes = sorted(
-        p.relative_to(root).as_posix() for p in folder.glob("*.svg") if p.stem not in svgs
+        p.relative_to(root).as_posix()
+        for p in sorted([*folder.glob("*.svg"), *folder.glob("*.png")])
+        if p.suffix == ".svg" or p.stem not in svgs
     ) if folder.is_dir() else []
     return out
 
@@ -195,9 +213,12 @@ def fence_errors(root: Path) -> list[str]:
 
 
 def apply(root: Path, p: Plan) -> None:
-    for path, text in p.writes.items():
+    for path, content in p.writes.items():
         (root / path).parent.mkdir(parents=True, exist_ok=True)
-        (root / path).write_text(text, encoding="utf-8")
+        if isinstance(content, bytes):
+            (root / path).write_bytes(content)
+        else:
+            (root / path).write_text(content, encoding="utf-8")
     for path in p.deletes:
         (root / path).unlink()
 

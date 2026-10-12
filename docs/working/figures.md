@@ -1,21 +1,21 @@
 # Figures
 
 For contributors who add a diagram to a document. A figure is a
-short text spec in `docs/assets/figures/NAME.fig`; `--sync` draws it to `NAME.svg`
-beside it, in the reader's light or dark setting. A document holds only the image,
-so GitHub shows it with no build step.
+short text spec in `docs/assets/figures/NAME.fig`; `--sync` draws it to `NAME.png`
+beside it. A document holds only the image, so any Markdown viewer shows it with no
+build step.
 
 ## Adding a figure
 
 1. Write the spec in `docs/assets/figures/NAME.fig`.
-2. Reference the image from the document: `![what it shows](../assets/figures/NAME.svg)`,
+2. Reference the image from the document: `![what it shows](../assets/figures/NAME.png)`,
    with the path relative to the document.
-3. Run `python3 tools/docsbuild/build.py --sync` and commit the `.fig`, the `.svg` and
+3. Run `python3 tools/docsbuild/build.py --sync` and commit the `.fig`, the `.png` and
    the document.
 
 To change a figure, edit its `.fig` and run `--sync` again. A spec written as a `fig`
 fence in a document works too: `--sync` moves it to a `.fig` named after the document
-(`docs-working-figures-1`) and leaves the image reference. An `.svg` with no `.fig` is
+(`docs-working-figures-1`) and leaves the image reference. A `.png` with no `.fig` (or an old `.svg`) is
 deleted.
 
 `--check` exits 1, and the test `test_repository_is_in_sync` fails, when a generated file is
@@ -53,7 +53,7 @@ Boxes and arrows, laid out in layers. Back edges become arcs around the drawing.
 
 The fills `a` to `e` are a fixed categorical palette; without `fill` a node is neutral.
 
-![From source to object file](../assets/figures/docs-working-figures-1.svg)
+![From source to object file](../assets/figures/docs-working-figures-1.png)
 
 Source: [docs-working-figures-1.fig](../assets/figures/docs-working-figures-1.fig)
 
@@ -69,7 +69,7 @@ A memory, stack or record layout, top to bottom as written.
 | `bracket "label" from=N to=M` | Spans cells N to M, counting `cell` and `gap` lines from 1 |
 | `scale: yes` | Cell heights follow `size` (8 pixels a unit, at most 160) |
 
-![Frame of a QuickBASIC procedure (far call, Pascal order)](../assets/figures/docs-working-figures-2.svg)
+![Frame of a QuickBASIC procedure (far call, Pascal order)](../assets/figures/docs-working-figures-2.png)
 
 Source: [docs-working-figures-2.fig](../assets/figures/docs-working-figures-2.fig)
 
@@ -85,6 +85,25 @@ A timeline of lanes over numbered columns, or a call and return sequence.
 | `mark LANE N "label" [kind=error\|ok]` | A point in column N |
 | `msg FROMLANE TOLANE N "label" [kind=call\|ret]` | An arrow between two lanes in column N; `ret` is dashed |
 
-![A change while a shared borrow is still used](../assets/figures/docs-working-figures-3.svg)
+![A change while a shared borrow is still used](../assets/figures/docs-working-figures-3.png)
 
 Source: [docs-working-figures-3.fig](../assets/figures/docs-working-figures-3.fig)
+
+## How a figure is drawn
+
+`tools/docsbuild/figures.py` lays the figure out and writes an SVG as an intermediate;
+`raster.py` draws that SVG to the PNG. It is written with the standard library only,
+so the PNG is the same bytes on every machine: nothing is installed, and the pixels
+and the compressed stream depend only on the spec.
+
+- Shapes are filled by scanline with four sub-scanlines per pixel row and exact
+  horizontal coverage, at 1.5 pixels per unit, in four coverage steps. That keeps
+  every figure within a 256-colour palette; one that needs more is written as RGB.
+- The background is opaque white, so a figure reads on a dark page too.
+- Text is set in DejaVu Sans (`tools/docsbuild/fonts/`, with its licence), read by a
+  small TrueType parser (`ttf.py`). The font is vendored because text drawn from a
+  font on the contributor's machine would differ between machines, and the layout
+  measures text with the same advance widths it is drawn with. Bold is drawn twice,
+  slightly apart, and italic is sheared.
+- `png.py` writes the file: our own deflate, because zlib's output differs between
+  zlib builds, and no timestamps or other chunks.
