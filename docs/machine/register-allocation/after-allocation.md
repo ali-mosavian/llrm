@@ -6,7 +6,7 @@ Audience: an engineer asking which phase made a register or slot in the final co
 |---|---|
 | `ParallelCopy` | writes each phi copy group in an order that computes it ([coalescing-and-copies](coalescing-and-copies.md#after-allocation)) |
 | `Prologue` | reserves the frame the spiller asked for. `assemble::phased_to` skips it: `masm` writes the prologue from the frame's reserve |
-| `Peephole` | rewrites that depend on final registers, repeated to a fixed point: `regthrash`, `copyprop`, `copysink`, `spillforward`, `postrasink`, ... ([backend](../../optimizations/backend.md#peephole)) |
+| `Peephole` | rewrites that depend on final registers, repeated to a fixed point: `regthrash`, `copyprop`, `copysink`, `spillforward`, `postrasink`, ... ([backend](../../optimizations/backend/readme.md)) |
 | `LoopSlots` | [spill traffic in loops](#spill-traffic) |
 | `Scheduler` | orders fully allocated instructions for the CPU's pipeline |
 | `ControlFlow` | block order and redundant jumps: the physical order decides which explicit edge falls through |
