@@ -27,6 +27,11 @@
 //! Only integers of at most 128 bits are tracked (`u128` masks). A value that
 //! is absent from the map is not read at all.
 //!
+//! # Example
+//! No honest example: no test asks `demanded` for its map. The listing above
+//! shows the rule by hand; its only consumer is `algebraic` in
+//! `llrm-transforms`.
+//!
 //! # Provides
 //! `demanded(context, function)`: a `ValueId -> u128` map. Cached as
 //! [`crate::manager::DemandedBits`]. Consumer: `algebraic`'s removal of masks

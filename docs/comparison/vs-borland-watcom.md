@@ -4,29 +4,38 @@ For maintainers comparing llrm's 16-bit C output with BCC 3.1, Turbo C 2.01, Tur
 
 ## Flow
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  src["<b>bench/NAME/NAME.c</b>"]:::src
+  llrm["<b>llrm-c -O2 or -Os</b><br/><small>-fno-inline-functions<br/>llrm's own link</small>"]:::opt
+  bcc["<b>bcc.sh in DOSBox-X</b><br/><small>bcc / tcc -mm, 8087<br/>jwlink + that toolchain's<br/>C0M, CM, FP87, MATHM</small>"]:::out
+  ow["<b>bwcc (host)</b><br/><small>Open Watcom -mm -4 -fpi87<br/>jwlink + OW's CLIBM,<br/>MATH87M, NOEMU87</small>"]:::data
+  run["<b>real-mode unicorn</b><br/><small>crates/target/llrm-x86-m16<br/>/bench/icount.py<br/>counts bench_NAME: entry to<br/>return, runtime calls included</small>"]:::warn
+  ins["<b>instructions, memory ops</b><br/><small>-#gt; bench/NAME/expected.toml</small>"]:::mid
+  clk["<b>486 clocks (estimate)</b><br/><small>not gated</small>"]:::mid
+  siz["<b>sizes.py: code, data,</b><br/><small>bss of the program's OBJ</small>"]:::mid
+  tm["<b>with --time: RDTSC in</b><br/><small>DOSBox-X -#gt; kernel_ms</small>"]:::mid
+  src --> llrm
+  src --> bcc
+  src --> ow
+  llrm -->|"OBJ"| run
+  bcc -->|"OBJ"| run
+  ow -->|"OBJ"| run
+  run --> ins
+  run --> clk
+  run --> siz
+  ins -.-> tm
 ```
- bench/NAME/NAME.c
-        |
-   +----+-----------------------+----------------------------------+
-   v                            v                                  v
- llrm-c -O2 | -Os           bcc.sh in DOSBox-X                  bwcc (host)
-   -fno-inline-functions   bcc / tcc  -mm, 8087             Open Watcom -mm -4 -fpi87
-   |                          |  OBJ                           |  OBJ
-   v                          v                                v
- llrm's own link           jwlink + that toolchain's        jwlink + OW's CLIBM,
-                           C0M, CM, FP87, MATHM             MATH87M, NOEMU87
-   +------------------------------+--------------------------+
-                                  v
-            real-mode unicorn (crates/target/llrm-x86-m16/bench/icount.py)
-            count bench_NAME: entry to return, runtime calls included
-                                  |
-        +-------------------------+----------------------+
-        v                         v                      v
- instructions, memory ops   486 clocks (estimate)    sizes.py: code, data,
- -> bench/NAME/expected.toml  (not gated)            bss of the program's OBJ
-        |
-        +--> with --time: RDTSC in DOSBox-X -> kernel_ms
-```
+
+*One C source through llrm-c, Borland C and Open Watcom, counted by the same emulator*
 
 ## Generated instructions and size
 

@@ -16,14 +16,26 @@ The form is LLVM's; the compiler is llrm's. Its analyses, passes and code
 generation are its own, because LLVM has no segmented 16-bit x86 target. LLVM
 is a reference and an oracle, never a dependency.
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  text["<b>text</b><br/><small>(.ll subset)</small>"]:::mid
+  mod["<b>Module</b><br/><small>arenas, ids, use lists</small>"]:::src
+  ver["<b>verify</b><br/><small>(LLVM Verifier rules)</small>"]:::mid
+  interp["<b>interpret</b><br/><small>(poison, datalayout)</small>"]:::mid
+  pm["<b>PassManager</b><br/><small>function and module passes,<br/>cached analyses,<br/>PreservedAnalyses,<br/>verify-each,<br/>verify-analysis-invalidation</small>"]:::opt
+  text -->|"parse"| mod
+  mod -.->|"print"| text
+  mod --> ver
+  mod --> interp
+  mod --> pm
 ```
- text (.ll subset)  <--parse/print-->  Module (arenas, ids, use lists)
-                                          |
-        verify (LLVM Verifier rules)  <---+---> interpret (poison, datalayout)
-                                          |
-        PassManager: function and module passes, cached analyses,
-        PreservedAnalyses, verify-each, verify-analysis-invalidation
-```
+
+*The rich MIR module and what works on it*
 
 Independent oracles, pinned to LLVM 20: `opt -passes=verify` checks stage
 dumps, `lli -force-interpreter` runs what it can, `llc -mtriple=msp430`

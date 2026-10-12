@@ -34,6 +34,41 @@
 //! removed edges, and replaces uses of values defined in dead blocks with
 //! poison before erasing them.
 //!
+//! # Example
+//! A `switch` names its default and a case target `%b2` twice, and `dead` is
+//! not reachable:
+//!
+//! ```mir
+//! define void @f(i16 %s) {
+//! b1:
+//!   switch i16 %s, label %b2 [ i16 1, label %b2
+//!                             i16 2, label %b3 ]
+//!
+//! b2:
+//!   ret void
+//!
+//! b3:
+//!   ret void
+//!
+//! dead:
+//!   br label %b2
+//! }
+//! ```
+//!
+//! `graph(function)` lists the blocks in layout order, each target once, the
+//! unreachable block kept:
+//!
+//! | `at` | `succ` |
+//! | --- | --- |
+//! | `b1` | `b2`, `b3` |
+//! | `b2` | none |
+//! | `b3` | none |
+//! | `dead` | `b2` |
+//!
+//! From unit test
+//! `a_switch_names_each_target_once_and_an_unreachable_block_stays_in_the_graph`
+//! in `cfg.rs`.
+//!
 //! # Provides
 //! `Shape` (a [`Analysis`](llrm_mir::passes::Analysis) named `shape`), the
 //! `Dominance` and `Reaching` types, and the id/graph helpers. Consumers:

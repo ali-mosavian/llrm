@@ -1,0 +1,8 @@
+fn bump(x: i16) -> i16:
+    return x + 1
+
+fn main() -> void:
+    let xs = [1, 2, 3]
+    let a = bump(xs[0])
+    let b = bump(xs[1])
+    print(a + b + xs[2])

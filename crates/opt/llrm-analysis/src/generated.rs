@@ -28,6 +28,34 @@
 //! Seeds are replayable: `SCEV_SEED=k` runs seed `k` alone and prints its
 //! text; `SCEV_SEEDS=n` runs `n` seeds instead of the default.
 //!
+//! # Example
+//! The case of seed 7: one invariant expression `%e0`, selected by `%which`:
+//!
+//! ```mir
+//! define i32 @f(i16 %x, i16 %s, i16 %a, i16 %b, i16 %c, i16 %n, i16 %which) {
+//! b0:
+//!   %e0 = mul i16 30415, %c
+//!   br label %b1
+//!
+//! b1:
+//!   %i = phi i16 [ %x, %b0 ], [ %inext, %b1 ]
+//!   %t = phi i16 [ 0, %b0 ], [ %tnext, %b1 ]
+//!   %z0 = zext i16 %e0 to i32
+//!   %p0 = icmp eq i16 %which, 0
+//!   %r0 = select i1 %p0, i32 %z0, i32 0
+//!   %inext = add i16 %i, %s
+//!   %tnext = add i16 %t, 1
+//!   %go = icmp ult i16 %tnext, %n
+//!   br i1 %go, label %b1, label %b2
+//!
+//! b2:
+//!   ret i32 %r0
+//! }
+//! ```
+//!
+//! From unit test `test_generated_recurrences_match_the_interpreter` in
+//! `induction_tests.rs`, run with `SCEV_SEED=7` and `--nocapture`.
+//!
 //! # Provides
 //! `case`, `seeds`, `observed`, `Inputs`, `Rng`, `Tracked`, built only for
 //! tests or the `testing` feature. Consumers: the tests of

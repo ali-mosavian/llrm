@@ -13,7 +13,7 @@ use llrm_support::pyrepr::{self, Repr};
 
 use crate::omf::{self, Record};
 
-/// $$SYMBOLS record kinds -- see docs/machine/codeview.md's own table for each
+/// $$SYMBOLS record kinds -- see docs/formats/codeview.md's own table for each
 /// one's data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
