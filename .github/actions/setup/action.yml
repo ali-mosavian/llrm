@@ -14,7 +14,8 @@ runs:
         curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
         echo "deb https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm20.list
         sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential autoconf automake libtool pkg-config nasm libpng-dev zlib1g-dev libncurses-dev gdb binutils llvm-20 clang-20 lld-20 zstd
+        sudo apt-get install -y -qq build-essential gcc-multilib autoconf automake libtool pkg-config nasm libpng-dev zlib1g-dev libncurses-dev gdb binutils llvm-20 clang-20 lld-20 zstd
+        # gcc-multilib: the vsgcc harness links gcc -m32 programs, which need the 32-bit libgcc (__divdi3).
         # ubuntu-24.04 is a fixed image: gdb 15.1, binutils 2.42 (printed below).
         echo /usr/lib/llvm-20/bin >> "$GITHUB_PATH"
         export PATH="/usr/lib/llvm-20/bin:$PATH"

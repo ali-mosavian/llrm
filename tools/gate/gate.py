@@ -124,6 +124,21 @@ def verdict_line(tier: str, failed: list[str], cut: list[str], took: float, skip
     )
 
 
+def failure_text(log: str, limit: int = 80) -> str:
+    """What the failing tests of a cargo test or pytest log printed, at most `limit` lines: the log's last 30 lines name the failed target
+    and not the failure (CI said "1 target failed: -p llrm --test dwarf" and nothing of why)."""
+    lines = log.splitlines()
+    out, keep = [], False
+    for line in lines:
+        if re.match(r"^---- .+ (stdout|stderr) ----$", line) or re.match(r"^_{3,} .+ _{3,}$", line) or re.match(r"^={3,} (FAILURES|ERRORS) ={3,}$", line):
+            keep = True
+        elif re.match(r"^(failures:|test result:|={3,} short test summary info ={3,})", line):
+            keep = False
+        if keep and line.strip():
+            out.append(line)
+    return "\n".join(out[:limit])
+
+
 def step_table(results: dict[str, tuple[int, float, float]]) -> str:
     """Each step's wall and CPU seconds, the most CPU first: where the work is, whatever the host's load made of the wall."""
     rows = sorted(((n, w, c) for n, (code, w, c) in results.items() if code != 77), key=lambda r: -r[2])
@@ -587,8 +602,10 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         verdict = "ok" if code == 0 else "SKIPPED" if code == 77 else "INCOMPLETE" if code == 78 else "FAIL"
         print(f"[time] {name} {verdict} {took:.0f}s wall {cpu:.0f}s cpu", flush=True)
         if code not in (0, 77):
-            tail = (logs / f"{name}.log").read_text().splitlines()[-30:]
-            print("\n".join("    " + line for line in tail), flush=True)
+            text = (logs / f"{name}.log").read_text()
+            if failures := failure_text(text):
+                print(f"    [{name}: what the failing tests printed]\n" + "\n".join("    " + line for line in failures.splitlines()), flush=True)
+            print("\n".join("    " + line for line in text.splitlines()[-30:]), flush=True)
 
     for name, why in skipped.items():
         if name in p.steps:
