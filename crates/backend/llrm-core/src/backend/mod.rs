@@ -1,4 +1,104 @@
-//! Ports of `qbopt/backend`.
+//! The backend: MIR lowered for selection, instruction selection, the machine
+//! phases over LIR, and emission to an object.
+//!
+//! # How it works
+//! Each module here is one phase, one analysis a phase uses, or a helper; its
+//! own header says which. The order of the phases is below. Everything after
+//! selection works on LIR (`LirBody`): in SSA over virtual registers until
+//! `phielim`, over virtual registers with copy groups until `allocate`, then
+//! over physical registers.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   subgraph g_drv["DRIVER::OPTIMIZED"]
+//!     mir["<b>MIR after</b><br/><small>llrm_transforms::pipeline</small>"]:::mid
+//!     prep["<b>assumptions dropped</b><br/><small>ehprepare, fpconvert*<br/>selects*  (* if the target<br/>needs it)</small>"]:::mid
+//!   end
+//!   subgraph g_asm["ASSEMBLE"]
+//!     near["<b>nearcode</b><br/><small>globals::names<br/>functions callees first</small>"]:::mid
+//!     staged["<b>machined: staged</b><br/><small>isel, framefree, frame::of</small>"]:::mid
+//!     once["<b>machined_once</b><br/><small>cheaper of allocator alone<br/>and spiller route<br/>(flow::machine_with)</small>"]:::mid
+//!     relay["<b>relayout::laid_again</b><br/><small>if far frame operands remain</small>"]:::mid
+//!     omax["<b>-Omax: again without</b><br/><small>callee facts, keep cheaper</small>"]:::mid
+//!     proc["<b>per procedure</b><br/><small>addressvalues::converted<br/>masm::cleaned_returns<br/>jumps::duplicated_returns<br/>shrinkwrap::tails_split</small>"]:::mid
+//!     all["<b>all procedures</b><br/><small>stackusage::elide_checks<br/>debuginfo::described</small>"]:::mid
+//!   end
+//!   mod["<b>masm::Module</b>"]:::opt
+//!   obj["<b>objbuild</b>"]:::out
+//!   wr["<b>writer crate</b>"]:::out
+//!   mir --> prep
+//!   prep --> near
+//!   near -->|"per function"| staged
+//!   staged --> once
+//!   once --> relay
+//!   relay --> omax
+//!   omax --> proc
+//!   proc --> all
+//!   all --> mod
+//!   mod -->|"data layout (driver)"| obj
+//!   obj --> wr
+//!   style g_drv fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+//!   style g_asm fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+//! ```
+//!
+//! *From optimized MIR to the object writer*
+//!
+//! The machine phases, in the order of [`crate::flow::machine_with`]. Each
+//! runs on the whole body and is verified afterwards under `LLRM_DEBUG=verify`
+//! (`flow::checked`).
+//!
+//! ```text
+//!   #  phase (name)             module        notes
+//!   1  far-indirect-calls       farcall       memory operand for a far call
+//!   2  SsaSpill                 ssaspill      spiller route only
+//!   3  phielim                  phielim       phis -> copy groups; SSA ends
+//!   4  pressuresink             pressuresink  move a load to its one reader
+//!   5  floatfold                floatfold     float load as memory operand
+//!   6  floatassign              floatassign   x87 stack slots per value
+//!   7  floatalloc               floatalloc    x87 stack form
+//!   8  TwoAddress               twoaddr       c := a+b  ->  c := a; c += b
+//!   9  Coalescer                coalesce      remove a copy that can share
+//!  10  RegAlloc                 allocate      assign registers, split, spill
+//!  11  parcopy                  parcopy       sequence the copy groups
+//!  12  prologue                 prologue      reserve the frame; skipped by
+//!                                             assemble, masm writes it
+//!  13  peephole                 peephole      one sweep of local rewrites
+//!  14  loopslots                loopslots     loop spill slots in registers
+//!  15  schedule                 schedule      latency-aware order
+//!  16  jumps                    jumps         block order, jumps, tails
+//! ```
+//!
+//! Phases 4 to 9 are in `machine_with` before `allocate`; `allocate` calls
+//! `splitkit`, `spillplacement`, `spiller`, `spillforward` and `postings` for
+//! live-range splitting and spilling, and consults `constrain`, `classes`,
+//! `registerinfo` and `datagroup` for what each value may be assigned.
+//! `peephole` calls the sub-passes `regthrash`, `copyprop`, `copysink`,
+//! `spillforward`, `postrasink`, `storecombine`, `sharedstores`,
+//! `exactaddress`, `machinecse`, `machinedce` and `upperzero`, and the rule
+//! groups of `peep`.
+//!
+//! The analyses the phases share: `liveness` and `lanes` (register and flag
+//! lanes), `live`, `liveunion` and `neighbours` (intervals, per-register
+//! holders and interference for the allocator), `overlap` (memory operands),
+//! `lifetimes` and `slots` (frame-slot sharing), `executed` and `timing`
+//! (what a candidate costs) and `effects` (what an instruction reads and
+//! writes). `needs` lets the peephole skip a sub-pass with nothing to act on.
+//!
+//! # Runs
+//! `assemble::assembled_by` runs it once per module. The gating of the two
+//! allocation routes (`-fallocation-routes`, `-fallocation-search`,
+//! `-fallocation-search-all`, at -Os candidates priced in bytes) is described
+//! in `assemble` and `allocate`. `ISEL_DUMP=1` prints the LIR after each
+//! machine phase (`lirtext`).
+//!
+//! # See also
+//! [`crate::flow`] (the phase list and its gate) and
+//! The phase map: [`crate::backend`].
 
 pub mod addressforms;
 pub mod addressvalues;

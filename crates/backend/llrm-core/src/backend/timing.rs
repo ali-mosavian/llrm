@@ -1,8 +1,21 @@
-//! Port of `qbopt/backend/timing.py`: audited instruction core-clock
-//! bounds, separate from scoreboard estimates.
+//! Core-clock bounds of multiplies and divides, read from the CPU profile.
 //!
-//! Where it is used: docs/machine/arithmetic-targets.md. Bounds exclude
-//! decode, prefix, memory and scheduling costs.
+//! # How it works
+//! A CPU description states a price per key (`smul_min_w4`, `smul_max_w2`,
+//! `sdiv_w4`, `udiv_w2`, ...). This module reads them and returns `Clocks`, a
+//! `minimum` and `maximum`, or none where the profile has no such key or the
+//! width is not 2 or 4 bytes. A CPU the description does not price yields none,
+//! and the caller does not use the form that needed it.
+//!
+//! A multiply that ends early on a short multiplier (the 486's `10 + max(bits,
+//! 3)`) is priced by linear interpolation from the minimum at 3 bits to the
+//! maximum at the full width. A negative multiplier takes the profile's
+//! `smul_negative_bits` as the floor. An unknown multiplier is priced at the
+//! middle of the range.
+//!
+//! # Used by
+//! [`crate::backend::division`] (multiply by reciprocal against a divide) and
+//! [`crate::backend::arithmetic`] (constant multiply chains against `imul`).
 
 use crate::backend::cpu::{self as targets, ProfileOrName};
 

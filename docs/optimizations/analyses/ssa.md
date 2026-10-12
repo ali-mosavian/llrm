@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ssa.rs sha256:45113ab12a66ba5760d0e11d1c0f7de6705fe0e3f000c252861496b86af10460 -->
+<!-- src: crates/opt/llrm-analysis/src/ssa.rs sha256:6afe4abbfa6817bfbed3bfd60199f89867fe92df9b2ce6b3a370895a7e469763 -->
 
 # ssa
 
@@ -34,14 +34,23 @@ whose inputs are all one value, ignoring itself, is replaced by that value.
 the end of the block it comes from, any other at the middle of its block.
 `inserted_phis` lists the phis placed that stand.
 
-```text
-      A: v1 = ...          available: A -> v1, B -> v2
-     / \
-    B   C                  value_in_middle_of_block(D):
-    v2  |                    preds B, C -> phi placed in D
-     \ /                       D: %p = phi [v2, B], [v1', C]
-      D: use v             C has one pred A -> passes v1 up
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  a["<b>A: v1 = ...</b>"]:::mid
+  b["<b>B</b><br/><small>v2</small>"]:::mid
+  c["<b>C</b>"]:::mid
+  d["<b>D: use v</b><br/><small>%p = phi [v2, B], [v1', C]</small>"]:::mid
+  a --> b
+  a --> c
+  b --> d
+  c --> d
 ```
+
+*Available A -> v1, B -> v2. Asking for D finds preds B and C and places D:
+%p = phi [v2, B], [v1', C]; C has one pred A and passes v1 up*
 
 ## Provides
 The helpers above. Consumers in llrm-transforms: `dead`, `promote`

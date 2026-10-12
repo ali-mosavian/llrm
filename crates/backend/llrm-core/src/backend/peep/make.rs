@@ -1,5 +1,26 @@
 //! What `peephole.peep` builds rewrites from: lane sets, operands, and the
 //! metadata a joined instruction carries.
+//!
+//! # How it works
+//! A rule's `rewrite` calls these makers. They come in three kinds.
+//!
+//! ```text
+//!   lanes      lanes, upper, root_upper     lane sets of a register
+//!   operands   widen, low_byte, dword,      the operand (or source point)
+//!              zero, dword_cell, renamed,   a fused or narrowed
+//!              high_word, low_word, point   instruction takes
+//!   metadata   joined_defines,              the defined values, used values
+//!              joined_uses(_all),           and value widths of an
+//!              joined_widths                instruction made of two
+//! ```
+//!
+//! `joined_uses` is what the first instruction reads, then what the second
+//! reads that the first does not define; `joined_widths` takes the second's
+//! width where both name one value. Together they keep the value numbering
+//! of the fused instruction consistent for later phases.
+//!
+//! # Used by
+//! The code generated from `peephole.peep`, through [`super::walk`].
 
 use llrm_lir::registers::Regs;
 

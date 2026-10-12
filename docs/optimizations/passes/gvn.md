@@ -1,34 +1,89 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:984c4e62697d744e1dce0ac1d4d9c31a03d8d761031cea4747ed5bbff4a2f54c -->
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:8a974e2fbf5e90f62a50f1d6c25f7712d91751ce62bcdeb028b350092d7c291a -->
 
 # gvn
 
-Adapted from llrm-core's `optimize/gvn.rs`, the port of
-`qbopt/optimize/gvn.py`: global value numbering and partial redundancy
-elimination.
+Global value numbering and load reuse: LLVM's GVN and gcc's FRE/PRE. One
+pass owns reuse of a value, whether it came from arithmetic, a load or a
+store. `Gvn` is the pass; `EqualCalls` is its call part alone.
 
-One pass owns reuse, whether the value came from arithmetic or memory.
-`Gvn` is the pass; the old one sat with the pipeline in `transform.rs`.
+## How it works
+`Gvn` runs these steps on a body, in order.
 
-What changed with the IR:
-- A function argument is defined at the entry, ahead of everything.
-- An inserted expression goes before its predecessor's unconditional `br`; a
-  block leaves only by its terminator, so the old refusal of a predecessor
-  holding a branch, return or escape is that terminator.
-- The flags checks are gone: no value is the machine's flags. `Convert` (the
-  register-pair extension) and `Copy` have no instruction, so what `joined`
-  refuses of `_PURE` is the divisions, which may trap on a path that did not
-  divide.
-- `_on_edge` translates an instruction's operands; a phi's input may be a
-  constant.
+1. Branch equality (`propagated`, LLVM's `propagateEquality`). In what the
+   edge to a successor dominates, the branch's condition is that edge's
+   constant.
+2. Numbering (`transform::forwarded`, `transform::subexpressions`,
+   `transform::equal_calls`). A load a known value serves becomes that
+   value: a dominating store of the same bytes and type, or an earlier load
+   of them, with nothing between that may write them. Two pure operations on
+   the same operands are one, a copy counting as its source and a
+   commutative pair ordered. Two calls with the same callee and arguments
+   that read and write no memory are one.
+3. Join PRE (`joined`). An expression every predecessor of a join already
+   computes becomes a phi of those values. With `pre`, a predecessor that
+   lacks it gets the computation inserted before its unconditional `br`, if
+   no loop is entered or left by the edge and the operands are available
+   there. Divisions (which may trap on a path that did not divide), loads
+   and floating expressions are never inserted here.
+4. Load PRE (`loadjoins::reused`). A load at a join whose bytes every
+   predecessor holds becomes a phi of those values; with `pre`, a
+   predecessor holding none gets its own load on its edge where that
+   speculates nothing.
 
-`floatfold::checks` has no counterpart: the rich MIR observes no FP
-exception.
+```text
+ b0: store i16 %x, ptr @g          b0: store i16 %x, ptr @g
+     %r = load i16, ptr @g   =>        ret i16 %x
+     ret i16 %r
 
-What each instruction touches is `memoryssa::Accesses`, asked once
-before anything changes; without `Summaries` required, every call is
-to an unknown callee.
-`reused_divides` has no counterpart (see `transform`).
+ b1: store %x, @g   b2: store %y, @g    b3: %r1 = phi i16 [%x,%b1],[%y,%b2]
+ b3: %r = load @g                 =>        ret i16 %r1
+```
 
-The old module had no tests of its own; `subexpressions`' are in
-`transform` and these in `gvn_tests.rs`.
+A volatile access is never numbered. Floats are numbered like integers; a
+value serves a read only of its own type, so a float store reaches a float
+load exactly and nothing rounds. Which floats are exact constants is
+[`crate::floatfold`](../backend/floatfold.md)'s question.
+
+What serves a load is a MemorySSA walk (`avail::forwardable_walk`).
+`memoryssa::Accesses` says what each instruction reads and writes,
+`alias::PointsTo` what each pointer may point to, and a call's footprint is
+its `CallEffects` from `Summaries`; without `Summaries` every callee is
+unknown. A call that may write the bytes, or a store that may overlap, ends
+the walk, and a walk past `MAX_NEAREST_WRITES` (100) writes gives up.
+
+A value held across a store saves a load but lengthens a live range. Where a
+load was served across a store the function is numbered twice, once crossing
+stores and once avoiding them, and the crossing one stands unless the
+careful
+one prices lower (`profit::motion_price`: work weighted by block frequency
+plus the spill forecast against the target's registers). Where nothing
+spills the crossing one stands. Trip counts are the proven ones
+(`profit::proven_trips`). Without `pre` there is no pricing and a load is
+served wherever it is redundant on every path.
+
+`EqualCalls` runs the call numbering alone, before `tailrec`, so two equal
+calls are one before one of them becomes the loop's next trip (EarlyCSE
+precedes tail-recursion elimination in LLVM, FRE in gcc). It asks for no
+analysis unless the body has two such calls.
+
+## Runs
+`EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after
+`dse`, before `promote`. Both are on at every optimizing level and are
+turned
+off together by `-fno-gcse`. `Gvn`'s PRE steps and pricing (`pre`) are on
+from
+-O2, the -O1 level being FRE, and off with `-fno-tree-pre`. Each runs once
+per
+body pass.
+
+## Needs
+[`crate::transform`](transform.md), [`crate::loadjoins`](loadjoins.md), `memoryssa::Accesses`,
+`alias::PointsTo`, `Summaries`, registers and loop trips for pricing.
+
+## Keeps
+Dominators and loops, unless a join split an edge.
+
+## See also
+Tests: `gvn_tests.rs`, `loadjoins_tests.rs`. Levels:
+`docs/reference/levels.md`. LLVM `GVN.cpp`; gcc `tree-ssa-pre.cc`.

@@ -1,29 +1,58 @@
-//! Loop stores nothing inside the loop observes, sunk to its single exit:
-//! LICM's store sinking, as `promoteLoopAccessesToScalars` leaves one store
-//! after the loop. Adapted from llrm-core's `optimize/loopmotion.rs`, the
-//! port of `qbopt/optimize/loopmotion.py`.
+//! Stores nothing inside a loop observes, sunk to the loop's single exit: the
+//! store half of LICM, as `promoteLoopAccessesToScalars` leaves one store
+//! after the loop.
 //!
-//! Whether two accesses meet is `regions::overlapping` of the references
-//! and call writes `memoryssa::Accesses` holds, asked again after each loop
-//! that changed: a moved store's narrowing was its old block's.
+//! # How it works
+//! A loop is taken when it has exactly one exit edge `source -> destination`,
+//! where `source` is the destination's only predecessor and no block of the
+//! loop lacks a successor. Nothing in it may be more than a value, a store
+//! aside (`llrm_mir::memory::only_value`): a volatile access, a call that may
+//! touch memory, or an `invoke` refuses the loop.
 //!
-//! What changed with the IR:
-//! - A store is moved, not copied; one that goes with another value has it as
-//!   its operand. An address is an operand too, and must reach the exit.
-//! - What refuses a loop is what `llrm_mir::memory` says is more than a value,
-//!   a store aside: a volatile access (the old barrier), a call that may touch
-//!   memory, an `invoke` (a raise a handler here observes). The old refused
-//!   every call; one with no effect that returns is a value.
-//! - A stored cell is in an object (`MemRef::object`), as the old `Segment` and
-//!   `Frame` spaces were, with no selector.
-//! - `root` followed copies, which have no instruction.
+//! A store is moved when it is unobserved (`_unobserved`): not volatile,
+//! through an object's cell with no segment, whose base and root are defined
+//! outside the loop and dominate its header, and which no other access of the
+//! loop may overlap (`regions::overlapping` of the references `Accesses`
+//! holds). A moved store goes to the front of `destination`, so its address
+//! and value must reach there. Three cases:
+//! - it is in `source` (the exiting block): moved as it is;
+//! - the loop has one latch, `source` is the header, and a header phi's entry
+//!   and latch values are what the cell holds on every path into the preheader
+//!   and the latch (`_Exit::exit_value`): the store writes that phi, so an
+//!   accumulator is stored once after the loop. The answer is asked once per
+//!   block, not once per path;
+//! - the store is in the latch and writes a value the loop does not change,
+//!   where the loop certainly runs, or the counter, whose last value
+//!   (`induction::controlling`) is then a number.
 //!
-//! Dropped, no rich MIR analogue: the `excludes` an indexed store had to
-//! carry (a hole of the x86 region lattice), and the per-block intervals
-//! `sunk_stores` built, which alias's `annotated` now applies.
+//! ```text
+//!  b1: %i = phi [0,b0] [%next,b2]       b1: %i = phi [0,b0] [%next,b2]
+//!      store %i, @n                         %c = icmp slt %i, %k
+//!      %c = icmp slt %i, %k         =>      br %c, b2, b3
+//!      br %c, b2, b3                    b2: %next = add %i, 1 ; br b1
+//!  b2: %next = add %i, 1; br b1         b3: store %i, @n      ; once
+//!  b3: %v = load @n                         %v = load @n
+//! ```
 //!
-//! llrm-mir's `licm` hoists invariant instructions and loads to the
-//! preheader; it sinks no store.
+//! Alias is asked again after each loop that changed, because a moved store's
+//! narrowing was its old block's. A moved store keeps the blocks, values and
+//! facts about them: only the points-to solve and memory results are dropped.
+//!
+//! # Runs
+//! In [`crate::pipeline`]'s per-body fixed point, after `hoist` and
+//! before `trivialunswitch`; on where `hoist` is (`-fmove-loop-invariants`,
+//! every level above -O0).
+//!
+//! # Needs
+//! `memoryssa::Accesses`, `Counted`, `Registers`, `cfg::Shape`.
+//!
+//! # Keeps
+//! `ExposedFrames`, `Annotated`, `Dominators`, `Loops`, `Registers`,
+//! `AssumptionCache`, `Counted`, `DominatedEdges` and `Bounded`.
+//!
+//! # See also
+//! [`crate::hoist`] moves invariant instructions and loads to the preheader; it
+//! sinks no store.
 
 use std::collections::{BTreeMap, BTreeSet};
 

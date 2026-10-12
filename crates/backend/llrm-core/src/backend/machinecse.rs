@@ -1,11 +1,43 @@
-//! Port of `qbopt/backend/machinecse.py`: eliminate repeated deterministic
-//! computations after register allocation.
+//! Removes a repeated pure register computation after allocation, by value
+//! numbering the byte lanes each instruction reads and writes.
 //!
+//! # How it works
 //! MIR GVN sees values, not the physical instructions lowering and allocation
-//! create.  At this point the question is entirely physical: value-number the
-//! byte lanes read and written by independently reproducible instructions, and
-//! retain an anchor for the virtual/data-source ownership of a redundant
-//! occurrence.
+//! create. Here the question is physical: which bytes of which registers hold
+//! the result of which computation.
+//!
+//! A candidate is a `mov`, `movsx`, `movzx` or `lea` with one register
+//! destination and register, immediate or address sources, whose result does
+//! not depend on the destination's old contents and which sets no flags.
+//! Memory reads are out (proving a cell unchanged is MIR's job), as are
+//! relocated operands (each owns a fixup), calls, spill traffic and anything
+//! with side conditions (`clobbers`, `requires`, `delivers`, groups).
+//!
+//! Each lane maps to a token that names its value. A candidate's token is its
+//! operation, its sources' encoded fields and the tokens currently in the
+//! lanes it reads; the destination register is not part of it. If every lane
+//! the candidate writes already holds the token it would write, the
+//! instruction is redundant. Any other write gives its lanes a fresh token,
+//! and an opaque instruction (call, return, barrier, block copy or fill)
+//! clears the state.
+//!
+//! ```text
+//!   lea  bx,[si+4]     bx.0..1 := V([si+4], si's tokens)
+//!   ...                (si, bx untouched)
+//!   lea  bx,[si+4]     bx already holds V: redundant
+//!   lea  di,[si+4]     di.0..1 := V (same value, other register: kept,
+//!                      destination placement is not part of the token)
+//! ```
+//!
+//! Across blocks the incoming state is the tokens every predecessor agrees on.
+//! Layout order is iterated to a fixed point; if it does not settle within
+//! four rounds per block the body is returned unchanged. A redundant
+//! instruction is replaced by an anchor (`lir::anchor`) that keeps its virtual
+//! definition and source ownership but emits no bytes.
+//!
+//! # Runs
+//! A peephole sub-pass, once per `peephole` run, after `sharedstores` and
+//! before the final `machinedce`.
 
 use std::sync::Arc;
 

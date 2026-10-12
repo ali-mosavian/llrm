@@ -1,39 +1,67 @@
-//! Values known to be numbers, replaced by those numbers: LLVM's SCCP and
-//! InstSimplify. Adapted from llrm-core's `optimize/transform.rs` `Fold`
-//! (`folded`, `_folded_op`, `_folded_division`, `_folded_phi_edges`,
-//! `_constant_operands`). What is known is consts' answer.
+//! Replaces every integer value [`llrm_analysis::consts`] knows by its
+//! constant, folds a pure operation on each edge of a join, and puts compares
+//! and identities in canonical form.
 //!
-//! What changed with the IR:
-//! - An operation whose answer was known became a move of that number, and each
-//!   reader's register operand became the number. Here every use of the value
-//!   is the constant, and Dead takes the definition. So a store's value, a
-//!   call's argument (`_constant_argument`), a fill's byte and count
-//!   (`_constant_fill`) and an address's index (`_constant_based`) need no case
-//!   of their own, and a load from a known cell is a value consts knows.
-//! - Operand order is no machine's: an ordered operand is replaced like any
-//!   other. A commutative operation still takes its constant on the right.
-//! - An edge fold put a copy of each number in its parent; a phi here takes the
-//!   constant, so the parent's terminator no longer matters.
-//! - consts reads the module's globals through the outer proxy, and what each
-//!   call writes from the manager's `Writes`.
-//! - The old Fold left floatfold out of a body with loops, whose x87
-//!   observation points belonged to floatloop; the rich MIR observes no FP
-//!   exception, so it folds every body.
+//! # How it works
+//! Facts come from `consts`: "the low `width` bits of this value are `n`",
+//! solved through registers, phis and memory (a load of a cell every reaching
+//! store fills with one number is that number). What each call writes is
+//! `manager::writes`, so a constant stored before a `readonly` call survives
+//! it. A fact replaces its value only when it is as wide as the value. A
+//! division or remainder of two known numbers is computed here too.
 //!
-//! Dropped, no rich MIR analogue: `_constant_update` (a read-modify-write of
-//! a cell); `_symbol_copies` and the symbol half of `_literal_of` (a
-//! global's address is already a constant operand); the checks for a
-//! second result something reads (`wanted`: one result per instruction).
+//! Each use of a known value becomes the constant at once, so a store's value,
+//! a call argument, a fill's byte or an address index need no case of their
+//! own, and the definition is left unread for [`crate::dead`] to take. A
+//! commutative operation that ends up with the constant on the left gets it
+//! back on the right; an ordered one (`sub`, shifts) keeps its operand order.
 //!
-//! Tests, in `fold_tests.rs`: `divisor_constants_propagate_without_reordering`,
-//! and consts' tests that waited for this port:
-//! `test_signed_widening_produces_a_whole_long_constant`'s folding half,
-//! `test_pointer_displacement_constants_preserve_order_and_width`,
-//! `test_constant_subtraction_preserves_operand_order` and
-//! `test_a_known_factor_becomes_a_multiply_operand`. Skipped:
-//! `test_constant_operand_keeps_its_memory_address_dependency` (every use is
-//! replaced at once, so no reader keeps an orphaned value), and the width
-//! halves (a fact here is as wide as its value).
+//! A call kills only the cells its writes may overlap (`CallEffects`, from
+//! `Summaries` and the call's `memory(...)`, `readonly` and `readnone`
+//! attributes); one that states writes without an effect list clears every
+//! cell. A fact about reaching an edge says nothing about a callee, so edge
+//! facts clear all cells at a call.
+//!
+//! ```text
+//!  store i16 9, ptr @g          store i16 9, ptr @g
+//!  %a = load i16, ptr @g   ==>  call void @clobber()   ; writes @g
+//!  call void @clobber()         %b = load i16, ptr @g  ; unknown again
+//!  %b = load i16, ptr @g        (%a is 9; with @clobber readonly, %b too)
+//! ```
+//!
+//! One edge fold runs per call. At a block with two or more predecessors, a
+//! pure `Binary` or `Cast` in the block (or in the single-predecessor chain
+//! below it) that reads one of its phis, and whose answer is a number on every
+//! incoming edge, becomes a phi of those numbers. An operation that also reads
+//! an unknown value stays.
+//!
+//! ```text
+//!  b3:                                 b3:
+//!    %p = phi [1,%b1], [2,%b2]           %p  = phi [1,%b1], [2,%b2]
+//!    %y = add %p, %x                     %s1 = phi [11,%b1], [12,%b2]
+//!    %s = add %p, 10          ==>        %y  = add %p, %x
+//!    %t = add %s, %y                     %t  = add %s1, %y
+//! ```
+//!
+//! Then [`crate::floatfold`] runs on the same body (exact floats, and the
+//! integers of exact conversions), and [`crate::canonical`] swaps a compare
+//! whose constant is on the left and simplifies identities. The pass reports
+//! every analysis invalid when anything changed.
+//!
+//! # Runs
+//! Second in the per-body pipeline, after `sroa`, and again after the header
+//! copy of `rotate` (to clean the test it leaves in the latch). Part of the
+//! fixed point; on at -O1 and up, off at -O0. `Options::fold` turns it off
+//! for bisection. See `docs/reference/levels.md`.
+//!
+//! # Needs
+//! [`llrm_analysis::consts`], [`llrm_analysis::floatfacts`],
+//! `manager::writes` (`Summaries`).
+//!
+//! # See also
+//! LLVM's
+//! [`SCCP`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp)
+//! and `InstSimplify`; GCC's `tree-ssa-ccp.cc`.
 
 use std::collections::BTreeSet;
 

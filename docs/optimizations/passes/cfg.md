@@ -1,36 +1,45 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cfg.rs sha256:fe45eb9e6615c5f26c560e3dafff4c55acef40c43952904182884cff3458473d -->
+<!-- src: crates/opt/llrm-transforms/src/cfg.rs sha256:60664597dbbf158e82b94b91bed0c5b701bde7ee939de608bb615951799b1a10 -->
 
 # cfg
 
-Adapted from llrm-core's `optimize/cfg.rs`, the port of
-`qbopt/optimize/cfg.py`: exact MIR control-flow cleanup.
+Control-flow cleanup: a block that jumps unconditionally to a block only it
+reaches takes that block's instructions (LLVM's SimplifyCFG
+`MergeBlockIntoPredecessor`).
 
-What the old `merged` checked only for the old representation is gone:
-- Byte ownership: the erased jump's emptied operation, the dead
-  ownership-only blocks moved along (`_empty` and transform's
-  `_empty_operation`), and the forward-only walk that kept blocks placed by
-  their source bytes. Layout is free here, so any chain merges and the
-  merged block keeps the first block's place.
-- Unrolling provenance (`repetitions`) and floating sequences
-  (`floating_origin`): the rich MIR has neither.
-- The substitution error: `replace_all_uses_with` cannot fail, and a swap
-  cycle is still refused before anything changes.
+## How it works
+`merged` visits the blocks in layout order and, for each block `first`,
+merges its successor into it while it can. The successor `second` merges
+when
 
-Tests that stay behind, each of the old byte ownership or the BC raise:
-- test_cloned_chain_without_source_bytes_merges and
-  test_transferred_byte_ownership_does_not_block_chain_merge: the chain
-  differs from the first test only in owned bytes.
-- test_unreachable_ownership_between_blocks_moves_without_losing_spans and
-  test_empty_accepts_zero_stack_depth: `_empty` is not ported.
-- test_merge_preserves_alternate_entries_and_layout's entry, repetition and
-  intervening-block cases: the entry has no predecessors (the verifier), and
-  there are no repetitions or source placement; its other predecessor case
-  is ported.
-- test_end_guards_have_no_return_edge_in_raised_control_flow,
-  test_udtrng_bounds_compare_explicit_values,
-  test_udtrng_guards_constrain_subsequent_reads_of_slot,
-  test_only_established_terminal_contracts_remove_return_edges,
-  test_bools_constant_program_is_one_live_block and
-  test_localp_keeps_termination_after_interleaved_procedure: they read BC
-  fixtures through the raise and the old pipeline, not `merged`.
+- `first` ends in an unconditional `br` and `second` is its only successor;
+- `first` is `second`'s only predecessor, and `second` is neither the entry
+  nor `first`;
+- every phi of `second` has `first` as its only incoming block, and the
+  values they take are not themselves phis of `second` (a swap cycle is
+  refused before anything changes).
+
+Then the `br` is erased, each phi's value is replaced by what it received
+from `first`, the phis go, the instructions of `second` move to the end of
+`first`, uses of `second` as a block name `first`, and `second` is erased.
+`first` is asked again, since its new terminator may reach another
+single-entry block. A two-way branch or any other terminator is never
+merged.
+
+```text
+  first:  ...             first:  ...
+          br second   ==>         <instructions of second>
+  second: %p = phi [%v, first]    <terminator of second>
+          ...
+          <terminator>
+```
+
+The merged block keeps `first`'s place in the layout.
+
+## Runs
+A library function, called by `decide` after it decides branches and by
+`phiopt`, `rotate` and `lsr` after their rewrites. The pass `Merged` wraps
+it; no pipeline stage runs it alone.
+
+## Keeps
+Blocks change: every analysis is invalidated when anything merged.

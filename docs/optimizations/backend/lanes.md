@@ -1,12 +1,36 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lanes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lanes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lanes.rs sha256:86eb73c999e21536a938666a6f16d2970175cacaa99dc9c158c5af1cbc0e03d0 -->
+<!-- src: crates/backend/llrm-core/src/backend/lanes.rs sha256:a67bb8a714ce20f748e4764a140e7888ea60a7bb8e185241d0cbb1ee51a6c4f9 -->
 
 # lanes
 
-Python's `set[tuple[Register_, int]]` of register and flag lanes, as a
-bitmask.
+A set of register and flag lanes, as a 128-bit mask.
 
-Every lane a body can name is a byte of a general register root, a byte of
-a segment register, or a flag bit against `RegId::None`: 72 in all. Bit
-`i` is the `i`-th lane in `(RegId, u32)` order, so iteration visits lanes
-in the order a `BTreeSet<Lane>` would.
+## How it works
+A lane is a byte of a general register root (4 each, 7 roots), a byte of a
+segment register (2 each, 6 segments), or a flag bit against
+`RegId::None` (32): 72 in all. The table sorts the lanes in `(RegId, u32)`
+order, so flag bit `i` is mask bit `i`, and iteration visits lanes in the
+order a `BTreeSet<Lane>` would. Each register records the mask bit of its
+byte 0 and its byte count, so a lane's bit is a table lookup.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
+block-beta
+  columns 8
+  o1["bit 32.."] c1["bytes, one run per register"]:3 s1[" "] n1["in RegId order"]:3
+  o2["bit 0..31"] c2["flags (RegId::None, 0..31)"]:3 s2[" "] n2[" "]:3
+  classDef off fill:transparent,stroke:transparent,stroke-width:2px,color:#64748b
+  classDef cell fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff
+  class o1,n1,s1,o2,n2,s2 off
+  class c1,c2 cell
+```
+
+*Lane mask bits*
+
+Union, difference, intersection, subset and disjointness are single word
+operations. Inserting a lane that is none of the 72 panics.
+
+## Used by
+`liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`,
+`regthrash`, `exactaddress`, `sharedstores`, `machinecse`), `loopslots`,
+`schedule`, `parcopy`, and `peep/guards`, `peep/walk`, `peep/make`.

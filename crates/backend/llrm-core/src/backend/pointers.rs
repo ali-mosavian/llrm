@@ -1,5 +1,27 @@
-//! Port of `qbopt/backend/pointers.py`: target pointer representation, kept
-//! below the MIR boundary.
+//! Advances a packed huge pointer by a displacement as arithmetic on its 32-bit
+//! form.
+//!
+//! # How it works
+//! A huge pointer is selector:offset in one dword, and an offset that carries
+//! moves the selector by the ABI's stride (`HugeShift`: a constant 0..16, or a
+//! byte cell the runtime sets). `Model::offset` returns the operations that
+//! compute `result = pointer + displacement` with that carry corrected:
+//!
+//! ```text
+//!  pages = ((pointer & 0xffff) + displacement) >> 16
+//!  high  = ((pages << shift) - pages) << 16
+//!  result = (pointer + displacement) + high
+//! ```
+//!
+//! The plain dword sum already adds one selector unit per page crossed; `high`
+//! adds the other `(1 << shift) - 1` units. Nine operations in all, none of
+//! which rebuilds the two halves. The caller supplies `fresh`, a source of new
+//! value numbers. Pointer, displacement and result must be dword-wide, and a
+//! cell stride must be a byte.
+//!
+//! # Used by
+//! Nothing outside the file's own tests: a grep finds no caller. Isel states
+//! the carry itself (see `docs/machine/pointer-lowering.md`).
 
 use crate::model::ir::{self, Loc, Operation};
 

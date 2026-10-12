@@ -1,8 +1,26 @@
-//! An integer wider than the target's widest native one, split into halves of
-//! that width: LLVM's `ExpandIntegerResult`. Which halves an operation makes,
-//! and which of them take the carry (or borrow) of the one before, is
-//! arithmetic and the same for every target; the target maps each half to a
-//! form (x86's `add` then `adc`).
+//! Splits an integer wider than the target's widest native one into halves of
+//! that width: the arithmetic of LLVM's `ExpandIntegerResult`.
+//!
+//! # How it works
+//! `expand_wide(chained, bits, legal)` returns the halves of an operation on
+//! `bits`-wide integers, low first. Each `Half` has its index, its byte offset
+//! from the integer's first (little-endian), its width in bytes, and whether it
+//! takes the carry (borrow) of the half below. Only an add or a subtraction
+//! chains the carry (`chained`); a bit operation does not. The result is empty
+//! where `bits` is native or not a whole number of halves.
+//!
+//! ```text
+//!  i64 on a 32-bit target (legal = 32)        i128 add, legal = 32
+//!    half 0   offset 0  4 bytes               half 0  no carry
+//!    half 1   offset 4  4 bytes  carried*     half 1-3  carried
+//!    (* only where chained)
+//! ```
+//!
+//! The split is the same for every target. The target maps each half to a form:
+//! x86's `add` then `adc`, from the `chain` lines of its `patterns.isel`.
+//!
+//! # Used by
+//! `isel/wide.rs` (`Selector::wide_halves`, `wide_chain`).
 
 /// One half of an expanded operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

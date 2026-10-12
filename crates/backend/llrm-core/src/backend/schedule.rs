@@ -1,14 +1,60 @@
-//! Port of `qbopt/backend/schedule.py`: latency-aware ordering of safe,
-//! already-allocated machine instructions.
+//! Reorders independent register-and-immediate instructions after allocation so
+//! a consumer does not wait on its producer's latency.
 //!
-//! This is deliberately narrower than an instruction scheduler in a flat
-//! 32-bit compiler.  The medium-model output has segment state, far calls,
-//! source-map anchors, and precise x87 exception ordering.  Until all of
-//! those have a complete dependency model, they are boundaries.  Within the
-//! remaining integer register/immediate windows, physical register and flag
-//! lanes are the complete dependency graph, so a later independent operation
-//! can fill the latency of an earlier producer without changing memory or
-//! ABI behaviour.
+//! # How it works
+//! The scheduler is narrower than a flat-32-bit compiler's. The 16-bit output
+//! has segment state, far calls, source-map anchors and precise x87 exception
+//! ordering, none with a complete dependency model, so each is a boundary. Only
+//! the integer instructions `_safe` admits move: register and immediate
+//! operands (or the address of a frame cell), a move, binary, unary, multiply,
+//! compare, extend, funnel shift or address operation, with no memory operand,
+//! no fixed register or clobber, no group, no spill or frame-adjust marker and
+//! no barrier. For these the physical register lanes and flag lanes are the
+//! whole dependency graph.
+//!
+//! Each block is cut at the instructions that are not safe into windows of safe
+//! ones. A window's dependency graph (`_graph`) has an edge from an earlier to
+//! a later instruction for read-after-write, write-after-read and
+//! write-after-write on any lane, flags included, in source order. A window is
+//! then list-scheduled:
+//!
+//! ```text
+//!  mov eax, [..]   (boundary)           window: imul ebx, ecx   latency 9
+//!  imul ebx, ecx                                add  edx, 1
+//!  add  ebx, 3     needs imul                   add  ebx, 3     needs imul
+//!  add  edx, 1                          ordered: imul, add edx, add ebx
+//! ```
+//!
+//! Each step picks, among instructions whose inputs are ready by the current
+//! clock, the one with the longest latency (`_latency`, the CPU's `latency` for
+//! the instruction's form), ties in source order. A consumer becomes ready at
+//! its producer's finish plus `_partial_merge_delay`: the CPU's
+//! partial-register stall where a 32-bit read follows a 16- or 8-bit write of
+//! the same root with no full write between.
+//!
+//! A CPU with `pentium_pairing` uses `_pentium_ordered` instead: each cycle it
+//! issues one instruction and, where one is ready, a second that pairs with it.
+//! `_pair_class` gives the form's category by gcc's Pentium description: `u`
+//! for forms with an operand or address-size prefix or a shift, `np` for
+//! immediate forms, multiplies and funnel shifts, `uv` otherwise. A U-only or
+//! `uv` form starts a pair when a `uv` form is also ready, and a `uv` form
+//! fills the V slot.
+//!
+//! # Runs
+//! Once per body, the machine phase after `loopslots` and before `jumps`
+//! (`flow::machine_with`), in every machine at every -O level. A body is
+//! returned unchanged, sharing its instructions, when nothing moved, and for an
+//! in-order profile without Pentium pairing (the 386 and 486).
+//!
+//! # Needs
+//! Register-lane effects from [`crate::backend::peephole`]
+//! (`_register_effects`) and the CPU profile ([`crate::backend::cpu`]):
+//! `latency`, `in_order`, `partial_register_stall`, `pentium_pairing`.
+//!
+//! # See also
+//! - gcc `-fschedule-insns2`, which runs after register allocation as this
+//!   does:
+//!   <https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L642>
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

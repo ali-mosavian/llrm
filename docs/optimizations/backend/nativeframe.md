@@ -1,6 +1,38 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/nativeframe.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/nativeframe.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/nativeframe.rs sha256:b4991878be85ad5743799df6b25259aa161ddab63161058ab877942a96f90a59 -->
+<!-- src: crates/backend/llrm-core/src/backend/nativeframe.rs sha256:c49f239b378bba86b526bcc96bbeca72276505f5ba05caf22a1d102a3fc3cda6 -->
 
 # nativeframe
 
-Port of `qbopt/backend/nativeframe.py`.
+The frame plan of a procedure whose prologue already exists (native-code
+input): where it reserves the frame, where it releases it, and which
+registers hold values on entry.
+
+## How it works
+A `Plan` holds the established reservation (`entry.floor`,
+`entry.reserve_at`, the registers saved), the instructions that release the
+frame (`releases`), `(instruction, register)` pairs for values that arrive
+in registers (`registers`), the outgoing stack-argument cells (`outgoing`),
+whether the procedure keeps a frame register (`framed`) and the stack depth
+at a return (`return_depth`, not read anywhere).
+
+`pins` reads the plan against the body and gives each value held at one of
+those instructions that register, so the allocator keeps it there.
+
+A plan changes the other frame phases:
+
+```text
+  frame::of     refuses a body that reaches below entry.floor; leaves the
+                outgoing cells out of the floor; keeps pins in native_pins
+  Frame::slot   refuses a spill when the procedure is not framed
+  prologue      reserves at entry.reserve_at and releases at `releases`,
+                not at the entry and the returns; shifts outgoing cells
+  assemble      no second frame (relayout)
+```
+
+No caller builds a plan: `assemble` passes none to `frame::of`, so
+`Frame::native` is always `None` in the compiler and the paths above are
+not taken.
+
+## Used by
+`frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and
+`flow::machine_with` (which adds `native_pins` to the allocator's pins).

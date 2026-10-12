@@ -1,12 +1,35 @@
-//! Port of `qbopt/backend/machinedce.py`: eliminate pure allocated
-//! instructions whose complete result is dead.
+//! Removes a pure allocated instruction whose whole result is dead.
 //!
+//! # How it works
 //! MIR dead-code elimination reasons about values before allocation. Lowering,
 //! splitting and physical rewrites can leave a machine computation whose
-//! virtual definition still exists but whose physical register and flag results
-//! are all dead. This pass answers only that machine question. Source memory
-//! reads, control flow, trapping arithmetic, x87 work and relocations are
-//! deliberately outside it.
+//! virtual definition still exists but whose register and flag results nothing
+//! reads. This pass answers only that machine question, from the lane
+//! liveness of [`crate::backend::liveness`].
+//!
+//! Each block is walked backward from the lanes dead at its exit
+//! (`dead_at_exit`). An instruction is removed when every lane it writes is
+//! dead and it is pure: an operation from `_PURE` (move, exchange, address,
+//! binary, multiply, compare, unary, funnel, extend), with register,
+//! immediate or address operands (and a named frame slot as a source), no
+//! relocation, no stack or segment destination, no positional register (their
+//! effects are not lane-visible), no call or spill role. Otherwise the walk
+//! applies the instruction's effect and goes on. Memory reads, control flow,
+//! trapping arithmetic and x87 work are never removed.
+//!
+//! ```text
+//!   mov ax,bx        both write only ax and flags, and the
+//!   add ax,1         mov below overwrites ax: both become anchors
+//!   mov ax,si        (ax live after, flags dead)
+//! ```
+//!
+//! A removed instruction becomes an anchor (`lir::anchor`) that keeps source
+//! ownership and emits no bytes. A sweep can expose more dead work, so sweeps
+//! repeat, at most once per instruction, until one changes nothing.
+//!
+//! # Runs
+//! The last body rewrite of `peephole` before `popped_arguments`, and
+//! `jumps::optimized` after each tail merge.
 
 use std::sync::Arc;
 

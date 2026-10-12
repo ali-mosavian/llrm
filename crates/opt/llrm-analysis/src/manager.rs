@@ -23,19 +23,34 @@
 //! - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
 //!   fresh `run`.
 //!
-//! ```text
-//!  pass runs ---> PreservedAnalyses
-//!                   |
-//!    entry named? --yes--> kept
-//!         |no
-//!    READS_OUTER=false and function unchanged? --yes--> kept
-//!         |no
-//!    SKIPS and depends.unaffected(changes)? ------yes--> kept, stands again
-//!         |no                                              if changes undone
-//!    INCREMENTAL and update(previous, changes)? --Some--> updated
-//!         |no
-//!    dropped; recomputed on the next get
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   run["<b>pass runs</b><br/><small>PreservedAnalyses</small>"]:::mid
+//!   q1["<b>entry named?</b>"]:::mid
+//!   q2["<b>READS_OUTER=false and</b><br/><small>function unchanged?</small>"]:::mid
+//!   q3["<b>SKIPS and depends</b><br/><small>.unaffected(changes)?</small>"]:::mid
+//!   q4["<b>INCREMENTAL and</b><br/><small>update(previous, changes)?</small>"]:::mid
+//!   kept["<b>kept</b>"]:::opt
+//!   kept2["<b>kept, stands again</b><br/><small>if changes undone</small>"]:::opt
+//!   upd["<b>updated</b>"]:::opt
+//!   drop["<b>dropped#59; recomputed</b><br/><small>on the next get</small>"]:::warn
+//!   run --> q1
+//!   q1 -->|"yes"| kept
+//!   q1 -->|"no"| q2
+//!   q2 -->|"yes"| kept
+//!   q2 -->|"no"| q3
+//!   q3 -->|"yes"| kept2
+//!   q3 -->|"no"| q4
+//!   q4 -->|"Some"| upd
+//!   q4 -->|"no"| drop
 //! ```
+//!
+//! *What happens to a cached analysis when a pass runs*
 //!
 //! Function entries and what each asks for (every one also asks `Shape`, and
 //! most `AssumptionCache` and `ExposedFrames`, which are omitted):

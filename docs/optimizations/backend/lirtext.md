@@ -1,7 +1,27 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lirtext.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lirtext.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:f911fca22efddb9a210f0ed75ca33299aca33052d5571f698a2fe0e50bdd25b4 -->
+<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:ae83e1d779b49c38101085baf4869c310765d95a6d6fb07d9984d2e7d464bf73 -->
 
 # lirtext
 
 LIR as text, one stage at a time: what `ISEL_DUMP` prints after each
 machine phase.
+
+## How it works
+`lir_stage` prints a `=== stage` line, then for each body its name and
+instruction count, each block by address, its phis (`v3 := phi ...`) and
+its instructions as `dests := name sources`, with `; notes` for what a phase
+attached (`inserted`, `parallel-copy N`, `spill reload`, `frame adjust`,
+`requires`, `delivers`, `clobbers`).
+Addresses are hex with at least four digits, and the format is short enough
+to diff between stages.
+
+```text
+=== PhiElimination
+  f: 2 instructions
+    block 0x0000
+      0x0004  v5 := mov v2  ; inserted; parallel-copy 1
+```
+
+## Used by
+`assemble` after each machine phase when `ISEL_DUMP` is set; the register
+allocator's tests print input and result with it.

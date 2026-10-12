@@ -6,10 +6,19 @@
 //! successor ids; nothing here knows an IR. The rich MIR adapts a `Function`
 //! through [`crate::cfg`], which turns it into `Block`s in layout order.
 //!
-//! ```text
-//!  Function --cfg::graph--> [Block{at,succ}] --> graph::loops
-//!                                                  (Loop, depth, ...)
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart LR
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   f["<b>Function</b>"]:::mid
+//!   b["<b>[Block#123;at,succ#125;]</b>"]:::mid
+//!   l["<b>graph::loops</b><br/><small>(Loop, depth, ...)</small>"]:::mid
+//!   f -->|"cfg::graph"| b
+//!   b --> l
 //! ```
+//!
+//! *From a Function to loops*
 //!
 //! The backend's `LirBlock` has its own copy of these walks in
 //! `crates/backend/llrm-core/src/analysis/loops.rs`; both build on

@@ -1,8 +1,45 @@
-//! How a group's matcher walks each block, and the window its rules see.
+//! How a group's matcher walks each block, and the window of instructions its
+//! rules see.
 //!
+//! # How it works
 //! The walks are the ones the hand-written passes used, kept exactly: which
-//! instructions a window skips, whether a match consumes its instructions
-//! or rewrites them in place, and where the walk resumes decide the output.
+//! instructions a window skips, whether a match consumes its instructions or
+//! rewrites them in place, and where the walk resumes decide the output. A
+//! group's `walk` line in `peephole.peep` selects one:
+//!
+//! ```text
+//!   each     every instruction alone, replaced in place
+//!   window   runs of consecutive instructions (those `skip` names stepped
+//!            over); a match consumes what it matched
+//!   slide    windows of the matcher's width rewritten in place, moving on
+//!            `advance` after a match
+//!   gap      a first instruction, then each later one the gap has not
+//!            stopped at; instructions may stand between them while the
+//!            matcher's `cross` says they may
+//! ```
+//!
+//! [`Skip`] picks the instructions a window steps over: none, meta
+//! instructions, inert `nothing` anchors, or all `nothing`s. A [`Window`]
+//! holds the matched instructions in order, where each stands in the block,
+//! what a gap stepped over, and (`defined`) the nearest earlier definition of
+//! a held value. `gap` with `first original` matches the first instruction as
+//! the block had it, and skips a slot an earlier match rewrote; `resume past`
+//! continues after the last matched instruction rather than after the first.
+//!
+//! A rule's result is a [`Rewrite`]: how many instructions it consumed and an
+//! [`Out`] for each: `Put` the new instruction, `Drop` one with `lir::without`,
+//! or `Retire` a matched definition, which leaves the block once the walk is
+//! done and only if it was the value's sole definition.
+//!
+//! [`Facts`] is what a rule may ask of the body, each worked out once when
+//! first asked: read counts per value, the lanes dead at block exits
+//! ([`crate::backend::liveness`]), flags live out of a block, and which
+//! registers have a zero upper half ([`crate::backend::upperzero`]). [`Cx`]
+//! is the same for one block, with the lanes dead after any instruction.
+//!
+//! # Used by
+//! The code `build.rs` generates for each group, called from `peephole` and
+//! `isel/combined`.
 
 use std::cell::OnceCell;
 use std::sync::Arc;

@@ -1,9 +1,68 @@
-//! IndVarSimplify's exit rewriting reused across an outer loop: llrm-core's
-//! `optimize/indvars.rs`, the port of `qbopt/optimize/indvars.py`, adapted
-//! to the rich MIR. `widened` is `widenIV` for a counter that needs no sign
-//! proof. `rewound` carries an exact inner recurrence's exit value
-//! around the outer loop, less its distance, in place of its saved start.
-//! Which counters a loop keeps, and which ends it, is `lsr`'s.
+//! Counters after their loop, and wide counters in it: LLVM's IndVarSimplify
+//! (`rewriteLoopExitValues`, `widenIV`) plus an exit-value rewind across an
+//! outer loop. Which counters a loop keeps, and which ends it, is `lsr`'s.
+//!
+//! # How it works
+//! One run is these steps, each followed by a refresh of what is known where it
+//! changed the body.
+//!
+//! 1. `loopexit::evaluated`: values after a counted loop computed from its
+//!    trips.
+//! 2. `exitfold::folded`: exits their counts decide are folded.
+//! 3. `exit_values` (only with `exit_values: true`): a counted exit's phi
+//!    values that are affine in the counters, with constant starts and steps,
+//!    become numbers. A counter stepped and then tested (`i + 1 < 32`) leaves
+//!    as 32, so the exit no longer keeps the old counter alive past its step.
+//! 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
+//! 5. `widened`: a counter read through `zext` to the address's index width,
+//!    where `induction` proves its values never pass its own
+//!    (`rises_unsigned`), becomes a counter of that width. C's `unsigned short
+//!    i` reads `a[zext i]`, a conversion per trip, which hides the loop from
+//!    idioms and strength reduction. The wide counter ends the loop against the
+//!    bound extended once in the preheader; other readers of the narrow one
+//!    read its low part.
+//! 6. `rewound`: see below.
+//!
+//! `rewound` carries an exact inner recurrence's exit value around the outer
+//! loop. An inner loop running exactly `count` trips leaves as
+//! `start + count * step`; subtracting that distance on the outer back edge
+//! rebuilds the next start, so the saved start is dead across the hot inner
+//! loop.
+//!
+//! ```text
+//!  outer:                                 outer:
+//!    inner_pre: br inner                    %st = phi [%start,pre],[%r,latch]
+//!  inner:                                 inner:
+//!    %p = phi [%start,inner_pre],..  =>     %p = phi [%st,inner_pre],..
+//!  exit:                                  exit:
+//!    ...                                    %r = add %p_exit, -distance
+//! ```
+//!
+//! It applies only for a pair of single-latch loops whose inner loop has one
+//! exit, a known trip count, a counter with constant nonzero step, and a start
+//! defined outside the outer loop and read in it only by that phi. It is
+//! profitable when inner-loop register pressure reaches the target's registers
+//! and the target's `add` costs no more than a `move` and its `memory_update`
+//! no more than a `load` plus `store`: in a register the old copy and the
+//! rewind are equal work; in frame cells the old form is a load and a store,
+//! the new a memory update.
+//!
+//! # Runs
+//! In the body pipeline after `promote`, with `exit_values: false`. With
+//! `-ftree-ch` (not at -Os) it runs again with `exit_values: true` after the
+//! loop-header copy, where the copy made a counted exit's test the one that
+//! leaves (a number is a `mov` where the counter's register already holds it).
+//!
+//! # Needs
+//! `Registers`, `Bounded` (for a `sext` counter), `induction`, `liveness`,
+//! [`crate::loopexit`], [`crate::exitfold`], [`crate::exitsink`],
+//! [`crate::profit`].
+//!
+//! # Keeps
+//! Nothing after steps 1 to 3; dominators and loops after the others.
+//!
+//! # See also
+//! LLVM `IndVarSimplify.cpp`. Tests: `indvars_tests.rs`.
 
 use std::collections::BTreeSet;
 

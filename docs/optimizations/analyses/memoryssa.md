@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/memoryssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memoryssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/memoryssa.rs sha256:b05678c1b4d9a53f2d3d44519e1585ab014530f4bd1b6c83d9ba9ef5ceb5c6cb -->
+<!-- src: crates/opt/llrm-analysis/src/memoryssa.rs sha256:3592d038ba3c654cb6e1dd33f55e7c8207e0e83267c344b85ecf87f4ed9f6736 -->
 
 # memoryssa
 
@@ -23,15 +23,26 @@ the function. Phis are wired before they are resolved, so back edges need no
 iteration over memory versions; then phis whose inputs reduce to one state
 are replaced by it.
 
-```text
-        entry: Live(0)
-          |
-   b1: Def s1 --(defining)--> Def s2 ---+
-          |                              |
-   b2: Phi [b1: s2, b3: s3]  <-----------+----- b3: Def s3
-          |
-         Use l1   (defining = Phi)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  live["<b>entry: Live(0)</b>"]:::mid
+  s1["<b>b1: Def s1</b>"]:::mid
+  s2["<b>Def s2</b>"]:::mid
+  phi["<b>b2: Phi</b><br/><small>[b1: s2, b3: s3]</small>"]:::mid
+  s3["<b>b3: Def s3</b>"]:::mid
+  use["<b>Use l1</b><br/><small>(defining = Phi)</small>"]:::mid
+  live --> s1
+  s1 -->|"defining"| s2
+  s2 --> phi
+  phi --> use
+  phi --> s3
+  s3 --> phi
 ```
+
+*Memory SSA of a loop: b2's Phi merges b1's last Def and b3's Def*
 
 The walker (`clobbers`, `clobbers_at_end`, `nearest_writes`) answers, for a
 `MemRef` read at a site, the set of nearest defs whose write may change it,

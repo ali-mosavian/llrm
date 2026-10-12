@@ -1,4 +1,20 @@
-//! What the x87 allocator raises, and where its stack cannot reach.
+//! Where the x87 stack cannot reach, and the error type the x87 allocator
+//! raises.
+//!
+//! # How it works
+//! `boundary` says whether the x87 stack cannot be assumed to survive an
+//! instruction: a call, a barrier, an instruction with no semantics, or one
+//! that names an x87 register by position (`target::positional_place`). The
+//! allocator's passes treat each such instruction as a point where no value may
+//! be live on the stack: [`crate::backend::floatassign`] ends a register
+//! stretch there, [`crate::backend::floatalloc`] flushes the stack there, and
+//! `pressuresink` does not move a load across it.
+//!
+//! `Raised` is the error of those two passes: an operand that cannot be lowered
+//! (`Unlowered`), a frame cell refused (`frame::Refused`), or a bad value.
+//!
+//! # Used by
+//! `floatassign`, `floatalloc`, `pressuresink`.
 
 use std::fmt;
 

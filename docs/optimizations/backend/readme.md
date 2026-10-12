@@ -6,95 +6,95 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 92 documented,
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
-| addressforms | Port of `qbopt/backend/addressforms.py`: fold address arithmetic into the memory operands that read it. |  | [addressforms](addressforms.md) |
-| addressvalues | Port of `qbopt/backend/addressvalues.py`: spell allocated address-valued memory operands as machine addresses. |  | [addressvalues](addressvalues.md) |
-| affine | Allocated instructions that keep a register an affine sum of registers, and the 32-bit addresses that name such a sum. |  | [affine](affine.md) |
-| allocate | Port of `qbopt/backend/allocate.py`: registers for a lowered body, using greedy allocation with eviction. |  | [allocate](allocate.md) |
-| arithmetic | Port of `qbopt/backend/arithmetic.py`: target-dependent ranking of constant arithmetic, not MIR semantics. |  | [arithmetic](arithmetic.md) |
-| arrival | Where a parameter is while the function has not yet stored it into its home: in the register the convention passed it in, from the entry until the instruction that stores it. |  | [arrival](arrival.md) |
-| asm | The assembler: instructions in, one image and its relocations out. |  | [asm](asm.md) |
-| assemble | A MIR module to masm, as LLVM's `llc` takes a module to an object: each defined function selected and run through the machine phases, each defined variable's data, and the symbols both name. |  | [assemble](assemble.md) |
-| calleefacts | What a function nothing outside the program reaches leaves different: the registers its body, and the calls in it, write. |  | [calleefacts](calleefacts.md) |
-| callregs | The registers a runtime call destroys or keeps, read from its contract. |  | [callregs](callregs.md) |
-| cfi | Call frame information, read back from the code as it was emitted: from every place in a function, how to find the caller's frame (the canonical frame address) and the registers the function saved. |  | [cfi](cfi.md) |
-| classes | What a target says about its registers that the allocator and the passes around it read: which operand of which instruction form lives in which register. |  | [classes](classes.md) |
-| coalesce | Port of `qbopt/backend/coalesce.py`: a copy whose two values can share a register is not a copy. |  | [coalesce](coalesce.md) |
-| comparefold | Port of `qbopt/backend/comparefold.py`: select one-use memory comparisons before register allocation. |  | [comparefold](comparefold.md) |
-| constpool | Readonly constants the machine phases put in memory, as GCC's `force_const_mem`: one datum per distinct bytes, which the driver names and emits with the module's other readonly data. |  | [constpool](constpool.md) |
-| constrain | Port of `qbopt/backend/constrain.py`: giving a required register a value of its own. |  | [constrain](constrain.md) |
-| copyprop | Port of `qbopt/backend/copyprop.py`: forward and remove physical register copies proven on every CFG path. |  | [copyprop](copyprop.md) |
-| copysink | Port of `qbopt/backend/copysink.py`: move a copy out of a loop when only what is after the loop reads it. |  | [copysink](copysink.md) |
-| cpu | Port of `qbopt/backend/cpu.py`: one immutable description of a code-generation tuning target. |  | [cpu](cpu.md) |
-| datagroup | The data segment register as a fourth selector register. |  | [datagroup](datagroup.md) |
-| debuginfo | `-g`: a module's debug information as [`llrm_object::debug::Info`], whichever format a writer encodes it in. |  | [debuginfo](debuginfo.md) |
-| division | Port of `qbopt/backend/division.py`: select signed constant division without exposing machine choices to MIR. |  | [division](division.md) |
-| effects | The registers and flags an instruction reads and writes, as `x86.instr` states them: the rows the target's register file carries (`Info::effects`), for the code of `bits` bits. |  | [effects](effects.md) |
-| ehprepare | A QB personality's landing pad made one the runtime can enter, before instruction selection, as LLVM's SjLjEHPrepare prepares setjmp/longjmp unwinding. |  | [ehprepare](ehprepare.md) |
-| exactaddress | Fold the chain computing an exact address into its 32-bit form. |  | [exactaddress](exactaddress.md) |
-| executed | A finished body's executed work, estimated without a profile. |  | [executed](executed.md) |
-| farcall | Port of `qbopt/backend/farcall.py`: give a far indirect call the memory operand the 16-bit ISA requires. |  | [farcall](farcall.md) |
-| farload | Port of `qbopt/backend/farload.py`: select complete far-pointer loads before allocation loses their address. |  | [farload](farload.md) |
-| floatalloc | Port of `qbopt/backend/floatalloc.py`: assign floating LIR values to the target register stack. |  | [floatalloc](floatalloc.md) |
-| floatassign | Pass one of GCC's x87 allocation, as IRA and LRA do for any register class: which floating values hold one of the eight flat stack registers, and where. |  | [floatassign](floatassign.md) |
-| floatfold | A float load that only one arithmetic instruction reads is that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. |  | [floatfold](floatfold.md) |
-| floatregions | What the x87 allocator raises, and where its stack cannot reach. |  | [floatregions](floatregions.md) |
-| fpconvert | A float converted to an unsigned 64-bit integer, as signed conversions and a select, before instruction selection: the x87 stores only signed qwords. |  | [fpconvert](fpconvert.md) |
-| frame | Port of `qbopt/backend/frame.py`: the stack slots a body needs, and where they are. |  | [frame](frame.md) |
-| framefree | LLVM's `hasFP`, decided before allocation: whether a function can do without its frame register, which is then one more value register (and callee-saved: the prologue pushes it where it is used). |  | [framefree](framefree.md) |
-| globals | A MIR module's globals as masm symbols and data, as LLVM's AsmPrinter emits a global's initializer: its bytes, and a relocation for each address in it. |  | [globals](globals.md) |
-| inline_asm | Inline assembly: the x86 assembler is `llrm_x86::asm`; what is here is the QB runtime's naming of registers around it (`Reg`, the registers a runtime routine's contract names). |  | [inline_asm](inline_asm.md) |
-| isel | Instruction selection from MIR: each function's instructions as LIR over virtual registers, as LLVM's SelectionDAG makes MachineInstrs. |  | [isel](isel.md) |
-| jumps | Port of `qbopt/backend/jumps.py`: block order, and the jumps it makes redundant. |  | [jumps](jumps.md) |
-| lanes | Python's `set[tuple[Register_, int]]` of register and flag lanes, as a bitmask. |  | [lanes](lanes.md) |
-| layout | A whole body, emitted -- and everything that has to move when it does. |  | [layout](layout.md) |
-| lifetimes | Where a block local's bytes are live, from its lifetime markers: from a `llvm.lifetime.start` along every path to where a `.end` or the return comes. |  | [lifetimes](lifetimes.md) |
-| lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. |  | [lirtext](lirtext.md) |
-| live | The live intervals the allocator holds of the body it is rewriting. |  | [live](live.md) |
-| liveness | Port of `qbopt/backend/liveness.py`: which physical register and flag lanes are dead on exit from each block. |  | [liveness](liveness.md) |
-| liveunion | What each register holds, by where: LLVM's `LiveIntervalUnion` and the `LiveRegMatrix` over it. |  | [liveunion](liveunion.md) |
-| loopslots | A loop's spill slots in the registers the loop leaves free. |  | [loopslots](loopslots.md) |
-| lower_int64 | The contract of an inline routine the compiler places where an operation has no instruction (`llrm_x86::helpers`): what it reads and what it changes. |  | [lower_int64](lower_int64.md) |
-| machinecse | Port of `qbopt/backend/machinecse.py`: eliminate repeated deterministic computations after register allocation. |  | [machinecse](machinecse.md) |
-| machinedce | Port of `qbopt/backend/machinedce.py`: eliminate pure allocated instructions whose complete result is dead. |  | [machinedce](machinedce.md) |
-| masm | Allocated LIR as jwasm source. |  | [masm](masm.md) |
-| nativeframe | Port of `qbopt/backend/nativeframe.py`. |  | [nativeframe](nativeframe.md) |
-| nearcode | A function a frontend allows near (`nearcode`), only its own module calls, and only directly, is entered by a near call: its callers share its code segment, so a return address needs no segment. |  | [nearcode](nearcode.md) |
-| needs | What a body contains that a peephole sub-pass could act on, so that the driver skips a pass whose subject is absent: the shape of the MIR passes' `Depends`, for the machine passes. |  | [needs](needs.md) |
-| neighbours | The values one value interferes with: a sorted set that is a bit vector once it is dense, as GCC's IRA keeps the conflicts of an allocno (a vector of ids, or a bit vector over its id range, whichever is smaller: `ira_allocate_object_conflicts`, ira-build.cc). |  | [neighbours](neighbours.md) |
-| objbuild | A masm module as an object: its code and data laid out in sections, each name resolved to where it is defined or declared, each reference to one a relocation. |  | [objbuild](objbuild.md) |
-| overlap | Whether two machine memory operands may overlap, read from their addresses alone: the same space and segment compared by offset and width, and "may overlap" for anything else. |  | [overlap](overlap.md) |
-| parcopy | Port of `qbopt/backend/parcopy.py`: scheduling a parallel copy, moves that happen at once, written in an order. |  | [parcopy](parcopy.md) |
-| peephole | Port of `qbopt/backend/peephole.py`: simplifications that depend on the final physical register assignment. |  | [peephole](peephole.md) |
-| phielim | Port of `qbopt/backend/phielim.py`: the pass that takes LIR out of SSA. |  | [phielim](phielim.md) |
-| pointers | Port of `qbopt/backend/pointers.py`: target pointer representation, kept below the MIR boundary. |  | [pointers](pointers.md) |
-| postings | Where each value is defined and read in a body, kept as the body changes. |  | [postings](postings.md) |
-| postrasink | LLVM's PostRAMachineSinking: a copy whose result only one successor reads moves into that successor. |  | [postrasink](postrasink.md) |
-| pressuresink | A load made where its one reader is, when that raises the pressure of no register class: LLVM's scheduler works bottom-up for the same reason, a value defined late is live a short while. |  | [pressuresink](pressuresink.md) |
-| prologue | Port of `qbopt/backend/prologue.py`: reserving the frame the spiller asked for, and giving it back. |  | [prologue](prologue.md) |
-| regalloc_input | Test support: a function of a MIR fixture as the register allocator receives it, and the allocator phase itself. |  | [regalloc_input](regalloc_input.md) |
-| regclass | The register class of each value: the one place that states which registers a value may be in. |  | [regclass](regclass.md) |
-| registerinfo | A target's register file, as its description states it (`registers.regs`) and the target generated it: the `Info` a `Target` hands out and every query of a register asks. |  | [registerinfo](registerinfo.md) |
-| regthrash | Port of `qbopt/backend/regthrash.py`: renaming a definition's register so a copy after it is redundant. |  | [regthrash](regthrash.md) |
-| relayout | The frame laid out again: a function whose frame reaches past `[bp-128]` is also tried with a hole above its allocas for the spill slots; this makes that layout from the first one, by the slot each frame cell names, where it used to run the whole backend a second time (docs/optimizations/second-frame.md). |  | [relayout](relayout.md) |
-| rmw | Port of `qbopt/backend/rmw.py`: select exact read-modify-write chains before register allocation. |  | [rmw](rmw.md) |
-| schedule | Port of `qbopt/backend/schedule.py`: latency-aware ordering of safe, already-allocated machine instructions. |  | [schedule](schedule.md) |
-| selects | Selects as branches: the 486 has no conditional move, so each `select c, a, b` becomes a branch on `c` around an empty block into a phi of `a` and `b`, before instruction selection. |  | [selects](selects.md) |
-| sharedstores | Tuned for size, a run of stores of one literal is the literal in a dead register, loaded once, then register stores: `mov dword ptr [bp-8],0` is 8 bytes, `mov [bp-8],eax` 4, and the one `xor eax,eax` 3. |  | [sharedstores](sharedstores.md) |
-| shrinkwrap | LLVM's ShrinkWrap: the registers a procedure keeps for its caller (SI and DI), and its frame (the stack reserve and the frame register), set up where they are first needed instead of at every entry, and taken back only on the returns that path reaches. |  | [shrinkwrap](shrinkwrap.md) |
-| slots | The one rule for sharing a frame slot: two things share when they are never live together. |  | [slots](slots.md) |
-| spiller | Port of `qbopt/backend/spiller.py`: a value the allocator would not keep, kept in memory instead. |  | [spiller](spiller.md) |
-| spillforward | Port of `qbopt/backend/spillforward.py`: remove reloads of a slot a register already holds on every path here, and stores of such a register back into that slot. |  | [spillforward](spillforward.md) |
-| spillplacement | Where a split value should be in a register and where on the stack. |  | [spillplacement](spillplacement.md) |
-| splitkit | Port of `qbopt/backend/splitkit.py`: splitting a live range instead of spilling the whole of it. |  | [splitkit](splitkit.md) |
-| ssarepair | SSA after a spiller gave some values more than one definition: a reload brings a value back, and every use after it must read the reload, or a phi where two definitions meet. |  | [ssarepair](ssarepair.md) |
-| ssaspill | Braun & Hack spilling on the SSA LIR ("Register Spilling and Live-Range Splitting for SSA-Form Programs", CC 2009), run before `PhiElimination`. |  | [ssaspill](ssaspill.md) |
-| stackusage | How much stack a program may use, as GCC's `-fstack-usage` and `-Wstack-usage`: each procedure's own frame, and the most a call from it can reach through the procedures it calls. |  | [stackusage](stackusage.md) |
-| stepflags | A compare of a value with a constant that a step of the same value already subtracts: the step's flags are the compare's. |  | [stepflags](stepflags.md) |
-| storecombine | Port of `qbopt/backend/storecombine.py`: pack neighboring literal word stores after allocation. |  | [storecombine](storecombine.md) |
-| storedhomes | The cells the optimizer proved hold a phi's value (`!llrm.home`, `LirBody.homes`), as the body now stands: the one fact both spillers ask. |  | [storedhomes](storedhomes.md) |
-| target | Port of `qbopt/backend/target.py`: what the machine has, and what each instruction requires. |  | [target](target.md) |
-| timing | Port of `qbopt/backend/timing.py`: audited instruction core-clock bounds, separate from scoreboard estimates. |  | [timing](timing.md) |
-| twoaddr | Port of `qbopt/backend/twoaddr.py`: x86 writes into one of the registers it reads. |  | [twoaddr](twoaddr.md) |
-| upperzero | Which 32-bit register roots hold zero in their upper half before each allocated instruction. |  | [upperzero](upperzero.md) |
-| valuetrack | Where the value a variable has is, over the code as it was emitted: LLVM's instruction-referencing LiveDebugValues (`InstrRefBasedLDV`), after the allocator and every pass that follows it. |  | [valuetrack](valuetrack.md) |
-| verify | Port of `qbopt/backend/verify.py`: whether a lowered body is well formed, checked where it was made. |  | [verify](verify.md) |
+| addressforms | Widens word definitions so a 67h address can take them as dword components. | `isel.rs`, after a function is selected, for the values the selector | [addressforms](addressforms.md) |
+| addressvalues | Spells the `address` operations of an allocated body as `lea` operands. | `assemble.rs`, on each machined body before `masm::cleaned_returns`, and | [addressvalues](addressvalues.md) |
+| affine | Recognises allocated instructions that keep a register an affine sum of registers, and names the 32-bit or 16-bit address of such a sum. | `exactaddress.rs`, which folds the chain into a memory operand, and the | [affine](affine.md) |
+| allocate | Assigns a register to every value of a lowered body, splitting and spilling the values that do not fit. | Once per function and route in the machine phases (`regalloc`), after | [allocate](allocate.md) |
+| arithmetic | Ranks the ways to multiply by a constant on a target: shift and add chains, `lea`, or `imul`. | `isel/matcher.rs` (which multiply to select), `division.rs` (a divisor's | [arithmetic](arithmetic.md) |
+| arrival | Finds how long a parameter stays in the register its convention passed it in, from the machine code. | `debuginfo.rs`, for 32-bit `-g` output: the parameter's location list is | [arrival](arrival.md) |
+| asm | The types a laid-out body is handed over in: bytes, moved addresses and relocations. | `layout.rs`, `objbuild.rs`. | [asm](asm.md) |
+| assemble | Takes a MIR module to masm, as `llc` takes a module to an object: each defined function selected and put through the machine phases, each defined variable's data, and the symbols both name. | Once per module. Per-function candidates are described above; the gating | [assemble](assemble.md) |
+| calleefacts | Records which registers a private function writes, so its direct callers keep values in the others across the call. | Per function in `assemble.rs`: `record` after the function is machined. | [calleefacts](calleefacts.md) |
+| callregs | Which registers a runtime call destroys or keeps, read from its contract. | `isel.rs`, `isel/wide.rs`, `isel/unwind.rs` (the clobber sets of a call | [callregs](callregs.md) |
+| cfi | Reads call frame information back from emitted code. | `debuginfo.rs`, under `-g`. | [cfi](cfi.md) |
+| classes | What the selected target says about its registers, for the allocator and the passes around it. | `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller | [classes](classes.md) |
+| coalesce | Removes a copy whose two values can share a register. | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
+| comparefold | Fold a one-use load into the comparison that reads it, as a memory operand. | Per block, inside isel's cross-instruction selection | [comparefold](comparefold.md) |
+| constpool | Readonly constants the machine phases put in memory, one datum per distinct bytes. | `floatassign.rs`: an integer other than 0 or 1 converted to float becomes | [constpool](constpool.md) |
+| constrain | Give each value a register is required for a value of its own, live across that instruction alone, copied in and out. | Register allocation (`allocate.rs`), which calls `distinct_roles`, | [constrain](constrain.md) |
+| copyprop | Forward and remove register-to-register copies after allocation. | Inside the peephole phase, after register thrashing and frame copies. | [copyprop](copyprop.md) |
+| copysink | Move a register copy out of a loop to its exit when only code after the loop reads it. | Inside the peephole phase, after copy propagation and extension | [copysink](copysink.md) |
+| cpu | One immutable description of a code-generation tuning target: a CPU's prices and a target's registers, address forms and cost model. | The driver (`driver/mod.rs`, `Options::cpu`) builds it from the machine's | [cpu](cpu.md) |
+| datagroup | Make the data segment register a fourth selector register where the stack lives in the data group. | Register allocation (`allocate.rs`): `names_data_segment` before it, | [datagroup](datagroup.md) |
+| debuginfo | `-g`: build a module's debug information as [`llrm_object::debug::Info`], the format-neutral model each object format's writer encodes. | `described` when a module is assembled (`assemble.rs`; `driver/basic.rs` | [debuginfo](debuginfo.md) |
+| division | Select a dword division by a constant as a multiply by its reciprocal, where the CPU's prices make that cheaper. | `isel.rs` (`divide`), for each division by a constant. | [division](division.md) |
+| effects | The registers and flags an instruction reads and writes, from its `x86.instr` row. | `peephole.rs` (`_effects_by_table`), which adds the instruction's | [effects](effects.md) |
+| ehprepare | Make a QB personality's landing pad one the runtime can enter, before instruction selection. | In `driver::optimized` (`mir ehprepare`), once per module after the MIR | [ehprepare](ehprepare.md) |
+| exactaddress | Fold the chain computing an exact address into its 32-bit form. | Inside the peephole phase, after the pattern rewrites, before | [exactaddress](exactaddress.md) |
+| executed | A finished body's executed work per call, estimated without a profile. | Not a pass: `assemble.rs` calls it on each finished body to choose | [executed](executed.md) |
+| farcall | Give a far indirect call the memory operand the 16-bit ISA requires. | First machine phase (`far-indirect-calls`), before `ssaspill`, once per | [farcall](farcall.md) |
+| farload | Select a far pointer's two word loads as one `les`-form load. | Per block in isel's cross-instruction selection (`isel/combined.rs`), | [farload](farload.md) |
+| floatalloc | Converts floating values held in flat x87 registers to stack form: `fld`, `fxch`, `fstp st(i)` and `st(i)` operands. | After `floatassign` in the machine phases, once per function, on bodies with | [floatalloc](floatalloc.md) |
+| floatassign | Decides which floating values hold one of the eight flat x87 registers and which live in memory, and makes every spill, restore and memory operand explicit. | Machine phase after `floatfold` and `phielim`, before `floatalloc`, once per | [floatassign](floatassign.md) |
+| floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `pressuresink` and before `floatassign`, once per | [floatfold](floatfold.md) |
+| floatregions | Where the x87 stack cannot reach, and the error type the x87 allocator raises. | `floatassign`, `floatalloc`, `pressuresink`. | [floatregions](floatregions.md) |
+| fpconvert | Rewrites a float converted to an unsigned 64-bit integer as signed conversions and a select, in MIR before instruction selection. | `mir fp to unsigned` in `driver::optimized`, after `ehprepare` and before | [fpconvert](fpconvert.md) |
+| frame | The stack frame of one function body: where each spill slot, temporary and selector-made stack object lives, and how many bytes the prologue reserves. | `lir frame` in `assemble::staged`, once per function after selection and | [frame](frame.md) |
+| framefree | Decides, before allocation, whether a function can do without its frame register, which is then one more value register. | In `assemble::staged`, after isel and before `frame::of`, once per function. | [framefree](framefree.md) |
+| globals | Turns a MIR module's globals into assembler symbols and data: names, and each initializer's bytes with a relocation for every address in it. | `global names` and the data loop in `assemble::assembled_by`, once per | [globals](globals.md) |
+| inline_asm | Names the QB runtime's registers for inline assembly operands and clobbers. | `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`). | [inline_asm](inline_asm.md) |
+| isel | Instruction selection: one MIR function becomes LIR over virtual registers, as LLVM's SelectionDAG makes MachineInstrs. | First of the staged phases in `assemble::staged`, once per function and | [isel](isel.md) |
+| jumps | Orders the blocks of an allocated body and removes the jumps and blocks the order makes redundant; merges and copies tails. | `ControlFlow` is the last machine phase, because this physical order | [jumps](jumps.md) |
+| lanes | A set of register and flag lanes, as a 128-bit mask. | `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`, | [lanes](lanes.md) |
+| layout | The pairs of branch conditions that are each other's inverse. | `jumps`, to invert a branch when it makes the other successor the | [layout](layout.md) |
+| lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
+| lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. | `assemble` after each machine phase when `ISEL_DUMP` is set; the register | [lirtext](lirtext.md) |
+| live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit`, `regclass` and | [live](live.md) |
+| liveness | Which physical register and flag lanes are live into and dead out of each block, and what one instruction reads and writes. | `peephole` and the sub-passes it runs (`regthrash`, `copysink`, | [liveness](liveness.md) |
+| liveunion | What each register holds, by where: LLVM's `LiveIntervalUnion` and the `LiveRegMatrix` over it. | `allocate` and `splitkit`. | [liveunion](liveunion.md) |
+| loopslots | Moves a loop's spill slots, and its loop-invariant reloads, into the registers the loop leaves free. | After `peephole` (spill traffic is final), before `schedule`. Always on; | [loopslots](loopslots.md) |
+| lower_int64 | The contract of an inline routine the compiler places where an operation has no instruction (`llrm_x86::helpers`): what it reads and what it changes. | `isel/wide` (64-bit arithmetic helpers) and `isel/unwind`. | [lower_int64](lower_int64.md) |
+| machinecse | Removes a repeated pure register computation after allocation, by value numbering the byte lanes each instruction reads and writes. | A peephole sub-pass, once per `peephole` run, after `sharedstores` and | [machinecse](machinecse.md) |
+| machinedce | Removes a pure allocated instruction whose whole result is dead. | The last body rewrite of `peephole` before `popped_arguments`, and | [machinedce](machinedce.md) |
+| masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
+| nativeframe | The frame plan of a procedure whose prologue already exists (native-code input): where it reserves the frame, where it releases it, and which registers hold values on entry. | `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and | [nativeframe](nativeframe.md) |
+| nearcode | Puts a function a frontend allows near, which only its own module calls and only directly, in the near code space, so callers enter it by a near call. | Once per module at the start of `assemble::assembled_by` (`mir near code`), | [nearcode](nearcode.md) |
+| needs | What a body contains that a peephole sub-pass could act on, so that `peephole` skips a sub-pass whose subject is absent. | `peephole`. | [needs](needs.md) |
+| neighbours | The values one value interferes with: a sorted set that turns into a bit vector once it is dense. | `coalesce`, for its interference graph. | [neighbours](neighbours.md) |
+| objbuild | Encodes a masm module as a format-neutral object: code and data laid out in sections, each name resolved, each reference to one a relocation. | Once per module, after `assemble` and `data layout` have produced the masm | [objbuild](objbuild.md) |
+| overlap | Whether two machine memory operands may overlap, read from their addresses alone. | `spiller`, `floatassign`, `storedhomes`. | [overlap](overlap.md) |
+| parcopy | Writes each parallel copy group (the copies a phi becomes on an edge, which happen at once) as a sequence of moves that computes the same thing. | After `regalloc`, before `prologue` and the peephole, once per body, at | [parcopy](parcopy.md) |
+| peephole | Local rewrites of allocated LIR that need the final physical registers. | Once per body, as the machine phase after `prologue` and before `loopslots` | [peephole](peephole.md) |
+| phielim | Takes LIR out of SSA: each phi becomes parallel copies on its incoming edges. | A machine phase after `ssaspill` (spiller route only) and before | [phielim](phielim.md) |
+| pointers | Advances a packed huge pointer by a displacement as arithmetic on its 32-bit form. | Nothing outside the file's own tests: a grep finds no caller. Isel states | [pointers](pointers.md) |
+| postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [postings](postings.md) |
+| postrasink | Moves a register copy, or a spill store, into the one successor that needs it. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `spillforward`: a reload | [postrasink](postrasink.md) |
+| pressuresink | Moves a load down to just before its one reader when that raises the pressure of no register class and lowers it for some. | A machine phase after `phielim` and before `floatfold` | [pressuresink](pressuresink.md) |
+| prologue | Reserves the stack the spiller asked for (`sub sp, N`) and gives it back (`add sp, N`) at every exit. | A machine phase after `parcopy` and before `peephole`, in every machine | [prologue](prologue.md) |
+| regalloc_input | Test support: the machine-phase list and the LIR a fixture has reached just before a chosen phase. | Tests of [`crate::backend::allocate`](allocate.md), [`crate::backend::ssaspill`](ssaspill.md), | [regalloc_input](regalloc_input.md) |
+| regclass | The register class of each value: the set of registers an instruction's operands allow it to be in. | Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate` and | [regclass](regclass.md) |
+| registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [registerinfo](registerinfo.md) |
+| regthrash | Renames a definition's register so that a copy after it is a copy of a register to itself. | First sub-pass of [`crate::backend::peephole`](peephole.md), gated on a register copy | [regthrash](regthrash.md) |
+| relayout | Lays a function's frame out a second time, with a hole for the spill slots, by moving each frame cell of the first layout. | In `machined_once` (`assemble.rs`), after the first layout is chosen, unless | [relayout](relayout.md) |
+| rmw | Selects a private load, update and store of one cell as a single memory-destination instruction, before register allocation. | During instruction selection, in the combining step of `isel/combined.rs`, | [rmw](rmw.md) |
+| schedule | Reorders independent register-and-immediate instructions after allocation so a consumer does not wait on its producer's latency. | Once per body, the machine phase after `loopslots` and before `jumps` | [schedule](schedule.md) |
+| selects | Turns each MIR `select` into a branch around an empty block and a phi, where the target has no conditional move. | Once per program in `driver::optimized`, after `fpconvert` and before the | [selects](selects.md) |
+| sharedstores | At -Os, a run of stores of one literal becomes the literal loaded once into a dead register, then register stores. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [sharedstores](sharedstores.md) |
+| shrinkwrap | Sets up a procedure's frame and kept registers where they are first needed, not at the entry, and takes them back only on the returns that path reaches. | `wrapped` runs when masm builds a procedure's items, for a procedure that | [shrinkwrap](shrinkwrap.md) |
+| slots | Frame slot sharing: two things share a slot when they are never live together. | - [`crate::backend::spiller`](spiller.md), which shares spill slots by the live range of | [slots](slots.md) |
+| spiller | Keeps a value the allocator would not hold in memory instead: a store after each definition, a reload before each use, or the value made again where it is read. | Inside the register allocator ([`crate::backend::allocate`](allocate.md)): once for the | [spiller](spiller.md) |
+| spillforward | Removes reloads of a frame slot that a register already holds on every path to it, and turns other reads of such a slot into reads of the register. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after `copysink` | [spillforward](spillforward.md) |
+| spillplacement | Decides, for each value being split, which edge bundles hold it in a register and which on the stack. | Not a pass: [`crate::backend::splitkit`](splitkit.md) queries it for each value it | [spillplacement](spillplacement.md) |
+| splitkit | Splits a live range into pieces held in registers where that pays, instead of spilling all of it. | Inside the register allocator ([`crate::backend::allocate`](allocate.md)), at the split | [splitkit](splitkit.md) |
+| ssarepair | Restores SSA after the spiller gave some values more than one definition. | Inside [`crate::backend::ssaspill`](ssaspill.md): `simplified` first, `repaired` last. | [ssarepair](ssarepair.md) |
+| ssaspill | Spills on SSA, before phi elimination: decides per block which values a register holds, and where the rest are stored and reloaded. | The first machine phase after `far-indirect-calls`, before `phielim`, on the | [ssaspill](ssaspill.md) |
+| stackusage | How much stack a program may use, as gcc's `-fstack-usage` and `-Wstack-usage` report it. | `elide_checks` is the `stack checks` step of assembly, once per module. | [stackusage](stackusage.md) |
+| stepflags | Removes a compare of a value with a constant when a step of the same value already sets those flags. | Once per block in instruction selection, after `comparefold` and before | [stepflags](stepflags.md) |
+| storecombine | Packs two neighbouring literal word stores into one dword store. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [storecombine](storecombine.md) |
+| storedhomes | The cells the optimizer proved hold a phi's value, as the body now stands. | [`crate::backend::spiller`](spiller.md) and [`crate::backend::floatassign`](floatassign.md) (`held`); | [storedhomes](storedhomes.md) |
+| target | What the machine has for the register allocator: operand needs, the segment registers, and the facts the allocator asks of each instruction. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [target](target.md) |
+| timing | Core-clock bounds of multiplies and divides, read from the CPU profile. | [`crate::backend::division`](division.md) (multiply by reciprocal against a divide) and | [timing](timing.md) |
+| twoaddr | Rewrites three-address arithmetic into x86's two-address form before register allocation. | A machine phase after `floatalloc` and before `coalesce` | [twoaddr](twoaddr.md) |
+| upperzero | Which 32-bit register roots hold zero in their upper half, and the `movzx` that makes it so where a 32-bit address needs it. | `established` is the last sub-pass of [`crate::backend::peephole`](peephole.md), run when | [upperzero](upperzero.md) |
+| valuetrack | Where each `-g` variable's value is over the emitted code. | On the emitted code of a procedure, from `debuginfo`, when `-g` places | [valuetrack](valuetrack.md) |
+| verify | Checks that a lowered body is well formed, between machine phases. | After instruction selection and after every machine phase when `LLRM_VERIFY` | [verify](verify.md) |

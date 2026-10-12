@@ -1,16 +1,17 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/layout.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/layout.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/layout.rs sha256:9af902a3892c149ccd353b26396d94c8899aa43306317c515171b50a39865bfe -->
+<!-- src: crates/backend/llrm-core/src/backend/layout.rs sha256:c9bed141200db01432c914b2a5b51f4f9e728eae849d82e25d8111f5c7756776 -->
 
 # layout
 
-A whole body, emitted -- and everything that has to move when it does.
+The pairs of branch conditions that are each other's inverse.
 
-Port of `qbopt/backend/layout.py`. Blocks are placed, implicit edges made
-explicit and branches threaded; `asm` then measures, shrinks every branch
-to a fixed point and emits. What comes back is bytes plus the relocations,
-because a relocated displacement is emitted as zero and the fixup that
-names it has to be moved to wherever the field ended up.
+## How it works
+`_PAIRS` lists each condition mnemonic with the one that is true exactly
+when it is false (`je`/`jne`, `jb`/`jae`, and the aliases of each).
+`_OPPOSITE` is the table in both directions. `jcxz` and `loop*` are absent
+on purpose: they have no inverse to name, so a block ending in one keeps its
+jump.
 
-Refuses the whole body where it cannot emit one op.
-
-Python's `id(op)` is the `Arc` pointer of an LIR occurrence.
+## Used by
+`jumps`, to invert a branch when it makes the other successor the
+fall-through.

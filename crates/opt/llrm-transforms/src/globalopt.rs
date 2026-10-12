@@ -1,8 +1,29 @@
-//! An internal global the module only ever loads from made `constant`, as
-//! LLVM's GlobalOpt marks one it finds never stored: a load of it is then
-//! its initializer's bytes (`memory::constant_bits`). The old BC raise
-//! exposed BC_CN's loader bytes at the program's entry
-//! (`raising_literals`); a global's initializer is those bytes here.
+//! Mark internal globals that are only ever loaded from as `constant`.
+//!
+//! # How it works
+//! A variable qualifies when it is internal or private, initialized, not yet
+//! `constant`, and not named by any other global's initializer. Every use of it
+//! in every function must then be a load's address, reached through constant
+//! `gep`s and `bitcast`/`addrspacecast`s of its address, and through the same
+//! instructions at run time as long as all their users load. Any other use (a
+//! store, a call argument, a compare, an escape into a value) disqualifies it.
+//!
+//! A qualifying variable gets `constant = true`. A load of it is then its
+//! initializer's bytes (`memory::constant_bits`), which the body passes fold.
+//! Every defined function is reported as changed so each body is run through
+//! its pipeline again.
+//!
+//! ```text
+//! @w = internal global i16 5       @w = internal constant i16 5
+//! load i16, ptr @w          =>     load i16, ptr @w   (reads as 5)
+//! ```
+//!
+//! # Runs
+//! Once, as a module pass before the per-body pipeline and before the
+//! interprocedural step. Not run at -O0.
+//!
+//! # See also
+//! LLVM's GlobalOpt, which also marks globals it finds never stored.
 
 use llrm_analysis::globalsaa::embedded;
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};

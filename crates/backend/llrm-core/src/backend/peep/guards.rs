@@ -1,5 +1,37 @@
-//! The guards `peephole.peep` names. Each answers one question about the
-//! matched instructions, their operands or the block around them.
+//! The guards `peephole.peep` names in `when`: each answers one question about
+//! the matched instructions, their operands or the block around them.
+//!
+//! # How it works
+//! A guard takes the walk's [`Cx`] first where it needs the block, then the
+//! operands or instructions the rule binds, and returns a bool. They fall into
+//! kinds.
+//!
+//! ```text
+//!   metadata    free(@k, set)         none of the set's metadata present
+//!   liveness    dead, flags_dead,     lanes or flags nothing reads after
+//!               flags_dead_out        the instruction or the block
+//!   encoding    encodable, no_longer, the rewrite encodes, in no more bytes
+//!               same_length,          than the original (via `select`)
+//!               splits_smaller, ...
+//!   operands    same_width, narrower, widths, roots, register classes,
+//!               same_root, segment    segments
+//!   addresses   same_cell, next_word, two cells are the same bytes, or
+//!               same_registers,       one word above the other
+//!               stack_based, ...
+//!   movement    independent,          an instruction between two matched
+//!               hoistable, delays,    ones neither reads nor redefines what
+//!               unchanged, clear_of   the rewrite moves across it
+//!   cost        doubles_by_add,       what the target's timings price lower
+//!               clears_before_...
+//! ```
+//!
+//! Instructions that write memory are never crossed by `delays`: proving them
+//! disjoint from a load belongs in MIR. `free` uses the bits of
+//! [`super::field`]; a rule names a `meta` set of them so a rewrite cannot
+//! drop a call's clobbers, a spill role or a group number.
+//!
+//! # Used by
+//! The code generated from `peephole.peep`, through [`super::walk`].
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

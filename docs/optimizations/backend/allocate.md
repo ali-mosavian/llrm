@@ -1,10 +1,169 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:466d744d49add97aa6bed2c1762459c1105ee960716c3647938db3831540da07 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:0bbe9eaca9c348ecbb43c890558d2eb85a6440f29c615279f3b40a20835d98f7 -->
 
 # allocate
 
-Port of `qbopt/backend/allocate.py`: registers for a lowered body, using
-greedy allocation with eviction.
+Assigns a register to every value of a lowered body, splitting and
+spilling the values that do not fit.
 
-LLVM's `RegAllocGreedy`: spilling is priced by `intervals::weights`, and
-fixed intervals go first.
+## How it works
+The allocator is greedy with eviction, after LLVM's `RegAllocGreedy`.
+Values are taken from a priority queue one at a time and each is given a
+register, or is moved, split or spilled. There is no interference graph:
+two values clash when their live intervals overlap while in the same
+register.
+
+### Inputs
+The body is machine-level LIR after `phielim`, `twoaddr` and `coalesce`,
+over virtual values with widths. Besides it the allocator reads:
+
+- pins: values already bound to a register (arguments, results, what an
+  instruction requires, see `constrain`);
+- the register classes (`classes`, `regclass`): which registers a value may
+  take, from how its operands use it;
+- the CPU profile, block frequencies and the frame (spill slots).
+
+### What stands for interference
+Three facts are kept for the body and recomputed incrementally whenever a
+rewrite changes it (`Facts`):
+
+```text
+ live intervals     value -> segments of instruction slots, + spill weight
+ LiveUnion          register root -> intervals placed in it   (no overlap)
+ Masks              points that destroy a register without naming it:
+                    calls (clobbers), 16-bit callees (clobbers_high:
+                    the upper half only), points that need DS (the
+                    data group)
+```
+
+A value may use a register when no value placed there overlaps its
+interval (`LiveUnion::busy`) and no mask point lies inside it
+(`_clobbered`). Registers are compared by root, so `AX` and `EAX` are one
+register; a mask on the upper half matters only to values wider than a
+word. The weight is the references to the value, weighted by block
+frequency (10 per loop level) and divided by its size plus a grace, less
+what its copies and folds would save; a value that must not be spilled
+(`unspillable`, `protected`) weighs infinity.
+
+### Preparing the body
+`RegAlloc::transform` first changes the body so that the greedy loop can
+treat every value alike, in this order:
+
+1. `constrain::distinct_roles` and `distinct_classes` copy a value that
+   needs two incompatible register sets at once (a word that is both base
+   and index of one address, or both a byte and an index) into one value per
+   role.
+2. `explicit_selectors` reaches a far cell through ES where its selector is
+   also read as a number.
+3. `narrowed` turns a call result nothing reads into a clobber.
+4. A pin outside the value's class is dropped where an instruction delivers
+   the value in that register, else it is an error; a value both pinned and
+   required in two registers is an error.
+5. `constrain::constrained` gives each register an instruction requires a
+   value of its own, live across that one instruction and copied in and out,
+   and returns those pins; `required` adds the rest.
+6. A value read once from a cell that holds, by an instruction that takes
+   the cell, is not held at all: the read stays a memory operand.
+
+`unallocatable` then refuses a body no assignment can fit: a value no
+register may hold, two pinned values live together in one register, or
+more unspillable values live at a point than there are registers.
+
+### The loop
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  pop["<b>pop a value v, stage S</b><br/><small>Assign, Split or Spill</small>"]:::src
+  order["<b>register order</b><br/><small>copy-partner votes first#59;<br/>neighbour-wanted later#59;<br/>DS last</small>"]:::mid
+  free(["<b>free register?</b><br/><small>not busy, not clobbered</small>"]):::mid
+  evict["<b>S = Assign or unspillable</b><br/><small>evict cheapest register<br/>holders' weight below v's<br/>(0 if a holder can move)#59;<br/>holders requeue at Assign</small>"]:::mid
+  split["<b>S = Split, v not a piece</b><br/><small>split v (splitkit): one<br/>block, by region over edge<br/>bundles, else per block#59;<br/>kept only if it pays</small>"]:::mid
+  recolor["<b>recolor</b><br/><small>move v's holders#59; depth 5,<br/>under 8 holders, 256 tries</small>"]:::mid
+  force["<b>v pinned or unspillable</b><br/><small>evict by force#59;<br/>victims go to Spill</small>"]:::mid
+  spill["<b>spill v and siblings</b><br/><small>sharing its slot (spiller)<br/>stores after defs, reloads<br/>before uses, unspillable</small>"]:::data
+  placed["<b>place, Done</b>"]:::out
+  changed["<b>body changed</b><br/><small>requeue</small>"]:::warn
+  pop -->|"queue: fixed, narrowest<br/>class, past Assign, longest"| order
+  order --> free
+  free -->|"yes"| placed
+  free -->|"no"| evict
+  evict --> placed
+  evict -->|"none: S := Split"| split
+  split -->|"pieces requeue at Assign,<br/>the rest at Spill"| changed
+  split -->|"else"| recolor
+  recolor --> placed
+  recolor -->|"else"| force
+  force --> placed
+  force -->|"else"| spill
+  spill --> changed
+```
+
+*One value through the allocator loop*
+
+An eviction records a cascade number so a value evicted by one that was
+itself evicted cannot ping-pong. A value that cannot be spilled may break
+the cascade of a spillable one.
+
+When a split or a spill changes the body, the facts are recomputed from
+what changed, pins are found again for the changed blocks, the union is
+refreshed, any placed value that now overlaps another or has a clobber in
+its range is unplaced, and every new, moved or unplaced value re-enters
+the queue. The loop stops when the queue is empty (`BUDGET` visits at
+most, 200000).
+
+Last, `_recolored_hints` moves a value into a copy partner's register when
+that register is free over its whole interval and joins more copies than
+the one it has, so each joined copy becomes a deleted move.
+
+### Candidates
+The first run (`regalloc base`) is a full allocation of the prepared body.
+If it spilled, and the profile has `search` (`-fallocation-search`; off at
+-O0), the spilled values suggest other shapes of the same body and each is
+allocated and priced (`_emitted`: instructions and memory operands
+weighted by block frequency); the cheapest wins.
+
+- `Addressed`: address arithmetic of spilled values made apart from users.
+- `Unfolded`: folded indexes of spilled values opened.
+- `Scoped`, `ScopedOpened`: loop-local copies of the base values a loop's
+  spills lost, protected from spilling.
+- `Retainable`: one spilled invariant base protected from spilling.
+- `Whole`: the body as it was, without splitting.
+
+Unless the search is exhaustive (`-fallocation-search-all`, -Omax) only
+the first shape in the order `Retainable`, `Scoped`, `Addressed`,
+`Unfolded` that the spills admit is tried, plus `Whole` without
+splitting. A trial is kept only if it is cheaper and spilled none of its
+protected values. The frame is restored between trials.
+
+### Applying
+`applied` replaces every operand's value by its register at its width
+(selector and address registers included), deletes identity moves and
+dead allocator copies, and refuses a body with a spill left. `datagroup`
+then restores DS where a value held it.
+
+## Runs
+Once per function and route in the machine phases (`regalloc`), after
+`coalesce` and before `parcopy`, at every -O level; `search` only widens
+the candidates tried. `assemble.rs` runs the whole machine list twice per
+function (allocator alone, and with `ssaspill`) and keeps the cheaper.
+The file also holds the per-block liveness rows (`live`, `live_rows*`)
+that other phases read.
+
+## Needs
+[`crate::backend::liveunion`](liveunion.md), [`crate::backend::live`](live.md),
+[`crate::backend::regclass`](regclass.md), [`crate::backend::constrain`](constrain.md),
+[`crate::backend::splitkit`](splitkit.md), [`crate::backend::spillplacement`](spillplacement.md),
+[`crate::backend::spiller`](spiller.md), [`crate::backend::datagroup`](datagroup.md) and
+[`crate::backend::frame`](frame.md).
+
+## See also
+- LLVM's `RegAllocGreedy`:
+  <https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/RegAllocGreedy.cpp>
+- The phase list: `crate::backend`.

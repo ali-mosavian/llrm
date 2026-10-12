@@ -1,8 +1,46 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/globaldce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globaldce.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/globaldce.rs sha256:c1b696432eb509d47630d85d7dd4dc6ff85d22e71237bfad671901730c61ad73 -->
+<!-- src: crates/opt/llrm-transforms/src/globaldce.rs sha256:1379a64cc01112b6b740663047eb46dd7fb083b3063f6f19d51c64291a63d584 -->
 
 # globaldce
 
-LLVM's GlobalDCE: a module's own body or variable that nothing live
-names -- no code outside the program, no live body, no live initializer
--- is deleted. A declaration stays: naming one asks the linker for it.
+Delete the module's own bodies and variables that nothing live names.
+
+## How it works
+A definition is a root when it is not deletable: a declaration, a global
+with external linkage, one the program exports (an entry point), or one
+named in `program.exports.kept`. Only internal and private definitions can
+be deleted, since no other module can name them.
+
+Liveness is a worklist from the roots. A live variable makes live every
+global its initializer names; a live function makes live every global named
+by its constant operands and its personality. Names are found through
+constant expressions (`globalsaa::embedded`), and a name in one module also
+makes live the definition the program resolves it to in another.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  r["<b>roots</b><br/><small>declarations, exported, kept</small>"]:::src
+  l["<b>live</b>"]:::opt
+  m["<b>more live</b>"]:::opt
+  d["<b>internal definitions</b><br/><small>not reached: deleted</small>"]:::warn
+  r --> l
+  l -->|"initializer, operands,<br/>personality name"| m
+```
+
+*Liveness from the roots*
+
+A declaration is never deleted: naming one asks the linker for it.
+Deleting renumbers the module's globals, so the program analyses are
+invalidated.
+
+## Runs
+Once, as a program pass after the interprocedural step, so the bodies that
+inlining made unreachable go before selection. Not run at -O0.
+
+## See also
+LLVM's GlobalDCE.

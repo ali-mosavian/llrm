@@ -1,17 +1,43 @@
-//! What a counted-loop rewrite places before the loop: its seeds, skip test
-//! and exit values. Adapted from llrm-core's `optimize/counting.rs`, the
-//! port of `qbopt/optimize/counting.py`; LLVM's counterpart is
-//! SCEVExpander, as IndVarSimplify and LoopRotate use it.
+//! What a counted-loop rewrite places before the loop: its seeds, skip test and
+//! exit values (LLVM's SCEVExpander, as IndVarSimplify and LoopRotate use it).
 //!
-//! Built only from `induction::CountedLoop`, so every pass that replaces a
-//! loop's counter enters and leaves the loop the same way.
+//! # How it works
+//! Everything is built from an `induction::CountedLoop` proof, so every pass
+//! that replaces a loop's counter enters and leaves the loop the same way. A
+//! `Seeds` names where the arithmetic goes (before `at`) and how wide it is.
 //!
-//! A seed is placed as it is made, before `Seeds::at`: the old ones were
-//! ops held for the caller to splice once its proof was complete, so a
-//! caller asks only once it will commit. `fresh` and `held` have no
-//! counterpart: a value is its instruction's result, and a phi takes a
-//! constant as it takes a value. `skip_guard` gives the compare; the
-//! caller branches on it, as the old caller placed the branch it returned.
+//! - `Seeds::computed` places `kind` of its arguments, or the constant where
+//!   both are constants, so a rewrite whose count and start are known places
+//!   nothing; `canonical::identities` folds the neutral terms of the rest.
+//! - `Seeds::widened` zero-extends a trip count to an index's width.
+//! - `Seeds::operand` and `constant` turn an affine term or a number into an
+//!   operand of a given width.
+//! - `skip_guard` builds the preheader compare that is true when the loop runs
+//!   no trips; the caller branches on it to the loop's exit.
+//! - `leaving` gives the new operands of the exit phis of a replaced counter:
+//!   its exit value after a trip and, where a guard may skip the loop, its
+//!   start after none.
+//!
+//! ```text
+//!  preheader:                         built before `at`:
+//!    br loop                  ==>       %trips = ...        Seeds::computed
+//!                                       %skip  = icmp ...   skip_guard
+//!                                       br %skip, exit, loop
+//!  exit:                              exit:
+//!    %r = phi [%i, latch]               %r = phi [%v, latch], [%i0, preheader]
+//! ```
+//!
+//! A seed is placed as it is made, so a caller asks for one only once it will
+//! commit to its rewrite.
+//!
+//! # Used by
+//! [`crate::fill`], [`crate::loopexit`], [`crate::window`] and [`crate::lsr`]
+//! build `Seeds` when they commit to replacing a loop's counter, and
+//! [`crate::exitfold`] and others take `constant` for operands. Not a pass: it
+//! runs only inside those.
+//!
+//! # See also
+//! [`crate::expand`] for sums.
 
 use llrm_analysis::cfg;
 use llrm_analysis::consts::{ARITH, masked};

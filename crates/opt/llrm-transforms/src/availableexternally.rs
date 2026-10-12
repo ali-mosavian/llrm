@@ -1,6 +1,25 @@
-//! LLVM's EliminateAvailableExternally: a body the program holds only to
-//! inline from is a declaration again once inlining is done, so no copy of
-//! it is emitted and what calls it still reaches the runtime's own routine.
+//! LLVM's EliminateAvailableExternally: a body held only to inline from becomes
+//! a declaration again once inlining is done.
+//!
+//! # How it works
+//! A function defined `available_externally` is given its body by a runtime's
+//! description so the inliner can price it against the call (it is a candidate
+//! at any size, since no copy of it is emitted). The inliner may replace the
+//! call by the body. What it does not replace stays a call to the runtime's own
+//! routine, so the body must not be emitted as a second copy.
+//!
+//! For every such function with a body the pass makes the global a declaration
+//! with external linkage; calls to it are untouched. It invalidates the program
+//! analyses only if it changed something.
+//!
+//! ```text
+//!  define available_externally @rt(..) { .. }       declare @rt(..)
+//!  call @rt(..)  (not inlined)               ==>    call @rt(..)
+//! ```
+//!
+//! # Runs
+//! A program pass. At -O1 and above it runs after the interprocedural step and
+//! `globaldce`, before `calleepop`; at -O0 it is the only pass that runs.
 
 use llrm_mir::module::{GlobalKind, Linkage};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
