@@ -9,7 +9,7 @@ One directory per benchmark, `bench/NAME/` (or `bench/parity/NAME/`, same layout
 
 ```
 bench/NAME/
-  NAME.bas  NAME.c  NAME.nib    one variant per language
+  NAME.bas  NAME.c  NAME.nib    one variant per language (the .bas is built three ways: bas, bq16, bq32)
   NAME.out                      what all three print
   bench.toml                    description, kernel names, gaps
   expected.toml                 the blessed counts (bench.py --bless)
