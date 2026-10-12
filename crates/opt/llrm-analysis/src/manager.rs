@@ -891,6 +891,74 @@ pub struct Registers;
 impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
+    const INCREMENTAL: bool = true;
+
+    /// A fact is of the values its value is made from alone (the edges of the
+    /// CFG are not read: a phi meets what its arms are), so the facts of
+    /// the values a change did not reach, by the uses of what it
+    /// touched, stand; the others are worked out again from them.
+    fn update(
+        previous: &Self::Result,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        Self::update_owned(Rc::new(previous.clone()), changes, context, layout, function, analyses)
+    }
+
+    fn update_owned(
+        previous: Rc<Self::Result>,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let mut kept = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
+        // The values touched, and the facts that were made from them, which no
+        // longer stand.
+        let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
+        let mut work = Vec::<ValueId>::new();
+        for change in changes {
+            let inst = match *change {
+                Change::Inserted { inst, .. }
+                | Change::Erased { inst, .. }
+                | Change::Moved { inst, .. }
+                | Change::Rewritten(inst) => inst,
+                Change::Cloned { to, .. } => to,
+                Change::BlockCreated(_) | Change::BlockErased(_) => continue,
+            };
+            if let Some(result) = function.instruction(inst).result
+                && touched.insert(result)
+            {
+                work.push(result);
+            }
+        }
+        // Every value to settle again: the touched, those whose fact was made
+        // from them, and the users of each, whose operands may now be
+        // known.
+        let mut dirty = touched.clone();
+        let mut seen = touched;
+        while let Some(value) = work.pop() {
+            kept.swap_remove(&value);
+            for user in function.users(value) {
+                if function.parent(user.user).is_none() {
+                    continue;
+                }
+                let Some(result) = function.instruction(user.user).result else { continue };
+                dirty.insert(result);
+                if kept.contains_key(&result) && seen.insert(result) {
+                    work.push(result);
+                }
+            }
+        }
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
+        Some(consts::known_from(&unit, kept, Some(&dirty)))
+    }
+
     fn run(
         context: &Context,
         layout: &DataLayout,

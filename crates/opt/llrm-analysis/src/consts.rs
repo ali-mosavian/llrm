@@ -839,6 +839,18 @@ pub fn holds(
 /// Every value this function computes that is a number, to a fixed point,
 /// without memory (`known_walked` has it).
 pub fn known(unit: &Unit) -> IndexMap<ValueId, Known> {
+    known_from(unit, IndexMap::default(), None)
+}
+
+/// `known`, from the facts `kept` of the values `dirty` leaves out (all of them
+/// where it is none): what a value is known to be is a function of the values
+/// it is made from alone, so a value no change reached has the fact it had, and
+/// the others are worked out again.
+pub fn known_from(
+    unit: &Unit,
+    kept: IndexMap<ValueId, Known>,
+    dirty: Option<&llrm_mir::dense::IdSet<ValueId>>,
+) -> IndexMap<ValueId, Known> {
     REGISTER_DERIVATIONS.with(|count| count.set(count.get() + 1));
     // Each access asks whether its frame object is exposed: found once for the
     // body, if no caller has.
@@ -847,37 +859,61 @@ pub fn known(unit: &Unit) -> IndexMap<ValueId, Known> {
     #[cfg(test)]
     SOLVED.with(|solved| solved.set(solved.get() + 1));
     let function = unit.function;
-    let mut facts = IndexMap::<ValueId, Known>::default();
+    let mut facts = kept;
     let empty = Cells::default();
+    // A value's fact from the facts of the values it is made from: a join is
+    // known where every path into it agrees.
+    let settled = |inst: InstId, facts: &IndexMap<ValueId, Known>| -> Option<Known> {
+        let op = function.instruction(inst);
+        if op.opcode == Opcode::Phi {
+            let seen = op.operands.iter().step_by(2).map(|&one| incoming(unit, one, facts)).collect::<Vec<_>>();
+            let known = seen.iter().flatten().collect::<Vec<_>>();
+            if seen.is_empty()
+                || known.len() != seen.len()
+                || known.iter().map(|one| (&one.n, one.width)).collect::<BTreeSet<_>>().len() != 1
+            {
+                return None;
+            }
+            return Some((*known[0]).clone());
+        }
+        _result(unit, inst, facts, Some(&empty))
+    };
+    if let Some(dirty) = dirty {
+        // From the facts that stand, each value to settle in turn, and the
+        // users of each that came to a fact: the facts only grow, so it
+        // ends where the fixed point does.
+        let defining = |value: ValueId| match function.value(value).def {
+            llrm_mir::module::ValueDef::Instruction(inst) => function.parent(inst).map(|_| inst),
+            llrm_mir::module::ValueDef::Argument(_) => None,
+        };
+        let mut region = dirty.clone();
+        let mut queue: Vec<InstId> = dirty.iter().filter_map(defining).collect();
+        while let Some(inst) = queue.pop() {
+            let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else { continue };
+            let Some(found) = settled(inst, &facts) else { continue };
+            facts.insert(target, found);
+            for user in function.users(target) {
+                if function.parent(user.user).is_some() {
+                    region.extend(function.instruction(user.user).result);
+                    queue.push(user.user);
+                }
+            }
+        }
+        return constant_cycles::propagated(unit, facts, None, Some(&region));
+    }
+    let walked: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
     let mut changing = true;
     while changing {
         changing = false;
-        for (_, inst) in function.walk() {
-            let op = function.instruction(inst);
-            let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else {
-                continue;
-            };
-            // A join is known where every path into it agrees.
-            if op.opcode == Opcode::Phi {
-                let seen = op.operands.iter().step_by(2).map(|&one| incoming(unit, one, &facts)).collect::<Vec<_>>();
-                let known = seen.iter().flatten().collect::<Vec<_>>();
-                if seen.is_empty()
-                    || known.len() != seen.len()
-                    || known.iter().map(|one| (&one.n, one.width)).collect::<BTreeSet<_>>().len() != 1
-                {
-                    continue;
-                }
-                facts.insert(target, (*known[0]).clone());
-                changing = true;
-                continue;
-            }
-            if let Some(found) = _result(unit, inst, &facts, Some(&empty)) {
+        for &inst in &walked {
+            let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else { continue };
+            if let Some(found) = settled(inst, &facts) {
                 facts.insert(target, found);
                 changing = true;
             }
         }
     }
-    constant_cycles::propagated(unit, &facts, None)
+    constant_cycles::propagated(unit, facts, None, None)
 }
 
 thread_local! {
@@ -1371,7 +1407,7 @@ pub fn known_walked_over(
         }
         allowed = Some(resolved);
     };
-    constant_cycles::propagated(unit, &facts, None)
+    constant_cycles::propagated(unit, facts, None, None)
 }
 
 #[cfg(test)]
