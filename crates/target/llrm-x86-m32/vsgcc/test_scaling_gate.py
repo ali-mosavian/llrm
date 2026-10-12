@@ -1039,6 +1039,13 @@ def test_header_copy_on_a_nest_derives_the_registers_of_what_each_rotation_touch
     values it is made from alone, so the manager brings it up to date from what the rotation touched: 42 Minstr, x2.7. And `mir rotate` cloned
     every loop of the nest (a set of its blocks each) to look at one for each rotation: 93 Minstr, x5.1 for the doubling; 61, x3.8. A bound of 100
     on registers and 80 on rotate fails the first."""
+
+
+def test_pressure_is_brought_up_to_date_for_the_values_a_change_named(tmp_path):
+    """nest(64) at -O2 with -ftree-ch: lsr changed a loop 25 times and each time the live sets of the whole function (`analysis pressure`) were
+    derived afresh, though the change left the edges as they were and named a handful of values: 326 Minstr, 1,347 at N=128. The log keeps
+    what an operand was, so the values a change stopped reading are named too, and only theirs are followed again: 118 and 597.
+    A bound of 200 at N=64 fails the first."""
     source = tmp_path / "nest64.c"
     source.write_text(scaling.nest(64))
     command = gate.levels_time.command("llrm", "O2", source)
@@ -1047,3 +1054,7 @@ def test_header_copy_on_a_nest_derives_the_registers_of_what_each_rotation_touch
     assert own["analysis registers"] > 5.0, f"premise: registers were derived ({own['analysis registers']:.1f} Minstr)"
     assert own["analysis registers"] <= 100.0, f"registers {own['analysis registers']:.1f} Minstr"
     assert own["mir rotate"] <= 80.0, f"rotate {own['mir rotate']:.1f} Minstr"
+
+
+    assert own["analysis pressure"] > 20.0, f"premise: pressure was derived ({own['analysis pressure']:.1f} Minstr)"
+    assert own["analysis pressure"] <= 200.0, f"{own['analysis pressure']:.1f} Minstr"

@@ -929,7 +929,16 @@ impl Analyses {
             // Asking of a long log again and again is more than the run it
             // saves.
             if A::SKIPS
-                && changes.len() <= 256
+                // The entries that tell what an operand was are not changes of
+                // their own.
+                && changes
+                    .iter()
+                    .filter(|one| !matches!(
+                        one,
+                        crate::module::Change::Operand { .. } | crate::module::Change::Operands { .. }
+                    ))
+                    .count()
+                    <= 256
                 && (!A::READS_OUTER || Rc::ptr_eq(&outer, &self.outer))
                 && A::unaffected(changes, context, function)
             {

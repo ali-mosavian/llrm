@@ -968,7 +968,9 @@ impl Analysis for Registers {
                 | Change::Moved { inst, .. }
                 | Change::Rewritten(inst) => inst,
                 Change::Cloned { to, .. } => to,
-                Change::BlockCreated(_) | Change::BlockErased(_) => continue,
+                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Operand { .. } | Change::Operands { .. } => {
+                    continue;
+                }
             };
             if let Some(result) = function.instruction(inst).result
                 && touched.insert(result)
@@ -1164,6 +1166,7 @@ pub fn reached_by(
             Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
             Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
             Change::Rewritten(inst) => (inst, Vec::new()),
+            Change::Operand { .. } | Change::Operands { .. } => continue,
             Change::Cloned { to, .. } => (to, Vec::new()),
         };
         if function.instruction(inst).opcode.is_terminator() {
