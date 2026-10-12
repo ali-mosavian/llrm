@@ -14,6 +14,11 @@
 [compiler]
 paths = ["crates/**", "src/**", "build.rs", "Cargo.toml", "Cargo.lock", "**/Cargo.toml", "rust-toolchain.toml", ".cargo/**"]
 
+# Files the integration tests run or read without naming them in a test (the tools the build bootstraps, the requirement variables):
+# a diff of only these still plans `integration`. tests/dwarf.rs reads WDUMP, the tool toolchain/wdump.sh builds.
+[integration_inputs]
+paths = ["toolchain/**", "tools/debug-gate.env"]
+
 [inert]
 paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**", ".zed/**"]
 
