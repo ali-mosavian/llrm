@@ -28,6 +28,33 @@
 //!    %h = fadd double %g, 0.5    0.5 not an integer: not exact
 //! ```
 //!
+//! # Example
+//! Floats converted from 16-bit integers (`%a`, `%b`) are bounded integers, so
+//! sums stay exact:
+//!
+//! ```mir
+//! define void @f(i16 %a, i16 %b, i1 %c) {
+//! b0:
+//!   %x = sitofp i16 %a to float
+//!   %y = sitofp i16 %b to float
+//!   %sum = fadd float %x, %y
+//!   %product = fmul float %x, %y
+//!   ; ...
+//!   %half = fmul float %x, 0.5
+//!   ; ...
+//! }
+//! ```
+//!
+//! | Value | `exact` | Why |
+//! | --- | --- | --- |
+//! | `%x` | yes | in `[-32768, 32767]` |
+//! | `%sum` | yes | in `[-65536, 65534]` |
+//! | `%product` | no | up to 2^30, past 2^24 |
+//! | `%half` | no | 0.5 is not an integer |
+//!
+//! From unit test `test_integer_inputs_bound_their_float_work` in
+//! `floatbounds_tests.rs`.
+//!
 //! # Provides
 //! `exact`, `evaluated`, `_memory`. No pass consumes them: only this module's
 //! tests call them, and `exact` fails unless the caller supplies the loop

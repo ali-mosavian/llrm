@@ -6,10 +6,10 @@ For frontend authors and contributors to `decide`, `jumpthread` and isel. A mult
 
 `switch` takes one integer selector, ordered `(value, block)` cases and a default. Destinations may repeat; duplicate case values may not. Passes that read it:
 
-- `decide` ([`decide.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/decide.rs#L171)) selects the case a known selector takes.
+- `decide` ([`decide.rs`](../../optimizations/passes/decide.md)) selects the case a known selector takes.
 - `jumpthread` threads a switch's edges (`jumpthread.rs`) and, from -O2, the switch of a loop's state ([levels](../levels.md)).
 - `loopclone` remaps cases and default, keeping successor phis; `loopmotion` and `peelsize` read it.
-- isel ([`isel.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/isel.rs#L1504)) expands it to compares and branches; a case equal to the default needs no compare.
+- isel ([`isel.rs`](../../optimizations/backend/isel.md)) expands it to compares and branches; a case equal to the default needs no compare.
 
 ```
  switch i16 %sel, label %d [ 1: %A  2: %A  3: %d ]

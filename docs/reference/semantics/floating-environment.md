@@ -4,7 +4,7 @@ For contributors adding a floating-point optimization. States what the compiler 
 
 ## What MIR assumes
 
-MIR observes no floating-point exception and states no rounding mode or flush-to-zero setting. A fact about a float result is therefore kept only when it holds under every mode: `floatfacts` proves a result *exact in its format*, and only then does `floatfold` replace it ([constant-propagation](../../optimizations/constant-propagation.md)). Nothing reassociates float arithmetic, assumes no NaNs, or changes a rounding conversion. A strict-order float recurrence keeps its iteration order (`floatloop` runs only exact ones).
+MIR observes no floating-point exception and states no rounding mode or flush-to-zero setting. A fact about a float result is therefore kept only when it holds under every mode: `floatfacts` proves a result *exact in its format*, and only then does `floatfold` replace it ([constant-propagation](../../optimizations/passes/fold.md)). Nothing reassociates float arithmetic, assumes no NaNs, or changes a rounding conversion. A strict-order float recurrence keeps its iteration order (`floatloop` runs only exact ones).
 
 This matches LLVM's model: exception handling and rounding are separate properties, and a pass that reuses a value must know both (`SimpleValue::canHandle` in LLVM's `EarlyCSE.cpp` rejects strict-exception and dynamic-rounding operations).
 

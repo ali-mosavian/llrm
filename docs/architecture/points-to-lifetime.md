@@ -15,22 +15,18 @@ escape phase is redone per configuration. See [modref.md](modref.md).
 
 ## What an edit must do
 
-```
- edit                          kept answer
- erase / use of a subset   --> unchanged (a superset stays sound)
- derived value (gep, cast) --> union of operands'; a back-edge phi widens
- new load of a pointer     --> escaped or stored-to objects, and Unknown
- new alloca                --> new object, not escaped
- stored pointer, new call  --> invalidate the body
- copied block or insn      --> invalidate (no escaped_before entry)
- moved insn                --> escape later or reader earlier: sound;
-                               otherwise invalidate
- inline, signature change  --> invalidate (restrict roots and Parameter(i)
-                               renumber)
- address rebuilt on a      --> derive from the new base
-   new base (lsr, gepoffset)
- callee declaration change --> drops every body's answer in the module
-```
+| Edit | Kept answer |
+|---|---|
+| erase / use of a subset | unchanged (a superset stays sound) |
+| derived value (gep, cast) | union of operands'; a back-edge phi widens |
+| new load of a pointer | escaped or stored-to objects, and Unknown |
+| new alloca | new object, not escaped |
+| stored pointer, new call | invalidate the body |
+| copied block or insn | invalidate (no escaped_before entry) |
+| moved insn | escape later or reader earlier: sound; otherwise invalidate |
+| inline, signature change | invalidate (restrict roots and Parameter(i) renumber) |
+| address rebuilt on a new base (lsr, gepoffset) | derive from the new base |
+| callee declaration change | drops every body's answer in the module |
 
 A missing `escaped_before` entry must read as `Unknown`, not as nothing
 escaped. An `LLRM_CHECK_*` switch that asserts the kept answer is a superset of

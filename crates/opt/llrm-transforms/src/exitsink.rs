@@ -1,22 +1,68 @@
 //! An add, subtract or extension in a loop that only exit phis read, moved to
-//! those exits: LLVM's LICM sinking an instruction only used outside the
-//! loop, a copy to each exit that reads it. The last trip's update of a
-//! pointer strength reduction carried is computed once, on the way out, and
-//! so is the `sext` of a narrow counter whose value `work += i` reads after
-//! the loop (mandel: `inc cx; movsx eax,cx; cmp cx,20h` every trip).
+//! those exits: LLVM's LICM sinking an instruction only used outside the loop.
 //!
-//! Adapted from llrm-core's `optimize/exitsink.rs`. Each operand the loop
-//! defines is read through an exit phi, as LCSSA has it; an invariant one
-//! directly. The old one moved one a call; this one repeats to a fixed
-//! point.
+//! # How it works
+//! A candidate is an `add`, `sub`, `sext`, `zext` or `trunc` in a loop whose
+//! result is read only by phis outside the loop, one of which has this value as
+//! its only input (an LCSSA exit phi). The operation is computed in the exit,
+//! in place of the phi, and the loop's copy goes once nothing reads it. Each
+//! other exit that reads it takes its own copy in its turn.
 //!
-//! Dropped, with no rich-MIR counterpart: the refusal of a body whose
-//! opaque or barrier operations read registers their operands do not name,
-//! flags live into the exit, other results of the moved operation read
-//! elsewhere, and its stack and x87 effects.
+//! An operand the loop defines is read through an exit phi, as LCSSA has it
+//! (reusing one that exists); an invariant operand is read directly. The
+//! rewrite repeats to a fixed point, so a chain of updates moves together.
 //!
-//! The old test is skipped there: its fixture spied on `strength.reduced`.
-//! These are new.
+//! ```text
+//!  loop:  %p1 = add %p, 2          loop:  (the add is gone)
+//!         ...                             ...
+//!  exit:  %r = phi [%p1, latch]    exit:  %q = phi [%p, latch]
+//!                             ==>        %r = add %q, 2
+//! ```
+//!
+//! The last trip's update of a pointer strength reduction carried is computed
+//! once, on the way out, and so is the `sext` of a narrow counter whose value
+//! `work += i` reads after the loop (mandel: `inc cx; movsx eax,cx; cmp cx,20h`
+//! every trip).
+//!
+//! # Example
+//! Before (`looped("add i16 %i, 40", "%i.next")`):
+//!
+//! ```mir
+//! b1:
+//!   %i = phi i16 [ 0, %b0 ], [ %i.next, %b1 ]
+//!   %i.next = add i16 %i, 1
+//!   %last = add i16 %i, 40
+//!   %more = icmp ult i16 %i.next, %n
+//!   br i1 %more, label %b1, label %b2
+//!
+//! b2:
+//!   %e = phi i16 [ %last, %b1 ]
+//!   ret i16 %e
+//! }
+//! ```
+//!
+//! After, `b2` as the test asserts it (`%last` leaves `b1` once nothing reads
+//! it):
+//!
+//! ```mir
+//! b2:
+//!   %i.lcssa = phi i16 [ %i, %b1 ]
+//!   %0 = add i16 %i.lcssa, 40
+//!   ret i16 %0
+//! }
+//! ```
+//!
+//! From unit test `test_final_update_moves_to_the_exit` in `exitsink_tests.rs`.
+//!
+//! # Runs
+//! Step 4 of [`crate::indvars`]: on whenever `indvars` is, in the fixed point
+//! and after the loop-header copy. Not at -O0; off with `-fno-strength-reduce`.
+//!
+//! # Keeps
+//! Blocks and edges are unchanged; dominators and loops are preserved.
+//!
+//! # See also
+//! [`crate::exitfold`], [`crate::lcssa`]; LLVM LICM `sinkRegion`.
 
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::Loop;
