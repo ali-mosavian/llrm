@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/peelsize.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/peelsize.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/peelsize.rs sha256:2a2f2c3eefe7d1353bdd3adf45185d236d82024351161c1224aa36e70342107e -->
+<!-- src: crates/opt/llrm-analysis/src/peelsize.rs sha256:79989c120a14483b8c69613a4ac3fa3b50d40eb12df32363de52dfad0683aca1 -->
 
 # peelsize
 

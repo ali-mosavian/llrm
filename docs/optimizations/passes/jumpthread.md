@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumpthread.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumpthread.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumpthread.rs sha256:2f527e88a30af4c8bb68baf2e33926e4c0351de94ee4c565a07e0cc0235e9c64 -->
+<!-- src: crates/opt/llrm-transforms/src/jumpthread.rs sha256:89192d023004c1819d232c38ac81fa4a9fc25ea47d7f722ff553615f0b9e7f17 -->
 
 # jumpthread
 

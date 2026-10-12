@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/addresssink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/addresssink.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/addresssink.rs sha256:11942ebaa547503f2c082e3425ddc1c9d0557e39c9594c623580e055f00131cb -->
+<!-- src: crates/opt/llrm-transforms/src/addresssink.rs sha256:8d2784d96968ae108c9c0828bcef3dfdabcb9ec3e0712b5ae3558f32c1790da4 -->
 
 # addresssink
 

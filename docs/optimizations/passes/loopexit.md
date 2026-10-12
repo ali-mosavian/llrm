@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopexit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopexit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopexit.rs sha256:47e3b39fc56e1370799b7e0cbd7d651d71eea3cb5d09735fa34a67bdecc4a854 -->
+<!-- src: crates/opt/llrm-transforms/src/loopexit.rs sha256:482c57810c44c27ff99fbb18a340f4993922362220bd6c3d3bac0f8ef7be8974 -->
 
 # loopexit
 

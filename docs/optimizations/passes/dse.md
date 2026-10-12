@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dse.rs sha256:b4194cd2857f23e8c801d3d7862a5a94625ddbc15e8a952a2d230465543d760a -->
+<!-- src: crates/opt/llrm-transforms/src/dse.rs sha256:205b251293bcfdff79dd803f08b0ee932dc96098ea85e6b83da83f492f73bbe3 -->
 
 # dse
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/copyprop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/copyprop.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/copyprop.rs sha256:5f31f7cf79e743ffe81c5f421cf27cf1727264f857df1935658a73905273f50d -->
+<!-- src: crates/backend/llrm-core/src/backend/copyprop.rs sha256:a9bf161ea430a2750d67b6850b1d9b9f7c37804d8a988cdde965598070cbc544 -->
 
 # copyprop
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/frameescape.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/frameescape.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/frameescape.rs sha256:139b4fcca73d0bf905958f5ffdb4baa96e6910a7c727679e6299f67226714d37 -->
+<!-- src: crates/opt/llrm-analysis/src/frameescape.rs sha256:4ab924cd74173df8319987ad31b7639e43c513faf0511efb8f352a5e02f4dae9 -->
 
 # frameescape
 

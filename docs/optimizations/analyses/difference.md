@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/difference.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/difference.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/difference.rs sha256:06dad0771de38577005f284690144dc8591d750cc6820959423a7e28ec957622 -->
+<!-- src: crates/opt/llrm-analysis/src/difference.rs sha256:5ffed67f8b9a9cc5be422436a3f189398038b411fbedc280daa0a469177363b8 -->
 
 # difference
 

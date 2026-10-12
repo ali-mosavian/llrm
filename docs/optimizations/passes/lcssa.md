@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lcssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:be2b2290666a8643af04496ca29548df8746140309af77cc1d822ff93dca10dc -->
+<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:2436ad09e4eff1c8e10a0493519d05e6247e05dbe6b00d3af498bded2ff14024 -->
 
 # lcssa
 

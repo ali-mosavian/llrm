@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/sharedstores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/sharedstores.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/sharedstores.rs sha256:1fce821fe6c4f1942df03aeddd8d9076c50cd012311de2be1301f1c4ee846e9c -->
+<!-- src: crates/backend/llrm-core/src/backend/sharedstores.rs sha256:b5c36cdbe6de272a2b2565e04144f134904235a05715720684a606ad06ddada2 -->
 
 # sharedstores
 

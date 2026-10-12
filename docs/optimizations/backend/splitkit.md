@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/splitkit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/splitkit.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:1f4fbf6b03537458f359963d689959ad15fdd450d3551fc4785d15d973d01e46 -->
+<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:e12ff9b10a5df330637005807838df4ffee6997864d9c575c2b6e7e4da053e0a -->
 
 # splitkit
 

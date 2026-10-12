@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lower_int64.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lower_int64.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lower_int64.rs sha256:c748ed7f9d25b76e6fc65288884b9d8f77e80081dccfdec3eab21736bb1969b7 -->
+<!-- src: crates/backend/llrm-core/src/backend/lower_int64.rs sha256:ff93bc8b89f2f5a055280aec2f1dd9f6fa53fba61be3f62f166060c8de54ff77 -->
 
 # lower_int64
 

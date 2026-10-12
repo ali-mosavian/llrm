@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/masm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/masm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:087692eb09bc964756bb6490b209844ca254a356f9990a2863693274ed194162 -->
+<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:edf9275fd345378911eed3812899bc264ec20ad658abc9d51235960675245324 -->
 
 # masm
 

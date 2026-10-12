@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/peel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/peel.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:c3f446819a3fa00b50b19edd645efe3602a2e1d28dd005da3378dd15180875df -->
+<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:69b00cf0d4bcaa3994a3ed1359d05de1dc0cc84460e63805050b2f8c30c62e91 -->
 
 # peel
 

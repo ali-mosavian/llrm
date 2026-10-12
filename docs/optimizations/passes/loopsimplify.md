@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:e75da5d5b3f7f990c8188df53b6c07f91a6a747fe65b5ef90bee9a2adcd49f08 -->
+<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:c3f01a46a4dbc48531f492c4658f299e906f6e730d150afee4ef8907c78bea41 -->
 
 # loopsimplify
 

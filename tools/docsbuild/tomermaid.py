@@ -413,7 +413,6 @@ def graph(opts, body) -> Result:
             else:
                 head.append(f"  classDef {c} fill:{f},stroke:{s},stroke-width:2px,color:{t},rx:12px,ry:12px")
     head.append(f"  {LINK_STYLE}")
-    bold = [i for i, e in enumerate(edges) if e.arrow == "==>"]
     out = head + lines + [f"  {s}" for s in styles]
     return Result("\n".join(out), opts.get("title", (0, ""))[1])
 

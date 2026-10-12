@@ -85,7 +85,7 @@ def section_line(lines: list[str], names: tuple[str, ...]) -> str:
                 fenced = not fenced
             if not fenced and line.startswith("# "):
                 inside = line[2:].strip() == name
-            elif inside and line.strip() and not line.lstrip().startswith("```"):
+            elif inside and not fenced and line.strip() and not line.lstrip().startswith("```"):
                 return line.strip()
     return ""
 

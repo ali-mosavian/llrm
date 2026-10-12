@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/availableexternally.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/availableexternally.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/availableexternally.rs sha256:6877eac894ec9839b92e1fb7a4af848604592e2fdc7aab4df9c1ee83003424ec -->
+<!-- src: crates/opt/llrm-transforms/src/availableexternally.rs sha256:b7ca47425a71bb93117c57039e17a071b8a26d24206f1e9f7b3d8e371816a080 -->
 
 # availableexternally
 

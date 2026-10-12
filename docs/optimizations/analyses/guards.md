@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/guards.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/guards.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/guards.rs sha256:3648963c7f74f5bf6cb0ca66c713029b129cee1bef417036858b517e89034d64 -->
+<!-- src: crates/opt/llrm-analysis/src/guards.rs sha256:2c4653f7b6009e6b9b260f756c121ba4528dfaaf0aa5b13d824fe681cf616ff5 -->
 
 # guards
 

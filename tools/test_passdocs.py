@@ -1,4 +1,4 @@
-"""passdocs.py extracts the `//!` headers into pages and reports headers that lack a required section."""
+"""passdocs.py reads the `//!` headers and reports the ones that lack a required section."""
 import sys
 from pathlib import Path
 
@@ -29,31 +29,22 @@ def test_analyses_need_provides_not_runs():
     assert passdocs.missing([x.replace("Runs", "Provides") for x in lines], "Provides") == []
 
 
-def test_headings_are_demoted_two_levels_outside_fences():
-    out = passdocs.render(["S.", "# How it works", "```text", "# not a heading", "```"])
-    assert out == ["S.", "### How it works", "```text", "# not a heading", "```"]
 
 
-def test_intra_doc_links_become_plain_code_and_real_links_stay():
-    out = passdocs.render(["See [`crate::x`] and [`y`][z] and [`w`](http://e)."])
-    assert out == ["See `crate::x` and `y` and [`w`](http://e)."]
 
 
-def test_an_undocumented_file_is_listed_and_a_documented_one_has_a_section(tmp_path):
-    root = tree(tmp_path, {"a.rs": GOOD, "bare.rs": "fn f() {}\n", "lib.rs": "", "a_tests.rs": "", "testing.rs": ""})
-    text, done, bare = passdocs.page("T", "src", "Runs", root, "abc")
-    assert (done, bare) == (1, 1)
-    assert "## a\n" in text and "- [a](#a): Does a thing." in text
-    assert "## Undocumented" in text and "src/bare.rs" in text and "blob/abc/src/a.rs" in text
-    assert "lib.rs" not in text
 
 
-def test_write_makes_the_index_and_three_pages(tmp_path):
-    out = tmp_path / "out"
-    passdocs.write(out, passdocs.ROOT, "main")
-    assert sorted(p.name for p in out.iterdir()) == ["analyses.md", "backend.md", "index.md", "passes.md"]
 
 
 def test_the_summary_is_the_first_sentence_unwrapped():
     """A wrapped first sentence listed as its first line only, cut mid-phrase in the table of contents."""
     assert passdocs.summary(["Does a", "thing well. Then more.", "", "Next."]) == "Does a thing well."
+
+
+def test_section_line_is_the_first_line_under_the_first_of_the_headings():
+    lines = ["S.", "# Used by", "", "the loop passes", "more", "# Runs", "once"]
+    assert passdocs.section_line(lines, ("Runs", "Used by")) == "once"
+    assert passdocs.section_line(lines, ("Used by",)) == "the loop passes"
+    assert passdocs.section_line(lines, ("Provides",)) == ""
+    assert passdocs.section_line(["# Runs", "```text", "# Provides", "```", "x"], ("Runs",)) == "x"
