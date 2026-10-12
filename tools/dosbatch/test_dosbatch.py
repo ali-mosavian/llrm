@@ -225,3 +225,13 @@ def test_a_program_run_on_its_own_is_not_given_the_microsoft_install_as_v(tmp_pa
 
     assert "mount v" not in script("exe")
     assert "mount v" in script("obj")
+
+
+def test_a_program_whose_screen_is_compared_keeps_the_mount_so_its_rows_line_up_with_the_reference(tmp_path):
+    """Dropping V: for every exe job emptied the rows the mount messages had filled: 71 test_qbrt programs failed
+    "row 3: want 80 cells got 0" against BCOM45's screen."""
+    exe = tmp_path / "P.EXE"
+    exe.write_bytes(b"MZ")
+    with mock.patch.object(dosbatch, "_launch", return_value=None), mock.patch.object(dosbatch, "collect", return_value={}):
+        dosbatch.run([dosbatch.Job("J", "exe", exe, screen=True)], tmp_path / "w")
+    assert "mount v" in (tmp_path / "w" / "jobs.txt").read_text()
