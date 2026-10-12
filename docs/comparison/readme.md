@@ -41,3 +41,5 @@ Two processors are in play: the 32-bit comparison counts a protected-mode 486 st
 - [vs-basic](vs-basic.md): llrm-qb against the BC compilers of QuickBASIC 4.5, PDS 7.1 and VBDOS: counts, sizes, output.
 
 Other instruments, and what each answers: [measuring](../working/measurement/readme.md). Compile-time method and the per-pass tools: [compile-time](../working/measurement/compile-time.md).
+
+The gaps above are tracked in [#1534](https://github.com/ali-mosavian/llrm/issues/1534).
