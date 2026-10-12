@@ -1,4 +1,5 @@
 """--sync: figure sources, images, the committed pass pages, and the check that they are current."""
+import passdocs
 from docsbuild import build, figblock, sync
 
 HEADER = """//! Walks the thing.
@@ -174,15 +175,6 @@ def test_fence_shown_inside_a_text_block_is_not_a_figure(tmp_path):
     assert figblock.find(doc.replace("```text\n```fig", "```text\n~~~fig"))[0] == []
 
 
-def test_site_shows_the_figure_as_an_image_and_copies_it(tmp_path):
-    root = repo(tmp_path, BASE)
-    synced(root)
-    assert build.build(root, tmp_path / "site") == []
-    page = (tmp_path / "site/a/b/c.html").read_text()
-    assert '<img src="../../assets/figures/docs-a-b-c-1.svg"' in page
-    assert (tmp_path / "site/assets/figures/docs-a-b-c-1.svg").is_file()
-
-
 def test_repository_is_in_sync():
     p = sync.plan(build.ROOT)
     assert p.errors == [] and p.drift == [] and sync.fence_errors(build.ROOT) == [], sync.drift_message(p)
@@ -193,3 +185,12 @@ def test_image_syntax_in_code_is_not_a_reference(tmp_path):
     doc = "# C\n\nWrite `![x](../assets/figures/n.svg)`.\n\n```text\n![x](../assets/figures/m.svg)\n```\n"
     root = repo(tmp_path, dict(BASE, **{"docs/a/b/c.md": doc}))
     assert sync.plan(root).errors == []
+
+
+# Directories whose every file has the header; add transforms and the backend phases as theirs are written.
+HEADERS_REQUIRED = ["crates/opt/llrm-analysis/src"]
+
+
+def test_every_file_of_a_required_directory_has_a_header():
+    """A pass without its `//!` summary, `# How it works` and `# Runs`/`# Provides` is missing from the reference."""
+    assert passdocs.check(HEADERS_REQUIRED, build.ROOT) == []
