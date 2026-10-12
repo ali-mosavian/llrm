@@ -16,7 +16,9 @@
 
 enum { OCTANTS = 8, FIXED = 256, TURN_COUNTS = 8 };
 
-static double start_angle, end_angle, aspect_ratio;
+static double start_angle, end_angle;
+static long aspect_scale; /* the aspect B$CASP was given, in 256ths of the scaled axis */
+static int aspect_x;      /* and whether the x axis is the one scaled */
 static int has_start, has_end, has_aspect;
 
 void B_CSTT(float angle)
@@ -31,9 +33,25 @@ void B_CSTO(float angle)
     has_end = 1;
 }
 
+/* B$CASP: QB rt/circle.asm.  The ratio over 1 scales x by its inverse; the
+   256ths are rounded, and a negative or zero ratio is mapped as BCOM45 does so
+   that it draws what the interpreters drew (GORILLA's explosion gives -1.57): a
+   low byte of zero with a high byte is a ratio of 1, otherwise only the low
+   byte counts. */
 void B_CASP(float ratio)
 {
-    aspect_ratio = ratio;
+    double r = ratio, n;
+    long whole;
+
+    aspect_x = r >= 1;
+    if (aspect_x)
+        r = 1 / r;
+    n = r * FIXED;
+    whole = (long)(n + (n < 0 ? -0.5 : 0.5));
+    if ((whole & 0xFF) == 0 && (whole & 0xFF00) != 0)
+        aspect_scale = FIXED;
+    else
+        aspect_scale = whole & 0xFF;
     has_aspect = 1;
 }
 
@@ -216,18 +234,23 @@ static double turn(double angle, int *spoked)
 void B_CIRC(float radius, short color)
 {
     Circle c;
-    double ratio = has_aspect ? aspect_ratio : gfx_current->aspect;
+    double ratio = gfx_current->aspect;
     double from = 0, to = 2 * pi;
     int spoke_from = 0, spoke_to = 0, arc = has_start || has_end, has_to = has_end;
 
     c.color = gfx_color(color);
     gd_fill_select(&c.fill, c.color, OP_SET);
-    if (radius < 0 || ratio <= 0)
+    if (radius < 0 || (!has_aspect && ratio <= 0))
         qb_error(BE_ILLFUN);
     c.radius = (long)(radius + 0.5);
     c.points = (long)(c.radius * 0.7071067811865476 + 0.5);
-    c.scale_x = ratio >= 1;
-    c.scale = (long)((c.scale_x ? FIXED / ratio : FIXED * ratio) + 0.5);
+    if (has_aspect) {
+        c.scale_x = aspect_x;
+        c.scale = aspect_scale;
+    } else {
+        c.scale_x = ratio >= 1;
+        c.scale = (long)((c.scale_x ? FIXED / ratio : FIXED * ratio) + 0.5);
+    }
     c.cx = gfx_x1;
     c.cy = gfx_y1;
     c.arc = arc;
