@@ -3,10 +3,12 @@ import math
 import re
 import struct
 import zlib
+from pathlib import Path
 
 from docsbuild import figures, png, raster, ttf
 
 WHITE = (255, 255, 255)
+FIGURES = Path(__file__).resolve().parents[2] / "docs" / "assets" / "figures"
 
 
 def decode(data):
@@ -104,14 +106,14 @@ def test_text_draws_ink_inside_its_box_and_nowhere_else():
 
 def test_text_is_centred_and_right_aligned_on_its_anchor():
     width = ttf.font().width("Wave", raster.FONT_SIZE)
-    mid = decode(raster.render_png(svg('<text class="t m" x="20" y="15">Wave</text>')))[3]
-    end = decode(raster.render_png(svg('<text class="t x" x="38" y="15">Wave</text>')))[3]
+    mid = decode(raster.render_png(svg('<text class="t" text-anchor="middle" x="20" y="15">Wave</text>')))[3]
+    end = decode(raster.render_png(svg('<text class="t" text-anchor="end" x="38" y="15">Wave</text>')))[3]
     assert ink(mid, 20 - width / 2 - 1, 0, 20 + width / 2 + 1, 20) > 40 and ink(mid, 0, 0, 20 - width / 2 - 1, 20) == 0
     assert ink(end, 38 - width - 1, 0, 40, 20) > 40 and ink(end, 0, 0, 38 - width - 1, 20) == 0
 
 
 def test_a_label_halo_clears_the_line_behind_the_text():
-    body = '<path class="e" d="M2 10H38"/><text class="t lbl m" x="20" y="14">M</text>'
+    body = '<path class="e" d="M2 10H38"/><text class="t lbl" text-anchor="middle" x="20" y="14">M</text>'
     rows = decode(raster.render_png(svg(body)))[3]
     assert px(rows, 14.8, 10) == WHITE  # the halo wipes the line beside the letter
     assert px(rows, 4, 10) != WHITE
@@ -151,3 +153,51 @@ def test_figure_widths_use_the_same_metrics_as_the_drawn_text():
     node = next(b for b in fig.boxes if b.kind == "node")
     assert abs(node.w - (ttf.font().width("Instruction selection", 13) + 2 * figures.PAD_X)) < 0.5
     assert re.search(r"Instruction selection", fig.svg)
+
+
+def ink_box(rows):
+    xs = [x for r in rows for x, p in enumerate(r) if p != WHITE]
+    return min(xs) / raster.SCALE, (max(xs) + 1) / raster.SCALE
+
+
+def test_middle_anchored_ink_is_centred_on_x_and_end_anchored_ink_ends_there():
+    """The anchor was ignored: every string started at its x, so centred labels overflowed their boxes."""
+    mid = decode(raster.render_png(svg('<text class="t" text-anchor="middle" x="30" y="15">HOH</text>', 60, 24)))[3]
+    lo, hi = ink_box(mid)
+    assert abs((lo + hi) / 2 - 30) <= 1
+    end = decode(raster.render_png(svg('<text class="t" text-anchor="end" x="50" y="15">HOH</text>', 60, 24)))[3]
+    assert abs(ink_box(end)[1] - 50) <= 1.5
+
+
+def test_each_line_of_a_label_is_centred_on_its_own_width():
+    body = (
+        '<text class="t" text-anchor="middle" x="30" y="12">HOHOHO</text>'
+        '<text class="t" text-anchor="middle" x="30" y="29">HOH</text>'
+    )
+    rows = decode(raster.render_png(svg(body, 60, 34)))[3]
+    cut = round(20 * raster.SCALE)
+    for part in (rows[:cut], rows[cut:]):
+        lo, hi = ink_box(part)
+        assert abs((lo + hi) / 2 - 30) <= 1
+
+
+def test_a_node_label_sits_inside_its_node_box():
+    fig = figures.build('kind: graph\nnode A "Instruction selection\\nLIR over virtual values"')
+    rows = decode(raster.render_png(fig.svg))[3]
+    vx, vy, _, _ = fig.viewbox
+    node = next(b for b in fig.boxes if b.kind == "node")
+    s = raster.SCALE
+    inside = [row[round((node.x - vx + 2) * s) : round((node.x + node.w - vx - 2) * s)] for row in rows[round((node.y - vy + 2) * s) : round((node.y + node.h - vy - 2) * s)]]
+    lo, hi = ink_box(inside)
+    assert abs((lo + hi) / 2 - (node.w - 4) / 2) <= 1.5
+
+
+def test_no_figure_of_the_docs_draws_to_the_edge_of_its_image():
+    """Captions and labels were cut at the right edge: the canvas must hold all the text."""
+    root = FIGURES
+    figs = sorted(root.glob("*.fig"))
+    assert figs
+    for f in figs:
+        rows = decode(raster.render_png(figures.render(f.read_text(encoding="utf-8"))))[3]
+        edges = [rows[0], rows[-1], [r[0] for r in rows], [r[-1] for r in rows]]
+        assert all(p == WHITE for e in edges for p in e), f.name

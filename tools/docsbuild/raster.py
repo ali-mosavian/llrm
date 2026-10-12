@@ -505,7 +505,9 @@ def draw(svg: str, indexed: bool) -> Canvas:
             if ("marker-end" in st or el.get("marker-end")) and subs:
                 _arrow(cv, subs, st, float(st.get("stroke-width", "1")) * SCALE)
         elif tag == "text":
-            draw_text(cv, el.text or "", float(el.get("x")), float(el.get("y")), "end" if "x" in el.get("class", "").split() else "middle" if "m" in el.get("class", "").split() else "start", st, vx, vy)
+            cls = el.get("class", "").split()
+            anchor = el.get("text-anchor") or ("end" if "x" in cls else "middle" if "m" in cls else "start")
+            draw_text(cv, el.text or "", float(el.get("x")), float(el.get("y")), anchor, st, vx, vy)
     return cv
 
 
