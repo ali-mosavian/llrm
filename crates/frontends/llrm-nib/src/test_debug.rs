@@ -307,7 +307,7 @@ fn main() -> i16:
 /// A parameter kept in a register across a loop: `step` (DX) is there the whole
 /// function, the one place a format of one place can say; `n` is copied out of
 /// its register at the entry, so it has no place of one register, and a format
-/// with ranges says both of its.
+/// with ranges says each place it has.
 #[test]
 fn a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_its_ranges() {
     use llrm_object::debug::Location;
@@ -327,14 +327,17 @@ fn a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_
     let sum = info.functions.iter().find(|one| one.name == "sum").expect("sum");
     let n = sum.variables.iter().find(|one| one.name == "n").expect("n");
     let Location::List(entries) = &n.location else { panic!("{:?}", n.location) };
-    // ax, then cx once the code has copied it out and the register is reused:
-    // no byte of the function without a place.
+    // With the header copy the loop counts by another value (`neg ax` at the
+    // entry) and nothing reads `n` inside it: ax is `n` up to that, and again
+    // on the path that skips the loop; in between it is optimized out, as a
+    // debugger shows a value the code no longer holds.
     assert!(
-        matches!(&entries[..], [(_, Location::Register(first)), (_, Location::Register(second))] if first == "ax" && second == "cx"),
+        matches!(&entries[..], [(first, Location::Register(one)), (second, Location::Register(two))]
+            if one == "ax" && two == "ax" && first.offset == 0 && first.offset + first.length < second.offset),
         "{entries:?}"
     );
-    let covered: usize = entries.iter().map(|(range, _)| range.length).sum();
-    assert_eq!(covered, sum.ranges[0].length, "{entries:?}");
+    let end = entries.iter().map(|(range, _)| range.offset + range.length).max().expect("a range");
+    assert!(end <= sum.ranges[0].offset + sum.ranges[0].length, "{entries:?}");
 }
 
 fn compiled_regparm() -> Vec<Rc<omf::Record>> {

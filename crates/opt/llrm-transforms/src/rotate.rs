@@ -70,6 +70,12 @@
 //!   takes the loop test's branch weights, else the loop heuristic's, so the
 //!   way into the loop is laid out as the likely one.
 //!
+//! The copy is on at -O1 and up, not at -Os (`-fno-tree-ch` turns it off): the
+//! user's decision of 2026-10-12 (docs/reference/levels.md) accepts its compile
+//! cost (+9.3% at -O1, +14.0% at -O2 over the vsgcc programs) and the m16 bench
+//! rows it moves (#1557); the steeper slopes of rotate, loopslots and
+//! `analysis registers` on nests and many-loop functions are #1559.
+//!
 //! A rotated loop is no longer the pre-tested shape the counted-loop
 //! analyses, [`crate::peel`] and [`crate::unroll`] read, so rotation goes
 //! after them. [`crate::lsr`] enters a loop it counts to zero at its body too,
@@ -133,11 +139,18 @@
 //!
 //! # Runs
 //! Twice in [`crate::pipeline`], outside the per-body fixed point. `copy` runs
-//! only with `-ftree-ch` (`copy_headers`, off at every level) and not at
-//! `-Os`, after the interprocedural step and before `fixednarrow`, followed by
-//! loop simplification, LCSSA and cleanup. `proven` always runs, last of the
-//! loop passes, after `window`. `LLRM_DEBUG=census` prints what the trip-count
-//! analyses prove per loop, to compare builds with and without `-ftree-ch`.
+//! with `copy_headers` (`-ftree-ch`, on at -O1 and up, `-fno-tree-ch` turns it
+//! off) and not at `-Os`, after the interprocedural step and before
+//! `fixednarrow`, followed by loop simplification, LCSSA and cleanup. `proven`
+//! always runs, last of the loop passes, after `window`. `LLRM_DEBUG=census`
+//! prints what the trip-count analyses prove per loop, to compare builds with
+//! and without `-ftree-ch`.
+//!
+//! On by default is the user's decision of 2026-10-12
+//! (docs/reference/levels.md): compile +9.3% at -O1 and +14.0% at -O2 over the
+//! vsgcc programs, the m16 bench rows it moves (#1557), and steeper slopes of
+//! rotate, loopslots and `analysis registers` on nests and many-loop functions
+//! (#1559).
 //!
 //! # Keeps
 //! Nothing where it changes a body.

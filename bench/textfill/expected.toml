@@ -1,4 +1,4 @@
-reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
+reason = "ch default (user decision 2026-10-12) and the shrinkwrap, frequency and layout fixes landed with it: the rows main's bq16/bq32 columns add moved by -0.1% to +0.05% except nbody bq32 -O2 (+4.6%, the guard and rotated loops of the BASIC loops); the rest fewer instructions"
 blessed = "2026-10-12"
 
 [bas.O2]
@@ -34,18 +34,16 @@ bss_bytes = 0
 kernel_ms = 0.4101
 
 [bq32.O2]
-instructions = 88699
+instructions = 88689
 code_bytes = 234
 data_bytes = 19
 bss_bytes = 0
-kernel_ms = 0.7024
 
 [bq32.Os]
-instructions = 84699
+instructions = 84690
 code_bytes = 233
 data_bytes = 19
 bss_bytes = 0
-kernel_ms = 0.6491
 
 [c.O2]
 instructions = 34009

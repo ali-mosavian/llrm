@@ -98,6 +98,10 @@ impl Fact for Carried {
 pub struct Frequency {
     block: IndexMap<i64, f64>,
     taken: IndexMap<(i64, i64), f64>,
+    /// Each edge's probability as the loops' trip counts left it, for the edges
+    /// of blocks that are no bridge: a loop of 10 trips leaves by one edge in
+    /// ten, not by the one in 32 the odds say.
+    flow: IndexMap<(i64, i64), f64>,
 }
 
 impl Frequency {
@@ -133,6 +137,7 @@ impl Frequency {
         let mut block: IndexMap<i64, f64> =
             body.blocks.iter().filter_map(|one| table.get(&one.at).map(|runs| (one.at, *runs))).collect();
         let mut missing: Vec<i64> = body.blocks.iter().map(|one| one.at).filter(|at| !block.contains_key(at)).collect();
+        let mut flow: Option<IndexMap<(i64, i64), f64>> = None;
         while !missing.is_empty() {
             let before = missing.len();
             missing.retain(|at| {
@@ -140,7 +145,28 @@ impl Frequency {
                 if from.iter().any(|one| !block.contains_key(one)) {
                     return true;
                 }
-                let runs = from.iter().map(|one| block[one] * taken[&(*one, *at)]).sum();
+                // A block put on the edge of a loop with a proven count runs as
+                // often as the trips say the edge is taken, not as the odds.
+                let whole = flow.get_or_insert_with(|| {
+                    // The blocks made since as the bridges they are: with
+                    // work in them they would read as a loop's body.
+                    let shadow: Vec<LirBlock> = body
+                        .blocks
+                        .iter()
+                        .map(|one| {
+                            if table.contains_key(&one.at) {
+                                one.clone()
+                            } else {
+                                LirBlock { succ: one.succ.clone(), ..LirBlock::new(one.at, Vec::new()) }
+                            }
+                        })
+                        .collect();
+                    Self::over(body, &shadow).flow
+                });
+                let runs = from
+                    .iter()
+                    .map(|one| block[one] * whole.get(&(*one, *at)).copied().unwrap_or(taken[&(*one, *at)]))
+                    .sum();
                 block.insert(*at, runs);
                 false
             });
@@ -161,7 +187,7 @@ impl Frequency {
                 break;
             }
         }
-        Some(Self { block, taken })
+        Some(Self { block, taken, flow: IndexMap::default() })
     }
 
     /// What no honest table breaks, whatever shape the blocks have: an entry
@@ -320,7 +346,21 @@ impl Frequency {
                 break;
             }
         }
-        Self { block: block.into_iter().collect(), taken }
+        // Every edge as the trips left it, through the bridges: a bridge on an
+        // edge takes its share of it.
+        let mut flow: IndexMap<(i64, i64), f64> = IndexMap::default();
+        for from in blocks.iter().filter(|block| successors.contains_key(&block.at)) {
+            for to in from.succ.iter().copied().collect::<BTreeSet<_>>() {
+                let past = beyond(to);
+                if let Some(probability) = edges.get(&(from.at, past)) {
+                    flow.insert(
+                        (from.at, to),
+                        probability * taken[&(from.at, to)] / shared[&(from.at, past)].max(f64::MIN_POSITIVE),
+                    );
+                }
+            }
+        }
+        Self { block: block.into_iter().collect(), taken, flow }
     }
 
     /// Per call; zero for a block the entry does not reach.
@@ -420,6 +460,28 @@ mod tests {
         moved.odds.taken.insert((2, 2), 1);
         Frequency::of(&moved);
         assert_eq!(runs(&moved) - before, 2, "other odds were answered from the old table");
+    }
+
+    /// A block phi elimination puts on the exit edge of a loop with a proven
+    /// count ran as often as the odds took the edge (one in 32 of the loop's
+    /// 5 trips: 0.16 a call) where the loop leaves once a call: its join read
+    /// 1 against predecessors that sent 0.3 (`ivarg`, behind the header copy).
+    #[test]
+    fn test_a_block_on_the_exit_of_a_counted_loop_runs_as_often_as_the_loop_leaves() {
+        let plain = counted(Some(5), 124.0 / 128.0);
+        let mut body = plain.clone();
+        body.frequencies = Some(Frequency::of(&plain).table());
+        let loop_ = body.blocks[1].clone();
+        body.odds.rerouted(2, &loop_.succ, 3, &[(4, 1.0)]);
+        let blocks = vec![
+            body.blocks[0].clone(),
+            LirBlock { succ: vec![2, 4], ..body.blocks[1].clone() },
+            body.blocks[2].clone(),
+            block(4, "jmp", Operation::Jump, vec![3]),
+        ];
+        let body = body.with_blocks(blocks);
+        let found = Frequency::of(&body);
+        assert!((found.block(4) - found.block(3)).abs() < 1e-6, "{} against {}", found.block(4), found.block(3));
     }
 
     fn counted(
@@ -537,7 +599,8 @@ mod tests {
         for at in [1, 2, 3] {
             assert_eq!(before.block(at), after.block(at), "block {at}");
         }
-        assert!((after.block(9) - 5.0 * 124.0 / 128.0).abs() < 1e-9, "the copies run {}", after.block(9));
+        // 5 runs of the header, one of them leaving: 4 take the back edge.
+        assert!((after.block(9) - 4.0).abs() < 1e-9, "the copies run {}", after.block(9));
     }
 
     /// A table left as it was after an edge moved (block 3 reached only through
@@ -545,22 +608,37 @@ mod tests {
     /// The invariant every honest table keeps catches it under LLRM_VERIFY.
     #[test]
     fn test_a_table_left_stale_by_a_moved_edge_is_caught() {
-        let mut body = counted(Some(5), 124.0 / 128.0);
+        let mut body = LirBody::new(
+            "f",
+            1,
+            vec![
+                block(1, "jne", Operation::Branch, vec![2, 3]),
+                block(2, "jmp", Operation::Jump, vec![3]),
+                block(3, "ret", Operation::Return, vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        for (to, probability) in [(2, 31.0 / 32.0), (3, 1.0 / 32.0)] {
+            body.odds.taken.insert((1, to), (probability * BlockOdds::CERTAIN).round() as u32);
+        }
         body.frequencies = Some(Frequency::of(&body).table());
         assert!(Frequency::violations(&body).is_empty(), "{:?}", Frequency::violations(&body));
-        // 2 -> 3 is replaced by 2 -> 9 -> 3, 9 taking 1 in 32 from 2: block 3
-        // now runs a thirty-second as often.
+        // 1 -> 3 is gone and 3 is reached by 2 -> 9 -> 3, 9 taking 1 in 32
+        // from 2: block 3 now runs a thirty-second as often.
         let mut moved = body.clone();
+        moved.blocks[0].succ = vec![2];
+        moved.blocks[1] = block(2, "jne", Operation::Branch, vec![4, 9]);
+        moved.blocks.push(block(4, "ret", Operation::Return, vec![]));
         moved.blocks.push(LirBlock { succ: vec![3], ..LirBlock::new(9, vec![insn(9, Operation::Jump, "jmp")]) });
-        moved.blocks[1].succ = vec![2, 9];
         moved.odds.taken.insert((2, 9), (BlockOdds::CERTAIN / 32.0).round() as u32);
-        moved.odds.taken.insert((2, 2), (BlockOdds::CERTAIN * 31.0 / 32.0).round() as u32);
-        moved.blocks[2].succ = vec![];
+        moved.odds.taken.insert((2, 4), (BlockOdds::CERTAIN * 31.0 / 32.0).round() as u32);
         let said = Frequency::violations(&moved);
         assert!(said.iter().any(|one| one.contains("block 0x3 runs")), "{said:?}");
         let mut gone = body.clone();
         gone.blocks.retain(|one| one.at != 3);
-        gone.blocks[1].succ = vec![2];
+        gone.blocks[0].succ = vec![2];
+        gone.blocks[1].succ = vec![];
         gone.frequencies = body.frequencies.clone();
         assert!(Frequency::violations(&gone).iter().any(|one| one.contains("gone")));
         assert!(Frequency::violations(&gone.with_blocks(gone.blocks.clone())).is_empty());
@@ -585,7 +663,8 @@ mod tests {
             more.odds.taken.insert((from, to), (probability * BlockOdds::CERTAIN).round() as u32);
         }
         let busy = Frequency::of(&more);
-        let entering = busy.block(2) * (1.0 / 32.0);
+        // The loop of 5 trips leaves once in 5 of its runs.
+        let entering = busy.block(2) / 5.0;
         assert!((busy.block(8) - entering).abs() < 1e-6, "{} {}", busy.block(8), entering);
         assert!(
             (busy.block(9) - entering * 32.0).abs() < 1e-3 * entering * 32.0,

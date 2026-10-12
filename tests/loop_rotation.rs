@@ -14,8 +14,9 @@ long steps(unsigned x)
 
 /// The pass took two jumps round the loop, one over or into an arm and a
 /// conditional one back to the header: collatz's x_collatz ran 1.19 of gcc's
-/// clocks for the same instructions. gcc's `rotate_loop` leaves one, and the
-/// test of the count leaves the loop instead of repeating it.
+/// clocks for the same instructions. gcc's `rotate_loop` leaves none beyond
+/// the entry's, and the test of the count leaves the loop (`je`) or goes back
+/// (`jne`) from the arm that falls into it.
 #[test]
 fn test_the_latch_of_a_loop_with_a_diamond_body_falls_into_the_header() {
     let scratch = tempfile::tempdir().unwrap();
@@ -27,17 +28,8 @@ fn test_the_latch_of_a_loop_with_a_diamond_body_falls_into_the_header() {
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
-    let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let latches: Vec<&str> = lines
-        .windows(4)
-        .filter(|four| four[0].starts_with("inc") && four[1].ends_with(':') && four[2].starts_with("cmp"))
-        .map(|four| four[3])
-        .collect();
-    assert!(!latches.is_empty(), "no latch found: {text}");
-    assert!(
-        latches.iter().all(|next| next.starts_with("je ")),
-        "the test of x != 1 branches back: {latches:?}\n{text}"
-    );
+    let jumps = text.lines().filter(|line| line.trim().starts_with("jmp ")).count();
+    assert!(jumps <= 1, "{jumps} jumps: {text}");
 }
 
 /// A latch with a second branch after its own (a copied loop test: `jle top;

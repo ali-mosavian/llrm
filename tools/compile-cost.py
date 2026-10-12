@@ -74,7 +74,7 @@ def measure(compiler: Path, jobs: int) -> dict[str, int]:
     """Instructions per `file level`."""
     with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         work = Path(tmp)
-        todo = [(f"{name} {level}", [str(compiler), level, *flags, str(source), "-o", os.devnull]) for name, (source, flags) in files(work).items() for level in LEVELS]
+        todo = [(f"{name} {level}", [str(llrmbin.pinned(compiler)), level, *flags, str(source), "-o", os.devnull]) for name, (source, flags) in files(work).items() for level in LEVELS]
         with ThreadPoolExecutor(jobs) as pool:
             return dict(zip((k for k, _ in todo), pool.map(instructions, (c for _, c in todo))))
 

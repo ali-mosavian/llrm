@@ -397,6 +397,24 @@ fn _offset_compared(
     if width > 64 {
         return false;
     }
+    // A test of a phi's own next value stays on it: the step is made for the
+    // next trip anyway, and testing the phi keeps both live (ivopts takes a
+    // use after the increment from the incremented candidate).
+    // An exit test sits in the loop's header or its latch.
+    if let (Operand::Value(source), Some(result)) = (source, function.instruction(made).result)
+        && let ValueDef::Instruction(phi) = function.value(source).def
+        && function.instruction(phi).opcode == Opcode::Phi
+        && let Some(latch) = function
+            .instruction(phi)
+            .operands
+            .chunks(2)
+            .find(|pair| pair[0] == Operand::Value(result))
+            .map(|pair| pair[1])
+        && let Some(home) = function.parent(inst)
+        && (function.parent(phi) == Some(home) || latch == Operand::Block(home))
+    {
+        return false;
+    }
     let signed = matches!(
         predicate,
         IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge

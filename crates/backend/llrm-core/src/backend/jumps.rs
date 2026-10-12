@@ -607,13 +607,17 @@ fn rotated(
             from
         });
         let outside = |at: &i64| position.get(at).is_none_or(|&index| index < start || index >= end);
-        if order[start..end]
-            .iter()
-            .skip(1)
-            .any(|block| from.get(&block.at).is_some_and(|from| from.iter().any(outside)))
-        {
-            continue;
-        }
+        // The one block the run is entered at from outside, where that is not
+        // its first: the run is turned to start there, so the way in falls
+        // into it. A run entered at two blocks is left as it is.
+        let entered_at: Vec<usize> = (0..end - start)
+            .filter(|&at| from.get(&order[start + at].at).is_some_and(|from| from.iter().any(outside)))
+            .collect();
+        let only = match entered_at[..] {
+            [] | [0] => None,
+            [at] => Some(at),
+            _ => continue,
+        };
         let frequency = estimate.get_or_insert_with(|| Frequency::of(body));
         // The jumps a run of blocks takes, `after` being what follows it and
         // `before` what leads into it.
@@ -671,6 +675,7 @@ fn rotated(
         let run = &order[start..end];
         let current = clocks(run, before, after);
         let best = (1..run.len())
+            .filter(|at| only.is_none_or(|one| *at == one))
             .map(|at| {
                 let turned: Vec<LirBlock> = run[at..].iter().chain(&run[..at]).cloned().collect();
                 (clocks(&turned, before, after), at)

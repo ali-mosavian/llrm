@@ -1,13 +1,12 @@
-reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
+reason = "ch default (user decision 2026-10-12): the rotated loops expose m16 allocator register choice (#1557)"
 blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 144796
+instructions = 145095
 memory_operands = 62573
-code_bytes = 706
+code_bytes = 704
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 1.9519
 
 [bas.Os]
 instructions = 141276
@@ -18,34 +17,30 @@ bss_bytes = 0
 kernel_ms = 1.9095
 
 [bq16.O2]
-instructions = 153429
+instructions = 152825
 memory_operands = 61700
-code_bytes = 716
+code_bytes = 714
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 2.0609
 
 [bq16.Os]
-instructions = 150210
+instructions = 149307
 memory_operands = 63067
 code_bytes = 646
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 2.0225
 
 [bq32.O2]
-instructions = 213662
-code_bytes = 696
+instructions = 213607
+code_bytes = 691
 data_bytes = 23
 bss_bytes = 0
-kernel_ms = 3.2593
 
 [bq32.Os]
-instructions = 214603
+instructions = 214591
 code_bytes = 665
 data_bytes = 23
 bss_bytes = 0
-kernel_ms = 3.2862
 
 [c.O2]
 instructions = 56568
