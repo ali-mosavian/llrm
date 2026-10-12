@@ -1,4 +1,4 @@
-reason = "ch default (user decision 2026-10-12) and the shrinkwrap, frequency and layout fixes landed with it: the rows main's bq16/bq32 columns add moved by -0.1% to +0.05% except nbody bq32 -O2 (+4.6%, the guard and rotated loops of the BASIC loops); the rest fewer instructions"
+reason = "branch odds combine as gcc 13.4 does (predict.cc combine_predictions_for_bb), a build for size keeps phi copies in the predecessor, an edge copy must win by a tenth, a recursive call is not exceptional against a returning base case; worse rows: bintree -Os instructions +1.3..1.6% (clocks +0.8%)"
 blessed = "2026-10-12"
 
 [bas.O2]
@@ -46,12 +46,11 @@ data_bytes = 83
 bss_bytes = 0
 
 [c.O2]
-instructions = 128
+instructions = 127
 memory_operands = 55
-code_bytes = 408
+code_bytes = 390
 data_bytes = 0
 bss_bytes = 78
-kernel_ms = 0.0031
 
 [c.Os]
 instructions = 126

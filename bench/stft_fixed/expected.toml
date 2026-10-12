@@ -1,4 +1,4 @@
-reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
+reason = "branch odds combine as gcc 13.4 does (predict.cc combine_predictions_for_bb), a build for size keeps phi copies in the predecessor, an edge copy must win by a tenth, a recursive call is not exceptional against a returning base case; worse rows: bintree -Os instructions +1.3..1.6% (clocks +0.8%)"
 blessed = "2026-10-12"
 
 [bas.O2]
@@ -38,7 +38,7 @@ data_bytes = 4709
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 1200
+code_bytes = 1196
 data_bytes = 15
 bss_bytes = 5122
 kernel_ms = 518.097
@@ -50,7 +50,7 @@ bss_bytes = 5122
 kernel_ms = 524.8356
 
 [nib.O2]
-code_bytes = 2567
+code_bytes = 2573
 data_bytes = 5149
 bss_bytes = 0
 kernel_ms = 810.366

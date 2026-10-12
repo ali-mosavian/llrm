@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/phielim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/phielim.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/phielim.rs sha256:ddfef7c03b38b4cff195ab645a56ca9199957d89ffb34b97ad74ca42c88f32fd -->
+<!-- src: crates/backend/llrm-core/src/backend/phielim.rs sha256:438115f90cd854ac6c0edbfc4e6b2866f256750b36dd32a24c4429f5573acae2 -->
 
 # phielim
 
@@ -12,6 +12,12 @@ of `p1` and `r := v2` at the end of `p2`, before the terminator. The copies
 of one edge carry one group number, so [`crate::backend::parcopy`](parcopy.md) later
 orders them as a single simultaneous assignment. A phi with an incoming edge
 from outside the body is left alone.
+
+A copy on a branch's edge instead of in its predecessor is made only when
+it costs the target at least a tenth less (`EdgePrices::cheaper_on_edge`:
+the edge's chance times its copies and the `jmp`, against the copies every
+time), and never in a build for size: the odds are a guess, and an edge
+that wins by less costs a block and a jump the clocks do not show.
 
 Before copying, three shortcuts avoid a copy altogether. A one-input phi
 renames its result to its input. A loop-exit one-input phi is the exception:

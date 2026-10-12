@@ -263,7 +263,8 @@ why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the heade
 [[measure.accepted]]
 row = "qcport -Os"
 geomean = 1.0049
-why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+worst = 1.03
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559. Also 2026-10-12 (docs/reference/levels.md, `branchprob`): the combined branch odds, qcport/snd +3% (regalloc spill rounds on shifted block weights), with qcport/sbar -O3 and programs lru -O3 under the rows above."
 
 [[measure.accepted]]
 row = "programs -O1"

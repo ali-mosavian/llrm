@@ -27,10 +27,27 @@ fn listing(flags: &[&str]) -> String {
     std::fs::read_to_string(scratch.path().join("a.s")).unwrap()
 }
 
-/// The text up to the first return: the path `n == 0` takes.
-fn early_path(listing: &str) -> String {
-    let end = listing.lines().position(|line| line.trim().starts_with("ret")).expect("a return");
-    listing.lines().take(end + 1).collect::<Vec<_>>().join("\n")
+/// The paths from the entry to a return, each cut at its first conditional
+/// jump's two ways: the one laid next and the one branched to.
+fn paths(listing: &str) -> Vec<String> {
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let first_return = |from: usize| lines[from..].iter().position(|line| line.starts_with("ret")).map(|at| from + at);
+    let entry = lines.iter().position(|line| line.ends_with(':')).expect("a block");
+    let jump =
+        lines[entry..].iter().position(|line| line.starts_with('j') && !line.starts_with("jmp")).map(|at| entry + at);
+    let mut found = Vec::new();
+    if let Some(end) = first_return(entry) {
+        found.push(lines[entry..=end].join("\n"));
+    }
+    if let Some(jump) = jump {
+        let label = lines[jump].split_whitespace().nth(1).unwrap();
+        if let Some(target) = lines.iter().position(|line| *line == format!("{label}:"))
+            && let Some(end) = first_return(target)
+        {
+            found.push(format!("{}\n{}", lines[entry..=jump].join("\n"), lines[target..=end].join("\n")));
+        }
+    }
+    found
 }
 
 /// Every call paid `sub esp, 84` (m32, stack-addressed) or `push bp / mov bp,
@@ -40,9 +57,11 @@ fn early_path(listing: &str) -> String {
 fn test_the_path_that_leaves_before_the_frame_is_used_builds_none() {
     for flags in [&["-O2", "-m32", "-march=i486"][..], &["-O2", "-m16"]] {
         let text = listing(flags);
-        let early = early_path(&text);
+        // The early path is whichever of the two ways the placement lays first.
         assert!(
-            !early.contains("sub esp") && !early.contains("sub sp") && !early.contains("push bp"),
+            paths(&text)
+                .iter()
+                .any(|path| !path.contains("sub esp") && !path.contains("sub sp") && !path.contains("push bp")),
             "{flags:?}:\n{text}"
         );
         assert!(

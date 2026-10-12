@@ -1,43 +1,42 @@
-reason = "ch default (user decision 2026-10-12): the rotated loops expose m16 allocator register choice (#1557)"
+reason = "branch odds combine as gcc 13.4 does (predict.cc combine_predictions_for_bb), a build for size keeps phi copies in the predecessor, an edge copy must win by a tenth, a recursive call is not exceptional against a returning base case; worse rows: bintree -Os instructions +1.3..1.6% (clocks +0.8%)"
 blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 145095
 memory_operands = 62573
-code_bytes = 704
+code_bytes = 706
 data_bytes = 17
 bss_bytes = 0
 
 [bas.Os]
-instructions = 141276
+instructions = 143170
 memory_operands = 63940
 code_bytes = 636
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 1.9095
 
 [bq16.O2]
-instructions = 152825
+instructions = 155618
 memory_operands = 61700
-code_bytes = 714
+code_bytes = 716
 data_bytes = 17
 bss_bytes = 0
 
 [bq16.Os]
-instructions = 149307
+instructions = 153394
 memory_operands = 63067
 code_bytes = 646
 data_bytes = 17
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 213607
-code_bytes = 691
+instructions = 213648
+code_bytes = 695
 data_bytes = 23
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 214591
+instructions = 216485
 code_bytes = 665
 data_bytes = 23
 bss_bytes = 0
@@ -51,12 +50,11 @@ bss_bytes = 0
 kernel_ms = 0.7574
 
 [c.Os]
-instructions = 52744
+instructions = 52743
 memory_operands = 12581
 code_bytes = 241
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.7109
 
 [nib.O2]
 instructions = 87078
@@ -67,12 +65,11 @@ bss_bytes = 0
 kernel_ms = 1.165
 
 [nib.Os]
-instructions = 116145
+instructions = 118039
 memory_operands = 28850
 code_bytes = 445
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 1.5573
 
 [ow.O2]
 instructions = 109307

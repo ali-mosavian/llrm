@@ -4,9 +4,10 @@
 //!
 //! # How it works
 //! `estimated` gives every edge a probability and every block a frequency. A
-//! block with one successor takes 1. A block with several takes the first
-//! heuristic that tells its successors apart, in this order (`Heuristic`
-//! records which one fired):
+//! block with one successor takes 1. A block with several takes the first of
+//! heuristics 1 to 5 that tells its successors apart; where none does, a
+//! two-way branch combines the votes of 6 to 8 as GCC does (below), and a
+//! wider one takes the first of them (`Heuristic` records which one fired):
 //!
 //! 1. `Declared`: `!prof` `branch_weights` on the terminator, one per named
 //!    target, summed per distinct successor. Weights that do not name every
@@ -35,6 +36,14 @@
 //!    negative, 71% if null, 65% if another constant (`PRED_NEGATIVE_RETURN`,
 //!    `PRED_NULL_RETURN`, `PRED_CONST_RETURN`).
 //! 9. `Even`: equal weights.
+//!
+//! The votes of 6 to 8 are not first-match in GCC (`PRED_FLAG_FIRST_MATCH` is
+//! set on 1 to 5): `combine_predictions_for_bb` (predict.cc L1213, GCC 13.4)
+//! folds the probability each gives the first successor from 1/2 as
+//! Dempster-Shafer, `d = c*p + (1-c)*(1-p); c = c*p/d` (`combined`), so a zero
+//! test (62.5%) and a call on the same arm (33%) leave that arm at 45%. A call
+//! to the function itself is no vote where the other way returns at once (the
+//! base case of a recursion: the call is the work).
 //!
 //! Frequencies are relative to the entry's 1 (`propagated`). Blocks go in
 //! reverse postorder and a block's frequency is the sum over its non-back edges
@@ -111,7 +120,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use llrm_mir::facts::Facts;
-use llrm_mir::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, MetadataNode, MetadataOperand, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::types::Type;
 use llrm_mir::{ConstantKind, Context};
@@ -302,7 +311,8 @@ fn declared(
 }
 
 /// The first heuristic that tells `block`'s successors apart, and their
-/// weights.
+/// weights; below the loop and trip heuristics, which first-match, the
+/// predictors of a branch of two ways combined.
 fn weighed(
     context: &Context,
     metadata: &[MetadataNode],
@@ -347,29 +357,44 @@ fn weighed(
     if let Some(weights) = counted(context, function, shape, trips, runs, block, successors) {
         return (Heuristic::Counted, weights);
     }
+    // The predictors left do not first-match: on a branch of two ways every one
+    // that applies votes, and the votes are combined as GCC's
+    // `combine_predictions_for_bb` does (Dempster-Shafer, predict.cc:1213).
+    // Each vote is the probability of the first successor.
+    let mut votes: Vec<(Heuristic, f64)> = Vec::new();
     if successors.len() == 2 {
         if let Some((heuristic, likely, nan)) = compared(context, declarations, function, block) {
             let weights = if nan { ORDERED } else { OPCODE };
             let (when_true, when_false) = if likely { weights } else { weights.swap() };
-            return (heuristic, vec![when_true, when_false]);
+            votes.push((heuristic, when_true / (when_true + when_false)));
         }
-    }
-    let calls = |at: i64| {
-        function
-            .block(cfg::block(at))
-            .instructions()
-            .iter()
-            .any(|&inst| matches!(
-                function.instruction(inst).opcode,
-                Opcode::Call(_) | Opcode::Invoke(_)
-            ))
-    };
-    if let Some(weights) = split(&|at| !calls(at), CALL) {
-        return (Heuristic::Call, weights);
     }
     let returns = |at: i64| {
         function.terminator(cfg::block(at)).is_some_and(|last| function.instruction(last).opcode == Opcode::Ret)
     };
+    let called = |at: i64| {
+        function
+            .block(cfg::block(at))
+            .instructions()
+            .iter()
+            .filter(|&&inst| matches!(
+                function.instruction(inst).opcode,
+                Opcode::Call(_) | Opcode::Invoke(_)
+            ))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    // A way that returns at once is the base case of a recursion that the
+    // other way calls: that call is the work, not an exceptional case.
+    let base = successors.len() == 2 && successors.iter().any(|&at| returns(at) && called(at).is_empty());
+    let calls =
+        |at: i64| called(at).into_iter().any(|inst| !(base && recursive(context, declarations, function, inst)));
+    if let Some(weights) = split(&|at| !calls(at), CALL) {
+        if successors.len() != 2 {
+            return (Heuristic::Call, weights);
+        }
+        votes.push((Heuristic::Call, weights[0] / (weights[0] + weights[1])));
+    }
     if successors.len() == 2 && successors.iter().filter(|&&at| returns(at)).count() == 1 {
         let (leaving, staying) = if returns(successors[0]) { (0, 1) } else { (1, 0) };
         // What the returning block returns, when it does nothing else: a
@@ -378,10 +403,15 @@ fn weighed(
         let mut weights = vec![0.0; 2];
         weights[leaving] = odds.0;
         weights[staying] = odds.1;
-        return (Heuristic::Return, weights);
+        votes.push((Heuristic::Return, weights[0] / (weights[0] + weights[1])));
+    } else if successors.len() != 2 {
+        if let Some(weights) = split(&|at| !returns(at), RETURN) {
+            return (Heuristic::Return, weights);
+        }
     }
-    if let Some(weights) = split(&|at| !returns(at), RETURN) {
-        return (Heuristic::Return, weights);
+    if let Some(&(heuristic, _)) = votes.first() {
+        let combined = combined(votes.iter().map(|&(_, vote)| vote));
+        return (heuristic, vec![combined, 1.0 - combined]);
     }
     (Heuristic::Even, vec![1.0; successors.len()])
 }
@@ -643,6 +673,33 @@ fn returned(
         }
         _ => None,
     }
+}
+
+/// Whether `inst` calls `function` itself: the work of the function, not the
+/// report of an exceptional case the call heuristic assumes.
+fn recursive(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    llrm_mir::memory::callee(context, function, inst).is_some_and(|callee| {
+        matches!(
+            declarations.get(callee.0 as usize).map(|global| &global.kind),
+            Some(GlobalKind::Function(one)) if std::ptr::eq(&**one, function)
+        )
+    })
+}
+
+/// The probability of the first way, from the probabilities each predictor
+/// gives it: Dempster-Shafer, as `combine_predictions_for_bb` folds them (from
+/// one half, `p' = p * q / (p * q + (1 - p) * (1 - q))`; two certainties that
+/// disagree leave one half).
+fn combined(votes: impl Iterator<Item = f64>) -> f64 {
+    votes.fold(0.5, |p, q| {
+        let d = p * q + (1.0 - p) * (1.0 - q);
+        if d == 0.0 { 0.5 } else { p * q / d }
+    })
 }
 
 trait Swap {

@@ -8,6 +8,12 @@
 //! orders them as a single simultaneous assignment. A phi with an incoming edge
 //! from outside the body is left alone.
 //!
+//! A copy on a branch's edge instead of in its predecessor is made only when
+//! it costs the target at least a tenth less (`EdgePrices::cheaper_on_edge`:
+//! the edge's chance times its copies and the `jmp`, against the copies every
+//! time), and never in a build for size: the odds are a guess, and an edge
+//! that wins by less costs a block and a jump the clocks do not show.
+//!
 //! Before copying, three shortcuts avoid a copy altogether. A one-input phi
 //! renames its result to its input. A loop-exit one-input phi is the exception:
 //! it becomes a copy opening the exit, so a call after the loop does not pin
@@ -144,22 +150,33 @@ pub struct EdgePrices {
 }
 
 impl EdgePrices {
+    /// None for a build for size: a copy on its edge is a block of its own and
+    /// a jump, and the copy twice where the edge's other end is reached
+    /// another way, so the copies stay in their predecessor.
     pub fn of(cpu: &crate::backend::cpu::Profile) -> Option<Self> {
+        if cpu.size {
+            return None;
+        }
         Some(Self { copy: cpu.cost("mov_rr").ok()? as f64, jump: cpu.cost("jmp_short").ok()? as f64 })
     }
 
     /// Whether `copies` copies cost less in a block of their own on an edge
     /// taken `chance` of the times its predecessor runs (the copies and the
-    /// jump that ends it) than in the predecessor (the copies, every time).
+    /// jump that ends it) than in the predecessor (the copies, every time),
+    /// by a tenth at least: the odds are a guess, and an edge that wins by
+    /// less costs a block and a jump for nothing the clocks show.
     pub fn cheaper_on_edge(
         &self,
         chance: f64,
         copies: usize,
     ) -> bool {
         let copies = copies as f64 * self.copy;
-        chance * (copies + self.jump) < copies
+        chance * (copies + self.jump) < copies * EDGE_MARGIN
     }
 }
+
+/// What an edge copy must cost, of the predecessor's, to be made there.
+const EDGE_MARGIN: f64 = 0.9;
 
 /// `prices`: where none are known, a copy stays in its predecessor.
 #[derive(Default)]
@@ -1510,5 +1527,30 @@ mod tests {
         assert_eq!(got.width, cell.width);
         assert_eq!(got.offset, cell.offset);
         assert_eq!(got.disp_width, cell.disp_width);
+    }
+
+    /// A build for size kept a loop's guard-exit constants on an edge of their
+    /// own (a block, a `jmp` and the copies twice: 4 bytes in 25 of 67 programs
+    /// once the guard's odds moved); only a build for speed prices an edge
+    /// copy.
+    #[test]
+    fn test_a_build_for_size_keeps_its_phi_copies_in_the_predecessor() {
+        use super::EdgePrices;
+        use crate::backend::cpu;
+        assert!(EdgePrices::of(cpu::tuned("486", false).unwrap()).is_some());
+        assert!(EdgePrices::of(cpu::tuned("486", true).unwrap()).is_none());
+    }
+
+    /// An edge taken 24% of the time won by 0.06 clocks of 1 (`24% * (1 + 3) <
+    /// 1`): x_binsearch grew a block and a `jmp` for clocks the model could not
+    /// tell, and 25 of the 67 programs +1% in code once the guards' odds moved
+    /// to it.
+    #[test]
+    fn test_an_edge_that_wins_by_less_than_a_tenth_keeps_its_copy_in_the_predecessor() {
+        use super::EdgePrices;
+        let prices = EdgePrices { copy: 1.0, jump: 3.0 };
+        assert!(!prices.cheaper_on_edge(0.24, 1));
+        assert!(prices.cheaper_on_edge(0.1, 1));
+        assert!(prices.cheaper_on_edge(0.33, 2));
     }
 }
