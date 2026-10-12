@@ -125,3 +125,20 @@ def test_the_budget_of_a_run_is_its_cpu_not_the_wall_clock_so_load_cannot_break_
         for one in busy:
             one.kill()
             one.wait()
+
+
+def test_the_compilers_environment_and_path_do_not_depend_on_where_the_binaries_are(monkeypatch, tmp_path):
+    """`functions` at 2N read 3,192,407,376 or 3,192,925,702 instructions by the length of the directory the compiler ran from (its
+    argv[0], and LLRM_BIN in its environment): a gate's tree and a base's differ in it by more than the ratio's tolerance."""
+    import llrmbin
+
+    seen = set()
+    for name in ("a", "a-much-longer-directory-name-" * 3):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "llrm-c").write_text("")
+        monkeypatch.setenv("LLRM_BIN", str(folder))
+        monkeypatch.setattr(llrmbin, "stale_binaries", lambda *_: [])
+        env = scaling.measured_environment()
+        seen.add((len(env["LLRM_BIN"]), sum(len(k) + len(v) for k, v in env.items()), len(str(llrmbin.pinned(folder / "llrm-c")))))
+    assert len(seen) == 1, seen

@@ -145,6 +145,45 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
     }
 }
 
+/// A Nib program is Turbo Debugger's too: TLINK /v builds the table from the
+/// object `llrm-nib -gtd` writes, and TDUMP says its function, its two locals
+/// and the parameter that stays in a register, and its lines. Without `-gtd`
+/// the object has no source in the table.
+#[test]
+fn tlink_builds_turbo_debuggers_table_from_a_nib_object() {
+    let Some((borland, _)) = toolchain() else {
+        skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
+        return;
+    };
+    let nib = llrm_c().with_file_name("llrm-nib");
+    let scratch = tempfile::tempdir().unwrap();
+    for (short, flag) in [("kt", "-gtd"), ("kn", "-O0")] {
+        let made = Command::new(&nib)
+            .args(["-m16", "-O0", flag])
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.nib"))
+            .arg("-o")
+            .arg(scratch.path().join(format!("{short}.obj")))
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{short}: {}", String::from_utf8_lossy(&made.stderr));
+    }
+    let mut commands = Vec::new();
+    for short in ["kt", "kn"] {
+        commands.push(format!("tlink /v c:\\lib\\c0m {short}.obj, {short}.exe,, c:\\lib\\cm > {short}.tl"));
+        commands.push(format!("tdump {short}.exe > {short}.tx"));
+    }
+    dosbox::run(&[('c', &borland), ('w', scratch.path())], "c:\\bin", &commands);
+    let read = |short: &str| {
+        std::fs::read_to_string(scratch.path().join(format!("{}.TX", short.to_uppercase())))
+            .unwrap_or_else(|error| panic!("DOS made no {short}.tx: {error}"))
+    };
+    assert!(!read("kn").contains("KNOWN.NIB"), "premise: an object without -gtd names no source");
+    let (types, locals, lines) = module(&read("kt"));
+    assert_eq!(types, ["add function near C returns signed int"]);
+    assert_eq!(locals, ["second register signed int", "sum auto signed int", "total auto signed int"]);
+    assert_eq!(lines, BTreeSet::from([2, 3, 6, 7]));
+}
+
 /// A pointer to a function points to a function type called as far as the
 /// pointer reaches. TDUMP's symbol table names the type of each public symbol:
 /// for the same C program Turbo C++ says `far pointer function far C` of `fp`

@@ -20,35 +20,38 @@ COFF or Mach-O) with debug info (`-g`). The rule that shapes everything:
 
 ## Pipeline
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  qb["<b>QB, QBasic, PDS, VBDOS</b><br/><small>qbfront parser (llrm-qb)</small>"]:::src
+  nib["<b>Nib</b><br/><small>llrm-nib: lexer, parser,<br/>semantics</small>"]:::src
+  c["<b>C</b><br/><small>patched Open Watcom front<br/>end (llrm-c translate)</small>"]:::src
+  bc["<b>BC .OBJ (side input)</b><br/><small>llrm-x86-bc:<br/>decode and lift</small>"]:::src
+  hir["<b>HIR</b><br/><small>llrm-hir: model, verify,<br/>JSON codec</small>"]:::mid
+  mir["<b>MIR</b><br/><small>llrm-mir</small>"]:::mid
+  opt["<b>Optimized MIR</b><br/><small>llrm-transforms: module<br/>steps, per-body fixed point</small>"]:::opt
+  lir["<b>LIR over virtual values</b><br/><small>llrm-lir, llrm-core backend</small>"]:::mid
+  ph["<b>Machine phases (flow.rs)</b><br/><small>phi elimination, two-address,<br/>coalescing, register<br/>allocation, parallel copies,<br/>prologue, peephole,<br/>scheduling, jumps</small>"]:::mid
+  obj["<b>llrm_object::Object</b><br/><small>format-neutral (objbuild.rs)</small>"]:::out
+  wr["<b>Object writer</b><br/><small>omf, elf32, elf64, coff32,<br/>coff64, macho</small>"]:::out
+  qb --> hir
+  nib --> hir
+  c --> hir
+  hir -->|"llrm_hir::mir::emit"| mir
+  bc --> mir
+  mir --> opt
+  opt -->|"lowering boundary:<br/>isel, a selector<br/>generated per target"| lir
+  lir --> ph
+  ph -->|"layout + branch relaxation<br/>(asm.rs, layout.rs)"| obj
+  obj --> wr
 ```
- QB/QBasic/PDS/VBDOS    Nib            C                    BC .OBJ (side)
-        |                |             |                       |
-   qbfront parser    llrm-nib       Open Watcom front     decode and lift
-   (llrm-qb)         lexer, parser, end, patched          (llrm-x86-bc)
-        |            semantics      (llrm-c translate)         |
-        |                |             |                       |
-        +-------+--------+-------------+                       |
-                v                                              |
-        HIR  (llrm-hir: model, verify, JSON codec)             |
-                | llrm_hir::mir::emit                          |
-                v                                              v
-  ====================== MIR  (llrm-mir) ========================
-                | llrm-transforms: module steps + per-body fixed point
-                v
-        optimized MIR            <-- the lowering boundary (split.md)
-                | isel (selector generated per target)
-                v
-        LIR over virtual values  (llrm-lir, llrm-core backend)
-                | machine phases (flow.rs): phi elimination, two-address,
-                |   coalescing, register allocation, parallel copies,
-                |   prologue, peephole, scheduling, jumps
-                v
-        allocated LIR
-                | layout + branch relaxation (asm.rs, layout.rs)
-                | objbuild.rs: one format-neutral llrm_object::Object
-                v
-        object writer: omf | elf32 | elf64 | coff32 | coff64 | macho
-```
+
+*From source to object file*
 
 | Tool | Frontend | Reaches MIR by |
 | --- | --- | --- |
@@ -68,26 +71,41 @@ exits nonzero; no partial output is written.
 
 An arrow reads "depends on". Verified against each crate's `Cargo.toml`.
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  fe["<b>Tools (src/bin) and frontends</b><br/><small>llrm-qb llrm-nib llrm-c<br/>llrm-omf llrm-mir llrm-run<br/>nibfront nib-lsp<br/>llrm-bcdriver qbfront</small>"]:::src
+  drv["<b>llrm-driver</b>"]:::mid
+  sel["<b>llrm-x86-m16-select</b><br/><small>llrm-x86-m32-select<br/>(generated selector,<br/>peephole rules)</small>"]:::mid
+  core["<b>llrm-core</b><br/><small>driver, isel, machine phases,<br/>objbuild, HIR interpreter</small>"]:::opt
+  hir["<b>llrm-hir</b>"]:::mid
+  tr["<b>llrm-transforms</b>"]:::mid
+  tgt["<b>llrm-target</b><br/><small>llrm-lir</small>"]:::mid
+  x86["<b>llrm-x86</b>"]:::mid
+  wr["<b>Writers: llrm-omf,</b><br/><small>llrm-elf*, llrm-coff*,<br/>llrm-macho, llrm-dwarf</small>"]:::out
+  an["<b>llrm-analysis</b>"]:::mid
+  obj["<b>llrm-object</b>"]:::mid
+  mir["<b>llrm-mir</b><br/><small>(no dependencies)</small>"]:::mid
+  fe --> drv
+  drv --> sel
+  drv --> core
+  core --> hir
+  core --> tr
+  core --> tgt
+  core --> x86
+  core --> wr
+  wr --> obj
+  hir --> mir
+  tr --> an
+  an --> mir
 ```
- src/bin: llrm-qb llrm-nib llrm-c llrm-omf llrm-mir llrm-run nibfront nib-lsp
- llrm-qb   llrm-nib   llrm-c   llrm-bcdriver   qbfront
-     \         |         |           |           /
-      v        v         v           v          v
-                      llrm-driver ----> llrm-x86-m16-select
-                           |            llrm-x86-m32-select
-                           v            (generated selector, peephole rules)
-                       llrm-core
-          driver, isel, machine phases, objbuild, HIR interpreter
-     |            |             |            |               |
-     v            v             v            v               v
- llrm-hir   llrm-transforms  llrm-target  llrm-x86    writers: llrm-omf,
-     |            |          llrm-lir                 llrm-elf*, llrm-coff*,
-     |            v                                   llrm-macho, llrm-dwarf
-     |       llrm-analysis                                   |
-     |            |                                          v
-     v            v                                     llrm-object
-  llrm-mir (no dependencies)
-```
+
+*Crate layering; an arrow reads "depends on"*
 
 Three edges carry the architecture:
 
@@ -116,33 +134,59 @@ prints the per-body list, and
 lists the module steps. Which passes a level enables is in
 [levels](../reference/levels.md).
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef note fill:transparent,stroke:transparent,color:#64748b
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  a["<b>globalopt</b><br/><small>ports (every body)<br/>interprocedural stamp</small>"]:::mid
+  b["<b>per body: Fixed</b><br/><small>(next figure)</small>"]:::opt
+  c["<b>interprocedural: inline,</b><br/><small>parameter ranges,<br/>specialisation<br/>(a changed body goes<br/>through Fixed again)</small>"]:::mid
+  d["<b>globaldce</b><br/><small>availableexternally<br/>calleepop</small>"]:::mid
+  e["[freeze summaries<br/>and GlobalsAA]"]:::note
+  f["<b>rotate with header copy</b><br/><small>(on at -O1 and up, not -Os), fixednarrow, lsr</small>"]:::mid
+  g["<b>window, rotate, jumpthread,</b><br/><small>hoist, gepoffset</small>"]:::mid
+  h["<b>addresssink, spares, homes</b>"]:::mid
+  a --> b
+  b --> c
+  c --> d
+  d --> e
+  e --> f
+  f --> g
+  g --> h
 ```
- module steps, in order
-   globalopt -> ports (every body) -> interprocedural stamp
-     -> per body: Fixed (below)
-     -> interprocedural: inline, parameter ranges, specialisation;
-        a changed body goes through Fixed again
-     -> globaldce -> availableexternally -> calleepop
-     -> [freeze summaries and GlobalsAA]
-     -> rotate with header copy (when on) -> fixednarrow -> lsr
-     -> window -> rotate -> jumpthread -> hoist -> gepoffset
-     -> addresssink -> spares -> homes
-```
+
+*Module steps of the optimizer, in order*
 
 `Fixed` runs one body:
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  sroa["<b>sroa</b>"]:::mid
+  round["<b>One round</b><br/><small>fold ports decide phiopt<br/>equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead fill</small>"]:::opt
+  unroll["<b>unroll</b><br/><small>(a copy goes back<br/>through sroa)</small>"]:::mid
+  chg(["<b>changed?</b>"]):::mid
+  peel["<b>peel</b><br/><small>(repeat while loops drop)</small>"]:::mid
+  unsw["<b>unswitch (-O3)</b>"]:::mid
+  uj["<b>unroll-jam (-O3)</b>"]:::mid
+  merge["<b>merge</b>"]:::mid
+  sroa --> round
+  round -->|"after the round"| unroll
+  unroll --> chg
+  chg -->|"yes: next round"| round
+  chg -->|"no"| peel
+  peel --> unsw
+  unsw --> uj
+  uj --> merge
 ```
- sroa --> +-- one round --------------------------------------------+
-          | fold ports decide phiopt equalcalls tailrec loopsimplify |
-          | lcssa floatloop hoist loopmotion trivialunswitch         |
-          | inferspace dse gvn promote indvars algebraic dead fill   |
-          | unroll (after the round; a copy goes back through sroa)  |
-          +--------------------- changed? --yes--> next round -------+
-                                     |no
-                                     v
-                 peel (repeat while loops drop) --> unswitch (-O3)
-                 --> unroll-jam (-O3) --> merge
-```
+
+*Fixed, the passes that run on one body*
 
 A round is repeated until the body prints the same. A repeated state is an
 error (a pass oscillates), as is exceeding `max(16, size + 1)` rounds. A pass
@@ -165,12 +209,53 @@ descriptions (`calling`, `datalayout`, `dos`, `object`).
 [`flow::machine_with`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/flow.rs#L56)
 is the phase order:
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  a["<b>FarIndirectCalls</b>"]:::mid
+  b["<b>SsaSpill (when on)</b>"]:::mid
+  c["<b>PhiElimination</b>"]:::mid
+  d["<b>PressureSink</b>"]:::mid
+  e["<b>FloatFold</b>"]:::mid
+  f["<b>FloatAssign</b>"]:::mid
+  g["<b>FloatAlloc</b>"]:::mid
+  h["<b>TwoAddress</b>"]:::mid
+  a --> b
+  b --> c
+  c --> d
+  d --> e
+  e --> f
+  f --> g
+  g --> h
 ```
- FarIndirectCalls -> SsaSpill (when on) -> PhiElimination -> PressureSink
- -> FloatFold -> FloatAssign -> FloatAlloc -> TwoAddress -> Coalescer
- -> RegAlloc -> ParallelCopy -> Prologue -> Peephole -> LoopSlots
- -> Scheduler -> ControlFlow
+
+*Machine phase order (first half)*
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  a["<b>Coalescer</b>"]:::mid
+  b["<b>RegAlloc</b>"]:::mid
+  c["<b>ParallelCopy</b>"]:::mid
+  d["<b>Prologue</b>"]:::mid
+  e["<b>Peephole</b>"]:::mid
+  f["<b>LoopSlots</b>"]:::mid
+  g["<b>Scheduler</b>"]:::mid
+  h["<b>ControlFlow</b>"]:::mid
+  a --> b
+  b --> c
+  c --> d
+  d --> e
+  e --> f
+  f --> g
+  g --> h
 ```
+
+*Machine phase order (second half)*
 
 `RegAlloc` places every value; nothing before it picks a register for an
 unconstrained value, and `Peephole` runs after it because its rewrites depend

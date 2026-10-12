@@ -5,18 +5,26 @@ object (QB 4.5, PDS 7.1 or VBDOS `BC` output) is recompiled with llrm's
 optimizer and backend. Source programs go through [llrm-qb](qb/readme.md)
 instead; this route is for programs whose source is not at hand.
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  obj["<b>BC .OBJ ...</b><br/><small>[runtime .LIB]</small>"]:::src
+  bc["<b>llrm-x86-bc</b><br/><small>decode: declen, blocks, extent<br/>find the module header<br/>raise each body to MIR</small>"]:::opt
+  mir["<b>MIR: one function per body</b><br/><small>main, each procedure by name<br/>DGROUP variables are globals<br/>runtime routines are<br/>@llrm.qb.* declarations</small>"]:::mid
+  sh["<b>shared optimizer, isel,</b><br/><small>machine phases<br/>(as for any frontend)</small>"]:::mid
+  out["<b>fresh BASIC-envelope OMF</b><br/><small>object, one per input</small>"]:::out
+  obj --> bc
+  bc --> mir
+  mir --> sh
+  sh --> out
 ```
- BC .OBJ ... [runtime .LIB]
-     |
-     v  llrm-x86-bc          decode (declen, blocks, extent), find the module
-     |                       header, raise each body to MIR
-     v  MIR                  one function per body: `main`, each procedure
-     |                       by name; DGROUP variables are globals; runtime
-     |                       routines are `@llrm.qb.*` declarations
-     v  shared optimizer, isel, machine phases   (as for any frontend)
-     v
- fresh BASIC-envelope OMF object, one per input
-```
+
+*A BC object recompiled*
 
 ## Usage
 

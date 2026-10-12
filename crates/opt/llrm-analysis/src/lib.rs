@@ -28,35 +28,47 @@
 //! - [`manager`] caches the facts that are expensive or asked repeatedly.
 //!   `testing` and `generated` are test support, behind the `testing` feature.
 //!
-//! ```text
-//!    llrm-mir: Function, Context, DominatorTree, Analyses
-//!         |
-//!         v
-//!   +---------+   +----------+   +-------------------------------+
-//!   | cfg     |-->| consts   |-->| ranges  difference  guards    |
-//!   | graph   |   | demanded |   | floatfacts floatbounds        |
-//!   | liveness|   +----------+   +---------------+---------------+
-//!   +----+----+        |                         |
-//!        |             v                         v
-//!        |        +----------+            +------------+
-//!        +------->| induction|----------->| peelsize   |
-//!        |        +----------+            | dependence |
-//!        v                                +------------+
-//!   +-----------------------------+   +---------------------------+
-//!   | memory regions pointerfacts |-->| memoryssa  avail          |
-//!   | alias effects frameescape   |   | observers  noreturn       |
-//!   | globalsaa sliceset cellmap  |   | interprocedural           |
-//!   +--------------+--------------+   | parameter_ranges          |
-//!                  |                  +-------------+-------------+
-//!                  v                                |
-//!         +------------------+                      v
-//!         | manager (cache)  |------> llrm-transforms passes, backend
-//!         +------------------+
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   mir["<b>llrm-mir</b><br/><small>Function, Context,<br/>DominatorTree, Analyses</small>"]:::src
+//!   base["<b>cfg, graph, liveness</b>"]:::opt
+//!   val["<b>consts, demanded</b>"]:::mid
+//!   rng["<b>ranges, difference,</b><br/><small>guards, floatfacts,<br/>floatbounds</small>"]:::out
+//!   ind["<b>induction</b>"]:::mid
+//!   loop["<b>peelsize, dependence</b>"]:::out
+//!   mem["<b>memory, regions, pointerfacts,</b><br/><small>alias, effects, frameescape,<br/>globalsaa, sliceset, cellmap</small>"]:::opt
+//!   ssa["<b>memoryssa, avail,</b><br/><small>observers, noreturn,<br/>interprocedural,<br/>parameter_ranges</small>"]:::out
+//!   man["<b>manager (cache)</b>"]:::data
+//!   use["<b>llrm-transforms passes,</b><br/><small>backend</small>"]:::src
+//!   mir --> base
+//!   base --> val
+//!   val --> rng
+//!   val --> ind
+//!   base --> ind
+//!   ind --> loop
+//!   rng --> loop
+//!   base --> mem
+//!   mem --> ssa
+//!   ssa --> man
+//!   man --> use
 //! ```
+//!
+//! *Analysis layers, from the MIR inputs to the cache and its consumers*
 //!
 //! The arrows point from a fact's owner to the modules that ask it. [`consts`]
 //! asks [`memoryssa`] when it solves through memory, so the layers are
 //! conceptual, not a strict order.
+//!
+//! # Example
+//! None: this is the crate index. Each module's own page has its example; start
+//! with [`manager`] for how a pass asks for a fact.
 //!
 //! # Provides
 //! Invalidation and caching, in [`manager`]. A pass asks

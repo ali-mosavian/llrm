@@ -3,17 +3,28 @@
 For contributors changing `-g`, its model or a writer. Debug information is built once, in a format-neutral
 model, and each object format's writer encodes it. State described here is the code at commit `c341bd6e3`.
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  fe["<b>Frontends</b><br/><small>llrm-c, llrm-nib, llrm-qb:<br/>HIR debug Builder</small>"]:::src
+  mir["<b>MIR</b><br/><small>!types !functions !globals<br/>#35;dbg_declare<br/>#35;dbg_value/_piece/_gone<br/>lines</small>"]:::mid
+  be["<b>Backend</b><br/><small>debuginfo::described<br/>(types, procedures)<br/>valuetrack (ranges)<br/>cfi (frame rows)<br/>debuginfo::laid_out<br/>-#gt; debug::Info</small>"]:::opt
+  dw["<b>llrm-dwarf</b><br/><small>.debug_*<br/>ELF, Mach-O,<br/>OMF (-gdwarf)</small>"]:::out
+  co["<b>llrm-coff</b><br/><small>C13<br/>COFF</small>"]:::out
+  om["<b>llrm-omf</b><br/><small>CV4 / TD<br/>OMF</small>"]:::out
+  fe --> mir
+  mir --> be
+  be --> dw
+  be --> co
+  be --> om
 ```
- frontend                 MIR                       backend                  writers
-+----------+   +---------------------+   +-------------------------+   +--------------+
-| llrm-c   |   | !types !functions   |   | debuginfo::described    |   | llrm-dwarf   |-> ELF, Mach-O,
-| llrm-nib |-->| !globals            |-->|   (types, procedures)   |   |  .debug_*    |   OMF (-gdwarf)
-| llrm-qb  |   | #dbg_declare        |   | valuetrack (ranges)     |-->| llrm-coff    |-> COFF
-|  HIR     |   | #dbg_value/_piece/  |   | cfi (frame rows)        |   |  C13         |
-|  debug   |   | _gone               |   | debuginfo::laid_out     |   | llrm-omf     |-> OMF
-|  Builder |   | lines               |   |   -> debug::Info        |   |  CV4 / TD    |
-+----------+   +---------------------+   +-------------------------+   +--------------+
-```
+
+*Debug information from frontend to writers*
 
 ## The model
 
@@ -69,19 +80,25 @@ pick the writer from the object format and the `-g` flavor, and the backend buil
 2. [`debuginfo::described`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/debuginfo.rs#L172)
    reads the metadata into types and procedures. [`laid_out`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/backend/debuginfo.rs#L346)
    adds each procedure's place, variables, lines and frame rows once the code is laid out.
-3. `valuetrack.rs` follows the emitted code along every path (LLVM's instruction-referencing
+3. A parameter that arrives in one register is noted at the function's entry (`noted` in `isel.rs`) and
+   tracked from there like any variable the code moves. Nib m16 `regparm3`: CodeView 4 gets `S_REGISTER` where
+   the register holds it for the whole body; a parameter the code overwrites has no one place and is left
+   out; DWARF gets its ranges. A parameter in two registers (a pair) is still left out
+   (at `-O0` no frontend produces one; with optimization [#1368](https://github.com/ali-mosavian/llrm/issues/1368)). Tests:
+   `crates/frontends/llrm-nib/src/test_debug.rs`, `tests/cv4.rs`.
+4. `valuetrack.rs` follows the emitted code along every path (LLVM's instruction-referencing
    LiveDebugValues): isel marks which instructions define a named value, masm marks where each landed, and
    the tracker says where each variable is, in a register or a cell. Where the code cannot be followed or the
    value is nowhere, the variable has no location: `<optimized out>`, never a wrong one.
-4. `cfi.rs` decodes the emitted code and follows it to give each function's frame rows: from an offset on,
+5. `cfi.rs` decodes the emitted code and follows it to give each function's frame rows: from an offset on,
    the frame address is `cfa_offset` past `cfa_register`, and each register in `saved` is in memory at an
    offset from it. A function whose paths reach one place at two stack depths has no rows.
-5. A writer encodes `Info` and refuses by name what it cannot say (`Unsupported`); it does not drop it.
+6. A writer encodes `Info` and refuses by name what it cannot say (`Unsupported`); it does not drop it.
 
 **`-g` never changes the code.** What a format cannot say is left out, gcc's way. A format with one place
-per scope (CodeView 4, Turbo Debugger) says a variable only where a cell holds it for the scope: a register
-parameter or a local the allocator keeps in a register is left out, and no store is added to make it
-sayable. `tools/g-identical.sh` and the tests `g_leaves_the_code_of_the_bench_programs_alone` and
+per scope (CodeView 4, Turbo Debugger) says a variable only where one place holds it for the whole scope: a
+cell, or one register the code keeps it in from its first value to the end of the body. A variable in
+several places is left out, and no store is added to make it sayable. `tools/g-identical.sh` and the tests `g_leaves_the_code_of_the_bench_programs_alone` and
 `g_leaves_the_code_of_the_basic_and_nib_bench_programs_alone` (`tests/dwarf.rs`) hold the rule.
 
 ## Flags
@@ -120,7 +137,7 @@ What each writer says, refused or left out:
 
 | writer | says | refuses by name |
 |---|---|---|
-| DWARF 2-5 | units, base and derived types, structs, enums, typedefs, qualifiers, pointers with address class, functions, blocks of one range, location lists (`.debug_loc`, `.debug_loclists`), pieces, line program (`DW_LNS_*`, MD5 checksums in 5), `.debug_aranges`, `.debug_frame` | BASIC's `STRING`, `CURRENCY`, `STRING * n` and arrays; a function in several ranges; a module of several code ranges; a block of several ranges |
+| DWARF 2-5 | units, base and derived types, structs, enums, typedefs, qualifiers, pointers with address class, functions, blocks of one range, location lists (`.debug_loc`, `.debug_loclists`), pieces, line program (`DW_LNS_*`, MD5 checksums in 5), `.debug_aranges`, `.debug_frame` | BASIC's `STRING`, `CURRENCY` and `STRING * n` (a BASIC array is said as its descriptor struct); a function in several ranges; a module of several code ranges; a block of several ranges |
 | C13 | `S_GPROC32`/`S_LPROC32`, `S_LOCAL` with `S_DEFRANGE_REGISTER_REL` or `S_DEFRANGE_REGISTER`, `S_BLOCK32`, `S_GDATA32`/`S_LDATA32`, `S_UDT`, lines with columns, types as `LF_*` | far and huge pointers, BASIC's types, a function or block in several ranges, a register with no CodeView number, a far function |
 | CV4 (C7) | procedures, parameters and locals, statics, enums, modifiers, register variables, blocks, structs | 64-bit integers and bools have no scalar code |
 | Turbo Debugger | scopes, frame variables, register variables, statics, structs, pointers, arrays, typedefs and tags, lines | enums, a bit field beside padding, a block of several ranges, a function in several ranges, a type past 64K, a register with no Borland number, 32-bit objects (the variable is left out where it is the variable alone that cannot be said) |
@@ -131,7 +148,7 @@ What each writer says, refused or left out:
   ([#1514](https://github.com/ali-mosavian/llrm/issues/1514)).
 - A Nib program cannot be debugged in real CodeView where it has a code segment per procedure
   ([#892](https://github.com/ali-mosavian/llrm/issues/892)).
-- A register parameter of a Nib m16 program has no CodeView record
+- A Nib m16 parameter in two registers has no CodeView record
   ([#883](https://github.com/ali-mosavian/llrm/issues/883)).
 - Turbo Debugger: register locals of unsupported registers, enums, bit fields beside padding, types past 64K
   ([#823](https://github.com/ali-mosavian/llrm/issues/823)).

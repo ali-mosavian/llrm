@@ -1,17 +1,108 @@
-//! LLVM's ShrinkWrap: the registers a procedure keeps for its caller (SI and
-//! DI), and its frame (the stack reserve and the frame register), set up where
-//! they are first needed instead of at every entry, and taken back only on the
-//! returns that path reaches.
+//! Sets up a procedure's frame and kept registers where they are first needed,
+//! not at the entry, and takes them back only on the returns that path reaches.
 //!
-//! A procedure that leaves early (`if row == 7 { return 1 }`) before any of its
-//! loop touches SI paid a push and a pop for it on every call. Each piece (a
-//! register kept, the frame) is set up at the block that dominates every use of
-//! it, as gcc's `shrink_wrap_separate` places each component, and taken back at
-//! each return that block dominates; where a return can be reached both
-//! through that block and around it, or the set-up would sit in a loop, the
-//! piece is set up at the entry as before. One piece's entry use no longer
-//! holds the others there: `paths(n, m)` named ECX at its entry, and paid the
-//! frame and four more pushes for its `n == 0` answer.
+//! # How it works
+//! A procedure has pieces to set up: the frame (the stack reserve and the frame
+//! register) and each register it keeps for its caller. A piece is set up in
+//! its home, the nearest block that dominates every use of it and is outside
+//! any loop (a set-up in a loop would run each trip). It is taken back before
+//! each return that home dominates. This is gcc's separate shrink-wrapping
+//! (`try_shrink_wrapping_separate`), which places each component, where LLVM's
+//! ShrinkWrap moves the whole prologue.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   entry["<b>entry</b>"]:::mid
+//!   test["<b>test</b>"]:::mid
+//!   early["<b>early return</b><br/><small>no push, no frame</small>"]:::mid
+//!   home["<b>home</b><br/><small>push si#59; frame</small>"]:::src
+//!   loop["<b>loop</b>"]:::mid
+//!   ret["<b>pop si#59; ret</b>"]:::mid
+//!   entry --> test
+//!   test --> early
+//!   test --> home
+//!   home --> loop
+//!   loop --> ret
+//! ```
+//!
+//! *Frame and pushes only on the path that needs them*
+//!
+//! A piece is wrapped only if it is safe and pays:
+//!
+//! - Some return is not dominated by the home. Otherwise every path pays for
+//!   the set-up and nothing is gained.
+//! - A return the home reaches is also dominated by it. A return reachable both
+//!   through the home and around it would pop what was never pushed.
+//! - For the frame, and for every piece when the stack pointer addresses the
+//!   frame cells, each block reachable from the home is dominated by it, so
+//!   every block is entered at one stack depth.
+//!
+//! No register is set up above the frame, since the frame's cells sit just
+//! below the arguments and a push before the reserve would cover them. The
+//! frame therefore comes up to the dominator of its own uses and the homes of
+//! the registers, or stays at the entry if a register is set up there. Pieces
+//! open in the order of the dominator chain, the frame first, and close in
+//! reverse.
+//!
+//! `tails_split` makes more pieces wait. A small block that ends in a return
+//! and is reached by two or more paths (at most `MAX_GROW` = 8 instructions) is
+//! copied for each way into it, when that raises `worth`, how much of the
+//! procedure is set up late, to at least `WORTH` (three pieces). The early path
+//! then returns through a copy that nothing was saved for.
+//!
+//! # Example
+//! The pass places pieces while masm builds the procedure, after LIR is
+//! final, so its result is in the assembly, not in a LIR dump. A function that
+//! returns `k` at once when `n` is 0 and otherwise loops over calls to `g`:
+//!
+//! ```asm
+//! f_ proc near
+//! L0_0:
+//!     or eax, eax
+//!     je L0_13          ; early return: no push, no pop
+//! L0_2:
+//!     push ecx          ; set-up in the home block
+//!     push ebx
+//!     push esi
+//!     ; ... loop with `call g_`
+//! L0_14:
+//!     mov eax, edx
+//!     pop esi           ; taken back only on this return
+//!     pop ebx
+//!     pop ecx
+//!     ret
+//! L0_13:
+//!     mov eax, edx
+//!     ret
+//! f_ endp
+//! ```
+//!
+//! The three pushes sit in `L0_2`, which the early return does not reach, and
+//! the early return leaves with a bare `ret`.
+//!
+//! From `-S` of a C function (`if (n == 0) return k;` then a loop calling `g`)
+//! at -O2 -m32; the comments are added.
+//!
+//! # Runs
+//! `wrapped` runs when masm builds a procedure's items, for a procedure that
+//! saves a register or has a frame, whose blocks are all reachable from the
+//! entry, and that returns. The frame is not moved in an interrupt handler, a
+//! runtime entry frame, a procedure with a stack check or one with inline code.
+//! Registers are not wrapped in an interrupt handler or a runtime entry frame.
+//! `tails_split` runs before that in assembly, after `lir duplicated returns`,
+//! not at -Os, and only for a procedure with at least three pieces. Neither has
+//! a level switch beyond that.
+//!
+//! # See also
+//! LLVM's
+//! [`ShrinkWrap`](https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/ShrinkWrap.cpp)
+//! and gcc's
+//! [`shrink-wrap.cc`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/shrink-wrap.cc).
+//! The tail copy size is in `docs/reference/levels.md`.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -21,7 +112,7 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::loops::{dominance, immediate_dominators, loops};
 use crate::model::ir::Semantics;
-use crate::model::ir::{self, Loc};
+use crate::model::ir::{self, Loc, Mem};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 
 /// What a procedure sets up and takes back: the frame, or a register it keeps
@@ -198,8 +289,23 @@ pub fn wrapped(
         if returns.iter().all(|&at| from_entry.dominates(home, at)) {
             continue;
         }
-        if closed_at(home, stack_addressed || piece == Piece::Frame).is_some() {
-            homes.insert(piece, home);
+        // Where a return is reached around the home, the set-up goes up to the
+        // nearest block above it that every such return is below: LLVM's
+        // ShrinkWrap moves the save point up the dominators until it reaches
+        // the restores' dominator. A guard that skips the loop a register is
+        // used in joins the returns after it, and kept that register at the
+        // entry.
+        let strict = stack_addressed || piece == Piece::Frame;
+        let mut candidate = Some(home);
+        while let Some(at) = candidate {
+            if returns.iter().all(|&ret| from_entry.dominates(at, ret)) {
+                break;
+            }
+            if closed_at(at, strict).is_some() {
+                homes.insert(piece, at);
+                break;
+            }
+            candidate = idom.get(&at).copied().flatten().filter(|&above| above != body.entry);
         }
     }
     // The frame register addresses the cells and the arguments from the frame's
@@ -303,6 +409,10 @@ pub fn tails_split(
             }
             let before = *score.get_or_insert_with(|| worth(&best));
             let Some(made) = tail_copied(&best, tail, &parents[&tail.at]) else { continue };
+            // The copy lets a path reload nothing it stored on the way: what
+            // the early path stored for the tail to read is gone before the
+            // pieces it needs are counted.
+            let made = returns_cleaned(&made);
             let now = worth(&made);
             // Only where the early path skips several pieces: each is a push
             // and a pop saved, and the copy costs bytes on every
@@ -315,6 +425,73 @@ pub fn tails_split(
         }
         return best;
     }
+}
+
+/// `body` with, on each path that returns through a block of its own, the
+/// reloads a store on that path fills forwarded and the allocator's stores no
+/// later instruction of the path reads dropped: a frame dies at its return, as
+/// gcc's and LLVM's dead store elimination of a local at the end of a function.
+fn returns_cleaned(body: &LirBody) -> LirBody {
+    let body = crate::backend::spillforward::forwarded(body);
+    let parents = crate::backend::jumps::_predecessors(&body.blocks);
+    let mut cleaned: BTreeMap<i64, Vec<Arc<Insn>>> = BTreeMap::new();
+    for block in &body.blocks {
+        let returns = block
+            .insns
+            .last()
+            .is_some_and(|last| last.what.as_ref().is_some_and(|what| what.op == ir::Operation::Return));
+        let Some(&only) =
+            parents.get(&block.at).filter(|ways| ways.len() == 1 && returns).and_then(|ways| ways.first())
+        else {
+            continue;
+        };
+        let Some(way) = body.blocks.iter().find(|one| one.at == only) else { continue };
+        if way.succ != [block.at] {
+            continue;
+        }
+        let mut read: Vec<Mem> = Vec::new();
+        let mut dead: BTreeSet<usize> = BTreeSet::new();
+        for one in block.insns.iter().chain(way.insns.iter()).rev() {
+            let Some(what) = &one.what else { continue };
+            if one.spill_store
+                && let [Loc::Mem(cell)] = what.dests.as_slice()
+                && crate::backend::peephole::_frame_cell(cell)
+                && !read.iter().any(|seen| crate::backend::peephole::_overlapping(seen, cell))
+            {
+                dead.insert(crate::backend::peephole::id(one));
+                continue;
+            }
+            for place in what.sources.iter().chain(what.dests.iter().filter(|_| what.op != ir::Operation::Move)) {
+                if let Loc::Mem(cell) = place {
+                    read.push(cell.clone());
+                }
+            }
+        }
+        if !dead.is_empty() {
+            cleaned.insert(
+                way.at,
+                way.insns
+                    .iter()
+                    .map(|one| {
+                        if dead.contains(&crate::backend::peephole::id(one)) {
+                            crate::model::lir::anchor(Arc::clone(one))
+                        } else {
+                            Arc::clone(one)
+                        }
+                    })
+                    .collect(),
+            );
+        }
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| match cleaned.remove(&block.at) {
+            Some(insns) => block.with_insns(insns),
+            None => block.clone(),
+        })
+        .collect();
+    body.with_blocks(blocks)
 }
 
 /// `body` with `tail` copied for each of `ways`, the original gone.

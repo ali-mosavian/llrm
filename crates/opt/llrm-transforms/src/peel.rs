@@ -1,22 +1,168 @@
-//! Exact CFG loop peeling, priced before anything is cloned: llrm-core's
-//! `optimize/peel.rs`, the port of `qbopt/optimize/peel.py`, adapted to the
-//! rich MIR.
-//! LLVM: LoopPeel (`peelLoop`) peeling every trip, priced by LoopUnrollPass's
-//! full-unroll cost model.
+//! Whole-loop peeling: clone every iteration of a loop with a known trip
+//! count ahead of it, priced before anything is cloned, and let Fold, Decide
+//! and Dead prove the residual loop unreachable.
 //!
-//! Peeling is the CFG counterpart of full straight-line unrolling: clone
-//! every block of a proven exact loop once per trip, keep the residual loop
-//! as a correctness fallback, and let Fold, Decide and Dead prove it
-//! unreachable.
+//! # How it works
+//! Peeling is the CFG counterpart of full straight-line unrolling. For each
+//! loop of a copy of the body, closed to LCSSA (`lcssa::closed`), the pass
+//! - takes the trip count (`induction::trip_count`, else `trip_bound`) and
+//!   skips the loop below two trips;
+//! - asks `llrm_analysis::peelsize::admitted` whether the copies are worth
+//!   their size: the budgets are `peelsize::Limits`, counted in instructions,
+//!   and the loop's `Site` comes from `profit::site`;
+//! - clones the iterations with [`crate::loopclone::peeled`].
 //!
-//! The copy budgets are peelsize's `Limits`, which count instructions. The
-//! one machine number is the target's costs: a function with an instruction
-//! the target does not price is left alone (`profit::priced`).
+//! The copy is kept, and the next loop looked for, until none is admitted.
+//! Each loop is peeled once, named by its latch. The residual loop stays as a
+//! correctness fallback: the copies' header tests fold to constants, so the
+//! branch into it is decided and `Dead` removes it.
 //!
-//! What changed with the IR: the old stage records and `watch` hook are the
-//! pass manager's dump and change log. Dropped:
-//! `MAX_CONDITIONAL_FLOAT_OPERATIONS`, a limit on the x87 strict-FP fixed
-//! point a floating branch crossed; a float is an ordinary value here.
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart LR
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   pre["<b>pre</b>"]:::mid
+//!   h["<b>H</b>"]:::mid
+//!   b["<b>B</b>"]:::mid
+//!   ex["<b>exit</b>"]:::mid
+//!   pre --> h
+//!   h --> b
+//!   b --> h
+//!   b --> ex
+//! ```
+//!
+//! *Loop of 3 trips*
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart LR
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   pre["<b>pre</b>"]:::mid
+//!   h1["<b>H1</b>"]:::mid
+//!   b1["<b>B1</b>"]:::mid
+//!   h2["<b>H2</b>"]:::mid
+//!   b2["<b>B2</b>"]:::mid
+//!   h3["<b>H3</b>"]:::mid
+//!   b3["<b>B3</b>"]:::mid
+//!   h["<b>H</b>"]:::mid
+//!   b["<b>B</b>"]:::mid
+//!   pre --> h1
+//!   h1 --> b1
+//!   b1 --> h2
+//!   h2 --> b2
+//!   b2 --> h3
+//!   h3 --> b3
+//!   b3 --> h
+//!   h --> b
+//!   b --> h
+//! ```
+//!
+//! *After peel*
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart LR
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   pre["<b>pre</b>"]:::mid
+//!   b1["<b>B1</b>"]:::mid
+//!   b2["<b>B2</b>"]:::mid
+//!   b3["<b>B3</b>"]:::mid
+//!   ex["<b>exit</b>"]:::mid
+//!   pre --> b1
+//!   b1 --> b2
+//!   b2 --> b3
+//!   b3 --> ex
+//! ```
+//!
+//! *After fold, decide and dead*
+//!
+//! The one machine number is the target's: a function with an instruction the
+//! target does not price (`profit::priced`) is left alone, since
+//! `peelsize` cannot size it. The target's `unroll_budget` is scaled by
+//! `Limits::target_percent`.
+//!
+//! # Example
+//! Before:
+//! ```mir
+//! define ... @pipeline.body() ... {
+//!   ; ...
+//! b2:
+//!   %0 = phi i16 [ 0, %b1 ], [ %6, %b5 ]
+//!   %1 = icmp slt i16 %0, 2
+//!   br i1 %1, label %b4, label %b3
+//!
+//!   ; ...
+//! b4:
+//!   %2 = mul i16 %0, 2
+//!   %3 = getelementptr inbounds i8, ptr @_a, i16 %2
+//!   %4 = load i16, ptr %3, !tbaa !9
+//!   %5 = icmp slt i16 %4, 0
+//!   br i1 %5, label %b6, label %b5
+//!
+//! b5:
+//!   %6 = add nsw i16 %0, 1
+//!   br label %b2
+//!
+//!   ; ...
+//! b7:
+//!   %7 = phi i16 [ 0, %b3 ], [ 1, %b6 ]
+//!   ret i16 %7
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define ... @pipeline.body() ... {
+//! b1:
+//!   %0 = getelementptr inbounds i8, ptr @_a, i16 0
+//!   %1 = load i16, ptr %0, !tbaa !9
+//!   %2 = icmp slt i16 %1, 0
+//!   br i1 %2, label %b6, label %4
+//!
+//! b6:
+//!   br label %b7
+//!
+//! b7:
+//!   %3 = phi i16 [ 0, %8 ], [ 1, %b6 ]
+//!   ret i16 %3
+//!
+//! 4:
+//!   %5 = getelementptr inbounds i8, ptr @_a, i16 2
+//!   %6 = load i16, ptr %5, !tbaa !9
+//!   %7 = icmp slt i16 %6, 0
+//!   br i1 %7, label %b6, label %8
+//!
+//! 8:
+//!   br label %b7
+//! }
+//! ```
+//! The loop of two trips is two copies of its test and body: the branch back
+//! into the loop is gone.
+//!
+//! From `--dump` of `hit` (`for (i = 0; i < 2; i++) if (a[i] < 0) return 1;`)
+//! at -O3 -m16: stage `dead` before `peel`, and `peeled-r01-dead`, which is
+//! `peel`'s copy after `fold`, `decide` and `dead` have cleaned it.
+//!
+//! # Runs
+//! In [`crate::pipeline`]'s per-body fixed point `Fixed`, after the scalar
+//! passes settle: while a peel leaves fewer loops, the scalar rounds run
+//! again and the pass is asked once more, so an outer loop whose inner loop
+//! was peeled may be peeled in turn. On at -O3, -Omax and -Os (`peel`,
+//! `-fpeel-loops`); off at -O1, -O2, -Og and -Oz. Budgets per level:
+//! `docs/reference/levels.md`.
+//!
+//! # Needs
+//! `Registers` facts, `induction`, `peelsize`, `lcssa`, `loopclone`.
+//!
+//! # Keeps
+//! Nothing when it peels.
+//!
+//! # See also
+//! LLVM's `peelLoop` (`LoopPeel.cpp`) priced by `LoopUnrollPass`'s full-unroll
+//! cost model; gcc's `try_unroll_loop_completely`, `-fpeel-loops`.
+//! [`crate::unroll`] copies a loop in straight line instead.
 
 use std::collections::BTreeSet;
 

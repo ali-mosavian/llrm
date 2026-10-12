@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import levels_time
+import llrmbin
 
 WORK = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
 COMPILERS = ("llrm", "gcc", "clang")
@@ -231,10 +232,13 @@ ENVIRONMENT_BYTES = 4096
 
 
 def measured_environment(env: dict | None = None) -> dict:
-    """What the compiler under measurement is given: PATH, LLRM_BIN where set, `env`'s own, and padding to a constant size. The bytes
+    """What the compiler under measurement is given: PATH, LLRM_BIN (the pinned directory, of one length), `env`'s own, and padding to a constant size. The bytes
     of the caller's environment (a sourced script, a longer worktree path) move the stack and the allocator's first pages, and `lir
     peephole` read 157.0 or 168.8 Minstr of cells(224) by 4 bytes of environment alone: base and head must be given the same bytes."""
-    kept = {"PATH": "/usr/bin:/bin", **({"LLRM_BIN": os.environ["LLRM_BIN"]} if "LLRM_BIN" in os.environ else {}), **(env or {})}
+    # The compiler reads LLRM_BIN too: the pinned directory stands for it always, of one length wherever the binaries are and whether
+    # the caller set it or not (llrmbin.pinned).
+    where = {"LLRM_BIN": str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c").parent)}
+    kept = {"PATH": "/usr/bin:/bin", **where, **(env or {})}
     used = sum(len(k) + len(v) + 2 for k, v in kept.items())
     return {**kept, "LLRM_PAD": "x" * max(0, ENVIRONMENT_BYTES - used - len("LLRM_PAD") - 2)}
 

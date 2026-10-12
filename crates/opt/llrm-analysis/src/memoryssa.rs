@@ -18,15 +18,26 @@
 //! iteration over memory versions; then phis whose inputs reduce to one state
 //! are replaced by it.
 //!
-//! ```text
-//!         entry: Live(0)
-//!           |
-//!    b1: Def s1 --(defining)--> Def s2 ---+
-//!           |                              |
-//!    b2: Phi [b1: s2, b3: s3]  <-----------+----- b3: Def s3
-//!           |
-//!          Use l1   (defining = Phi)
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   live["<b>entry: Live(0)</b>"]:::mid
+//!   s1["<b>b1: Def s1</b>"]:::mid
+//!   s2["<b>Def s2</b>"]:::mid
+//!   phi["<b>b2: Phi</b><br/><small>[b1: s2, b3: s3]</small>"]:::mid
+//!   s3["<b>b3: Def s3</b>"]:::mid
+//!   use["<b>Use l1</b><br/><small>(defining = Phi)</small>"]:::mid
+//!   live --> s1
+//!   s1 -->|"defining"| s2
+//!   s2 --> phi
+//!   phi --> use
+//!   phi --> s3
+//!   s3 --> phi
 //! ```
+//!
+//! *Memory SSA of a loop: b2's Phi merges b1's last Def and b3's Def*
 //!
 //! The walker (`clobbers`, `clobbers_at_end`, `nearest_writes`) answers, for a
 //! `MemRef` read at a site, the set of nearest defs whose write may change it,
@@ -49,6 +60,35 @@
 //! Predicates shared with the passes: `changes`, `spares`, `covers`/`covered`
 //! (outer references certainly hold every byte of the inner), `placed`,
 //! `same_bytes`, `byte_keys`, and `Writers`, which indexes writes by object.
+//!
+//! # Example
+//! A diamond whose arms store to the same cell of `@g` and whose join loads it:
+//!
+//! ```mir
+//! define i16 @f(i1 %c) {
+//! b0:
+//!   br i1 %c, label %b1, label %b2
+//!
+//! b1:
+//!   store i16 1, ptr getelementptr (i8, ptr @g, i16 32)
+//!   br label %b3
+//!
+//! b2:
+//!   store i16 2, ptr getelementptr (i8, ptr @g, i16 32)
+//!   br label %b3
+//!
+//! b3:
+//!   %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+//!   ret i16 %x
+//! }
+//! ```
+//!
+//! | access      | kind  | incoming or defining                           |
+//! |-------------|-------|------------------------------------------------|
+//! | `b3` entry  | `Phi` | (`b1`, the `b1` store), (`b2`, the `b2` store) |
+//! | `%x = load` | `Use` | the `b3` `Phi`                                 |
+//!
+//! From unit test `test_a_join_gets_one_memory_phi` in `memoryssa_tests.rs`.
 //!
 //! # Provides
 //! `Accesses` (analysis `accesses`), `MemorySSA` via `built`, `Kind`, `Access`,

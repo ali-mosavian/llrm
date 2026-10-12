@@ -58,6 +58,40 @@
 //! go) and `zero_terminating_control` (a counter reaching its final value ends
 //! control and takes no value twice in the trip count).
 //!
+//! # Example
+//! A loop that steps by 24 until it reaches `%start + 768`, tested after the
+//! step:
+//!
+//! ```mir
+//! define i32 @f(i32 %start) {
+//! b0:
+//!   %end = add i32 %start, 768
+//!   br label %b1
+//!
+//! b1:
+//!   %i = phi i32 [ %start, %b0 ], [ %next, %b2 ]
+//!   %trips = phi i32 [ 0, %b0 ], [ %up, %b2 ]
+//!   br label %b2
+//!
+//! b2:
+//!   %up = add i32 %trips, 1
+//!   %next = add i32 %i, 24
+//!   %c = icmp ne i32 %next, %end
+//!   br i1 %c, label %b1, label %b3
+//!
+//! b3:
+//!   %t = phi i32 [ %up, %b2 ]
+//!   ret i32 %t
+//! }
+//! ```
+//!
+//! `trip_count` is 32, whatever `%start` is (768 / 24). The interpreter returns
+//! 32 for starts 0, -5 and 0x7FFFFFF0.
+//!
+//! From unit test
+//! `test_posttested_symbolic_sentinel_keeps_its_exact_trip_count` in
+//! `induction_tests.rs`.
+//!
 //! # Provides
 //! `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`,
 //! `Recurrence`, `Users`, `LoopFollowers` and the functions above. Manager
@@ -897,7 +931,10 @@ fn _proven(
                 && stepped
                 && abs(&step) == BigInt::from(1)
                 && _entered(unit, &shape, &start, &bound, IntPredicate::Ne, width);
-            Some(period)
+            // An access through an `inbounds` pointer bounds the trips of a
+            // loop tested for equality too, as of one tested for order.
+            let bounded = if inbounds { inbounds_backedges(unit, loop_) } else { None };
+            Some(period).into_iter().chain(bounded).min()
         } else if test != IntPredicate::Ne && abs(&step) != BigInt::from(1) {
             // An ordered test by more than one: promised not to wrap past the
             // bound, the counter reaches it in the distance divided by the

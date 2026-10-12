@@ -36,6 +36,24 @@
 //! `<= 0`, `sgt` and `sge` swap the sides, `eq` is both ways, `ne` is either
 //! way strictly.
 //!
+//! # Example
+//! The compares of quicksort's slice loop, over 16-bit unknowns `lo`, `hi` and
+//! `len`:
+//!
+//! | Facts | Range | Asked | Result |
+//! | --- | --- | --- | --- |
+//! | `hi <u len`, `lo <s hi`, `lo <u len` | `len` in `[0, 32767]` | `hi - 1 <u len` | proved |
+//! | same | same | `lo <=u hi - 1` | proved |
+//! | same | none | `hi - 1 <u len` | not proved |
+//! | same | none | `lo <=u hi - 1` | not proved |
+//!
+//! Without a range on `len`, `lo <u len` leaves `lo` possibly negative (`len`
+//! 0xFFF0, `lo` 0x8008 passes), so the last index `hi - 1` is not below `len`.
+//!
+//! From unit tests `test_a_slice_loops_last_index_is_below_the_length` and
+//! `test_an_unbounded_length_proves_nothing_of_the_last_index` in
+//! `difference_tests.rs`.
+//!
 //! # Provides
 //! `proves(width, facts, ranges, predicate, left, right)`. Its one consumer is
 //! [`crate::guards`] (`Given::holds`), which supplies the guards and the

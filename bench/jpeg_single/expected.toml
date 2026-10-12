@@ -2,7 +2,7 @@ reason = "a tail is not copied over the likelier way of the branch before its ju
 blessed = "2026-10-12"
 
 [bas.O2]
-code_bytes = 5177
+code_bytes = 5230
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5213
+code_bytes = 5262
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
@@ -26,32 +26,31 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 64111644
-code_bytes = 6649
+instructions = 64068477
+code_bytes = 6715
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64374214
+instructions = 64374234
 code_bytes = 6225
 data_bytes = 29697
 bss_bytes = 0
-kernel_ms = 888.4602
 
 [c.O2]
-code_bytes = 3152
+code_bytes = 3236
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 308.3791
 
 [c.Os]
-code_bytes = 2917
+code_bytes = 2902
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 310.1458
 
 [nib.O2]
-code_bytes = 6264
+code_bytes = 6727
 data_bytes = 17198
 bss_bytes = 0
 kernel_ms = 392.1278

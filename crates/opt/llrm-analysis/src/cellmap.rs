@@ -29,6 +29,10 @@
 //! skip work: under test a flag makes `kill` ask the exact test of every cell
 //! it skipped.
 //!
+//! # Example
+//! No honest example: `CellMap` is a container with no printed form, and no
+//! test shows it alone. Read the tests of its users, such as `consts_tests.rs`.
+//!
 //! # Provides
 //! The container. Consumers: [`crate::alias`], [`crate::consts`],
 //! [`crate::avail`], [`crate::regions`] and `promote` in `llrm-transforms`.

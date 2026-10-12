@@ -23,19 +23,34 @@
 //! - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
 //!   fresh `run`.
 //!
-//! ```text
-//!  pass runs ---> PreservedAnalyses
-//!                   |
-//!    entry named? --yes--> kept
-//!         |no
-//!    READS_OUTER=false and function unchanged? --yes--> kept
-//!         |no
-//!    SKIPS and depends.unaffected(changes)? ------yes--> kept, stands again
-//!         |no                                              if changes undone
-//!    INCREMENTAL and update(previous, changes)? --Some--> updated
-//!         |no
-//!    dropped; recomputed on the next get
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   run["<b>pass runs</b><br/><small>PreservedAnalyses</small>"]:::mid
+//!   q1["<b>entry named?</b>"]:::mid
+//!   q2["<b>READS_OUTER=false and</b><br/><small>function unchanged?</small>"]:::mid
+//!   q3["<b>SKIPS and depends</b><br/><small>.unaffected(changes)?</small>"]:::mid
+//!   q4["<b>INCREMENTAL and</b><br/><small>update(previous, changes)?</small>"]:::mid
+//!   kept["<b>kept</b>"]:::opt
+//!   kept2["<b>kept, stands again</b><br/><small>if changes undone</small>"]:::opt
+//!   upd["<b>updated</b>"]:::opt
+//!   drop["<b>dropped#59; recomputed</b><br/><small>on the next get</small>"]:::warn
+//!   run --> q1
+//!   q1 -->|"yes"| kept
+//!   q1 -->|"no"| q2
+//!   q2 -->|"yes"| kept
+//!   q2 -->|"no"| q3
+//!   q3 -->|"yes"| kept2
+//!   q3 -->|"no"| q4
+//!   q4 -->|"Some"| upd
+//!   q4 -->|"no"| drop
 //! ```
+//!
+//! *What happens to a cached analysis when a pass runs*
 //!
 //! Function entries and what each asks for (every one also asks `Shape`, and
 //! most `AssumptionCache` and `ExposedFrames`, which are omitted):
@@ -73,6 +88,31 @@
 //! holds. `Held` and `Ranges` bundle the cached results a pass passes on to a
 //! `Unit`, so the facts are the manager's and not a solve of the pass's own.
 //! `Bounded` is empty where `Outer::loop_intervals` is off (-O1).
+//!
+//! # Example
+//! A pass replaces the uses of `%x` by `%a`, an integer edit:
+//!
+//! ```mir
+//! declare void @use(ptr)
+//! define i32 @f(ptr %p, i32 %a) {
+//! entry:
+//!   %x = add i32 %a, 1
+//!   %y = mul i32 %x, 3
+//!   %q = getelementptr i32, ptr %p, i32 1
+//!   call void @use(ptr %q)
+//!   ret i32 %y
+//! }
+//! ```
+//!
+//! | change                       | `Pointers`, `CallEffects`, `Writes`, `ExposedFrames` |
+//! |------------------------------|------------------------------------------------------|
+//! | `%x` replaced by `%a`        | kept (`unaffected` is true)                          |
+//! | `%q`, the address, rewritten | `CallEffects::unaffected` is false: recomputed        |
+//!
+//! From unit test
+//! `an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not`
+//! in
+//! `manager_tests.rs`.
 //!
 //! # Provides
 //! The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
@@ -891,6 +931,74 @@ pub struct Registers;
 impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
+    const INCREMENTAL: bool = true;
+
+    /// A fact is of the values its value is made from alone (the edges of the
+    /// CFG are not read: a phi meets what its arms are), so the facts of
+    /// the values a change did not reach, by the uses of what it
+    /// touched, stand; the others are worked out again from them.
+    fn update(
+        previous: &Self::Result,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        Self::update_owned(Rc::new(previous.clone()), changes, context, layout, function, analyses)
+    }
+
+    fn update_owned(
+        previous: Rc<Self::Result>,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let mut kept = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
+        // The values touched, and the facts that were made from them, which no
+        // longer stand.
+        let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
+        let mut work = Vec::<ValueId>::new();
+        for change in changes {
+            let inst = match *change {
+                Change::Inserted { inst, .. }
+                | Change::Erased { inst, .. }
+                | Change::Moved { inst, .. }
+                | Change::Rewritten(inst) => inst,
+                Change::Cloned { to, .. } => to,
+                Change::BlockCreated(_) | Change::BlockErased(_) => continue,
+            };
+            if let Some(result) = function.instruction(inst).result
+                && touched.insert(result)
+            {
+                work.push(result);
+            }
+        }
+        // Every value to settle again: the touched, those whose fact was made
+        // from them, and the users of each, whose operands may now be
+        // known.
+        let mut dirty = touched.clone();
+        let mut seen = touched;
+        while let Some(value) = work.pop() {
+            kept.swap_remove(&value);
+            for user in function.users(value) {
+                if function.parent(user.user).is_none() {
+                    continue;
+                }
+                let Some(result) = function.instruction(user.user).result else { continue };
+                dirty.insert(result);
+                if kept.contains_key(&result) && seen.insert(result) {
+                    work.push(result);
+                }
+            }
+        }
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
+        Some(consts::known_from(&unit, kept, Some(&dirty)))
+    }
+
     fn run(
         context: &Context,
         layout: &DataLayout,

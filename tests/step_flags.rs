@@ -16,7 +16,8 @@ fn listing(kernel: &str) -> String {
 
 /// x_insertion's `n - 1 > 0` guard was `lea eax, [ecx-1]; cmp ecx, 1; jle`: the
 /// compare read `n` after the step had defined `n - 1`, so the step could not
-/// be made in place and the flags were made twice.
+/// be made in place and the flags were made twice. With the header copy the
+/// guard is the compare of `n` alone, and no `lea` steps it.
 #[test]
 fn test_a_guard_on_a_value_and_its_step_is_one_instruction_and_its_flags() {
     let text = listing("x_insertion");
@@ -24,7 +25,7 @@ fn test_a_guard_on_a_value_and_its_step_is_one_instruction_and_its_flags() {
     assert!(
         lines
             .windows(2)
-            .any(|pair| pair[0].starts_with("add ") && pair[0].ends_with(", -1") && pair[1].starts_with("jle ")),
+            .any(|pair| pair[0].starts_with("cmp ") && pair[0].ends_with(", 1") && pair[1].starts_with("jle ")),
         "{text}"
     );
     assert!(!lines.iter().any(|line| line.starts_with("lea ") && line.ends_with("-1]")), "{text}");

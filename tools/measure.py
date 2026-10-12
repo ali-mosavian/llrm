@@ -110,6 +110,15 @@ def tolerances(path: Path = HERE / "gate" / "tiers.toml") -> dict:
     return tomllib.loads(path.read_text())["measure"]
 
 
+def row_tolerance(tol: dict, label: str) -> dict:
+    """`tol` as a recorded decision sets it for `label` (`[[measure.accepted]]` in tiers.toml): the limits the entry names replace the
+    general ones for every row at or below its `row` ("nest O1" is also "nest O1 mir lsr"), as ceilings: a row above them fails as ever."""
+    for entry in tol.get("accepted", []):
+        if label == entry["row"] or label.startswith(entry["row"] + " "):
+            return {**tol, **{name: value for name, value in entry.items() if name not in ("row", "why")}}
+    return tol
+
+
 def method() -> str:
     """What the measurement is made of besides the compiler: the tools, the programs and QCport's modules. A stored measurement of
     another method is not comparable and is made again."""
@@ -252,11 +261,12 @@ def compile_rises(base: dict[str, int], now: dict[str, int], tol: dict) -> tuple
                 lines.append(f"{group} {level}: not in both measurements")
                 continue
             g, worst = geomean(list(ratios.values())), max(ratios, key=ratios.get)
+            here = row_tolerance(tol, f"{group} {level}")
             lines.append(f"{group} {level}: geomean {g:.4f}, worst {ratios[worst]:.4f} ({worst.rsplit(' ', 1)[0]}), {len(ratios)} files")
-            if g > tol["geomean"]:
-                bad.append(f"{group} {level}: geomean {g:.4f} > {tol['geomean']}")
-            if ratios[worst] > tol["worst"]:
-                bad.append(f"{group} {level}: {worst} {ratios[worst]:.4f} > {tol['worst']}")
+            if g > here["geomean"]:
+                bad.append(f"{group} {level}: geomean {g:.4f} > {here['geomean']}")
+            if ratios[worst] > here["worst"]:
+                bad.append(f"{group} {level}: {worst} {ratios[worst]:.4f} > {here['worst']}")
     return lines, bad
 
 
@@ -272,11 +282,12 @@ def superlinear(half: float, small: float, big: float) -> float:
     return max(0.0, second(half, small, big))
 
 
-def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], tol: dict) -> tuple[list[str], list[str]]:
+def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], general: dict) -> tuple[list[str], list[str]]:
     """Per axis and level: the second difference may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`."""
     lines, bad = [], []
     for key in sorted(base.keys() & now.keys()):
         (half, small, big), (was_half, was_small, was_big) = now[key], base[key]
+        tol = row_tolerance(general, key)
         more = superlinear(half, small, big) - superlinear(was_half, was_small, was_big)
         lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), 2N x{big / was_big:.4f} ({half}/{small}/{big} against {was_half}/{was_small}/{was_big})")
         if more > tol["excess"] * was_big:
@@ -287,7 +298,7 @@ def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], tol: dict)
 
 
 def step_rises(
-    base: dict[str, list[float]], now: dict[str, list[float]], tol: dict, judged: frozenset[str] = frozenset()
+    base: dict[str, list[float]], now: dict[str, list[float]], general: dict, judged: frozenset[str] = frozenset()
 ) -> tuple[list[str], list[str]]:
     """A step of `high` share or more whose second difference rose by `step_excess` of the compile's cost at 2N, or whose cost at 2N rose
     by `pass_slack`, fails. A step the base did not read is taken to have had none; one below `high`, or on the edge of the share floor,
@@ -295,6 +306,7 @@ def step_rises(
     analysis of its own was in other steps' spans before: the axis rule judges it."""
     lines, bad = [], []
     for key, (half, small, big, whole) in sorted(now.items()):
+        tol = row_tolerance(general, key)
         if big < tol["high"] * whole:
             continue
         if key not in base and " ".join(key.split(" ")[:2]) in judged:
