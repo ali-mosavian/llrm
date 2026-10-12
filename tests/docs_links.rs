@@ -149,9 +149,8 @@ fn orphans(dir: &Path) -> Vec<String> {
 
 /// The catalogs of the optimizer and the backend: every source file of a
 /// directory is named in its doc.
-const CATALOGS: [(&str, &str); 3] = [
+const CATALOGS: [(&str, &str); 2] = [
     ("crates/opt/llrm-transforms/src", "docs/optimizations/passes.md"),
-    ("crates/opt/llrm-analysis/src", "docs/optimizations/analyses.md"),
     ("crates/backend/llrm-core/src/backend", "docs/optimizations/backend.md"),
 ];
 

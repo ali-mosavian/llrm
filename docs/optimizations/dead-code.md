@@ -35,4 +35,4 @@ For contributors to `crates/opt`. Covers `dead` (values), `dse` (stores), `promo
 
 `dead` also runs inside other passes (after `lsr`, `indvars` and `fold`) to take what they leave.
 
-Catalog: [passes](passes.md). Analyses: [analyses](analyses.md).
+Catalog: [passes](passes.md). Analyses: [analyses](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src).

@@ -2,13 +2,15 @@
 
 How the compiler turns MIR into x86 code: the SSA optimizer in `crates/opt`, the backend in `crates/backend/llrm-core`, and one reference per pass family. For contributors.
 
-## Catalogs
+## Reference
 
-| Doc | Holds |
+The reference for every pass, analysis and backend phase is the `//!` header at the top of its source file: what it does, how, where it runs, what it needs and keeps. `tools/passdocs.py` extracts the headers into one page each for passes, analyses and backend phases; the CI `passdocs` job runs it and uploads the result as the `passdocs` artifact.
+
+| Source | Holds |
 |---|---|
-| [passes](passes.md) | The MIR pipeline in order, and every file of `llrm-transforms` |
-| [analyses](analyses.md) | Every analysis of `llrm-analysis` and the pass manager: the fact it owns and who reads it |
-| [backend](backend.md) | Lowering for selection, instruction selection and the machine phases, in order |
+| [`crates/opt/llrm-transforms/src`](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-transforms/src) | The MIR passes and the pipeline that orders them |
+| [`crates/opt/llrm-analysis/src`](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src) | The analyses and the pass manager |
+| [`crates/backend/llrm-core/src/backend`](https://github.com/ali-mosavian/llrm/tree/main/crates/backend/llrm-core/src/backend) | Lowering for selection, instruction selection and the machine phases |
 
 ## Pass index, in pipeline order
 

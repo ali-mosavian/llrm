@@ -1,6 +1,6 @@
 # Backend phases
 
-For contributors to `crates/backend/llrm-core/src/backend`. Lists every phase from MIR lowering for selection to the object, in the order they run, with what each consumes and produces. The MIR passes before it are in [passes](passes.md), the facts they read in [analyses](analyses.md), the target description in [machine](../machine/readme.md).
+For contributors to `crates/backend/llrm-core/src/backend`. Lists every phase from MIR lowering for selection to the object, in the order they run, with what each consumes and produces. The MIR passes before it are in [passes](passes.md), the facts they read in [analyses](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src), the target description in [machine](../machine/readme.md).
 
 Files are under `crates/backend/llrm-core/src/backend/` unless named otherwise.
 

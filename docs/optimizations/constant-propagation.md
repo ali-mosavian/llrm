@@ -63,4 +63,4 @@ At -O1 and -Og the loop intervals are off (`Options::loop_intervals`); `indvars`
 
 `llrm-c --dump DIR` (or `LLRM_MIR_STAGES=DIR`) writes a file for each changed step of each body, `N/NNN-<pass>.ll` (the Nth body run); `fold`'s change is the diff between the files around it. `llrm-mir FILE` prints a MIR file back, `llrm-mir --run` interprets it. Pass-level tests are in `crates/opt/llrm-transforms/src/fold_tests.rs` and `crates/opt/llrm-analysis/src/consts_tests.rs`.
 
-Catalog: [passes](passes.md), [analyses](analyses.md).
+Catalog: [passes](passes.md), [analyses](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src).

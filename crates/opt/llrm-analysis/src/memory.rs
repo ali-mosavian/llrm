@@ -1,34 +1,73 @@
-//! Machine-independent memory objects and byte-accurate access paths:
-//! llrm-core's `model/memory.rs` (`Kind`, `Object`, `Slice`, `Provenance`,
-//! `objects_may_alias`), and the access its analyses read, `MemRef`, adapted
-//! to the rich MIR. Slices are half-open; a stride greater than one
-//! describes selected byte lanes, not merely their hull.
+//! The memory model every alias query reads: objects, byte slices, provenance,
+//! accesses (`MemRef`) and the `Unit` that carries a function's facts.
 //!
-//! An object is what LLVM calls an underlying object. The rich MIR makes
-//! these kinds: `Frame` (an alloca), `Global` (a global variable),
-//! `Parameter` (what a pointer parameter points to), `Unknown`, `Nonlocal`
-//! (what a callee may reach) and `Absolute` (linear memory; see
-//! `regions::linear`). Kept for `classes_may_alias`, with no rich MIR
-//! producer: `Stack` (the push area), `External` (a symbol the linker may
-//! share: distinct rich MIR globals never overlap), `Named` (a far named
-//! segment) and `Allocation` (a descriptor's heap block: the rich MIR marks
-//! it on the access instead, as the `!tbaa` type "allocation").
+//! # How it works
+//! An object is what LLVM calls an underlying object (`MemoryObject`, interned
+//! per module as `ObjectRef`). Its `MemoryKind` is one of:
 //!
-//! A global is `captured` unless the unit's GlobalsAA tracks it: the old
-//! raise's private segments.
+//! - `Frame`: an `alloca`.
+//! - `Global`: a global variable.
+//! - `Parameter`: what a pointer parameter points to.
+//! - `Unknown`: a pointer no fact follows.
+//! - `Nonlocal`: what a callee may reach.
+//! - `Absolute`: linear memory (`regions::linear`).
+//! - `Stack`, `External`, `Named`, `Allocation`: kept for `classes_may_alias`;
+//!   the rich MIR has no producer for them (an allocation is the `!tbaa` type
+//!   "allocation" on the access).
 //!
-//! Old `MemRef` spelled an address as an x86 operand -- a space, a segment
-//! index, a displacement and a register base -- with an SSA `base` and
-//! `segment` beside it. Here it is its pointer decomposed, as BasicAA's
-//! `DecomposeGEPExpression` does: a root, a constant displacement, and at
-//! most one variable index. Old concepts with no rich MIR counterpart are
-//! not carried: `symbolic` (a second spelling of an address), `beyond`,
-//! `excludes` and `within` (holes in the x86 region lattice), `allocation`
-//! (the `!tbaa` type now), `pointer` (an access whose address was a bare
-//! value: every access here is a decomposed pointer), `published`, `origin`.
+//! Besides its identity an object carries three facts that equality ignores:
+//! `addressed` (some code computes its address), `captured` (that address can
+//! be found from outside this activation) and `constant` (nothing writes it).
+//! `objects_may_alias` asks only the `AliasClass` (kind, addressed, captured):
 //!
-//! Skipped: the Python `repr` of each type, which ordered a call's effects;
-//! they sort as the types order.
+//! ```text
+//!   an unaddressed object            -> reached only by its own name
+//!   Unknown vs x                     -> x.captured
+//!   Nonlocal vs x                    -> x.captured and x is not Frame/Stack
+//!   Parameter vs x                   -> x.captured and x is not Frame
+//!   Global/External vs Global/External -> only if one is External
+//!   anything else (distinct)         -> no
+//! ```
+//!
+//! A `Slice` is bytes of one object: `[low, high)` with `stride` and `width`,
+//! so a stride above one selects byte lanes, not their hull. `WHOLE_LOW..
+//! WHOLE_HIGH` is "any byte". `Slice::intersects` is exact for one object (gcd
+//! of the strides) and, for two distinct objects that may alias, true. A
+//! `Provenance` is a set of slices plus the `restrict` roots (`noalias`
+//! parameters) a pointer is based on; two with disjoint nonempty restrict sets
+//! do not intersect.
+//!
+//! `MemRef` is an access, LLVM's `MemoryLocation`, with its pointer decomposed
+//! as BasicAA's `DecomposeGEPExpression` does: a `root`, a constant `disp`
+//! wrapped to the index width, and at most one variable index (`base`,
+//! `scale`), plus the width, `!tbaa` type and its ancestors (`lineage`), and
+//! `volatile`. `MemRef::of` builds it from a load or store, `filled` from a
+//! constant-length `memset`, `reach` from provenance alone (what a call's
+//! effect names). `named` says the bytes are fixed outright; `unwritable` that
+//! every object it may reach is `constant`.
+//!
+//! `Unit` is what the analyses read: the function, its module's types,
+//! constants, layout, metadata and globals, the program's target and segment
+//! layout, and optional facts handed in with `with_*` (shape, registers,
+//! pointers, annotated references, assumptions, counted loops, bounds, edges,
+//! exposed frames, GlobalsAA, callbacks). A fact not handed in is derived on
+//! demand, which is correct but repeats work; [`crate::manager`]'s
+//! `Unit::within` fills them from cached analyses. `Standing` holds the
+//! registers for a caller that edits the body as it goes. `constant_bits` and
+//! `constant_bytes` read a `constant` global's initializer. `own_bytes` is the
+//! one statement of what a load or store does to its bytes, and
+//! `unmodeled_write` says whether any other instruction may write.
+//!
+//! # Provides
+//! The types above; `exposed_frames`, `object_of`, `global_object`, `typed`,
+//! `lineage`, `is_lifetime_marker`. Consumers: nearly every analysis in this
+//! crate ([`crate::alias`], [`crate::memoryssa`], [`crate::regions`],
+//! [`crate::avail`], [`crate::consts`], [`crate::effects`]) and the memory
+//! passes of llrm-transforms.
+//!
+//! # See also
+//! LLVM BasicAA `DecomposeGEPExpression` and `MemoryLocation`
+//! (`llvm/lib/Analysis/BasicAliasAnalysis.cpp`).
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;

@@ -36,4 +36,4 @@ The interprocedural stage ([`interprocedural.rs`](https://github.com/ali-mosavia
 
 ## Related
 
-[early-summaries](early-summaries.md) covers what the pipeline does with summaries between edits. [analyses](analyses.md) lists the module analyses.
+[early-summaries](early-summaries.md) covers what the pipeline does with summaries between edits. [analyses](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src) lists the module analyses.
