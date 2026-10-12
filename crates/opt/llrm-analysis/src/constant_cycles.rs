@@ -81,7 +81,7 @@ fn _supported(opcode: &Opcode) -> bool {
 /// registers` cost at N=64.
 fn _possible(
     unit: &Unit,
-    seeds: &IndexMap<ValueId, Known>,
+    seeded: &dyn Fn(&ValueId) -> bool,
 ) -> llrm_mir::dense::IdSet<ValueId> {
     use llrm_mir::dense::{IdMap, IdSet};
     let function = unit.function;
@@ -97,7 +97,7 @@ fn _possible(
     let mut operands = Vec::<(ValueId, Vec<ValueId>)>::new();
     for (_, inst) in function.walk() {
         let op = function.instruction(inst);
-        let Some(value) = consts::_defined(unit, inst).filter(|value| !seeds.contains_key(value)) else { continue };
+        let Some(value) = consts::_defined(unit, inst).filter(|value| !seeded(value)) else { continue };
         if op.opcode == Opcode::Phi || _supported(&op.opcode) || zeroes(op) {
             possible.insert(value);
             let from: &mut dyn Iterator<Item = &Operand> =
@@ -110,7 +110,7 @@ fn _possible(
     let mut gone = Vec::<ValueId>::new();
     for (value, named) in &operands {
         for one in named {
-            if !seeds.contains_key(one) && !possible.contains(one) {
+            if !seeded(one) && !possible.contains(one) {
                 if possible.remove(value) {
                     gone.push(*value);
                 }
@@ -129,28 +129,29 @@ fn _possible(
     possible
 }
 
+thread_local! {
+    /// 1 while `LLRM_CHECK_CYCLES` works a propagation twice, 2 for the run
+    /// that leaves no value out.
+    static CHECKING: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
 pub fn propagated(
     unit: &Unit,
     seeds: &IndexMap<ValueId, Known>,
     successors: Option<Successors<'_>>,
 ) -> IndexMap<ValueId, Known> {
-    let pruned = successors.is_none().then(|| _possible(unit, seeds));
-    let found = _propagated(unit, seeds, successors, pruned.as_ref());
-    if pruned.is_some() && llrm_support::env_set("LLRM_CHECK_CYCLES") {
-        assert!(
-            found == _propagated(unit, seeds, successors, None),
-            "constant cycles: leaving out the values that cannot be known changed the facts"
-        );
+    if successors.is_none() && CHECKING.get() == 0 && llrm_support::env_set("LLRM_CHECK_CYCLES") {
+        CHECKING.set(1);
+        let found = propagated(unit, seeds, successors);
+        CHECKING.set(2);
+        let whole = propagated(unit, seeds, successors);
+        CHECKING.set(0);
+        assert!(found == whole, "constant cycles: leaving out the values that cannot be known changed the facts");
+        return found;
     }
-    found
-}
-
-fn _propagated(
-    unit: &Unit,
-    seeds: &IndexMap<ValueId, Known>,
-    successors: Option<Successors<'_>>,
-    possible: Option<&llrm_mir::dense::IdSet<ValueId>>,
-) -> IndexMap<ValueId, Known> {
+    let possible =
+        (successors.is_none() && CHECKING.get() != 2).then(|| _possible(unit, &|value| seeds.contains_key(value)));
+    let possible = possible.as_ref();
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else {
         return seeds.clone();
