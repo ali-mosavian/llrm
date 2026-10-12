@@ -49,7 +49,7 @@ Records are Open Watcom's `cv4f.h`; each shape was also read from objects ML 6.1
 - CodeView 4 names one place per scope: a variable in a register for part of a scope, or removed by the
   optimizer, is left out. A parameter that arrives in one register and stays there for the whole body is an
   `S_REGISTER` (Nib m16 `regparm3`: `b` in EDX); one the code overwrites, or one in a register pair, is not
-  written ([#883](https://github.com/ali-mosavian/llrm/issues/883)).
+  written (pairs: [#1368](https://github.com/ali-mosavian/llrm/issues/1368)).
 
 Read by real CodeView (`tests/cv4.rs`, driven in DOSBox-X): enums (`color e = 5`), `const` (`const short k`),
 register variables (`SI reg short r = 42`), block scopes (`k` is listed only while the program is in its
@@ -151,7 +151,7 @@ names with offsets as two parallel records. A BYREF parameter is two hops on VBD
 Packed by `LINK /CO`, the result has an `NBxx` trailer, a subsection directory, real `S_LPROC16`, `S_BPREL16`
 and `S_LDATA16` records with scope links, and `sstGlobalTypes` with numbered `LF_` leaves. MS LINK 5.31 (`LINK /CO`) runs
 CVPACK and keeps the CodeView 4 records (`tests/cv4.rs`). `jwlink debug codeview` takes them too and Open
-Watcom `cvpack` packs its image (`tools/debug-matrix.py`).
+Watcom `cvpack` packs its image (`tools/debug-matrix.py`). What the image keeps is pinned in the emulator fork's symbol tests ([`tests/symbols/qb`](https://github.com/ali-mosavian/dosbox-x/blob/main/tests/symbols/qb/README.md)): QB 4.5 LINK 3.69 and PDS LINK 5.10 drop the CodeView 4 records and keep BC-dialect names and offsets; MS LINK 5.31 and jwlink keep CodeView 4.
 
 ## Screenshots
 
