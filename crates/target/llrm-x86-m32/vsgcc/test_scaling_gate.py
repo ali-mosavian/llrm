@@ -1008,3 +1008,19 @@ def test_liveness_of_a_body_is_followed_when_the_values_are_live_in_few_blocks(t
     assert own["lir twoaddr"] <= 500.0, f"twoaddr {own['lir twoaddr']:.1f} Minstr"
     assert own["intervals walk"] <= 150.0, f"walk {own['intervals walk']:.1f} Minstr"
     assert own["lir pressuresink"] <= 150.0, f"pressuresink {own['lir pressuresink']:.1f} Minstr"
+
+
+def test_header_copy_on_a_nest_derives_the_registers_of_what_each_rotation_touched(tmp_path):
+    """nest(64) at -O2 with -ftree-ch: each of the 64 rotations asked the registers of the whole function afresh (a fixed point and the cycle
+    propagation over every value): `analysis registers` read 270 Minstr, and the doubling 64 -> 128 x3.3 (x2.0 without the copy). A fact is of the
+    values it is made from alone, so the manager brings it up to date from what the rotation touched: 42 Minstr, x2.7. And `mir rotate` cloned
+    every loop of the nest (a set of its blocks each) to look at one for each rotation: 93 Minstr, x5.1 for the doubling; 61, x3.8. A bound of 100
+    on registers and 80 on rotate fails the first."""
+    source = tmp_path / "nest64.c"
+    source.write_text(scaling.nest(64))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["analysis registers"] > 5.0, f"premise: registers were derived ({own['analysis registers']:.1f} Minstr)"
+    assert own["analysis registers"] <= 100.0, f"registers {own['analysis registers']:.1f} Minstr"
+    assert own["mir rotate"] <= 80.0, f"rotate {own['mir rotate']:.1f} Minstr"

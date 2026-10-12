@@ -1,5 +1,5 @@
-reason = "phielim renames a loop phi to its back-edge argument only where its copies would need an edge block (never an x87 value); twoaddr ties the source that does not interfere with the destination. matmul bas -O2 instructions -11.6%, nbody_fixed nib -Os instructions -3.7% (xchg chains gone) with memory operands +12%; crc bas +1 instruction, +2 bytes (one copy outside its loop)"
-blessed = "2026-10-10"
+reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 4847163
@@ -7,6 +7,7 @@ memory_operands = 900246
 code_bytes = 325
 data_bytes = 13
 bss_bytes = 0
+kernel_ms = 64.6685
 
 [bas.Os]
 instructions = 4952187
@@ -16,12 +17,43 @@ data_bytes = 13
 bss_bytes = 0
 kernel_ms = 66.0688
 
+[bq16.O2]
+instructions = 5102236
+memory_operands = 900246
+code_bytes = 330
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 68.0648
+
+[bq16.Os]
+instructions = 5207260
+memory_operands = 900246
+code_bytes = 313
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 69.4657
+
+[bq32.O2]
+instructions = 4897176
+code_bytes = 282
+data_bytes = 19
+bss_bytes = 0
+kernel_ms = 64.8422
+
+[bq32.Os]
+instructions = 4825565
+code_bytes = 264
+data_bytes = 19
+bss_bytes = 0
+kernel_ms = 63.8845
+
 [c.O2]
 instructions = 3631898
 memory_operands = 180050
 code_bytes = 151
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 48.4465
 
 [c.Os]
 instructions = 3736922
@@ -29,6 +61,7 @@ memory_operands = 180050
 code_bytes = 147
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 49.8468
 
 [nib.O2]
 instructions = 4832998
@@ -36,6 +69,7 @@ memory_operands = 270051
 code_bytes = 188
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 64.4682
 
 [nib.Os]
 instructions = 4862998
@@ -43,6 +77,7 @@ memory_operands = 270051
 code_bytes = 180
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 64.8679
 
 [ow.O2]
 instructions = 11596295

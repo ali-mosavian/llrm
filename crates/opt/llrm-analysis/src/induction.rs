@@ -980,9 +980,15 @@ fn _entered(
         }
     };
     let (start, bound) = (Scev::of(start, width), Scev::of(bound, width));
-    if crate::guards::holds(unit, preheader, test, &start, &bound)
-        || _ranged(unit, preheader, value, limit, test, width)
-    {
+    // The guards over the preheader, found once for the questions below.
+    let guards = std::cell::OnceCell::new();
+    let guards = || guards.get_or_init(|| crate::guards::guards(unit, preheader));
+    let held = if start.known().is_some() && bound.known().is_some() {
+        crate::guards::holds(unit, preheader, test, &start, &bound)
+    } else {
+        crate::guards::holds_with(unit, preheader, guards(), test, &start, &bound)
+    };
+    if held || _ranged(unit, preheader, value, limit, test, width) {
         return true;
     }
     // A signed ordered test reads them at an offset too (`n > 2` proves `1 < n
@@ -997,17 +1003,15 @@ fn _entered(
             root.map_or(number.clone(), |root| Scev::unknown(root, width).plus(&number))
         };
         let (start, bound) = (rooted(value), rooted(limit));
-        return crate::guards::guards(unit, preheader)
-            .into_iter()
-            .any(|guard| crate::guards::implies_at_offset(&guard, test, &start, &bound));
+        return guards().iter().any(|guard| crate::guards::implies_at_offset(guard, test, &start, &bound));
     }
     // Only an equality test reads the guards at an offset (`a != 1` proves `a -
     // 1 != 0`), and only where the ones above do not prove it as they
     // stand.
     matches!(test, IntPredicate::Eq | IntPredicate::Ne) && {
         let (start, bound) = (anchor(&start), anchor(&bound));
-        crate::guards::guards(unit, preheader)
-            .into_iter()
+        guards()
+            .iter()
             .any(
                 |guard| crate::guards::implies(
                     &crate::guards::Guard {
