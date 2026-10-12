@@ -361,6 +361,8 @@ static void music_stop(void)
     tail = head;
     sound_left = quiet_left = 0;
     dev_tone(0);
+    if (tick_started)
+        dev_ticker_stop();
 }
 
 static Comp comp = {0, C_SN, {0, 0, 0, 0, music_stop}};

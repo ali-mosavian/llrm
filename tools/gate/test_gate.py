@@ -706,7 +706,7 @@ def test_a_failed_step_prints_what_its_failing_tests_printed_not_only_the_log_ta
 
 def test_what_a_runner_lacks_is_a_named_skip_and_what_it_needs_is_installed(tmp_path):
     """GitHub CI was red on every commit: `tests/dwarf.rs` failed for want of Open Watcom's wdump (LLRM_REQUIRE_DWARF made a missing tool a
-    failure), the QB45 runtime-library tests errored in LIB.EXE for want of QB45, and the vsgcc harness could not link gcc -m32 programs
+    failure), the QB45 runtime-library tests errored in LIB.EXE for want of QB45 (now only the tests that compare with BCOM45 need it), and the vsgcc harness could not link gcc -m32 programs
     (no 32-bit libgcc: __divdi3). A tool the runner cannot have is a capability the gate names and skips; one it can have is installed."""
     host = {"HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1"}
     assert "wdump" in gate.missing_capabilities(host) and "LLRM_REQUIRE_WDUMP" in gate.load()["capability"]["wdump"]["require"]
@@ -714,6 +714,9 @@ def test_what_a_runner_lacks_is_a_named_skip_and_what_it_needs_is_installed(tmp_
     assert "wdump" not in gate.missing_capabilities({**host, "WDUMP": str(tmp_path / "wdump")})
     assert "LLRM_REQUIRE_WDUMP" in (gate.ROOT / "tools/debug-gate.env").read_text()
     declared = gate.declared_requirements()
-    for test in ("test_qb32.py", "test_qbgfxspeed.py", "test_qbgfxfill.py"):
+    # BCOM45 is the oracle of these; the llrm side (jwlink) of every QB test needs no QB45
+    for test in ("test_qbbc.py", "test_qbgfx.py", "test_qbgfxstep.py", "test_qbdemos.py", "test_qbrt.py"):
         assert declared.get(f"tools/dosbatch/{test}") == ["qb45"], test
+    for test in ("test_qb32.py", "test_qbgfxspeed.py", "test_qbgfxfill.py", "test_qbgorilla.py", "test_qbkeys.py", "test_qbstrblocks.py", "test_qbentries.py"):
+        assert declared.get(f"tools/dosbatch/{test}") is None, test
     assert "gcc-multilib" in (gate.ROOT / ".github/actions/setup/action.yml").read_text()
