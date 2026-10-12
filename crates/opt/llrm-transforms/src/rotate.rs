@@ -146,10 +146,11 @@
 //! prints what the trip-count analyses prove per loop, to compare builds with
 //! and without `-ftree-ch`.
 //!
-//! On by default is the user's decision of 2026-10-12 (docs/reference/levels.md):
-//! compile +9.3% at -O1 and +14.0% at -O2 over the vsgcc programs, the m16 bench
-//! rows it moves (#1557), and steeper slopes of rotate, loopslots and `analysis
-//! registers` on nests and many-loop functions (#1559).
+//! On by default is the user's decision of 2026-10-12
+//! (docs/reference/levels.md): compile +9.3% at -O1 and +14.0% at -O2 over the
+//! vsgcc programs, the m16 bench rows it moves (#1557), and steeper slopes of
+//! rotate, loopslots and `analysis registers` on nests and many-loop functions
+//! (#1559).
 //!
 //! # Keeps
 //! Nothing where it changes a body.
