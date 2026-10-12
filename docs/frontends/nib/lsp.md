@@ -1,8 +1,8 @@
 # nib-lsp
 
-A language server for Nib (language id `nib`), speaking LSP over stdio. It
-runs the compiler's own frontend, so what it reports is what `llrm-nib`
-would.
+Audience: editor users and contributors. `nib-lsp` is a language server for
+Nib (language id `nib`), speaking LSP over stdio. It runs the compiler's own
+frontend, so what it reports is what `llrm-nib` would.
 
 ## Building
 
@@ -24,10 +24,12 @@ copied under `$TMPDIR/nib-lsp/` so that a definition can open them.
 
 ## The project's target
 
-The server checks for real mode (m16) unless the editor names the project's target in
-`initialize`: `"initializationOptions": {"target": "x86-m32"}`. That target's layout, calling
-conventions and OS layer (`std.os`) then decide what is an error and what a hover or definition
-shows. An unknown target fails `initialize`. Zed passes the `lsp.nib-lsp.initialization_options` setting (see `editors/zed/README.md`).
+The server checks for real mode (`-m16`) unless the editor sends the
+project's mode in `initialize`: `"initializationOptions": {"mode": 32}`, gcc's
+`-m32`. That target's layout, calling conventions and OS layer (`std.os`) then
+decide what is an error and what a hover or definition shows. A mode no target
+has fails `initialize` (`no target for -m64`). Zed passes the
+`lsp.nib-lsp.initialization_options` setting (see `editors/zed/README.md`).
 
 ## Features
 
@@ -40,5 +42,6 @@ shows. An unknown target fails `initialize`. Zed passes the `lsp.nib-lsp.initial
   through imports (into `std` too), and fields and methods of a value whose
   type the checker found.
 - Hover: a declaration's signature and the comment above it; a local's type.
-- Completion: keywords, the file's top-level names, and after `alias.` the
-  public names of that module.
+- Completion: the locals in scope, keywords and the module's own names; after
+  `alias.` the public names of that module; after any other value and `.`, the
+  fields and methods of its type.

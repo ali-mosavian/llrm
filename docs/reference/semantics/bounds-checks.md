@@ -1,148 +1,36 @@
-# Bounds-check policy and lowering
+# Bounds checks
 
-Bounds checking has its own `--bounds-checks` flag, default off, independent of
-`--basic-semantics`. Both flags are recorded separately in manifests and output
-configuration markers. Bench and stage-dump tools accept the same policy.
+For users choosing check policy and for frontend authors. A subscript is checked only where the user asked.
 
-**Implemented first slice:** static numeric `B$HARY` accesses with a relocated,
-segment-contained allocation become ordinary scalar MIR subtract/multiply/add
-operations and a selector load at the raise boundary. No optimization pass
-recognizes the helper or its register convention. With checks enabled, the
-original checked helper remains. Huge/string forms are not lowered yet;
-unchecked emission refuses them explicitly rather than silently retaining checks.
-Loop preguards are also pending.
+## What the user selects
 
-**Dynamic FAR arrays:** a recognized numeric DDIM with allocation features 1
-also exposes HARY address arithmetic. Rank/type come from the allocation
-request; lower bounds, dimension counts, base offset and selector are explicit
-memory loads at each access. The optimization passes may prove reuse or
-invariance; the frontend does not freeze mutable descriptor memory.
+`-fsanitize=bounds` (or `-fsanitize=undefined`; `-fno-sanitize=bounds` turns it off) is the one switch, parsed with the other gcc options in [`flags.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/flags.rs#L96). It is off by default. A frontend reads `Flags::sanitize.bounds` and marks its own semantics: `llrm-qb` sets `checked_arrays` ([`cli.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/frontends/llrm-qb/src/cli.rs#L108)), which is BC's `/D` subscript check. The two other `/D` checks are separate switches ([integer-overflow-policy](integer-overflow-policy.md)).
 
-The three shipped DDIM bodies establish the allocation distinction: QB
-dynamic.asm 0x6c, PDS 0x51 and VBDOS 0xdf zero the base offset, then test
-feature bit 2 and reject non-huge sizes above 64K before far allocation.
-Thus valid non-huge FAR accesses need no selector carry. This does **not**
-justify dropping the high offset for HUGE allocations. No hard-coded
-`b$HugeShift` or machine encoding was introduced into a MIR pass.
-
-HARR's two calls now become the following value computation:
-
-```text
-before: push row; push column; push 2; descriptor argument; call B$HARY
-after:  offset = ((column - load(lowerColumn)) * load(rowCount)
-                 + row - load(lowerRow)) * elementSize + load(base)
+```
+ -fsanitize=bounds
+        |
+        v
+ Flags.sanitize.bounds --> llrm-qb: Frontend.checked_arrays
+                                |
+                                v
+                  qbfront semantic Options.checked_arrays
+                    unchecked: subscript = address arithmetic from the descriptor
+                    checked:   branch to an error block (error 9) before it
+                                |
+                                v
+                       HIR -> MIR: ordinary compares, loads, geps
 ```
 
-Its `/D` builds print the same answer before/after on all three compilers.
-`tests/inputs/omf/regressions/harr-bounds-{p-g2,q-o,v-g3}.obj` are unchanged compiler
-output from `tests/run/qb/harr.bas` with the named configuration plus `/D`.
-An additional focused expression check uses unequal dimensions and negative
-lower bounds, because HARR's square zero-based allocation cannot detect a
-swapped dimension formula. Unestablished allocation layouts stay refused.
+## What the frontend emits
 
-Runtime-sized DIM no longer loses its known rank/type merely because its
-extents are unknown. Allocation header facts are derived separately from the
-optional constant-bound allocation request. Dynamic address recognition uses
-those header facts; it still loads the actual bounds and base at each access.
-`tests/inputs/omf/regressions/dynsz.bas` reads unequal upper bounds at runtime and
-uses negative/nonzero lower bounds. Its three `dynsz-*.obj` files are real
-compiler output with the named primary flags plus `/D`. All three original
-and optimized executables print `123 456` and `DONE`; the emitted objects
-contain no HARY calls. Before this change they refused unchecked lowering.
+qbfront ([`bounds.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/frontends/qbfront/src/semantic/bounds.rs)) reads a bound from the array descriptor. Where the procedure's own `DIM` or `REDIM` reached the read, the bound is what that statement handed the runtime: the frontend holds each array's rank and bounds in locals, so `promote` and `gvn` fold them, and drops them at `ERASE`, a `DIM`, a call that can reach the array, and any entry the runtime makes. `B$LBND` and `B$UBND` run only to raise "Subscript out of range": always for a dimension past the declared rank, and under `-fsanitize=bounds` where the array may be unallocated or the dimension outside its rank.
 
-For a zero-based INTEGER array the address computation changes from:
+Because a check is an ordinary compare and branch in MIR, the optimizer treats it like any other: `ranges` removes it where the index interval proves it, and `unswitch`, `hoist` and `gvn` move or share it.
 
-```text
-before: push index; push rank; descriptor argument; call B$HARY
-MIR:    adjusted = index - 0; bytes = adjusted * 2; address = base + bytes
-after:  mov bx,[index]; shl bx,1; add bx,array; mov es,[selector]
-```
+## Objects compiled by BC
 
-The assembly excerpt is PDS ARRIDX's first access; `array` and `selector` stand
-for relocated operands, not hard-coded addresses. `/D` tracing calls remain
-barriers, so this is exposure of address arithmetic, not yet a claim that every
-address has become a loop-carried induction value.
+A BC object compiled with `/D` or `/Ah` calls `B$HARY` for each element address. The raise ([`access.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-x86-bc/src/access.rs)) keeps it a call, `@llrm.qb.B$HARY`, answering `{bx, es}`: computing the address in the raise would drop the check the program was compiled with, and a huge element is a 32-bit offset a 16-bit far index cannot hold. The routine's contract in `runtime.toml` says it reads any memory, writes its own, and raises an error, so `gvn` does not share two calls and `hoist` does not move them.
 
-Regression fixtures `tests/inputs/omf/regressions/arridx-bounds-{p-g2,q-o,v-g3}.obj`
-are unchanged BC output from `tests/run/qb/arridx.bas`, using each named configuration
-plus `/D`. All three execute with output 1260, with checks both enabled and
-disabled (six runs). This also exposed an independent INTO normal-path SSA bug:
-invented register results made ARRIDX print 630/0. INTO now observes flags
-without redefining registers; its exceptional memory/control barrier remains.
+## Not selectable
 
-
-## Actual compiler output
-
-Compiled the existing ARRIDX and HARR sources with each primary configuration
-plus `/D`, on QB 4.5, PDS 7.1 and VBDOS. All six compilations report zero
-severe errors. Objects and complete PDS ARRIDX stage dumps are at:
-
-`bounds-codegen`
-
-All three compilers emit three `B$HARY` calls for ARRIDX's three accesses
-and two for HARR's two accesses. These calls compute addresses as well as
-checking bounds. Deleting the calls would delete the address calculation.
-They also emit `B$LINA` calls at statement boundaries; do not remove those
-as bounds checks, because they implement tracing and Ctrl-Break handling.
-
-PDS ARRIDX initially refused emission at its first `B$LINA` (0x36).
-Its normal stack interface is now established from the shipped libraries;
-trace/break handling retains conservative clobbers and memory/control effects.
-
-## Runtime evidence
-
-Inspected `tools/libdump.py B$HARY --limit 95` against all three shipped
-libraries and the QB runtime `rt/dynamic.asm` body:
-
-- Descriptor address arrives in BX; indices and dimension count are on the
-  stack. The result is ES:BX. The ordinary return restores AX/CX/DX/SI/DI/BP.
-- Rank is checked against descriptor byte +8. For each dimension, the
-  adjusted index is compared against zero and its element count. Dimension
-  records start at +14 and contain count and lower bound, four bytes each.
-- Element width is at +12. The address calculation accumulates a 32-bit
-  offset, adds the data offset, then adjusts the segment using `b$HugeShift`.
-  A zero segment also reports an error.
-- Caller stack cleanup is `2 * (dimension_count + 1)`, not a fixed size.
-  The return is an indirect jump through saved runtime scratch storage.
-- QB's entry is dynamic.asm 1:00dc; PDS/VBDOS use hugearr.asm 1:0004.
-- VBDOS additionally tests descriptor byte +9 bit 0x80 and, when set,
-  dereferences the data-offset field through another pointer. A shared
-  unconditional descriptor-load sequence would therefore be wrong.
-
-These linear listings establish the address calculation but are not complete
-contracts for the error paths or indirect-return dependency. Do not derive
-purity, error-handler effects or normal termination from them. In particular,
-the checked helper is not a pure pointer expression.
-
-`B$LINA` also differs from the available source: all three library bodies
-contain a trace-flag test and branch after the break-check call, whereas the
-local source body ends immediately after that call. Use the library and its
-reachable dependencies when establishing its interface.
-
-## Implementation boundary
-
-1. Establish the debug and checked-array call interfaces, including variable
-   stack cleanup and error paths. Keep the original error machinery until
-   checked execution is represented soundly.
-2. Raise a descriptor-backed array access into semantic address calculation
-   plus a separate bounds obligation. Descriptor layout, register arguments,
-   and huge-pointer encoding belong in the frontend/backend, never loop
-   optimization passes.
-3. Native mode drops the bounds obligation, not the address calculation or
-   allocation operation. Unsupported helper forms must remain explicitly
-   unsupported; a retained checked helper is not an unchecked success.
-4. In preserve mode, derive the accessed range from the induction variable,
-   step and actual loop trip count. Account for wraparound, negative steps,
-   zero trips, conditional accesses and descriptor mutation.
-5. The user explicitly permits bounds errors to be raised before the loop,
-   even when this skips earlier iterations' writes/output. A failed pre-loop
-   check may therefore report the BASIC error directly; a checked slow-loop
-   version is not required merely to preserve error timing. Guard the check
-   with loop entry so zero-trip loops do not introduce errors. Early reporting
-   does not authorize checking conditional accesses that would never execute,
-   or treating mutable bounds as invariant.
-
-For inputs compiled without checks, the flag cannot simply recover missing
-checks from a helper call: the access may already be inline machine code.
-Adding checks there requires recovered array identity, rank and extents, not
-an assumption that any indexed memory operand is an array element.
+Checks cannot be added to an object compiled without them: an access may already be inline machine code, and adding a check needs the array's identity, rank and extents.

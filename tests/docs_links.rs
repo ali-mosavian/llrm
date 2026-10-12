@@ -147,6 +147,43 @@ fn orphans(dir: &Path) -> Vec<String> {
     all.into_iter().filter(|file| file.starts_with("docs/") && !seen.contains(file)).collect()
 }
 
+/// The catalogs of the optimizer and the backend: every source file of a
+/// directory is named in its doc.
+const CATALOGS: [(&str, &str); 3] = [
+    ("crates/opt/llrm-transforms/src", "docs/optimizations/passes.md"),
+    ("crates/opt/llrm-analysis/src", "docs/optimizations/analyses.md"),
+    ("crates/backend/llrm-core/src/backend", "docs/optimizations/backend.md"),
+];
+
+/// `source file` of each non-test source file of `src` its `catalog` never
+/// names.
+fn uncatalogued(
+    dir: &Path,
+    src: &str,
+    catalog: &str,
+) -> Vec<String> {
+    let text = fs::read_to_string(dir.join(catalog)).unwrap_or_default();
+    let mut found: Vec<String> = fs::read_dir(dir.join(src))
+        .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.path()).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .filter_map(|path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
+        .filter(|stem| !stem.ends_with("_tests") && !["lib", "mod", "testing"].contains(&stem.as_str()))
+        .filter(|stem| !text.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == stem))
+        .map(|stem| format!("{src}/{stem}.rs ({catalog})"))
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn test_every_pass_analysis_and_backend_file_is_in_its_catalog() {
+    let dir = Path::new(ROOT);
+    let found: Vec<String> = CATALOGS.iter().flat_map(|(src, doc)| uncatalogued(dir, src, doc)).collect();
+    assert!(found.is_empty(), "add these to their catalog:\n{}", found.join("\n"));
+}
+
 #[test]
 fn test_every_markdown_link_resolves() {
     let found = broken(Path::new(ROOT));
@@ -215,4 +252,19 @@ fn test_a_doc_path_named_in_prose_that_is_gone_is_found() {
         ("docs/here.md", "x\n"),
     ]);
     assert_eq!(named_missing(dir.path()), ["a.md docs/gone.md", "a.md docs/gone2.md"]);
+}
+
+/// A pass added to the pipeline with no word in `passes.md` left the
+/// catalog incomplete without a failure.
+#[test]
+fn test_a_source_file_a_catalog_does_not_name_is_found() {
+    let dir = repo(&[
+        ("src/alpha.rs", ""),
+        ("src/beta.rs", ""),
+        ("src/beta_tests.rs", ""),
+        ("src/lib.rs", ""),
+        ("src/gamma_delta.rs", ""),
+        ("cat.md", "`alpha` and gamma only; alpha_beta is not it\n"),
+    ]);
+    assert_eq!(uncatalogued(dir.path(), "src", "cat.md"), ["src/beta.rs (cat.md)", "src/gamma_delta.rs (cat.md)"]);
 }

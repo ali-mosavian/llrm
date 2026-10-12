@@ -1,303 +1,129 @@
-# Rich portable MIR
+# MIR
 
-Status: done. Steps 0 to 7 landed; the old MIR is deleted and every
-frontend compiles through this MIR alone.
+For contributors writing a frontend, a pass or lowering. MIR is the one IR
+every frontend builds and every pass reads and writes. It lives in
+`crates/ir/llrm-mir`, which has no dependencies.
 
 ## Decision
 
-MIR is LLVM IR. Its text is a subset of LLVM's assembly language, its
-meaning is the LangRef's, and every MIR file is one that LLVM 20's
-`opt -passes=verify` accepts. Where llrm needs something LLVM lacks, it
-takes the form LLVM gives extensions: an intrinsic, an attribute or
-metadata. It never adds syntax, a type or an instruction.
+MIR is LLVM IR. Its text is a subset of LLVM's assembly language, its meaning
+is the LangRef's, and every MIR file is one that LLVM 20's
+`opt -passes=verify` accepts. Where llrm needs something LLVM lacks it takes
+the form LLVM gives extensions: an intrinsic, an attribute or metadata. It
+never adds syntax, a type or an instruction.
 
-The form is LLVM's; the compiler stays llrm's. Its analyses, passes and
-code generation remain its own, because LLVM has no segmented 16-bit x86
-target. LLVM is a reference and an oracle, never a dependency.
+The form is LLVM's; the compiler is llrm's. Its analyses, passes and code
+generation are its own, because LLVM has no segmented 16-bit x86 target. LLVM
+is a reference and an oracle, never a dependency.
 
-That buys what a private IR cannot have:
+```
+ text (.ll subset)  <--parse/print-->  Module (arenas, ids, use lists)
+                                          |
+        verify (LLVM Verifier rules)  <---+---> interpret (poison, datalayout)
+                                          |
+        PassManager: function and module passes, cached analyses,
+        PreservedAnalyses, verify-each, verify-analysis-invalidation
+```
 
-- **Independent oracles**, pinned to LLVM 20. `opt -passes=verify` checks
-  every stage dump. `lli -force-interpreter` runs what it can: not
-  overflow, min/max or `fmuladd` intrinsics or unwinding, and a
-  `@llrm.qb.*` routine only where a `.ll` model of it is linked in.
-  `llc -mtriple=msp430` compiles all but exception handling for a 16-bit
-  non-x86 target, and `opt -O2` on the same MIR is a quality reference.
-  `tools/mir-oracle.sh` runs all three.
-- **LLVM's answers.** Poison and its flags, phi semantics, memory
-  attributes and exception edges are settled
-  questions there; llrm does not answer them again.
-- **Readers.** Anyone who reads LLVM IR reads MIR.
+Independent oracles, pinned to LLVM 20: `opt -passes=verify` checks stage
+dumps, `lli -force-interpreter` runs what it can, `llc -mtriple=msp430`
+compiles most of it, and `opt -O2` is a quality reference.
+`tools/mir-oracle.sh` runs them; `llrm-mir`'s verifier and interpreter are
+held to `opt` and `lli` over the corpus. An input one accepts and the other
+rejects, or an answer they disagree on, is a bug in one of them.
+
+## Vocabulary
+
+Types: `void`, `label`, `metadata`, `token`, `iN`, `float`, `double`, opaque
+`ptr` per address space, arrays, vectors, literal and named structs,
+function types
+([`types.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/ir/llrm-mir/src/types.rs)).
+
+Instructions
+([`Opcode`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/ir/llrm-mir/src/opcode.rs#L455)):
+
+| Class | Opcodes |
+| --- | --- |
+| Terminators | `ret`, `br`, `switch`, `invoke`, `resume`, `unreachable` |
+| Arithmetic | `add sub mul udiv sdiv urem srem shl lshr ashr and or xor`, `fadd fsub fmul fdiv frem`, `fneg` |
+| Casts | `trunc zext sext fptrunc fpext fptoui fptosi uitofp sitofp ptrtoint inttoptr bitcast addrspacecast` |
+| Aggregates | `extractvalue`, `insertvalue` |
+| Memory | `alloca`, `load`, `store` (both with `volatile`), `getelementptr` |
+| Other | `icmp`, `fcmp`, `phi`, `select`, `freeze`, `call`, `landingpad` |
+
+There are no atomics, `indirectbr` or `undef`; the parser refuses them. Flags
+(`nsw`, `nuw`, `exact`, `inbounds`, fast-math) and attributes, including
+`memory(...)`, `noalias`, `nocapture` and `initializes`, are LLVM's.
+Intrinsics are one table
+([`intrinsics.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/ir/llrm-mir/src/intrinsics.rs)):
+the overflow, min/max, `fmuladd`, math, `memcpy`/`memmove`/`memset`, `assume`,
+`lifetime` and `va_start` intrinsics of LLVM, plus llrm's `llrm.ia16.*`
+(port I/O, huge-pointer difference and window, inline code and assembly).
+The table gives each its signature and attributes; the parser sets them as
+LLVM does, the verifier checks them, the interpreter runs them.
+
+Beyond instructions, `llrm-mir` holds LLVM's analyses in the form passes
+need them: dominators, loops, scalar evolution, value tracking, TBAA, the
+call graph and the pass manager.
 
 ## Where llrm differs from LLVM
 
 The complete list; everything else is LLVM's.
 
-1. **Passes see no target.** LLVM passes read `TargetTransformInfo`;
-   llrm's do not (the fifth rule); where LLVM consults it, llrm's pass uses
-   the MIR cost model, and what depends on the target is lowering's.
-   `target datalayout` stays, because here it states the program's memory
-   layout: BC's object fixes it, and a C or Nib frontend states its own, as
-   clang does. It names no native integer widths (`n`), and there is no
-   `target triple`; lowering is given the target.
-2. **A subset.** No `undef`, which LLVM is retiring for `poison`; no
-   constant expressions outside global initializers; nothing without a
-   producer, such as GC, coroutines or scalable vectors. The subset grows
-   when a producer needs more, never by an llrm construct.
-3. **Rust, not C++.** The in-memory form is LLVM's object model -- module,
-   functions, blocks, instructions, typed values, use lists,
-   `replace_all_uses_with`, and a pass manager whose analyses are cached
-   and invalidated by `PreservedAnalyses` -- held in arenas addressed by id
-   rather than by intrusive pointers. Ids are never reused. Erase, clone
-   and replace record what they did, which feeds the rewrite ledger now
-   that a pass's input no longer survives it; and, as LLVM's
-   `-verify-analysis-invalidation` does, an instrument recomputes each
-   preserved analysis and compares.
-4. **Source bytes are not IR.** Which original bytes an instruction owns is
-   the rewrite ledger's (step 2), outside MIR. Diagnostic lineage is
-   `!llrm.origin` metadata; stripping it must not change the output, the
-   rule LLVM holds for `-g`.
+1. **Passes see no target.** LLVM passes read `TargetTransformInfo`; llrm's
+   read `llrm_mir::target::Machine` (costs, register counts, address-space
+   roles). `target datalayout` is kept because it states the program's memory
+   layout; there is no `target triple`.
+2. **A subset.** No `undef`, no constant expressions outside global
+   initializers, nothing without a producer. The subset grows when a producer
+   needs more, never by an llrm construct.
+3. **Rust, not C++.** LLVM's object model (module, functions, blocks,
+   instructions, typed values, use lists, `replace_all_uses_with`) held in
+   arenas addressed by id. Ids are never reused. Every edit is logged as a
+   `Change`, and `check_uses` recomputes use lists and compares.
+4. **Address spaces are roles.** A target's `datalayout.toml` gives the
+   numbers. For x86-m16: `0` near, `1` far (segment:offset, 32 bits, indexed
+   by 16), `2` a bare segment selector, `3` huge, `4` fixed device memory,
+   `5` stack. A pass asks the target for the role and never names a number
+   ([`spaces.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/ir/llrm-mir/src/spaces.rs#L9)).
 
-## llrm's needs in LLVM's terms
+## What frontends map onto it
 
-| Need | LLVM form |
+| Source construct | MIR form |
 | --- | --- |
-| A long held in a register pair | `i32`, recognized by the raise |
+| A long held in a register pair | `i32`, recognised when MIR is built |
 | A write to half of a word | `trunc`, `zext`, `shl`, `or` |
-| Carry, borrow, overflow | `llvm.uadd.with.overflow` and its kin, `extractvalue` |
-| `B$MUI4` and other runtime arithmetic | the LLVM operation |
-| Division | `sdiv`, `srem`, unguarded: division is C's (agents.md), so a zero divisor is undefined, as in C |
-| An error check BC's code makes | `icmp`, `br`, a call to `@llrm.qb.error(i16)`: `noreturn`, and not `nounwind`, since a handler catches it |
-| `ON ERROR`, `RESUME` | `invoke` and `landingpad` under `@llrm.qb.personality` |
-| `GOSUB`/`RETURN`, `RESUME` targets, event handlers | one mechanism: an `i16` continuation index and a `switch` over the places control may return to |
-| Event traps (`ON TIMER`, `ON KEY`) | a call to `@llrm.qb.events` at each check BC makes |
-| An alternate entry sharing a frame | a master function taking an entry selector, and a thin function per entry, as flang lowers `ENTRY` |
-| Variables BASIC zeroes | explicit stores or `zeroinitializer`; `alloca` is uninitialized |
-| String space and dynamic arrays, which the runtime moves | reached through their descriptors; no pointer into them lives across a call that may allocate |
-| Near and far pointers | `ptr` and `ptr addrspace(1)`; datalayout `p:16:16-p1:32:16:16:16`, a far pointer indexing by 16 bits; its integer form is segment:offset, so a near offset into far data is `ptrtoint` to `i16` |
-| Segments | `ptr addrspace(2)`, datalayout `p2:16:16`: `addrspacecast` from a far pointer gives its segment, one back gives segment:0, and its integer form is the selector; address spaces' casts are the memory model's to define |
-| Huge-array address arithmetic | an intrinsic; segment arithmetic has no LLVM form |
-| An object's fixed layout | the datalayout, struct types, globals and their initializers |
-| A frontend's promise that an access stays in its object | `getelementptr inbounds`, `noalias`, `!alias.scope`, `!tbaa` |
-| A runtime routine | `@llrm.qb.<name>`, declared with `memory(...)` and the rest as proved; few are `nounwind`, since most can raise an error |
-| An unrecognized external call | a call to its declaration, all effects unknown; a function whose interface cannot be recovered is refused whole |
-| `SINGLE`, `DOUBLE` | `float`, `double`, plain arithmetic; precision and floating exceptions are the machine's |
+| Carry, borrow, overflow | `llvm.uadd.with.overflow` and kin, `extractvalue` |
+| Runtime arithmetic such as `B$MUI4` | the LLVM operation |
+| Division | `sdiv`, `srem`, unguarded, as in C |
+| `ON ERROR`, `RESUME` | `invoke` and `landingpad` under `@llrm.qb.personality`; `@llrm.qb.onerror` and `onlocalerror` turn trapping on and off |
+| `GOSUB`/`RETURN`, event handlers | an `i16` continuation index and a `switch` over the places control may return to |
+| Variables BASIC zeroes | explicit stores or `zeroinitializer`; `alloca` is uninitialised |
+| Near and far pointers | `ptr` and `ptr addrspace(1)`; `ptrtoint` of a far pointer is segment:offset |
+| A frontend's promise that an access stays in its object | `getelementptr inbounds`, `noalias`, `!tbaa` |
+| A runtime routine | `@llrm.qb.<name>`, declared with `memory(...)` as proved |
+| An unrecognised external call | a call to its declaration, all effects unknown |
 
-The raise recognizes; no pass does. `B$MUI4` is a `mul` the moment MIR
-exists.
+The frontend recognises; no pass does. `B$MUI4` is a `mul` the moment MIR exists.
+Facts a language promises (what a pass may use and may drop without changing
+meaning) are stated through `llrm_hir::facts` and read through
+`llrm_mir::facts`; what changes meaning, such as `volatile`, is an IR field.
 
-The analyses and passes are llrm's, shaped as LLVM's: dominators, loops,
-scalar evolution, alias analysis, MemorySSA, known bits, value ranges, the
-call graph. Each fact has one owner (the seventh rule).
+## Invariants
 
-## Stage dumps and the verifier
-
-`LLRM_MIR_STAGES=DIR` writes one `.ll` per pass; diffing adjacent files is the
-debugging evidence (the fourth rule).
-
-`llrm-mir` implements LLVM's `Verifier` rules for its subset, so the
-compiler needs no LLVM at run time. Its verifier and interpreter are
-checked against `opt` and `lli` over the corpus: an input one accepts and
-the other rejects, or an answer they disagree on, is a bug in one of them.
+- The verifier ([`verify.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/ir/llrm-mir/src/verify.rs))
+  holds LLVM's rules for the subset. The pass manager verifies after every pass when `LLRM_VERIFY` is set.
+- A frontend's MIR holds no `poison`, no flag but a GEP's `inbounds`, and no
+  read of an alloca before a store of its whole type (`lint::poison`).
+- A pass reports a change by preserving fewer analyses than all of them.
+- `LLRM_MIR_STAGES=DIR` writes one `.ll` per changed step; diff adjacent files.
+- `crates/ir/llrm-mir` depends on nothing: MIR cannot name a decoder, object
+  file or target, and a test keeps it so.
 
 ## Lowering contract
 
-Lowering receives MIR, the target, the rewrite ledger and the ABI bindings
-of an existing object. It may choose types' machine representations,
-legalize, select, and implement intrinsics. It may not consult original
-bytes to decide what an instruction means, invent an input, result or
-edge, or feed a machine fact back into a MIR pass.
-
-## Migration
-
-The migration keeps the compiler runnable and output-stable.  Each issue found
-gets a fail-first symptom regression in the same commit as its fix.
-
-### 0. Freeze the baseline
-
-- Record normalized MIR after every existing pass and final allocated output.
-- Preserve byte-identical untouched OMF round trips separately from semantic
-  reconstruction.
-- Record linked answers, final assembly, structural metrics, and per-CPU costs.
-
-`tools/baseline.sh` records every MIR, LIR and assembly stage of the OMF
-corpus and the Nib examples; while final assembly is unchanged, so are costs.
-The round trip is `test_round_trip_is_byte_identical` and
-`test_every_mapped_fixture_round_trips_byte_identical`; answers are
-`tools/e2e/e2e.py`.
-
-### 1. Land the typed shell and its instruments
-
-- Introduce `MirContext`, the first scalar types, typed constants/values,
-  signatures, explicit parameters and returns, stable semantic IDs, and one
-  small opcode family.
-- Land the verifier, deterministic printer/parser, normalized stage dump, and
-  a focused interpreter for that slice immediately.
-- Make an undefined non-parameter use a verifier error.
-- Add a temporary adapter from new MIR operations into the existing backend so
-  the compiler remains runnable before lowering is ported.
-- Derive compatibility widths from types temporarily; never infer a type from a
-  consumer's guessed width.
-
-No old field is deleted in this step.
-
-Landed as `crates/ir/llrm-mir`, which has no dependencies: MIR cannot name a
-decoder, object file or target, and a test keeps it that way. The adapter and
-compatibility widths wait for the first producer in step 3, since nothing
-emits the new MIR yet. Its private text syntax gives way to LLVM's in
-step 3.
-
-### 2. Separate lineage from byte ownership
-
-- Make diagnostic lineage many-to-many and discardable.
-- Introduce mandatory `TransformChange` records.
-- Move retention, replacement, deletion, refusal, landing points, and
-  relocation intent into an independent rewrite ledger.
-- Prove that cloning and DCE no longer require live instruction anchors.
-
-This happens before opcode migration changes transformation identity and before
-new DCE/CSE can duplicate the old ownership coupling.
-
-In the old MIR, `Op.id` is each operation's own identity: unique in its body,
-assigned by the pass manager (`mir::identified`) after the raise and after
-every pass, and excluded from equality. `Op.source` is the provenance a copy
-shares: the raise-time operation whose relocations, node and site it
-re-emits. `mir::transformed` identifies a pass's output and diffs it against
-its input into `TransformChange` records (rewritten, cloned, deleted,
-inserted); `transform::recorded` returns them per stage with the body, the
-unroll, peel and unswitch drivers included.
-
-No pass sees a tombstone. At each pass boundary `mir::transformed` strips
-them and records where their bytes land: before the next operation still in
-the block, chained as that operation is deleted or moves, or where a vanished
-block's control or last operation went (`mir::Ledger`). `transform::applied`
-puts them back before the backend runs.
-
-In LIR the byte markers are meta instructions (`Insn::is_meta`), as LLVM's
-debug instructions are: they take no slot, and no pass counts, windows or
-stops on them. `LLRM_STRIP_META` drops them at every LIR phase boundary;
-the code must come out the same, as LLVM's must with and without `-g`.
-
-### 3. Make `llrm-mir` LLVM's
-
-- First the instruments: the harness that prints MIR, has `opt` verify it
-  and compares llrm's interpreter with `lli`, with a wrong fixture seen
-  failing; and hand-written `.ll` for division, `ON ERROR`, `GOSUB`,
-  `ON TIMER`, a far array and floating point, run through `opt`, `lli` and
-  `llc` to prove the mappings above before code depends on them.
-- Parse and print the subset of LLVM's text; step 1's private syntax goes.
-- Hold it in LLVM's object model: use lists, `replace_all_uses_with`, the
-  pass and analysis managers, and change records for the ledger.
-- Verifier and interpreter for the subset, checked against `opt` and `lli`
-  on the fixtures.
-- Modules: the datalayout, declarations and attributes, globals and
-  initializers, LLVM's intrinsics.
-
-The text landed first, with the arenas it reads into: `llrm-mir` parses and
-prints the subset, and `tools/mir-oracle.sh` checks that LLVM reads its
-output as it reads the input, over the mapping fixtures and clang's output
-for `bench/parity`.
-
-Then the mutation API (`llrm_mir::edit`): LLVM's `setOperand`,
-`replaceAllUsesWith`, `eraseFromParent`, `clone` and moves, over use lists
-kept for values and blocks, each change logged for the ledger;
-`check_uses` recomputes the lists and compares.
-
-Then the verifier (`llrm_mir::verify`), over a dominator tree: LLVM's
-rules for the subset. `tools/mir-oracle.sh` holds it to `opt`'s verdicts,
-accepting what `opt` accepts and refusing `tests/invalid` for the reasons
-they state.
-
-Then the datalayout and the interpreter (`llrm_mir::interpret`): LLVM's
-semantics with poison, memory laid out as the datalayout says, and
-undefined behaviour reported rather than run. On every fixture that states
-its answer it agrees with `lli`.
-
-Then the pass manager (`llrm_mir::passes`): function passes over a module,
-analyses cached per function until a pass's `PreservedAnalyses` drops
-them, and each pass's changes returned as a stage for the ledger. Its
-instruments are LLVM's `-verify-each` and `-verify-analysis-invalidation`,
-which recomputes every analysis a pass kept.
-
-Then LLVM's intrinsics (`llrm_mir::intrinsics`): one table gives each its
-signature and attributes, which the parser sets as LLVM does, the verifier
-checks with LLVM's messages, and the interpreter runs. Those lli cannot run
-are checked by hand. The `@llrm.qb.*` routines are declared by the raise,
-which proves their attributes, so they come with step 4.
-
-### 4. Raise into MIR beside the old MIR
-
-- The QB raise and the C and Nib frontends also build a MIR module. Nothing
-  consumes it yet.
-- Every corpus function's MIR passes `opt -passes=verify`, or is refused
-  whole with the reason.
-- A lint checks that raised MIR makes no poison BASIC defines, before any
-  pass can exploit it.
-
-HIR, the common frontend of QB source and Nib, emits MIR first
-(`llrm_hir::mir`), as clang's CodeGen emits LLVM IR: data objects become
-globals, local places allocas, calls to routines the module does not
-declare `@llrm.qb.*` calls. `tools/hir-mir-corpus.sh` emits the QB suite
-and the Nib fixtures, has `llrm-mir` and `opt` verify each module, and
-counts the refusals by reason.
-
-The lint is `llrm_mir::lint::poison`: a raise's MIR holds no `poison`
-constant, no flag but a GEP's `inbounds`, and no use of an alloca before
-a store of its whole type. HIR's frame starts zeroed, so the emitter zeroes
-each local, one alloca per group of places that overlap.
-
-### 5. Lower from MIR
-
-- Lowering reads only MIR into the existing LIR, so unoptimized e2e answers
-  check the new MIR, and `lli` agrees with them where it can run.
-- A call's ABI is in the MIR, as LLVM keeps it: the calling convention on
-  the callee and the call (C's is 0, BASIC's `cc1000`), and far code in
-  address space 1, whose pointers are segment:offset.
-
-An adapter into the old MIR was planned here; it needed the old MIR's call
-ABIs, frame references and flags, a second lowering that this step would
-delete, so the permanent one comes first.
-
-`backend::isel` is that lowering: it selects instructions over virtual
-registers, folds allocas and constant GEPs into addressing modes, keeps a
-branch's only comparison as flags and any other as SETcc, and turns a switch
-into a chain of compares, each edge its own phi source. What an instruction does to memory is
-the `Insn`'s own answer (`volatile`, `barrier`, `unmodeled_write`), not the
-old MIR operation's.
-
-### 6. Port the passes
-
-- One pass at a time onto MIR, against `.ll` fixtures, the interpreter and
-  the e2e answers.
-  Where LLVM has the pass, llrm's follows it.
-- Representation changes stay apart from optimization-policy changes.
-- LLVM's CodeGenPrepare sinks a comparison into the block of the branch
-  that reads it, so isel keeps it as flags there; until a MIR pass does,
-  such a comparison is SETcc and a test.
-
-### 7. Delete the old MIR
-
-Done (#323): the legacy route, then `Op`, `MemRef`, the old memory
-model and its analyses. LIR carries what it needs of a call as `CallMemory`;
-`backend/overlap.rs` compares machine addresses syntactically.
-
-## Acceptance gates
-
-Every step passes those that apply:
-
-1. Untouched OMF read and write stays byte-identical.
-2. Unoptimized decode, raise, lower, allocate, emit, link and run keep the
-   program's answers.
-3. Optimized code and answers stay unchanged until an optimization is
-   proposed and measured on its own.
-4. Each fixed symptom and each fixed instrument has a test seen failing
-   first.
-5. The first differing adjacent stage names the responsible pass.
-6. Every stage of the corpus passes `opt -passes=verify` and llrm's
-   verifier alike.
-7. llrm's interpreter, `lli` and the linked program agree.
-8. Stripping `!llrm.origin` changes no output.
-9. The rewrite ledger accounts for every source byte, fixup and external
-   landing point exactly once.
-10. Quality is judged by the code emitted; MIR is
-    infrastructure, not evidence of better code.
+Lowering receives MIR, the target and the ABI bindings of an existing object.
+It may choose types' machine representations, legalise, select and implement
+intrinsics. It may not consult original bytes to decide what an instruction
+means, invent an input, result or edge, or feed a machine fact back into a MIR
+pass. See [split.md](split.md).

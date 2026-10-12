@@ -1,124 +1,140 @@
-# Generated QB parser integration
+# The generated QB parser
 
-## Source and license provenance
+Audience: contributors to `qbfront`'s parser. Where its tables come from, how
+they are built and checked, and how they become the syntax tree.
 
-The generated parser is derived from the tracked `qbasic-port` commit
-`e468001b32a96a70c44b5767790de71698ef57c0` (2026-06-21).  Files are read
-from that Git object, never from the sibling checkout's dirty working tree.
-That package declares `license = "MIT"` in both its root and `buildprs`
-`Cargo.toml`; the commit does not contain a standalone license file.  The
-vendored file headers and this provenance record are retained rather than
-inventing a notice that is absent upstream.
+## Pipeline
 
-The grammar itself is recovered Microsoft QBasic 1.1 source.  It is the QB
-base grammar and compatibility evidence, not a FreeBASIC approximation and
-not evidence for PDS 7.1 or VBDOS-only additions.
+```
+ grammar/qbasbnf.prs ----+
+ grammar/peropcod.txt ---+--> crates/buildprs (vendored generator)
+ grammar/ast-actions.toml-+        |
+ grammar/dialect-extensions.toml   v
+                         build.rs --> OUT_DIR/qbasic_parser_tables.rs
+                                       T_STATE, T_INT_NT_DISP, T_EXT_NT_DISP,
+                                       statement/function anchors, tokens,
+                                       AstAction, ExternalAction
+                                              |
+ source text --> generated_parser/lexer.rs --> tokens with spans
+                                              |
+                      generated_parser/engine.rs (table interpreter)
+                        checkpoint / rollback per alternative
+                                              |
+                      generated_parser/ast.rs (builder) --> syntax::Module
+```
 
-## Reused unchanged
+`build.rs` runs the vendored generator over the grammar and opcode catalog and
+emits the state table, the internal and external nonterminal dispatch tables,
+statement and function anchors, token numbers, and the typed `AstAction` and
+`ExternalAction` enums. An ordinary build needs no DOS tool and no other
+checkout. `ast-actions.toml` names grammar `EMIT` and external identities
+symbolically; the build fails when a name is absent from the grammar or the
+opcode catalog.
 
-The following host-side inputs have no dependency on p-code and are vendored
-byte-for-byte from the pinned commit:
+## Source and license
 
-- `crates/buildprs/Cargo.toml` and every `crates/buildprs/src/*.rs` generator
-  module;
-- production inputs `grammar/qbasbnf.prs` and `grammar/peropcod.txt`; and
-- captured `prstab`, `prsirw`, `prsorw`, `prsstate`, and `prsrwt` goldens under
-  `tests/fixtures/buildprs/qbasic-1.1`, used only to prove that the host generator
-  still describes the recovered tables.
+The generator and grammar are extracted from the `qbasic-port` repository,
+commit `e468001b32a96a70c44b5767790de71698ef57c0`, a Rust port of the QBasic
+1.1 parser. The commit has no standalone license file; its `Cargo.toml` and
+`buildprs` `Cargo.toml` declare `license = "MIT"`. The vendored file headers
+are kept as they were.
 
-The crate build script uses those inputs plus
-`grammar/ast-actions.toml` to generate `T_STATE`, internal and external
-nonterminal dispatch tables, statement/function anchor tables, reserved-word
-numbers, and typed `AstAction`/`ExternalAction` dispatch. An ordinary build has
-no dependency on the sibling repository or a DOS tool. The action schema names
-grammar `EMIT` identities and external nonterminals symbolically; the build
-fails when a name is absent from the generated grammar or opcode catalog.
+The grammar is recovered Microsoft QBasic 1.1 source. It is evidence for the
+QB base syntax, not for PDS 7.1 or VBDOS additions.
+
+Vendored byte for byte, with no p-code dependency:
+
+- `crates/frontends/qbfront/crates/buildprs`, the generator;
+- `grammar/qbasbnf.prs` and `grammar/peropcod.txt`; and
+- the captured generator outputs under `crates/frontends/qbfront/fixtures/buildprs/`
+  (`qbasic-1.1`, `qbasic-1.1-o0`, `micro`), which prove the host generator still reproduces the recovered tables.
 
 ## Adapted, not copied
 
-The runtime parser boundary is implemented locally under
-`crates/frontends/qbfront/src/generated_parser/`:
-
-| qbasic-port reference | Local responsibility |
+| qbasic-port | Local module in `src/generated_parser/` |
 |---|---|
-| `prslex.rs` | Tokenize QB source while retaining local spans; qbfront applies the universal VBDOS syntax superset. |
-| `prsnt.rs` | Interpret generated state bytes and dispatch named external actions. |
-| `prsstmt.rs` | Build local `syntax::Statement` values; never emit an opcode. |
-| `prsexp.rs` | Build local typed expression syntax with QB precedence. |
-| `prsid.rs` | Build local name/index/member/declaration syntax. |
-| `prsmain.rs` | Parse a module and preserve action checkpoints across alternatives. |
+| `prslex.rs` | `lexer.rs`: tokenizes with spans; accepts every catalogue spelling, so `?` is `PRINT` and `&377` is octal |
+| `prsnt.rs` | `engine.rs`: interprets state bytes, dispatches external actions |
+| `prsstmt.rs`, `prsexp.rs`, `prsid.rs`, `prsmain.rs` | `ast.rs`: builds `syntax::Statement`, expressions, names and declarations, and parses a module |
 
-`prscg`, `pcode`, scanner patching, executor, IDE, display, audio, and runtime
-modules are intentionally excluded. Numeric grammar words exist only as input
-to the generated table decoder. The decoder immediately turns each one into a
-typed `AstAction`; an unmapped action retains its symbolic grammar identity as
-`Unsupported("op...")`. Numeric action IDs and p-code-shaped word buffers do
-not enter syntax, HIR, or MIR.
+The p-code generator, scanner patching, executor, IDE, display, audio and
+runtime modules are not part of the frontend. Numeric grammar words reach only
+the table decoder, which turns each into a typed `AstAction`; an unmapped one
+is `AstAction::Unsupported("op...")` and fails explicitly. Numeric action IDs
+and word buffers do not enter syntax, HIR or MIR.
 
-## Boundaries
+## Speculative parsing
 
-The table interpreter operates on typed parser/builder state. Each alternative
-checkpoints both the token cursor, the typed `AstSink`, and every builder
-collection or mode it can change. Rejection restores all of them; acceptance
-commits them. `MARK` and `EMIT` invoke the sink immediately, internal
-nonterminals recurse through `T_INT_NT_DISP`, and external nonterminals are
-decoded to generated `ExternalAction` variants before calling the hand-written
-syntax builder. Statement shapes such as PRINT, GOTO, DIM, and runtime
-statements come from generated action metadata rather than a second spelling
-allowlist in the parser.
+```
+ token cursor + builder checkpoint
+        | table alternative / internal NT / external action
+        +-- reject -> restore both
+        `-- accept -> commit both
+```
 
-The hand-written syntax types are the intended lossless source boundary. The
-current model retains names and effective written type, fixed string lengths,
-source-order array bounds and dynamic/shared form, parameter BYVAL/SEG state,
-procedure kind/static state, and source spans. It does not yet distinguish an
-equivalent suffix from an `AS` spelling, nor model FAR/HUGE/COMMON or explicit
-dialect origin. Accordingly, the `retains` entries in
-`ast-actions.toml` claim only facts the current syntax AST or statement builder
-can represent; they do not generate fields. The build rejects a retained-fact
-claim outside that explicit AST vocabulary. A dialect extension must first
-gain a hand-written syntax field and parser behavior before the schema may
-claim the new source fact.
+An alternative checkpoints the token cursor, the `AstSink` and every builder
+collection or mode it can change (expressions, statements, declarations,
+labels, procedure references, type names, literal values, parameters).
+Restoring only the cursor would let a declaration, mark or partial expression
+from a failed alternative poison the next one. `MARK` and `EMIT` invoke the
+sink immediately, internal nonterminals recurse through `T_INT_NT_DISP`, and
+external nonterminals decode to `ExternalAction` variants before the
+hand-written builder runs.
 
-Semantic analysis, not parsing, resolves suffix/default/`AS` types and names.
-It is also where a selected compiler/runtime profile supplies canonical type
-sizes and layout, storage/address space and allocation provenance, array
-descriptor ordering and bounds behavior, floating representation/evaluation,
-and call ABI/effects. Profile-derived calling distance or memory-model facts
-therefore belong in rich HIR unless source syntax explicitly spells them. The
-parser neither chooses layout nor resolves alias or ABI policy.
+## External actions
 
-The generated parser is the production `qbfront::parse` path. Before that
-switch it matched all 79 manifest identities accepted by the former recursive
-parser, including 1,848 independently parsed source lines. Unsupported
-generated actions fail explicitly; production has no legacy fallback.
+The grammar delegates its context-sensitive work to 49 external nonterminals
+(`EXTERNAL` entries in `qbasbnf.prs`): declaration context (`IdFuncDecl`,
+`IdSubDef`, `Deflist*`, ...), expression and lexical boundaries (`Exp`,
+`LitString`, `RwB`, ...), name ambiguity (`Assignment`, `IdAry*`, `IdFor`,
+...), line structure (`IfStmt`, `LabLn`, `Statement`, ...) and bounded
+argument forms (`NArgsMax3` to `5`). Each is registered to a typed action in
+`ast-actions.toml`.
 
-QB 4.5, PDS 7.1, and VBDOS all parse the highest VBDOS syntax superset.
-Later constructs remain named generated-table extensions so their source facts
-are explicit, but those extensions are inherited by every parser profile.
-Profile selection begins at semantic/runtime/ABI resolution, not syntax
-acceptance.
+## Syntax tree boundary
 
-## Verification gates
+The hand-written syntax types are the lossless source boundary. They keep
+names and the effective written type, fixed string lengths, source-order array
+bounds and dynamic or shared form, parameter `BYVAL`/`SEG` state, procedure
+kind and static state, and spans. They do not distinguish an equivalent suffix
+from an `AS` spelling, and do not model `FAR`/`HUGE`/`COMMON` or the dialect an
+element came from. The `retains` entries in `ast-actions.toml` claim only
+facts this model can represent, and the build rejects a claim outside that
+vocabulary. A dialect extension first gains a syntax field and parser
+behavior; only then may the schema claim the fact.
 
-1. The vendored generator reproduces the checked-in QBasic goldens and table
-   dimensions.
-2. The generated lexer scans all 2,160 mechanically ported qbasic-port source
-   cases under every runtime profile while preserving token order and spans.
-3. All 79 compatibility identities accepted before the production switch
-   match checked-in, human-readable AST goldens exactly.  Those snapshots are
-   legacy-derived: when the syntax model gains a field, all cases must first
-   match the previous snapshots after projecting only that representation
-   change.  The snapshots then move to the new schema together, rather than
-   teaching the test to ignore the new field.
-4. Parse counts are reported separately from semantic HIR, optimized MIR, OBJ,
-   LINK, DOS execution, verdict, and artifact counts.
-5. No case becomes runtime-green from parser acceptance alone.
+Semantic analysis, not parsing, resolves suffix, default and `AS` types and
+names, and applies the selected profile's type sizes, layout, address spaces,
+descriptor ordering, floating evaluation and call ABI. The parser chooses no
+layout and resolves no ABI policy.
 
-The 2026-09-20 snapshot-schema migration checked all 79 identities in one
-process.  After projecting only `Print.using`, `CaseItem::Value`, optional
-`LineInput.file` plus `prompt`, and `Procedure.exported`, 78 snapshots matched
-their legacy form exactly.  The remaining `qb45/memorymodel` source had been
-changed by `11c6d519` while its snapshot still described the previous program;
-its replacement was reviewed as a source-contract change.  The checked-in
-snapshots now use the complete syntax model and the test performs an exact
-comparison with no compatibility filter.
+## Dialects
+
+QB 4.5, PDS 7.1 and VBDOS all parse the VBDOS syntax superset, for every
+profile. The additions after QBasic 1.1 are named generated-table extensions
+in `grammar/dialect-extensions.toml` (for example `OPTION EXPLICIT`,
+`ON LOCAL ERROR`, `CDECL ALIAS`), validated by `build.rs` and applied
+universally by `src/dialect_extensions.rs`. Profile selection starts after
+parsing ([dialects](dialects.md)). A token name that appears in the recovered
+grammar is not evidence that a compiler accepts it; ISAM and OS/2 `SIGNAL`
+names are catalogue entries only.
+
+## Checks
+
+| Check | Where |
+|---|---|
+| The vendored generator reproduces the captured QBasic tables and equates | `fixtures/buildprs/`, tests in `crates/buildprs` |
+| The generated parser accepts the VBDOS superset under every dialect | `tests/generated_parser.rs` |
+| The AST of each accepted conformance case equals its snapshot | `fixtures/legacy_ast_goldens/`, `tests/generated_parser.rs` |
+
+The snapshots are a frozen record of the earlier parser. When the syntax model
+gains a field, every case must first match the old snapshot after projecting
+only that field; then all snapshots move to the new schema together
+(`QBFRONT_BLESS=1` rewrites them, and the diff shows added lines only). The
+test never ignores a field.
+
+`cargo run -p qbfront --bin qbparse-stages -- DIALECT SOURCE OUTDIR` dumps the
+source, the typed action stream and the syntax tree of one program.
+
+Parse counts are reported apart from semantic HIR, MIR, object, link and DOS
+counts, and no case is runtime-green from parser acceptance alone.

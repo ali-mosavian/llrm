@@ -1,236 +1,78 @@
-# Compile-time scaling, main aa93a260 (tinytim, instructions:u, median of 3, 6 axes run 6 at a time)
+# Compile-time scaling
 
-**Current llrm slopes (2026-10-11, main d9afbda99 + #1472, `llrm-c -m32 -O2`, total instructions:u per doubling of N).** The tables below are of aa93a260 and are
-stale where this says otherwise; gcc's columns have not been re-run.
+For maintainers asking how the compile cost of llrm, gcc and clang grows with program size, and which llrm step grows fastest. This file states the method; `scaling.py report` prints the numbers. The comparison family is in [vs-gcc-clang](../../../../docs/comparison/vs-gcc-clang.md#compile-time).
 
-| axis | N, 2N, 4N | Minstr | step 1 | step 2 | note |
-|---|---|---|---|---|---|
-| functions | 128..512 | 2,884 / 5,785 / 11,707 | x2.01 | x2.02 | linear |
-| straight | 1024..4096 | 3,252 / 6,493 / 13,010 | x2.00 | x2.00 | linear (was 1.40 slope at -O2) |
-| mulconst | 128..512 | 748 / 1,463 / 2,928 | x1.96 | x2.00 | linear |
-| callers | 64..256 | 984 / 1,914 / 3,779 | x1.95 | x1.97 | linear |
-| live | 64..256 | 763 / 1,714 / 4,437 | x2.25 | x2.59 | |
-| chain | 64..256 | 627 / 1,289 / 3,245 | x2.06 | x2.52 | |
-| cases | 128..512 | 2,302 / 5,558 / 14,322 | x2.41 | x2.58 | |
-| cells | 64..256 | 660 / 1,671 / 4,690 | x2.53 | x2.81 | |
-| branches | 128..512 | 3,710 / 9,073 / 23,113 | x2.45 | x2.55 | spill rounds: siblings interference, short updates, recolor |
-| fjoins | 64..256 | 2,858 / 6,840 / 18,076 | x2.39 | x2.64 | |
-| joins | 64..256 | 4,065 / 10,649 / 31,337 (26,442 with #1472) | x2.62 | x2.94 (x2.60) | `storedhomes::held` solved every value's liveness per spill round |
-| nest | 16..64 | 788 / 2,415 / 7,628 (`-fno-tree-ch`); 1,277 / 5,091 / 18,259 (`-ftree-ch`) | x3.07 / x3.99 | x3.16 / x3.59 | per-loop passes over a nest's own body; 15,740 with #1462 and the products change |
+    uv run --project tools --with matplotlib python crates/target/llrm-x86-m32/vsgcc/scaling.py run [--axis NAME ...] [--programs] [--min 4] [--max 15] [--runs 3] [--limit 10] [--jobs 6]
+    uv run --project tools --with matplotlib python crates/target/llrm-x86-m32/vsgcc/scaling.py report
+    uv run --project tools python crates/target/llrm-x86-m32/vsgcc/scaling.py check [--n 64]
+    uv run --project tools python crates/target/llrm-x86-m32/vsgcc/scaling_gate.py [--jobs N]
 
-Rows past x2.5 at the largest step, own Minstr, joins 128 -> 256: gvn 890 -> 2,883, lir coalesce 431 -> 1,637, mir homes 315 -> 1,314, split placed 386 -> 1,431,
-through-memory 335 -> 1,307, dse 349 -> 1,265, decide 483 -> 1,427, sroa 255 -> 943, isel 299 -> 884.
+## Flow
 
+```
+ AXES[axis](N)  N = 2^min .. 2^max, doubling       QCport modules (--programs)
+        |                                                   |
+        v  one C program per (axis, N)                      v
+ +--------------+--------------+--------------+     one point per module:
+ | llrm-c -m32  | gcc -m32 -c  | clang -m32 -c|     (MIR instructions, cost)
+ |  levels_time.command, -O0 -O1 -O2 -O3 -Os   |     MIR size: LLRM_DEBUG=mir
+ +------+-------+------+-------+------+-------+
+        |  perf stat -e instructions:u,task-clock, median of --runs
+        |  (llrm -O2 also: LLRM_DEBUG=time, own cost per step)
+        v
+ minus the same compiler's cost on an empty file
+        |
+        v
+ $VSGCC_WORK/scaling.json --report--> tables + one PNG per axis
+ an axis stops for a compiler once one compile takes --limit seconds
+```
 
-Slopes are over the sizes llrm reached; "top 4" is the largest four. "Total" ratios are whole-process instructions; "net" subtract each compiler's empty-file cost. Pass tables: steps of llrm -O2 above exponent 1.15 (own ms, wall, so approximate). `mulconst` is N multiplies by large odd constants (#951: isel's multiply search); `straight` and `branches` use small multipliers. Regenerate: `scaling.py run --programs && scaling.py report`.
+## What is measured
 
-### functions
+Cost is `instructions:u` (user instructions retired, children included) and `task-clock`, less what the same compiler spends on an empty file. The slope is the exponent of cost against N over the sizes reached, and over the largest four. A slope of 1 is linear. The compilers run through `levels_time.py`, so the commands are the compile-time comparison's.
 
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|---|
-| -O0 | 1.18 / 1.39 | 0.93 / 1.01 | 0.97 / 1.00 | 0.98 / 1.03 | 3.06x @ 2^4 | 13.60x @ 2^11 | 13.64x | 8 / 12 |
-| -O1 | 1.21 / 1.38 | 0.98 / 1.01 | 1.09 / 1.18 | 1.00 / 1.03 | 4.61x @ 2^4 | 14.22x @ 2^10 | 14.25x | 7 / 10 |
-| -O2 | 1.20 / 1.37 | 1.00 / 1.03 | 1.14 / 1.26 | 1.06 / 1.24 | 2.73x @ 2^4 | 6.60x @ 2^10 | 6.61x | 7 / 9 |
-| -O3 | 1.20 / 1.36 | 1.05 / 1.09 | 1.14 / 1.26 | 1.07 / 1.13 | 2.23x @ 2^4 | 4.42x @ 2^10 | 4.42x | 7 / 8 |
-| -Os | 1.20 / 1.36 | 0.98 / 1.03 | 1.09 / 1.17 | 1.03 / 1.15 | 4.42x @ 2^4 | 12.34x @ 2^10 | 12.36x | 7 / 9 |
+`report` prints, per axis and level: llrm's slope, gcc's and clang's slopes at the same N and over their own range, the llrm/gcc ratio at the smallest and largest N (total and net of the empty file), and the number of sizes each reached. For llrm `-O2` it also prints the steps whose slope exceeds 1.15 with their own cost at the largest N (own cost excludes children; it is `LLRM_DEBUG=time`).
 
-Passes of llrm -O2 above exponent 1.15 on functions (top 4 sizes, own ms; largest N = 1024):
+## Axes
 
-| step | ms @ largest | slope |
+Each axis is a generated C program that prints a checksum; `check` compiles every axis at one size with gcc and clang on the host (`-O0`, `-O2`) and with llrm `-O2` in the emulator, and requires one value, so an axis cannot read a compiler that miscompiled it.
+
+| Axis | Program of size N | Stresses |
 |---|---|---|
-| mir interprocedural | 6835.8 | 2.13 |
-| isel | 4236.1 | 1.66 |
-| analysis call-effects | 3388.6 | 1.72 |
-| analysis summaries | 1186.3 | 1.59 |
-| summaries points-to | 667.2 | 1.29 |
-| analysis points-to | 566.7 | 1.17 |
-| mir verify after pass | 334.9 | 1.17 |
-| regalloc base | 295.0 | 1.57 |
-| frontend translate | 280.1 | 1.19 |
-| mir pipeline | 272.0 | 1.18 |
+| `functions` | N small functions, a loop and a call each | module-level analyses, per-function fixed cost |
+| `straight` | one function of N statements on four live values | coalescing, two-address, allocation |
+| `mulconst` | N multiplies by large odd 32-bit constants | instruction selection's multiply search |
+| `branches` | one function of N branches and loops over six live values | allocation under pressure |
+| `live` | N volatile loads live across a call, then all used | spilling |
+| `callers` | N callers of eight small callees | the inliner |
+| `chain` | a call chain N deep, one caller per link | interprocedural summaries |
+| `nest` | loops N deep, a statement at each depth | passes that walk a loop's nest |
+| `cases` | a loop around a `switch` of N cases | a block with N successors |
+| `unrolled` | a recursive partition unrolled to N loops in one function | analyses that meet each loop once per loop |
+| `cells` | N distinct memory cells read after the stores before them | memory forwarding |
+| `joins` | N held cells and N if/else joins that store and read | through-memory's dense solve |
+| `fjoins` | `joins` in floats | float facts |
 
-### straight
+## QCport
 
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|---|
-| -O0 | 1.47 / 1.85 | 0.88 / 1.14 | 0.88 / 0.98 | 1.06 / 1.59 | 1.77x @ 2^4 | 57.92x @ 2^12 | 58.11x | 9 / 12 |
-| -O1 | 1.18 / 1.57 | 0.95 / 1.08 | 1.05 / 1.19 | 0.97 / 1.15 | 1.73x @ 2^4 | 9.72x @ 2^13 | 9.72x | 10 / 11 |
-| -O2 | 1.12 / 1.40 | 0.95 / 1.02 | 1.02 / 1.10 | 0.99 / 1.12 | 1.50x @ 2^4 | 4.56x @ 2^12 | 4.57x | 9 / 11 |
-| -O3 | 1.16 / 1.56 | 0.97 / 1.06 | 1.04 / 1.18 | 0.99 / 1.12 | 1.65x @ 2^4 | 7.01x @ 2^13 | 7.01x | 10 / 11 |
-| -Os | 1.16 / 1.53 | 0.93 / 1.01 | 1.04 / 1.18 | 0.95 / 1.05 | 1.73x @ 2^4 | 9.78x @ 2^13 | 9.79x | 10 / 12 |
+`--programs` adds QCport's 65 modules: one point each of (llrm's MIR instructions, cost), so the slope is cost against code size rather than a generated shape. Needs `QCPORT` and `QCPORT_INC` (`--qcport`, `--inc`). QCport is Open Watcom DOS C, which gcc and clang do not read as it stands, so a copy is stubbed for all three (llrm reads the same stubbed text): 16-bit struct-size asserts, inline assembly, a ^Z end-of-file byte in Borland headers, and Borland names (`_fmemcpy`, `stricmp`, `FP_OFF`, ...) declared in a prelude for gcc and clang only, with `-Dfar= -Dhuge= -Dnear= -Dpascal= -Dcdecl=`. A module a compiler fails on is listed with the reason in the report.
 
-Passes of llrm -O2 above exponent 1.15 on straight (top 4 sizes, own ms; largest N = 4096):
+## Gate
 
-| step | ms @ largest | slope |
-|---|---|---|
-| lir coalesce | 5492.6 | 2.36 |
-| regalloc base | 3484.5 | 2.60 |
-| lir twoaddr | 2962.3 | 2.21 |
-| mir gvn | 1560.4 | 1.65 |
-| lir peephole | 1251.7 | 1.29 |
-| lir verify | 543.0 | 1.40 |
-| analysis published | 463.0 | 2.03 |
-| hir to mir | 424.7 | 1.87 |
-| frontend translate | 365.9 | 1.51 |
-| regalloc prepare | 221.8 | 1.78 |
+`scaling_gate.py` is the gated form, run by `tools/measure.py`: it takes llrm-c's cost at N/2, N and 2N for the axes in its `SIZES` (and `chain` and `callers` again at `-m16`), less the empty file's, and forms `c(2N) - 3c(N) + 2c(N/2)`, which is nil for fixed and linear work and `1.5kN^2` for a quadratic term. It reads the same for each step with at least a `LOW` share of the work. It exits 77 where `perf` cannot count. Tolerances: `tools/gate/tiers.toml` `[measure]`. Method: [compile-time](../../../../docs/working/measurement/compile-time.md).
 
-### branches
+## Caveats
 
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|---|
-| -O0 | 1.72 / 1.90 | 0.81 / 0.93 | 0.90 / 0.97 | 0.92 / 1.02 | 3.89x @ 2^4 | 210.25x @ 2^10 | 212.86x | 7 / 12 |
-| -O1 | 1.76 / 1.83 | 0.88 / 0.92 | 1.00 / 1.02 | 1.06 / 1.47 | 10.19x @ 2^4 | 137.86x @ 2^8 | 139.96x | 5 / 11 |
-| -O2 | 1.75 / 1.82 | 0.92 / 0.95 | 1.01 / 1.02 | 1.02 / 1.17 | 7.98x @ 2^4 | 88.55x @ 2^8 | 89.38x | 5 / 10 |
-| -O3 | 1.73 / 1.82 | 0.92 / 0.95 | 1.01 / 1.02 | 1.01 / 1.15 | 8.25x @ 2^4 | 86.12x @ 2^8 | 86.90x | 5 / 10 |
-| -Os | 1.74 / 1.84 | 0.90 / 0.94 | 1.01 / 1.02 | 1.02 / 1.19 | 8.34x @ 2^4 | 94.23x @ 2^8 | 95.31x | 5 / 10 |
+- Instruction counts are not time; `task-clock` is, and it is host dependent.
+- Slopes are over the sizes a compiler reached. A compiler stops once one compile takes `--limit` seconds, so the compilers' ranges differ: read the range columns.
+- A step's slope at small N is dominated by fixed cost; one whose ratio is a small-N artifact is recorded as it reads.
+- The measured command runs with a fixed environment size (`measured_environment`): the bytes of the caller's environment move the stack and allocator and change a count.
+- gcc's count includes its assembler and clang's an integrated one; llrm writes the object directly.
+- A generated program is a shape, not a program people write. A slope on an axis says that a pass is superlinear in that shape, not that real code hits it.
+- The `-m32` axes run only at `-m32`; `-m16` is covered by the gate's two extra axes.
 
-Passes of llrm -O2 above exponent 1.15 on branches (top 4 sizes, own ms; largest N = 256):
+## Test
 
-| step | ms @ largest | slope |
-|---|---|---|
-| regalloc recolor | 8227.4 | 1.76 |
-| siblings interference | 925.6 | 2.10 |
-| lir peephole | 791.3 | 1.30 |
-| intervals walk | 771.5 | 1.87 |
-| mir gvn | 530.8 | 1.49 |
-| split carving | 450.9 | 1.81 |
-| regalloc spill | 428.7 | 1.71 |
-| regalloc candidates | 421.9 | 3.05 |
-| analysis registers | 358.7 | 1.78 |
-| siblings widths | 334.4 | 1.98 |
+    uv run --project tools --group dev pytest crates/target/llrm-x86-m32/vsgcc/test_scaling.py crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py
 
-### live
-
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|---|
-| -O0 | 1.49 / 1.88 | 0.92 / 1.27 | 0.85 / 0.97 | 1.18 / 1.77 | 2.95x @ 2^4 | 53.94x @ 2^11 | 54.19x | 8 / 11 |
-| -O1 | 1.53 / 1.76 | 1.07 / 1.29 | 1.02 / 1.27 | 1.42 / 1.87 | 6.19x @ 2^4 | 37.26x @ 2^9 | 37.51x | 6 / 10 |
-| -O2 | 1.53 / 1.76 | 1.09 / 1.30 | 1.02 / 1.28 | 1.42 / 1.83 | 5.68x @ 2^4 | 29.68x @ 2^9 | 29.83x | 6 / 10 |
-| -O3 | 1.52 / 1.76 | 1.11 / 1.34 | 1.01 / 1.19 | 1.38 / 1.78 | 5.60x @ 2^4 | 26.71x @ 2^9 | 26.83x | 6 / 9 |
-| -Os | 1.55 / 1.84 | 1.14 / 1.46 | 1.20 / 1.40 | 1.38 / 1.80 | 5.68x @ 2^4 | 36.25x @ 2^10 | 36.33x | 7 / 10 |
-
-Passes of llrm -O2 above exponent 1.15 on live (top 4 sizes, own ms; largest N = 512):
-
-| step | ms @ largest | slope |
-|---|---|---|
-| spill cleanup | 2572.7 | 2.11 |
-| regalloc spill | 1533.3 | 1.83 |
-| siblings interference | 1523.1 | 2.30 |
-| spill color slots | 1204.3 | 2.18 |
-| mir gvn | 1071.5 | 1.80 |
-| spill rewrite | 1070.5 | 2.06 |
-| facts widths | 805.5 | 2.05 |
-| facts sibling prices | 791.9 | 1.86 |
-| classes scan | 776.4 | 2.29 |
-| intervals walk | 755.9 | 1.82 |
-
-### callers
-
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|---|
-| -O0 | 1.14 / 1.38 | 0.88 / 0.98 | 0.93 / 1.00 | 0.94 / 1.02 | 3.63x @ 2^4 | 17.79x @ 2^11 | 17.85x | 8 / 12 |
-| -O1 | 1.28 / 1.59 | 0.99 / 1.05 | 0.98 / 1.00 | 1.03 / 1.19 | 3.40x @ 2^4 | 16.27x @ 2^11 | 16.28x | 8 / 10 |
-| -O2 | 1.74 / 1.89 | 0.95 / 0.98 | 0.96 / 0.98 | 0.98 / 1.00 | 4.95x @ 2^4 | 81.00x @ 2^9 | 81.30x | 6 / 10 |
-| -O3 | 1.74 / 1.89 | 0.95 / 0.98 | 0.96 / 0.98 | 0.98 / 1.00 | 4.99x @ 2^4 | 82.27x @ 2^9 | 82.57x | 6 / 10 |
-| -Os | 2.17 / 2.17 | 0.89 / 0.89 | 0.94 / 0.94 | 0.97 / 1.00 | 15.81x @ 2^4 | 250.96x @ 2^7 | 256.06x | 4 / 11 |
-
-Passes of llrm -O2 above exponent 1.15 on callers (top 4 sizes, own ms; largest N = 512):
-
-| step | ms @ largest | slope |
-|---|---|---|
-| mir gvn | 5741.6 | 1.65 |
-| analysis call-effects | 5315.9 | 2.14 |
-| mir interprocedural | 4829.3 | 1.61 |
-| analysis through-memory | 4504.3 | 1.71 |
-| analysis summaries | 3691.2 | 1.88 |
-| mir decide | 3579.9 | 1.92 |
-| summaries points-to | 3463.7 | 1.47 |
-| analysis globals-aa | 3197.3 | 1.93 |
-| summaries direct | 2748.2 | 1.76 |
-| analysis points-to | 2720.1 | 1.89 |
-
-### chain
-
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|---|
-| -O0 | 1.10 / 1.31 | 0.87 / 0.98 | 0.96 / 1.00 | 0.92 / 1.00 | 2.99x @ 2^4 | 16.52x @ 2^12 | 16.57x | 9 / 12 |
-| -O1 | 2.06 / 2.11 | 0.77 / 0.83 | 1.82 / 1.89 | 0.94 / 1.00 | 9.56x @ 2^4 | 427.27x @ 2^8 | 444.20x | 5 / 12 |
-| -O2 | 2.05 / 2.09 | 0.80 / 0.86 | 1.84 / 1.90 | 0.94 / 1.00 | 9.04x @ 2^4 | 349.79x @ 2^8 | 360.76x | 5 / 12 |
-| -O3 | 2.05 / 2.09 | 0.80 / 0.86 | 1.84 / 1.90 | 0.94 / 1.00 | 9.05x @ 2^4 | 344.35x @ 2^8 | 354.95x | 5 / 12 |
-| -Os | 2.05 / 2.09 | 0.80 / 0.86 | 1.84 / 1.90 | 0.95 / 1.00 | 9.51x @ 2^4 | 372.52x @ 2^8 | 384.96x | 5 / 12 |
-
-Passes of llrm -O2 above exponent 1.15 on chain (top 4 sizes, own ms; largest N = 256):
-
-| step | ms @ largest | slope |
-|---|---|---|
-| analysis globals-aa | 14824.5 | 2.81 |
-| summaries points-to | 12611.4 | 2.16 |
-| summaries direct | 11641.9 | 2.34 |
-| analysis summaries | 5455.4 | 2.35 |
-| mir interprocedural | 4734.9 | 2.19 |
-| analysis call-registers | 1997.9 | 2.09 |
-| mir gvn | 1258.6 | 1.56 |
-| analysis callee-effects | 633.3 | 1.61 |
-| regalloc spill | 580.2 | 1.68 |
-| mir decide | 492.0 | 1.45 |
-
-### mulconst
-
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|---|
-| -O0 | 1.18 / 1.36 | 1.02 / 1.22 | 0.78 / 0.95 | 1.13 / 1.51 | 8.70x @ 2^4 | 26.24x @ 2^11 | 26.29x | 8 / 10 |
-| -O1 | 1.06 / 1.14 | 0.98 / 1.01 | 0.97 / 1.06 | 1.00 / 1.08 | 5.46x @ 2^4 | 9.87x @ 2^11 | 9.88x | 8 / 11 |
-| -O2 | 1.06 / 1.14 | 0.98 / 1.01 | 0.97 / 1.06 | 1.01 / 1.09 | 4.82x @ 2^4 | 8.37x @ 2^11 | 8.38x | 8 / 11 |
-| -O3 | 1.06 / 1.14 | 0.98 / 1.01 | 0.97 / 1.06 | 1.01 / 1.09 | 4.89x @ 2^4 | 8.36x @ 2^11 | 8.37x | 8 / 11 |
-| -Os | 1.01 / 1.05 | 0.85 / 1.03 | 0.99 / 1.12 | 0.97 / 1.30 | 7.02x @ 2^4 | 24.74x @ 2^12 | 24.83x | 9 / 12 |
-
-Passes of llrm -O2 above exponent 1.15 on mulconst (top 4 sizes, own ms; largest N = 2048):
-
-| step | ms @ largest | slope |
-|---|---|---|
-| lir twoaddr | 1678.4 | 2.08 |
-| lir coalesce | 1370.0 | 1.89 |
-| regalloc base | 874.2 | 1.90 |
-| analysis published | 112.5 | 1.88 |
-| analysis globals-aa | 68.3 | 1.30 |
-| analysis registers | 34.1 | 1.17 |
-| lir loopslots | 27.9 | 1.15 |
-| hir to mir | 27.7 | 1.27 |
-| mir sroa | 16.5 | 1.60 |
-| lir owned bytes | 14.6 | 1.56 |
-
-### QCport: 65 modules, cost against llrm's MIR instructions (instructions:u; slopes and "net" ratios are less the empty file's cost: gcc 18.7 M, clang 41 M, llrm 8.1 M)
-
-| level | llrm slope (net) | gcc | clang | llrm/gcc total, geomean | llrm/gcc net of empty file, geomean | worst total llrm/gcc | modules |
-|---|---|---|---|---|---|---|---|
-| -O0 | 1.13 | 0.51 | 0.64 | 6.25x | 7.30x | 159.42x render/d_faces | 59 |
-| -O1 | 1.32 | 0.67 | 0.86 | 12.75x | 14.19x | 600.09x render/d_faces | 62 |
-| -O2 | 1.33 | 0.77 | 0.88 | 9.75x | 10.56x | 368.32x render/d_faces | 62 |
-| -O3 | 1.34 | 0.85 | 0.91 | 8.17x | 8.79x | 335.49x render/d_faces | 62 |
-| -Os | 1.32 | 0.73 | 0.85 | 10.99x | 12.01x | 427.04x render/d_faces | 61 |
-
-Modules a compiler failed on (levels, reason):
-
-- host/dbg: llrm O0,O1,O2,O3,Os: front end E1060 Invalid type (dos.h _FAR)
-- host/keybind: llrm O0: peephole: value read but never defined
-- render/d_alias: llrm Os: peephole: value read but never defined
-- render/sb_build: llrm O0,O1,O2,O3,Os: peephole: value read but never defined
-- render/sc: llrm O0: peephole: value read but never defined
-- model/mdl: llrm O0: peephole: value read but never defined
-- game/mdl_ai: llrm O0,O1,O2,O3,Os: front end E1060 Invalid type (dos.h _FAR)
-
-Stubbed so gcc and clang can read QCport (llrm reads the same stubbed text):
-
-- 16-bit struct-size asserts (`typedef char rec_*_ok[..]`; the sizes are 16-bit ones): 12 files
-- inline assembly (`__asm { .. }`, `_asm ..`), which gcc and clang cannot read: 4 files
-- ^Z end-of-file byte in Borland headers (gcc: stray \32): 4 files
-- Borland names declared for gcc/clang only (`-include prelude.h`): _fmemcpy, _fmemset, _fmemmove, _fmemcmp, _fstricmp, _fstrncmp, stricmp, FP_OFF, FP_SEG, __emit__; flags -Dfar= -Dhuge= -Dnear= -Dpascal= -Dcdecl= -Wno-implicit-function-declaration -w (-Dfar etc. for gcc/clang only; llrm-c has no -D)
-
-Largest modules, llrm -O2 steps by own ms:
-
-- host/host (9616 MIR instructions, 46 functions): analysis summaries 7638, analysis call-effects 4798, mir gvn 3241, analysis through-memory 3201, analysis float-facts 1816, spill color slots 1757
-- game/weapons (8360 MIR instructions, 37 functions): lir peephole 536, mir gvn 434, intervals walk 265, regalloc spill 238, split placed 210, spill color slots 203
-- render/d_alias (6937 MIR instructions, 24 functions): regalloc recolor 1374, lir peephole 879, intervals walk 816, split placed 797, regalloc spill 728, spill color slots 703
-- render/sc (5144 MIR instructions, 48 functions): lir peephole 763, mir decide 524, mir gvn 355, regalloc trial 161, analysis through-memory 157, summaries direct 143
-- game/ent (4973 MIR instructions, 35 functions): mir gvn 192, lir peephole 189, analysis call-effects 94, regalloc recolor 86, analysis through-memory 66, isel 61
-
+`test_scaling.py` runs a stand-in compiler of known cost: a quadratic one must read as slope 2, a linear one as 1, and the generators must not collapse.

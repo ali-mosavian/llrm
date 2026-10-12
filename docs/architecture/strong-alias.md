@@ -1,85 +1,67 @@
 # Strong alias analysis
 
-`crates/opt/llrm-analysis/src/memory.rs` is the one machine-independent vocabulary for memory.
-Every MemorySSA consumer reaches it through `regions::overlapping`, so GVN,
-promotion, DSE and loop motion ask the same question.
+For contributors writing or reading an analysis or pass that asks about
+memory. One machine-independent vocabulary answers every such question, for
+every frontend; it lives in `crates/opt/llrm-analysis/src/` (`memory.rs`,
+`regions.rs`, `alias.rs`, `memoryssa.rs`).
 
-## 1. Canonical objects and subobjects
+```
+ pointer value --points_to--> Provenance { slices, restrict roots }
+ load/store    --MemRef::of--> root + constant offset + one index, width
+ two MemRefs   --regions::overlapping--> may they meet?   (GVN, DSE, LICM,
+ call          --Summary/Effect--> bytes of objects read/written  promote)
+```
 
-A memory object has a kind, stable identity, allocation generation and optional
-extent. The kinds distinguish current-frame and stack storage, defined and
-external globals, nonlocal storage, allocation sites, named far objects,
-formal pointer parameters and genuinely unknown storage. Different concrete
-objects are disjoint. `NONLOCAL` reaches globals, heap and escaped objects but
-not an unescaped current frame; `UNKNOWN` reaches everything.
+## Objects and slices
 
-An access is a half-open byte `Slice`. Its object identity separates equal
-offsets in different objects, and its byte range separates fields and array
-subobjects in one object. A slice may also carry a stride and element width;
-intersection uses the modular byte lanes, not merely their overlapping hull.
+A memory object has a `MemoryKind`, a stable id and an optional extent. The
+kinds MIR produces are `Frame` (an alloca), `Global`, `Parameter` (what a
+pointer parameter points to), `Nonlocal` (what a callee may reach), `Absolute`
+(linear memory) and `Unknown`. Different concrete objects are disjoint.
+`Nonlocal` reaches globals and escaped objects but not an unescaped frame;
+`Unknown` reaches everything.
 
-## 2. Flow-sensitive points-to and escape
+An access is a half-open byte `Slice` of one object, with a stride and an
+element width. Two slices intersect by their modular byte lanes, not by their
+hull, so interleaved even and odd lanes are disjoint. Non-wrapping range facts
+narrow an indexed access to its possible start offsets.
 
-`crates/backend/llrm-core/src/analysis/alias.rs::points_to` propagates provenance through SSA copies,
-pointer arithmetic and phis. A missing phi arm produces `UNKNOWN`; one known
-arm can never erase it. Exact pointer spill slots are tracked as memory state:
-an exact store is a strong update, an overlapping or unresolved store kills the
-fact, and CFG joins retain a slot only when every incoming edge defines it.
-Indirect references are resolved through those same value facts before a store
-invalidates spill state. A write through a parameter can therefore kill cells
-in that parameter object without discarding a pointer saved in a disjoint frame
-object. The resolved reference also feeds escape and mod/ref analysis; the
-three consumers cannot disagree about what an indirect operand reaches.
+## Points-to and escape
 
-Escape is a second forward dataflow. Publishing a pointer outside the frame,
-returning it, or passing it to a capturing callee exposes its object only from
-that program point onward. Each call therefore sees the objects that escaped
-before it, not every object that escapes somewhere in the procedure.
+`points_to` ([source](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-analysis/src/alias.rs#L2436))
+has two phases. `point_values` flows provenance through SSA values, `select`s,
+phis and exact pointer spill slots: an exact store is a strong update, an
+overlapping or unresolved store kills the fact, a join keeps a slot only when
+every edge defines it, and a missing phi arm gives `Unknown`. The escape
+phase is a second forward dataflow: publishing a pointer, returning it or
+passing it to a capturing callee exposes its object from that point on, so a
+call sees only what escaped before it.
 
-## 3. Interprocedural mod/ref and capture
+The value solve does not read call arguments or captures, so it is its own
+analysis (`PointerValues`) and `Pointers` and `CallEffects` each run only their
+escape phase on it.
 
-Procedure summaries describe reads, writes and captured formal pointer
-indices. They are solved to a fixed point, so recursion and mutually recursive
-calls are conservative without losing effects already known. At a call site,
-parameter slices are rebased onto each actual pointer's object and offset.
-The direct summary resolves base-plus-displacement operands through the
-procedure's points-to solution, rather than requiring provenance to have been
-stamped statically on every dereference.
+## Calls
 
-An unknown C callee has a complete, explicit footprint: all nonlocal storage,
-the whole object behind each pointer actual, and objects already escaped on
-that path. It cannot touch an unrelated current-frame object. Known callees
-replace that footprint with their instantiated summary. Standard fresh
-allocation routines create allocation-site objects with a distinct generation
-and a constant extent when their size is known.
+A `Summary` holds the slices a procedure reads and writes in its own
+parameter space, the parameters it captures, and unknown-read and
+unknown-write flags. Summaries are solved to a fixed point over the call
+graph; a body that may be replaced (weak, linkonce) describes no call.
+`instantiated` rebases a summary onto each actual pointer's provenance. An
+unknown callee reaches all nonlocal storage, the whole object behind each
+pointer actual and what has already escaped; it cannot reach an unrelated
+frame object. The data model and its cost are in [modref.md](modref.md).
 
-Established C library semantics enter the same fixed point as defined
-procedures. The initial catalog records `strlen` as readonly argument memory
-and nocapture: GCC's local source marks it pure and constrains its use set to
-argument zero, LLVM assigns `readonly`, `argmemonly` and `nocapture(0)`, and
-Open Watcom's implementation contains only the advancing read loop. A local
-definition overrides the catalog; object-name decoration alone never grants a
-contract.
+What the C library is known to do (`strlen` reads its arguments and keeps
+none) is stated by `llrm-c` in `crates/frontends/llrm-c/src/libfunc.rs`, as
+attributes on the declaration. A local definition overrides it; a name's
+decoration alone grants no contract.
 
-## 4. Fields, indices and dependences
+## Language promises
 
-Direct frame and global references carry the containing object and exact field
-bytes. Pointer offsets preserve that provenance. Non-wrapping range facts
-narrow indexed references to possible starting offsets, while induction
-congruences retain their stride. This proves, for example, that adjacent fields
-and interleaved even/odd lanes are disjoint without pretending their enclosing
-objects are.
-
-## 5. C alias contracts
-
-The frontend records scalar alias classes on memory references. Incompatible
-non-character classes are disjoint; character, aggregate and untyped accesses
-remain conservative. The Open Watcom recording shim also preserves
-`__restrict` as a private `CGAttr`, and the raise assigns each restricted
-declaration a stable no-alias root. Roots flow with the pointer through copies,
-arithmetic and phis.
-
-References without canonical provenance retain the established RegionSet
-query. That is a compatibility path for decoded BC objects, not a second
-answer: when both operands have canonical provenance, the canonical query has
-precedence and the legacy address-hull rewrite is bypassed.
+`!tbaa` types make two accesses disjoint unless one type is an ancestor of the
+other (`typed_apart`); character and untyped accesses stay conservative.
+`llrm-c` writes C's aliasing classes as a TBAA tree, and a C `restrict`
+parameter becomes a `noalias` parameter, which gives it a restrict root that
+travels with the pointer through copies, arithmetic and phis. `llrm-nib` and
+`llrm-qb` state their own facts the same way, through `llrm_hir::facts`.

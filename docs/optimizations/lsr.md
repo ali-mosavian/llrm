@@ -102,13 +102,19 @@ fit one window there is no outer loop. The split is priced: a window's setup
 against the carries it saves, over the trips or `UNKNOWN_TRIPS`, or in
 bytes at -Os; its branches carry the trips as weights.
 
-## What it replaced
+## The exit test
 
-`strength`, `ivshare`'s twin and offset counters, `affine`'s address
-spelling, `indexing`, count-to-zero and `simplified` in `indvars`, and
-`rotate`'s countdown. Each covered one relation between counters; each is a
-fit or a candidate here. Exit values, exit sinking and `rewound` stay, as
-IndVarSimplify's, in `indvars::IndVars`.
+The exit either keeps its compare or tests one candidate for its last value. A loop whose controlling counter is read only by its own update and its exit can therefore lose it: an existing recurrence the body already needs supplies the termination test, an equality or inequality against `start + N * step`. This holds when the original compare proves a positive finite trip count N with a non-wrapping final update, and N is smaller than the candidate's modular period `2^w / gcd(step, 2^w)`, so the candidate cannot equal its final value on an earlier trip even if it wraps. No target enters the proof. The old counter's final value is materialized at the exit if something reads it after the loop. `indvars` keeps the exit values, exit sinking and `rewound` (an inner recurrence's exit value carried around the outer loop); which counters the loop keeps is `lsr`'s.
+
+```
+ i = 0..10 step 1, p = &a[i]            p = a, end = a + 10*step
+ loop: *p = ...; p += step; i++    ==>  loop: *p = ...; p += step
+       exit if i == 10                        exit if p == end
+```
+
+## Invariant work
+
+`hoist` ([`hoist.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/hoist.rs)) moves a loop's invariant instructions, and loads no write in the loop reaches (`Accesses`), to the preheader, innermost loops first. A pure operation whose operands are defined outside the loop is invariant, whatever it is: an outer counter shifted left by two is computed once before the inner loop and read in each trip. What may fault (a load not known dereferenceable, a division by other than a constant) moves only from where the loop certainly runs it. A run stays in the loop where moving it prices higher: the values it makes live across the loop may spill (`profit::motion_price`). It runs before the other loop passes and again after `rotate`, when a loop entered at its body certainly runs what it loads unchanged.
 
 ## From LLVM, GCC and Open Watcom
 
@@ -128,8 +134,7 @@ IndVarSimplify's, in `indvars::IndVars`.
   symbolic count is guarded instead.
 
 Where LLVM and GCC disagree, costs are summed as GCC does, with fewer
-counters breaking a tie. Pricing each register over instructions made
-`matrix` 1837 → 3017 instructions and `PARTICLE` worse.
+counters breaking a tie.
 
 ## Limits
 
@@ -142,3 +147,9 @@ few programs trade instructions for memory operands. A symbolic stride
 seldom chooses under pressure, where main's strength pass walked a pointer.
 Choosing which value is the base and which the index of a two-register
 address is the backend's, and its choice decides some of these.
+
+## Levels and flags
+
+`lsr` and `indvars` (`-fstrength-reduce`), `window`, `gepoffset` and `addresssink` run at -O1 and up. gcc's ivopts search bounds apply at every level but -Omax, which searches without them ([levels](../reference/levels.md)). `-fno-strength-reduce` turns the group off, `-fno-move-loop-invariants` turns `hoist` off. `--dump DIR` writes the module after `lsr`, and `llrm-mir --ivs FILE` prints how many of each innermost loop's header phis ScalarEvolution proves to step by a nonzero amount.
+
+Catalog: [passes](passes.md). Analyses: [analyses](analyses.md) (`induction`, `guards`).
