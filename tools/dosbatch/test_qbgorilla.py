@@ -1,14 +1,18 @@
-"""GORILLA played to a hit, in real mode and on dos32: the first player's banana hits the second's gorilla, and the game
-says so.
+"""GORILLA played with aimed shots, in real mode and on dos32.
 
-A banana that hit ended GORILLA with "Illegal function call": ExplodeGorilla's CIRCLE passes an aspect of -1.57, which the
-runtime refused and BC takes (#1510).  No pixel test of CIRCLE saw it; a game played to the explosion does.
+A banana that hit a gorilla ended the game with "Illegal function call": ExplodeGorilla's CIRCLE passes an aspect of -1.57,
+which the runtime refused and BC takes (#1510).  No pixel test of CIRCLE saw it; a game played to the explosion does.
 
-The game is the demo's source with RANDOMIZE (TIMER) made RANDOMIZE 1, so the skyline, the wind (-1) and the gorillas
-(m16: left at x 141, y 223; right at x 449, y 147) are the same every time.  (75, 83) is the angle and velocity the banana's
-arc, worked out from that screen with the game's own formulas (PlotShot), gets from the left gorilla into the right
-one over the buildings, with the same hit for every gorilla position within a pixel of the estimate.  Skipped without
-the demo sources (QB45_DEMOS_DIR) or QB45."""
+Two cases, each on both targets.  A gorilla hit: the first player's banana goes into the second's gorilla (only a gorilla
+hit scores), the game ends with "GAME OVER!" and the first player at 1.  A building hit, which is a different explosion
+(DoExplosion): the first player's banana lands on a building, nothing scores, the turn passes, and the second player's
+banana hits the first's gorilla, so the game ends with the second at 1 and the first at 0.
+
+The game is the demo's source with RANDOMIZE (TIMER) made RANDOMIZE 1, so the skyline, the wind and the gorillas are the
+same every time; the test checks the screen has them before it shoots.  The shots are worked out from the screen with the
+game's own formulas (gorilla_aim.py, PlotShot's): each hits for every gorilla position within a pixel of the estimate.
+m32's RND gives another sequence (#1512), so another skyline and other shots.  Skipped without the demo sources
+(QB45_DEMOS_DIR) or QB45."""
 
 from __future__ import annotations
 
@@ -25,12 +29,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 import dosbatch  # noqa: E402
 import qb32  # noqa: E402
 import qbplay  # noqa: E402
+import gorilla_aim  # noqa: E402
 import qbruntime  # noqa: E402
 
 pytestmark = pytest.mark.slow_dos
 
-# By target: m32's RND gives another sequence (#1512), so another skyline and another shot.
-SHOT = {"16": ("75", "83"), "32": ("80", "104")}
+# By target: the gorillas (GorillaX, GorillaY) and the wind of the seeded game, then the shots (angle, velocity).
+SCENES = {"16": ((141, 223), (449, 147), -1), "32": ((71, 248), (559, 198), 3)}
+HIT = {"16": [("75", "83")], "32": [("80", "104")]}
+# The first lands on a building (m16: x 290, y 158; m32: x 250, y 123), the second is the other player's, into the gorilla.
+BUILDING = {"16": [("73", "56"), ("83", "102")], "32": [("35", "182"), ("63", "81")]}
 
 
 @pytest.fixture(scope="module")
@@ -60,7 +68,8 @@ def game(tmp_path_factory):
     return {"16": (real, ()), "32": (exe, tuple(loaders))}
 
 
-def play_to_the_hit(exe: Path, loaders: tuple, work: Path, shot: tuple) -> str:
+def play(exe: Path, loaders: tuple, work: Path, scene: tuple, shots: list) -> str:
+    """The game to its end with `shots` typed in turn; the screen at the end."""
     work.mkdir()
     shutil.copy(exe, work / "P.EXE")
     for loader in loaders:
@@ -76,19 +85,38 @@ def play_to_the_hit(exe: Path, loaders: tuple, work: Path, shot: tuple) -> str:
         session.type(["p"], pause=0.3)
         session.wait_for_mode(0x10, 60)  # BIOS mode 10h is SCREEN 9
         time.sleep(3)
-        session.type([*shot[0], "enter"], pause=0.3)
-        time.sleep(1)
-        session.type([*shot[1], "enter"], pause=0.3)
+        session.shot(work / "skyline.png")
+        seen = gorilla_aim.Scene(work / "skyline.png")
+        assert (seen.left, seen.right, seen.wind) == scene, "the seeded game is not the one the shots were worked out for: run gorilla_aim.py"
+        for at, (angle, velocity) in enumerate(shots):
+            session.type([*angle, "enter"], pause=0.3)
+            time.sleep(1)
+            session.type([*velocity, "enter"], pause=0.3)
+            if at + 1 < len(shots):
+                time.sleep(10)  # the banana, the explosion, the other player's prompt
         session.wait_for("GAME OVER!", 60)
         return session.screen()
     finally:
         session.close()
 
 
+def scores(screen: str) -> tuple[int, int]:
+    first, second = re.search(r"Player 1\s+(\d+)", screen), re.search(r"Player 2\s+(\d+)", screen)
+    assert first and second, screen
+    return int(first.group(1)), int(second.group(1))
+
+
 @pytest.mark.parametrize("target", ["16", "32"])
 def test_a_banana_that_hits_the_other_gorilla_scores_and_ends_the_game(game, tmp_path, target: str):
     exe, loaders = game[target]
-    screen = play_to_the_hit(exe, loaders, tmp_path / "play", SHOT[target])
+    screen = play(exe, loaders, tmp_path / "play", SCENES[target], HIT[target])
     assert "Illegal function call" not in screen
-    assert re.search(r"Player 1\s+1\b", screen), screen
-    assert re.search(r"Player 2\s+0\b", screen), screen
+    assert scores(screen) == (1, 0), screen
+
+
+@pytest.mark.parametrize("target", ["16", "32"])
+def test_a_banana_that_hits_a_building_scores_nothing_and_the_turn_passes(game, tmp_path, target: str):
+    exe, loaders = game[target]
+    screen = play(exe, loaders, tmp_path / "play", SCENES[target], BUILDING[target])
+    assert "Illegal function call" not in screen
+    assert scores(screen) == (0, 1), screen
