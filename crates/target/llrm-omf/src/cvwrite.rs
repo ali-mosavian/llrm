@@ -1,5 +1,5 @@
 //! The inverse of [`cvinfo`](crate::cvinfo): $$SYMBOLS and $$TYPES in BC's
-//! pre-link layout, which LINK /CO hands to CVPACK. docs/machine/codeview.md
+//! pre-link layout, which LINK /CO hands to CVPACK. docs/formats/codeview.md
 //! has the measurements behind every byte.
 
 use llrm_support::hash::IndexMap;

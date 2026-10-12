@@ -26,7 +26,7 @@ paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**", ".zed/*
 # takes the full tier. The backend (isel, regalloc, conventions, driver) and transforms are not listed: they take the
 # fast tier plus every codegen step (run on all languages, qcport, pytest-programs; see [[heavy]]), which is everything
 # the full tier adds except the debugger sessions and the identity gate. Move "crates/backend/**" and "crates/opt/**"
-# here to send them to the full tier instead; the plan's `replay` cost is in docs/testing.md.
+# here to send them to the full tier instead; the plan's `replay` cost is in docs/working/testing.md.
 [shared]
 paths = [
   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs", "src/**", "tests/common/**",
