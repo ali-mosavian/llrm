@@ -17,19 +17,12 @@ replacement/removal behavior is deterministic in QB45's fixed DOS block.
 `runtime` state the completion obligation, not a claim that a current build
 has met it:
 
-- `required` is a deterministic compatibility obligation for the completed
-  frontend and selected Microsoft runtime;
-- `pending` is a deterministic QB 4.5 probe whose lowerer/runtime path still
-  needs measurement and integration; and
+- `required` is a deterministic compatibility obligation for llrm-qb and the
+  selected Microsoft runtime;
+- `pending` is a deterministic QB 4.5 probe whose expectation or integration
+  still needs completing; and
 - `reference-only` is legal QB 4.5 source whose display/event result needs a
   DOS display or event instrument, so it is not a headless golden-output gate.
-
-The current frontend has not completed this manifest. `--emit-frontend` uses
-the real HIR/MIR/OMF path and records failures beside partial stage dumps;
-`--run-frontend` fails explicitly because linking the emitted object to the
-selected Microsoft runtime is not yet integrated. A `required` row remains an
-obligation until that exact qb object links to BCOM45 and its redirected DOS
-behavior is captured.
 
 The sources progress from lexical/numeric/control-flow behavior to procedures,
 arrays, strings, UDTs, DATA, sequential and RANDOM files, errors, segment
@@ -70,9 +63,9 @@ now have deterministic DOS fixtures.
 
 ## QuickHelp inventory and evidence
 
-`coverage.toml` is an exhaustive, machine-readable inventory of the 989
-unique topics decoded from the installed Microsoft `QB45QCK.HLP` (200 topics),
-`QB45ADVR.HLP` (533), and `QB45ENER.HLP` (256). It records the topic context,
+`coverage.toml` is an exhaustive, machine-readable inventory of the unique
+topics decoded from the installed Microsoft `QB45QCK.HLP`,
+`QB45ADVR.HLP`, and `QB45ENER.HLP`. It records the topic context,
 title, class, case mapping, completion status, and a source/line evidence
 pointer. The nested `QB45/QB45/HLP` copy has the same SHA-256 values and is not
 counted twice. A `covered` row points at a source line that constructs the

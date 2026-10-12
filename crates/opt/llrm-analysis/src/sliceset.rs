@@ -1,14 +1,42 @@
-//! A set of slices that can hold most of itself as a run shared with other
-//! sets.
+//! An ordered set of memory slices that holds most of itself as a run shared
+//! with other sets.
 //!
-//! The module's callbacks (what an address-taken function or an entry does:
-//! QCport's host has 186 slices of them) are part of the summary of every
-//! function that calls something unknown, of every instantiation of it at a
-//! call and of every call's effect. Each of those used to be a tree set of its
-//! own with the callbacks in it, built, compared, filtered and listed again and
-//! again: a third of the compile of a module with indirect calls. Here the
-//! callbacks are one `Shared`, and a set holds them by reference beside the few
-//! slices of its own. As a set of slices it is exactly the union.
+//! # How it works
+//! A function that may call back into the module (an address-taken function or
+//! an entry) has, in its summary, the effects of all those callbacks. That run
+//! of slices is the same for every such summary, every instantiation of it at a
+//! call and every call's effect. Building, comparing, filtering and listing a
+//! tree set holding it each time is wasted work.
+//!
+//! `Shared` is one immutable run of slices behind an `Rc`, with facts computed
+//! once: whether none is in a `Frame` or `Stack` object (`outlives`), whether
+//! any is a `Parameter`'s, and which objects it holds whole or in part. A
+//! `SliceSet` is `own` (a `BTreeSet<Slice>`) plus an optional `base:
+//! Rc<Shared>`, the two disjoint. Seen as a set, it is exactly the union.
+//!
+//! ```text
+//!  SliceSet                    Shared (one allocation, many holders)
+//!  +------+---------+          +---------------------------------+
+//!  | own  | base ---+--------> | set, outlives, parameters,      |
+//!  | few  |         |          | wholes, parts, coalesced        |
+//!  +------+---------+          +---------------------------------+
+//!  another SliceSet's base ---------^ (same Rc: ptr_eq shortcut)
+//! ```
+//!
+//! `absorb` takes the other set's run by reference when this set has none or
+//! the same one, and copies slices otherwise. `retain` and `retain_outliving`
+//! ask the run as a whole where `shared_kept` can answer, and `materialize` it
+//! into `own` where only per-slice tests can. `coalesced` drops the subranges
+//! of an object the set has every byte of; the run is materialized only if its
+//! own wholes and parts disagree or the set's own wholes cover a part of it.
+//! `mapped` rewrites `own` and keeps the run, so the map must not change what
+//! the run holds. Equality compares by `Rc::ptr_eq` and `own` when the runs are
+//! the same.
+//!
+//! # Provides
+//! `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`] (call
+//! summaries and `callbacks_over`, via [`crate::manager`]'s `Callbacks`) and
+//! the `interprocedural` pass in llrm-transforms.
 
 use std::collections::BTreeSet;
 use std::rc::Rc;

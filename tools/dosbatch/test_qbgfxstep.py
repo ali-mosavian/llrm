@@ -10,33 +10,40 @@ from pathlib import Path
 
 import pytest
 
+# BCOM45 (BC, LINK and its runtime) is the oracle these tests compare against: the gate drops the file where QB45 is not installed.
+REQUIRES = ["qb45"]
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
-import qbruntime  # noqa: E402
+import qbbuild  # noqa: E402
 
 pytestmark = pytest.mark.slow_dos
 SOURCES = sorted((dosbatch.ROOT / "tests" / "qbrt").glob("lastpoint_*.bas"))
 
 
+@pytest.fixture(scope="module")
+def objects(tmp_path_factory):
+    return qbbuild.runtimes(tmp_path_factory.mktemp("qbgfxstep_rt"))
+
+
+def run_text(job: dosbatch.Job, where: Path) -> str:
+    result = dosbatch.run([job], where)[job.stem]
+    assert result.status == "ok", result.detail
+    return dosbatch.read_dos(where, "L.TXT")
+
+
 @pytest.mark.parametrize("source", SOURCES, ids=lambda path: path.stem)
-def test_graphics_statement_matches_bc(tmp_path, source: Path):
+def test_graphics_statement_matches_bc(tmp_path, objects, source: Path):
+    """BC's file is the oracle; ours, at m16 and at m32, must be the same."""
     if not dosbatch.QB45.is_dir():
         pytest.skip("QB45_DIR is unavailable")
-    obj = tmp_path / "lp.llrm.obj"
-    assert (error := qbruntime.compile_basic(source, obj, "llrm")) is None, error
-    archive, _ = qbruntime.build(tmp_path / "archive")
+    built = qbbuild.build(source, tmp_path / "build", objects)
     reference = tmp_path / "LASTPT.BAS"
     reference.write_bytes(source.read_text().replace("\n", "\r\n").encode())
-    jobs = [
-        dosbatch.Job("BCREF", "bas", reference, screen=True, budget_ms=30000),
-        dosbatch.Job("LLRM", "obj", obj, runtime="llrmqb", runtime_file=archive, screen=True, budget_ms=30000),
-    ]
-    texts = []
-    for job in jobs:
-        where = tmp_path / job.stem
-        result = dosbatch.run([job], where)[job.stem]
-        assert result.status == "ok", result.detail
-        texts.append(dosbatch.read_dos(where, "L.TXT"))
-    assert texts[0].count("\n") > 150, "BC's reference is missing"
-    assert texts[0] == texts[1]
+    want = run_text(dosbatch.Job("BCREF", "bas", reference, screen=True, budget_ms=30000), tmp_path / "BCREF")
+    assert want.count("\n") > 150, "BC's reference is missing"
+    for target in qbbuild.TARGETS:
+        one = built[target]
+        got = run_text(dosbatch.Job("LLRM", "exe", one.exe, files=one.files, screen=True, budget_ms=30000), tmp_path / f"LLRM{target}")
+        assert want == got, f"m{target}"

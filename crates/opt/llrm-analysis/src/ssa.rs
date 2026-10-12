@@ -1,28 +1,54 @@
-//! SSA helpers, adapted from llrm-core's `analysis/ssa.rs` (a port of
-//! `qbopt/analysis/ssa.py`).
+//! SSA helpers: use lists, dead-phi pruning, value substitution and an SSA
+//! updater.
 //!
-//! `use_index` returns [`InstId`]s where the old one returned snapshot-local
-//! occurrences.  A substitution maps a [`ValueId`] to an [`Operand`], since a
-//! rich MIR value may be replaced by a constant.
+//! # How it works
+//! `use_index` maps each value to the non-phi instructions that read it, in
+//! layout order, each at most once; `values` lists the values a function
+//! mentions.
 //!
-//! `constructed` rebuilt SSA for a few of the old MIR's variables, each
-//! defined in several places; [`SsaUpdater`] is that for one value, as
-//! LLVM's SSAUpdater, and places the phis where its definitions meet. Its
-//! `ConstructionError`, the old renamer's, has no counterpart.
+//! `pruned_phis(function, roots)` removes phis nothing needs, including cycles
+//! that only other dead phis read. A value is needed when a root or a non-phi
+//! instruction reads it, or a needed phi reads it; the rest of the phis are
+//! erased (their operands first, since only dead phis read dead phis). It
+//! reports whether any went.
 //!
-//! Skipped, with no meaning on SSA IR:
-//! - `renumbered`: variable versions.
-//! - `cloned_pointer_metadata` and `cloned_integer_ranges`: the old body's side
-//!   tables; a pointer is its type here, and an instruction's metadata travels
-//!   with `clone_instruction`.
+//! `provider(value, swap)` follows a substitution map from a value to an
+//! operand (a value may be replaced by a constant) until it reaches one the map
+//! does not move; a cycle is `SubstitutionError::CyclicValueSubstitution`.
+//! `substituted` reads each operand of an instruction through it and leaves the
+//! definition alone.
 //!
-//! Tests skipped: `constructed_matches_blocks_by_identity_not_position` and
-//! `constructed_repairs_existing_phi_inputs_by_predecessor` (test
-//! `constructed`); the consumed mode of
-//! `use_index_preserves_modes_filtering_and_operation_order` (carried merge
-//! inputs do not exist, every operand is consumed); and the exits, cells,
-//! known-memory and merge parts of the `substituted` tests (an address is an
-//! operand here).
+//! `SsaUpdater` is LLVM's SSAUpdater for one value defined in several blocks.
+//! `add_available_value(block, v)` says `v` is the definition at the end of
+//! `block`. The value at the end of any other block is what reaches it from its
+//! predecessors. One predecessor passes the question up; no predecessor reads
+//! `poison`; several place a phi at the head of the block, one input per edge
+//! (a `switch` may reach a block by several), asked of the predecessors. A phi
+//! whose inputs are all one value, ignoring itself, is replaced by that value.
+//! `rewrite_use` makes a use read the value where it reads: a phi's input at
+//! the end of the block it comes from, any other at the middle of its block.
+//! `inserted_phis` lists the phis placed that stand.
+//!
+//! ```text
+//!       A: v1 = ...          available: A -> v1, B -> v2
+//!      / \
+//!     B   C                  value_in_middle_of_block(D):
+//!     v2  |                    preds B, C -> phi placed in D
+//!      \ /                       D: %p = phi [v2, B], [v1', C]
+//!       D: use v             C has one pred A -> passes v1 up
+//! ```
+//!
+//! # Provides
+//! The helpers above. Consumers in llrm-transforms: `dead`, `promote`
+//! (`pruned_phis`); `gvn`, `lcssamerges`, `transform`, `loadjoins`
+//! (`substituted`, `provider`); `rotate`, `jumpthread`, `floatloop`
+//! (`SsaUpdater`).
+//!
+//! # Needs
+//! [`crate::occurrence`] for the operation and phi walks.
+//!
+//! # See also
+//! LLVM `SSAUpdater` (`llvm/lib/Transforms/Utils/SSAUpdater.cpp`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

@@ -1,50 +1,65 @@
 # Source layout
 
+For contributors finding where something lives. Every top-level directory and
+every crate in the workspace, grouped by pipeline stage; dependency edges are
+in [readme.md](readme.md).
+
+```
+ repo
+ +-- crates/  support ir opt frontends bc backend target   (Rust workspace)
+ +-- src/bin/ the command-line tools, one file each
+ +-- runtime/ the per-language runtime sources and descriptions
+ +-- tests/ bench/ examples/ tools/ toolchain/ editors/ docs/
+```
+
+## crates/
+
 | Path | Holds |
 | --- | --- |
-| `crates/support/llrm-support` | Helpers every crate shares: Python-compatible repr and JSON, hashing, code pages, diagnostics |
-| `crates/ir/llrm-hir` | The common HIR: model, JSON codec, verifier, escape facts |
-| `crates/ir/llrm-mir` | The rich portable MIR of `rich-mir.md`: types, verifier, text, interpreter |
-| `crates/opt/llrm-analysis` | MIR analyses, and `graph`: dominance and loops over any IR's blocks |
-| `crates/opt/llrm-transforms` | MIR to MIR passes and the pipeline |
-| `crates/target/llrm-x86-m16` | The 16-bit x86 target: the `Dos` cost model passes see as `llrm_mir::target::Machine`, and the machine description (`machine`) |
-| `crates/target/llrm-omf` | OMF records, the code segment as a module, CodeView debug info |
-| `crates/backend/llrm-core` | The compile driver, instruction selection, the machine phases and object writing; the HIR interpreter |
-| `crates/target/llrm-x86-bcmachine` | BC objects: x86 decode, the instruction model and its classification (`model::ir::lift`), object reading, flags |
-| `crates/target/llrm-x86-bc` | The BC object frontend: machine code raised onto MIR |
-| `crates/bc/llrm-bcdriver` | The rich route for BC objects |
-| `crates/frontends/llrm-qbruntime` | The QB-family runtime's `B$` routine contracts and `runtime.toml` |
-| `crates/frontends/llrm-nib` | The Nib frontend and language server; its runtime, `std` and `abi` modules |
-| `crates/frontends/llrm-qb` | The QB-family frontend: driver, inline x87, stage dumps |
-| `crates/frontends/llrm-c` | C through Open Watcom's front end (`toolchain/owshim/`) |
-| `crates/frontends/qbfront` | The QB parser, run by `llrm-qb` as a program, and its compatibility corpus |
-| `src/bin` | The `llrm-*` tools, `nibfront` and `nib-lsp` (package `llrm`) |
-| `tests` | Integration tests, fixtures, and the BASIC suite |
-| `bench` | Benchmark programs |
-| `examples` | Nib, BASIC, Pascal and C interop programs |
-| `editors` | The Zed extension and tree-sitter grammar |
-| `toolchain` | What the build scripts bootstrap: `wccq` (`owshim`), jwasm, jwlink, DOSBox-X |
-| `tools` | Developer tools; see `tools/readme.md` |
+| `support/llrm-support` | Helpers every crate shares: hashing, JSON and repr helpers, code pages, debug channels and diagnostics |
+| `ir/llrm-hir` | The common HIR: model, JSON codec, verifier, escape facts, emission to MIR, `hir-mir` |
+| `ir/llrm-mir` | MIR: types, text, verifier, interpreter, dominators, loops, pass manager. No dependencies |
+| `ir/llrm-lir` | The machine operand model (`Reg`, `Mem`, `Operation`, `Semantics`) shared by the backend and the BC lift |
+| `opt/llrm-analysis` | MIR analyses: alias and points-to, MemorySSA, ranges, induction, summaries, GlobalsAA |
+| `opt/llrm-transforms` | MIR to MIR passes and the pipeline |
+| `frontends/qbfront` | The QB, QBasic, PDS and VBDOS parser and resolver, generated from `grammar/` |
+| `frontends/llrm-qb` | The `llrm-qb` driver: dialects, inline runtime, stage dumps |
+| `frontends/llrm-qbruntime` | QB runtime routine contracts (`runtime.toml`) |
+| `frontends/llrm-nib` | The Nib frontend: lexer, parser, semantics, std, runtime, and the language server (`lsp`) |
+| `frontends/llrm-c` | C through Open Watcom's front end (`toolchain/owshim/`): capture stream and translation to HIR |
+| `bc/llrm-bcdriver` | Compiles objects BC wrote: lift, optimise, select, write a fresh object |
+| `target/llrm-x86-bcmachine` | x86 decode, blocks and runtime ABI facts for BC objects |
+| `target/llrm-x86-bc` | The BC lift: machine code of a BC object to MIR |
+| `backend/llrm-core` | The compile driver, instruction selection, machine phases (`flow.rs`), layout, `objbuild`, the HIR interpreter, ABIs |
+| `backend/llrm-driver` | The one place that names targets and binds each to its selector and rules |
+| `backend/llrm-iselgen` | Build-time generator of the instruction selector from `patterns.isel` |
+| `backend/llrm-peepgen` | Build-time generator of peephole automata from `.peep` rules |
+| `target/llrm-target` | The target-generic layer: what a target description is |
+| `target/llrm-x86` | What every x86 target shares: instruction family, selection family, peephole rules |
+| `target/llrm-x86-m16` | 16-bit real-mode x86: registers, timings, calling, datalayout, object and DOS descriptions, `Dos` cost model |
+| `target/llrm-x86-m16-select` | Selector and peephole rules generated for m16 |
+| `target/llrm-x86-m32` | Flat 32-bit x86, the same descriptions |
+| `target/llrm-x86-m32-select` | Selector and peephole rules generated for m32 |
+| `target/llrm-object` | The format-neutral `Object` the backend produces ([object model](../formats/object-model.md)) |
+| `target/llrm-omf` | OMF records, writer and reader, CodeView debug info |
+| `target/llrm-elf`, `llrm-elf32`, `llrm-elf64` | ELF common part and the 32- and 64-bit writers |
+| `target/llrm-coff`, `llrm-coff32`, `llrm-coff64` | COFF common part and the 32- and 64-bit writers |
+| `target/llrm-macho` | Mach-O writer |
+| `target/llrm-dwarf` | DWARF 4 and 5 debug sections |
 
-`llrm-core` re-exports `llrm-support`, `llrm-omf` and `llrm-hir` as
-`support`, `objectfile` and `hir::{model, codec, verify, escape}`. The frontends depend on `llrm-core`
-and never on each other. `LLRM_ROOT` (`.cargo/config.toml`) is the
-repository root for any crate's tests.
+## Other top-level paths
 
-In `llrm-core`, `driver` runs a compile and `flow.rs` orders the machine
-phases. The rest is grouped by responsibility:
-
-| Module | Responsibility |
+| Path | Holds |
 | --- | --- |
-| `driver` | The compile driver: HIR or lifted MIR through the pipeline to an object |
-| `flow` | The machine phases and their gate |
-| `hir` | The HIR interpreter, and `llrm-hir` re-exported |
-| `model` | LIR, decoded IR and phase interfaces |
-| `analysis` | Loops, intervals and block frequency over LIR |
-| `backend` | Instruction selection, allocation, frame/layout, peepholes, object writing |
-| `abi` | Runtime contracts (`llrm-qbruntime`, as `abi::runtime`) and the QB runtime ABI (`abi::qb`) |
-| `frontends::bc` | `llrm-x86-bcmachine`'s BC decoding, re-exported |
-
-Recognition belongs in the frontend, machine-independent optimization in
-`llrm-transforms`, and physical placement in the backend; see `split.md`.
-`model::ir` is the decoded machine representation LIR uses, not MIR.
+| `src/bin` | `llrm-qb`, `llrm-nib`, `llrm-c`, `llrm-omf`, `llrm-mir`, `llrm-run`, `nibfront`, `nib-lsp` (package `llrm`) |
+| `build.rs` | Builds jwasm, jwlink and the headless DOSBox-X beside the binaries (features `jw`, `dosrun`) |
+| `runtime/` | `qb` (the QB runtime in C), `c` and `nib` (per-target `x86-m16`, `x86-m32` descriptions and startup), `shared` (DOS facts and OS descriptions) |
+| `tests/` | Integration tests (`*.rs`, `test_*.py`), `run` and `check` suites per language, `differential`, `inputs`, `fixtures`, host shims (`hostalloc`, `hostgfx`) |
+| `bench/` | Benchmark programs with `expected.toml` baselines; see `bench/readme.md` |
+| `examples/` | Nib, BASIC, Pascal, C interop and `dot` example programs |
+| `tools/` | Developer tools: `bench`, `loops`, `e2e`, `dosbatch`, `gate`, `ci`, `callconv`, `torture`, `qcport`, `analysis`, `rfmt-post`, and scripts; see `tools/readme.md` |
+| `toolchain/` | Bootstrap scripts and `owshim`, the patched Open Watcom capture |
+| `editors/` | The Zed extension and the Nib tree-sitter grammar |
+| `docs/` | These documents |
+| `.cargo/config.toml` | Sets `LLRM_ROOT`, the repository root for any crate's tests |
+| `.github/` | CI workflows |

@@ -11,9 +11,6 @@ from pathlib import Path
 
 import pytest
 
-# QB45's LIB.EXE builds the runtime library these tests link: the gate drops the file where QB45 is not installed.
-REQUIRES = ["qb45"]
-
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "gfxbench"))
 
@@ -36,7 +33,7 @@ def timed(tmp_path_factory):
     return gfxbench_run.run(list(LIMITS), tmp_path_factory.mktemp("gfxspeed"), only=("llrm real", "llrm flat"))
 
 
-@pytest.mark.parametrize("side", ["llrm real", "llrm flat"])
 @pytest.mark.parametrize("mode,segment", [(m, s) for m, limits in LIMITS.items() for s in limits])
-def test_a_filled_row_costs_a_row_fill_not_a_pixel_loop(timed, side: str, mode: int, segment: str):
-    assert timed[mode][segment][side] <= LIMITS[mode][segment]
+def test_a_filled_row_costs_a_row_fill_not_a_pixel_loop(timed, mode: int, segment: str):
+    for side in ("llrm real", "llrm flat"):
+        assert timed[mode][segment][side] <= LIMITS[mode][segment], side

@@ -1,335 +1,242 @@
 # 386 real-mode memory and runtime model
 
-The target is fixed: Intel 386 or newer, executing 16-bit real-mode DOS code.
-The 386 minimum permits 32-bit integer instructions and operand/address-size
+Audience: contributors to `qbfront` and the QB HIR-to-MIR adapter. The address
+spaces, storage classes, floating-point rules and frame layouts the QB frontend
+relies on.
+
+The target is Intel 386 or newer executing 16-bit real-mode DOS code. The 386
+minimum permits 32-bit integer instructions and operand/address-size
 overrides. It does not turn DOS memory into a flat address space.
 
 Ordinary data segments and DGROUP remain 64 KiB resources. A 32-bit `LONG`
 or address-size override does not widen a near pointer, increase a segment
 limit, or authorize unreal-mode addressing. Module statics, descriptors,
 runtime bookkeeping, and near allocations therefore need an explicit group
-budget; data that cannot fit must use the runtime's established far/huge
-allocation path.
+budget; data that cannot fit uses the runtime's far/huge allocation path.
 
 ## Address spaces
-
-The frontend and HIR adapter preserve these semantic address forms:
 
 | Form | Meaning |
 |---|---|
 | near | 16-bit offset interpreted in a known segment or group |
 | far | 16:16 segment:offset pointer naming one object/access path |
-| huge | 16:16 pointer whose arithmetic has normalization/wrapping semantics required for objects crossing segment windows |
+| huge | 16:16 pointer whose arithmetic normalizes and wraps for objects crossing segment windows |
 | code | far procedure identity or code relocation used by the runtime/linker |
 
-A far or huge pointer is not a flat 32-bit integer. In particular, huge
-pointer arithmetic does not become ordinary packed `ADD`. The adapter emits
-the current whole-pointer and `PTR_OFFSET` MIR form, and the existing backend
-performs the established selector/offset lowering described in
-[pointer-lowering.md](../../machine/pointer-lowering.md).
-
-This is where the design intentionally diverges from LLVM's usual integral,
-flat pointer model. LLVM's address-space and `getelementptr` separation is the
-reference for preserving pointer kind and separating address formation from
-access, but it does not define the normalization rule for a BASIC huge pointer.
-That rule remains an explicit runtime/target profile fact.
+A far or huge pointer is not a flat 32-bit integer. Huge pointer arithmetic
+does not become packed `ADD`: the adapter emits the whole-pointer and
+`PTR_OFFSET` MIR form, and the backend performs the selector/offset lowering
+described in [pointer-lowering](../../machine/pointer-lowering.md).
 
 No frontend operation selects `DS`, `SS`, `ES`, `BP`, `SI`, or any other
-register. Segment selection and legal addressing modes remain backend work.
+register. Segment selection and addressing modes are backend work.
 
 Field projection through a dynamic array keeps the whole pointer and byte
-displacement as HIR `ptr_offset`. It must not become address-of an indirect
-whole-pointer cell: that loses the separation between address formation and
-access. Dynamic string descriptors are the deliberate runtime-boundary
-exception. The QB string arena is near, so `B$SASS`, `B$FLEN`, and `B$SCMP`
-receive the projected 16-bit descriptor offset.
+displacement as HIR `ptr_offset`; it is not the address of an indirect
+whole-pointer cell. Dynamic string descriptors are the exception. The QB string
+arena is near, so `B$SASS`, `B$FLEN`, and `B$SCMP` receive the projected 16-bit
+descriptor offset.
 
 ## Logical storage objects
 
-Source storage is classified before HIR emission as one of:
-
-- automatic procedure local or parameter;
-- static procedure local;
-- module variable or constant;
-- `COMMON`/shared or external object;
-- record object or field slice;
-- array descriptor;
-- array allocation; or
-- opaque runtime-owned storage.
+Source storage is classified before HIR emission as one of: automatic
+procedure local or parameter; static procedure local; module variable or
+constant; `COMMON`/shared or external object; record object or field slice;
+array descriptor; array allocation; opaque runtime-owned storage.
 
 An object has stable identity, extent when known, alignment, mutability,
-escape, and an address form. Fields and array elements are slices/accesses of
-that object rather than unrelated numeric addresses. The HIR-to-MIR adapter
-maps these facts into the current canonical memory model in
-`memory.rs`.
+escape, and an address form. Fields and array elements are slices of that
+object, not unrelated numeric addresses. The adapter maps these facts into the
+memory model in `crates/ir/llrm-mir/src/memory.rs`.
 
-This is the basis for alias analysis. Near-versus-far by itself does not prove
-two accesses disjoint, and two numerically equal offsets in different objects
-do not make them the same storage.
-
-Source-known objects are disjoint only when the language and runtime allocation
-contract establish it. Facilities that expose raw segmented memory, change a
-default segment, or pass an address to unknown code escape the relevant object
-and force conservative alias/call effects. HIR never treats the arithmetic
-non-equality of two segment:offset spellings as proof that their physical
-addresses cannot alias.
+Near-versus-far by itself does not prove two accesses disjoint, and equal
+offsets in different objects are not the same storage. Raw segmented memory
+(`DEF SEG`, `PEEK`, `POKE`), and addresses passed to unknown code, escape the
+object and force conservative alias and call effects. Unequal segment:offset
+spellings are never proof that two physical addresses differ.
 
 ## Runtime profiles
 
-QB 4.5, PDS 7.1, and VBDOS are distinct ABI profiles. A profile owns:
+QB 4.5, PDS 7.1, and VBDOS are distinct ABI profiles; `llrm` is QB 4.5's
+frames and descriptors called by the target's own convention
+([dialects](dialects.md)). A profile owns procedure entry/exit and frame
+layout, near/far and callback conventions, argument order and `BYREF`/`BYVAL`,
+return locations, dynamic string and array descriptor layout, module header,
+startup, event and error integration, external symbol spelling, and the
+floating-point library linkage.
 
-- procedure entry/exit and BASIC frame layout;
-- near/far procedure and callback conventions;
-- argument order, width, and `BYREF`/`BYVAL` behavior;
-- return locations and caller/callee effects;
-- dynamic string and array descriptor layout;
-- module header, startup, event, and error integration;
-- external symbol spelling and runtime library selection; and
-- native-x87 and floating-runtime linkage requirements.
+Facts are measured per profile. Layouts are shared only after the bytes and
+calls agree.
 
-Facts are measured per profile. Similar layouts are shared only after byte
-layouts and calls agree; one runtime is never used as an undocumented proxy
-for another.
+Static STRING literals show the difference. QB 4.5 and PDS 7.1 use one near
+descriptor-plus-payload object in `BC_CN`. VBDOS uses a private `FSL_CONST`
+far descriptor and payload plus a near `BC_CN` bridge and a shared selector
+word. HIR records the profile's typed data objects and relocations; MIR sees
+only the descriptor address.
 
-Static STRING literals are a measured example. QB 4.5 and PDS 7.1 use one
-near descriptor-plus-payload object in `BC_CN`. VBDOS uses a private
-`FSL_CONST` far descriptor/payload plus a near `BC_CN` bridge and shared
-selector word. HIR records the selected profile's typed data objects and
-relocations; MIR sees only the resulting descriptor address. No FreeBASIC
-layout or ABI participates in this choice.
-
-The HIR contains typed calls and logical storage. The adapter applies the
-selected ABI contract and produces existing MIR calls and memory effects.
-OMF records, module headers, fixups, and library requirements live in a link
-plan beside MIR rather than in numeric operations.
+HIR holds typed calls and logical storage. The adapter applies the ABI
+contract and produces MIR calls and memory effects. OMF records, module
+headers, fixups and library requirements are a link plan beside MIR.
 
 ## LONG and integer math
 
-A BASIC `LONG` is a signed 32-bit value throughout HIR and semantic/optimized
-MIR. It is never an AX:DX- or CX:BX-shaped arithmetic value there. At a public
-call/return boundary only, frontend ABI physicalization splits or joins two
-anonymous words; lowering assigns the measured `DX:AX` locations. Arithmetic
-helper calls such as the measured long multiply/divide/remainder/compare family
-are created as whole semantic operations when current MIR can express them, matching
-`raising_calls.rs` and
-`raising_longs.rs`.
+A `LONG` is a signed 32-bit value throughout HIR and MIR. At a public
+call/return boundary only, ABI physicalization splits or joins two words and
+assigns `DX:AX`. Long multiply, divide, remainder and compare are whole
+semantic operations. Overflow and division policy is the compiler's shared
+one (`-fsanitize=signed-integer-overflow`, `integer-divide-by-zero`); the
+frontend does not infer semantics from the convenient 386 instruction.
 
-The source frontend supplies the existing overflow and division policies. It
-does not infer semantics from the convenient 386 instruction. Where llrm has
-already made an explicit compatibility tradeoff, the source path uses that
-same policy and tests it; it does not silently invent another one.
+## Floating point
 
-The backend is free to use 32-bit real-mode instructions because 386 is the
-minimum target. There is no alternate 8086 word-pair lowering to maintain.
+- `SINGLE` storage is binary32 and `DOUBLE` binary64.
+- Evaluation may use extended x87 precision until a store or conversion rounds.
+- Rounding, exceptions and unordered comparisons use the MIR floating
+  semantics, not folding of host floats during parsing.
 
-## Floating point and math
+Arithmetic, comparison, negation, absolute value, square root and conversions
+are native MIR operations. Other math intrinsics stay named in HIR through
+optimization. After x87 stack allocation the QB finalizer replaces each
+remaining `st(0) -> st(0)` intrinsic with its 80387 byte sequence: `SIN` and
+`COS` are single instructions, `ATN` is `fld1; fpatan`, and a positive-base
+power is `log2(base) * exponent` followed by `exp2`, both expanded inline.
+Substituting after allocation keeps MIR and the machine passes free of
+calls that do not exist.
 
-The frontend distinguishes storage format from evaluation semantics:
-
-- `SINGLE` storage is binary32;
-- `DOUBLE` storage is binary64; and
-- evaluation may use the existing extended/x87 semantics until an explicit
-  store or conversion rounds the value.
-
-Rounding, exceptions, unordered comparisons, and observable environment
-effects are carried using current `FloatingSemantics`. The adapter follows the
-same policy as the existing float raiser rather than folding host-language
-floats during parsing.
-
-"Inline floating/math" includes all numeric BASIC math intrinsics. Arithmetic,
-comparison, negation, absolute value, square root, and conversions already
-supported there become native operations. The remaining math intrinsics stay
-named in HIR until QB-owned late physicalization rather than becoming runtime
-calls or expanding the shared MIR vocabulary.
-
-Named HIR intrinsics which have no distinct MIR kind are physicalized by the
-QB frontend after MIR optimization, using the same x87 meanings recovered by
-the object frontend; they never become BASIC runtime calls and do not add
-source-language cases to shared MIR or backend code.
-
-After x87 stack allocation, the QB-owned finalizer replaces each remaining
-`st(0) -> st(0)` intrinsic with its 80387 byte sequence. `SIN` and `COS` are
-single instructions; `ATN` is `fld1; fpatan`; positive-base power is retained
-as `log2(base) * exponent` followed by `exp2`, with both helpers expanded
-inline. This byte substitution is deliberately after allocation: it cannot
-hide a call or machine constraint from MIR because there is no call.
-
-The source compiler emits native x87 for inline floating operations. A 386 CPU
-does not itself contain an FPU, so a float-using program additionally requires
-an x87-compatible coprocessor or execution environment. The legacy
-floating-emulator byte protocol is recoverable when rewriting a BC object
-because that object supplies patch-site anchors; a newly generated module has
-no such anchors, and the current whole-segment backend is native-only. This
-design adds neither an emulator-protocol generator nor a soft-float backend.
+Inline floating operations are native x87, so a program that uses floats
+needs an x87-compatible coprocessor or execution environment. A new module has
+no patch-site anchors for the legacy floating-emulator byte protocol, and
+there is no soft-float backend.
 
 ## Arrays
 
-The native array scope is numeric arrays. The frontend records:
+The frontend records element type and size, rank and source bounds, static or
+dynamic allocation, near/far/huge address behavior, descriptor and allocation
+identity, and whether a bounds check is required. Dimensions stay in source
+order in HIR; the ABI adapter applies descriptor ordering, adjusted base and
+stride once, in an explicit width, never host `usize`.
 
-- element type and byte size;
-- rank and source bounds;
-- fixed/static versus dynamic allocation;
-- near, far, or huge allocation/address behavior;
-- descriptor identity and allocation identity; and
-- whether a bounds proof or runtime check is required.
+Numeric arrays are addressed inline. String arrays and unsupported
+descriptor operations are runtime calls.
 
-The adapter produces the same current MIR facts as
-`raising_arrays.rs`,
-`raising_array_bounds.rs`,
-and
-`raising_array_access.rs`.
-Static numeric allocations and established far/huge numeric access patterns
-may be lowered natively. String arrays and unsupported descriptor operations
-remain runtime calls or receive a precise unsupported-lowering diagnostic.
+A dynamic element of a frame allocation is `ADDRESS(fixed frame base)` plus an
+ordinary integer `ADD(dynamic byte offset)`, for near offsets and for the
+offset half of far/huge pointers, so the allocator may use any general register
+for the offset.
 
-Array dimensions are kept in source order in HIR. Any runtime-specific
-descriptor ordering, adjusted base, or stride convention is applied once by
-the ABI adapter. Bounds and stride arithmetic use an explicitly chosen width;
-host `usize` is never a substitute for target arithmetic.
+### Descriptor layout
 
-A dynamic element of a frame allocation is not kept as one machine-shaped
-`[bp + dynamic]` address. HIR lowering emits `ADDRESS(fixed frame base)` and
-an ordinary integer `ADD(dynamic byte offset)`, for both near offsets and the
-offset half of far/huge pointers. This is semantic pointer arithmetic and lets
-the allocator place the dynamic value in any general register; it cannot
-accidentally request the nonexistent 16-bit `[bp+bx]` encoding. The production
-optimizer currently leaves address-form recombination disabled because the
-shared folder does not expose the legal `BP+SI`/`BP+DI` pair constraint to
-allocation. That is a target-selection limitation, not a QB special case in
-MIR or the backend.
+The `AD` descriptor of a numeric array, from the measured `ARRAY.INC` layout:
+
+```
+ +0   +2   +4    +6     +8    +9      +0Ah       +0Ch    +0Eh
+ +----+----+-----+------+-----+-------+----------+-------+-----------+
+ | off| seg| link| total| rank| flags | adjusted | elem  | (count,   |
+ |    |    |     | size |     |       | offset   | width | lower)... |
+ +----+----+-----+------+-----+-------+----------+-------+-----------+
+ data far pointer                  FADF_STATIC = 40h    one 4-byte record
+                                                        per dimension
+```
+
+An array of unspecified rank reserves BASCOM's eight dimension records: a
+14-byte header plus eight four-byte records, 46 bytes. That is an ABI storage
+rule, distinct from the parser's subscript ceiling.
+
+Module `$STATIC` numeric arrays split storage from metadata. Elements live in
+`BC_DATA`; the descriptor lives in read-only `BC_CN` and holds a relocated far
+pointer to the elements. BASIC startup clears `BC_DATA`, so a descriptor
+emitted there would be zero when a procedure passed it to the runtime.
+
+`$DYNAMIC` arrays own a mutable descriptor in `BC_DATA`; a bounded declaration
+executes `B$DDIM`, and a later `REDIM` passes the same descriptor to
+`B$RDIM`. The element allocation is not in DGROUP. VBDOS `MOD_TEX` and
+`R_BSP` load the selector from `AD+2` and the adjusted offset from `AD+0Ah`,
+then add the scaled subscript to that 16-bit offset. `AD+0Ah` already accounts
+for every declared lower bound, so indexing must not subtract the first lower
+bound again. HIR forms the 16-bit byte offset and concatenates it with the
+selector; it does not send the pointer through huge-pointer normalization.
+`/AH` arrays are not covered.
 
 ## Procedure calls and frames
 
-HIR procedure types preserve parameter mode (`BYREF` or `BYVAL` where the
-dialect permits it), array/descriptor passing, declared result type, and
-whether a call can escape an address. The selected runtime profile maps that
-signature to the established BASIC frame and far-call conventions.
+HIR procedure types keep the parameter mode, array/descriptor passing, result
+type and whether a call can escape an address. HIR keeps source parameter
+order. Pascal pushes left to right, so the first formal is furthest from the
+return address and the adapter alone maps it to `6 +` the widths of all later
+formals; `CDECL` pushes right to left and uses ascending offsets.
 
-Runtime calls use audited contracts from the existing runtime contract model.
-Unknown calls conservatively read/write escaped memory and preserve no facts
-that the ABI does not guarantee. Optimization never treats the call instruction
-itself as cost-free; its semantic operation is expanded only when it is on the
-native allowlist.
+Runtime calls use the audited contracts of `llrm-qbruntime`. An unknown call
+reads and writes escaped memory and preserves no fact the ABI does not
+guarantee.
 
-Fresh procedures use the frontend-owned BASIC runtime frame directly, without
-the shared backend's native BP shell. `B$ENRA` pushes BP, installs the BASIC
-frame chain, saves SI/DI, and zeroes the local extent; `B$EXSA` reverses that
-work before the far return. Source locals and spills are rebased below the
-runtime-owned header: 10 bytes for QB, 18 for PDS, and the measured 20 for
-VBDOS. Before that rebase, a local array descriptor occupied VBDOS's frame-link
-words and the reduced executable failed immediately after `B$EXSA`.
+### Runtime frames
 
-Compiler-created cells follow their enclosing storage class. A module-level
-`FOR` end/step value is module data, a STATIC procedure's value is a private
-data object, and an automatic procedure's value is a frame cell. Using the
-module-data cursor as a negative BP displacement made qb-qrender's module entry
-reserve 7.5 KiB again on the stack; `B$DDIM` then allocated string storage over
-a live `SYS_PARSE_ARGS` local. The corrected module frame dropped from `1DA2h`
-bytes to allocator spill space, and the string corruption disappeared.
+```
+  high   +--------------------+
+         | parameters         |  Pascal: first formal furthest from [bp+6]
+         +--------------------+
+         | return address     |  far
+         +--------------------+
+         | runtime header     |  <- BP at its top; 10 bytes QB 4.5 / llrm,
+         |  (saved BP, frame  |  18 bytes PDS 7.1, 20 bytes VBDOS
+         |   chain, SI, DI)   |
+         +--------------------+
+         | source locals and  |
+         | spills             |
+  low    +--------------------+  <- SP
+```
 
-An unspecified-rank dynamic array descriptor reserves BASCOM's eight-
-dimension envelope: a 14-byte header plus eight four-byte dimension records,
-46 bytes total. The language parser's larger subscript ceiling is not an ABI
-descriptor size. Identical floating literals are pooled per module, matching
-BC and avoiding needless pressure on VBDOS's near constant/string space.
+`B$ENRA` pushes BP, installs the BASIC frame chain, saves SI and DI, and
+allocates and zeroes the locals; `B$EXSA` reverses it before the far return.
+Locals and spills are rebased below the header
+([sizes](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/basic.rs#L63-L77)).
+A procedure frames itself instead when the runtime needs none
+([dialects](dialects.md#procedure-frames)); `--runtime-frames` keeps the
+runtime's frame everywhere.
 
-`BX` at `B$ENRA` counts frame-owned dynamic-STRING descriptors. Runtime call
-results such as `COMMAND$`, `LTRIM$`, `RTRIM$`, `LDFS`, and `SCAT` stay on the
-runtime temporary chain and do not add handle-block entries. Raw VBDOS objects
-measure `BX=0` for `COM_TOKENIZE` and an isolated array append, and `BX=1` for
-one local STRING even around nested `RTRIM$(LTRIM$(COMMAND$))`. Fixed-bound
-variable-length STRING arrays remain
-descriptor-backed and use `B$DDIM` plus the measured `B$ERS1` exit cleanup. The reduced
-array-plus-command executable now prints `HELLO WORLD` and exits normally.
+Compiler-created cells follow their enclosing storage class: a module-level
+`FOR` end or step is module data, a `STATIC` procedure's is a private data
+object, an automatic procedure's is a frame cell. Identical floating literals
+are pooled per module, as BC does.
 
-A user `BYREF STRING` formal needs a descriptor whose lifetime covers every
-operation in the callee. A genuine dynamic STRING variable already supplies
-one and aliases directly. A literal, fixed string, concatenation, or
-string-function result supplies only an expression/runtime temporary; it is
-first assigned with `B$SASS` to an owned descriptor. The distinction is
-observable because `B$FLEN` may consume a temporary: passing a literal
-directly to a function that calls `LEN` and then `ASC` raises error 5 on the
-second call. In a procedure the materialized descriptor is a managed local and
-contributes to `B$ENRA`'s `BX`; in module-level code it is module data because
-there is no procedure runtime frame.
+### STRING temporaries and descriptors
 
-The subsequent real-program rounds corrected four independent ABI facts:
-local `B$DDIM` descriptors carry a near data offset at `+0Ah`, BASIC procedure
-calls push in Pascal left-to-right order, and positive BP displacements remain
-parameters when the runtime header is inserted. Bare declared zero-argument
-functions resolve as calls rather than implicit locals, and public LONG
-results cross the legacy boundary in `DX:AX` even under `/G3`. `TIMER` is a
-zero-argument `B$TIMR` call whose AX result is a near pointer to a
-runtime-owned SINGLE; it is neither an implicit local nor inline math. A
-Pascal user function returning SINGLE or DOUBLE receives a hidden near
-destination pointer after its source formals, stores the rounded result there,
-returns that pointer in AX, and includes its two bytes in `retf n`. HIR keeps a
-semantic floating result; only the QB ABI adapter introduces the pointer,
-store/load, and cleanup.
+`BX` at `B$ENRA` counts the frame-owned dynamic-STRING descriptors. Runtime
+call results (`COMMAND$`, `LTRIM$`, `RTRIM$`, `LDFS`, `SCAT`) stay on the
+runtime's temporary chain and add none. Fixed-bound variable-length STRING
+arrays are descriptor-backed and use `B$DDIM` with `B$ERS1` at exit.
 
-A dynamic STRING function result has two representations at one source-level
-boundary. The function's result variable is an owned four-byte descriptor in
-its runtime frame. The expression returned to its caller is a near descriptor
-address. Before `B$EXSA` releases the frame, the callee passes the owned
-descriptor address to `B$SCPF`; the runtime copies it to its temporary chain
-and returns the surviving near address in AX. Accordingly, HIR represents a
-callable dynamic-STRING result as `near*string`, while the local result place
-remains `string`. This is a QB runtime ownership rule, not a new MIR value kind
-or backend calling convention.
+A `BYREF STRING` formal needs a descriptor that lives through the whole callee.
+A dynamic STRING variable already has one. A literal, fixed string,
+concatenation or string-function result is only a runtime temporary, so it is
+first assigned with `B$SASS` to an owned descriptor, because `B$FLEN` may
+consume a temporary: `LEN` then `ASC` on a literal passed directly raises
+error 5 on the second call. In a procedure the descriptor is a managed local
+and counts in `BX`; at module level it is module data.
 
-The former `ents.bin missing` gate was caused by a stale uGL archive lacking
-ZIP support. With the corrected archive and complete link response, both the
-all-BC control and a fresh-`SYS` mixed build render five frames and exit. Their
-structural counters agree. Timing-dependent camera state differs between runs,
-so raw BMP identity is not used as evidence for this timed scenario.
+A dynamic STRING function result has two representations. The result variable
+is an owned four-byte descriptor in the runtime frame. The expression the
+caller sees is a near descriptor address: before `B$EXSA` releases the frame
+the callee passes the owned descriptor to `B$SCPF`, which copies it to the
+temporary chain and returns the surviving near address in AX. HIR types the
+callable's result `near*string` and the local result place `string`.
 
-Module `$STATIC` numeric arrays split storage from metadata. Their mutable
-elements live in `BC_DATA`, but their Microsoft `AD` descriptor lives in
-`BC_CN` and contains a relocated far pointer back to the element storage.
-This is a lifetime requirement, not cosmetic segment selection: BASIC startup
-clears `BC_DATA`. A descriptor emitted there is present in the linked EXE but
-is all zero by the time a procedure passes it to an external runtime.
+### Result conventions
 
-The implemented rank-one layout is the measured `ARRAY.INC` layout: far data
-pointer, next link, total size, rank byte, `FADF_STATIC` (`40h`), adjusted
-offset, element width, then `(count, lower-bound)` for each dimension. The HIR
-place names the separate read-only data object, while the relocation names the
-ordinary mutable array object. No array ABI fact is introduced into MIR or the
-backend.
-
-`'$DYNAMIC` is different in two independent ways. A bounded declaration owns
-a mutable descriptor in `BC_DATA` and executes `B$DDIM`; a later `REDIM`
-passes that same descriptor to `B$RDIM`. Its numeric/UDT element allocation is
-not in DGROUP. The VBDOS `MOD_TEX` listing loads its selector from `AD+2` and
-its adjusted offset from `AD+0Ah`, then adds the scaled subscript to that
-16-bit offset.
-`R_BSP` shows the same two fields for a numeric array formal; descriptor
-offset zero is not the adjusted data offset. QB semantics therefore resolves
-both owned and incoming numeric/UDT descriptors to the same split far-pointer
-view. `AD+0Ah` has already accounted for all declared lower bounds, so indexing
-must not read `AD+10h` and subtract the first lower bound again. HIR forms the
-16-bit byte offset first and concatenates it with the selector; it does not
-send the packed pointer through huge-pointer normalization. `/AH` arrays are a
-different, future descriptor/address policy and must not change this default
-memory-model rule.
-
-Left-to-right Pascal pushes also reverse physical formal layout: the first
-source parameter is furthest from the return address. HIR retains source order;
-the QB ABI adapter alone maps a Pascal formal to `6 +` the widths of all later
-formals (before the frontend's native-shell adjustment). CDECL remains
-right-to-left and therefore uses ascending offsets. The isolated
-`runtime-call-basic.bas` subtraction distinguishes the two orders and links
-against VBDOS successfully.
+- A public `LONG` result is returned in `DX:AX`, also under `/G3`.
+- A Pascal function returning `SINGLE` or `DOUBLE` takes a hidden near
+  destination pointer after its source formals, stores the rounded result
+  there, returns the pointer in AX, and counts its two bytes in `retf n`. HIR
+  keeps a floating result; only the adapter introduces the pointer.
+- `TIMER` is a zero-argument `B$TIMR` call whose AX result is a near pointer
+  to a runtime-owned `SINGLE`.
 
 ## Responsibility boundary
 
 | Layer | Responsible for | Must not do |
 |---|---|---|
 | QB semantic frontend | source types, storage class, parameter mode, bounds, evaluation order | choose registers or encodings |
-| HIR | preserve resolved typed meaning and logical effects | model p-code, OMF, or legacy register pairs |
-| QB HIR-to-MIR adapter | apply runtime ABI, build current memory/array/call facts, select allowed semantic expansion | add MIR kinds or machine operations |
-| existing MIR/optimizer | SSA and machine-independent optimization | know QB grammar or x86 registers |
-| existing lower/backend | real-mode encodings, register allocation, pointer lowering, OMF emission | reinterpret source semantics |
-
-Any required fact that cannot cross these existing boundaries is a frontend
-scope issue to diagnose, not permission to alter MIR or the backend.
+| HIR | resolved typed meaning and logical effects | model p-code, OMF, or legacy register pairs |
+| QB HIR-to-MIR adapter | runtime ABI, memory/array/call facts, allowed semantic expansion | add MIR kinds or machine operations |
+| MIR and optimizer | SSA and machine-independent optimization | know QB grammar or x86 registers |
+| lowering and backend | real-mode encodings, register allocation, pointer lowering, OMF emission | reinterpret source semantics |

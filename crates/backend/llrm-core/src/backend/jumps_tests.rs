@@ -1117,3 +1117,65 @@ fn test_a_tail_is_copied_where_the_jump_is_the_likelier_way() {
         "not copied where the jump is likelier"
     );
 }
+
+/// Every hoisted anchor solved the liveness of every value of the body afresh
+/// (a nest of 64 copied loops: a third of `lir jumps`); a value is live where
+/// its own reads and definitions say, so only the values a moved instruction
+/// names are solved. Held to the solve of all of them over random graphs of
+/// blocks with reads, definitions, delivered registers and phis.
+#[test]
+fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
+    for seed in 1..300u64 {
+        let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+        let mut next = move |most: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % most
+        };
+        let count = 3 + next(7) as usize;
+        let mut blocks: Vec<LirBlock> = Vec::new();
+        for at in 0..count as i64 {
+            let mut insns = Vec::new();
+            for step in 0..next(5) {
+                let defines = if next(2) == 0 { vec![next(6) as u32] } else { Vec::new() };
+                let uses = if next(3) > 0 { vec![next(6) as u32] } else { Vec::new() };
+                let mut one = Insn::new(at * 10 + step as i64, None, None, defines, uses);
+                if next(5) == 0 {
+                    one.requires = vec![(crate::model::ir::Held { value: next(6) as u32, width: 2 }, RegId::AX)];
+                }
+                insns.push(Arc::new(one));
+            }
+            let mut block = LirBlock::new(at, insns);
+            block.succ = (0..next(3)).map(|_| next(count as u64) as i64).collect();
+            block.succ.dedup();
+            blocks.push(block);
+        }
+        for at in 0..count {
+            if next(3) == 0 {
+                let from: Vec<i64> = (0..count as i64).filter(|_| next(2) == 0).collect();
+                blocks[at]
+                    .phis
+                    .push(
+                        crate::model::lir::Phi {
+                            result: 6 + next(2) as u32,
+                            incoming: from.iter().map(|f| (*f, next(6) as u32)).collect(),
+                        },
+                    );
+            }
+        }
+        let whole = _live_values(&blocks);
+        let some: BTreeSet<u32> = (0..9).filter(|_| next(2) == 0).collect();
+        let found = _live_in_of(&blocks, &some);
+        for value in &some {
+            for block in &blocks {
+                assert_eq!(
+                    found[value].contains(&block.at),
+                    whole.get(&block.at).is_some_and(|live| live.contains(value)),
+                    "seed {seed}: value {value} at block {}",
+                    block.at
+                );
+            }
+        }
+    }
+}

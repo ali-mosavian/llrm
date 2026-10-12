@@ -1,37 +1,100 @@
-//! Strong, flow-sensitive alias analysis: llrm-core's `analysis/alias.rs`,
-//! a port of `qbopt/analysis/alias.py`, adapted to the rich MIR. One
-//! vocabulary for every frontend: canonical objects, subobject byte
-//! slices, pointer provenance and restrict roots. Pointer facts flow
-//! through SSA phis and through exact pointer spill slots. Unknown stores
-//! kill spill facts; they never manufacture a disjointness proof.
+//! Strong, flow-sensitive alias analysis: what each pointer may point to, what
+//! escapes and when, and what each call reads and writes.
 //!
-//! The objects a function starts from are its own (`memory::object_of`)
-//! and its pointer parameters' (`Parameter`, a `noalias` one also a
-//! restrict root): old `pointer_seeds`. Every pointer-typed value is a
-//! pointer (old `pointer_values`). A `select` joins as a phi does. Integers
-//! carry no provenance, so a `ptrtoint` publishes its pointer, as LLVM
-//! counts it a capture; an `inttoptr` has no provenance.
+//! # How it works
+//! One vocabulary serves every frontend. A pointer's fact is a `Provenance`: a
+//! set of `Slice`s (a canonical object, a byte range of it, a stride and an
+//! access width) plus `restrict` roots. Objects are the function's own
+//! (`memory::object_of`: frame `alloca`s, globals), each pointer parameter's
+//! `Parameter` object (offset 0; a `noalias` parameter is also a restrict
+//! root, `seeds`) and, for a call whose callee returns `noalias`, a fresh
+//! `Allocation`. Unknown stores kill spill facts; they never manufacture a
+//! disjointness proof.
 //!
-//! What a call reads and writes, `calls_annotated`, is a side table here:
-//! the rich MIR's call carries no memory operands. Of the globals GlobalsAA
-//! tracks, a callee no summary describes reaches what `globalsaa` says. A
-//! body that may be replaced, weak or linkonce, is no summary.
+//! Value solve (`point_values`). Pointer facts flow forward over the CFG to a
+//! fixed point:
 //!
-//! Not ported: `named_bytes` (a cell's root is its object), the merge of a
-//! frontend's attached provenance with the derived one in
-//! `_resolved_reference` (nothing attaches one), and `annotated`'s outgoing
-//! stack excludes (no push area).
+//! - `alloca`, `bitcast`, `addrspacecast`, `getelementptr` give a fact from
+//!   their operand (`_direct`); a constant displacement shifts the slices, a
+//!   variable index widens to the whole object.
+//! - A `phi` or `select` joins its arms as a union; a pointer with an arm no
+//!   fact follows is `UNKNOWN`.
+//! - Pointers stored to an exact slot (a spill slot) are tracked per block in a
+//!   `CellMap` keyed by `CellKey`; a possibly overlapping store or an unmodeled
+//!   call write kills them; a join keeps a cell only if every parent holds it.
+//!   A load of a pointer reads the cell, else the union of every pointer ever
+//!   stored into the object.
+//! - A loop-carried fact is widened to whole objects (`_widened`) at a
+//!   natural-loop header so it settles, and a fact with more than
+//!   `MAX_FIELDS_FOR_FIELD_SENSITIVE` slices is also collapsed, as gcc and LLVM
+//!   do.
+//! - Integers carry no provenance: a `ptrtoint` publishes its pointer, as LLVM
+//!   counts it a capture, and an `inttoptr` has none.
 //!
-//! Tests skipped:
-//! `test_outgoing_argument_stack_does_not_kill_current_frame_values`
-//! (no push area),
-//! `test_pointer_fact_does_not_hide_a_conflicting_concrete_operand_object`
-//! (no attached provenance),
-//! `test_a_lane_form_slice_names_every_byte_it_covers` (`named_bytes`).
-//! `test_unknown_call_reaches_nonlocals_and_only_its_pointer_actual`
-//! drops its Python `repr` order, and
-//! `test_interprocedural_modref_reaches_the_call_operation`
-//! its `memory_complete` flag: a call's effect is a side table.
+//! ```text
+//!  %p = alloca [8 x i16]            %p -> {frame:%p [0,16)}
+//!  %q = gep %p, i16 2               %q -> {frame:%p [4,6)}
+//!  store ptr %q, ptr %slot          cell(%slot) = %q          (spill slot)
+//!  %r = load ptr, ptr %slot         %r -> {frame:%p [4,6)}    (exact slot)
+//!  call @unknown(ptr %q)            %q's object escapes from here on
+//! ```
+//!
+//! Escape solve (`points_to`, `escapes`). Over the value solve, a forward
+//! gen/kill dataflow finds what has been published, per instruction
+//! (`EscapedBefore`): objects handed to a call that keeps them (not
+//! `nocapture`; a summary's `captures` stand where the callee has one), stored
+//! somewhere other than a frame, returned, or converted to an integer something
+//! reads, closed over pointers stored in what was published and over the
+//! initializers of published globals. A frame object not escaped before an
+//! access cannot be reached by a pointer no fact follows
+//! (`EscapedBefore::apart`, LLVM's `EarliestEscapeInfo`).
+//!
+//! Summaries (`summaries`). Each body's `Summary` is the slices it reads and
+//! writes, whether it reads or writes unknown memory, its captured parameters,
+//! and the `!tbaa` types of its unplaced writes. It starts from the body's own
+//! accesses (`_direct_summary`) and adds each callee's summary instantiated at
+//! the call's actual arguments (`instantiated`), to a fixed point over the call
+//! graph in SCC order; a cycle is solved from nothing, so a recursive function
+//! that captures nothing proves so. A callee with a body that may be replaced
+//! (weak or linkonce) describes no call. A call to something with no summary
+//! reaches what its attributes allow (`_allowed`: `memory(...)`, `readnone`,
+//! ...): through each actual the objects it points to, elsewhere the nonlocal
+//! memory, what escaped before the call, and, of the globals
+//! [`crate::globalsaa`] tracks, those it names; unless `nocallback` it also
+//! does what the module's entry points do (`callbacks`). `summaries_updating`
+//! redoes only the bodies that changed and their readers.
+//!
+//! Call effects (`calls_annotated`). Each call gets an `Effect`: the `MemRef`s
+//! it loads and stores, instantiated through the actuals, and the bytes it
+//! fills (`initialized`: bytes written before any is read). It is a side table,
+//! because the rich MIR's call carries no memory operands.
+//!
+//! Access annotation (`annotated`). Each load and store gets its provenance;
+//! where a range bounds its index the slice narrows to the bytes the index can
+//! reach, using strides from `congruences` (a value's residue modulo a
+//! modulus). Far or fixed-address accesses name linear memory.
+//!
+//! # Provides
+//! `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`,
+//! `escaped_before`, `nonnull`), `seeds`, `summaries`, `calls_annotated`,
+//! `annotated`, `congruences`, `initialized`, `read_arguments`,
+//! `nonnull_by_definition`. Manager entries in [`crate::manager`]: `Pointers`,
+//! `PointValues`, `Annotated`, `CallEffects`, `Summaries`. Consumers:
+//! [`crate::memory`] (a `Unit`'s lazily built `annotated` and `points_to`),
+//! [`crate::memoryssa`] (`calls_annotated`), [`crate::avail`]
+//! (`EscapedBefore`), [`crate::observers`], [`crate::induction`]
+//! (`congruences`), [`crate::globalsaa`], [`crate::interprocedural`], and
+//! `gvn`, `promote`, `loadjoins` and `decide` in `llrm-transforms`.
+//!
+//! # Needs
+//! [`crate::globalsaa`] (tracked globals), [`crate::cfg::Shape`],
+//! [`crate::ranges`] and [`crate::consts`] (index intervals, constants),
+//! [`crate::cellmap`], [`crate::induction`] (strides), `llrm_mir::memory` for
+//! what attributes state.
+//!
+//! # See also
+//! LLVM `BasicAA`, `GlobalsAA`, `EarliestEscapeInfo`, `FunctionAttrs`
+//! `initializes`; GCC `tree-ssa-structalias.cc` (field sensitivity cap).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};

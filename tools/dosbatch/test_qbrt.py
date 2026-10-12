@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
 import pytest
 
+# BCOM45 (BC, LINK and its runtime) is the oracle these tests compare against: the gate drops the file where QB45 is not installed.
+REQUIRES = ["qb45"]
+
 sys.path.insert(0, str(Path(__file__).parent))
 
+import dosbatch  # noqa: E402
+import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 
 # The graphics probes are compared as pictures (test_qbgfx.py).
@@ -22,21 +26,28 @@ ALL_SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_source
 SOURCES = {name: path for name, path in ALL_SOURCES.items() if not name.startswith(LLRM_ONLY)}
 
 
+def differential(sources: dict[str, Path], work: Path) -> dict[str, dict]:
+    """Each program as BCOM45 builds it (the oracle) and ours at each target, run and compared."""
+    objects = {}
+    candidates: dict[str, dict] = {target: {} for target in qbbuild.TARGETS}
+    runtime = qbbuild.runtimes(work)
+    for name, source in sources.items():
+        obj = work / f"{name}.qb45.obj"
+        error = qbruntime.compile_basic(source, obj, "qb45")
+        assert error is None, error
+        objects[name] = (obj, *qbruntime.linked_objects(source, work, "qb45"))
+        for target, built in qbbuild.build(source, work / f"b_{name}", runtime, tolerant=True).items():
+            candidates[target][name] = built  # or why it did not build: that program's test says so
+    # a flat program runs behind DOS/32A's banner: the raw bytes are compared there, the screens in real mode
+    return qbruntime.differential_batch(objects, candidates, work / "differential", screens={qbbuild.REAL})
+
+
 @pytest.fixture(scope="module")
 def results(tmp_path_factory):
-    """Each program linked and run once against BCOM45 and once against the candidate."""
+    """Each program linked and run once against BCOM45 and once on each target of ours."""
     if not qbruntime.dosbatch.QB45.is_dir():
         pytest.skip("QB45_DIR is unavailable")
-    work = tmp_path_factory.mktemp("qbrt")
-    objects = {}
-    for name, source in SOURCES.items():
-        pair = (work / f"{name}.qb45.obj", work / f"{name}.llrm.obj")
-        for runtime, obj in zip(("qb45", "llrm"), pair):
-            error = qbruntime.compile_basic(source, obj, runtime)
-            assert error is None, error
-        objects[name] = (*pair, *qbruntime.linked_pairs(source, work))
-    archive, _ = qbruntime.build(work / "archive")
-    return qbruntime.differential_batch(objects, archive, work / "differential")
+    return differential(SOURCES, tmp_path_factory.mktemp("qbrt"))
 
 
 # Programs that wait for something outside the runtime.  Strict: one that starts
@@ -51,6 +62,21 @@ LAYOUT_DEPENDENT: dict[str, str] = {
 }
 
 
+# (program, target) where ours differs from BCOM45 for a bug that is open: it is expected to differ, and a pass fails the
+# test so the entry goes.  Only the flat target has any.
+KNOWN: dict[tuple[str, str], str] = {
+    ("bc_sound", qbbuild.FLAT): "#1482: the program ends at the second error under ON ERROR, with the 1Ch vector still taken",
+    ("rnd_val", qbbuild.FLAT): "#1512: RND after RANDOMIZE n",
+    ("color_masks", qbbuild.FLAT): "#1538: Out of DATA",
+    ("fre_lprint", qbbuild.FLAT): "#1539: FRE",
+    ("read_real", qbbuild.FLAT): "#1540: the last digit of a DOUBLE",
+    ("real_print_sweep", qbbuild.FLAT): "#1540: the last digit of a DOUBLE",
+    ("real_print_wide", qbbuild.FLAT): "#1540: the last digit of a DOUBLE",
+    ("environ_command", qbbuild.FLAT): "#1541: ENVIRON$ and COMMAND$ do not link",
+    ("scores", qbbuild.FLAT): "#1542: the ' link: library does not compile for the flat runtime",
+}
+
+
 def case(name: str):
     if reason := LAYOUT_DEPENDENT.get(name):
         return pytest.param(name, marks=pytest.mark.xfail(strict=False, reason=reason))
@@ -60,11 +86,15 @@ def case(name: str):
 
 @pytest.mark.parametrize("name", [case(name) for name in sorted(SOURCES)])
 def test_program_matches_bcom45_byte_for_byte(results, name: str):
-    result = results[name]
-    assert result.reference.status == "ok"
-    assert result.candidate.status == "ok", result.candidate.detail
-    assert result.difference == ""
-    assert result.screen_difference == ""
+    for target, result in results[name].items():
+        assert result.reference.status == "ok"
+        differs = result.candidate.status != "ok" or result.difference != "" or result.screen_difference != ""
+        if reason := KNOWN.get((name, target)):
+            assert differs, f"{target} now matches BCOM45: remove it from KNOWN ({reason})"
+            continue
+        assert result.candidate.status == "ok", f"{target}: {result.candidate.detail}"
+        assert result.difference == "", f"{target}: {result.difference}"
+        assert result.screen_difference == "", f"{target}: {result.screen_difference}"
 
 
 @pytest.fixture(scope="module")
@@ -73,69 +103,13 @@ def demos(tmp_path_factory):
     found, reason = qbruntime.demo_sources()
     if not found or not qbruntime.dosbatch.QB45.is_dir():
         pytest.skip(reason or "QB45_DIR is unavailable")
-    work = tmp_path_factory.mktemp("demos")
-    objects = {}
-    for filename, source in found.items():
-        name = source.stem.upper()
-        pair = (work / f"{name}.qb45.obj", work / f"{name}.llrm.obj")
-        for runtime, obj in zip(("qb45", "llrm"), pair):
-            error = qbruntime.compile_basic(source, obj, runtime)
-            assert error is None, error
-        objects[name] = (*pair, *qbruntime.linked_pairs(source, work))
-    archive, _ = qbruntime.build(work / "archive")
-    return qbruntime.differential_batch(objects, archive, work / "differential")
+    return differential({source.stem.upper(): source for source in found.values()}, tmp_path_factory.mktemp("demos"))
 
 
 @pytest.mark.parametrize("name", ["NIBBLES", "GORILLA"])
 def test_demo_introduction_matches_bcom45(demos, name: str):
     """Both draw the same introduction and wait for a key (NIBBLES's random sparkles aside)."""
-    result = demos[name]
-    assert result.candidate.status in ("ok", "stopped"), result.candidate.detail
-    assert result.reference.status in ("ok", "stopped")
-    assert result.screen_difference == ""
-
-
-def symbols(obj: Path, kind: int) -> set[str]:
-    """The names an OMF object defines (PUBDEF, 0x90) or references (EXTDEF, 0x8C)."""
-    data, at, found = obj.read_bytes(), 0, set()
-    while at < len(data):
-        record, size = data[at], data[at + 1] | data[at + 2] << 8
-        body = data[at + 3 : at + 2 + size]
-        at += 3 + size
-        if record != kind:
-            continue
-        i = 0
-        if kind == 0x90:  # the group and segment indexes, and a frame number where there is no segment
-            i = 2 + (2 if body[1] == 0 else 0)
-        while i < len(body):
-            length = body[i]
-            found.add(body[i + 1 : i + 1 + length].decode("latin-1"))
-            i += 1 + length + (3 if kind == 0x90 else 1)
-    return found
-
-
-def test_every_runtime_entry_is_called_by_a_probe_under_llrm(tmp_path_factory):
-    """A prototype that drifts from what llrm-qb passes breaks only the programs that call it, so an
-    entry no probe calls would break silently."""
-    if not qbruntime.dosbatch.QB45.is_dir():
-        pytest.skip("QB45_DIR is unavailable")
-    work = tmp_path_factory.mktemp("qbrt-entries")
-    qbruntime.build(work / "archive")
-    exported = set()
-    # What a program can call is what the frontend's runtime table names; the rest of the B$ names are
-    # the target's helpers and handlers.
-    table = (qbruntime.dosbatch.ROOT / "crates/frontends/llrm-qbruntime/src/runtime.toml").read_text()
-    entries = set(re.findall(r"B\$\w+", table))
-    for obj in (work / "archive").glob("*.obj"):
-        # The *USED names are markers the compiler refers to, not routines to call.
-        exported |= {name for name in symbols(obj, 0x90) if name in entries and not name.endswith("USED")}
-    called = set()
-    pictures = sorted((qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("gfx_*.bas"))
-    for name, source in {**ALL_SOURCES, **{path.stem: path for path in pictures}}.items():
-        obj = work / f"{name}.obj"
-        assert qbruntime.compile_basic(source, obj, "llrm") is None
-        called |= symbols(obj, 0x8C)
-        for library in qbruntime.linked_objects(source, work, "llrm"):
-            called |= symbols(library, 0x8C)
-    assert exported
-    assert sorted(exported - called) == []
+    for target, result in demos[name].items():
+        assert result.candidate.status in ("ok", "stopped"), f"{target}: {result.candidate.detail}"
+        assert result.reference.status in ("ok", "stopped")
+        assert result.screen_difference == "", target

@@ -63,30 +63,52 @@ def runtimes(work: Path) -> dict[str, dict[str, Path]]:
     return {REAL: runtime16(work / "real"), FLAT: qb32.build(work / "flat")}
 
 
-def build(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...] = ("-O2",)) -> dict[str, Built]:
-    """`source` compiled and jwlink-linked for each target against `objects` (from `runtimes`)."""
+def build(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...] = ("-O2",), tolerant: bool = False) -> dict[str, Built | str]:
+    """`source` compiled and jwlink-linked for each target against `objects` (from `runtimes`).  A target that does not build
+    raises BuildError, or with `tolerant` is the reason, as text, in its place."""
     work.mkdir(parents=True, exist_ok=True)
     built = {}
     for target in TARGETS:
-        obj, exe = work / f"{source.stem}.{target}.obj", work / f"{source.stem}.{target}.EXE"
-        extra = ["-march=i486", dosbatch.m_flag(FLAT)] if target == FLAT else []
-        done = dosbatch.subprocess.run(
-            [str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", *qbruntime.frontend_flags(source), *flags, *extra, "-o", str(obj)],
-            capture_output=True,
-            text=True,
-        )
-        if done.returncode != 0 or not obj.exists():
-            raise dosbatch.BuildError(f"{source.name} {target}: {(done.stderr or done.stdout).strip()[-400:]}")
-        if target == FLAT:
-            built[target] = Built(exe, tuple(qb32.link(obj, objects[target], exe, work)))
-        else:
-            link16(obj, objects[target], exe)
-            built[target] = Built(exe)
+        try:
+            built[target] = one_target(source, work, objects, flags, target)
+        except dosbatch.BuildError as error:
+            if not tolerant:
+                raise
+            built[target] = str(error)[-400:]
     return built
 
 
-def link16(program: Path, objects: dict[str, Path], exe: Path) -> None:
+def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...], target: str) -> Built:
+    """`source` for one target."""
+    obj, exe = work / f"{source.stem}.{target}.obj", work / f"{source.stem}.{target}.EXE"
+    extra = ["-march=i486", dosbatch.m_flag(FLAT)] if target == FLAT else []
+    done = dosbatch.subprocess.run(
+        [str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", *qbruntime.frontend_flags(source), *flags, *extra, "-o", str(obj)],
+        capture_output=True,
+        text=True,
+    )
+    if done.returncode != 0 or not obj.exists():
+        raise dosbatch.BuildError(f"{source.name} {target}: {(done.stderr or done.stdout).strip()[-400:]}")
+    libs = qbruntime.linked_objects(source, work, "llrm", tuple(extra[1:]) if target == FLAT else (), f".{target}")
+    if target == FLAT:
+        loaders = dosbatch.link_target(
+            qb32.TARGET, obj, exe, work, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target]))
+        )
+        return Built(exe, tuple(loaders))
+    link16(obj, objects[target], exe, libs)
+    return Built(exe)
+
+
+def needed(roots: tuple[Path, ...], objects: dict[str, Path]) -> list[Path]:
+    """The runtime objects the `roots` need, once each."""
+    chosen: list[Path] = []
+    for root in roots:
+        chosen += [one for one in qb32.closure(root, objects) if one not in chosen]
+    return chosen
+
+
+def link16(program: Path, objects: dict[str, Path], exe: Path, libs: tuple[Path, ...] = ()) -> None:
     command = [str(dosbatch.BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(exe)]
-    for one in (program, *qb32.closure(program, objects)):
+    for one in (program, *libs, *needed((program, *libs), objects)):
         command += ["file", str(one)]
     dosbatch._host(command)

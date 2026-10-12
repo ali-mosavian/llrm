@@ -1,23 +1,80 @@
-//! Which values are affine functions of a loop's counter, and how many
-//! trips a loop makes: llrm-core's `analysis/induction.rs`, adapted to the
-//! rich MIR. LLVM's ScalarEvolution add recurrences and trip counts, with
-//! InductionDescriptor's view of a counter. A width is in bits.
+//! Which values are affine functions of a loop's counter, and how many trips a
+//! loop makes.
 //!
-//! `Recurrence` is any such value as `pointer + start + step * trip`, with
-//! invariant symbols (`Scev`); `users` is what reads a loop's recurrences,
-//! as LLVM's IVUsers.
+//! # How it works
+//! Three layers, each built on the one before.
 //!
-//! A compare is the `icmp` a conditional `br` reads; a step is an `add` or
-//! a `sub` of a constant; a pointer offset is a `getelementptr`, scaled as
-//! the layout says. A counter tested narrower is a `trunc`, not a counter.
+//! Counters. `basics(unit, loop)` finds the header phis that one invariant or
+//! constant step (`add`, or `sub` of a constant) advances on every way round,
+//! from one start on every way in: an `Affine { value, start, step, header }`,
+//! `start + step * trip`. `pointers` finds pointer phis stepped by constant
+//! bytes through a `getelementptr`. `followers` finds header phis that advance
+//! by at most one a trip wherever a counter advances by one without wrapping.
 //!
-//! Dropped, with no rich-MIR counterpart: copies (`copied`, `definitions`,
-//! `transparent_aliases`, a replacement's aliases and copies); flags (the
-//! `or i, i` zero test, `test_only`, a step's flags read elsewhere); an
-//! arithmetic operand in memory (`unwritten`: a `load` is its own
-//! instruction, hoisted by LICM); the frontend's `integer_ranges` and the
-//! remembered `loop_trip_counts`, which nothing states here; and the
-//! occurrence accessors, an `InstId` being the identity.
+//! Trip counts. `counted(unit, loop, ..)` returns a `CountedLoop` proof for a
+//! loop with one latch and one conditional exit that goes on (`_control`: the
+//! branch is in the header or the latch, a latch that only jumps back being the
+//! end of its predecessor). The proof says the counter, its start and bound,
+//! the `IntPredicate` that continues the loop, whether it is tested before or
+//! after the trip (`posttested`) and on the stepped value (`stepped`), and how
+//! the count is reached (`Reach`):
+//!
+//! - `Distance`: `bound - start`, one more if the test is inclusive.
+//! - `Solved`: where `start + k * step == bound` modulo the width, as LLVM's
+//!   `howFarToZero`.
+//! - `Ceil`: an ordered test with a step above one that is promised not to
+//!   wrap, the distance divided by the step, rounded up (`howManyLessThans`).
+//!
+//! `count` is the exact count when constant, `maximum` bounds an unknown one,
+//! and `first` and `last` are the counter's signed values on the first and last
+//! trip, given only when nothing wraps. A symbolic count is built on demand by
+//! `trips` (and `exit_value`), which asks the caller to place each preheader
+//! operation. `counted_unless_stopped` also accepts a loop that leaves into a
+//! block that never returns (`stops`, using [`crate::noreturn::stranded`]);
+//! `counted_leaving` also other exits that go on. `exits` counts every exit of
+//! a single-latch loop, as LLVM's exit limits. The manager keeps `counted_all`
+//! as the `Counted` analysis, and a unit that carries it is read without a
+//! re-proof.
+//!
+//! Recurrences. A `Scev` is a polynomial in loop-invariant unknowns modulo a
+//! width (sums of `Monomial`s, at most 16 terms and degree 4), in one canonical
+//! form so equal values are equal. A `Recurrence` is `pointer + start + step *
+//! trip` with `Scev` start and step: LLVM's add recurrence. `recurrences` walks
+//! a loop and gives every value affine in a counter one; `users` lists the
+//! operands that read them, each as an `IvUse` of kind `Address`, `Compare` or
+//! `Basic` with the low bits it observes (LLVM's IVUsers).
+//!
+//! ```text
+//!   pre:    ...
+//!   header: %i = phi [0, pre], [%n, latch]     Affine{start 0, step 1}
+//!           %c = icmp slt %i, %len             test: Slt, bound %len
+//!           br %c, body, exit                  Reach::Distance
+//!   body:   %p = gep %a, %i                    Recurrence{pointer %a, step 4}
+//!   latch:  %n = add %i, 1                     trips = %len - 0
+//! ```
+//!
+//! Proofs of removal are `control_replacement` (the counter's phi is read only
+//! by its compare, its step and the exit's phis, so the loop's own control may
+//! go) and `zero_terminating_control` (a counter reaching its final value ends
+//! control and takes no value twice in the trip count).
+//!
+//! # Provides
+//! `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`,
+//! `Recurrence`, `Users`, `LoopFollowers` and the functions above. Manager
+//! entries: `Counted` (incremental) and `Followers`. Consumers:
+//! [`crate::ranges`], [`crate::alias`], [`crate::peelsize`],
+//! [`crate::difference`], [`crate::guards`], [`crate::floatfacts`], and in
+//! llrm-transforms `indvars`, `lsr`, `loopexit`, `peel`, `unroll`,
+//! `unroll_jam`, `rotate`, `decide`, `hoist`, `expand`, `exitfold`, `counting`,
+//! `window`, `fill`, `floatloop`.
+//!
+//! # Needs
+//! [`crate::consts`] (the registers the proofs read), [`crate::occurrence`],
+//! [`crate::noreturn`], [`crate::cfg`] (loops, dominance).
+//!
+//! # See also
+//! LLVM ScalarEvolution add recurrences and trip counts, InductionDescriptor,
+//! IVUsers.
 
 use std::cmp::max;
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,7 +83,7 @@ use llrm_mir::context::signed;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::TypeId;
-use llrm_support::hash::{HashSet, IndexMap};
+use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::cfg::{self, Around};
@@ -545,14 +602,22 @@ pub fn counted_renewed(
     // 6,449 Minstr, on 32 loops).
     let congruent = std::cell::OnceCell::new();
     let unit = &Unit { congruent: Some(&congruent), ..*unit };
-    shape
-        .loops
-        .iter()
-        .map(|loop_| match previous.get(&loop_.header) {
-            Some(proofs) if !dirty(loop_) => (loop_.header, proofs.clone()),
-            _ => (loop_.header, _counted_unless_stopped(unit, loop_, &registers, false, false)),
-        })
-        .collect()
+    // A proof asks the proofs of the loops around it (`_ranged`), each of which
+    // asks those around it: the outer loops first, so that each is asked of
+    // what is already found and not proved again (a nest of D loops proved
+    // the outermost 2^D times: 40% of the compile of fib at -O2 with header
+    // copy).
+    let mut order: Vec<&Loop> = shape.loops.iter().collect();
+    order.sort_by_key(|one| std::cmp::Reverse(one.body.len()));
+    let mut found = Counted::default();
+    for loop_ in order {
+        let proofs = match previous.get(&loop_.header) {
+            Some(proofs) if !dirty(loop_) => proofs.clone(),
+            _ => _counted_unless_stopped(&Unit { counted: Some(&found), ..*unit }, loop_, &registers, false, false),
+        };
+        found.insert(loop_.header, proofs);
+    }
+    shape.loops.iter().map(|loop_| (loop_.header, found[&loop_.header].clone())).collect()
 }
 
 /// `counted`, also for a loop that may leave into a block that never returns.
@@ -576,6 +641,15 @@ pub fn counted_unless_stopped(
             }
         }
     }
+    let local = std::cell::RefCell::new(Counted::default());
+    let unit = &match unit.proved {
+        Some(_) => *unit,
+        None => Unit { proved: Some(&local), ..*unit },
+    };
+    let cache = unit.proved.filter(|_| !inbounds && facts.is_none());
+    if let Some(found) = cache.and_then(|cache| cache.borrow().get(&loop_.header).cloned()) {
+        return found;
+    }
     let computed;
     let facts = match facts {
         Some(facts) => facts,
@@ -584,7 +658,11 @@ pub fn counted_unless_stopped(
             &*computed
         }
     };
-    _counted_unless_stopped(unit, loop_, facts, inbounds, false)
+    let proofs = _counted_unless_stopped(unit, loop_, facts, inbounds, false);
+    if let Some(cache) = cache {
+        cache.borrow_mut().insert(loop_.header, proofs.clone());
+    }
+    proofs
 }
 
 /// `counted_unless_stopped`, also for a loop that has other ways out that go
@@ -598,6 +676,11 @@ pub fn counted_leaving(
     facts: Option<&IndexMap<ValueId, Known>>,
     inbounds: bool,
 ) -> Vec<CountedLoop> {
+    let local = std::cell::RefCell::new(Counted::default());
+    let unit = &match unit.proved {
+        Some(_) => *unit,
+        None => Unit { proved: Some(&local), ..*unit },
+    };
     let computed;
     let facts = match facts {
         Some(facts) => facts,
@@ -1040,6 +1123,11 @@ pub fn exits(
     facts: Option<&IndexMap<ValueId, Known>>,
     inbounds: bool,
 ) -> Vec<ExitCount> {
+    let local = std::cell::RefCell::new(Counted::default());
+    let unit = &match unit.proved {
+        Some(_) => *unit,
+        None => Unit { proved: Some(&local), ..*unit },
+    };
     let function = unit.function;
     let computed;
     let facts = match facts {
@@ -1889,7 +1977,7 @@ pub fn gcd(
 /// The values a loop does not define.
 #[derive(Clone, Debug, Default)]
 pub struct Invariant {
-    defined: HashSet<ValueId>,
+    defined: llrm_mir::dense::IdSet<ValueId>,
 }
 
 impl Invariant {

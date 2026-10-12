@@ -1,29 +1,15 @@
-# Explicit integer overflow checks
+# Integer overflow, divide and wrap policy
 
-`--basic-semantics` now controls BC's explicit `INTO` checks, independently of
-`--bounds-checks`. Recognition and removal happen at the raise boundary; no
-MIR optimization pass recognizes a machine overflow instruction.
+For users choosing arithmetic policy and for frontend authors. Each policy is a gcc option; a frontend marks the semantics it implies.
 
-```asm
-; Before / BASIC compatibility       ; Native
-add ax,1                             add ax,1
-into                                 ; no explicit BASIC overflow trap
-```
+| Option | Meaning | Where it lands |
+|---|---|---|
+| `-fwrapv` | signed arithmetic wraps; the frontend states no no-overflow promise | C: `Unit::wrapv` ([`translate.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/frontends/llrm-c/src/translate.rs#L2562)) decides whether a signed add or multiply of 16 bits or more carries `nsw` |
+| `-ftrapv`, `-fsanitize=signed-integer-overflow` | signed overflow raises | QB: `checked_overflow`, BC's `/D` check |
+| `-fsanitize=integer-divide-by-zero` | division by zero raises in code | QB: `checked_division` |
+| `-fsanitize=stack` | procedure entry compares SP with the runtime's limit | `checked_stack` |
+| `-fsanitize=undefined` | bounds, divide and overflow together | not `stack` |
 
-Trace/break calls remain. Native arithmetic still follows the widths of its
-MIR values; removing an overflow observer is not permission to invent a wider
-result. This change is specifically about explicit INTO sites, not a claim
-that every numeric runtime operation is already replaced.
+`-fsanitize` is parsed in [`flags.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/flags.rs#L96). With `checked_overflow`, qbfront emits the error-6 raise for INTEGER and LONG `+ - *`, negation, and LONG to INTEGER narrowing ([`semantic.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/frontends/qbfront/src/semantic.rs#L7998)); without it the result wraps at its width. `checked_division` raises error 11 in code rather than through the processor's divide trap, whose statement the frontend cannot name.
 
-`tests/inputs/omf/regressions/ovfpol.bas` evaluates 32767+1 with an error handler that
-prints ERR and the error number. Its three `ovfpol-*.obj` fixtures are real
-QB/PDS/VBDOS output with each named primary configuration plus `/D /X`.
-BC and BASIC-compatible output print `ERR 6` and `DONE`. Native output prints
-`-32768` and `DONE`. All six optimized runs were verified; compiler logs report
-zero severe errors and linker logs no errors.
-
-
-HARR's debug builds still contain tracing/break barriers. Removing those
-barriers just to hoist descriptor loads would discard behavior; this change
-does not do that. Huge-array address lowering and checked loop preguards
-remain open work.
+A C frontend that sees no `-fwrapv` marks signed operations `nsw`, and `ranges`, `indvars` and `algebraic` may assume they do not wrap. A checked or wrapping operation carries no such mark, so no pass assumes more than the width allows.
