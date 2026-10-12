@@ -3,6 +3,12 @@
 //! Each phi becomes a copy at the end of every predecessor it names. A copy
 //! on a critical edge goes in a block of its own, labelled above physical
 //! offsets in a namespace per body entry. LLVM's `PHIElimination`.
+//!
+//! A copy on a branch's edge instead of in its predecessor is made only when
+//! it costs the target at least a tenth less (`EdgePrices::cheaper_on_edge`:
+//! the edge's chance times its copies and the `jmp`, against the copies every
+//! time), and never in a build for size: the odds are a guess, and an edge
+//! that wins by less costs a block and a jump the clocks do not show.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

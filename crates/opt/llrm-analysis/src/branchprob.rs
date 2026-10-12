@@ -4,9 +4,10 @@
 //!
 //! # How it works
 //! `estimated` gives every edge a probability and every block a frequency. A
-//! block with one successor takes 1. A block with several takes the first
-//! heuristic that tells its successors apart, in this order (`Heuristic`
-//! records which one fired):
+//! block with one successor takes 1. A block with several takes the first of
+//! heuristics 1 to 5 that tells its successors apart; where none does, a
+//! two-way branch combines the votes of 6 to 8 as GCC does (below), and a
+//! wider one takes the first of them (`Heuristic` records which one fired):
 //!
 //! 1. `Declared`: `!prof` `branch_weights` on the terminator, one per named
 //!    target, summed per distinct successor. Weights that do not name every
@@ -35,6 +36,14 @@
 //!    negative, 71% if null, 65% if another constant (`PRED_NEGATIVE_RETURN`,
 //!    `PRED_NULL_RETURN`, `PRED_CONST_RETURN`).
 //! 9. `Even`: equal weights.
+//!
+//! The votes of 6 to 8 are not first-match in GCC (`PRED_FLAG_FIRST_MATCH` is
+//! set on 1 to 5): `combine_predictions_for_bb` (predict.cc L1213, GCC 13.4)
+//! folds the probability each gives the first successor from 1/2 as
+//! Dempster-Shafer, `d = c*p + (1-c)*(1-p); c = c*p/d` (`combined`), so a zero
+//! test (62.5%) and a call on the same arm (33%) leave that arm at 45%. A call
+//! to the function itself is no vote where the other way returns at once (the
+//! base case of a recursion: the call is the work).
 //!
 //! Frequencies are relative to the entry's 1 (`propagated`). Blocks go in
 //! reverse postorder and a block's frequency is the sum over its non-back edges
