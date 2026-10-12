@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import shutil
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -30,7 +29,7 @@ def programs(tmp_path_factory):
     """Both builds of every probe, linked."""
     if not dosbatch.QB45.is_dir():
         pytest.skip("QB45_DIR is unavailable")
-    return qbplay.built_pairs({source.stem: source for source in PROBES}, tmp_path_factory.mktemp("qbgfx"))
+    return qbplay.built({source.stem: source for source in PROBES}, tmp_path_factory.mktemp("qbgfx"))
 
 
 # Probes that go back to text before they wait: nothing to see change but the clock.
@@ -38,17 +37,19 @@ ENDS_IN_TEXT = {"gfx_back_to_text"}
 TEXT_SECONDS = 6
 
 
-def screenshot(exe: Path, work: Path, text: bool, mode: int = GRAPHICS_MODE, settle: float = SETTLE_SECONDS) -> Path:
+def screenshot(exe: Path, work: Path, text: bool, mode: int = GRAPHICS_MODE, settle: float = SETTLE_SECONDS, files: tuple = ()) -> Path:
     work.mkdir(exist_ok=True)
     shutil.copy(exe, work / "P.EXE")
+    for beside in files:
+        shutil.copy(beside, work / Path(beside).name)
     session = qbplay.Session(work)
     try:
         session.send({"cmd": "dos_cmd", "command": "P.EXE"}, wait=False)
         if text:
-            time.sleep(TEXT_SECONDS)
+            session.wait_for("red")  # the last thing gfx_back_to_text prints
         else:
             session.wait_for_mode(mode)
-            time.sleep(settle)
+        session.settle(looks=5, stable_for=0.4)  # the probe has drawn and waits for a key: the picture stops changing
         session.shot(work / "shot.png")
     finally:
         session.close()
@@ -57,9 +58,11 @@ def screenshot(exe: Path, work: Path, text: bool, mode: int = GRAPHICS_MODE, set
 
 @pytest.mark.parametrize("name", [path.stem for path in PROBES])
 def test_graphics_probe_has_no_pixel_different_from_bcom45(programs, tmp_path, name: str):
-    reference, candidate = programs[name]
+    """BCOM45's picture is the oracle; ours, at m16 and at m32, must have no pixel that differs from it."""
+    reference, candidates = programs[name]
     mode = BIOS_MODES.get(name, GRAPHICS_MODE)
     settle = SETTLE.get(name, SETTLE_SECONDS)
     want = screenshot(reference, tmp_path / "ref", name in ENDS_IN_TEXT, mode, settle)
-    got = screenshot(candidate, tmp_path / "cand", name in ENDS_IN_TEXT, mode, settle)
-    assert qbplay.differing_pixels(want, got) == 0
+    for target, built in candidates.items():
+        got = screenshot(built.exe, tmp_path / f"cand{target}", name in ENDS_IN_TEXT, mode, settle, built.files)
+        assert qbplay.differing_pixels(want, got) == 0, f"m{target}"

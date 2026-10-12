@@ -16,6 +16,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import dosbatch  # noqa: E402
 import qb32  # noqa: E402
+import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 
 MODES = (0, 1, 2, 7, 8, 9, 12, 13)
@@ -45,8 +46,9 @@ def run(modes: list[int], work: Path, only: tuple[str, ...] = COLUMNS) -> dict[i
     """The segments of each mode, in milliseconds, for the builds named in `only`."""
     work.mkdir(parents=True, exist_ok=True)
     sources = {mode: source(mode, work) for mode in modes}
-    archive, _ = qbruntime.build(work / "archive_real") if "llrm real" in only else (None, None)
-    runtime32 = qb32.build(work / "rt_flat") if "llrm flat" in only else None
+    # ours, on both targets: the llrm runtime, linked by jwlink
+    objects = qbbuild.runtimes(work) if {"llrm real", "llrm flat"} & set(only) else {}
+    ours = {mode: qbbuild.build(path, work / f"b{mode}", objects) for mode, path in sources.items()} if objects else {}
     sides: dict[str, tuple[Path, list[dosbatch.Job]]] = {}
     jobs = []
     for mode, path in sources.items() if "BCOM45" in only else ():
@@ -59,21 +61,11 @@ def run(modes: list[int], work: Path, only: tuple[str, ...] = COLUMNS) -> dict[i
             raise SystemExit(f"qb45 g{mode}: {reason}")
         jobs.append(dosbatch.Job(f"Q{mode:02d}", "obj", obj, screen=True, budget_ms=BUDGET_MS))
     sides["llrm+BCOM45"] = (work / "run_qb45", jobs)
-    jobs = []
-    for mode, path in sources.items() if "llrm real" in only else ():
-        obj = work / f"g{mode}.real.obj"
-        if reason := qbruntime.compile_basic(path, obj, "llrm"):
-            raise SystemExit(f"real g{mode}: {reason}")
-        jobs.append(dosbatch.Job(f"L{mode:02d}", "obj", obj, runtime="llrmqb", runtime_file=archive, screen=True, budget_ms=BUDGET_MS))
-    sides["llrm real"] = (work / "run_real", jobs)
-    jobs = []
-    for mode, path in sources.items() if "llrm flat" in only else ():
-        obj, exe = work / f"g{mode}.flat.obj", work / f"g{mode}.flat.exe"
-        if reason := qb32.compile_basic(path, obj):
-            raise SystemExit(f"flat g{mode}: {reason}")
-        loaders = qb32.link(obj, runtime32, exe, work)
-        jobs.append(dosbatch.Job(f"M{mode:02d}", "exe", exe, files=loaders, screen=True, budget_ms=BUDGET_MS))
-    sides["llrm flat"] = (work / "run_flat", jobs)
+    for side, target, prefix in (("llrm real", qbbuild.REAL, "L"), ("llrm flat", qbbuild.FLAT, "M")):
+        sides[side] = (
+            work / ("run_real" if target == qbbuild.REAL else "run_flat"),
+            [dosbatch.Job(f"{prefix}{mode:02d}", "exe", ours[mode][target].exe, files=ours[mode][target].files, screen=True, budget_ms=BUDGET_MS) for mode in sources if side in only],
+        )
 
     found: dict[int, dict[str, dict[str, int]]] = {mode: {} for mode in modes}
     for side, (where, side_jobs) in sides.items():

@@ -10,13 +10,11 @@ from pathlib import Path
 
 import pytest
 
-# QB45's LIB.EXE builds the runtime library these tests link: the gate drops the file where QB45 is not installed.
-REQUIRES = ["qb45"]
-
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
 import qb32  # noqa: E402
+import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 
 SOURCE = dosbatch.ROOT / "tests" / "qbgfx" / "fill_ops.c"
@@ -50,8 +48,8 @@ def found(tmp_path_factory):
         pytest.skip("DOSBox-X is unavailable")
     work = tmp_path_factory.mktemp("gfxfill")
     jobs = []
-    qbruntime.build(work / "rt16")
-    objects16 = tuple(work / "rt16" / f"{name}.obj" for name in NEEDED)
+    runtime16 = qbbuild.runtime16(work / "rt16")
+    objects16 = tuple(runtime16[name] for name in NEEDED)
     obj16, exe16 = work / "f16.obj", work / "f16.exe"
     compile_c(dosbatch.REAL_MODE, dosbatch.c_include(dosbatch.REAL_MODE, work), qbruntime.platform_directory(), obj16)
     dosbatch.link_target(dosbatch.REAL_MODE, obj16, exe16, work, objects_after=objects16)
@@ -65,7 +63,6 @@ def found(tmp_path_factory):
     return {job.stem: (results[job.stem].status, qbruntime.raw_output(work / "run", job.stem).decode().strip()) for job in jobs}
 
 
-@pytest.mark.parametrize("stem", ["F16", "F32"])
-def test_every_box_fill_leaves_what_its_operation_says(found, stem: str):
-    status, printed = found[stem]
-    assert (status, printed) == ("ok", "0")
+def test_every_box_fill_leaves_what_its_operation_says(found):
+    for stem, (status, printed) in found.items():
+        assert (status, printed) == ("ok", "0"), stem

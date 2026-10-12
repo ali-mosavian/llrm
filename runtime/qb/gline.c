@@ -131,7 +131,8 @@ void gfx_line_between(int color, int style, int how)
     int solid = style == SOLID;
     GdFill fill;
 
-    pattern = (unsigned)style;
+    /* a style with bit 15 set is a negative INTEGER: widened, its high bits would fall into every turn of it */
+    pattern = (unsigned)style & 0xFFFF;
     phase = 0;
     gd_fill_select(&fill, c, OP_SET);
     if (how == FILLED_BOX) {
