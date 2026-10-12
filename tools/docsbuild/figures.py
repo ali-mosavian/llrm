@@ -968,7 +968,7 @@ svg.fig .nd{fill:var(--nd);stroke:var(--nds);stroke-width:1.5}svg.fig .gap{strok
 svg.fig .grp{fill:none;stroke:var(--nds);stroke-width:1.2;stroke-dasharray:6 4}
 svg.fig .lane{fill:var(--lane);stroke:none}svg.fig .grid{stroke:var(--grid);stroke-dasharray:2 4}
 svg.fig .e{fill:none;stroke:var(--line);stroke-width:1.5}svg.fig .e.dash{stroke-dasharray:5 4}svg.fig .e.bold{stroke-width:3}
-svg.fig .ah{fill:var(--line)}svg.fig .axis{stroke:var(--mu);fill:none}svg.fig .br{fill:none;stroke:var(--mu);stroke-width:1.5}
+svg.fig .head{fill:var(--line)}svg.fig .axis{stroke:var(--mu);fill:none}svg.fig .br{fill:none;stroke:var(--mu);stroke-width:1.5}
 svg.fig .mk{fill:var(--nd);stroke:var(--nds);stroke-width:1.5}svg.fig .gl{fill:none;stroke:var(--ink);stroke-width:1.6;stroke-linecap:round}
 svg.fig .f-a{fill:var(--a);stroke:var(--as)}svg.fig .f-b{fill:var(--b);stroke:var(--bs)}svg.fig .f-c{fill:var(--c);stroke:var(--cs)}svg.fig .f-d{fill:var(--d);stroke:var(--ds)}svg.fig .f-e{fill:var(--e);stroke:var(--es)}"""
 
@@ -1003,7 +1003,7 @@ def build(spec: str) -> Figure:
         f'<title id="{pre}-t">{_esc(title or default, quote=False)}</title>\n'
         f'<desc id="{pre}-d">{_esc(desc, quote=False)}</desc>\n<style>{CSS.replace(chr(10), '')}</style>\n'
         f'<defs><marker id="{pre}-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">'
-        f'<path class="ah" d="M0 0L10 5L0 10z"/></marker></defs>\n'
+        f'<path class="head" d="M0 0L10 5L0 10z"/></marker></defs>\n'
     )
     cv.fig.svg = head + "\n".join(cv.els) + "\n</svg>"
     cv.fig.viewbox = vb
