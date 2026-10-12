@@ -1,20 +1,20 @@
-reason = "new benches: STFT of a 64Ki-sample generated signal, single and fixed"
-blessed = "2026-10-11"
+reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
+blessed = "2026-10-12"
 
 [bas.O2]
-code_bytes = 1245
+code_bytes = 1267
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 872.2596
 
 [bas.Os]
-code_bytes = 1203
+code_bytes = 1206
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 871.4081
 
 [c.O2]
-code_bytes = 827
+code_bytes = 814
 data_bytes = 39
 bss_bytes = 5122
 kernel_ms = 325.0169
@@ -26,7 +26,7 @@ bss_bytes = 5122
 kernel_ms = 322.3455
 
 [nib.O2]
-code_bytes = 2401
+code_bytes = 2335
 data_bytes = 1089
 bss_bytes = 0
 kernel_ms = 646.3395

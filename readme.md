@@ -113,7 +113,7 @@ long dot(const int *a, const int *b, int n)
 ```asm
 _dot@3 proc far
 L0_0:
-    cmp cx, 0
+    test cx, cx
     jle L0_4294967297               ; [header copy] one guard for n <= 0, ahead of the prologue
 L0_17:
     push si                         ; a is in ax, b in dx, n in cx (regparm3); si and di are callee-saved
@@ -171,7 +171,7 @@ L0_0:
 L0_8:
     mov cx, dx
 L0_9:                               ; cx = min(len(a), len(b)): zip ends with the shorter slice,
-    cmp cx, 0                       ; decided once, not tested in the loop
+    test cx, cx                       ; decided once, not tested in the loop
     je L0_4294967297                ; [header copy] no elements: skip the loop
 L0_27:
     add cx, cx
@@ -250,7 +250,7 @@ L1_12:
     mov si, word ptr [si+10]        ; [hoisted] a's data offset
     mov fs, word ptr [bx+2]         ; [hoisted] fs = b's data segment
     mov di, word ptr [bx+10]        ; [hoisted] di = b's data offset
-    cmp ax, 0
+    test ax, ax
     jl L1_4294967297                ; [header copy] bound < 0: no iterations
 L1_44:
     add ax, ax                      ; ax = 2 * bound

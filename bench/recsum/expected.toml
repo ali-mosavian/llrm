@@ -1,10 +1,10 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
+blessed = "2026-10-12"
 
 [c.O2]
 instructions = 14009
 memory_operands = 0
-code_bytes = 53
+code_bytes = 60
 data_bytes = 0
 bss_bytes = 0
 

@@ -1,8 +1,8 @@
-reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
-blessed = "2026-10-11"
+reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
+blessed = "2026-10-12"
 
 [bas.O2]
-code_bytes = 5177
+code_bytes = 5230
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.1787
@@ -14,19 +14,19 @@ bss_bytes = 0
 kernel_ms = 542.2903
 
 [c.O2]
-code_bytes = 3156
+code_bytes = 3245
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 308.3818
 
 [c.Os]
-code_bytes = 2917
+code_bytes = 2902
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 310.146
 
 [nib.O2]
-code_bytes = 6269
+code_bytes = 6727
 data_bytes = 17198
 bss_bytes = 0
 kernel_ms = 392.1256

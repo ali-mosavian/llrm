@@ -1,10 +1,10 @@
-reason = "#1446: a phi whose arms are one address is that address, so the exit block's loads fold it (c -O2/-Os -2.5k instructions, -2 bytes). #1431: gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
+reason = "ch default (user decision 2026-10-12): the rotated loops expose m16 allocator register choice (copies and frame reloads per outer trip, queens +3072 avoidable, 3033 inherent); follow-up issue for the allocator"
 blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 144796
+instructions = 145095
 memory_operands = 62573
-code_bytes = 706
+code_bytes = 704
 data_bytes = 17
 bss_bytes = 0
 

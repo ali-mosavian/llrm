@@ -1,10 +1,10 @@
-reason = "x87: a float load one arithmetic instruction reads is its memory operand (nbody c -8%/-12.5% Os, fpbench -1.2%, parity/qbsp -6.8%, nbody_single nib -5.3%)"
-blessed = "2026-10-09"
+reason = "ch default (user decision 2026-10-12): fewer executed instructions (guard replaces the loop-entry test; sum_three bytes +3 to +8 for fewer instructions and memory operands)"
+blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 55209
+instructions = 55208
 memory_operands = 26031
-code_bytes = 904
+code_bytes = 902
 data_bytes = 31
 bss_bytes = 0
 
@@ -16,9 +16,9 @@ data_bytes = 31
 bss_bytes = 0
 
 [c.O2]
-instructions = 46459
+instructions = 46457
 memory_operands = 20844
-code_bytes = 464
+code_bytes = 461
 data_bytes = 16
 bss_bytes = 0
 

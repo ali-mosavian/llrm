@@ -1,10 +1,10 @@
-reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
-blessed = "2026-10-11"
+reason = "ch default (user decision 2026-10-12): the rotated loops expose m16 allocator register choice (copies and frame reloads per outer trip, queens +3072 avoidable, 3033 inherent); follow-up issue for the allocator"
+blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 17645
+instructions = 17635
 memory_operands = 7059
-code_bytes = 280
+code_bytes = 294
 data_bytes = 15
 bss_bytes = 0
 
@@ -16,9 +16,9 @@ data_bytes = 15
 bss_bytes = 0
 
 [c.O2]
-instructions = 12106
-memory_operands = 2727
-code_bytes = 146
+instructions = 12151
+memory_operands = 2901
+code_bytes = 194
 data_bytes = 0
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 12086
+instructions = 12141
 memory_operands = 2727
-code_bytes = 136
+code_bytes = 146
 data_bytes = 0
 bss_bytes = 0
 

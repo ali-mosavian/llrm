@@ -1,8 +1,8 @@
-reason = "a spill store ahead of a branch is made on the path that reads the slot, off the other (bintree -2.5% instructions, quicksort c -0.8%, queens -0.1%); bintree nib -Os +1 byte (the store's edge block)"
-blessed = "2026-10-09"
+reason = "ch default (user decision 2026-10-12): the rotated loops expose m16 allocator register choice (copies and frame reloads per outer trip, queens +3072 avoidable, 3033 inherent); follow-up issue for the allocator"
+blessed = "2026-10-12"
 
 [c.O2]
-instructions = 5408
+instructions = 5282
 memory_operands = 763
 code_bytes = 162
 data_bytes = 0

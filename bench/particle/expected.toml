@@ -1,13 +1,12 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "ch default (user decision 2026-10-12): fewer executed instructions (guard replaces the loop-entry test; sum_three bytes +3 to +8 for fewer instructions and memory operands)"
+blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 127550
+instructions = 127350
 memory_operands = 92918
-code_bytes = 484
+code_bytes = 480
 data_bytes = 121
 bss_bytes = 0
-kernel_ms = 1.7446
 
 [bas.Os]
 instructions = 127348

@@ -1,20 +1,20 @@
-reason = "coalesce takes loop blocks deepest first: stft_fixed nib -Os code 2560 -> 2558 bytes, stft_fixed c -O2 code vs tcpp 0.749x -> 0.750x"
-blessed = "2026-10-11"
+reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
+blessed = "2026-10-12"
 
 [bas.O2]
-code_bytes = 1807
+code_bytes = 1786
 data_bytes = 4677
 bss_bytes = 0
 kernel_ms = 1261.3363
 
 [bas.Os]
-code_bytes = 1716
+code_bytes = 1718
 data_bytes = 4677
 bss_bytes = 0
 kernel_ms = 1263.1091
 
 [c.O2]
-code_bytes = 1198
+code_bytes = 1200
 data_bytes = 15
 bss_bytes = 5122
 kernel_ms = 518.042
@@ -26,7 +26,7 @@ bss_bytes = 5122
 kernel_ms = 524.8372
 
 [nib.O2]
-code_bytes = 2548
+code_bytes = 2567
 data_bytes = 5149
 bss_bytes = 0
 kernel_ms = 810.366

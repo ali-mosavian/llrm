@@ -1,10 +1,10 @@
-reason = "coalesce takes loop blocks deepest first, the hottest copies first within a loop (x_binsearch -9.4% clocks m32): bintree c -O2 +2.6% instructions (the LCG chain in the loop takes a longer multiply sequence), qbsp/mandel/grep code bytes +0.3..1.9%, fib/crc/jpeg/grep/qbsp nib better"
-blessed = "2026-10-11"
+reason = "ch default (user decision 2026-10-12): the rotated loops expose m16 allocator register choice (copies and frame reloads per outer trip, queens +3072 avoidable, 3033 inherent); follow-up issue for the allocator"
+blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 308816
-memory_operands = 20126
-code_bytes = 312
+instructions = 316022
+memory_operands = 20866
+code_bytes = 324
 data_bytes = 13
 bss_bytes = 0
 
@@ -16,9 +16,9 @@ data_bytes = 13
 bss_bytes = 0
 
 [c.O2]
-instructions = 172712
+instructions = 176401
 memory_operands = 20125
-code_bytes = 171
+code_bytes = 187
 data_bytes = 0
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 171944
+instructions = 171176
 memory_operands = 20125
-code_bytes = 174
+code_bytes = 181
 data_bytes = 0
 bss_bytes = 0
 
