@@ -21,7 +21,13 @@ pub struct EdgePrices {
 }
 
 impl EdgePrices {
+    /// None for a build for size: a copy on its edge is a block of its own and
+    /// a jump, and the copy twice where the edge's other end is reached
+    /// another way, so the copies stay in their predecessor.
     pub fn of(cpu: &crate::backend::cpu::Profile) -> Option<Self> {
+        if cpu.size {
+            return None;
+        }
         Some(Self { copy: cpu.cost("mov_rr").ok()? as f64, jump: cpu.cost("jmp_short").ok()? as f64 })
     }
 
@@ -1387,5 +1393,17 @@ mod tests {
         assert_eq!(got.width, cell.width);
         assert_eq!(got.offset, cell.offset);
         assert_eq!(got.disp_width, cell.disp_width);
+    }
+
+    /// A build for size kept a loop's guard-exit constants on an edge of their
+    /// own (a block, a `jmp` and the copies twice: 4 bytes in 25 of 67 programs
+    /// once the guard's odds moved); only a build for speed prices an edge
+    /// copy.
+    #[test]
+    fn test_a_build_for_size_keeps_its_phi_copies_in_the_predecessor() {
+        use super::EdgePrices;
+        use crate::backend::cpu;
+        assert!(EdgePrices::of(cpu::tuned("486", false).unwrap()).is_some());
+        assert!(EdgePrices::of(cpu::tuned("486", true).unwrap()).is_none());
     }
 }
