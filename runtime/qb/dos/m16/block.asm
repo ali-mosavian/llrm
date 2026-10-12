@@ -157,7 +157,8 @@ B$FILLB         proc    public uses bx cx dx di es
                 ret
 B$FILLB         endp
 
-;; B$CMPB - compare `count` bytes at `first` and `second`, as unsigned.
+;; B$CMPB - compare `count` bytes at `first` and `second`, as signed bytes: BCOM45
+;; compares so (CHR$(200) < "a"), the flags of its REPE CMPSB read with JG and JL.
 ;;
 ;; By dwords until one differs, then the four bytes it is in.
 ;;
@@ -192,7 +193,7 @@ lastbytes:
                 mov     ax, 0
                 je      @F
                 mov     ax, 1
-                ja      @F
+                jg      @F
                 mov     ax, -1
 @@:
                 ret

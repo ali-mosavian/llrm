@@ -38,7 +38,7 @@ FOR n = 0 TO 40
     IF b > a THEN gt = gt + 1
   NEXT
 NEXT
-hi = (CHR$(200) > CHR$(100)) + (CHR$(100) < CHR$(200)) + (CHR$(127) < CHR$(128))
+hi = (CHR$(200) < CHR$(100)) + (CHR$(100) > CHR$(200)) + (CHR$(127) > CHR$(128))
 sz = LEN(SPACE$(37)) + LEN(STRING$(5, 66))
 PRINT lt; gt; eq; hi; sz; ASC(MID$(STRING$(41, 66), 41, 1)); ASC(RIGHT$(SPACE$(7), 1))
 a = "abcdefghijklmnopqrst"
