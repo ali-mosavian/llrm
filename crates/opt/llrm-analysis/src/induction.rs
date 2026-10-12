@@ -83,7 +83,7 @@ use llrm_mir::context::signed;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::TypeId;
-use llrm_support::hash::{HashSet, IndexMap};
+use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::cfg::{self, Around};
@@ -1977,7 +1977,7 @@ pub fn gcd(
 /// The values a loop does not define.
 #[derive(Clone, Debug, Default)]
 pub struct Invariant {
-    defined: HashSet<ValueId>,
+    defined: llrm_mir::dense::IdSet<ValueId>,
 }
 
 impl Invariant {

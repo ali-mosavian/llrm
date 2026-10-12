@@ -33,7 +33,7 @@ use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::passes::{Analyses, Analysis, FunctionPass, Outer, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, Analysis, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::HashMap;
@@ -199,12 +199,24 @@ impl spill::Spilled<Resident> for Residents {
 /// The whole function's block frequencies as lsr's prices read them: a loop's
 /// trips multiplied, ten where unproven (#203), a branch's cold arm less. A
 /// manager analysis, so a loop lsr looks at and leaves alone does not find them
-/// again (16 loops of a nest: a fifth of lsr).
+/// again (16 loops of a nest: a fifth of lsr), and a loop it changes does not
+/// either unless the change reaches what they read.
 pub struct Products;
 
+/// `Products`' result: the frequencies, and the trips they were worked out
+/// under.
+#[derive(Debug, PartialEq)]
+pub struct Frequencies {
+    pub by_block: Option<std::collections::BTreeMap<i64, i64>>,
+    trips: llrm_support::hash::IndexMap<i64, i64>,
+    /// The odds of each edge `by_block` was worked out from.
+    taken: std::collections::BTreeMap<(i64, i64), f64>,
+}
+
 impl Analysis for Products {
-    type Result = Option<std::collections::BTreeMap<i64, i64>>;
+    type Result = Frequencies;
     const NAME: &'static str = "loop-products";
+    const INCREMENTAL: bool = true;
 
     fn run(
         context: &Context,
@@ -222,15 +234,78 @@ impl Analysis for Products {
             .with_registers(&registers)
             .with_shape(&shape)
             .with_counted(&counted);
-        profit::_loop_products_by_branch_in(
+        let trips = profit::proven_trips(&view, &registers);
+        let (by_block, taken) =
+            profit::_products_with_odds_in(view.context, view.metadata, &outer.globals, function, &shape, Some(&trips))
+                .map_or((None, Default::default()), |(by_block, taken)| (Some(by_block), taken));
+        Frequencies { by_block, trips, taken }
+    }
+
+    /// They are worked out from the blocks and their edges, the loops, the
+    /// trips proven and the odds of each branch's edges, which read a call in
+    /// a block, the weights it declares and the compare it tests with what
+    /// that reads. A change that leaves these as they were (a counter another
+    /// counter was chosen for, an address strength-reduced) leaves them: only
+    /// the branches that read what it touched are weighed again.
+    fn update(
+        previous: &Self::Result,
+        changes: &[llrm_mir::module::Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let reach = llrm_analysis::manager::reached_by(function, changes)?;
+        if previous.by_block.is_none() || changes.iter().any(|one| _calls(function, one)) {
+            return None;
+        }
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let counted = analyses.get::<llrm_analysis::manager::Counted>(context, layout, function);
+        let view = memory::Unit::within(context, layout, function, &outer)
+            .with_registers(&registers)
+            .with_shape(&shape)
+            .with_counted(&counted);
+        let trips = profit::proven_trips(&view, &registers);
+        if trips != previous.trips {
+            return None;
+        }
+        let weighed = reach.conditions.iter().copied().collect::<Vec<_>>();
+        let by_header = profit::counted_by_header(&shape, Some(&trips))?;
+        let taken = llrm_analysis::branchprob::taken_from(
             view.context,
             view.metadata,
             &outer.globals,
             function,
             &shape,
-            Some(&profit::proven_trips(&view, &registers)),
-        )
+            &by_header,
+            &weighed,
+        );
+        let wanted = weighed.iter().map(|&at| cfg::id(at)).collect::<BTreeSet<_>>();
+        let same = previous.taken.iter().filter(|((from, _), _)| wanted.contains(from)).eq(taken.iter());
+        same.then(|| Frequencies { by_block: previous.by_block.clone(), trips, taken: previous.taken.clone() })
     }
+}
+
+/// Whether `change` touched a call: what a branch's weights read of a block.
+fn _calls(
+    function: &Function,
+    change: &llrm_mir::module::Change,
+) -> bool {
+    use llrm_mir::module::Change;
+    let inst = match *change {
+        Change::Inserted { inst, .. }
+        | Change::Erased { inst, .. }
+        | Change::Moved { inst, .. }
+        | Change::Rewritten(inst) => inst,
+        Change::Cloned { to, .. } => to,
+        _ => return true,
+    };
+    matches!(
+        function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    )
 }
 
 /// What the function as it stands gives every loop, each worked out when first
@@ -315,10 +390,11 @@ pub fn reduced(
             continue;
         }
         let saved = leaves.then(|| (unit.function.clone(), _function_price(unit, &*analyses, outer, &target)));
+        let graph = _graph(unit.function);
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
-        analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        analyses.invalidate(unit.function, &_kept_graph(unit.function, &graph));
         whole = Whole::default();
         if let Some((before, Some(kept))) = saved {
             dead::dead(unit.context, outer.callees(), unit.function);
@@ -334,6 +410,26 @@ pub fn reduced(
         changed = true;
     }
     changed
+}
+
+/// The blocks of `function` and where each goes.
+fn _graph(function: &Function) -> Vec<(BlockId, Vec<BlockId>)> {
+    function.layout().iter().map(|&block| (block, function.successors(block))).collect()
+}
+
+/// What an edit that left the blocks and their edges as `before` had them
+/// leaves true: the analyses that read the graph and nothing else. A loop
+/// counted onto another counter changes no edge, and a nest of N loops derived
+/// the dominance and loops of the whole function N times.
+fn _kept_graph(
+    function: &Function,
+    before: &[(BlockId, Vec<BlockId>)],
+) -> PreservedAnalyses {
+    if _graph(function) == before {
+        PreservedAnalyses::none().preserve::<cfg::Shape>().preserve::<Dominators>().preserve::<Loops>()
+    } else {
+        PreservedAnalyses::none()
+    }
 }
 
 /// What the function costs as it stands: `profit::motion_price` at the
@@ -533,7 +629,7 @@ fn _plan(
     loop_: &Loop,
     target: &Target,
     pressure: &spill::Pressure,
-    products: &mut dyn FnMut() -> std::rc::Rc<Option<std::collections::BTreeMap<i64, i64>>>,
+    products: &mut dyn FnMut() -> std::rc::Rc<Frequencies>,
     whole: &mut Whole,
 ) -> Option<Plan> {
     let function = view.function;
@@ -549,7 +645,7 @@ fn _plan(
     // lsr's prices were fitted to trips multiplied, ten where unproven (#203),
     // and a branch's cold arm less.
     let held = products();
-    let frequencies = held.as_ref().as_ref()?;
+    let frequencies = held.by_block.as_ref()?;
     let frequency = |block: BlockId| frequencies.get(&cfg::id(block)).copied().unwrap_or(1);
     let exit = _exit(view, loop_, &users);
     let nested = view
