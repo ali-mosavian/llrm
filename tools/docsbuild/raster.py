@@ -496,7 +496,8 @@ def draw(svg: str, indexed: bool) -> Canvas:
             pts = [((px - vx) * SCALE, (py - vy) * SCALE) for px, py in rounded_rect(x, y, w, h, r, max(4, int(r * SCALE / 3)))]
             _draw_shape(cv, [(pts, True)], st)
         elif tag == "circle":
-            cx, cy, r = (float(el.get(k)) for k in ("cx", "cy", "r"))
+            cx, cy = (float(el.get(f"c{axis}")) for axis in "xy")
+            r = float(el.get("r"))
             pts = [((cx + r * math.cos(a * math.tau / 32) - vx) * SCALE, (cy + r * math.sin(a * math.tau / 32) - vy) * SCALE) for a in range(32)]
             _draw_shape(cv, [(pts, True)], st)
         elif tag == "path":
