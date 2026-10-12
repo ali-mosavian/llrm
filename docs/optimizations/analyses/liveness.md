@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/liveness.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/liveness.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/liveness.rs sha256:26ba2a1e5378f3945f2b69087feab0d0949f91a45588cd34afe8272782194d0a -->
+<!-- src: crates/opt/llrm-analysis/src/liveness.rs sha256:544027117b30603dcab191d9a7148f6bafedd224175e2d4c817231e2f5cf8369 -->
 
 # liveness
 
@@ -26,6 +26,10 @@ size of the live sets, not blocks times values. gcc's
 `calculate_live_on_exit` and LLVM's `LiveVariables` walk from each use too.
 A phi's arm is live out of the predecessor it comes from, not in the phi's
 block.
+
+`live_of` follows only the values it is given (a manager analysis brought up
+to date for what a change named), from their reads, and gives their sets
+alone.
 
 ```text
    B0:  %a = ...                 %a live_out(B0), live_in(B1) (read in B1)

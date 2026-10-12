@@ -22,8 +22,9 @@
 //! A phi's arm is live out of the predecessor it comes from, not in the phi's
 //! block.
 //!
-//! `live_of` follows only the values it is given (a manager analysis brought up to
-//! date for what a change named), from their reads, and gives their sets alone.
+//! `live_of` follows only the values it is given (a manager analysis brought up
+//! to date for what a change named), from their reads, and gives their sets
+//! alone.
 //!
 //! ```text
 //!    B0:  %a = ...                 %a live_out(B0), live_in(B1) (read in B1)

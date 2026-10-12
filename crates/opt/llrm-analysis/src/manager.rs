@@ -968,7 +968,9 @@ impl Analysis for Registers {
                 | Change::Moved { inst, .. }
                 | Change::Rewritten(inst) => inst,
                 Change::Cloned { to, .. } => to,
-                Change::BlockCreated(_) | Change::BlockErased(_) => continue,
+                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Operand { .. } | Change::Operands { .. } => {
+                    continue;
+                }
             };
             if let Some(result) = function.instruction(inst).result
                 && touched.insert(result)
