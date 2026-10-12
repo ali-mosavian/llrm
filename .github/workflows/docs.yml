@@ -1,6 +1,6 @@
 # The documentation site (tools/docsbuild), on every change that can alter it.
 #
-#   build   passdocs gap check, build.py --check (figures, links, constructs), the site as a Pages artifact.
+#   build   passdocs gap check, build.py --check (generated docs up to date, figures, links, constructs), the site as a Pages artifact.
 #   deploy  main only, and only when the repository variable DOCS_PAGES is 'true' (Settings, Pages: source GitHub Actions).
 #           Otherwise the run summary says why it was skipped; nothing fails.
 name: docs
@@ -38,8 +38,6 @@ jobs:
       - run: python3 tools/passdocs.py --check --require crates/opt/llrm-analysis/src
       - run: python3 tools/docsbuild/build.py --check
       - run: python3 tools/docsbuild/build.py --out site
-        env:
-          GITHUB_SHA: ${{ github.sha }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
