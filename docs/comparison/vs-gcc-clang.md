@@ -45,7 +45,7 @@ For each program, the work llrm's `m32` object does against gcc's and clang's at
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/table.py                      # the tables, from $VSGCC_WORK/results.jsonl
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/loops.py sieve llrm gccO2 clangO2   # hottest loop, side by side
 
-Variants are `llrm` (that is `-O2`), `llrmO1`, `llrmO3`, `llrmOs` and `gccO1 gccO2 gccO3 gccOs`, `clangO1 ...`. `$VSGCC_WORK` (default `~/scratch/vsgcc-work`) holds products and results. Needs gcc, clang with 32-bit support, GNU `ld`, `uv`. Usage and layout: [vsgcc readme](../../crates/target/llrm-x86-m32/vsgcc/readme.md).
+Variants are `llrm` (that is `-O2`), `llrmO1`, `llrmO3`, `llrmOs` and `gccO1 gccO2 gccO3 gccOs`, `clangO1 ...`. `$VSGCC_WORK` (default `$HOME/scratch/vsgcc-work`, set in `run.sh`) holds products and results. Needs gcc, clang with 32-bit support, GNU `ld`, `uv`. Usage and layout: [vsgcc readme](../../crates/target/llrm-x86-m32/vsgcc/readme.md).
 
 Flags, from [build.sh](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-x86-m32/vsgcc/build.sh#L22):
 
