@@ -1,40 +1,68 @@
-//! What a reference can reach, and whether two can meet: llrm-core's
-//! `analysis/regions.rs`, adapted to the rich MIR's accesses.
+//! Whether two memory references can meet: `may_alias`, `overlapping`, and the
+//! indexes that find the candidates without comparing every pair.
 //!
-//! Kept: `may_alias` and `overlapping` (Python `mir.overlapping`), with
-//! `typed_apart`, the index `narrowed`, foreign memory, the displacement
-//! compare off one base, and the overlap buckets a `CellMap` indexes by.
+//! # How it works
+//! `overlapping(one, other, known, other_known, program)` asks whether a write
+//! through `other` could land on `one`, in this order:
 //!
-//! Skipped, with no rich MIR counterpart: the region lattice (`RegionSet`,
-//! `Region`, `Span`, `regions`, `addressed`, `addresses`, `RegionLayout`'s
-//! COMMON segments and landmarks, `provenance`, `_reached`, `_without`,
-//! `_object`) and the holes it subtracted (`beyond`, `excludes`, `within`).
-//! It placed an x86 operand in the stack, DGROUP or a linked segment where
-//! no provenance named its object; a rich MIR access has a root, and
-//! `alias::points_to` gives every pointer an object, `Unknown` at worst, so
-//! provenance alone answers. Where an access carries none, nothing proves
-//! it apart. `allocation` (a descriptor's object) is the `!tbaa` type
-//! "allocation" now, which `typed_apart` reads.
+//! 1. `typed_apart`: accesses of different `!tbaa` types of one root, neither
+//!    type an ancestor of the other, cannot alias, unless the address analysis
+//!    already has them at overlapping bytes (`provably_overlap`) or at one
+//!    start (`same_typed_start`). It is asked as LLVM's TypeBasedAA is, only to
+//!    separate what addresses cannot.
+//! 2. `foreign_apart`: one reference is in an address space that holds program
+//!    data and the other, by its selector's range, lands wholly in linear
+//!    memory the target keeps no program data in (`foreign`).
+//! 3. Both with provenance: `_displaced` (two references off one root and one
+//!    scaled index are disjoint by displacement, LLVM's constant-offset GEP
+//!    compare) if they share a frame, else `may_alias`.
+//! 4. Otherwise a reference that only a named object reaches (`_unescaped`) is
+//!    not reached by one through a pointer value. With range facts, an indexed
+//!    reference is first widened to the hull of its range (`ranges::covering`),
+//!    then `_displaced` again, then `may_alias`.
 //!
-//! Which linear memory holds no program data is the target's fact, and
-//! which address spaces hold program data the segment layout's: both the
-//! program's, which the pass manager hands analyses as `Outer::program`.
+//! `may_alias` refines each reference to the bytes it may name under its own
+//! interval facts, `foreign` linear bytes or its provenance `narrowed`: an
+//! indexed access into its own object with a range fact on the index names
+//! `[disp + scale * low, disp + scale * high]` plus the access width, when that
+//! lies inside the object's extent. Refining that cannot be expressed in
+//! `Slice` endpoints is a `RegionError`, and the caller treats it as overlap.
+//! The two refined provenances then decide by `Provenance::intersects`. A
+//! reference with no provenance is not proven apart from anything.
 //!
-//! Tests skipped, the lattice's:
-//! `hierarchy_coarse_dgroup_meets_linked_static_but_stack_does_not`,
-//! `one_hole_covers_but_the_union_of_holes_does_not`,
-//! `layout_makes_owned_segment_private_but_shared_segment_linked`,
-//! `indexed_access_stays_in_its_segment_and_landmarks_bound_physical_indexing`,
-//! `beyond_and_excludes_remove_only_the_named_bytes`,
-//! `overlapping_reports_unrepresentable_region_endpoints`,
-//! `empty_within_falls_through_to_the_address_span`,
-//! `endpoint_overflow_refuses_to_narrow`, and all of `regions_alias_tests.rs`
-//! (x86 addresses and an OMF object's landmarks). Skipped,
-//! `overlapping_pointers_skip_covering_and_same_base_arithmetic`: no access
-//! is a bare pointer with a spelled address. Skipped,
-//! `narrowing_reports_invalid_and_unrepresentable_python_slices`' invalid
-//! half: an interval whose low passes its high is no rich MIR fact to hand
-//! it, the unrepresentable half is ported.
+//! ```text
+//!    A: p + 4 (width 4)     B: p + 8 (width 4)     one frame (p, no index)
+//!    A = [4, 8), B = [8, 12)  ->  _displaced: disjoint, no object reasoning
+//! ```
+//!
+//! Finding candidates. A `CellMap` indexes cells by `OverlapBucket`: an
+//! interned (object, frame, alias class) shape. `overlap_buckets` picks, for a
+//! write, only the buckets that can hold a cell `overlapping` does not rule
+//! out: objectless ones, the write's frame, its objects, and any class that may
+//! alias. `displaced_buckets` and `displaced_span` serve a write at fixed
+//! displacements in a frame. `Index` does the same for lists of references:
+//! `near` returns the entries that name an object the reference may alias,
+//! every addressed one if the reference names an addressed object, and every
+//! entry without provenance; more than needed, never fewer.
+//!
+//! Which linear memory holds no program data is the target's fact, and which
+//! address spaces hold program data the segment layout's; both come from the
+//! program the manager hands analyses as `Outer::program`.
+//!
+//! # Provides
+//! `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`,
+//! `fixed_provenance`, the bucket functions, `displaced_span`, `Index`.
+//! Consumers: [`crate::alias`], [`crate::memoryssa`], [`crate::avail`],
+//! [`crate::consts`], [`crate::floatfacts`], [`crate::cellmap`], and in
+//! llrm-transforms `promote`, `transform`, `homes`, `loopmotion`, `fill`,
+//! `floatloop`.
+//!
+//! # Needs
+//! [`crate::memory`] (`MemRef`, `Provenance`, alias classes) and
+//! [`crate::ranges`] (`Interval`, `covering`).
+//!
+//! # See also
+//! LLVM BasicAA's constant-offset GEP comparison and TypeBasedAA.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};

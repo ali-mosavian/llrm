@@ -1,10 +1,22 @@
-//! MIR occurrence keys, adapted from llrm-core's `analysis/occurrence.rs`.
+//! The instructions of a function as occurrences: operations and phis, apart.
 //!
-//! The old MIR's operations were values, so an immutable body view supplied
-//! their identity as a block and operation ordinal.  A rich MIR instruction
-//! has its own identity, its [`InstId`], which outlives rewrites; it is the
-//! key here, and `OpOccurrence` and `PhiOccurrence` have no counterpart.
-//! Operations and phis stay separate walks, as the old MIR kept them.
+//! # How it works
+//! An [`InstId`] names an instruction and outlives rewrites, so it is the key
+//! of an occurrence. Two equal instructions have different ids. `operations`
+//! yields every non-phi instruction in layout order with its block;
+//! `operations_in` yields those of a set of blocks (numbered as `cfg::id`) in
+//! block-id order, so walking a loop costs the loop, not the function; `phis`
+//! yields the phis in layout order. Operations and phis are separate walks.
+//!
+//! ```text
+//!  block b2:  %p = phi ...   <- phis()
+//!             %y = add ...   <- operations()
+//!             ret %y         <- operations()
+//! ```
+//!
+//! # Provides
+//! The three walks. Consumers: [`crate::induction`], [`crate::ssa`], and the
+//! `unswitch` and `loopexit` passes in llrm-transforms.
 
 use llrm_mir::module::{BlockId, Function, InstId, Instruction};
 use llrm_mir::opcode::Opcode;

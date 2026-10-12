@@ -1,43 +1,64 @@
-//! Which values are known, and what they are: llrm-core's
-//! `analysis/consts.rs`, a port of `qbopt/analysis/consts.py`, adapted to
-//! the rich MIR. A fact is a width as well as a number -- "the low `width`
-//! bits of this value are `n`" -- and an operation only folds where the
-//! widths agree. A width is in bits; a memory cell's in bytes.
+//! Which values are known, and what they are: integer constant propagation and
+//! folding, with memory read through MemorySSA.
 //!
-//! What memory holds is solved alongside, when the caller says what each
-//! call writes (`Calls`): a cell is a fixed address in an object, its root
-//! an alloca or a global, so its object is its root's.
+//! # How it works
+//! A fact is `Known { n, width }`: the low `width` bits of the value are `n`,
+//! nothing is said above them. An operation folds only where the widths
+//! agree (`_result`): integer `add`, `sub`, `mul`, `and`, `or`, `xor`, shifts,
+//! divisions that do not fault (`folds`), `sext`, `zext`, `trunc`, `icmp`
+//! (`holds`), `x ^ x` and `x - x`, the fixed-point intrinsics, and a pointer
+//! compare of two addresses of one global. A width is in bits; a memory
+//! cell's, in bytes.
 //!
-//! Old operations with no rich MIR counterpart, and what used them: a
-//! read-modify-write of a cell (`updated`), a carry between halves
-//! (`AddCarry`, `_carry`), `Concat`, `Smulhi`, a memory operand of an
-//! arithmetic operation (a `load` is its own instruction), the known values
-//! a call leaves in memory (`memory_values`), and the constants memory held
-//! at program start (`body.initial`: a rich MIR function is no program's
-//! start). `named_bytes` found which object an address was in; a cell's
-//! root is its object. `reusing`, `_reuse` and `shared_cells` cached a
-//! solve by body address, which a function changed in place no longer
-//! keeps: `manager` caches through the pass manager instead.
+//! Registers. `known` runs a fixed point over the body in layout order: each
+//! integer result not yet known is folded from the facts so far, and a phi
+//! is known where every incoming value is known and they agree. It then
+//! hands the facts to [`crate::constant_cycles`], which settles the phis whose
+//! incoming values depend on each other around a loop.
 //!
-//! Tests skipped:
-//! `test_constant_analysis_scope_reuses_an_unchanged_body_without_sharing_mutation`
-//! (`reusing`); `test_pointer_displacement_constants_preserve_order_and_width`,
-//! `test_constant_subtraction_preserves_operand_order`,
-//! `test_constant_operand_keeps_its_memory_address_dependency`,
-//! `test_a_known_factor_becomes_a_multiply_operand` and
-//! `test_signed_widening_produces_a_whole_long_constant`'s folding half
-//! (optimize/transform's, whose port they wait for);
-//! `test_recovered_argument_constants` (`Concat`);
-//! `test_flags_do_not_stop_an_operation_being_folded` (a flags result);
-//! BC object corpora: `test_relocated_descriptor_address_is_not_integer_zero`,
-//! `test_folded_extraction_has_no_implicit_machine_result`,
-//! `test_a_fact_never_claims_more_bytes_than_the_instruction_wrote`,
-//! `test_every_known_value_is_defined_by_an_operation_that_computes_it`,
-//! `test_a_comparison_result_folds_to_basics_own_true`,
-//! `test_nothing_is_folded_through_a_phi`.
-//! `test_a_call_reaching_nonlocal_keeps_an_uncaptured_static_constant` is
-//! ported with a frame object, which a callee's nonlocal reach misses: no
-//! rich MIR global is uncaptured.
+//! Memory. `known_walked` starts from the register facts and, for each load,
+//! asks [`crate::memoryssa`] which stores reach it (`load_providers`). If
+//! they all put the same number in the bytes the load reads, so does the
+//! load (`provided`; a store may serve a load of another type, or several
+//! stores serve one byte at a time). No state is held per block, so the cost
+//! is the walks, not cells times joins. A load whose index only memory taught
+//! is asked again with the index placed, up to four rounds. `known_walked_over`
+//! adds what counted float loops leave in memory at their exits
+//! ([`crate::floatfacts`]).
+//!
+//! ```text
+//!    store i16 7, @g          known:        %a is not known
+//!    %a = load i16, @g        known_walked: %a = 7, %b = 8
+//!    %b = add i16 %a, 1       (the walk finds the store)
+//! ```
+//!
+//! The caller states what each call writes (`Calls`, from
+//! `alias::calls_annotated`); a call not listed writes what
+//! `memory::unmodeled_write` says. A far store through a segment selector
+//! nothing yet resolves is taken to write no program object, and the solve is
+//! made again without any such selector that did not resolve to a number.
+//!
+//! `memory_queries` and `_MemoryQueries` answer alias questions about the cells
+//! of one solved epoch, each cell carrying its object, for passes that walk
+//! instructions with a fact table ([`crate::cellmap`] indexes the cells by
+//! overlap bucket).
+//!
+//! # Provides
+//! `Known`, `known` (registers, cached as [`crate::manager::Registers`]),
+//! `known_walked` and `known_walked_over` (memory; cached as
+//! [`crate::manager::ThroughMemory`]), `memory_queries`, `holds`, `folds`.
+//! Consumers: `gvn`, `algebraic`, `fold`, `decide`, `unswitch`, `floatloop` and
+//! `interprocedural` in `llrm-transforms`, the backend's `isel`, and most
+//! analyses of this crate.
+//!
+//! # Needs
+//! [`crate::memoryssa`], [`crate::alias`] (the call table), [`crate::ranges`],
+//! [`crate::regions`], [`crate::cellmap`], [`crate::constant_cycles`].
+//!
+//! # See also
+//! LLVM `SCCP`/`ConstantFolding`; GCC FRE walks the same virtual use-def chain
+//! for a load's value (`vn_reference_lookup`). `LLRM_CHECK_CYCLES` in
+//! [`crate::constant_cycles`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

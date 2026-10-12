@@ -152,4 +152,4 @@ address is the backend's, and its choice decides some of these.
 
 `lsr` and `indvars` (`-fstrength-reduce`), `window`, `gepoffset` and `addresssink` run at -O1 and up. gcc's ivopts search bounds apply at every level but -Omax, which searches without them ([levels](../reference/levels.md)). `-fno-strength-reduce` turns the group off, `-fno-move-loop-invariants` turns `hoist` off. `--dump DIR` writes the module after `lsr`, and `llrm-mir --ivs FILE` prints how many of each innermost loop's header phis ScalarEvolution proves to step by a nonzero amount.
 
-Catalog: [passes](passes.md). Analyses: [analyses](analyses.md) (`induction`, `guards`).
+Catalog: [passes](passes.md). Analyses: [analyses](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src) (`induction`, `guards`).

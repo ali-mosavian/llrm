@@ -1,6 +1,6 @@
 # MIR passes
 
-For contributors to `crates/opt/llrm-transforms`: the order the MIR optimizer runs its passes in, and what each file there does. Which analysis a pass reads is named in its entry and described in [analyses](analyses.md); what runs after MIR is in [backend](backend.md); what each `-O` level turns on is in [levels](../reference/levels.md).
+For contributors to `crates/opt/llrm-transforms`: the order the MIR optimizer runs its passes in, and what each file there does. Which analysis a pass reads is named in its entry and described in [analyses](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src); what runs after MIR is in [backend](backend.md); what each `-O` level turns on is in [levels](../reference/levels.md).
 
 ## How a body is optimized
 

@@ -1,16 +1,41 @@
-//! Adapted from llrm-core's `analysis/effects.rs`: conservative memory
-//! effects not described by an instruction's own operands.
+//! What a call may do to memory its operands do not name, from LLVM's call
+//! attributes.
 //!
-//! A load or store names its bytes. A call states the rest as LLVM does,
-//! with `memory(...)`, `readnone`, `readonly` or `writeonly` at the call site
-//! and on its callee, as `llrm_mir::memory` reads them, where the old code read
-//! the raise's `memory_complete` mark. A volatile load or store names its bytes
-//! too.
+//! # How it works
+//! A load or store names its bytes, so it has no effect beyond them. A call
+//! states the rest as LLVM does: `memory(...)`, `readnone`, `readonly` or
+//! `writeonly` at the call site and on its callee, read through
+//! `llrm_mir::memory::stated_at`. The effect is what both the site and the
+//! callee allow (`call_effects`: reads and writes are each `site && callee`); a
+//! callee with no body or declaration known is any effect. A volatile access
+//! names its bytes too.
 //!
-//! Division is C's and floating exceptions are the machine's, so the old
-//! list of trapping kinds and the body-wide `handles_errors` have no MIR
-//! meaning: a raise reaches a handler in this body only along an `invoke`'s
-//! unwind edge, and `exposes_memory` asks for that edge.
+//! ```text
+//!  call @f(p) memory(argmem: readwrite)
+//!    call(...)            reads, writes    argmem counts: p's bytes
+//!    unmodeled_read/write false, false     argmem excluded: p names them
+//! ```
+//!
+//! The "unmodeled" queries leave out the `argmem` location, because arguments
+//! are accessed through bytes the pointer names; what is left is memory no
+//! operand names. `exposes_memory` asks whether a raise can reach a handler in
+//! this body, which reads memory: only an `invoke` not stated `nounwind`
+//! (along its unwind edge).
+//!
+//! # Provides
+//! `call`, `touches_memory`, `writes_memory`, `unmodeled_read`,
+//! `unmodeled_write`, `exposes_memory`, `states`, and the `Declarations` type
+//! (every global as its declaration, a module analysis, since a pass holds its
+//! own function mutably while asking about the others). Consumers include
+//! [`crate::memory`], [`crate::noreturn`], [`crate::branchprob`],
+//! [`crate::interprocedural`] and `profit` in `llrm-transforms` (grep
+//! `effects::`).
+//!
+//! # Needs
+//! `llrm_mir::memory` and `llrm_mir::facts` for what the attributes mean.
+//!
+//! # See also
+//! LLVM `MemoryEffects`, `FunctionAttrs`.
 
 use llrm_mir::Context;
 use llrm_mir::facts::{Fact, Facts};

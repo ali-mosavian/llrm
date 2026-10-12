@@ -51,4 +51,4 @@ A float computation is numbered like an integer one. What is exact is a separate
 
 `--dump DIR` writes the module after `gvn` (`N/NNN-gvn.ll`). gvn has no `LLRM_DEBUG` channel; compare the dump before and after. Tests: `gvn_tests.rs`, `loadjoins_tests.rs`.
 
-Catalog: [passes](passes.md). Analyses it reads: [analyses](analyses.md).
+Catalog: [passes](passes.md). Analyses it reads: [analyses](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src).

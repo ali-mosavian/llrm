@@ -1,21 +1,46 @@
-//! Adapted from llrm-core's `analysis/frameescape.rs`: which frame objects'
-//! addresses reach where.
+//! Which frame objects' addresses reach where, and which are exposed.
 //!
-//! A frame object is an `alloca`, named by its result; the old frame
-//! offsets and extents were the raise's names for the same thing, and an
-//! alloca is its own extent. So `reach` is `exposed` and is gone, and the
-//! old `opaque_addresses` (an address the raise could not name) cannot
-//! occur. The old `Copy` is `bitcast`, `addrspacecast` or `freeze`, and the
-//! old `Address`, `Add` and `Sub` of an address are `getelementptr`.
+//! # How it works
+//! A frame object is an `alloca`, named by its result. An address moves
+//! through `getelementptr`, `bitcast`, `addrspacecast` and `freeze` (one
+//! operand in, one out) and through phis. Everything else that uses an address
+//! either accesses through it or exposes it:
 //!
-//! A load or store's own pointer is an access, not an exposure: MIR has no
-//! frame access that does not go through an address, where the old one
-//! named its slot directly.
+//! - a load's pointer and a store's pointer (not the stored value) are
+//!   accesses;
+//! - a lifetime marker (`marker` says which instructions) names an object
+//!   without handing out its address;
+//! - any other use, including storing the pointer, passing it to a call,
+//!   returning it, `ptrtoint`, or comparing it, exposes it.
 //!
-//! Skipped: `test_opaque_address_is_not_an_empty_escape_proof` (MIR has no
-//! opaque address);
-//! `test_renderer_exposes_temporary_string_not_counter_address` reads a BC
-//! fixture and stays behind.
+//! `exposes(function, alloca, marker)` follows the alloca's uses through moves
+//! and answers true at the first exposing use. `exposed_allocas` does it for
+//! every alloca in one pass: it marks each value that has an exposing use,
+//! then propagates back along the move edges, so an address that reaches an
+//! exposing value through moves is exposed too. `analysed` computes the same
+//! by fixed point, as `origins` (the allocas each value may hold the address
+//! of) and `exposed`; only tests call it.
+//!
+//! ```text
+//!  %a = alloca            %a --gep--> %b --phi--> %c
+//!  %b = gep %a, 4         load %b          access: not exposure
+//!  %c = phi [%b, ..]      call @f(%c)      exposure: %a is exposed
+//! ```
+//!
+//! `framed(function)` is the other question: which values hold an address
+//! inside frame objects on every path, and which objects. C's pointer
+//! arithmetic stays inside its object, so an address the body took of a local
+//! and moved by an integer still reaches only that local's bytes. It is
+//! optimistic: phis and moves start unrefuted, a value is refuted when it has
+//! a non-address definition (a parameter, a load, a call) or an input that is
+//! a number, and refutation repeats until what remains is stable.
+//!
+//! # Provides
+//! `exposed_allocas`, `exposes`, `framed`, `analysed`. Consumers:
+//! [`crate::memory`] (`object_of` marks an object captured when exposed), the
+//! manager entry [`crate::manager::ExposedFrames`], [`crate::interprocedural`]
+//! (`framed`) and the backend's `isel` (which frame objects are exposed).
+//! `scans` counts `exposes` calls, for tests.
 
 use std::collections::BTreeSet;
 

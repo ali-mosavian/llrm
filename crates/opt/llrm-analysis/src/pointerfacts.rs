@@ -1,17 +1,39 @@
-//! Adapted from llrm-core's `analysis/pointerfacts.rs`: relative byte
-//! offsets of whole MIR pointers; no pointer encoding is assumed.
+//! Constant byte offsets between pointer values, and disjointness of two
+//! accesses that share a base.
 //!
-//! Only accesses already proven inside the same allocation may use relative
-//! offsets to establish disjointness. Unrelated pointer values never suffice.
-//! Facts are rebuilt from the current SSA, not attached to operands that a
+//! # How it works
+//! `Offsets::relative(pointer)` walks `getelementptr inbounds` chains whose
+//! indices are all integer constants, summing the byte offset with the data
+//! layout (`collect_offset`), and returns the value it stopped at and the
+//! offset from it. It stops at a value that is not such a `getelementptr` (a
+//! parameter, an alloca, a global, a variable index, a step not `inbounds`).
+//! `fixed` is the same through steps that need not be `inbounds`, for when the
+//! address matters and not the object it stays in. A cycle is refused, and so
+//! is an offset that does not fit the pointer's index width.
+//!
+//! `inbounds` is the MIR's own proof that the result stays in its base's
+//! allocation, so two pointers that reach one base lie in one allocation. Only
+//! then does `comparable` return their two offsets, and `disjoint` and
+//! `same_bytes` compare the byte ranges `[offset, offset + bytes)` of two
+//! `Location`s. Two unrelated pointer values never prove disjointness.
+//!
+//! ```text
+//!   %base ----+--- gep inbounds 0  -> %a   (relative: (%base, 0))
+//!             |
+//!             +--- gep inbounds 8  -> %b   (relative: (%base, 8))
+//!   Location{%a, 8} and Location{%b, 4} are disjoint: 0 + 8 <= 8
+//! ```
+//!
+//! Facts are read from the current SSA on each call, not stored on operands a
 //! later transformation could retarget.
 //!
-//! The old walk followed copies and `PtrOffset`s of four-byte pointers and
-//! took the allocation from the raise's `MemRef.allocation`. Here it
-//! follows `getelementptr inbounds` with constant indices: `inbounds` is the
-//! MIR's own proof that the result stays in its base's allocation, so two
-//! pointers reached from one base lie in one allocation. The old width and
-//! segment checks were for split pointer halves, which MIR does not have.
+//! # Provides
+//! `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`],
+//! [`crate::interprocedural`] (`cannot_fault`) and `argpromotion` in
+//! llrm-transforms.
+//!
+//! # Needs
+//! `llrm_mir::datalayout::DataLayout` for offsets and index widths.
 
 use llrm_mir::context::signed;
 use llrm_mir::datalayout::DataLayout;

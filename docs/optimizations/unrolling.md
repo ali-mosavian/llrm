@@ -41,4 +41,4 @@ Applies to a perfect nest of two header-tested loops where the inner loop leaves
 
 `LLRM_DEBUG=unroll` prints one line per loop with its size, unrolled size, boost, branches and the reason for a refusal. `-fno-unroll-loops`, `-fno-peel-loops`, `-fno-loop-unroll-and-jam` turn a pass off. `--dump DIR` shows the module around `unroll` and `peel`.
 
-Catalog: [passes](passes.md). Analyses: [analyses](analyses.md).
+Catalog: [passes](passes.md). Analyses: [analyses](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src).
