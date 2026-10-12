@@ -1,5 +1,5 @@
-reason = "(x + a) + a is x + (a << 1): hanoi's two recursive calls are one call once the permuted arguments are dead, so h + 1 + h is 2h + 1 (#1432)"
-blessed = "2026-10-11"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 335856
@@ -7,6 +7,7 @@ memory_operands = 131059
 code_bytes = 213
 data_bytes = 15
 bss_bytes = 0
+kernel_ms = 4.4896
 
 [bas.Os]
 instructions = 344048
@@ -14,7 +15,23 @@ memory_operands = 131059
 code_bytes = 211
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 5.691
+kernel_ms = 4.5989
+
+[bq16.O2]
+instructions = 368621
+memory_operands = 131059
+code_bytes = 218
+data_bytes = 15
+bss_bytes = 0
+kernel_ms = 4.923
+
+[bq16.Os]
+instructions = 376813
+memory_operands = 131059
+code_bytes = 216
+data_bytes = 15
+bss_bytes = 0
+kernel_ms = 5.0324
 
 [c.O2]
 instructions = 98
@@ -22,6 +39,7 @@ memory_operands = 0
 code_bytes = 37
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.002
 
 [c.Os]
 instructions = 98
@@ -29,6 +47,7 @@ memory_operands = 0
 code_bytes = 37
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.002
 
 [nib.O2]
 instructions = 99
@@ -36,6 +55,7 @@ memory_operands = 0
 code_bytes = 40
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0023
 
 [nib.Os]
 instructions = 99
@@ -43,6 +63,7 @@ memory_operands = 0
 code_bytes = 40
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0023
 
 [ow.O2]
 instructions = 376809

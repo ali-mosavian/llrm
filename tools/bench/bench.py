@@ -38,6 +38,8 @@ import sizes  # noqa: E402
 import icount  # noqa: E402
 import dosbatch  # noqa: E402
 llrmbin = dosbatch.llrmbin
+import qbbuild  # noqa: E402
+import qbruntime  # noqa: E402
 import run_tests  # noqa: E402
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
@@ -54,8 +56,11 @@ OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/b
 # needs its generated headers and 16-bit bootstrap, which this checkout lacks)
 OWLIB = Path(os.environ.get("OW_LIB", Path.home() / "dos/devtools/dev/c/watcom/lib286"))
 BENCH = ROOT / "bench"
-LANGUAGES = {"bas": ".bas", "c": ".c", "nib": ".nib"}
+# `bas` is BASIC on the Microsoft runtime (MS LINK, in DOSBox: only where QB45 and the others are installed); `bq16` the same source on
+# our runtime, real mode, linked by jwlink: always available.
+LANGUAGES = {"bas": ".bas", "bq16": ".bas", "c": ".c", "nib": ".nib"}
 BASIC_LANGUAGES = ("bas",)
+OURS_BASIC = ("bq16",)
 COUNTERS = ("instructions", "memory_operands")
 # Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
 SIZES = ("code_bytes", "data_bytes", "bss_bytes")
@@ -73,7 +78,7 @@ BORLAND = {
     "tcpp": (TURBO / "tcpp30", "tcc", {"O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
-REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
+REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "bq16": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
 # BASIC references: the name in expected.toml -> the toolchain (run_tests.TOOLS) whose BC compiles and whose runtime links.
 BASIC_REFERENCES = {"bc": "qb45", "pds71": "pds71", "vbdos": "vbdos"}
 # Kernel time is a difference of two whole-program times, each a few cycles off from run to run: parity/loop's 139
@@ -116,7 +121,8 @@ def variants(directory: Path) -> list[Variant]:
         source = directory / f"{directory.name}{suffix}"
         if source.exists():
             head = run_tests.header(source)
-            out.append(Variant(name, language, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45").split()[0],
+            region = settings["region"].get(language) or settings["region"]["bas"]  # our BASIC is the same kernel
+            out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
                               bool(settings.get("timed_only")), tuple(head.get("data", "").split())))
     return out
 
@@ -135,7 +141,7 @@ def c_include_arguments(work: Path) -> list[str]:
     return ["-I", str(dosbatch.c_include(dosbatch.REAL_MODE, work))]
 
 
-def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
+def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | None = None) -> tuple[Path, Path] | str:
     """(exe, linker map) of the variant at -`opt`, or why it did not build. BASIC is only compiled here: LINK runs in DOSBox."""
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
     # The kernel stays a call: inlined into main it has no entry to count from.
@@ -143,7 +149,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
     more = os.environ.get("LLRM_BENCH_FLAGS", "").split()
     flags = [f"-{opt}", "-fno-inline-functions", *more]
     # A BASIC kernel is a private SUB called once from main: it stays a call only where called-once inlining is off (a C one is public).
-    if variant.language in BASIC_LANGUAGES:
+    if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
         flags.append("-fno-inline-functions-called-once")
     try:
         if variant.language == "nib":
@@ -152,8 +158,10 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
                                 env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
-        tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
+        tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-c"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
+        if variant.language in OURS_BASIC:
+            arguments = ["--dialect", "qb45", "-fqb-runtime=llrm"]
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
         if variant.language == "c":
             extra += c_include_arguments(work)
@@ -163,6 +171,10 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
         if variant.language == "c":
             exe = work / f"{stem}.exe"
             dosbatch.link_c(obj, exe, work, listing)
+            return exe, listing
+        if variant.language in OURS_BASIC:
+            exe = work / f"{stem}.exe"
+            qbbuild.link16(obj, objects[qbbuild.REAL], exe, qbruntime.linked_objects(variant.source, work, "llrm", (), stem), listing)
             return exe, listing
     except (dosbatch.BuildError, subprocess.TimeoutExpired) as error:
         return f"build: {error}"
@@ -362,8 +374,9 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         folder.mkdir(parents=True)
         todo = with_startup(selected, timing)
         stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
+        objects = qbbuild.runtimes(work / "runtime") if any(v.language in OURS_BASIC for _, v in todo) else None
         with ThreadPoolExecutor() as pool:
-            built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)]), todo))
+            built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)], objects), todo))
         basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
         failed = link_basic(basic, folder)
         jobs, plain, needs = [], {}, {}

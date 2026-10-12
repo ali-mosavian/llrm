@@ -1,4 +1,4 @@
-reason = "#1446: a phi whose arms are one address is that address, so the exit block's loads fold it (c -O2/-Os -2.5k instructions, -2 bytes). #1431: gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
 blessed = "2026-10-12"
 
 [bas.O2]
@@ -7,6 +7,7 @@ memory_operands = 62573
 code_bytes = 706
 data_bytes = 17
 bss_bytes = 0
+kernel_ms = 1.9519
 
 [bas.Os]
 instructions = 141276
@@ -14,6 +15,23 @@ memory_operands = 63940
 code_bytes = 636
 data_bytes = 17
 bss_bytes = 0
+kernel_ms = 1.9095
+
+[bq16.O2]
+instructions = 153429
+memory_operands = 61700
+code_bytes = 716
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 2.0662
+
+[bq16.Os]
+instructions = 150210
+memory_operands = 63067
+code_bytes = 646
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 2.0278
 
 [c.O2]
 instructions = 56568
@@ -21,6 +39,7 @@ memory_operands = 11825
 code_bytes = 289
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.7574
 
 [c.Os]
 instructions = 52744
@@ -28,6 +47,7 @@ memory_operands = 12581
 code_bytes = 241
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.7109
 
 [nib.O2]
 instructions = 87078
@@ -35,6 +55,7 @@ memory_operands = 13027
 code_bytes = 394
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 1.165
 
 [nib.Os]
 instructions = 116145
@@ -42,6 +63,7 @@ memory_operands = 28850
 code_bytes = 445
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 1.5573
 
 [ow.O2]
 instructions = 109307

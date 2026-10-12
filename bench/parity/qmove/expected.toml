@@ -1,5 +1,5 @@
-reason = "x87: a float load one arithmetic instruction reads is its memory operand (nbody c -8%/-12.5% Os, fpbench -1.2%, parity/qbsp -6.8%, nbody_single nib -5.3%)"
-blessed = "2026-10-09"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 89
@@ -7,6 +7,7 @@ memory_operands = 28
 code_bytes = 389
 data_bytes = 17
 bss_bytes = 0
+kernel_ms = 0.0142
 
 [bas.Os]
 instructions = 82
@@ -14,6 +15,23 @@ memory_operands = 28
 code_bytes = 332
 data_bytes = 17
 bss_bytes = 0
+kernel_ms = 0.0141
+
+[bq16.O2]
+instructions = 90
+memory_operands = 28
+code_bytes = 394
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 0.0083
+
+[bq16.Os]
+instructions = 84
+memory_operands = 28
+code_bytes = 337
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 0.0083
 
 [c.O2]
 instructions = 89
@@ -21,6 +39,7 @@ memory_operands = 27
 code_bytes = 308
 data_bytes = 4
 bss_bytes = 0
+kernel_ms = 0.0022
 
 [c.Os]
 instructions = 86
@@ -28,6 +47,7 @@ memory_operands = 27
 code_bytes = 257
 data_bytes = 4
 bss_bytes = 0
+kernel_ms = 0.0021
 
 [nib.O2]
 instructions = 133
@@ -35,6 +55,7 @@ memory_operands = 39
 code_bytes = 455
 data_bytes = 16
 bss_bytes = 0
+kernel_ms = 0.0035
 
 [nib.Os]
 instructions = 128
@@ -42,6 +63,7 @@ memory_operands = 39
 code_bytes = 399
 data_bytes = 16
 bss_bytes = 0
+kernel_ms = 0.0035
 
 [ow.O2]
 instructions = 202

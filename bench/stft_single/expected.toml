@@ -1,17 +1,29 @@
-reason = "new benches: STFT of a 64Ki-sample generated signal, single and fixed"
-blessed = "2026-10-11"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+blessed = "2026-10-12"
 
 [bas.O2]
 code_bytes = 1245
 data_bytes = 4701
 bss_bytes = 0
-kernel_ms = 872.2596
+kernel_ms = 872.2595
 
 [bas.Os]
 code_bytes = 1203
 data_bytes = 4701
 bss_bytes = 0
-kernel_ms = 871.4081
+kernel_ms = 871.4083
+
+[bq16.O2]
+code_bytes = 1222
+data_bytes = 4701
+bss_bytes = 0
+kernel_ms = 1132.9161
+
+[bq16.Os]
+code_bytes = 1184
+data_bytes = 4701
+bss_bytes = 0
+kernel_ms = 1132.0911
 
 [c.O2]
 code_bytes = 827
@@ -29,13 +41,13 @@ kernel_ms = 322.3455
 code_bytes = 2401
 data_bytes = 1089
 bss_bytes = 0
-kernel_ms = 646.3395
+kernel_ms = 646.3399
 
 [nib.Os]
 code_bytes = 2405
 data_bytes = 1089
 bss_bytes = 0
-kernel_ms = 653.1244
+kernel_ms = 653.1238
 
 [bcc.O2]
 code_bytes = 1115

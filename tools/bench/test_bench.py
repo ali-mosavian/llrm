@@ -292,7 +292,25 @@ class StartupTests(unittest.TestCase):
     def test_every_language_has_a_startup_program(self):
         """Nib had no startup/startup.nib: its whole-program time was never netted, so it had no kernel_ms."""
         have = {one.language for one in bench.variants(bench.STARTUP)}
-        self.assertEqual(have, {"bas", "c", "nib"})
+        self.assertEqual(have, {"bas", "bq16", "c", "nib"})
+
+
+def test_every_basic_benchmark_has_a_variant_on_our_runtime_with_the_same_kernel():
+    """BASIC on our runtime (bq16: llrm runtime, real mode, jwlink) runs beside the Microsoft-runtime `bas` and needs no QB45."""
+    have = {one.language: one for one in bench.variants(bench.BENCH / "fib")}
+    assert have["bq16"].region == have["bas"].region
+    assert have["bq16"].source == have["bas"].source
+
+
+def test_fib_on_our_runtime_counts_what_is_blessed(tmp_path):
+    """Built `-fqb-runtime=llrm`, linked by jwlink (no Microsoft LINK), counted by the emulator from the kernel's entry."""
+    fib = bench.BENCH / "fib"
+    variant = next(one for one in bench.variants(fib) if one.language == "bq16")
+    objects = bench.qbbuild.runtimes(tmp_path / "runtime")
+    built = bench.build(variant, "O2", tmp_path, "V000", objects)
+    assert not isinstance(built, str), built
+    counts = bench.measure(("V000", built[0], built[1], variant.region, bench.expected_output(fib), tmp_path / "V000.obj"))
+    assert counts["instructions"] == bench.read_expected(fib)["bq16"]["O2"]["instructions"]
 
 
 class TimedOnlyTests(unittest.TestCase):

@@ -107,8 +107,9 @@ def needed(roots: tuple[Path, ...], objects: dict[str, Path]) -> list[Path]:
     return chosen
 
 
-def link16(program: Path, objects: dict[str, Path], exe: Path, libs: tuple[Path, ...] = ()) -> None:
-    command = [str(dosbatch.BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(exe)]
+def link16(program: Path, objects: dict[str, Path], exe: Path, libs: tuple[Path, ...] = (), listing: Path | None = None) -> None:
+    """The real-mode link; `listing` is where the linker's map goes."""
+    command = [str(dosbatch.BIN / "jwlink"), "option", "quiet", *(["option", f"map={listing}"] if listing else []), "format", "dos", "name", str(exe)]
     for one in (program, *libs, *needed((program, *libs), objects)):
         command += ["file", str(one)]
     dosbatch._host(command)

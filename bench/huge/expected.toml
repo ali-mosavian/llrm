@@ -1,5 +1,5 @@
-reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
-blessed = "2026-10-11"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 609952
@@ -7,6 +7,7 @@ memory_operands = 162884
 code_bytes = 338
 data_bytes = 13
 bss_bytes = 0
+kernel_ms = 8.3553
 
 [bas.Os]
 instructions = 690584
@@ -16,12 +17,29 @@ data_bytes = 13
 bss_bytes = 0
 kernel_ms = 9.4315
 
+[bq16.O2]
+instructions = 851285
+memory_operands = 122711
+code_bytes = 350
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 11.3724
+
+[bq16.Os]
+instructions = 931918
+memory_operands = 123140
+code_bytes = 334
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 12.4481
+
 [c.O2]
 instructions = 569421
 memory_operands = 82405
 code_bytes = 205
 data_bytes = 80400
 bss_bytes = 0
+kernel_ms = 7.5962
 
 [c.Os]
 instructions = 650016
@@ -29,6 +47,7 @@ memory_operands = 82800
 code_bytes = 193
 data_bytes = 80400
 bss_bytes = 0
+kernel_ms = 8.6719
 
 [nib.O2]
 instructions = 569421
@@ -36,6 +55,7 @@ memory_operands = 82405
 code_bytes = 208
 data_bytes = 0
 bss_bytes = 80400
+kernel_ms = 8.2676
 
 [nib.Os]
 instructions = 650016
@@ -43,6 +63,7 @@ memory_operands = 82800
 code_bytes = 196
 data_bytes = 0
 bss_bytes = 80400
+kernel_ms = 9.3434
 
 [ow.O2]
 instructions = 6756017

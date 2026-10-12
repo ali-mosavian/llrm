@@ -1,5 +1,5 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 53
@@ -7,6 +7,7 @@ memory_operands = 8
 code_bytes = 232
 data_bytes = 13
 bss_bytes = 0
+kernel_ms = 0.0136
 
 [bas.Os]
 instructions = 48
@@ -16,12 +17,29 @@ data_bytes = 13
 bss_bytes = 0
 kernel_ms = 0.0135
 
+[bq16.O2]
+instructions = 56
+memory_operands = 8
+code_bytes = 237
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.0076
+
+[bq16.Os]
+instructions = 52
+memory_operands = 8
+code_bytes = 209
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.0075
+
 [c.O2]
 instructions = 38
 memory_operands = 6
 code_bytes = 115
 data_bytes = 0
 bss_bytes = 2
+kernel_ms = 0.0015
 
 [c.Os]
 instructions = 33
@@ -29,6 +47,7 @@ memory_operands = 6
 code_bytes = 94
 data_bytes = 0
 bss_bytes = 2
+kernel_ms = 0.0014
 
 [nib.O2]
 instructions = 25
@@ -36,6 +55,7 @@ memory_operands = 0
 code_bytes = 86
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.002
 
 [nib.Os]
 instructions = 19
@@ -43,6 +63,7 @@ memory_operands = 0
 code_bytes = 65
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0019
 
 [ow.O2]
 instructions = 92

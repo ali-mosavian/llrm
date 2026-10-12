@@ -1,5 +1,5 @@
-reason = "word and/or/xor run on the whole register (m32 promote, #1349) and any mask under a zero-extension is taken before it: frames nib -O2/-Os -139,000 instructions, -4 B; qlight nib -O2/-Os -4 instructions, -4 B"
-blessed = "2026-10-10"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 122
@@ -7,6 +7,7 @@ memory_operands = 28
 code_bytes = 327
 data_bytes = 13
 bss_bytes = 0
+kernel_ms = 0.0199
 
 [bas.Os]
 instructions = 110
@@ -14,6 +15,23 @@ memory_operands = 28
 code_bytes = 286
 data_bytes = 13
 bss_bytes = 0
+kernel_ms = 0.0198
+
+[bq16.O2]
+instructions = 129
+memory_operands = 28
+code_bytes = 332
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.0107
+
+[bq16.Os]
+instructions = 117
+memory_operands = 28
+code_bytes = 291
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.0106
 
 [c.O2]
 instructions = 90
@@ -21,6 +39,7 @@ memory_operands = 4
 code_bytes = 186
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0028
 
 [c.Os]
 instructions = 80
@@ -28,6 +47,7 @@ memory_operands = 4
 code_bytes = 150
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0027
 
 [nib.O2]
 instructions = 113
@@ -35,6 +55,7 @@ memory_operands = 0
 code_bytes = 191
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0043
 
 [nib.Os]
 instructions = 101
@@ -42,6 +63,7 @@ memory_operands = 0
 code_bytes = 155
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0042
 
 [ow.O2]
 instructions = 325

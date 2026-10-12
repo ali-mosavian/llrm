@@ -1,5 +1,5 @@
-reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
-blessed = "2026-10-11"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 86
@@ -7,6 +7,7 @@ memory_operands = 42
 code_bytes = 316
 data_bytes = 103
 bss_bytes = 0
+kernel_ms = 0.0109
 
 [bas.Os]
 instructions = 86
@@ -14,6 +15,23 @@ memory_operands = 44
 code_bytes = 301
 data_bytes = 103
 bss_bytes = 0
+kernel_ms = 0.0109
+
+[bq16.O2]
+instructions = 88
+memory_operands = 42
+code_bytes = 313
+data_bytes = 103
+bss_bytes = 0
+kernel_ms = 0.0069
+
+[bq16.Os]
+instructions = 87
+memory_operands = 44
+code_bytes = 298
+data_bytes = 103
+bss_bytes = 0
+kernel_ms = 0.0069
 
 [c.O2]
 instructions = 92
@@ -21,6 +39,7 @@ memory_operands = 38
 code_bytes = 191
 data_bytes = 24
 bss_bytes = 0
+kernel_ms = 0.0019
 
 [c.Os]
 instructions = 95
@@ -28,6 +47,7 @@ memory_operands = 41
 code_bytes = 188
 data_bytes = 24
 bss_bytes = 0
+kernel_ms = 0.0019
 
 [nib.O2]
 instructions = 71
@@ -35,6 +55,7 @@ memory_operands = 29
 code_bytes = 171
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0019
 
 [nib.Os]
 instructions = 73
@@ -42,6 +63,7 @@ memory_operands = 30
 code_bytes = 172
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.002
 
 [ow.O2]
 instructions = 123
