@@ -9,7 +9,7 @@ For readers and contributors of llrm. Read in this order; each section's readme 
                                                     |
                               working <- reference <- machine
                            (test, debug,  (levels,    (x86 real mode,
-                            measure)       switches,   ABIs, targets)
+                            measure)       switches,   targets; abi)
                                            tools, crates)
 ```
 
@@ -20,7 +20,8 @@ For readers and contributors of llrm. Read in this order; each section's readme 
 | [frontends](frontends/readme.md) | [QuickBASIC](frontends/qb/readme.md), [Nib](frontends/nib/readme.md), [what the Open Watcom C front end gathers](frontends/c/ow-contract.md), and [BC objects](frontends/bc.md) |
 | [optimizations](optimizations/readme.md) | One note per optimization, each measured on a program |
 | [formats](formats/readme.md) | The object model and its writers; debug information |
-| [machine](machine/readme.md) | x86 real mode: ABIs, prefixes, pointer lowering, targets |
+| [machine](machine/readme.md) | x86 real mode: prefixes, pointer lowering, targets |
+| [abi](abi/readme.md) | Calling conventions: registers, stacks, near and far calls, how a convention is chosen, the tests that pin them |
 | [reference](reference/readme.md) | Optimization levels, the switches that change what a program means, the tools, the crates |
 | [comparison](comparison/readme.md) | llrm's output beside other compilers' |
 | [working](working/readme.md) | Testing, debugging, measuring, and what has broken before |
