@@ -1,5 +1,5 @@
-reason = "new benches: STFT of a 64Ki-sample generated signal, single and fixed"
-blessed = "2026-10-11"
+reason = "a tail is not copied over the likelier way of the branch before its jump: parity/qbsp c -O2 instructions +1.9% (266 -> 271, clocks +0.64%), parity/qbsp nib -O2 code -12 bytes"
+blessed = "2026-10-12"
 
 [bas.O2]
 code_bytes = 1245
@@ -26,7 +26,7 @@ bss_bytes = 5122
 kernel_ms = 322.3455
 
 [nib.O2]
-code_bytes = 2401
+code_bytes = 2397
 data_bytes = 1089
 bss_bytes = 0
 kernel_ms = 646.3395

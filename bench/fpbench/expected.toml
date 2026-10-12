@@ -1,5 +1,5 @@
-reason = "phielim renames a loop phi to its back-edge argument only where its copies would need an edge block (never an x87 value); twoaddr ties the source that does not interfere with the destination. matmul bas -O2 instructions -11.6%, nbody_fixed nib -Os instructions -3.7% (xchg chains gone) with memory operands +12%; crc bas +1 instruction, +2 bytes (one copy outside its loop)"
-blessed = "2026-10-10"
+reason = "a tail is not copied over the likelier way of the branch before its jump: parity/qbsp c -O2 instructions +1.9% (266 -> 271, clocks +0.64%), parity/qbsp nib -O2 code -12 bytes"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 21693
@@ -32,7 +32,7 @@ bss_bytes = 0
 [nib.O2]
 instructions = 19916
 memory_operands = 3003
-code_bytes = 494
+code_bytes = 489
 data_bytes = 16
 bss_bytes = 0
 

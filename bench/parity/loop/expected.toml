@@ -1,10 +1,10 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "a tail is not copied over the likelier way of the branch before its jump: parity/qbsp c -O2 instructions +1.9% (266 -> 271, clocks +0.64%), parity/qbsp nib -O2 code -12 bytes"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 143
 memory_operands = 14
-code_bytes = 261
+code_bytes = 249
 data_bytes = 13
 bss_bytes = 0
 kernel_ms = 0.0149
@@ -20,7 +20,7 @@ kernel_ms = 0.0149
 [c.O2]
 instructions = 127
 memory_operands = 10
-code_bytes = 145
+code_bytes = 140
 data_bytes = 0
 bss_bytes = 4
 
@@ -34,7 +34,7 @@ bss_bytes = 4
 [nib.O2]
 instructions = 111
 memory_operands = 0
-code_bytes = 104
+code_bytes = 99
 data_bytes = 0
 bss_bytes = 0
 

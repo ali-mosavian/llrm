@@ -1,10 +1,10 @@
-reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
-blessed = "2026-10-11"
+reason = "a tail is not copied over the likelier way of the branch before its jump: parity/qbsp c -O2 instructions +1.9% (266 -> 271, clocks +0.64%), parity/qbsp nib -O2 code -12 bytes"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 338395
 memory_operands = 103461
-code_bytes = 452
+code_bytes = 446
 data_bytes = 15
 bss_bytes = 0
 
@@ -18,7 +18,7 @@ bss_bytes = 0
 [c.O2]
 instructions = 135744
 memory_operands = 28501
-code_bytes = 178
+code_bytes = 171
 data_bytes = 0
 bss_bytes = 0
 
