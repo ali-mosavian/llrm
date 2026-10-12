@@ -926,7 +926,20 @@ pub(crate) fn parameters(
                 // took it out.
                 None => DebugPlace::Gone,
             };
-            Some(DebugVariable { name, r#type, place, parameter: true, argument: None, arrives: None })
+            // A parameter in a register says which of the registers the entry
+            // delivers it is, as they come in the order of
+            // the parameters (a register's name there is the allocator's, and
+            // is not the convention's).
+            let argument = match (&place, at) {
+                (DebugPlace::Register(_), Some(at)) => Some(
+                    convention.parameters[..at]
+                        .iter()
+                        .map(|one| if let Parameter::Registers(registers) = one { registers.len() as i64 } else { 0 })
+                        .sum(),
+                ),
+                _ => None,
+            };
+            Some(DebugVariable { name, r#type, place, parameter: true, argument, arrives: None })
         })
         .collect()
 }
@@ -1143,6 +1156,30 @@ fn noted(
     for variable in function.debug_dropped() {
         notes.push(DebugNote { variable: variable.0, piece: None, value: NoteValue::Nothing });
     }
+    // A parameter that arrives in a register has no record of its own where
+    // nothing was optimised (it is no cell's): it is said to be in its
+    // register from the entry, as a note, and the tracking that follows a
+    // variable the code moves says for how long. Its number is past the
+    // metadata's.
+    let arrivals: Vec<(RegId, u32)> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .find(|one| one.arrival())
+        .map(|one| one.delivers.iter().map(|(held, register)| (*register, held.value)).collect())
+        .unwrap_or_default();
+    let mut entry_notes: Vec<u32> = Vec::new();
+    for (index, variable) in body.variables.iter_mut().enumerate() {
+        let (DebugPlace::Register(_), Some(delivered)) = (&variable.place, variable.argument) else { continue };
+        let Some(&(_, vreg)) = usize::try_from(delivered).ok().and_then(|delivered| arrivals.get(delivered)) else {
+            continue;
+        };
+        let node = u32::MAX - u32::try_from(index).expect("a few variables");
+        entry_notes.push(u32::try_from(notes.len()).expect("a few notes"));
+        notes.push(DebugNote { variable: node, piece: None, value: NoteValue::Value(vreg) });
+        named.insert(vreg);
+        variable.place = DebugPlace::Tracked(node);
+    }
     if notes.is_empty() {
         return body;
     }
@@ -1159,7 +1196,10 @@ fn noted(
                 .map(|one| {
                     let ats_here: Vec<i64> =
                         before.keys().copied().filter(|&at| at <= one.at && !taken.contains(&at)).collect();
-                    let ahead: Vec<u32> = ats_here.iter().flat_map(|at| before[at].iter().copied()).collect();
+                    let mut ahead: Vec<u32> = ats_here.iter().flat_map(|at| before[at].iter().copied()).collect();
+                    if one.arrival() {
+                        ahead.extend(&entry_notes);
+                    }
                     // An argument is made where the function is entered, by the
                     // instruction that says where each
                     // arrives: it tells which, by position, as the registers it

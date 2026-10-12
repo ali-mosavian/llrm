@@ -236,9 +236,17 @@ fn main() -> i16:
 
 /// The model of `ADD` under `-mabi=regparm3`, its debug format `format`.
 fn regparm_model(format: llrm_object::debug::Format) -> (llrm_object::debug::Info, Vec<u8>) {
+    regparm_model_of(ADD, format)
+}
+
+/// The model of the Nib `source` under `-mabi=regparm3`, and its code.
+fn regparm_model_of(
+    source: &str,
+    format: llrm_object::debug::Format,
+) -> (llrm_object::debug::Info, Vec<u8>) {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = directory.path().join("probe.nib");
-    std::fs::write(&path, ADD).expect("writes");
+    std::fs::write(&path, source).expect("writes");
     let frontend = crate::Frontend { debug: true, native_name: "regparm3".into(), ..crate::real_mode() };
     let program = crate::driver::parsed(&path, &frontend, None).expect("parses");
     let pipeline =
@@ -255,27 +263,78 @@ fn regparm_model(format: llrm_object::debug::Format) -> (llrm_object::debug::Inf
     (object.debug.expect("-g's information"), code)
 }
 
-/// Under `-mabi=regparm3` a parameter arrives in a register, and CodeView 4's
-/// BASIC-era records (and Turbo Debugger's) name one place for a whole scope:
-/// `add`'s `a` and `b` are in no CodeView. The backend stored each to a cell at
-/// the entry to give the format one; `-g` changes no code, so it stores
-/// nothing, and the model says only that each is in its register until the body
-/// starts.
+/// Under `-mabi=regparm3` a parameter arrives in a register. A format that
+/// names one place for a whole scope (CodeView 4, Turbo Debugger) says it where
+/// the code keeps it from its first value to the body's end: `add`'s `b` stays
+/// in EDX the whole function, `a` is overwritten by the first instruction and
+/// has no such place. The entry said only that each was in its register until
+/// the body starts (one byte), so `b` was in no CodeView; the tracking that
+/// follows a variable the code moves says for how long now. `-g` changes no
+/// code: nothing stores either to a cell.
 #[test]
-fn a_register_parameter_is_not_stored_to_a_cell_for_a_format_that_names_one_place() {
+fn a_register_parameter_is_said_where_the_code_keeps_it_for_the_whole_body() {
     use llrm_object::debug::{Kind, Location};
     let (info, code) = regparm_model(llrm_object::debug::Format::Default);
     let add = info.functions.iter().find(|one| one.name == "add").expect("add");
     let places: Vec<(&str, Kind, &Location)> =
         add.variables.iter().map(|one| (one.name.as_str(), one.kind, &one.location)).collect();
+    let whole = add.ranges[0];
     assert!(
-        matches!(&places[..], [("a", Kind::Parameter, Location::List(a)), ("b", Kind::Parameter, Location::List(b))] if matches!(&a[..], [(_, Location::Register(_))]) && matches!(&b[..], [(_, Location::Register(_))])),
+        matches!(&places[..], [("a", Kind::Parameter, Location::List(a)), ("b", Kind::Parameter, Location::List(b))]
+            if a.is_empty() && matches!(&b[..], [(range, Location::Register(register))] if *range == whole && register == "edx")),
         "{places:?}"
     );
     // `mov [bp-2], ax` is 89 46 FE: nothing stores it.
     assert!(!code.windows(3).any(|bytes| bytes == [0x89, 0x46, 0xFE]), "the store of a is in the code");
     let shape = cv4info::shape(&compiled_regparm());
-    assert!(!shape.iter().any(|one| one.contains("add.a") || one.contains("add.b")), "{shape:#?}");
+    assert!(shape.iter().any(|one| one == "REGISTER add.b: LONG in register 19"), "{shape:#?}");
+    assert!(!shape.iter().any(|one| one.contains("add.a")), "{shape:#?}");
+}
+
+const LOOP: &str = "fn sum(n: i16, step: i16) -> i16:
+    let mut total = 0
+    let mut i = 0
+    while i < n:
+        total = total + step
+        i = i + 1
+    return total
+
+fn main() -> i16:
+    print(sum(3, 4) + sum(5, 6))
+    return 0
+";
+
+/// A parameter kept in a register across a loop: `step` (DX) is there the whole
+/// function, the one place a format of one place can say; `n` is copied out of
+/// its register at the entry, so it has no place of one register, and a format
+/// with ranges says both of its.
+#[test]
+fn a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_its_ranges() {
+    use llrm_object::debug::Location;
+    let (info, _) = regparm_model_of(LOOP, llrm_object::debug::Format::Default);
+    let sum = info.functions.iter().find(|one| one.name == "sum").expect("sum");
+    let step = sum.variables.iter().find(|one| one.name == "step").expect("step");
+    assert!(
+        matches!(&step.location, Location::List(entries) if matches!(&entries[..], [(range, Location::Register(register))]
+            if *range == sum.ranges[0] && register == "dx")),
+        "{:?}",
+        step.location
+    );
+    let n = sum.variables.iter().find(|one| one.name == "n").expect("n");
+    assert!(matches!(&n.location, Location::List(entries) if entries.is_empty()), "{:?}", n.location);
+
+    let (info, _) = regparm_model_of(LOOP, llrm_object::debug::Format::Dwarf { version: 5 });
+    let sum = info.functions.iter().find(|one| one.name == "sum").expect("sum");
+    let n = sum.variables.iter().find(|one| one.name == "n").expect("n");
+    let Location::List(entries) = &n.location else { panic!("{:?}", n.location) };
+    // ax, then cx once the code has copied it out and the register is reused:
+    // no byte of the function without a place.
+    assert!(
+        matches!(&entries[..], [(_, Location::Register(first)), (_, Location::Register(second))] if first == "ax" && second == "cx"),
+        "{entries:?}"
+    );
+    let covered: usize = entries.iter().map(|(range, _)| range.length).sum();
+    assert_eq!(covered, sum.ranges[0].length, "{entries:?}");
 }
 
 fn compiled_regparm() -> Vec<Rc<omf::Record>> {

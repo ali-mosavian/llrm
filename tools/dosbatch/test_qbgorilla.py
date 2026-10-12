@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 import shutil
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -64,22 +63,21 @@ def play(built: qbbuild.Built, work: Path, scene: tuple, shots: list) -> str:
     try:
         session.send({"cmd": "dos_cmd", "command": "P.EXE"}, wait=False)
         session.wait_for("Press any key", 60)
-        time.sleep(1)
-        for keys, wait in ((["space"], 3), (["enter"], 1), (["enter"], 1), (["1", "enter"], 1.5), (["enter"], 2.5)):
-            session.type(keys, pause=0.3)
-            time.sleep(wait)
-        session.type(["p"], pause=0.3)
+        # the intro, the names (Player 1, Player 2), the points, the gravity, then P to play
+        for keys in (["space"], ["enter"], ["enter"], ["1", "enter"], ["enter"]):
+            session.keys(keys)
+        session.type(["p"], pause=0)
         session.wait_for_mode(0x10, 60)  # BIOS mode 10h is SCREEN 9
-        time.sleep(3)
+        session.idle()
+        session.settle()
         session.shot(work / "skyline.png")
         seen = gorilla_aim.Scene(work / "skyline.png")
         assert (seen.left, seen.right, seen.wind) == scene, "the seeded game is not the one the shots were worked out for: run gorilla_aim.py"
-        for at, (angle, velocity) in enumerate(shots):
-            session.type([*angle, "enter"], pause=0.3)
-            time.sleep(1)
-            session.type([*velocity, "enter"], pause=0.3)
-            if at + 1 < len(shots):
-                time.sleep(10)  # the banana, the explosion, the other player's prompt
+        for angle, velocity in shots:
+            session.keys([*angle, "enter"])  # the prompt for the velocity
+            session.type([*velocity, "enter"], pause=0)
+            if (angle, velocity) != shots[-1]:
+                session.idle()  # the banana, the explosion, the other player's prompt
         session.wait_for("GAME OVER!", 60)
         return session.screen()
     finally:

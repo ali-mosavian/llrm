@@ -187,14 +187,17 @@ def masked(name: str, screen: tuple[str, ...] | None) -> tuple[str, ...] | None:
 
 
 def differential_batch(
-    objects: dict[str, tuple[Path, ...]], archive: Path, work: Path
-) -> dict[str, Differential]:
-    """Each program as two objects of one source: BCOM45's (`qb45`) linked with BCOM45, and llrm's
-    (`-fqb-runtime=llrm`) linked with LLRMQB.  A third and later item are objects both link besides.
-    Raw bytes and screens are compared.
+    objects: dict[str, tuple[Path, ...]], candidates: dict[str, dict], work: Path, screens: set[str] | None = None
+) -> dict[str, dict[str, Differential]]:
+    """Each program as BCOM45 builds it against ours at each target.
 
-    Both sessions run in `work/run`, so the mount lines on the DOS screen are the same text.  Jobs are
-    named J000, J001, ...: a source name is not always an 8.3 basename, or unique in 8 characters.
+    `objects[name]`: the object of the source built for the Microsoft runtime (`qb45`, linked with BCOM45 by Microsoft's
+    LINK: the oracle), then objects it links besides.  `candidates[target][name]`: a qbbuild.Built.  Raw bytes are compared
+    at every target, the screens (what the program drew) at the targets in `screens`: a flat program runs behind DOS/32A's
+    banner, which is on the screen.
+
+    Every session runs in `work/run`, so the mount lines on the DOS screen are the same text.  Jobs are named J000, J001,
+    ...: a source name is not always an 8.3 basename, or unique in 8 characters.
     """
     names = {name: f"J{at:03d}" for at, name in enumerate(objects)}
     run = work / "run"
@@ -206,39 +209,32 @@ def differential_batch(
             for at, (name, job) in enumerate(pairs)
         }
 
-    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0], objects=extras(pair[2:], False), screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n))) for n, pair in objects.items()])
-    candidate = session(
-        [
-            (
-                n,
-                dosbatch.Job(
-                    names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive, objects=extras(pair[2:], True), screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n)
-                ),
-            )
-            for n, pair in objects.items()
-        ]
-    )
-    found = {}
-    for name in objects:
-        (want, want_bytes, want_screen, want_size), (got, got_bytes, got_screen, got_size) = (
-            reference[name],
-            candidate[name],
+    reference = session([(n, dosbatch.Job(names[n], "obj", objs[0], objects=extras(objs[1:], False), screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n))) for n, objs in objects.items()])
+    found: dict[str, dict[str, Differential]] = {name: {} for name in objects}
+    for target, built in candidates.items():
+        candidate = session(
+            [
+                (n, dosbatch.Job(names[n], "exe", built[n].exe, files=built[n].files, screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n)))
+                for n in objects
+                if not isinstance(built[n], str)
+            ]
         )
-        sizes = (want_size, got_size)
-        if want.status != "ok" or got.status != "ok":
-            found[name] = Differential(want, got, "a differential side did not complete", "", sizes)
-        elif want_screen is None or got_screen is None:
-            found[name] = Differential(
-                want, got, first_byte_difference(want_bytes, got_bytes), "screen capture unavailable", sizes
-            )
-        else:
-            found[name] = Differential(
-                want,
-                got,
-                first_byte_difference(want_bytes, got_bytes),
-                first_screen_difference(want_screen, got_screen),
-                sizes,
-            )
+        for name in objects:
+            if isinstance(built[name], str):  # it did not build: why
+                found[name][target] = Differential(reference[name][0], dosbatch.Result("not built", detail=built[name]), "a differential side did not complete", "", (reference[name][3], 0))
+                continue
+            (want, want_bytes, want_screen, want_size), (got, got_bytes, got_screen, got_size) = reference[name], candidate[name]
+            sizes = (want_size, got_size)
+            if want.status != "ok" or got.status != "ok":
+                found[name][target] = Differential(want, got, "a differential side did not complete", "", sizes)
+            elif screens is not None and target not in screens:
+                found[name][target] = Differential(want, got, first_byte_difference(want_bytes, got_bytes), "", sizes)
+            elif want_screen is None or got_screen is None:
+                found[name][target] = Differential(want, got, first_byte_difference(want_bytes, got_bytes), "screen capture unavailable", sizes)
+            else:
+                found[name][target] = Differential(
+                    want, got, first_byte_difference(want_bytes, got_bytes), first_screen_difference(want_screen, got_screen), sizes
+                )
     return found
 
 
@@ -250,18 +246,18 @@ def frontend_flags(source: Path) -> list[str]:
     return []
 
 
-def linked_objects(source: Path, work: Path, runtime: str = "qb45") -> tuple[Path, ...]:
+def linked_objects(source: Path, work: Path, runtime: str = "qb45", flags: tuple[str, ...] = (), tag: str = "") -> tuple[Path, ...]:
     """The objects a source's `' link:` line names, built here: a .nib library by llrm-nib, for the runtime
-    (`qb45` or `llrm`) the program is built for."""
+    (`qb45` or `llrm`) the program is built for, with `flags` (a target) and the file name marked with `tag`."""
     made = []
     for line in source.read_text(encoding="latin-1").splitlines()[:5]:
         if not line.startswith("' link:"):
             continue
         for name in line.split()[2:]:
             library = source.parent / name
-            obj = work / f"{library.stem}.{runtime}.obj"
+            obj = work / f"{library.stem}.{runtime}{tag}.obj"
             done = subprocess.run(
-                [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2", f"--basic-runtime={runtime}"],
+                [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2", f"--basic-runtime={runtime}", *flags],
                 capture_output=True,
                 text=True,
             )

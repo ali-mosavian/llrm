@@ -102,17 +102,44 @@ class Session:
             time.sleep(0.01)
 
     def wait_event(self, name: str, since: int, seconds: float) -> dict:
-        """The first event called `name` among those after the first `since`; the wait ends the moment it arrives."""
+        """The first event called `name` among those after the first `since`; the wait ends the moment it arrives.  With an
+        emulator behind the session `seconds` are its CPU time, else the wall clock's."""
+        late = self.limit(seconds) if getattr(self, "process", None) else None
         deadline = time.monotonic() + seconds
         with self.arrived:
             while True:
                 for event in self.events[since:]:
                     if event.get("event") == name:
                         return event
-                left = deadline - time.monotonic()
-                if left <= 0:
+                if (late() if late else time.monotonic() >= deadline):
                     raise TimeoutError(f"no {name} event in {seconds} s")
-                self.arrived.wait(left)
+                self.arrived.wait(0.2 if late else max(deadline - time.monotonic(), 0.001))
+
+    def idle(self, seconds: float = 60) -> None:
+        """Until the program reads the keyboard and finds nothing there: it has done what the keys, or its start, asked."""
+        since = len(self.events)
+        self.send({"cmd": "key_wait_arm"})
+        self.wait_event("key_wait", since, seconds)
+
+    def keys(self, keys: list[str], seconds: float = 60) -> None:
+        """`keys` typed, and the program idle again: the next step needs no pause."""
+        self.type(keys, pause=0)
+        self.idle(seconds)  # armed after the keys: a read between two of them found nothing, and would end the wait early
+
+    def settle(self, looks: int = 3, seconds: float = 60, stable_for: float = 0.0) -> None:
+        """Until the screen is the same picture `looks` times running and for `stable_for` host seconds (by the hash of the
+        adapter's memory): a program that computes for a while between two strokes looks done to a few quick looks."""
+        late, same, last, since = self.limit(seconds), 0, None, time.monotonic()
+        while not late():
+            look = self.screen_hash()
+            if look != last:
+                same, since = 1, time.monotonic()
+            else:
+                same += 1
+            last = look
+            if same >= looks and time.monotonic() - since >= stable_for:
+                return
+        raise TimeoutError("the screen never settled")
 
     def screen_hash(self, length: int = 0x28000) -> str:
         """A hash of the adapter's video memory, every plane: the same two hashes are the same picture."""
@@ -203,43 +230,36 @@ def differing_pixels(left: Path, right: Path) -> int:
     return sum(1 for i in range(0, len(a[2]), 3) if a[2][i : i + 3] != b[2][i : i + 3])
 
 
-def built_pairs(sources: dict[str, Path], work: Path) -> dict[str, tuple[Path, Path]]:
-    """Each program as two linked EXEs, BCOM45's and the llrm runtime's: (reference, candidate) by name."""
+def reference(sources: dict[str, Path], work: Path) -> dict[str, Path]:
+    """Each program as BCOM45 builds it: llrm-qb's object on the Microsoft runtime, linked by Microsoft's LINK.  The
+    oracle a test compares against."""
     import shutil
 
     import qbruntime
 
-    objects = {}
+    objs = {}
     for name, source in sources.items():
-        pair = (work / f"{name}.qb45.obj", work / f"{name}.llrm.obj")
-        for runtime, obj in zip(("qb45", "llrm"), pair):
-            error = qbruntime.compile_basic(source, obj, runtime)
-            assert error is None, error
-        objects[name] = (*pair, *qbruntime.linked_pairs(source, work))
-    archive, _ = qbruntime.build(work / "archive")
-    exes: dict[str, list[Path | None]] = {name: [None, None] for name in objects}
-    for tag, runtime in (("ref", "bcom45"), ("cand", "llrmqb")):
-        jobs = []
-        for at, (reference, candidate, *pairs) in enumerate(objects.values()):
-            stem = f"J{at:03d}"
-            if tag == "ref":
-                jobs.append(dosbatch.Job(stem, "obj", reference, objects=qbruntime.extras(tuple(pairs), False), budget_ms=200))
-            else:
-                jobs.append(
-                    dosbatch.Job(
-                        stem,
-                        "obj",
-                        candidate,
-                        runtime=runtime,
-                        runtime_file=archive,
-                        objects=qbruntime.extras(tuple(pairs), True),
-                        budget_ms=200,
-                    )
-                )
-        run = work / f"link_{tag}"
-        dosbatch.run(jobs, run)
-        for name, job in zip(objects, jobs):
-            kept = work / f"{name}.{tag}.exe"
-            shutil.copy(run / f"{job.stem.upper()}.EXE", kept)
-            exes[name][tag == "cand"] = kept
-    return {name: (pair[0], pair[1]) for name, pair in exes.items()}
+        obj = work / f"{name}.qb45.obj"
+        error = qbruntime.compile_basic(source, obj, "qb45")
+        assert error is None, error
+        objs[name] = (obj, qbruntime.linked_pairs(source, work))
+    jobs = [
+        dosbatch.Job(f"J{at:03d}", "obj", obj, objects=qbruntime.extras(tuple(pairs), False), budget_ms=200)
+        for at, (obj, pairs) in enumerate(objs.values())
+    ]
+    run = work / "link_ref"
+    dosbatch.run(jobs, run)
+    out = {}
+    for name, job in zip(objs, jobs):
+        out[name] = work / f"{name}.ref.exe"
+        shutil.copy(run / f"{job.stem.upper()}.EXE", out[name])
+    return out
+
+
+def built(sources: dict[str, Path], work: Path) -> dict[str, tuple[Path, dict]]:
+    """`reference` and ours at each target (qbbuild: the llrm runtime, jwlink): (reference exe, {target: Built}) by name."""
+    import qbbuild
+
+    refs = reference(sources, work)
+    objects = qbbuild.runtimes(work)
+    return {name: (refs[name], qbbuild.build(source, work / f"b_{name}", objects)) for name, source in sources.items()}

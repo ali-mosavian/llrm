@@ -35,7 +35,8 @@ def test_trapped_keys_run_their_handlers_and_are_not_read(tmp_path):
         try:
             session.send({"cmd": "dos_cmd", "command": "P.EXE"}, wait=False)
             session.wait_for("ready", 60)
-            session.type(KEYS)
+            session.idle()
+            session.type(KEYS, pause=0)
             session.wait_for("done", 60)
             screen = " ".join(session.screen().split())
         finally:
