@@ -176,7 +176,7 @@ impl Forest {
         function: &Function,
         loops: &mut [Loop],
     ) {
-        let place: std::collections::HashMap<i64, usize> =
+        let place: llrm_support::hash::HashMap<i64, usize> =
             function.layout().iter().enumerate().map(|(at, &block)| (cfg::id(block), at)).collect();
         loops.sort_by_key(|one| {
             (
