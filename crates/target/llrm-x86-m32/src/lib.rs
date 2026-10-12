@@ -241,6 +241,20 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// gcc's by-pieces ratios of a constant memset, read from the description:
+    /// `i486_cost` and `pentium_cost` (x86-tune-costs.h, gcc 13.4.0), and the
+    /// size table every CPU takes.
+    #[test]
+    fn test_the_memset_ratios_are_gccs_per_cpu() {
+        let (i486, p5) = (TIMINGS.cpu("486").expect("a 486"), TIMINGS.cpu("P5").expect("a P5"));
+        assert_eq!(
+            (i486.set_ratio, i486.clear_ratio, p5.set_ratio, p5.clear_ratio),
+            (Some(3), Some(3), Some(6), Some(6))
+        );
+        assert_eq!((i486.set_ratio_size, i486.clear_ratio_size), (Some(3), Some(2)));
+        assert_eq!((p5.set_ratio_size, p5.clear_ratio_size), (Some(3), Some(2)));
+    }
+
     const EAX: RegId = RegId::EAX;
     const EBP: RegId = RegId::EBP;
     const EBX: RegId = RegId::EBX;

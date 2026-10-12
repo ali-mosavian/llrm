@@ -105,7 +105,14 @@ pub fn described_by_size(
         call_registers: prices.call_registers,
         address_forms: prices.address_forms.clone(),
         operations: prices.operations.clone(),
-        sizes,
+        // The by-pieces ratios are the CPU's, whichever table prices the rest.
+        sizes: sizes.map(|sizes| OperationCosts {
+            pieces_set: prices.operations.pieces_set,
+            pieces_clear: prices.operations.pieces_clear,
+            pieces_set_size: prices.operations.pieces_set_size,
+            pieces_clear_size: prices.operations.pieces_clear_size,
+            ..sizes
+        }),
         spaces: prices.spaces,
         private: prices.private.clone(),
         calling: prices.calling,

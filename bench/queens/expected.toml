@@ -1,10 +1,10 @@
-reason = "a comparison another block's branch reads is made again there (CodeGenPrepare's sinkCmpExpression): queens -1.8% clocks, grep -12 bytes; queens nib -Os +551 memory operands (the byte held in memory is a compare made again)"
-blessed = "2026-10-09"
+reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
+blessed = "2026-10-11"
 
 [bas.O2]
-instructions = 338389
+instructions = 338395
 memory_operands = 103461
-code_bytes = 459
+code_bytes = 452
 data_bytes = 15
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 171285
+instructions = 171291
 memory_operands = 19777
-code_bytes = 204
+code_bytes = 193
 data_bytes = 0
 bss_bytes = 0
 

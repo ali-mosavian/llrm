@@ -1,10 +1,10 @@
-reason = "#1446: a phi whose arms are one address is that address, so the exit block's loads fold it (bintree c -O2 -2.5k instructions, -2 bytes; -Os the same)"
+reason = "#1446: a phi whose arms are one address is that address, so the exit block's loads fold it (c -O2/-Os -2.5k instructions, -2 bytes). #1431: gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
 blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 144792
+instructions = 144796
 memory_operands = 62573
-code_bytes = 715
+code_bytes = 706
 data_bytes = 17
 bss_bytes = 0
 

@@ -224,9 +224,32 @@ pub struct OperationCosts {
     /// it saves is boosted (`peelsize::Limits`); 0: the target states none
     /// and the pass's own is used.
     pub unroll_budget: i64,
+    /// gcc's by-pieces ratios for a constant memset (`SET_RATIO` for a
+    /// nonzero byte, `CLEAR_RATIO` for zero; the `_size` ones when tuned for
+    /// size): stores while their number is under it, else a fill. 0: the
+    /// target states none for the CPU.
+    pub pieces_set: i64,
+    pub pieces_clear: i64,
+    pub pieces_set_size: i64,
+    pub pieces_clear_size: i64,
 }
 
 impl OperationCosts {
+    /// The ratio under which a constant memset of `zero` bytes, or of any other
+    /// byte, is stores; 0 where none is stated. `size`: tuned for size.
+    pub fn pieces(
+        &self,
+        size: bool,
+        zero: bool,
+    ) -> i64 {
+        match (size, zero) {
+            (true, true) => self.pieces_clear_size,
+            (true, false) => self.pieces_set_size,
+            (false, true) => self.pieces_clear,
+            (false, false) => self.pieces_set,
+        }
+    }
+
     /// What a caller pays to take `words` words of arguments off the stack.
     pub fn cleanup(
         &self,
@@ -305,6 +328,10 @@ impl Default for OperationCosts {
             copy_cell: 1,
             direction: 1,
             unroll_budget: 0,
+            pieces_set: 0,
+            pieces_clear: 0,
+            pieces_set_size: 0,
+            pieces_clear_size: 0,
         }
     }
 }

@@ -1,8 +1,8 @@
-reason = "coalesce takes loop blocks deepest first, the hottest copies first within a loop (x_binsearch -9.4% clocks m32): bintree c -O2 +2.6% instructions (the LCG chain in the loop takes a longer multiply sequence), qbsp/mandel/grep code bytes +0.3..1.9%, fib/crc/jpeg/grep/qbsp nib better"
+reason = "gcc 13.4 per-CPU by-pieces ratio for a constant memset (486 3, P5 6; size 3/2), user decision 2026-10-11: smaller code, a few more executed instructions"
 blessed = "2026-10-11"
 
 [bas.O2]
-code_bytes = 5186
+code_bytes = 5177
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.1787
@@ -26,7 +26,7 @@ bss_bytes = 15849
 kernel_ms = 310.146
 
 [nib.O2]
-code_bytes = 6301
+code_bytes = 6269
 data_bytes = 17198
 bss_bytes = 0
 kernel_ms = 392.1256
