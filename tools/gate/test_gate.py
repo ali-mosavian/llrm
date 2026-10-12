@@ -762,3 +762,11 @@ def test_wdump_is_built_from_the_pinned_tree_cached_and_required_in_ci(tmp_path)
     action = (gate.ROOT / ".github/actions/setup/action.yml").read_text()
     assert "sh toolchain/wdump.sh" in action and 'echo "WDUMP=$wdump" >> "$GITHUB_ENV"' in action and "LLRM_REQUIRE_WDUMP=1" in action
     assert action.count("'toolchain/wdump.sh'") == 2, "both cache keys hold the script that builds it"
+
+
+def test_a_change_to_a_tool_the_integration_tests_run_plans_the_integration_step():
+    """A diff of toolchain/wdump.sh (CI run 38234232991) planned unit, run and python and not integration, so the green run did not show
+    the three tests/dwarf.rs tests that read the wdump it builds: they read WDUMP, and no test names the script."""
+    for touched in ("toolchain/wdump.sh", "toolchain/jwbuild.sh", "tools/debug-gate.env"):
+        assert "integration" in gate.plan([touched]).steps, touched
+    assert "integration" not in gate.plan(["tools/measure.py"]).steps
