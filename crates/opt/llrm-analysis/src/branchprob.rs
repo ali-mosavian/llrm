@@ -75,7 +75,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use llrm_mir::facts::Facts;
-use llrm_mir::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, MetadataNode, MetadataOperand, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::types::Type;
 use llrm_mir::{ConstantKind, Context};
@@ -324,25 +324,32 @@ fn weighed(
             votes.push((heuristic, when_true / (when_true + when_false)));
         }
     }
-    let calls = |at: i64| {
+    let returns = |at: i64| {
+        function.terminator(cfg::block(at)).is_some_and(|last| function.instruction(last).opcode == Opcode::Ret)
+    };
+    let called = |at: i64| {
         function
             .block(cfg::block(at))
             .instructions()
             .iter()
-            .any(|&inst| matches!(
+            .filter(|&&inst| matches!(
                 function.instruction(inst).opcode,
                 Opcode::Call(_) | Opcode::Invoke(_)
             ))
+            .copied()
+            .collect::<Vec<_>>()
     };
+    // A way that returns at once is the base case of a recursion that the
+    // other way calls: that call is the work, not an exceptional case.
+    let base = successors.len() == 2 && successors.iter().any(|&at| returns(at) && called(at).is_empty());
+    let calls =
+        |at: i64| called(at).into_iter().any(|inst| !(base && recursive(context, declarations, function, inst)));
     if let Some(weights) = split(&|at| !calls(at), CALL) {
         if successors.len() != 2 {
             return (Heuristic::Call, weights);
         }
         votes.push((Heuristic::Call, weights[0] / (weights[0] + weights[1])));
     }
-    let returns = |at: i64| {
-        function.terminator(cfg::block(at)).is_some_and(|last| function.instruction(last).opcode == Opcode::Ret)
-    };
     if successors.len() == 2 && successors.iter().filter(|&&at| returns(at)).count() == 1 {
         let (leaving, staying) = if returns(successors[0]) { (0, 1) } else { (1, 0) };
         // What the returning block returns, when it does nothing else: a
@@ -621,6 +628,22 @@ fn returned(
         }
         _ => None,
     }
+}
+
+/// Whether `inst` calls `function` itself: the work of the function, not the
+/// report of an exceptional case the call heuristic assumes.
+fn recursive(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    llrm_mir::memory::callee(context, function, inst).is_some_and(|callee| {
+        matches!(
+            declarations.get(callee.0 as usize).map(|global| &global.kind),
+            Some(GlobalKind::Function(one)) if std::ptr::eq(&**one, function)
+        )
+    })
 }
 
 /// The probability of the first way, from the probabilities each predictor

@@ -944,3 +944,57 @@ fn test_combining_is_symmetric_and_certain_disagreement_is_even() {
     assert_eq!(combined([1.0, 0.0].into_iter()), 0.5);
     assert_eq!(combined(std::iter::empty()), 0.5);
 }
+
+/// hanoi/nib: `if n == 0 { 0 } else { f(n - 1) * 2 + 1 }`. The call heuristic
+/// counted the recursion as an error report and, combined with the zero test,
+/// made the leaf the likelier arm (55%): the recursive arm became the taken
+/// branch and the benchmark 12.6% slower. A call to the function itself is
+/// the work, not an exceptional case: the zero test decides alone.
+#[test]
+fn test_a_recursive_call_is_not_an_exceptional_one() {
+    let (odds, at) = estimate(
+        "define i16 @f(i16 %n) {
+entry:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %leaf, label %step
+leaf:
+  ret i16 0
+step:
+  %m = sub i16 %n, 1
+  %r = call i16 @f(i16 %m)
+  %d = add i16 %r, %r
+  ret i16 %d
+}
+",
+    );
+    let leaf = odds.probability(at("entry"), at("leaf"));
+    assert!(close(leaf, 12.0 / 32.0), "{leaf:?}");
+}
+
+/// quicksort/c -Os: the way to the recursive calls is not a base case; the
+/// call heuristic still counts the recursion there. Dropping it for every
+/// recursive call gave that way 50% for 33%, the partition loop a third less
+/// frequency (+1.05% clocks, +17 bytes).
+#[test]
+fn test_a_recursive_call_is_still_a_call_where_no_way_is_a_base_case() {
+    let (odds, at) = estimate(
+        "define void @f(i16 %n, i16 %m) {
+entry:
+  %c = icmp slt i16 %n, %m
+  br i1 %c, label %work, label %recurse
+work:
+  store volatile i16 %n, ptr null
+  br label %recurse
+recurse:
+  %k = sub i16 %n, 1
+  call void @f(i16 %k, i16 %m)
+  ret void
+}
+",
+    );
+    let way = odds.probability(at("entry"), at("recurse"));
+    // The call (33%) and the return (34%) heuristics, combined.
+    let (call, ret) = (0.33, 0.34);
+    let want = call * ret / (call * ret + (1.0 - call) * (1.0 - ret));
+    assert!(close(way, want), "{way:?}");
+}
