@@ -33,7 +33,7 @@ use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::passes::{Analyses, Analysis, FunctionPass, Outer, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, Analysis, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::HashMap;
@@ -315,10 +315,11 @@ pub fn reduced(
             continue;
         }
         let saved = leaves.then(|| (unit.function.clone(), _function_price(unit, &*analyses, outer, &target)));
+        let graph = _graph(unit.function);
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
-        analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        analyses.invalidate(unit.function, &_kept_graph(unit.function, &graph));
         whole = Whole::default();
         if let Some((before, Some(kept))) = saved {
             dead::dead(unit.context, outer.callees(), unit.function);
@@ -334,6 +335,25 @@ pub fn reduced(
         changed = true;
     }
     changed
+}
+
+/// The blocks of `function` and where each goes.
+fn _graph(function: &Function) -> Vec<(BlockId, Vec<BlockId>)> {
+    function.layout().iter().map(|&block| (block, function.successors(block))).collect()
+}
+
+/// What an edit that left the blocks and their edges as `before` had them leaves true: the
+/// analyses that read the graph and nothing else. A loop counted onto another counter changes
+/// no edge, and a nest of N loops derived the dominance and loops of the whole function N times.
+fn _kept_graph(
+    function: &Function,
+    before: &[(BlockId, Vec<BlockId>)],
+) -> PreservedAnalyses {
+    if _graph(function) == before {
+        PreservedAnalyses::none().preserve::<cfg::Shape>().preserve::<Dominators>().preserve::<Loops>()
+    } else {
+        PreservedAnalyses::none()
+    }
 }
 
 /// What the function costs as it stands: `profit::motion_price` at the
