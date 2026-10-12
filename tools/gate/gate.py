@@ -273,7 +273,7 @@ def narrowed(p: Plan, cfg: dict, live: list[str]) -> Plan:
     """The steps for a diff with none of the compiler's source: each covers the files it was written for. The binaries are built first
     where a step runs them."""
     steps = ["pytest"]
-    if any(f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/")) for f in live):
+    if any(f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/")) or matches(f, cfg["integration_inputs"]["paths"]) for f in live):
         steps.append("integration")
     for directory in sorted({d for f in live if (d := data_dir(f))}):
         steps += sorted(readers(directory, cfg))
