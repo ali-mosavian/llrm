@@ -125,3 +125,11 @@ def test_wide_figures_and_tables_scroll_inside_their_box_not_the_page(tmp_path):
     css = next(out.rglob("*.css")).read_text()
     assert "figure{" in css and "overflow-x:auto" in css.split("figure{", 1)[1].split("}", 1)[0]
     assert ".tbl{overflow-x:auto" in css and "main{min-width:0}" in css
+
+
+def test_the_dark_scheme_styles_scrollbars_and_form_controls_dark(tmp_path):
+    """The figure scrollbar track was bright white in dark mode."""
+    out = tmp_path / "site"
+    build.main(["--out", str(out)])
+    css = next(out.rglob("*.css")).read_text()
+    assert "prefers-color-scheme:dark){:root{color-scheme:dark" in css
