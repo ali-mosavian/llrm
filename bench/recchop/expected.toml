@@ -1,12 +1,13 @@
-reason = "ch default (user decision 2026-10-12): the rotated loops expose m16 allocator register choice (copies and frame reloads per outer trip, queens +3072 avoidable, 3033 inherent); follow-up issue for the allocator"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
 blessed = "2026-10-12"
 
 [c.O2]
-instructions = 5282
+instructions = 5408
 memory_operands = 763
 code_bytes = 162
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.0749
 
 [c.Os]
 instructions = 5920
@@ -14,3 +15,4 @@ memory_operands = 889
 code_bytes = 158
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.0818

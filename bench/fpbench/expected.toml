@@ -1,12 +1,13 @@
-reason = "ch default (user decision 2026-10-12): fewer executed instructions (guard replaces the loop-entry test; sum_three bytes +3 to +8 for fewer instructions and memory operands)"
+reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
 blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 21692
+instructions = 21693
 memory_operands = 5066
-code_bytes = 713
+code_bytes = 715
 data_bytes = 23
 bss_bytes = 0
+kernel_ms = 0.3003
 
 [bas.Os]
 instructions = 21763
@@ -14,13 +15,45 @@ memory_operands = 5120
 code_bytes = 707
 data_bytes = 23
 bss_bytes = 0
+kernel_ms = 0.3015
+
+[bq16.O2]
+instructions = 22623
+memory_operands = 5119
+code_bytes = 724
+data_bytes = 23
+bss_bytes = 0
+kernel_ms = 0.3126
+
+[bq16.Os]
+instructions = 22691
+memory_operands = 5173
+code_bytes = 716
+data_bytes = 23
+bss_bytes = 0
+kernel_ms = 0.3137
+
+[bq32.O2]
+instructions = 72508
+code_bytes = 820
+data_bytes = 29
+bss_bytes = 0
+kernel_ms = 1.3883
+
+[bq32.Os]
+instructions = 72513
+code_bytes = 814
+data_bytes = 29
+bss_bytes = 0
+kernel_ms = 1.388
 
 [c.O2]
-instructions = 19766
+instructions = 19768
 memory_operands = 3003
-code_bytes = 333
+code_bytes = 336
 data_bytes = 8
 bss_bytes = 0
+kernel_ms = 0.2643
 
 [c.Os]
 instructions = 19768
@@ -28,13 +61,15 @@ memory_operands = 3003
 code_bytes = 336
 data_bytes = 8
 bss_bytes = 0
+kernel_ms = 0.2643
 
 [nib.O2]
-instructions = 19914
+instructions = 19916
 memory_operands = 3003
-code_bytes = 483
+code_bytes = 494
 data_bytes = 16
 bss_bytes = 0
+kernel_ms = 0.2666
 
 [nib.Os]
 instructions = 19929
@@ -42,6 +77,7 @@ memory_operands = 3003
 code_bytes = 484
 data_bytes = 16
 bss_bytes = 0
+kernel_ms = 0.2669
 
 [ow.O2]
 instructions = 21603

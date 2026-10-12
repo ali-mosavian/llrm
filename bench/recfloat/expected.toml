@@ -1,12 +1,13 @@
-reason = "ch default (user decision 2026-10-12): fewer executed instructions (guard replaces the loop-entry test; sum_three bytes +3 to +8 for fewer instructions and memory operands)"
+reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
 blessed = "2026-10-12"
 
 [c.O2]
-instructions = 6022
+instructions = 9020
 memory_operands = 1010
-code_bytes = 87
+code_bytes = 89
 data_bytes = 12
 bss_bytes = 0
+kernel_ms = 0.1216
 
 [c.Os]
 instructions = 9021
@@ -14,3 +15,4 @@ memory_operands = 1010
 code_bytes = 87
 data_bytes = 12
 bss_bytes = 0
+kernel_ms = 0.1216
