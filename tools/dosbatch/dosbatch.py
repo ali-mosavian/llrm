@@ -472,7 +472,10 @@ def run(jobs: list[Job], work: Path, timeout: int | None = None, stall: int = 18
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
-    head = [f"mount c {work}", f"mount v {tools.mount}", r"set LIB=V:\LIB", "c:"]
+    # V: is Microsoft's BASIC install, mounted for the jobs that build with it: a program run on its own sees the same DOS whether or
+    # not a host has the install, which its instruction count depends on to the instruction
+    needs_tools = any(job.kind in ("bas", "obj") for job in jobs)
+    head = [f"mount c {work}", *([f"mount v {tools.mount}", r"set LIB=V:\LIB"] if needs_tools else []), "c:"]
     building = []
     for job in jobs:
         u = job.stem.upper()

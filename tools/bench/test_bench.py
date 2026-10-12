@@ -292,7 +292,7 @@ class StartupTests(unittest.TestCase):
     def test_every_language_has_a_startup_program(self):
         """Nib had no startup/startup.nib: its whole-program time was never netted, so it had no kernel_ms."""
         have = {one.language for one in bench.variants(bench.STARTUP)}
-        self.assertEqual(have, {"bas", "bq16", "c", "nib"})
+        self.assertEqual(have, {"bas", "bq16", "bq32", "c", "nib"})
 
 
 def test_every_basic_benchmark_has_a_variant_on_our_runtime_with_the_same_kernel():
@@ -403,3 +403,12 @@ def test_llrm_c_benches_find_the_os_layer_header(tmp_path):
     flag, directory = bench.c_include_arguments(tmp_path)
     assert flag == "-I"
     assert (Path(directory) / "llrm_os.h").exists()
+
+
+def test_without_the_microsoft_install_its_basic_is_skipped_by_name_and_ours_is_not(monkeypatch, tmp_path):
+    """The reason names the dialect, the directory and the variable, as the other unavailable tools do; bq16 and bq32 need none."""
+    monkeypatch.setitem(bench.run_tests.TOOLS, "qb45", bench.run_tests.TOOLS["qb45"]._replace(mount=tmp_path / "none") if hasattr(bench.run_tests.TOOLS["qb45"], "_replace") else __import__("dataclasses").replace(bench.run_tests.TOOLS["qb45"], mount=tmp_path / "none"))
+    have = {one.language: one for one in bench.variants(bench.BENCH / "fib")}
+    reason = bench.tools_missing(have["bas"])
+    assert "QB45_DIR" in reason and str(tmp_path / "none") in reason
+    assert bench.tools_missing(have["bq16"]) is None and bench.tools_missing(have["bq32"]) is None

@@ -1,53 +1,67 @@
-reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
 blessed = "2026-10-12"
 
 [bas.O2]
 code_bytes = 993
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3753.5267
+kernel_ms = 3753.5253
 
 [bas.Os]
 code_bytes = 942
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3750.7133
+kernel_ms = 3750.7177
 
 [bq16.O2]
 code_bytes = 966
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3706.6209
+kernel_ms = 3706.6112
 
 [bq16.Os]
 code_bytes = 931
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3703.813
+kernel_ms = 3703.8059
+
+[bq32.O2]
+instructions = 627546967
+code_bytes = 1395
+data_bytes = 127
+bss_bytes = 0
+kernel_ms = 9633.6602
+
+[bq32.Os]
+instructions = 627556801
+code_bytes = 1334
+data_bytes = 127
+bss_bytes = 0
+kernel_ms = 9633.7982
 
 [c.O2]
 code_bytes = 544
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3547.055
+kernel_ms = 3547.0561
 
 [c.Os]
 code_bytes = 513
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3682.6041
+kernel_ms = 3682.6052
 
 [nib.O2]
 code_bytes = 1475
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4514.0917
+kernel_ms = 4514.089
 
 [nib.Os]
 code_bytes = 1398
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4647.9978
+kernel_ms = 4647.9981
 
 [ow.O2]
 code_bytes = 544

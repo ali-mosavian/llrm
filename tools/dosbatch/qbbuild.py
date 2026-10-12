@@ -78,9 +78,10 @@ def build(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: 
     return built
 
 
-def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...], target: str) -> Built:
-    """`source` for one target."""
-    obj, exe = work / f"{source.stem}.{target}.obj", work / f"{source.stem}.{target}.EXE"
+def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...], target: str, name: str | None = None) -> Built:
+    """`source` for one target; its files are `name`'s (the source's stem) in `work`."""
+    stem = name or source.stem
+    obj, exe = work / f"{stem}.{target}.obj", work / f"{stem}.{target}.EXE"
     extra = ["-march=i486", dosbatch.m_flag(FLAT)] if target == FLAT else []
     done = dosbatch.subprocess.run(
         [str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", *qbruntime.frontend_flags(source), *flags, *extra, "-o", str(obj)],
@@ -113,3 +114,26 @@ def link16(program: Path, objects: dict[str, Path], exe: Path, libs: tuple[Path,
     for one in (program, *libs, *needed((program, *libs), objects)):
         command += ["file", str(one)]
     dosbatch._host(command)
+
+
+@dataclass(frozen=True)
+class Ran:
+    """A program's run: how it ended, what it wrote to standard output, and the guest instructions the whole run executed
+    (the emulator's end event: on virtual time, the same every run)."""
+
+    status: str
+    output: bytes
+    instructions: int
+
+
+def run(built: Built, work: Path, files: tuple[Path, ...] = (), conf: str | None = None, budget_ms: int | None = None, stdin: bytes | None = None) -> Ran:
+    """`built` run on its own in `work`."""
+    import json
+
+    job = dosbatch.Job("J", "exe", built.exe, files=(*built.files, *files), budget_ms=budget_ms, stdin=stdin)
+    result = dosbatch.run([job], work, **({"conf": conf} if conf else {}))["J"]
+    count = 0
+    for line in (work / "events.txt").read_text(errors="replace").splitlines():
+        if '"ev":"end"' in line:
+            count = json.loads(line).get("instructions", 0)
+    return Ran(result.status, qbruntime.raw_output(work, "J"), count)

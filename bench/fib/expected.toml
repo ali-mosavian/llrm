@@ -1,4 +1,4 @@
-reason = "new path: BASIC on our runtime (llrm), real mode, linked by jwlink (bq16), first measurement; no QB45 needed"
+reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
 blessed = "2026-10-12"
 
 [bas.O2]
@@ -7,7 +7,7 @@ memory_operands = 109453
 code_bytes = 176
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.9735
+kernel_ms = 4.9737
 
 [bas.Os]
 instructions = 372147
@@ -23,7 +23,7 @@ memory_operands = 109453
 code_bytes = 181
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 5.4079
+kernel_ms = 5.4082
 
 [bq16.Os]
 instructions = 404984
@@ -32,6 +32,20 @@ code_bytes = 181
 data_bytes = 15
 bss_bytes = 0
 kernel_ms = 5.4082
+
+[bq32.O2]
+instructions = 458306
+code_bytes = 218
+data_bytes = 21
+bss_bytes = 0
+kernel_ms = 5.6247
+
+[bq32.Os]
+instructions = 458306
+code_bytes = 218
+data_bytes = 21
+bss_bytes = 0
+kernel_ms = 5.6241
 
 [c.O2]
 instructions = 251745
