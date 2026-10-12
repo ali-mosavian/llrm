@@ -1,5 +1,5 @@
-reason = "coalesce takes loop blocks deepest first, the hottest copies first within a loop (x_binsearch -9.4% clocks m32): bintree c -O2 +2.6% instructions (the LCG chain in the loop takes a longer multiply sequence), qbsp/mandel/grep code bytes +0.3..1.9%, fib/crc/jpeg/grep/qbsp nib better"
-blessed = "2026-10-11"
+reason = "#1446: a phi whose arms are one address is that address, so the exit block's loads fold it (bintree c -O2 -2.5k instructions, -2 bytes; -Os the same)"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 144792
@@ -16,16 +16,16 @@ data_bytes = 17
 bss_bytes = 0
 
 [c.O2]
-instructions = 59060
+instructions = 56568
 memory_operands = 11825
-code_bytes = 291
+code_bytes = 289
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 55236
+instructions = 52744
 memory_operands = 12581
-code_bytes = 243
+code_bytes = 241
 data_bytes = 0
 bss_bytes = 0
 
