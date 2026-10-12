@@ -355,3 +355,10 @@ def test_spec_errors_name_the_line(spec, line, word):
 def test_error_text_carries_the_line():
     with pytest.raises(FigureError, match=r"^line 2: "):
         build('kind: graph\nnode A "a" fill=z')
+
+
+def test_a_figure_keeps_its_natural_size_so_text_stays_readable():
+    """A wide stack figure scaled to a phone's width drew 4px text."""
+    svg = figures.render("kind: stack\ncell \"a long label to make this wide\" off=\"bp+4\" note=\"and a long note on the right\"\n")
+    width = re.search(r'viewBox="[-\d. ]+? ([\d.]+) [\d.]+"', svg).group(1)
+    assert f"min-width:{width}px" in svg and f"max-width:{width}px" in svg
