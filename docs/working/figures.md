@@ -1,30 +1,32 @@
 # Figures and the docs site
 
 For contributors who add a diagram to a document or build the site. A figure is a
-short text spec in a `fig` fence; `--sync` draws it to an SVG that follows the
-reader's light or dark setting, commits it beside the document and shows it on GitHub
-with the spec collapsed under it. The docs read the same on GitHub with no build.
+short text spec in `docs/assets/figures/NAME.fig`; `--sync` draws it to `NAME.svg`
+beside it, in the reader's light or dark setting. A document holds only the image,
+so GitHub shows it with no build.
 
 ## Adding a figure
 
-1. Write the spec as a `fig` fence in a Markdown file or in a Rust `//!` header.
-2. Run `python3 tools/docsbuild/build.py --sync`.
-3. Commit the changed Markdown, `docs/assets/figures/*.svg` and
-   `docs/optimizations/reference/*.md`.
+1. Write the spec in `docs/assets/figures/NAME.fig`.
+2. Reference the image from the document: `![what it shows](../assets/figures/NAME.svg)`,
+   with the path relative to the document.
+3. Run `python3 tools/docsbuild/build.py --sync` and commit the `.fig`, the `.svg` and
+   the document.
 
-`--sync` replaces each fence with an image and the fence inside `<details>`; run
-again it changes nothing. Edit the spec inside the `<details>` block and sync
-again. An image that no block refers to is deleted. `--check` (and CI) fails when
-`--sync` would change a file.
+To change a figure, edit its `.fig` and run `--sync` again. A spec written as a `fig`
+fence in a document works too: `--sync` moves it to a `.fig` named after the document
+(`docs-working-figures-1`) and leaves the image reference. An `.svg` with no `.fig` is
+deleted, and a `.fig` no document references fails `--check`, which CI runs.
 
 The pass, analysis and backend pages in `docs/optimizations/reference/` are written
 by `--sync` from the `//!` headers (extracted by `tools/passdocs.py`); edit the
-header, not the page. A figure in a header lands on those pages the same way.
+header, not the page. A `fig` fence stays in the header: it becomes an image on those
+pages, named after the crate and file (`llrm-analysis-cfg-1`), with no `.fig`.
 
 ## Writing a figure
 
-A figure is a fenced block whose language is `fig`, in a Markdown file or in a
-Rust `//!` header. The first line names the kind. Lines starting with `#` are comments.
+A spec is the text of a `.fig` file, or the body of a `fig` fence in a Rust `//!`
+header. The first line names the kind. Lines starting with `#` are comments.
 
 ```text
 kind: graph | stack | lanes
@@ -47,38 +49,9 @@ Boxes and arrows, laid out in layers. Back edges become arcs around the drawing.
 
 The fills `a` to `e` are a fixed categorical palette; without `fill` a node is neutral.
 
-<!-- figure:docs-working-figures-1 -->
 ![From source to object file](../assets/figures/docs-working-figures-1.svg)
 
-<details><summary>Figure source</summary>
-
-```fig
-kind: graph
-dir: down
-title: From source to object file
-node qb "QuickBASIC\nllrm-qb" fill=a
-node nib "Nib\nllrm-nib" fill=a
-node c "C\nllrm-c" fill=a
-node hir "HIR\nllrm-hir"
-node mir "MIR\nllrm-mir"
-node opt "Optimizer\nllrm-transforms" fill=b
-node sel "Instruction selection\nLIR over virtual values"
-node ph "Machine phases\nregister allocation, peephole"
-node obj "Object writer\nOMF, ELF, COFF, Mach-O" fill=c
-edge qb -> hir
-edge nib -> hir
-edge c -> hir
-edge hir -> mir "mir::emit"
-edge mir -> opt
-edge opt -> sel "lowering boundary"
-edge sel -> ph
-edge ph -> obj
-group front "Source front ends": qb nib c
-group back "Backend": sel ph obj
-```
-
-</details>
-<!-- /figure -->
+Source: [docs-working-figures-1.fig](../assets/figures/docs-working-figures-1.fig)
 
 ### stack
 
@@ -92,28 +65,9 @@ A memory, stack or record layout, top to bottom as written.
 | `bracket "label" from=N to=M` | Spans cells N to M, counting `cell` and `gap` lines from 1 |
 | `scale: yes` | Cell heights follow `size` (8 pixels a unit, at most 160) |
 
-<!-- figure:docs-working-figures-2 -->
 ![Frame of a QuickBASIC procedure (far call, Pascal order)](../assets/figures/docs-working-figures-2.svg)
 
-<details><summary>Figure source</summary>
-
-```fig
-kind: stack
-title: Frame of a QuickBASIC procedure (far call, Pascal order)
-arrow "higher addresses" up
-cell "formal 1" off="bp+8" size="2"
-cell "formal 2" off="bp+6" size="2" note="last formal: nearest the return address"
-cell "return address" off="bp+2" size="4" note="far: offset, then segment" fill=a
-cell "runtime header" off="bp" size="10" note="saved BP, frame chain, SI, DI (QB 4.5)" fill=b
-cell "locals and spills" note="SP is at the bottom"
-gap "..."
-arrow "stack grows down" down
-bracket "pushed by the caller" from=1 to=3
-bracket "B$ENRA" from=4 to=5
-```
-
-</details>
-<!-- /figure -->
+Source: [docs-working-figures-2.fig](../assets/figures/docs-working-figures-2.fig)
 
 ### lanes
 
@@ -127,27 +81,9 @@ A timeline of lanes over numbered columns, or a call and return sequence.
 | `mark LANE N "label" [kind=error\|ok]` | A point in column N |
 | `msg FROMLANE TOLANE N "label" [kind=call\|ret]` | An arrow between two lanes in column N; `ret` is dashed |
 
-<!-- figure:docs-working-figures-3 -->
 ![A change while a shared borrow is still used](../assets/figures/docs-working-figures-3.svg)
 
-<details><summary>Figure source</summary>
-
-```fig
-kind: lanes
-title: A change while a shared borrow is still used
-lane v "v (owner)"
-lane r "r = &v[0]"
-tick 1 "let mut v"
-tick 2 "let r = &v[0]"
-tick 3 "v.push(3)"
-tick 4 "print(r)"
-span v 1 4 "owner" kind=owner
-span r 2 4 "shared borrow, live to its last use" kind=shared
-mark v 3 "refused: r is used later" kind=error
-```
-
-</details>
-<!-- /figure -->
+Source: [docs-working-figures-3.fig](../assets/figures/docs-working-figures-3.fig)
 
 ## Building the site
 
@@ -155,11 +91,11 @@ mark v 3 "refused: r is used later" kind=error
 python3 tools/docsbuild/build.py --out site
 ```
 
-writes the site to `site/`; open `site/index.html`. The site draws each figure
-inline from its spec. `--check` fails on stale generated files, a figure that does
+writes the site to `site/`; open `site/index.html`. `--check` fails on stale generated
+files, a `fig` fence left in a document, a `.fig` no document uses, a figure that does
 not parse, a link that does not resolve in the site, or a Markdown construct the
-converter does not know. Links to files outside `docs/` become links to the
-repository on GitHub.
+converter does not know. Links to files outside `docs/` become links to the repository
+on GitHub.
 
 The converter's tests run with `uv run --project tools pytest tools/docsbuild`.
 

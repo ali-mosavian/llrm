@@ -5,10 +5,12 @@
     python3 tools/docsbuild/build.py --check        fail if --sync would change a file, then check the site
     python3 tools/docsbuild/build.py --out DIR      write the site to DIR
 
---sync is what contributors run after editing a figure or a `//!` header: GitHub shows
-docs/ as committed, without a build. The site converts the same Markdown. Exits 1 on a
-figure that does not parse, a link that does not resolve, a construct the converter does
-not know, or generated files that are stale.
+--sync is what contributors run after editing a figure source (docs/assets/figures/*.fig)
+or a `//!` header: GitHub shows docs/ as committed, without a build. A ```fig fence in a
+document is moved to a .fig and replaced by its image. The site converts the same
+Markdown. Exits 1 on a figure that does not parse, a .fig no document uses, a fence left
+in a document, a link that does not resolve, a construct the converter does not know, or
+generated files that are stale.
 """
 from __future__ import annotations
 
@@ -95,8 +97,6 @@ class Site:
             page.ids = {h[2] for h in page.res.headings}
         for page in self.pages.values():
             r = page.res
-            for line, msg in r.figure_errors:
-                self.errors.append(f"{page.src}:{line}: figure: {msg}")
             for line, what in r.unrecognised:
                 self.errors.append(f"{page.src}:{line}: unconverted construct: {what}")
             for line, href in r.links:
@@ -227,9 +227,8 @@ pre code{background:none;padding:0}
 blockquote{margin:1em 0;padding:.1em 1em;border-left:4px solid var(--bd);color:var(--mu)}
 .tbl{overflow-x:auto;max-width:100%}table{border-collapse:collapse;margin:1em 0}
 th,td{border:1px solid var(--bd);padding:.35rem .7rem;vertical-align:top;text-align:left}th{background:var(--sf)}
-img{max-width:100%;height:auto}figure{margin:1.2em 0;text-align:center;overflow-x:auto}figure svg{height:auto}main{min-width:0}
+img{max-width:100%;height:auto}img[src$=".svg"]{max-width:none}p:has(>img[src$=".svg"]){overflow-x:auto}main{min-width:0}
 .src{margin-top:3rem;font-size:.85rem;color:var(--mu)}
-.figerr{border-color:#cf222e;color:#cf222e}
 @media (max-width:52rem){.wrap{grid-template-columns:minmax(0,1fr);gap:0}nav{position:static;max-height:40vh;border-bottom:1px solid var(--bd)}}
 """
 
@@ -254,6 +253,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.sync or args.check:
         p = sync.plan(ROOT)
         errors += p.errors
+        if args.check:
+            errors += sync.fence_errors(ROOT)
         if args.sync and not p.errors:
             sync.apply(ROOT, p)
             print(f"synced {len(p.writes)} written, {len(p.deletes)} deleted")
