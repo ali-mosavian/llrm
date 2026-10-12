@@ -992,6 +992,24 @@ def test_registers_of_a_body_with_no_open_phi_set_nothing_up(tmp_path):
     assert own["analysis registers"] <= 25.0, f"{own['analysis registers']:.1f} Minstr"
 
 
+def test_liveness_of_a_body_is_followed_when_the_values_are_live_in_few_blocks(tmp_path):
+    """branches(512) at -O2 with -ftree-ch: the choice between following each value through the blocks it is live in and solving rows of bits
+    was made from where each value first and last occurs in the layout, and a value whose uses lie far apart (the copy of a header test) read as
+    one live in all the blocks between: 607 k steps against 22 k without the copy, so the rows were solved, blocks times words, for every
+    caller of `allocate::live`. `lir twoaddr` read 855 Minstr, `intervals walk` 534, `lir pressuresink` 311 (x3.2-3.7 for N=512 -> 1024); the
+    walk is tried at the cost of the rows and given up there: 344, 55, 58 (x2.0-2.2). A bound of 500 on twoaddr and 150 on the others fails
+    the first."""
+    source = tmp_path / "branches512.c"
+    source.write_text(gate.generated("branches", 512))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["lir twoaddr"] > 20.0, f"premise: twoaddr ran ({own['lir twoaddr']:.1f} Minstr)"
+    assert own["lir twoaddr"] <= 500.0, f"twoaddr {own['lir twoaddr']:.1f} Minstr"
+    assert own["intervals walk"] <= 150.0, f"walk {own['intervals walk']:.1f} Minstr"
+    assert own["lir pressuresink"] <= 150.0, f"pressuresink {own['lir pressuresink']:.1f} Minstr"
+
+
 def test_header_copy_on_a_nest_derives_the_registers_of_what_each_rotation_touched(tmp_path):
     """nest(64) at -O2 with -ftree-ch: each of the 64 rotations asked the registers of the whole function afresh (a fixed point and the cycle
     propagation over every value): `analysis registers` read 270 Minstr, and the doubling 64 -> 128 x3.3 (x2.0 without the copy). A fact is of the
