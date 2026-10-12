@@ -16,6 +16,26 @@ fn skipped(reason: &str) {
     assert!(std::env::var_os("LLRM_REQUIRE_DWARF").is_none(), "LLRM_REQUIRE_DWARF is set, and: {reason}");
 }
 
+/// `skipped`, for a tool that has its own requirement variable: the gate unsets
+/// `var` where it says the tool is not on the host (a runner has no Open Watcom
+/// install), so the test names what it lacked and skips; a host that has it
+/// sets `var` and fails without it.
+fn skipped_for(
+    var: &str,
+    reason: &str,
+) {
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
+    assert!(std::env::var_os(var).is_none(), "{var} is set, and: {reason}");
+}
+
+/// Open Watcom's wdump: `WDUMP`, else the development hosts' install.
+fn wdump() -> Option<PathBuf> {
+    std::env::var_os("WDUMP")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("dos/devtools/dev/c/watcom/binl/wdump")))
+        .filter(|path| path.exists())
+}
+
 fn llrm_c() -> PathBuf {
     Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-c")
 }
@@ -871,15 +891,15 @@ fn dwarf_in_an_omf_object_links_into_an_le_image_that_llvm_reads() {
 /// the linker's directive.
 #[test]
 fn dwarf_in_a_16_bit_omf_object_links_into_an_mz_image_that_wdump_reads() {
-    let wdump = std::env::var_os("WDUMP")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("dos/devtools/dev/c/watcom/binl/wdump")))
-        .filter(|path| path.exists());
-    let jwlink = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("jwlink");
-    let (Some(wdump), true) = (wdump, jwlink.exists()) else {
-        skipped("needs Open Watcom's wdump (WDUMP) and jwlink beside llrm");
+    let Some(wdump) = wdump() else {
+        skipped_for("LLRM_REQUIRE_WDUMP", "needs Open Watcom's wdump (WDUMP)");
         return;
     };
+    let jwlink = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("jwlink");
+    if !jwlink.exists() {
+        skipped("needs jwlink beside llrm");
+        return;
+    }
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");
@@ -951,13 +971,13 @@ fn a_value_in_two_registers_is_said_as_two_pieces() {
 /// size, no names); Open Watcom's convention is version 2.
 #[test]
 fn nib_dwarf_in_omf_links_into_images_that_independent_readers_read() {
-    let wdump = std::env::var_os("WDUMP")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("dos/devtools/dev/c/watcom/binl/wdump")))
-        .filter(|path| path.exists());
+    let Some(wdump) = wdump() else {
+        skipped_for("LLRM_REQUIRE_WDUMP", "needs Open Watcom's wdump (WDUMP)");
+        return;
+    };
     let bins = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().to_path_buf();
-    let (Some(dwarfdump), Some(wdump), true) = (dwarfdump(), wdump, bins.join("jwlink").exists()) else {
-        skipped("needs llvm-dwarfdump, Open Watcom's wdump (WDUMP) and jwlink beside llrm");
+    let (Some(dwarfdump), true) = (dwarfdump(), bins.join("jwlink").exists()) else {
+        skipped("needs llvm-dwarfdump and jwlink beside llrm");
         return;
     };
     let scratch = tempfile::tempdir().unwrap();
@@ -1016,15 +1036,15 @@ fn nib_dwarf_in_omf_links_into_images_that_independent_readers_read() {
 /// reader).
 #[test]
 fn a_far_16_bit_functions_cells_are_found_from_its_longer_frame_address() {
-    let wdump = std::env::var_os("WDUMP")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("dos/devtools/dev/c/watcom/binl/wdump")))
-        .filter(|path| path.exists());
-    let jwlink = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("jwlink");
-    let (Some(wdump), true) = (wdump, jwlink.exists()) else {
-        skipped("needs Open Watcom's wdump (WDUMP) and jwlink beside llrm");
+    let Some(wdump) = wdump() else {
+        skipped_for("LLRM_REQUIRE_WDUMP", "needs Open Watcom's wdump (WDUMP)");
         return;
     };
+    let jwlink = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("jwlink");
+    if !jwlink.exists() {
+        skipped("needs jwlink beside llrm");
+        return;
+    }
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");

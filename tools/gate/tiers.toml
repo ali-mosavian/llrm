@@ -180,6 +180,11 @@ needs = [
   { env = "TCPP30_DIR", default = "~/scratch/toolchains/tcpp30", marker = "lib/C0M.OBJ" },
 ]
 
+# Open Watcom's wdump reads the 16-bit DWARF images tests/dwarf.rs links; it is not built from this repository.
+[capability.wdump]
+require = ["LLRM_REQUIRE_WDUMP"]
+needs = [{ env = "WDUMP", default = "~/dos/devtools/dev/c/watcom/binl/wdump", marker = "." }]
+
 [capability.qcport]
 require = []
 needs = [

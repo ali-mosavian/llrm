@@ -684,3 +684,36 @@ def test_a_test_over_its_cpu_limit_fails_with_its_name_and_its_subprocess_is_kil
     assert "CPU LIMIT" in out and "test_a_compile_that_never_ends" in out, out
     assert "cpulimit-test-spinner" not in sp.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout, "the test's subprocess outlived the limit"
     assert "-p pytest_cpulimit" in gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["pytest"]
+
+
+def test_a_failed_step_prints_what_its_failing_tests_printed_not_only_the_log_tail():
+    """CI's integration job said `1 target failed: -p llrm --test dwarf` and nothing of why: the gate printed the last 30 lines of the log,
+    and the panic message was far above them."""
+    cargo = "\n".join(
+        ["running 22 tests", "...", "failures:", "", "---- a_test_that_needs_a_tool stdout ----", "",
+         "thread 'a_test_that_needs_a_tool' panicked at tests/dwarf.rs:16:5:", "LLRM_REQUIRE_DWARF is set, and: needs Open Watcom's wdump (WDUMP)", "",
+         "failures:", "    a_test_that_needs_a_tool", "", "test result: FAILED. 21 passed; 1 failed"]
+        + ["running 3 tests"] * 40
+        + ["error: 1 target failed:", "    `-p llrm --test dwarf`"]
+    )
+    shown = gate.failure_text(cargo)
+    assert "LLRM_REQUIRE_DWARF is set, and: needs Open Watcom's wdump" in shown and "a_test_that_needs_a_tool" in shown
+    assert "running 3 tests" not in shown
+    pytest_log = "\n".join(["= FAILURES =", "___ test_x ___", "    def test_x():", ">       assert 1 == 2", "E       assert 1 == 2", "= short test summary info =", "FAILED test_x.py::test_x"])
+    assert "E       assert 1 == 2" in gate.failure_text(pytest_log)
+    assert gate.failure_text("everything passed\n") == ""
+
+
+def test_what_a_runner_lacks_is_a_named_skip_and_what_it_needs_is_installed(tmp_path):
+    """GitHub CI was red on every commit: `tests/dwarf.rs` failed for want of Open Watcom's wdump (LLRM_REQUIRE_DWARF made a missing tool a
+    failure), the QB45 runtime-library tests errored in LIB.EXE for want of QB45, and the vsgcc harness could not link gcc -m32 programs
+    (no 32-bit libgcc: __divdi3). A tool the runner cannot have is a capability the gate names and skips; one it can have is installed."""
+    host = {"HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1"}
+    assert "wdump" in gate.missing_capabilities(host) and "LLRM_REQUIRE_WDUMP" in gate.load()["capability"]["wdump"]["require"]
+    (tmp_path / "wdump").write_text("")
+    assert "wdump" not in gate.missing_capabilities({**host, "WDUMP": str(tmp_path / "wdump")})
+    assert "LLRM_REQUIRE_WDUMP" in (gate.ROOT / "tools/debug-gate.env").read_text()
+    declared = gate.declared_requirements()
+    for test in ("test_qb32.py", "test_qbgfxspeed.py", "test_qbgfxfill.py"):
+        assert declared.get(f"tools/dosbatch/{test}") == ["qb45"], test
+    assert "gcc-multilib" in (gate.ROOT / ".github/actions/setup/action.yml").read_text()

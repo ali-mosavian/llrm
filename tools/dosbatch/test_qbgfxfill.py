@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 
+# QB45's LIB.EXE builds the runtime library these tests link: the gate drops the file where QB45 is not installed.
+REQUIRES = ["qb45"]
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
