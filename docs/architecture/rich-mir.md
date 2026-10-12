@@ -268,7 +268,7 @@ old MIR operation's.
 ### 6. Port the passes
 
 - One pass at a time onto MIR, against `.ll` fixtures, the interpreter and
-  the e2e answers, with quality judged by `docs/measurement/targets.md`.
+  the e2e answers.
   Where LLVM has the pass, llrm's follows it.
 - Representation changes stay apart from optimization-policy changes.
 - LLVM's CodeGenPrepare sinks a comparison into the block of the branch
@@ -280,7 +280,6 @@ old MIR operation's.
 Done (#323): the legacy route, then `Op`, `MemRef`, the old memory
 model and its analyses. LIR carries what it needs of a call as `CallMemory`;
 `backend/overlap.rs` compares machine addresses syntactically.
-`docs/history/mir-vocabulary.md` keeps the old vocabulary's story.
 
 ## Acceptance gates
 
@@ -300,5 +299,5 @@ Every step passes those that apply:
 8. Stripping `!llrm.origin` changes no output.
 9. The rewrite ledger accounts for every source byte, fixup and external
    landing point exactly once.
-10. Quality is judged by `docs/measurement/targets.md`; MIR is
+10. Quality is judged by the code emitted; MIR is
     infrastructure, not evidence of better code.

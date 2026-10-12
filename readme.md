@@ -9,7 +9,9 @@ backend, and writes linkable OMF `.OBJ` files.
 MIR passes are machine-independent; only lowering, allocation and peephole see
 registers or instructions. See [the MIR boundary](docs/architecture/split.md). The goal is
 output within 1.5× a hand-derived modern-compiler listing for every suite
-program; [targets](docs/measurement/targets.md) has the evidence and current gaps.
+program; [measurement](docs/working/measurement/readme.md) says how it is measured.
+
+Documentation starts at [docs](docs/readme.md).
 
 ## Frontends
 
@@ -99,8 +101,7 @@ LINK build/optimized/MAIN.OBJ+build/optimized/DRAW.OBJ,,,BCOM45.LIB
 Unsupported records, unresolved externals and unencodable code are errors;
 `--allow-unchanged` keeps a refused object as it was. `--basic-semantics` keeps
 BASIC's numeric runtime errors and conversions, and `--bounds-checks` keeps
-array checks. Audited external calls come from `--contracts PROFILE.json`; see
-[the profile format](docs/qrender/contracts/readme.md).
+array checks. 
 
 ## Optimizations
 
@@ -317,7 +318,7 @@ loop. The product is a 32-bit `imul` in `eax`, without a runtime call.
 
 `-g` makes an object carry CodeView line numbers, symbols and types. `LINK /CO`
 and CVPACK accept it, and CodeView shows the source, locals, parameters and
-`TYPE`s. [debugging.md](docs/debugging.md) finds a miscompile in a running DOS
+`TYPE`s. [debugging.md](docs/working/debugging.md) finds a miscompile in a running DOS
 program with dosrun: break on write, stack traces and map-file symbols.
 
 `llrm-qb --runtime-frames` calls the runtime's frame entry and exit in every
@@ -344,4 +345,4 @@ tools.
 
 For every failure, dump every stage and diff the first changed pair. Every fix
 needs a regression that fails before the fix. Testing details are in
-[docs/testing.md](docs/testing.md).
+[testing](docs/working/testing.md).
