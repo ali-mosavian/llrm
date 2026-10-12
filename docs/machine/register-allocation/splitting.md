@@ -33,19 +33,19 @@ A block that only passes the value through, with no interference, links its two 
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':46,'padding':16,'htmlLabels':true,'useMaxWidth':true}}}%%
-flowchart LR
+flowchart TB
   classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
-  subgraph before["BEFORE: v spans all three blocks"]
-    direction LR
-    a1["<b>entry</b><br/><small>defines v</small>"]:::mid --> a2["<b>loop</b><br/><small>reads v often<br/>no register free</small>"]:::warn --> a3["<b>exit</b><br/><small>reads v once</small>"]:::mid
-  end
   subgraph after["AFTER: the loop holds a piece"]
     direction LR
     b1["<b>entry</b><br/><small>defines v</small>"]:::mid -->|copy v to piece| b2["<b>loop</b><br/><small>reads the piece</small>"]:::opt -->|copy piece to v| b3["<b>exit</b><br/><small>reads v</small>"]:::mid
+  end
+  subgraph before["BEFORE: v spans all three blocks"]
+    direction LR
+    a1["<b>entry</b><br/><small>defines v</small>"]:::mid --> a2["<b>loop</b><br/><small>reads v often<br/>no register free</small>"]:::warn --> a3["<b>exit</b><br/><small>reads v once</small>"]:::mid
   end
   style before fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
   style after fill:#ea580c12,stroke:#ea580c,stroke-width:1.6px,stroke-dasharray:7 5,color:#ea580c

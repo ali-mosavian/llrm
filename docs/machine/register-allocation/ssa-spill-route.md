@@ -14,7 +14,7 @@ flowchart TB
   linkStyle default stroke:#64748b,stroke-width:2.2px
   st["<b>staged</b><br/><small>isel, frame, classes</small>"]:::src
   a["<b>route A: allocator alone</b><br/><small>PhiElimination ... RegAlloc splits and spills inline</small>"]:::mid
-  chk{"traffic over 0.5% of the work?"}
+  chk{"enough frame traffic?"}
   b["<b>route B: SsaSpill, then the same phases</b><br/><small>pressure cut on SSA, RegAlloc finishes</small>"]:::opt
   keep["<b>keep the cheaper</b><br/><small>clocks, or bytes at -Os; ties by the other measure</small>"]:::out
   st --> a --> chk

@@ -23,24 +23,21 @@ The code is in `crates/backend/llrm-core/src/backend`. The allocator is LLVM's g
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':30,'rankSpacing':40,'padding':16,'htmlLabels':true,'useMaxWidth':true}}}%%
-flowchart TB
+flowchart LR
   classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
-  isel["<b>isel, frame</b><br/><small>SSA LIR over virtual values, constraints on instructions</small>"]:::src
-  far["<b>FarIndirectCalls</b>"]:::mid
+  isel["<b>isel, frame</b><br/><small>SSA LIR, constraints</small>"]:::src
   ssa["<b>SsaSpill</b><br/><small>route B only</small>"]:::data
-  phi["<b>PhiElimination</b><br/><small>phis become parallel copies</small>"]:::mid
-  ps["<b>PressureSink, FloatFold, FloatAssign, FloatAlloc</b><br/><small>x87 values placed on the stack</small>"]:::mid
-  tw["<b>TwoAddress, Coalescer</b><br/><small>ties made, copies joined</small>"]:::mid
-  ra["<b>RegAlloc</b><br/><small>constrain, assign, split, spill, apply</small>"]:::opt
-  pc["<b>ParallelCopy</b>"]:::mid
-  pp["<b>Peephole, LoopSlots, Scheduler, ControlFlow</b>"]:::mid
-  masm["<b>masm</b><br/><small>prologue, saved registers, shrink-wrap</small>"]:::out
-  isel --> far --> ssa --> phi --> ps --> tw --> ra --> pc --> pp --> masm
+  phi["<b>PhiElimination, x87 phases</b><br/><small>parallel copies</small>"]:::mid
+  tw["<b>TwoAddress, Coalescer</b><br/><small>ties, joins</small>"]:::mid
+  ra["<b>RegAlloc</b><br/><small>constrain, assign, split, spill</small>"]:::opt
+  pp["<b>ParallelCopy, Peephole, LoopSlots, Scheduler, ControlFlow</b>"]:::mid
+  masm["<b>masm</b><br/><small>frame, saved registers</small>"]:::out
+  isel --> ssa --> phi --> tw --> ra --> pp --> masm
 ```
 
 *The phases of `flow::machine_with`, in order. `Prologue` is in the list and skipped where functions are made (`assemble::phased_to`); `masm` writes the prologue.*

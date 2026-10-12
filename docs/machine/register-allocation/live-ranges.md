@@ -8,24 +8,6 @@ Audience: an engineer debugging why two values did or did not share a register, 
 
 An [`Interval`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/analysis/intervals.rs#L38) is a sorted list of half-open `Segment`s plus a weight. A use ends a segment at the instruction's write slot, a definition starts one there, so a source that dies at an instruction and the destination it defines do not overlap and may share a register. A value defined and never read still has a one-slot segment. A segment that crosses a block boundary stays one segment (`_merged`); a redefinition leaves a hole.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','textColor':'#64748b','titleColor':'#64748b','gridColor':'#94a3b8','sectionBkgColor':'transparent','sectionBkgColor2':'transparent','altSectionBkgColor':'transparent','taskTextColor':'#ffffff','taskTextOutsideColor':'#64748b','taskTextLightColor':'#ffffff','taskTextDarkColor':'#ffffff','doneTaskBkgColor':'#16a34a','doneTaskBorderColor':'#166534','activeTaskBkgColor':'#2563eb','activeTaskBorderColor':'#1e40af','critBkgColor':'#dc2626','critBorderColor':'#991b1b','todayLineColor':'transparent'},'gantt':{'barHeight':30,'barGap':10,'topPadding':40,'leftPadding':120,'fontSize':14,'sectionFontSize':14,'numberSectionStyles':2}}}%%
-gantt
-  dateFormat X
-  axisFormat %s
-  tickInterval 1
-  section v6 (sum)
-  def, then used by the add   :done, a1, 1, 3
-  redefined by the add        :done, a2, 4, 9
-  section v9 (load)
-  one segment, one use        :active, b1, 2, 3
-  section v1 (limit)
-  live through, a hole        :done, c1, 1, 2
-  after its redefinition      :done, c2, 6, 9
-```
-
-*Illustrative slots, not a dump: a hole is the stretch between a value's last read and its next definition. Another value may hold the register there.*
-
 How segments are found: per block, backward from the values live out, a definition closes a segment and a use opens one at the block top if nothing defines it first. The walk is `_walked_at` in [`intervals.rs`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/analysis/intervals.rs#L1562); `LLRM_CHECK_RANGES=1` holds it to a plainer reference. A phi's result is defined at the block top, its arguments are read at the end of the predecessor (`allocate::live`). A parallel copy (`Insn::group`) reads all its sources before any write, so its moves are one point.
 
 Which values are live into and out of each block (`allocate::LiveRows`) is a bit-row fixed point, or, in a large body, is found by following each value up its predecessors from where it occurs ([`live_rows_by`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/allocate.rs#L593), `WebRows`). `LLRM_CHECK_LIVE=1` runs both and compares. [`liveness.rs`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/liveness.rs#L289) is another thing: which physical register and flag lanes are dead after allocation, for the peephole.
