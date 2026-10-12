@@ -106,3 +106,13 @@ def test_check_exits_nonzero_on_a_problem(tmp_path, monkeypatch, capsys):
 
 def test_check_passes_on_the_repository(capsys):
     assert build.main(["--check"]) == 0
+
+
+def test_a_page_declares_an_icon_a_viewport_and_both_colour_schemes(tmp_path):
+    """The built site asked the browser for /favicon.ico and got a 404 in the console."""
+    out = tmp_path / "site"
+    build.main(["--out", str(out)])
+    page = (out / "index.html").read_text()
+    assert 'rel="icon"' in page and 'name="viewport"' in page
+    css = next(out.rglob("*.css")).read_text()
+    assert "prefers-color-scheme:dark" in css and "max-width:52rem" in css
