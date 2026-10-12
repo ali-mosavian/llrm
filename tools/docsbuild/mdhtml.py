@@ -1,7 +1,7 @@
 """Small Markdown to HTML converter for this repository's documents.
 
 `convert(text)` returns a `Result`: the HTML, the headings with their ids, the
-links found, the figure errors, and `unrecognised`, the constructs it could not
+links found, and `unrecognised`, the constructs it could not
 convert (the build fails on any).
 """
 from __future__ import annotations
@@ -11,7 +11,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from html import escape as _esc
 
-from . import figblock, figures
 
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(.*)$")
 ATX = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$")
@@ -25,9 +24,7 @@ class Result:
     html: str = ""
     headings: list[tuple[int, str, str]] = field(default_factory=list)  # level, text, id
     links: list[tuple[int, str]] = field(default_factory=list)  # line, href
-    figure_errors: list[tuple[int, str]] = field(default_factory=list)
     unrecognised: list[tuple[int, str]] = field(default_factory=list)
-    figures: int = 0
 
 
 def slugify(text: str) -> str:
@@ -225,16 +222,8 @@ class Converter:
         if j >= len(lines):
             self.res.unrecognised.append((no, "code fence is never closed"))
         text = "\n".join(body)
-        if info == "fig":
-            self.res.figures += 1
-            try:
-                out.append(f'<figure class="figure">{figures.render(text)}</figure>')
-            except figures.FigureError as e:
-                self.res.figure_errors.append((no + e.line, e.message))
-                out.append(f'<pre class="figerr">figure error, line {e.line}: {esc(e.message)}</pre>')
-        else:
-            cls = f' class="language-{esc(info)}"' if info else ""
-            out.append(f"<pre><code{cls}>{esc(text)}\n</code></pre>")
+        cls = f' class="language-{esc(info)}"' if info else ""
+        out.append(f"<pre><code{cls}>{esc(text)}\n</code></pre>")
         return j + 1
 
     def _indented(self, lines, i, out) -> int:
@@ -401,7 +390,6 @@ class Converter:
 
 def convert(text: str, link_hook: Callable[[str], str] | None = None) -> Result:
     c = Converter(link_hook)
-    text = figblock.unwrap(text)
     lines = [(n, s.rstrip("\r")) for n, s in enumerate(text.expandtabs(4).split("\n"), 1)]
     c.res.html = c.blocks(lines)
     return c.res

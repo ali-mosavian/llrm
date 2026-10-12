@@ -13,7 +13,8 @@ EPS = 0.01
 
 
 def doc_figures() -> list[str]:
-    return re.findall(r"```fig\n(.*?)```", DOC.read_text(encoding="utf-8"), re.S)
+    folder = DOC.parents[1] / "assets" / "figures"
+    return [(folder / f"docs-working-figures-{n}.fig").read_text(encoding="utf-8") for n in (1, 2, 3)]
 
 
 def overlap(a, b):

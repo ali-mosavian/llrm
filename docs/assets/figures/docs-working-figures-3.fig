@@ -1,0 +1,11 @@
+kind: lanes
+title: A change while a shared borrow is still used
+lane v "v (owner)"
+lane r "r = &v[0]"
+tick 1 "let mut v"
+tick 2 "let r = &v[0]"
+tick 3 "v.push(3)"
+tick 4 "print(r)"
+span v 1 4 "owner" kind=owner
+span r 2 4 "shared borrow, live to its last use" kind=shared
+mark v 3 "refused: r is used later" kind=error

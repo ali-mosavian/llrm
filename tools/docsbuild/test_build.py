@@ -63,10 +63,9 @@ def test_unresolved_link_and_missing_anchor_are_reported_with_lines(tmp_path):
     assert any(e.startswith("docs/a/one.md:5:") and "#nope" in e for e in errors)
 
 
-def test_figure_error_and_unconverted_construct_fail_the_build(tmp_path):
-    files = dict(BASE, **{"docs/a/one.md": "# One\n\n```fig\nkind: graph\n```\n\n<blink>\n"})
-    errors, _ = run(tmp_path, files)
-    assert any("figure:" in e for e in errors) and any("unconverted construct" in e for e in errors)
+def test_unconverted_construct_fails_the_build(tmp_path):
+    errors, _ = run(tmp_path, dict(BASE, **{"docs/a/one.md": "# One\n\n<blink>\n"}))
+    assert any("unconverted construct" in e for e in errors)
 
 
 def test_links_to_files_outside_the_site_point_at_the_repository(tmp_path):
@@ -119,11 +118,11 @@ def test_a_page_declares_an_icon_a_viewport_and_both_colour_schemes(tmp_path):
 
 
 def test_wide_figures_and_tables_scroll_inside_their_box_not_the_page(tmp_path):
-    """At 390px a wide figure was scaled to 4px text and a table lost its right column: neither scrolled."""
+    """At 390px a wide figure (now an image) was scaled to 4px text and a table lost its right column: neither scrolled."""
     out = tmp_path / "site"
     build.main(["--out", str(out)])
     css = next(out.rglob("*.css")).read_text()
-    assert "figure{" in css and "overflow-x:auto" in css.split("figure{", 1)[1].split("}", 1)[0]
+    assert 'p:has(>img[src$=".svg"]){overflow-x:auto}' in css and 'img[src$=".svg"]{max-width:none}' in css
     assert ".tbl{overflow-x:auto" in css and "main{min-width:0}" in css
 
 

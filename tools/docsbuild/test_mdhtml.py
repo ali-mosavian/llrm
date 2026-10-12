@@ -42,16 +42,6 @@ def test_fence_has_language_class_and_escapes():
     assert html("```asm\nmov <ax>\n```") == '<pre><code class="language-asm">mov &lt;ax&gt;\n</code></pre>'
 
 
-def test_fig_fence_renders_inline_svg():
-    r = convert('```fig\nkind: graph\nnode A "a"\n```')
-    assert "<figure" in r.html and "<svg" in r.html and r.figures == 1 and not r.figure_errors
-
-
-def test_bad_fig_fence_is_reported_with_the_document_line():
-    r = convert('text\n\n```fig\nkind: graph\nnode A "a"\nedge A -> Z\n```')
-    assert r.figure_errors == [(3 + 3, "unknown node 'Z'")] and "figerr" in r.html
-
-
 def test_table_alignment_and_escaped_pipe():
     h = html("| a | b | c |\n|:--|:-:|--:|\n| 1 | `x\\|y` | 3 |\n")
     assert 'text-align:left' in h and 'text-align:center' in h and 'text-align:right' in h

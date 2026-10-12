@@ -1,0 +1,12 @@
+kind: stack
+title: Frame of a QuickBASIC procedure (far call, Pascal order)
+arrow "higher addresses" up
+cell "formal 1" off="bp+8" size="2"
+cell "formal 2" off="bp+6" size="2" note="last formal: nearest the return address"
+cell "return address" off="bp+2" size="4" note="far: offset, then segment" fill=a
+cell "runtime header" off="bp" size="10" note="saved BP, frame chain, SI, DI (QB 4.5)" fill=b
+cell "locals and spills" note="SP is at the bottom"
+gap "..."
+arrow "stack grows down" down
+bracket "pushed by the caller" from=1 to=3
+bracket "B$ENRA" from=4 to=5
