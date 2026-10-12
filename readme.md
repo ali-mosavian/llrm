@@ -151,7 +151,7 @@ L0_0:
     add si, ax                      ; [biased] a + 2n, so a[i] is at [bx+si]
     add di, ax                      ; [biased] b + 2n
     xor eax, eax                    ; total = 0
-    or cx, cx
+    test cx, cx
     jle L0_6                        ; [loop rotation] one guard for n <= 0; the test moves to the bottom
 L0_21:
 L0_8:
@@ -203,7 +203,7 @@ L0_9:                               ; bx = min(len(a), len(b)): zip ends with th
     lea si, [eax+edx]               ; [biased] a's data + 2*count
     add di, dx                      ; [biased] b's data + 2*count
     xor eax, eax                    ; total = 0
-    or bx, bx
+    test bx, bx
     je L0_29                        ; [loop rotation] no elements: skip the loop
 L0_31:
     mov bx, cx
@@ -278,7 +278,7 @@ L1_12:
     add si, ax                      ; [biased] a's offset + 2 * bound; the +2 is in the loop's
     add di, ax                      ; [biased] b's offset + 2 * bound; displacement
     xor eax, eax                    ; total = 0
-    or cx, cx
+    test cx, cx
     jl L1_49                        ; [loop rotation] bound < 0: no iterations
 L1_34:
     movsx ecx, word ptr es:[bx+si+2] ; a(i), sign-extended
