@@ -1,14 +1,28 @@
 # Docs
 
-For readers and contributors of llrm. Start at the [root readme](../readme.md) for what
-llrm is and how to build it.
+For readers and contributors of llrm. Read in this order; each section's readme lists its documents.
+
+```
+ readme.md -> architecture -> frontends -> optimizations -> formats
+  (what, how    (pipeline,    (QB, Nib, C,   (one note per     (objects,
+   to build)     MIR, HIR)     BC objects)    optimization)     debug info)
+                                                    |
+                              working <- reference <- machine
+                           (test, debug,  (levels,    (x86 real mode,
+                            measure)       switches,   ABIs, targets)
+                                           tools, crates)
+```
 
 | Section | Holds |
 |---|---|
+| [root readme](../readme.md) | What llrm is, its programs, how to build and use them |
 | [architecture](architecture/readme.md) | The pipeline, the MIR boundary, HIR, analyses, source layout, packages |
-| [frontends](frontends/readme.md) | [QuickBASIC](frontends/qb/readme.md), [Nib](frontends/nib/readme.md), and [what the Open Watcom C front end gathers](frontends/c/ow-contract.md) |
+| [frontends](frontends/readme.md) | [QuickBASIC](frontends/qb/readme.md), [Nib](frontends/nib/readme.md), [what the Open Watcom C front end gathers](frontends/c/ow-contract.md), and [BC objects](frontends/bc.md) |
 | [optimizations](optimizations/readme.md) | One note per optimization, each measured on a program |
-| [machine](machine/readme.md) | x86 real mode: ABIs, prefixes, pointer lowering, targets |
 | [formats](formats/readme.md) | The object model and its writers; debug information |
-| [reference](reference/readme.md) | Optimization levels and the switches that change what a program means |
+| [machine](machine/readme.md) | x86 real mode: ABIs, prefixes, pointer lowering, targets |
+| [reference](reference/readme.md) | Optimization levels, the switches that change what a program means, the tools, the crates |
+| [comparison](comparison/readme.md) | llrm's output beside other compilers' |
 | [working](working/readme.md) | Testing, debugging, measuring, and what has broken before |
+
+Contributors also read [agents.md](../agents.md): the rules and method.
