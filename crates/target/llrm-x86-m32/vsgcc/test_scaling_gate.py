@@ -914,3 +914,16 @@ def test_lir_jumps_does_not_solve_the_liveness_of_every_value_for_each_anchor_it
     own = gate.own_work(command)
     assert own["lir jumps"] > 20.0, f"premise: jumps ran ({own['lir jumps']:.1f} Minstr)"
     assert own["lir jumps"] <= 230.0, f"{own['lir jumps']:.1f} Minstr"
+
+
+def test_header_copy_does_not_derive_the_loops_again_for_each_loop_it_copies(tmp_path):
+    """nest(32) at -O2 with -ftree-ch: each copied loop derived the loops of the whole function afresh (and each lsr'd loop once more): `analysis loops`
+    read 106 Minstr at N=32 and 789 at N=64. The loops are held through a run of rotations and edited as the rotation edits them: 20 and 82.
+    A bound of 50 at N=32 fails the first and passes the second."""
+    source = tmp_path / "nest32.c"
+    source.write_text(scaling.nest(32))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["analysis loops"] > 5.0, f"premise: loops were derived ({own['analysis loops']:.1f} Minstr)"
+    assert own["analysis loops"] <= 50.0, f"{own['analysis loops']:.1f} Minstr"

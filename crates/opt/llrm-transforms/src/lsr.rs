@@ -342,9 +342,10 @@ fn _graph(function: &Function) -> Vec<(BlockId, Vec<BlockId>)> {
     function.layout().iter().map(|&block| (block, function.successors(block))).collect()
 }
 
-/// What an edit that left the blocks and their edges as `before` had them leaves true: the
-/// analyses that read the graph and nothing else. A loop counted onto another counter changes
-/// no edge, and a nest of N loops derived the dominance and loops of the whole function N times.
+/// What an edit that left the blocks and their edges as `before` had them
+/// leaves true: the analyses that read the graph and nothing else. A loop
+/// counted onto another counter changes no edge, and a nest of N loops derived
+/// the dominance and loops of the whole function N times.
 fn _kept_graph(
     function: &Function,
     before: &[(BlockId, Vec<BlockId>)],

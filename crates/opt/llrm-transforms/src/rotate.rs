@@ -83,14 +83,121 @@ pub fn entered(
     copy: bool,
 ) -> Result<bool, String> {
     let mut done: llrm_mir::dense::IdSet<BlockId> = llrm_mir::dense::IdSet::new();
-    while proven && rotated(context, layout, function, analyses, &mut done)? {}
-    while copy && copied(context, layout, function, declared, analyses, &mut done)? {}
+    let mut forest = Forest::default();
+    while proven && rotated(context, layout, function, analyses, &mut forest, &mut done)? {}
+    while copy && copied(context, layout, function, declared, analyses, &mut forest, &mut done)? {}
     if done.is_empty() {
         return Ok(false);
     }
     crate::cfg::merged(function);
     crate::canonical::identities(context, function);
     Ok(true)
+}
+
+/// The function's natural loops, held through the rotations of one run. A
+/// rotation moves a loop's header to the block that follows it and its one
+/// latch to the old header, and splitting the edge into a loop puts one block
+/// into each loop around it: no other loop's blocks, headers or latches change,
+/// so the loops are not derived again for each rotation (a nest of N loops
+/// rotated N times, N^2 blocks of loops each time). `LLRM_CHECK_SHAPE` holds
+/// them to a new derivation after each.
+#[derive(Default)]
+struct Forest {
+    loops: Option<Vec<Loop>>,
+}
+
+impl Forest {
+    /// The shape of `function` as it stands: its dominance afresh (cheap) and
+    /// the loops held, made from `fresh` the first time; `fresh` holds it
+    /// too, so that what it derives next does not derive it again.
+    /// Give it back with `keep` once `fresh` is dropped.
+    fn shape(
+        &mut self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        fresh: &mut Analyses,
+    ) -> std::rc::Rc<cfg::Shape> {
+        let loops = match self.loops.take() {
+            Some(loops) => loops,
+            None => fresh.get::<cfg::Shape>(context, layout, function).loops.clone(),
+        };
+        let shape = std::rc::Rc::new(cfg::Shape {
+            dominance: cfg::Dominance::of(function),
+            loops,
+            reaching: Default::default(),
+        });
+        fresh.seed::<cfg::Shape>(function, std::rc::Rc::clone(&shape));
+        shape
+    }
+
+    fn keep(
+        &mut self,
+        shape: std::rc::Rc<cfg::Shape>,
+    ) {
+        self.loops = std::rc::Rc::try_unwrap(shape).ok().map(|shape| shape.loops);
+    }
+
+    /// The loop that had `header` is entered at `first` now and goes back from
+    /// `latch` alone.
+    fn rotated(
+        &mut self,
+        function: &Function,
+        header: i64,
+        first: i64,
+        latch: i64,
+    ) {
+        let Some(loops) = self.loops.as_mut() else { return };
+        if let Some(one) = loops.iter_mut().find(|one| one.header == header) {
+            one.header = first;
+            one.latches = BTreeSet::from([latch]);
+        }
+        Self::ordered(function, loops);
+        self.check(function);
+    }
+
+    /// `bridge` stands on the edge from `from` into the loop at `header`: it is
+    /// in the loops `from` is in.
+    fn split(
+        &mut self,
+        bridge: i64,
+        from: i64,
+        header: i64,
+    ) {
+        let Some(loops) = self.loops.as_mut() else { return };
+        for one in loops.iter_mut().filter(|one| one.header != header && one.body.contains(&from)) {
+            one.body.insert(bridge);
+        }
+    }
+
+    /// As `cfg::natural` lists them: smallest first, equal ones by the place in
+    /// the layout of the first of their latches.
+    fn ordered(
+        function: &Function,
+        loops: &mut [Loop],
+    ) {
+        let place: std::collections::HashMap<i64, usize> =
+            function.layout().iter().enumerate().map(|(at, &block)| (cfg::id(block), at)).collect();
+        loops.sort_by_key(|one| {
+            (
+                one.body.len(),
+                one.latches.iter().filter_map(|latch| place.get(latch)).min().copied().unwrap_or(usize::MAX),
+            )
+        });
+    }
+
+    fn check(
+        &self,
+        function: &Function,
+    ) {
+        if cfg!(test) || llrm_support::env_set("LLRM_CHECK_SHAPE") {
+            let fresh = cfg::Shape::of(function).loops;
+            assert!(
+                self.loops.as_ref() == Some(&fresh),
+                "the loops held through a rotation are not those of the function as it stands"
+            );
+        }
+    }
 }
 
 /// A loop this can enter at its body: `preheader` jumps only to `header`,
@@ -363,16 +470,17 @@ pub(crate) fn _rotate(
 }
 
 /// The first proven loop not in `done` entered at its body; whether one was.
-pub fn rotated(
+fn rotated(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &Analyses,
+    forest: &mut Forest,
     done: &mut llrm_mir::dense::IdSet<BlockId>,
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
+    let found = forest.shape(context, layout, function, &mut fresh);
     let facts = fresh.get::<Registers>(context, layout, function);
-    let found = fresh.get::<cfg::Shape>(context, layout, function);
     for loop_ in found.loops.clone() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
@@ -386,8 +494,15 @@ pub fn rotated(
         }
         _rotate(context, function, &shape, None, &[])?;
         done.insert(shape.first);
+        drop(facts);
+        drop(fresh);
+        forest.keep(found);
+        forest.rotated(function, cfg::id(shape.header), cfg::id(shape.first), cfg::id(shape.header));
         return Ok(true);
     }
+    drop(facts);
+    drop(fresh);
+    forest.keep(found);
     Ok(false)
 }
 
@@ -430,16 +545,17 @@ const MAX_HEADER_INSNS: usize = 20;
 /// body behind the copy; whether one was (`copy_headers`,
 /// `should_duplicate_loop_header_p`: a header that ends in the exit test,
 /// within the limit, calling nothing).
-pub fn copied(
+fn copied(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
     declared: &mut Declared,
     analyses: &Analyses,
+    forest: &mut Forest,
     done: &mut llrm_mir::dense::IdSet<BlockId>,
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
-    let found = fresh.get::<cfg::Shape>(context, layout, function);
+    let found = forest.shape(context, layout, function, &mut fresh);
     for loop_ in found.loops.clone() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
@@ -475,17 +591,25 @@ pub fn copied(
             .map(|(_, node)| *node);
         _rotate(context, function, &shape, Some(guard), &copies)?;
         _weighed(context, declared, function, &shape, weights, guard.1);
+        drop(facts);
+        drop(fresh);
+        forest.keep(found);
+        forest.rotated(function, cfg::id(shape.header), cfg::id(shape.first), cfg::id(shape.header));
         // Each following test that leaves the loop is copied too while the
         // budget lasts (`while (a && b)`): gcc's chain of headers.
         let mut first = shape.first;
         let mut remaining = MAX_HEADER_INSNS - insns;
-        while let Some((next, spent)) = _chained(context, layout, function, declared, analyses, first, remaining)? {
+        while let Some((next, spent)) =
+            _chained(context, layout, function, declared, analyses, forest, first, remaining)?
+        {
             first = next;
             remaining -= spent;
         }
         done.insert(first);
         return Ok(true);
     }
+    drop(fresh);
+    forest.keep(found);
     Ok(false)
 }
 
@@ -501,6 +625,7 @@ fn _chained(
     function: &mut Function,
     declared: &mut Declared,
     analyses: &Analyses,
+    forest: &mut Forest,
     first: BlockId,
     remaining: usize,
 ) -> Result<Option<(BlockId, usize)>, String> {
@@ -509,8 +634,11 @@ fn _chained(
     });
     let Some(preheader) = preheader else { return Ok(None) };
     let mut fresh = analyses.fresh();
-    let found = fresh.get::<cfg::Shape>(context, layout, function);
-    let Some(loop_) = found.loops.iter().find(|one| one.header == cfg::id(first)).cloned() else { return Ok(None) };
+    let found = forest.shape(context, layout, function, &mut fresh);
+    let loop_ = found.loops.iter().find(|one| one.header == cfg::id(first)).cloned();
+    drop(fresh);
+    forest.keep(found);
+    let Some(loop_) = loop_ else { return Ok(None) };
     // The loop must be entered by the guard alone, over an edge of its own.
     if loop_.entering(function) != BTreeSet::from([preheader]) {
         return Ok(None);
@@ -536,13 +664,17 @@ fn _chained(
         return Ok(None);
     }
     let bridge = crate::edges::split(function, cfg::block(preheader), first, Vec::new())?;
-    let mut fresh = analyses.fresh();
-    let found = fresh.get::<cfg::Shape>(context, layout, function);
-    let Some(loop_) = found.loops.iter().find(|one| one.header == cfg::id(first)).cloned() else { return Ok(None) };
+    // The loop is as it was and a block stands on its way in, in the loops
+    // around.
+    forest.split(cfg::id(bridge), preheader, cfg::id(first));
     let Some(shape) = _shape_of(function, &loop_, true, true).filter(|shape| shape.preheader == bridge) else {
+        forest.check(function);
         return Ok(None);
     };
-    let Some((guard, copies)) = _copy_test(function, &shape) else { return Ok(None) };
+    let Some((guard, copies)) = _copy_test(function, &shape) else {
+        forest.check(function);
+        return Ok(None);
+    };
     let weights = function
         .instruction(function.terminator(shape.header).expect("a terminated header"))
         .metadata
@@ -551,6 +683,7 @@ fn _chained(
         .map(|(_, node)| *node);
     _rotate(context, function, &shape, Some(guard), &copies)?;
     _weighed(context, declared, function, &shape, weights, guard.1);
+    forest.rotated(function, cfg::id(shape.header), cfg::id(shape.first), cfg::id(shape.header));
     Ok(Some((shape.first, insns)))
 }
 

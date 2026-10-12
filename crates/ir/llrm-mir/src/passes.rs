@@ -880,6 +880,21 @@ impl Analyses {
             .map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
     }
 
+    /// `result` as `A`'s, for `function` as it stands: a caller that has worked
+    /// out what the analysis would derive (a pass that knows what its own
+    /// edit did to it) hands it on, and what is asked next of this cache is
+    /// not derived again from it.
+    pub fn seed<A: Analysis>(
+        &mut self,
+        function: &Function,
+        result: Rc<A::Result>,
+    ) {
+        self.cache.insert(
+            TypeId::of::<A>(),
+            Box::new(Entry::<A> { result, outer: Rc::clone(&self.outer), mark: function.mark() }),
+        );
+    }
+
     /// `A`'s result for `function`, computed once until invalidated.
     pub fn get<A: Analysis>(
         &mut self,
