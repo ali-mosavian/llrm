@@ -772,10 +772,8 @@ fn billed_asking_for_costly(trips: u64) -> (super::Run, u64) {
 #[test]
 fn test_a_steps_own_work_leaves_out_the_analyses_it_computed() {
     let (run, reference) = billed_asking_for_costly(2_000_000);
-    // The premise is in the clock's own unit: the analysis cost what the same
-    // loop costs alone.
     assert!(
-        run.idle_with_analyses * 2 >= reference,
+        analysis_was_billed(run.idle_with_analyses, reference),
         "premise: the analysis cost {} of {reference}",
         run.idle_with_analyses
     );
@@ -789,7 +787,33 @@ fn test_a_steps_own_work_leaves_out_the_analyses_it_computed() {
 #[test]
 fn test_the_premise_of_an_analysis_is_its_cost_in_the_clocks_unit_not_a_number_of_them() {
     let (run, reference) = billed_asking_for_costly(100_000);
-    assert!(run.idle_with_analyses * 2 >= reference, "the analysis cost {} of {reference}", run.idle_with_analyses);
+    assert!(
+        analysis_was_billed(run.idle_with_analyses, reference),
+        "the analysis cost {} of {reference}",
+        run.idle_with_analyses
+    );
+}
+
+/// The step billed the analysis, read in the clock's own unit against the same
+/// loop measured alone. CPU nanoseconds of one loop differ by more than 2x from
+/// one read to the next on a shared runner (1,351,415 against 2,947,056,
+/// #1442's CI): the floor is an eighth of the reference, which still
+/// tells a billed analysis from none.
+fn analysis_was_billed(
+    billed: u64,
+    reference: u64,
+) -> bool {
+    billed > 0 && billed * 8 >= reference
+}
+
+/// A noisy clock reads the analysis at 0.3 of its reference and the step still
+/// counts as billed; a step that billed nothing, or a tenth, does not.
+#[test]
+fn test_a_noisy_clock_still_shows_the_analysis_billed_and_none_does_not() {
+    assert!(analysis_was_billed(300_000, 1_000_000));
+    assert!(analysis_was_billed(1_351_415, 2_947_056));
+    assert!(!analysis_was_billed(0, 1_000_000));
+    assert!(!analysis_was_billed(100_000, 1_000_000));
 }
 
 /// Finds nothing to do, and counts how often it was asked.
