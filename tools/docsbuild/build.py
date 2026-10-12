@@ -215,6 +215,7 @@ class Site:
             '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
             '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
             f"<title>{html.escape(page.title)} - llrm</title>\n"
+            '<link rel="icon" href="data:,">\n'
             f'<link rel="stylesheet" href="{css}">\n</head>\n<body>\n'
             f'<header><a href="{home}">llrm</a></header>\n<div class="wrap">\n'
             f"{self.nav_html(page.src, top)}\n<main>\n{page.res.html}\n{source}\n</main>\n</div>\n</body>\n</html>\n"
