@@ -1,13 +1,7 @@
 # QB source frontend
 
-The executable progression is defined in [test-ladder.md](test-ladder.md).
 Small BC-compared runtime probes are required before qrender or qb-quake module
 substitution.
-[footprint.md](footprint.md) records both BASIC-owned `BC_CODE` and complete
-linked executable code (`BC_CODE + CODE`) for BC and the QB frontend after
-each integration round; `.OBJ` file lengths are never used as the code-size
-measurement.
-
 Status: implementation in progress. The common HIR boundary and an in-tree,
 dependency-free Rust source frontend now exist. All 17 qb-qrender BASIC
 modules pass the VBDOS syntax frontend, and all 17 now complete HIR, semantic

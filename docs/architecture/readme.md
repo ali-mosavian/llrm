@@ -1260,7 +1260,7 @@ one documented target without materially regressing another.
   The current uncommitted qrender rollout removes 10,590 code bytes across
   all 21 BASIC modules and restores E1M1 screenshot completion. Three dedicated
   QGL checks match baseline; broader renderer acceptance remains open. See
-  [the integration evidence](../qrender/readme.md) for assembly and runtime
+  the integration evidence for assembly and runtime
   results. This does not complete general spill optimization or copy propagation.
 - [ ] Add instruction scheduling for 486/P5/P6 only after their latency,
   dependency and pairing models are validated against primary sources.

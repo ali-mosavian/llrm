@@ -210,4 +210,3 @@ a Microsoft BASIC descriptor opcode or changing MIR.
 - [QB frontend](../../frontends/qb/readme.md) defines the first producer.
 - [QB real-mode memory model](../../frontends/qb/memory-model.md) defines the
   target and runtime facts carried through the adapter.
-- [QB implementation plan](../../frontends/qb/plan.md) gives staged gates.

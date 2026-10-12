@@ -2,7 +2,7 @@
 
 llrm's m32 output against gcc and clang: executed instructions, memory operands and a 486 clock
 estimate of each `bench/` C kernel in one emulator, and the hottest loop of each. Method, results and
-findings: [docs/vs-gcc.md](../../../../docs/vs-gcc.md).
+findings: [docs/vs-gcc.md](../../../../docs/working/measurement/vs-gcc.md).
 
     crates/target/llrm-x86-m32/vsgcc/run.sh                        # builds, runs, prints the tables; products in $VSGCC_WORK
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/harness.py sieve gccO2   # one program, one compiler
