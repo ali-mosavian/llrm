@@ -515,6 +515,21 @@ impl Analysis for Dominators {
     type Result = DominatorTree;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "dominators";
+    const INCREMENTAL: bool = true;
+
+    /// The blocks the changed edges reach are worked out again; nothing else
+    /// can move.
+    fn update(
+        previous: &DominatorTree,
+        changes: &[crate::module::Change],
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> Option<DominatorTree> {
+        previous.updated(function, changes)
+    }
+
     fn run(
         _: &Context,
         _: &DataLayout,
