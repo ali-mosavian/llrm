@@ -222,11 +222,12 @@ impl Analysis for Products {
             .with_registers(&registers)
             .with_shape(&shape)
             .with_counted(&counted);
-        profit::_loop_products_by_branch(
+        profit::_loop_products_by_branch_in(
             view.context,
             view.metadata,
             &outer.globals,
             function,
+            &shape,
             Some(&profit::proven_trips(&view, &registers)),
         )
     }
@@ -348,11 +349,12 @@ fn _function_price(
     let shape = fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
     let view =
         memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts).with_shape(&shape);
-    let frequencies = profit::_loop_products_by_branch(
+    let frequencies = profit::_loop_products_by_branch_in(
         view.context,
         view.metadata,
         &outer.globals,
         unit.function,
+        &shape,
         Some(&profit::proven_trips(&view, &facts)),
     )?;
     profit::motion_price(unit.context, unit.layout, outer, unit.function, &target.costs, target.room, &frequencies)

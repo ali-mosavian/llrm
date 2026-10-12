@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::backend::allocate::live;
+use crate::backend::allocate::live_rows_by;
 use crate::backend::overlap;
 use crate::backend::spiller::_may_write;
 use crate::model::ir::{Loc, Mem, Operation};
@@ -108,18 +108,29 @@ pub fn held(
     if found.is_empty() {
         return found;
     }
+    // Only these values are looked at, where they occur: every instruction of
+    // the body was walked, and the liveness of every value solved, afresh
+    // for each spill round to read the few homes in it.
+    let asked: BTreeSet<u32> = found.keys().copied().collect();
     // Every definition is a copy.
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        if !copies(one) {
-            for value in &one.defines {
-                found.shift_remove(value);
+    let reads = crate::backend::postings::following(body, |postings| {
+        let mut reads: BTreeSet<usize> = BTreeSet::new();
+        for &value in &asked {
+            if postings.defs(value).iter().any(|at| !copies(&body.blocks[at.0 as usize].insns[at.1 as usize])) {
+                found.shift_remove(&value);
             }
+            reads.extend(postings.uses(value).iter().map(|at| at.0 as usize));
         }
-    }
-    let (_, live_out) = live(body);
-    for block in &body.blocks {
-        let mut alive: BTreeSet<u32> =
-            live_out[&block.at].iter().copied().filter(|value| found.contains_key(value)).collect();
+        reads
+    });
+    let live_out = live_rows_by(body, |value| asked.contains(&value));
+    for (position, block) in body.blocks.iter().enumerate() {
+        let mut alive: BTreeSet<u32> = live_out.leaving(block.at).filter(|value| found.contains_key(value)).collect();
+        // Nothing of these values is live at the exit or read here: no
+        // instruction changes anything.
+        if alive.is_empty() && !reads.contains(&position) {
+            continue;
+        }
         for one in block.insns.iter().rev() {
             // What a pointer reaches is the optimizer's proof; what is checked
             // is a write to the cell itself.

@@ -2139,9 +2139,18 @@ fn narrow_to(
 /// Every interval known at each block: a loop's counters and what they
 /// compute, narrowed by the branch edges that dominate it.
 pub fn scoped(unit: &Unit) -> Result<Facts, String> {
-    let mut result = bounded(unit)?;
-    for (at, edges) in dominated_edges(unit)? {
-        let known = result.entry(at).or_default();
+    // The solve's own edges are the ones put in: a block no counted loop holds
+    // has them as its facts already, and narrowing a map by itself, entry
+    // by entry for every block of a chain of N branches, was most of the
+    // work (N^2 of them).
+    let bounds = bounded_solved(unit, &unit.registers(), None)?;
+    let mut result = bounds.facts();
+    for (at, edges) in &bounds.edges {
+        if !bounds.within.contains_key(at) {
+            continue;
+        }
+        let edges = (**edges).clone();
+        let known = result.entry(*at).or_default();
         for (value, interval) in edges {
             match known.get(&value) {
                 Some(previous) if previous.width == interval.width => {
