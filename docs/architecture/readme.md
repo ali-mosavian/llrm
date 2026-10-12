@@ -146,7 +146,7 @@ flowchart TB
   c["<b>interprocedural: inline,</b><br/><small>parameter ranges,<br/>specialisation<br/>(a changed body goes<br/>through Fixed again)</small>"]:::mid
   d["<b>globaldce</b><br/><small>availableexternally<br/>calleepop</small>"]:::mid
   e["[freeze summaries<br/>and GlobalsAA]"]:::note
-  f["<b>rotate with header copy</b><br/><small>(when on), fixednarrow, lsr</small>"]:::mid
+  f["<b>rotate with header copy</b><br/><small>(on at -O1 and up, not -Os), fixednarrow, lsr</small>"]:::mid
   g["<b>window, rotate, jumpthread,</b><br/><small>hoist, gepoffset</small>"]:::mid
   h["<b>addresssink, spares, homes</b>"]:::mid
   a --> b

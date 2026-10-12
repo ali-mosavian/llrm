@@ -70,6 +70,12 @@
 //!   takes the loop test's branch weights, else the loop heuristic's, so the
 //!   way into the loop is laid out as the likely one.
 //!
+//! The copy is on at -O1 and up, not at -Os (`-fno-tree-ch` turns it off): the
+//! user's decision of 2026-10-12 (docs/reference/levels.md) accepts its compile
+//! cost (+9.3% at -O1, +14.0% at -O2 over the vsgcc programs) and the m16 bench
+//! rows it moves (#1557); the steeper slopes of rotate, loopslots and
+//! `analysis registers` on nests and many-loop functions are #1559.
+//!
 //! A rotated loop is no longer the pre-tested shape the counted-loop
 //! analyses, [`crate::peel`] and [`crate::unroll`] read, so rotation goes
 //! after them. [`crate::lsr`] enters a loop it counts to zero at its body too,
@@ -133,11 +139,18 @@
 //!
 //! # Runs
 //! Twice in [`crate::pipeline`], outside the per-body fixed point. `copy` runs
-//! only with `-ftree-ch` (`copy_headers`, off at every level) and not at
-//! `-Os`, after the interprocedural step and before `fixednarrow`, followed by
-//! loop simplification, LCSSA and cleanup. `proven` always runs, last of the
-//! loop passes, after `window`. `LLRM_DEBUG=census` prints what the trip-count
-//! analyses prove per loop, to compare builds with and without `-ftree-ch`.
+//! with `copy_headers` (`-ftree-ch`, on at -O1 and up, `-fno-tree-ch` turns it
+//! off) and not at `-Os`, after the interprocedural step and before
+//! `fixednarrow`, followed by loop simplification, LCSSA and cleanup. `proven`
+//! always runs, last of the loop passes, after `window`. `LLRM_DEBUG=census`
+//! prints what the trip-count analyses prove per loop, to compare builds with
+//! and without `-ftree-ch`.
+//!
+//! On by default is the user's decision of 2026-10-12
+//! (docs/reference/levels.md): compile +9.3% at -O1 and +14.0% at -O2 over the
+//! vsgcc programs, the m16 bench rows it moves (#1557), and steeper slopes of
+//! rotate, loopslots and `analysis registers` on nests and many-loop functions
+//! (#1559).
 //!
 //! # Keeps
 //! Nothing where it changes a body.
@@ -204,7 +217,7 @@ pub fn entered(
     layout: &DataLayout,
     function: &mut Function,
     declared: &mut Declared,
-    analyses: &Analyses,
+    analyses: &mut Analyses,
     proven: bool,
     copy: bool,
 ) -> Result<bool, String> {
@@ -600,13 +613,13 @@ fn rotated(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
-    analyses: &Analyses,
+    analyses: &mut Analyses,
     forest: &mut Forest,
     done: &mut llrm_mir::dense::IdSet<BlockId>,
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
     let found = forest.shape(context, layout, function, &mut fresh);
-    for loop_ in found.loops.clone() {
+    for loop_ in found.loops.iter() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
         }
@@ -615,7 +628,7 @@ fn rotated(
         };
         // Asked of the first loop that could be rotated: a body with none
         // derives nothing.
-        let facts = fresh.get::<Registers>(context, layout, function);
+        let facts = analyses.get::<Registers>(context, layout, function);
         let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
         let proven = induction::trip_count(&unit, &loop_, &facts).is_some();
         drop((unit, facts));
@@ -627,6 +640,7 @@ fn rotated(
         drop(fresh);
         forest.keep(found);
         forest.rotated(function, cfg::id(shape.header), cfg::id(shape.first), cfg::id(shape.header));
+        analyses.invalidate(function, &PreservedAnalyses::none());
         return Ok(true);
     }
     drop(fresh);
@@ -650,7 +664,7 @@ fn census(
     let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
     let name = format!("{id:?}");
     let (mut proofs, mut constant, mut symbolic) = (0, 0, 0);
-    for loop_ in found.loops.clone() {
+    for loop_ in found.loops.iter() {
         let found = induction::counted(&unit, &loop_, Some(&facts), false);
         proofs += usize::from(!found.is_empty());
         constant += usize::from(induction::trip_count(&unit, &loop_, &facts).is_some());
@@ -678,13 +692,13 @@ fn copied(
     layout: &DataLayout,
     function: &mut Function,
     declared: &mut Declared,
-    analyses: &Analyses,
+    analyses: &mut Analyses,
     forest: &mut Forest,
     done: &mut llrm_mir::dense::IdSet<BlockId>,
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
     let found = forest.shape(context, layout, function, &mut fresh);
-    for loop_ in found.loops.clone() {
+    for loop_ in found.loops.iter() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
         }
@@ -703,8 +717,8 @@ fn copied(
         // A loop proven to run needs no guard: it is entered at its body once
         // the loop passes are done (`rotated`, which unroll, peel and
         // fill wait for), as gcc's value propagation leaves it after its copy.
+        let facts = analyses.get::<Registers>(context, layout, function);
         let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
-        let facts = fresh.get::<Registers>(context, layout, function);
         if induction::trip_count(&unit, &loop_, &facts).is_some() {
             continue;
         }
@@ -723,6 +737,7 @@ fn copied(
         drop(fresh);
         forest.keep(found);
         forest.rotated(function, cfg::id(shape.header), cfg::id(shape.first), cfg::id(shape.header));
+        analyses.invalidate(function, &PreservedAnalyses::none());
         // Each following test that leaves the loop is copied too while the
         // budget lasts (`while (a && b)`): gcc's chain of headers.
         let mut first = shape.first;
@@ -752,7 +767,7 @@ fn _chained(
     layout: &DataLayout,
     function: &mut Function,
     declared: &mut Declared,
-    analyses: &Analyses,
+    analyses: &mut Analyses,
     forest: &mut Forest,
     first: BlockId,
     remaining: usize,
@@ -812,6 +827,7 @@ fn _chained(
     _rotate(context, function, &shape, Some(guard), &copies)?;
     _weighed(context, declared, function, &shape, weights, guard.1);
     forest.rotated(function, cfg::id(shape.header), cfg::id(shape.first), cfg::id(shape.header));
+    analyses.invalidate(function, &PreservedAnalyses::none());
     Ok(Some((shape.first, insns)))
 }
 

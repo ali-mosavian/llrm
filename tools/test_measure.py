@@ -10,7 +10,8 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 measure = importlib.import_module("measure")
-TOL = measure.tolerances()
+# The general limits: the rows the user accepted a rise on are tested apart.
+TOL = {name: limit for name, limit in measure.tolerances().items() if name != "accepted"}
 
 
 def made(compile=None, axes=None, passes=None):
@@ -354,3 +355,25 @@ def test_a_new_row_on_an_axis_whose_superlinear_work_rose_still_fails():
         passes={"callers O2 analysis call-effects": quad(0.02), "callers O2 analysis pointer-values": quad(0.04)},
     )
     assert measure.rises(base, grown, TOL)[1] != []
+
+
+def test_a_row_the_user_accepted_a_rise_on_passes_up_to_its_ceiling_and_fails_above_it():
+    """The header copy's compile cost was accepted on named rows: `[[measure.accepted]]` gives a row its own ceilings, and the general
+    tolerance still judges every other row and anything past the ceiling."""
+    base = made(files(**{f"p{i}": 1000 for i in range(66)}), {"nest O2": cost(100, 1000, 1)}, {"nest O2 mir lsr": [5.0, 10.0, 30.0, 300.0]})
+    now = made(
+        {k: v * 1.1 for k, v in base["compile"].items()},
+        {"nest O2": [2 * c for c in cost(100, 1000, 1)]},
+        {"nest O2 mir lsr": [5.0, 10.0, 60.0, 300.0]},
+    )
+    assert len(measure.rises(base, now, TOL)[1]) >= 3  # the geomean, the axis and the step all fail without the entry
+    limits = {"geomean": 1.1001, "worst": 1.1001}
+    every = {**TOL, "accepted": [
+        {"row": f"programs {level}", "why": "decision", **limits} for level in ("-O1", "-O2", "-O3", "-Os")
+    ] + [{"row": "nest O2", "why": "decision", "excess": 10.0, "worst": 2.5, "step_excess": 1.0, "pass_slack": 2.5}]}
+    assert measure.rises(base, now, every)[1] == []
+    above = {**every, "accepted": [{**one, **({"geomean": 1.0999} if one["row"] == "programs -O2" else {})} for one in every["accepted"]]}
+    assert any("programs -O2: geomean" in line for line in measure.rises(base, now, above)[1])
+    steeper = made(now["compile"], {"nest O2": [2 * c for c in cost(100, 1000, 40)]}, now["passes"])
+    assert any("nest O2" in line for line in measure.rises(base, steeper, every)[1])
+    assert measure.row_tolerance(TOL, "nest O2 mir lsr") is TOL  # a row nothing names keeps the general limits

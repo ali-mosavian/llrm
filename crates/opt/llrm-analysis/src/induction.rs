@@ -931,7 +931,10 @@ fn _proven(
                 && stepped
                 && abs(&step) == BigInt::from(1)
                 && _entered(unit, &shape, &start, &bound, IntPredicate::Ne, width);
-            Some(period)
+            // An access through an `inbounds` pointer bounds the trips of a
+            // loop tested for equality too, as of one tested for order.
+            let bounded = if inbounds { inbounds_backedges(unit, loop_) } else { None };
+            Some(period).into_iter().chain(bounded).min()
         } else if test != IntPredicate::Ne && abs(&step) != BigInt::from(1) {
             // An ordered test by more than one: promised not to wrap past the
             // bound, the counter reaches it in the distance divided by the

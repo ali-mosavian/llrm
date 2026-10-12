@@ -112,30 +112,33 @@ long dot(const int *a, const int *b, int n)
 
 ```asm
 _dot@3 proc far
+L0_0:
+    test cx, cx
+    jle L0_4294967297               ; [header copy] one guard for n <= 0, ahead of the prologue
+L0_17:
     push si                         ; a is in ax, b in dx, n in cx (regparm3); si and di are callee-saved
     push di
-L0_0:
     mov si, ax                      ; si = a, an address register: ax cannot address
     mov di, dx                      ; di = b
-    lea ax, [ecx+ecx]               ; ax = 2n, the byte length of each array
-    mov bx, ax
+    add cx, cx                      ; cx = 2n, the byte length of each array
+    mov bx, cx
     neg bx                          ; [one induction variable] bx = -2n is the counter and the offset
-    add si, ax                      ; [biased] a + 2n, so a[i] is at [bx+si]
-    add di, ax                      ; [biased] b + 2n
+    add si, cx                      ; [biased] a + 2n, so a[i] is at [bx+si]
+    add di, cx                      ; [biased] b + 2n
     xor eax, eax                    ; total = 0
-    test cx, cx
-    jle L0_6                        ; [loop rotation] one guard for n <= 0; the test moves to the bottom
-L0_21:
-L0_8:
+L0_4:
     movsx ecx, word ptr [bx+si]     ; a[i], sign-extended to 32 bits
     movsx edx, word ptr [bx+di]     ; b[i]
     imul ecx, edx                   ; (long)a[i] * b[i]: a 32-bit multiply, no runtime helper
     add eax, ecx                    ; total += product
     add bx, 2                       ; step one int; [flag reuse] its flags end the loop at 0
-    jne L0_8
-L0_6:
+    jne L0_4
+L0_2:
     pop di                          ; the long is already in eax: it returns there
     pop si                          ; no frame: nothing is on the stack
+    retf
+L0_4294967297:
+    xor eax, eax                    ; n <= 0: no saved registers were touched
     retf
 _dot@3 endp
 ```
@@ -159,35 +162,39 @@ _dot proc far
 L0_0:
     les bx, dword ptr [bp+6]        ; es:bx = a's slice: length, then data pointer
     lfs si, dword ptr [bp+10]       ; fs:si = b's slice
-    mov cx, word ptr es:[bx]        ; len(a)
-    mov dx, word ptr fs:[si]        ; len(b)
+    mov dx, word ptr es:[bx]        ; len(a)
+    mov cx, word ptr fs:[si]        ; len(b)
     les ax, dword ptr es:[bx+4]     ; [hoisted] es:ax = a's data
     lfs di, dword ptr fs:[si+4]     ; [hoisted] fs:di = b's data
-    cmp cx, dx
-    mov bx, dx
+    cmp dx, cx
     jae L0_9
 L0_8:
-    mov bx, cx
-L0_9:                               ; bx = min(len(a), len(b)): zip ends with the shorter slice,
-    lea dx, [ebx+ebx]               ; decided once, not tested in the loop
     mov cx, dx
-    neg cx                          ; [one induction variable] cx = -2*count
-    lea si, [eax+edx]               ; [biased] a's data + 2*count
-    add di, dx                      ; [biased] b's data + 2*count
-    xor eax, eax                    ; total = 0
-    test bx, bx
-    je L0_29                        ; [loop rotation] no elements: skip the loop
-L0_31:
+L0_9:                               ; cx = min(len(a), len(b)): zip ends with the shorter slice,
+    test cx, cx                       ; decided once, not tested in the loop
+    je L0_4294967297                ; [header copy] no elements: skip the loop
+L0_27:
+    add cx, cx
     mov bx, cx
-L0_16:
+    neg bx                          ; [one induction variable] bx = -2*count
+    lea si, [eax+ecx]               ; [biased] a's data + 2*count
+    add di, cx                      ; [biased] b's data + 2*count
+    xor eax, eax                    ; total = 0
+L0_12:
     movsx ecx, word ptr es:[bx+si]  ; a[i]
     movsx edx, word ptr fs:[bx+di]  ; b[i]
     imul ecx, edx
     add eax, ecx                    ; total += product
     add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
-    jne L0_16                       ; zip pairs the elements: no index, no bounds check
-L0_29:
+    jne L0_12                       ; zip pairs the elements: no index, no bounds check
+L0_25:
     pop di                          ; the long is in eax, where it returns
+    pop si
+    pop bp
+    retf
+L0_4294967297:
+    xor eax, eax
+    pop di
     pop si
     pop bp
     retf
@@ -230,41 +237,49 @@ DOT proc near
 L1_0:
     mov si, word ptr [bp+6]         ; a() descriptor: the arguments were pushed left to right
     mov bx, word ptr [bp+4]         ; b() descriptor
-    mov cx, word ptr [si+14]        ; UBOUND(a): one dimension, so its slot is fixed, from 0,
-    dec cx                          ; so the bound is its count less 1; no allocated test
-    mov ax, word ptr [bx+14]
-    dec ax                          ; UBOUND(b)
-    cmp cx, ax                      ; [inlined] Min%: no call, cx = the smaller bound
+    mov ax, word ptr [si+14]        ; UBOUND(a): one dimension, so its slot is fixed, from 0,
+    dec ax                          ; so the bound is its count less 1; no allocated test
+    mov cx, word ptr [bx+14]
+    dec cx                          ; UBOUND(b)
+    cmp ax, cx                      ; [inlined] Min%: no call, ax = the smaller bound
     jl L1_12
 L1_11:
-    mov cx, ax
+    mov ax, cx
 L1_12:
     mov es, word ptr [si+2]         ; [hoisted] es = a's data segment
     mov si, word ptr [si+10]        ; [hoisted] a's data offset
     mov fs, word ptr [bx+2]         ; [hoisted] fs = b's data segment
     mov di, word ptr [bx+10]        ; [hoisted] di = b's data offset
-    lea ax, [ecx+ecx]               ; ax = 2 * bound
+    test ax, ax
+    jl L1_4294967297                ; [header copy] bound < 0: no iterations
+L1_44:
+    add ax, ax                      ; ax = 2 * bound
     mov bx, ax
     neg bx
     add bx, -2                      ; [one induction variable] bx = -2 * (bound + 1)
     add si, ax                      ; [biased] a's offset + 2 * bound; the +2 is in the loop's
     add di, ax                      ; [biased] b's offset + 2 * bound; displacement
     xor eax, eax                    ; total = 0
-    test cx, cx
-    jl L1_49                        ; [loop rotation] bound < 0: no iterations
-L1_34:
+L1_27:
     movsx ecx, word ptr es:[bx+si+2] ; a(i), sign-extended
     movsx edx, word ptr fs:[bx+di+2] ; b(i)
     imul ecx, edx                   ; CLNG(a(i)) * b(i)
     add eax, ecx                    ; total += product
     add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
-    jne L1_34
-L1_49:
+    jne L1_27
+L1_42:
     shld edx, eax, 16               ; the long returns in DX:AX
     pop di
     pop si
     pop bp
     ret 4                           ; the callee pops the two arguments
+L1_4294967297:
+    xor eax, eax
+    shld edx, eax, 16
+    pop di
+    pop si
+    pop bp
+    ret 4
 DOT endp
 ```
 

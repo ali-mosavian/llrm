@@ -217,8 +217,9 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
     };
     let facts = constant_cycles::propagated(
         unit,
-        &facts,
+        facts.clone(),
         Some(constant_cycles::Successors { choose: &successors, reads: &reads }),
+        None,
     );
     let scoped = ranges::bounds(unit)?;
     let mut out = Vec::new();

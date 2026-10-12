@@ -1,13 +1,12 @@
-reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
+reason = "ch default (user decision 2026-10-12): the rotated loops expose m16 allocator register choice (#1557)"
 blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 1057
-memory_operands = 463
-code_bytes = 713
+instructions = 1094
+memory_operands = 503
+code_bytes = 716
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0231
 
 [bas.Os]
 instructions = 1134
@@ -18,42 +17,37 @@ bss_bytes = 0
 kernel_ms = 0.0244
 
 [bq16.O2]
-instructions = 1461
-memory_operands = 497
-code_bytes = 722
+instructions = 1468
+memory_operands = 537
+code_bytes = 725
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0297
 
 [bq16.Os]
-instructions = 1534
+instructions = 1512
 memory_operands = 569
 code_bytes = 667
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.031
 
 [bq32.O2]
-instructions = 51736
-code_bytes = 717
+instructions = 51722
+code_bytes = 700
 data_bytes = 19
 bss_bytes = 0
-kernel_ms = 1.0935
 
 [bq32.Os]
-instructions = 51730
+instructions = 51721
 code_bytes = 663
 data_bytes = 19
 bss_bytes = 0
-kernel_ms = 1.0864
 
 [c.O2]
-instructions = 266
+instructions = 271
 memory_operands = 77
-code_bytes = 369
+code_bytes = 358
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0039
 
 [c.Os]
 instructions = 274
@@ -64,12 +58,11 @@ bss_bytes = 0
 kernel_ms = 0.004
 
 [nib.O2]
-instructions = 309
+instructions = 299
 memory_operands = 82
-code_bytes = 438
+code_bytes = 424
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0049
 
 [nib.Os]
 instructions = 316

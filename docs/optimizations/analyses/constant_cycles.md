@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/constant_cycles.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/constant_cycles.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/constant_cycles.rs sha256:59161e621f7b08525200611313c5c58bfe477634c93cdd7749d734423ae859bd -->
+<!-- src: crates/opt/llrm-analysis/src/constant_cycles.rs sha256:ef8175eeb2e457f5aa1e4cd1664f2ef4a6517d699ad150fbb51edc0c1923c151 -->
 
 # constant_cycles
 
@@ -9,10 +9,14 @@ states, to find constants that only a cycle proves.
 ## How it works
 Each value has a state: `Pending` (nothing met yet), `Known(fact)` or
 `Overdefined`, with `Pending` the identity of the meet and two different
-facts meeting to `Overdefined`. `propagated(unit, seeds, successors)` takes
-the facts already known (`seeds`, from [`crate::consts`](consts.md)) and settles the
-rest, which are the phis no seed has and the operations that depend on
-them. A body with no such open phi returns its seeds at once.
+facts meeting to `Overdefined`. `propagated(unit, seeds, successors, only)`
+takes the facts already known (`seeds`, from [`crate::consts`](consts.md)) and settles
+the rest, which are the phis no seed has and the operations that depend on
+them: all of them, or the values `only` names (an incremental `Registers`
+brings up to date the values a change reached and no others). Values that
+cannot come out known (one made from an argument, a load or a call) are left
+out of the propagation. A body with no such open phi returns its seeds at
+once.
 
 A worklist re-evaluates a value when one of its inputs changes. A phi meets
 the facts of its incoming values (constants evaluate through

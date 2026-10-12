@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/rotate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/rotate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/rotate.rs sha256:fce898ec2d84acfcfa5dd769e242570a84816cac9fcd27405aad8c13c5cab2ad -->
+<!-- src: crates/opt/llrm-transforms/src/rotate.rs sha256:b607296e2ba7f7931adc1cff5a941ed72f1f608bb5868d3282b853dfc9a5ce41 -->
 
 # rotate
 
@@ -75,6 +75,12 @@ Two modes, set by the fields of `Rotate`:
   takes the loop test's branch weights, else the loop heuristic's, so the
   way into the loop is laid out as the likely one.
 
+The copy is on at -O1 and up, not at -Os (`-fno-tree-ch` turns it off): the
+user's decision of 2026-10-12 (docs/reference/levels.md) accepts its compile
+cost (+9.3% at -O1, +14.0% at -O2 over the vsgcc programs) and the m16 bench
+rows it moves (#1557); the steeper slopes of rotate, loopslots and
+`analysis registers` on nests and many-loop functions are #1559.
+
 A rotated loop is no longer the pre-tested shape the counted-loop
 analyses, [`crate::peel`](peel.md) and [`crate::unroll`](unroll.md) read, so rotation goes
 after them. [`crate::lsr`](lsr.md) enters a loop it counts to zero at its body too,
@@ -138,11 +144,17 @@ From `--dump` of `sum` (`for (i = 0; i < n; i++) s += a[i];`) at -O2 -m16
 
 ## Runs
 Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs
-only with `-ftree-ch` (`copy_headers`, off at every level) and not at
-`-Os`, after the interprocedural step and before `fixednarrow`, followed by
-loop simplification, LCSSA and cleanup. `proven` always runs, last of the
-loop passes, after `window`. `LLRM_DEBUG=census` prints what the trip-count
-analyses prove per loop, to compare builds with and without `-ftree-ch`.
+with `copy_headers` (`-ftree-ch`, on at -O1 and up, `-fno-tree-ch` turns it
+off) and not at `-Os`, after the interprocedural step and before
+`fixednarrow`, followed by loop simplification, LCSSA and cleanup. `proven`
+always runs, last of the loop passes, after `window`. `LLRM_DEBUG=census`
+prints what the trip-count analyses prove per loop, to compare builds with
+and without `-ftree-ch`.
+
+On by default is the user's decision of 2026-10-12 (docs/reference/levels.md):
+compile +9.3% at -O1 and +14.0% at -O2 over the vsgcc programs, the m16 bench
+rows it moves (#1557), and steeper slopes of rotate, loopslots and `analysis
+registers` on nests and many-loop functions (#1559).
 
 ## Keeps
 Nothing where it changes a body.

@@ -32,7 +32,7 @@ UNRANDOMIZED = ["setarch", "-R"]
 
 def command(compiler: str, level: str, source: Path, bits: int = 32) -> list[str]:
     if compiler == "llrm":
-        return [str(llrmbin.bin_dir() / "llrm-c"), f"-m{bits}", *(["-march=i486"] if bits == 32 else []), f"-{level}", "-o", "/dev/null", str(source)]
+        return [str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c")), f"-m{bits}", *(["-march=i486"] if bits == 32 else []), f"-{level}", "-o", "/dev/null", str(source)]
     return [compiler, *FLAGS, f"-{level}", "-c", "-o", "/dev/null", str(source)]
 
 

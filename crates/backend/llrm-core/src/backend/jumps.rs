@@ -607,13 +607,17 @@ fn rotated(
             from
         });
         let outside = |at: &i64| position.get(at).is_none_or(|&index| index < start || index >= end);
-        if order[start..end]
-            .iter()
-            .skip(1)
-            .any(|block| from.get(&block.at).is_some_and(|from| from.iter().any(outside)))
-        {
-            continue;
-        }
+        // The one block the run is entered at from outside, where that is not
+        // its first: the run is turned to start there, so the way in falls
+        // into it. A run entered at two blocks is left as it is.
+        let entered_at: Vec<usize> = (0..end - start)
+            .filter(|&at| from.get(&order[start + at].at).is_some_and(|from| from.iter().any(outside)))
+            .collect();
+        let only = match entered_at[..] {
+            [] | [0] => None,
+            [at] => Some(at),
+            _ => continue,
+        };
         let frequency = estimate.get_or_insert_with(|| Frequency::of(body));
         // The jumps a run of blocks takes, `after` being what follows it and
         // `before` what leads into it.
@@ -671,6 +675,7 @@ fn rotated(
         let run = &order[start..end];
         let current = clocks(run, before, after);
         let best = (1..run.len())
+            .filter(|at| only.is_none_or(|one| *at == one))
             .map(|at| {
                 let turned: Vec<LirBlock> = run[at..].iter().chain(&run[..at]).cloned().collect();
                 (clocks(&turned, before, after), at)
@@ -1048,7 +1053,10 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
     let mut blocks = body.blocks.clone();
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect();
     let predecessors = _predecessors(&blocks);
-    let mut live: Option<IndexMap<i64, BTreeSet<u32>>> = None;
+    // Where each value is live on entry, from the values to their blocks: a
+    // hoist moves the anchors' values alone, and the rest are not looked
+    // at.
+    let mut live: Option<(IndexMap<u32, BTreeSet<i64>>, Mentions)> = None;
     for position in 0..blocks.len() {
         let block = &blocks[position];
         let parents = predecessors.get(&block.at);
@@ -1074,11 +1082,19 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
         let Some(&other) = before.succ.iter().find(|at| **at != block.at) else {
             continue;
         };
-        let reads = live.get_or_insert_with(|| _live_values(&blocks));
+        let (reads, _) = live.get_or_insert_with(|| {
+            let mut by_value: IndexMap<u32, BTreeSet<i64>> = IndexMap::default();
+            for (at, values) in _live_values(&blocks) {
+                for value in values {
+                    by_value.entry(value).or_default().insert(at);
+                }
+            }
+            (by_value, Mentions::of(&blocks))
+        });
         if anchors
             .iter()
             .flat_map(|one| &one.defines)
-            .any(|value| reads.get(&other).is_some_and(|live| live.contains(value)))
+            .any(|value| reads.get(value).is_some_and(|at| at.contains(&other)))
         {
             continue;
         }
@@ -1099,7 +1115,7 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
         // reads alone: only the values the moved anchors name changed
         // (a full dataflow of every value for each hoist was
         // most of this pass in a nest of copied loops).
-        if let Some(held) = live.as_mut() {
+        if let Some((held, mentions)) = live.as_mut() {
             let named: BTreeSet<u32> = anchors
                 .iter()
                 .flat_map(|one| {
@@ -1111,22 +1127,25 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
                         .chain(one.requires.iter().map(|(held, _)| held.value))
                 })
                 .collect();
-            let now = _live_in_of(&blocks, &named);
-            for set in held.values_mut() {
-                set.retain(|value| !named.contains(value));
+            // The parent now mentions what the anchors name.
+            for value in &named {
+                mentions.add(*value, at);
             }
-            for (value, entering) in now {
-                for at in entering {
-                    held.entry(at).or_default().insert(value);
-                }
+            for (value, entering) in mentions.live_in_of(&blocks, &named) {
+                held.insert(value, entering);
             }
         }
         if llrm_support::env_set("LLRM_CHECK_JUMPS") {
-            if let Some(held) = &live {
+            if let Some((held, _)) = &live {
                 let fresh = _live_values(&blocks);
                 assert!(
-                    blocks.iter().all(|block| held.get(&block.at).cloned().unwrap_or_default()
-                        == fresh.get(&block.at).cloned().unwrap_or_default()),
+                    blocks.iter().all(|block| {
+                        held.iter()
+                            .filter(|(_, at)| at.contains(&block.at))
+                            .map(|(value, _)| *value)
+                            .collect::<BTreeSet<u32>>()
+                            == fresh.get(&block.at).cloned().unwrap_or_default()
+                    }),
                     "{}: the values live on entry to the blocks, patched past a hoist, are not those of a new solve",
                     body.name
                 );
@@ -1141,85 +1160,120 @@ fn _inert(one: &Insn) -> bool {
     one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing) && one.inserted() && one.spread.is_empty()
 }
 
-/// Where each of `values` is live on entry to a block: `_live_values` for those
-/// alone. A value is live where a path from the start of the block reaches a
-/// read of it that no definition comes before; the block's own instructions
-/// decide, backwards from its end, by the earliest mention.
-fn _live_in_of(
-    blocks: &[LirBlock],
-    values: &BTreeSet<u32>,
-) -> IndexMap<u32, BTreeSet<i64>> {
-    #[derive(Clone, Copy, PartialEq)]
-    enum Transfer {
-        Pass,
-        Gen,
-        Kill,
-    }
-    let mut parents: IndexMap<i64, Vec<usize>> = IndexMap::default();
-    for (at, block) in blocks.iter().enumerate() {
-        for to in &block.succ {
-            parents.entry(*to).or_default().push(at);
-        }
-    }
-    let position: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
-    let mut found: IndexMap<u32, BTreeSet<i64>> = IndexMap::default();
-    let mut carried: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
-    for block in blocks {
-        for phi in &block.phis {
-            for (from, value) in &phi.incoming {
-                if values.contains(value) {
-                    if let Some(at) = position.get(from) {
-                        carried.entry(*value).or_default().insert(*at);
+/// The blocks that name each value, and the edges between blocks, which a hoist
+/// does not change: what the liveness of a few values is found from.
+struct Mentions {
+    /// A superset of the positions of the blocks that name a value, as an
+    /// instruction operand or a phi's.
+    named: IndexMap<u32, Vec<usize>>,
+    parents: IndexMap<i64, Vec<usize>>,
+    /// The blocks whose end a phi reads each value at.
+    carried: IndexMap<u32, BTreeSet<usize>>,
+}
+
+impl Mentions {
+    fn of(blocks: &[LirBlock]) -> Self {
+        let position: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+        let mut parents: IndexMap<i64, Vec<usize>> = IndexMap::default();
+        let mut named: IndexMap<u32, Vec<usize>> = IndexMap::default();
+        let mut carried: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
+        for (at, block) in blocks.iter().enumerate() {
+            for to in &block.succ {
+                parents.entry(*to).or_default().push(at);
+            }
+            for phi in &block.phis {
+                named.entry(phi.result).or_default().push(at);
+                for (from, value) in &phi.incoming {
+                    if let Some(from) = position.get(from) {
+                        carried.entry(*value).or_default().insert(*from);
+                    }
+                }
+            }
+            for one in &block.insns {
+                let values = one
+                    .defines
+                    .iter()
+                    .chain(&one.uses)
+                    .copied()
+                    .chain(one.delivers.iter().map(|(held, _)| held.value))
+                    .chain(one.requires.iter().map(|(held, _)| held.value));
+                for value in values {
+                    let places = named.entry(value).or_default();
+                    if places.last() != Some(&at) {
+                        places.push(at);
                     }
                 }
             }
         }
+        Self { named, parents, carried }
     }
-    let mut transfers: IndexMap<u32, Vec<Transfer>> =
-        values.iter().map(|value| (*value, vec![Transfer::Pass; blocks.len()])).collect();
-    for (at, block) in blocks.iter().enumerate() {
-        for one in block.insns.iter().rev() {
-            for value in one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)) {
-                if let Some(each) = transfers.get_mut(&value) {
-                    each[at] = Transfer::Kill;
+
+    fn add(
+        &mut self,
+        value: u32,
+        at: usize,
+    ) {
+        self.named.entry(value).or_default().push(at);
+    }
+
+    /// Where each of `values` is live on entry to a block: `_live_values` for
+    /// those alone. A value is live where a path from the start of the
+    /// block reaches a read of it that no definition comes before; the
+    /// block's own instructions decide, backwards from its end, by the earliest
+    /// mention.
+    fn live_in_of(
+        &self,
+        blocks: &[LirBlock],
+        values: &BTreeSet<u32>,
+    ) -> IndexMap<u32, BTreeSet<i64>> {
+        #[derive(Clone, Copy, PartialEq)]
+        enum Transfer {
+            Gen,
+            Kill,
+        }
+        let mut found: IndexMap<u32, BTreeSet<i64>> = IndexMap::default();
+        for &value in values {
+            // Only the blocks that name the value are not passed through.
+            let mut how: IndexMap<usize, Transfer> = IndexMap::default();
+            for &at in self.named.get(&value).into_iter().flatten() {
+                let block = &blocks[at];
+                let mut mark = None;
+                for one in block.insns.iter().rev() {
+                    if one.defines.contains(&value) || one.delivers.iter().any(|(held, _)| held.value == value) {
+                        mark = Some(Transfer::Kill);
+                    }
+                    if one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value) {
+                        mark = Some(Transfer::Gen);
+                    }
+                }
+                if block.phis.iter().any(|phi| phi.result == value) {
+                    mark = Some(Transfer::Kill);
+                }
+                if let Some(mark) = mark {
+                    how.insert(at, mark);
                 }
             }
-            for value in one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)) {
-                if let Some(each) = transfers.get_mut(&value) {
-                    each[at] = Transfer::Gen;
+            let ends = self.carried.get(&value);
+            let mut entering: BTreeSet<usize> = BTreeSet::new();
+            let mut work: Vec<usize> = Vec::new();
+            for &at in how.keys().chain(ends.into_iter().flatten()) {
+                let live_out = ends.is_some_and(|set| set.contains(&at));
+                if (how.get(&at) == Some(&Transfer::Gen) || (!how.contains_key(&at) && live_out)) && entering.insert(at)
+                {
+                    work.push(at);
                 }
             }
-        }
-        for phi in &block.phis {
-            if let Some(each) = transfers.get_mut(&phi.result) {
-                each[at] = Transfer::Kill;
-            }
-        }
-    }
-    for (value, each) in &transfers {
-        let mut entering = vec![false; blocks.len()];
-        let mut work: Vec<usize> = Vec::new();
-        for (at, how) in each.iter().enumerate() {
-            let live_out = carried.get(value).is_some_and(|set| set.contains(&at));
-            if *how == Transfer::Gen || (*how == Transfer::Pass && live_out) {
-                entering[at] = true;
-                work.push(at);
-            }
-        }
-        while let Some(at) = work.pop() {
-            for &parent in parents.get(&blocks[at].at).into_iter().flatten() {
-                if !entering[parent] && each[parent] == Transfer::Pass {
-                    entering[parent] = true;
-                    work.push(parent);
+            while let Some(at) = work.pop() {
+                for &parent in self.parents.get(&blocks[at].at).into_iter().flatten() {
+                    if !how.contains_key(&parent) && entering.insert(parent) {
+                        work.push(parent);
+                    }
                 }
             }
+            found.insert(value, entering.into_iter().map(|at| blocks[at].at).collect());
         }
-        found.insert(
-            *value,
-            entering.iter().enumerate().filter(|(_, live)| **live).map(|(at, _)| blocks[at].at).collect(),
-        );
+        found
     }
-    found
 }
 
 /// Per block, the virtual values live on entry.
@@ -1700,7 +1754,13 @@ pub fn _step(
             }
             blocks[index] = _retargeted(&block, last, onward);
             body.blocks = blocks;
-            _stranded(body, at);
+            // Every block with edges is reached (the body was pruned after each
+            // change), so the only block this can strand is the one
+            // the branch left, and only when nothing else enters it.
+            match last_what.target {
+                Some(old) if old == body.entry || body.blocks.iter().any(|one| one.succ.contains(&old)) => {}
+                _ => _stranded(body, at),
+            }
             return Some(at.get(&here).copied().unwrap_or(0));
         }
         if last_what.op == Operation::Jump && target == after {
@@ -1903,9 +1963,46 @@ fn _stranded(
     body: &mut LirBody,
     at: &mut IndexMap<i64, usize>,
 ) {
-    let before = body.blocks.len();
-    _prune(body);
-    if body.blocks.len() != before {
+    // Followed over the positions the caller keeps, and the blocks rebuilt only
+    // if one that is reached by nothing is not already the bytes it owned:
+    // the body is pruned after each change, so that is rarely more than the
+    // block a branch just left.
+    let blocks = &body.blocks;
+    let mut reached = vec![false; blocks.len()];
+    let mut work: Vec<usize> = at.get(&body.entry).copied().into_iter().collect();
+    while let Some(index) = work.pop() {
+        if std::mem::replace(&mut reached[index], true) {
+            continue;
+        }
+        work.extend(blocks[index].succ.iter().filter_map(|to| at.get(to).copied()).filter(|&next| !reached[next]));
+    }
+    let settled = |block: &LirBlock| {
+        block.succ.is_empty()
+            && block.phis.is_empty()
+            && !block.insns.is_empty()
+            && block.insns.iter().all(|one| Arc::ptr_eq(&lir::bytes_only(one), one) && !one.owned().is_empty())
+    };
+    let stranded: Vec<usize> = (0..blocks.len()).filter(|&index| !reached[index] && !settled(&blocks[index])).collect();
+    if stranded.is_empty() {
+        return;
+    }
+    // What `_prune` makes of them, in place: the blocks that keep bytes stay
+    // where they are, and only a block with none to keep takes the
+    // positions after it with it.
+    let mut keep = vec![true; body.blocks.len()];
+    for index in stranded {
+        let block = &body.blocks[index];
+        let kept: Vec<Arc<Insn>> =
+            block.insns.iter().filter(|one| !one.owned().is_empty()).map(lir::bytes_only).collect();
+        if kept.is_empty() {
+            keep[index] = false;
+        } else {
+            body.blocks[index] = LirBlock { succ: Vec::new(), phis: Vec::new(), ..block.with_insns(kept) };
+        }
+    }
+    if keep.contains(&false) {
+        let mut places = keep.into_iter();
+        body.blocks.retain(|_| places.next().unwrap_or(true));
         *at = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
     }
 }

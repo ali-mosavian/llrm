@@ -1,46 +1,44 @@
-reason = "bq32 re-measured: V: is no longer mounted for a program run on its own, so its count no longer depends on the host having QB45 (458341 vs 458306 on fib)"
+reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
 blessed = "2026-10-12"
 
 [bas.O2]
-code_bytes = 1807
+code_bytes = 1786
 data_bytes = 4677
 bss_bytes = 0
 kernel_ms = 1261.3369
 
 [bas.Os]
-code_bytes = 1716
+code_bytes = 1718
 data_bytes = 4677
 bss_bytes = 0
 kernel_ms = 1263.1086
 
 [bq16.O2]
-code_bytes = 1784
+code_bytes = 1783
 data_bytes = 4677
 bss_bytes = 0
 kernel_ms = 1526.7033
 
 [bq16.Os]
-code_bytes = 1705
+code_bytes = 1703
 data_bytes = 4677
 bss_bytes = 0
 kernel_ms = 1527.6111
 
 [bq32.O2]
-instructions = 99428291
-code_bytes = 1651
+instructions = 99426728
+code_bytes = 1636
 data_bytes = 4709
 bss_bytes = 0
-kernel_ms = 1371.7249
 
 [bq32.Os]
-instructions = 99561509
-code_bytes = 1613
+instructions = 99430605
+code_bytes = 1610
 data_bytes = 4709
 bss_bytes = 0
-kernel_ms = 1373.4985
 
 [c.O2]
-code_bytes = 1198
+code_bytes = 1200
 data_bytes = 15
 bss_bytes = 5122
 kernel_ms = 518.097
@@ -52,7 +50,7 @@ bss_bytes = 5122
 kernel_ms = 524.8356
 
 [nib.O2]
-code_bytes = 2548
+code_bytes = 2567
 data_bytes = 5149
 bss_bytes = 0
 kernel_ms = 810.366
