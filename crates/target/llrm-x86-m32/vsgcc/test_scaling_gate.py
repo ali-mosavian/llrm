@@ -927,3 +927,16 @@ def test_header_copy_does_not_derive_the_loops_again_for_each_loop_it_copies(tmp
     own = gate.own_work(command)
     assert own["analysis loops"] > 5.0, f"premise: loops were derived ({own['analysis loops']:.1f} Minstr)"
     assert own["analysis loops"] <= 50.0, f"{own['analysis loops']:.1f} Minstr"
+
+
+def test_registers_set_up_a_recipe_only_for_the_values_that_can_be_known(tmp_path):
+    """nest(32) at -O2 with -ftree-ch: `analysis registers` set the cycle propagation up for every value of the body (a recipe, its consumers,
+    a copy of the graph) though only the phis of the counted loops are left to settle and most values read a load, an argument or a call: 242
+    Minstr at N=32 and 901 at N=64. Values that cannot be known are left out: 81 and 290. A bound of 150 at N=32 fails the first and passes the second."""
+    source = tmp_path / "nest32.c"
+    source.write_text(scaling.nest(32))
+    command = gate.levels_time.command("llrm", "O2", source)
+    command.insert(1, "-ftree-ch")
+    own = gate.own_work(command)
+    assert own["analysis registers"] > 10.0, f"premise: registers were derived ({own['analysis registers']:.1f} Minstr)"
+    assert own["analysis registers"] <= 150.0, f"{own['analysis registers']:.1f} Minstr"

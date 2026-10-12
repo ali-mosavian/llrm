@@ -63,10 +63,93 @@ thread_local! {
     pub static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// What a value is folded from: the operations `propagated` evaluates.
+fn _supported(opcode: &Opcode) -> bool {
+    match opcode {
+        Opcode::Binary(kind) => consts::folds(*kind),
+        Opcode::Cast(CastOp::Trunc | CastOp::SExt) => true,
+        _ => false,
+    }
+}
+
+/// The values that can come out known: a phi, or an operation `_supported`
+/// evaluates, all of whose operands can. Any other value is overdefined at the
+/// end whatever the rest is (an operand that is overdefined makes a phi and a
+/// fold overdefined; `x ^ x` and `x - x` are zero for any `x`), so the
+/// propagation does not set a recipe up for it: a body of N counted loops has N
+/// phis to settle and every other value of it, which was 70% of what `analysis
+/// registers` cost at N=64.
+fn _possible(
+    unit: &Unit,
+    seeds: &IndexMap<ValueId, Known>,
+) -> llrm_mir::dense::IdSet<ValueId> {
+    use llrm_mir::dense::{IdMap, IdSet};
+    let function = unit.function;
+    let zeroes = |op: &llrm_mir::module::Instruction| {
+        matches!(
+            op.opcode,
+            Opcode::Binary(llrm_mir::opcode::BinaryOp::Xor | llrm_mir::opcode::BinaryOp::Sub)
+        )
+            && matches!(op.operands[0], Operand::Value(_))
+            && op.operands[0] == op.operands[1]
+    };
+    let mut possible = IdSet::<ValueId>::new();
+    let mut operands = Vec::<(ValueId, Vec<ValueId>)>::new();
+    for (_, inst) in function.walk() {
+        let op = function.instruction(inst);
+        let Some(value) = consts::_defined(unit, inst).filter(|value| !seeds.contains_key(value)) else { continue };
+        if op.opcode == Opcode::Phi || _supported(&op.opcode) || zeroes(op) {
+            possible.insert(value);
+            let from: &mut dyn Iterator<Item = &Operand> =
+                if op.opcode == Opcode::Phi { &mut op.operands.iter().step_by(2) } else { &mut op.operands.iter() };
+            let named = from.filter_map(|one| if let Operand::Value(one) = one { Some(*one) } else { None });
+            operands.push((value, if zeroes(op) { Vec::new() } else { named.collect() }));
+        }
+    }
+    let mut users = IdMap::<ValueId, Vec<ValueId>>::new();
+    let mut gone = Vec::<ValueId>::new();
+    for (value, named) in &operands {
+        for one in named {
+            if !seeds.contains_key(one) && !possible.contains(one) {
+                if possible.remove(value) {
+                    gone.push(*value);
+                }
+            } else {
+                users.get_or_insert_with(*one, Vec::new).push(*value);
+            }
+        }
+    }
+    while let Some(value) = gone.pop() {
+        for &user in users.get(&value).into_iter().flatten() {
+            if possible.remove(&user) {
+                gone.push(user);
+            }
+        }
+    }
+    possible
+}
+
 pub fn propagated(
     unit: &Unit,
     seeds: &IndexMap<ValueId, Known>,
     successors: Option<Successors<'_>>,
+) -> IndexMap<ValueId, Known> {
+    let pruned = successors.is_none().then(|| _possible(unit, seeds));
+    let found = _propagated(unit, seeds, successors, pruned.as_ref());
+    if pruned.is_some() && llrm_support::env_set("LLRM_CHECK_CYCLES") {
+        assert!(
+            found == _propagated(unit, seeds, successors, None),
+            "constant cycles: leaving out the values that cannot be known changed the facts"
+        );
+    }
+    found
+}
+
+fn _propagated(
+    unit: &Unit,
+    seeds: &IndexMap<ValueId, Known>,
+    successors: Option<Successors<'_>>,
+    possible: Option<&llrm_mir::dense::IdSet<ValueId>>,
 ) -> IndexMap<ValueId, Known> {
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else {
@@ -82,7 +165,10 @@ pub fn propagated(
     let open = function
         .walk()
         .filter(|(_, inst)| is_phi(*inst))
-        .any(|(_, inst)| consts::_defined(unit, inst).is_some_and(|value| !seeds.contains_key(&value)));
+        .any(
+            |(_, inst)| consts::_defined(unit, inst)
+                .is_some_and(|value| !seeds.contains_key(&value) && possible.is_none_or(|kept| kept.contains(&value))),
+        );
     if !open && !llrm_support::env_set("LLRM_CHECK_CYCLES") {
         return seeds.clone();
     }
@@ -93,7 +179,9 @@ pub fn propagated(
     let mut owners = IndexMap::<ValueId, i64>::default();
     for phis in [true, false] {
         for (block, inst) in function.walk().filter(|(_, inst)| is_phi(*inst) == phis) {
-            if let Some(value) = consts::_defined(unit, inst) {
+            if let Some(value) = consts::_defined(unit, inst)
+                .filter(|value| possible.is_none_or(|kept| kept.contains(value) || seeds.contains_key(value)))
+            {
                 recipes.insert(value, inst);
                 owners.insert(value, cfg::id(block));
             }
@@ -173,11 +261,7 @@ pub fn propagated(
         }
         true
     };
-    let supported = |opcode: &Opcode| match opcode {
-        Opcode::Binary(kind) => consts::folds(*kind),
-        Opcode::Cast(CastOp::Trunc | CastOp::SExt) => true,
-        _ => false,
-    };
+    let supported = _supported;
     let knowns = |states: &IndexMap<ValueId, State>| {
         states
             .iter()
