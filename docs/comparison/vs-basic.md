@@ -29,7 +29,7 @@ For maintainers comparing `llrm-qb` with BC of QuickBASIC 4.5, PDS 7.1 and VBDOS
 
 ### What is compared
 
-Executed instructions and memory operands of the kernel, and object bytes, of llrm-qb's BASIC against BC's. BC has one level (`/O`), so `[bc.O2]`, `[pds71.O2]` and `[vbdos.O2]` have no `Os` table; llrm's `[bas.O2]` and `[bas.Os]` are both set against them. Each BC is given every program, with the dialect of the program's header for llrm; `/AH` is added where the program asks for huge arrays. BASIC is built on llrm-qb's own frames (no `B$ENRA`/`B$EXSA` where the runtime needs no frame); `--runtime-frames` is not benchmarked.
+Executed instructions and memory operands of the kernel, and object bytes, of llrm-qb's BASIC against BC's. BC has one level (`/O`), so `[bc.O2]`, `[pds71.O2]` and `[vbdos.O2]` have no `Os` table; llrm's `[bas.O2]` and `[bas.Os]` are both set against them. The same source on llrm's own runtime, linked by jwlink, has `[bq16.*]` (real mode, same kernel count as `bas`) and `[bq32.*]` (flat under DOS/32A: the whole run's guest instructions in DOSBox on virtual time less the empty start-up program's); neither needs QB45, and `[bq16.*]` is set against the same references. Each BC is given every program, with the dialect of the program's header for llrm; `/AH` is added where the program asks for huge arrays. BASIC is built on llrm-qb's own frames (no `B$ENRA`/`B$EXSA` where the runtime needs no frame); `--runtime-frames` is not benchmarked.
 
 ### How
 
@@ -38,7 +38,7 @@ Executed instructions and memory operands of the kernel, and object bytes, of ll
     uv run --project tools python tools/bench/bench.py --references --time --bless --reason "why"
     python3 tools/dosbatch/qbsizes.py [--work DIR] [source.bas ...]          # linked size against BCOM45's, the runtime included
 
-`--references` needs the three toolchains (QB 4.5's `BC.EXE`, PDS 7.1 and VBDOS), `jwlink` and the DOSBox-X fork. A toolchain that is absent is skipped.
+`--references` needs the three toolchains (QB 4.5's `BC.EXE`, PDS 7.1 and VBDOS), `jwlink` and the DOSBox-X fork. A toolchain that is absent is skipped, and `bas` with it (a `SKIP` line names the variable, e.g. `QB45_DIR`); `bq16` and `bq32` still run.
 
 ### What it prints
 
