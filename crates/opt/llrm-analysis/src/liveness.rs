@@ -414,6 +414,99 @@ pub fn live_where(
     found
 }
 
+/// `live` of the values in `wanted` alone, followed from their reads without
+/// the setup of a solve of the whole function: the work is the blocks those
+/// values are live in. The sets are named for the blocks a value is live in
+/// only. A phi's arm is live where the phi is, so `wanted` holds the arms of
+/// its phis and the phis that take its values.
+pub fn live_of(
+    function: &Function,
+    wanted: &IdSet<ValueId>,
+) -> Liveness {
+    use llrm_mir::module::ValueDef;
+    enum Reach {
+        After(BlockId, ValueId),
+        Out(BlockId, ValueId),
+    }
+    let mut found = Liveness { live_in: BTreeMap::new(), live_out: BTreeMap::new() };
+    let Some(&entry) = function.layout().first() else { return found };
+    // Where a value is made: a block, and whether by a phi. A value made by
+    // nothing here arrives at the entry.
+    let made = |value: ValueId| match function.value(value).def {
+        ValueDef::Instruction(inst) => {
+            function.parent(inst).map(|block| (block, function.instruction(inst).opcode == Opcode::Phi))
+        }
+        ValueDef::Argument(_) => None,
+    };
+    let mut pending = Vec::new();
+    for value in wanted.iter() {
+        let at = made(value);
+        for user in function.users(value) {
+            let Some(block) = function.parent(user.user) else { continue };
+            if function.instruction(user.user).opcode == Opcode::Phi {
+                continue;
+            }
+            // Read before it is written in the block: the operation that makes
+            // it comes first.
+            let exposed = match at {
+                Some((home, false)) if home == block => {
+                    let insts = function.block(block).instructions();
+                    insts
+                        .iter()
+                        .position(|&one| one == user.user)
+                        .zip(insts.iter().position(|&one| function.instruction(one).result == Some(value)))
+                        .is_some_and(|(read, made)| read <= made)
+                }
+                _ => true,
+            };
+            if exposed && (block != entry || at.is_some()) {
+                pending.push(Reach::After(block, value));
+            }
+        }
+    }
+    let mut seen_phis = BTreeSet::<(i64, ValueId)>::new();
+    while let Some(reach) = pending.pop() {
+        match reach {
+            Reach::Out(block, value) => {
+                let by_op = match made(value) {
+                    Some((home, phi)) => home == block && !phi,
+                    None => block == entry,
+                };
+                if found.live_out.entry(id(block)).or_default().insert(value) && !by_op {
+                    pending.push(Reach::After(block, value));
+                }
+            }
+            Reach::After(block, value) => {
+                if made(value).is_some_and(|(home, phi)| home == block && phi) {
+                    if !seen_phis.insert((id(block), value)) {
+                        continue;
+                    }
+                    for one in function.block(block).instructions() {
+                        let phi = function.instruction(*one);
+                        if phi.opcode != Opcode::Phi {
+                            break;
+                        }
+                        if phi.result != Some(value) {
+                            continue;
+                        }
+                        for from in function.predecessors(block) {
+                            if let Some(arm) = arm(phi, from).filter(|arm| wanted.contains(arm)) {
+                                pending.push(Reach::Out(from, arm));
+                            }
+                        }
+                    }
+                } else {
+                    if !found.live_in.entry(id(block)).or_default().insert(value) {
+                        continue;
+                    }
+                    pending.extend(function.predecessors(block).into_iter().map(|from| Reach::Out(from, value)));
+                }
+            }
+        }
+    }
+    found
+}
+
 fn solved(
     function: &Function,
     wanted: &dyn Fn(ValueId) -> bool,
@@ -921,5 +1014,30 @@ top:
         };
         let (small, large) = (steps(100), steps(200));
         assert!(small > 0 && large <= 2 * small + 8, "{small} steps for 100 blocks, {large} for 200");
+    }
+
+    /// The liveness of the values asked for, followed from their reads without
+    /// a solve of the body, is what the solve gives for them: of all of
+    /// them, and of each alone with the phis that take its value.
+    #[test]
+    fn the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
+        let texts = [
+            super::tests::LOOP,
+            "define i16 @f(i16 %x) {\nb0:\n  %incoming = add i16 %x, 1\n  br label %b1\n\nb1:\n  %merged = phi i16 [ %incoming, %b0 ]\n  ret i16 %merged\n}\n",
+        ];
+        for text in texts {
+            let module = parsed(text);
+            let function = function(&module, "f");
+            let whole = live(function);
+            let mut every = IdSet::<ValueId>::new();
+            every.extend(function.parameters().iter().copied());
+            every.extend(function.walk().filter_map(|(_, inst)| function.instruction(inst).result));
+            let found = live_of(function, &every);
+            for &block in function.layout() {
+                let at = id(block);
+                assert_eq!(found.live_in.get(&at).cloned().unwrap_or_default(), whole.live_in[&at], "in {at}");
+                assert_eq!(found.live_out.get(&at).cloned().unwrap_or_default(), whole.live_out[&at], "out {at}");
+            }
+        }
     }
 }

@@ -1198,6 +1198,9 @@ impl Site {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pressure {
     found: Liveness,
+    /// The blocks each value is live into and out of, which `found` has by
+    /// block: what a value that a change touched is taken out of.
+    placed: IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
     cells: BTreeMap<ValueId, ValueId>,
     counted: IdSet<ValueId>,
     addressed: IdSet<ValueId>,
@@ -1334,9 +1337,43 @@ impl Pressure {
         function: &Function,
         scales: u8,
     ) -> Self {
+        Self::over(context, function, scales, liveness::live(function))
+    }
+
+    /// `of`, the liveness being `found`.
+    fn over(
+        context: &Context,
+        function: &Function,
+        scales: u8,
+        found: Liveness,
+    ) -> Self {
+        let mut placed = IdMap::<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>::new();
+        for (at, values) in &found.live_in {
+            for value in values {
+                placed.get_or_insert_with(*value, Default::default).0.insert(*at);
+            }
+        }
+        for (at, values) in &found.live_out {
+            for value in values {
+                placed.get_or_insert_with(*value, Default::default).1.insert(*at);
+            }
+        }
+        Self::with(context, function, scales, found, placed)
+    }
+
+    /// `of`, the liveness being `found` and `placed` the blocks each value is
+    /// live in.
+    fn with(
+        context: &Context,
+        function: &Function,
+        scales: u8,
+        found: Liveness,
+        placed: IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
+    ) -> Self {
         let (addressed, folds) = addressed_by(function, &mut |value| folded_in(context, function, value, scales));
         Self {
-            found: liveness::live(function),
+            found,
+            placed,
             cells: cells(function),
             counted: (0..function.value_count() as u32)
                 .map(ValueId)
@@ -1386,6 +1423,7 @@ impl Pressure {
 impl llrm_mir::passes::Analysis for Pressure {
     type Result = Pressure;
     const NAME: &'static str = "pressure";
+    const INCREMENTAL: bool = true;
     fn run(
         context: &Context,
         _: &DataLayout,
@@ -1393,6 +1431,114 @@ impl llrm_mir::passes::Analysis for Pressure {
         analyses: &mut llrm_mir::passes::Analyses,
     ) -> Self::Result {
         Pressure::of(context, function, Room::of(analyses.outer()).index_scales)
+    }
+
+    /// What is live is followed from the reads of each value, so a change that
+    /// leaves the edges as they were moves the live sets of the values it
+    /// names alone: the results, the operands and the operands that were of
+    /// what it touched, with the phis that take them and the arms of those.
+    /// A branch that takes other edges, or a block made or gone, derives them
+    /// afresh.
+    fn update_owned(
+        previous: std::rc::Rc<Self::Result>,
+        changes: &[llrm_mir::module::Change],
+        context: &Context,
+        _: &DataLayout,
+        function: &Function,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> Option<Self::Result> {
+        use llrm_mir::module::Change;
+        let mut named = IdSet::<ValueId>::new();
+        let name_operand = |named: &mut IdSet<ValueId>, operand: &Operand| {
+            if let Operand::Value(value) = operand {
+                named.insert(*value);
+            }
+        };
+        let name_inst = |named: &mut IdSet<ValueId>, inst: InstId| {
+            let op = function.instruction(inst);
+            named.extend(op.result);
+            op.operands.iter().for_each(|one| name_operand(named, one));
+        };
+        for change in changes {
+            match change {
+                Change::BlockCreated(_) | Change::BlockErased(_) => return None,
+                Change::Inserted { inst, .. } | Change::Moved { inst, .. } | Change::Erased { inst, .. } => {
+                    if function.instruction(*inst).opcode.is_terminator() {
+                        return None;
+                    }
+                    name_inst(&mut named, *inst);
+                }
+                Change::Cloned { to, .. } => name_inst(&mut named, *to),
+                Change::Rewritten(inst) => name_inst(&mut named, *inst),
+                Change::Operand { inst, was, index } => {
+                    name_operand(&mut named, was);
+                    if function.instruction(*inst).opcode.is_terminator()
+                        && (matches!(was, Operand::Block(_))
+                            || matches!(
+                                function.instruction(*inst).operands.get(*index as usize),
+                                Some(Operand::Block(_))
+                            ))
+                    {
+                        return None;
+                    }
+                }
+                Change::Operands { inst, was } => {
+                    was.iter().for_each(|one| name_operand(&mut named, one));
+                    if function.instruction(*inst).opcode.is_terminator()
+                        && was.iter().any(|one| matches!(one, Operand::Block(_)))
+                        && was[..] != function.instruction(*inst).operands[..]
+                    {
+                        return None;
+                    }
+                }
+            }
+        }
+        // A phi's arms are live where it is, and it where they are read.
+        let mut work: Vec<ValueId> = named.iter().collect();
+        while let Some(value) = work.pop() {
+            for user in function.users(value) {
+                let phi = function.instruction(user.user);
+                if phi.opcode == Opcode::Phi && function.parent(user.user).is_some() {
+                    work.extend(phi.result.filter(|&result| named.insert(result)));
+                }
+            }
+            if let ValueDef::Instruction(inst) = function.value(value).def
+                && function.instruction(inst).opcode == Opcode::Phi
+            {
+                for pair in function.instruction(inst).operands.chunks(2) {
+                    if let Operand::Value(arm) = pair[0]
+                        && named.insert(arm)
+                    {
+                        work.push(arm);
+                    }
+                }
+            }
+        }
+        let (mut found, mut placed) = std::rc::Rc::try_unwrap(previous)
+            .map_or_else(|kept| (kept.found.clone(), kept.placed.clone()), |owned| (owned.found, owned.placed));
+        for value in named.iter() {
+            let (into, out) = placed.remove(&value).unwrap_or_default();
+            for at in into {
+                found.live_in.get_mut(&at).map(|set| set.remove(&value));
+            }
+            for at in out {
+                found.live_out.get_mut(&at).map(|set| set.remove(&value));
+            }
+        }
+        let now = liveness::live_of(function, &named);
+        for (at, values) in now.live_in {
+            for value in &values {
+                placed.get_or_insert_with(*value, Default::default).0.insert(at);
+            }
+            found.live_in.entry(at).or_default().extend(values);
+        }
+        for (at, values) in now.live_out {
+            for value in &values {
+                placed.get_or_insert_with(*value, Default::default).1.insert(at);
+            }
+            found.live_out.entry(at).or_default().extend(values);
+        }
+        Some(Pressure::with(context, function, Room::of(analyses.outer()).index_scales, found, placed))
     }
 }
 
