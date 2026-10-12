@@ -12,7 +12,7 @@ The game is the demo's source with RANDOMIZE (TIMER) made RANDOMIZE 1, so the sk
 same every time; the test checks the screen has them before it shoots.  The shots are worked out from the screen with the
 game's own formulas (gorilla_aim.py, PlotShot's): each hits for every gorilla position within a pixel of the estimate.
 m32's RND gives another sequence (#1512), so another skyline and other shots.  Skipped without the demo sources
-(QB45_DEMOS_DIR) or QB45."""
+(QB45_DEMOS_DIR)."""
 
 from __future__ import annotations
 
@@ -26,8 +26,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import dosbatch  # noqa: E402
-import qb32  # noqa: E402
+import qbbuild  # noqa: E402
 import qbplay  # noqa: E402
 import gorilla_aim  # noqa: E402
 import qbruntime  # noqa: E402
@@ -44,36 +43,23 @@ BUILDING = {"16": [("73", "56"), ("83", "102")], "32": [("35", "182"), ("63", "8
 @pytest.fixture(scope="module")
 def game(tmp_path_factory):
     found, reason = qbruntime.demo_sources()
-    if not found or not dosbatch.QB45.is_dir():
-        pytest.skip(reason or "QB45_DIR is unavailable")
+    if not found:
+        pytest.skip(reason or "the demo sources are unavailable")
     work = tmp_path_factory.mktemp("gorilla")
     original = {path.stem.upper(): path for path in found.values()}["GORILLA"]
     text = original.read_text()
     assert "RANDOMIZE (TIMER)" in text
     seeded = work / "GORSEED.BAS"
     seeded.write_text(text.replace("RANDOMIZE (TIMER)", "RANDOMIZE 1"))
-    _, real = qbplay.built_pairs({"GORSEED": seeded}, work)["GORSEED"]
-    flat = work / "flat"
-    flat.mkdir()
-    runtime = qb32.build(flat / "rt")
-    obj = flat / "g.obj"
-    done = dosbatch.subprocess.run(
-        [str(dosbatch.BIN / "llrm-qb"), str(seeded), "--dialect", "qb45", *qbruntime.frontend_flags(seeded), "-O2", "-march=i486", dosbatch.m_flag(qb32.TARGET), "-o", str(obj)],
-        capture_output=True,
-        text=True,
-    )
-    assert done.returncode == 0, done.stderr[-300:]
-    exe = flat / "GORSEED.EXE"
-    loaders = qb32.link(obj, runtime, exe, flat)
-    return {"16": (real, ()), "32": (exe, tuple(loaders))}
+    return qbbuild.build(seeded, work / "build", qbbuild.runtimes(work))
 
 
-def play(exe: Path, loaders: tuple, work: Path, scene: tuple, shots: list) -> str:
+def play(built: qbbuild.Built, work: Path, scene: tuple, shots: list) -> str:
     """The game to its end with `shots` typed in turn; the screen at the end."""
     work.mkdir()
-    shutil.copy(exe, work / "P.EXE")
-    for loader in loaders:
-        shutil.copy(loader, work / Path(loader).name)
+    shutil.copy(built.exe, work / "P.EXE")
+    for beside in built.files:
+        shutil.copy(beside, work / Path(beside).name)
     session = qbplay.Session(work)
     try:
         session.send({"cmd": "dos_cmd", "command": "P.EXE"}, wait=False)
@@ -106,17 +92,15 @@ def scores(screen: str) -> tuple[int, int]:
     return int(first.group(1)), int(second.group(1))
 
 
-@pytest.mark.parametrize("target", ["16", "32"])
-def test_a_banana_that_hits_the_other_gorilla_scores_and_ends_the_game(game, tmp_path, target: str):
-    exe, loaders = game[target]
-    screen = play(exe, loaders, tmp_path / "play", SCENES[target], HIT[target])
-    assert "Illegal function call" not in screen
-    assert scores(screen) == (1, 0), screen
+def test_a_banana_that_hits_the_other_gorilla_scores_and_ends_the_game(game, tmp_path):
+    for target in qbbuild.TARGETS:
+        screen = play(game[target], tmp_path / f"hit{target}", SCENES[target], HIT[target])
+        assert "Illegal function call" not in screen, f"m{target}"
+        assert scores(screen) == (1, 0), f"m{target}: {screen}"
 
 
-@pytest.mark.parametrize("target", ["16", "32"])
-def test_a_banana_that_hits_a_building_scores_nothing_and_the_turn_passes(game, tmp_path, target: str):
-    exe, loaders = game[target]
-    screen = play(exe, loaders, tmp_path / "play", SCENES[target], BUILDING[target])
-    assert "Illegal function call" not in screen
-    assert scores(screen) == (0, 1), screen
+def test_a_banana_that_hits_a_building_scores_nothing_and_the_turn_passes(game, tmp_path):
+    for target in qbbuild.TARGETS:
+        screen = play(game[target], tmp_path / f"building{target}", SCENES[target], BUILDING[target])
+        assert "Illegal function call" not in screen, f"m{target}"
+        assert scores(screen) == (0, 1), f"m{target}: {screen}"
