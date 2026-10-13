@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import dosbatch  # noqa: E402
 import qbplay  # noqa: E402
 
-PROBES = sorted((dosbatch.ROOT / "tests" / "qbrt").glob("gfx_*.bas"))
+PROBES = sorted(path for path in (dosbatch.ROOT / "tests" / "qbrt").glob("gfx_*.bas") if ".flat" not in path.name)
 pytestmark = pytest.mark.slow_dos
 
 SETTLE_SECONDS = 2

@@ -29,6 +29,13 @@ class Built:
     files: tuple[Path, ...] = ()
 
 
+def flat_source(source: Path) -> Path:
+    """`source`'s port to the flat target, `NAME.flat.bas` beside it, where there is one: absolute addresses (video memory) are
+    held in variables there, DEF SEG being ignored."""
+    ported = source.with_name(f"{source.stem}.flat{source.suffix}")
+    return ported if ported.exists() else source
+
+
 def runtime16(work: Path) -> dict[str, Path]:
     """The real-mode runtime's objects by source name, from the cache where nothing it is made of has changed."""
     work.mkdir(parents=True, exist_ok=True)
@@ -83,6 +90,8 @@ def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], fl
     """`source` for one target; its files are `name`'s (the source's stem) in `work`."""
     stem = name or source.stem
     obj, exe = work / f"{stem}.{target}.obj", work / f"{stem}.{target}.EXE"
+    # a program that needs hand porting to the flat target (DEF SEG is ignored there) has NAME.flat.bas beside it
+    source = flat_source(source) if target == FLAT else source
     extra = ["-march=i486", dosbatch.m_flag(FLAT)] if target == FLAT else []
     done = dosbatch.subprocess.run(
         [str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", *qbruntime.frontend_flags(source), *flags, *extra, "-o", str(obj)],

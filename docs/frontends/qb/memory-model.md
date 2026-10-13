@@ -55,17 +55,26 @@ offsets in different objects are not the same storage. Raw segmented memory
 object and force conservative alias and call effects. Unequal segment:offset
 spellings are never proof that two physical addresses differ.
 
-## Raw offsets from an array's start (one address space)
+## One address space (m32): flat addresses, no segments
 
-At a target with one address space (m32) a pointer is the whole linear address: `VARPTR(x)` is it, `VARSEG(x)` is 0, and `DEF SEG`
-with no value is 0. `DEF SEG = VARSEG(x)` followed by `PEEK(VARPTR(x) + i)` reaches `x`.
+At a target with one address space a pointer is the whole 32-bit linear address, and the program holds addresses in variables:
 
-Not supported: `DEF SEG = VARSEG(array(i))` followed by `PEEK(o)` and `POKE o, v` with offsets counted from the array's start, which
-is what real mode's far array gives (its data begins at offset 0 of its own segment). Here `o` is a linear address, so such a
-program reads and writes low memory (the interrupt table, BIOS data): qbdemo's `fracline` died that way. The compiler warns at the
-`DEF SEG` line. It cannot work by a segment value instead, because a 16-bit `VARSEG` cannot name an object above 1 MB, and the
-demos' arrays are above it: DOS/32A puts the program's heap in extended memory (`VARPTR` of a `$DYNAMIC` array is about 5.4 MB, of a
-variable in the data about 1.5 MB). A program of this class runs at m16 and not at m32 until the target has segments (a selector per
+- `VARPTR(x)` is the address of `x`; `VARSEG(x)` is 0.
+- `DEF SEG` (with or without a value) is ignored, and the compiler says so at every one: *warning: DEF SEG is ignored at one
+  address space*.
+- `PEEK`, `POKE`, `BLOAD` and `BSAVE` take that address: `p& = VARPTR(a%(1)): POKE p&, 7`.
+- An absolute address, video memory above all, is ported by hand into a variable, as `vram& = &HB8000: POKE vram& + 160, 65`; it
+  does not become one by itself. A program that writes `DEF SEG = &HB800` and `POKE 160, 65` would write low memory (the interrupt
+  table) here. A port of a probe sits beside it as `NAME.flat.bas`, which the harnesses build for m32 and compare with the original's
+  BCOM45 output (`tests/qbrt/screen_text.flat.bas`).
+- `BLOAD name` with no address is refused: the image holds a 16-bit segment and offset, which cannot name a flat address.
+  `BSAVE` writes the low 16 bits of the address it was given.
+
+So `DEF SEG = VARSEG(array(i))` followed by `PEEK(o)` and `POKE o, v` with offsets counted from the array's start (real mode's far
+array: its data begins at offset 0 of its own segment) does not work here, and qbdemo's `fracline` is of that class: `o` is a linear
+address. It cannot be made to work with a segment value: a 16-bit `VARSEG` cannot name an object above 1 MB, and DOS/32A puts the
+program's heap in extended memory (`VARPTR` of a `$DYNAMIC` array is about 5.4 MB, of a variable in the data about 1.5 MB). Such a
+program runs at m16 and is ported by hand to m32 (the array's address held in a variable) until the target has segments (a selector per
 object); that is the memory-models decision, not a runtime fix.
 
 ## Runtime profiles
