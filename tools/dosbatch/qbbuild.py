@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+import shutil
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -78,7 +79,7 @@ def build(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: 
     return built
 
 
-def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...], target: str, name: str | None = None) -> Built:
+def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...], target: str, name: str | None = None, listing: Path | None = None) -> Built:
     """`source` for one target; its files are `name`'s (the source's stem) in `work`."""
     stem = name or source.stem
     obj, exe = work / f"{stem}.{target}.obj", work / f"{stem}.{target}.EXE"
@@ -93,7 +94,7 @@ def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], fl
     libs = qbruntime.linked_objects(source, work, "llrm", tuple(extra[1:]) if target == FLAT else (), f".{target}")
     if target == FLAT:
         loaders = dosbatch.link_target(
-            qb32.TARGET, obj, exe, work, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target]))
+            qb32.TARGET, obj, exe, work, listing, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target]))
         )
         return Built(exe, tuple(loaders))
     link16(obj, objects[target], exe, libs)
@@ -118,22 +119,41 @@ def link16(program: Path, objects: dict[str, Path], exe: Path, libs: tuple[Path,
 
 @dataclass(frozen=True)
 class Ran:
-    """A program's run: how it ended, what it wrote to standard output, and the guest instructions the whole run executed
-    (the emulator's end event: on virtual time, the same every run)."""
+    """A program's run: how it ended, what it wrote to standard output, the guest instructions the whole run executed (the
+    emulator's end event: on virtual time, the same every run) and, for a run asked to profile, the instructions each function of
+    its link map ran, itself and what it called (`inclusive`, by upper-cased name)."""
 
     status: str
     output: bytes
     instructions: int
+    inclusive: dict[str, int]
 
 
-def run(built: Built, work: Path, files: tuple[Path, ...] = (), conf: str | None = None, budget_ms: int | None = None, stdin: bytes | None = None) -> Ran:
-    """`built` run on its own in `work`."""
+def run(
+    built: Built,
+    work: Path,
+    files: tuple[Path, ...] = (),
+    conf: str | None = None,
+    budget_ms: int | None = None,
+    stdin: bytes | None = None,
+    profile: Path | None = None,
+) -> Ran:
+    """`built` run on its own in `work`.  With `profile`, the program's link map (`listing` of its link), the emulator reads the
+    map as the program's symbols and counts by function: nothing the loader or the runtime's start-up ran is in a function's
+    count."""
     import json
+    import tempfile
 
-    job = dosbatch.Job("J", "exe", built.exe, files=(*built.files, *files), budget_ms=budget_ms, stdin=stdin)
-    result = dosbatch.run([job], work, **({"conf": conf} if conf else {}))["J"]
-    count = 0
+    with tempfile.TemporaryDirectory() as sidecar:
+        # the emulator reads NAME.MAP beside NAME.EXE: the job is J
+        beside = (Path(shutil.copy(profile, Path(sidecar) / "J.MAP")),) if profile else ()
+        job = dosbatch.Job("J", "exe", built.exe, files=(*built.files, *files, *beside), budget_ms=budget_ms, stdin=stdin, profile=bool(profile))
+        result = dosbatch.run([job], work, **({"conf": conf} if conf else {}))["J"]
+    count, inclusive = 0, {}
     for line in (work / "events.txt").read_text(errors="replace").splitlines():
         if '"ev":"end"' in line:
             count = json.loads(line).get("instructions", 0)
-    return Ran(result.status, qbruntime.raw_output(work, "J"), count)
+        elif '"ev":"profile"' in line:
+            for one in json.loads(line)["functions"]:
+                inclusive[one["name"].upper()] = one["inclusive"]
+    return Ran(result.status, qbruntime.raw_output(work, "J"), count, inclusive)

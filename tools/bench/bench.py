@@ -175,7 +175,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
                                 env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
-            built = qbbuild.one_target(variant.source, work, objects, tuple(flags), qbbuild.FLAT, stem)
+            built = qbbuild.one_target(variant.source, work, objects, tuple(flags), qbbuild.FLAT, stem, listing)
             LOADERS[built.exe] = built.files
             return built.exe, listing
         tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-c"
@@ -315,7 +315,7 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
 def with_startup(selected: list[str], timing: bool) -> list[tuple[Path, Variant]]:
     """Every (directory, variant) to build, plus under --time the empty-kernel programs that price each start-up."""
     todo = [(directory, variant) for directory in benchmarks(selected) for variant in variants(directory)]
-    return todo + [(STARTUP, variant) for variant in variants(STARTUP) if timing or variant.language == FLAT]
+    return todo + [(STARTUP, variant) for variant in variants(STARTUP) if timing]
 
 
 def measure_references(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
@@ -386,34 +386,33 @@ def net_times(measured: dict) -> dict:
 
 
 def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
-    """The flat target's programs, each run on its own in DOSBox on virtual time: the guest instructions of the whole run less
-    the empty start-up program's of the same level (`instructions`), the program's own object's sizes, and its output checked.
-    Not a count between the kernel's entry and return as the real-mode emulator's: protected mode has no such emulator here, and
-    the start-up costs (DOS/32A's load, the runtime's init) are what the subtraction takes out."""
+    """The flat target's programs, each run on its own in DOSBox on virtual time with the emulator counting by function from the
+    program's link map: `instructions` are the kernel's own, its entry to its return and what it called, as the real-mode
+    emulator counts them. Not the whole run's: that holds the extender's load (about 40 instructions per relocation, so the
+    number of address references in the program) and the runtime's start-up, which are not what the compiler made. With the
+    program's object's sizes, and its output checked."""
     work.mkdir(parents=True, exist_ok=True)
 
     def one(item):
-        key, (stem, exe, obj, want, needed) = item
+        key, (stem, exe, obj, want, needed, listing, region) = item
         if needed and "skip" in needed:
             return key, {"error": "skipped: " + needed["skip"]}
-        ran = qbbuild.run(qbbuild.Built(exe, LOADERS.get(exe, ())), work / f"{stem}-{key[2]}", needed["files"] if needed else (), qb32.BENCH_CONF, qb32.BUDGET_MS)
+        ran = qbbuild.run(
+            qbbuild.Built(exe, LOADERS.get(exe, ())), work / f"{stem}-{key[2]}", needed["files"] if needed else (), qb32.BENCH_CONF, qb32.BUDGET_MS, profile=listing
+        )
         if ran.status != "ok":
             return key, {"error": f"run: {ran.status}"}
         got = run_tests.lines(ran.output.decode("latin1"))
-        # BASIC's PRINT of a number leads with a blank: the empty start-up program's ` 0` is the 0 it is stated as
+        # BASIC's PRINT of a number leads with a blank
         if [line.strip() for line in got] != [line.strip() for line in want]:
             return key, {"error": f"prints {got}, want {want}"}
+        if region.upper() not in ran.inclusive:
+            return key, {"error": f"the kernel {region} is not in the link map's functions"}
         data, bss = sizes.data_bytes(obj)
-        return key, {"instructions": ran.instructions, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+        return key, {"instructions": ran.inclusive[region.upper()], "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
 
     with ThreadPoolExecutor() as pool:
         found = dict(pool.map(one, flat.items()))
-    for key, counts in found.items():
-        if key[0] == "startup" or "instructions" not in counts:
-            continue
-        base = found.get(("startup", key[1], key[2]), {})
-        if "instructions" in base:
-            counts["instructions"] -= base["instructions"]
     return {key: counts for key, counts in found.items() if key[0] != "startup"}
 
 
@@ -445,7 +444,7 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
                 continue
             exe, listing = (folder / f"{stem}.exe", folder / f"{stem}.map") if variant.language in BASIC_LANGUAGES else result
             if variant.language == FLAT:
-                flat[key] = (stem, exe, folder / f"{stem}.{qbbuild.FLAT}.obj", expected_output(directory), timing_input(variant, directory))
+                flat[key] = (stem, exe, folder / f"{stem}.{qbbuild.FLAT}.obj", expected_output(directory), timing_input(variant, directory), listing, variant.region)
                 if directory == STARTUP:
                     plain[key] = exe
                 else:

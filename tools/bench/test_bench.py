@@ -421,3 +421,27 @@ def test_a_flat_programs_count_is_net_of_the_empty_startup_program(tmp_path):
     counts = bench.measure_all(["parity/sum_three"], ["O2"], tmp_path)[("parity/sum_three", "bq32", "O2")]
     assert "error" not in counts, counts
     assert counts["instructions"] < 5000, counts
+
+
+def test_a_flat_kernels_count_does_not_move_with_work_outside_it(tmp_path):
+    """bq32 counted the whole run: DOS/32A's load and the runtime's start-up were in every row (about 41.8k instructions), so work
+    outside the kernel moved every row (a function pointer added to the runtime: +165).  What does not move a run: one more
+    referenced byte array (its statics add no relocations; that was the first guess and it failed).  What does: work the program
+    does outside the kernel, here 200 loop iterations before it.  The kernel's count is the emulator's own for its function."""
+    kernel = "FUNCTION Kern%\n  s% = 0\n  FOR i% = 1 TO 100: s% = s% + i%: NEXT\n  Kern% = s%\nEND FUNCTION\n"
+    plain = "DECLARE FUNCTION Kern% ()\nPRINT Kern%\nEND\n" + kernel
+    more = "DECLARE FUNCTION Kern% ()\nFOR j% = 1 TO 200: t% = t% + j%: NEXT\nPRINT Kern%\nEND\n" + kernel
+    objects = bench.qbbuild.runtimes(tmp_path / "runtime")
+    flat, whole = {}, {}
+    for name, text in (("PLAIN", plain), ("MORE", more)):
+        source = tmp_path / f"{name}.BAS"
+        source.write_text(text)
+        (tmp_path / name).mkdir()
+        built = bench.qbbuild.one_target(source, tmp_path / name, objects, ("-O2",), bench.qbbuild.FLAT, listing=tmp_path / f"{name}.map")
+        bench.LOADERS[built.exe] = built.files
+        flat[(name, "bq32", "O2")] = (name, built.exe, tmp_path / name / f"{name}.{bench.qbbuild.FLAT}.obj", ["5050"], None, tmp_path / f"{name}.map", "Kern")
+        whole[name] = bench.qbbuild.run(built, tmp_path / f"whole{name}", conf=bench.qb32.BENCH_CONF, budget_ms=bench.qb32.BUDGET_MS).instructions
+    counts = bench.measure_flat(flat, tmp_path / "flat")
+    assert all("instructions" in one for one in counts.values()), counts
+    assert whole["MORE"] != whole["PLAIN"], "the experiment moves the whole run"
+    assert counts[("MORE", "bq32", "O2")]["instructions"] == counts[("PLAIN", "bq32", "O2")]["instructions"], (counts, whole)
