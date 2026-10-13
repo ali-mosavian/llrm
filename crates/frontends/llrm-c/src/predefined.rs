@@ -8,7 +8,10 @@
 use crate::raise_hir::widths_for;
 
 /// The `#define`s of a unit, flat (the 386 tree) or not.
-pub fn header(flat: bool, long_double_bytes: u64) -> String {
+pub fn header(
+    flat: bool,
+    long_double_bytes: u64,
+) -> String {
     let size = |type_: &str| i64::from(widths_for(flat, type_).expect("a front-end type has a width"));
     let (int, short, long, long_long, pointer) =
         (size("TY_INTEGER"), size("TY_INT_2"), size("TY_INT_4"), size("TY_INT_8"), size("TY_NEAR_POINTER"));

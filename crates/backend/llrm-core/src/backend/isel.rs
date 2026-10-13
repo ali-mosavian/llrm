@@ -5209,9 +5209,11 @@ impl Selector<'_, '_, '_> {
                 // into it, as gcc does, and not stored to a
                 // cell and pushed from it.
                 if matches!(size, 4 | 8 | 10) && self.arch.object().bitness == 32 {
-                    // An extended float takes whole slots (12 bytes), its 10 stored at the lower addresses: the
+                    // An extended float takes whole slots (12 bytes), its 10
+                    // stored at the lower addresses: the
                     // callee reads the next argument 12 bytes on.
-                    let slot = (i64::from(size) + self.arch.stack_slot_bytes() - 1) / self.arch.stack_slot_bytes() * self.arch.stack_slot_bytes();
+                    let slot = (i64::from(size) + self.arch.stack_slot_bytes() - 1) / self.arch.stack_slot_bytes()
+                        * self.arch.stack_slot_bytes();
                     let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
                     let count = Loc::Imm(Imm { value: slot, width: 2, address: None });
                     out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp, count])));

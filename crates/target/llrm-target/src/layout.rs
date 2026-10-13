@@ -207,7 +207,8 @@ mod tests {
         assert!(flat.spaces.unmarked(2).is_err());
     }
 
-    /// A long double was 10 bytes everywhere in the frontends; the target's `f80` entry says the stride.
+    /// A long double was 10 bytes everywhere in the frontends; the target's
+    /// `f80` entry says the stride.
     #[test]
     fn a_long_double_is_ten_bytes_rounded_up_to_the_layouts_f80_alignment() {
         let with = |f80: &str| Layout::parse(&FLAT.replace("e-p:32:32", &format!("e-p:32:32-{f80}"))).unwrap();

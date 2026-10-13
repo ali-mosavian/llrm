@@ -198,7 +198,8 @@ pub struct Profile {
     /// records mean in `calling.toml`'s conventions: one it records as
     /// cdecl, and one it records in its default registers.
     pub flags: Vec<String>,
-    /// A long double's size in memory, the target's (`Layout::long_double_bytes`): what `__SIZEOF_LONG_DOUBLE__` says.
+    /// A long double's size in memory, the target's
+    /// (`Layout::long_double_bytes`): what `__SIZEOF_LONG_DOUBLE__` says.
     pub long_double_bytes: u64,
     pub cdecl: String,
     pub registers: String,
@@ -225,8 +226,9 @@ impl Profile {
         calling.chosen(family)?;
         let mut profile = Self::parse(&description.table()?, family.unwrap_or(&calling.default))?;
         profile.long_double_bytes = target.layout().long_double_bytes();
-        // A long double is x87's 80-bit type at every target whose layout has one, whatever the ABI's other switches
-        // are: without `-fld` the front end makes it a double.
+        // A long double is x87's 80-bit type at every target whose layout has
+        // one, whatever the ABI's other switches are: without `-fld`
+        // the front end makes it a double.
         if target.layout().long_double_bytes() >= u64::from(FloatKind::X86Fp80.value_bytes())
             && !profile.flags.iter().any(|one| one == "-fld")
         {
@@ -828,11 +830,15 @@ mod tests {
         assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
     }
 
-    /// The flat target's long double was a double (8 bytes, no x87 tbyte code) while the real-mode target's was the x87
-    /// type: `-fld` was a switch in one target's file. The profile adds it where the layout has the x87 type.
+    /// The flat target's long double was a double (8 bytes, no x87 tbyte code)
+    /// while the real-mode target's was the x87 type: `-fld` was a switch
+    /// in one target's file. The profile adds it where the layout has the x87
+    /// type.
     #[test]
     fn test_every_x86_target_asks_for_the_x87_long_double_once() {
-        for profile in [super::Profile::of(&llrm_x86_m16::M16).unwrap(), super::Profile::of(&llrm_x86_m32::M32).unwrap()] {
+        for profile in
+            [super::Profile::of(&llrm_x86_m16::M16).unwrap(), super::Profile::of(&llrm_x86_m32::M32).unwrap()]
+        {
             assert_eq!(profile.flags.iter().filter(|one| *one == "-fld").count(), 1, "{:?}", profile.flags);
         }
     }
@@ -848,7 +854,8 @@ mod tests {
         let recorded = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records probe.c");
         assert!(recorded.contains("TY_LONG_DOUBLE"), "{recorded}");
         assert!(recorded.lines().any(|line| line.contains("DGBytes 10 ")), "{recorded}");
-        // the object is the description's 12 bytes: the image, then two of padding
+        // the object is the description's 12 bytes: the image, then two of
+        // padding
         assert!(recorded.lines().any(|line| line.trim() == "- DGUBytes 2"), "{recorded}");
     }
 
