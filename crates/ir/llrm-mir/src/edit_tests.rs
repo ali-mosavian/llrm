@@ -40,7 +40,11 @@ fn replacing_every_use_lets_the_definition_go() {
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
     assert_eq!(
         f.take_changes(),
-        [Change::Rewritten(y), Change::Erased { inst: x, block: f.entry().unwrap(), next: Some(y) }]
+        [
+            Change::Operand { inst: y, index: 0, was: Operand::Value(value) },
+            Change::Rewritten(y),
+            Change::Erased { inst: x, block: f.entry().unwrap(), next: Some(y) }
+        ]
     );
     assert_eq!(print::module(&module), "define i16 @f(i16 %a) {\nentry:\n  %y = mul i16 %a, 2\n  ret i16 %y\n}\n");
 }
@@ -138,14 +142,18 @@ fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
     let mark = f.mark();
     assert_eq!(f.changes_since(mark), Some(&[][..]));
     f.replace_all_uses_with(value, Operand::Value(a));
-    assert_eq!(f.changes_since(mark), Some(&[Change::Rewritten(y)][..]));
+    assert_eq!(
+        f.changes_since(mark),
+        Some(&[Change::Operand { inst: y, index: 0, was: Operand::Value(value) }, Change::Rewritten(y)][..]),
+        "the log keeps what the operand was, for the readers of the edges and the values it stopped reading"
+    );
     let copy = f.clone();
     assert_eq!(copy.changes_since(mark), None, "a copy's edits are its own");
     assert_eq!(copy.changes_since(copy.mark()), Some(&[][..]));
     f.erase(x).expect("unused now");
-    assert_eq!(f.changes_since(mark).map(<[Change]>::len), Some(2));
+    assert_eq!(f.changes_since(mark).map(<[Change]>::len), Some(3));
     f.take_changes();
-    assert_eq!(f.changes_since(mark).map(<[Change]>::len), Some(2), "taken, and still on the log");
+    assert_eq!(f.changes_since(mark).map(<[Change]>::len), Some(3), "taken, and still on the log");
     assert_eq!(f.changes_since(f.mark()), Some(&[][..]));
 }
 
@@ -335,9 +343,9 @@ fn taken_changes_stay_for_an_analysis_computed_before_them() {
     let (y, value) = named(f, "y");
     let a = f.parameters()[0];
     f.replace_all_uses_with(value, Operand::Value(a));
-    assert_eq!(f.take_changes().len(), 1);
+    assert_eq!(f.take_changes().len(), 2);
     let _ = (x, y);
-    assert_eq!(f.changes_since(before).map(<[Change]>::len), Some(1), "the taken change is gone from the log");
+    assert_eq!(f.changes_since(before).map(<[Change]>::len), Some(2), "the taken change is gone from the log");
     assert!(f.take_changes().is_empty(), "a change was handed out twice");
 }
 

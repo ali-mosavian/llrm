@@ -1,43 +1,70 @@
-reason = "a split pays only where a reference costs more spilled than a fold (splitkit::_benefit): 29 rows better (quicksort nib -Os instructions -2%, nbody_fixed -0.1%); worse: memory operands bintree nib -Os +2.1%, quicksort nib -Os +1%, sum_three bas -Os +2, huge instructions +0.07%"
-blessed = "2026-10-11"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+blessed = "2026-10-13"
 
 [bas.O2]
-instructions = 144792
+instructions = 145095
 memory_operands = 62573
-code_bytes = 715
+code_bytes = 706
 data_bytes = 17
 bss_bytes = 0
 
 [bas.Os]
-instructions = 141276
+instructions = 143170
 memory_operands = 63940
 code_bytes = 636
 data_bytes = 17
 bss_bytes = 0
 
-[c.O2]
-instructions = 57563
-memory_operands = 11227
-code_bytes = 283
-data_bytes = 0
+[bq16.O2]
+instructions = 155618
+memory_operands = 61700
+code_bytes = 716
+data_bytes = 17
 bss_bytes = 0
 
+[bq16.Os]
+instructions = 153394
+memory_operands = 63067
+code_bytes = 646
+data_bytes = 17
+bss_bytes = 0
+
+[bq32.O2]
+instructions = 163116
+code_bytes = 695
+data_bytes = 23
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 165956
+code_bytes = 665
+data_bytes = 23
+bss_bytes = 0
+
+[c.O2]
+instructions = 56568
+memory_operands = 11825
+code_bytes = 289
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.7574
+
 [c.Os]
-instructions = 55535
+instructions = 52743
 memory_operands = 12581
-code_bytes = 243
+code_bytes = 241
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 87078
+instructions = 85874
 memory_operands = 13027
 code_bytes = 394
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 116145
+instructions = 118039
 memory_operands = 28850
 code_bytes = 445
 data_bytes = 0

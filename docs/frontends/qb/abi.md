@@ -1,8 +1,12 @@
 # Measured QB procedure and array ABI
 
-This file records facts used by the source frontend. They are not inferred
-from 16-bit C conventions. The probes are compiled BASIC, and the offsets
-below are visible in the emitted instructions.
+Audience: contributors to `qbfront` and the QB ABI adapter. Facts about the
+Microsoft BASIC procedure, array and symbol ABI, measured from compiled BASIC
+and not inferred from 16-bit C conventions. The adapter is
+`crates/backend/llrm-core/src/abi/qb.rs`.
+
+A runtime result is primary evidence. A BC `/A` listing is not raw code: VBDOS
+shows back-patched frame operands as zero.
 
 ## Ordinary `BYREF`
 
@@ -42,8 +46,8 @@ far heap before the semantic call-order fix.
 The source OMF adapter reproduces Microsoft's linker names exactly. Public
 SUB/FUNCTION names are ASCII uppercase with the BASIC type suffix removed;
 runtime EXTDEF names retain their table spelling, including `$` and case;
-compiler data labels are `<MODULE>$D<number>`. The unmodified Gorillas pair
-therefore uses `CENTER`, `B$SASS`, and `GORILLA$D61` on both sides.
+compiler data labels are `<MODULE>$D<number>`. The Gorillas pair uses
+`CENTER`, `B$SASS`, and `GORILLA$D61` on both sides.
 
 Source globals retain their **effective** BASIC type suffix, not merely their
 spelling in a `DIM`. A QB 4.5 `/Zi` OMF probe establishes: untyped
@@ -79,10 +83,10 @@ mov es,[si+2]       ; data selector
 retf 2
 ```
 
-The emitted descriptor is the runtime layout already validated by
-`raising_arrays.py`: a data far pointer at `+0`, rank/features at `+8/+9`, an
-adjusted base at `+10`, element width at `+12`, then reversed-dimension
-`(count, lower)` pairs from `+14`.
+The descriptor layout is a data far pointer at `+0`, rank and features at
+`+8/+9`, an adjusted base at `+10`, element width at `+12`, then
+reversed-dimension `(count, lower)` pairs from `+14`; see the
+[diagram](memory-model.md#descriptor-layout).
 
 The source frontend represents the formal parameter as a near pointer to the
 descriptor. Huge descriptor element access loads the whole data pointer and
@@ -99,10 +103,7 @@ fastest). qb-qrender is built with `/R`. This changes emitted address
 arithmetic rather than the dialect or runtime profile, so HIR records it as
 the program's `array_order` option.
 
-Forwarding an array parameter passes the same descriptor pointer. Constructing
-a descriptor for a source-declared fixed or dynamic array is a separate object
-emission responsibility and remains an explicit lowering gate until the fresh
-OMF writer can emit its data pointer relocation and runtime-family fields.
+Forwarding an array parameter passes the same descriptor pointer.
 
 `ERASE` accepts either descriptor identity form. A local/module array supplies
 an addressable descriptor place; an array formal already supplies the incoming
@@ -122,6 +123,9 @@ listings establish an exact stack shape:
 | `B$GET3`, `B$PUT3` | channel word, record far pointer, length word | 8 |
 | `B$GET4`, `B$PUT4` | channel word, record number dword, record far pointer, length word | 12 |
 | `B$SSEK` | channel word, record number dword | 6 |
+| `B$VARP` | address (the target's near integer: a dword at m32), type word | 4 (m16; whole slots at m32) |
+| `B$SADD` | string descriptor pointer | 2 |
+| `B$BLOD`, `B$BSAV` | file name descriptor, offset (word; a dword at m32), word (BLOAD: 1 if an offset was given; BSAVE: length) | 6 |
 | `B$LEFT`, `B$STRI`, `B$STRS` | two near words | 4 |
 | `B$FEVS`, `B$FEVI` | descriptor pointer or ordinal word | 2 |
 
@@ -145,6 +149,9 @@ references `B$CGAUSED`, `B$EGAUSED`, `B$VGAUSED`, `B$HRCUSED`, or
 `B$OLIUSED`; an expression references `B$GRPUSED`. These zero-cost private
 relocations pull the selected graphics module from the Microsoft runtime.
 Without one, `SCREEN 9` reaches `B$CSCN` but raises error 5.
+
+`B$ENRA` reserves and zeroes the frame with no separate stack-check call at
+that site (VBDOS only).
 
 `ON ERROR` registration is executable state, not function metadata. Each
 source statement materializes `B$OEGA` with a far module offset or `B$OEGP`

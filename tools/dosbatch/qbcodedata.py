@@ -1,5 +1,5 @@
 """Code and data of each bench program as linked, from the linker maps: Microsoft's BC with BCOM45.LIB; llrm-qb with
-BCOM45.LIB (our compiler, Microsoft's runtime); the llrm runtime on m16 (MS LINK with LLRMQB.LIB); and on m32 (jwlink, LE
+BCOM45.LIB (our compiler, Microsoft's runtime); the llrm runtime in real mode (MS LINK with LLRMQB.LIB); and flat (jwlink, LE
 under DOS/32A).
 
     python tools/dosbatch/qbcodedata.py [--work DIR] [SOURCE.BAS ...]
@@ -48,7 +48,7 @@ def jw_map(path: Path) -> dict[str, int]:
     return totals
 
 
-def m16(work: Path, sources: list[Path]) -> tuple[dict, dict]:
+def real_mode(work: Path, sources: list[Path]) -> tuple[dict, dict]:
     """BCOM45's and the llrm runtime's maps, from one differential run: the maps are copied after each session."""
     kept = {"ref": {}, "cand": {}}
     original = dosbatch.run
@@ -93,7 +93,7 @@ def bc(work: Path, sources: list[Path]) -> dict:
     return {source.stem: ms_map(work / "bc_run" / f"{job.stem.upper()}.MAP") for source, job in zip(sources, jobs)}
 
 
-def m32(work: Path, sources: list[Path]) -> dict:
+def flat(work: Path, sources: list[Path]) -> dict:
     runtime = qb32.build(work / "rt32")
     out = {}
     for source in sources:
@@ -113,10 +113,10 @@ def main() -> int:
     work = args.work or Path(tempfile.mkdtemp(prefix="qbcodedata-"))
     work.mkdir(parents=True, exist_ok=True)
     sources = args.sources or qbruntime.milestone_sources()
-    ref, cand = m16(work, sources)
-    big = m32(work, sources)
+    ref, cand = real_mode(work, sources)
+    big = flat(work, sources)
     microsoft = bc(work, sources)
-    heads = ("BC+BCOM45 m16", "llrm-qb+BCOM45 m16", "llrm m16", "llrm m32")
+    heads = ("BC+BCOM45", "llrm-qb+BCOM45", "llrm real", "llrm flat")
     print(f"{'program':<13}| " + " | ".join(f"{h:^20}" for h in heads))
     print(f"{'':<13}| " + " | ".join(f"{'code':>6}{'data':>7}{'stack':>7}" for _ in heads))
     for source in sources:

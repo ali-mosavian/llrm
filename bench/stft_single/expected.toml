@@ -1,0 +1,98 @@
+reason = "OPEN no longer allocates a kilobyte of line buffer with its file block, so programs that open files in their kernel (grep, jpeg, stft: -3,063 instructions each) skip the string-space take it caused; scroll +3 for freeing the file name's temporary"
+blessed = "2026-10-13"
+
+[bas.O2]
+code_bytes = 1267
+data_bytes = 4701
+bss_bytes = 0
+kernel_ms = 872.2605
+
+[bas.Os]
+code_bytes = 1206
+data_bytes = 4701
+bss_bytes = 0
+kernel_ms = 871.4082
+
+[bq16.O2]
+code_bytes = 1243
+data_bytes = 4701
+bss_bytes = 0
+kernel_ms = 1132.917
+
+[bq16.Os]
+code_bytes = 1184
+data_bytes = 4701
+bss_bytes = 0
+kernel_ms = 1132.0913
+
+[bq32.O2]
+instructions = 73084713
+code_bytes = 1380
+data_bytes = 4733
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 73414194
+code_bytes = 1379
+data_bytes = 4733
+bss_bytes = 0
+
+[c.O2]
+code_bytes = 810
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 325.0158
+
+[c.Os]
+code_bytes = 779
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 322.3449
+
+[nib.O2]
+code_bytes = 2345
+data_bytes = 1089
+bss_bytes = 0
+kernel_ms = 646.3399
+
+[nib.Os]
+code_bytes = 2405
+data_bytes = 1089
+bss_bytes = 0
+kernel_ms = 653.1238
+
+[bcc.O2]
+code_bytes = 1115
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 802.1648
+
+[bcc.Os]
+code_bytes = 1129
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 1101.862
+
+[tcpp.O2]
+code_bytes = 1264
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 1137.2573
+
+[tcpp.Os]
+code_bytes = 1246
+data_bytes = 39
+bss_bytes = 5122
+kernel_ms = 1179.9877
+
+[bc.O2]
+code_bytes = 2014
+data_bytes = 61
+bss_bytes = 130
+kernel_ms = 2136.2355
+
+[pds71.O2]
+code_bytes = 2036
+data_bytes = 57
+bss_bytes = 130
+kernel_ms = 2036.0259

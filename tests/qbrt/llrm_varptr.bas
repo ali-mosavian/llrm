@@ -1,7 +1,7 @@
 ' VARPTR$ and SADD, and what DRAW and PLAY do with them: = takes a variable's
 ' value, X runs a string variable.  BC hangs on a DRAW or PLAY given a VARPTR$
 ' string under DOSBox, so this program checks itself and test_qbbc compares its
-' output with the expectations below.  m16 (a VARPTR$ string is 3 bytes).
+' output with the expectations below.  m16 (a VARPTR$ string is 3 bytes: the type and a 16-bit offset).
 ' expect: 3 2 20 4 8 3
 ' expect: -1 -1
 ' expect: draw-1 -1 -1

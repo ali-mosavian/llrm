@@ -1,10 +1,10 @@
-reason = "phielim renames a loop phi to its back-edge argument only where its copies would need an edge block (never an x87 value); twoaddr ties the source that does not interfere with the destination. matmul bas -O2 instructions -11.6%, nbody_fixed nib -Os instructions -3.7% (xchg chains gone) with memory operands +12%; crc bas +1 instruction, +2 bytes (one copy outside its loop)"
-blessed = "2026-10-10"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+blessed = "2026-10-13"
 
 [bas.O2]
-instructions = 21693
+instructions = 21692
 memory_operands = 5066
-code_bytes = 715
+code_bytes = 713
 data_bytes = 23
 bss_bytes = 0
 
@@ -14,11 +14,38 @@ memory_operands = 5120
 code_bytes = 707
 data_bytes = 23
 bss_bytes = 0
+kernel_ms = 0.3015
+
+[bq16.O2]
+instructions = 22562
+memory_operands = 5119
+code_bytes = 722
+data_bytes = 23
+bss_bytes = 0
+
+[bq16.Os]
+instructions = 22631
+memory_operands = 5173
+code_bytes = 716
+data_bytes = 23
+bss_bytes = 0
+
+[bq32.O2]
+instructions = 21770
+code_bytes = 818
+data_bytes = 29
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 21777
+code_bytes = 814
+data_bytes = 29
+bss_bytes = 0
 
 [c.O2]
-instructions = 19768
+instructions = 19766
 memory_operands = 3003
-code_bytes = 336
+code_bytes = 333
 data_bytes = 8
 bss_bytes = 0
 
@@ -28,11 +55,12 @@ memory_operands = 3003
 code_bytes = 336
 data_bytes = 8
 bss_bytes = 0
+kernel_ms = 0.2643
 
 [nib.O2]
-instructions = 19916
+instructions = 19914
 memory_operands = 3003
-code_bytes = 494
+code_bytes = 483
 data_bytes = 16
 bss_bytes = 0
 
@@ -42,6 +70,7 @@ memory_operands = 3003
 code_bytes = 484
 data_bytes = 16
 bss_bytes = 0
+kernel_ms = 0.2669
 
 [ow.O2]
 instructions = 21603

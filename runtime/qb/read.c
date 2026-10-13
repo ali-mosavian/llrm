@@ -94,7 +94,7 @@ static void read_number(byte type, qb_data_ptr destination)
 
     item_end(data, cursor, delimiter);
     if (type == VT_I2)
-        *(int QB_FAR *)destination = value.integer;
+        *(short QB_FAR *)destination = (short)value.integer;
     else if (type == VT_I4)
         *(long QB_FAR *)destination = value.long_integer;
     else if (type == VT_R4)

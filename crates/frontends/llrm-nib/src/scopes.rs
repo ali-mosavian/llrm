@@ -1,6 +1,8 @@
 //! Which names are locals where an expression stands. A pass that rewrites
 //! module-level names asks this walk, so that a local of the same name hides
-//! the declaration, as the semantic scopes will.
+//! the declaration, as the semantic scopes will. `walk_roles_mut` also says
+//! whether an expression is the name an assignment writes, which a pass that
+//! replaces a name by its value (a const's literal) must not replace.
 
 use super::syntax::{AsmTarget, AssignTarget, Clause, Expr, Pattern, Span, Statement};
 
@@ -31,6 +33,16 @@ impl Local for (String, Span) {
     }
 }
 
+/// What an expression stands for where the walk finds it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Role {
+    /// A value read.
+    Read,
+    /// The name an assignment (or an asm output) writes, visited as the name
+    /// it is.
+    Assigned,
+}
+
 /// Calls `visit` on each expression of `body`, innermost first, with the
 /// locals bound where it stands: `locals`, then each binding before it.
 /// An assignment's named target is visited as the name it is.
@@ -38,6 +50,17 @@ pub fn walk_mut<E, L: Local>(
     body: &mut [Statement],
     locals: &mut Vec<L>,
     visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
+) -> Result<(), E> {
+    walk_roles_mut(body, locals, &mut |expression, locals, _| visit(expression, locals))
+}
+
+/// `walk_mut`, saying for each expression whether it is read or is the name
+/// an assignment writes: a pass that replaces a name by its value must not
+/// replace a name that is written.
+pub fn walk_roles_mut<E, L: Local>(
+    body: &mut [Statement],
+    locals: &mut Vec<L>,
+    visit: &mut impl FnMut(&mut Expr, &[L], Role) -> Result<(), E>,
 ) -> Result<(), E> {
     let depth = locals.len();
     for statement in body {
@@ -50,7 +73,7 @@ pub fn walk_mut<E, L: Local>(
 fn statement_mut<E, L: Local>(
     statement: &mut Statement,
     locals: &mut Vec<L>,
-    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
+    visit: &mut impl FnMut(&mut Expr, &[L], Role) -> Result<(), E>,
 ) -> Result<(), E> {
     match statement {
         Statement::Bind { name, value, span, .. } => {
@@ -60,7 +83,7 @@ fn statement_mut<E, L: Local>(
         Statement::Destructure { pattern, value, otherwise, .. } => {
             expression_mut(value, locals, visit)?;
             if let Some(otherwise) = otherwise {
-                walk_mut(otherwise, locals, visit)?;
+                walk_roles_mut(otherwise, locals, visit)?;
             }
             locals.extend(bound(pattern));
         }
@@ -111,7 +134,7 @@ fn statement_mut<E, L: Local>(
             for arm in arms {
                 let depth = locals.len();
                 locals.extend(bound(&arm.pattern));
-                walk_mut(&mut arm.body, locals, visit)?;
+                walk_roles_mut(&mut arm.body, locals, visit)?;
                 locals.truncate(depth);
             }
         }
@@ -120,7 +143,7 @@ fn statement_mut<E, L: Local>(
                 expression_mut(expression, locals, visit)?;
             }
             for block in statement.blocks_mut() {
-                walk_mut(block, locals, visit)?;
+                walk_roles_mut(block, locals, visit)?;
             }
         }
     }
@@ -136,12 +159,13 @@ fn assigned<E, L: Local>(
     name: &mut String,
     span: Span,
     locals: &[L],
-    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
+    visit: &mut impl FnMut(&mut Expr, &[L], Role) -> Result<(), E>,
 ) -> Result<(), E> {
-    let mut named = Expr::Name(std::mem::take(name), span);
-    visit(&mut named, locals)?;
-    let Expr::Name(renamed, _) = named else { unreachable!("a name stays a name") };
-    *name = renamed;
+    let mut named = Expr::Name(name.clone(), span);
+    visit(&mut named, locals, Role::Assigned)?;
+    if let Expr::Name(renamed, _) = named {
+        *name = renamed;
+    }
     Ok(())
 }
 
@@ -151,10 +175,10 @@ fn scoped<E, L: Local>(
     span: Span,
     body: &mut [Statement],
     locals: &mut Vec<L>,
-    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
+    visit: &mut impl FnMut(&mut Expr, &[L], Role) -> Result<(), E>,
 ) -> Result<(), E> {
     locals.push(L::bound(name, span));
-    walk_mut(body, locals, visit)?;
+    walk_roles_mut(body, locals, visit)?;
     locals.pop();
     Ok(())
 }
@@ -165,13 +189,13 @@ pub fn expression_walk_mut<E, L: Local>(
     locals: &mut Vec<L>,
     visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
 ) -> Result<(), E> {
-    expression_mut(expression, locals, visit)
+    expression_mut(expression, locals, &mut |expression, locals, _| visit(expression, locals))
 }
 
 fn expression_mut<E, L: Local>(
     expression: &mut Expr,
     locals: &mut Vec<L>,
-    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
+    visit: &mut impl FnMut(&mut Expr, &[L], Role) -> Result<(), E>,
 ) -> Result<(), E> {
     let depth = locals.len();
     match expression {
@@ -197,13 +221,13 @@ fn expression_mut<E, L: Local>(
         }
     }
     locals.truncate(depth);
-    visit(expression, locals)
+    visit(expression, locals, Role::Read)
 }
 
 fn clauses_mut<E, L: Local>(
     clauses: &mut [Clause],
     locals: &mut Vec<L>,
-    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
+    visit: &mut impl FnMut(&mut Expr, &[L], Role) -> Result<(), E>,
 ) -> Result<(), E> {
     for clause in clauses {
         match clause {

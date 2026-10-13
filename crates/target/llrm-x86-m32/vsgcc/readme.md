@@ -1,29 +1,49 @@
 # crates/target/llrm-x86-m32/vsgcc
 
-llrm's m32 output against gcc and clang: executed instructions, memory operands and a 486 clock
-estimate of each `bench/` C kernel in one emulator, and the hottest loop of each. Method, results and
-findings: [docs/vs-gcc.md](../../../../docs/vs-gcc.md).
+For maintainers running llrm's `m32` output against gcc and clang. Method, commands, flow and caveats: [vs-gcc-clang](../../../../docs/comparison/vs-gcc-clang.md). This file lists the files and how to run them.
 
-    crates/target/llrm-x86-m32/vsgcc/run.sh                        # builds, runs, prints the tables; products in $VSGCC_WORK
-    uv run --project tools python crates/target/llrm-x86-m32/vsgcc/harness.py sieve gccO2   # one program, one compiler
+    crates/target/llrm-x86-m32/vsgcc/run.sh                                              # build, run, print the tables; products in $VSGCC_WORK
+    uv run --project tools python crates/target/llrm-x86-m32/vsgcc/harness.py sieve gccO2     # one program, one variant
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/loops.py sieve llrm gccO2 clangO2   # its hottest loop, side by side
     uv run --project tools --group dev pytest crates/target/llrm-x86-m32/vsgcc                # after run.sh
 
-`harness.py` links llrm's OMF itself and gcc/clang's ELF with `ld`, both against `stub.s`, runs `main` in
-unicorn and counts `bench_NAME` from entry to its own return. Variants: `llrm`, `gccO2`, `clangO2`, and the
-`Os` ones. A rerun with another llrm shows a fix's gain in the table's llrm columns; gcc and clang do not
-move.
+| File | Does |
+|---|---|
+| `run.sh` | builds llrm-c and every program with every compiler, runs all, prints `table.py`, writes `loops.PROG.txt` and `ctime.json` |
+| `build.sh PROG` | one program at -O1, -O2, -O3, -Os in llrm (OMF; ELF for `loops.py`), gcc and clang |
+| `wrap.py` | the copy every compiler builds: `main` calls the kernel through a volatile pointer |
+| `harness.py` | links, runs `main` in unicorn, counts the kernel's instructions, memory operands, 486 clocks |
+| `table.py`, `loops.py` | the tables, the hottest loop |
+| `programs.py`, `kernels/x_*` | the programs; `x_*` are kernels written for this comparison, each with a `.out` self-check from gcc `-O0` on the host, which every variant must reproduce or `table.py` refuses |
+| `levels_time.py`, `ctime.py` | compile cost per level, compile wall clock |
+| `scaling.py`, `scaling_gate.py` | compile cost against program size: [scaling](scaling.md) |
+| `stub.s` | `report`, `memset`, `memcpy`, `memmove` for every variant |
 
-`kernels/x_*` are 38 more kernels (`bench/` has no copy of them), each with its `.out` self-check from gcc -O0 on the host; every variant
-must report the same values or `table.py` refuses. The table prints the bench programs and the kernels as separate summaries, the
-worst program beside each geomean.
+A rerun with another llrm shows a change in the table's llrm columns; gcc and clang do not move.
 
-The kernel is called from `main` through a volatile pointer to it (`wrap.py`, in the copy every compiler builds), so none of them can inline
-it into `main`, and none can clone it for `main`'s constants (`-fipa-cp-clone`'s doing in gcc -O3); everything else inlines as the level
-says. `-fno-inline-functions` was on for all three before, which the table never showed was turning inlining off.
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  run["<b>run.sh</b>"]:::src
+  build["<b>build.sh</b>"]:::mid
+  wrap["<b>wrap.py</b>"]:::mid
+  comp["<b>llrm-c, gcc, clang</b>"]:::opt
+  har["<b>harness.py</b><br/><small>unicorn</small>"]:::mid
+  res["<b>results.jsonl</b>"]:::mid
+  tab["<b>table.py</b>"]:::out
+  loops["<b>loops.py</b>"]:::mid
+  run --> build
+  build --> wrap
+  wrap --> comp
+  comp --> har
+  har --> res
+  res --> tab
+  comp -.->|"ELF of llrm, gcc, clang"| loops
+```
 
-## Compile-time scaling
-
-`scaling.py` measures how the compile cost of llrm, gcc and clang (`levels_time.py`'s commands, `perf stat instructions:u` and task-clock) grows with program size: six generated axes (functions, straight-line statements, branches, live values, callers, call-chain depth; N doubling until a compile takes 10 s) and QCport's 65 modules against llrm's MIR size (`LLRM_DEBUG=mir`). `run` writes `$VSGCC_WORK/scaling.json`, `report` prints the tables and one PNG per axis. `check` runs each axis' program on gcc, clang and llrm (emulator) and requires one value. Results: [scaling.md](scaling.md). Test: `pytest test_scaling.py` (a stand-in compiler of known quadratic cost must read as slope 2).
-
-    uv run --project tools --with matplotlib python crates/target/llrm-x86-m32/vsgcc/scaling.py run --programs
+*The vsgcc scripts, in the order they run*

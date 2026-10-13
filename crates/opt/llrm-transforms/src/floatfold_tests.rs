@@ -329,3 +329,15 @@ fn test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation()
     // a multiply by one needs no flag
     assert!(!said("  %r = fmul double 1.0, %x\n  ret double %r").contains("fmul"));
 }
+
+/// A long double literal came as `fpext double -8.0 to x86_fp80`, which nothing
+/// read as a constant: `x / -8.0L` stayed an `fdiv` (tests/check/c/
+/// divide_by_power_of_two32.c, once long double was the x87 type at m32). A
+/// constant widened is the constant.
+#[test]
+fn test_a_widened_constant_is_a_constant_so_its_division_is_a_multiply() {
+    let text = through_the_pipeline(
+        "  %w = fpext double -8.0 to x86_fp80\n  %xx = fpext double %x to x86_fp80\n  %r = fdiv x86_fp80 %xx, %w\n  %t = fptrunc x86_fp80 %r to double\n  ret double %t",
+    );
+    assert!(!text.contains("fdiv"), "{text}");
+}

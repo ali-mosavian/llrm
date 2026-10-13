@@ -545,8 +545,12 @@ fn _function(
             }
             for operand in &instruction.operands {
                 if let model::Operand::IndirectPlace(model::IndirectPlace { origin: Some(origin), .. }) = operand {
-                    // A word offset where the target has segments, else the origin pointer itself.
-                    if types.get(&values[origin].r#type).is_none_or(|one| one.width != 2 && one.kind != model::TypeKind::Pointer) {
+                    // A word offset where the target has segments, else the
+                    // origin pointer itself.
+                    if types
+                        .get(&values[origin].r#type)
+                        .is_none_or(|one| one.width != 2 && one.kind != model::TypeKind::Pointer)
+                    {
                         invalid!("{prefix}: origin value {origin} is not a word offset or a pointer");
                     }
                 }
@@ -750,8 +754,12 @@ fn _function(
                     // offset. A normal scalar supplies a typed near pointer.
                     // Both are the same runtime address form; wider operands
                     // would lose the established real-mode contract.
-                    // Where there is one space a near address is a pointer, however wide.
-                    if operand_types.iter().any(|one| types[one].width != 2 && types[one].kind != model::TypeKind::Pointer) {
+                    // Where there is one space a near address is a pointer,
+                    // however wide.
+                    if operand_types
+                        .iter()
+                        .any(|one| types[one].width != 2 && types[one].kind != model::TypeKind::Pointer)
+                    {
                         invalid!("{prefix}: string comparison operands are not near addresses");
                     }
                 } else if operand_types[0] != operand_types[1] {
@@ -788,7 +796,8 @@ fn _function(
                     || (instruction.op == model::Op::PointerSegment && pointer.width != 4)
                     || (instruction.op == model::Op::PointerOffset && !matches!(pointer.width, 2 | 4))
                     || result.kind != model::TypeKind::Integer
-                    // A whole address, as wide as the pointer, where there is one space.
+                    // A whole address, as wide as the pointer, where there is
+                    // one space.
                     || !(result.width == 2
                         || (instruction.op == model::Op::PointerOffset && result.width == pointer.width))
                 {
@@ -808,7 +817,9 @@ fn _function(
                     || result.kind != model::TypeKind::Pointer
                     || result.width != 4
                 {
-                    invalid!("{prefix}: pointer concat is not INTEGER:INTEGER to 16:16, or INTEGER:LONG to a flat pointer");
+                    invalid!(
+                        "{prefix}: pointer concat is not INTEGER:INTEGER to 16:16, or INTEGER:LONG to a flat pointer"
+                    );
                 }
             }
             for operand in &instruction.operands {

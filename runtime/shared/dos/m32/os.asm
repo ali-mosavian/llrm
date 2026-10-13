@@ -20,8 +20,9 @@
 ;; definition the file holds every group.
 G_CORE          equ     1
 G_CONSOLE       equ     2
+G_PROCESS       equ     4
 ifndef OS_GROUPS
-OS_GROUPS       equ     3
+OS_GROUPS       equ     7
 endif
 
 ;; What DOS's device information (IOCTL 44h) says of a handle: bit 7 is a character device.
@@ -38,10 +39,15 @@ public LL$CLOSE
 public LL$EXIT
 public LL$MORE
 public LL$STACK_LOW
+public LL$PSP
 endif
 if OS_GROUPS and G_CONSOLE
 public LL$CONSOLE_READ_KEY
 public LL$CONSOLE_KEY_READY
+endif
+if OS_GROUPS and G_PROCESS
+public LL$COMMAND_LINE
+public LL$ENVIRONMENT
 endif
 
 ;; HEAP_BYTES comes from os.toml, DOS_* from the OS's facts: the assembler is told both.
@@ -50,6 +56,8 @@ if OS_GROUPS and G_CORE
 .data
 ;; The lowest ESP a checked function may reach (-fsanitize=stack). Start-up sets it.
 LL$STACK_LOW    dd      0
+;; The program's PSP selector, which the extender enters with in ES (start.asm keeps it).
+LL$PSP          dw      0
 ;; The heap's next free byte and the end of its arena: set on the first LL$MORE, which asks the
 ;; extender for the arena.
 heap_next       dd      0
@@ -277,6 +285,118 @@ LL$EXIT         proc
                 mov     ah, DOS_EXIT
                 int     DOS_INT
 LL$EXIT         endp
+endif
+
+if OS_GROUPS and G_PROCESS
+;; The program's PSP (the selector the extender gave ES at entry) holds the command tail (length at 80h, text from 81h) and the
+;; environment's selector (at 2Ch); the environment is NUL-ended strings ended by one more NUL.
+PSP_ENVIRONMENT equ     2Ch
+PSP_TAIL        equ     80h
+
+;;::::::::::::::
+;; LL$COMMAND_LINE(data: *near mut u8, max: usize) -> isize: the command tail without its leading blanks, at most `max` bytes of
+;; it, and the length copied.
+LL$COMMAND_LINE proc
+                push    ebx
+                push    esi
+                push    edi
+                push    es
+                mov     ax, LL$PSP
+                mov     es, ax
+                movzx   ecx, byte ptr es:[PSP_TAIL]
+                mov     esi, PSP_TAIL + 1
+skip_blank:
+                test    ecx, ecx
+                jz      short tail_copy
+                cmp     byte ptr es:[esi], ' '
+                jne     short tail_copy
+                inc     esi
+                dec     ecx
+                jmp     short skip_blank
+tail_copy:
+                cmp     ecx, dword ptr [esp+28]
+                jbe     short tail_fits
+                mov     ecx, dword ptr [esp+28]
+tail_fits:
+                mov     edi, dword ptr [esp+24]
+                mov     eax, ecx
+                jecxz   short tail_done
+copy_tail:
+                mov     bl, es:[esi]
+                mov     [edi], bl
+                inc     esi
+                inc     edi
+                dec     ecx
+                jnz     short copy_tail
+tail_done:
+                pop     es
+                pop     edi
+                pop     esi
+                pop     ebx
+                ret
+LL$COMMAND_LINE endp
+
+;;::::::::::::::
+;; LL$ENVIRONMENT(index: usize, data: *near mut u8, max: usize) -> isize: the `index`th string of the environment (from 0), at
+;; most `max` bytes of it, and its length; -1 past the last.
+LL$ENVIRONMENT  proc
+                push    ebx
+                push    esi
+                push    edi
+                push    es
+                mov     ax, LL$PSP
+                mov     es, ax
+                mov     ax, es:[PSP_ENVIRONMENT]
+                mov     es, ax
+                xor     esi, esi
+                mov     ecx, dword ptr [esp+20]
+next_string:
+                cmp     byte ptr es:[esi], 0
+                je      short no_string         ;; the closing NUL: past the last
+                jecxz   short found
+                dec     ecx
+skip_string:
+                mov     al, es:[esi]
+                inc     esi
+                test    al, al
+                jnz     short skip_string
+                jmp     short next_string
+found:
+                mov     ebx, esi
+measure:
+                cmp     byte ptr es:[esi], 0
+                je      short measured
+                inc     esi
+                jmp     short measure
+measured:
+                mov     eax, esi
+                sub     eax, ebx                ;; its length
+                mov     ecx, dword ptr [esp+28]
+                cmp     eax, ecx
+                jbe     short string_fits
+                mov     eax, ecx
+string_fits:
+                mov     ecx, eax
+                mov     edi, dword ptr [esp+24]
+                mov     esi, ebx
+                jecxz   short environment_done
+copy_string:
+                mov     bl, es:[esi]
+                mov     [edi], bl
+                inc     esi
+                inc     edi
+                dec     ecx
+                jnz     short copy_string
+                jmp     short environment_done
+no_string:
+                mov     eax, -1
+environment_done:
+                pop     es
+                pop     edi
+                pop     esi
+                pop     ebx
+                ret
+LL$ENVIRONMENT  endp
 endif
 
 end

@@ -1,24 +1,51 @@
-reason = "fill: adjacent constant stores are one store of the widest integer where that is fewer bytes tuned for size (gcc store-merging, LLVM MergeConsecutiveStores); several fills in a loop are a memset each where memsets are cheaper in clocks and bytes"
-blessed = "2026-10-10"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+blessed = "2026-10-13"
 
 [bas.O2]
-instructions = 1036
+instructions = 1054
 memory_operands = 463
-code_bytes = 735
+code_bytes = 691
 data_bytes = 13
 bss_bytes = 0
 
 [bas.Os]
 instructions = 1134
 memory_operands = 535
-code_bytes = 656
+code_bytes = 658
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.0244
+
+[bq16.O2]
+instructions = 1431
+memory_operands = 497
+code_bytes = 700
 data_bytes = 13
 bss_bytes = 0
 
+[bq16.Os]
+instructions = 1512
+memory_operands = 569
+code_bytes = 667
+data_bytes = 13
+bss_bytes = 0
+
+[bq32.O2]
+instructions = 1422
+code_bytes = 688
+data_bytes = 19
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 1426
+code_bytes = 663
+data_bytes = 19
+bss_bytes = 0
+
 [c.O2]
-instructions = 266
+instructions = 268
 memory_operands = 77
-code_bytes = 369
+code_bytes = 351
 data_bytes = 0
 bss_bytes = 0
 
@@ -28,11 +55,12 @@ memory_operands = 77
 code_bytes = 315
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.004
 
 [nib.O2]
-instructions = 311
+instructions = 299
 memory_operands = 82
-code_bytes = 429
+code_bytes = 424
 data_bytes = 0
 bss_bytes = 0
 
@@ -42,6 +70,7 @@ memory_operands = 82
 code_bytes = 381
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.005
 
 [ow.O2]
 instructions = 387

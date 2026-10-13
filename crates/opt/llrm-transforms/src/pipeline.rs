@@ -1,25 +1,125 @@
-//! The MIR fixed point every driver runs: llrm-core's `optimize/transform.rs`
-//! `pipeline`, `applied`, `recorded`, `Applied` and `_Transaction` (with
-//! `_applied` and `_transacted`), on llrm-mir's pass manager. The
-//! transaction is `Fixed`, one function pass; `applied` runs it under a
-//! manager that requires `Summaries` and verifies the module after it,
-//! then the whole-module step, `Interprocedural`, which runs it again on
-//! each body it changes, then `Rotate`.
+//! The MIR optimization pipeline every driver runs: the order of the passes,
+//! the per-body fixed point, and which options switch them off.
 //!
-//! What changed with the IR:
-//! - A pass reports a change by preserving less than every analysis; the old
-//!   compared bodies. Arenas never shrink, so the repeated-state check compares
-//!   printed bodies instead.
-//! - The stage records are the manager's change log (`recorded`); `watch` is
-//!   `Applied::dump`, a file per changed step of each body.
-//! - `Where`'s segment, BC blocks and object file went with the BC frontend.
-//!   The machine's facts are the program's target's.
-//! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning.
-//!   Hoist's store sinking is loopmotion's pass.
-//! - `flow::optimized`'s rule that an irreducible body is not promoted is here:
-//!   promotion needs dominators.
-//! - The old `_Transaction` verified nothing; `applied`'s manager verifies the
-//!   module after the pipeline.
+//! # How it works
+//! [`recorded`] (and [`applied`], which drops its result) builds a
+//! `PassManager` and adds, in this order: whole-module steps, [`Fixed`] over
+//! every body, the whole-program [`crate::interprocedural`] step, and loop and
+//! address passes that run once, after the program is settled. Every pass
+//! after `globalopt` is a function, module or program pass of the manager.
+//! With `LLRM_VERIFY` set the module is verified after each manager pass;
+//! with `Applied::dump` set each changed step of each body is written there.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef note fill:transparent,stroke:transparent,color:#64748b
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   o0["-O0 (Options::optimize = false)<br/>available-externally only"]:::note
+//!   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
+//!   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
+//!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
+//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+//!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
+//!     unsw["<b>unswitch (-O3)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+//!     jam["<b>unroll-jam (-O3)</b><br/><small>sroa, then B's rounds</small>"]:::mid
+//!     mrg["<b>merge (once)</b>"]:::mid
+//!   end
+//!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
+//!   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
+//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>jumpthread hoist gepoffset<br/>addresssink</small>"]:::mid
+//!   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
+//!   a --> sroa
+//!   sroa --> rnd
+//!   rnd --> peel
+//!   peel --> unsw
+//!   unsw --> jam
+//!   jam --> mrg
+//!   mrg --> c
+//!   c -.->|"a changed body goes<br/>back through B"| sroa
+//!   c --> d
+//!   d --> e
+//!   e --> f
+//!   style g_b fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+//! ```
+//!
+//! *The mir pipeline, stages A to F*
+//!
+//! The order of B is the `every` list of [`pipeline`]; [`passes`] returns it
+//! as names. [`Fixed`] takes four passes out of it: `sroa` runs at structural
+//! boundaries, `unroll` and `peel` run at the places drawn above, `merge`
+//! once at the end. A pass that is off is not in the list.
+//!
+//! A round runs the remaining passes in order. The body is at a fixed point
+//! when a round changes nothing; a pass reports a change by preserving less
+//! than every analysis. A pass that changed nothing is skipped until an edit
+//! reaches what it reads (`FunctionPass::reads`, `footprint::of`). The limit
+//! is `max(16, size + 1)` rounds, and a round that reproduces an earlier
+//! printed body is an error, so an oscillating pair fails at once. `sroa` and
+//! `promote` are skipped on a body with an irreducible loop: promotion needs
+//! dominators.
+//!
+//! Peeling repeats while it leaves fewer loops, so an outer loop whose inner
+//! loop was peeled is peeled in turn. [`crate::unswitch`] re-optimizes each
+//! candidate with a `Fixed` of its own that has unswitching and jamming off.
+//!
+//! In E, `lsr` is after the interprocedural step because nothing after it may
+//! choose a loop's counters again; `rotate{proven}` is last of the loop
+//! passes because `unroll` and `peel` refuse a rotated loop; `hoist`
+//! runs again to lift what a rotated loop (run at least once) may now leave;
+//! `gepoffset` follows it because it would move a constant `gep` out of its
+//! loop; `addresssink` follows the last `gvn`, which makes the phis it sinks.
+//!
+//! # Example
+//! No honest example: the pipeline is the order of the passes, not one rewrite,
+//! and no one function shows it. `llrm-c --dump DIR` writes the module after
+//! each stage (`NN-stage.ll`) and, for each body, each changed step of the
+//! fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
+//!
+//! # Runs
+//! Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
+//! maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to
+//! `Options::none`, `basic`, `standard`, `speed`, `aggressive`, `size`,
+//! `min_size` (`-Og`: `basic` without `fill`). `-f` flags set single fields
+//! (`PASSES` in the same file). The per-level table, with the gcc and LLVM
+//! counterpart of each limit, is
+//! [docs/reference/levels.md](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/docs/reference/levels.md).
+//!
+//! `Options::wanted` gates passes by name, so every pass can be bisected off:
+//!
+//! | field | passes |
+//! |---|---|
+//! | `optimize` | all; off, only `available-externally` runs |
+//! | `lcssa`, `floatloop`, `fold`, `decide`, `dead` | the pass of that name |
+//! | `hoist` | `hoist`, `loopmotion` |
+//! | `forward` and `drop_loads` | `gvn`, `equalcalls` |
+//! | `drop_stores` | `dse` |
+//! | `promote` | `sroa`, `promote` |
+//! | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
+//! | `unroll`, `peel` | the pass of that name |
+//! | `fill` | `fill`, `merge` |
+//! | `sibcalls` | `tailrec` |
+//! | `ipa_ranges` | argument ranges in the interprocedural step |
+//! | `unswitch`, `unroll_jam` | the passes of that name (off by default) |
+//! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
+//!
+//! `pre` makes `gvn` insert on the path that lacks a value; `expensive`
+//! enables `jumpthread`'s state machines and `copy_headers` its correlated
+//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `fill`, `lsr`,
+//! `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals` lets
+//! alias and branch decisions use the intervals of counted loops. `limits`
+//! are the copy budgets of `unroll` and `peel`.
+//!
+//! # Needs
+//! `Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
+//! up front, and frozen at the end of D so the passes of E read them without
+//! recomputing after each edit.
+//!
+//! # See also
+//! gcc's pass lists, `passes.def`; LLVM's `PassBuilderPipelines.cpp`.
+//! `LLRM_DEBUG=time` times each step, `runs` counts rounds, skips and the
+//! work of passes that changed nothing.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -37,7 +137,8 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
+    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unroll_jam, unswitch,
+    window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -62,6 +163,10 @@ pub struct Options {
     pub hoist: bool,
     pub forward: bool,
     pub drop_loads: bool,
+    /// Partial redundancies are made full by inserting a computation or load on
+    /// the path that lacks it: gcc's `-ftree-pre`, -O2 and up. Without it
+    /// `gvn` only removes what is redundant on every path (`-ftree-fre`, -O1).
+    pub pre: bool,
     pub drop_stores: bool,
     pub promote: bool,
     pub strength: bool,
@@ -70,6 +175,9 @@ pub struct Options {
     pub fill: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
+    /// A nest's outer loop unrolled and its inner copies fused (gcc's
+    /// `-floop-unroll-and-jam`, -O3 only).
+    pub unroll_jam: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -106,6 +214,7 @@ impl Default for Options {
             loop_intervals: true,
             forward: true,
             drop_loads: true,
+            pre: true,
             drop_stores: true,
             promote: true,
             strength: true,
@@ -114,7 +223,8 @@ impl Default for Options {
             fill: true,
             sibcalls: true,
             unswitch: false,
-            copy_headers: false,
+            unroll_jam: false,
+            copy_headers: true,
             for_size: false,
             expensive: true,
             search: true,
@@ -134,18 +244,18 @@ impl Options {
     /// loop is copied out completely only where the code does not grow;
     /// nothing is inlined that `early-inlining-insns` (6) over
     /// `max-inline-insns-auto` (15) of the -O2 threshold does not admit,
-    /// and no gcse, sibling calls, peeling or unswitching. Pattern fill is on
-    /// (`LoopIdiomRecognize` is in LLVM's O1 pipeline, PassBuilderPipelines.cpp
-    /// L562): the one departure from gcc's -O1 here, the user's decision of
-    /// 2026-10-10 (docs/levels.md).
+    /// value numbering that inserts nothing (`-ftree-fre`; no
+    /// `-ftree-pre`), and no sibling calls, peeling or unswitching. Pattern
+    /// fill is on (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
+    /// PassBuilderPipelines.cpp L562): the one departure from gcc's -O1
+    /// here, the user's decision of 2026-10-10 (docs/reference/levels.md).
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
             inline: inline::Threshold::new(Self::default().inline.limit * 6 / 15),
             ipa_ranges: false,
             loop_intervals: false,
-            forward: false,
-            drop_loads: false,
+            pre: false,
             sibcalls: false,
             peel: false,
             unswitch: false,
@@ -174,6 +284,7 @@ impl Options {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
+            unroll_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
         }
@@ -305,7 +416,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // one.
         Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),
-        Box::new(gvn::Gvn),
+        Box::new(gvn::Gvn { pre: applied.options.pre }),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
         Box::new(indvars::IndVars { exit_values: false }),
@@ -435,7 +546,8 @@ pub fn recorded(
     // The loops it guards are re-simplified for the passes that follow. Not at
     // -Os (`optimize_loop_for_size_p`): there only a loop proven to run is
     // entered at its body, which the last `Rotate` does.
-    if applied.options.copy_headers && !applied.options.prefers_size() {
+    let guarded = applied.options.copy_headers && !applied.options.prefers_size();
+    if guarded {
         manager.add(rotate::Rotate { proven: false, copy: true });
         manager.add(loopsimplify::LoopSimplify);
         manager.add(lcssa::LoopClosedSSA);
@@ -447,6 +559,13 @@ pub fn recorded(
         // the one that leaves.
         manager.add(indvars::IndVars { exit_values: true });
         manager.add(dead::Dead);
+    }
+    // A loop entered at its body runs it at least once: what it loads
+    // unchanged leaves it before its counters are chosen, as LLVM runs LICM
+    // before LoopStrengthReduce. Only the copy has entered loops at their
+    // body by here; without it the last `Rotate` has not, and hoist follows it.
+    if guarded && applied.options.wanted("hoist") {
+        manager.add(hoist::Hoist { size: applied.options.prefers_size() });
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
@@ -483,7 +602,7 @@ pub fn recorded(
     }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
-    if applied.options.wanted("hoist") {
+    if !guarded && applied.options.wanted("hoist") {
         manager.add(hoist::Hoist { size: applied.options.prefers_size() });
     }
     // After hoist, which would move a constant `gep` out of its loop.
@@ -543,6 +662,7 @@ pub struct Fixed {
     /// Once, after everything else.
     last: Vec<Box<dyn FunctionPass>>,
     unswitch: Option<unswitch::Unswitch>,
+    jam: Option<unroll_jam::UnrollJam>,
     only: bool,
     dump: Option<PathBuf>,
     /// Bodies run, naming each one's dump.
@@ -570,7 +690,7 @@ impl Fixed {
             .unswitch
             .then(
                 || {
-                    let options = Options { unswitch: false, ..applied.options.clone() };
+                    let options = Options { unswitch: false, unroll_jam: false, ..applied.options.clone() };
                     let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
                     unswitch::Unswitch { passes: vec![Box::new(Fixed::new(&reoptimize))] }
                 },
@@ -582,6 +702,7 @@ impl Fixed {
             peelers,
             last,
             unswitch,
+            jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
             only: only.is_some(),
             dump: applied.dump.clone(),
             runs: 0,
@@ -623,6 +744,15 @@ impl Fixed {
         }
         if let Some(unswitch) = &mut self.unswitch {
             run.step(unswitch, "unswitch", unit, analyses);
+        }
+        // After unswitching, as gcc's pass order has it: an invariant guard is
+        // out of the nest by then. The fused copies are cleaned as a peeled
+        // loop is.
+        if let Some(jam) = &mut self.jam {
+            if run.step(jam, "unroll-jam", unit, analyses) {
+                self.scalarized(unit, analyses, run, "jammed");
+                self.fixed(unit, analyses, run, "jammed-")?;
+            }
         }
         for one in &mut self.last {
             let stage = one.name();

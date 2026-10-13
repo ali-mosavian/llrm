@@ -287,7 +287,8 @@ fn event_statement(
     })
 }
 
-/// The name a coordinate pair's x carries when the pair is STEP-relative to the last point.
+/// The name a coordinate pair's x carries when the pair is STEP-relative to the
+/// last point.
 pub const STEP_MARK: &str = "$STEP";
 
 /// Where the first comma outside parentheses stands in `tokens`.
@@ -1371,8 +1372,9 @@ fn data_statement(
     ParseResult::GoodSyntax
 }
 
-/// A graphics statement's arguments in place: each coordinate pair whose STEP the source gave has its x wrapped in
-/// `STEP(x)`; `LINE -(x, y)` gets the pair `STEP(0), 0` (the last point) in front; `LINE`'s color, B or BF, and style
+/// A graphics statement's arguments in place: each coordinate pair whose STEP
+/// the source gave has its x wrapped in `STEP(x)`; `LINE -(x, y)` gets the pair
+/// `STEP(0), 0` (the last point) in front; `LINE`'s color, B or BF, and style
 /// are three arguments, `Omitted` where the source left them out.
 fn graphics_arguments(
     state: &ParseState,
@@ -1383,10 +1385,11 @@ fn graphics_arguments(
 ) -> Vec<Expr> {
     let keyword_at = state.tokens[..state.at].iter().rposition(|token| token.span == span).unwrap_or(0);
     let tokens = &state.tokens[keyword_at..state.at];
-    let marked = |slot: u8| actions.iter().any(|action| matches!(action, AstAction::Mark { slot: s, .. } if *s == slot));
+    let marked =
+        |slot: u8| actions.iter().any(|action| matches!(action, AstAction::Mark { slot: s, .. } if *s == slot));
     let zero = |at: Span| Expr::Literal(Literal::Integer(0, TypeName::Integer), at);
-    let omitted_first = name == "LINE"
-        && tokens.get(1).is_some_and(|token| token.kind == TokenKind::Reserved(named("tkMinus")));
+    let omitted_first =
+        name == "LINE" && tokens.get(1).is_some_and(|token| token.kind == TokenKind::Reserved(named("tkMinus")));
     if name == "LINE" {
         if omitted_first {
             arguments.splice(0..0, [zero(span), zero(span)]);
@@ -1413,11 +1416,12 @@ fn graphics_arguments(
     for &at in pairs {
         let Some(x) = arguments.get(at) else { break };
         let from = if at == 0 { floor } else { after_first };
-        let stepped = (at == 0 && omitted_first) || tokens.iter().any(|token| {
-            token.kind == TokenKind::Reserved(named("tkSTEP"))
-                && token.span.start >= from
-                && token.span.end <= x.span().start
-        });
+        let stepped = (at == 0 && omitted_first)
+            || tokens.iter().any(|token| {
+                token.kind == TokenKind::Reserved(named("tkSTEP"))
+                    && token.span.start >= from
+                    && token.span.end <= x.span().start
+            });
         if at == 0 {
             after_first = arguments.get(1).map_or(floor, |y| y.span().end);
             floor = after_first;
@@ -1544,26 +1548,37 @@ fn synthesize_statement(
     let descriptor = if line_input { Some(StatementShape::LineInput) } else { dispatched.or(emitted) };
     let arguments = state.expressions.split_off(expression_base);
     let labels = state.labels.split_off(label_base);
-    // `STRIG ON` and `STRIG OFF` start and stop reading the joystick's buttons; the grammar emits nothing for them.
+    // `STRIG ON` and `STRIG OFF` start and stop reading the joystick's buttons;
+    // the grammar emits nothing for them.
     let strig_switch = (keyword == named("tkSTRIG") && arguments.is_empty()).then(|| {
-        state.tokens[..state.at].iter().rev().find_map(|token| match token.kind {
-            TokenKind::Reserved(id) if id == named("tkON") => Some("ON"),
-            TokenKind::Reserved(id) if id == named("tkOFF") => Some("OFF"),
-            _ => None,
-        })
+        state
+            .tokens[..state.at]
+            .iter()
+            .rev()
+            .find_map(
+                |token| match token.kind {
+                    TokenKind::Reserved(id) if id == named("tkON") => Some("ON"),
+                    TokenKind::Reserved(id) if id == named("tkOFF") => Some("OFF"),
+                    _ => None,
+                },
+            )
     });
     if let Some(Some(verb)) = strig_switch {
         state.expressions.truncate(expression_base);
-        state.statements.push(Statement::Runtime {
-            name: "EVENT".into(),
-            arguments: vec![
-                Expr::Name("STRIG".into(), span),
-                Expr::Omitted(span),
-                Expr::Name(verb.into(), span),
-                Expr::Omitted(span),
-            ],
-            span,
-        });
+        state
+            .statements
+            .push(
+                Statement::Runtime {
+                    name: "EVENT".into(),
+                    arguments: vec![
+                        Expr::Name("STRIG".into(), span),
+                        Expr::Omitted(span),
+                        Expr::Name(verb.into(), span),
+                        Expr::Omitted(span),
+                    ],
+                    span,
+                },
+            );
         return true;
     }
     if let Some(event) = event_statement(actions, &arguments, &labels, span) {
@@ -1795,7 +1810,10 @@ fn synthesize_statement(
                     arguments.push(Expr::Name(mode.into(), mode_span));
                 }
             }
-            if matches!(name, "PSET" | "PRESET" | "LINE" | "CIRCLE" | "PAINT" | "GET" | "PUT") {
+            if matches!(
+                name,
+                "PSET" | "PRESET" | "LINE" | "CIRCLE" | "PAINT" | "GET" | "PUT"
+            ) {
                 arguments = graphics_arguments(state, name, arguments, actions, span);
             }
             Statement::Runtime { name: name.into(), arguments, span }
@@ -2694,7 +2712,8 @@ fn name_or_apply(
     name: String,
     start: Span,
 ) -> Result<Expr, ParseResult> {
-    // VARPTR$ and VARPTR are two functions, which the intrinsics find by their name without the `$`.
+    // VARPTR$ and VARPTR are two functions, which the intrinsics find by their
+    // name without the `$`.
     let name = if name.eq_ignore_ascii_case("VARPTR$") { "$VARPTR".to_owned() } else { name };
     let mut value = Expr::Name(name, start);
     loop {

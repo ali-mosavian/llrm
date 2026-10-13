@@ -272,9 +272,12 @@ fn _compiler_switches(program: &model::Program) -> Result<i64, CompileError> {
         return Ok(0x1088); // BC /O /FPa /G2
     }
     let mut flags = match program.runtime {
-        model::RuntimeProfile::Qb45 | model::RuntimeProfile::Llrm => 0x1080, // BC /O /FPi; llrm keeps QB's
-        model::RuntimeProfile::Pds71 => 0x1084, // BC /O /FPi /G2
-        model::RuntimeProfile::Vbdos => 0x12C4, // BC /O /FPi /G3 /E
+        // BC /O /FPi; llrm keeps QB's
+        model::RuntimeProfile::Qb45 | model::RuntimeProfile::Llrm => 0x1080,
+        // BC /O /FPi /G2
+        model::RuntimeProfile::Pds71 => 0x1084,
+        // BC /O /FPi /G3 /E
+        model::RuntimeProfile::Vbdos => 0x12C4,
         model::RuntimeProfile::Freestanding => {
             return Err(CompileError::Value(format!("KeyError: {}", program.runtime.repr())));
         }
@@ -297,8 +300,9 @@ fn _header(
     let mut name = object_name.as_bytes()[..object_name.len().min(8)].to_vec();
     name.resize(8, b' ');
     // MODULE_CODE in runtime/inc/addr.inc. Every symbolic word is an offset,
-    // framed through DGROUP by the shared writer; where the target's near pointer is a dword the words are
-    // dwords (`HeaderWords`), and the 48 bytes keep the marker and the switches where they were.
+    // framed through DGROUP by the shared writer; where the target's near
+    // pointer is a dword the words are dwords (`HeaderWords`), and the 48
+    // bytes keep the marker and the switches where they were.
     let words = driver::basic::HeaderWords::of(bitness);
     let mut out: Vec<u8> = [b"bl".to_vec(), name, vec![0; 34], vec![0xff, 0xff]].concat();
     out.extend((_compiler_switches(program)? as u16).to_le_bytes());
@@ -306,7 +310,8 @@ fn _header(
         return Err(CompileError::Value("MODULE_CODE is exactly O_ENT bytes".into()));
     }
     // The addends live in the image. The remaining words are zero.
-    out[words.segments[0]..words.segments[0] + words.width].copy_from_slice(&2u32.to_le_bytes()[..words.width]); // OF_DS is BC_DS + 2.
+    // OF_DS is BC_DS + 2.
+    out[words.segments[0]..words.segments[0] + words.width].copy_from_slice(&2u32.to_le_bytes()[..words.width]);
     Ok(out)
 }
 
@@ -345,7 +350,8 @@ fn _near_procedures(
         let callables: BTreeSet<i64> =
             original.callables.iter().filter(|one| near.contains(one.name.as_str())).map(|one| one.id).collect();
         for function in &mut program.modules[index].functions {
-            // Where there is one space no code is far: a call is near, and so is every procedure's return.
+            // Where there is one space no code is far: a call is near, and so
+            // is every procedure's return.
             if flat || near.contains(function.name.as_str()) {
                 if let Some(abi) = function.abi.as_mut() {
                     abi.distance = model::CallDistance::Near;
@@ -473,8 +479,11 @@ fn rich_assembled(
         ("COMMON", vec![]),
         (
             "BC_DATA",
-            [vec![datum(masm::Datum::Bytes(vec![0; module_data_bytes(near_bytes as usize)]))], placed.swap_remove("BC_DATA").unwrap_or_default()]
-                .concat(),
+            [
+                vec![datum(masm::Datum::Bytes(vec![0; module_data_bytes(near_bytes as usize)]))],
+                placed.swap_remove("BC_DATA").unwrap_or_default(),
+            ]
+            .concat(),
         ),
         ("NMALLOC", vec![]),
         ("ENMALLOC", vec![]),
@@ -486,8 +495,8 @@ fn rich_assembled(
             "BC_SA",
             vec![
                 label("$QB$SA"),
-                // The module's address as the target holds it: an offset and a segment where it has both, else
-                // an address.
+                // The module's address as the target holds it: an offset and a
+                // segment where it has both, else an address.
                 datum(masm::Datum::Pointer(masm::Pointer {
                     name: basic::HEADER.into(),
                     offset: 0,
@@ -571,16 +580,19 @@ pub fn assembled(
     let laid_out = llrm_core::support::debug::timed("hir zero fill", || {
         super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function))
     });
-    let program = &llrm_core::support::debug::timed("hir near procedures", || _near_procedures(&laid_out, codegen.arch.layout().spaces.far_is_near()));
+    let program = &llrm_core::support::debug::timed("hir near procedures", || {
+        _near_procedures(&laid_out, codegen.arch.layout().spaces.far_is_near())
+    });
     if program.modules.len() != 1 {
         return emission("one OMF object represents exactly one QB module");
     }
     rich_assembled(program, codegen)
 }
 
-/// The module's data area the runtime keeps at the start of BC_DATA: a C struct of a flag, an unused byte,
-/// the READ cursor and the ON ERROR handler's address, the last two as wide as a near pointer: QB's six
-/// bytes where that is two.
+/// The module's data area the runtime keeps at the start of BC_DATA: a C struct
+/// of a flag, an unused byte, the READ cursor and the ON ERROR handler's
+/// address, the last two as wide as a near pointer: QB's six bytes where that
+/// is two.
 fn module_data_bytes(near_bytes: usize) -> usize {
     2usize.next_multiple_of(near_bytes) + 2 * near_bytes
 }

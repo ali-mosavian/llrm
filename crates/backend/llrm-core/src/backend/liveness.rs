@@ -1,11 +1,47 @@
-//! Port of `qbopt/backend/liveness.py`: which physical register and flag
-//! lanes are dead on exit from each block.
+//! Which physical register and flag lanes are live into and dead out of each
+//! block, and what one instruction reads and writes.
 //!
-//! A backward walk inside one block starts by assuming everything is live, so a
-//! copy written as the last instruction of a block always survives it -- and a
-//! parallel copy for a phi is written exactly there. deedlines' plasmablobs
-//! ends its inner loop with `mov di,bx` whose destination no path reads before
-//! writing it again.
+//! # How it works
+//! A lane is one byte of a general or segment register, or one flag bit
+//! ([`crate::backend::lanes`]). `effect` gives an instruction's reads and
+//! writes: as it decodes (`_register_effects`), else as its contract declares
+//! (`_declared`: a call's `requires`, `clobbers` and `delivers`, a return's
+//! explicit results and the architectural state its epilogue needs). An
+//! instruction with neither is unknown and may read anything. The answer is
+//! worked out once per instruction and kept on it.
+//!
+//! A shift's effect also lists the bytes it moves, `(written, source)`: a
+//! source is read only where its written byte, or a flag the shift sets, is
+//! live after it. A parallel copy group is one effect at its last copy, since
+//! it reads every source before it writes any destination.
+//!
+//! Inside a block the walk goes backward:
+//!
+//! ```text
+//!   live_before = (live_after - writes) | reads
+//! ```
+//!
+//! Across blocks `live_into` finds the least fixed point with a worklist that
+//! starts from the last block: a block is recomputed when a successor's live
+//! set changed. A block with no successor leaves everything live, so a copy
+//! written as the last instruction of an exit block survives, and so does a
+//! parallel copy for a phi, which is written exactly at a block end.
+//! `dead_at_exit` is the complement, per block: the lanes nothing reads again.
+//! Its last answer is kept and reused while the body is the same instructions,
+//! because the peephole sub-passes ask in turn and most leave the body as it
+//! was.
+//!
+//! SI, DI and the frame register are not return inputs: their incoming values
+//! live in the prologue's saves, so a dead final write to one stays removable.
+//!
+//! # Example
+//! No example: the lane sets it computes are printed by no dump, and the tests
+//! assert them without printing. See `lanes.rs` for the lane model.
+//!
+//! # Used by
+//! `peephole` and the sub-passes it runs (`regthrash`, `copysink`,
+//! `postrasink`, `exactaddress`, `upperzero`, `sharedstores`, `machinedce`),
+//! `loopslots`, and the peephole rule walker (`peep/walk`).
 
 use std::sync::Arc;
 
@@ -158,7 +194,40 @@ pub fn _effects(
     bits: u32,
     block: &LirBlock,
 ) -> Vec<Option<Effect>> {
-    block.insns.iter().map(|one| effect(regs, bits, one)).collect()
+    let mut effects: Vec<Option<Effect>> = block.insns.iter().map(|one| effect(regs, bits, one)).collect();
+    // A parallel copy reads every source before it writes any destination,
+    // whatever order its copies are kept in: one effect, at its last copy,
+    // and none at the rest. Walked a copy at a time, a source another copy of
+    // the group writes first in that order was dead before the group, and
+    // the register was handed out as free.
+    let nothing = || Effect { reads: Lanes::new(), writes: Lanes::new(), moved: Vec::new() };
+    let mut at = 0;
+    while at < block.insns.len() {
+        let Some(group) = block.insns[at].group else {
+            at += 1;
+            continue;
+        };
+        let mut end = at + 1;
+        while end < block.insns.len() && block.insns[end].group == Some(group) {
+            end += 1;
+        }
+        if end - at > 1 {
+            let merged = effects[at..end]
+                .iter()
+                .try_fold(
+                    nothing(),
+                    |all, one| one.as_ref().map(|one| Effect {
+                        reads: all.reads.or(&one.reads),
+                        writes: all.writes.or(&one.writes),
+                        moved: [all.moved, one.moved.clone()].concat(),
+                    }),
+                );
+            effects[at..end - 1].iter_mut().for_each(|one| *one = Some(nothing()));
+            effects[end - 1] = merged;
+        }
+        at = end;
+    }
+    effects
 }
 
 /// The lanes live before `effects`, given those live after them. An unknown
@@ -405,6 +474,39 @@ mod tests {
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(regs, RegId::DX).is_disjoint(&into[&1]));
         assert!(_lanes(regs, RegId::AX).is_subset(&into[&1]));
+    }
+
+    /// A parallel copy kept as `bx <- dx` then `ax <- bx` reads bx before it
+    /// writes it: grep at -O2 -m32 saw bx dead before the copy, was told it
+    /// was free, and carried a cycle in it while the next block still read it.
+    #[test]
+    fn test_a_parallel_copy_reads_its_sources_before_any_destination_is_written() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let bx = Reg { register: RegId::BX, width: 2 };
+        let cx = Reg { register: RegId::CX, width: 2 };
+        let grouped = |at: i64, into: Reg, from: Reg| {
+            let mut one = Insn::new(
+                at,
+                Some((at, at)),
+                Some(Semantics {
+                    name: Some("mov".to_owned()),
+                    dests: vec![Loc::Reg(into)],
+                    sources: vec![Loc::Reg(from)],
+                    ..Semantics::new(Operation::Move)
+                }),
+                vec![],
+                vec![],
+            );
+            one.group = Some(1);
+            Arc::new(one)
+        };
+        let first = LirBlock { succ: vec![2], ..LirBlock::new(1, vec![grouped(1, bx, DX), grouped(2, AX, bx)]) };
+        let last = LirBlock::new(2, vec![_insn(3, Operation::Move, "mov", vec![Loc::Reg(cx)], vec![Loc::Reg(AX)])]);
+        let body = LirBody::new("f", 1, vec![first, last], IndexMap::default(), IndexMap::default());
+        let (into, _successors, _universe) = live_into(&body);
+        assert!(_lanes(regs, RegId::BX).is_subset(&into[&1]), "bx is read by `ax <- bx` before `bx <- dx` writes it");
+        assert!(_lanes(regs, RegId::DX).is_subset(&into[&1]));
+        assert!(_lanes(regs, RegId::AX).is_disjoint(&into[&1]));
     }
 
     /// A chain of blocks, the last reading AX and each before it writing a

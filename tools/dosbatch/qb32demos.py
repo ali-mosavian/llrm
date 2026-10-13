@@ -26,8 +26,30 @@ import dosbatch  # noqa: E402
 import qb32  # noqa: E402
 import qbplay  # noqa: E402
 import qbruntime  # noqa: E402
-import test_qbdemos  # noqa: E402
+import qbbuild  # noqa: E402
 
+CURSOR_PIXELS = 32   # the cursor blinks: a few pixels of difference at most
+
+# (keys to type, seconds to wait, checkpoint name or None, text the screen must show first or None) for
+# each demo.
+SCRIPTS = {
+    "NIBBLES": [
+        ([], 7, None, "Press any key"),
+        (["space"], 3, "players", "How many players"),
+        (["1", "enter"], 2, None, "Skill level"),
+        (["1", "enter"], 2, None, "Increase game speed"),
+        (["n", "enter"], 2, "monochrome", "Monochrome or color"),
+        (["c", "enter"], 1, "level", "Push Space"),
+    ],
+    "GORILLA": [
+        ([], 7, None, "Press any key"),
+        (["space"], 3, "names", "Name of Player 1"),
+        (["A", "l", "enter"], 1.5, "first", "Name of Player 2"),
+        (["enter"], 1.5, "second", "Play to how many"),
+        (["1", "enter"], 2, "points", None),
+        (["enter"], 4, "ready", None),
+    ],
+}
 CACHE = Path.home() / ".cache" / "llrm" / "qb32-demo-refs"
 
 # The keys after the introduction's, and the checkpoints that are compared in a box (x0, y0, x1, y1 of a 640 x 350
@@ -62,6 +84,7 @@ def ready(session, since: int, shown: str | None) -> None:
         deadline = time.monotonic() + LONGEST
         while shown not in session.screen():
             if time.monotonic() > deadline:
+                # `IBM ROM BASIC NOT IMPLEMENTED` on the screen is the fork's flake, ali-mosavian/llrm#1570.
                 raise TimeoutError(f"{shown!r} never appeared")
         since = len(session.events)
         session.send({"cmd": "key_wait_arm"})
@@ -115,7 +138,7 @@ def play(exe: Path, work: Path, steps: list, demo: str | None = None) -> dict[st
 
 
 def script(name: str) -> list:
-    return test_qbdemos.SCRIPTS[name] + PLAYED[name][0]
+    return SCRIPTS[name] + PLAYED[name][0]
 
 
 def region_difference(want: Path, got: Path, box: tuple[int, int, int, int]) -> int:
@@ -135,7 +158,7 @@ def differences(name: str, want: dict[str, Path], got: dict[str, Path]) -> list[
     for checkpoint in want:
         box = boxes.get(checkpoint)
         count = region_difference(want[checkpoint], got[checkpoint], box) if box else qbplay.differing_pixels(want[checkpoint], got[checkpoint])
-        if count > test_qbdemos.CURSOR_PIXELS:
+        if count > CURSOR_PIXELS:
             bad.append(f"{checkpoint}: {count} pixels")
     return bad
 
@@ -154,7 +177,7 @@ def reference_shots(name: str, source: Path, work: Path) -> dict[str, Path]:
         return {one: cached / f"{one}.png" for one in names}
     work.mkdir(parents=True, exist_ok=True)
     (work / "build").mkdir(exist_ok=True)
-    exe = qbplay.built_pairs({name: source}, work / "build")[name][0]
+    exe = qbplay.reference({name: source}, work / "build")[name]
     shots = play(exe, work / "play", script(name), name)
     cached.mkdir(parents=True, exist_ok=True)
     for one, path in shots.items():
@@ -162,28 +185,30 @@ def reference_shots(name: str, source: Path, work: Path) -> dict[str, Path]:
     return {one: cached / f"{one}.png" for one in names}
 
 
-def candidate_shots(name: str, source: Path, runtime: dict[str, Path], work: Path) -> dict[str, Path]:
-    """The checkpoint screens of the dos32 build of `name`."""
+def candidate_shots(name: str, built: dict, work: Path) -> dict[str, dict[str, Path]]:
+    """The checkpoint screens of each target's build of `name`: {target: {checkpoint: screenshot}}."""
     work.mkdir(parents=True, exist_ok=True)
-    obj, exe = work / f"{name}.obj", work / f"{name}.exe"
-    if reason := qb32.compile_basic(source, obj):
-        raise RuntimeError(f"compile {name}: {reason}")
-    play_dir = work / "play"
-    play_dir.mkdir(exist_ok=True)
-    for loader in qb32.link(obj, runtime, exe, work):
-        shutil.copy(loader, play_dir / loader.name)
-    return play(exe, play_dir, script(name), name)
+    shots = {}
+    for target, one in built.items():
+        play_dir = work / target / "play"
+        play_dir.mkdir(parents=True, exist_ok=True)
+        for beside in one.files:
+            shutil.copy(beside, play_dir / Path(beside).name)
+        shots[target] = play(one.exe, play_dir, script(name), name)
+    return shots
 
 
-def run(sources: dict[str, Path], work: Path) -> dict[str, list[str]]:
-    """For each demo, the checkpoints that differ from BCOM45's: [] where it looks the same."""
-    runtime = qb32.build(work / "runtime")
+def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]]]:
+    """For each demo and target of ours, the checkpoints that differ from BCOM45's: [] where it looks the same."""
+    objects = qbbuild.runtimes(work)
 
-    def one(name: str) -> list[str]:
+    def one(name: str) -> dict[str, list[str]]:
+        built = qbbuild.build(sources[name], work / name / "build", objects)
         with ThreadPoolExecutor(2) as pool:
             reference = pool.submit(reference_shots, name, sources[name], work / name / "ref")
-            candidate = pool.submit(candidate_shots, name, sources[name], runtime, work / name / "cand")
-            return differences(name, reference.result(), candidate.result())
+            candidate = pool.submit(candidate_shots, name, built, work / name / "cand")
+            want, got = reference.result(), candidate.result()
+        return {target: differences(name, want, shots) for target, shots in got.items()}
 
     with ThreadPoolExecutor(len(sources)) as pool:
         futures = {name: pool.submit(one, name) for name in sources}

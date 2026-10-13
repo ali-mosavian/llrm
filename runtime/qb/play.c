@@ -104,7 +104,7 @@ void music_tick(void)
 
         sound_left = next->sound;
         quiet_left = next->quiet;
-        if (sound_left)
+        if (sound_left && next->hertz)
             dev_tone(next->hertz);
         tail = (tail + 1) % QUEUE;
     }
@@ -164,16 +164,18 @@ static unsigned frequency(int note)
 static void play_note(Player *p, int note, long time)
 {
     static long owed_sound, owed_quiet;
-    long sounding = note ? time * p->style / LEGATO : 0;
+    long sounding = note ? time * p->style / LEGATO : time;
     Note *at;
 
     if (!tick_started) {
         dev_ticker_start();
         tick_started = 1;
     }
-    /* in the foreground a note waits for the one sounding to end */
+    /* in the foreground a note waits for the queue ahead of it and for the
+       note sounding to end, not for the silence that follows it; a rest counts
+       as sound */
     if (p->foreground)
-        while (sound_left || quiet_left)
+        while (tail != head || sound_left)
             ;
     wait_for_room();
     at = &queue[head];
@@ -364,7 +366,7 @@ void B_SOND(short hertz, float duration)
         tick_started = 1;
     }
     if (player.foreground)
-        while (sound_left || quiet_left)
+        while (tail != head || sound_left)
             ;
     wait_for_room();
     at = &queue[head];
@@ -383,6 +385,8 @@ static void music_stop(void)
     tail = head;
     sound_left = quiet_left = 0;
     dev_tone(0);
+    if (tick_started)
+        dev_ticker_stop();
 }
 
 static Comp comp = {0, C_SN, {0, 0, 0, 0, music_stop}};

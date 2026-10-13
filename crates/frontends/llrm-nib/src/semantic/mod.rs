@@ -1757,6 +1757,21 @@ fn print_builtins(types: &mut TypeRegistry) -> Vec<(&'static str, Vec<u32>)> {
     out
 }
 
+/// What a type is called where it has no default formatter (`print` and an
+/// f-string take a number, a bool, a char, a string, an enum or a fixed-point
+/// value; the rest is a program's own `display`), and none where it has one.
+pub(super) fn unformatted(type_name: TypeName) -> Option<&'static str> {
+    match type_name.plain() {
+        TypeName::Vector { .. } => Some("vec"),
+        TypeName::Dictionary { .. } => Some("dict"),
+        TypeName::Function { .. } => Some("function"),
+        TypeName::Bits { .. } => Some("bits value"),
+        TypeName::Pointer { .. } => Some("pointer"),
+        TypeName::Addr => Some("address"),
+        _ => None,
+    }
+}
+
 fn print_name(type_name: TypeName) -> &'static str {
     match type_name.plain() {
         TypeName::Word { .. } => unreachable!("plain() is never a word"),

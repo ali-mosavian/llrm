@@ -3,7 +3,7 @@
 //! 32-bit (`S_GPROC32`) records, in the pre-link layout LINK /CO hands to
 //! CVPACK. Record layouts are Open Watcom's `bld/watcom/h/cv4f.h`; every shape
 //! marked "ML" below was also read from an object ML 6.11 wrote under /Zi
-//! (docs/machine/codeview.md).
+//! (docs/formats/codeview.md).
 //!
 //! BASIC's compilers write a different, older dialect: `cvwrite` is that one.
 

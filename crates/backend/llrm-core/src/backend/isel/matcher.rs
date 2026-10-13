@@ -1,8 +1,53 @@
-//! The generated selector's runtime: an instruction's features, the walk
-//! of the automaton `generator` built from `patterns.isel`, the choice
-//! among the patterns that match, and what the patterns call by name --
-//! operand constructors (`op_`), predicates (`is_`), costs (`cost_`) and
-//! the hooks (`hook_`) for what is not pattern-shaped.
+//! The runtime of the generated selector: it matches a MIR instruction against
+//! the target's patterns and hosts what the patterns call by name.
+//!
+//! # How it works
+//! `llrm-iselgen` turns a target's `patterns.isel` into a `Compiled`: a
+//! decision automaton (`State`) and the `holds`, `cost` and `emit` functions of
+//! each pattern. This file runs it, for `Selector::instruction`:
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   a["<b>instruction -#gt;</b><br/><small>Match #123; ops, at, ... #125;<br/>(constant second if<br/>commutative)</small>"]:::mid
+//!   b["<b>features: [opcode,</b><br/><small>result type, (kind, type)<br/>x up to 3 operands]</small>"]:::mid
+//!   c["<b>candidates, in file order</b>"]:::mid
+//!   d["<b>emit(pattern)</b><br/><small>LIR instructions, or<br/>refuse(opcode) if none holds</small>"]:::mid
+//!   a --> b
+//!   b -->|"walk: Test #123; feature,<br/>edges, default #125; ...<br/>-#gt; Leaf(patterns)"| c
+//!   c -->|"choose: the first whose<br/>holds is true#59; in a group,<br/>the cheapest holding member<br/>(the earlier on a tie)"| d
+//! ```
+//!
+//! *Matching one instruction to a pattern*
+//!
+//! `covered_by_pattern` is the cover phase that runs before any instruction is
+//! emitted: the first covering pattern that holds marks the nested instruction
+//! it covers (`cover`, `covered_by`), and that instruction is then selected by
+//! the cover alone.
+//!
+//! What a pattern names is a method here, by prefix:
+//!
+//! - `op_` operand constructors (`let x = held(a)`): make the value, immediate,
+//!   memory cell or x87 operand an `emit` takes.
+//! - `is_` predicates (`when only_reader(v)`): facts about the MIR the pattern
+//!   needs, such as a single reader, an unwritten cell, or a promoted word.
+//! - `cost_` costs of a `group` member.
+//! - `hook_` selection by hand, for what is not pattern-shaped: calls, wide and
+//!   far loads, stores and casts, `getelementptr`, `setcc`, `br`, `ret`,
+//!   landing pads, scaled multiplies, float bit patterns.
+//!
+//! # Example
+//! No example: the runtime of the generated tables, with no output of its own.
+//! The example in `isel.rs` shows what it selects.
+//!
+//! # Used by
+//! `isel.rs` (`Selector::instruction` and `covered_by_pattern`) and the
+//! emitters generated into each target's selector.
+//!
+//! # See also
+//! `llrm-iselgen` (`crates/backend/llrm-iselgen`); LLVM's `DAGISelMatcher`.
 
 use std::sync::Arc;
 

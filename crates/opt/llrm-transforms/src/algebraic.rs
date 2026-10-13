@@ -1,24 +1,111 @@
-//! Algebraic identities over integer values, as LLVM's InstCombine and, for
-//! a loop-carried operand, Reassociate.
+//! Algebraic identities over integer values, as LLVM's InstCombine and, for a
+//! loop-carried operand, Reassociate.
 //!
-//! Adapted from llrm-core's `optimize/algebraic.rs`, the port of
-//! `qbopt/optimize/algebraic.py`. Every rewrite holds modulo 2^width, so a
-//! rewritten instruction drops `nsw`, `nuw`, `exact` and `disjoint`: a
-//! reassociated sum may overflow where the original did not.
+//! # How it works
+//! `simplified` repeats a round of rules until none fires. A round runs, in
+//! order: the rules that need an analysis (`_whole_fixed`,
+//! `_unsigned_divisions`, `_divisions`, `_redundant_masks`, `_unread_bits`),
+//! then the first matching local rule on each instruction (`_rewritten`), then
+//! the loop-carried reassociation (`_reassociated_recurrences`) and
+//! `_shared_shifts`. A repeated addend (`_doubled_addend`) is tried last, only
+//! when nothing else fired, since the other rules may cancel it (`x - (x + 5 +
+//! x)`).
 //!
-//! Gone with the old MIR:
-//! - `wholephis`, `wholestores`, `_halved`, `_halves`, `_takes_halves`,
-//!   `_extracted`, `_recombined` and a `Concat` of constants: a long split into
-//!   word halves. Every value is whole here.
-//! - `_forwarded_zero_tests`: `or x, x` for its x86 flags; `icmp` reads the
-//!   value.
-//! - `_product`: a widening multiply's unused high half; `mul` has one result.
-//! - `_zero_difference` and `_copied_zero`: `sub 0, x` is the negation here,
-//!   and nothing is a copy.
-//! - `wanted` and `wide`: which flags and which halves were read.
-//! - `_distributing`'s and `_mask_scaled`'s pairing: the old rules read a
-//!   snapshot and rewrote one op each, so both ops of a pair had to agree to
-//!   change. Here a rewrite replaces both at once, on the current function.
+//! Every rewrite holds modulo 2^width, so a rewritten instruction drops `nsw`,
+//! `nuw`, `exact` and `disjoint`: a reassociated sum may overflow where the
+//! original did not. The rules fall in groups.
+//!
+//! - Constants and chains: neutral terms (`x + 0`, `x * 1`, `x & -1`), `x * 0`,
+//!   `x % 1`, decided self-compares, a `select` on a constant; two single-use
+//!   shifts, scales, offsets or bitwise constants become one; `(x + a) * k + b`
+//!   distributes; `(x + a) + a` is `x + (a << 1)`; `x - (x + y)` is `-y`.
+//! - Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, `sext` of
+//!   a value whose sign bit is clear, logic or a phi of like extensions done at
+//!   the narrow type, `ptrtoint(inttoptr x)`, a byte offset from a constant
+//!   near address as the constant address.
+//! - Compares: `icmp P (x + C1), C2` is `icmp P x, C2 - C1` (an ordered test
+//!   needs `nsw` or `nuw` for its signedness); a compare of extensions is a
+//!   compare of the sources; `xor (icmp P a b), true` is the inverse compare;
+//!   `icmp ne (sext i1 x), 0` is `x`.
+//! - Divisions: `udiv` and `urem` by a power of two are a shift and a mask;
+//!   `sdiv` and `srem` of a dividend proved non-negative (`ranges`, or a clear
+//!   sign bit) are unsigned, by a power of two always, by another constant only
+//!   at 32 bits in a 32-bit-pointer segment and not under `size`, where the
+//!   signed form is a byte shorter; other `sdiv` and `srem` by a power of two
+//!   are an `ashr`, a bias and a shift; a fixed-point product or quotient by a
+//!   whole number cancels its scale.
+//! - Masks and demanded bits: `and x, C` where `C` covers every bit `x` may set
+//!   is `x`; a mask, or an `or`, that touches only bits nothing reads is its
+//!   operand.
+//! - Phis: a phi repeating an earlier phi of its block from the same
+//!   predecessors is that phi.
+//!
+//! A counter carried round a loop is put at the root of its `add` tree, so the
+//! inner sum can be invariant and leave the loop:
+//!
+//! ```text
+//!  loop:  %i = phi [ %i0 ], [ %n, latch ]        %i = phi [ %i0 ], [ %n, .. ]
+//!         %t = add %i, %a                  ==>   %s = add %a, %b   (invariant)
+//!         %n = add %t, %b                        %n = add %i, %s
+//! ```
+//!
+//! A mask whose operand advances by a constant each trip moves after its scale,
+//! `(x & m) * 2^k` as `(x * 2^k) & (m * 2^k)`, so the scale can fold into the
+//! loop's step.
+//!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! define i16 @f(i16 %x, i16 %a) {
+//! b0:
+//!   %m = add i16 %x, %a
+//!   %r = add i16 %m, %a
+//!   ret i16 %r
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! define i16 @f(i16 %x, i16 %a) {
+//! b0:
+//!   %0 = shl i16 %a, 1
+//!   %1 = add i16 %x, %0
+//!   ret i16 %1
+//! }
+//! ```
+//!
+//! A value added twice is added once, doubled.
+//!
+//! From unit test `test_a_value_added_twice_is_added_once_doubled` in
+//! `algebraic_tests.rs`.
+//!
+//! # Runs
+//! `algebraic` runs once in each pass of the fixed point, after `indvars` and
+//! before `dead`; it has no flag of its own, so it is on whenever the optimizer
+//! is. It runs again after the loop-header copy (`-ftree-ch`, not at -Os). The
+//! `size` option is set at -Os and -Oz.
+//!
+//! `Differences` is a smaller pass of this file, run after `lsr`: it applies
+//! only the rules `x - (x + y)` is `-y` and a negated difference, to clean
+//! bounds subtracted from counters LSR rebased, without folding the scales LSR
+//! just chose back together (LLVM's LSR cleans with InstSimplify for the same
+//! reason). It is skipped with `-fno-strength-reduce`.
+//!
+//! # Needs
+//! `ranges` (non-negative dividends, redundant masks), `DemandedBits` (unread
+//! bits), `Registers` and `consts` (divisors known through phis), `induction`
+//! (recurrences).
+//!
+//! # Keeps
+//! Blocks and edges are unchanged: dominators and loops are preserved; other
+//! analyses are invalidated when anything changed.
+//!
+//! # See also
+//! LLVM InstCombine (`visitSub`, `foldICmpAddConstant`, `visitTrunc`),
+//! Reassociate, CorrelatedValuePropagation `processAnd`, SimplifyDemandedBits;
+//! gcc `fold_comparison`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -145,6 +232,15 @@ pub fn simplified(
         }
         round |= _reassociated_recurrences(function);
         round |= _shared_shifts(context, function);
+        // Last, when no other rule has anything to do: a repeat may be a
+        // difference the other rules cancel (`x - (x + 5 + x)`).
+        if !round {
+            for (_, inst) in function.walk().collect::<Vec<_>>() {
+                if !function.is_erased(inst) {
+                    round |= _doubled_addend(context, function, inst);
+                }
+            }
+        }
         if !round {
             return changed;
         }
@@ -301,6 +397,24 @@ fn _offset_compared(
     if width > 64 {
         return false;
     }
+    // A test of a phi's own next value stays on it: the step is made for the
+    // next trip anyway, and testing the phi keeps both live (ivopts takes a
+    // use after the increment from the incremented candidate).
+    // An exit test sits in the loop's header or its latch.
+    if let (Operand::Value(source), Some(result)) = (source, function.instruction(made).result)
+        && let ValueDef::Instruction(phi) = function.value(source).def
+        && function.instruction(phi).opcode == Opcode::Phi
+        && let Some(latch) = function
+            .instruction(phi)
+            .operands
+            .chunks(2)
+            .find(|pair| pair[0] == Operand::Value(result))
+            .map(|pair| pair[1])
+        && let Some(home) = function.parent(inst)
+        && (function.parent(phi) == Some(home) || latch == Operand::Block(home))
+    {
+        return false;
+    }
     let signed = matches!(
         predicate,
         IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
@@ -452,9 +566,10 @@ fn _narrowed_binary(
     inst: InstId,
 ) -> bool {
     let instruction = function.instruction(inst);
-    if instruction.opcode != Opcode::Cast(CastOp::Trunc) || !_single_use(function, instruction.operands[0]) {
+    if instruction.opcode != Opcode::Cast(CastOp::Trunc) {
         return false;
     }
+    let alone = _single_use(function, instruction.operands[0]);
     let narrow = instruction.ty;
     let Some(made) = _definition(function, instruction.operands[0]) else { return false };
     let Some((op, left, right, wide)) = _binary(context, function, made) else { return false };
@@ -474,6 +589,14 @@ fn _narrowed_binary(
     };
     let (a, b) = (source(function, left), source(function, right));
     if a.is_none() && b.is_none() {
+        return false;
+    }
+    // The wide sum has other readers and stays for them: the narrow one is made
+    // only where it needs no cut of its own, an extension of its width and
+    // a constant, so that a counter's step reads as one (`i + 1` in `int`, cut
+    // back to `short`).
+    let free = |known: &Option<Operand>, operand: Operand| known.is_some() || matches!(operand, Operand::Constant(_));
+    if !alone && !(free(&a, left) && free(&b, right)) {
         return false;
     }
     let mut cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
@@ -1239,6 +1362,74 @@ fn _offset_chain(
     let width = _width(context, function, inst).expect("an integer");
     let amount = _constant(context, function, inst, first.wrapping_add(last) & mask(width));
     _replace(function, inst, Opcode::Binary(BinaryOp::Add), vec![source, amount]);
+    true
+}
+
+/// The operands of the tree of single-use `add`s `inst` roots:
+/// `((x + a) + b) + a` is `x`, `a`, `b`, `a`.
+fn _addends(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+    out: &mut Vec<Operand>,
+) {
+    let Some((BinaryOp::Add, left, right, _)) = _binary(context, function, inst) else {
+        return;
+    };
+    for operand in [left, right] {
+        let inner = _definition(function, operand)
+            .filter(|_| _single_use(function, operand) && out.len() < 8)
+            .filter(|&made| matches!(_binary(context, function, made), Some((BinaryOp::Add, ..))));
+        match inner {
+            Some(made) => _addends(context, function, made, out),
+            None => out.push(operand),
+        }
+    }
+}
+
+/// A value added twice through single-use `add`s is added once, doubled:
+/// `(x + a) + a` is `x + (a << 1)`, and `((x + a) + b) + a` is
+/// `(x + b) + (a << 1)`. LLVM's InstCombine (`X + Y + Y` is `X + (Y << 1)`) and
+/// Reassociate, which ranks the repeats together. The sum has the operations it
+/// had, and the doubled value is one a read-modify-write of a cell can take as
+/// its addend (bench/particle's second sweep of the same cells).
+fn _doubled_addend(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    let mut addends = Vec::new();
+    _addends(context, function, inst, &mut addends);
+    let repeated = addends
+        .iter()
+        .enumerate()
+        .find(|&(at, one)| {
+            // A value the loop carries is Reassociate's: its own rule keeps it
+            // at the root.
+            matches!(one, Operand::Value(_))
+                && addends[..at].contains(one)
+                && _definition(function, *one).is_none_or(|made| function.instruction(made).opcode != Opcode::Phi)
+        })
+        .map(|(_, one)| *one);
+    let Some(repeat) = repeated else { return false };
+    // Both uses of the repeated value leave; the doubled one is built first,
+    // before the sum it joins.
+    let mut kept: Vec<Operand> = Vec::new();
+    let mut seen = 0;
+    for &one in &addends {
+        if one == repeat && seen < 2 {
+            seen += 1;
+            continue;
+        }
+        kept.push(one);
+    }
+    let one = _constant(context, function, inst, 1);
+    let doubled = _before(function, inst, Opcode::Binary(BinaryOp::Shl), vec![repeat, one]);
+    let mut sum = doubled;
+    for operand in kept.into_iter().rev() {
+        sum = _before(function, inst, Opcode::Binary(BinaryOp::Add), vec![operand, sum]);
+    }
+    _forward(function, inst, sum);
     true
 }
 

@@ -1,43 +1,87 @@
-//! Which values are known, and what they are: llrm-core's
-//! `analysis/consts.rs`, a port of `qbopt/analysis/consts.py`, adapted to
-//! the rich MIR. A fact is a width as well as a number -- "the low `width`
-//! bits of this value are `n`" -- and an operation only folds where the
-//! widths agree. A width is in bits; a memory cell's in bytes.
+//! Which values are known, and what they are: integer constant propagation and
+//! folding, with memory read through MemorySSA.
 //!
-//! What memory holds is solved alongside, when the caller says what each
-//! call writes (`Calls`): a cell is a fixed address in an object, its root
-//! an alloca or a global, so its object is its root's.
+//! # How it works
+//! A fact is `Known { n, width }`: the low `width` bits of the value are `n`,
+//! nothing is said above them. An operation folds only where the widths
+//! agree (`_result`): integer `add`, `sub`, `mul`, `and`, `or`, `xor`, shifts,
+//! divisions that do not fault (`folds`), `sext`, `zext`, `trunc`, `icmp`
+//! (`holds`), `x ^ x` and `x - x`, the fixed-point intrinsics, and a pointer
+//! compare of two addresses of one global. A width is in bits; a memory
+//! cell's, in bytes.
 //!
-//! Old operations with no rich MIR counterpart, and what used them: a
-//! read-modify-write of a cell (`updated`), a carry between halves
-//! (`AddCarry`, `_carry`), `Concat`, `Smulhi`, a memory operand of an
-//! arithmetic operation (a `load` is its own instruction), the known values
-//! a call leaves in memory (`memory_values`), and the constants memory held
-//! at program start (`body.initial`: a rich MIR function is no program's
-//! start). `named_bytes` found which object an address was in; a cell's
-//! root is its object. `reusing`, `_reuse` and `shared_cells` cached a
-//! solve by body address, which a function changed in place no longer
-//! keeps: `manager` caches through the pass manager instead.
+//! Registers. `known` runs a fixed point over the body in layout order: each
+//! integer result not yet known is folded from the facts so far, and a phi
+//! is known where every incoming value is known and they agree. It then
+//! hands the facts to [`crate::constant_cycles`], which settles the phis whose
+//! incoming values depend on each other around a loop.
 //!
-//! Tests skipped:
-//! `test_constant_analysis_scope_reuses_an_unchanged_body_without_sharing_mutation`
-//! (`reusing`); `test_pointer_displacement_constants_preserve_order_and_width`,
-//! `test_constant_subtraction_preserves_operand_order`,
-//! `test_constant_operand_keeps_its_memory_address_dependency`,
-//! `test_a_known_factor_becomes_a_multiply_operand` and
-//! `test_signed_widening_produces_a_whole_long_constant`'s folding half
-//! (optimize/transform's, whose port they wait for);
-//! `test_recovered_argument_constants` (`Concat`);
-//! `test_flags_do_not_stop_an_operation_being_folded` (a flags result);
-//! BC object corpora: `test_relocated_descriptor_address_is_not_integer_zero`,
-//! `test_folded_extraction_has_no_implicit_machine_result`,
-//! `test_a_fact_never_claims_more_bytes_than_the_instruction_wrote`,
-//! `test_every_known_value_is_defined_by_an_operation_that_computes_it`,
-//! `test_a_comparison_result_folds_to_basics_own_true`,
-//! `test_nothing_is_folded_through_a_phi`.
-//! `test_a_call_reaching_nonlocal_keeps_an_uncaptured_static_constant` is
-//! ported with a frame object, which a callee's nonlocal reach misses: no
-//! rich MIR global is uncaptured.
+//! Memory. `known_walked` starts from the register facts and, for each load,
+//! asks [`crate::memoryssa`] which stores reach it (`load_providers`). If
+//! they all put the same number in the bytes the load reads, so does the
+//! load (`provided`; a store may serve a load of another type, or several
+//! stores serve one byte at a time). No state is held per block, so the cost
+//! is the walks, not cells times joins. A load whose index only memory taught
+//! is asked again with the index placed, up to four rounds. `known_walked_over`
+//! adds what counted float loops leave in memory at their exits
+//! ([`crate::floatfacts`]).
+//!
+//! ```text
+//!    store i16 7, @g          known:        %a is not known
+//!    %a = load i16, @g        known_walked: %a = 7, %b = 8
+//!    %b = add i16 %a, 1       (the walk finds the store)
+//! ```
+//!
+//! The caller states what each call writes (`Calls`, from
+//! `alias::calls_annotated`); a call not listed writes what
+//! `memory::unmodeled_write` says. A far store through a segment selector
+//! nothing yet resolves is taken to write no program object, and the solve is
+//! made again without any such selector that did not resolve to a number.
+//!
+//! `memory_queries` and `_MemoryQueries` answer alias questions about the cells
+//! of one solved epoch, each cell carrying its object, for passes that walk
+//! instructions with a fact table ([`crate::cellmap`] indexes the cells by
+//! overlap bucket).
+//!
+//! # Example
+//! A load of a global that a constant-index store wrote:
+//!
+//! ```mir
+//! @g = global [128 x i8] zeroinitializer
+//!
+//! define i16 @f() {
+//! b0:
+//!   %index = add i16 2, 2
+//!   %p = getelementptr i8, ptr @g, i16 %index
+//!   store i16 9, ptr %p
+//!   %loaded = load i16, ptr getelementptr (i8, ptr @g, i16 4)
+//!   ret i16 %loaded
+//! }
+//! ```
+//!
+//! | Value | `known` | `known_walked` |
+//! | --- | --- | --- |
+//! | `%loaded` | none | `Known { n: 9, width: 16 }` |
+//!
+//! From unit test `a_store_through_a_constant_index_is_read_back` in
+//! `consts_tests.rs`.
+//!
+//! # Provides
+//! `Known`, `known` (registers, cached as [`crate::manager::Registers`]),
+//! `known_walked` and `known_walked_over` (memory; cached as
+//! [`crate::manager::ThroughMemory`]), `memory_queries`, `holds`, `folds`.
+//! Consumers: `gvn`, `algebraic`, `fold`, `decide`, `unswitch`, `floatloop` and
+//! `interprocedural` in `llrm-transforms`, the backend's `isel`, and most
+//! analyses of this crate.
+//!
+//! # Needs
+//! [`crate::memoryssa`], [`crate::alias`] (the call table), [`crate::ranges`],
+//! [`crate::regions`], [`crate::cellmap`], [`crate::constant_cycles`].
+//!
+//! # See also
+//! LLVM `SCCP`/`ConstantFolding`; GCC FRE walks the same virtual use-def chain
+//! for a load's value (`vn_reference_lookup`). `LLRM_CHECK_CYCLES` in
+//! [`crate::constant_cycles`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -815,9 +859,54 @@ pub fn holds(
     }
 }
 
+/// The loads that read a `constant` global at an index: the fact of each is the
+/// bytes the index can only be one value to read, which `ranges` finds from the
+/// index's whole expression (the facts and the bounds of every value it is made
+/// of, those that are known numbers and those that are not), so no change to a
+/// value it is made from leaves one as it was.
+pub fn table_loads(unit: &Unit) -> Vec<InstId> {
+    let function = unit.function;
+    function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| {
+            matches!(
+                function.instruction(inst).opcode,
+                Opcode::Load { volatile: false, .. }
+            )
+                && MemRef::of(unit, inst).is_some_and(|reference| {
+                    reference.base.is_some()
+                        && matches!(
+                            reference.root,
+                            Some(Operand::Constant(root)) if matches!(
+                                unit.context.get(root).kind,
+                                ConstantKind::Global(global) if matches!(
+                                    unit.globals.get(global.0 as usize).map(|one| &one.kind),
+                                    Some(llrm_mir::module::GlobalKind::Variable(variable)) if variable.constant
+                                )
+                            )
+                        )
+                })
+        })
+        .collect()
+}
+
 /// Every value this function computes that is a number, to a fixed point,
 /// without memory (`known_walked` has it).
 pub fn known(unit: &Unit) -> IndexMap<ValueId, Known> {
+    known_from(unit, IndexMap::default(), None, &[])
+}
+
+/// `known`, from the facts `kept` of the values `dirty` leaves out (all of them
+/// where it is none): what a value is known to be is a function of the values
+/// it is made from alone, so a value no change reached has the fact it had, and
+/// the others are worked out again.
+pub fn known_from(
+    unit: &Unit,
+    kept: IndexMap<ValueId, Known>,
+    dirty: Option<&llrm_mir::dense::IdSet<ValueId>>,
+    tables: &[InstId],
+) -> IndexMap<ValueId, Known> {
     REGISTER_DERIVATIONS.with(|count| count.set(count.get() + 1));
     // Each access asks whether its frame object is exposed: found once for the
     // body, if no caller has.
@@ -826,37 +915,73 @@ pub fn known(unit: &Unit) -> IndexMap<ValueId, Known> {
     #[cfg(test)]
     SOLVED.with(|solved| solved.set(solved.get() + 1));
     let function = unit.function;
-    let mut facts = IndexMap::<ValueId, Known>::default();
+    let mut facts = kept;
     let empty = Cells::default();
+    // A value's fact from the facts of the values it is made from: a join is
+    // known where every path into it agrees.
+    let settled = |inst: InstId, facts: &IndexMap<ValueId, Known>| -> Option<Known> {
+        let op = function.instruction(inst);
+        if op.opcode == Opcode::Phi {
+            let seen = op.operands.iter().step_by(2).map(|&one| incoming(unit, one, facts)).collect::<Vec<_>>();
+            let known = seen.iter().flatten().collect::<Vec<_>>();
+            if seen.is_empty()
+                || known.len() != seen.len()
+                || known.iter().map(|one| (&one.n, one.width)).collect::<BTreeSet<_>>().len() != 1
+            {
+                return None;
+            }
+            return Some((*known[0]).clone());
+        }
+        _result(unit, inst, facts, Some(&empty))
+    };
+    if let Some(dirty) = dirty {
+        // From the facts that stand, each value to settle in turn, and the
+        // users of each that came to a fact: the facts only grow, so it
+        // ends where the fixed point does.
+        let defining = |value: ValueId| match function.value(value).def {
+            llrm_mir::module::ValueDef::Instruction(inst) => function.parent(inst).map(|_| inst),
+            llrm_mir::module::ValueDef::Argument(_) => None,
+        };
+        let mut region = dirty.clone();
+        let mut queue: Vec<InstId> = dirty.iter().filter_map(defining).collect();
+        loop {
+            while let Some(inst) = queue.pop() {
+                let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else { continue };
+                let Some(found) = settled(inst, &facts) else { continue };
+                facts.insert(target, found);
+                for user in function.users(target) {
+                    if function.parent(user.user).is_some() {
+                        region.extend(function.instruction(user.user).result);
+                        queue.push(user.user);
+                    }
+                }
+            }
+            // A table load is known by the bounds of its whole index, so a fact
+            // that came to a value the index is made of (and not to
+            // the load's own operand) asks it again.
+            queue.extend(tables.iter().copied().filter(|&inst| {
+                _defined(unit, inst)
+                    .is_some_and(|target| !facts.contains_key(&target) && settled(inst, &facts).is_some())
+            }));
+            if queue.is_empty() {
+                break;
+            }
+        }
+        return constant_cycles::propagated(unit, facts, None, Some(&region));
+    }
+    let walked: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
     let mut changing = true;
     while changing {
         changing = false;
-        for (_, inst) in function.walk() {
-            let op = function.instruction(inst);
-            let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else {
-                continue;
-            };
-            // A join is known where every path into it agrees.
-            if op.opcode == Opcode::Phi {
-                let seen = op.operands.iter().step_by(2).map(|&one| incoming(unit, one, &facts)).collect::<Vec<_>>();
-                let known = seen.iter().flatten().collect::<Vec<_>>();
-                if seen.is_empty()
-                    || known.len() != seen.len()
-                    || known.iter().map(|one| (&one.n, one.width)).collect::<BTreeSet<_>>().len() != 1
-                {
-                    continue;
-                }
-                facts.insert(target, (*known[0]).clone());
-                changing = true;
-                continue;
-            }
-            if let Some(found) = _result(unit, inst, &facts, Some(&empty)) {
+        for &inst in &walked {
+            let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else { continue };
+            if let Some(found) = settled(inst, &facts) {
                 facts.insert(target, found);
                 changing = true;
             }
         }
     }
-    constant_cycles::propagated(unit, &facts, None)
+    constant_cycles::propagated(unit, facts, None, None)
 }
 
 thread_local! {
@@ -1029,6 +1154,14 @@ fn provider_of(
     let mut values = Vec::new();
     let mut exact = true;
     let reaching = ask(reference);
+    // Past this many nearest writes a load is not served: a scalar written in
+    // each arm of N joins is reached by N of them at the last, N^2 over the
+    // body (`joins` 256: 10% of the compile). LLVM's walker stops at
+    // `memssa-check-limit` (100) checks, gcc's value numbering at
+    // `sccvn-max-alias-queries-per-access` (1000).
+    if reaching.len() > memoryssa::MAX_NEAREST_WRITES {
+        return None;
+    }
     // A path to the entry that no write meets leaves every byte as it
     // was found, so no byte is a store's.
     if reaching.iter().any(|id| graph.access(*id).kind == memoryssa::Kind::Live) {
@@ -1066,7 +1199,12 @@ fn provider_of(
                 ..reference.clone()
             };
             let mut from = Vec::new();
-            for id in ask(&one) {
+            let nearest = ask(&one);
+            if nearest.len() > memoryssa::MAX_NEAREST_WRITES {
+                bytes.clear();
+                break 'bytes;
+            }
+            for id in nearest {
                 let access = graph.access(id);
                 let Some((site, (cell, _))) = access
                     .site
@@ -1122,7 +1260,7 @@ pub fn load_providers(
         if crate::memory::constant_bits(unit, &reference).is_some() {
             continue;
         }
-        let ask = |one: &MemRef| graph.clobbers_ignoring_invariance(inst, one);
+        let ask = |one: &MemRef| graph.nearest_writes(inst, one);
         if let Some(provider) = provider_of(unit, accesses, &graph, &reference, &ask) {
             providers.insert(result, provider);
         }
@@ -1337,7 +1475,7 @@ pub fn known_walked_over(
         }
         allowed = Some(resolved);
     };
-    constant_cycles::propagated(unit, &facts, None)
+    constant_cycles::propagated(unit, facts, None, None)
 }
 
 #[cfg(test)]

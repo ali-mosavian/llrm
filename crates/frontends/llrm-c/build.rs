@@ -38,7 +38,7 @@ fn toolchain() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("owshim");
     // What each tree is asked to be: the sizes its target's description states,
     // by the CPU the target names.
-    let mut trees: std::collections::BTreeMap<String, [String; 4]> = std::collections::BTreeMap::new();
+    let mut trees: std::collections::BTreeMap<String, [String; 5]> = std::collections::BTreeMap::new();
     for entry in std::fs::read_dir("../../../runtime/c").expect("runtime/c").flatten() {
         let Ok(text) = std::fs::read_to_string(entry.path().join("c.toml")) else { continue };
         let table: toml::Table =
@@ -66,12 +66,13 @@ fn toolchain() {
             bytes(layout.spaces.near),
             bytes(layout.spaces.far),
             int.to_string(),
+            layout.long_double_bytes().to_string(),
         ];
         if let Some(had) = trees.insert(cpu.to_owned(), sizes.clone()) {
             assert_eq!(had, sizes, "two targets share the {cpu} front end and state different sizes");
         }
     }
-    for (cpu, [flat, near, far, int]) in &trees {
+    for (cpu, [flat, near, far, int, long_double]) in &trees {
         let status = Command::new("sh")
             .arg("../../../toolchain/owshim/build.sh")
             .arg(out.join(cpu))
@@ -80,6 +81,7 @@ fn toolchain() {
             .env("LLRM_NEAR_BYTES", near)
             .env("LLRM_FAR_BYTES", far)
             .env("LLRM_INT_BYTES", int)
+            .env("LLRM_LDOUBLE_BYTES", long_double)
             .status()
             .expect("could not start sh");
         assert!(status.success(), "OWCPU={cpu} ../../../toolchain/owshim/build.sh failed: {status}");

@@ -1,22 +1,42 @@
-# QB runtime and semantic profiles
+# QB dialects and runtimes
+
+Audience: contributors to `llrm-qb` and `qbfront`. Which source dialects the
+frontend accepts, which runtime each is paired with, and the QuickrBASIC
+extensions.
 
 There is one source language: the highest VBDOS syntax superset. QB 4.5 is a
 subset of PDS 7.1, which is a subset of VBDOS, so later syntax is accepted for
-every target profile. The selected profile starts affecting the program after
+every profile. The selected dialect starts affecting the program after
 parsing, in semantic rules, runtime interfaces, compiler options, layouts, and
 ABI choices.
 
-## Initial profiles
+## Profiles
 
-| Profile | Source syntax | Runtime pairing normally tested |
-|---|---|---|
-| `qbasic11` | VBDOS superset | QBasic interpreter behavior; compilation coverage may be a subset |
-| `qb45` | VBDOS superset | QB 4.5 BCOM/BRUN runtime |
-| `pds71` | VBDOS superset | PDS 7.1 runtime |
-| `vbdos10` | VBDOS superset | VBDOS runtime |
+`--dialect` selects one of these (default `vbdos`); the aliases in the last
+column are also accepted.
+
+| Dialect | Source syntax | Aliases | Meaning |
+|---|---|---|---|
+| `qbasic11` | VBDOS superset | `qbasic` | QBasic interpreter behavior; compilation coverage may be a subset |
+| `qb45` | VBDOS superset | `quickbasic45` | QB 4.5 |
+| `pds71` | VBDOS superset | `pds` | PDS 7.1 |
+| `vbdos` | VBDOS superset | `vb` | VBDOS |
+| `quickr` | VBDOS plus the [extensions below](#quickrbasic-quickr) | `quickrbasic` | QuickrBASIC |
+
+`--runtime` selects the runtime the program calls (default `llrm`);
+`-fqb-runtime=R` is the same option.
+
+| Runtime | Calls |
+|---|---|
+| `qb45`, `pds71`, `vbdos` | The Microsoft runtime's `B$` routines by their stack ABI |
+| `llrm` | The same routines and descriptors as `qb45`, called by the target's own convention; its source is `runtime/qb` |
+
+Dialect, runtime and array order are independent options, and none is
+inferred from another. The Microsoft dialects are normally tested against
+their own runtime.
 
 The dialect is recorded once in the program profile. Feature checks query the
-profile rather than being spread through action code as version comparisons.
+`Dialect` predicates (`crates/frontends/qbfront/src/dialect.rs`) rather than being spread through action code as version comparisons.
 
 ## Profile-controlled behavior
 
@@ -96,24 +116,11 @@ Parser acceptance and lowering support have separate fixture fields. This
 allows the parser to become dialect-complete without falsely claiming that a
 new statement has a correct current-MIR lowering.
 
-## Bring-up order
-
-VBDOS is the first full-program profile because QB Quake/qb-qrender exercises
-its extended source language and large-program behavior. That priority does
-not make VBDOS syntax the common grammar. Small probes for all profiles begin
-with the lexer/parser extraction so early architectural choices do not bake
-in VBDOS-only behavior.
-
-QB Quake is a late integration corpus, not the specification. A construct
-first discovered there is reduced to a small dialect fixture before its
-implementation is changed.
-
 ## QuickrBASIC (`quickr`)
 
-`quickr` is the one profile that is not a Microsoft compiler. It is the VBDOS
-profile plus the extensions below, and it pairs with the VBDOS runtime. The
-Microsoft profiles reject every extension, so the compatibility ladder stays
-faithful.
+`quickr` is the one dialect that is not a Microsoft compiler. It is the VBDOS
+dialect plus the extensions below. The Microsoft dialects reject every
+extension, so `f"x"` stays the name `f` before a string.
 
 ### Sized integers
 

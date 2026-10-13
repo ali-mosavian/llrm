@@ -9,10 +9,14 @@ use llrm_mir::program::Program;
 use crate::pipeline::{self, Applied};
 use crate::testing::{parsed, printed, results};
 
-/// `module` through the pipeline the compilers run, for the DOS target.
+/// `module` through the pipeline the compilers run, for the DOS target, with
+/// the loop as written: the header copy moves what these read from blocks
+/// by name.
 fn pipe(module: &mut Module) {
+    let applied =
+        Applied { options: pipeline::Options { copy_headers: false, ..Default::default() }, ..Applied::default() };
     Program::lend(module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
-        pipeline::applied(program, &Applied::default())
+        pipeline::applied(program, &applied)
     })
     .and_then(|done| done)
     .expect("the pipeline runs");

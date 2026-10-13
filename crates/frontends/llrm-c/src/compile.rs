@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use llrm_core::backend::{masm, objbuild};
 use llrm_core::driver::flags::{self, Flags};
+use llrm_mir::types::FloatKind;
 
 use super::{hir, stream, translate};
 
@@ -165,6 +166,9 @@ struct Args {
     flags: Flags,
     dump: Option<PathBuf>,
     include: Vec<String>,
+    /// The target, whose OS layer header a program that includes it is given
+    /// (`os_header_directory`).
+    target: std::rc::Rc<dyn llrm_target::Target>,
     /// Watcom switches the program opts into, passed to wccq: -oa, -on.
     watcom: Vec<&'static str>,
     /// The target, the built-in DOS on a 386 unless `--machine` names
@@ -194,6 +198,9 @@ pub struct Profile {
     /// records mean in `calling.toml`'s conventions: one it records as
     /// cdecl, and one it records in its default registers.
     pub flags: Vec<String>,
+    /// A long double's size in memory, the target's
+    /// (`Layout::long_double_bytes`): what `__SIZEOF_LONG_DOUBLE__` says.
+    pub long_double_bytes: u64,
     pub cdecl: String,
     pub registers: String,
     /// The header it includes first, from the repository root.
@@ -217,7 +224,17 @@ impl Profile {
         let description = target.runtime("c").ok_or_else(|| format!("target {} has no C runtime", target.name()))?;
         let calling = target.calling();
         calling.chosen(family)?;
-        Self::parse(&description.table()?, family.unwrap_or(&calling.default))
+        let mut profile = Self::parse(&description.table()?, family.unwrap_or(&calling.default))?;
+        profile.long_double_bytes = target.layout().long_double_bytes();
+        // A long double is x87's 80-bit type at every target whose layout has
+        // one, whatever the ABI's other switches are: without `-fld`
+        // the front end makes it a double.
+        if target.layout().long_double_bytes() >= u64::from(FloatKind::X86Fp80.value_bytes())
+            && !profile.flags.iter().any(|one| one == "-fld")
+        {
+            profile.flags.push("-fld".to_owned());
+        }
+        Ok(profile)
     }
 
     pub fn parse(
@@ -262,6 +279,7 @@ impl Profile {
             entry_convention: text(frontend, "entry_convention")?,
             default_registers: text(frontend, "default_registers")?,
             flags,
+            long_double_bytes: 0,
             cdecl: text(abi, "cdecl")?,
             registers: text(abi, "registers")?,
             header: text(frontend, "header")?,
@@ -308,7 +326,7 @@ pub fn recorded_for(
     let forced = scratch.path().join("predefined.h");
     let text = format!(
         "{}#include \"{}\"\n",
-        crate::predefined::header(profile.cpu == "386"),
+        crate::predefined::header(profile.cpu == "386", profile.long_double_bytes),
         root.join(&profile.header).display()
     );
     fs::write(&forced, text).map_err(|error| failed(error.to_string()))?;
@@ -338,6 +356,14 @@ pub fn recorded_for(
 
 fn usage() -> String {
     format!("usage: llrm-c [-h] [-I INCLUDE] [--dump DUMP] [--os-layer FIELD] {} source", flags::USAGE)
+}
+
+/// A directory holding `target`'s OS layer header as `llrm_os.h`.
+fn os_header_directory(target: &dyn llrm_target::Target) -> Option<tempfile::TempDir> {
+    let text = target.os_layer()?.report(&target.runtime("c")?, "header").ok()?;
+    let directory = tempfile::tempdir().ok()?;
+    fs::write(directory.path().join("llrm_os.h"), text + "\n").ok()?;
+    Some(directory)
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
@@ -387,7 +413,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 )
         });
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
-    Ok(Args { source, os_layer, dump, include, watcom, codegen: bound.options(&flags, machine), flags })
+    let target = bound.target.clone();
+    Ok(Args { source, os_layer, dump, include, target, watcom, codegen: bound.options(&flags, machine), flags })
 }
 
 /// `main`: exit status 0 on success, 1 on a refusal, 2 on bad arguments.
@@ -427,13 +454,25 @@ pub fn main(argv: &[String]) -> i32 {
                     .collect();
                 let switches: Vec<&str> =
                     args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
-                recorded_for(
-                    &args.source,
-                    &args.include,
-                    args.flags.debug,
-                    &switches,
-                    &Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?,
-                )
+                let profile =
+                    Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?;
+                let record =
+                    |include: &[String]| recorded_for(&args.source, include, args.flags.debug, &switches, &profile);
+                let first = record(&args.include);
+                // `#include "llrm_os.h"` needs no `-I`: a program that includes
+                // it, itself or through another header, is
+                // recorded again with the header's directory searched last. The
+                // others pay nothing for it.
+                match &first {
+                    Err(error) if error.0.contains("llrm_os.h") => match os_header_directory(&*args.target) {
+                        Some(directory) => {
+                            let include = [&args.include[..], &[directory.path().display().to_string()]].concat();
+                            record(&include)
+                        }
+                        None => first,
+                    },
+                    _ => first,
+                }
             })?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
@@ -511,7 +550,10 @@ mod tests {
         // The assembly is laid out in columns: its words are what is compared.
         let runtime = |name: &str| {
             let text = std::fs::read_to_string(root.join("runtime").join(name)).unwrap();
-            text.lines().map(|line| line.split_whitespace().collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n")
+            text.lines()
+                .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         assert!(
             runtime("shared/dos/m16/os.asm").contains(&format!("public {}", check.limit))
@@ -786,6 +828,35 @@ mod tests {
         let recorded = super::recorded(&source, &[], false, &[]).expect("wccq records probe.c");
         let data: Vec<&str> = recorded.lines().filter(|line| line.contains("DGBytes")).collect();
         assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
+    }
+
+    /// The flat target's long double was a double (8 bytes, no x87 tbyte code)
+    /// while the real-mode target's was the x87 type: `-fld` was a switch
+    /// in one target's file. The profile adds it where the layout has the x87
+    /// type.
+    #[test]
+    fn test_every_x86_target_asks_for_the_x87_long_double_once() {
+        for profile in
+            [super::Profile::of(&llrm_x86_m16::M16).unwrap(), super::Profile::of(&llrm_x86_m32::M32).unwrap()]
+        {
+            assert_eq!(profile.flags.iter().filter(|one| *one == "-fld").count(), 1, "{:?}", profile.flags);
+        }
+    }
+
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_flat_long_double_is_recorded_as_the_x87_type() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("probe.c");
+        std::fs::write(&source, "long double gld = 3.5;\nlong double get(void) { return gld; }\n").unwrap();
+        let profile = super::Profile::of(&llrm_x86_m32::M32).unwrap();
+        let recorded = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records probe.c");
+        assert!(recorded.contains("TY_LONG_DOUBLE"), "{recorded}");
+        assert!(recorded.lines().any(|line| line.contains("DGBytes 10 ")), "{recorded}");
+        // the object is the description's 12 bytes: the image, then two of
+        // padding
+        assert!(recorded.lines().any(|line| line.trim() == "- DGUBytes 2"), "{recorded}");
     }
 
     /// The front end, its switches and its header were `if flat` here and a
@@ -2342,7 +2413,11 @@ mod tests {
         // From the store the loop makes (the trip's extension is the first
         // thing after it).
         let from = body.iter().position(|line| line.starts_with("mov byte ptr [")).expect("the loop stores a byte");
-        let loop_ = &body[from..];
+        // To the last jump before the epilogue: the copied guard leaves the
+        // function by more than one return, whose `movzx` is not a trip's.
+        let ret = body[from..].iter().position(|line| line == "ret").expect("the function returns") + from;
+        let last_jump = body[from..ret].iter().rposition(|line| line.starts_with('j')).expect("the loop jumps") + from;
+        let loop_ = &body[from..=last_jump];
         let copies = |line: &&String| {
             line.starts_with("movzx e")
                 || line.split_once(' ').is_some_and(|(operation, operands)| {
@@ -2401,11 +2476,8 @@ mod tests {
             "{body:#?}"
         );
         assert!(body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");
-        assert!(
-            body.iter().any(|line| line.starts_with("jne "))
-                && !body.iter().any(|line| line.starts_with("cmp ") && line.ends_with(", 0")),
-            "{body:#?}"
-        );
+        let jump = body.iter().position(|line| line.starts_with("jne ")).expect("the loop ends on jne");
+        assert!(body[jump - 1].starts_with("add e") && body[jump - 1].ends_with(", 4"), "{body:#?}");
         assert!(
             body.iter().all(|line| !line.contains(" bp")
                 && !line.contains("[bx")

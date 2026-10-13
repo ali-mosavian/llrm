@@ -162,6 +162,8 @@ long dev_clock(void);
    handler is put back when the program ends.  Called once. */
 void dev_ticker_start(void);
 #pragma aux dev_ticker_start "B$TICKON"
+void dev_ticker_stop(void);
+#pragma aux dev_ticker_stop "B$TICKOFF"
 /* A tone of `hertz` until the next call; 0 is silence. */
 void dev_tone(unsigned hertz);
 

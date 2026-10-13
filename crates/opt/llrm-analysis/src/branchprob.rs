@@ -2,32 +2,125 @@
 //! `BranchProbabilityInfo` and `BlockFrequencyInfo` estimate them when no
 //! profile says otherwise.
 //!
-//! Each block with more than one successor takes the first heuristic that
-//! applies, in LLVM's order, then GCC's call and return heuristics (from
-//! Ball and Larus; LLVM has neither):
-//! - a successor every path of which ends in `unreachable`, a `noreturn` or a
-//!   `cold` call (`noreturn::cold`) is all but never taken;
-//! - in a loop, staying in it is taken 124 times to every 4 exits;
-//! - a branch decided by the counters of the loop around it, which induction
-//!   proves counts a known number of trips, is taken on the share of those
-//!   trips the compare holds on;
-//! - `p == q` on pointers fails (20:12), as do `x == 0`, `x == -1`, `x < 0` and
-//!   `x <= 0` on integers but truth values and one-bit tests, and `x == y` on
-//!   floats; `isnan` is all but never;
-//! - a successor that calls, where the other does not, is not taken (67%);
-//! - a successor that returns, where the other does not, is not taken (66%):
-//!   98% where it returns a negative number, 71% null, 65% another constant
-//!   (GCC's `PRED_NEGATIVE_RETURN`, `PRED_NULL_RETURN`, `PRED_CONST_RETURN`).
+//! # How it works
+//! `estimated` gives every edge a probability and every block a frequency. A
+//! block with one successor takes 1. A block with several takes the first of
+//! heuristics 1 to 5 that tells its successors apart; where none does, a
+//! two-way branch combines the votes of 6 to 8 as GCC does (below), and a
+//! wider one takes the first of them (`Heuristic` records which one fired):
 //!
-//! Frequencies are relative to the entry's 1. A loop header runs
-//! 1 / (1 - p) times per entry, `p` the probability of coming back round,
-//! capped as LLVM caps a loop's scale.
+//! 1. `Declared`: `!prof` `branch_weights` on the terminator, one per named
+//!    target, summed per distinct successor. Weights that do not name every
+//!    target, or sum to zero, say nothing.
+//! 2. `Invoke`: an invoke's unwind edge is taken 1 in 2^20.
+//! 3. `Unreachable`: a successor every path of which ends in `unreachable`, a
+//!    `noreturn` call or a `cold` call (`noreturn::cold`) is all but never
+//!    taken.
+//! 4. `Loop`: in a loop, staying is 124 to 4 for leaving (`LOOP`, LLVM's
+//!    weights).
+//! 5. `Counted`: a branch on a compare of the counters of an enclosing loop
+//!    whose trip count induction proved (`trips`, at most 4096). The counters
+//!    (header phis from a constant start) are stepped trip by trip and the edge
+//!    is taken on the share of trips the compare holds on, clamped away from 0
+//!    and 1.
+//! 6. `Pointer`, `Zero`, `Float`, from the compare feeding a `br`: `p == q` on
+//!    pointers fails (20:12), as do `x == 0`, `x == -1`, `x < 0` and `x <= 0`
+//!    on integers, and `x == y` on floats; `isnan` (`uno`) is 1 in 2^20. Truth
+//!    values (0 or all ones, 0 or 1, a compare, or a call whose `range` says
+//!    so), one-bit tests (`x & 2^n`) and the sign of a three-way compare are no
+//!    quantity and say nothing.
+//! 7. `Call` (GCC, from Ball and Larus; LLVM has no such heuristic): a
+//!    successor that calls, where the other does not, is not taken (67:33).
+//! 8. `Return` (GCC): a successor that returns, where the other does not, is
+//!    not taken (66:34); where it only returns a constant, 98% not taken if
+//!    negative, 71% if null, 65% if another constant (`PRED_NEGATIVE_RETURN`,
+//!    `PRED_NULL_RETURN`, `PRED_CONST_RETURN`).
+//! 9. `Even`: equal weights.
+//!
+//! The votes of 6 to 8 are not first-match in GCC (`PRED_FLAG_FIRST_MATCH` is
+//! set on 1 to 5): `combine_predictions_for_bb` (predict.cc L1213, GCC 13.4)
+//! folds the probability each gives the first successor from 1/2 as
+//! Dempster-Shafer, `d = c*p + (1-c)*(1-p); c = c*p/d` (`combined`), so a zero
+//! test (62.5%) and a call on the same arm (33%) leave that arm at 45%. A call
+//! to the function itself is no vote where the other way returns at once (the
+//! base case of a recursion: the call is the work).
+//!
+//! Frequencies are relative to the entry's 1 (`propagated`). Blocks go in
+//! reverse postorder and a block's frequency is the sum over its non-back edges
+//! of predecessor frequency times edge probability, times its loop's scale if
+//! it is a header. A loop's scale is 1 / (1 - p), `p` the probability of coming
+//! back round, capped at 4096 (`LOOP_SCALE`, LLVM's cap). Inner loops are
+//! scaled first. With proven trips the scale is the trips (or trips + 1 when
+//! the only exit is a test at a non-latch header), and the exit test takes `1 /
+//! (trips + 1 - tested)` of the mass, so the trips stay.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   entry["<b>entry</b><br/><small>frequency 1</small>"]:::mid
+//!   h["<b>H</b><br/><small>scale 1/(1-0.969) = 32</small>"]:::mid
+//!   body["<b>body</b>"]:::mid
+//!   exit["<b>exit</b><br/><small>frequency 1<br/>(entering once)</small>"]:::mid
+//!   entry --> h
+//!   h --> body
+//!   body -->|"stay 124/128"| h
+//!   h --> exit
+//! ```
+//!
+//! *Frequencies around a loop with a header scale of 32*
+//!
+//! The propagation takes edge probabilities as a function, so the backend uses
+//! it too (`propagated_edges`, `Cycle`) and MIR and LIR estimates agree.
+//!
+//! # Example
+//! A one-block loop with no proven trip count:
+//!
+//! ```mir
+//! define i16 @f(i16 %n) {
+//! entry:
+//!   br label %head
+//! head:
+//!   %i = phi i16 [ 0, %entry ], [ %j, %head ]
+//!   %j = add i16 %i, 1
+//!   %c = icmp slt i16 %j, %n
+//!   br i1 %c, label %head, label %out
+//! out:
+//!   ret i16 %j
+//! }
+//! ```
+//!
+//! | Fact | Value |
+//! | --- | --- |
+//! | heuristic at `head` | `Loop` |
+//! | probability `head -> head` | 124/128 |
+//! | frequency of `head` | 32 |
+//! | frequency of `out` | 1 |
+//!
+//! From unit test `test_a_loop_stays_in_31_of_32_and_its_header_runs_32_times`
+//! in `branchprob_tests.rs`.
+//!
+//! # Provides
+//! `Odds { taken, frequency, by }` from `estimated`, `propagated` and
+//! `propagated_edges`, and the constants `LOOP` and `LIKELY` (0.8, the edge
+//! probability above which machine block placement trades the shorter layout
+//! for it). Consumers: `profit` and `rotate` in `llrm-transforms`; the
+//! backend's `isel`, `jumps` and `analysis/frequency` (grep `branchprob::`).
+//!
+//! # Needs
+//! [`crate::cfg::Shape`] for loops, [`crate::noreturn`] (`terminal_sites`,
+//! `cold`), [`crate::effects::Declarations`] and the trip counts the caller
+//! takes from [`crate::induction`].
+//!
+//! # See also
+//! LLVM `BranchProbabilityInfo.cpp`, `BlockFrequencyInfo`; GCC `predict.def`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use llrm_mir::facts::Facts;
-use llrm_mir::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, MetadataNode, MetadataOperand, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::types::Type;
 use llrm_mir::{ConstantKind, Context};
@@ -134,6 +227,40 @@ pub fn estimated(
     odds
 }
 
+/// The probability of each edge out of `blocks`, as `estimated` gives them.
+pub fn taken_from(
+    context: &Context,
+    metadata: &[MetadataNode],
+    declarations: &Declarations,
+    function: &Function,
+    shape: &Shape,
+    trips: &BTreeMap<i64, i64>,
+    blocks: &[BlockId],
+) -> BTreeMap<(i64, i64), f64> {
+    let terminal = noreturn::terminal_sites(context, declarations, function, &BTreeSet::new());
+    let cold = noreturn::cold(context, declarations, function, &terminal);
+    let runs = Runs::default();
+    let mut taken = BTreeMap::new();
+    for &block in blocks {
+        let successors: Vec<i64> = function.successors(block).into_iter().map(id).collect();
+        match successors.as_slice() {
+            [] => {}
+            [only] => {
+                taken.insert((id(block), *only), 1.0);
+            }
+            _ => {
+                let (_, weights) =
+                    weighed(context, metadata, declarations, function, shape, trips, &cold, &runs, block, &successors);
+                let total: f64 = weights.iter().sum();
+                for (to, weight) in successors.iter().zip(&weights) {
+                    *taken.entry((id(block), *to)).or_default() += weight / total;
+                }
+            }
+        }
+    }
+    taken
+}
+
 /// What an invoke's normal edge weighs against its unwind edge's one.
 const INVOKE_NORMAL: f64 = 1048575.0;
 
@@ -184,7 +311,8 @@ fn declared(
 }
 
 /// The first heuristic that tells `block`'s successors apart, and their
-/// weights.
+/// weights; below the loop and trip heuristics, which first-match, the
+/// predictors of a branch of two ways combined.
 fn weighed(
     context: &Context,
     metadata: &[MetadataNode],
@@ -229,29 +357,44 @@ fn weighed(
     if let Some(weights) = counted(context, function, shape, trips, runs, block, successors) {
         return (Heuristic::Counted, weights);
     }
+    // The predictors left do not first-match: on a branch of two ways every one
+    // that applies votes, and the votes are combined as GCC's
+    // `combine_predictions_for_bb` does (Dempster-Shafer, predict.cc:1213).
+    // Each vote is the probability of the first successor.
+    let mut votes: Vec<(Heuristic, f64)> = Vec::new();
     if successors.len() == 2 {
         if let Some((heuristic, likely, nan)) = compared(context, declarations, function, block) {
             let weights = if nan { ORDERED } else { OPCODE };
             let (when_true, when_false) = if likely { weights } else { weights.swap() };
-            return (heuristic, vec![when_true, when_false]);
+            votes.push((heuristic, when_true / (when_true + when_false)));
         }
-    }
-    let calls = |at: i64| {
-        function
-            .block(cfg::block(at))
-            .instructions()
-            .iter()
-            .any(|&inst| matches!(
-                function.instruction(inst).opcode,
-                Opcode::Call(_) | Opcode::Invoke(_)
-            ))
-    };
-    if let Some(weights) = split(&|at| !calls(at), CALL) {
-        return (Heuristic::Call, weights);
     }
     let returns = |at: i64| {
         function.terminator(cfg::block(at)).is_some_and(|last| function.instruction(last).opcode == Opcode::Ret)
     };
+    let called = |at: i64| {
+        function
+            .block(cfg::block(at))
+            .instructions()
+            .iter()
+            .filter(|&&inst| matches!(
+                function.instruction(inst).opcode,
+                Opcode::Call(_) | Opcode::Invoke(_)
+            ))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    // A way that returns at once is the base case of a recursion that the
+    // other way calls: that call is the work, not an exceptional case.
+    let base = successors.len() == 2 && successors.iter().any(|&at| returns(at) && called(at).is_empty());
+    let calls =
+        |at: i64| called(at).into_iter().any(|inst| !(base && recursive(context, declarations, function, inst)));
+    if let Some(weights) = split(&|at| !calls(at), CALL) {
+        if successors.len() != 2 {
+            return (Heuristic::Call, weights);
+        }
+        votes.push((Heuristic::Call, weights[0] / (weights[0] + weights[1])));
+    }
     if successors.len() == 2 && successors.iter().filter(|&&at| returns(at)).count() == 1 {
         let (leaving, staying) = if returns(successors[0]) { (0, 1) } else { (1, 0) };
         // What the returning block returns, when it does nothing else: a
@@ -260,10 +403,15 @@ fn weighed(
         let mut weights = vec![0.0; 2];
         weights[leaving] = odds.0;
         weights[staying] = odds.1;
-        return (Heuristic::Return, weights);
+        votes.push((Heuristic::Return, weights[0] / (weights[0] + weights[1])));
+    } else if successors.len() != 2 {
+        if let Some(weights) = split(&|at| !returns(at), RETURN) {
+            return (Heuristic::Return, weights);
+        }
     }
-    if let Some(weights) = split(&|at| !returns(at), RETURN) {
-        return (Heuristic::Return, weights);
+    if let Some(&(heuristic, _)) = votes.first() {
+        let combined = combined(votes.iter().map(|&(_, vote)| vote));
+        return (heuristic, vec![combined, 1.0 - combined]);
     }
     (Heuristic::Even, vec![1.0; successors.len()])
 }
@@ -525,6 +673,33 @@ fn returned(
         }
         _ => None,
     }
+}
+
+/// Whether `inst` calls `function` itself: the work of the function, not the
+/// report of an exceptional case the call heuristic assumes.
+fn recursive(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    llrm_mir::memory::callee(context, function, inst).is_some_and(|callee| {
+        matches!(
+            declarations.get(callee.0 as usize).map(|global| &global.kind),
+            Some(GlobalKind::Function(one)) if std::ptr::eq(&**one, function)
+        )
+    })
+}
+
+/// The probability of the first way, from the probabilities each predictor
+/// gives it: Dempster-Shafer, as `combine_predictions_for_bb` folds them (from
+/// one half, `p' = p * q / (p * q + (1 - p) * (1 - q))`; two certainties that
+/// disagree leave one half).
+fn combined(votes: impl Iterator<Item = f64>) -> f64 {
+    votes.fold(0.5, |p, q| {
+        let d = p * q + (1.0 - p) * (1.0 - q);
+        if d == 0.0 { 0.5 } else { p * q / d }
+    })
 }
 
 trait Swap {
@@ -857,20 +1032,25 @@ pub fn propagated_edges(
     // `to` is a loop header and `from` is in its loop.
     let backward =
         |from: i64, to: i64| headed.get(&to).into_iter().flatten().any(|&index| cycles[index].body.contains(&from));
-    // Where each block is in `order`, to take a loop's blocks in order without
-    // walking the function's.
-    let position: BTreeMap<i64, usize> = order.iter().enumerate().map(|(index, &at)| (at, index)).collect();
+    // Each loop's reachable blocks in `order`, found in one pass over it: a
+    // nest of N loops sorted each loop's body by its place, N times over
+    // the same blocks.
+    let mut inside_of: Vec<Vec<i64>> = vec![Vec::new(); cycles.len()];
+    for &at in order {
+        for &index in around.get(&at).into_iter().flatten() {
+            inside_of[index].push(at);
+        }
+    }
     // Innermost first: an inner header's scale is known when its outer loop is
     // weighed.
     let mut scale: BTreeMap<i64, f64> = BTreeMap::new();
-    for found in cycles {
+    for (index, found) in cycles.iter().enumerate() {
         let weighed = |edge: &dyn Fn(i64, i64) -> f64, scale: &BTreeMap<i64, f64>| -> BTreeMap<i64, f64> {
             let mut mass: BTreeMap<i64, f64> = BTreeMap::new();
-            let mut inside: Vec<i64> = found.body.iter().copied().filter(|at| position.contains_key(at)).collect();
-            inside.sort_unstable_by_key(|at| position[at]);
+            let inside = &inside_of[index];
             #[cfg(test)]
             VISITS.with(|visits| visits.set(visits.get() + found.body.len()));
-            for at in inside {
+            for &at in inside {
                 let entering: f64 = if at == found.header {
                     1.0
                 } else {

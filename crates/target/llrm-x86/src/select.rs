@@ -11,7 +11,6 @@ use std::sync::LazyLock;
 use iced_x86::{Code, Decoder, DecoderOptions, Encoder, Instruction, MemoryOperand, RepPrefixKind};
 use llrm_lir::registers::RegId;
 use llrm_lir::{self as ir, Loc, Operation, Semantics, Space};
-use llrm_support::hash::HashMap;
 use llrm_support::hash::IndexMap;
 
 /// Real mode: what a size asked of an instruction no object holds yet is in.
@@ -515,15 +514,31 @@ pub fn r#move(
 pub const TWO_OPERAND: [&str; 8] = ["add", "adc", "sub", "sbb", "and", "or", "xor", "cmp"];
 pub const ONE_OPERAND: [&str; 4] = ["neg", "not", "inc", "dec"];
 
-static CODES: LazyLock<HashMap<String, Code>> =
-    LazyLock::new(|| Code::values().map(|code| (format!("{code:?}").to_uppercase(), code)).collect());
+mod code_names {
+    include!(concat!(env!("OUT_DIR"), "/code_names.rs"));
+}
+
+/// Two hashes of a name, 128 bits between them: `build.rs`'s.
+fn _name_hash(name: &str) -> (u64, u64) {
+    let (mut first, mut second) = (0xcbf2_9ce4_8422_2325_u64, 0x9e37_79b9_7f4a_7c15_u64);
+    for byte in name.bytes() {
+        first = (first ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        second = (second.rotate_left(5) ^ u64::from(byte)).wrapping_mul(0xff51_afd7_ed55_8ccd);
+    }
+    (first, second)
+}
 
 /// iced's Code value by its own name, or None where there is no such form.
 ///
 /// Python's `getattr(Code, name)`; iced's Rust names are the same names in
-/// another case.
+/// another case. The names are hashed by the build (`build.rs`): a map of owned
+/// names made at the first call cost five million instructions in every
+/// compile.
 pub fn _code(name: &str) -> Option<Code> {
-    CODES.get(name).copied()
+    debug_assert_eq!(Code::values().len(), code_names::CODE_COUNT, "the table of names is of another iced");
+    let hash = _name_hash(name);
+    let at = code_names::CODE_NAMES.binary_search_by(|(first, second, _)| (*first, *second).cmp(&hash)).ok()?;
+    Code::try_from(usize::from(code_names::CODE_NAMES[at].2)).ok()
 }
 
 pub fn _remapped(
@@ -1031,11 +1046,37 @@ fn in_mode(
     }
 }
 
+/// The x87 operations that are no one instruction, with the bytes each is: a
+/// frontend's finalizer spells them (`fatan` is `fld1; fpatan`), and the
+/// encoder prices them as the same bytes, so that no operation the backend
+/// emits has no price.
+pub const X87_SEQUENCES: [(&str, &[u8]); 6] = [
+    ("fsin", &[0xd9, 0xfe]),
+    ("fcos", &[0xd9, 0xff]),
+    ("fatan", &[0xd9, 0xe8, 0xd9, 0xf3]),
+    ("flog2", &[0xd9, 0xe8, 0xd9, 0xc9, 0xd9, 0xf1]),
+    // 2**x: split x into its nearest integer n and fraction f, then
+    // (2**f) * (2**n).
+    (
+        "fexp2",
+        &[0xd9, 0xc0, 0xd9, 0xfc, 0xd9, 0xc9, 0xd8, 0xe1, 0xd9, 0xf0, 0xd9, 0xe8, 0xde, 0xc1, 0xd9, 0xfd, 0xdd, 0xd9],
+    ),
+    ("fround", &[0xd9, 0xfc]),
+];
+
+/// The bytes of the x87 operation `name` where it is a sequence.
+pub fn x87_sequence(name: &str) -> Option<&'static [u8]> {
+    X87_SEQUENCES.iter().find(|(one, _)| *one == name).map(|(_, bytes)| *bytes)
+}
+
 /// An instruction with no operands at all.
 pub fn bare(
     name: &str,
     at: At,
 ) -> Option<Emitted> {
+    if let Some(bytes) = x87_sequence(name) {
+        return Some(Emitted::new(bytes.to_vec()));
+    }
     let code = _code(&in_mode(BARE.get(name).copied().unwrap_or(""), at))?;
     _assemble(&Instruction::with(code), at, true)
 }

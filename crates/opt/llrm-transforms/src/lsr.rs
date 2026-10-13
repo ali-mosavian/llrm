@@ -1,25 +1,203 @@
-//! A loop's induction variables chosen once, by cost: LLVM's
-//! LoopStrengthReduce and GCC's ivopts.
+//! Strength reduction: replaces a loop's induction variables, and the address
+//! arithmetic built from them, with the cheapest set of counters the target
+//! can address, so the loop carries few registers and no multiply (LLVM's
+//! LoopStrengthReduce, gcc's ivopts).
 //!
+//! # How it works
 //! Every read of a counter, or of a value affine in one, is one
-//! `induction::Recurrence`, `pointer + start + step * trip`, with symbols
-//! allowed (`induction::users`). A candidate is a recurrence the loop could
-//! carry in a register. A use is realized from a candidate `r` as
-//! `base + k * r + c`: an address the target's forms take, or the adds,
-//! shifts and multiplies that compute it. The exit either keeps its compare
-//! or tests one candidate for its last value, which is free where that is
-//! zero.
+//! `induction::Recurrence`, `pointer + start + step * trip`, with `start` and
+//! `step` forms in invariant symbols (`Scev`, modulo the width).
+//! `induction::users` finds each recurrence and how it is read: as an
+//! address, compared with an invariant, or otherwise. A recurrence times a
+//! recurrence is not one.
 //!
-//! A set of candidates costs an add a trip each, its uses' cheapest
-//! realizations, and a spill a trip for each register past the target's.
-//! The cheapest set is found by adding, removing and swapping candidates
-//! from the loop's own counters and from none, as GCC's
-//! `find_optimal_iv_set`, and is carried out only where it beats the
-//! counters the loop has. Prices, registers and address forms are the
-//! target's; the counters left unread go to `dead`.
+//! Loops are taken innermost first (smallest body first), each once. For one
+//! loop the pass needs a preheader, one latch, and a latch arm for every
+//! counter; else the loop is left. A loop of more groups of uses than
+//! `Bounds::groups` (gcc's `iv-max-considered-uses`) is left too. Three steps
+//! come before the choice:
+//! - a post-tested latch compare of a counter with a constant reads the
+//!   counter's step instead, with the bound a step on, so one register serves
+//!   for two (LLVM's `OptimizeLoopTermCond`);
+//! - `crate::mirror` makes the pointer for a counter only some trips step,
+//!   where the target's addresses take no scale (not at `-Os`);
+//! - the loop is then planned again from the new body.
 //!
-//! It runs once, after the loop passes, on each loop innermost first, as
-//! LLVM runs its LSR late: nothing after it chooses a loop's counters.
+//! The candidates are recurrences the loop could carry in a register:
+//! - each use's own, and its start with the symbols split every way between
+//!   counter and base (up to three symbols), with and without the constant;
+//! - the loop's existing counters;
+//! - one counter per scale of an address form whose index is wider than the
+//!   use;
+//! - each step counted to zero at the exit, `-trips * step`, where the loop has
+//!   a counted exit.
+//!
+//! A use is realized from a candidate `r` as `base + k * r + c` (`Fit`): the
+//! address form that takes it, or the shift, multiply and add that compute
+//! it. A value read after the loop may come from the trip the candidate
+//! counted, or from the known count. An equality with an invariant takes the
+//! candidate itself and moves the bias into the invariant. The counted exit
+//! either keeps its compare or tests one candidate for its last value
+//! (`Exit`), which costs nothing where that is zero. A counter read only by
+//! its own step and the exit is then dead and `dead` removes it, so a loop
+//! counting `i` from 0 to `n` keeps one counter, counted to zero.
+//!
+//! ```text
+//!  for (i = 0; i < n; i++) s += a[i] * b[i]      (a, b: 16-bit elements)
+//!
+//!  before                          after, one counter counted to zero
+//!  pre:                            pre:  c0 = -n; ea = a + 2n; eb = b + 2n
+//!  l1: i = phi [0,pre] [i+1,l2]    l1:   c = phi [c0,pre] [c+1,l2]
+//!      if i < n  -> l2 else exit         if c != 0 -> l2 else exit
+//!  l2: o  = i * 2                  l2:   pa = ea + c*2   ; the address
+//!      pa = a + o                          pb = eb + c*2   ; form takes *2
+//!      pb = b + o
+//! ```
+//!
+//! A candidate may test the exit only where it cannot come round to its final
+//! value on an earlier trip. Its modular period is `2^w / gcd(step, 2^w)`;
+//! the loop's most trips must not exceed it (nor equal it, where the test is
+//! before a trip). The compare becomes an equality or inequality against the
+//! candidate's last value. Only a pre-tested unit step has a symbolic
+//! count, so a counter stepping by more keeps its compare unless the count is
+//! a number.
+//!
+//! ```text
+//!  i = 0..10 step 1, p = &a[i]            p = a, end = a + 10*step
+//!  loop: *p = ...; p += step; i++    ==>  loop: *p = ...; p += step
+//!        exit if i == 10                        exit if p == end
+//! ```
+//!
+//! The price of a set of candidates (`Problem::total_of`) is the sum of
+//! - an add per trip for each counter's step (a pointer's step is
+//!   `profit::advance`; a counter wider than the native index pays the
+//!   operand-size prefix);
+//! - each use's cheapest realization, at its block frequency;
+//! - building starts, steps and invariants in the preheader;
+//! - a copy for each address that puts two values in the wrong register class;
+//! - the spill traffic of every value past the target's registers
+//!   (`crate::spill`, the one spill model `gvn` shares).
+//!
+//! Frequencies are `Products`: trips multiplied, ten where unproven (#203),
+//! a branch's cold arm less. Prices, registers and address forms are the
+//! target's (`OperationCosts`, `Machine`, `AddressForm`): the pass prices, it
+//! does not know the machine. `kept_across` says how many registers a call to
+//! a named callee keeps, from its contract, and `multiply_by` what a multiply
+//! by a constant costs, from the backend's shift and add chains. A spilled
+//! counter costs a memory update a trip, an invariant a load per read.
+//!
+//! The search is gcc's `find_optimal_iv_set`: from the loop's own counters
+//! and from a greedy start (each use's cheapest candidate, added until every
+//! use fits), add, remove or swap one candidate while the price falls, a tie
+//! going to fewer counters; the cheaper end wins. Past
+//! `Bounds::all_candidates` candidates, replacing is tried once, only where
+//! no add or remove helps, and not for a candidate serving more than
+//! `Bounds::always_prune` uses or exactly one. The loop is rewritten only
+//! when the set beats the counters it has.
+//!
+//! A loop with another way out was never counted before, so its rewrite is
+//! kept only if the whole function's price (`profit::motion_price`) does
+//! not rise; at `-Os` it is left as it is.
+//!
+//! A symbolic count holds only once the loop is entered, so a loop tested
+//! for its last value behind one is entered at its body behind a skip guard
+//! (`counting::skip_guard`, `rotate`), unless a branch over the entry already
+//! proves the first trip (`induction::guards`, as LLVM's
+//! `isLoopEntryGuardedByCond`).
+//!
+//! In a space where a pointer carries into its selector, an integer cannot
+//! index a pair: the use advances the pointer, and pays what an advance
+//! costs there (`profit::advance`). `crate::window` splits the huge pointers
+//! this chooses.
+//!
+//! # Example
+//! Before:
+//! ```mir
+//! define ... @"_sum@3"(ptr nocapture readonly %0, i16 %1) ... {
+//! b1:
+//!   br label %b2
+//!
+//! b2:
+//!   %2 = phi i16 [ 0, %b1 ], [ %10, %b4 ]
+//!   %3 = phi i16 [ 0, %b1 ], [ %9, %b4 ]
+//!   %4 = icmp slt i16 %2, %1
+//!   br i1 %4, label %b4, label %b3
+//!
+//! b3:
+//!   %5 = phi i16 [ %3, %b2 ]
+//!   ret i16 %5
+//!
+//! b4:
+//!   %6 = mul i16 %2, 2
+//!   %7 = getelementptr inbounds i8, ptr %0, i16 %6
+//!   %8 = load i16, ptr %7, !tbaa !9
+//!   %9 = add nsw i16 %3, %8
+//!   %10 = add nsw i16 %2, 1
+//!   br label %b2
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define ... @"_sum@3"(ptr nocapture readonly %0, i16 %1) ... {
+//! b1:
+//!   %2 = shl i16 %1, 1
+//!   %3 = sub i16 0, %2
+//!   %4 = getelementptr i8, ptr %0, i16 %2
+//!   %5 = icmp sle i16 %1, 0
+//!   br i1 %5, label %b3, label %12
+//!
+//! b3:
+//!   %6 = phi i16 [ 0, %b1 ], [ %10, %13 ]
+//!   ret i16 %6
+//!
+//! b4:
+//!   %7 = phi i16 [ %10, %b4 ], [ 0, %12 ]
+//!   %lsr.iv1 = phi i16 [ %lsr.iv.next, %b4 ], [ %3, %12 ]
+//!   %8 = getelementptr i8, ptr %4, i16 %lsr.iv1
+//!   %9 = load i16, ptr %8, !tbaa !9
+//!   %10 = add nsw i16 %7, %9
+//!   %lsr.iv.next = add i16 %lsr.iv1, 2
+//!   %11 = icmp ne i16 %lsr.iv.next, 0
+//!   br i1 %11, label %b4, label %13
+//!   ; ...
+//! }
+//! ```
+//! The counters `i` and `2 * i` are one: `%lsr.iv1` runs from `-2n` to zero,
+//! the address is `%4 + %lsr.iv1` with `%4 = a + 2n`, and the loop ends when
+//! `%lsr.iv1` reaches zero.
+//!
+//! From `--dump` of `sum` (`for (i = 0; i < n; i++) s += a[i];`, `int *a`) at
+//! -O2 -m16, stages `fixednarrow` and `lsr`.
+//!
+//! # Runs
+//! Once per body, after the interprocedural step and `fixednarrow`, before
+//! `algebraic::Differences` and `window`: nothing after it chooses a loop's
+//! counters. It is in `-O1` and up with `-fstrength-reduce`; at `-Omax` the
+//! search has no `Bounds` (gcc's values apply otherwise). See
+//! [`crate::pipeline`] and `docs/reference/levels.md`.
+//!
+//! # Needs
+//! `induction` (recurrences, counted exits, guards), `Registers`, `Pressure`
+//! (`crate::spill`), `Products`, [`crate::counting`] and [`crate::expand`]
+//! to build starts and guards, [`crate::rotate`] to enter at the body.
+//!
+//! # Keeps
+//! Nothing: a changed loop invalidates every analysis.
+//!
+//! # Limits
+//! A loop tested on a value other than a counter plus a constant (a scaled
+//! compare) keeps a counter for the compare. Past the target's registers the
+//! pressure estimate is coarse. Which value is the base and which the index
+//! of a two-register address is the backend's choice, and it decides some
+//! outcomes.
+//!
+//! # See also
+//! [`crate::indvars`] keeps the exit values, exit sinking and `rewound`: which
+//! counters the loop keeps is this pass's. LLVM:
+//! [`LoopStrengthReduce.cpp`](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp).
+//! gcc:
+//! [`tree-ssa-loop-ivopts.cc`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-loop-ivopts.cc).
+//! `LLRM_DEBUG=lsr` prints each loop's uses, candidates and costs.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -33,7 +211,7 @@ use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::passes::{Analyses, Analysis, FunctionPass, Outer, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, Analysis, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::HashMap;
@@ -199,12 +377,24 @@ impl spill::Spilled<Resident> for Residents {
 /// The whole function's block frequencies as lsr's prices read them: a loop's
 /// trips multiplied, ten where unproven (#203), a branch's cold arm less. A
 /// manager analysis, so a loop lsr looks at and leaves alone does not find them
-/// again (16 loops of a nest: a fifth of lsr).
+/// again (16 loops of a nest: a fifth of lsr), and a loop it changes does not
+/// either unless the change reaches what they read.
 pub struct Products;
 
+/// `Products`' result: the frequencies, and the trips they were worked out
+/// under.
+#[derive(Debug, PartialEq)]
+pub struct Frequencies {
+    pub by_block: Option<std::collections::BTreeMap<i64, i64>>,
+    trips: llrm_support::hash::IndexMap<i64, i64>,
+    /// The odds of each edge `by_block` was worked out from.
+    taken: std::collections::BTreeMap<(i64, i64), f64>,
+}
+
 impl Analysis for Products {
-    type Result = Option<std::collections::BTreeMap<i64, i64>>;
+    type Result = Frequencies;
     const NAME: &'static str = "loop-products";
+    const INCREMENTAL: bool = true;
 
     fn run(
         context: &Context,
@@ -222,14 +412,80 @@ impl Analysis for Products {
             .with_registers(&registers)
             .with_shape(&shape)
             .with_counted(&counted);
-        profit::_loop_products_by_branch(
+        let trips = profit::proven_trips(&view, &registers);
+        let (by_block, taken) =
+            profit::_products_with_odds_in(view.context, view.metadata, &outer.globals, function, &shape, Some(&trips))
+                .map_or((None, Default::default()), |(by_block, taken)| (Some(by_block), taken));
+        Frequencies { by_block, trips, taken }
+    }
+
+    /// They are worked out from the blocks and their edges, the loops, the
+    /// trips proven and the odds of each branch's edges, which read a call in
+    /// a block, the weights it declares and the compare it tests with what
+    /// that reads. A change that leaves these as they were (a counter another
+    /// counter was chosen for, an address strength-reduced) leaves them: only
+    /// the branches that read what it touched are weighed again.
+    fn update(
+        previous: &Self::Result,
+        changes: &[llrm_mir::module::Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let reach = llrm_analysis::manager::reached_by(function, changes)?;
+        if previous.by_block.is_none() || changes.iter().any(|one| _calls(function, one)) {
+            return None;
+        }
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let counted = analyses.get::<llrm_analysis::manager::Counted>(context, layout, function);
+        let view = memory::Unit::within(context, layout, function, &outer)
+            .with_registers(&registers)
+            .with_shape(&shape)
+            .with_counted(&counted);
+        let trips = profit::proven_trips(&view, &registers);
+        if trips != previous.trips {
+            return None;
+        }
+        let weighed = reach.conditions.iter().copied().collect::<Vec<_>>();
+        let by_header = profit::counted_by_header(&shape, Some(&trips))?;
+        let taken = llrm_analysis::branchprob::taken_from(
             view.context,
             view.metadata,
             &outer.globals,
             function,
-            Some(&profit::proven_trips(&view, &registers)),
-        )
+            &shape,
+            &by_header,
+            &weighed,
+        );
+        let wanted = weighed.iter().map(|&at| cfg::id(at)).collect::<BTreeSet<_>>();
+        let same = previous.taken.iter().filter(|((from, _), _)| wanted.contains(from)).eq(taken.iter());
+        same.then(|| Frequencies { by_block: previous.by_block.clone(), trips, taken: previous.taken.clone() })
     }
+}
+
+/// Whether `change` touched a call: what a branch's weights read of a block.
+fn _calls(
+    function: &Function,
+    change: &llrm_mir::module::Change,
+) -> bool {
+    use llrm_mir::module::Change;
+    let inst = match *change {
+        Change::Inserted { inst, .. }
+        | Change::Erased { inst, .. }
+        | Change::Moved { inst, .. }
+        | Change::Rewritten(inst) => inst,
+        Change::Cloned { to, .. } => to,
+        // What an operand was is told before the `Rewritten` that decides.
+        Change::Operand { .. } | Change::Operands { .. } => return false,
+        Change::BlockCreated(_) | Change::BlockErased(_) => return true,
+    };
+    matches!(
+        function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    )
 }
 
 /// What the function as it stands gives every loop, each worked out when first
@@ -275,9 +531,22 @@ pub fn reduced(
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
-            if let Some(rewrite) = _post_incremented(&view, &loop_) {
+            if let Some(rewrite) = _post_incremented(&view, &loop_).or_else(|| _stepped_before_test(&view, &loop_)) {
                 drop(facts);
                 _read_after_step(unit, rewrite);
+                analyses.invalidate(unit.function, &PreservedAnalyses::none());
+                whole = Whole::default();
+                changed = true;
+                done.remove(&loop_.header);
+                continue;
+            }
+            // A counter some trips step has no candidate (it is no function of
+            // the trip): where the target's address takes no scale, the pointer
+            // that moves with it is made first, and the loop chosen again.
+            if !size && let Some(plan) = crate::mirror::found(&view, &loop_, &target.forms) {
+                drop(facts);
+                crate::mirror::applied(unit.context, unit.function, &plan);
+                dead::dead(unit.context, outer.callees(), unit.function);
                 analyses.invalidate(unit.function, &PreservedAnalyses::none());
                 whole = Whole::default();
                 changed = true;
@@ -301,10 +570,11 @@ pub fn reduced(
             continue;
         }
         let saved = leaves.then(|| (unit.function.clone(), _function_price(unit, &*analyses, outer, &target)));
+        let graph = _graph(unit.function);
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
-        analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        analyses.invalidate(unit.function, &_kept_graph(unit.function, &graph));
         whole = Whole::default();
         if let Some((before, Some(kept))) = saved {
             dead::dead(unit.context, outer.callees(), unit.function);
@@ -322,6 +592,26 @@ pub fn reduced(
     changed
 }
 
+/// The blocks of `function` and where each goes.
+fn _graph(function: &Function) -> Vec<(BlockId, Vec<BlockId>)> {
+    function.layout().iter().map(|&block| (block, function.successors(block))).collect()
+}
+
+/// What an edit that left the blocks and their edges as `before` had them
+/// leaves true: the analyses that read the graph and nothing else. A loop
+/// counted onto another counter changes no edge, and a nest of N loops derived
+/// the dominance and loops of the whole function N times.
+fn _kept_graph(
+    function: &Function,
+    before: &[(BlockId, Vec<BlockId>)],
+) -> PreservedAnalyses {
+    if _graph(function) == before {
+        PreservedAnalyses::none().preserve::<cfg::Shape>().preserve::<Dominators>().preserve::<Loops>()
+    } else {
+        PreservedAnalyses::none()
+    }
+}
+
 /// What the function costs as it stands: `profit::motion_price` at the
 /// frequencies lsr's own prices use.
 fn _function_price(
@@ -335,11 +625,12 @@ fn _function_price(
     let shape = fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
     let view =
         memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts).with_shape(&shape);
-    let frequencies = profit::_loop_products_by_branch(
+    let frequencies = profit::_loop_products_by_branch_in(
         view.context,
         view.metadata,
         &outer.globals,
         unit.function,
+        &shape,
         Some(&profit::proven_trips(&view, &facts)),
     )?;
     profit::motion_price(unit.context, unit.layout, outer, unit.function, &target.costs, target.room, &frequencies)
@@ -518,7 +809,7 @@ fn _plan(
     loop_: &Loop,
     target: &Target,
     pressure: &spill::Pressure,
-    products: &mut dyn FnMut() -> std::rc::Rc<Option<std::collections::BTreeMap<i64, i64>>>,
+    products: &mut dyn FnMut() -> std::rc::Rc<Frequencies>,
     whole: &mut Whole,
 ) -> Option<Plan> {
     let function = view.function;
@@ -534,7 +825,7 @@ fn _plan(
     // lsr's prices were fitted to trips multiplied, ten where unproven (#203),
     // and a branch's cold arm less.
     let held = products();
-    let frequencies = held.as_ref().as_ref()?;
+    let frequencies = held.by_block.as_ref()?;
     let frequency = |block: BlockId| frequencies.get(&cfg::id(block)).copied().unwrap_or(1);
     let exit = _exit(view, loop_, &users);
     let nested = view
@@ -874,6 +1165,103 @@ fn _post_incremented(
         induction::AffineOperand::Value(..) => return None,
     };
     Some(PostIncrement { compare: proof.compare, counter, step, ty, bound: moved })
+}
+
+/// A test of the counter that leaves the loop, made after the step the
+/// counter's other use is: the compare reads the step and the bound a step on,
+/// so the counter is dead once stepped. gcc's ivopts takes a use after the
+/// increment from the incremented candidate, whichever exit it is; here a
+/// loop entered behind its copied tests leaves from its header, and the
+/// stepped value and the counter were two registers (`lea cx, [si+1]; cmp
+/// si, 31; ...; mov si, cx`). Where an ordered test would wrap the step's
+/// flags say so, as `icmp (add nsw x, k), c` is `icmp x, c - k`.
+fn _stepped_before_test(
+    view: &memory::Unit,
+    loop_: &Loop,
+) -> Option<PostIncrement> {
+    let function = view.function;
+    let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
+    for &at in &loop_.body {
+        let block = cfg::block(at);
+        let branch = function.terminator(block)?;
+        let instruction = function.instruction(branch);
+        if instruction.operands.len() != 3
+            || !function.successors(block).iter().any(|one| !loop_.body.contains(&cfg::id(*one)))
+        {
+            continue;
+        }
+        let Operand::Value(condition) = instruction.operands[0] else { continue };
+        let ValueDef::Instruction(compare) = function.value(condition).def else { continue };
+        let Opcode::ICmp(predicate) = function.instruction(compare).opcode else { continue };
+        let operands = &function.instruction(compare).operands;
+        let ((Operand::Value(read), Operand::Constant(bound)) | (Operand::Constant(bound), Operand::Value(read))) =
+            (operands[0], operands[1])
+        else {
+            continue;
+        };
+        let ValueDef::Instruction(phi) = function.value(read).def else { continue };
+        if function.instruction(phi).opcode != Opcode::Phi || function.parent(phi) != Some(cfg::block(loop_.header)) {
+            continue;
+        }
+        let Some(Operand::Value(step)) = _latch_arm(function, read, cfg::block(latch)) else { continue };
+        let ValueDef::Instruction(made) = function.value(step).def else { continue };
+        let stepper = function.instruction(made);
+        let width = view.int_bits(Operand::Value(read))?;
+        if width > 64 {
+            continue;
+        }
+        let signed = |bits: u128| {
+            let low = bits & ((1u128 << width) - 1);
+            if low >> (width - 1) == 1 { low as i128 - (1i128 << width) } else { low as i128 }
+        };
+        let by = match (&stepper.opcode, &stepper.operands[..]) {
+            (Opcode::Binary(BinaryOp::Add), [Operand::Value(one), k @ Operand::Constant(_)])
+            | (Opcode::Binary(BinaryOp::Add), [k @ Operand::Constant(_), Operand::Value(one)])
+                if *one == read =>
+            {
+                signed(view.int_constant(*k)?)
+            }
+            (Opcode::Binary(BinaryOp::Sub), [Operand::Value(one), k @ Operand::Constant(_)]) if *one == read => {
+                -signed(view.int_constant(*k)?)
+            }
+            _ => continue,
+        };
+        // The step is made before the compare, on every path to it.
+        let (stepped_in, compared_in) = (function.parent(made)?, block);
+        let before = if stepped_in == compared_in {
+            let all = function.block(block).instructions();
+            all.iter().position(|one| *one == made)? < all.iter().position(|one| *one == compare)?
+        } else {
+            view.shape().dominance.dominates(cfg::id(stepped_in), at)
+        };
+        // The counter is read by the step, the compare and its phi alone.
+        let readers = function.users(read);
+        if !before || readers.iter().any(|one| one.user != made && one.user != compare && one.user != phi) {
+            continue;
+        }
+        let flags = llrm_mir::facts::Facts::of_flags(stepper.flags);
+        let ty = function.value(read).ty;
+        let equality = matches!(predicate, IntPredicate::Eq | IntPredicate::Ne);
+        let unsigned =
+            matches!(
+                predicate,
+                IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge
+            );
+        if (!equality && !unsigned && !flags.no_signed_wrap()) || (unsigned && !flags.no_unsigned_wrap()) {
+            continue;
+        }
+        let known = view.int_constant(Operand::Constant(bound))?;
+        let (known, modulus) =
+            (if unsigned { (known & ((1u128 << width) - 1)) as i128 } else { signed(known) }, 1i128 << width);
+        let moved = known + by;
+        let (low, high) = if unsigned { (0, modulus - 1) } else { (-(modulus >> 1), (modulus >> 1) - 1) };
+        let moved = if equality { signed(moved.rem_euclid(modulus) as u128) } else { moved };
+        if !equality && (moved < low || moved > high) {
+            continue;
+        }
+        return Some(PostIncrement { compare, counter: read, step, ty, bound: moved });
+    }
+    None
 }
 
 /// `rewrite`: the compare reads the step and the bound a step on.

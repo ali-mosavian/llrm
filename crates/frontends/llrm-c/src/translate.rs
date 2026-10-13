@@ -13,6 +13,7 @@ use llrm_core::hir::model::{
 };
 use llrm_core::support::hash::IndexMap;
 use llrm_mir::facts::Fact;
+use llrm_mir::types::FloatKind;
 use llrm_support::hash::{HashMap, HashSet};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
@@ -241,6 +242,9 @@ fn number(text: &str) -> R<i64> {
 /// Each data segment's labelled objects, as the stream lays them down.
 fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
     let mut out: Vec<Object> = Vec::new();
+    // A literal is named by its place in the unit: the front end's own handle
+    // moves with `-g`, and the code with it.
+    let mut literals = 0;
     // A flat unit's initializer of a local aggregate is laid down under `_TEXT`
     // (the segment current when the front end names it): data in a code
     // segment is still data, so a segment with items is read whatever its
@@ -266,7 +270,10 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                 let key = back_key(unit, hir::handle(back));
                 let name = match key {
                     Key::Symbol(symbol) => unit.symbols[&symbol].object_name(),
-                    Key::Literal(back) => format!("L_b{back}"),
+                    Key::Literal(_) => {
+                        literals += 1;
+                        format!("L_b{literals}")
+                    }
                 };
                 out.push(Object {
                     key,
@@ -549,7 +556,7 @@ impl<'u> Types<'u> {
             "TY_LONG_POINTER" | "TY_LONG_CODE_PTR" => Shape::Pointer(4),
             "TY_SINGLE" => Shape::Float(4),
             "TY_DOUBLE" => Shape::Float(8),
-            "TY_LONG_DOUBLE" => Shape::Float(10),
+            "TY_LONG_DOUBLE" => Shape::Float(i64::from(FloatKind::X86Fp80.value_bytes())),
             other => match (widths_for(self.flat, other), self.aggregate(other)) {
                 (Some(width), _) => Shape::Int(i64::from(width), signed(other)),
                 (None, Some(size)) => return refuse(format!("a {size}-byte aggregate as a value")),
@@ -872,7 +879,7 @@ fn passed_as_scalar(
 /// words for every aggregate up to 128 bits, fields as they are: the stack
 /// bytes are the same either way, the front end here has no field list (its
 /// debug types are not always there), and the words are what its listings and
-/// tests have been. docs/targets.md.
+/// tests have been. docs/machine/targets.md.
 const BYVAL_ABOVE: i64 = 16;
 
 /// Whether an aggregate of `size` bytes passed to `callee` under `convention`

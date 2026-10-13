@@ -48,7 +48,7 @@ default = ["testing"]
 testing = ["llrm-omf/testing"]
 # The m16 and m32 selectors, peephole rules and effect rows, generated here from
 # their definition directories for this crate's own tests (a product binds a
-# target's from its select crate; see docs/targets.md, row 19b).
+# target's from its select crate; see docs/machine/targets.md, row 19b).
 fixtures = []
 
 [dev-dependencies]

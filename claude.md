@@ -1,11 +1,11 @@
 # llrm -- Low Level Real Machine
 
-See [agents.md](agents.md). It carries the goal, the architecture and the
-seven rules, and this file exists only so that either name finds them.
+See [agents.md](agents.md). It carries the goal, the layout and the
+eight rules, and this file exists only so that either name finds them.
 
-The seven rules, because they are the ones most easily forgotten mid-task.
-The first three are global; the last four are this project's own, and all
-seven get restated at the end of a reply here:
+The eight rules, because they are the ones most easily forgotten mid-task.
+The first three are global; the last five are this project's own, and all
+eight get restated at the end of a reply here:
 
 1. **Say it and stop.** The minimum needed to understand, in every word
    written -- comments, commit messages, docs, tests, replies alike.
@@ -17,8 +17,9 @@ seven get restated at the end of a reply here:
    commit as the fix, and written so that it fails before the fix goes in.
    A test never seen to fail is evidence of nothing.
 4. **Dump every step and pass to a file and diff them.** Do not reason
-   about where it went wrong -- `tools/stages.py` knows. Diff the MIR
-   between passes, not the emitted code at the end.
+   about where it went wrong -- `--dump DIR` (or `LLRM_MIR_STAGES=DIR`)
+   writes the MIR after each pass; see docs/working/debugging.md. Diff
+   the MIR between passes, not the emitted code at the end.
 5. **Every pass takes MIR and returns MIR**, and names nothing about the
    machine. Only lower, regalloc and peephole see machine form. What an
    idiom *is* -- a long pair, an absorbable call -- is the raise's answer,
@@ -33,6 +34,10 @@ seven get restated at the end of a reply here:
    rather than deriving its own. A language's promise is marked by its
    frontend in the IR; a machine fact comes from the target. SRP, DRY,
    Open/Closed, separation of concerns.
+8. **A change updates the doc of what it changes, in the same PR.** A
+   pass's `//!` header is its doc; `python3 tools/docsbuild/build.py --sync`
+   output is committed with it; the stale and missing-section tests enforce
+   it where they can.
 
 Reviews (agents.md, Method) are big-picture, not adversarial: right
 abstraction level, generalizes to unseen cases, DRY/SRP/Open-Closed/

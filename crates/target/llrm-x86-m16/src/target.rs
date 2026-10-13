@@ -154,7 +154,14 @@ impl Machine for Dos {
     }
 
     fn size_costs(&self) -> OperationCosts {
-        DESCRIPTION.size_costs()
+        // The by-pieces ratios are the CPU's, whichever table prices the rest.
+        OperationCosts {
+            pieces_set: self.costs.pieces_set,
+            pieces_clear: self.costs.pieces_clear,
+            pieces_set_size: self.costs.pieces_set_size,
+            pieces_clear_size: self.costs.pieces_clear_size,
+            ..DESCRIPTION.size_costs()
+        }
     }
 
     fn registers(&self) -> i64 {
@@ -236,7 +243,13 @@ pub fn address_forms(
 /// instructions lowering picks for it.
 pub fn costs(arch: &str) -> OperationCosts {
     let at = timings::ARCHS.iter().position(|one| *one == arch).expect("a listed arch");
-    DESCRIPTION.operations(&|kind| timings::COST[kind][at], timings::PREFIX[at])
+    OperationCosts {
+        pieces_set: timings::SET_RATIO[at],
+        pieces_clear: timings::CLEAR_RATIO[at],
+        pieces_set_size: timings::SET_RATIO_SIZE[at],
+        pieces_clear_size: timings::CLEAR_RATIO_SIZE[at],
+        ..DESCRIPTION.operations(&|kind| timings::COST[kind][at], timings::PREFIX[at])
+    }
 }
 
 /// Bytes of `op r, r` on `width`-byte registers; a dword runs under the 66h

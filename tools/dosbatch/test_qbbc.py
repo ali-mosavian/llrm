@@ -8,60 +8,68 @@ from pathlib import Path
 
 import pytest
 
+# BCOM45 (BC, LINK and its runtime) is the oracle these tests compare against: the gate drops the file where QB45 is not installed.
+REQUIRES = ["qb45"]
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
 import qb32  # noqa: E402
-import qbruntime  # noqa: E402
+import qbbuild  # noqa: E402
 
 # Waits cost no wall clock time: the clock is the guest's instruction count.
 CONF = qb32.virtual_conf(2000)
 
 pytestmark = pytest.mark.slow_dos
+# (program, target) that differ from BC for a bug that is open: expected to differ, and a pass fails the test so the entry goes.
+KNOWN: dict = {}
 QBRT = dosbatch.ROOT / "tests" / "qbrt"
 SOURCES = sorted([*QBRT.glob("events_*.bas"), *QBRT.glob("bc_*.bas")])
-# Programs BC cannot run under DOSBox (it hangs), that check themselves: the output is the `' expect:` lines.
-CHECKED = sorted(QBRT.glob("llrm_*.bas"))
+# Programs BC cannot run under DOSBox (it hangs), that check themselves: the output is the `' expect:` lines of the source each target
+# builds (a program with a NAME.flat.bas is built from it at m32).
+CHECKED = sorted(path for path in QBRT.glob("llrm_*.bas") if ".flat" not in path.name)
+
+
+@pytest.fixture(scope="module")
+def objects(tmp_path_factory):
+    return qbbuild.runtimes(tmp_path_factory.mktemp("qbbc_rt"))
+
+
+def run_text(job: dosbatch.Job, where: Path) -> str:
+    result = dosbatch.run([job], where, conf=CONF)[job.stem]
+    assert result.status == "ok", result.detail
+    return dosbatch.read_dos(where, "L.TXT")
 
 
 @pytest.mark.parametrize("source", SOURCES, ids=lambda path: path.stem)
-def test_program_matches_bc(tmp_path, source: Path):
+def test_program_matches_bc(tmp_path, objects, source: Path):
+    """BC and BCOM45 are the oracle; the llrm build is ours, at m16 and at m32, and both must write BC's file."""
     if not dosbatch.QB45.is_dir():
         pytest.skip("QB45_DIR is unavailable")
-    obj = tmp_path / "lp.llrm.obj"
-    assert (error := qbruntime.compile_basic(source, obj, "llrm")) is None, error
-    archive, _ = qbruntime.build(tmp_path / "archive")
+    built = qbbuild.build(source, tmp_path / "build", objects)
     reference = tmp_path / "REF.BAS"
     reference.write_bytes(source.read_text().replace("\n", "\r\n").encode())
-    jobs = [
-        dosbatch.Job("BCREF", "bas", reference, screen=True, budget_ms=60000, switches="/O /FPi /V" + (" /E /X" if "ON ERROR" in reference.read_text().upper() else "")),
-        dosbatch.Job("LLRM", "obj", obj, runtime="llrmqb", runtime_file=archive, screen=True, budget_ms=60000),
-    ]
-    texts = []
-    for job in jobs:
-        where = tmp_path / job.stem
-        result = dosbatch.run([job], where, conf=CONF)[job.stem]
-        assert result.status == "ok", result.detail
-        texts.append(dosbatch.read_dos(where, "L.TXT"))
-    assert texts[0].strip(), "BC's reference is missing"
-    differ = [
-        f"line {at}: BC {one!r}, llrm {two!r}"
-        for at, (one, two) in enumerate(zip(texts[0].split("\n"), texts[1].split("\n")))
-        if one != two
-    ]
-    assert texts[0] == texts[1], "\n".join(differ[:20]) or f"BC {texts[0]!r}, llrm {texts[1]!r}"
+    switches = "/O /FPi /V" + (" /E /X" if "ON ERROR" in reference.read_text().upper() else "")
+    want = run_text(dosbatch.Job("BCREF", "bas", reference, screen=True, budget_ms=60000, switches=switches), tmp_path / "BCREF")
+    assert want.strip(), "BC's reference is missing"
+    for target in qbbuild.TARGETS:
+        one = built[target]
+        got = run_text(dosbatch.Job("LLRM", "exe", one.exe, files=one.files, screen=True, budget_ms=60000), tmp_path / f"LLRM{target}")
+        differ = [f"line {at}: BC {a!r}, llrm {b!r}" for at, (a, b) in enumerate(zip(want.split("\n"), got.split("\n"))) if a != b]
+        if reason := KNOWN.get((source.stem, target)):
+            assert want != got, f"m{target} now matches BC: remove it from KNOWN ({reason})"
+            continue
+        assert want == got, f"m{target}: " + ("\n".join(differ[:20]) or f"BC {want!r}, llrm {got!r}")
 
 
 @pytest.mark.parametrize("source", CHECKED, ids=lambda path: path.stem)
-def test_program_prints_what_it_expects(tmp_path, source: Path):
+def test_program_prints_what_it_expects(tmp_path, objects, source: Path):
     if not dosbatch.QB45.is_dir():
         pytest.skip("QB45_DIR is unavailable")
-    obj = tmp_path / "x.llrm.obj"
-    assert (error := qbruntime.compile_basic(source, obj, "llrm")) is None, error
-    archive, _ = qbruntime.build(tmp_path / "archive")
-    job = dosbatch.Job("LLRM", "obj", obj, runtime="llrmqb", runtime_file=archive, screen=True, budget_ms=60000)
-    result = dosbatch.run([job], tmp_path / "run", conf=CONF)["LLRM"]
-    assert result.status == "ok", result.detail
-    expected = [line.split("expect:", 1)[1].strip() for line in source.read_text().splitlines() if "expect:" in line]
-    printed = [" ".join(line.split()) for line in dosbatch.read_dos(tmp_path / "run", "L.TXT").splitlines() if line.strip()]
-    assert printed == expected
+    built = qbbuild.build(source, tmp_path / "build", objects)
+    for target in qbbuild.TARGETS:
+        one = built[target]
+        used = qbbuild.flat_source(source) if target == qbbuild.FLAT else source
+        expected = [line.split("expect:", 1)[1].strip() for line in used.read_text().splitlines() if "expect:" in line]
+        text = run_text(dosbatch.Job("LLRM", "exe", one.exe, files=one.files, screen=True, budget_ms=60000), tmp_path / f"LLRM{target}")
+        assert [" ".join(line.split()) for line in text.splitlines() if line.strip()] == expected, f"m{target}: {text!r}"

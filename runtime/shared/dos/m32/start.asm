@@ -17,6 +17,7 @@
 extrn _main:near
 extrn LL$STACK_LOW:dword
 extrn LL$EXIT:near
+extrn LL$PSP:word
 ;; The language's start-up hook, called before `main` when its description names one (`init`).
 ifdef LANG_INIT
 extrn LANG_INIT:near
@@ -29,6 +30,7 @@ endif
 
 .code
 start:
+                mov     LL$PSP, es              ;; the PSP's selector, for the command line and the environment
                 push    ds
                 pop     es
                 lea     eax, [esp - STACK_BYTES + STACK_RESERVE]

@@ -246,9 +246,10 @@ impl Layer {
     }
 
     /// The C header of the interface: each operation declared `__cdecl` as
-    /// `llrm_os_<name>`, each named for its assembly symbol by a `#pragma aux`, the data
-    /// pointers far where the target has far data. The layer's routines are
-    /// written in the target's C convention whatever its default is.
+    /// `llrm_os_<name>`, each named for its assembly symbol by a `#pragma aux`,
+    /// the data pointers far where the target has far data. The layer's
+    /// routines are written in the target's C convention whatever its
+    /// default is.
     pub fn c_header(&self) -> Result<String, String> {
         let interface = Interface::shipped();
         let pointer = self.string("pointer")?;
@@ -448,9 +449,9 @@ mod tests {
         let far =
             Layer { text: "os = \"dos\"\nconvention = \"cdecl16\"\npointer = \"far\"\ngroups = [\"core\"]\n", ..LAYER };
         assert!(
-            far.nib_module().unwrap().contains(
-                "@extern(\"cdecl16\", name=\"LL$OPEN\")\npub fn open(name: *far char, mode: u8) -> i16"
-            )
+            far.nib_module()
+                .unwrap()
+                .contains("@extern(\"cdecl16\", name=\"LL$OPEN\")\npub fn open(name: *far char, mode: u8) -> i16")
         );
     }
 

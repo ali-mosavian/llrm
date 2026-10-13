@@ -10,33 +10,33 @@ executable failure prints `FAIL <case> <check>` and stops.
 
 ## Levels and inventory
 
-| Level | Case | VBDOS delta or integration shape | Current requirement |
-|---|---|---|---|
-| 1 | `underscore_identifiers` | VBDOS permits `_` in identifiers; QB 4.5 and PDS 7.1 reject it. | parser, lowering, runtime |
-| 2 | `g3_byval_long` | `/G3` uses the VBDOS 386 long-argument ABI; a `BYVAL LONG` call exercises its source-level boundary. | parser, lowering, runtime |
-| 2 | `g2_byval_long` | VBDOS also accepts `/G2`; this keeps its two-word ABI separate from `/G3`. | parser, lowering, runtime |
-| 4 | `segmented_memory` | `DEF SEG`, `VARSEG`, `VARPTR`, and `POKE` write through a selected segment. The variable name also contains `_`. | parser, lowering, runtime |
-| 4 | `local_error` | Procedure-local error trap with exact ERR/ERL, numbered RESUME target, and caller-side recovery witness. It uses `/X`. | parser, lowering, runtime |
-| 4 | `string_far_address` | `SSEG`, `SADD`, and `SSEGADD`, independently witnessed through physical PEEK bytes and a null-string boundary. | parser, lowering, runtime |
-| 4 | `interrupt_abi` | The supplied `VBDOS.BI` `RegType` layout and `INTERRUPT` far routine. It asks DOS interrupt 21h/function 30h for a nonzero major version, but intentionally does not print the version. | parser, lowering, runtime |
-| 4 | `vga_framebuffer_bsave` | Defined mode-13 VGA segment `A000h`, direct pixels, and an unmeasured BSAVE source surface. | parser/lowering; runtime pending |
-| 4 | `interruptx_abi_surface`, `absolute_abi_surface`, `legacy_interrupt_abi_surface` | Remaining routines declared by the installed `VBDOS.BI`: segmented-register, absolute-address, and legacy-array interrupt forms. | parser/lowering; reference runtime |
-| 4 | `cdecl_alias_external` | An external `CDECL ALIAS` declaration with a `BYVAL LONG` argument. | parser/lowering; reference runtime |
-| 4 | `form_event_surface`, `timer_event_surface`, `custom_control_surface` | Form event/property/method, Timer control event, and custom-control callback surfaces. | parser; form lowering pending; reference runtime |
-| 5 | `qrender_shape` | A small executable synthesis of qb-qrender's underscore names, `$STATIC`/`$DYNAMIC`, fixed UDT strings, line continuation, `BYREF` UDT, and `BYVAL` scalar patterns. | parser, lowering, runtime |
+| Level | Case | VBDOS delta or integration shape |
+|---|---|---|
+| 1 | `underscore_identifiers` | VBDOS permits `_` in identifiers; QB 4.5 and PDS 7.1 reject it. |
+| 2 | `g3_byval_long` | `/G3` uses the VBDOS 386 long-argument ABI; a `BYVAL LONG` call exercises its source-level boundary. |
+| 2 | `g2_byval_long` | VBDOS also accepts `/G2`; this keeps its two-word ABI separate from `/G3`. |
+| 4 | `segmented_memory` | `DEF SEG`, `VARSEG`, `VARPTR`, and `POKE` write through a selected segment. The variable name also contains `_`. |
+| 4 | `local_error` | Procedure-local error trap with exact ERR/ERL, numbered RESUME target, and caller-side recovery witness. It uses `/X`. |
+| 4 | `string_far_address` | `SSEG`, `SADD`, and `SSEGADD`, independently witnessed through physical PEEK bytes and a null-string boundary. |
+| 4 | `interrupt_abi` | The supplied `VBDOS.BI` `RegType` layout and `INTERRUPT` far routine. It asks DOS interrupt 21h/function 30h for a nonzero major version, but intentionally does not print the version. |
+| 4 | `vga_framebuffer_bsave` | Defined mode-13 VGA segment `A000h`, direct pixels, and an unmeasured BSAVE source surface. |
+| 4 | `interruptx_abi_surface`, `absolute_abi_surface`, `legacy_interrupt_abi_surface` | Remaining routines declared by the installed `VBDOS.BI`: segmented-register, absolute-address, and legacy-array interrupt forms. |
+| 4 | `cdecl_alias_external` | An external `CDECL ALIAS` declaration with a `BYVAL LONG` argument. |
+| 4 | `form_event_surface`, `timer_event_surface`, `custom_control_surface` | Form event/property/method, Timer control event, and custom-control callback surfaces. |
+| 5 | `qrender_shape` | A small executable synthesis of qb-qrender's underscore names, `$STATIC`/`$DYNAMIC`, fixed UDT strings, line continuation, `BYREF` UDT, and `BYVAL` scalar patterns. |
 
 The installed-help completion adds deliberately separate cases rather than
 folding distinct form and object contracts into a single umbrella.
 
-| Level | Case | VBDOS delta | Current requirement |
+| Level | Case | VBDOS delta |
 |---|---|---|---|
-| 1 | `option_explicit_negative` | `OPTION EXPLICIT` rejects an undeclared assignment. | parser negative acceptance |
-| 1 | `continuation_terminal_probe` | Original BC accepts a terminal bare underscore; this preserves the observed parser behavior even though `README.TXT` describes a different editor rule. | parser reference |
-| 2 | `date_serial_surface` | VBDOS unsuffixed date/time serial APIs and date-part functions. | parser, lowering, runtime |
-| 4 | `dialog_surface` | `MSGBOX` statement/function and `INPUTBOX$`. | parser; interactive reference runtime |
-| 4 | `form_lifecycle_surface` | Load, resize, paint, mouse, and unload event procedure shapes. | parser; generated-form reference runtime |
-| 4 | `object_runtime_surface` | `CONTROL`, `IF TYPEOF`, `LOAD`, `UNLOAD`, `DOEVENTS`, and object methods. | parser; generated-project reference runtime |
-| 4 | `financial-functions` | All 13 `FINANCE.LIB` functions, including double `BYVAL`, status outputs, and array arguments. | parser, lowering, matching-library runtime |
+| 1 | `option_explicit_negative` | `OPTION EXPLICIT` rejects an undeclared assignment. |
+| 1 | `continuation_terminal_probe` | Original BC accepts a terminal bare underscore; this preserves the observed parser behavior even though `README.TXT` describes a different editor rule. |
+| 2 | `date_serial_surface` | VBDOS unsuffixed date/time serial APIs and date-part functions. |
+| 4 | `dialog_surface` | `MSGBOX` statement/function and `INPUTBOX$`. |
+| 4 | `form_lifecycle_surface` | Load, resize, paint, mouse, and unload event procedure shapes. |
+| 4 | `object_runtime_surface` | `CONTROL`, `IF TYPEOF`, `LOAD`, `UNLOAD`, `DOEVENTS`, and object methods. |
+| 4 | `financial-functions` | All 13 `FINANCE.LIB` functions, including double `BYVAL`, status outputs, and array arguments. |
 
 `coverage.toml` is the machine-readable topic-to-case inventory. It pins all
 three requested HLP files by SHA-256 and names exact heading ranges for the
@@ -78,8 +78,7 @@ The runner must report that state, never treat it as a passing `PASS` result.
 ## Evidence and explicit unknowns
 
 Evidence is local and intentionally narrow: `docs/frontends/qb/dialects.md`
-records the underscore distinction and `/G3`; `docs/frontends/qb/parser-provenance.md`
-records VBDOS as the full-program bring-up profile; `frontends/qb/src/intrinsics.rs`
+records the underscore distinction and `/G3`; `crates/frontends/qbfront/src/intrinsics.rs`
 identifies currently catalogued pointer intrinsics; and the installed VBDOS
 tree supplies `INC/VBDOS.BI`, `INC/CUSTCALL.BAS`, and form examples.
 qb-qrender supplies the source shapes in `src/{ent,model,r_bsp,

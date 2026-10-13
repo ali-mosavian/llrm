@@ -1,4 +1,4 @@
-;; name: B$TICKON, B$TICKISR
+;; name: B$TICKON, B$TICKOFF, B$TICKISR
 ;; desc: the clock tick (interrupt 1Ch, 18.2 times a second) calling the
 ;;       runtime's music
 ;;
@@ -79,4 +79,10 @@ B$TICKON        proc    public
                 add     sp, 6
                 ret
 B$TICKON        endp
+
+;; B$TICKOFF - nothing: LL$SET_VECTOR puts the vector back when the program ends.
+B$TICKOFF       proc    public
+
+                ret
+B$TICKOFF       endp
                 end

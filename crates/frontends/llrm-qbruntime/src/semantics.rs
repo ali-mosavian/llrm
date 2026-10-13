@@ -8,8 +8,8 @@ use llrm_hir::model::StackCheck;
 
 static TABLE: LazyLock<toml::Table> = LazyLock::new(|| super::TABLE.parse().expect("runtime.toml parses"));
 
-/// `section.family`'s row, or the row of the family it is `like`: llrm's runtime keeps QB 4.5's strings
-/// and checks its stack as QB 4.5's does.
+/// `section.family`'s row, or the row of the family it is `like`: llrm's
+/// runtime keeps QB 4.5's strings and checks its stack as QB 4.5's does.
 fn row(
     section: &str,
     family: &str,
@@ -43,8 +43,9 @@ pub fn descriptor(
     let at =
         |key: &str| row.get(key).and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("layout.{family}.{key}"));
     let length = at("length");
-    // A natural layout is a C struct of a length and a pointer, each a word of the target: the pointer is on its
-    // own alignment, and a target with a wider word has a wider length.
+    // A natural layout is a C struct of a length and a pointer, each a word of
+    // the target: the pointer is on its own alignment, and a target with a
+    // wider word has a wider length.
     if row.get("natural").and_then(toml::Value::as_bool) == Some(true) && near_bytes > 2 {
         let near = near_bytes as i64;
         return Some(Descriptor { length, word: near, data: near, size: 2 * near });
@@ -52,7 +53,8 @@ pub fn descriptor(
     Some(Descriptor { length, word: 2, data: at("data"), size: at("size") })
 }
 
-/// Whether llrm's runtime keeps BASIC's stack block for `name`, which no register convention can state.
+/// Whether llrm's runtime keeps BASIC's stack block for `name`, which no
+/// register convention can state.
 pub fn keeps_stack_abi(name: &str) -> bool {
     TABLE
         .get("llrm")
@@ -267,8 +269,9 @@ mod tests {
         assert_eq!((form("qb45"), form("pds71"), form("vbdos")), (Some(Form::Near), Some(Form::Near), Some(Form::Far)));
     }
 
-    /// llrm's runtime lays a descriptor out as a C struct: QB's four bytes with a 2-byte pointer, the pointer on its
-    /// own alignment after the length where it is a dword.
+    /// llrm's runtime lays a descriptor out as a C struct: QB's four bytes with
+    /// a 2-byte pointer, the pointer on its own alignment after the length
+    /// where it is a dword.
     #[test]
     fn llrm_lays_its_descriptor_out_by_the_pointer_it_has() {
         assert_eq!(descriptor("llrm", 2), descriptor("qb45", 2));

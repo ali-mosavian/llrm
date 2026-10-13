@@ -10,6 +10,15 @@
 # crates/*/*/tests/ that nobody lists is cheap, so a new test is never forgotten.
 # A diff of only [inert] paths runs nothing. Changed paths in no table below are unknown: full.
 
+# The compiler's source: a diff with none of it tests what it changed (the gate's own steps for those files) and not the compiler.
+[compiler]
+paths = ["crates/**", "src/**", "build.rs", "Cargo.toml", "Cargo.lock", "**/Cargo.toml", "rust-toolchain.toml", ".cargo/**"]
+
+# Files the integration tests run or read without naming them in a test (the tools the build bootstraps, the requirement variables):
+# a diff of only these still plans `integration`. tests/dwarf.rs reads WDUMP, the tool toolchain/wdump.sh builds.
+[integration_inputs]
+paths = ["toolchain/**", "tools/debug-gate.env"]
+
 [inert]
 paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**", ".zed/**"]
 
@@ -17,7 +26,7 @@ paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**", ".zed/*
 # takes the full tier. The backend (isel, regalloc, conventions, driver) and transforms are not listed: they take the
 # fast tier plus every codegen step (run on all languages, qcport, pytest-programs; see [[heavy]]), which is everything
 # the full tier adds except the debugger sessions and the identity gate. Move "crates/backend/**" and "crates/opt/**"
-# here to send them to the full tier instead; the plan's `replay` cost is in docs/testing.md.
+# here to send them to the full tier instead; the plan's `replay` cost is in docs/working/testing.md.
 [shared]
 paths = [
   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs", "src/**", "tests/common/**",
@@ -176,6 +185,11 @@ needs = [
   { env = "TCPP30_DIR", default = "~/scratch/toolchains/tcpp30", marker = "lib/C0M.OBJ" },
 ]
 
+# Open Watcom's wdump reads the 16-bit DWARF images tests/dwarf.rs links; it is not built from this repository.
+[capability.wdump]
+require = ["LLRM_REQUIRE_WDUMP"]
+needs = [{ env = "WDUMP", default = "~/dos/devtools/dev/c/watcom/binl/wdump", marker = "." }]
+
 [capability.qcport]
 require = []
 needs = [
@@ -224,3 +238,126 @@ step_excess = 0.005  # a step's, of the compile's cost at 2N; the same build mea
 pass_slack = 1.05    # a step's cost at 2N
 linear = 2.1         # where the base read no such step: what gcc's passes reach
 high = 0.025         # a step needs this share of the compile's work to fail (the scaling_gate reads steps down to 1.5%)
+
+# Rows the user accepted a rise on, each at a ceiling equal to what the decision measured: a row above its ceiling fails as ever.
+# A row names a prefix (`nest O1` is also its steps); the limits it gives replace the general ones for it. Tighten as the follow-up lands.
+
+[[measure.accepted]]
+row = "qcport -O1"
+geomean = 1.0495
+worst = 1.3035
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "qcport -O2"
+geomean = 1.0468
+worst = 1.3003
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "qcport -O3"
+geomean = 1.041
+worst = 1.2502
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "qcport -Os"
+geomean = 1.0049
+worst = 1.03
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559. Also 2026-10-12 (docs/reference/levels.md, `branchprob`): the combined branch odds, qcport/snd +3% (regalloc spill rounds on shifted block weights), with qcport/sbar -O3 and programs lru -O3 under the rows above."
+
+[[measure.accepted]]
+row = "programs -O1"
+geomean = 1.0925
+worst = 1.4107
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "programs -O2"
+geomean = 1.1365
+worst = 1.7479
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "programs -O3"
+geomean = 1.135
+worst = 1.7309
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "branches O1"
+excess = 0.0287
+worst = 1.0937
+step_excess = 0.012
+pass_slack = 1.616
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "programs -Os"
+geomean = 1.0057
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "branches O2"
+excess = 0.028
+worst = 1.0918
+step_excess = 0.0117
+pass_slack = 1.616
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "callers O1"
+worst = 1.0231
+step_excess = 0.0051
+pass_slack = 1.207
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "callers-m16 O1"
+worst = 1.0245
+step_excess = 0.0051
+pass_slack = 1.203
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "callers-m16 O2"
+worst = 1.0242
+step_excess = 0.0051
+pass_slack = 1.203
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "functions O1"
+worst = 1.1439
+step_excess = 0.0051
+pass_slack = 1.338
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "functions O2"
+worst = 1.1463
+step_excess = 0.0051
+pass_slack = 1.34
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "nest O1"
+excess = 0.4492
+worst = 1.8892
+step_excess = 0.0164
+pass_slack = 3.72
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "nest O2"
+excess = 0.42
+worst = 1.8389
+step_excess = 0.0155
+pass_slack = 3.718
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+[[measure.accepted]]
+row = "callers O2"
+step_excess = 0.0051
+pass_slack = 1.277
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."

@@ -36,3 +36,9 @@ def test_the_counter_counts_work_not_time():
     except cc.NoCounter:
         pytest.skip("no counter")
     assert abs(a / b - 1) < 0.02 and a > 1_000_000
+
+
+def test_the_gcc_comparison_leaves_out_benches_that_read_files():
+    """stft_* include bench_io.h, which needs llrm's OS layer: the 66-program comparison compiled them as plain C and stopped on `bench_create`."""
+    included = [name for name, source in cc.programs.sources().items() if "bench_io.h" in source.read_text(errors="replace")]
+    assert included == []

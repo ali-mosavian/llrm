@@ -1,5 +1,5 @@
-reason = "movzx r,m8 becomes xor r,r; mov rl,m8 where the CPU description prices the pair lower (486: 2 clocks against 3), one instruction and one byte more per load: vsgcc harness 486 clocks fall, crc 864 to 855, x_life 400178 to 356042 (now under gcc -O2's 368012); gcc -march=i486 emits the same pair"
-blessed = "2026-10-09"
+reason = "textfill's bq32 is its hand port to the flat target (textfill.flat.bas: the video address held in a variable, DEF SEG being ignored there): no segment is read per PEEK/POKE"
+blessed = "2026-10-13"
 
 [bas.O2]
 instructions = 34045
@@ -7,12 +7,42 @@ memory_operands = 8013
 code_bytes = 233
 data_bytes = 13
 bss_bytes = 0
+kernel_ms = 0.4671
 
 [bas.Os]
 instructions = 30045
 memory_operands = 8013
 code_bytes = 232
 data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.4138
+
+[bq16.O2]
+instructions = 34072
+memory_operands = 8013
+code_bytes = 238
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.4635
+
+[bq16.Os]
+instructions = 30073
+memory_operands = 8013
+code_bytes = 237
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.4101
+
+[bq32.O2]
+instructions = 46035
+code_bytes = 205
+data_bytes = 19
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 42035
+code_bytes = 204
+data_bytes = 19
 bss_bytes = 0
 
 [c.O2]
@@ -21,6 +51,7 @@ memory_operands = 8000
 code_bytes = 76
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.4547
 
 [c.Os]
 instructions = 30009
@@ -28,6 +59,7 @@ memory_operands = 8000
 code_bytes = 75
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.4013
 
 [nib.O2]
 instructions = 34024
@@ -35,6 +67,7 @@ memory_operands = 8000
 code_bytes = 105
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.4556
 
 [nib.Os]
 instructions = 30024
@@ -42,6 +75,7 @@ memory_operands = 8000
 code_bytes = 104
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.4023
 
 [ow.O2]
 instructions = 52028

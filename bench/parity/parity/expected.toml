@@ -1,12 +1,13 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+blessed = "2026-10-13"
 
 [bas.O2]
-instructions = 371
+instructions = 377
 memory_operands = 115
-code_bytes = 218
+code_bytes = 211
 data_bytes = 13
 bss_bytes = 0
+kernel_ms = 0.0157
 
 [bas.Os]
 instructions = 391
@@ -16,12 +17,39 @@ data_bytes = 13
 bss_bytes = 0
 kernel_ms = 0.0159
 
+[bq16.O2]
+instructions = 572
+memory_operands = 129
+code_bytes = 221
+data_bytes = 13
+bss_bytes = 0
+
+[bq16.Os]
+instructions = 586
+memory_operands = 142
+code_bytes = 217
+data_bytes = 13
+bss_bytes = 0
+
+[bq32.O2]
+instructions = 621
+code_bytes = 225
+data_bytes = 19
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 621
+code_bytes = 225
+data_bytes = 19
+bss_bytes = 0
+
 [c.O2]
 instructions = 124
 memory_operands = 32
 code_bytes = 89
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0023
 
 [c.Os]
 instructions = 124
@@ -29,13 +57,15 @@ memory_operands = 32
 code_bytes = 89
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0023
 
 [nib.O2]
-instructions = 133
+instructions = 140
 memory_operands = 40
-code_bytes = 127
+code_bytes = 110
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0029
 
 [nib.Os]
 instructions = 164
@@ -43,6 +73,7 @@ memory_operands = 64
 code_bytes = 108
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0034
 
 [ow.O2]
 instructions = 299

@@ -20,9 +20,10 @@ import qbruntime  # noqa: E402
 
 TARGET = dosbatch.linkrecipe.named(32)
 RUNTIME = qbruntime.RUNTIME
-PLATFORM = RUNTIME / "dos" / "m32"
-SHARED = dosbatch.ROOT / "runtime" / "shared" / "dos" / "m32"
-START_FILES = ["runtime/qb/dos/m32/qbstart.asm", "runtime/shared/dos/m32/start.asm"]
+# The OS layer's directory is the target's to say; the QB runtime's code for it sits beside it under runtime/qb.
+SHARED = Path(dosbatch.os_layer(TARGET, "directory", "c"))
+PLATFORM = RUNTIME / SHARED.parent.name / SHARED.name
+START_FILES = [str((PLATFORM / "qbstart.asm").relative_to(dosbatch.ROOT)), str((SHARED / "start.asm").relative_to(dosbatch.ROOT))]
 
 
 OBJECTS = Path.home() / ".cache" / "llrm" / "qb32-objs"
@@ -43,7 +44,7 @@ def _tree() -> str:
     import hashlib
 
     digest = hashlib.sha256()
-    for directory in (RUNTIME, SHARED, dosbatch.ROOT / "runtime" / "c" / "x86-m32"):
+    for directory in (RUNTIME, SHARED, dosbatch.ROOT / "runtime" / "c" / TARGET):
         for path in sorted(directory.rglob("*")):
             if path.is_file() and path.suffix in (".c", ".h", ".asm", ".inc", ".toml"):
                 digest.update(str(path.relative_to(dosbatch.ROOT)).encode() + path.read_bytes())
@@ -143,15 +144,17 @@ def closure(program: Path, objects: dict[str, Path]) -> list[Path]:
         defined, needed = symbols(obj)
         needs[name] = needed
         owners.update({symbol: name for symbol in defined})
-    chosen: list[str] = []
-    pending = list(symbols(program)[1])
+    chosen: set[str] = set()
+    pending = sorted(symbols(program)[1])
     while pending:
         symbol = pending.pop()
         owner = owners.get(symbol)
         if owner and owner not in chosen:
-            chosen.append(owner)
-            pending.extend(needs[owner])
-    return [objects[name] for name in chosen]
+            chosen.add(owner)
+            pending.extend(sorted(needs[owner]))
+    # the link order is the objects' names': it is the layout, and a layout that followed the hash of a set's strings moved a
+    # program's count by 2% from one run to the next
+    return [objects[name] for name in sorted(chosen)]
 
 
 def data_files(source: Path) -> tuple[Path, ...]:
@@ -205,9 +208,8 @@ BUDGET_INSTRUCTIONS = 12_000_000_000
 
 
 def virtual_conf(rate: int) -> str:
-    """dosbatch.CONF on virtual time at `rate` guest instructions a millisecond."""
-    conf = re.sub(r"virtual time rate=\d+", f"virtual time rate={rate}", dosbatch.CONF)
-    assert "virtual time=true" in conf, "dosbatch.CONF is not on virtual time"
+    conf = dosbatch.CONF.replace(dosbatch.CYCLES, f"virtual time=true\nvirtual time rate={rate}")
+    assert conf != dosbatch.CONF
     return conf
 
 
@@ -278,51 +280,6 @@ def flat_programs(names: list[str], work: Path) -> dict[str, str]:
                 found[name] = f"run: {results[job.stem].status}"
                 continue
             want = (dosbatch.ROOT / "tests" / "qbflat" / f"{name}.out").read_bytes()
-            got = qbruntime.raw_output(work / "run", job.stem)
-            found[name] = qbruntime.first_byte_difference(want.replace(b"\r\n", b"\n"), got.replace(b"\r\n", b"\n"))
-    return found
-
-
-def probes(names: list[str], work: Path) -> dict[str, str]:
-    """Each probe of tests/qbrt (by name) on the flat target against BCOM45's own output: '' where they are the same bytes,
-    else the first difference or why it did not run."""
-    work.mkdir(parents=True, exist_ok=True)
-    sources = {name: dosbatch.ROOT / "tests" / "qbrt" / f"{name}.bas" for name in names}
-    # BCOM45's output comes from the real-mode differential run; its candidate side is not used.
-    objects, found = {}, {}
-    for name, source in sources.items():
-        pair = (work / f"{name}.qb45.obj", work / f"{name}.llrm.obj")
-        for runtime, obj in zip(("qb45", "llrm"), pair):
-            if reason := qbruntime.compile_basic(source, obj, runtime):
-                found[name] = f"real-mode compile: {reason}"
-                break
-        else:
-            objects[name] = pair
-    archive, _ = qbruntime.build(work / "archive16")
-    reference = qbruntime.differential_batch(objects, archive, work / "reference")
-    runtime = build(work / "runtime")
-    jobs, stems = [], {}
-    for at, name in enumerate(objects):
-        obj = work / f"{name}.obj"
-        if reason := compile_basic(sources[name], obj):
-            found[name] = f"compile: {reason}"
-            continue
-        try:
-            loaders = link(obj, runtime, work / f"{name}.exe", work)
-        except dosbatch.BuildError as error:
-            found[name] = f"link: {str(error)[-300:]}"
-            continue
-        stem = f"P{at:03d}"
-        stems[stem] = name
-        jobs.append(dosbatch.Job(stem, "exe", work / f"{name}.exe", files=loaders, stdin=qbruntime.typed_input(name)))
-    if jobs:
-        results = run_jobs(jobs, work / "run")
-        for job in jobs:
-            name = stems[job.stem]
-            if results[job.stem].status != "ok":
-                found[name] = f"run: {results[job.stem].status}"
-                continue
-            want = reference[name].reference.text.encode("latin-1")
             got = qbruntime.raw_output(work / "run", job.stem)
             found[name] = qbruntime.first_byte_difference(want.replace(b"\r\n", b"\n"), got.replace(b"\r\n", b"\n"))
     return found

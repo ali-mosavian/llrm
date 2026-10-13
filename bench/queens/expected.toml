@@ -1,10 +1,10 @@
-reason = "a comparison another block's branch reads is made again there (CodeGenPrepare's sinkCmpExpression): queens -1.8% clocks, grep -12 bytes; queens nib -Os +551 memory operands (the byte held in memory is a compare made again)"
-blessed = "2026-10-09"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+blessed = "2026-10-13"
 
 [bas.O2]
-instructions = 338389
-memory_operands = 103461
-code_bytes = 459
+instructions = 339050
+memory_operands = 102510
+code_bytes = 454
 data_bytes = 15
 bss_bytes = 0
 
@@ -14,11 +14,38 @@ memory_operands = 91158
 code_bytes = 403
 data_bytes = 15
 bss_bytes = 0
+kernel_ms = 4.278
+
+[bq16.O2]
+instructions = 347518
+memory_operands = 102524
+code_bytes = 462
+data_bytes = 15
+bss_bytes = 0
+
+[bq16.Os]
+instructions = 328633
+memory_operands = 91172
+code_bytes = 411
+data_bytes = 15
+bss_bytes = 0
+
+[bq32.O2]
+instructions = 359665
+code_bytes = 577
+data_bytes = 21
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 364224
+code_bytes = 528
+data_bytes = 21
+bss_bytes = 0
 
 [c.O2]
-instructions = 135744
-memory_operands = 28501
-code_bytes = 178
+instructions = 147321
+memory_operands = 21780
+code_bytes = 180
 data_bytes = 0
 bss_bytes = 0
 
@@ -28,11 +55,12 @@ memory_operands = 19810
 code_bytes = 159
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 2.1371
 
 [nib.O2]
-instructions = 171285
+instructions = 167182
 memory_operands = 19777
-code_bytes = 204
+code_bytes = 189
 data_bytes = 0
 bss_bytes = 0
 
@@ -42,6 +70,7 @@ memory_operands = 36773
 code_bytes = 279
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 3.6326
 
 [ow.O2]
 instructions = 217955

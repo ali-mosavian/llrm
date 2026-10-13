@@ -163,8 +163,15 @@ fn resolved(
         Target::OmfGroup(_) | Target::Section(_) => None,
     };
     let own = if matches!(loc, OFFSET | POINTER | OFFSET32) && !relative { local.unwrap_or(0) } else { 0 };
+    // A debug record's address is the place a debugger reads: the segment index
+    // of the group the data is addressed through, and the offset in it. A
+    // linker that writes the index of the fixup's frame (jwlink's
+    // `FindGroupIdx`) finds none for a frame that is the segment itself
+    // where the segment is not the group's first, and writes 0.
+    let through_group =
+        matches!(loc, OFFSET | OFFSET32) && !relative || section.role == Role::Debug && matches!(loc, POINTER | BASE);
     let subrecord = match group {
-        Some(group) if matches!(loc, OFFSET | OFFSET32) && !relative => {
+        Some(group) if through_group => {
             [vec![GROUP_FRAME << 4 | 4 | method], omf::as_index(group as i64 + 1)?, omf::as_index(datum)?].concat()
         }
         _ => [vec![TARGET_FRAME << 4 | 4 | method], omf::as_index(datum)?].concat(),
@@ -533,6 +540,26 @@ mod tests {
         // self-relative, offset32, at 1.
         assert_eq!(fixupp.body[0] & 0x40, 0);
         assert_eq!((fixupp.body[0] >> 2) & 0xF, 9);
+    }
+
+    /// jwlink wrote segment 0 for the S_LDATA16 of every BASIC module variable
+    /// once the runtime was linked in: the debug fixup's frame was the data
+    /// segment, which is not at its group's base there (`_NULL` comes first),
+    /// so no group matched it. A data symbol's address in the debug section
+    /// is addressed through its group.
+    #[test]
+    fn a_debug_address_in_a_group_is_addressed_through_the_group() {
+        let mut data = section("D", vec![0; 4], vec![]);
+        data.role = Role::Data;
+        let far = Reloc { at: 2, kind: Kind::FarPointer, target: Target::Section(0), addend: 0 };
+        let mut debug = section("$$SYMBOLS", vec![0; 8], vec![far]);
+        debug.role = Role::Debug;
+        let mut made = object(Arch::I8086, vec![data, debug], vec![]);
+        made.omf_groups = vec![llrm_object::OmfGroup { name: "DGROUP".into(), members: vec![0] }];
+        let records = crate::omf::parse(&write(&made).unwrap()).unwrap();
+        let fixupp = records.iter().filter(|one| one.r#type == omf::FIXUPP).last().unwrap();
+        // locat (2 bytes), then fix data: frame method in bits 4-6.
+        assert_eq!((fixupp.body[2] >> 4) & 7, GROUP_FRAME, "{:?}", fixupp.body);
     }
 
     /// A 64-bit object was written with 16-bit records.

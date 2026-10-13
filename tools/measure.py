@@ -26,6 +26,7 @@ import importlib.util
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,11 +43,47 @@ CACHE = Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/me
 PROFILE = os.environ.get("LLRM_MEASURE_PROFILE") or "release"
 
 
+def repository_of(root: Path) -> Path:
+    """The repository `root` is a working tree of: its common git directory, which every worktree of it shares (so does every commit made in one),
+    else `root` itself where it is not a repository."""
+    done = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=root, capture_output=True, text=True) if root.is_dir() else None
+    if done is None or done.returncode:
+        return root
+    return (root / done.stdout.strip()).resolve()
+
+
 def build_tree(root: Path = ROOT, env: dict | None = None) -> Path:
-    """Where the base is built: `LLRM_MEASURE_BUILD`, else a tree of this repository's own. Two clones share a tree no `git checkout` of
-    the other's commit can enter ('unable to read tree'), so each is keyed by the path of its working tree."""
+    """Where the base is built: `LLRM_MEASURE_BUILD`, else a tree of this repository's own: one for all its worktrees (a tree for each was
+    10-37 GB each, 489 GB of 48 on one host). Two clones share a tree no `git checkout` of the other's commit can enter ('unable to read
+    tree'), so each repository has its own, keyed by its git directory."""
     env = os.environ if env is None else env
-    return Path(env.get("LLRM_MEASURE_BUILD") or Path.home() / ".cache/llrm/measure-build" / hashlib.sha256(str(root).encode()).hexdigest()[:10])
+    return Path(env.get("LLRM_MEASURE_BUILD") or BUILDS / hashlib.sha256(str(repository_of(root)).encode()).hexdigest()[:10])
+
+
+BUILDS = Path.home() / ".cache/llrm/measure-build"
+# The builds kept, least recently used out first past this many bytes (LLRM_MEASURE_BUILD_CAP_GB): a build tree is 10-37 GB.
+BUILD_CAP = int(float(os.environ.get("LLRM_MEASURE_BUILD_CAP_GB") or 120) * 2**30)
+
+
+def size_of(tree: Path) -> int:
+    return int(subprocess.run(["du", "-sb", str(tree)], capture_output=True, text=True, check=True).stdout.split()[0])
+
+
+def pruned(parent: Path, keep: Path, cap: int) -> list[Path]:
+    """Trees under `parent` other than `keep`, least recently used first, removed until what is left (with `keep`) is within `cap` bytes.
+    A tree's use is the time of its `.used` file, which `built` touches."""
+    trees = [t for t in parent.iterdir() if t.is_dir() and t != keep] if parent.is_dir() else []
+    used = lambda t: (t / ".used").stat().st_mtime if (t / ".used").exists() else t.stat().st_mtime
+    sizes = {t: size_of(t) for t in trees}
+    total = sum(sizes.values()) + (size_of(keep) if keep.exists() else 0)
+    gone = []
+    for tree in sorted(trees, key=used):
+        if total <= cap:
+            break
+        shutil.rmtree(tree, ignore_errors=True)
+        total -= sizes[tree]
+        gone.append(tree)
+    return gone
 
 
 BUILD = build_tree()
@@ -71,6 +108,15 @@ NoCounter = compile_cost.NoCounter
 
 def tolerances(path: Path = HERE / "gate" / "tiers.toml") -> dict:
     return tomllib.loads(path.read_text())["measure"]
+
+
+def row_tolerance(tol: dict, label: str) -> dict:
+    """`tol` as a recorded decision sets it for `label` (`[[measure.accepted]]` in tiers.toml): the limits the entry names replace the
+    general ones for every row at or below its `row` ("nest O1" is also "nest O1 mir lsr"), as ceilings: a row above them fails as ever."""
+    for entry in tol.get("accepted", []):
+        if label == entry["row"] or label.startswith(entry["row"] + " "):
+            return {**tol, **{name: value for name, value in entry.items() if name not in ("row", "why")}}
+    return tol
 
 
 def method() -> str:
@@ -143,7 +189,7 @@ def checked_out(sha: str, tree: Path, source: Path = ROOT) -> Path:
         if origin.returncode == 0:
             git("remote", "add", "upstream", origin.stdout.strip(), cwd=tree)
     if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=tree, capture_output=True).returncode:
-        for remote in ("origin", "upstream"):
+        for remote in (str(source), "origin", "upstream"):
             if subprocess.run(["git", "fetch", "--quiet", remote, sha], cwd=tree, capture_output=True).returncode == 0:
                 break
         else:
@@ -155,6 +201,10 @@ def checked_out(sha: str, tree: Path, source: Path = ROOT) -> Path:
 def built(sha: str) -> Path:
     """`sha` built in a tree and target directory of its own (reused, so each build is an increment); its release directory."""
     BUILD.mkdir(parents=True, exist_ok=True)
+    (BUILD / ".used").touch()
+    if BUILD.parent == BUILDS:
+        for tree in pruned(BUILDS, BUILD, BUILD_CAP):
+            print(f"measure: removed the build tree {tree.name} to keep the cache within {BUILD_CAP >> 30} GB", flush=True)
     tree = checked_out(sha, BUILD / "tree")
     env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
     env.pop("LLRM_BIN", None)
@@ -211,11 +261,12 @@ def compile_rises(base: dict[str, int], now: dict[str, int], tol: dict) -> tuple
                 lines.append(f"{group} {level}: not in both measurements")
                 continue
             g, worst = geomean(list(ratios.values())), max(ratios, key=ratios.get)
+            here = row_tolerance(tol, f"{group} {level}")
             lines.append(f"{group} {level}: geomean {g:.4f}, worst {ratios[worst]:.4f} ({worst.rsplit(' ', 1)[0]}), {len(ratios)} files")
-            if g > tol["geomean"]:
-                bad.append(f"{group} {level}: geomean {g:.4f} > {tol['geomean']}")
-            if ratios[worst] > tol["worst"]:
-                bad.append(f"{group} {level}: {worst} {ratios[worst]:.4f} > {tol['worst']}")
+            if g > here["geomean"]:
+                bad.append(f"{group} {level}: geomean {g:.4f} > {here['geomean']}")
+            if ratios[worst] > here["worst"]:
+                bad.append(f"{group} {level}: {worst} {ratios[worst]:.4f} > {here['worst']}")
     return lines, bad
 
 
@@ -231,11 +282,12 @@ def superlinear(half: float, small: float, big: float) -> float:
     return max(0.0, second(half, small, big))
 
 
-def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], tol: dict) -> tuple[list[str], list[str]]:
+def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], general: dict) -> tuple[list[str], list[str]]:
     """Per axis and level: the second difference may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`."""
     lines, bad = [], []
     for key in sorted(base.keys() & now.keys()):
         (half, small, big), (was_half, was_small, was_big) = now[key], base[key]
+        tol = row_tolerance(general, key)
         more = superlinear(half, small, big) - superlinear(was_half, was_small, was_big)
         lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), 2N x{big / was_big:.4f} ({half}/{small}/{big} against {was_half}/{was_small}/{was_big})")
         if more > tol["excess"] * was_big:
@@ -246,14 +298,15 @@ def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], tol: dict)
 
 
 def step_rises(
-    base: dict[str, list[float]], now: dict[str, list[float]], tol: dict, judged: frozenset[str] = frozenset()
+    base: dict[str, list[float]], now: dict[str, list[float]], general: dict, judged: frozenset[str] = frozenset()
 ) -> tuple[list[str], list[str]]:
     """A step of `high` share or more whose second difference rose by `step_excess` of the compile's cost at 2N, or whose cost at 2N rose
     by `pass_slack`, fails. A step the base did not read is taken to have had none; one below `high`, or on the edge of the share floor,
-    does not fail either way. A new step on an axis both measurements carry (`judged`) has no step baseline, since work moved into an
-    analysis of its own was in other steps' spans before: the axis rule judges it."""
+    does not fail either way. A new step on an axis both measurements carry whose second difference did not rise (`judged`) has no step baseline, since work
+    moved into an analysis of its own was in other steps' spans before: the axis rule judges it. On an axis that rose it is new work."""
     lines, bad = [], []
     for key, (half, small, big, whole) in sorted(now.items()):
+        tol = row_tolerance(general, key)
         if big < tol["high"] * whole:
             continue
         if key not in base and " ".join(key.split(" ")[:2]) in judged:
@@ -282,7 +335,8 @@ def risen_elsewhere(key: str, base: dict[str, list[float]], now: dict[str, list[
 def rises(base: dict, now: dict, tol: dict | None = None) -> tuple[list[str], list[str]]:
     tol = tol or tolerances()
     lines, bad = [], []
-    judged = frozenset(base["axes"].keys() & now["axes"].keys())
+    # An axis judges a new row only when its own second difference did not rise: work moved between rows leaves it flat or lower.
+    judged = frozenset(axis for axis in base["axes"].keys() & now["axes"].keys() if superlinear(*now["axes"][axis]) <= superlinear(*base["axes"][axis]))
     for part, check in (("compile", compile_rises), ("axes", axis_rises), ("passes", lambda b, n, t: step_rises(b, n, t, judged))):
         got = check(base[part], now[part], tol)
         lines += got[0]

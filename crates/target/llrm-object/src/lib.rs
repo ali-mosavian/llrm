@@ -1,5 +1,5 @@
 //! The object the backend lays out, which one writer per format writes. See
-//! `docs/architecture/object-model.md`.
+//! `docs/formats/object-model.md`.
 
 pub mod debug;
 

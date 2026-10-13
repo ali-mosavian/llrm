@@ -1,23 +1,92 @@
-//! CodeGenPrepare's `sinkCmpExpression`: a comparison a branch in another block
-//! reads is made again beside that branch, so isel keeps it in the flags (a
-//! loop's test, GVN'd with the copy of it made ahead of the loop, was an `i1`
-//! held across the loop's body: `sete`, a store of the byte, `cmp` and `jne`,
-//! hanoi).
+//! Comparison and address sinking, so isel sees one form: LLVM's CodeGenPrepare
+//! `sinkCmpExpression` and address sinking, and GVNSink's merge of equal arms.
 //!
-//! A phi read only as an address, whose arms each compute the same thing of
-//! values the join sees, is that computation made once in the join: GVNSink
-//! and CodeGenPrepare's address sinking, so that isel matches one addressing
-//! form for the access.
+//! # How it works
+//! Three rewrites, each on one function, none of which touches an edge.
 //!
-//! `a(i) = ...` under an `IF` computes its element's address in each arm, and
-//! the store after the join reads a phi of equal addresses: a register held
-//! across the arms where `A%+disp[bx]` would do (RGBLIGHTS, #386).
+//! A comparison (`icmp` or `fcmp`) read by a branch, select or other user in
+//! another block is made again at the top of that block (one copy per block);
+//! the original goes once nothing reads it. A phi's incoming block is not a
+//! read. isel can then keep the result in the flags instead of an `i1` held
+//! across the loop body (`sete`, a store of the byte, `cmp`, `jne`). This runs
+//! only where the target has a single condition register
+//! (`!target().multiple_condition_registers()`).
 //!
-//! It runs last, with `gepoffset`: until then gvn's partial redundancy
-//! elimination makes exactly this phi, so that a load after the join reads
-//! what the arms stored, and a sink earlier would be undone by it.
+//! A phi read only as an address (`spill::address_only`: loads, stores through
+//! it, and GEPs of up to three levels that are themselves only addresses) whose
+//! arms each compute the same pure operation (`gep`, `zext`, `sext`, `trunc`,
+//! `add`, `sub`, `mul`, `shl`, `and`, `or`, `xor`, of equal type and flags, to
+//! depth 3) over operands that reach the join (they dominate it) is that
+//! computation made once, before the join's first non-phi. What only the phi
+//! read, the arms' copies, is erased.
+//!
+//! A phi of this kind whose arms are all one value (or the phi itself) is that
+//! value; this is how a closing phi left by `lcssa` goes. Each phi is visited
+//! once, and the phis that read it are queued again.
+//!
+//! A phi read as a value, or whose arms differ in kind, stays.
+//!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! b1:
+//!   %k1 = sub i16 %i, -3
+//!   %p1 = getelementptr inbounds i16, ptr @g, i16 %k1
+//!   store i16 0, ptr %p1
+//!   br label %b5
+//!
+//! ; ...
+//!
+//! b5:
+//!   %p = phi ptr [ %p1, %b1 ], [ %p3, %b3 ], [ %p4, %b4 ]
+//!   store i16 %c, ptr %p
+//!   ret void
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! b1:
+//!   %k1 = sub i16 %i, -3
+//!   %p1 = getelementptr inbounds i16, ptr @g, i16 %k1
+//!   store i16 0, ptr %p1
+//!   br label %b5
+//!
+//! ; ...
+//!
+//! b5:
+//!   %0 = sub i16 %i, -3
+//!   %1 = getelementptr inbounds i16, ptr @g, i16 %0
+//!   store i16 %c, ptr %1
+//!   ret void
+//! ```
+//!
+//! The phi of the three arms' addresses is the address computed once in the
+//! join (`b3` and `b4` are as `b1`, with their own stores); the arms' copies
+//! stay where their own stores read them.
+//!
+//! From unit test
+//! `test_a_phi_of_one_address_in_every_arm_is_that_address_in_the_join` in
+//! `addresssink_tests.rs`.
+//!
+//! # Runs
+//! Once, last of the function passes before `spares` and `homes`, after
+//! `gepoffset`: until then gvn's partial redundancy elimination makes exactly
+//! this phi so a load after the join reads what the arms stored, and an earlier
+//! sink would be undone. Off with `-fno-strength-reduce` and at -O0.
+//!
+//! # Keeps
+//! Blocks and edges are unchanged, so dominators and loops are preserved. A
+//! change that only replaced trivial phis also keeps the assumption cache and
+//! the exposed frame objects; value facts are recomputed.
+//!
+//! # See also
+//! LLVM `CodeGenPrepare::sinkCmpExpression` and `optimizeMemoryInst`; issue
+//! #386 (RGBLIGHTS `a(i) = ...` under an `IF`).
 
 use llrm_analysis::cfg;
+use llrm_analysis::manager::{AssumptionCache, ExposedFrames};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
@@ -40,14 +109,80 @@ impl FunctionPass for AddressSink {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // A closing phi (`lcssa`) whose arms are all one value is that value:
+        // nothing after this needs loop-closed form, and isel cannot
+        // fold a phi into an addressing mode.
+        let closed = trivial_phis(unit.function);
         // Blocks and edges are as they were.
         let sunk_compares = !analyses.outer().target().multiple_condition_registers() && compares_sunk(unit.function);
         if sunk(unit.function) || sunk_compares {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        } else if closed {
+            // A phi's value is replaced by the one it equalled: the blocks and
+            // loops stand, and what is said of an assumption or of
+            // the frame objects reads no phi. What is said of values (their
+            // facts, a loop's bound, the annotations, the edges a
+            // condition dominates) may name the phi, and is worked out again.
+            PreservedAnalyses::none()
+                .preserve::<ExposedFrames>()
+                .preserve::<Dominators>()
+                .preserve::<Loops>()
+                .preserve::<AssumptionCache>()
         } else {
             PreservedAnalyses::all()
         }
     }
+}
+
+/// Each phi read only as an address whose arms are one value, or itself,
+/// replaced by that value, and the phis that read it looked at again; whether
+/// any was. One visit of each phi, not a pass over the function until nothing
+/// changes. A phi of anything else costs the allocator nothing it does not
+/// coalesce, and a changed shape of it costs a search round (nest 32 at -O2:
+/// one more of every machine phase).
+fn trivial_phis(function: &mut Function) -> bool {
+    let mut pending: Vec<InstId> = function
+        .walk()
+        .filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi)
+        .map(|(_, inst)| inst)
+        .collect();
+    let mut changed = false;
+    while let Some(phi) = pending.pop() {
+        if function.is_erased(phi) {
+            continue;
+        }
+        let Some(result) = function.instruction(phi).result else { continue };
+        if !crate::spill::address_only(function, result, 3) {
+            continue;
+        }
+        let mut only: Option<Operand> = None;
+        let mut single = true;
+        for pair in function.instruction(phi).operands.chunks(2) {
+            if pair[0] == Operand::Value(result) {
+                continue;
+            }
+            match only {
+                None => only = Some(pair[0]),
+                Some(seen) if seen == pair[0] => {}
+                Some(_) => {
+                    single = false;
+                    break;
+                }
+            }
+        }
+        let (true, Some(value)) = (single, only) else { continue };
+        pending.extend(
+            function
+                .users(result)
+                .iter()
+                .map(|one| one.user)
+                .filter(|&user| user != phi && function.instruction(user).opcode == Opcode::Phi),
+        );
+        function.replace_all_uses_with(result, value);
+        function.erase(phi).expect("its uses were replaced");
+        changed = true;
+    }
+    changed
 }
 
 /// What the join makes of its phi's arms: a value every arm reads, or an
