@@ -35,6 +35,12 @@ flowchart TB
 *Frame depth at each block; every way into a block must agree, every return
 at depth 0*
 
+A way into a block is a branch to it, or the block laid out before it falling
+through. A block with no successor (it ends in a call that never returns, with
+no jump after it) does not fall through: the depth at the label after it is
+the branches' alone (llrm#1466: a runtime-error call inside a loop that had
+pushed a register left the next label "reached at depth 584 and 588").
+
 The frame register is kept where any of these holds: the target does not
 allow freeing it (`registers.optional`), the body is not 32-bit, or it has
 inline assembly, a landing pad, `returns_twice`, or debug variables not
