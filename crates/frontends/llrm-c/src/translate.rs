@@ -13,6 +13,7 @@ use llrm_core::hir::model::{
 };
 use llrm_core::support::hash::IndexMap;
 use llrm_mir::facts::Fact;
+use llrm_mir::types::FloatKind;
 use llrm_support::hash::{HashMap, HashSet};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
@@ -555,7 +556,7 @@ impl<'u> Types<'u> {
             "TY_LONG_POINTER" | "TY_LONG_CODE_PTR" => Shape::Pointer(4),
             "TY_SINGLE" => Shape::Float(4),
             "TY_DOUBLE" => Shape::Float(8),
-            "TY_LONG_DOUBLE" => Shape::Float(10),
+            "TY_LONG_DOUBLE" => Shape::Float(i64::from(FloatKind::X86Fp80.value_bytes())),
             other => match (widths_for(self.flat, other), self.aggregate(other)) {
                 (Some(width), _) => Shape::Int(i64::from(width), signed(other)),
                 (None, Some(size)) => return refuse(format!("a {size}-byte aggregate as a value")),

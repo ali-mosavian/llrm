@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use llrm_core::backend::{masm, objbuild};
 use llrm_core::driver::flags::{self, Flags};
+use llrm_mir::types::FloatKind;
 
 use super::{hir, stream, translate};
 
@@ -220,7 +221,16 @@ impl Profile {
         let description = target.runtime("c").ok_or_else(|| format!("target {} has no C runtime", target.name()))?;
         let calling = target.calling();
         calling.chosen(family)?;
-        Self::parse(&description.table()?, family.unwrap_or(&calling.default))
+        let mut profile = Self::parse(&description.table()?, family.unwrap_or(&calling.default))?;
+        // A long double is x87's 80-bit type at every target whose layout has
+        // one, whatever the ABI's other switches are: without `-fld`
+        // the front end makes it a double.
+        if target.layout().long_double_bytes() >= u64::from(FloatKind::X86Fp80.value_bytes())
+            && !profile.flags.iter().any(|one| one == "-fld")
+        {
+            profile.flags.push("-fld".to_owned());
+        }
+        Ok(profile)
     }
 
     pub fn parse(
@@ -813,6 +823,32 @@ mod tests {
         let recorded = super::recorded(&source, &[], false, &[]).expect("wccq records probe.c");
         let data: Vec<&str> = recorded.lines().filter(|line| line.contains("DGBytes")).collect();
         assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
+    }
+
+    /// The flat target's long double was a double (8 bytes, no x87 tbyte code)
+    /// while the real-mode target's was the x87 type: `-fld` was a switch
+    /// in one target's file. The profile adds it where the layout has the x87
+    /// type.
+    #[test]
+    fn test_every_x86_target_asks_for_the_x87_long_double_once() {
+        for profile in
+            [super::Profile::of(&llrm_x86_m16::M16).unwrap(), super::Profile::of(&llrm_x86_m32::M32).unwrap()]
+        {
+            assert_eq!(profile.flags.iter().filter(|one| *one == "-fld").count(), 1, "{:?}", profile.flags);
+        }
+    }
+
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_flat_long_double_is_recorded_as_the_x87_type() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("probe.c");
+        std::fs::write(&source, "long double gld = 3.5;\nlong double get(void) { return gld; }\n").unwrap();
+        let profile = super::Profile::of(&llrm_x86_m32::M32).unwrap();
+        let recorded = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records probe.c");
+        assert!(recorded.contains("TY_LONG_DOUBLE"), "{recorded}");
+        assert!(recorded.lines().any(|line| line.contains("DGBytes 10 ")), "{recorded}");
     }
 
     /// The front end, its switches and its header were `if flat` here and a

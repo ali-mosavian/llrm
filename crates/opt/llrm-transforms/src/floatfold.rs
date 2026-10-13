@@ -80,7 +80,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::facts::Facts;
 use llrm_mir::interpret::{self, Val};
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
 use llrm_mir::types::{FloatKind, Type, TypeId};
 use llrm_support::hash::IndexMap;
@@ -205,6 +205,16 @@ fn _simplified(
     inst: InstId,
 ) -> Option<Operand> {
     let instruction = function.instruction(inst);
+    // A constant widened is the wider constant, exactly: a long double literal
+    // came as the double's `fpext`, and its division by `-8.0L` never saw a
+    // constant divisor (no multiply by the reciprocal).
+    if let (Opcode::Cast(CastOp::FPExt), Some(&source), Type::Float(kind)) =
+        (&instruction.opcode, instruction.operands.first(), context.types.get(instruction.ty))
+    {
+        if let Some((_, number)) = float(context, source) {
+            return Some(float_constant(context, instruction.ty, *kind, number));
+        }
+    }
     let Opcode::Binary(op @ (BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)) = instruction.opcode
     else {
         return None;
