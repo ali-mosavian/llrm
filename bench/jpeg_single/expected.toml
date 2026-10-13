@@ -1,4 +1,4 @@
-reason = "bq32 jpeg_single +1.9% (+1,236,797 instructions O2), jpeg_fixed +0.03%: READ of the SINGLE/DOUBLE DATA numbers takes fin.c's exact bigint path at m32, the 53-bit quick path being wrong where long double is 8 bytes (#1572); a correct result costs this until #1573 settles the size"
+reason = "long double is the x87 type at m32 (#1573 step 2): fin.c/i8out.c's quick paths decide again (the guard of #1572 is gone), jpeg_single bq32 -1,236,399 instructions, parity/scalar -165, jpeg_fixed -28,530"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 65271897
+instructions = 64035498
 code_bytes = 6709
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 65610875
+instructions = 64374582
 code_bytes = 6224
 data_bytes = 29697
 bss_bytes = 0
