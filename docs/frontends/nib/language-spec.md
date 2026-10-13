@@ -273,7 +273,7 @@ protocol Display:
 generic and not a `bits struct` gets `hash` and `eq` derived from its fields
 unless it defines them. Every scalar except `bool` has `cmp`; it is never
 derived. Scalars do not satisfy `Display`; `print` and f-strings handle them
-directly and call a user type's `display`.
+directly and call a user type's `display`. A `vec`, `dict`, function, pointer or `bits struct` value has no default formatter: formatting one is a compile error that names the kind (print what it holds, or give a `struct` a `display` method).
 
 `for` does not use a declared protocol; see section 12.1.
 
