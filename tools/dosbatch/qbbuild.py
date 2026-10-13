@@ -86,7 +86,7 @@ def build(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: 
     return built
 
 
-def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...], target: str, name: str | None = None, listing: Path | None = None) -> Built:
+def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...], target: str, name: str | None = None, listing: Path | None = None, before: tuple[str, ...] = ()) -> Built:
     """`source` for one target; its files are `name`'s (the source's stem) in `work`."""
     stem = name or source.stem
     obj, exe = work / f"{stem}.{target}.obj", work / f"{stem}.{target}.EXE"
@@ -103,7 +103,7 @@ def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], fl
     libs = qbruntime.linked_objects(source, work, "llrm", tuple(extra[1:]) if target == FLAT else (), f".{target}")
     if target == FLAT:
         loaders = dosbatch.link_target(
-            qb32.TARGET, obj, exe, work, listing, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target]))
+            qb32.TARGET, obj, exe, work, listing, before=before, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target]))
         )
         return Built(exe, tuple(loaders))
     link16(obj, objects[target], exe, libs)
@@ -130,12 +130,14 @@ def link16(program: Path, objects: dict[str, Path], exe: Path, libs: tuple[Path,
 class Ran:
     """A program's run: how it ended, what it wrote to standard output, the guest instructions the whole run executed (the
     emulator's end event: on virtual time, the same every run) and, for a run asked to profile, the instructions each function of
-    its link map ran, itself and what it called (`inclusive`, by upper-cased name)."""
+    its link map ran, itself and what it called, less what ran in code the map does not name (`inclusive`, by upper-cased name; `outside` is what was left out of it; `sized` whether the function has a length in the image's debug info, without which code after it that no symbol names is counted in it)."""
 
     status: str
     output: bytes
     instructions: int
     inclusive: dict[str, int]
+    outside: dict[str, int] | None = None
+    sized: dict[str, bool] | None = None
 
 
 def run(
@@ -149,7 +151,7 @@ def run(
 ) -> Ran:
     """`built` run on its own in `work`.  With `profile`, the program's link map (`listing` of its link), the emulator reads the
     map as the program's symbols and counts by function: nothing the loader or the runtime's start-up ran is in a function's
-    count."""
+    count, and nor is what ran in code the map does not name (DOS, the extender: their length is not the function's to own)."""
     import json
     import tempfile
 
@@ -158,11 +160,13 @@ def run(
         beside = (Path(shutil.copy(profile, Path(sidecar) / "J.MAP")),) if profile else ()
         job = dosbatch.Job("J", "exe", built.exe, files=(*built.files, *files, *beside), budget_ms=budget_ms, stdin=stdin, profile=bool(profile))
         result = dosbatch.run([job], work, **({"conf": conf} if conf else {}))["J"]
-    count, inclusive = 0, {}
+    count, inclusive, outside, sized = 0, {}, {}, {}
     for line in (work / "events.txt").read_text(errors="replace").splitlines():
         if '"ev":"end"' in line:
             count = json.loads(line).get("instructions", 0)
         elif '"ev":"profile"' in line:
             for one in json.loads(line)["functions"]:
-                inclusive[one["name"].upper()] = one["inclusive"]
-    return Ran(result.status, qbruntime.raw_output(work, "J"), count, inclusive)
+                inclusive[one["name"].upper()] = one["inclusive"] - one["inclusive_unknown"]
+                outside[one["name"].upper()] = one["inclusive_unknown"]
+                sized[one["name"].upper()] = one["sized"]
+    return Ran(result.status, qbruntime.raw_output(work, "J"), count, inclusive, outside, sized)

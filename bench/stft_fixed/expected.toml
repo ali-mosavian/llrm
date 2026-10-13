@@ -1,4 +1,4 @@
-reason = "#1603 adds code to the flat runtime; the kernels' own functions are unchanged and the move (grep -119, others +-1..5, max 0.00002%) is in (unknown), the DOS/extender code that runs inside the file readers' window (grep: kernel functions identical, (unknown) -75)"
+reason = "on top of main's #1603 runtime change: +-1 to 5 instructions (max 0.000005%) in the readers' named runtime code, none from this PR"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1527.6111
 
 [bq32.O2]
-instructions = 99370461
+instructions = 99049633
 code_bytes = 1636
 data_bytes = 4709
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 99374548
+instructions = 99053717
 code_bytes = 1610
 data_bytes = 4709
 bss_bytes = 0
