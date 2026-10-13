@@ -11,7 +11,7 @@
 
 #include "qb.h"
 
-enum LhType { LH_FREE = 1, LH_ARRAY, LH_FILE, LH_LINE };
+enum LhType { LH_FREE = 1, LH_ARRAY, LH_FILE };
 
 typedef struct LhEntry {
     uword size;  /* the whole entry in bytes, even */

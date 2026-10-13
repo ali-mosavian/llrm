@@ -8,7 +8,7 @@
 char *heap_low;
 char *heap_top;
 
-static LhMoved moved[LH_LINE + 1];
+static LhMoved moved[LH_FILE + 1];
 
 enum { HEADER = sizeof(LhEntry), FOOTER = sizeof(uword) };
 
