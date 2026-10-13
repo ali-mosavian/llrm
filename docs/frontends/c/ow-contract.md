@@ -1504,6 +1504,7 @@ The facts the language states reach MIR through one table, `crates/frontends/llr
 |---|---|---|
 | `restrict` on a parameter | `CGFact v1 n restrict`, from the patch to `cgen.c` (stock `FLAG_RESTRICT` is parsed and discarded) | `Fact::NoAlias` on the parameter |
 | `noreturn`, `#pragma aux aborts` | call class `NORETURN 0x4`, `ABORTS 0x2` | `Fact::NoReturn` on the callable |
+| `__attribute__((noinline))` | call class bit `NO_INLINE 0x800`, which `toolchain/owshim/llrmattr.h` adds and the patch to `cfeinfo.c` sets from the symbol's flag; a definition of the unit gets a callable to state it of | `Fact::Inline(Never)` on the callable |
 | `#pragma aux nomemory` | call class `NO_MEMORY_READ 0x100`, `NO_MEMORY_CHANGED 0x200` | `Fact::Memory(None)`, or `Read` or `Write` when only one bit is set |
 | `volatile` | `CGVolatile` before the access | a volatile `IndirectPlace`; a bit field of a volatile object is read through its unit, volatile |
 | `const` object | `FE_CONSTANT`, read-only segment | a constant global |
@@ -1513,7 +1514,7 @@ The facts the language states reach MIR through one table, `crates/frontends/llr
 
 ### Call class and conventions
 
-Every call class bit is in a table. ABI bits (`REVERSE_PARMS` for pascal, `CALLER_POPS`, `HAS_VARARGS`, `MAKE_CALL_INLINE`) are read where the call is made. `DLL_EXPORT` is ignored. `PARMS_BY_ADDRESS` and any bit not in the table stop the compile.
+Every call class bit is in a table (`NO_INLINE` is not Open Watcom's: it is llrm's, for `__attribute__((noinline))`). ABI bits (`REVERSE_PARMS` for pascal, `CALLER_POPS`, `HAS_VARARGS`, `MAKE_CALL_INLINE`) are read where the call is made. `DLL_EXPORT` is ignored. `PARMS_BY_ADDRESS` and any bit not in the table stop the compile.
 
 A function takes its stack convention from the class, and one in registers is accepted only when its register list equals the target's default (`default_registers` in `c.toml`); any other `#pragma aux` parameter or return register list stops the compile. `modify` lists are not queried. Inline byte code (`#pragma aux name = "..."`) becomes a call of `llrm.ia16.code.<hex>`. `interrupt` functions become interrupt handlers on targets that have them.
 
