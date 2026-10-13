@@ -324,7 +324,7 @@ def test_loopslots_asks_each_instruction_once_not_once_for_each_loop_around_it(t
     source = tmp_path / "nest_128.c"
     source.write_text(scaling.AXES["nest"](128))
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
-    # Header copy on by default (2026-10-12, docs/reference/levels.md): bound at the measured ch-on cost; #1559 tightens it.
+    # Header copy on by default (docs/reference/levels.md): the cost is the same step as without it (x3.77 a doubling, x3.73 without), bound at what it reads.
     assert own["lir loopslots"] <= 930, f"{own['lir loopslots']:.1f} Minstr"
 
 
@@ -417,8 +417,8 @@ def test_lsr_does_not_add_up_the_function_or_rebuild_its_graph_for_each_loop(tmp
         source = tmp_path / f"{axis}_{n}.c"
         source.write_text(scaling.AXES[axis](n))
         costs[axis] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir lsr"]
-    # `nest` is bound at its cost behind the header copy (2026-10-12, docs/reference/levels.md; #1559).
-    assert costs["branches"] <= 900 and costs["nest"] <= 3510, costs
+    # `nest` is bound at its cost behind the header copy (docs/reference/levels.md): 3,039 once the pressure and the products are brought up to date.
+    assert costs["branches"] <= 300 and costs["nest"] <= 3350, costs
 
 
 def test_lsr_loop_reads_its_own_blocks_and_the_function_facts_once(tmp_path):
@@ -533,8 +533,8 @@ def test_lir_jumps_copies_a_tail_without_checking_the_whole_function_for_each_co
     source = tmp_path / "branches_1024.c"
     source.write_text(scaling.AXES["branches"](1024))
     cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir jumps"]
-    # Bound at its cost behind the header copy (2026-10-12, docs/reference/levels.md; #1559).
-    assert cost <= 2775, cost
+    # Behind the header copy (docs/reference/levels.md): 1,501 once a threaded jump strands blocks in place.
+    assert cost <= 1650, cost
 
 
 def test_a_split_reads_the_blocks_of_its_values_range_not_the_functions(tmp_path):
@@ -577,8 +577,8 @@ def test_the_backends_liveness_follows_each_value_from_its_reads_not_rows_of_eve
     source = tmp_path / "branches_1024.c"
     source.write_text(scaling.AXES["branches"](1024))
     rows = gate.own_work(gate.levels_time.command("llrm", "O2", source))
-    # Bound at the cost behind the header copy (2026-10-12, docs/reference/levels.md; #1559).
-    assert rows["lir twoaddr"] <= 2790 and rows["intervals walk"] <= 1990 and rows["lir pressuresink"] <= 1135, rows
+    # Behind the header copy (docs/reference/levels.md): 746, 110 and 115 once the walk is tried at the cost of the rows.
+    assert rows["lir twoaddr"] <= 820 and rows["intervals walk"] <= 125 and rows["lir pressuresink"] <= 130, rows
 
 
 def test_a_branchs_guards_come_from_its_nearest_dominators(tmp_path):
@@ -661,8 +661,8 @@ def test_a_set_membership_test_is_not_a_scan_of_the_set_on_the_branches_axis(tmp
         source.write_text("" if size == 0 else scaling.AXES["branches"](size))
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     small, big = (own[label].get("analysis registers", 0.0) - own["empty"].get("analysis registers", 0.0) for label in ("n", "2n"))
-    # 3.3 behind the header copy (2026-10-12, docs/reference/levels.md; #1559).
-    assert big <= 3.3 * small, f"analysis registers {small:.0f} -> {big:.0f} Minstr"
+    # 2.46 behind the header copy (docs/reference/levels.md), the manager bringing the registers up to date from what a change touched.
+    assert big <= 2.7 * small, f"analysis registers {small:.0f} -> {big:.0f} Minstr"
 
 
 def test_a_load_looks_for_its_provider_in_the_blocks_above_it_not_among_every_load(tmp_path):
