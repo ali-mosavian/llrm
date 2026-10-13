@@ -68,9 +68,6 @@ KNOWN: dict[tuple[str, str], str] = {
     ("rnd_val", qbbuild.FLAT): "#1512: RND after RANDOMIZE n",
     ("color_masks", qbbuild.FLAT): "#1538: Out of DATA",
     ("fre_lprint", qbbuild.FLAT): "#1539: FRE",
-    ("read_real", qbbuild.FLAT): "#1540: the last digit of a DOUBLE",
-    ("real_print_sweep", qbbuild.FLAT): "#1540: the last digit of a DOUBLE",
-    ("real_print_wide", qbbuild.FLAT): "#1540: the last digit of a DOUBLE",
     ("environ_command", qbbuild.FLAT): "#1541: ENVIRON$ and COMMAND$ do not link",
     ("scores", qbbuild.FLAT): "#1542: the ' link: library does not compile for the flat runtime",
 }

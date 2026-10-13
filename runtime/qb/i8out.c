@@ -74,7 +74,8 @@ static int quick_digits(int k, unsigned long long *digits, int *up)
     long double ten_power, product, integral, threshold, difference;
     int s = DIGITS - k, at;
 
-    if (s < 0 || s > MOST)
+    /* flat code's long double is a double: its error is no longer under the margin below */
+    if (sizeof(long double) < 10 || s < 0 || s > MOST)
         return 0;
     ten_power = 1;
     for (at = 0; at < s; at++)

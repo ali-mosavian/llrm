@@ -198,7 +198,8 @@ static int quick_double(unsigned long long mantissa, int exponent, double *out)
     unsigned low;
     int at, power = exponent < 0 ? -exponent : exponent;
 
-    if ((mantissa >> 63) || power > MOST)
+    /* flat code's long double is a double: no 64-bit product to round once */
+    if (sizeof(long double) < 10 || (mantissa >> 63) || power > MOST)
         return 0;
     ten_power = 1;
     for (at = 0; at < power; at++)
