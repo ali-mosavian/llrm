@@ -162,3 +162,19 @@ fn test_a_blocks_steps_and_liveness_are_worked_out_once() {
     assert!(rounds > 1, "the premise: a body that spills ({rounds} rounds)");
     assert!(shaped <= body.blocks.len(), "{shaped} shapes for {} blocks in {rounds} rounds", body.blocks.len());
 }
+
+/// A round wrote every step of a block again, though a new victim touches a
+/// few of them: nbody_single -O3 (35 rounds over a 691-instruction block)
+/// spent 531 Minstr in `floatassign`. A step is written again only when the
+/// spill state of a root it touches changed.
+#[test]
+fn test_a_round_writes_only_the_steps_a_new_spill_reaches() {
+    let (body, mut frame) = before_float_assign();
+    let cpu = crate::backend::cpu::profile("486").unwrap();
+    STEPPED.with(|one| one.set(0));
+    assigned(&body, Some(&mut frame), None, false, cpu).unwrap();
+    let (rounds, stepped) = (ROUNDS.with(|one| one.get()), STEPPED.with(|one| one.get()));
+    let insns: usize = body.blocks.iter().map(|one| one.insns.len()).sum();
+    assert!(rounds > 2, "the premise: a body that spills ({rounds} rounds)");
+    assert!(stepped < rounds * insns / 2, "{stepped} steps written in {rounds} rounds over {insns} instructions");
+}

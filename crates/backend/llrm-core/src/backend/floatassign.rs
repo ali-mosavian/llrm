@@ -35,8 +35,9 @@
 //! stack's depth (`_crowded`): at the first step with more live values than
 //! `float_stack`, the allocno read furthest ahead among those at that point is
 //! moved to memory (Belady, as LRA), and the body is rewritten again. Only the
-//! blocks the new victim reaches are rewritten, and a block's steps and the
-//! floats live after each, which no spill changes, are worked out once.
+//! steps the new victim reaches are rewritten (a step is kept by which of the
+//! roots it touches are spilled), and a block's steps and the floats live after
+//! each, which no spill changes, are worked out once.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -145,6 +146,7 @@ thread_local! {
     static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static WRITTEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SHAPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static STEPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// x87 reads integers from memory, for named values and physical stack slots.
@@ -976,7 +978,14 @@ struct Plan<'b> {
     /// A block's cut, steps and floating values live after each step: the
     /// block's own, whichever allocnos are spilled, so computed once.
     shaped: RefCell<HashMap<i64, Rc<Shape>>>,
+    /// A step as `rewritten` wrote it, by block, first instruction and which
+    /// of the roots it touches were spilled, with the values whose home it
+    /// asked for (in order, so a hit asks again and the frame is laid out as
+    /// before).
+    stepped: RefCell<HashMap<StepKey, Rc<(Vec<Arc<Insn>>, Vec<u32>)>>>,
 }
+
+type StepKey = (i64, usize, Vec<bool>);
 
 type Shape = (usize, Vec<(usize, usize)>, Vec<BTreeSet<u32>>);
 
@@ -1454,7 +1463,9 @@ impl Plan<'_> {
     ) -> Result<LirBody, Raised> {
         let (live_out, cells) = (&self.live_out, &self.cells);
         let mut homes = self.homes.clone();
+        let asked: Rc<RefCell<Vec<u32>>> = Rc::default();
         let mut home = |value: u32, frame: &mut Option<&mut Frame>| -> Result<Arc<Insn>, Raised> {
+            asked.borrow_mut().push(value);
             if let Some(home) = homes.get(&value) {
                 return Ok(Arc::clone(home));
             }
@@ -1515,6 +1526,17 @@ impl Plan<'_> {
                 Ok(())
             };
             for (index, (first, last)) in steps.iter().copied().enumerate() {
+                let key = (at, first, self.step_spills(block, first, last, spilled));
+                let hit = self.stepped.borrow().get(&key).cloned();
+                if let Some(done) = hit {
+                    for value in &done.1 {
+                        home(*value, frame)?;
+                    }
+                    insns.extend(done.0.iter().cloned());
+                    continue;
+                }
+                let (begin, fresh_before) = (insns.len(), fresh);
+                asked.borrow_mut().clear();
                 restore(&mut insns, first, block.insns[first].at, frame, &mut home)?;
                 let survives = |value: u32| after[index].contains(&value);
                 let mut pieces: Vec<Piece> = Vec::new();
@@ -1640,6 +1662,13 @@ impl Plan<'_> {
                         piece.emitted(&mut insns);
                     }
                 }
+                // A fresh value is numbered across blocks: a step that took
+                // none is the same in any round.
+                if fresh == fresh_before {
+                    #[cfg(test)]
+                    STEPPED.with(|one| one.set(one.get() + 1));
+                    self.stepped.borrow_mut().insert(key, Rc::new((insns[begin..].to_vec(), asked.take())));
+                }
             }
             let here = block.insns.get(cut).or(block.insns.last()).map_or(at, |one| one.at);
             restore(&mut insns, cut, here, frame, &mut home)?;
@@ -1652,6 +1681,41 @@ impl Plan<'_> {
             block.insns = insns.into();
         }
         Ok(out)
+    }
+
+    /// Which of the roots a step touches are spilled: all a step's output
+    /// depends on besides the block.
+    fn step_spills(
+        &self,
+        block: &LirBlock,
+        first: usize,
+        last: usize,
+        spilled: &BTreeSet<usize>,
+    ) -> Vec<bool> {
+        let at = block.at;
+        let mut roots: Vec<usize> = Vec::new();
+        for position in first..=last {
+            roots.extend(
+                self.allocnos
+                    .exits
+                    .get(&(at, position))
+                    .into_iter()
+                    .chain(self.allocnos.restores.get(&(at, position)))
+                    .flatten()
+                    .map(|segment| self.allocnos.root(*segment)),
+            );
+            if let Some(what) = block.insns[position].what.as_ref() {
+                for value in _held_floats(&what.sources) {
+                    roots.extend(self.allocnos.at_use.get(&(at, position, value)).map(|s| self.allocnos.root(*s)));
+                }
+                for value in _held_floats(&what.dests) {
+                    roots.extend(self.allocnos.at_def.get(&(at, position, value)).map(|s| self.allocnos.root(*s)));
+                }
+            }
+        }
+        roots.sort_unstable();
+        roots.dedup();
+        roots.iter().map(|root| spilled.contains(root)).collect()
     }
 
     /// `one` reading spilled `value` straight from its home, where x87 has
@@ -1864,6 +1928,7 @@ pub fn assigned(
         roots,
         written: RefCell::default(),
         shaped: RefCell::default(),
+        stepped: RefCell::default(),
     };
     plan.priced(cpu);
     let mut spilled = plan.in_memory();
