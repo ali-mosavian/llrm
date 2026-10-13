@@ -424,9 +424,10 @@ def test_a_flat_programs_count_is_net_of_the_empty_startup_program(tmp_path):
 
 
 def test_a_flat_kernels_count_does_not_move_with_work_outside_it(tmp_path):
-    """bq32 counted the whole run: DOS/32A's load and the runtime's start-up were in every row (about 41.8k instructions, and about
-    40 for each relocation the load applied), so a change outside the kernel, one more address reference in the runtime, moved
-    every row (+165 from one function pointer).  The kernel's count is the emulator's own for its function."""
+    """bq32 counted the whole run: DOS/32A's load and the runtime's start-up were in every row (about 41.8k instructions), so work
+    outside the kernel moved every row (a function pointer added to the runtime: +165).  What does not move a run: one more
+    referenced byte array (its statics add no relocations; that was the first guess and it failed).  What does: work the program
+    does outside the kernel, here 200 loop iterations before it.  The kernel's count is the emulator's own for its function."""
     kernel = "FUNCTION Kern%\n  s% = 0\n  FOR i% = 1 TO 100: s% = s% + i%: NEXT\n  Kern% = s%\nEND FUNCTION\n"
     plain = "DECLARE FUNCTION Kern% ()\nPRINT Kern%\nEND\n" + kernel
     more = "DECLARE FUNCTION Kern% ()\nFOR j% = 1 TO 200: t% = t% + j%: NEXT\nPRINT Kern%\nEND\n" + kernel
