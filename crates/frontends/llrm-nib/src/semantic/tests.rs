@@ -352,3 +352,26 @@ fn print_runtime_variants_use_short_byte_width_names() {
         ]
     );
 }
+
+/// `print(v)` or an f-string of a vec, dict, function, bits value or pointer
+/// panicked the compiler (`entered unreachable code: no default formatter`):
+/// a type with no default formatter is a diagnostic naming what it is, at the
+/// value.
+#[test]
+fn rejects_formatting_a_value_with_no_default_formatter() {
+    let cases = [
+        ("let v: vec[i16] = [1, 2]\n    print(v)", "a vec has no default formatter"),
+        ("let v: vec[i16] = [1, 2]\n    print(f\"{v}\")", "a vec has no default formatter"),
+        ("let d: dict[i16, i16] = {1: 2}\n    print(d)", "a dict has no default formatter"),
+        ("let f: fn(i16) -> i16 = |x| x + 1\n    print(f)", "a function has no default formatter"),
+    ];
+    for (body, message) in cases {
+        let error = compile_source(&format!("fn main() -> i16:\n    {body}\n    return 0\n")).unwrap_err();
+        assert!(error.message.contains(message), "{body}: {}", error.message);
+    }
+    let bits = compile_source(
+        "bits struct Attr: u8\n    mut fg: u4\n    mut bg: u4\n\nfn main() -> i16:\n    let a = Attr(fg=1, bg=2)\n    print(a)\n    return 0\n",
+    )
+    .unwrap_err();
+    assert!(bits.message.contains("a bits value has no default formatter"), "{}", bits.message);
+}
