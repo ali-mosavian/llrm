@@ -2488,7 +2488,10 @@ refuses a statement that calls the runtime: printing, a heap string, vec or
 dict, or a check whose failure panics. Index in `unsafe:`, or iterate.
 `--basic-runtime=llrm` links against this repository's own BASIC runtime
 routines instead. [examples/basic](../../../examples/basic) sorts a
-QuickBASIC program's array.
+QuickBASIC program's array. A library for BASIC is built for real mode only: at a flat target (`-m32`) the compiler refuses
+`--basic-runtime=llrm` with that said, because the BASIC ABI here is 16-bit (`pascal16`, near and far descriptors with word fields) and the
+flat target defines neither; a BASIC program's `' link:` of a Nib library is refused the same way (the port, a `pascal32` convention and
+flat adapters, is #1542).
 
 ### 15.8 Generated declarations
 
