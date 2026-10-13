@@ -22,7 +22,7 @@ CONF = qb32.virtual_conf(2000)
 
 pytestmark = pytest.mark.slow_dos
 # (program, target) that differ from BC for a bug that is open: expected to differ, and a pass fails the test so the entry goes.
-KNOWN = {("bc_sound", qbbuild.FLAT): "#1482: the flat runtime ends the program at the second error under ON ERROR, with L.TXT unwritten"}
+KNOWN: dict = {}
 SOURCES = sorted([*(dosbatch.ROOT / "tests" / "qbrt").glob("events_*.bas"), *(dosbatch.ROOT / "tests" / "qbrt").glob("bc_*.bas")])
 
 

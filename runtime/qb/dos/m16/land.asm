@@ -55,7 +55,8 @@ landing         dword   0                       ;; where QB_LAND and B$RESN jump
 ;; B$OEGA - register the landing pad of ON ERROR GOTO.
 ;;
 ;; In the main code (cur_level 0) the caller's frame is kept: its bp, its sp
-;; once this call has returned, and the call's return offset.
+;; once this call has returned, and the call's return offset; a call that
+;; disarms (0) keeps nothing.
 ;;
 ;; Args:
 ;;     erradr (bp+6): the landing pad, 0 for none.  The callee pops it.
@@ -67,6 +68,9 @@ B$OEGA          proc    public\
 
                 cmp     cur_level, 0
                 jne     @F
+                mov     ax, [bp+6]
+                or      ax, [bp+8]
+                jz      @F                      ;; disarming: the frame kept is the armed one's
                 ;; sp once the caller has the call behind it
                 lea     ax, [bp+10]
                 mov     qb_land_sp, ax

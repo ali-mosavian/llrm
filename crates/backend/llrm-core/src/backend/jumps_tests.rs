@@ -1179,3 +1179,57 @@ fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
         }
     }
 }
+
+/// A loop of one block left by `je exit; jmp top` when the exit was laid out
+/// elsewhere: the trip that goes on paid a branch not taken and a jump. The
+/// likelier way is the conditional jump, `jne top`, and the exit is the jump.
+#[test]
+fn test_a_loop_block_with_neither_way_next_branches_back_conditionally() {
+    let mut looped = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0))], vec![5]),
+            block(5, vec![_compare(5), _branch(6, "je", 20), _jump(7, 5)], vec![20, 5]),
+            block(10, vec![_move(10, cx()), _return(11)], vec![]),
+            block(20, vec![_return(20)], vec![]),
+        ],
+    );
+    // The loop goes round 31 times in 32, as isel's heuristic odds have it.
+    let certain = crate::model::lir::BlockOdds::CERTAIN;
+    looped.odds.taken.insert((5, 5), (certain * 31.0 / 32.0).round() as u32);
+    looped.odds.taken.insert((5, 20), (certain / 32.0).round() as u32);
+    let result = inverted(&looped);
+    let names: Vec<(String, Option<i64>)> = result.blocks[1]
+        .insns
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .collect();
+    assert_eq!(names, [("cmp".to_owned(), None), ("jne".to_owned(), Some(5)), ("jmp".to_owned(), Some(20))]);
+}
+
+#[test]
+fn test_the_likelier_way_stays_the_conditional_jump() {
+    let mut looped = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0))], vec![5]),
+            block(5, vec![_compare(5), _branch(6, "jne", 5), _jump(7, 20)], vec![5, 20]),
+            block(10, vec![_move(10, cx()), _return(11)], vec![]),
+            block(20, vec![_return(20)], vec![]),
+        ],
+    );
+    let certain = crate::model::lir::BlockOdds::CERTAIN;
+    looped.odds.taken.insert((5, 5), (certain * 31.0 / 32.0).round() as u32);
+    looped.odds.taken.insert((5, 20), (certain / 32.0).round() as u32);
+    let result = inverted(&looped);
+    let names: Vec<(String, Option<i64>)> = result.blocks[1]
+        .insns
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .collect();
+    assert_eq!(names, [("cmp".to_owned(), None), ("jne".to_owned(), Some(5)), ("jmp".to_owned(), Some(20))]);
+}
