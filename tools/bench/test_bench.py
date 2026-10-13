@@ -412,3 +412,12 @@ def test_without_the_microsoft_install_its_basic_is_skipped_by_name_and_ours_is_
     reason = bench.tools_missing(have["bas"])
     assert "QB45_DIR" in reason and str(tmp_path / "none") in reason
     assert bench.tools_missing(have["bq16"]) is None and bench.tools_missing(have["bq32"]) is None
+
+
+def test_a_flat_programs_count_is_net_of_the_empty_startup_program(tmp_path):
+    """The start-up program prints ` 0` and was compared with `0`: it errored, nothing was subtracted, and every bq32 row held
+    DOS/32A's load and the runtime's start-up too (41,766 of sum_three's 43,290 instructions), so a change to the start-up code moved
+    every row (+149 on #1591's)."""
+    counts = bench.measure_all(["parity/sum_three"], ["O2"], tmp_path)[("parity/sum_three", "bq32", "O2")]
+    assert "error" not in counts, counts
+    assert counts["instructions"] < 5000, counts
