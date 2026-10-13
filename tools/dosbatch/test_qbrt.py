@@ -67,7 +67,6 @@ LAYOUT_DEPENDENT: dict[str, str] = {
 KNOWN: dict[tuple[str, str], str] = {
     ("color_masks", qbbuild.FLAT): "#1538: Out of DATA",
     ("fre_lprint", qbbuild.FLAT): "#1539: FRE",
-    ("environ_command", qbbuild.FLAT): "#1541: ENVIRON$ and COMMAND$ do not link",
     ("scores", qbbuild.FLAT): "#1542: the ' link: library does not compile for the flat runtime",
 }
 
