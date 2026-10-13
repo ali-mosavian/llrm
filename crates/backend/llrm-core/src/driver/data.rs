@@ -57,6 +57,7 @@ impl Placed {
         data_space: u32,
         constants: Option<&str>,
         far_bss: bool,
+        bss_begin: bool,
         segment_bytes: Option<usize>,
     ) -> Result<(), String> {
         let (default, items) = built.data.pop().ok_or("an assembled module without its data segment")?;
@@ -160,6 +161,12 @@ impl Placed {
         match constants {
             Some(segment) if !pool.is_empty() => built.data.push((segment.to_owned(), pool)),
             _ => built.data[0].1.extend(pool),
+        }
+        // The first segment of the near uninitialised data, empty, ahead of it
+        // in this object: whichever object the linker meets first, `BSSB` is
+        // before every `_BSS`.
+        if bss_begin && let Some(at) = built.data.iter().position(|(segment, _)| segment == "_BSS") {
+            built.data.insert(at, ("BSSB".to_owned(), Vec::new()));
         }
         built.private.extend(self.private.iter().cloned());
         Ok(())
