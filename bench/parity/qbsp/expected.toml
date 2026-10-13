@@ -1,5 +1,5 @@
-reason = "a tail is not copied over the likelier way of the branch before its jump (#1535): parity/qbsp c -O2 instructions +1.9% (clocks +0.64%), the other moved rows smaller or equal"
-blessed = "2026-10-12"
+reason = "bq32 is now net of the empty start-up program, as stated (#1553): the subtraction never ran, because the start-up's output ' 0' was compared with '0' and errored; every row held DOS/32A's load and the runtime's start-up (about 41.8k instructions)"
+blessed = "2026-10-13"
 
 [bas.O2]
 instructions = 1054
@@ -31,13 +31,13 @@ data_bytes = 13
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 51722
+instructions = 9964
 code_bytes = 688
 data_bytes = 19
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 51721
+instructions = 9963
 code_bytes = 663
 data_bytes = 19
 bss_bytes = 0

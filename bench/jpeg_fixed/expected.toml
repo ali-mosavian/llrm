@@ -1,4 +1,4 @@
-reason = "long double is the x87 type at m32 (#1573 step 2): fin.c/i8out.c's quick paths decide again (the guard of #1572 is gone), jpeg_single bq32 -1,236,399 instructions, parity/scalar -165, jpeg_fixed -28,530"
+reason = "bq32 is now net of the empty start-up program, as stated (#1553): the subtraction never ran, because the start-up's output ' 0' was compared with '0' and errored; every row held DOS/32A's load and the runtime's start-up (about 41.8k instructions)"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 93561893
+instructions = 93548665
 code_bytes = 6936
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 95649231
+instructions = 95636360
 code_bytes = 6417
 data_bytes = 29209
 bss_bytes = 0

@@ -11,7 +11,7 @@ banana hits the first's gorilla, so the game ends with the second at 1 and the f
 The game is the demo's source with RANDOMIZE (TIMER) made RANDOMIZE 1, so the skyline, the wind and the gorillas are the
 same every time; the test checks the screen has them before it shoots.  The shots are worked out from the screen with the
 game's own formulas (gorilla_aim.py, PlotShot's): each hits for every gorilla position within a pixel of the estimate.
-m32's RND gives another sequence (#1512), so another skyline and other shots.  Skipped without the demo sources
+Both targets' RND give BC's sequence (#1512), so one skyline and the same shots.  Skipped without the demo sources
 (QB45_DEMOS_DIR)."""
 
 from __future__ import annotations
@@ -33,10 +33,10 @@ import qbruntime  # noqa: E402
 pytestmark = pytest.mark.slow_dos
 
 # By target: the gorillas (GorillaX, GorillaY) and the wind of the seeded game, then the shots (angle, velocity).
-SCENES = {qbbuild.REAL: ((141, 223), (449, 147), -1), qbbuild.FLAT: ((71, 248), (559, 198), 3)}
-HIT = {qbbuild.REAL: [("75", "83")], qbbuild.FLAT: [("80", "104")]}
+SCENES = {target: ((141, 223), (449, 147), -1) for target in qbbuild.TARGETS}
+HIT = {target: [("75", "83")] for target in qbbuild.TARGETS}
 # The first lands on a building (m16: x 290, y 158; m32: x 250, y 123), the second is the other player's, into the gorilla.
-BUILDING = {qbbuild.REAL: [("73", "56"), ("83", "102")], qbbuild.FLAT: [("35", "182"), ("63", "81")]}
+BUILDING = {target: [("73", "56"), ("83", "102")] for target in qbbuild.TARGETS}
 
 
 @pytest.fixture(scope="module")

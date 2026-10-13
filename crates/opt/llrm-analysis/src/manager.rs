@@ -956,11 +956,24 @@ impl Analysis for Registers {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
+        // A load from a table is known by the bounds of its whole index,
+        // whatever it is made of: it is asked again with the values a
+        // change touched.
+        let tables = consts::table_loads(&unit);
         let mut kept = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
         // The values touched, and the facts that were made from them, which no
         // longer stand.
         let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
         let mut work = Vec::<ValueId>::new();
+        for &inst in &tables {
+            if let Some(result) = function.instruction(inst).result
+                && touched.insert(result)
+            {
+                work.push(result);
+            }
+        }
         for change in changes {
             let inst = match *change {
                 Change::Inserted { inst, .. }
@@ -996,9 +1009,7 @@ impl Analysis for Registers {
                 }
             }
         }
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
-        Some(consts::known_from(&unit, kept, Some(&dirty)))
+        Some(consts::known_from(&unit, kept, Some(&dirty), &tables))
     }
 
     fn run(
