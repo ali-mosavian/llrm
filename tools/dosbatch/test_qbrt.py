@@ -66,7 +66,6 @@ LAYOUT_DEPENDENT: dict[str, str] = {
 # test so the entry goes.  Only the flat target has any.
 KNOWN: dict[tuple[str, str], str] = {
     ("rnd_val", qbbuild.FLAT): "#1512: RND after RANDOMIZE n",
-    ("color_masks", qbbuild.FLAT): "#1538: Out of DATA",
     ("fre_lprint", qbbuild.FLAT): "#1539: FRE",
     ("environ_command", qbbuild.FLAT): "#1541: ENVIRON$ and COMMAND$ do not link",
     ("scores", qbbuild.FLAT): "#1542: the ' link: library does not compile for the flat runtime",
