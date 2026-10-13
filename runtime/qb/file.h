@@ -34,5 +34,7 @@ int B_FREF(void);
 void B_GET4(short channel, long record, qb_data_ptr data, short length);
 void B_PUT4(short channel, long record, qb_data_ptr data, short length);
 void B_SSEK(short channel, long position);
+void B_BLOD(SD *name, unsigned offset, short supplied);
+void B_BSAV(SD *name, unsigned offset, unsigned short length);
 
 #endif
