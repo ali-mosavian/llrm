@@ -1,0 +1,62 @@
+' Sequential files: PRINT #, WRITE #, INPUT #, LINE INPUT #, EOF, FREEFILE and GET/PUT/SEEK with
+' positions.  The runtime had none of B$CHOU, B$WRIT, B$DSKI, B$FEOF, B$FREF, B$GET4, B$PUT4,
+' B$SSEK, so a program using them did not link.
+f = FREEFILE
+PRINT f
+OPEN "SEQ1.TMP" FOR OUTPUT AS #1
+PRINT #1, "alpha"; 1; -2
+PRINT #1, "a", "b"
+PRINT #1, USING "##.#"; 3.14159
+WRITE #1, 12, "quo ted", -3.5
+WRITE #1, "x"
+PRINT #1, STRING$(300, "z")
+PRINT "screen"
+CLOSE #1
+OPEN "SEQ1.TMP" FOR INPUT AS #2
+PRINT FREEFILE
+WHILE NOT EOF(2)
+  LINE INPUT #2, a$
+  PRINT LEN(a$); "["; LEFT$(a$, 24); "]"
+WEND
+CLOSE #2
+OPEN "SEQ1.TMP" FOR INPUT AS #1
+LINE INPUT #1, l$
+LINE INPUT #1, l$
+LINE INPUT #1, l$
+INPUT #1, n%, s$, d#
+PRINT n%; s$; d#
+INPUT #1, s$
+PRINT s$
+CLOSE
+OPEN "SEQ1.TMP" FOR APPEND AS #1
+PRINT #1, "more"
+CLOSE
+OPEN "SEQ1.TMP" FOR BINARY AS #1
+PRINT LOF(1)
+b$ = SPACE$(5)
+GET #1, 1, b$
+PRINT b$
+SEEK #1, 3
+GET #1, , b$
+PRINT b$
+x% = 258
+PUT #1, 2, x%
+GET #1, 2, y%
+PRINT y%
+GET #1, 1, b$
+PRINT b$
+CLOSE
+OPEN "SEQ1.TMP" FOR INPUT AS #1
+INPUT #1, q$
+PRINT q$
+PRINT EOF(1)
+CLOSE
+OPEN "SEQ1.TMP" FOR INPUT AS #1
+ON ERROR GOTO bad
+WHILE -1
+  LINE INPUT #1, a$
+WEND
+bad:
+PRINT "err"; ERR
+CLOSE
+END

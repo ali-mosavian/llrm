@@ -1,6 +1,7 @@
 """`uv run --project tools python -m unittest discover -s tools/dosbatch`"""
 
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -44,6 +45,18 @@ class RuntimeObjectTests(unittest.TestCase):
 
 
 class LinkTests(unittest.TestCase):
+    def test_a_candidate_runtime_is_copied_and_never_falls_back_to_the_toolchain_library(self):
+        """The first candidate link silently used BCOM45 after its replacement archive was not mounted."""
+        with tempfile.TemporaryDirectory() as work:
+            work = Path(work)
+            candidate = work / "LLRMQB.LIB"
+            candidate.write_bytes(b"library")
+            job = dosbatch.Job("T001", "obj", work / "P.OBJ", runtime="llrmqb", runtime_file=candidate)
+            self.assertEqual(dosbatch.runtime_library(job, dosbatch.QB45_TOOLS, work), r"C:\LLRMQB.LIB")
+            self.assertEqual((work / "LLRMQB.LIB").read_bytes(), b"library")
+        with self.assertRaisesRegex(dosbatch.BuildError, "runtime file"):
+            dosbatch.runtime_library(dosbatch.Job("T001", "obj", Path("P.OBJ"), runtime="empty"), dosbatch.QB45_TOOLS, Path("."))
+
     def test_c_runtime_is_each_targets_own_file_and_a_name_is_beside_the_source(self):
         """`link: @c-runtime` reached the compiler as a file name in bench (llrm-c: wccq failed on .../@c-runtime):
         only run_tests resolved it. Every reader resolves it here."""
@@ -120,3 +133,105 @@ class OutputCapTests(unittest.TestCase):
         jobs = [dosbatch.Job("T001", "obj", Path("a.obj")), dosbatch.Job("T002", "obj", Path("b.obj"))]
         results = dosbatch.stopped_for_output(jobs, Path("."), "T002.TXT", 100)
         self.assertEqual((results["T002"].status, results["T001"].status), ("over the output cap", "stopped"))
+
+
+class LoadedHostTests(unittest.TestCase):
+    """The torture step stopped programs that fit their budget whenever the machine was busy: with `cycles=max` an emulated
+    millisecond was what the host managed in a millisecond, so a loaded host ran fewer instructions in the same budget."""
+
+    SPIN = bytes.fromhex("66b980841e00" "6649" "75fc" "b8004c" "cd21")  # mov ecx,2000000; dec ecx / jnz; exit 0: 4 M instructions
+
+    def run_spin(self, work: Path, budget_ms: int):
+        import dataclasses
+
+        source = work / "spin.bin"
+        source.write_bytes(self.SPIN)
+        tools = dataclasses.replace(dosbatch.QB45_TOOLS, mount=work)
+        return dosbatch.run([dosbatch.Job("SPIN", "exe", source)], work / "run", timeout=120, budget_ms=budget_ms, build_ms=5000, tools=tools)["SPIN"]
+
+    def test_a_program_that_fits_its_budget_finishes_on_a_busy_host(self):
+        import subprocess
+        import sys
+
+        if not dosbatch.DOSBOX.exists():
+            self.skipTest("no dosbox-x")
+        burners = [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(4 * (os.cpu_count() or 4))]
+        try:
+            with tempfile.TemporaryDirectory() as where:
+                # 4 M instructions in 300 ms of emulated time is 13 k per millisecond: under the configured rate
+                result = self.run_spin(Path(where), 300)
+        finally:
+            for one in burners:
+                one.kill()
+                one.wait()
+        self.assertEqual(result.status, "ok", result.detail)
+
+    def test_a_binary_without_virtual_time_is_refused_and_not_run_with_a_flaky_budget(self):
+        """The pinned dosbox-x predated virtual time, so the setting was ignored and the busy-host test failed in every gate with
+        nothing said about why. A binary that cannot give it is named instead."""
+        import dataclasses
+        import stat
+
+        with tempfile.TemporaryDirectory() as where:
+            fake = Path(where) / "dosbox-x"
+            # a runner that ends the job having run 12345 instructions, whatever it was asked
+            fake.write_text('#!/bin/sh\necho \'{"ev":"end","reason":"limit","instructions":12345}\' >&"$DOSRUN_FD"\n')
+            fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+            self.assertIn("no `virtual time`", dosbatch.virtual_time_problem(fake) or "")
+            with mock.patch.object(dosbatch, "DOSBOX", fake), mock.patch.object(dosbatch, "_VIRTUAL", {}):
+                with self.assertRaises(dosbatch.BinaryError):
+                    dosbatch.run([dosbatch.Job("SPIN", "exe", Path(where) / "x")], Path(where) / "run")
+
+    def test_the_binary_the_tools_use_has_virtual_time(self):
+        if not dosbatch.DOSBOX.exists():
+            self.skipTest("no dosbox-x")
+        self.assertIsNone(dosbatch.virtual_time_problem(dosbatch.DOSBOX))
+
+
+class StallTests(unittest.TestCase):
+    """A launch's wall time is the host's load: a fixed limit killed a torture step that was still making progress."""
+
+    def test_a_launch_that_keeps_reporting_is_never_cut_off_by_how_long_it_takes(self):
+        import sys
+
+        writer = "import time\nfor i in range(10):\n    open('events.txt', 'a').write('{}\\n'); time.sleep(0.5)\n"
+        with tempfile.TemporaryDirectory() as where:
+            self.assertIsNone(dosbatch._launch([sys.executable, "-c", writer], Path(where), None, 1 << 20, stall=2, cwd=where))
+
+    def test_a_launch_that_stops_reporting_is_stopped(self):
+        import subprocess
+        import sys
+
+        # Stuck is spinning without a report: stall counts the emulator's CPU seconds (test_hostload.py has the one that
+        # only waits).
+        with tempfile.TemporaryDirectory() as where:
+            began = time.monotonic()
+            with self.assertRaises(subprocess.TimeoutExpired):
+                dosbatch._launch([sys.executable, "-c", "while True: pass"], Path(where), None, 1 << 20, stall=2, cwd=where)
+            self.assertLess(time.monotonic() - began, 20)
+
+
+def test_a_program_run_on_its_own_is_not_given_the_microsoft_install_as_v(tmp_path):
+    """V: was mounted for every launch, so the same flat program counted 458341 or 458306 instructions by whether the host had
+    QB45: its count is the benchmark, and the path that needs no QB45 must not depend on it."""
+    exe = tmp_path / "P.EXE"
+    exe.write_bytes(b"MZ")
+
+    def script(kind: str) -> str:
+        work = tmp_path / kind
+        with mock.patch.object(dosbatch, "_launch", return_value=None), mock.patch.object(dosbatch, "collect", return_value={}):
+            dosbatch.run([dosbatch.Job("J", kind, exe)], work)
+        return (work / "jobs.txt").read_text()
+
+    assert "mount v" not in script("exe")
+    assert "mount v" in script("obj")
+
+
+def test_a_program_whose_screen_is_compared_keeps_the_mount_so_its_rows_line_up_with_the_reference(tmp_path):
+    """Dropping V: for every exe job emptied the rows the mount messages had filled: 71 test_qbrt programs failed
+    "row 3: want 80 cells got 0" against BCOM45's screen."""
+    exe = tmp_path / "P.EXE"
+    exe.write_bytes(b"MZ")
+    with mock.patch.object(dosbatch, "_launch", return_value=None), mock.patch.object(dosbatch, "collect", return_value={}):
+        dosbatch.run([dosbatch.Job("J", "exe", exe, screen=True)], tmp_path / "w")
+    assert "mount v" in (tmp_path / "w" / "jobs.txt").read_text()

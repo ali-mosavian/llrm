@@ -1,15 +1,98 @@
-//! LLVM's PostRAMachineSinking: a copy whose result only one successor reads
-//! moves into that successor. A spill store does the same: a slot only one
-//! successor reads is stored there (hanoi's `n == 0` exit stored a slot it
-//! never read, and so built the frame).
+//! Moves a register copy, or a spill store, into the one successor that needs
+//! it.
 //!
-//! `mov edi, edx` ahead of `test eax, eax / jne body` is dead on the path that
-//! returns at once, where nothing reads EDI (a saved register's incoming value
-//! is on the stack): the copy belongs to the block that reads it.
-//! Shrink wrapping can then place the prologue after the test, as gcc and LLVM
-//! do. Sound while the successor is entered only from here, nothing between the
-//! copy and the branch reads its result or writes its source, and no other
-//! successor has the result live.
+//! # How it works
+//! In a block that ends in a branch, a copy `mov d, s` whose result `d` is live
+//! into only one successor is dead on the path to the others. The copy moves to
+//! the head of that successor:
+//!
+//! ```text
+//!  before                        after
+//!  B: mov edi, edx               B: test eax, eax
+//!     test eax, eax                 jne body
+//!     jne body                   ret_path: (nothing reads EDI)
+//!  ret_path: ret                 body: mov edi, edx ...
+//!  body: ... reads edi
+//! ```
+//!
+//! Blocks are taken once, bottom-up within a block, in reverse post-order, as
+//! LLVM's `PostRAMachineSinking` does, so a copy that lands in a block is seen
+//! when that block's turn comes, and later copies land ahead of earlier ones.
+//! Liveness of register lanes is computed once for the body (`live_in`).
+//!
+//! A copy moves only when every one of these holds: it writes lanes it does not
+//! read; exactly one successor has its result live; that successor is entered
+//! only from this block and by one edge; and no instruction between the copy
+//! and the branch touches (reads or writes) the copy's result or source
+//! (`touches`).
+//!
+//! A spill store `mov [slot], r` (a plain store to a fixed frame cell) moves by
+//! the same rule, with cells instead of registers: the one successor whose
+//! reachable blocks may read the slot (`Reads`, cell liveness worked out once
+//! for the function) receives it, provided nothing after the store in its block
+//! may read or overwrite the cell or touch `r`. A target entered from elsewhere
+//! too, such as a loop header, takes the store on the edge instead, in a block
+//! of its own (a bridge, with a jump to the target) which the layout puts in
+//! line; the branch is retargeted and the block odds are rerouted.
+//!
+//! The point is shrink wrapping. A path that returns at once then has no copy
+//! and no store of a saved register, and the prologue can be placed after the
+//! test, as gcc and LLVM do. A store of a slot only one successor reads can be
+//! the only thing that made a frame necessary on the other path.
+//!
+//! # Example
+//! A function copies its argument into `DI`, then either returns at once or
+//! loops reading `DI`.
+//!
+//! Schematic, from the fixture of test
+//! `test_a_copy_only_one_successor_reads_moves_into_it` (not printer output):
+//! Before:
+//!
+//! ```lir
+//! block 0x0001
+//!   0x0001  DI := mov DX
+//!   0x0002  cmp AX, BX
+//!   0x0003  jl
+//! block 0x0005
+//!   0x0005  ret
+//! block 0x0009
+//!   0x0009  AX := add AX, DI
+//!   0x000a  jmp
+//! ```
+//!
+//! After:
+//!
+//! ```lir
+//! block 0x0001
+//!   0x0002  cmp AX, BX
+//!   0x0003  jl
+//! block 0x0005
+//!   0x0005  ret
+//! block 0x0009
+//!   0x0001  DI := mov DX
+//!   0x0009  AX := add AX, DI
+//!   0x000a  jmp
+//! ```
+//!
+//! Only block 0x0009 reads `DI` and has no other predecessor, so the copy moves
+//! there and the path through 0x0005 runs without it.
+//!
+//! From unit test `test_a_copy_only_one_successor_reads_moves_into_it` in
+//! `postrasink.rs`, which asserts the copy count per block (0 in 0x0001, 1 in
+//! 0x0009).
+//!
+//! # Runs
+//! A sub-pass of [`crate::backend::peephole`], after `spillforward`: a reload
+//! on the other path is gone by then, so the store need not run there. Once per
+//! peephole run.
+//!
+//! # Keeps
+//! The body is returned unchanged where no block with several successors holds
+//! a copy or spill store. Block odds follow a bridged edge.
+//!
+//! # See also
+//! - LLVM `PostRAMachineSinking`:
+//!   <https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/MachineSink.cpp>
 
 use std::sync::Arc;
 
@@ -100,6 +183,27 @@ fn may_read(
     let plain_store =
         what.op == Operation::Move && what.dests.len() == 1 && what.sources.iter().all(|place| !reads(place));
     what.sources.iter().any(reads) || (!plain_store && what.dests.iter().any(reads))
+}
+
+/// Whether `one` may write a byte of `cell`: a store sunk past it would land
+/// over the newer value.
+fn overwrites(
+    one: &Insn,
+    cell: &Mem,
+) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.dests
+                .iter()
+                .any(
+                    |place| match place {
+                        Loc::Mem(other) => !crate::backend::storedhomes::apart(cell, other),
+                        Loc::Address(_) => true,
+                        _ => false,
+                    },
+                ),
+        )
 }
 
 /// Which spill cells each block, and the blocks reachable from it, may read:
@@ -276,9 +380,11 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 if target == at
                     || !insns.contains_key(&target)
                     || to.iter().filter(|next| **next == target).count() != 1
-                    || insns[&at][index + 1..]
-                        .iter()
-                        .any(|other| touches(regs, body.bits, other, &read, false) || may_read(other, &cell))
+                    || insns[&at][index + 1..].iter().any(|other| {
+                        touches(regs, body.bits, other, &read, false)
+                            || may_read(other, &cell)
+                            || overwrites(other, &cell)
+                    })
                 {
                     continue;
                 }
@@ -408,7 +514,10 @@ pub fn sunk(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::Register::{AX, BX, DI, DX};
+    const AX: RegId = RegId::AX;
+    const BX: RegId = RegId::BX;
+    const DI: RegId = RegId::DI;
+    const DX: RegId = RegId::DX;
     use llrm_lir::registers::RegId;
 
     use super::sunk;
@@ -460,7 +569,7 @@ mod tests {
         exit_reads: bool,
         body_has_two_predecessors: bool,
     ) -> LirBody {
-        let cmp = insn(2, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None);
+        let cmp = insn(2, Operation::Compare, "cmp", vec![], vec![r(RegId::from(AX)), r(RegId::from(BX))], None);
         let branch = insn(3, Operation::Branch, "jl", vec![], vec![], Some(9));
         // A generated return reads only what it requires and the epilogue: DI
         // is not among them.
@@ -468,7 +577,16 @@ mod tests {
             reads_complete: true,
             ..Arc::unwrap_or_clone(insn(5, Operation::Return, "ret", vec![], vec![], None))
         });
-        let use_di = |at| insn(at, Operation::Binary, "add", vec![r(AX)], vec![r(AX), r(DI)], None);
+        let use_di = |at| {
+            insn(
+                at,
+                Operation::Binary,
+                "add",
+                vec![r(RegId::from(AX))],
+                vec![r(RegId::from(AX)), r(RegId::from(DI))],
+                None,
+            )
+        };
         let mut blocks = vec![
             block(1, vec![copy(1, DI, DX), cmp, branch], vec![9, 5]),
             block(5, if exit_reads { vec![use_di(5), ret] } else { vec![ret] }, vec![]),
@@ -476,7 +594,7 @@ mod tests {
         let tail = if body_has_two_predecessors {
             vec![
                 use_di(9),
-                insn(10, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None),
+                insn(10, Operation::Compare, "cmp", vec![], vec![r(RegId::from(AX)), r(RegId::from(BX))], None),
                 insn(11, Operation::Branch, "jl", vec![], vec![], Some(9)),
             ]
         } else {
@@ -527,7 +645,7 @@ mod tests {
     /// 0.3% of compile time).
     #[test]
     fn test_a_copy_goes_on_through_a_second_branch_in_one_pass() {
-        let cmp = |at| insn(at, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None);
+        let cmp = |at| insn(at, Operation::Compare, "cmp", vec![], vec![r(RegId::from(AX)), r(RegId::from(BX))], None);
         let branch = |at, target| insn(at, Operation::Branch, "jl", vec![], vec![], Some(target));
         let ret = Arc::new(Insn {
             reads_complete: true,
@@ -540,7 +658,14 @@ mod tests {
                 block(
                     9,
                     vec![
-                        insn(9, Operation::Binary, "add", vec![r(AX)], vec![r(AX), r(DI)], None),
+                        insn(
+                            9,
+                            Operation::Binary,
+                            "add",
+                            vec![r(RegId::from(AX))],
+                            vec![r(RegId::from(AX)), r(RegId::from(DI))],
+                            None,
+                        ),
                         insn(10, Operation::Jump, "jmp", vec![], vec![], Some(5)),
                     ],
                     vec![5],
@@ -565,8 +690,8 @@ mod tests {
                 space: Space::Frame,
                 disp: -4 * (k + 1),
                 index: -(k + 1),
-                base: RegId::None,
-                segment: RegId::None,
+                base: (RegId::None).iced(),
+                segment: (RegId::None).iced(),
             };
             crate::model::ir::Mem { through: RegId::BP, ..crate::model::ir::Mem::new(Some(addr), 2) }
         };
@@ -575,15 +700,33 @@ mod tests {
             let (head, arm, next) = (10 * k + 1, 10 * k + 5, 10 * (k + 1) + 1);
             let store = Arc::new(Insn {
                 spill_store: true,
-                ..Arc::unwrap_or_clone(insn(head, Operation::Move, "mov", vec![Loc::Mem(cell(k))], vec![r(AX)], None))
+                ..Arc::unwrap_or_clone(insn(
+                    head,
+                    Operation::Move,
+                    "mov",
+                    vec![Loc::Mem(cell(k))],
+                    vec![r(RegId::from(AX))],
+                    None,
+                ))
             });
             let branch = insn(head + 2, Operation::Branch, "jl", vec![], vec![], Some(arm));
             blocks.push(block(
                 head,
-                vec![store, insn(head + 1, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None), branch],
+                vec![
+                    store,
+                    insn(
+                        head + 1,
+                        Operation::Compare,
+                        "cmp",
+                        vec![],
+                        vec![r(RegId::from(AX)), r(RegId::from(BX))],
+                        None,
+                    ),
+                    branch,
+                ],
                 vec![arm, next],
             ));
-            let read = insn(arm, Operation::Move, "mov", vec![r(DX)], vec![Loc::Mem(cell(k))], None);
+            let read = insn(arm, Operation::Move, "mov", vec![r(RegId::from(DX))], vec![Loc::Mem(cell(k))], None);
             blocks.push(block(
                 arm,
                 vec![read, insn(arm + 1, Operation::Jump, "jmp", vec![], vec![], Some(next))],
@@ -619,5 +762,72 @@ mod tests {
     fn test_the_blocks_read_to_place_spill_stores_grow_with_the_stores() {
         let (small, large) = (scanned(40), scanned(80));
         assert!(large <= 3 * small, "40 stores read {small} blocks, 80 read {large}");
+    }
+
+    /// `mov [slot], ebx` (the planes copy) was sunk into the arm that reads the
+    /// slot, past `mov [slot], esi` (the stride, stored over it): the arm read
+    /// the planes where it wanted the stride, and pack_ref of qb-m32's fill_ops
+    /// packed wrong rows.
+    #[test]
+    fn test_a_spill_store_does_not_move_past_a_later_store_to_its_cell() {
+        use crate::objectfile::module::{Addr, Space};
+        let addr = Addr {
+            space: Space::Frame,
+            disp: -8,
+            index: -1,
+            base: iced_x86::Register::None,
+            segment: iced_x86::Register::None,
+        };
+        let cell = crate::model::ir::Mem { through: RegId::BP, ..crate::model::ir::Mem::new(Some(addr), 2) };
+        let store = |at, source| {
+            Arc::new(Insn {
+                spill_store: true,
+                ..Arc::unwrap_or_clone(insn(
+                    at,
+                    Operation::Move,
+                    "mov",
+                    vec![Loc::Mem(cell.clone())],
+                    vec![r(source)],
+                    None,
+                ))
+            })
+        };
+        let ret = Arc::new(Insn {
+            reads_complete: true,
+            ..Arc::unwrap_or_clone(insn(9, Operation::Return, "ret", vec![], vec![], None))
+        });
+        let body = LirBody::new(
+            "f",
+            1,
+            vec![
+                block(
+                    1,
+                    vec![
+                        store(1, BX),
+                        store(2, DI),
+                        copy(3, DI, AX),
+                        insn(3, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None),
+                        insn(4, Operation::Branch, "jl", vec![], vec![], Some(5)),
+                    ],
+                    vec![5, 9],
+                ),
+                block(
+                    5,
+                    vec![
+                        insn(5, Operation::Move, "mov", vec![r(DX)], vec![Loc::Mem(cell.clone())], None),
+                        insn(6, Operation::Jump, "jmp", vec![], vec![], Some(9)),
+                    ],
+                    vec![9],
+                ),
+                block(9, vec![ret], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let after = sunk(&body);
+        let stores = |at| {
+            after.blocks.iter().find(|block| block.at == at).unwrap().insns.iter().filter(|one| one.spill_store).count()
+        };
+        assert_eq!((stores(1), stores(5)), (2, 0), "the older store ran after the newer one");
     }
 }

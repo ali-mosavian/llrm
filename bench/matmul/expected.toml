@@ -1,18 +1,46 @@
-reason = "rotation priced in clocks (jmp, jcc taken, not taken from the CPU): x_adler -12.1% clocks, x_bubble -3.0%, quicksort -2.0%; one jmp more per entry: quicksort +3.3% instructions, matmul +0.1%, grep +8 bytes"
-blessed = "2026-10-09"
+reason = "ch default (user decision 2026-10-12) and the shrinkwrap, frequency and layout fixes landed with it: the rows main's bq16/bq32 columns add moved by -0.1% to +0.05% except nbody bq32 -O2 (+4.6%, the guard and rotated loops of the BASIC loops); the rest fewer instructions"
+blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 9356
-memory_operands = 4602
-code_bytes = 487
+instructions = 8255
+memory_operands = 2471
+code_bytes = 454
+data_bytes = 15
+bss_bytes = 0
+kernel_ms = 0.1253
+
+[bas.Os]
+instructions = 8299
+memory_operands = 2520
+code_bytes = 445
+data_bytes = 15
+bss_bytes = 0
+kernel_ms = 0.126
+
+[bq16.O2]
+instructions = 10013
+memory_operands = 2320
+code_bytes = 464
 data_bytes = 15
 bss_bytes = 0
 
-[bas.Os]
-instructions = 9400
-memory_operands = 4651
-code_bytes = 478
+[bq16.Os]
+instructions = 10058
+memory_operands = 2369
+code_bytes = 455
 data_bytes = 15
+bss_bytes = 0
+
+[bq32.O2]
+instructions = 58346
+code_bytes = 557
+data_bytes = 21
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 58241
+code_bytes = 558
+data_bytes = 21
 bss_bytes = 0
 
 [c.O2]
@@ -21,6 +49,7 @@ memory_operands = 1561
 code_bytes = 236
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0789
 
 [c.Os]
 instructions = 5829
@@ -28,6 +57,7 @@ memory_operands = 1561
 code_bytes = 234
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0788
 
 [nib.O2]
 instructions = 5969
@@ -35,6 +65,7 @@ memory_operands = 1689
 code_bytes = 279
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0818
 
 [nib.Os]
 instructions = 6345
@@ -42,6 +73,7 @@ memory_operands = 2073
 code_bytes = 273
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0882
 
 [ow.O2]
 instructions = 22524

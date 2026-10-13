@@ -175,18 +175,29 @@ fn names(
         .any(|one| one.name == ".debug_str" && one.image.windows(wanted.len()).any(|at| at == wanted.as_bytes()))
 }
 
-/// A far pointer has no DWARF type: the variable that has it is left out (it
-/// was a refused compile), and the others are written.
+/// A far or huge pointer is a pointer with Open Watcom's DW_AT_address_class
+/// (far16 2, huge16 3, far32 5): a segment and an offset, still pointing at its
+/// target. It was refused, and the variable with it.
 #[test]
-fn a_variable_of_an_unwritable_type_is_left_out_and_the_others_are_written() {
-    let far = Type::Pointer { target: 0, bytes: 6, reach: Reach::Far };
-    let mut used = frame("xfar", 8);
-    used.r#type = 1;
-    let kept = frame("xnear", 12);
-    let made = written(vec![used, kept], vec![int(), far.clone()], Format::Default).expect("written");
-    assert!(!names(&made, "xfar") && names(&made, "xnear"));
-    // Nothing uses it: the unit is written without it.
-    assert!(written(vec![frame("x", 8)], vec![int(), far], Format::Default).is_ok());
+fn a_far_pointer_is_written_with_its_address_class() {
+    let far = Type::Pointer { target: 0, bytes: 4, reach: Reach::Far };
+    let huge = Type::Pointer { target: 0, bytes: 4, reach: Reach::Huge };
+    let mut one = frame("xfar", 8);
+    one.r#type = 1;
+    let mut two = frame("xhuge", 12);
+    two.r#type = 2;
+    let made = written(vec![one, two], vec![int(), far.clone(), huge], Format::Default).expect("written");
+    assert!(names(&made, "xfar") && names(&made, "xhuge"));
+    // DW_AT_address_class (0x33) as a one-byte constant is in an abbreviation.
+    let abbrev = made.sections.iter().find(|one| one.name == ".debug_abbrev").expect("abbreviations");
+    assert!(abbrev.image.windows(2).any(|two| two == [0x33, 0x0b]));
+    // A pointer of a width no address class names is left out with its
+    // variable.
+    let odd = Type::Pointer { target: 0, bytes: 3, reach: Reach::Far };
+    let mut three = frame("xodd", 8);
+    three.r#type = 1;
+    let made = written(vec![three, frame("xnear", 12)], vec![int(), odd], Format::Default).expect("written");
+    assert!(!names(&made, "xodd") && names(&made, "xnear"));
 }
 
 /// BASIC's array (its bounds are a descriptor's) leaves its variable out, never
@@ -397,7 +408,7 @@ fn a_frame_cell_is_found_from_the_canonical_frame_address_where_the_code_keeps_n
         return;
     };
     let mut made = object(vec![frame("x", -4)], vec![int()], Format::Default);
-    made.debug.as_mut().unwrap().frame_base = llrm_object::debug::FrameBase::Cfa { bias: 8 };
+    made.debug.as_mut().unwrap().frame_base = llrm_object::debug::FrameBase::Cfa { bias: 8, far_bias: 8 };
     let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join("x.o");
@@ -406,6 +417,33 @@ fn a_frame_cell_is_found_from_the_canonical_frame_address_where_the_code_keeps_n
     let shown = String::from_utf8_lossy(&shown.stdout).into_owned();
     assert!(shown.contains("DW_AT_frame_base\t(DW_OP_call_frame_cfa)"), "{shown}");
     assert!(shown.contains("DW_OP_fbreg -12"), "{shown}");
+}
+
+/// A function called far has a longer return address, so the frame address is
+/// further from the register its cells are numbered by: a 16-bit far function's
+/// `[bp-2]` is `bp+6-8` from the address, not `bp+4-6`. The offsets were
+/// computed for a near call and read the saved BP in place of the first
+/// parameter (dosbox-harness on a real run).
+#[test]
+fn a_function_called_far_finds_its_cells_from_the_longer_frame_address() {
+    let Some(dump) = dwarfdump() else {
+        skipped("llvm-dwarfdump is not installed");
+        return;
+    };
+    let fbreg = |far: bool| {
+        let mut made = object(vec![frame("x", -2)], vec![int()], Format::Default);
+        let info = made.debug.as_mut().unwrap();
+        info.frame_base = llrm_object::debug::FrameBase::Cfa { bias: 4, far_bias: 6 };
+        info.functions[0].far = far;
+        let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("x.o");
+        std::fs::write(&path, llrm_elf32::write(&made).unwrap()).unwrap();
+        let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
+        String::from_utf8_lossy(&shown.stdout).into_owned()
+    };
+    assert!(fbreg(false).contains("DW_OP_fbreg -6"), "{}", fbreg(false));
+    assert!(fbreg(true).contains("DW_OP_fbreg -8"), "{}", fbreg(true));
 }
 
 /// `.debug_frame`: the CIE says the frame address is `esp+4` and the return

@@ -10,7 +10,8 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 measure = importlib.import_module("measure")
-TOL = measure.tolerances()
+# The general limits: the rows the user accepted a rise on are tested apart.
+TOL = {name: limit for name, limit in measure.tolerances().items() if name != "accepted"}
 
 
 def made(compile=None, axes=None, passes=None):
@@ -18,7 +19,7 @@ def made(compile=None, axes=None, passes=None):
 
 
 def files(**per_file):
-    return {f"{name} {level}": n for name, n in per_file.items() for level in ("-O1", "-O2", "-Os")}
+    return {f"{name} {level}": n for name, n in per_file.items() for level in ("-O1", "-O2", "-O3", "-Os")}
 
 
 def test_a_branch_equal_to_its_base_passes():
@@ -31,6 +32,14 @@ def test_one_file_costing_much_more_fails_though_the_geomean_barely_moves():
     base = made(files(**{f"p{i}": 1000 for i in range(66)}))
     now = made(dict(base["compile"]) | {"p0 -O2": 1100})
     assert any("p0 -O2" in line for line in measure.rises(base, now, TOL)[1])
+
+
+def test_a_file_dearer_only_at_o3_fails():
+    """Recursion inlining admitted to gcc's -O3 growth made quicksort's -O3 compile x9.6 (205M -> 1,972M instructions): -O3 was not one of the
+    levels measured, so the gate passed it."""
+    base = made(files(**{f"p{i}": 1000 for i in range(66)}))
+    now = made(dict(base["compile"]) | {"p0 -O3": 9600})
+    assert any("p0 -O3" in line for line in measure.rises(base, now, TOL)[1])
 
 
 def test_every_file_a_little_dearer_fails_on_the_geomean():
@@ -227,6 +236,38 @@ def test_two_clones_do_not_share_the_tree_the_base_is_built_in(tmp_path):
     assert measure.build_tree(tmp_path / "a", {"LLRM_MEASURE_BUILD": "/elsewhere"}) == Path("/elsewhere")
 
 
+def test_worktrees_of_one_repository_share_the_tree_the_base_is_built_in_and_clones_do_not(tmp_path):
+    """The build tree was keyed by the working tree's path: 48 worktrees of one repository made 48 trees of 10-37 GB, 489 GB, and filled
+    /home. A commit made in one worktree is in all of them, so one tree serves them; a clone has other objects and keeps its own."""
+    def sh(*args, cwd):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    main = tmp_path / "main"
+    main.mkdir()
+    sh("init", "-q", "-b", "main", cwd=main)
+    (main / "a").write_text("1")
+    sh("add", "a", cwd=main)
+    sh("commit", "-q", "-m", "one", cwd=main)
+    sh("worktree", "add", "-q", "--detach", str(tmp_path / "wt"), cwd=main)
+    sh("clone", "-q", str(main), str(tmp_path / "clone"), cwd=tmp_path)
+    here, there, apart = (measure.build_tree(tmp_path / d, {}) for d in ("main", "wt", "clone"))
+    assert here == there and here != apart
+
+
+def test_the_build_cache_drops_the_least_recently_used_trees_past_its_cap(tmp_path):
+    """489 GB of build trees filled /home and killed the gates: past the cap the trees used longest ago go, never the one in use."""
+    for age, name in enumerate(["oldest", "old", "newer", "using"]):
+        tree = tmp_path / name
+        tree.mkdir()
+        (tree / "blob").write_bytes(b"x" * 1000)
+        (tree / ".used").touch()
+        os.utime(tree / ".used", (1_000_000 + age, 1_000_000 + age))
+    gone = measure.pruned(tmp_path, tmp_path / "using", 2500)
+    assert [t.name for t in gone] == ["oldest", "old"]
+    assert sorted(t.name for t in tmp_path.iterdir()) == ["newer", "using"]
+    assert measure.pruned(tmp_path, tmp_path / "using", 10**9) == []
+
+
 def test_a_commit_only_the_remote_has_is_checked_out_in_a_clone_measure_owns(tmp_path):
     """'unable to read tree': the build tree was a worktree of another session's repository. It is a clone measure.py makes of this
     repository, and a commit this repository has not got is fetched from its origin."""
@@ -314,3 +355,25 @@ def test_a_new_row_on_an_axis_whose_superlinear_work_rose_still_fails():
         passes={"callers O2 analysis call-effects": quad(0.02), "callers O2 analysis pointer-values": quad(0.04)},
     )
     assert measure.rises(base, grown, TOL)[1] != []
+
+
+def test_a_row_the_user_accepted_a_rise_on_passes_up_to_its_ceiling_and_fails_above_it():
+    """The header copy's compile cost was accepted on named rows: `[[measure.accepted]]` gives a row its own ceilings, and the general
+    tolerance still judges every other row and anything past the ceiling."""
+    base = made(files(**{f"p{i}": 1000 for i in range(66)}), {"nest O2": cost(100, 1000, 1)}, {"nest O2 mir lsr": [5.0, 10.0, 30.0, 300.0]})
+    now = made(
+        {k: v * 1.1 for k, v in base["compile"].items()},
+        {"nest O2": [2 * c for c in cost(100, 1000, 1)]},
+        {"nest O2 mir lsr": [5.0, 10.0, 60.0, 300.0]},
+    )
+    assert len(measure.rises(base, now, TOL)[1]) >= 3  # the geomean, the axis and the step all fail without the entry
+    limits = {"geomean": 1.1001, "worst": 1.1001}
+    every = {**TOL, "accepted": [
+        {"row": f"programs {level}", "why": "decision", **limits} for level in ("-O1", "-O2", "-O3", "-Os")
+    ] + [{"row": "nest O2", "why": "decision", "excess": 10.0, "worst": 2.5, "step_excess": 1.0, "pass_slack": 2.5}]}
+    assert measure.rises(base, now, every)[1] == []
+    above = {**every, "accepted": [{**one, **({"geomean": 1.0999} if one["row"] == "programs -O2" else {})} for one in every["accepted"]]}
+    assert any("programs -O2: geomean" in line for line in measure.rises(base, now, above)[1])
+    steeper = made(now["compile"], {"nest O2": [2 * c for c in cost(100, 1000, 40)]}, now["passes"])
+    assert any("nest O2" in line for line in measure.rises(base, steeper, every)[1])
+    assert measure.row_tolerance(TOL, "nest O2 mir lsr") is TOL  # a row nothing names keeps the general limits

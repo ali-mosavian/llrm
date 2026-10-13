@@ -1,5 +1,5 @@
-reason = "movzx r,m8 becomes xor r,r; mov rl,m8 where the CPU description prices the pair lower (486: 2 clocks against 3), one instruction and one byte more per load: vsgcc harness 486 clocks fall, crc 864 to 855, x_life 400178 to 356042 (now under gcc -O2's 368012); gcc -march=i486 emits the same pair"
-blessed = "2026-10-09"
+reason = "ch default (user decision 2026-10-12) and the shrinkwrap, frequency and layout fixes landed with it: the rows main's bq16/bq32 columns add moved by -0.1% to +0.05% except nbody bq32 -O2 (+4.6%, the guard and rotated loops of the BASIC loops); the rest fewer instructions"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 1216
@@ -7,6 +7,7 @@ memory_operands = 71
 code_bytes = 223
 data_bytes = 31
 bss_bytes = 0
+kernel_ms = 0.0364
 
 [bas.Os]
 instructions = 1207
@@ -16,12 +17,41 @@ data_bytes = 31
 bss_bytes = 0
 kernel_ms = 0.0363
 
+[bq16.O2]
+instructions = 1217
+memory_operands = 63
+code_bytes = 233
+data_bytes = 31
+bss_bytes = 0
+kernel_ms = 0.0259
+
+[bq16.Os]
+instructions = 1206
+memory_operands = 63
+code_bytes = 230
+data_bytes = 31
+bss_bytes = 0
+kernel_ms = 0.0258
+
+[bq32.O2]
+instructions = 44704
+code_bytes = 243
+data_bytes = 41
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 44705
+code_bytes = 240
+data_bytes = 41
+bss_bytes = 0
+
 [c.O2]
 instructions = 634
 memory_operands = 9
 code_bytes = 69
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.0103
 
 [c.Os]
 instructions = 625
@@ -29,20 +59,23 @@ memory_operands = 9
 code_bytes = 68
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.0102
 
 [nib.O2]
-instructions = 649
-memory_operands = 18
-code_bytes = 115
+instructions = 643
+memory_operands = 12
+code_bytes = 99
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0114
 
 [nib.Os]
-instructions = 640
-memory_operands = 18
-code_bytes = 114
+instructions = 634
+memory_operands = 12
+code_bytes = 98
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0114
 
 [ow.O2]
 instructions = 1404

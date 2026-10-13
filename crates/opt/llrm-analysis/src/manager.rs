@@ -1,10 +1,137 @@
-//! The memory analyses as entries of llrm-mir's analysis manager
-//! (`passes::Analyses`), the role llrm-core's `analysis/manager.rs` played:
-//! a pass asks, the manager computes once and drops what a pass did not
-//! preserve. An entry reads its module and target through the outer proxy
-//! (`passes::Outer`). Module analyses there: `GlobalsAA`, which globals no
-//! outside code reaches but by name, and alias's callee summaries, which
-//! ask it.
+//! The memory and range analyses as entries of llrm-mir's analysis manager:
+//! asked for by name, cached, kept or brought up to date after a pass.
+//!
+//! # How it works
+//! A pass asks `analyses.get::<A>(context, layout, function)` and receives a
+//! shared result. The manager computes it once, hands the same `Rc` to every
+//! later asker, and decides after each pass what to do with it. The entries
+//! here declare how, through the `Analysis` trait of `llrm_mir::passes`:
+//!
+//! - A pass returns the `PreservedAnalyses` it left true. An entry not named is
+//!   dropped, unless `READS_OUTER` is false (it reads only the function, as
+//!   `DemandedBits` and `Shape`) and the function is unchanged.
+//! - `SKIPS` with `depends`: the entry is kept past an invalidation if the
+//!   change log cannot have altered it. `Depends` names the instructions the
+//!   result models, those it keys entries by, and the users a change flows
+//!   through. `ExposedFrames`, `PointerValues`, `Pointers`, `CallEffects` and
+//!   `Writes` model pointers, aggregates and calls only, so a change to integer
+//!   arithmetic leaves them standing.
+//! - `INCREMENTAL` with `update`: the entry is brought up to date from the
+//!   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
+//!   or loops `reached_by` the changes (a change to a terminator or to the CFG
+//!   redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
+//! - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
+//!   fresh `run`.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   run["<b>pass runs</b><br/><small>PreservedAnalyses</small>"]:::mid
+//!   q1["<b>entry named?</b>"]:::mid
+//!   q2["<b>READS_OUTER=false and</b><br/><small>function unchanged?</small>"]:::mid
+//!   q3["<b>SKIPS and depends</b><br/><small>.unaffected(changes)?</small>"]:::mid
+//!   q4["<b>INCREMENTAL and</b><br/><small>update(previous, changes)?</small>"]:::mid
+//!   kept["<b>kept</b>"]:::opt
+//!   kept2["<b>kept, stands again</b><br/><small>if changes undone</small>"]:::opt
+//!   upd["<b>updated</b>"]:::opt
+//!   drop["<b>dropped#59; recomputed</b><br/><small>on the next get</small>"]:::warn
+//!   run --> q1
+//!   q1 -->|"yes"| kept
+//!   q1 -->|"no"| q2
+//!   q2 -->|"yes"| kept
+//!   q2 -->|"no"| q3
+//!   q3 -->|"yes"| kept2
+//!   q3 -->|"no"| q4
+//!   q4 -->|"Some"| upd
+//!   q4 -->|"no"| drop
+//! ```
+//!
+//! *What happens to a cached analysis when a pass runs*
+//!
+//! Function entries and what each asks for (every one also asks `Shape`, and
+//! most `AssumptionCache` and `ExposedFrames`, which are omitted):
+//!
+//! ```text
+//!  PointerValues    -
+//!  Pointers         PointerValues
+//!  CallEffects      PointerValues
+//!  Writes           CallEffects
+//!  Registers        -
+//!  Followers        Registers
+//!  Counted          Registers
+//!  DominatedEdges   Registers
+//!  Bounded          Registers, Counted, DominatedEdges
+//!  Annotated        Pointers, Registers, Counted, DominatedEdges, Bounded
+//!  Accesses         Annotated, CallEffects                  (memoryssa)
+//!  ThroughMemory    Writes, Annotated, Registers
+//!  FloatFacts       ThroughMemory, Writes, Annotated, Registers
+//!  Published        Pointers, ExposedFrames                 (observers)
+//! ```
+//!
+//! Module entries read the program through `ModuleAnalyses` and are dropped
+//! unless every run of a pass preserved them. `GlobalsAA` (which globals no
+//! outside code reaches but by name) and `Summaries` (each defined function's
+//! memory effects, by name) can be held past passes that add no memory
+//! operation when `covers` says the stale result states no more than a fresh
+//! one. `Summaries` keeps per-body facts and recomputes only bodies whose
+//! history moved. `Callbacks`, the effects of all the callbacks into the module
+//! added up, is rebuilt only when `GlobalsAA` or `Summaries` is a different
+//! result. `ProgramSummaries` is a program entry: one fixed point over all
+//! modules, each module's `Summaries` given the others'.
+//!
+//! `Unit::within` builds the `Unit` that analyses read from `Outer` (the
+//! module, target and program), carrying whichever cached results the caller
+//! holds. `Held` and `Ranges` bundle the cached results a pass passes on to a
+//! `Unit`, so the facts are the manager's and not a solve of the pass's own.
+//! `Bounded` is empty where `Outer::loop_intervals` is off (-O1).
+//!
+//! # Example
+//! A pass replaces the uses of `%x` by `%a`, an integer edit:
+//!
+//! ```mir
+//! declare void @use(ptr)
+//! define i32 @f(ptr %p, i32 %a) {
+//! entry:
+//!   %x = add i32 %a, 1
+//!   %y = mul i32 %x, 3
+//!   %q = getelementptr i32, ptr %p, i32 1
+//!   call void @use(ptr %q)
+//!   ret i32 %y
+//! }
+//! ```
+//!
+//! | change                       | `Pointers`, `CallEffects`, `Writes`, `ExposedFrames` |
+//! |------------------------------|------------------------------------------------------|
+//! | `%x` replaced by `%a`        | kept (`unaffected` is true)                          |
+//! | `%q`, the address, rewritten | `CallEffects::unaffected` is false: recomputed        |
+//!
+//! From unit test
+//! `an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not`
+//! in
+//! `manager_tests.rs`.
+//!
+//! # Provides
+//! The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
+//! `CallEffects`, `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
+//! `Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`,
+//! `Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
+//! entry `ProgramSummaries`; `Held`, `Ranges`, `reached_by`, `call_effects`,
+//! `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s `Accesses`,
+//! [`crate::observers`]'s `Published` and [`crate::noreturn`]'s `TerminalSites`
+//! are entries defined beside their analyses.
+//!
+//! # Needs
+//! [`crate::alias`], [`crate::consts`], [`crate::globalsaa`],
+//! [`crate::induction`], [`crate::ranges`], [`crate::floatfacts`],
+//! [`crate::frameescape`].
+//!
+//! # See also
+//! LLVM's new pass manager `AnalysisManager` and `PreservedAnalyses`; the trait
+//! is in `crates/ir/llrm-mir/src/passes.rs`.
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -20,7 +147,7 @@ use llrm_support::debug::counted;
 use llrm_support::hash::IndexMap;
 
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
-use crate::cfg::{self, Shape};
+use crate::cfg::Shape;
 use crate::consts::{self, Calls, Known};
 use crate::floatfacts;
 use crate::globalsaa::{self, Globals, ProgramGlobals};
@@ -62,6 +189,8 @@ impl<'a> Unit<'a> {
             point_values: None,
             callbacks: outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()),
             loop_intervals: outer.loop_intervals(),
+            congruent: None,
+            proved: None,
         }
     }
 }
@@ -494,8 +623,8 @@ fn moved(
     to: &Module,
 ) -> Summary {
     let mut out = summary.clone();
-    out.reads = carried(&summary.reads, from, to, &mut out.unknown_read);
-    out.writes = carried(&summary.writes, from, to, &mut out.unknown_write);
+    out.reads = carried(&summary.reads, from, to, &mut out.unknown_read).into();
+    out.writes = carried(&summary.writes, from, to, &mut out.unknown_write).into();
     // A global reached as unknown memory has no access type here.
     if out.unknown_write {
         out.unknown_write_types = None;
@@ -504,7 +633,7 @@ fn moved(
 }
 
 fn carried(
-    slices: &BTreeSet<Slice>,
+    slices: &crate::sliceset::SliceSet,
     from: &Module,
     to: &Module,
     unknown: &mut bool,
@@ -802,6 +931,76 @@ pub struct Registers;
 impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
+    const INCREMENTAL: bool = true;
+
+    /// A fact is of the values its value is made from alone (the edges of the
+    /// CFG are not read: a phi meets what its arms are), so the facts of
+    /// the values a change did not reach, by the uses of what it
+    /// touched, stand; the others are worked out again from them.
+    fn update(
+        previous: &Self::Result,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        Self::update_owned(Rc::new(previous.clone()), changes, context, layout, function, analyses)
+    }
+
+    fn update_owned(
+        previous: Rc<Self::Result>,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let mut kept = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
+        // The values touched, and the facts that were made from them, which no
+        // longer stand.
+        let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
+        let mut work = Vec::<ValueId>::new();
+        for change in changes {
+            let inst = match *change {
+                Change::Inserted { inst, .. }
+                | Change::Erased { inst, .. }
+                | Change::Moved { inst, .. }
+                | Change::Rewritten(inst) => inst,
+                Change::Cloned { to, .. } => to,
+                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Operand { .. } | Change::Operands { .. } => {
+                    continue;
+                }
+            };
+            if let Some(result) = function.instruction(inst).result
+                && touched.insert(result)
+            {
+                work.push(result);
+            }
+        }
+        // Every value to settle again: the touched, those whose fact was made
+        // from them, and the users of each, whose operands may now be
+        // known.
+        let mut dirty = touched.clone();
+        let mut seen = touched;
+        while let Some(value) = work.pop() {
+            kept.swap_remove(&value);
+            for user in function.users(value) {
+                if function.parent(user.user).is_none() {
+                    continue;
+                }
+                let Some(result) = function.instruction(user.user).result else { continue };
+                dirty.insert(result);
+                if kept.contains_key(&result) && seen.insert(result) {
+                    work.push(result);
+                }
+            }
+        }
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
+        Some(consts::known_from(&unit, kept, Some(&dirty)))
+    }
+
     fn run(
         context: &Context,
         layout: &DataLayout,
@@ -816,10 +1015,26 @@ impl Analysis for Registers {
                 .with_shape(&shape)
                 .with_assumptions(&assumptions)
                 .with_exposed(&exposed),
-            None,
-            None,
-            None,
         )
+    }
+}
+
+/// The bits of each integer value that anything reads (`demanded::demanded`),
+/// LLVM's DemandedBits.
+pub struct DemandedBits;
+
+impl Analysis for DemandedBits {
+    type Result = llrm_mir::dense::IdMap<ValueId, u128>;
+    const NAME: &'static str = "demanded";
+    // The function alone: no module or target is read.
+    const READS_OUTER: bool = false;
+    fn run(
+        context: &Context,
+        _layout: &DataLayout,
+        function: &Function,
+        _analyses: &mut Analyses,
+    ) -> Self::Result {
+        crate::demanded::demanded(context, function)
     }
 }
 
@@ -951,6 +1166,7 @@ pub fn reached_by(
             Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
             Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
             Change::Rewritten(inst) => (inst, Vec::new()),
+            Change::Operand { .. } | Change::Operands { .. } => continue,
             Change::Cloned { to, .. } => (to, Vec::new()),
         };
         if function.instruction(inst).opcode.is_terminator() {
@@ -1058,16 +1274,8 @@ impl Analysis for FloatFacts {
             .with_annotated(&references)
             .with_exposed(&exposed);
         match &*through {
-            Ok(integers) => {
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
-                    assert!(
-                        *integers == consts::known(&unit, Some(&calls), None, None),
-                        "ThroughMemory's integers are not those the float solve derives for itself"
-                    );
-                }
-                floatfacts::solved_over(&unit, &calls, None, integers)
-            }
-            Err(_) => floatfacts::solved_with(&unit, &calls, None),
+            Ok(integers) => floatfacts::solved_over(&unit, &calls, integers),
+            Err(_) => floatfacts::solved_with(&unit, &calls),
         }
     }
 }
@@ -1098,7 +1306,7 @@ impl Analysis for ThroughMemory {
             .with_assumptions(&assumptions)
             .with_registers(&registers)
             .with_exposed(&exposed);
-        Ok(consts::known(&unit, Some(&calls), None, None))
+        Ok(consts::known_walked(&unit, &calls))
     }
 }
 
@@ -1158,81 +1366,6 @@ impl DominatedEdges {
             &registers,
             before,
         )
-    }
-}
-
-/// What each memory cell holds before each instruction, where it is a number,
-/// of the body alone (no callee's writes, no facts from outside):
-/// `consts::cells`.
-pub struct MemoryCells;
-
-impl Analysis for MemoryCells {
-    type Result = consts::SolvedCells;
-    const NAME: &'static str = "memory-cells";
-    const INCREMENTAL: bool = true;
-
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self::Result {
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        consts::cells_solved(
-            &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
-            &consts::Calls::default(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            true,
-        )
-    }
-
-    /// Stores moved between blocks, or given another value, change what is
-    /// held in the blocks they left and entered and what those reach
-    /// (`consts::cells_restarted`); any other change derives them afresh.
-    fn update(
-        previous: &Self::Result,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        Self::update_owned(Rc::new(previous.clone()), changes, context, layout, function, analyses)
-    }
-
-    fn update_owned(
-        previous: Rc<Self::Result>,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        let store = |inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. });
-        let mut touched = BTreeSet::new();
-        for change in changes {
-            match *change {
-                Change::Moved { inst, block, from, .. } if store(inst) => {
-                    touched.extend([cfg::id(block), cfg::id(from)]);
-                }
-                Change::Rewritten(inst) if store(inst) => {
-                    touched.insert(cfg::id(function.parent(inst)?));
-                }
-                _ => return None,
-            }
-        }
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed);
-        // Changed where it stands when no one else holds it.
-        let mut cells = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
-        cells.restarted(&unit, &touched).then_some(cells)
     }
 }
 

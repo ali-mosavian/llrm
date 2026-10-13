@@ -1,13 +1,12 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "ch default (user decision 2026-10-12) and the shrinkwrap, frequency and layout fixes landed with it: the rows main's bq16/bq32 columns add moved by -0.1% to +0.05% except nbody bq32 -O2 (+4.6%, the guard and rotated loops of the BASIC loops); the rest fewer instructions"
+blessed = "2026-10-12"
 
 [bas.O2]
-instructions = 127550
+instructions = 127350
 memory_operands = 92918
-code_bytes = 484
+code_bytes = 480
 data_bytes = 121
 bss_bytes = 0
-kernel_ms = 1.7446
 
 [bas.Os]
 instructions = 127348
@@ -17,12 +16,40 @@ data_bytes = 121
 bss_bytes = 0
 kernel_ms = 1.7421
 
+[bq16.O2]
+instructions = 127450
+memory_operands = 92918
+code_bytes = 485
+data_bytes = 121
+bss_bytes = 0
+
+[bq16.Os]
+instructions = 127448
+memory_operands = 92918
+code_bytes = 464
+data_bytes = 121
+bss_bytes = 0
+kernel_ms = 1.7961
+
+[bq32.O2]
+instructions = 202559
+code_bytes = 623
+data_bytes = 187
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 202498
+code_bytes = 615
+data_bytes = 187
+bss_bytes = 0
+
 [c.O2]
 instructions = 84136
 memory_operands = 61509
 code_bytes = 165
 data_bytes = 0
 bss_bytes = 1212
+kernel_ms = 1.1435
 
 [c.Os]
 instructions = 83934
@@ -30,6 +57,7 @@ memory_operands = 61509
 code_bytes = 158
 data_bytes = 0
 bss_bytes = 1212
+kernel_ms = 1.1408
 
 [nib.O2]
 instructions = 137176
@@ -37,6 +65,7 @@ memory_operands = 112715
 code_bytes = 337
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 1.8327
 
 [nib.Os]
 instructions = 137880
@@ -44,6 +73,7 @@ memory_operands = 113621
 code_bytes = 317
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 1.8451
 
 [ow.O2]
 instructions = 151210

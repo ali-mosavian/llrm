@@ -338,7 +338,7 @@ fn test_an_inclusive_test_at_its_types_maximum_is_not_counted() {
 #[test]
 fn test_posttested_counter_has_an_exact_fixed_trip_count() {
     let parsed = looped(Some(0), Some(4), IntPredicate::Ult, 1, shaped("post-stepped", 16));
-    let facts = consts::known(&parsed.unit(), None, None, None);
+    let facts = consts::known(&parsed.unit());
     assert_eq!(trip_count(&parsed.unit(), &parsed.only_loop(), &facts), Some(BigInt::from(4)));
     assert_eq!(decoded(parsed.run(&[(0, 16), (0, 16)], 1_000).unwrap(), 16).0, BigInt::from(4));
 }
@@ -368,7 +368,7 @@ b3:
 }
 ",
     );
-    let facts = consts::known(&parsed.unit(), None, None, None);
+    let facts = consts::known(&parsed.unit());
     assert_eq!(trip_count(&parsed.unit(), &parsed.only_loop(), &facts), Some(BigInt::from(32)));
     for start in [0, -5, 0x7FFF_FFF0] {
         assert_eq!(parsed.run(&[(start, 32)], 10_000), Some(32), "{start}");
@@ -863,7 +863,7 @@ b3:
         ));
         let (unit, loop_) = (parsed.unit(), parsed.only_loop());
         assert!(counted(&unit, &loop_, None, false).is_empty(), "{elsewhere}");
-        let facts = consts::known(&unit, None, None, None);
+        let facts = consts::known(&unit);
         assert_eq!(trips_unless_stopped(&unit, &loop_, &facts), stops.map(BigInt::from), "{elsewhere}");
     }
 }
@@ -1137,7 +1137,7 @@ fn test_every_corpus_count_is_where_its_test_first_fails() {
                 continue;
             }
             let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
-            let facts = consts::known(&unit, None, None, None);
+            let facts = consts::known(&unit);
             for loop_ in loops::loops(&cfg::graph(function), None) {
                 for proof in counted_unless_stopped(&unit, &loop_, Some(&facts), false) {
                     proofs += 1;
@@ -1235,7 +1235,7 @@ b5:
         ));
         let inner =
             loops::loops(&cfg::graph(parsed.function()), None).into_iter().min_by_key(|one| one.body.len()).unwrap();
-        let facts = consts::known(&parsed.unit(), None, None, None);
+        let facts = consts::known(&parsed.unit());
         assert_eq!(trip_count(&parsed.unit(), &inner, &facts), count.map(BigInt::from), "{rewind}");
         assert_eq!(parsed.run(&[(0, 32)], 1_000), Some(trips), "{rewind}");
     }
@@ -2426,4 +2426,38 @@ b4:
     for x in [2, 3, 9] {
         assert_eq!(parsed.run(&[(x, 32)], 10_000), Some(x as u128 - 1), "{x}");
     }
+}
+
+/// A header phi that takes another counter's next value and a constant more,
+/// from that counter's start and the constant, is a counter of the same step
+/// (SCEV's `{2,+,3}` beside `{0,+,3}`). A header copy leaves one where the test
+/// read `i + 2`: x_base64 kept two counters and shuffled them in the latch.
+#[test]
+fn test_a_phi_that_is_a_counter_and_a_constant_is_a_counter() {
+    let derived = |start: i16, more: i16| {
+        Parsed::new(&format!(
+            "define void @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b1 ]
+  %t = phi i16 [ {start}, %b0 ], [ %t.next, %b1 ]
+  %i.next = add i16 %i, 3
+  %t.next = add i16 %i.next, {more}
+  %c = icmp slt i16 %t.next, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret void
+}}
+"
+        ))
+    };
+    let counters = derived(2, 2).basics();
+    assert_eq!(counters.len(), 2, "{counters:?}");
+    let t = counters.values().find(|one| one.start == constant(2, 16)).expect("the derived counter");
+    assert_eq!(t.step, constant(3, 16));
+    // A different start is not the counter and a constant.
+    assert_eq!(derived(1, 2).basics().len(), 1);
 }

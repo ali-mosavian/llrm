@@ -1,15 +1,55 @@
-//! The data segment register as a fourth selector register.
+//! Make the data segment register a fourth selector register where the
+//! stack lives in the data group.
 //!
-//! Where the machine's stack lives in the data group, an access to the data
-//! group can go through the stack segment instead. Allocation may then place
-//! a selector in the data segment register between the points that need it to
-//! hold the data group (`target::needs_data_group`); this pass makes the rest
-//! of the body agree: every access that would read the data group through it
-//! is prefixed with the stack segment while it may hold something else, and
-//! it is restored before each point that needs it and at each exit.
+//! # How it works
+//! When the stack segment reaches the same memory as the data segment, an
+//! access to the data group can name the stack segment instead (`ss:`).
+//! The data segment register is then free to hold a far-pointer selector
+//! between the points that need it to hold the data group
+//! (`target::needs_data_group`: calls, returns, traps, opaque
+//! instructions, x87 and string instructions). Allocation may place a
+//! selector there. This pass makes the rest of the body agree.
+//!
+//! [`restored`] runs a forward analysis, "the register may hold something
+//! else", over the allocated body. A write to the register sets it. It
+//! stays set across blocks to every successor.
+//!
+//! ```text
+//!   mov  ds, bx            ; DS now a selector       dirty
+//!   mov  ax, [si]          ; a data cell      =>     mov ax, ss:[si]
+//!   les  di, [var]         ; data cell        =>     les di, ss:[var]
+//!   call f                 ; needs DS = data  =>     mov ds, ss   (restore)
+//!                                                    call f
+//! ```
+//!
+//! Where it is set, each memory operand that would take its segment from
+//! the data segment register is prefixed with the stack segment. That means
+//! an operand with no segment of its own, in a segment, external or
+//! literal space, whose base is not itself the frame or stack register
+//! (those select the stack segment already). Immediately before an
+//! instruction that needs the data group the register is reloaded from the
+//! stack segment register and the flag clears. A block with no successor
+//! that leaves with the flag set restores before its jump or return.
+//!
+//! Nothing is done when the target has no stack-segment route
+//! (`Segments::through` is none) or when the body writes no data segment
+//! register. [`names_data_segment`] tells allocation to leave the register
+//! alone when the body already names it, since such a body manages DS
+//! itself, and then `data_free` is false here.
 //!
 //! The runtime's interrupt handlers load their own data segment, so a value
-//! held here is safe from them.
+//! held in DS is safe from them.
+//!
+//! # Example
+//! No honest example: the file has no unit test, and a small program that makes
+//! the allocator put a selector in `ds` under `-mstack-is-data` was not found.
+//!
+//! # Used by
+//! Register allocation (`allocate.rs`): `names_data_segment` before it,
+//! `restored` on the allocated body it keeps.
+//!
+//! # See also
+//! `-m[no-]stack-is-data`; [`crate::backend`]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -203,18 +243,24 @@ fn _prefixed(
         if cell.index.is_some() || !regs.holds_a_segment_offset(cell.through, offset_bytes) {
             return None;
         }
-        let addr = Addr { space: Space::Literal, disp: cell.offset, index: 0, base: cell.through, segment: through };
+        let addr = Addr {
+            space: Space::Literal,
+            disp: cell.offset,
+            index: 0,
+            base: cell.through.iced(),
+            segment: through.iced(),
+        };
         return Some(ir::Mem { addr: Some(addr), ..cell.clone() });
     };
-    if addr.segment != RegId::None {
+    if addr.segment != (RegId::None).iced() {
         return None;
     }
     if !matches!(addr.space, Space::Segment | Space::External | Space::Literal) {
         return None;
     }
-    let base = if cell.index.is_some() || cell.base.is_some() { cell.through } else { addr.base };
+    let base = if cell.index.is_some() || cell.base.is_some() { cell.through } else { RegId::from(addr.base) };
     if stack_based(base) {
         return None;
     }
-    Some(ir::Mem { addr: Some(Addr { segment: through, ..addr }), ..cell.clone() })
+    Some(ir::Mem { addr: Some(Addr { segment: through.iced(), ..addr }), ..cell.clone() })
 }

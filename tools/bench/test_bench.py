@@ -292,7 +292,25 @@ class StartupTests(unittest.TestCase):
     def test_every_language_has_a_startup_program(self):
         """Nib had no startup/startup.nib: its whole-program time was never netted, so it had no kernel_ms."""
         have = {one.language for one in bench.variants(bench.STARTUP)}
-        self.assertEqual(have, {"bas", "c", "nib"})
+        self.assertEqual(have, {"bas", "bq16", "bq32", "c", "nib"})
+
+
+def test_every_basic_benchmark_has_a_variant_on_our_runtime_with_the_same_kernel():
+    """BASIC on our runtime (bq16: llrm runtime, real mode, jwlink) runs beside the Microsoft-runtime `bas` and needs no QB45."""
+    have = {one.language: one for one in bench.variants(bench.BENCH / "fib")}
+    assert have["bq16"].region == have["bas"].region
+    assert have["bq16"].source == have["bas"].source
+
+
+def test_fib_on_our_runtime_counts_what_is_blessed(tmp_path):
+    """Built `-fqb-runtime=llrm`, linked by jwlink (no Microsoft LINK), counted by the emulator from the kernel's entry."""
+    fib = bench.BENCH / "fib"
+    variant = next(one for one in bench.variants(fib) if one.language == "bq16")
+    objects = bench.qbbuild.runtimes(tmp_path / "runtime")
+    built = bench.build(variant, "O2", tmp_path, "V000", objects)
+    assert not isinstance(built, str), built
+    counts = bench.measure(("V000", built[0], built[1], variant.region, bench.expected_output(fib), tmp_path / "V000.obj"))
+    assert counts["instructions"] == bench.read_expected(fib)["bq16"]["O2"]["instructions"]
 
 
 class TimedOnlyTests(unittest.TestCase):
@@ -371,3 +389,26 @@ class CSourceTests(unittest.TestCase):
             source = Path(where) / "g.c"
             source.write_bytes(b"// data: @dickens\n// flags: -O2\n// a comment\nint main(void) { return 0; }\n")
             self.assertEqual(bench.c_source(source), b"// a comment\nint main(void) { return 0; }\n")
+
+
+def test_reference_builds_find_bench_io_in_the_volume_root(tmp_path):
+    """jpeg.c includes "../bench_io.h", which a DOS volume's root cannot name: the Borland builds' copy includes it beside the source, and BC and TC had no row."""
+    text = bench.stage_shared_headers(tmp_path, b'#include "../bench_io.h"\nint x;\n')
+    assert text == b'#include "bench_io.h"\nint x;\n'
+    assert (tmp_path / "bench_io.h").read_bytes() == (bench.BENCH / "bench_io.h").read_bytes()
+
+
+def test_llrm_c_benches_find_the_os_layer_header(tmp_path):
+    """bench_io.h includes llrm_os.h: bench.py built C without -I for it, so jpeg's C variants did not compile."""
+    flag, directory = bench.c_include_arguments(tmp_path)
+    assert flag == "-I"
+    assert (Path(directory) / "llrm_os.h").exists()
+
+
+def test_without_the_microsoft_install_its_basic_is_skipped_by_name_and_ours_is_not(monkeypatch, tmp_path):
+    """The reason names the dialect, the directory and the variable, as the other unavailable tools do; bq16 and bq32 need none."""
+    monkeypatch.setitem(bench.run_tests.TOOLS, "qb45", bench.run_tests.TOOLS["qb45"]._replace(mount=tmp_path / "none") if hasattr(bench.run_tests.TOOLS["qb45"], "_replace") else __import__("dataclasses").replace(bench.run_tests.TOOLS["qb45"], mount=tmp_path / "none"))
+    have = {one.language: one for one in bench.variants(bench.BENCH / "fib")}
+    reason = bench.tools_missing(have["bas"])
+    assert "QB45_DIR" in reason and str(tmp_path / "none") in reason
+    assert bench.tools_missing(have["bq16"]) is None and bench.tools_missing(have["bq32"]) is None

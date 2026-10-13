@@ -51,6 +51,9 @@ struct Tree<'a> {
     bad: Vec<Option<String>>,
     version: u16,
     address: usize,
+    /// The function being described is called far: its return address, and
+    /// so the frame address of its cells, is longer.
+    far: bool,
     /// The location lists, in `.debug_loclists` (a header first) or
     /// `.debug_loc`.
     locations: crate::buffer::Buf,
@@ -75,6 +78,9 @@ impl Tree<'_> {
         }
         Ok(match self.info.types.get(index) {
             Some(Type::Scalar(Scalar::Void)) | None => None,
+            // BASIC's array is its descriptor to a debugger that cannot bound
+            // it.
+            Some(Type::Described { descriptor, .. }) => return self.ty(*descriptor),
             Some(_) => Some(1 + index),
         })
     }
@@ -118,7 +124,7 @@ impl Tree<'_> {
     ) -> Result<(), Unsupported> {
         let one = self.info.types[index].clone();
         let mut die = match &one {
-            Type::Scalar(Scalar::Void) => return Ok(()),
+            Type::Scalar(Scalar::Void) | Type::Described { .. } => return Ok(()),
             Type::Scalar(scalar) => base(*scalar, None)?,
             Type::Basic { name, scalar } => base(*scalar, Some(name))?,
             Type::FixedString(_) => return refused("a BASIC STRING * n has no DWARF type"),
@@ -187,11 +193,19 @@ impl Tree<'_> {
                 die
             }
             Type::Pointer { target, bytes, reach } => {
-                if *reach != Reach::Near {
-                    return refused("a far or huge pointer has no DWARF type");
-                }
                 let mut die = Die::new(TAG_POINTER);
                 die.attrs.push((AT_BYTE_SIZE, Value::U8(*bytes)));
+                // A far or huge pointer is a segment and an offset: Open
+                // Watcom's DW_AT_address_class says which (dwarf.h: far16 2,
+                // huge16 3, far32 5), and the size tells how
+                // wide.
+                match (reach, bytes) {
+                    (Reach::Near, _) => {}
+                    (Reach::Far, 4) => die.attrs.push((AT_ADDRESS_CLASS, Value::U8(2))),
+                    (Reach::Huge, 4) => die.attrs.push((AT_ADDRESS_CLASS, Value::U8(3))),
+                    (Reach::Far, 6) => die.attrs.push((AT_ADDRESS_CLASS, Value::U8(5))),
+                    _ => return refused(format!("a {bytes}-byte {reach:?} pointer has no address class")),
+                }
                 self.typed(&mut die, *target)?;
                 die
             }
@@ -261,7 +275,7 @@ impl Tree<'_> {
             Location::Frame { disp } => {
                 let from_frame_base = match self.info.frame_base {
                     FrameBase::Register => *disp,
-                    FrameBase::Cfa { bias } => disp - bias,
+                    FrameBase::Cfa { bias, far_bias } => disp - if self.far { far_bias } else { bias },
                 };
                 Ok([vec![0x91], crate::sleb(from_frame_base)].concat())
             }
@@ -440,6 +454,7 @@ impl Tree<'_> {
         let [range] = one.ranges[..] else {
             return refused(format!("function {} has {} ranges: one is written", one.name, one.ranges.len()));
         };
+        self.far = one.far;
         let mut die = Die::new(TAG_SUBPROGRAM);
         if !one.name.is_empty() {
             die.attrs.push((AT_NAME, Value::Str(one.name.clone())));
@@ -529,6 +544,7 @@ fn references(one: &Type) -> Vec<usize> {
     match one {
         Type::Scalar(_) | Type::Basic { .. } | Type::FixedString(_) => Vec::new(),
         Type::Array { element, .. } => vec![*element],
+        Type::Described { element, descriptor } => vec![*element, *descriptor],
         Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
         Type::Enum { underlying, .. } => vec![*underlying],
         Type::Pointer { target, .. }
@@ -553,6 +569,7 @@ pub fn tree(
         bad: vec![None; info.types.len()],
         version,
         address,
+        far: false,
         locations: crate::buffer::Buf::default(),
     };
     let mut unit = Die::new(TAG_COMPILE_UNIT);

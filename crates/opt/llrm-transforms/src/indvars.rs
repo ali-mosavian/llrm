@@ -1,15 +1,134 @@
-//! IndVarSimplify's exit rewriting reused across an outer loop: llrm-core's
-//! `optimize/indvars.rs`, the port of `qbopt/optimize/indvars.py`, adapted
-//! to the rich MIR. `widened` is `widenIV` for a counter that needs no sign
-//! proof. `rewound` carries an exact inner recurrence's exit value
-//! around the outer loop, less its distance, in place of its saved start.
-//! Which counters a loop keeps, and which ends it, is `lsr`'s.
+//! Settles what a loop's counters are worth: a counter's value after its loop
+//! becomes a number, and a narrow counter read as a wider index becomes a
+//! counter of that width. LLVM's IndVarSimplify (`rewriteLoopExitValues`,
+//! `widenIV`) plus an exit-value rewind across an outer loop. Which counters a
+//! loop keeps, and which ends it, is `lsr`'s.
+//!
+//! # How it works
+//! One run is these steps, each followed by a refresh of what is known where it
+//! changed the body.
+//!
+//! 1. `loopexit::evaluated`: values after a counted loop computed from its
+//!    trips.
+//! 2. `exitfold::folded`: exits their counts decide are folded.
+//! 3. `exit_values` (only with `exit_values: true`): a counted exit's phi
+//!    values that are affine in the counters, with constant starts and steps,
+//!    become numbers. A counter stepped and then tested (`i + 1 < 32`) leaves
+//!    as 32, so the exit no longer keeps the old counter alive past its step.
+//! 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
+//! 5. `widened`: a counter read through `zext` to the address's index width,
+//!    where `induction` proves its values never pass its own
+//!    (`rises_unsigned`), becomes a counter of that width. C's `unsigned short
+//!    i` reads `a[zext i]`, a conversion per trip, which hides the loop from
+//!    idioms and strength reduction. The wide counter ends the loop against the
+//!    bound extended once in the preheader; other readers of the narrow one
+//!    read its low part.
+//! 6. `rewound`: see below.
+//!
+//! `rewound` carries an exact inner recurrence's exit value around the outer
+//! loop. An inner loop running exactly `count` trips leaves as
+//! `start + count * step`; subtracting that distance on the outer back edge
+//! rebuilds the next start, so the saved start is dead across the hot inner
+//! loop.
+//!
+//! ```text
+//!  outer:                                 outer:
+//!    inner_pre: br inner                    %st = phi [%start,pre],[%r,latch]
+//!  inner:                                 inner:
+//!    %p = phi [%start,inner_pre],..  =>     %p = phi [%st,inner_pre],..
+//!  exit:                                  exit:
+//!    ...                                    %r = add %p_exit, -distance
+//! ```
+//!
+//! It applies only for a pair of single-latch loops whose inner loop has one
+//! exit, a known trip count, a counter with constant nonzero step, and a start
+//! defined outside the outer loop and read in it only by that phi. It is
+//! profitable when inner-loop register pressure reaches the target's registers
+//! and the target's `add` costs no more than a `move` and its `memory_update`
+//! no more than a `load` plus `store`: in a register the old copy and the
+//! rewind are equal work; in frame cells the old form is a load and a store,
+//! the new a memory update.
+//!
+//! # Example
+//! Step 5, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`
+//! with 32-bit addresses. Before:
+//!
+//! ```mir
+//! target datalayout = "e-p:32:32-n8:16:32"
+//!
+//! define i32 @f(i16 %n) {
+//! b0:
+//!   %buf = alloca [64 x i8]
+//!   br label %b1
+//!
+//! b1:
+//!   %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+//!   %go = icmp ult i16 %i, %n
+//!   br i1 %go, label %b2, label %b3
+//!
+//! b2:
+//!   %w = zext i16 %i to i32
+//!   %p = getelementptr inbounds i8, ptr %buf, i32 %w
+//!   store i8 1, ptr %p
+//!   %next = add i16 %i, 1
+//!   br label %b1
+//!
+//! b3:
+//!   ret i32 0
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! b0:
+//!   %buf = alloca [64 x i8]
+//!   %0 = zext i16 %n to i32
+//!   br label %b1
+//!
+//! b1:
+//!   %widen.iv = phi i32 [ 0, %b0 ], [ %widen.iv.next, %b2 ]
+//!   %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+//!   %1 = icmp ult i32 %widen.iv, %0
+//!   br i1 %1, label %b2, label %b3
+//!
+//! b2:
+//!   %p = getelementptr inbounds i8, ptr %buf, i32 %widen.iv
+//!   store i8 1, ptr %p
+//!   %widen.iv.next = add i32 %widen.iv, 1
+//!   %next = add i16 %i, 1
+//!   br label %b1
+//! ; ... b3 unchanged
+//! ```
+//!
+//! The loop now ends against `%n` extended once in the preheader, and the
+//! address reads the wide counter: the `zext` a trip is gone.
+//!
+//! From unit test `a_counter_extended_to_the_index_width_is_that_wide` in
+//! `indvars_tests.rs`.
+//!
+//! # Runs
+//! In the body pipeline after `promote`, with `exit_values: false`. With
+//! `-ftree-ch` (not at -Os) it runs again with `exit_values: true` after the
+//! loop-header copy, where the copy made a counted exit's test the one that
+//! leaves (a number is a `mov` where the counter's register already holds it).
+//!
+//! # Needs
+//! `Registers`, `Bounded` (for a `sext` counter), `induction`, `liveness`,
+//! [`crate::loopexit`], [`crate::exitfold`], [`crate::exitsink`],
+//! [`crate::profit`].
+//!
+//! # Keeps
+//! Nothing after steps 1 to 3; dominators and loops after the others.
+//!
+//! # See also
+//! LLVM `IndVarSimplify.cpp`. Tests: `indvars_tests.rs`.
 
 use std::collections::BTreeSet;
 
 use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::graph::loops::Loop;
-use llrm_analysis::induction::{self, AffineOperand};
+use llrm_analysis::induction::{self, Affine, AffineOperand};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
@@ -32,7 +151,12 @@ use crate::profit::OperationCosts;
 /// the exits (`exitsink`), and an inner recurrence's exit value carried
 /// round the loop outside (`rewound`). Which counters the loop keeps is
 /// `lsr`'s.
-pub struct IndVars;
+pub struct IndVars {
+    /// Rewrite a counted exit's affine values as numbers. Off before the
+    /// header copy: a number is a `mov` where the counter's register already
+    /// holds it.
+    pub exit_values: bool,
+}
 
 impl FunctionPass for IndVars {
     fn name(&self) -> &'static str {
@@ -67,6 +191,10 @@ impl FunctionPass for IndVars {
         if folded {
             standing.changed();
         }
+        let valued = self.exit_values && exit_values(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        if valued {
+            standing.changed();
+        }
         let sunk = crate::exitsink::sunk(unit.function);
         if sunk {
             standing.changed();
@@ -80,8 +208,8 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (sunk || rewound || widened) && dead::dead(unit.context, outer.callees(), unit.function);
-        if evaluated || folded {
+        let dead = (sunk || rewound || widened || valued) && dead::dead(unit.context, outer.callees(), unit.function);
+        if evaluated || folded || valued {
             PreservedAnalyses::none()
         } else if sunk || rewound || widened || dead {
             // Blocks and edges are as they were.
@@ -90,6 +218,101 @@ impl FunctionPass for IndVars {
             PreservedAnalyses::all()
         }
     }
+}
+
+/// A counted exit's phi values that are affine in the loop's counters, the
+/// counters' starts and steps constant, are numbers there: LLVM's
+/// `rewriteLoopExitValues`, the SCEV of the value at the exit's count. A
+/// counter stepped and then tested (`i + 1 < 32`) leaves with 32, so what the
+/// exit reads is no longer the counter kept alive past its step.
+fn exit_values(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &passes::Outer,
+    standing: &mut llrm_analysis::memory::Standing,
+) -> bool {
+    let mut changed = false;
+    let shape = cfg::Shape::of(function);
+    let mut found = Vec::new();
+    {
+        let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
+        let facts = standing.of(&unit);
+        let unit = unit.with_registers(facts);
+        let facts = unit.registers();
+        for loop_ in shape.loops.iter() {
+            let counters = induction::basics(&unit, loop_);
+            if counters.is_empty() {
+                continue;
+            }
+            let headers = counters.keys().copied().collect::<BTreeSet<_>>();
+            for count in induction::exits(&unit, loop_, Some(&facts), false) {
+                let Some(taken) = count.taken.as_ref().filter(|taken| taken.iter().all(|one| one.terms.is_empty()))
+                else {
+                    continue;
+                };
+                let Some(trips) = taken.iter().map(|one| one.constant.clone()).min() else { continue };
+                let (from, exit) = (cfg::block(count.block), cfg::block(count.exit));
+                for phi in _phis(function, exit) {
+                    let Some(Operand::Value(value)) = _from(function, phi, from) else { continue };
+                    let Some(width) = unit.int_bits(Operand::Value(value)) else { continue };
+                    let Some(terms) = induction::linear(
+                        &unit,
+                        &AffineOperand::Value(value, width),
+                        &headers,
+                        width,
+                        false,
+                        &BTreeSet::new(),
+                        &mut IndexMap::default(),
+                    ) else {
+                        continue;
+                    };
+                    let mut total = BigInt::zero();
+                    let mut complete = true;
+                    for (term, coefficient) in &terms {
+                        let number = match term {
+                            AffineOperand::Const(constant) => constant.n.clone(),
+                            AffineOperand::Value(counter, _) => match counters.get(counter) {
+                                Some(Affine {
+                                    start: AffineOperand::Const(start),
+                                    step: AffineOperand::Const(step),
+                                    ..
+                                }) => &start.n + &step.n * &trips,
+                                _ => {
+                                    complete = false;
+                                    break;
+                                }
+                            },
+                        };
+                        total += coefficient * number;
+                    }
+                    if complete {
+                        let at = function
+                            .instruction(phi)
+                            .operands
+                            .chunks(2)
+                            .position(|pair| pair[1] == Operand::Block(from));
+                        found.push((phi, at, total, width));
+                    }
+                }
+            }
+        }
+    }
+    for (phi, at, total, width) in found {
+        let Some(at) = at else { continue };
+        let constant = counting::constant(context, &total, width);
+        if function.instruction(phi).operands.len() == 2 {
+            // An exit phi of one arm is its number wherever it is read.
+            let result = function.instruction(phi).result.expect("a phi's value");
+            function.replace_all_uses_with(result, constant);
+            function.set_operands(phi, Vec::new());
+            function.erase(phi).expect("a phi nothing reads");
+        } else {
+            function.set_operand(phi, 2 * at, constant);
+        }
+        changed = true;
+    }
+    changed
 }
 
 fn _phis(

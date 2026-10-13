@@ -1,14 +1,118 @@
-//! What values past the target's registers cost: the one spill model every
-//! pricing of register pressure shares.
+//! The one spill model every pricing of register pressure shares: what values
+//! past the target's registers cost.
 //!
-//! A value kept in memory costs its traffic there: a store after each
-//! definition, a load at each read, and a memory update each time a counter
-//! is stepped in place; a value its one instruction rebuilds for less than a
-//! load costs that at each read instead. A counter and its step share one
-//! cell, as a copy-joined web does, and a phi's own edges into that cell
-//! move nothing. Where more values live than the target's registers hold,
-//! or than a call leaves across it, the cheapest are spilled, and stay
-//! spilled.
+//! # How it works
+//! The model does not allocate. It asks, at each point of a function, how many
+//! values are live against how many registers the target has there, and spills
+//! the cheapest of the excess.
+//!
+//! Residents. A value takes an integer register where it is live (`integer_in`
+//! is true). Floating values do not. A truth value only its own block's `br`
+//! reads is flags, not a register. An address is folded (`folded_in`), and
+//! takes none, when only loads, stores and `getelementptr`s that are such
+//! addresses read it, in its own block; a frame object, a symbol, or a
+//! constant offset into one is a displacement wherever it is read, and a frame
+//! object indexed by a scale the target's address takes (`Room::index_scales`)
+//! is `[bp+si*8+disp]` at each read. What a folded address is made of (the
+//! runtime pointer and each variable index) is read into registers at the
+//! access instead (`transient`). A far pointer of offset zero is a segment
+//! register's (`segment_view`) where the target has any.
+//!
+//! Cells. A spilled value lives in a cell. A counter and its constant step
+//! (`p + c`, `p - c` taken back into phi `p`) share one (`cells`), as the
+//! allocator's copy-joined web does, and a phi's own edges into its cell move
+//! nothing.
+//!
+//! Points. Each instruction has a point before it, with `Room::registers`
+//! less what its address needs (`transient`) and less the copy a two-address
+//! target makes when an operand stays live (`copied`). A call has a second
+//! point across it, with the registers it keeps (`kept_across`: the callee's
+//! own count for a direct call). Two further kinds have their own registers:
+//! segment views (`Room::segments`) and values an address is built from
+//! (`Room::addresses`).
+//!
+//! Price. A cell's traffic (`Traffic`), each count weighted by its block's
+//! frequency, is a store after each definition (a far pointer takes one store
+//! per word), a load at each read, and a memory update where a counter is
+//! stepped in place. Where one instruction rebuilds the value from nothing (a
+//! frame or symbol address, or a far view of one) the price is the less of
+//! that and the traffic.
+//!
+//! Forecast. The points are taken in order. At each, the residents not yet
+//! spilled that number past its registers are spilled, cheapest first, a
+//! dearer tie to the larger cell, and they stay spilled at every later point.
+//! The forecast is the total cost, the spilled set, and `peak`, the most
+//! residents past a point's registers before any spill. `Pressure` caches
+//! liveness per function; `View::run` and `View::forecast` step the live set
+//! through each block and keep the residents ranked by price, so a point
+//! costs what changed at it, not what is live.
+//!
+//! ```text
+//!   live before each instruction            registers = 3
+//!   i1   {a b c}        fits
+//!   i2   {a b c d}      excess 1: spill the cheapest of a b c d (say d)
+//!   i3   {a b c d e}    d is spilled already; e makes excess 1 again:
+//!                       spill the cheapest of a b c e
+//!   cost = price(victim at i2) + price(victim at i3)
+//! ```
+//!
+//! # Example
+//! ```mir
+//! define i16 @f(i16 %n) {
+//! entry:
+//!   %a = alloca [32 x i8]
+//!   %p = getelementptr inbounds i16, ptr %a, i16 3
+//!   %q = getelementptr inbounds i16, ptr %a, i16 5
+//!   br label %loop
+//! loop:
+//!   %i = phi i16 [ 0, %entry ], [ %next, %latch ]
+//!   %v = load i16, ptr %p
+//!   %at = getelementptr i16, ptr %a, i16 %i
+//!   %u = load i16, ptr %at
+//!   %more = icmp ult i16 %i, %n
+//!   br i1 %more, label %latch, label %exit
+//! latch:
+//!   %t = add i16 %v, %u
+//!   %w = add i16 %t, %i
+//!   store i16 %w, ptr %q
+//!   %next = add i16 %i, 1
+//!   br label %loop
+//! exit:
+//!   ret i16 %n
+//! }
+//! ```
+//! Facts:
+//! ```text
+//! Room { registers: 4, across_call: 2 }  =>  peak 0 (nothing spills)
+//! ```
+//! `%n`, `%i`, `%v` and `%u` fit the four registers; `%a`, `%p` and `%q` are
+//! `[bp+disp]`, so they take none.
+//!
+//! From unit test
+//! `test_a_constant_offset_into_a_frame_object_takes_no_register` in
+//! `spill_tests.rs`.
+//!
+//! # Provides
+//! `Room` (what the target holds), `Traffic` and `traffic`, the free
+//! functions `spilled`, `spilled_in` and `forecast` over `Point`s, and the
+//! `Pressure` analysis with its `View`.
+//!
+//! # Used by
+//! [`crate::profit`] (`spill_forecast`, `weighted`) prices every motion with
+//! it; [`crate::lsr`], [`crate::gvn`] (partial redundancy elimination),
+//! [`crate::hoist`], [`crate::addresssink`] and [`crate::tailrec`] ask it
+//! directly when they weigh a rewrite against register pressure. Not a pass:
+//! it runs only inside those.
+//!
+//! # Needs
+//! `liveness` (`llrm_analysis`), the target's `registers`, `call_registers`,
+//! `far_access_registers`, `segment_registers`, `address_registers`,
+//! `two_address`, `address_forms` and `OperationCosts` (`llrm_mir::target`).
+//!
+//! # Keeps
+//! `Pressure` is a manager analysis: each version of a function has it once.
+//! A target that states no registers (`Room::priced` false) leaves pressure
+//! unpriced.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1094,6 +1198,9 @@ impl Site {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pressure {
     found: Liveness,
+    /// The blocks each value is live into and out of, which `found` has by
+    /// block: what a value that a change touched is taken out of.
+    placed: Placed,
     cells: BTreeMap<ValueId, ValueId>,
     counted: IdSet<ValueId>,
     addressed: IdSet<ValueId>,
@@ -1106,6 +1213,22 @@ pub struct Pressure {
     /// What changes in the live set across each instruction of a block, and
     /// what changes from one block's end to another's start: the same.
     stepped: Stepped,
+}
+
+/// The blocks each value is live into and out of, made from `found` when a
+/// change first brings it up to date and kept from then on: a cache of what
+/// `found` says, so two `Pressure`s of one function are equal whatever was
+/// asked.
+#[derive(Clone, Debug, Default)]
+struct Placed(Option<IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>>);
+
+impl PartialEq for Placed {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
 }
 
 /// The live sets of each block's instructions: a cache of what `found` says,
@@ -1230,9 +1353,32 @@ impl Pressure {
         function: &Function,
         scales: u8,
     ) -> Self {
+        Self::over(context, function, scales, liveness::live(function))
+    }
+
+    /// `of`, the liveness being `found`.
+    fn over(
+        context: &Context,
+        function: &Function,
+        scales: u8,
+        found: Liveness,
+    ) -> Self {
+        Self::with(context, function, scales, found, Placed::default())
+    }
+
+    /// `of`, the liveness being `found` and `placed` the blocks each value is
+    /// live in.
+    fn with(
+        context: &Context,
+        function: &Function,
+        scales: u8,
+        found: Liveness,
+        placed: Placed,
+    ) -> Self {
         let (addressed, folds) = addressed_by(function, &mut |value| folded_in(context, function, value, scales));
         Self {
-            found: liveness::live(function),
+            found,
+            placed,
             cells: cells(function),
             counted: (0..function.value_count() as u32)
                 .map(ValueId)
@@ -1282,6 +1428,7 @@ impl Pressure {
 impl llrm_mir::passes::Analysis for Pressure {
     type Result = Pressure;
     const NAME: &'static str = "pressure";
+    const INCREMENTAL: bool = true;
     fn run(
         context: &Context,
         _: &DataLayout,
@@ -1289,6 +1436,132 @@ impl llrm_mir::passes::Analysis for Pressure {
         analyses: &mut llrm_mir::passes::Analyses,
     ) -> Self::Result {
         Pressure::of(context, function, Room::of(analyses.outer()).index_scales)
+    }
+
+    /// What is live is followed from the reads of each value, so a change that
+    /// leaves the edges as they were moves the live sets of the values it
+    /// names alone: the results, the operands and the operands that were of
+    /// what it touched, with the phis that take them and the arms of those.
+    /// A branch that takes other edges, or a block made or gone, derives them
+    /// afresh.
+    fn update_owned(
+        previous: std::rc::Rc<Self::Result>,
+        changes: &[llrm_mir::module::Change],
+        context: &Context,
+        _: &DataLayout,
+        function: &Function,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> Option<Self::Result> {
+        use llrm_mir::module::Change;
+        let mut named = IdSet::<ValueId>::new();
+        let name_operand = |named: &mut IdSet<ValueId>, operand: &Operand| {
+            if let Operand::Value(value) = operand {
+                named.insert(*value);
+            }
+        };
+        let name_inst = |named: &mut IdSet<ValueId>, inst: InstId| {
+            let op = function.instruction(inst);
+            named.extend(op.result);
+            op.operands.iter().for_each(|one| name_operand(named, one));
+        };
+        for change in changes {
+            match change {
+                Change::BlockCreated(_) | Change::BlockErased(_) => return None,
+                Change::Inserted { inst, .. } | Change::Moved { inst, .. } | Change::Erased { inst, .. } => {
+                    if function.instruction(*inst).opcode.is_terminator() {
+                        return None;
+                    }
+                    name_inst(&mut named, *inst);
+                }
+                Change::Cloned { to, .. } => name_inst(&mut named, *to),
+                Change::Rewritten(inst) => name_inst(&mut named, *inst),
+                Change::Operand { inst, was, index } => {
+                    name_operand(&mut named, was);
+                    if function.instruction(*inst).opcode.is_terminator()
+                        && (matches!(was, Operand::Block(_))
+                            || matches!(
+                                function.instruction(*inst).operands.get(*index as usize),
+                                Some(Operand::Block(_))
+                            ))
+                    {
+                        return None;
+                    }
+                }
+                Change::Operands { inst, was } => {
+                    was.iter().for_each(|one| name_operand(&mut named, one));
+                    if function.instruction(*inst).opcode.is_terminator()
+                        && was.iter().any(|one| matches!(one, Operand::Block(_)))
+                        && was[..] != function.instruction(*inst).operands[..]
+                    {
+                        return None;
+                    }
+                }
+            }
+        }
+        // A phi's arms are live where it is, and it where they are read.
+        let mut work: Vec<ValueId> = named.iter().collect();
+        while let Some(value) = work.pop() {
+            for user in function.users(value) {
+                let phi = function.instruction(user.user);
+                if phi.opcode == Opcode::Phi && function.parent(user.user).is_some() {
+                    work.extend(phi.result.filter(|&result| named.insert(result)));
+                }
+            }
+            if let ValueDef::Instruction(inst) = function.value(value).def
+                && function.instruction(inst).opcode == Opcode::Phi
+            {
+                for pair in function.instruction(inst).operands.chunks(2) {
+                    if let Operand::Value(arm) = pair[0]
+                        && named.insert(arm)
+                    {
+                        work.push(arm);
+                    }
+                }
+            }
+        }
+        let (mut found, placed) = std::rc::Rc::try_unwrap(previous)
+            .map_or_else(|kept| (kept.found.clone(), kept.placed.clone()), |owned| (owned.found, owned.placed));
+        let mut placed = placed
+            .0
+            .unwrap_or_else(
+                || {
+                    let mut index = IdMap::<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>::new();
+                    for (at, values) in &found.live_in {
+                        for value in values {
+                            index.get_or_insert_with(*value, Default::default).0.insert(*at);
+                        }
+                    }
+                    for (at, values) in &found.live_out {
+                        for value in values {
+                            index.get_or_insert_with(*value, Default::default).1.insert(*at);
+                        }
+                    }
+                    index
+                },
+            );
+        for value in named.iter() {
+            let (into, out) = placed.remove(&value).unwrap_or_default();
+            for at in into {
+                found.live_in.get_mut(&at).map(|set| set.remove(&value));
+            }
+            for at in out {
+                found.live_out.get_mut(&at).map(|set| set.remove(&value));
+            }
+        }
+        let now = liveness::live_of(function, &named);
+        for (at, values) in now.live_in {
+            for value in &values {
+                placed.get_or_insert_with(*value, Default::default).0.insert(at);
+            }
+            found.live_in.entry(at).or_default().extend(values);
+        }
+        for (at, values) in now.live_out {
+            for value in &values {
+                placed.get_or_insert_with(*value, Default::default).1.insert(at);
+            }
+            found.live_out.entry(at).or_default().extend(values);
+        }
+        Some(Pressure::with(context, function, Room::of(analyses.outer()).index_scales, found, Placed(Some(placed))))
     }
 }
 

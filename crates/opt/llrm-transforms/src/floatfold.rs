@@ -1,26 +1,75 @@
-//! Float values floatfacts proves exact, replaced by their constants: LLVM's
-//! InstSimplify and InstCombine for floats. Adapted from llrm-core's
-//! `optimize/floatfold.rs`, the port of `qbopt/optimize/floatfold.py`.
+//! Replaces floating values [`llrm_analysis::floatfacts`] proves exact by
+//! their constants, and applies the algebraic freedoms an operation's
+//! fast-math flags give.
 //!
-//! What changed with the IR:
-//! - `stored` wrote an exact x87 value's bits where it was stored, x87 having
-//!   no immediate operand. Here every read of the value reads the constant, a
-//!   store's included, and Dead takes the definition, as Fold's integers
-//!   (`_dead_values` is Dead's).
-//! - `discarded` dropped an unread exact conversion. Here every read of the
-//!   conversion's integer reads the number, and Dead takes the conversion.
+//! # How it works
+//! `floatfacts` proves a result exactly representable in its format, so the
+//! constant is right under any rounding mode. Three steps run in order over one
+//! solve (the manager's, where it was made for the same call writes):
 //!
-//! Dropped, no rich MIR analogue: `checks` and `_checked`, the `Fcheck`
-//! (FWAIT) kept for each removed operation's exceptions: the rich MIR
-//! observes no FP exception, so gvn has nothing to call.
+//! 1. `discarded`: an exact float-to-integer conversion (`fptosi`,
+//!    `llvm.lrint`, ...) has a known integer; every read of it reads that
+//!    number.
+//! 2. `stored`: every read of an exact float value, a store's included, reads
+//!    its constant. Whatever stops being read is [`crate::dead`]'s.
+//! 3. `freedoms`: rewrites that need no analysis, only the flags (`Facts`).
 //!
-//! Tests, in `floatfold_tests.rs`: `test_storage_requires_exact_bits` and
-//! `test_exact_pair_keeps_checks_and_refuses_observable_results`, less
-//! their checks. Skipped: the `checks` tests, and BC object corpora
-//! (`test_fpdeep_exact_double_stores_do_not_execute_floating_arithmetic`,
-//! `test_qb_fpcse_preserves_entry_when_first_load_disappears`,
-//! `test_collapsed_fpcse_has_no_empty_jump_trampoline`,
-//! `test_original_wait_is_an_explicit_checkpoint_with_encoding_provenance`).
+//! ```text
+//!   %a = fadd double 1.5, 2.0          %a = fadd double 1.5, 2.0   (dead)
+//!   store double %a, ptr @x     ==>    store double 3.5, ptr @x
+//!   %b = load double, ptr @x           %b = load double, ptr @x    (3.5 too)
+//! ```
+//!
+//! The freedoms, per operation: `x + -0.0`, `x - 0.0` and `x * 1.0` are `x`;
+//! `x + 0.0` is `x` with `nsz`; `x * 0` is 0 with `nnan` and `nsz`; `x - x` is
+//! 0 and `x / x` is 1 with `nnan` and `ninf`. A constant moves to the right of
+//! a sum or product. A division by a constant is a multiply by its reciprocal
+//! with `arcp`, or without it when the reciprocal is exact (a normal power of
+//! two whose reciprocal is normal). `(x op c1) op c2` is `x op (c1 op c2)` for
+//! a sum or product when both carry `reassoc`; the new flags are the
+//! intersection.
+//!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! @g = global float 0.0
+//!
+//! define i32 @f() {
+//! b0:
+//!   store float 1.440000e+02, ptr @g
+//!   %x = load float, ptr @g
+//!   %i = fptosi float %x to i32
+//!   ret i32 %i
+//! }
+//! ```
+//!
+//! After, with the dead load and conversion removed:
+//!
+//! ```mir
+//! define i32 @f() {
+//! b0:
+//!   store float 1.440000e+02, ptr @g
+//!   ret i32 144
+//! }
+//! ```
+//!
+//! The exact conversion of the stored 144.0 reads as 144.
+//!
+//! From unit test `test_an_exact_conversion_reads_as_its_number` in
+//! `floatfold_tests.rs`.
+//!
+//! # Runs
+//! Inside [`crate::fold`], every time fold runs, which is the pass list's
+//! second entry and after the header copy; there is no pass-list entry of its
+//! own. On wherever `fold` is (-O1 and up).
+//!
+//! # Needs
+//! [`llrm_analysis::floatfacts`] through `manager::FloatFacts`, and
+//! `manager::writes` for what calls write.
+//!
+//! # See also
+//! LLVM's `InstructionSimplify` and `InstCombine` floating rules.
 
 use llrm_analysis::consts::{Calls, Known};
 use llrm_analysis::floatfacts::{self, Finite, Format};
@@ -86,7 +135,7 @@ pub(crate) fn _folded(
         let unit = held.unit(context, layout, function, analyses.outer());
         let facts = match solved {
             Some(solved) => solved.facts.clone(),
-            None => floatfacts::known(&unit, calls, None),
+            None => floatfacts::known(&unit, calls),
         };
         let conversions = floatfacts::converted(&unit, calls, Some(&facts));
         (facts, conversions)

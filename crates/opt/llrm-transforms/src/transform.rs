@@ -1,50 +1,67 @@
-//! Helpers adapted from llrm-core's `optimize/transform.rs`, each copied as
-//! a ported pass needs it; the pipeline itself is `pipeline`.
-//! `_unreachable` is `llrm_analysis::cfg::_unreachable`.
+//! The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`],
+//! [`crate::unswitch`] and [`crate::loopexit`] share: value reuse, liveness of
+//! values, and cleanup of phis after an edge goes.
 //!
-//! What `gvn` reads -- `_PURE`, `_computation`, `_reaches`, `_undisturbed`
-//! and `subexpressions` -- came with it. Left behind, each of the old
-//! representation:
-//! - `_widths`, `_full`, `_width` and `_copied`: a value was split into word
-//!   halves and copied between registers; here every value is whole and nothing
-//!   is a copy, so `stands` (what a copy numbered as) is the substitution
-//!   itself.
-//! - `halves`: which half of a value was read; a value here is whole. `live` is
-//!   here for Dead.
-//! - `reused_divides`, `divided_twice`: one divide had two answers, one dead.
-//!   `sdiv` and `srem` are separate here, and two equal divides are one
-//!   expression `subexpressions` finds.
-//! - `_read` and the `flags` checks: no value is the machine's flags.
-//! - `_reusable_float_path`, `_exact_floating`, `_exact_stored_load`,
-//!   `_unchanged_float_environment`, `_erased_floating`: x87 exceptions,
-//!   precision and the float environment. Floating arithmetic has no exceptions
-//!   here (see `llrm_analysis::effects`), so it is as pure as integer
-//!   arithmetic.
-//! - `_phi_reading`, `_reclaimed`, `_empty_operation`: an erased operation's
-//!   source bytes. `replace_all_uses_with` reaches phis too.
+//! # How it works
+//! `subexpressions` is common-subexpression elimination. Blocks are taken in
+//! layout order; each instruction whose whole answer is in its operands gets a
+//! key (`_computation`): the opcode with its predicate, cast and flags, the
+//! type, and the operands as they stand once earlier replacements are made. A
+//! commutative pair (`add`, `mul`, `and`, `or`, `xor`, `icmp eq` and `ne`) is
+//! sorted and a pair of equal operands is one. The pure kinds are in `_PURE`,
+//! plus floating arithmetic and its conversions, which have no exceptions
+//! here. An instruction whose key an earlier one has, where that one has
+//! certainly run (`_reaches`: in the same block before it, or in a dominating
+//! block), reads the earlier result and is erased. A load is reused only
+//! within its block and only if nothing between the two may write its bytes
+//! (`_undisturbed`, from `memoryssa::Accesses`); with `avoid_store_crossing` a
+//! store between them refuses it too.
 //!
-//! `_undisturbed` asks `memoryssa::Accesses` what a store or call writes;
-//! the old one refused every call. `forwarded` serves only a load: no
-//! other instruction reads memory.
-//! - The `dgroup` parameter: a segment is not a MIR fact.
+//! `equal_calls` makes two calls with one callee and arguments one when the
+//! caller's `silent` says they touch no memory: the later takes the earlier's
+//! result where the earlier has certainly run.
 //!
-//! Tests of these, from `optimize/transform_tests.rs` and
-//! `analysis/induction_tests.rs`, are here, the addresses and constants
-//! now instructions; `test_cse_replaces_phi_uses_of_a_deleted_initializer`
-//! keeps one case, its others varying variables, source bytes and a copied
-//! constant. `test_a_third_equal_divide_reads_the_answer_the_first_computed`
-//! tests `subexpressions`, which serves a divide here. Stay behind:
-//! - test_cse_propagates_a_complete_narrow_copy_to_an_opaque_reader and
-//!   test_cse_refuses_an_operand_that_is_only_half_its_value: halves and
-//!   copies.
-//! - test_deferred_runtime_float_reuse_respects_environment,
-//!   test_unknown_integer_loads_share_a_value_but_unknown_floats_do_not and
-//!   test_proven_copy_unlocks_strict_floating_cse (ignored there): the x87
-//!   environment and exactness, the last two reading BC fixtures.
-//! - test_both_lngmix_divides_absorb: a BC corpus through `wholeseg`.
-//! - test_value_reuse_is_one_gvn_pre_pass: the pipeline is not ported.
-//! - test_a_served_read_names_the_value_and_not_a_register: a BC corpus, and a
-//!   load here is replaced by its value outright.
+//! `forwarded` is store-to-load forwarding across blocks: each load that
+//! `avail::forwardable_walk` says a known value serves becomes that value.
+//! `Crossings` answers whether a store lies on some path between the value's
+//! definition and the load, for `avoid_store_crossing`; `Forwarding` keeps the
+//! walk for the second numbering of one function.
+//!
+//! ```text
+//!   before                        after
+//!   %a = add %x, %y               %a = add %x, %y
+//!   %c = add %y, %x               (uses of %c read %a)
+//!   %b = load %p                  %b = load %p
+//!   store %v, %q                  store %v, %q   ; may not write %p's bytes
+//!   %d = load %p                  (uses of %d read %b)
+//! ```
+//!
+//! `live` marks, to a fixed point, every value that something staying reads;
+//! `dead` removes the rest. `_comparison` finds the `icmp` in a block that
+//! defines a branch's condition. `_trivial_phis` resolves joins after an edge
+//! disappears: each phi keeps only the inputs of its remaining predecessors, a
+//! phi with one other value is that value, and a phi with the arms of an
+//! earlier phi in its block is that phi (LLVM's `EliminateDuplicatePHINodes`).
+//!
+//! # Example
+//! No honest example: these are helpers shared by passes, and none changes a
+//! function on its own. Read [`crate::gvn`] and its tests for them in use.
+//!
+//! # Provides
+//! `subexpressions`, `equal_calls`, `forwarded` ([`crate::gvn`]); `live` and
+//! `live_except` ([`crate::dead`], [`crate::floatloop`]); `_comparison`
+//! ([`crate::decide`], [`crate::unswitch`]); `_trivial_phis`
+//! ([`crate::decide`], [`crate::loopexit`], [`crate::unswitch`]).
+//!
+//! # Used by
+//! [`crate::gvn`] calls `subexpressions`, `equal_calls` and `forwarded` on each
+//! function it numbers; [`crate::dead`] and [`crate::floatloop`] call `live`
+//! to decide what to delete; [`crate::decide`], [`crate::loopexit`] and
+//! [`crate::unswitch`] call `_trivial_phis` after they drop an edge. Not a
+//! pass: it runs only inside those.
+//!
+//! # Needs
+//! `memoryssa::Accesses`, `avail` and `cfg::Dominance` (`llrm_analysis`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -309,6 +326,69 @@ pub fn subexpressions(
     }
     for inst in gone {
         function.erase(inst)?;
+    }
+    Ok(true)
+}
+
+/// Two calls with the same callee and arguments that touch no memory (`silent`
+/// says which) are one: the later one is the earlier's value, where the earlier
+/// has certainly run. LLVM's GVN numbers a call that `doesNotAccessMemory` and
+/// gcc's FRE a call to a const function. `silent` is asked only of calls that
+/// have an equal. Whether anything changed.
+pub fn equal_calls(
+    function: &mut Function,
+    silent: &dyn Fn(&Function, InstId) -> bool,
+) -> Result<bool, String> {
+    // By callee and arguments, in layout order: only groups of two or more
+    // are looked at again.
+    let mut groups: IndexMap<(TypeId, &[Operand]), Vec<(usize, usize, InstId)>> = IndexMap::default();
+    for (at, &block) in function.layout().iter().enumerate() {
+        for (index, &inst) in function.block(block).instructions().iter().enumerate() {
+            let op = function.instruction(inst);
+            if matches!(op.opcode, Opcode::Call(_)) && op.result.is_some() {
+                groups.entry((op.ty, &op.operands[..])).or_default().push((at, index, inst));
+            }
+        }
+    }
+    let groups: Vec<Vec<(usize, usize, InstId)>> = groups
+        .into_values()
+        .filter(|calls| calls.len() > 1)
+        .map(|calls| calls.into_iter().filter(|&(_, _, inst)| silent(function, inst)).collect::<Vec<_>>())
+        .filter(|calls| calls.len() > 1)
+        .collect();
+    if groups.is_empty() {
+        return Ok(false);
+    }
+    let dominance = cfg::Dominance::of(function);
+    let layout = function.layout().to_vec();
+    let mut swap: Vec<(ValueId, ValueId)> = Vec::new();
+    for calls in &groups {
+        let mut leaders: Vec<(usize, usize, InstId)> = Vec::new();
+        for &(at, index, inst) in calls {
+            let earlier = leaders
+                .iter()
+                .rev()
+                .find(|leader| _reaches(leader.0, leader.1, at, index, &dominance, &layout, layout[at]))
+                .copied();
+            match earlier {
+                Some((_, _, leader)) => {
+                    let (mine, theirs) = (function.instruction(inst).result, function.instruction(leader).result);
+                    if let (Some(mine), Some(theirs)) = (mine, theirs) {
+                        swap.push((mine, theirs));
+                    }
+                }
+                None => leaders.push((at, index, inst)),
+            }
+        }
+    }
+    if swap.is_empty() {
+        return Ok(false);
+    }
+    for &(mine, theirs) in &swap {
+        function.replace_value(mine, Operand::Value(theirs));
+        if let ValueDef::Instruction(inst) = function.value(mine).def {
+            function.erase(inst)?;
+        }
     }
     Ok(true)
 }
@@ -684,12 +764,9 @@ b0:
             .unwrap()
         };
         let (context, function) = module.function_mut("f").expect("@f");
-        let registers = llrm_analysis::consts::known(
-            &llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)),
-            None,
-            None,
-            None,
-        );
+        let registers = llrm_analysis::consts::known(&llrm_analysis::testing::with_registers(Unit::within(
+            context, &layout, function, &outer,
+        )));
         let shape = llrm_analysis::cfg::Shape::of(function);
         let changed = forwarded(
             context,

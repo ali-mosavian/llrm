@@ -1,5 +1,5 @@
-reason = "x87: a float load one arithmetic instruction reads is its memory operand (nbody c -8%/-12.5% Os, fpbench -1.2%, parity/qbsp -6.8%, nbody_single nib -5.3%)"
-blessed = "2026-10-09"
+reason = "ch default (user decision 2026-10-12) and the shrinkwrap, frequency and layout fixes landed with it: the rows main's bq16/bq32 columns add moved by -0.1% to +0.05% except nbody bq32 -O2 (+4.6%, the guard and rotated loops of the BASIC loops); the rest fewer instructions"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 89
@@ -7,12 +7,42 @@ memory_operands = 28
 code_bytes = 389
 data_bytes = 17
 bss_bytes = 0
+kernel_ms = 0.0142
 
 [bas.Os]
 instructions = 82
 memory_operands = 28
 code_bytes = 332
 data_bytes = 17
+bss_bytes = 0
+kernel_ms = 0.0141
+
+[bq16.O2]
+instructions = 90
+memory_operands = 28
+code_bytes = 394
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 0.0087
+
+[bq16.Os]
+instructions = 84
+memory_operands = 28
+code_bytes = 337
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 0.0086
+
+[bq32.O2]
+instructions = 42451
+code_bytes = 363
+data_bytes = 23
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 42438
+code_bytes = 316
+data_bytes = 23
 bss_bytes = 0
 
 [c.O2]
@@ -21,6 +51,7 @@ memory_operands = 27
 code_bytes = 308
 data_bytes = 4
 bss_bytes = 0
+kernel_ms = 0.0022
 
 [c.Os]
 instructions = 86
@@ -28,6 +59,7 @@ memory_operands = 27
 code_bytes = 257
 data_bytes = 4
 bss_bytes = 0
+kernel_ms = 0.0021
 
 [nib.O2]
 instructions = 133
@@ -35,6 +67,7 @@ memory_operands = 39
 code_bytes = 455
 data_bytes = 16
 bss_bytes = 0
+kernel_ms = 0.0035
 
 [nib.Os]
 instructions = 128
@@ -42,6 +75,7 @@ memory_operands = 39
 code_bytes = 399
 data_bytes = 16
 bss_bytes = 0
+kernel_ms = 0.0035
 
 [ow.O2]
 instructions = 202

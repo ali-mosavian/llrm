@@ -1,7 +1,7 @@
 //! [`llrm_object::debug::Info`] as Borland's debug information in an OMF
 //! object: the `COMENT` records of classes 0xE1-0xE8 and 0xEA that Turbo C++
 //! writes under `-v`, which `TLINK /v` turns into the table Turbo Debugger
-//! reads. docs/machine/turbo-debugger.md has the measurements behind
+//! reads. docs/formats/turbo-debugger.md has the measurements behind
 //! every byte. 16-bit only. A fact these records cannot say is refused, with
 //! what it was.
 
@@ -123,6 +123,24 @@ struct Types<'a> {
 }
 
 impl Types<'_> {
+    /// `id`'s index, or None where these records cannot say the type: what
+    /// was added in the try is taken back (gcc's way: what a debug format
+    /// cannot say is left out, never a refused compile).
+    fn tolerated(
+        &mut self,
+        id: usize,
+    ) -> Result<Option<u16>, Error> {
+        let saved = (self.of.clone(), self.records.clone(), self.procedures.clone(), self.shapes.clone(), self.next);
+        match self.code(id) {
+            Ok(one) => Ok(Some(one)),
+            Err(Error::Unencodable(_)) => {
+                (self.of, self.records, self.procedures, self.shapes, self.next) = saved;
+                Ok(None)
+            }
+            Err(other) => Err(other),
+        }
+    }
+
     /// `id`'s index, its records made if it has none yet.
     fn code(
         &mut self,
@@ -137,6 +155,8 @@ impl Types<'_> {
             // Const and volatile are not in the records; a typedef is a name,
             // set by `names`.
             Type::Qualified { target, .. } | Type::Typedef { target, .. } => self.code(*target),
+            // BASIC's array is its descriptor, as a debugger reads it.
+            Type::Described { descriptor, .. } => self.code(*descriptor),
             one => {
                 let at = self.next;
                 self.next += 1;
@@ -171,6 +191,7 @@ impl Types<'_> {
         loop {
             match self.info.types.get(id)? {
                 Type::Typedef { target, .. } | Type::Qualified { target, .. } => id = *target,
+                Type::Described { descriptor, .. } => id = *descriptor,
                 Type::Procedure { .. } => return Some(id),
                 _ => return None,
             }
@@ -282,7 +303,11 @@ impl Types<'_> {
             Type::Enum { name, .. } => return refused(format!("enum {name} is not written yet")),
             Type::Reference(_) => return refused("a BASIC reference has no type here"),
             Type::FixedString(_) => return refused("a BASIC STRING * n has no type here"),
-            Type::Scalar(_) | Type::Basic { .. } | Type::Qualified { .. } | Type::Typedef { .. } => {
+            Type::Scalar(_)
+            | Type::Basic { .. }
+            | Type::Qualified { .. }
+            | Type::Typedef { .. }
+            | Type::Described { .. } => {
                 unreachable!("handled by `code`")
             }
         })
@@ -340,7 +365,7 @@ impl Builder<'_> {
         &mut self,
         variable: &model::Variable,
     ) -> Result<Vec<u8>, Error> {
-        let to = self.types.code(variable.r#type)?;
+        let Some(to) = self.types.tolerated(variable.r#type)? else { return Ok(Vec::new()) };
         let mut data = [pascal(&variable.name)?, index(to)?].concat();
         match &variable.location {
             Location::Frame { disp } => {
@@ -354,20 +379,20 @@ impl Builder<'_> {
             Location::List(entries) if matches!(&entries[..], [(_, Location::Register(_))]) => {
                 let Location::Register(register) = &entries[0].1 else { unreachable!("matched") };
                 data.push(if variable.kind == Kind::Parameter { REGISTER_PARAMETER } else { REGISTER_LOCAL });
-                data.push(register_number(&variable.name, register)?);
+                let Ok(number) = register_number(&variable.name, register) else { return Ok(Vec::new()) };
+                data.push(number);
             }
             // The optimiser removed it: Turbo Debugger's records have no
             // "optimized out", so it is left out.
             Location::List(entries) if entries.is_empty() => return Ok(Vec::new()),
-            Location::Register(register) => {
-                return refused(format!("{} is in register {register}, which is not written yet", variable.name));
-            }
-            Location::List(_) => {
-                return refused(format!("{} has a location list, which is not written yet", variable.name));
-            }
-            // Turbo Debugger's records say neither a value in no place nor one
-            // in pieces: left out.
-            Location::Constant(_) | Location::Pieces(_) | Location::Relative { .. } => return Ok(Vec::new()),
+            // These records name one place for a scope: a register for the
+            // whole of it, a value over ranges, in no place or in pieces is
+            // left out.
+            Location::Register(_)
+            | Location::List(_)
+            | Location::Constant(_)
+            | Location::Pieces(_)
+            | Location::Relative { .. } => return Ok(Vec::new()),
         }
         Ok(data)
     }
@@ -378,7 +403,12 @@ impl Builder<'_> {
     ) -> Result<Option<Rc<Record>>, Error> {
         let mut data = Vec::new();
         for variable in variables {
-            data.extend(self.entry(variable)?);
+            match self.entry(variable) {
+                Ok(entry) => data.extend(entry),
+                // One these records cannot say is left out, not the compile.
+                Err(Error::Unencodable(_)) => {}
+                Err(other) => return Err(other),
+            }
         }
         Ok((!data.is_empty()).then(|| comment(LOCALS, data)))
     }
@@ -417,10 +447,27 @@ impl Builder<'_> {
         let variables: Vec<&model::Variable> = own.iter().collect();
         out.extend(self.locals(&variables)?);
         for inner in &block.blocks {
-            self.block(out, inner)?;
+            self.left_out_if_unsayable(out, |this, out| this.block(out, inner))?;
         }
         out.push(self.end(range.offset + range.length)?);
         Ok(())
+    }
+
+    /// `write`'s records, or none of them where these records cannot say what
+    /// it writes.
+    fn left_out_if_unsayable(
+        &mut self,
+        out: &mut Vec<Rc<Record>>,
+        write: impl FnOnce(&mut Self, &mut Vec<Rc<Record>>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let kept = out.len();
+        match write(self, out) {
+            Err(Error::Unencodable(_)) => {
+                out.truncate(kept);
+                Ok(())
+            }
+            other => other,
+        }
     }
 
     /// A function's scopes: its own, with the parameters as passed in, and its
@@ -445,7 +492,7 @@ impl Builder<'_> {
         let (start, _) = function.body.unwrap_or((0, range.length));
         out.push(self.scope(range.section, range.offset + start)?);
         for block in &function.blocks {
-            self.block(out, block)?;
+            self.left_out_if_unsayable(out, |this, out| this.block(out, block))?;
         }
         let locals: Vec<&model::Variable> = function
             .variables
@@ -525,9 +572,6 @@ pub fn records(
     if object.arch.bits() != 16 {
         return refused("its records are 16-bit: Borland's 32-bit information is another format");
     }
-    if info.language != model::Language::C {
-        return refused(format!("only C's information is written, not {:?}'s", info.language));
-    }
     let mut builder = Builder {
         object,
         info,
@@ -545,7 +589,7 @@ pub fn records(
     functions.sort_by_key(|one| one.ranges.first().map(|range| (range.section, range.offset)));
     let mut scopes = Vec::new();
     for function in &functions {
-        builder.function(&mut scopes, function)?;
+        builder.left_out_if_unsayable(&mut scopes, |this, out| this.function(out, function))?;
     }
     let far = info.functions.iter().any(|one| one.far);
     let mut publics: BTreeMap<usize, Vec<Rc<Record>>> = BTreeMap::new();
@@ -556,7 +600,13 @@ pub fn records(
         Definition::Undefined => None,
     };
     for function in &info.functions {
-        let (at, record) = builder.function_type(function)?;
+        let (at, record) = match builder.function_type(function) {
+            Ok(made) => made,
+            // A function whose type these records cannot say has its scopes
+            // and no type.
+            Err(Error::Unencodable(_)) => continue,
+            Err(other) => return Err(other),
+        };
         if object.symbols[function.symbol].binding == Binding::Public {
             let list = publics.entry(function.symbol).or_default();
             list.push(record);
@@ -567,14 +617,16 @@ pub fn records(
         }
     }
     for global in &info.globals {
-        let Location::Static { symbol, disp } = &global.location else {
-            return refused(format!("{} is no static", global.name));
-        };
-        let to = builder.types.code(global.r#type)?;
+        let Location::Static { symbol, disp } = &global.location else { continue };
+        let Some(to) = builder.types.tolerated(global.r#type)? else { continue };
         if object.symbols[*symbol].binding == Binding::Public && *disp == 0 {
             publics.entry(*symbol).or_default().push(comment(PUBLIC_TYPE, [index(to)?, vec![0x00]].concat()));
         } else {
-            statics.extend(builder.placed(&global.name, to, false, *symbol, *disp)?);
+            match builder.placed(&global.name, to, false, *symbol, *disp) {
+                Ok(entry) => statics.extend(entry),
+                Err(Error::Unencodable(_)) => {}
+                Err(other) => return Err(other),
+            }
         }
     }
     if !statics.is_empty() {
@@ -835,41 +887,37 @@ mod tests {
         assert!(index(0x8000).is_err());
     }
 
-    /// What these records cannot say is refused by name: a register location, a
-    /// bit field, an enum, a 32-bit object, a language but C's.
+    /// What these records cannot say is left out, never a refused compile: a
+    /// variable in a register, of a bit field's struct or an enum, of another
+    /// language's. Each of these refused the whole object ("r is in register
+    /// si"), so `-gtd -O2` and every BASIC or Nib program produced none. A
+    /// 32-bit object is another format and is refused by name.
     #[test]
-    fn what_turbo_debugger_cannot_say_is_refused_by_name() {
-        let refused = |made: Object| write::write(&made).unwrap_err().to_string();
-        let register =
-            object(vec![int()], vec![variable("r", 0, Kind::Local, Location::Register("si".into()))], |_| {});
-        assert!(refused(register).contains("r is in register si"));
+    fn what_turbo_debugger_cannot_say_is_left_out_not_a_refused_compile() {
+        let names = |made: Object| -> Vec<u8> { all(&made, LOCALS).concat() };
+        let kept = variable("k", 0, Kind::Local, Location::Frame { disp: -2 });
+        let register = variable("r", 0, Kind::Local, Location::Register("si".into()));
+        let locals = names(object(vec![int()], vec![register, kept.clone()], |_| {}));
+        assert!(locals.windows(2).any(|pair| pair == [1, b'k']), "k is kept: {locals:?}");
+        assert!(!locals.windows(2).any(|pair| pair == [1, b'r']), "r is left out: {locals:?}");
         let bits = Type::Struct {
             name: "s".into(),
             bytes: 2,
             fields: vec![Field { name: "b".into(), r#type: 0, offset: 0, bits: Some((0, 3)) }],
             union: false,
         };
-        assert!(
-            refused(object(
-                vec![int(), bits],
-                vec![variable("v", 1, Kind::Local, Location::Frame { disp: -2 })],
-                |_| {}
-            ))
-            .contains("bit field b")
-        );
         let enumeration = Type::Enum { name: "e".into(), underlying: 0, enumerators: Vec::new() };
-        assert!(
-            refused(object(
-                vec![int(), enumeration],
-                vec![variable("v", 1, Kind::Local, Location::Frame { disp: -2 })],
-                |_| {}
-            ))
-            .contains("enum e")
-        );
+        for (unsayable, name) in [(bits, b'v'), (enumeration, b'w')] {
+            let one = variable(&String::from_utf8(vec![name]).unwrap(), 1, Kind::Local, Location::Frame { disp: -4 });
+            let locals = names(object(vec![int(), unsayable], vec![one, kept.clone()], |_| {}));
+            assert!(locals.windows(2).any(|pair| pair == [1, b'k']), "k is kept: {locals:?}");
+            assert!(!locals.windows(2).any(|pair| pair == [1, name]), "{} is left out: {locals:?}", name as char);
+        }
+        let basic = object(vec![int()], vec![kept], |info| info.language = Language::Basic);
+        assert!(!all(&basic, LOCALS).is_empty(), "another language's information is written");
         let mut wide = object(vec![int()], Vec::new(), |_| {});
         wide.arch = Arch::I386;
-        assert!(refused(wide).contains("16-bit"));
-        assert!(refused(object(vec![int()], Vec::new(), |info| info.language = Language::Basic)).contains("only C's"));
+        assert!(write::write(&wide).unwrap_err().to_string().contains("16-bit"));
     }
 
     /// A block is a scope of its own inside the body's, ending where it does.
@@ -931,9 +979,9 @@ mod tests {
             scopes[3],
             (LOCALS, vec![1, b'p', 0x04, 0x0C, 0x06, 1, b'c', 0x04, 0x0C, 0x03, 1, b'a', 0x04, 0x0A, 0x06, 0x00])
         );
-        // A register Turbo Debugger has no number for is refused by name.
+        // A register Turbo Debugger has no number for is left out.
         let wide = object(vec![int()], vec![in_register("w", "eax")], |_| {});
-        assert!(write::write(&wide).unwrap_err().to_string().contains("w is in register eax"));
+        assert!(!all(&wide, LOCALS).concat().windows(2).any(|pair| pair == [1, b'w']));
     }
 
     /// A pointer to a function points to a function type called as far as the

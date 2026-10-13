@@ -1,9 +1,90 @@
-//! Port of `qbopt/backend/splitkit.py`: splitting a live range instead of
-//! spilling the whole of it.
+//! Splits a live range into pieces held in registers where that pays, instead
+//! of spilling all of it.
 //!
-//! LLVM's `SplitKit`: `placed`, `local` and `per_block` choose where a piece
-//! holds the value (`tryRegionSplit`, `tryLocalSplit`, `tryBlockSplit`), and
-//! `carved` makes it (`SplitEditor`).
+//! # How it works
+//! When the allocator cannot place a value it first tries to split it. Three
+//! strategies choose where a piece holds the value, in order:
+//!
+//! - `local`: for a value live in one block, the longest run of references that
+//!   some candidate register is free across, when that is at least two and not
+//!   all of them (`tryLocalSplit`).
+//! - `placed`: by region (`tryRegionSplit`). For each candidate register,
+//!   [`crate::backend::spillplacement`] settles which edge bundles hold the
+//!   value in a register, weighting blocks by frequency against the
+//!   interference of that register. The best candidate's region comes first,
+//!   and the compact region the use clusters form takes the uses left over.
+//! - `per_block`: if no region is found, each block naming the value at least
+//!   twice holds it from its first reference to its last (`tryBlockSplit`).
+//!
+//! `pays` keeps a region only if the references it holds save more than the
+//! copies it adds. A reference saves what a reload would cost, less what its
+//! instruction folds as a memory operand, and each crossing costs a copy, both
+//! weighted by loop depth. A region that holds the value's whole range is not a
+//! split.
+//!
+//! `carved` (`SplitEditor`) makes a region: a fresh value for the piece, read
+//! inside the region, joined by copies at each crossing.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   a["<b>A: v := ...</b>"]:::mid
+//!   b["<b>B</b>"]:::mid
+//!   c["<b>C</b>"]:::mid
+//!   d["<b>D: uses v</b>"]:::mid
+//!   a --> b
+//!   a --> c
+//!   b --> d
+//!   c --> d
+//! ```
+//!
+//! *Before: v is used in B and D*
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   a["<b>A: v := ...</b><br/><small>v1 := v  (enter)</small>"]:::mid
+//!   b["<b>B: uses v1</b><br/><small>v := v1  (leave, if B<br/>wrote v1)</small>"]:::mid
+//!   c["<b>C</b>"]:::mid
+//!   d["<b>D: uses v</b>"]:::mid
+//!   a --> b
+//!   a --> c
+//!   b --> d
+//!   c --> d
+//! ```
+//!
+//! *After splitting region {B}*
+//!
+//! An edge copy goes at the end of a source with one successor, else at the
+//! start of a target whose predecessors all need the same copy, else in a new
+//! block on the edge. A copy to leave is omitted if the piece never writes the
+//! value.
+//!
+//! `loop_bases` is a separate use of the same editor: a spilled address operand
+//! (base, index or selector) used inside a natural loop and outside it is
+//! carved into the loop as a piece, so the loop reads it from a register once.
+//!
+//! # Example
+//! None: the tests build bodies in code and assert on structure, and a stage
+//! dump does not say which copy a split made. Read the figures above for the
+//! shape.
+//!
+//! # Runs
+//! Inside the register allocator ([`crate::backend::allocate`]), at the split
+//! stage of a value that no register took and no eviction made room for; the
+//! pieces and the rest compete again. A piece splits again only while its live
+//! blocks strictly shrink, so splitting ends. `loop_bases` runs only as a
+//! candidate body when the allocation search is on (`-fallocation-search`).
+//!
+//! # See also
+//! LLVM's
+//! [`SplitKit`](https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/SplitKit.cpp)
+//! and the [greedy
+//! allocator](https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/RegAllocGreedy.cpp).
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,6 +94,7 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::intervals::{self as ranges, Indexes, Segment};
 use crate::analysis::loops;
+use crate::backend::liveunion::LiveUnion;
 use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::backend::{allocate, spiller};
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
@@ -895,13 +977,27 @@ fn named_in(
 /// What holds a register where: the occupants' segments and the points that
 /// destroy it.
 pub struct Occupied<'a> {
-    /// Each register's occupants' segments, sorted by start.
-    segments: IndexMap<RegId, Vec<Segment>>,
-    /// The furthest end among a register's segments up to each: sorted, so the
-    /// first that reaches a span is found by search. Values of different views
-    /// of one register (`al` and `ah`) overlap, so ends alone are not sorted.
-    reach: IndexMap<RegId, Vec<i64>>,
+    held: Holders<'a>,
     masks: &'a allocate::Masks,
+}
+
+enum Holders<'a> {
+    /// Each register's occupants' segments, sorted by start, and the furthest
+    /// end among a register's segments up to each: sorted, so the first
+    /// that reaches a span is found by search. Values of different views of
+    /// one register (`al` and `ah`) overlap, so ends alone are not sorted.
+    Built { segments: IndexMap<RegId, Vec<Segment>>, reach: IndexMap<RegId, Vec<i64>> },
+    /// The occupants as the allocation keeps them: asked of by the span, not
+    /// gathered for every register at each split (LLVM's
+    /// `LiveIntervalUnion::Query`).
+    Union {
+        union: &'a LiveUnion,
+        live: &'a crate::backend::live::LiveRanges,
+        value: u32,
+        /// A register with few holders is gathered, once, where it is first
+        /// asked.
+        gathered: std::cell::RefCell<IndexMap<RegId, (Vec<Segment>, Vec<i64>)>>,
+    },
 }
 
 impl<'a> Occupied<'a> {
@@ -923,7 +1019,17 @@ impl<'a> Occupied<'a> {
                     .collect(),
             );
         }
-        Self { segments, reach, masks }
+        Self { held: Holders::Built { segments, reach }, masks }
+    }
+
+    /// The occupants `union` has, but `value`.
+    pub fn of(
+        union: &'a LiveUnion,
+        live: &'a crate::backend::live::LiveRanges,
+        value: u32,
+        masks: &'a allocate::Masks,
+    ) -> Self {
+        Self { held: Holders::Union { union, live, value, gathered: Default::default() }, masks }
     }
 }
 
@@ -937,28 +1043,82 @@ impl Occupied<'_> {
         span: (i64, i64),
     ) -> Option<(i64, i64)> {
         let whole = allocate::_whole(register);
-        // Sorted by start, those that meet the span lie between the first that
-        // reaches it and the last that starts before its end.
-        let held = self
-            .segments
-            .get(&whole)
-            .map(
-                |all| {
-                    let from = self.reach[&whole].partition_point(|end| *end <= span.0);
-                    let to = from + all[from..].partition_point(|one| one.start < span.1);
-                    all[from..to]
-                        .iter()
-                        .filter(move |one| one.end > span.0)
-                        .map(move |one| (one.start.max(span.0), one.end.min(span.1) - 1))
-                },
-            );
+        let held = self.held(whole, span);
         let destroyed = self.masks.destroyed_within(whole, width, span.0, span.1);
-        let found =
-            held.into_iter().flatten().chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)));
+        let found = held.into_iter().chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)));
         if llrm_support::env_set("LLRM_CHECK_OCCUPIED") {
             assert_eq!(found, self.interference_by_scan(whole, width, span), "interference in span {span:?}");
         }
         found
+    }
+
+    /// The stretches of `span` something holds `whole` for.
+    fn held(
+        &self,
+        whole: RegId,
+        span: (i64, i64),
+    ) -> Vec<(i64, i64)> {
+        match &self.held {
+            // Sorted by start, those that meet the span lie between the first
+            // that reaches it and the last that starts before its end.
+            Holders::Built { segments, reach } => segments
+                .get(&whole)
+                .map(|all| {
+                    let from = reach[&whole].partition_point(|end| *end <= span.0);
+                    let to = from + all[from..].partition_point(|one| one.start < span.1);
+                    all[from..to]
+                        .iter()
+                        .filter(|one| one.end > span.0)
+                        .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Holders::Union { union, live, value, gathered } if !union.many(&whole) => {
+                let mut gathered = gathered.borrow_mut();
+                let (all, reach) = gathered
+                    .entry(whole)
+                    .or_insert_with(
+                        || {
+                            let mut all: Vec<Segment> = union
+                                .holders(&whole)
+                                .into_iter()
+                                .filter(|other| other != value)
+                                .filter_map(|other| live.get(&other))
+                                .flat_map(|one| one.segments.iter().copied())
+                                .collect();
+                            all.sort_by_key(|one| (one.start, one.end));
+                            let mut furthest = i64::MIN;
+                            let reach = all
+                                .iter()
+                                .map(|one| {
+                                    furthest = furthest.max(one.end);
+                                    furthest
+                                })
+                                .collect();
+                            (all, reach)
+                        },
+                    );
+                let from = reach.partition_point(|end| *end <= span.0);
+                let to = from + all[from..].partition_point(|one| one.start < span.1);
+                all[from..to]
+                    .iter()
+                    .filter(|one| one.end > span.0)
+                    .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                    .collect()
+            }
+            Holders::Union { union, live, value, .. } => {
+                let probe = crate::analysis::intervals::Interval::new(0, vec![Segment { start: span.0, end: span.1 }]);
+                union
+                    .meeting(&whole, &probe, *live)
+                    .into_iter()
+                    .filter(|other| other != value)
+                    .filter_map(|other| live.get(&other))
+                    .flat_map(|one| one.segments.iter())
+                    .filter(|one| one.end > span.0 && one.start < span.1)
+                    .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                    .collect()
+            }
+        }
     }
 
     /// `interference`, looking at every segment and point.
@@ -969,13 +1129,24 @@ impl Occupied<'_> {
         span: (i64, i64),
     ) -> Option<(i64, i64)> {
         let inside = Segment { start: span.0, end: span.1 };
-        let held = self
-            .segments
-            .get(&whole)
-            .into_iter()
-            .flatten()
-            .filter(|one| one.overlaps(&inside))
-            .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1));
+        let held: Vec<(i64, i64)> = match &self.held {
+            Holders::Built { segments, .. } => segments
+                .get(&whole)
+                .into_iter()
+                .flatten()
+                .filter(|one| one.overlaps(&inside))
+                .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                .collect(),
+            Holders::Union { union, live, value, .. } => union
+                .holders(&whole)
+                .into_iter()
+                .filter(|other| other != value)
+                .filter_map(|other| live.get(&other))
+                .flat_map(|one| one.segments.iter())
+                .filter(|one| one.overlaps(&inside))
+                .map(|one| (one.start.max(span.0), one.end.min(span.1) - 1))
+                .collect(),
+        };
         let destroyed = self
             .masks
             .iter()
@@ -987,7 +1158,7 @@ impl Occupied<'_> {
                         || (width > 2 && mask.high.contains(&whole)))
             })
             .map(|mask| (mask.slot, mask.slot));
-        held.chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)))
+        held.into_iter().chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)))
     }
 }
 
@@ -1237,21 +1408,28 @@ fn _held(
     region
 }
 
-/// What holding `region` in a register saves: a memory operand per
-/// reference inside it, less every copy `crossings` says carving it adds.
+/// What holding `region` in a register saves: what each reference inside it
+/// costs spilled (`saving`: a reload, less what its instruction folds), less
+/// every copy `crossings` says carving it adds.
 fn _benefit(
     blocks: &Blocks,
     value: u32,
     region: &Region,
     frequency: &dyn Fn(i64) -> f64,
     live: &dyn allocate::LiveAt,
+    saving: &dyn Fn(&Insn) -> f64,
 ) -> f64 {
     let body = blocks.body;
     let saved: f64 = named_in(body, value)
         .iter()
         .map(|(block, positions)| {
             let at = body.blocks[*block].at;
-            positions.iter().filter(|position| region.covers(at, **position)).count() as f64 * frequency(at)
+            positions
+                .iter()
+                .filter(|position| region.covers(at, **position))
+                .map(|position| saving(&body.blocks[*block].insns[*position]))
+                .sum::<f64>()
+                * frequency(at)
         })
         .sum();
     let copies: f64 = crossings_in(blocks, value, region, live)
@@ -1271,9 +1449,10 @@ pub fn pays(
     value: u32,
     region: &Region,
     live: &dyn allocate::LiveAt,
+    saving: &dyn Fn(&Insn) -> f64,
 ) -> bool {
     let depths = ranges::depths_shared(body);
-    _benefit(&Blocks::of(body), value, region, &|at| ranges::level(depths[&at]), live) > 0.0
+    _benefit(&Blocks::of(body), value, region, &|at| ranges::level(depths[&at]), live, saving) > 0.0
 }
 
 /// Whether `region` holds all of `value`'s range: every block it is named in
@@ -1335,6 +1514,7 @@ pub fn placed(
     candidates: &[RegId],
     occupied: &Occupied,
     width: u32,
+    saving: &dyn Fn(&Insn) -> f64,
 ) -> Vec<Region> {
     let blocks = Blocks::of(body);
     let analysis = analysed_in(&blocks, value, live);
@@ -1346,7 +1526,7 @@ pub fn placed(
         if region.is_empty() || _whole_range(&blocks, &analysis, value, region, live) {
             return 0.0;
         }
-        _benefit(&blocks, value, region, &|at| placement.frequency[&at], live)
+        _benefit(&blocks, value, region, &|at| placement.frequency[&at], live, saving)
     };
     let open = |_: i64| None;
     let mut compact = Region::default();
@@ -1563,7 +1743,7 @@ mod tests {
     }
 
     fn where_() -> Addr {
-        Addr { base: RegId::SI, ..Addr::new(Space::Segment, 0x10) }
+        Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Segment, 0x10) }
     }
 
     /// `analysed`, `_benefit` and `_whole_range` walked every instruction of
@@ -2052,6 +2232,33 @@ mod tests {
         assert_eq!(joined.segments, vec![intervals::Segment { start: first.start, end: second.end }]);
     }
 
+    /// Three `add`s of a value between its definition and a push, in a block
+    /// of their own: held in a register they save three reloads against the
+    /// two copies that carve them out, but each `add` takes the memory operand
+    /// when the value is spilled, so they save one and a half. Carved on the
+    /// first count, mandel -O2 (16-bit) split a counter and spilled it anyway:
+    /// 1.3% more instructions and 8% more code than spilling it whole.
+    #[test]
+    fn test_a_region_of_instructions_that_fold_the_spilled_value_does_not_pay() {
+        let body = body(
+            "one",
+            vec![
+                block(0, vec![move_imm(0, 3, 0x40), jump(2, 0x10)], &[0x10]),
+                block(0x10, vec![add(0x10, 3), add(0x12, 3), add(0x14, 3), jump(0x16, 0x20)], &[0x20]),
+                block(
+                    0x20,
+                    vec![push(0x20, 3), _insn(0x22, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[])],
+                    &[],
+                ),
+            ],
+        );
+        let live = crate::backend::allocate::live(&body);
+        let region = region(&body, &[0x10]);
+        let sets = (&live.0, &live.1);
+        assert!(super::pays(&body, 3, &region, &sets, &|_| 1.0), "premise: three reloads outweigh two copies");
+        assert!(!super::pays(&body, 3, &region, &sets, &crate::backend::allocate::_held_saving));
+    }
+
     /// A value whose register is taken before and after a loop, but free in
     /// it, spilled whole and reloaded every trip. Placement keeps it in the
     /// register across the loop, entering after the interference before it
@@ -2071,7 +2278,8 @@ mod tests {
         ];
         let masks = crate::backend::allocate::Masks::default();
         let occupied = super::Occupied::new(IndexMap::from_iter([(RegId::EAX, taken)]), &masks);
-        let regions = super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[RegId::AX], &occupied, 2);
+        let regions =
+            super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[RegId::AX], &occupied, 2, &|_| 1.0);
         let first = regions.first().expect("a region");
         assert_eq!(first.spans.get(&0x10), Some(&vec![(0, 3)]), "{regions:?}");
         assert_eq!(first.spans.get(&0x20), Some(&vec![(0, 1)]), "{regions:?}");

@@ -1,23 +1,92 @@
-//! Adapted from llrm-core's `optimize/profit.rs`, the port of
-//! `qbopt/optimize/profit.py`: machine-neutral profitability shared by MIR
-//! transforms.
+//! Machine-neutral profitability shared by the MIR transforms: what an
+//! instruction, a block and a function cost under a target's prices, how often
+//! each block runs, and what registers cost past the target's.
 //!
-//! Everything here prices semantic work only: opcodes, memory effects and
-//! CFG frequency.  A kind without a price makes the answer unknown rather
-//! than cheap.
+//! # How it works
+//! Everything here prices semantic work: opcodes, memory effects and CFG
+//! frequency. A kind of instruction without a price makes the answer `None`,
+//! unknown rather than cheap, and a transform that copies code leaves a
+//! function it cannot price alone (`priced`).
 //!
 //! The machine's facts come in as parameters: each operation's price
-//! (`OperationCosts`, from the target: `costs`), how many integer values fit in
-//! registers (`capacity`), and that floating values do not take that room --
-//! the old MIR's x87 width, here a floating type.
+//! (`OperationCosts`, from the target by `costs`), how many integer values fit
+//! in registers and across a call (`registers`, `Room`), and that floating
+//! values do not take that room.
 //!
-//! What changed with the IR: only a load or store touches memory, so no
-//! operation carries a folded memory operand and `memory_update` prices
-//! nothing; `llvm.memset` is the old fill, its bytes the cells; `select`,
-//! `frem` and `landingpad` had no old kind and stay unpriced. `spill_risk`
-//! is the spill model's (`spill`) over the whole body. `trips` is induction's
-//! proven counts (`proven_trips`); a loop it does not name gets the
-//! conventional ten.
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   op["<b>operation(inst)</b><br/><small>one instruction's price#59;<br/>gep or call by its kind,<br/>pointer advance by #96;advance#96;<br/>(carries)</small>"]:::mid
+//!   blk["<b>_block / static</b><br/><small>sum over a block / over<br/>the body, once</small>"]:::mid
+//!   w["<b>weighted(freq)</b><br/><small>sum of block price *<br/>block frequency</small>"]:::mid
+//!   sf["<b>spill_forecast</b><br/><small>what #96;spill#96; says does not<br/>fit in registers</small>"]:::mid
+//!   pa["<b>pressure_adjusted</b><br/><small>== motion_price<br/>(the price a motion is<br/>judged by)</small>"]:::opt
+//!   op --> blk
+//!   blk --> w
+//!   w -->|"+"| pa
+//!   sf -->|"+"| pa
+//! ```
+//!
+//! *How the price a motion is judged by is built*
+//!
+//! Frequencies come in two models, both per entry:
+//! - `_frequencies`: `branchprob`'s estimate in `UNIT`ths of an execution
+//!   (never below one, so a cold arm is near free but ordered), with each
+//!   loop's proven trips (`proven_trips`, from `induction::trip_count`) in
+//!   place of its estimate;
+//! - `_loop_products`: the trips of each loop around a block multiplied, with
+//!   `UNKNOWN_TRIPS` (ten) for a loop `induction` does not name. `lsr` and
+//!   `gvn` were tuned on it (#202, #203). `_loop_products_by_branch` weighs
+//!   each block by the share of its loop's trips that reach it.
+//!
+//! `site` is `peelsize`'s view of a loop: how often it is entered and
+//! whether it calls what may touch memory, from frequencies worked out once
+//! per version of the function (`Frequencies`).
+//!
+//! Prices of what has no instruction: a `llvm.memset` call is a fill, its
+//! bytes the cells, `fill + cells * fill_cell`; a `select` is a branch and a
+//! move, and has no cheaper form here; `frem`, `landingpad` and other kinds
+//! the target does not price are `None`. A load or store touches memory, so no
+//! operation carries a folded memory operand.
+//!
+//! # Example
+//! ```mir
+//! define double @f(double %x) {
+//! b0:
+//!   %y = frem double %x, 3.000000e+00
+//!   ret double %y
+//! }
+//! ```
+//! Facts:
+//! ```text
+//! profit::static(@f, OperationCosts::default()) = None
+//! ```
+//! The body has an instruction no price covers, so the answer is `None`, not a
+//! small number.
+//!
+//! From unit test `an_unpriced_instruction_makes_the_body_unpriced` in
+//! `profit_tests.rs`.
+//!
+//! # Provides
+//! `costs`, `registers`, `operation`, `static`, `priced`, `weighted`,
+//! `spill_forecast`, `pressure_adjusted`, `motion_price`, `advance`, `site`,
+//! `proven_trips`, the frequency models and `UNIT`, `UNKNOWN_TRIPS`.
+//!
+//! # Used by
+//! Each of [`crate::lsr`], [`crate::hoist`], [`crate::gvn`],
+//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`], [`crate::fill`],
+//! [`crate::window`], [`crate::gepoffset`], [`crate::indvars`],
+//! [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`] and
+//! [`crate::interprocedural`] asks it, before a rewrite that trades code size
+//! or registers for speed, whether the rewrite pays. Not a pass: it runs only
+//! inside those.
+//!
+//! # Needs
+//! The target's `OperationCosts` and registers, [`crate::spill`] for the
+//! forecast, `branchprob` and `induction` for the frequencies.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -276,7 +345,27 @@ pub fn _frequencies(
     function: &Function,
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
-    let shape = cfg::Shape::of(function);
+    _frequencies_in(context, metadata, globals, function, &cfg::Shape::of(function), trips)
+}
+
+/// `_frequencies`, `shape` being `function`'s.
+pub fn _frequencies_in(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    globals: &Declarations,
+    function: &Function,
+    shape: &cfg::Shape,
+    trips: Option<&IndexMap<i64, i64>>,
+) -> Option<BTreeMap<i64, i64>> {
+    _odds_in(context, metadata, globals, function, shape, trips).map(|(frequency, _)| frequency)
+}
+
+/// Each loop's proven trips by its header: none for loops whose latches
+/// disagree.
+pub fn counted_by_header(
+    shape: &cfg::Shape,
+    trips: Option<&IndexMap<i64, i64>>,
+) -> Option<BTreeMap<i64, i64>> {
     let empty = IndexMap::default();
     let trips = trips.unwrap_or(&empty);
     let mut counted = BTreeMap::new();
@@ -289,8 +378,21 @@ pub fn _frequencies(
             counted.insert(loop_.header, count);
         }
     }
-    let odds = branchprob::estimated(context, metadata, globals, function, &shape, &counted);
-    Some(
+    Some(counted)
+}
+
+/// `_frequencies_in`, and the odds of each edge they were worked out from.
+fn _odds_in(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    globals: &Declarations,
+    function: &Function,
+    shape: &cfg::Shape,
+    trips: Option<&IndexMap<i64, i64>>,
+) -> Option<(BTreeMap<i64, i64>, BTreeMap<(i64, i64), f64>)> {
+    let counted = counted_by_header(shape, trips)?;
+    let odds = branchprob::estimated(context, metadata, globals, function, shape, &counted);
+    Some((
         cfg::graph(function)
             .iter()
             .map(|block| {
@@ -300,7 +402,8 @@ pub fn _frequencies(
                 )
             })
             .collect(),
-    )
+        odds.taken,
+    ))
 }
 
 /// Block frequencies as a product of the trips of each loop around a block, ten
@@ -311,11 +414,20 @@ pub fn _loop_products(
     function: &Function,
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
+    _loop_products_in(function, &cfg::Shape::of(function), trips)
+}
+
+/// `_loop_products`, `shape` being `function`'s.
+pub fn _loop_products_in(
+    function: &Function,
+    shape: &cfg::Shape,
+    trips: Option<&IndexMap<i64, i64>>,
+) -> Option<BTreeMap<i64, i64>> {
     let graph = cfg::graph(function);
     let mut frequency = graph.iter().map(|block| (block.at, 1_i64)).collect::<BTreeMap<_, _>>();
     let empty = IndexMap::default();
     let trips = trips.unwrap_or(&empty);
-    for loop_ in cfg::Shape::of(function).loops {
+    for loop_ in &shape.loops {
         let exact = loop_.latches.iter().filter_map(|at| trips.get(at).copied()).collect::<BTreeSet<_>>();
         if exact.len() > 1 {
             return None;
@@ -341,9 +453,34 @@ pub fn _loop_products_by_branch(
     function: &Function,
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
-    let mut weight = _loop_products(function, trips)?;
-    let odds = _frequencies(context, metadata, globals, function, trips)?;
-    let loops = cfg::Shape::of(function).loops;
+    _loop_products_by_branch_in(context, metadata, globals, function, &cfg::Shape::of(function), trips)
+}
+
+/// `_loop_products_by_branch`, `shape` being `function`'s: asked of the
+/// manager's, it is not derived three times over for each call.
+pub fn _loop_products_by_branch_in(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    globals: &Declarations,
+    function: &Function,
+    shape: &cfg::Shape,
+    trips: Option<&IndexMap<i64, i64>>,
+) -> Option<BTreeMap<i64, i64>> {
+    _products_with_odds_in(context, metadata, globals, function, shape, trips).map(|(weight, _)| weight)
+}
+
+/// `_loop_products_by_branch_in`, and the odds of each edge it came from.
+pub fn _products_with_odds_in(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    globals: &Declarations,
+    function: &Function,
+    shape: &cfg::Shape,
+    trips: Option<&IndexMap<i64, i64>>,
+) -> Option<(BTreeMap<i64, i64>, BTreeMap<(i64, i64), f64>)> {
+    let mut weight = _loop_products_in(function, shape, trips)?;
+    let (odds, taken) = _odds_in(context, metadata, globals, function, shape, trips)?;
+    let loops = &shape.loops;
     for (at, count) in weight.iter_mut() {
         let Some(innermost) = loops.iter().filter(|one| one.body.contains(at)).min_by_key(|one| one.body.len()) else {
             continue;
@@ -354,7 +491,7 @@ pub fn _loop_products_by_branch(
             *count = (*count * here / trip).max(1);
         }
     }
-    Some(weight)
+    Some((weight, taken))
 }
 
 /// Profile-free expected work at `frequency`, a block's executions per entry

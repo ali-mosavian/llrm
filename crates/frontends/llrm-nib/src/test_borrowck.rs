@@ -1022,7 +1022,7 @@ fn main() -> i16:
         .expect("area")
         .2;
     let unit = llrm_analysis::memory::Unit::of(&module, &layout, function);
-    let registers = llrm_analysis::consts::known(&unit, None, None, None);
+    let registers = llrm_analysis::consts::known(&unit);
     let shape = llrm_analysis::cfg::Shape::of(function);
     let unit = unit.with_registers(&registers).with_shape(&shape);
     let known = llrm_analysis::ranges::scoped(&unit).expect("ranges");

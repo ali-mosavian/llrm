@@ -1,5 +1,5 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "bq32 +126 instructions (+0.23%): VAL(\"0\") takes fin.c's exact path, the 53-bit quick path being wrong at m32 where long double is 8 bytes (#1572, #1573); a correct result costs 126 instructions"
+blessed = "2026-10-13"
 
 [bas.O2]
 instructions = 92
@@ -7,6 +7,7 @@ memory_operands = 2
 code_bytes = 160
 data_bytes = 21
 bss_bytes = 0
+kernel_ms = 0.0348
 
 [bas.Os]
 instructions = 92
@@ -14,7 +15,35 @@ memory_operands = 2
 code_bytes = 160
 data_bytes = 21
 bss_bytes = 0
-kernel_ms = 0.0351
+kernel_ms = 0.0348
+
+[bq16.O2]
+instructions = 92
+memory_operands = 2
+code_bytes = 165
+data_bytes = 21
+bss_bytes = 0
+kernel_ms = 0.0138
+
+[bq16.Os]
+instructions = 92
+memory_operands = 2
+code_bytes = 165
+data_bytes = 21
+bss_bytes = 0
+kernel_ms = 0.0138
+
+[bq32.O2]
+instructions = 54701
+code_bytes = 163
+data_bytes = 31
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 54701
+code_bytes = 163
+data_bytes = 31
+bss_bytes = 0
 
 [c.O2]
 instructions = 87
@@ -22,6 +51,7 @@ memory_operands = 0
 code_bytes = 66
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0019
 
 [c.Os]
 instructions = 87
@@ -29,6 +59,7 @@ memory_operands = 0
 code_bytes = 66
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0019
 
 [nib.O2]
 instructions = 87
@@ -36,6 +67,7 @@ memory_operands = 0
 code_bytes = 69
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0022
 
 [nib.Os]
 instructions = 87
@@ -43,6 +75,7 @@ memory_operands = 0
 code_bytes = 69
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0022
 
 [ow.O2]
 instructions = 288

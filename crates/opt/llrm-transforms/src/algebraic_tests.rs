@@ -131,7 +131,7 @@ fn test_offset_composition_preserves_modular_values() {
         );
         unchanged(&unary(
             16,
-            &format!("  %m = add i16 %x, -6\n  %r = {op} i16 %m, 20\n  %s = add i16 %m, %r\n  ret i16 %s\n"),
+            &format!("  %m = add i16 %x, -6\n  %r = {op} i16 %m, 20\n  %s = xor i16 %m, %r\n  ret i16 %s\n"),
         ));
     }
 }
@@ -157,6 +157,49 @@ fn test_associative_bitwise_constants_combine() {
 #[test]
 fn test_mixed_bitwise_operations_stay_apart() {
     unchanged(&unary(16, "  %m = and i16 %x, 255\n  %r = or i16 %m, 4096\n  ret i16 %r\n"));
+}
+
+fn binary(
+    width: u32,
+    body: &str,
+) -> String {
+    format!("define i{width} @f(i{width} %x, i{width} %a) {{\nb0:\n{body}}}\n")
+}
+
+fn pairs() -> Vec<Vec<i128>> {
+    edges(16).into_iter().flat_map(|x| edges(16).into_iter().map(move |a| vec![x, a])).collect()
+}
+
+/// `(x + a) + a`: bench/particle's second sweep of a cell adds the same value
+/// again. It is `x + (a << 1)`, so the sum is the cell and one addend, which a
+/// read-modify-write takes.
+#[test]
+fn test_a_value_added_twice_is_added_once_doubled() {
+    let text = binary(16, "  %m = add i16 %x, %a\n  %r = add i16 %m, %a\n  ret i16 %r\n");
+    assert_eq!(checked(&text, &pairs()), binary(16, "  %0 = shl i16 %a, 1\n  %1 = add i16 %x, %0\n  ret i16 %1\n"));
+    // Whichever way round the operands are.
+    let swapped = binary(16, "  %m = add i16 %a, %x\n  %r = add i16 %a, %m\n  ret i16 %r\n");
+    assert_eq!(checked(&swapped, &pairs()), binary(16, "  %0 = shl i16 %a, 1\n  %1 = add i16 %x, %0\n  ret i16 %1\n"));
+}
+
+/// The repeat need not be next to its twin: `((x + a) + b) + a`.
+#[test]
+fn test_a_value_added_twice_through_a_longer_chain_is_doubled() {
+    let text = "define i16 @f(i16 %x, i16 %a, i16 %b) {\nb0:\n  %m = add i16 %x, %a\n  %n = add i16 %m, %b\n  %r = add i16 %n, %a\n  ret i16 %r\n}\n";
+    let inputs: Vec<Vec<i128>> =
+        edges(16).into_iter().flat_map(|x| edges(16).into_iter().map(move |a| vec![x, a, 5 - x])).collect();
+    let after = checked(text, &inputs);
+    assert!(after.contains("shl i16 %a, 1"), "{after}");
+    assert_eq!(after.matches("add i16").count(), 2, "{after}");
+}
+
+/// A sum something else reads is shared work: the value is not doubled out of
+/// it. A constant twice is `offset_chain`'s.
+#[test]
+fn test_a_shared_sum_and_a_constant_are_not_doubled() {
+    unchanged(&binary(16, "  %m = add i16 %x, %a\n  %r = add i16 %m, %a\n  %s = xor i16 %m, %r\n  ret i16 %s\n"));
+    let text = binary(16, "  %m = add i16 %x, 3\n  %r = add i16 %m, 3\n  ret i16 %r\n");
+    assert_eq!(checked(&text, &pairs()), binary(16, "  %0 = add i16 %x, 6\n  ret i16 %0\n"));
 }
 
 #[test]
@@ -723,7 +766,7 @@ fn test_a_mask_then_trunc_then_zext_reads_the_low_part_once() {
     let after = checked(text, &singles(&edges(16)));
     assert_eq!(
         after,
-        "define i32 @f(i16 %x) {\nb0:\n  %0 = trunc i16 %x to i8\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n}\n"
+        "define i32 @f(i16 %x) {\nb0:\n  %t = trunc i16 %x to i8\n  %r = zext i8 %t to i32\n  ret i32 %r\n}\n"
     );
 }
 
@@ -853,6 +896,20 @@ fn test_a_truncated_sum_with_an_extension_of_its_width_is_narrow() {
     unchanged(
         "define i16 @f(i16 %m, i32 %i) {\nb0:\n  %w = zext i16 %m to i32\n  %s = add i32 %w, %i\n  %r = trunc i32 %s to i16\n  %t = trunc i32 %s to i8\n  %u = zext i8 %t to i16\n  %v = add i16 %r, %u\n  ret i16 %v\n}\n",
     );
+}
+
+/// ring's counter: `i + 1` computed in `int` is read twice (`(i + 1) * 3 - 7`
+/// and the counter's own step), so the wide sum stays for its other reader; the
+/// step is `add i16 %i, 1` all the same. Left cut from the wide sum, the
+/// counter's step was not a step, the sum's other reader was not reduced to `3
+/// * i - 4` through the single use it had, and the loop kept a `movsx`/`cmp` of
+/// its counter beside its work: +8.5% clocks at -O1.
+#[test]
+fn test_a_truncated_sum_with_a_constant_is_narrow_where_the_wide_sum_has_other_readers() {
+    let text = "define i32 @f(i16 %x) {\nb0:\n  %w = sext i16 %x to i32\n  %s = add nsw i32 %w, 1\n  %r = trunc i32 %s to i16\n  %m = mul i32 %s, 3\n  %e = sext i16 %r to i32\n  %t = add i32 %m, %e\n  ret i32 %t\n}\n";
+    let inputs = edges(16).iter().map(|&a| vec![a]).collect::<Vec<_>>();
+    let after = checked(text, &inputs);
+    assert!(after.contains("add i16 %x, 1"), "{after}");
 }
 
 /// A byte compared where the extension lives on for an address (grep's
@@ -1137,4 +1194,60 @@ fn a_mask_is_judged_by_the_bounds_the_manager_holds_not_by_new_ones() {
     assert!(super::simplified(context, &layout, function, &mut analyses, false), "premise: the mask went");
     let solved = llrm_analysis::ranges::loops_solved() - before;
     assert_eq!(solved, 0, "{solved} loops worked again for one mask");
+}
+
+/// bench/x_funcptr: `table[(i * 7 + (x & 3)) & 3]` kept the inner mask, which
+/// the outer one made redundant (a sum's low two bits depend on its operands'
+/// low two bits): `mov ecx, eax; and ecx, 3; add ecx, edi; and ecx, 3` where
+/// gcc and clang emit `add; and`.
+#[test]
+fn test_a_mask_inside_a_sum_a_wider_mask_reads_through_is_dropped() {
+    let text = "define i32 @f(i32 %i, i32 %x) {
+b0:
+  %m = mul i32 %i, 7
+  %a = and i32 %x, 3
+  %s = add i32 %m, %a
+  %r = and i32 %s, 3
+  ret i32 %r
+}
+";
+    let inputs: Vec<Vec<i128>> =
+        [0, 1, 5, 6, 7, 100, -3, 12345].iter().flat_map(|&i| [0, 1, 2, 3, 9, -1, 77].map(|x| vec![i, x])).collect();
+    let after = checked(text, &inputs);
+    assert_eq!(after.matches("and i32").count(), 1, "{after}");
+}
+
+/// bench/x_popcount: `rev32(s) & 255` read one byte of five 32-bit stages; the
+/// stages' other halves are never read, and `x << 16` is zero in every bit the
+/// `& 255` reads.
+#[test]
+fn test_the_half_of_a_bit_reversal_a_masked_byte_never_reads_is_dropped() {
+    let text = "define i32 @f(i32 %x) {
+b0:
+  %lo = shl i32 %x, 16
+  %hi = lshr i32 %x, 16
+  %r = or i32 %hi, %lo
+  %b = and i32 %r, 255
+  ret i32 %b
+}
+";
+    let inputs = singles(&edges(32));
+    let after = checked(text, &inputs);
+    assert!(!after.contains("shl"), "{after}");
+}
+
+/// A mask that clears a bit something reads stays.
+#[test]
+fn test_a_mask_over_a_bit_that_is_read_stays() {
+    unchanged(
+        "define i32 @f(i32 %i, i32 %x) {
+b0:
+  %m = mul i32 %i, 7
+  %a = and i32 %x, 3
+  %s = add i32 %m, %a
+  %r = and i32 %s, 7
+  ret i32 %r
+}
+",
+    );
 }

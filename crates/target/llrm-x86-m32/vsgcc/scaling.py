@@ -10,11 +10,12 @@ compile takes LIMIT seconds; `--programs` adds QCport's modules, each as one poi
 `run` at -O2 also keeps llrm's per-pass own time (LLRM_DEBUG=time) at each size, and the MIR size (LLRM_DEBUG=mir).
 """
 from concurrent.futures import ThreadPoolExecutor
-import argparse, json, math, os, re, shutil, statistics, subprocess, sys, tempfile
+import argparse, json, math, os, re, shutil, signal, statistics, subprocess, sys, tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import levels_time
+import llrmbin
 
 WORK = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
 COMPILERS = ("llrm", "gcc", "clang")
@@ -122,6 +123,54 @@ def nest(n: int) -> str:
     return "".join(out)
 
 
+def cases(n: int) -> str:
+    """One loop around a `switch` of N cases, each deciding the next state by a compare and a mask of a byte the loop makes: a
+    block with N successors, each reached by one edge, as a state machine or an interpreter's dispatch has."""
+    arms = "".join(
+        f"    case {k}: return c < {k * 37 % 250 + 3} ? {(k + 1) % n} : (c & {k % 7 + 1} ? {(k + 3) % n} : {(k + 5) % n});\n" for k in range(n)
+    )
+    return (
+        PRELUDE_C
+        + f"static int step(int s, int c)\n{{\n    switch (s) {{\n{arms}    default: return 0;\n    }}\n}}\n"
+        + "long fn(int n)\n{\n    int i, s = 0;\n    long sum = 0;\n    unsigned r = 9u;\n"
+        + "    for (i = 0; i < n; ++i) {\n        r = r * 1103515245u + 12345u;\n"
+        + "        s = step(s, (int)((r >> 16) & 255u));\n        sum += s * (i & 3);\n    }\n    return sum;\n}\n"
+        + _main("cases", "    return fn(n + 7);\n")
+    )
+
+
+def unrolled(loops: int) -> str:
+    """A recursive partition (quicksort's) unrolled until it has LOOPS partition loops (rounded down to 2**D - 1, D = loops.bit_length()),
+    each in a branch of the one before, in one function, as a compiler's recursive inlining makes it. Every analysis of the loops
+    (counted proofs, intervals, products) meets each loop of the function once for each of them. N is the loops, as in the other axes: the
+    other way (N the depth) made 2**32 loops of the size the generic tests give an axis, a compile that never ended."""
+    depth = max(1, loops.bit_length())
+    count = [0]
+
+    def body(left: int, lo: str, hi: str) -> str:
+        if left == 0:
+            return f"    fallback(a, {lo}, {hi});\n"
+        count[0] += 1
+        k = count[0]
+        return (
+            f"    {{ int lo{k} = {lo}, hi{k} = {hi};\n"
+            f"      if (lo{k} < hi{k}) {{ int pivot{k} = a[hi{k}], i{k} = lo{k}, j{k}, t{k};\n"
+            f"        for (j{k} = lo{k}; j{k} < hi{k}; ++j{k})\n"
+            f"          if (a[j{k}] < pivot{k}) {{ t{k} = a[i{k}]; a[i{k}] = a[j{k}]; a[j{k}] = t{k}; ++i{k}; }}\n"
+            f"        t{k} = a[i{k}]; a[i{k}] = a[hi{k}]; a[hi{k}] = t{k};\n"
+            + body(left - 1, f"lo{k}", f"i{k} - 1")
+            + body(left - 1, f"i{k} + 1", f"hi{k}")
+            + "      }\n    }\n"
+        )
+
+    return (
+        PRELUDE_C
+        + "extern void fallback(int *a, int lo, int hi);\n"
+        + f"void sort(int *a, int lo, int hi)\n{{\n{body(depth, 'lo', 'hi')}}}\n"
+        + _main("unrolled", "    int v[64], i;\n    for (i = 0; i < 64; ++i) v[i] = (i * 37) & 63;\n    sort(v, 0, 63);\n    return v[n & 63];\n")
+    )
+
+
 def cells(n: int) -> str:
     """One function reading and writing N distinct memory cells (elements of one static array), each read after the stores to every
     cell before it: the loads that memory forwarding looks up meet N different cells, so a pass that scans every cell held per load
@@ -132,7 +181,48 @@ def cells(n: int) -> str:
     return PRELUDE_C + f"static unsigned cell[{n}];\nunsigned fn(unsigned a) {{\n" + body + "    return a;\n}\n" + _main("cells", "    return (long)fn(3u);\n")
 
 
-AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells}
+def joins(n: int) -> str:
+    """Four functions, each with N static cells all known after its first N stores and N if/else joins that store to one and read
+    another: every join meets N held cells, so a pass that keeps the cells of memory as one map per block, and meets the maps of the
+    predecessors at a join (through-memory's dense solve), costs N^2 a function. `cells` is one block and has no join; GORILLA.BAS (1,300
+    lines of graphics statements over global state) compiled 17 s at -O1, 62 % of it there."""
+    out = [PRELUDE_C]
+    for f in range(4):
+        out.append(f"static unsigned c{f}[{n}];\nunsigned fn{f}(unsigned a) {{\n")
+        out.append("".join(f"    c{f}[{k}] = {k + 1}u;\n" for k in range(n)))
+        out.append(
+            "".join(
+                f"    if ((a >> {k % 7}) & 1u) {{ c{f}[{(k * 3) % n}] = {k + 5}u; }} else {{ a += c{f}[{(k * 5 + 1) % n}]; }}\n"
+                for k in range(n)
+            )
+        )
+        out.append(f"    return a + c{f}[{n - 1}];\n}}\n")
+    calls = " + ".join(f"fn{f}(3u)" for f in range(4))
+    out.append(_main("joins", f"    return (long)({calls});\n"))
+    return "".join(out)
+
+
+def fjoins(n: int) -> str:
+    """`joins` in floats: four functions, each with N static float cells all known after N stores and N if/else joins that store one and
+    add another, so the float facts meet N held cells at each join. A float load was read from the dense cell map float-facts solved
+    beside the integers' (GORILLA.BAS: 6.5 % of its -O1 compile)."""
+    out = [PRELUDE_C]
+    for f in range(4):
+        out.append(f"static float c{f}[{n}];\nfloat fn{f}(unsigned a, float x) {{\n")
+        out.append("".join(f"    c{f}[{k}] = {k + 1}.5f;\n" for k in range(n)))
+        out.append(
+            "".join(
+                f"    if ((a >> {k % 7}) & 1u) {{ c{f}[{(k * 3) % n}] = {k + 5}.25f; }} else {{ x += c{f}[{(k * 5 + 1) % n}]; }}\n"
+                for k in range(n)
+            )
+        )
+        out.append(f"    return x + c{f}[{n - 1}];\n}}\n")
+    calls = " + ".join(f"fn{f}(3u, 1.0f)" for f in range(4))
+    out.append(_main("fjoins", f"    return (long)({calls});\n"))
+    return "".join(out)
+
+
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins, "fjoins": fjoins, "cases": cases, "unrolled": unrolled}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------
@@ -142,16 +232,36 @@ ENVIRONMENT_BYTES = 4096
 
 
 def measured_environment(env: dict | None = None) -> dict:
-    """What the compiler under measurement is given: PATH, LLRM_BIN where set, `env`'s own, and padding to a constant size. The bytes
+    """What the compiler under measurement is given: PATH, LLRM_BIN (the pinned directory, of one length), `env`'s own, and padding to a constant size. The bytes
     of the caller's environment (a sourced script, a longer worktree path) move the stack and the allocator's first pages, and `lir
     peephole` read 157.0 or 168.8 Minstr of cells(224) by 4 bytes of environment alone: base and head must be given the same bytes."""
-    kept = {"PATH": "/usr/bin:/bin", **({"LLRM_BIN": os.environ["LLRM_BIN"]} if "LLRM_BIN" in os.environ else {}), **(env or {})}
+    # The compiler reads LLRM_BIN too: the pinned directory stands for it always, of one length wherever the binaries are and whether
+    # the caller set it or not (llrmbin.pinned).
+    where = {"LLRM_BIN": str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c").parent)}
+    kept = {"PATH": "/usr/bin:/bin", **where, **(env or {})}
     used = sum(len(k) + len(v) + 2 for k, v in kept.items())
     return {**kept, "LLRM_PAD": "x" * max(0, ENVIRONMENT_BYTES - used - len("LLRM_PAD") - 2)}
 
 
+WALL_PER_CPU = 10  # a run that burns no CPU (a deadlock, a wait) is given this many wall seconds per CPU second of its budget
+
+
+def _cpu_limited(seconds: float):
+    """For the child: at most `seconds` of its own CPU time (SIGXCPU past it), whatever else the machine is doing."""
+    def apply() -> None:
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_CPU, (int(seconds), int(seconds) + 1))
+
+    return apply
+
+
 def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tuple[int, int, str]:
     """(instructions:u, task-clock ns, stderr) of one run; raises on a failed compile.
+
+    `timeout` is CPU seconds of the run, not wall: a count has no wall-clock budget that load can break (a compile of 3 s timed out
+    at 120 s wall under a load average of 100). A hang that spins is stopped by the CPU limit; one that waits, by a wall backstop
+    `WALL_PER_CPU` times as long.
 
     The child sees no LLRM_ variable of the caller's but LLRM_BIN (and `env`'s own): LLRM_CHECK_*, LLRM_VERIFY and the like add work to
     the step they check, and a count taken under them is not the compiler's (regparm16: 'lir peephole' read 4.5 Minstr over at every size).
@@ -170,7 +280,10 @@ def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tup
         if Path(cmd[0]).name.startswith("llrm-") and Path(cmd[0]).is_file():
             (Path(here) / Path(cmd[0]).name).symlink_to(Path(cmd[0]).resolve())
             cmd = [f"./{Path(cmd[0]).name}", *cmd[1:]]
-        done = subprocess.run([*levels_time.UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout, cwd=here, env=measured_environment(env))
+        done = subprocess.run([*levels_time.UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout * WALL_PER_CPU, cwd=here, env=measured_environment(env), preexec_fn=_cpu_limited(timeout))
+        # perf stat exits 0 for a child a signal killed, and says only what the shell would.
+        if "CPU time limit exceeded" in done.stderr or done.returncode in (-signal.SIGXCPU, 128 + signal.SIGXCPU):
+            raise TimeoutError(f"{' '.join(cmd[-1:])}: more than {timeout:g} CPU seconds")
         if done.returncode:
             said = [l for l in (done.stderr or done.stdout).splitlines() if l and not l.startswith(("[time]", "[mir]"))]
             raise RuntimeError(f"{' '.join(cmd[-1:])}: " + " | ".join(said)[:300])

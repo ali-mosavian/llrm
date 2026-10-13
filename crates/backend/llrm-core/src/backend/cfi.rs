@@ -1,18 +1,64 @@
-//! Call frame information, read back from the code as it was emitted: from
-//! every place in a function, how to find the caller's frame (the canonical
-//! frame address) and the registers the function saved.
+//! Reads call frame information back from emitted code.
 //!
-//! The code is decoded and followed from its entry along every path, so the
-//! rule is the code's own, whatever produced it: a frame register, none (a
-//! stack pointer that moves with each argument pushed), registers saved
-//! where first needed and restored before the return that needs it. A rule the
-//! code does not make single-valued (two paths reach a place with different
-//! stack depths) is refused: no information is better than a wrong one.
+//! # How it works
+//! For every offset of a function the rows say how to find the caller's
+//! frame (the canonical frame address, CFA) and where each saved register
+//! lives. They are derived from the bytes, not from what the compiler meant,
+//! so they hold for any producer.
+//!
+//! `rows` decodes from the entry and follows every path with a work list.
+//! Each place carries a `State`: whether the CFA is measured from the stack
+//! pointer or the frame register, the distance, the registers saved (and
+//! their depth below the CFA) and the registers written since entry. `step`
+//! updates it per instruction: push and pop move the stack and record a save
+//! of an unchanged register or its restore, `sub`/`add` of the stack
+//! pointer by an immediate moves it, `mov frame,stack` switches the base to
+//! the frame register, `mov stack,frame` and `leave` switch back, a call
+//! subtracts the argument bytes the callee pops (`pops`). Rows that repeat
+//! the previous one are merged.
+//!
+//! ```text
+//!  push ebp           CFA = esp+4   ->  esp+8, ebp saved at CFA-8
+//!  mov  ebp,esp       CFA = esp+8   ->  ebp+8
+//!  sub  esp,8         CFA = ebp+8
+//!  leave              CFA = ebp+8   ->  esp+4, ebp restored
+//!  ret                CFA = esp+4
+//! ```
+//!
+//! A rule that is not single-valued is an error, and the caller keeps no
+//! frame information for that function: two paths reaching a place with
+//! different stack depths, a write to the stack pointer by anything but the
+//! forms above, a write to the frame register while it is the base, invalid
+//! code. A jump out of the function (a tail call) ends that path. Code no path
+//! reaches (jump table targets) gets no row and takes the rule of the code
+//! before it.
+//!
+//! # Example
+//! `push ebp; mov ebp,esp; sub esp,8; nop; leave; ret` and the rows `rows`
+//! returns for it (`ebp` is saved at 8 below the CFA):
+//!
+//! ```text
+//! offset  bytes           rule from this offset
+//! 0       55              cfa = esp+4
+//! 1       89 E5           cfa = esp+8, ebp saved at cfa-8
+//! 3       83 EC 08        cfa = ebp+8, ebp saved at cfa-8     (also covers nop, leave)
+//! 8       C3              cfa = esp+4
+//! ```
+//!
+//! From unit test
+//! `a_frame_register_function_is_the_stack_pointer_then_the_frame_register_then_the_stack_pointer`
+//! in `cfi_tests.rs`.
+//!
+//! # Used by
+//! `debuginfo.rs`, under `-g`.
+//!
+//! # See also
+//! `arrival.rs`, which reads the same code for where a parameter is.
 
 use iced_x86::{
     Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind,
-    Register,
 };
+use llrm_lir::registers::RegId;
 use llrm_object::debug::FrameRow;
 
 /// Where the canonical frame address is measured from.
@@ -32,17 +78,27 @@ struct State {
     frame: i64,
     /// A register and where its value at entry was saved: its distance below
     /// the frame address.
-    saved: Vec<(Register, i64)>,
+    saved: Vec<(RegId, i64)>,
     /// Registers written since the entry: a push of one of those is no save.
-    changed: Vec<Register>,
+    changed: Vec<RegId>,
 }
 
-fn full(register: Register) -> Register {
+fn full(register: RegId) -> RegId {
     if register.is_gpr() { register.full_register32() } else { register }
 }
 
-fn name(register: Register) -> String {
+fn name(register: RegId) -> String {
     format!("{register:?}").to_lowercase()
+}
+
+/// A register saved, as the code's width spells it: a 16-bit program pushes
+/// `si`, which `full` widened to `esi` (the i386 number is not the 16-bit one).
+fn spelled(
+    bits: u32,
+    register: RegId,
+) -> String {
+    let spelled = name(register);
+    if bits == 16 && register.is_gpr32() { spelled.trim_start_matches('e').to_owned() } else { spelled }
 }
 
 /// The rows of the function whose bytes are `code`, entered with the frame
@@ -54,8 +110,8 @@ fn name(register: Register) -> String {
 pub fn rows(
     code: &[u8],
     bits: u32,
-    frame: Register,
-    stack: Register,
+    frame: RegId,
+    stack: RegId,
     entry: i64,
     pops: &[(usize, i64)],
 ) -> Result<Vec<FrameRow>, String> {
@@ -88,7 +144,7 @@ pub fn rows(
         }
         let one = decode(at)?;
         states.insert(at, (one, state.clone()));
-        let after = step(&one, state, frame, stack, pops, &mut info)?;
+        let after = step(&one, state, bits, full(frame), full(stack), pops, &mut info)?;
         let next = at + one.len();
         let jump = (matches!(one.op0_kind(), OpKind::NearBranch32 | OpKind::NearBranch16))
             .then(|| one.near_branch_target() as usize);
@@ -117,7 +173,7 @@ pub fn rows(
             offset: at,
             cfa_register: name(if state.base == Base::Stack { stack } else { frame }),
             cfa_offset: if state.base == Base::Stack { state.stack } else { state.frame },
-            saved: state.saved.iter().map(|&(register, below)| (name(register), -below)).collect(),
+            saved: state.saved.iter().map(|&(register, below)| (spelled(bits, register), -below)).collect(),
         };
         if out.last().is_none_or(|last| {
             (&last.cfa_register, last.cfa_offset, &last.saved) != (&row.cfa_register, row.cfa_offset, &row.saved)
@@ -132,12 +188,13 @@ pub fn rows(
 fn step(
     one: &Instruction,
     mut state: State,
-    frame: Register,
-    stack: Register,
+    bits: u32,
+    frame: RegId,
+    stack: RegId,
     pops: &[(usize, i64)],
     info: &mut InstructionInfoFactory,
 ) -> Result<State, String> {
-    let written: Vec<Register> = info
+    let written: Vec<RegId> = info
         .info(one)
         .used_registers()
         .iter()
@@ -147,7 +204,7 @@ fn step(
                 OpAccess::Write | OpAccess::CondWrite | OpAccess::ReadWrite | OpAccess::ReadCondWrite
             )
         })
-        .map(|used| full(used.register()))
+        .map(|used| full(RegId::from(used.register())))
         .collect();
     let mnemonic = one.mnemonic();
     let end = (one.ip() + one.len() as u64) as usize;
@@ -173,7 +230,7 @@ fn step(
             let moved = -i64::from(one.stack_pointer_increment());
             state.stack += moved;
             if mnemonic == Mnemonic::Push && one.op0_kind() == OpKind::Register {
-                let register = full(one.op0_register());
+                let register = full(RegId::from(one.op0_register()));
                 if register.is_gpr32()
                     && register != stack
                     && !state.changed.contains(&register)
@@ -183,7 +240,7 @@ fn step(
                 }
             }
             if mnemonic == Mnemonic::Pop && one.op0_kind() == OpKind::Register {
-                let register = full(one.op0_register());
+                let register = full(RegId::from(one.op0_register()));
                 // Its own slot, popped: it has the entry value again.
                 if let Some(at) =
                     state.saved.iter().position(|&(saved, below)| saved == register && below == state.stack + 4)
@@ -200,12 +257,17 @@ fn step(
             // MOV esp, ebp; POP ebp.
             state.stack = state.frame;
             state.base = Base::Stack;
-            state.stack -= 4;
-            state.saved.retain(|&(register, below)| !(register == full(frame) && below == state.stack + 4));
+            // The frame register comes back off the stack: a word of the code's
+            // width.
+            let word = i64::from(bits / 8);
+            state.stack -= word;
+            state.saved.retain(|&(register, below)| !(register == full(frame) && below == state.stack + word));
             state.changed.retain(|one| *one != full(frame));
             return Ok(state);
         }
-        Mnemonic::Sub | Mnemonic::Add if full(one.op0_register()) == stack && one.op0_kind() == OpKind::Register => {
+        Mnemonic::Sub | Mnemonic::Add
+            if full(RegId::from(one.op0_register())) == stack && one.op0_kind() == OpKind::Register =>
+        {
             let Some(amount) = immediate() else {
                 return Err(format!("{:?} of the stack pointer by a register at {}", mnemonic, one.ip()));
             };
@@ -213,7 +275,7 @@ fn step(
             return Ok(state);
         }
         Mnemonic::Mov if one.op0_kind() == OpKind::Register && one.op1_kind() == OpKind::Register => {
-            let (to, from) = (full(one.op0_register()), full(one.op1_register()));
+            let (to, from) = (full(RegId::from(one.op0_register())), full(RegId::from(one.op1_register())));
             if to == full(frame) && from == stack && state.base == Base::Stack {
                 // The frame register now stands where the stack pointer does.
                 state.base = Base::Frame;

@@ -1,22 +1,120 @@
-//! Non-wrapping integer intervals, scoped to the branch edges and counted
-//! loops that bound them: llrm-core's `analysis/ranges.rs`, a port of
-//! `qbopt/analysis/ranges.py`, adapted to the rich MIR. A width is in bits.
+//! Bounds each integer value in each block by a non-wrapping interval, from the
+//! branch edges that dominate the block and the counted loops that hold it. A
+//! bounds check or overlap test that the interval decides can then go.
 //!
-//! A comparison is an `icmp` feeding a conditional `br`, where the old MIR
-//! read a flags value and a branch's test; an increment is an `add`. Old
-//! `Copy` has no counterpart.
+//! # How it works
+//! An `Interval` is `[low, high]` over mathematical integers at a bit width,
+//! signed. A value's interval is the intersection of what several sources give.
 //!
-//! `exact_offsets` is of an access into its own object's address, the
-//! only root whose offset is known to start at 0; the old far origin has
-//! no counterpart.
+//! Operands. `_operand` reads a constant's, an entry in the scope's
+//! `Intervals`, a parameter's `range` attribute or a `!range` on a load or call
+//! (`declared`), or a single known value from [`crate::consts`]. `_computed`
+//! gives what an instruction computes from its operands' intervals (`add`,
+//! `sub`, `mul`, `shl`, `and`, `sext`, `zext`, fixed-point multiply), and no
+//! interval where the result could wrap.
 //!
-//! Skipped, BC object corpora:
-//! `test_fpdeep_one_based_index_has_a_bounded_byte_offset`,
-//! `test_addrm_long_array_value_keeps_counter_bounds`,
-//! `test_rngarm_writes_its_counter_only_after_the_loop`.
-//! Skipped, `test_non_comparison_flags_do_not_establish_a_bound`: a branch
-//! reads an `i1`, which only an `icmp` makes a comparison of; a flags value
-//! another operation set has no counterpart.
+//! Edges. `dominated_edges` walks the dominator tree. A conditional `br` on an
+//! `icmp` narrows the compared values on each edge (`on_edge`): signed
+//! predicates move bounds, `eq` intersects, `ne` trims an end when the other
+//! side is a point, unsigned ones only decide whether the edge is possible, and
+//! `assume` calls add facts. `_refine_through` pushes a bound back through the
+//! `add` or `sub` that made the value. An edge counts only when its destination
+//! has that one predecessor, because a join is another way around the check; a
+//! block starts from its sole predecessor's facts narrowed by the edge, or else
+//! its immediate dominator's. An edge no execution takes makes the block
+//! unreachable. `EdgeStates` keeps each block's state so a change re-solves
+//! only the blocks it reaches (`edges_solved`).
+//!
+//! Loops. `bounded_solved` handles each counted loop (`induction`'s trip
+//! counts) outer first. A counter that steps by a constant from a known start
+//! gets the interval its trip count allows (`_recurrence_span` refuses
+//! wrapping), a header that tests before the trip also sees the exit value, and
+//! a counter with an `nsw` step never goes back past its start. The loop's
+//! operations are then swept to a fixed point in the scope of each block,
+//! narrowed by the edges inside the loop and above its header. Header phis with
+//! no counted proof that stay inside a box `[-2^k, 2^k)` on every entry and
+//! latch are given the box, grown by powers of two until the latches stay in
+//! it. Two loops whose facts contradict at a block make it `unreachable`.
+//! `Bounds` holds the result: facts from the loops (`within`) over those from
+//! the edges. A change re-solves only the loops it reaches (`loops_reached`).
+//!
+//! ```text
+//!   entry:  ...
+//!   b1:     %c = icmp slt %i, 10         b2 (taken):    %i in [lo, 9]
+//!           br %c, b2, b3                b3 (not taken): %i in [10, hi]
+//!   loop:   %i = phi [0, pre], [%n, latch]; %n = add nsw %i, 1
+//!           counted trips 10    ->  %i in [0, 9] in the body, [0, 10] at exit
+//! ```
+//!
+//! Queries. `scoped` is every block's intervals (loops narrowed by edges);
+//! `operand_at` is one operand's at one block without copying the rest.
+//! `covering` widens an indexed access into its own object to the byte interval
+//! it can touch; `inside_object` says that interval lies inside the object.
+//! `exact_offsets` finds index values whose every access sums, at any wider
+//! width, to the same bytes, because every partial sum is a non-negative
+//! integer below `2**index_bits`; it is used where the object's own address is
+//! the only root known to start at 0.
+//!
+//! # Example
+//! `for i = 0 while i < 10: if i < 4: off = i * 2`:
+//!
+//! ```mir
+//! define void @f() {
+//! b0:
+//!   br label %b10
+//!
+//! b10:
+//!   %i = phi i16 [ 0, %b0 ], [ %next, %b40 ]
+//!   %c = icmp slt i16 %i, 10
+//!   br i1 %c, label %b20, label %b50
+//!
+//! b20:
+//!   %g = icmp slt i16 %i, 4
+//!   br i1 %g, label %b30, label %b40
+//!
+//! b30:
+//!   %off = mul i16 %i, 2
+//!   br label %b40
+//!
+//! b40:
+//!   %next = add i16 %i, 1
+//!   br label %b10
+//!
+//! b50:
+//!   ret void
+//! }
+//! ```
+//!
+//! `bounded` gives:
+//!
+//! | block | `%i`        | `%off`   |
+//! |-------|-------------|----------|
+//! | `b30` | [0, 3]      | [0, 6]   |
+//! | `b40` | [0, 9]      |          |
+//! | `b50` | [10, 32767] |          |
+//!
+//! The guard bounds `%off` to 0..6 in `b30` without leaking into the join
+//! `b40`.
+//!
+//! From unit test `test_guard_refines_subscript_without_leaking_to_the_join` in
+//! `ranges_tests.rs`.
+//!
+//! # Provides
+//! The interval facts above. In the manager they are `DominatedEdges` and
+//! `Bounded` (both incremental) and `Ranges`, which bundles them with registers
+//! for a pass; `Bounded` is held only when `Outer::loop_intervals` is on (-O2
+//! and up). Consumers: [`crate::alias`], [`crate::regions`], [`crate::guards`],
+//! [`crate::memoryssa`], [`crate::avail`], [`crate::parameter_ranges`], and in
+//! llrm-transforms `algebraic`, `hoist`, `loopexit`, `indvars`, `decide`,
+//! `fixednarrow`, `ports`, `interprocedural`.
+//!
+//! # Needs
+//! [`crate::consts`] (`Known`, the registers), [`crate::induction`] (counted
+//! loops), [`crate::assumptions`], [`crate::cfg`] (shape and dominance).
+//!
+//! # See also
+//! GCC's ranger (`gimple-range-cache.cc`, `ranger_cache::range_on_entry`);
+//! LLVM's LazyValueInfo and ScalarEvolution value ranges.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -146,20 +244,37 @@ fn edge_delta(
     known: &Intervals,
     facts: Option<&IndexMap<ValueId, Known>>,
 ) -> Result<Option<Intervals>, String> {
-    #[cfg(test)]
-    EDGE_DELTAS.with(|count| count.set(count.get() + 1));
-    let successors = unit.function.successors(block);
-    if !successors.contains(&successor) {
+    if !unit.function.successors(block).contains(&successor) {
         return Err("not a successor".to_owned());
     }
+    edge_delta_of(unit, block, successor, known, facts)
+}
+
+/// `edge_delta` of an edge known to be one: a block's way in is asked of its
+/// predecessor, which names it, and a switch of N cases listed its N successors
+/// again for each.
+fn edge_delta_of(
+    unit: &Unit,
+    block: BlockId,
+    successor: BlockId,
+    known: &Intervals,
+    facts: Option<&IndexMap<ValueId, Known>>,
+) -> Result<Option<Intervals>, String> {
+    #[cfg(test)]
+    EDGE_DELTAS.with(|count| count.set(count.get() + 1));
     let empty = IndexMap::default();
     let facts = facts.unwrap_or(&empty);
-    if successors.len() != 2 {
-        return Ok(Some(Intervals::default()));
-    }
+    // Two distinct targets, or the branch decides nothing.
     let Some((condition, taken)) = branch(unit, block) else {
         return Ok(Some(Intervals::default()));
     };
+    let other = match unit.function.instruction(unit.function.terminator(block).expect("a branch")).operands[2] {
+        Operand::Block(other) => other,
+        _ => unreachable!("branch() found two blocks"),
+    };
+    if taken == other {
+        return Ok(Some(Intervals::default()));
+    }
     Ok(narrowed_delta(unit, condition, successor == taken, known, facts))
 }
 
@@ -952,11 +1067,15 @@ pub fn edges_solved(
     let mut moved: BTreeSet<i64> = BTreeSet::new();
     let mut made: BTreeMap<i64, u64> = BTreeMap::new();
     let assumed = unit.assumptions();
+    // The edges a terminator names twice, found once: a block's way in counts
+    // only where its one predecessor names it once, and counting a switch's
+    // operands for each of its N successors was N^2.
+    let twice = named_twice(unit);
+    let once = |parent: i64, block: i64| !twice.contains(&(parent, block));
     for &at in &order {
         let block = cfg::block(at);
         let sole = predecessors.get(&at).filter(|parents| parents.len() == 1).and_then(|parents| parents.first());
-        let from_parent =
-            sole.is_some_and(|parent| known.contains_key(parent) && edges(unit, cfg::block(*parent), block) == 1);
+        let from_parent = sole.is_some_and(|parent| known.contains_key(parent) && once(*parent, at));
         let source = if from_parent { sole.copied() } else { immediate.get(&at).copied().flatten() };
         if let Some((states, reached)) = before {
             let stale = reached.contains(&block)
@@ -976,9 +1095,9 @@ pub fn edges_solved(
         let seeded = if at == cfg::id(entry) { declared_arguments(unit) } else { Intervals::default() };
         let mut made_of = llrm_support::hash::FxBuild::default().build_hasher();
         let mut scoped = match sole.and_then(|parent| Some((*parent, known.get(parent)?))) {
-            Some((parent, inherited)) if edges(unit, cfg::block(parent), block) == 1 => {
+            Some((parent, inherited)) if once(parent, at) => {
                 made.get(&parent).hash(&mut made_of);
-                match edge_delta(unit, cfg::block(parent), block, inherited, Some(facts))? {
+                match edge_delta_of(unit, cfg::block(parent), block, inherited, Some(facts))? {
                     Some(delta) => {
                         delta.iter().for_each(|(value, interval)| (value, interval).hash(&mut made_of));
                         applied(inherited, delta)
@@ -1032,15 +1151,31 @@ pub fn edges_solved(
     Ok(EdgeStates { order, own, below: known, made })
 }
 
-/// How many of `parent`'s terminator's targets are `block`.
-fn edges(
-    unit: &Unit,
-    parent: BlockId,
-    block: BlockId,
-) -> usize {
-    unit.function.terminator(parent).map_or(0, |one| {
-        unit.function.instruction(one).operands.iter().filter(|operand| **operand == Operand::Block(block)).count()
-    })
+/// The (block, target) pairs a terminator names more than once, as ids: a
+/// conditional branch to one block twice, a switch with two cases to one block.
+fn named_twice(unit: &Unit) -> BTreeSet<(i64, i64)> {
+    let function = unit.function;
+    let mut out = BTreeSet::new();
+    for &block in function.layout() {
+        let Some(last) = function.terminator(block) else { continue };
+        let targets = &function.instruction(last).operands;
+        // One or two targets (every `br`) are compared; more are sorted.
+        if targets.len() <= 3 {
+            if let [_, Operand::Block(one), Operand::Block(two)] = targets[..]
+                && one == two
+            {
+                out.insert((cfg::id(block), cfg::id(one)));
+            }
+            continue;
+        }
+        let mut named: Vec<BlockId> = targets
+            .iter()
+            .filter_map(|operand| if let Operand::Block(target) = operand { Some(*target) } else { None })
+            .collect();
+        named.sort_unstable();
+        out.extend(named.windows(2).filter(|pair| pair[0] == pair[1]).map(|pair| (cfg::id(block), cfg::id(pair[0]))));
+    }
+    out
 }
 
 pub type Facts = IndexMap<i64, Intervals>;
@@ -1854,6 +1989,14 @@ pub fn bounded_solved(
         if !counted && boxes.is_empty() {
             continue;
         }
+        // A box holds wherever the header's phi is read, the header itself
+        // too, though the trip's counts there stop short of the exit value:
+        // a rotated loop computes in its header what the loop tested before.
+        let at_header = (!inside.contains(&loop_.header) && !boxes.is_empty()).then(|| {
+            let mut held = declared_arguments(unit);
+            held.extend(boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
+            closed(held)
+        });
         known.extend(boxes);
         // The header's values too: seen from inside, they are the trip's,
         // though the header itself also sees the exit value.
@@ -1865,6 +2008,16 @@ pub fn bounded_solved(
             for (value, interval) in scoped.iter() {
                 if narrow_to(destination, value, interval) {
                     dead.insert(at);
+                }
+            }
+        }
+        if let Some(held) = at_header {
+            let held_id = fresh_known();
+            let scoped = scope_at(loop_.header, &held, held_id, true)?;
+            let destination = Rc::make_mut(result.entry(loop_.header).or_default());
+            for (value, interval) in scoped.iter() {
+                if narrow_to(destination, value, interval) {
+                    dead.insert(loop_.header);
                 }
             }
         }
@@ -1973,7 +2126,11 @@ fn inductive_boxes(
         assumed.extend(boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
         let assumed = closed(assumed);
         let assumed_id = fresh_known();
-        let mut scopes = BTreeMap::new();
+        // What holds as each latch leaves for the header: the scope at its end
+        // with its branch's condition applied, as SCEV takes a loop's exit
+        // count from the latch test. A rotated loop's counter is bounded by
+        // the test after its step, which the block's own scope does not hold.
+        let mut scopes: BTreeMap<i64, Option<Intervals>> = BTreeMap::new();
         let mut grown = false;
         let mut dropped = Vec::new();
         for (phi, width, _, latches) in &candidates {
@@ -1982,9 +2139,13 @@ fn inductive_boxes(
             let mut known_all = true;
             for (latch, value) in latches {
                 if !scopes.contains_key(latch) {
-                    scopes.insert(*latch, scope_at(*latch, &assumed, assumed_id, false)?);
+                    let at_latch = scope_at(*latch, &assumed, assumed_id, false)?;
+                    let leaving = on_edge(unit, cfg::block(*latch), header, &at_latch, Some(facts))?;
+                    scopes.insert(*latch, leaving);
                 }
-                match _operand(unit, *value, &scopes[latch], facts).filter(|interval| interval.width == *width) {
+                // An edge no execution takes brings no value round.
+                let Some(scope) = &scopes[latch] else { continue };
+                match _operand(unit, *value, scope, facts).filter(|interval| interval.width == *width) {
                     Some(interval) => {
                         wanted.low = wanted.low.min(interval.low);
                         wanted.high = wanted.high.max(interval.high);
@@ -2076,9 +2237,18 @@ fn narrow_to(
 /// Every interval known at each block: a loop's counters and what they
 /// compute, narrowed by the branch edges that dominate it.
 pub fn scoped(unit: &Unit) -> Result<Facts, String> {
-    let mut result = bounded(unit)?;
-    for (at, edges) in dominated_edges(unit)? {
-        let known = result.entry(at).or_default();
+    // The solve's own edges are the ones put in: a block no counted loop holds
+    // has them as its facts already, and narrowing a map by itself, entry
+    // by entry for every block of a chain of N branches, was most of the
+    // work (N^2 of them).
+    let bounds = bounded_solved(unit, &unit.registers(), None)?;
+    let mut result = bounds.facts();
+    for (at, edges) in &bounds.edges {
+        if !bounds.within.contains_key(at) {
+            continue;
+        }
+        let edges = (**edges).clone();
+        let known = result.entry(*at).or_default();
         for (value, interval) in edges {
             match known.get(&value) {
                 Some(previous) if previous.width == interval.width => {

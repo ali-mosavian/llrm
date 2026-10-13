@@ -8,8 +8,7 @@ forbidden because the named console device bypasses COMMAND.COM redirection.
 
 The PDS runtime is its own target. This suite does not borrow an ABI, string
 descriptor, event entry, or data layout from FreeBASIC or from the QB 4.5
-runtime. `parser`, `lowering`, and `runtime` marked `required` mean required
-for compatibility even before the current frontend supports that form.
+runtime.
 
 | Level | Case | PDS facility and observable result |
 |---:|---|---|

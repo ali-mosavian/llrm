@@ -968,7 +968,7 @@ fn test_repeated_allocated_address_copies_use_one_clean_67h_base() {
             through: register,
             base: Some(Held { value, width: 2 }),
             selector: Some(Held { value: 20, width: 2 }),
-            ..Mem::new(Some(Addr { segment: RegId::FS, ..Addr::new(Space::Far, index) }), 2)
+            ..Mem::new(Some(Addr { segment: (RegId::FS).iced(), ..Addr::new(Space::Far, index) }), 2)
         };
         let load = insn(
             index,
@@ -1708,11 +1708,13 @@ fn test_zeroing_before_a_jump_asks_what_the_target_reads() {
 }
 
 #[test]
-fn test_zero_compare_before_its_branch_is_or() {
-    // `cmp ax,0; jl` is three bytes where `or ax,ax; jl` is two. Only AF
-    // differs.
+fn test_zero_compare_before_its_branch_is_test() {
+    // `cmp ax,0; jl` is three bytes where `test ax,ax; jl` is two, and writes
+    // no register as `or ax,ax` did. Only AF differs. The branch need not end
+    // its block: `-ftree-ch` left `cmp ecx, 0; je` before a jump.
     for (variant, rewritten) in [
         ("plain", true),
+        ("jumped", true),
         ("moves", true),
         ("call", true),
         ("return", true),
@@ -1744,8 +1746,11 @@ fn test_zero_compare_before_its_branch_is_or() {
             _ => Some(after.clone()),
         };
         let compare = Arc::new(compare);
+        let jump = insn(7, Some((7, 8)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(9))), vec![], vec![]);
         let head = if ["moves", "between"].contains(&variant) {
             vec![Arc::clone(&compare), Arc::new(between), Arc::new(branch)]
+        } else if variant == "jumped" {
+            vec![Arc::clone(&compare), Arc::new(branch), Arc::new(jump)]
         } else {
             vec![Arc::clone(&compare), Arc::new(branch)]
         };
@@ -1766,7 +1771,7 @@ fn test_zero_compare_before_its_branch_is_or() {
         if rewritten {
             assert_eq!(
                 (what.op, what.name.as_deref(), &what.dests, &what.sources),
-                (Operation::Binary, Some("or"), &vec![ax.clone()], &vec![ax.clone(), ax]),
+                (Operation::Compare, Some("test"), &Vec::new(), &vec![ax.clone(), ax]),
                 "{variant}"
             );
         } else {
@@ -2075,7 +2080,7 @@ fn test_far_pointer_loaded_in_one_instruction() {
             // As lowered and allocated: the offset value placed in si.
             let far = |disp: i64| Mem {
                 base: Some(Held { value: 1, width: 2 }),
-                ..mem(Some(Addr { segment: RegId::ES, ..Addr::new(Space::Far, disp) }), 2, RegId::SI, 0, 2)
+                ..mem(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, disp) }), 2, RegId::SI, 0, 2)
             };
             (low, high) = (far(16), far(18));
             base = RegId::SI;
@@ -2103,7 +2108,10 @@ fn test_far_pointer_loaded_in_one_instruction() {
         let made = code(result[0].what.as_ref().unwrap());
         let decoded = Decoder::new(16, &made, DecoderOptions::NONE).decode();
         let expected = if variant == "fs" { Mnemonic::Lfs } else { Mnemonic::Les };
-        assert_eq!((decoded.mnemonic(), decoded.op0_register(), decoded.memory_base()), (expected, RegId::BX, base));
+        assert_eq!(
+            (decoded.mnemonic(), decoded.op0_register(), decoded.memory_base()),
+            (expected, iced_x86::Register::BX, base.iced())
+        );
     }
 }
 
@@ -2752,7 +2760,8 @@ fn test_memory_round_trip_folds_across_an_independent_operand_load() {
 fn test_single_use_loaded_addend_folds_into_the_arithmetic_operand() {
     // Frontend-parity MEMORY emitted C's `mov cx,[si]; add ax,cx`.
     let (ax, cx) = (rl(RegId::AX, 2), rl(RegId::CX, 2));
-    let delta = Loc::Mem(mem(Some(Addr { base: RegId::SI, ..Addr::new(Space::Segment, 0) }), 2, RegId::SI, 0, 0));
+    let delta =
+        Loc::Mem(mem(Some(Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Segment, 0) }), 2, RegId::SI, 0, 0));
     let load = plain(0, Operation::Move, "mov", vec![cx.clone()], vec![delta.clone()], None);
     let addition = plain(1, Operation::Binary, "add", vec![ax.clone()], vec![ax.clone(), cx], None);
     let finish = Arc::new(Insn {
@@ -2904,7 +2913,8 @@ fn test_one_use_compare_folds_before_a_complete_return() {
 fn test_dead_compare_load_may_overwrite_its_own_address_register() {
     // lru_use's bnext test used DI for both the pointer and loaded value.
     let di = rl(RegId::DI, 2);
-    let cell = Loc::Mem(mem(Some(Addr { base: RegId::DI, ..Addr::new(Space::Segment, 0) }), 2, RegId::DI, 0, 2));
+    let cell =
+        Loc::Mem(mem(Some(Addr { base: (RegId::DI).iced(), ..Addr::new(Space::Segment, 0) }), 2, RegId::DI, 0, 2));
     let load = plain(1, Operation::Move, "mov", vec![di.clone()], vec![cell.clone()], None);
     let compare = plain(2, Operation::Compare, "cmp", vec![], vec![di.clone(), im(0, 2)], None);
     let overwrite = plain(3, Operation::Move, "mov", vec![di], vec![rl(RegId::AX, 2)], None);
@@ -2931,7 +2941,7 @@ fn test_memory_round_trip_does_not_cross_a_dependent_or_writing_instruction() {
         let through = if hazard == "changes address" { RegId::BX } else { RegId::BP };
         let position = Loc::Mem(mem(
             Some(if through == RegId::BX {
-                Addr { base: through, ..Addr::new(Space::Segment, 0) }
+                Addr { base: through.iced(), ..Addr::new(Space::Segment, 0) }
             } else {
                 Addr::new(Space::Frame, -4)
             }),
@@ -4270,7 +4280,7 @@ fn test_a_copy_is_forwarded_into_the_address_that_reads_it() {
     let cell = Mem {
         index_through: RegId::ESI,
         index: Some(Held { value: 32, width: 4 }),
-        ..mem(Some(Addr { segment: RegId::SS, ..Addr::new(Space::Literal, -1032) }), 1, RegId::EBP, 0, 2)
+        ..mem(Some(Addr { segment: (RegId::SS).iced(), ..Addr::new(Space::Literal, -1032) }), 1, RegId::EBP, 0, 2)
     };
     let store = Arc::new(insn(
         1,
@@ -4306,7 +4316,7 @@ fn test_a_copy_is_not_forwarded_past_a_write_of_its_source() {
     let cell = Mem {
         index_through: RegId::ESI,
         index: Some(Held { value: 32, width: 4 }),
-        ..mem(Some(Addr { segment: RegId::SS, ..Addr::new(Space::Literal, -1032) }), 1, RegId::EBP, 0, 2)
+        ..mem(Some(Addr { segment: (RegId::SS).iced(), ..Addr::new(Space::Literal, -1032) }), 1, RegId::EBP, 0, 2)
     };
     let store = Arc::new(insn(
         2,
@@ -4646,4 +4656,115 @@ fn the_lanes_of_a_register_are_the_descriptions() {
             && _lanes(regs, RegId::ESP).is_empty()
             && _lanes(regs, RegId::XMM0).is_empty()
     );
+}
+
+/// `lea eax, [bx-52]` took a local's address after `mov ebp, ebx`: a frame
+/// cell's base was renamed with the frame register's copy.
+#[test]
+fn a_frame_cells_base_is_not_renamed_with_a_copy_of_the_frame_register() {
+    let regs = crate::backend::registerinfo::test_regs();
+    let frame = Addr::new(Space::Frame, -52);
+    let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(Some(frame), 4) });
+    assert_eq!(_register_operand(regs, &cell, RegId::BP, RegId::BX), cell);
+    let address = Loc::Address(AddressRef {
+        addr: Some(frame),
+        through: RegId::BP,
+        index_through: RegId::None,
+        scale: 1,
+        offset: 0,
+        disp_width: 2,
+    });
+    assert_eq!(_register_operand(regs, &address, RegId::BP, RegId::BX), address);
+    let pointer = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(None, 4) });
+    assert_eq!(_register_operand(regs, &pointer, RegId::BP, RegId::BX).address().map(|at| at.through), Some(RegId::BX));
+}
+
+/// A binary search tested `a[mid] < key` and then `a[mid] > key` in the else
+/// arm with a second `cmp ecx,edi`: 2.1% of x_binsearch -O1's clocks, the
+/// branch reading flags the first compare already set.
+#[test]
+fn test_a_compare_that_a_sole_predecessor_just_made_is_not_made_again() {
+    let (cx, di) = (rl(RegId::CX, 4), rl(RegId::DI, 4));
+    let compare = |at| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 2)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![cx.clone(), di.clone()])),
+            vec![],
+            vec![],
+        ))
+    };
+    let branch = |at, name: &str, target| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 2)),
+            Some(semt(Operation::Branch, name, vec![], vec![], Some(target))),
+            vec![],
+            vec![],
+        ))
+    };
+    let ret = Arc::new(insn(20, Some((20, 21)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]));
+    let blocks = vec![
+        block(0, vec![compare(0), branch(2, "jl", 30)], vec![10, 30]),
+        block(10, vec![compare(10), branch(12, "jle", 30)], vec![20, 30]),
+        block(20, vec![ret.clone()], vec![]),
+        block(30, vec![ret], vec![]),
+    ];
+    let names = |after: &LirBody, at: usize| {
+        after.blocks[at]
+            .insns
+            .iter()
+            .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
+    let after = compares_again(&body("search", 0, blocks));
+    assert_eq!(names(&after, 0), ["cmp", "jl"]);
+    assert_eq!(names(&after, 1), ["", "jle"], "the second compare is made again");
+}
+
+#[test]
+fn test_a_compare_of_other_operands_or_a_block_with_two_ways_in_is_made_again() {
+    let (cx, di, si) = (rl(RegId::CX, 4), rl(RegId::DI, 4), rl(RegId::SI, 4));
+    let compare = |at, left: &Loc, right: &Loc| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 2)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![left.clone(), right.clone()])),
+            vec![],
+            vec![],
+        ))
+    };
+    let branch = |at, target| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 2)),
+            Some(semt(Operation::Branch, "jl", vec![], vec![], Some(target))),
+            vec![],
+            vec![],
+        ))
+    };
+    let ret = Arc::new(insn(20, Some((20, 21)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]));
+    let compares = |after: &LirBody, at: usize| {
+        after.blocks[at]
+            .insns
+            .iter()
+            .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Compare))
+            .count()
+    };
+    let other = vec![
+        block(0, vec![compare(0, &cx, &di), branch(2, 30)], vec![10, 30]),
+        block(10, vec![compare(10, &cx, &si), branch(12, 30)], vec![20, 30]),
+        block(20, vec![ret.clone()], vec![]),
+        block(30, vec![ret.clone()], vec![]),
+    ];
+    assert_eq!(compares(&compares_again(&body("other", 0, other)), 1), 1);
+    // Block 10 is also entered from 5: the flags are not the compare's.
+    let joined = vec![
+        block(0, vec![compare(0, &cx, &di), branch(2, 30)], vec![10, 5]),
+        block(5, vec![compare(5, &cx, &si), branch(7, 30)], vec![10, 30]),
+        block(10, vec![compare(10, &cx, &di), branch(12, 30)], vec![20, 30]),
+        block(20, vec![ret.clone()], vec![]),
+        block(30, vec![ret], vec![]),
+    ];
+    assert_eq!(compares(&compares_again(&body("joined", 0, joined)), 2), 1);
 }

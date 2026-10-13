@@ -1,15 +1,115 @@
-//! Allocated LIR as jwasm source.
+//! The assembly-level module: allocated LIR with its frame sequences written
+//! out, as the items `objbuild` encodes and the jwasm source `-S` prints.
 //!
-//! Port of `qbopt/backend/masm.py`. `listing` is the procedure as emitted,
-//! frame and all; this prints it and objbuild.rs encodes it, so the two
-//! cannot drift. Every operand is already placed; an unplaced one is an
-//! error.
+//! # How it works
+//! `assemble` collects each machined function into a [`Procedure`] (its LIR
+//! body, the bytes it reserves below the frame register, its callees, flags)
+//! and the module's data into [`Datum`]s, giving a [`Module`]. `listing` turns
+//! one procedure into [`Item`]s, and `text` prints the module from them. The
+//! printer and the encoder read the same items, so the two cannot drift. Every
+//! operand is already placed; an unplaced one is an error ([`Unprintable`]).
+//!
+//! ```text
+//!   Procedure.body (LIR)     frame facts          Item list
+//!   ----------------------   ------------------   -----------------------
+//!   blocks, returns       -> parts(): entry   ->  enter (entry only)
+//!   cleaned_returns          and leave            block labels, items
+//!   (ret imm / retf n)       sequences            leave before each ret
+//!                            shrinkwrap::wrapped  pieces set up in the
+//!                                                 block that first needs
+//! ```
+//!
+//! The entry and return sequences are not in the LIR. `parts` builds them:
+//! `push bp; mov bp,sp; sub sp,reserve` (or `enter` where size is tuned and
+//! the target has it), the stack-limit compare and its overflow branches, a
+//! `push` per callee-saved register the body names or a call disturbs, and
+//! the mirror on return. An interrupt handler wraps its frame in a save of
+//! every register and the segment setup, and a runtime-built frame is not
+//! rebuilt.
+//!
+//! Where the frame register is not needed (nothing holds a value in it), the
+//! frame is dropped and each cell is addressed through the stack pointer
+//! (`stack_addressed`): every instruction's stack effect moves the offset,
+//! and every way into a block must agree on it. Anything that puts that out
+//! of reach (the stack pointer written another way, inline code, an indirect
+//! call that may pop, the frame register read as a value) keeps the frame.
+//! Tuned for size, the stack-addressed form is kept only if it is no longer
+//! in bytes.
+//!
+//! Under `-g` the items also carry marks (line starts, body start and end,
+//! where a variable's value is defined) which encode to no bytes. A move of an
+//! immediate into a segment register, which x86 lacks, is written `push imm;
+//! pop seg`.
+//!
+//! A frame piece (the frame, one saved register) is set up where it is first
+//! needed rather than at the entry when `shrinkwrap::wrapped` says so, and is
+//! taken back on the returns that path reaches.
+//!
+//! `cleaned_returns` rewrites each `ret` of a callee that removes its
+//! arguments to `ret n` or `retf n`; past what `ret imm16` can remove, a
+//! near return of a 32-bit target pops the return address into the last slot
+//! of the area instead (`moved_return`). `return_overhead_bytes` is the size of
+//! the leave sequence, which `jumps::duplicated_returns` needs.
+//!
+//! # Example
+//! The allocated LIR has no frame sequences. `listing` adds the `push` and
+//! `pop` of the callee-saved `si` the body uses, a `ret` after each leave, and
+//! the labels.
+//!
+//! Before:
+//! ```lir
+//! === ControlFlow
+//!   total: 25 instructions
+//!     block 0x0000
+//!       0x0000     ; inserted; delivers v19@AX
+//!       0x0000  SI := mov AX  ; inserted
+//!       ; ...
+//!       0x0003  cmp DX, 0x4  ; inserted
+//!       0x0003  jne   ; inserted
+//!       0x0003     ; inserted
+//!       0x0003     ; inserted
+//!       0x0003     ; inserted; requires v20@EAX
+//!     block 0x0009
+//!       0x000a  cmp DX, CX  ; inserted
+//!       0x000a  jae   ; inserted
+//!     ; ...
+//! ```
+//!
+//! After:
+//! ```asm
+//! _total proc near
+//!     push si
+//! L0_0:
+//!     mov si, ax
+//!     ; ...
+//!     cmp dx, 4
+//!     jne L0_9
+//!     pop si
+//!     ret
+//! L0_9:
+//!     cmp dx, cx
+//!     jae L0_18
+//!     ; ...
+//! ```
+//!
+//! From `ISEL_DUMP=1` and `-S` of a `total` over a `&[u16]`
+//! (`-fno-inline-functions`) at `-m16 -O2`.
+//!
+//! # Runs
+//! Once per procedure after the machine phases. `cleaned_returns` runs in
+//! `assemble::assembled_by` (`masm cleaned returns`), before the return
+//! duplication and shrink-wrap tails there; `listing` runs when the object is
+//! built or `-S` is printed.
+//!
+//! # See also
+//! [`crate::backend::objbuild`] for the encoder of the same items,
+//! [`crate::backend::shrinkwrap`], [`crate::backend::stackusage`].
 
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::{Arc, LazyLock};
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
 use crate::backend::{select, target};
@@ -20,8 +120,8 @@ use crate::support::pyrepr::Repr;
 
 /// What LIR calls the frame register and the stack pointer, whatever the
 /// target: `spelled` gives each its own.
-const FRAME: Register = ir::FRAME;
-const STACK: Register = ir::STACK;
+const FRAME: RegId = ir::FRAME;
+const STACK: RegId = ir::STACK;
 
 /// `SIZES`.
 pub static SIZES: LazyLock<IndexMap<u32, &'static str>> =
@@ -306,13 +406,13 @@ pub enum Mark {
     Note(u32),
     /// The call before it clobbers this register (one mark for each it
     /// clobbers).
-    Clobbered(Register),
+    Clobbered(RegId),
 }
 
 /// Where an instruction put a value `-g` names.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Place {
-    Register(Register),
+    Register(RegId),
     /// A frame cell, as the frame register would address it at this
     /// displacement.
     Cell {
@@ -345,7 +445,7 @@ fn placed(dest: &Loc) -> Option<Place> {
     }
 }
 
-fn reg(register: Register) -> Loc {
+fn reg(register: RegId) -> Loc {
     Loc::Reg(ir::Reg { register, width: 2 })
 }
 
@@ -450,7 +550,7 @@ fn sp_reg() -> Loc {
 /// callee, by its low half. A call to a routine whose convention disturbs more
 /// than this one's (cdecl's ECX and EDX under Watcom's) takes the caller's
 /// value.
-fn saved_of(procedure: &Procedure) -> Vec<Register> {
+fn saved_of(procedure: &Procedure) -> Vec<RegId> {
     let mut roots = if procedure.registers.free {
         _roots_of_values(&procedure.body, procedure.registers.pointer)
     } else {
@@ -475,7 +575,7 @@ fn wrap_of(
     stack_addressed: bool,
 ) -> Option<crate::backend::shrinkwrap::Wrap> {
     let lows = saved_of(procedure);
-    let kept: BTreeSet<Register> =
+    let kept: BTreeSet<RegId> =
         procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
     // The runtime's entry builds an `entry` frame, an interrupt handler and the
     // stack check run at the entry, and inline code may address the frame.
@@ -634,24 +734,24 @@ const INTERRUPT_SAVED: usize = 5;
 /// them is what POPAD or `iret` goes back with. The x87 state is not saved.
 fn _interrupt_parts(group: Addr) -> (Vec<Semantics>, Vec<Semantics>) {
     let push = |one: Loc| semantics(Operation::Push, "push", vec![], vec![one]);
-    let pop = |one: Register| semantics(Operation::Pop, "pop", vec![reg(one)], vec![]);
+    let pop = |one: RegId| semantics(Operation::Pop, "pop", vec![reg(one)], vec![]);
     let enter = vec![
         semantics(Operation::Nothing, "pushad", vec![], vec![]),
-        push(reg(Register::DS)),
-        push(reg(Register::ES)),
-        push(reg(Register::FS)),
-        push(reg(Register::GS)),
+        push(reg(RegId::DS)),
+        push(reg(RegId::ES)),
+        push(reg(RegId::FS)),
+        push(reg(RegId::GS)),
         push(Loc::Imm(ir::Imm { value: 0, width: 2, address: Some(group) })),
-        pop(Register::DS),
-        push(reg(Register::DS)),
-        pop(Register::ES),
+        pop(RegId::DS),
+        push(reg(RegId::DS)),
+        pop(RegId::ES),
         semantics(Operation::Nothing, "cld", vec![], vec![]),
     ];
     let leave = vec![
-        pop(Register::GS),
-        pop(Register::FS),
-        pop(Register::ES),
-        pop(Register::DS),
+        pop(RegId::GS),
+        pop(RegId::FS),
+        pop(RegId::ES),
+        pop(RegId::DS),
         semantics(Operation::Nothing, "popad", vec![], vec![]),
     ];
     (enter, leave)
@@ -713,7 +813,7 @@ fn built(
     let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
     let kept = enter.split_off(enter.len() - count);
     let restores: Vec<Semantics> = leave.drain(..count).collect();
-    let saved: Vec<Register> = {
+    let saved: Vec<RegId> = {
         let lows = saved_of(procedure);
         procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect()
     };
@@ -953,7 +1053,7 @@ fn frame_omitted(
 fn moved_return(
     bytes: i64,
     address: i64,
-    stack: Register,
+    stack: RegId,
 ) -> Vec<Semantics> {
     let up = bytes - address;
     let above = ir::Mem { through: stack, offset: up, disp_width: 4, ..ir::Mem::new(None, address as u32) };
@@ -1244,28 +1344,18 @@ fn writes_stack_pointer(place: &Loc) -> bool {
 
 /// `place` with a frame cell addressed through the stack pointer; none where it
 /// reads the frame register as anything but a base. The frame register would
-/// have held the entry's stack pointer less `slot`.
+/// have held the entry's stack pointer less `slot`. A frame cell is
+/// `Space::Frame`, indexed or not; a register of the frame register's name in
+/// any other address is a value (`FrameRegisters::free`).
 fn through_stack(
     place: &Loc,
     depth: i64,
     slot: i64,
-    pointer: Register,
+    pointer: RegId,
     free: bool,
 ) -> Option<Loc> {
     let shift = |_disp: i64| depth - slot;
-    // Where the frame register holds a value (`FrameRegisters::free`), only a
-    // frame cell is the frame register's: a register of that name elsewhere
-    // is the value.
-    let is_pointer = |one: Register| (one == FRAME || one == pointer) && !(free && one != Register::None);
-    // A frame place with no register, or a cell the frame register's own
-    // address names: a 32-bit index has no frame space, only
-    // `[ebp+index+d]`. A cell with a base value is that register's, even
-    // when it was given the frame register.
-    let based = |through: Register, addr: &Option<Addr>, valued: bool| match addr {
-        Some(addr) if addr.space == Space::Frame => through == Register::None || through == FRAME || through == pointer,
-        Some(addr) if addr.space == Space::Literal => (through == FRAME || through == pointer) && !(free && valued),
-        _ => false,
-    };
+    let is_pointer = |one: RegId| (one == FRAME || one == pointer) && !(free && one != RegId::None);
     if matches!(place, Loc::Reg(one) if is_pointer(one.register)) {
         return None;
     }
@@ -1273,11 +1363,7 @@ fn through_stack(
     if is_pointer(at.index_through) {
         return None;
     }
-    // A cell with a base value is that register's, even when it was given the
-    // frame register.
-    let valued = matches!(place, Loc::Mem(cell) if cell.base.is_some());
-    if based(at.through, &at.addr, valued) {
-        let addr = at.addr?;
+    if let Some(addr) = at.addr.filter(|addr| addr.space == Space::Frame) {
         return Some(place.map_address(|one| ir::AddressRef {
             through: STACK,
             addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr }),
@@ -1294,10 +1380,10 @@ fn spelled(
     item: Item,
     registers: &llrm_target::FrameRegisters,
 ) -> Item {
-    let register = |one: Register| registers.spelled(one);
+    let register = |one: RegId| registers.spelled(one);
     // A frame place with no register is addressed through the frame register.
-    let framed = |through: Register, addr: Option<Addr>, index: Register| {
-        if through == Register::None && index == Register::None && addr.is_some_and(|addr| addr.space == Space::Frame) {
+    let framed = |through: RegId, addr: Option<Addr>, index: RegId| {
+        if through == RegId::None && index == RegId::None && addr.is_some_and(|addr| addr.space == Space::Frame) {
             registers.pointer
         } else {
             register(through)
@@ -1456,8 +1542,8 @@ pub fn _falls_to(
 /// array's too) names it only as the address it is, and does not use it.
 fn _roots_of_values(
     body: &lir::LirBody,
-    pointer: Register,
-) -> BTreeSet<Register> {
+    pointer: RegId,
+) -> BTreeSet<RegId> {
     let mut found = BTreeSet::new();
     for one in body.insns() {
         let Some(what) = &one.what else { continue };
@@ -1467,10 +1553,8 @@ fn _roots_of_values(
                     found.insert(ir::root(*register));
                 }
                 Loc::Mem(cell) => {
-                    let frame_cell =
-                        cell.addr.as_ref().is_some_and(|addr| {
-                            addr.space == Space::Frame || (addr.space == Space::Literal && cell.base.is_none())
-                        }) && (cell.through == FRAME || cell.through == pointer || cell.through == Register::None);
+                    let frame_cell = cell.addr.as_ref().is_some_and(|addr| addr.space == Space::Frame)
+                        && (cell.through == FRAME || cell.through == pointer || cell.through == RegId::None);
                     if !frame_cell {
                         found.insert(ir::root(cell.through));
                     }
@@ -1483,7 +1567,7 @@ fn _roots_of_values(
     found
 }
 
-pub fn _roots(body: &lir::LirBody) -> BTreeSet<Register> {
+pub fn _roots(body: &lir::LirBody) -> BTreeSet<RegId> {
     let mut found = BTreeSet::new();
     for one in body.insns() {
         let Some(what) = &one.what else { continue };
@@ -1678,7 +1762,7 @@ pub fn _operand(
             }
         }
         Loc::Mem(cell) => _memory(regs, cell, names)?,
-        Loc::Address(ir::AddressRef { addr: Some(address), index_through: Register::None, through, .. }) => {
+        Loc::Address(ir::AddressRef { addr: Some(address), index_through: RegId::None, through, .. }) => {
             let text = _memory(regs, &ir::Mem { through: *through, ..ir::Mem::new(Some(*address), 2) }, names)?;
             text.strip_prefix("word ptr ").map_or(text.clone(), str::to_owned)
         }
@@ -1691,12 +1775,12 @@ pub fn _operand(
 
 pub fn _registers(
     regs: Regs,
-    base: Register,
-    index: Register,
+    base: RegId,
+    index: RegId,
     scale: i64,
 ) -> String {
-    let mut parts = if base != Register::None { vec![target::name_of(regs, base)] } else { vec![] };
-    if index != Register::None {
+    let mut parts = if base != RegId::None { vec![target::name_of(regs, base)] } else { vec![] };
+    if index != RegId::None {
         parts.push(target::name_of(regs, index) + &(if scale != 1 { format!("*{scale}") } else { String::new() }));
     }
     parts.join("+")
@@ -1711,7 +1795,7 @@ pub fn _memory(
     // As select.operand_of: a named address carries the displacement, and
     // `offset` is only the displacement of a cell with none.
     let Some(address) = &cell.addr else {
-        if cell.through == Register::None {
+        if cell.through == RegId::None {
             return Err(Unprintable(format!("cell {}", cell.repr())));
         }
         return Ok(format!("{size}[{}{}]", target::name_of(regs, cell.through), _signed(cell.offset)));
@@ -1725,29 +1809,30 @@ pub fn _memory(
         Space::Segment | Space::External => {
             let symbol = named(names, address);
             let indexed = if registers.is_empty() { String::new() } else { format!("[{registers}]") };
-            let segment = if address.segment == Register::None {
+            let segment = if address.segment == (RegId::None).iced() {
                 String::new()
             } else {
-                format!("{}:", target::name_of(regs, address.segment))
+                format!("{}:", target::name_of(regs, RegId::from(address.segment)))
             };
             return Ok(format!("{size}{segment}{symbol}{disp}{indexed}"));
         }
         Space::Literal if !registers.is_empty() => {
-            let segment =
-                if address.segment == Register::None || regs.default_segment(cell.through) == Some(address.segment) {
-                    String::new()
-                } else {
-                    format!("{}:", target::name_of(regs, address.segment))
-                };
+            let segment = if address.segment == (RegId::None).iced()
+                || regs.default_segment(cell.through) == Some(RegId::from(address.segment))
+            {
+                String::new()
+            } else {
+                format!("{}:", target::name_of(regs, RegId::from(address.segment)))
+            };
             return Ok(format!("{size}{segment}[{registers}{disp}]"));
         }
         // A direct address, as `[disp16]`: the offset is unsigned.
-        Space::Literal if registers.is_empty() && address.segment == Register::None => {
+        Space::Literal if registers.is_empty() && address.segment == (RegId::None).iced() => {
             return Ok(format!("{size}[{}]", address.disp & 0xFFFF));
         }
-        Space::Far if address.segment != Register::None => {
+        Space::Far if address.segment != (RegId::None).iced() => {
             let inside = if registers.is_empty() { address.disp.to_string() } else { format!("{registers}{disp}") };
-            return Ok(format!("{size}{}:[{inside}]", target::name_of(regs, address.segment)));
+            return Ok(format!("{size}{}:[{inside}]", target::name_of(regs, RegId::from(address.segment))));
         }
         _ => {}
     }
@@ -1783,7 +1868,7 @@ mod tests {
     }
 
     fn ax() -> Loc {
-        Loc::Reg(ir::Reg { register: Register::AX, width: 2 })
+        Loc::Reg(ir::Reg { register: RegId::AX, width: 2 })
     }
 
     /// A string move prints as the instruction it is: `rep` where it has a
@@ -1819,7 +1904,7 @@ mod tests {
             ..Semantics::new(Operation::Copy)
         };
         let segment = |register| Loc::Reg(ir::Reg { register, width: 2 });
-        let through = ss("movsd", vec![held(1), held(2), held(3), segment(Register::SS), segment(Register::ES)]);
+        let through = ss("movsd", vec![held(1), held(2), held(3), segment(RegId::SS), segment(RegId::ES)]);
         assert_eq!(
             _instruction(regs, &through, &no_names(), 0).unwrap(),
             ["rep movs dword ptr es:[di], dword ptr ss:[si]"]
@@ -1833,7 +1918,7 @@ mod tests {
     fn test_frame_address_displacement_once() {
         let regs = crate::backend::registerinfo::test_regs();
         let placed = Loc::Address(ir::AddressRef {
-            through: Register::BP,
+            through: RegId::BP,
             offset: -10,
             disp_width: 1,
             ..ir::AddressRef::new(Some(Addr::new(Space::Frame, -10)))
@@ -1846,8 +1931,8 @@ mod tests {
     #[test]
     fn test_far_cell_displacement_once() {
         let regs = crate::backend::registerinfo::test_regs();
-        let addr = Addr { base: Register::BX, segment: Register::ES, ..Addr::new(Space::Far, 2) };
-        let cell = ir::Mem { through: Register::BX, offset: 2, ..ir::Mem::new(Some(addr), 1) };
+        let addr = Addr { base: (RegId::BX).iced(), segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 2) };
+        let cell = ir::Mem { through: RegId::BX, offset: 2, ..ir::Mem::new(Some(addr), 1) };
         assert_eq!(_operand(regs, &Loc::Mem(cell), &no_names()).unwrap(), "byte ptr es:[bx+2]");
     }
 
@@ -1952,7 +2037,7 @@ mod tests {
     }
 
     fn through_bp() -> Loc {
-        Loc::Mem(ir::Mem { through: Register::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, 6)), 2) })
+        Loc::Mem(ir::Mem { through: RegId::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, 6)), 2) })
     }
 
     fn has(
@@ -1967,7 +2052,7 @@ mod tests {
     /// two.
     #[test]
     fn test_frame_only_where_something_uses_it() {
-        let bx = Loc::Reg(ir::Reg { register: Register::BX, width: 2 });
+        let bx = Loc::Reg(ir::Reg { register: RegId::BX, width: 2 });
         assert_eq!(_printed(vec![bx], 0), ["_get proc far", "L0_1:", "mov ax, bx", "retf", "_get endp"]);
         let params = _printed(vec![through_bp()], 0);
         let tail = &params[params.len() - 3..params.len() - 1];
@@ -2137,6 +2222,7 @@ mod tests {
                 default: llrm_target::object::Format::Omf,
                 bitness: 32,
                 header: vec![".386".to_owned(), ".model flat".to_owned()],
+                dwarf_version: llrm_target::object::DEFAULT_DWARF_VERSION,
             },
             code: "T_TEXT".into(),
             names: no_names(),
@@ -2168,8 +2254,8 @@ mod tests {
             IndexMap::default(),
         );
         let registers = llrm_target::FrameRegisters {
-            pointer: Register::EBP,
-            stack: Register::ESP,
+            pointer: RegId::EBP,
+            stack: RegId::ESP,
             saved: Vec::new(),
             slot: 4,
             optional: false,
@@ -2216,8 +2302,8 @@ mod tests {
         };
         let listing = |enter: bool, size: bool| {
             let registers = llrm_target::FrameRegisters {
-                pointer: Register::EBP,
-                stack: Register::ESP,
+                pointer: RegId::EBP,
+                stack: RegId::ESP,
                 saved: Vec::new(),
                 slot: 4,
                 optional: false,
@@ -2261,8 +2347,8 @@ mod tests {
             ..lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, body)], IndexMap::default(), IndexMap::default())
         };
         let registers = llrm_target::FrameRegisters {
-            pointer: Register::EBP,
-            stack: Register::ESP,
+            pointer: RegId::EBP,
+            stack: RegId::ESP,
             saved: Vec::new(),
             slot: 4,
             optional,
@@ -2286,12 +2372,12 @@ mod tests {
     }
 
     fn eax() -> Loc {
-        Loc::Reg(ir::Reg { register: Register::EAX, width: 4 })
+        Loc::Reg(ir::Reg { register: RegId::EAX, width: 4 })
     }
 
     /// A cell of the frame, `disp` from the frame register.
     fn cell(disp: i64) -> Loc {
-        Loc::Mem(ir::Mem { through: Register::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, disp)), 4) })
+        Loc::Mem(ir::Mem { through: RegId::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, disp)), 4) })
     }
 
     fn ret() -> Arc<lir::Insn> {
@@ -2345,7 +2431,7 @@ mod tests {
                     Operation::Move,
                     "mov",
                     vec![eax()],
-                    vec![Loc::Reg(ir::Reg { register: Register::EBP, width: 4 })],
+                    vec![Loc::Reg(ir::Reg { register: RegId::EBP, width: 4 })],
                 ),
             ),
             ret(),
@@ -2379,8 +2465,8 @@ mod tests {
             IndexMap::default(),
         );
         let registers = llrm_target::FrameRegisters {
-            pointer: Register::EBP,
-            stack: Register::ESP,
+            pointer: RegId::EBP,
+            stack: RegId::ESP,
             saved: Vec::new(),
             slot: 4,
             optional: false,
@@ -2410,7 +2496,7 @@ mod tests {
     /// call.
     #[test]
     fn test_callee_saves_only_what_the_convention_keeps() {
-        let lines = _printed(vec![Loc::Reg(ir::Reg { register: Register::ESI, width: 4 })], 0);
+        let lines = _printed(vec![Loc::Reg(ir::Reg { register: RegId::ESI, width: 4 })], 0);
         assert!(has(&lines, "push si") && has(&lines, "pop si"));
         assert!(!has(&lines, "push esi") && !has(&lines, "pop esi"));
     }
@@ -2421,7 +2507,7 @@ mod tests {
     #[test]
     fn test_a_register_only_a_later_block_names_is_saved_there() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
-        let si = || Loc::Reg(ir::Reg { register: Register::SI, width: 2 });
+        let si = || Loc::Reg(ir::Reg { register: RegId::SI, width: 2 });
         let blocks = vec![
             lir::LirBlock {
                 succ: vec![3, 2],
@@ -2468,7 +2554,7 @@ mod tests {
     #[test]
     fn test_a_return_reached_around_the_save_keeps_the_save_at_the_entry() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
-        let si = || Loc::Reg(ir::Reg { register: Register::SI, width: 2 });
+        let si = || Loc::Reg(ir::Reg { register: RegId::SI, width: 2 });
         let blocks = vec![
             lir::LirBlock { succ: vec![3, 2], ..lir::LirBlock::new(1, vec![insn(1, branch)]) },
             lir::LirBlock {
@@ -2507,12 +2593,8 @@ mod tests {
     #[test]
     fn test_arithmetic_lea_scales_its_index() {
         let regs = crate::backend::registerinfo::test_regs();
-        let r#where = ir::AddressRef {
-            through: Register::EBX,
-            index_through: Register::EBX,
-            scale: 2,
-            ..ir::AddressRef::new(None)
-        };
+        let r#where =
+            ir::AddressRef { through: RegId::EBX, index_through: RegId::EBX, scale: 2, ..ir::AddressRef::new(None) };
         assert_eq!(_operand(regs, &Loc::Address(r#where), &no_names()).unwrap(), "[ebx+ebx*2]");
     }
 }

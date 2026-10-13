@@ -671,6 +671,23 @@ thread_local! {
     static BURNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+thread_local! {
+    /// How long `Costly` burns, in loop trips.
+    static BURN: std::cell::Cell<u64> = const { std::cell::Cell::new(2_000_000) };
+}
+
+/// The work of `trips` of `Costly`'s loop in the unit the clock reads
+/// (instructions, or CPU nanoseconds where there is no counter).
+fn burnt(trips: u64) -> u64 {
+    let start = llrm_support::debug::work();
+    let mut sum = 0u64;
+    for at in 0..trips {
+        sum = std::hint::black_box(sum.wrapping_add(at));
+    }
+    BURNED.with(|burned| burned.set(sum));
+    llrm_support::debug::work() - start
+}
+
 /// An analysis that costs a lot.
 struct Costly;
 
@@ -684,7 +701,7 @@ impl llrm_mir::passes::Analysis for Costly {
         _: &mut llrm_mir::passes::Analyses,
     ) -> u64 {
         let mut sum = 0u64;
-        for at in 0..2_000_000u64 {
+        for at in 0..BURN.with(std::cell::Cell::get) {
             sum = std::hint::black_box(sum.wrapping_add(at));
         }
         BURNED.with(|burned| burned.set(sum));
@@ -714,8 +731,9 @@ impl llrm_mir::passes::FunctionPass for Asks {
 /// the pipeline's work read as idle (floatloop 5.7 G, sroa 5.0 G) when the
 /// passes' own work was 3% and the analyses were reused by the next pass to
 /// ask. A step now says how much of its work was its own.
-#[test]
-fn test_a_steps_own_work_leaves_out_the_analyses_it_computed() {
+fn billed_asking_for_costly(trips: u64) -> (super::Run, u64) {
+    BURN.with(|burn| burn.set(trips));
+    let reference = burnt(trips);
     use llrm_mir::module::{GlobalKind, Module};
     use llrm_mir::passes::{Analyses, Declared, Outer, Unit};
     llrm_mir::passes::observe(llrm_mir::passes::Observer {
@@ -743,8 +761,219 @@ fn test_a_steps_own_work_leaves_out_the_analyses_it_computed() {
         useful: 0,
         idle_with_analyses: 0,
         useful_with_analyses: 0,
+        classified: unit.function.mark(),
+        stretches: Vec::new(),
+        unreached: 0,
     };
     run.step(&mut Asks, "asks", &mut unit, &mut analyses);
-    assert!(run.idle_with_analyses > 1_000_000, "premise: the analysis cost {} ", run.idle_with_analyses);
+    (run, reference)
+}
+
+#[test]
+fn test_a_steps_own_work_leaves_out_the_analyses_it_computed() {
+    let (run, reference) = billed_asking_for_costly(2_000_000);
+    assert!(
+        analysis_was_billed(run.idle_with_analyses, reference),
+        "premise: the analysis cost {} of {reference}",
+        run.idle_with_analyses
+    );
     assert!(run.idle * 10 < run.idle_with_analyses, "own {} of {} with the analysis", run.idle, run.idle_with_analyses);
+}
+
+/// A fixed floor on the analysis's work (1,000,000) read "instructions" with a
+/// counter and "CPU nanoseconds" without one, where a fast runner spends
+/// 790,710 on 2,000,000 trips: the premise failed there though the step billed
+/// the analysis. A short analysis is billed too, whatever the unit.
+#[test]
+fn test_the_premise_of_an_analysis_is_its_cost_in_the_clocks_unit_not_a_number_of_them() {
+    let (run, reference) = billed_asking_for_costly(100_000);
+    assert!(
+        analysis_was_billed(run.idle_with_analyses, reference),
+        "the analysis cost {} of {reference}",
+        run.idle_with_analyses
+    );
+}
+
+/// The step billed the analysis, read in the clock's own unit against the same
+/// loop measured alone. CPU nanoseconds of one loop differ by more than 2x from
+/// one read to the next on a shared runner (1,351,415 against 2,947,056,
+/// #1442's CI): the floor is an eighth of the reference, which still
+/// tells a billed analysis from none.
+fn analysis_was_billed(
+    billed: u64,
+    reference: u64,
+) -> bool {
+    billed > 0 && billed * 8 >= reference
+}
+
+/// A noisy clock reads the analysis at 0.3 of its reference and the step still
+/// counts as billed; a step that billed nothing, or a tenth, does not.
+#[test]
+fn test_a_noisy_clock_still_shows_the_analysis_billed_and_none_does_not() {
+    assert!(analysis_was_billed(300_000, 1_000_000));
+    assert!(analysis_was_billed(1_351_415, 2_947_056));
+    assert!(!analysis_was_billed(0, 1_000_000));
+    assert!(!analysis_was_billed(100_000, 1_000_000));
+}
+
+/// Finds nothing to do, and counts how often it was asked.
+struct Watch {
+    name: &'static str,
+    reads: llrm_mir::footprint::Footprint,
+    runs: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl llrm_mir::passes::FunctionPass for Watch {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.reads
+    }
+
+    fn run(
+        &mut self,
+        _: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        self.runs.set(self.runs.get() + 1);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// Changes the constant of @f's add, once: an arithmetic value that only a
+/// `ret` reads.
+struct Fold {
+    done: bool,
+}
+
+impl llrm_mir::passes::FunctionPass for Fold {
+    fn name(&self) -> &'static str {
+        "fold-once"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        if std::mem::replace(&mut self.done, true) {
+            return llrm_mir::passes::PreservedAnalyses::all();
+        }
+        let (_, add) = unit
+            .function
+            .walk()
+            .find(|&(_, one)| {
+                unit.function.instruction(one).opcode
+                    == llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Add)
+            })
+            .expect("an add");
+        let ty = unit.function.instruction(add).ty;
+        let operands = unit.function.instruction(add).operands.clone();
+        let two = llrm_mir::module::Operand::Constant(unit.context.int(ty, 2));
+        unit.function.set_operands(add, vec![operands[0], two]);
+        llrm_mir::passes::PreservedAnalyses::none()
+    }
+}
+
+/// A fold in one function made every pass before it run again, the whole round,
+/// though what it changed was an arithmetic value only a `ret` reads: 13.6% of
+/// x_popcount -O2's compile was passes that found nothing (decide alone 3.4 of
+/// 94 Minstr), and a late fold (`& 3` over a sum masked again) cost it x1.024.
+/// A pass says what it reads (`FunctionPass::reads`), the driver what the edits
+/// reached (`footprint::of`): decide, which reads conditions, memory and
+/// the CFG, is not run again; one that reads everything is.
+#[test]
+fn a_fold_does_not_rerun_the_passes_that_read_nothing_it_reached() {
+    use llrm_mir::footprint::Footprint;
+    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let (narrow, wide) = (std::rc::Rc::new(std::cell::Cell::new(0)), std::rc::Rc::new(std::cell::Cell::new(0)));
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![
+        Box::new(Watch {
+            name: "narrow",
+            reads: Footprint::CONTROL | Footprint::MEMORY | Footprint::STRUCTURE,
+            runs: std::rc::Rc::clone(&narrow),
+        }),
+        Box::new(Watch { name: "wide", reads: Footprint::ALL, runs: std::rc::Rc::clone(&wide) }),
+        Box::new(Fold { done: false }),
+    ];
+    crate::testing::managed(&mut module, fixed);
+    assert_eq!(wide.get(), 2, "a pass that reads everything is run again after the fold");
+    assert_eq!(narrow.get(), 1, "decide-like: the fold reached no condition, no memory and no block");
+}
+
+/// Six sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them,
+/// through the whole pipeline at -O3 with and without unroll-and-jam, and at
+/// -O2: the jam changes the code of -O3 alone, and the nest computes what it
+/// did. Before the pass was in the pipeline the first two were the same text.
+#[test]
+fn only_o3_jams_a_nest_that_sweeps_the_same_cells() {
+    let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
+    let text = format!(
+        "@p = global [100 x i16] [{}]
+@v = global [100 x i16] [{}]
+
+define i16 @main() {{
+b0:
+  br label %outer
+
+outer:
+  %t = phi i16 [ 0, %b0 ], [ %tn, %outerlatch ]
+  %go = icmp slt i16 %t, 6
+  br i1 %go, label %pre, label %done
+
+pre:
+  br label %inner
+
+inner:
+  %j = phi i16 [ 0, %pre ], [ %jn, %body ]
+  %more = icmp slt i16 %j, 100
+  br i1 %more, label %body, label %outerlatch
+
+body:
+  %o = mul i16 %j, 2
+  %pp = getelementptr i8, ptr @p, i16 %o
+  %pv = getelementptr i8, ptr @v, i16 %o
+  %a = load i16, ptr %pp
+  %b = load i16, ptr %pv
+  %s = add i16 %a, %b
+  store i16 %s, ptr %pp
+  %jn = add i16 %j, 1
+  br label %inner
+
+outerlatch:
+  %tn = add i16 %t, 1
+  br label %outer
+
+done:
+  %q = getelementptr i8, ptr @p, i16 40
+  %w = load i16, ptr %q
+  ret i16 %w
+}}
+",
+        cells(1),
+        cells(3)
+    );
+    let through = |options: pipeline::Options| {
+        let mut module = llrm_analysis::testing::parsed(&text);
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+            pipeline::applied(program, &Applied { options, ..Applied::default() })
+        })
+        .and_then(|done| done)
+        .unwrap();
+        (llrm_mir::print::module(&module), interpret::run(&module, "main", Vec::new(), FUEL))
+    };
+    let before = interpret::run(&llrm_analysis::testing::parsed(&text), "main", Vec::new(), FUEL);
+    let (jammed, result) = through(pipeline::Options::speed());
+    let (plain, plain_result) = through(pipeline::Options { unroll_jam: false, ..pipeline::Options::speed() });
+    assert_eq!((&result, &plain_result), (&before, &before), "{jammed}");
+    assert_ne!(jammed, plain);
+    assert_eq!(
+        through(pipeline::Options::default()).0,
+        through(pipeline::Options { unroll_jam: false, ..Default::default() }).0
+    );
 }

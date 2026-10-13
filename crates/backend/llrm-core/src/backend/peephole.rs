@@ -1,5 +1,114 @@
-//! Port of `qbopt/backend/peephole.py`: simplifications that depend on the
-//! final physical register assignment.
+//! Local rewrites of allocated LIR that need the final physical registers.
+//!
+//! # How it works
+//! The phase is one fixed sequence of sub-passes over the body. Most are
+//! generated rule groups: `peephole.peep` of the target (`llrm-x86`, plus
+//! `llrm-x86-m16` or `llrm-x86-m32`) lists the groups, each with a window walk,
+//! `match` patterns, `when` guards and a `rewrite`; `build.rs` turns them into
+//! the matchers under `peep/`, bound to the target as `peep::Rules`. The rest
+//! are hand-written functions in this file or their own modules. A window skips
+//! meta instructions, so a source-map marker between two instructions never
+//! stops a rewrite.
+//!
+//! What the passes know is physical: liveness of register lanes and flag lanes
+//! (`lanes.rs`, `effects.rs`) and the CPU's prices (`Profile`). A rewrite fires
+//! only when the lanes and flags it changes are dead, and, where the target has
+//! a choice, when the profile prices it no dearer in cycles or bytes.
+//!
+//! The order is deliberate. Register renaming and copy propagation come first,
+//! so every later pass sees fewer copies. Sinking of copies and spill stores
+//! follows the reload forwarding, because a reload gone from the other path is
+//! what lets the store leave it. Operand folding and address selection come
+//! next, then the flag passes, then dead-code elimination, and last the repair
+//! of what the 16-bit target's 32-bit addresses need.
+//!
+//! ```text
+//!  thrash -> frame copies -> copyprop -> extensions -> copysink
+//!    -> spillforward -> postrasink -> storecombine -> pushed constants
+//!    -> pushes, constants, commuted, transferred, high extracts, restored
+//!       copies, shuttles, overwritten, fused, fused calls, far loads
+//!    -> exact addresses -> addresses (LEA) -> stepped after compare
+//!    -> secondary bases -> increments, borrows, doubled, narrowed
+//!    -> widened moves, zero extensions -> zeroed loads -> shared stores
+//!    -> machine CSE -> narrowed moves, zeroes, tested, compares again,
+//!       zero compares, waits -> machine DCE -> popped arguments
+//!    -> frame adjust cleanup -> upper zero (non-native targets)
+//! ```
+//!
+//! Typical rewrites, before and after:
+//!
+//! ```text
+//!  inc edi ; cmp edi,0 ; jne L      inc edi ; jne L        (tested)
+//!  cmp r,0 ; jcc                    or r,r ; jcc           (zero_compares)
+//!  mov r,0 ; sbb r,0                sbb r,r                (borrows)
+//!  mov z,y ; add z,x  (flags dead)  lea z,[y+x]            (addresses)
+//!  mov r,[m] ; mov es,[m+2]         les r,[m]              (far_loads)
+//! ```
+//!
+//! A sub-pass whose subject the body lacks is skipped. `needs.rs` keeps one bit
+//! per candidate shape (a register copy, an inserted definition, a cell read
+//! through an unheld 32-bit register, an exact cell, a based cell) per block,
+//! and `gated` runs the pass only if some block has its bit. `LLRM_CHECK_NEEDS`
+//! runs the skipped pass anyway and asserts it changed nothing.
+//!
+//! When the frame has a size but the body reads or writes no spill cell, no
+//! barrier and no stack-register operand outside the frame, the synthetic frame
+//! reservations (`frame_adjust`) are dropped. A native target returns before
+//! the last pass: its addresses read whole registers, where a 16-bit target's
+//! 32-bit address is the prefixed form of a 16-bit one and needs the upper half
+//! proven zero (`upperzero.rs`).
+//!
+//! # Example
+//! A loop counting `n` down, after allocation:
+//!
+//! Before:
+//!
+//! ```lir
+//! block 0x0000
+//!   0x0000  AX := mov 0x1  ; inserted
+//!   0x0000  BX := mov 0x0  ; inserted
+//!   0x0000  jmp   ; inserted
+//! block 0x0001
+//!   0x0004  CX := mov DX  ; inserted
+//!   0x0004  CX := sub CX, 0x1  ; inserted
+//!   0x0006  cmp DX, 0x0  ; inserted
+//!   0x0006  jne   ; inserted
+//! ```
+//!
+//! After:
+//!
+//! ```lir
+//! block 0x0000
+//!   0x0000  AX := mov 0x1  ; inserted
+//!   0x0000  BX := xor BX, BX  ; inserted
+//!   0x0000  jmp   ; inserted
+//! block 0x0001
+//!   0x0004  CX := mov DX  ; inserted
+//!   0x0004  CX := dec CX  ; inserted
+//!   0x0006  DX := or DX, DX  ; inserted
+//!   0x0006  jne   ; inserted
+//! ```
+//!
+//! The zero load became `xor`, the subtraction of one `dec`, and the compare
+//! with zero `or`, which sets the flags `jne` reads as `cmp` did.
+//!
+//! From `ISEL_DUMP=1` of a C countdown loop compiled with `llrm-c -O2 -m16`:
+//! the `ParallelCopy` and `Peephole` stages.
+//!
+//! # Runs
+//! Once per body, as the machine phase after `prologue` and before `loopslots`
+//! (`flow::machine_with`), in every machine of every candidate allocation.
+//! There is no flag to turn it off; at -O1 and up it runs the same rounds, as
+//! gcc's `-fpeephole2` does.
+//!
+//! # Needs
+//! Allocated, two-address LIR with the frame laid out
+//! ([`crate::backend::allocate`], [`crate::backend::prologue`]). Liveness comes
+//! from [`crate::backend::liveness`].
+//!
+//! # See also
+//! - gcc `-fpeephole2`:
+//!   <https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L638>
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -22,7 +131,7 @@ use crate::backend::{
     affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores,
     spillforward, storecombine,
 };
-use crate::model::ir::{self, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet};
@@ -219,27 +328,31 @@ impl Peephole {
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
             self.rules,
-            &fused(
+            &fused_calls(
                 self.rules,
-                &overwritten(&shuttles(
+                &fused(
                     self.rules,
-                    &restored_copies(
+                    &overwritten(&shuttles(
                         self.rules,
-                        &high_extracts(
-                            &transferred(
-                                self.rules,
-                                &commuted(self.rules, &constants(&pushes(self.rules, &body, &self.cpu))),
-                            ),
-                            &self.cpu,
-                        )?,
-                    ),
-                )),
+                        &restored_copies(
+                            self.rules,
+                            &high_extracts(
+                                &transferred(
+                                    self.rules,
+                                    &commuted(self.rules, &constants(&pushes(self.rules, &body, &self.cpu))),
+                                ),
+                                &self.cpu,
+                            )?,
+                        ),
+                    )),
+                ),
             ),
         );
         let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
             crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
         })?;
         let body = addresses(&body, &self.cpu)?;
+        let body = stepped_after_compare(self.rules, &body);
         let body = gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?;
         let body = borrows(self.rules, &increments(self.rules, &body));
         let body = doubled(self.rules, &body, &self.cpu)?;
@@ -255,7 +368,10 @@ impl Peephole {
         let body = zeroed_loads(self.rules, &body, &self.cpu)?;
         let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
         let body = machinecse::eliminated(&body)?;
-        let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
+        let body = waits(&zero_compares(
+            self.rules,
+            &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
+        ));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
@@ -921,6 +1037,17 @@ pub fn restored_copies(
     peep::rewritten(rules.restored_copies, body, &Facts::new(body, None))
 }
 
+/// Whether `register` in an operand at `addr` is the frame base, which the
+/// frame layout resolves: not a read of the frame register, so a copy of that
+/// register does not rename it.
+pub fn is_frame_base(
+    regs: Regs,
+    addr: Option<Addr>,
+    register: RegId,
+) -> bool {
+    addr.is_some_and(|addr| addr.space == Space::Frame) && regs.is_frame(register)
+}
+
 /// One allocated operand with aliases of `before` renamed to `after`.
 pub fn _register_operand(
     regs: Regs,
@@ -931,28 +1058,27 @@ pub fn _register_operand(
     // `target.named(after, target.width_of(x))`: a width the target does not
     // know leaves `after` as named.
     let named = |register: RegId| regs.width_of(register).map_or(after, |width| regs.named(after, width));
+    let renames = |register: RegId, addr: Option<Addr>| {
+        ir::root(register) == ir::root(before) && !is_frame_base(regs, addr, register)
+    };
     match one {
         Loc::Reg(one) if ir::root(one.register) == ir::root(before) => {
             Loc::Reg(Reg { register: regs.named(after, i64::from(one.width)), ..*one })
         }
-        Loc::Mem(one) if [ir::root(one.through), ir::root(one.index_through)].contains(&ir::root(before)) => {
+        Loc::Mem(one) => {
+            let (through, index) = (renames(one.through, one.addr), renames(one.index_through, None));
+            if !through && !index {
+                return Loc::Mem(one.clone());
+            }
             Loc::Mem(Mem {
-                through: if ir::root(one.through) == ir::root(before) { named(one.through) } else { one.through },
-                index_through: if ir::root(one.index_through) == ir::root(before) {
-                    named(one.index_through)
-                } else {
-                    one.index_through
-                },
+                through: if through { named(one.through) } else { one.through },
+                index_through: if index { named(one.index_through) } else { one.index_through },
                 ..one.clone()
             })
         }
         Loc::Address(one) => {
-            let through = if ir::root(one.through) == ir::root(before) { named(one.through) } else { one.through };
-            let index = if ir::root(one.index_through) == ir::root(before) {
-                named(one.index_through)
-            } else {
-                one.index_through
-            };
+            let through = if renames(one.through, one.addr) { named(one.through) } else { one.through };
+            let index = if renames(one.index_through, None) { named(one.index_through) } else { one.index_through };
             Loc::Address(AddressRef { through, index_through: index, ..one.clone() })
         }
         _ => one.clone(),
@@ -1391,6 +1517,15 @@ pub fn fused(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.fused, body, &Facts::new(body, None))
+}
+
+/// Fold a load that only an indirect call reads into the call
+/// (`peephole.peep`).
+pub fn fused_calls(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.fused_calls, body, &Facts::new(body, None))
 }
 
 /// Load a far pointer's two words with one les (lds, lfs, lgs)
@@ -2111,6 +2246,15 @@ pub fn increments(
     peep::rewritten(rules.increments, body, &Facts::new(body, None))
 }
 
+/// A step made before the compare of the value it replaces, after it
+/// (`peephole.peep`).
+pub fn stepped_after_compare(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.stepped_after_compare, body, &Facts::new(body, None))
+}
+
 /// `mov r,0 ; sbb r,0` as `sbb r,r` (`peephole.peep`).
 pub fn borrows(
     rules: &peep::Rules,
@@ -2295,6 +2439,70 @@ pub fn tested(
             ..(*test).clone()
         });
         blocks[block_index].insert(test_index, setter);
+    }
+    body.with_blocks(body.blocks.iter().zip(blocks).map(|(block, insns)| block.with_insns(insns)).collect())
+}
+
+/// `cmp a,b; jl X` falling into `cmp a,b; jle Y` is `cmp a,b; jl X`, `jle Y`.
+///
+/// A block entered from one block alone, whose first work is the compare that
+/// block ended in (a compare, then its conditional jump, then perhaps a jump
+/// to the other side), reads flags that are already its compare's: the jump
+/// changes none. gcc's `cse_condition_code_reg` removes it in its extended
+/// basic blocks, and an else-if on the same two values (a binary search's
+/// `a[m] < k`, then `a[m] > k`) tests them once.
+pub fn compares_again(body: &LirBody) -> LirBody {
+    let mut predecessors = HashMap::<i64, Vec<usize>>::default();
+    for (at, block) in body.blocks.iter().enumerate() {
+        for to in &block.succ {
+            predecessors.entry(*to).or_default().push(at);
+        }
+    }
+    let work = |insns: &[Arc<Insn>]| -> Vec<usize> {
+        insns.iter().enumerate().filter(|(_, one)| !_skippable_nothing(one)).map(|(index, _)| index).collect()
+    };
+    let compare_of = |one: &Insn| -> bool {
+        one.clobbers.is_empty()
+            && one.symbol != Some(true)
+            && !one.volatile
+            && one.what.as_ref().is_some_and(|what| what.op == Operation::Compare)
+    };
+    let mut blocks = body.blocks.iter().map(|block| block.insns.to_vec()).collect::<Vec<_>>();
+    for (index, block) in body.blocks.iter().enumerate() {
+        let Some([from]) = predecessors.get(&block.at).map(Vec::as_slice) else { continue };
+        if *from == index {
+            continue;
+        }
+        // The first work of the block, and the last of the one before: a
+        // compare, a branch on it, and perhaps the jump to the other side.
+        let ahead = work(&blocks[*from]);
+        let mut last = ahead.len();
+        let is =
+            |insns: &[Arc<Insn>], at: usize, op: Operation| insns[at].what.as_ref().is_some_and(|what| what.op == op);
+        if last > 0 && is(&blocks[*from], ahead[last - 1], Operation::Jump) {
+            last -= 1;
+        }
+        if last < 2 || !is(&blocks[*from], ahead[last - 1], Operation::Branch) {
+            continue;
+        }
+        let before = Arc::clone(&blocks[*from][ahead[last - 2]]);
+        let here = work(&blocks[index]);
+        let Some(&first) = here.first() else { continue };
+        let again = Arc::clone(&blocks[index][first]);
+        if !compare_of(&before) || !compare_of(&again) || before.widths != again.widths {
+            continue;
+        }
+        let (Some(was), Some(is_now)) = (before.what.as_ref(), again.what.as_ref()) else { continue };
+        if !was.same_meaning(is_now) {
+            continue;
+        }
+        blocks[index][first] = Arc::new(Insn {
+            what: Some(semantics(Operation::Nothing, "", vec![], vec![])),
+            defines: Vec::new(),
+            uses: Vec::new(),
+            widths: Vec::new(),
+            ..(*again).clone()
+        });
     }
     body.with_blocks(body.blocks.iter().zip(blocks).map(|(block, insns)| block.with_insns(insns)).collect())
 }

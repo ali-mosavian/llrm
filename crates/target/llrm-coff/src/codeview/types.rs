@@ -122,6 +122,7 @@ impl Builder<'_> {
         let made = match one {
             Type::Scalar(scalar) | Type::Basic { scalar, .. } => primitive(scalar)?,
             Type::Typedef { target, .. } => self.of(target)?,
+            Type::Described { descriptor, .. } => self.of(descriptor)?,
             Type::Pointer { target, bytes, reach } => {
                 if reach != Reach::Near {
                     return refused("a far or huge pointer is 16-bit code's");

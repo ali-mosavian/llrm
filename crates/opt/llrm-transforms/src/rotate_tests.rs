@@ -189,3 +189,114 @@ b3:
 ";
     assert!(!through(text, Rotate { proven: true, copy: false }).0);
 }
+
+/// The guard a header copy leaves before the loop was an unweighted branch like
+/// any other, so the way into the loop was laid out as the unlikely one (the
+/// copy of a `while (at >= gap && ...)` in shellsort -O1: 17,720 clocks against
+/// 15,658 without the copy). It takes the loop test's weights as gcc's header
+/// copy takes its probabilities and LLVM's `LoopRotate` its weights.
+#[test]
+fn test_a_copied_header_guard_enters_the_loop_as_the_loop_stays_in() {
+    use std::collections::BTreeMap;
+
+    use llrm_analysis::branchprob::{self, Heuristic};
+    use llrm_analysis::cfg::Shape;
+    let (changed, module) = through(&summing("%n"), Rotate { proven: false, copy: true });
+    assert!(changed);
+    let function = llrm_analysis::testing::function(&module, "f");
+    let entry = cfg::id(function.entry().unwrap());
+    let odds = branchprob::estimated(
+        &module.context,
+        &module.metadata,
+        &module.globals,
+        function,
+        &Shape::of(function),
+        &BTreeMap::new(),
+    );
+    assert_eq!(odds.by.get(&entry), Some(&Heuristic::Declared));
+    let into = function
+        .successors(function.entry().unwrap())
+        .into_iter()
+        .map(cfg::id)
+        .find(
+            |at| {
+                // The way in is the successor that is in the loop.
+                only_loop(function).body.contains(at)
+            },
+        );
+    let into = into.expect("a way into the loop");
+    let got = odds.probability(entry, into).unwrap();
+    assert!((got - 124.0 / 128.0).abs() < 1e-9, "{got}");
+}
+
+/// `while (i < n && second) { ... }`: `second` reads `what`.
+fn two_tests(what: &str) -> String {
+    format!(
+        "define i16 @f(i16 %x, i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b3 ]
+  %v = phi i16 [ %x, %b0 ], [ %v2, %b3 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b4
+
+b2:
+  %t = and i16 {what}, 3
+  %c = icmp eq i16 %t, 3
+  br i1 %c, label %b4, label %b3
+
+b3:
+  %v2 = mul i16 %v, 3
+  %next = add i16 %i, 1
+  br label %b1
+
+b4:
+  %r = phi i16 [ %v, %b1 ], [ %i, %b2 ]
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// Conditional branches before the loop: the copies of its tests.
+fn guards(module: &Module) -> usize {
+    let function = llrm_analysis::testing::function(module, "f");
+    let inside = only_loop(function).body;
+    function
+        .layout()
+        .iter()
+        .filter(|&&block| !inside.contains(&cfg::id(block)))
+        .filter(|&&block| function.terminator(block).is_some_and(|last| function.instruction(last).operands.len() == 3))
+        .count()
+}
+
+/// gcc copies the chain of header tests, `while (a && b)` both
+/// (`should_duplicate_loop_header_p`, `copy_headers`): x_primes -O2 +20% over
+/// gcc with the one.
+#[test]
+fn test_a_second_test_of_a_counter_is_copied_with_the_first() {
+    let (changed, module) = through(&two_tests("%i"), Rotate { proven: false, copy: true });
+    assert!(changed);
+    assert_eq!(guards(&module), 2);
+}
+
+/// Rotating derived what is known of the function (a fixed point and the cycle
+/// propagation over every value) before looking for a loop to enter at its
+/// body, so every function without one paid for it: 1.0 Minstr of a 40 on
+/// straight(512) at -Os. It is asked of the first loop that could be entered.
+#[test]
+fn a_function_with_no_loop_to_enter_derives_nothing() {
+    let straight = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
+    let before = llrm_analysis::consts::register_derivations();
+    let (changed, _) = through(straight, Rotate { proven: true, copy: true });
+    assert!(!changed);
+    assert_eq!(llrm_analysis::consts::register_derivations(), before, "a body with no loop derived its registers");
+    let before = llrm_analysis::consts::register_derivations();
+    through(&summing("4"), Rotate { proven: true, copy: false });
+    assert!(
+        llrm_analysis::consts::register_derivations() > before,
+        "premise: a loop is asked its trips from the registers"
+    );
+}

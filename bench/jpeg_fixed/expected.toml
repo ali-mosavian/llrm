@@ -1,0 +1,98 @@
+reason = "where neither way is next, the likelier is the conditional jump (#1461): queens -O2 instructions -1.5%, mandel nib -5%, quicksort/shellsort smaller; worse by noise only: grep bq32 +15 instructions of 627M, stft_fixed nib +2 bytes"
+blessed = "2026-10-12"
+
+[bas.O2]
+code_bytes = 5551
+data_bytes = 29147
+bss_bytes = 0
+kernel_ms = 990.2466
+
+[bas.Os]
+code_bytes = 5234
+data_bytes = 29147
+bss_bytes = 0
+kernel_ms = 990.065
+
+[bq16.O2]
+code_bytes = 5587
+data_bytes = 29147
+bss_bytes = 0
+kernel_ms = 1078.9088
+
+[bq16.Os]
+code_bytes = 5269
+data_bytes = 29147
+bss_bytes = 0
+kernel_ms = 1084.7928
+
+[bq32.O2]
+instructions = 93561935
+code_bytes = 6936
+data_bytes = 29209
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 95649282
+code_bytes = 6417
+data_bytes = 29209
+bss_bytes = 0
+
+[c.O2]
+code_bytes = 3299
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 443.7384
+
+[c.Os]
+code_bytes = 2983
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 445.4513
+
+[nib.O2]
+code_bytes = 6445
+data_bytes = 17158
+bss_bytes = 0
+kernel_ms = 585.5367
+
+[nib.Os]
+code_bytes = 6025
+data_bytes = 17158
+bss_bytes = 0
+kernel_ms = 591.7214
+
+[bcc.O2]
+code_bytes = 3287
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 641.9222
+
+[bcc.Os]
+code_bytes = 3150
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 801.9115
+
+[tcpp.O2]
+code_bytes = 3528
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5739.5933
+
+[tcpp.Os]
+code_bytes = 3354
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5743.6192
+
+[pds71.O2]
+code_bytes = 6545
+data_bytes = 765
+bss_bytes = 3718
+kernel_ms = 4495.1913
+
+[vbdos.O2]
+code_bytes = 6483
+data_bytes = 813
+bss_bytes = 3718
+kernel_ms = 5360.958

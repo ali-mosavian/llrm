@@ -1,128 +1,37 @@
 # CPU-dependent constant arithmetic
 
-Production CLI: `uv run python -m qbopt.rewrite input.obj -o output.obj -march=pentium`.
-The C frontend accepts the same profiles with
-`uv run python -m qbopt.cfront input.c --opt -march=pentium`. Both drivers resolve
-the public name through one immutable profile and retain `386` as the default.
-`tools/stages.py`, `tools/e2e.py`, and `tools/bench.py` accept the same
-`--cpu` option. The rewrite manifest and completion marker record tuning;
-the legacy marker without an explicit CPU means 386. An already rewritten
-object cannot be retuned: start again from BC's original object.
-Benchmark reports identify the tuning target separately from DOSBox's
-execution model; choosing P5 does not turn DOSBox timings into P5 timings.
+For contributors to the backend's constant arithmetic. A multiply or divide by a constant is lowered during instruction selection by comparing sequences the target prices; the answer depends on `-march` and `-mtune`, never on MIR.
 
-`wholeseg.emitted(data, cpu="386")` selects a tuning CPU explicitly;
-the default preserves the existing 386 policy. `lower.lowered` accepts
-the same option. Tuning changes instruction selection, not MIR semantics
-or the minimum ISA (the output remains 386-compatible).
+## Selecting the CPU
 
-The backend compares binary and signed-digit shift/add/sub chains against
-the direct multiply. The chain includes a source-preserving move in its
-estimate; ties retain multiply. A signed-digit chain can implement seven
-as `(x << 3) - x`, not three additions. Observed multiply flags still
-prevent replacement.
+`-march=CPU` and `-mtune=CPU` take gcc's names (`i386`, `i486`, `pentium`, `pentiumpro`, `k5`, `k6`, `athlon`, `core2`), each a column of the target's `timings.times`; the default is the 486 (`default_cpu`). Tuning changes which instructions are selected, not MIR semantics or the minimum ISA: the code stays 386-compatible. `-S` shows the result.
 
-486/P5/P6 and the other existing timing profiles use `crates/backend/llrm-core/src/cycles/timings.rs`.
-386 uses the existing opportunity scoreboard's representative arithmetic
-ranking. These are approximate instruction-cost estimates, not benchmark
-measurements, and do not yet model allocation spills, prefix penalties or
-superscalar scheduling in the selection decision.
+## Multiply by a constant
 
-HOTLPX (PDS fixture), before target selection:
+`arithmetic::scale` ([`arithmetic.rs`](../optimizations/backend/arithmetic.md)) compares binary and signed-digit chains of shifts, adds, subtracts and `lea` against `imul` by the immediate, each priced from the CPU's column, including the source-preserving move a destructive two-address form needs. Ties keep the multiply. A signed digit chain makes seven `(x << 3) - x`. A negative number is the chain of its magnitude and a `neg`, or, as gcc's `synth_mult` has it, `source - (source * q << m)`. A narrow value gets shifts, adds and subtracts only (`cheapest_narrow_chain`), since `lea` makes a dword. The chains are remembered per profile. On the 386 an `imul` by a positive imm8 costs `max(ceil(log2(m)), 3) + 6` (Intel 80386 Programmer's Reference); other CPUs price it by the immediate's bits from the table.
 
-```asm
-lea bx,[ecx+ecx*4]
-shl bx,2
+```
+ x * 20 on the 486/P6:   lea bx,[ecx+ecx*4]      x*5
+                         shl bx,2                 x*20      (chain)
+ not                     imul bx,bx,20            (a multiply the table prices higher)
 ```
 
-The first P6 selector incorrectly chose:
+## Divide by a constant
 
-```asm
-imul bx,bx,20
+`division::reciprocal` ([`division.rs`](../optimizations/backend/division.md)) replaces a signed dword division by a constant divisor with a multiply by a magic number (LLVM's `SignedDivisionByConstantInfo`, `magic`) when the CPU's multiply costs less than its divide. Negative divisors divide by the magnitude and negate; zero, `-1`, `INT_MIN` and word divisions keep `idiv`. The cost of the reciprocal is the multiply's clocks for the magic's bits, the shifts and corrections, and the reconstruction of the remainder (a `scale` chain, or an `imul`), counting each dword operand's prefix decode (`prefix` in `timings.times`); `timing.rs` holds audited core-clock ranges per form and width, and a CPU with no entry keeps `idiv`. When only the quotient is used, the reconstruction is left out of the estimate and the code. At -Os the division stays: the magic is a 5-byte `mov` before the multiply and corrections, where `cdq; idiv` is 3 bytes.
+
+```
+ x / 7, multiply cheaper            x / 7, divide cheaper
+ mov ecx,92492493h                   mov ebx,7
+ mov eax,ebx                         mov eax,ecx
+ imul ecx                            cdq
+ mov eax,edx ; add eax,ebx           idiv ebx
+ mov ecx,eax ; shr ecx,31
+ sar eax,2   ; add eax,ecx           (quotient only: no remainder tail)
 ```
 
-That choice has been corrected: P6 also selects the LEA + SHL form, making
-the full emitted object 841 rather than 837 bytes. GCC's `pentiumpro_cost`
-in `gcc/config/i386/x86-tune-costs.h` (local revision 9a135e85c) assigns
-one instruction-cost unit each to LEA and constant shift, four to multiply.
-The selector now costs the fused form rather than the longer pre-peephole
-sequence. This is a compiler tuning heuristic, not a measured clock count
-for these 16-bit-mode encodings. The default 386 selection is unchanged.
+The prefix rule is Intel 241430-004 section 24.3 (page 24-3).
 
-Signed positive constant division now compares a reciprocal sequence,
-including remainder reconstruction, against IDIV during lowering.
-`crates/backend/llrm-core/src/backend/division.rs` derives the multiplier with LLVM's
-`SignedDivisionByConstantInfo` algorithm. Zero, negative divisors and word
-division retain the existing path. Its source-preserving moves and both
-multiply results are explicit, so allocation sees every clobber.
+## See it
 
-The old midpoint comparisons have been withdrawn. `crates/backend/llrm-core/src/backend/timing.rs`
-records audited form/width-specific core-clock ranges independently of the
-scoreboard. Selection compares the multiply's maximum with the divide's
-minimum; an unknown timing profile retains IDIV. For division by seven,
-386 and 486 retain IDIV. P6 also retains it pending exact-form evidence.
-P5 selects the reciprocal: an estimate of 36 includes reserved copies and
-one decode clock for each dword operand-size prefix, against IDIV's 46
-core clocks alone (excluding its setup). The prefix rule is Intel
-241430-004 section 24.3, printed page 24-3, PDF page 610.
-
-These remain static estimates, not measured hardware timings. P5's PDS
-object grows from 862 to 890 bytes. The default 386 object remains 862.
-Three P5 runtime checks pass, one per compiler variant. The earlier
-486/P6 experiments passed correctness checks but are no longer selected.
-
-Before (division core):
-
-```asm
-mov ebx,7
-mov eax,ecx
-cdq
-idiv ebx
-```
-
-After (P5, dividend in EBX, quotient in EAX, remainder in EBX):
-
-```asm
-mov ecx,92492493h
-mov eax,ebx
-imul ecx
-mov eax,edx
-add eax,ebx
-mov ecx,eax
-shr ecx,31
-sar eax,2
-add eax,ecx
-mov ecx,eax
-shl ecx,3
-sub ecx,eax
-sub ebx,ecx
-```
-
-`tools/stages.py -march=pentium --dump DIR` records the selected backend stages.
-Remaining: simplify quotient/remainder consumers in MIR, and make the
-current MIR power-of-two division expansion participate in the comparison
-rather than irreversibly expanding before lowering. Selection is still
-conservative about register copies and does not model allocation spills or
-full superscalar scheduling. Other profiles and the multiply-chain selector
-still need the remaining timing audit; see `../measurement/timing-audit.md`.
-
-For a quotient-only MIR DIVMOD, lowering now tells reciprocal selection that
-the remainder is unused. The candidate stops at the quotient and excludes
-reconstruction from its estimate. For P5 division by seven the conservative
-estimate becomes 28 rather than 36; this is still not a measured clock count.
-The otherwise generated tail is absent:
-
-```asm
-mov ecx,eax
-shl ecx,3
-sub ecx,eax
-sub ebx,ecx       ; unused remainder
-```
-
-Both-result consumers such as LNGMXX are unchanged. Do not rewrite q+r into
-x-(d-1)*q indiscriminately in MIR: native IDIV already provides the remainder,
-so that can replace one addition with a multiply and subtraction. This consumer
-combine remains an instruction-selection opportunity, not grounds for an LIR
-optimization tier. The 96-object P5 audit changes no current fixture; 23 focused
-division/driver checks pass, and the old emitted reconstruction fails the new
-quotient-only regression.
+`llrm-c -march=pentium -S` prints the selection for a CPU (compare `-march=i486`); `arithmetic.rs` and `division.rs` tests pin the chosen sequences. These are static estimates; [metal](metal.md) is about what only hardware can measure.

@@ -68,13 +68,16 @@ fn test_only_omax_searches_every_shape() {
 
 /// The passes a level runs are gcc 13.4.0's `default_options_table` (opts.cc
 /// 573-694) for the passes this compiler has: -O1 the scalar ones and the last
-/// call inlined, -O2 adds inlining, gcse, sibling calls and pattern fill, -O3
+/// call inlined, -O2 adds inlining, gcse and sibling calls, -O3
 /// peeling, unswitching, complete copies of loops that grow the code, and the
 /// larger inline threshold. Before, -O1 and -O2 differed by loop copies alone
-/// and -O2 let a complete copy grow the code.
+/// and -O2 let a complete copy grow the code. Pattern fill is the one
+/// departure: gcc has it from -O2 (opts.cc:653), clang's O1 pipeline from -O1
+/// (PassBuilderPipelines.cpp:562), and -O1 has it by the user's decision of
+/// 2026-10-10; -Og does not.
 #[test]
 fn each_level_selects_gcc_s_passes() {
-    // (scalar passes, last call inlined, inlines at all, gcse, sibling calls,
+    // (scalar passes, last call inlined, inlines at all, pre, sibling calls,
     // fill, peel, unswitch, copies may grow)
     let row = |level: &str| {
         let o = pipeline(&[level]);
@@ -82,7 +85,7 @@ fn each_level_selects_gcc_s_passes() {
             [o.dead, o.promote, o.drop_stores, o.hoist, o.strength],
             o.inline.last,
             o.inline.limit > 0,
-            o.forward && o.drop_loads,
+            o.pre,
             o.sibcalls,
             o.fill,
             o.peel,
@@ -93,11 +96,11 @@ fn each_level_selects_gcc_s_passes() {
     };
     let scalar = [true; 5];
     assert!(!pipeline(&["-O0"]).optimize);
-    assert_eq!(row("-O1"), (scalar, true, true, false, false, false, false, false, false, true));
+    assert_eq!(row("-O1"), (scalar, true, true, false, false, true, false, false, false, true));
     assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
-    assert_eq!(pipeline(&["-Og"]), pipeline(&["-O1"]));
+    assert_eq!(pipeline(&["-Og"]), Options { fill: false, ..pipeline(&["-O1"]) });
     assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
     // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676).
     assert_eq!(
@@ -294,4 +297,15 @@ fn a_target_is_named_by_gccs_m_flag() {
 fn fwrapv_makes_signed_arithmetic_wrap() {
     assert!(parsed(&["-fwrapv"]).unwrap().wrapv);
     assert!(!parsed(&["-fwrapv", "-fno-wrapv"]).unwrap().wrapv && !parsed(&[]).unwrap().wrapv);
+}
+
+/// gcc turns `-floop-unroll-and-jam` on at -O3 and no lower (opts.cc:678).
+#[test]
+fn only_o3_jams_loop_nests_and_the_flag_overrides_it() {
+    for level in ["-O1", "-O2", "-Os", "-Omax"] {
+        assert!(!pipeline(&[level]).unroll_jam, "{level}");
+        assert!(pipeline(&[level, "-floop-unroll-and-jam"]).unroll_jam, "{level}");
+    }
+    assert!(pipeline(&["-O3"]).unroll_jam);
+    assert!(!pipeline(&["-O3", "-fno-loop-unroll-and-jam"]).unroll_jam);
 }

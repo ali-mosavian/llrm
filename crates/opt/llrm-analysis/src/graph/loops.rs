@@ -1,10 +1,79 @@
-//! Which blocks are a loop, and how deeply nested each one is: copied from
-//! llrm-core's `analysis/loops.rs`, the port of `qbopt/analysis/loops.py`,
-//! for any IR whose blocks are `Node`s.
+//! Which blocks are a loop, and how deeply nested each one is, for any IR whose
+//! blocks are `Node`s.
 //!
-//! Python's frozensets become `BTreeSet`s and its result dicts `BTreeMap`s:
-//! every caller only looks them up.  `irreducible` keeps block order where
-//! its DFS start order depends on it.
+//! # How it works
+//! Dominance comes from `llrm_support::graph` (re-exported here). A back edge
+//! is an edge whose target dominates its source. Back edges that share a
+//! header are one loop: its `latches` are their sources, and its `body` is the
+//! union of the blocks that reach each latch without passing back through the
+//! header (`_body` puts the header in first, which stops the walk).
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   b0["<b>b0</b>"]:::mid
+//!   b1["<b>b1</b><br/><small>loop header</small>"]:::mid
+//!   b2["<b>b2</b><br/><small>loop header, self loop</small>"]:::mid
+//!   b3["<b>b3</b>"]:::mid
+//!   b4["<b>b4</b>"]:::mid
+//!   b0 --> b1
+//!   b1 --> b4
+//!   b1 --> b2
+//!   b2 --> b2
+//!   b2 --> b3
+//!   b3 --> b1
+//! ```
+//!
+//! *Back edges b3->b1 and b2->b2. Loop h=b1 has latches {b3} and body
+//! {b1,b2,b3}; loop h=b2 has latches {b2} and body {b2}*
+//!
+//! `loops` sorts by body size, so an inner loop precedes the loops around it.
+//! `depth` counts the loops each block is in, 0 for straight-line code.
+//! `immediate_dominators` takes, of a block's strict dominators, the one with
+//! the most dominators itself. `frontiers` is the dominance frontier: the
+//! blocks a phi belongs in, found by walking each join's predecessors up to the
+//! join's immediate dominator.
+//!
+//! `irreducible` finds blocks left in a cycle once every back edge is cut. It
+//! cuts them and runs a three-colour DFS on the rest: an edge into a grey block
+//! closes a cycle no natural loop explains, and its target is reported.
+//! Unreachable blocks are ignored. `irreducible_under` takes dominance already
+//! found.
+//!
+//! # Example
+//! A graph given as `block(at, succ)` pairs, with a loop nested in a loop:
+//!
+//! ```text
+//! 0 -> 1
+//! 1 -> 2
+//! 2 -> 3
+//! 3 -> 2, 4
+//! 4 -> 1, 5
+//! 5 ->
+//! ```
+//!
+//! | Query | Result |
+//! | --- | --- |
+//! | `loops` headers, in order | 2, 1 |
+//! | body of loop 2 | {2, 3} |
+//! | body of loop 1 | {1, 2, 3, 4} |
+//! | `depth` of blocks 0..5 | 0, 1, 2, 2, 1, 0 |
+//! | `irreducible` | none |
+//!
+//! From unit test
+//! `nested_loops_come_innermost_first_and_the_outer_body_holds_the_inner` in
+//! `loops_tests.rs`.
+//!
+//! # Provides
+//! `Loop`, `back_edges`, `loops`, `depth`, `irreducible`, `irreducible_under`,
+//! `immediate_dominators` and `frontiers`. Consumers: [`crate::cfg`]
+//! (`Dominance::irreducible`), [`crate::noreturn`], and the loop passes of
+//! `llrm-transforms` (grep `graph::loops`).
+//!
+//! # See also
+//! LLVM `LoopInfo`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

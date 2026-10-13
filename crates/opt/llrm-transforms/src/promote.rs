@@ -1,38 +1,122 @@
-//! Write-through promotion: a load of a cell a store left its value in on
-//! every path becomes that value, a phi where paths join; every store
-//! stays. `Sroa` does it for aggregates' leaves alone.
-//! LLVM's counterpart: LICM's scalar promotion, function-wide; `Sroa`'s, SROA.
+//! Write-through promotion: a load of a cell that a store left its value in on
+//! every path becomes that value, a phi where paths join. Every store stays;
+//! `dse` removes the ones nothing reads. `Sroa` is the same rewrite for the
+//! leaves of aggregates alone.
 //!
-//! Adapted from llrm-core's `optimize/promote.rs`. What an instruction
-//! names and writes is `memoryssa::Accesses`' answer, and whether a write
-//! reaches a cell
-//! `regions::overlapping`'s. Globals and callees' attributes come through
-//! the outer proxy.
+//! # How it works
+//! A cell is a scalar memory location, named by a `Key`: an exact leaf of a
+//! memory object (its object, byte range, `!tbaa` type and `restrict` roots)
+//! or else its pointer decomposed (`MemRef`, any root). Accesses of one leaf
+//! through distinct but equal pointers are one cell. `memoryssa::Accesses`
+//! says what each instruction names and writes.
 //!
-//! What changed with the IR:
-//! - A cell is its exact leaf, or else its pointer decomposed (`Key::Ref`) over
-//!   any root: the old `Addr` key, and `_allocation_leaves`' grouping by affine
-//!   root. A leaf of one start takes any stride.
-//! - One LLVM type per cell stands for the old width and float checks
-//!   (`_float_cells`, `_stores_value`, `_converts_integer`, `_forwards_float`):
-//!   a store keeps its type's value.
-//! - A load becomes the stored operand itself, so `_restated` and `_order` have
-//!   nothing to do; the phis are placed here, as `ssa::constructed` was not
-//!   ported.
-//! - `_canonical_leaf_types` types a leaf in both passes: the old `Sroa`
-//!   rewrote the body the old `Promote` then read.
+//! A cell is blocked, and stays in memory, when
+//! - an access is volatile;
+//! - its bytes partly overlap another leaf's (`_blocked`): a narrower store
+//!   into a wider cell, the halves of one, a wider cell read in part;
+//! - it is loaded as more than one type (an access of another type is only a
+//!   write).
 //!
-//! Dropped, with no rich MIR counterpart:
-//! - `READS`, `_separated`, `split_updates`: an arithmetic memory operand.
-//! - `CELLS`, `Bounds`: the x86 spaces and landmarks `regions` dropped.
-//! - `_initializers`: every object access carries exact provenance, so a
-//!   narrower store into a wider cell blocks both.
-//! - `_allocation_leaves`, `_affine_values`, `_signed`, `_rewritten_refs`: no
-//!   array request; `MemRef::at` decomposes an address.
-//! - `_bounded_leaves`, `_bounded_ref`, `_pointed_ref`: `alias::annotated`
-//!   narrows constant indices and follows exact pointers.
-//! - `_split_copies` and its helpers: `splitcopy`, for a `llvm.memcpy`.
-//! - `loop_only`: no caller set it.
+//! A cell is a candidate when it is accessed more than once. For `Sroa` it
+//! must also be a leaf of an object that holds more than that leaf, and
+//! `splitcopy` first turns a copy of an aggregate into its leaves' loads and
+//! stores.
+//!
+//! `_available` is a forward must-analysis over the reachable blocks: the set
+//! of cells whose last write on every path is a store of the cell's own type.
+//! A block's entry set is the intersection of its predecessors' exits (empty
+//! at the entry). Walking a block, a store of a cell adds it; a write that may
+//! reach the cell (`regions::overlapping`, calls by their effects) or a
+//! definition of a value the cell's address is made from removes it; an
+//! instruction with no known writes removes every cell. A load of a cell in
+//! the set is planned. A load reached before any store keeps its memory value.
+//!
+//! `rewrite` then places phis as LLVM's `PromoteMemToReg` does: at the
+//! dominance frontier of each cell's stores, only where the cell is live on
+//! entry, and renames down the dominator tree. Each planned load is replaced
+//! by the stored operand or the phi. With `-g`, the debug record of the
+//! variable a cell is gets the value, or a piece of it.
+//!
+//! ```text
+//!  b1: store 7, %a   b2: store %d, %a       b1: store 7, %a   b2: store %d, %a
+//!  b3: %x = load %a             =>          b3: %x = phi [7, b1], [%d, b2]
+//!      %y = add %x, 1                           %y = add %x, 1
+//! ```
+//!
+//! # Example
+//! Before:
+//! ```mir
+//! define ... @pipeline.body() ... {
+//! b1:
+//!   %0 = alloca i16
+//!   %1 = alloca i16
+//!   store i16 0, ptr %1, !tbaa !9
+//!   br label %b2
+//!
+//! b2:
+//!   %2 = load i16, ptr %1, !tbaa !9
+//!   %3 = icmp slt i16 %2, 10
+//!   %4 = zext i1 %3 to i16
+//!   br i1 %3, label %b4, label %b3
+//!
+//! b3:
+//!   ret void
+//!
+//! b4:
+//!   store i16 %2, ptr @_n, !tbaa !9
+//!   %5 = add nsw i16 %2, 1
+//!   store i16 %5, ptr %1, !tbaa !9
+//!   br label %b2
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define ... @pipeline.body() ... {
+//! b1:
+//!   %0 = alloca i16
+//!   %1 = alloca i16
+//!   store i16 0, ptr %1, !tbaa !9
+//!   br label %b2
+//!
+//! b2:
+//!   %2 = phi i16 [ 0, %b1 ], [ %5, %b4 ]
+//!   %3 = icmp slt i16 %2, 10
+//!   %4 = zext i1 %3 to i16
+//!   br i1 %3, label %b4, label %b3
+//!
+//! b3:
+//!   ret void
+//!
+//! b4:
+//!   store i16 %2, ptr @_n, !tbaa !9
+//!   %5 = add nsw i16 %2, 1
+//!   store i16 %5, ptr %1, !tbaa !9
+//!   br label %b2
+//! }
+//! ```
+//! The load of the counter's slot `%1` is the phi `%2`. Every store stays;
+//! `dse` removes the ones nothing reads.
+//!
+//! From `--dump` of `ten` (`for (i = 0; i < 10; i++) n = i;`) at -O2 -m16,
+//! stages `gvn` and `promote` of the first body.
+//!
+//! # Runs
+//! In [`crate::pipeline`]'s per-body fixed point: `Sroa` at the boundaries of
+//! `Fixed` (start, after a peel, an unroll or a jam), before any pass asks
+//! what is constant or invariant; `Promote` each round, after `gvn`. Both are
+//! skipped on a body with an irreducible loop, which has no dominators. On at
+//! every level above -O0 (`promote`, `-ftree-sra`).
+//!
+//! # Needs
+//! `memoryssa::Accesses`, `Held`, `regions`, [`crate::splitcopy`], the
+//! dominator tree.
+//!
+//! # Keeps
+//! Nothing, where it changes a body.
+//!
+//! # See also
+//! LLVM's LICM scalar promotion (`promoteLoopAccessesToScalars`), function-wide
+//! here, and SROA; gcc's `-ftree-sra`.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -44,6 +128,7 @@ use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, regions, ssa};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
+use llrm_mir::footprint::Footprint;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
@@ -247,6 +332,12 @@ pub struct Promote;
 impl FunctionPass for Promote {
     fn name(&self) -> &'static str {
         "promote"
+    }
+
+    /// A load becomes the value a store left in its cell: memory operations
+    /// (and what addresses them) and the CFG.
+    fn reads(&self) -> Footprint {
+        Footprint::MEMORY | Footprint::STRUCTURE
     }
 
     fn run(
@@ -543,6 +634,46 @@ fn _available(
             based.entry(value).or_default().push(at);
         }
     }
+    // The cells a write may reach, by the buckets of the objects it may alias:
+    // a store asked every cell that was available, N cells at each of N
+    // stores. A cell outside the buckets the write reaches is one
+    // `overlapping` rules out unseen.
+    // Made when a write finds many cells available: putting every cell in a
+    // bucket costs more than asking the few that are (host.c: promote 245
+    // -> 605 Minstr when it was made for each function).
+    let indexed = std::cell::OnceCell::new();
+    let reached = RefCell::new(HashMap::<InstId, Option<Vec<usize>>>::default());
+    let reach = |inst: InstId, writes: &[MemRef]| -> Option<Vec<usize>> {
+        let index = indexed.get_or_init(|| {
+            let mut buckets = regions::OverlapBuckets::default();
+            llrm_analysis::cellmap::CellMap::<usize, (), regions::OverlapBucket>::new(
+                (0..refs.len()).map(|at| (at, ())).collect(),
+                |at| (regions::overlap_bucket(&mut buckets, &refs[*at]), None),
+            )
+        });
+        reached
+            .borrow_mut()
+            .entry(inst)
+            .or_insert_with(|| {
+                let mut cells = Vec::new();
+                for written in writes {
+                    match regions::overlap_buckets(written, &index.parts) {
+                        None => return None,
+                        Some(picked) => cells.extend(
+                            picked
+                                .iter()
+                                .filter_map(|bucket| index.buckets.get(bucket))
+                                .flat_map(IndexMap::keys)
+                                .copied(),
+                        ),
+                    }
+                }
+                cells.sort_unstable();
+                cells.dedup();
+                Some(cells)
+            })
+            .clone()
+    };
     let mut every = Bits::new(cells.len());
     (0..cells.len()).for_each(|at| every.insert(at));
     let mut leaving = reachable.iter().map(|at| (*at, every.clone())).collect::<BTreeMap<_, _>>();
@@ -584,8 +715,17 @@ fn _available(
                 moved.iter().for_each(|&at| available.remove(at));
             }
             if !writes.is_empty() {
-                let gone = available
-                    .iter()
+                // The cells available are asked one by one while they are few;
+                // past `MANY`, the buckets the write reaches
+                // say which could be hit.
+                const MANY: usize = 24;
+                let near = if available.iter().nth(MANY).is_some() { reach(inst, writes) } else { None };
+                let asked: Vec<usize> = match &near {
+                    Some(cells) => cells.iter().copied().filter(|&at| available.contains(at)).collect(),
+                    None => available.iter().collect(),
+                };
+                let gone = asked
+                    .into_iter()
                     .filter(|&at| {
                         *clobbered
                             .borrow_mut()
@@ -639,6 +779,49 @@ fn edges(
         .collect()
 }
 
+/// For each cell, the blocks it is live on entering: where a load of it is
+/// reached before any store of it, along the paths that have none. Found
+/// backwards from the loads that read before they write, stopping at the blocks
+/// that write.
+fn live_in(
+    function: &Function,
+    plan: &Plan,
+) -> Vec<BTreeSet<i64>> {
+    let cells = plan.types.len();
+    let mut writes = vec![BTreeSet::<i64>::new(); cells];
+    let mut reading = vec![Vec::<BlockId>::new(); cells];
+    let mut written = HashSet::<usize>::default();
+    for &block in function.layout() {
+        written.clear();
+        for &inst in function.block(block).instructions() {
+            if let Some(&slot) = plan.loads.get(&inst) {
+                if !written.contains(&slot) {
+                    reading[slot].push(block);
+                }
+            } else if let Some(&slot) = plan.stores.get(&inst) {
+                written.insert(slot);
+                writes[slot].insert(cfg::id(block));
+            }
+        }
+    }
+    reading
+        .into_iter()
+        .zip(&writes)
+        .map(|(mut work, writes)| {
+            let mut live = BTreeSet::new();
+            while let Some(block) = work.pop() {
+                if !live.insert(cfg::id(block)) {
+                    continue;
+                }
+                work.extend(
+                    function.predecessors(block).into_iter().filter(|before| !writes.contains(&cfg::id(*before))),
+                );
+            }
+            live
+        })
+        .collect()
+}
+
 /// `function` with each planned load its cell's stored value: phis where
 /// the stores' dominance frontiers put them, named down the dominator tree.
 fn rewrite(
@@ -662,6 +845,11 @@ fn rewrite(
         .map(|&ty| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })))
         .collect::<Vec<_>>();
 
+    // Where each cell is live on entering a block: LLVM's PromoteMemToReg
+    // places a phi only there. A cell stored and read inside one arm of a
+    // switch of N cases is live at no join, and a phi of N inputs at the
+    // join for each such cell was N^2 data made to be pruned.
+    let live = live_in(function, plan);
     // Each phi placed, by block and cell, with the block each input comes from.
     let mut phis = HashMap::<(i64, usize), (InstId, Vec<BlockId>)>::default();
     let mut named_phis = Vec::new();
@@ -677,7 +865,11 @@ fn rewrite(
         let mut placed = BTreeSet::new();
         while let Some(at) = work.pop() {
             for &frontier in frontiers.get(&at).into_iter().flatten() {
-                if !placed.insert(frontier) {
+                // A cell `-g` names keeps its phis, live or not: the debugger
+                // is told where the variable is by the phi, and
+                // by the record it leaves when it goes.
+                let pruned = plan.variables.get(slot).copied().flatten().is_none() && !live[slot].contains(&frontier);
+                if pruned || !placed.insert(frontier) {
                     continue;
                 }
                 let block = cfg::block(frontier);
@@ -718,20 +910,48 @@ fn rewrite(
             children.entry(parent).or_default().push(at);
         }
     }
+    // The phis of each block, by cell, so that a block asks its own and not
+    // every cell's.
+    let mut phis_at = HashMap::<i64, Vec<usize>>::default();
+    for &(at, slot) in phis.keys() {
+        phis_at.entry(at).or_default().push(slot);
+    }
+    phis_at.values_mut().for_each(|slots| slots.sort_unstable());
     let mut dead = Vec::new();
-    let mut stack = vec![(entry, poison.clone())];
-    while let Some((at, mut current)) = stack.pop() {
-        let block = cfg::block(at);
-        for (slot, value) in current.iter_mut().enumerate() {
-            if let Some((phi, _)) = phis.get(&(at, slot)) {
-                *value = Operand::Value(function.instruction(*phi).result.expect("a phi's value"));
+    // The value each cell has, down the dominator tree: a block changes a few,
+    // which are put back on leaving it. A copy of every cell's value for
+    // each child was blocks x cells.
+    enum Visit {
+        Enter(i64),
+        Leave(usize),
+    }
+    let mut current = poison.clone();
+    let mut undo = Vec::<(usize, Operand)>::new();
+    let mut stack = vec![Visit::Enter(entry)];
+    while let Some(visit) = stack.pop() {
+        let at = match visit {
+            Visit::Leave(marked) => {
+                while undo.len() > marked {
+                    let (slot, old) = undo.pop().expect("an entry above the mark");
+                    current[slot] = old;
+                }
+                continue;
             }
+            Visit::Enter(at) => at,
+        };
+        stack.push(Visit::Leave(undo.len()));
+        let block = cfg::block(at);
+        for &slot in phis_at.get(&at).into_iter().flatten() {
+            let (phi, _) = &phis[&(at, slot)];
+            undo.push((slot, current[slot]));
+            current[slot] = Operand::Value(function.instruction(*phi).result.expect("a phi's value"));
         }
         for inst in function.block(block).instructions().to_vec() {
             if let Some(&slot) = plan.loads.get(&inst) {
                 function.replace_value(function.instruction(inst).result.expect("a load's value"), current[slot]);
                 dead.push(inst);
             } else if let Some(&slot) = plan.stores.get(&inst) {
+                undo.push((slot, current[slot]));
                 current[slot] = function.instruction(inst).operands[0];
                 // And the value it stores, from the instruction after it on.
                 if let Some(named) = plan.variables.get(slot).copied().flatten()
@@ -743,14 +963,14 @@ fn rewrite(
             }
         }
         for successor in function.successors(block) {
-            for (slot, &value) in current.iter().enumerate() {
-                let Some((phi, from)) = phis.get(&(cfg::id(successor), slot)) else { continue };
+            for &slot in phis_at.get(&cfg::id(successor)).into_iter().flatten() {
+                let (phi, from) = &phis[&(cfg::id(successor), slot)];
                 for (index, _) in from.iter().enumerate().filter(|(_, one)| **one == block) {
-                    function.set_operand(*phi, 2 * index, value);
+                    function.set_operand(*phi, 2 * index, current[slot]);
                 }
             }
         }
-        stack.extend(children.get(&at).into_iter().flatten().map(|&child| (child, current.clone())));
+        stack.extend(children.get(&at).into_iter().flatten().map(|&child| Visit::Enter(child)));
     }
     for inst in dead {
         function.erase(inst).expect("a promoted load has no users left");

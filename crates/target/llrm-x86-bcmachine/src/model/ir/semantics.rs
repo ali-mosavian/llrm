@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 
 use iced_x86::{Code, Mnemonic, OpKind, Register};
+use llrm_lir::registers::RegId;
 
 use super::{
     ANY_MEMORY, AddressRef, Effects, Flag, Imm, Loc, Mem, Operation, Reg, Semantics, UNMODELLED, barrier, root,
@@ -16,16 +17,16 @@ use crate::model::ir::lift::{Resolver, operand as long_operand};
 use crate::objectfile::module::Space;
 
 /// Which roots this instruction may write, and which it may read.
-pub fn _register_effects(insn: &Insn) -> (BTreeSet<Register>, BTreeSet<Register>) {
+pub fn _register_effects(insn: &Insn) -> (BTreeSet<RegId>, BTreeSet<RegId>) {
     let mut factory = instruction_info_factory();
     let used = factory.info(&insn.insn).used_registers().to_vec();
     let mut defs = BTreeSet::new();
     let mut uses = BTreeSet::new();
     for one in used {
-        let target = root(one.register());
+        let target = root(RegId::from(one.register()));
         if WRITES.contains(&one.access()) {
             defs.insert(target);
-            if target != one.register() {
+            if target != RegId::from(one.register()) {
                 uses.insert(target);
             }
         }
@@ -152,12 +153,12 @@ pub fn _location(
         OpKind::Register => {
             let register = insn.insn.op_register(index);
             if register.is_gpr() || register.is_segment_register() {
-                return Some(Loc::Reg(Reg { register, width: register.size() as u32 }));
+                return Some(Loc::Reg(Reg { register: RegId::from(register), width: register.size() as u32 }));
             }
             None
         }
         OpKind::Memory => Some(Loc::Mem(Mem {
-            through: insn.insn.memory_base(),
+            through: RegId::from(insn.insn.memory_base()),
             offset: insn.displacement(),
             disp_width: insn.disp_len as u32,
             ..Mem::new(long_operand(insn, resolve), insn.insn.memory_size().size() as u32)
@@ -251,8 +252,8 @@ pub fn _address(
     let dest = _destination(insn, 0, resolve)?;
     let where_ = AddressRef {
         addr: long_operand(insn, resolve),
-        through: insn.insn.memory_base(),
-        index_through: insn.insn.memory_index(),
+        through: RegId::from(insn.insn.memory_base()),
+        index_through: RegId::from(insn.insn.memory_index()),
         scale: i64::from(insn.insn.memory_index_scale()),
         offset: insn.displacement(),
         disp_width: insn.disp_len as u32,
@@ -279,7 +280,7 @@ const fn reg(
     register: Register,
     width: u32,
 ) -> Loc {
-    Loc::Reg(Reg { register, width })
+    Loc::Reg(Reg { register: RegId::new(register), width })
 }
 
 /// imul's own implicit pair in its one-operand, widening form: the (low, high)

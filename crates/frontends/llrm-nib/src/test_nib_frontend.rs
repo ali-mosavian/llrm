@@ -843,7 +843,29 @@ fn test_readonly_array_borrow_keeps_payload_initialization_visible_to_callee() {
 
     assert!(main.contains("call _sum"), "premise: the call stays\n{main}");
 
-    assert!((1..7).all(|value| main.contains(&format!(", {value}"))));
+    let stored = stored_constants(main);
+    assert!((1..7).all(|value| stored.contains(&value)), "{main}");
+}
+
+/// The constants the listing stores to memory, a dword store of two adjacent
+/// words (`store-merging`) as the words it is made of.
+fn stored_constants(listing: &str) -> BTreeSet<i64> {
+    let mut found = BTreeSet::new();
+    for line in listing.lines() {
+        let Some(captured) =
+            Regex::new(r"mov (word|dword) ptr \[[^\]]*\](?:\+\d+)?, (-?\d+)\s*$").unwrap().captures(line)
+        else {
+            continue;
+        };
+        let value: i64 = captured[2].parse().unwrap();
+        if &captured[1] == "dword" {
+            found.insert(value & 0xFFFF);
+            found.insert((value >> 16) & 0xFFFF);
+        } else {
+            found.insert(value);
+        }
+    }
+    found
 }
 
 #[test]
@@ -899,11 +921,7 @@ fn test_three_array_initializer_keeps_the_fixed_frame_address_component() {
     kept.pipeline.inline = llrm_transforms::inline::Threshold::none();
     let assembly = listing(&parsed(&fixture("sum_three.nib")), "main", &kept);
     let main = between(&assembly, "_main proc far", "call _sum_three");
-    let stored: BTreeSet<i64> = Regex::new(r"mov word ptr \[bp-\d+\], (\d+)\n")
-        .unwrap()
-        .captures_iter(main)
-        .map(|found| found[1].parse().unwrap())
-        .collect();
+    let stored = stored_constants(main);
     let elements = [1, 2, 3, 4, 10, 20, 30, 40, 100, 200, 300, 400];
 
     assert!(elements.iter().all(|one| stored.contains(one)), "{main}");
@@ -1662,8 +1680,9 @@ fn a_pointer_loaded_from_a_local_descriptor_still_reaches_its_array() {
         "fn main() -> i16:\n    let values: i16[3] = [7, 8, 9]\n    for (i, x) in enumerate(values):\n        print(f\"{i}: {x}\")\n    return 0\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("Os"), llrm_target::Target::default_cpu(&llrm_x86_m16::M16));
-    for value in [", 7", ", 8", ", 9"] {
-        assert!(text.contains(value), "{value} is never stored:\n{text}");
+    let stored = stored_constants(&text);
+    for value in [7, 8, 9] {
+        assert!(stored.contains(&value), "{value} is never stored:\n{text}");
     }
 }
 
@@ -2386,7 +2405,7 @@ fn test_a_range_loops_counter_does_not_wrap() {
 
 /// A shared reference is not null and points at all of its struct, so the
 /// load of its field is hoisted above the loop's guard and no register is
-/// saved to hold it: 15 instructions where 17 saved and restored `si`.
+/// saved to hold it: one load, where 17 instructions saved and restored `si`.
 #[test]
 fn test_a_reference_lets_its_field_load_leave_the_loop() {
     let directory = tempfile::tempdir().unwrap();
@@ -2408,7 +2427,7 @@ fn test_a_reference_lets_its_field_load_leave_the_loop() {
         .take_while(|one| !one.ends_with("endp"))
         .filter(|one| !one.ends_with(':'))
         .collect();
-    assert_eq!(body.len(), 15, "{body:?}");
+    assert_eq!(body.iter().filter(|one| one.contains("es:[bx+2]")).count(), 1, "{body:?}");
     assert!(!body.contains(&"push si"), "{body:?}");
 }
 
@@ -3062,4 +3081,36 @@ fn test_a_library_cut_to_nothing_assembles_without_an_entry() {
         nib_compile::assembled(&program, "main", &level("O2"), &crate::real_mode().os).is_err(),
         "a program with no entry is still refused"
     );
+}
+
+/// `zip(a, b)` walks two slices' elements by one counter, bounded by the
+/// `inbounds` accesses of both. Behind the header copy the loop is tested for
+/// equality, and its trips were counted to 65536 (the width's period) where
+/// the accesses allow 32768: the biased byte counter `add bx, 2` was no exit
+/// test, and the loop kept `inc cx; jne` beside it and reloaded a segment
+/// offset from `[bp-2]` each trip (7 instructions, one of them a load).
+#[test]
+fn test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "fn dot(a: &[i16], b: &[i16]) -> i32:\n    let mut total: i32 = 0\n    for (x, y) in zip(a, b):\n        total += i32(x) * i32(y)\n    return total\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "dot.nib", source));
+    let module = nib_compile::assembled(
+        &program,
+        "dot",
+        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
+        &crate::real_mode().os,
+    )
+    .expect("assembles");
+    let asm = masm::text(&module).expect("prints");
+    let from = asm.find("_dot proc").expect("the function");
+    let body: Vec<&str> = asm[from..]
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .take_while(|one| !one.ends_with("endp"))
+        .filter(|one| !one.ends_with(':'))
+        .collect();
+    let at = body.iter().position(|one| *one == "add bx, 2").expect("the byte counter steps");
+    assert_eq!(body.get(at + 1).map(|one| &one[..4]), Some("jne "), "{body:?}");
+    assert!(!body.iter().any(|one| one.contains("[bp-")), "{body:?}");
 }

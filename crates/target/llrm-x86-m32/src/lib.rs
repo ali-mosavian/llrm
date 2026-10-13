@@ -7,7 +7,7 @@ include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
 
 use std::sync::LazyLock;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_mir::target::{AddressForm, OperationCosts};
 use llrm_target::CostModel;
 use llrm_target::machine::Machine;
@@ -132,7 +132,7 @@ impl llrm_target::Target for M32 {
         CALLING.native().slot_bytes
     }
 
-    fn frame_register(&self) -> Register {
+    fn frame_register(&self) -> RegId {
         llrm_x86::calling::frame(CALLING.native())
     }
 
@@ -164,12 +164,12 @@ impl llrm_target::Target for M32 {
         llrm_x86::calling::return_address_bytes(CALLING.native(), far)
     }
 
-    fn stack_pointer(&self) -> Register {
+    fn stack_pointer(&self) -> RegId {
         llrm_x86::calling::stack(CALLING.native())
     }
 
     /// What cdecl32 keeps, but the frame register.
-    fn callee_saved(&self) -> Vec<(Register, Register)> {
+    fn callee_saved(&self) -> Vec<(RegId, RegId)> {
         llrm_x86::calling::callee_saved(CALLING.native())
     }
 
@@ -234,14 +234,35 @@ impl llrm_target::Target for M32 {
     fn results(
         &self,
         width: u32,
-    ) -> Vec<Register> {
+    ) -> Vec<RegId> {
         llrm_x86::calling::results(CALLING.native(), width)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use iced_x86::Register::{EAX, EBP, EBX, ECX, EDI, EDX, ESI, ESP};
+    /// gcc's by-pieces ratios of a constant memset, read from the description:
+    /// `i486_cost` and `pentium_cost` (x86-tune-costs.h, gcc 13.4.0), and the
+    /// size table every CPU takes.
+    #[test]
+    fn test_the_memset_ratios_are_gccs_per_cpu() {
+        let (i486, p5) = (TIMINGS.cpu("486").expect("a 486"), TIMINGS.cpu("P5").expect("a P5"));
+        assert_eq!(
+            (i486.set_ratio, i486.clear_ratio, p5.set_ratio, p5.clear_ratio),
+            (Some(3), Some(3), Some(6), Some(6))
+        );
+        assert_eq!((i486.set_ratio_size, i486.clear_ratio_size), (Some(3), Some(2)));
+        assert_eq!((p5.set_ratio_size, p5.clear_ratio_size), (Some(3), Some(2)));
+    }
+
+    const EAX: RegId = RegId::EAX;
+    const EBP: RegId = RegId::EBP;
+    const EBX: RegId = RegId::EBX;
+    const ECX: RegId = RegId::ECX;
+    const EDI: RegId = RegId::EDI;
+    const EDX: RegId = RegId::EDX;
+    const ESI: RegId = RegId::ESI;
+    const ESP: RegId = RegId::ESP;
     use llrm_target::Target;
 
     use super::*;

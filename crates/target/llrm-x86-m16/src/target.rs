@@ -3,30 +3,29 @@
 
 use std::collections::BTreeSet;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 
 use crate::timings;
 
 /// The registers a value may be placed in.
-pub const GENERAL: [Register; 6] =
-    [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
+pub const GENERAL: [RegId; 6] = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI];
 
 /// The registers a 16-bit address is encoded with, `[bx+si]`: a base is BX or
 /// BP and an index SI or DI.
-pub const ENCODABLE_BASES: [Register; 2] = llrm_x86::addressing16::BASES;
-pub const WORD_INDEXES: [Register; 2] = llrm_x86::addressing16::INDEXES;
+pub const ENCODABLE_BASES: [RegId; 2] = llrm_x86::addressing16::BASES;
+pub const WORD_INDEXES: [RegId; 2] = llrm_x86::addressing16::INDEXES;
 
 /// The frame register: no value is held in it.
-pub const FRAME: Register = Register::BP;
+pub const FRAME: RegId = RegId::BP;
 
 /// The bases a value may be held in: the encodable ones but the frame's.
-pub fn word_bases() -> Vec<Register> {
+pub fn word_bases() -> Vec<RegId> {
     ENCODABLE_BASES.into_iter().filter(|&one| one != FRAME).collect()
 }
 
 /// Those a C callee keeps, as their word halves.
-pub const PRESERVED: [(Register, Register); 2] = [(Register::ESI, Register::SI), (Register::EDI, Register::DI)];
+pub const PRESERVED: [(RegId, RegId); 2] = [(RegId::ESI, RegId::SI), (RegId::EDI, RegId::DI)];
 
 /// How real-mode operations are priced from the instruction forms:
 /// `opcosts.txt`.
@@ -155,7 +154,14 @@ impl Machine for Dos {
     }
 
     fn size_costs(&self) -> OperationCosts {
-        DESCRIPTION.size_costs()
+        // The by-pieces ratios are the CPU's, whichever table prices the rest.
+        OperationCosts {
+            pieces_set: self.costs.pieces_set,
+            pieces_clear: self.costs.pieces_clear,
+            pieces_set_size: self.costs.pieces_set_size,
+            pieces_clear_size: self.costs.pieces_clear_size,
+            ..DESCRIPTION.size_costs()
+        }
     }
 
     fn registers(&self) -> i64 {
@@ -237,7 +243,13 @@ pub fn address_forms(
 /// instructions lowering picks for it.
 pub fn costs(arch: &str) -> OperationCosts {
     let at = timings::ARCHS.iter().position(|one| *one == arch).expect("a listed arch");
-    DESCRIPTION.operations(&|kind| timings::COST[kind][at], timings::PREFIX[at])
+    OperationCosts {
+        pieces_set: timings::SET_RATIO[at],
+        pieces_clear: timings::CLEAR_RATIO[at],
+        pieces_set_size: timings::SET_RATIO_SIZE[at],
+        pieces_clear_size: timings::CLEAR_RATIO_SIZE[at],
+        ..DESCRIPTION.operations(&|kind| timings::COST[kind][at], timings::PREFIX[at])
+    }
 }
 
 /// Bytes of `op r, r` on `width`-byte registers; a dword runs under the 66h

@@ -9,3 +9,6 @@ description = "llrm's machine operand model: registers, memory operands, effects
 llrm-support = { workspace = true }
 llrm-omf = { workspace = true }
 iced-x86 = { workspace = true }
+
+[build-dependencies]
+iced-x86 = { workspace = true }

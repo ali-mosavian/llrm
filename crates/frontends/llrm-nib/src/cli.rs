@@ -88,6 +88,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
                 )
             }
             "--os-layer" => os_layer = Some(value("--os-layer")?),
+            "--basic-runtime" => super::standard::set_basic_runtime(&value("--basic-runtime")?)?,
             "-Wno-target-width" => warn_target_width = false,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
             "--unchecked-bounds" => unchecked_bounds = true,
@@ -242,6 +243,7 @@ pub fn main(argv: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use llrm_core::backend::registerinfo::RegId;
     use llrm_target::Target;
 
     /// M16 without its Nib runtime: what a target not yet given one is.
@@ -275,7 +277,7 @@ mod tests {
         fn stack_slot_bytes(&self) -> i64 {
             self.0.stack_slot_bytes()
         }
-        fn frame_register(&self) -> iced_x86::Register {
+        fn frame_register(&self) -> RegId {
             self.0.frame_register()
         }
         fn first_argument_offset(
@@ -293,13 +295,13 @@ mod tests {
         fn results(
             &self,
             width: u32,
-        ) -> Vec<iced_x86::Register> {
+        ) -> Vec<RegId> {
             self.0.results(width)
         }
-        fn stack_pointer(&self) -> iced_x86::Register {
+        fn stack_pointer(&self) -> RegId {
             self.0.stack_pointer()
         }
-        fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> {
+        fn callee_saved(&self) -> Vec<(RegId, RegId)> {
             self.0.callee_saved()
         }
         fn cpu_table(

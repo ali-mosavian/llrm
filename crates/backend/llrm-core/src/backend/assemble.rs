@@ -1,12 +1,93 @@
-//! A MIR module to masm, as LLVM's `llc` takes a module to an object:
-//! each defined function selected and run through the machine phases, each
-//! defined variable's data, and the symbols both name.
+//! Takes a MIR module to masm, as `llc` takes a module to an object: each
+//! defined function selected and put through the machine phases, each defined
+//! variable's data, and the symbols both name.
+//!
+//! # How it works
+//! `assembled_by` first places near-callable functions (`nearcode`) and names
+//! the globals. It then machines the functions callees first, so what a
+//! function that takes part in interprocedural register use writes is known
+//! (`calleefacts`) when its callers are selected, and records it after each.
+//!
+//! `machined` makes one function:
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   staged["<b>staged</b><br/><small>isel, framefree, frame::of<br/>LIR over virtual regs</small>"]:::src
+//!   a["<b>route A</b><br/><small>machine phases,<br/>allocator alone</small>"]:::mid
+//!   b["<b>route B</b><br/><small>machine phases<br/>with ssaspill</small>"]:::mid
+//!   pick(["<b>cheaper one kept</b>"]):::mid
+//!   far["<b>far frame cells and a spill</b><br/><small>area: relayout::laid_again<br/>fewer far cells kept</small>"]:::mid
+//!   facts["<b>-Omax, a callee's fact used</b><br/><small>again without facts<br/>cheaper kept</small>"]:::mid
+//!   pad["<b>landing pad moved last</b><br/><small>(landed_last)</small>"]:::mid
+//!   fin["<b>assembled_by: cleaned returns,</b><br/><small>duplicated returns,<br/>shrink-wrap tails<br/>masm::Procedure</small>"]:::out
+//!   staged --> a
+//!   staged --> b
+//!   a --> pick
+//!   b --> pick
+//!   staged --> far
+//!   staged --> facts
+//!   pick --> pad
+//!   far --> pad
+//!   facts --> pad
+//!   pad --> fin
+//! ```
+//!
+//! *How a staged procedure becomes a masm Procedure*
+//!
+//! `phased_to` runs the list of `flow::machine_with` over the staged body
+//! (`prologue` is skipped; masm writes the prologue from the frame's reserve).
+//! Each phase's output is checked, and `ISEL_DUMP=1` prints the LIR after
+//! each. The two routes differ in whether `ssaspill` is on that list. A
+//! route's price is the instructions and memory operands it is expected to
+//! execute (`executed::work`), or its encoded bytes at -Os, plus two for each
+//! register it must save; a tie is decided by the other measure.
+//!
+//! Below -Omax `directed` runs the allocator alone first and runs the spiller
+//! route only if at least 0.5% of the weighted instructions are spill or
+//! frame-cell traffic; `LLRM_CANDIDATES=spiller|allocator` forces one route.
+//! With `-fallocation-routes` off the allocator runs alone.
+//!
+//! When all functions are done the module's constants are added to the data,
+//! stack checks the program proves unneeded are elided, undefined names
+//! become externs, and debug info is described.
+//!
+//! # Example
+//! A MIR function and the masm it becomes (`bump`, called twice from `main`):
+//!
+//! ```mir
+//! define internal regparm3cc i16 @bump(i16 %0) addrspace(1) nearcode ... {
+//! b1:
+//!   %1 = add i16 %0, 1
+//!   ret i16 %1
+//! }
+//! ```
+//!
+//! ```text
+//! _bump proc near
+//! L0_0:
+//!     inc ax
+//!     ret
+//! _bump endp
+//! ```
+//!
+//! From `--dump` (`mir/21-homes.ll`) and `-S` of a nib program at -O2 with
+//! `-fno-inline-functions -fno-inline-functions-called-once -fno-ipa-cp-clone
+//! -fno-ipa-vrp -march=i386`.
+//!
+//! # Runs
+//! Once per module. Per-function candidates are described above; the gating
+//! flags are in [`crate::backend`].
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, Regs};
 use llrm_mir::facts::Fact;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 use llrm_support::debug::timed;
@@ -20,7 +101,7 @@ use crate::backend::isel::{self, Selected};
 use crate::backend::target::Segments;
 use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, select, ssaspill};
 use crate::flow;
-use crate::model::ir::{Addr, Space};
+use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
@@ -58,8 +139,8 @@ pub trait Abi {
 /// each in its register, and its result's fields, each in its register.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Registers {
-    pub arguments: Vec<iced_x86::Register>,
-    pub results: Vec<iced_x86::Register>,
+    pub arguments: Vec<RegId>,
+    pub results: Vec<RegId>,
 }
 
 /// `module` as masm, its code in the segment `code`, selected by the 16-bit x86
@@ -495,6 +576,21 @@ fn cheaper(
 /// same output on every bench row below this share.
 const SPILLER_TRAFFIC: f64 = 0.005;
 
+/// Whether `what` reads or writes a frame cell the spiller could move: one at a
+/// fixed displacement. An array's cell, indexed, reaches its whole object and
+/// is not the traffic the spiller removes.
+fn names_frame_cell(what: &Semantics) -> bool {
+    what.dests
+        .iter()
+        .chain(&what.sources)
+        .any(
+            |place| matches!(
+                place,
+                Loc::Mem(mem) if mem.index.is_none() && mem.addr.is_some_and(|addr| addr.space == Space::Frame)
+            ),
+        )
+}
+
 /// What `cheaper` does below -Omax (LLVM allocates once; GCC runs its reload
 /// pass only on what the allocator left in memory): the allocator alone, and
 /// the spiller's route too only where the allocator left traffic through the
@@ -514,17 +610,7 @@ fn directed(
         let weight = if target.cpu.size { 1.0 } else { busy.block(block.at) };
         for one in block.insns.iter().filter(|one| masm::prints(one)) {
             all += weight;
-            let frame = one
-                .what
-                .as_ref()
-                .is_some_and(
-                    |what| what.dests.iter().chain(&what.sources).any(|place| {
-                        matches!(
-                            place,
-                            crate::model::ir::Loc::Mem(mem) if mem.addr.is_some_and(|addr| addr.space == Space::Frame)
-                        )
-                    }),
-                );
+            let frame = one.what.as_ref().is_some_and(names_frame_cell);
             if one.spill_reload || one.spill_store || frame {
                 traffic += weight;
             }
@@ -692,7 +778,19 @@ fn cheaper_by(
 
 #[cfg(test)]
 mod tests {
-    use super::cheaper_by;
+    use super::{cheaper_by, names_frame_cell};
+    use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
+
+    /// An indexed array's cell counted as frame traffic, so every function
+    /// with a local array ran the spiller's route as well and compiled up to
+    /// 14% slower (x_strlen, ring, x_radix) for the same code.
+    #[test]
+    fn test_an_arrays_indexed_cell_is_not_the_frame_traffic_the_spiller_removes() {
+        let cell = |index| Mem { index, ..Mem::new(Some(Addr::new(Space::Frame, -16)), 2) };
+        let read = |cell| Semantics { sources: vec![Loc::Mem(cell)], ..Semantics::new(Operation::Move) };
+        assert!(names_frame_cell(&read(cell(None))));
+        assert!(!names_frame_cell(&read(cell(Some(Held { value: 1, width: 2 })))));
+    }
 
     /// The spiller's route was kept unless the allocator alone was cheaper by
     /// bytes: where bytes tied (sieve -Os) or neither had a price
@@ -714,6 +812,34 @@ mod tests {
     }
 }
 
+/// `what` with the stack and frame tokens of its register-addressed cells
+/// named at the width of the target's addresses: `[sp]` has no encoding in
+/// flat code, and the token is only the stack's name until the frame layout
+/// resolves it.
+fn stack_as_addressed(
+    regs: Regs,
+    bits: u32,
+    what: &Semantics,
+) -> Semantics {
+    let bytes = i64::from(bits / 8);
+    let widen = |place: &Loc| {
+        if place.address().is_none_or(|cell| cell.addr.is_some()) {
+            return place.clone();
+        }
+        place.map_address(|cell| {
+            let wide = |register: RegId| {
+                if regs.is_stack(register) || regs.is_frame(register) { regs.named(register, bytes) } else { register }
+            };
+            AddressRef { through: wide(cell.through), index_through: wide(cell.index_through), ..cell }
+        })
+    };
+    Semantics {
+        dests: what.dests.iter().map(&widen).collect(),
+        sources: what.sources.iter().map(&widen).collect(),
+        ..what.clone()
+    }
+}
+
 /// What a finished function costs: its encoded bytes where the target optimizes
 /// for size, else the instructions and memory operands it is expected to
 /// execute per call.
@@ -727,6 +853,7 @@ fn cost(
             .iter()
             .filter_map(|one| one.what.as_ref())
             .map(|what| {
+                let what = &stack_as_addressed(made.body.regs(), made.body.bits, what);
                 let priced = select::priced_in(made.body.bits, what, 0, None, false, false, None)
                     .map(|code| code.code.len() as f64);
                 // A function with one instruction the encoder cannot price is
@@ -844,14 +971,18 @@ fn staged(
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
-    let classes: Rc<RegisterClasses> = if crate::backend::framefree::without_frame_register(
-        &body,
-        &registers,
-        &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
-        !inline.is_empty(),
-        false,
-        landing.is_some(),
-    ) {
+    // A BASIC module's frames are BP's (its listing addresses cells through the
+    // frame register and the runtime walks the chain), so its frame
+    // register is never a value register.
+    let classes: Rc<RegisterClasses> = if !target.basic
+        && crate::backend::framefree::without_frame_register(
+            &body,
+            &registers,
+            &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
+            !inline.is_empty(),
+            false,
+            landing.is_some(),
+        ) {
         registers.free = true;
         registers.saved.push((registers.pointer, registers.pointer));
         Rc::new(target.classes.with_frame_free())

@@ -1,11 +1,66 @@
-//! Port of `qbopt/backend/copyprop.py`: forward and remove physical register
-//! copies proven on every CFG path.
+//! Forward and remove register-to-register copies after allocation.
 //!
-//! LLVM's MachineCopyPropagation tracks physical register units after
-//! allocation; here a unit is one byte lane.  Undirected lane equality removes
-//! redundant copies, while a second must-analysis retains the reaching copy's
-//! direction for operand substitution.  Selection and decoded effects are both
-//! checked again before a source is renamed.
+//! # How it works
+//! The pass tracks, per byte lane of the seven general registers (28 lanes),
+//! what is known on every path to a point. LLVM's MachineCopyPropagation
+//! does the same per register unit. Two facts are solved together by a
+//! forward must-analysis over the CFG:
+//!
+//! - `Equal`: a partition of the lanes into classes that hold the same value.
+//!   Undirected. It decides whether a copy is redundant.
+//! - A set of directed pairs `dest <- oldest source` from the copies that reach
+//!   the point. It decides which register an operand may be renamed to, so that
+//!   the older value is the one read and the copy can die.
+//!
+//! A `mov reg,reg` of equal widths merges the destination lanes into their
+//! source lanes' classes. Any other write, found from the instruction's
+//! decoded effects (`peephole::_register_effects`), takes the written lanes
+//! out of their classes and drops every pair that names them. An instruction
+//! with no known effects resets the partition. At a join the facts are
+//! intersected, from the must-analysis top; the entry block and any block
+//! with no reachable predecessor start from nothing, so a back edge cannot
+//! prove its own equality.
+//!
+//! ```text
+//!   mov bx, ax                 mov bx, ax      <- now dead if bx is not
+//!   add cx, bx          =>     add cx, ax         read later; machinedce
+//!   mov [si+bx], dx            mov [si+ax], dx    removes it
+//!   mov bx, ax                 (anchor)        <- bx == ax already
+//! ```
+//!
+//! A second walk applies the facts. A copy whose every lane pair is already
+//! equal becomes an anchor. For every other instruction, each explicit register
+//! source and each register of an address (base or index, except the frame
+//! base) is tried against the directed pair that reaches it. The rename
+//! is kept only when all of these hold: the older register covers exactly
+//! the same lanes at the same width, the lanes are proven equal, the
+//! instruction does not write the older register, the new spelling still
+//! selects as a real instruction, and the decoded effects of the new form
+//! are the old ones with the renamed lanes replaced. Instructions with
+//! register constraints (`requires`, `delivers`, clobbers, spreads, groups)
+//! or a relocation are left alone.
+//!
+//! A body with phis is returned unchanged.
+//!
+//! # Example
+//! No honest example: the pass runs inside the peephole phase, whose dump mixes
+//! it with every other rewrite, and its unit test builds the body in Rust. Run
+//! a program with `ISEL_DUMP=1` and compare the `ParallelCopy` and `Peephole`
+//! stages for the renamed operands.
+//!
+//! # Runs
+//! Inside the peephole phase, after register thrashing and frame copies.
+//! Skipped when the body holds no register copy (`needs::COPY`). Runs again
+//! after the zero-extension rewrite on targets that have one, so the copies
+//! that rewrite makes are forwarded. Once per peephole run, not a fixed
+//! point. No flag of its own.
+//!
+//! # Needs
+//! [`crate::analysis::dataflow`] and loop predecessors
+//! ([`crate::analysis::loops`]).
+//!
+//! # See also
+//! LLVM `MachineCopyPropagation`; [`crate::backend`]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -14,7 +69,7 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
-use crate::backend::peephole::{_lanes, _register_effects, _register_effects_of_what, Lane, Lanes, id};
+use crate::backend::peephole::{_lanes, _register_effects, _register_effects_of_what, Lane, Lanes, id, is_frame_base};
 use crate::backend::select;
 use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
@@ -178,7 +233,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
     // rewrite tries.
     let mut places = vec![[u8::MAX; 4]; 512];
     for (index, (register, byte)) in lanes.iter().enumerate() {
-        places[*register as usize][*byte as usize] = index as u8;
+        places[(*register).index()][*byte as usize] = index as u8;
     }
     struct Slots(Vec<[u8; 4]>);
     impl Slots {
@@ -188,7 +243,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         ) -> Option<&usize> {
             const PLACES: [usize; 28] =
                 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27];
-            let place = *self.0.get(lane.0 as usize)?.get(lane.1 as usize)?;
+            let place = *self.0.get(lane.0.index())?.get(lane.1 as usize)?;
             (place != u8::MAX).then(|| &PLACES[place as usize])
         }
     }
@@ -410,7 +465,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
                     let place = if side { &current.dests[index] } else { &current.sources[index] };
                     let Some(at) = place.address() else { continue };
                     let register = if through { at.through } else { at.index_through };
-                    if register == RegId::None {
+                    if register == RegId::None || (through && is_frame_base(regs, at.addr, register)) {
                         continue;
                     }
                     let put = |replacement: RegId| {

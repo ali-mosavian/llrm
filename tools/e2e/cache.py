@@ -32,7 +32,7 @@ Only a run that actually finished is cached -- a timeout is not memoized, so a
 hung toolchain is retried rather than replayed as a permanent failure. A run
 that finished with BC or LINK reporting an error is still memoized: the
 programs here are deterministic and a compiler error is as much a real answer
-as a clean object, but see docs/testing.md for what that means when the
+as a clean object, but see docs/working/testing.md for what that means when the
 *environment*, not the source, is what actually failed.
 """
 

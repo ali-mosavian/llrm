@@ -1,21 +1,90 @@
-//! Port of `qbopt/backend/regthrash.py`: renaming a definition's register so
-//! a copy after it is redundant.
+//! Renames a definition's register so that a copy after it is a copy of a
+//! register to itself.
 //!
-//! Open Watcom's `RegThrash` (`bld/cg/c/scthrash.c`), and it is the inverse of
-//! coalescing. Registers are already chosen, so it takes
+//! # How it works
+//! Registers are already chosen, so this is the inverse of coalescing. It takes
 //!
 //! ```text
-//! OP(...) -> Y        ...        mov Z, Y     (and Y dies there)
+//!  OP(...) -> Y        ...        mov Z, Y     (and Y dies there)
 //! ```
 //!
-//! and writes the producer's result into Z instead, which leaves the move
-//! copying Z to itself. Between the definition and the move, Y has to stay
-//! live and untouched and Z has to be dead, and the rewritten instruction has
-//! to still exist: `select.emit` is that check here.
+//! and writes the producer's result into Z, which leaves the move copying Z to
+//! itself. Each block is handled alone, to a fixed point of its own, since a
+//! rename leaves the block's live-in as it was.
+//!
+//! For each plain `mov Z, Y` (register to register, one width, no pinned
+//! operands, no group), Y must die at the move. The producer is found by
+//! walking back, as Open Watcom's `RegThrash` does (`bld/cg/c/scthrash.c`).
+//! Every step in between must leave Y live and untouched and Z dead, and may
+//! not be a terminator, a barrier or a spill store. The definition that writes
+//! Y must own all of Y's lanes and must not read Z. Then `_renamed` rewrites it
+//! to write Z, and accepts the result only if `select::priced_in` still encodes
+//! it and the decoded register effects moved from Y to Z and nothing else.
+//!
+//! Two cases differ in what happens to the copy:
+//!
+//! ```text
+//!  not tied (producer never reads Y)    tied (two-address, reads Y too)
+//!    add  Y, a, b  ->  add  Z, a, b       mov  Y, x  ->  mov  Z, x
+//!    mov  Z, Y         mov  Z, Y (anchor) add  Y, a      add  Z, a
+//!                                         mov  Z, Y      (copy moved up)
+//! ```
+//!
+//! When not tied, the copy stays as an anchor with its virtual definition,
+//! since later operands may still name that value. When tied, the renamed form
+//! reads Z, so the copy is relocated before the producer and Y's range ends
+//! there instead of at the old move (Watcom's `PrefixIns`).
+//!
+//! At most `ROUNDS` (8) renames are made per block per run, because each
+//! changes the liveness later candidates are judged against. Liveness after
+//! each instruction is worked out again only for the stretch the rename moved,
+//! and the search resumes at the first instruction whose liveness moved.
+//! `LLRM_CHECK_THRASH` (always under test) asserts that equals a full
+//! recompute.
+//!
+//! # Example
+//! A value is built in EAX, copied to EDI and read later as EDI (the first
+//! block of the fixture; the second block, which reads EDI and then overwrites
+//! every other register, is trimmed):
+//!
+//! ```lir
+//! === before
+//!     block 0x0000
+//!       0x0000  EAX := mov 0x7  ; inserted
+//!       0x0001  EDI := mov EAX  ; inserted
+//!     block 0x0001
+//!       0x0009  push EDI  ; inserted
+//!       ; ...
+//! === after
+//!     block 0x0000
+//!       0x0000  EDI := mov 0x7  ; inserted
+//!       0x0001     ; inserted
+//!     block 0x0001
+//!       0x0009  push EDI  ; inserted
+//!       ; ...
+//! ```
+//!
+//! The producer writes EDI directly. The copy is left as an anchor with no
+//! operation, which keeps the virtual value it defined.
+//!
+//! From unit test `test_removed_copy_keeps_its_virtual_definition` in
+//! `regthrash.rs`.
+//!
+//! # Runs
+//! First sub-pass of [`crate::backend::peephole`], gated on a register copy
+//! being present. It is the only pass there that removes a copy the coalescer
+//! refused on colourability.
+//!
+//! # Needs
+//! Register-lane liveness at block exits and instruction effects:
+//! [`crate::backend::liveness`], [`crate::backend::peephole::Lanes`].
+//!
+//! # See also
+//! Open Watcom `RegThrash`, `bld/cg/c/scthrash.c`.
 
 use std::sync::Arc;
 
-use iced_x86::Register;
+use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
 use crate::backend::liveness;
@@ -293,8 +362,8 @@ fn _renamed(
     regs: Regs,
     bits: u32,
     one: &Insn,
-    before: Register,
-    after: Register,
+    before: RegId,
+    after: RegId,
     result_only: bool,
 ) -> Option<Arc<Insn>> {
     let what = one.what.as_ref().expect("a producer has semantics");
@@ -334,7 +403,8 @@ fn _renamed(
 mod tests {
     use std::sync::Arc;
 
-    use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
+    use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind};
+    use llrm_lir::registers::RegId;
 
     use super::{_plain_copy, ROUNDS, thrashed};
     use crate::backend::{select, verify};
@@ -345,7 +415,7 @@ mod tests {
 
     const MASK: u64 = 0xFFFF_FFFF;
 
-    fn _reg(register: Register) -> Loc {
+    fn _reg(register: RegId) -> Loc {
         Loc::Reg(Reg { register, width: 4 })
     }
 
@@ -368,8 +438,8 @@ mod tests {
     /// What the emitted bytes of `block` leave in the registers.
     fn _run(
         block: &LirBlock,
-        state: &HashMap<Register, u64>,
-    ) -> HashMap<Register, u64> {
+        state: &HashMap<RegId, u64>,
+    ) -> HashMap<RegId, u64> {
         let mut state = state.clone();
         for one in &block.insns {
             let code = select::emit(one.what.as_ref().unwrap(), 0, None, false, false, None).unwrap().code;
@@ -378,32 +448,32 @@ mod tests {
                 match insn.mnemonic() {
                     Mnemonic::Mov => {
                         let value = if insn.op1_kind() == OpKind::Register {
-                            state[&insn.op1_register()]
+                            state[&RegId::from(insn.op1_register())]
                         } else {
                             insn.immediate(1)
                         };
-                        state.insert(into, value & MASK);
+                        state.insert(RegId::from(into), value & MASK);
                     }
                     Mnemonic::Add => {
-                        let value = (state[&into] + state[&insn.op1_register()]) & MASK;
-                        state.insert(into, value);
+                        let value = (state[&RegId::from(into)] + state[&RegId::from(insn.op1_register())]) & MASK;
+                        state.insert(RegId::from(into), value);
                     }
                     Mnemonic::Cdq => {
-                        let value = if state[&Register::EAX] & 0x8000_0000 != 0 { MASK } else { 0 };
-                        state.insert(Register::EDX, value);
+                        let value = if state[&RegId::EAX] & 0x8000_0000 != 0 { MASK } else { 0 };
+                        state.insert(RegId::EDX, value);
                     }
                     Mnemonic::Idiv => {
                         let signed = |value: i128, bits: u32| {
                             if value >> (bits - 1) != 0 { value - (1i128 << bits) } else { value }
                         };
                         let dividend =
-                            signed(i128::from(state[&Register::EDX]) << 32 | i128::from(state[&Register::EAX]), 64);
-                        let divisor = signed(i128::from(state[&into]), 32);
+                            signed(i128::from(state[&RegId::EDX]) << 32 | i128::from(state[&RegId::EAX]), 64);
+                        let divisor = signed(i128::from(state[&RegId::from(into)]), 32);
                         assert!(divisor != 0, "divide by zero");
                         let sign = if (dividend < 0) == (divisor < 0) { 1 } else { -1 };
                         let quotient = dividend.abs() / divisor.abs() * sign;
-                        state.insert(Register::EAX, (quotient & i128::from(MASK)) as u64);
-                        state.insert(Register::EDX, ((dividend - quotient * divisor) & i128::from(MASK)) as u64);
+                        state.insert(RegId::EAX, (quotient & i128::from(MASK)) as u64);
+                        state.insert(RegId::EDX, ((dividend - quotient * divisor) & i128::from(MASK)) as u64);
                     }
                     other => panic!("NotImplementedError: {other:?}"),
                 }
@@ -415,9 +485,9 @@ mod tests {
     /// `insns`, then a block that reads only `read` and overwrites the rest.
     fn _body(
         insns: Vec<Insn>,
-        read: Register,
+        read: RegId,
     ) -> LirBody {
-        let killed = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI]
+        let killed = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI]
             .into_iter()
             .enumerate()
             .map(|(index, one)| {
@@ -443,9 +513,8 @@ mod tests {
     fn test_oimad_remainder_is_not_renamed_out_of_edx() {
         // `idiv`'s remainder is fixed in EDX: renaming it to ESI emitted the
         // same `idiv esi` behind a `mov esi,edx` that overwrote the divisor.
-        for divisor in [Register::ESI, Register::ECX] {
-            let (edi, esi, eax, edx) =
-                (_reg(Register::EDI), _reg(Register::ESI), _reg(Register::EAX), _reg(Register::EDX));
+        for divisor in [RegId::ESI, RegId::ECX] {
+            let (edi, esi, eax, edx) = (_reg(RegId::EDI), _reg(RegId::ESI), _reg(RegId::EAX), _reg(RegId::EDX));
             let body = _body(
                 vec![
                     _insn(
@@ -466,13 +535,13 @@ mod tests {
                     ),
                     _insn(4, "mov", Operation::Move, vec![esi], vec![edx]),
                 ],
-                Register::ESI,
+                RegId::ESI,
             );
-            let mut start: HashMap<Register, u64> =
-                [Register::EAX, Register::ECX, Register::EDX, Register::ESI].into_iter().map(|one| (one, 0)).collect();
-            start.insert(Register::EDI, 100_000);
+            let mut start: HashMap<RegId, u64> =
+                [RegId::EAX, RegId::ECX, RegId::EDX, RegId::ESI].into_iter().map(|one| (one, 0)).collect();
+            start.insert(RegId::EDI, 100_000);
             let result = thrashed(body);
-            assert_eq!(_run(&result.blocks[0], &start)[&Register::ESI], 100_000 % 0xFFF1, "{divisor:?}");
+            assert_eq!(_run(&result.blocks[0], &start)[&RegId::ESI], 100_000 % 0xFFF1, "{divisor:?}");
         }
     }
 
@@ -480,17 +549,17 @@ mod tests {
     fn test_a_rename_does_not_merge_the_producers_other_operand() {
         // `ecx += edx; edx = ecx` renamed to `edx = ecx; edx += edx` doubles
         // ecx.
-        let (ecx, edx) = (_reg(Register::ECX), _reg(Register::EDX));
+        let (ecx, edx) = (_reg(RegId::ECX), _reg(RegId::EDX));
         let body = _body(
             vec![
                 _insn(0, "add", Operation::Binary, vec![ecx.clone()], vec![ecx.clone(), edx.clone()]),
                 _insn(1, "mov", Operation::Move, vec![edx], vec![ecx]),
             ],
-            Register::EDX,
+            RegId::EDX,
         );
         let result = thrashed(body);
-        let start = HashMap::from_iter([(Register::ECX, 5), (Register::EDX, 7)]);
-        assert_eq!(_run(&result.blocks[0], &start)[&Register::EDX], 12);
+        let start = HashMap::from_iter([(RegId::ECX, 5), (RegId::EDX, 7)]);
+        assert_eq!(_run(&result.blocks[0], &start)[&RegId::EDX], 12);
     }
 
     #[test]
@@ -498,9 +567,9 @@ mod tests {
         // One rename per body per round stopped after ROUNDS blocks: deedlines'
         // PLASMA loop kept `mov bx,dx; sub bx,k; shl bx,1` once earlier blocks
         // had used the budget.
-        let (ecx, edx) = (_reg(Register::ECX), _reg(Register::EDX));
+        let (ecx, edx) = (_reg(RegId::ECX), _reg(RegId::EDX));
         let count = ROUNDS as i64 + 1;
-        let tail = _body(vec![], Register::EDX).blocks[1].clone();
+        let tail = _body(vec![], RegId::EDX).blocks[1].clone();
         let mut blocks: Vec<LirBlock> = (0..count)
             .map(|at| {
                 let insns = vec![
@@ -533,7 +602,7 @@ mod tests {
     fn test_removed_copy_keeps_its_virtual_definition() {
         // mdl_draw_tris lost the selector value used by later far-memory reads
         // when regthrash removed its physical copy after allocation.
-        let (ax, di) = (_reg(Register::EAX), _reg(Register::EDI));
+        let (ax, di) = (_reg(RegId::EAX), _reg(RegId::EDI));
         let producer = Insn {
             defines: vec![1],
             .._insn(
@@ -545,7 +614,7 @@ mod tests {
             )
         };
         let copy = Insn { defines: vec![2], uses: vec![1], .._insn(1, "mov", Operation::Move, vec![di], vec![ax]) };
-        let body = _body(vec![producer, copy], Register::EDI);
+        let body = _body(vec![producer, copy], RegId::EDI);
         let following = body.blocks[1].clone();
         let mut insns = following.insns.to_vec();
         insns[0] = Arc::new(Insn { uses: vec![2], ..(*insns[0]).clone() });
@@ -573,19 +642,19 @@ mod tests {
                 at * 3,
                 "mov",
                 Operation::Move,
-                vec![_reg(Register::EAX)],
+                vec![_reg(RegId::EAX)],
                 vec![Loc::Imm(Imm { value: at, width: 4, address: None })],
             ));
-            insns.push(_insn(at * 3 + 1, "mov", Operation::Move, vec![_reg(Register::EDX)], vec![_reg(Register::EAX)]));
+            insns.push(_insn(at * 3 + 1, "mov", Operation::Move, vec![_reg(RegId::EDX)], vec![_reg(RegId::EAX)]));
             insns.push(_insn(
                 at * 3 + 2,
                 "add",
                 Operation::Binary,
-                vec![_reg(Register::EBX)],
-                vec![_reg(Register::EBX), _reg(Register::EDX)],
+                vec![_reg(RegId::EBX)],
+                vec![_reg(RegId::EBX), _reg(RegId::EDX)],
             ));
         }
-        let body = _body(insns, Register::EBX);
+        let body = _body(insns, RegId::EBX);
         let size = body.insns().len();
         let before = crate::backend::liveness::effects_worked_out();
         let after = thrashed(body.clone());
@@ -612,19 +681,19 @@ mod tests {
                 0,
                 "mov",
                 Operation::Move,
-                vec![word(Register::CX)],
+                vec![word(RegId::CX)],
                 vec![Loc::Imm(Imm { value: 0x1234, width: 2, address: None })],
             ),
             _insn(
                 1,
                 "shr",
                 Operation::Binary,
-                vec![word(Register::CX)],
-                vec![word(Register::CX), Loc::Imm(Imm { value: 8, width: 1, address: None })],
+                vec![word(RegId::CX)],
+                vec![word(RegId::CX), Loc::Imm(Imm { value: 8, width: 1, address: None })],
             ),
-            _insn(2, "mov", Operation::Move, vec![word(Register::AX)], vec![word(Register::CX)]),
+            _insn(2, "mov", Operation::Move, vec![word(RegId::AX)], vec![word(RegId::CX)]),
         ];
-        let body = _body(insns, Register::EAX);
+        let body = _body(insns, RegId::EAX);
         let after = thrashed(body.clone());
         // Whether or not it renamed, `thrashed` checked the liveness it kept
         // against working it out whole; a rename is the premise.

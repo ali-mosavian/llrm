@@ -165,6 +165,9 @@ struct Args {
     flags: Flags,
     dump: Option<PathBuf>,
     include: Vec<String>,
+    /// The target, whose OS layer header a program that includes it is given
+    /// (`os_header_directory`).
+    target: std::rc::Rc<dyn llrm_target::Target>,
     /// Watcom switches the program opts into, passed to wccq: -oa, -on.
     watcom: Vec<&'static str>,
     /// The target, the built-in DOS on a 386 unless `--machine` names
@@ -340,6 +343,14 @@ fn usage() -> String {
     format!("usage: llrm-c [-h] [-I INCLUDE] [--dump DUMP] [--os-layer FIELD] {} source", flags::USAGE)
 }
 
+/// A directory holding `target`'s OS layer header as `llrm_os.h`.
+fn os_header_directory(target: &dyn llrm_target::Target) -> Option<tempfile::TempDir> {
+    let text = target.os_layer()?.report(&target.runtime("c")?, "header").ok()?;
+    let directory = tempfile::tempdir().ok()?;
+    fs::write(directory.path().join("llrm_os.h"), text + "\n").ok()?;
+    Some(directory)
+}
+
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut flags, mut dump) = (None, Flags::default(), None);
     let (mut include, mut watcom) = (Vec::new(), Vec::new());
@@ -387,7 +398,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 )
         });
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
-    Ok(Args { source, os_layer, dump, include, watcom, codegen: bound.options(&flags, machine), flags })
+    let target = bound.target.clone();
+    Ok(Args { source, os_layer, dump, include, target, watcom, codegen: bound.options(&flags, machine), flags })
 }
 
 /// `main`: exit status 0 on success, 1 on a refusal, 2 on bad arguments.
@@ -427,13 +439,25 @@ pub fn main(argv: &[String]) -> i32 {
                     .collect();
                 let switches: Vec<&str> =
                     args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
-                recorded_for(
-                    &args.source,
-                    &args.include,
-                    args.flags.debug,
-                    &switches,
-                    &Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?,
-                )
+                let profile =
+                    Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?;
+                let record =
+                    |include: &[String]| recorded_for(&args.source, include, args.flags.debug, &switches, &profile);
+                let first = record(&args.include);
+                // `#include "llrm_os.h"` needs no `-I`: a program that includes
+                // it, itself or through another header, is
+                // recorded again with the header's directory searched last. The
+                // others pay nothing for it.
+                match &first {
+                    Err(error) if error.0.contains("llrm_os.h") => match os_header_directory(&*args.target) {
+                        Some(directory) => {
+                            let include = [&args.include[..], &[directory.path().display().to_string()]].concat();
+                            record(&include)
+                        }
+                        None => first,
+                    },
+                    _ => first,
+                }
             })?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
@@ -508,7 +532,14 @@ mod tests {
     fn the_stack_check_names_what_the_c_runtime_defines() {
         let root = Path::new(env!("LLRM_ROOT"));
         let check = super::stack_check(&llrm_x86_m16::M16);
-        let runtime = |name: &str| std::fs::read_to_string(root.join("runtime").join(name)).unwrap();
+        // The assembly is laid out in columns: its words are what is compared.
+        let runtime = |name: &str| {
+            let text = std::fs::read_to_string(root.join("runtime").join(name)).unwrap();
+            text.lines()
+                .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
         assert!(
             runtime("shared/dos/m16/os.asm").contains(&format!("public {}", check.limit))
                 && runtime("shared/dos/m16/start.asm").contains(&format!("mov {}, ax", check.limit))
@@ -530,7 +561,7 @@ mod tests {
         assert!(
             checked.contains("cmp sp, word ptr FOO")
                 && checked.contains("call far ptr BAR")
-                && !checked.contains("_llrm_os_stack_low"),
+                && !checked.contains("LL$STACK_LOW"),
             "{checked}"
         );
         assert!(!listing(None).contains("cmp sp"));
@@ -801,6 +832,45 @@ mod tests {
         );
         let none: toml::Table = "stack = \"stack.toml\"\n".parse().unwrap();
         assert_eq!(super::Profile::parse(&none, "x").unwrap_err(), "the C runtime description has no [frontend]");
+    }
+
+    /// Where EBP is a value (no frame register kept), an `lea` through it is
+    /// the value's address, not the frame's: masm read the register's name and
+    /// the lack of a base value on an `lea`'s operand as a frame cell, and made
+    /// `lea ebp,[ebp+ecx*2]` into `[esp+ecx*2]`.
+    #[test]
+    fn test_m32_an_lea_through_a_value_in_ebp_is_not_a_frame_cell() {
+        let lines = flat_listing_with("sixptr", &["-O2", "-ftree-ch"]);
+        let leas: Vec<&String> = lines.iter().filter(|line| line.starts_with("lea") && line.contains('*')).collect();
+        assert!(!leas.iter().any(|line| line.contains("[esp+")), "{lines:#?}");
+    }
+
+    /// -O3 takes LLVM's copy budget (300, `UnrollThresholdAggressive`), not
+    /// gcc's 200: at 150 the product's middle loop, 328 operations once its
+    /// inner loop is copied out, stayed rolled and `b` was read back from the
+    /// stack by 8 multiplies a trip, 10,399 model clocks against 1,189.
+    #[test]
+    fn test_m32_o3_copies_out_a_product_whose_operand_is_constant() {
+        let lines = flat_listing_at("matmul", "-O3");
+        let multiplies = lines.iter().filter(|line| line.starts_with("imul")).count();
+        assert_eq!(multiplies, 0, "{lines:#?}");
+    }
+
+    /// A load whose only reader is an add is the add's memory operand. The
+    /// return read the frame register as it does where one is kept, so a load
+    /// into EBP, the last register given out where none is, looked live to
+    /// the end: `mov ebp, [..]; add ax, bp` where the other two loads folded.
+    #[test]
+    fn test_m32_a_load_into_the_free_frame_register_is_folded_into_its_add() {
+        let lines = flat_listing("sumthree");
+        let body: Vec<&str> = lines
+            .iter()
+            .skip_while(|line| *line != "sum_three_ proc near")
+            .take_while(|line| *line != "sum_three_ endp")
+            .map(String::as_str)
+            .collect();
+        let folded = body.iter().filter(|line| line.starts_with("add ax, word ptr [")).count();
+        assert_eq!(folded, 3, "{body:#?}");
     }
 
     /// The 386 front end records `sum.c` as the committed flat stream: `flat=1`
@@ -1869,10 +1939,25 @@ mod tests {
     /// tests/fixtures/c32/`fixture`.cgs, as the 386 front end recorded it,
     /// selected for `-m32`.
     fn flat_listing(fixture: &str) -> Vec<String> {
+        flat_listing_with(fixture, &["-O2"])
+    }
+
+    fn flat_listing_at(
+        fixture: &str,
+        level: &str,
+    ) -> Vec<String> {
+        flat_listing_with(fixture, &[level])
+    }
+
+    fn flat_listing_with(
+        fixture: &str,
+        flags: &[&str],
+    ) -> Vec<String> {
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs")))
                 .unwrap();
-        let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let argv: Vec<String> =
+            ["-m32"].into_iter().chain(flags.iter().copied()).chain(["x.c"]).map(str::to_owned).collect();
         let args = super::parse_args(&argv).unwrap();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()
@@ -2176,7 +2261,7 @@ mod tests {
         .unwrap();
         let listing = llrm_core::backend::masm::text(&built).unwrap();
         assert!(
-            listing.contains("cmp esp, dword ptr _llrm_os_stack_low") && listing.contains("call __STKOVERFLOW"),
+            listing.contains("cmp esp, dword ptr LL$STACK_LOW") && listing.contains("call __STKOVERFLOW"),
             "{listing}"
         );
         assert!(!listing.contains("far ptr") && listing.contains("extern __STKOVERFLOW:near"), "{listing}");
@@ -2284,7 +2369,11 @@ mod tests {
         // From the store the loop makes (the trip's extension is the first
         // thing after it).
         let from = body.iter().position(|line| line.starts_with("mov byte ptr [")).expect("the loop stores a byte");
-        let loop_ = &body[from..];
+        // To the last jump before the epilogue: the copied guard leaves the
+        // function by more than one return, whose `movzx` is not a trip's.
+        let ret = body[from..].iter().position(|line| line == "ret").expect("the function returns") + from;
+        let last_jump = body[from..ret].iter().rposition(|line| line.starts_with('j')).expect("the loop jumps") + from;
+        let loop_ = &body[from..=last_jump];
         let copies = |line: &&String| {
             line.starts_with("movzx e")
                 || line.split_once(' ').is_some_and(|(operation, operands)| {
@@ -2343,11 +2432,8 @@ mod tests {
             "{body:#?}"
         );
         assert!(body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");
-        assert!(
-            body.iter().any(|line| line.starts_with("jne "))
-                && !body.iter().any(|line| line.starts_with("cmp ") && line.ends_with(", 0")),
-            "{body:#?}"
-        );
+        let jump = body.iter().position(|line| line.starts_with("jne ")).expect("the loop ends on jne");
+        assert!(body[jump - 1].starts_with("add e") && body[jump - 1].ends_with(", 4"), "{body:#?}");
         assert!(
             body.iter().all(|line| !line.contains(" bp")
                 && !line.contains("[bx")

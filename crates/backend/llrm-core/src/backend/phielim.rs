@@ -1,8 +1,137 @@
-//! Port of `qbopt/backend/phielim.py`: the pass that takes LIR out of SSA.
+//! Takes LIR out of SSA: each phi becomes parallel copies on its incoming
+//! edges.
 //!
-//! Each phi becomes a copy at the end of every predecessor it names. A copy
-//! on a critical edge goes in a block of its own, labelled above physical
-//! offsets in a namespace per body entry. LLVM's `PHIElimination`.
+//! # How it works
+//! For each phi `r = phi [p1: v1, p2: v2]` the pass puts `r := v1` at the end
+//! of `p1` and `r := v2` at the end of `p2`, before the terminator. The copies
+//! of one edge carry one group number, so [`crate::backend::parcopy`] later
+//! orders them as a single simultaneous assignment. A phi with an incoming edge
+//! from outside the body is left alone.
+//!
+//! A copy on a branch's edge instead of in its predecessor is made only when
+//! it costs the target at least a tenth less (`EdgePrices::cheaper_on_edge`:
+//! the edge's chance times its copies and the `jmp`, against the copies every
+//! time), and never in a build for size: the odds are a guess, and an edge
+//! that wins by less costs a block and a jump the clocks do not show.
+//!
+//! Before copying, three shortcuts avoid a copy altogether. A one-input phi
+//! renames its result to its input. A loop-exit one-input phi is the exception:
+//! it becomes a copy opening the exit, so a call after the loop does not pin
+//! the loop's register to a call-preserved one. On a critical edge, where every
+//! incoming value is defined once in its own predecessor, is read by nothing
+//! but this phi (or only past the loop the edge closes), and the phi's result
+//! is not live after that definition, the definitions are renamed to define the
+//! result outright. That is what gcc's out-of-SSA does with a phi argument that
+//! does not interfere with the result.
+//!
+//! Otherwise a predecessor with several successors makes the edge critical. A
+//! copy there may run in the predecessor only if no other path reads either end
+//! of it (`_observed`) and, where block odds are known, the edge is not cheaper
+//! (`EdgePrices::cheaper_on_edge`: the edge's chance times copies plus a `jmp`
+//! against the copies run every time). Otherwise the copy goes in a new block
+//! on the edge, which holds its copies and a jump to the successor:
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   p["<b>P</b>"]:::mid
+//!   q["<b>Q</b>"]:::mid
+//!   s["<b>S</b><br/><small>r = phi[P: v]</small>"]:::mid
+//!   p --> q
+//!   p --> s
+//! ```
+//!
+//! *Before: edge P to S is critical (r = phi[P: v])*
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef src fill:#2563eb,stroke:#1e40af,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   p["<b>P</b>"]:::mid
+//!   q["<b>Q</b>"]:::mid
+//!   e["<b>E</b><br/><small>r := v #59; jmp S</small>"]:::src
+//!   s["<b>S</b>"]:::mid
+//!   p --> q
+//!   p --> e
+//!   e --> s
+//! ```
+//!
+//! *After: the copy goes in a new block E on the edge*
+//!
+//! The new block's label is above every physical offset (`(entry + 1) << 32`),
+//! in a namespace of its own per body entry.
+//!
+//! `unsplit` undoes a split whose copies coalescing removed: a block of only a
+//! jump is bypassed, so the jump is not taken on every pass. The peephole calls
+//! it first.
+//!
+//! # Example
+//! A loop carrying three values has three phis at its head:
+//!
+//! Before:
+//!
+//! ```lir
+//! block 0x0000
+//!   0x0000  v2 := mov 0x1  ; inserted
+//!   0x0000  v3 := mov 0x0  ; inserted
+//!   0x0000  jmp   ; inserted
+//! block 0x0001
+//!   v5 := phi 0x0000:v2 0x0009:v4
+//!   v6 := phi 0x0000:v3 0x0009:v5
+//!   v8 := phi 0x0000:v1 0x0009:v7
+//!   ; ...
+//! block 0x0009
+//!   0x0009  v4 := add v6, v5  ; inserted
+//!   0x000a  jmp   ; inserted
+//! ```
+//!
+//! After:
+//!
+//! ```lir
+//! block 0x0000
+//!   0x0000  v2 := mov 0x1  ; inserted
+//!   0x0000  v3 := mov 0x0  ; inserted
+//!   0x0000  v5 := mov v2  ; inserted; parallel-copy 1
+//!   0x0000  v6 := mov v3  ; inserted; parallel-copy 1
+//!   0x0000  v8 := mov v1  ; inserted; parallel-copy 1
+//!   0x0000  jmp   ; inserted
+//! block 0x0001
+//!   ; ...
+//! block 0x0009
+//!   0x0009  v4 := add v6, v5  ; inserted
+//!   0x000a  v5 := mov v4  ; inserted; parallel-copy 2
+//!   0x000a  v6 := mov v5  ; inserted; parallel-copy 2
+//!   0x000a  v8 := mov v7  ; inserted; parallel-copy 2
+//!   0x000a  jmp   ; inserted
+//! ```
+//!
+//! Each phi became one copy at the end of each predecessor, one group per edge.
+//! The copies of group 2 read values (`v5`) that others write, which
+//! [`crate::backend::parcopy`] orders after allocation.
+//!
+//! From `ISEL_DUMP=1` of a C Fibonacci loop (`t = a + b; a = b; b = t;`)
+//! compiled with `llrm-c -O2 -m16`: the stage before `PhiElimination`, and
+//! `PhiElimination`.
+//!
+//! # Runs
+//! A machine phase after `ssaspill` (spiller route only) and before
+//! `pressuresink`, in every machine (`flow::machine_with`); `EdgePrices` come
+//! from the CPU profile, and with none a copy stays in its predecessor. Also
+//! `placed_on_edges`, which [`crate::backend::floatalloc`] uses to put its
+//! selected transfers on exact edges.
+//!
+//! # Keeps
+//! Result is out of SSA except for phis it refused. Value identities are
+//! unified where a phi was trivial, so the body's widths and operands are
+//! renamed throughout.
+//!
+//! # See also
+//! - LLVM `PHIElimination`:
+//!   <https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/PHIElimination.cpp>
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -12,7 +141,48 @@ use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 
-pub struct PhiElimination;
+/// What the target charges for a copy and for the `jmp` ending an edge's block,
+/// in clocks.
+#[derive(Clone, Copy, Debug)]
+pub struct EdgePrices {
+    pub copy: f64,
+    pub jump: f64,
+}
+
+impl EdgePrices {
+    /// None for a build for size: a copy on its edge is a block of its own and
+    /// a jump, and the copy twice where the edge's other end is reached
+    /// another way, so the copies stay in their predecessor.
+    pub fn of(cpu: &crate::backend::cpu::Profile) -> Option<Self> {
+        if cpu.size {
+            return None;
+        }
+        Some(Self { copy: cpu.cost("mov_rr").ok()? as f64, jump: cpu.cost("jmp_short").ok()? as f64 })
+    }
+
+    /// Whether `copies` copies cost less in a block of their own on an edge
+    /// taken `chance` of the times its predecessor runs (the copies and the
+    /// jump that ends it) than in the predecessor (the copies, every time),
+    /// by a tenth at least: the odds are a guess, and an edge that wins by
+    /// less costs a block and a jump for nothing the clocks show.
+    pub fn cheaper_on_edge(
+        &self,
+        chance: f64,
+        copies: usize,
+    ) -> bool {
+        let copies = copies as f64 * self.copy;
+        chance * (copies + self.jump) < copies * EDGE_MARGIN
+    }
+}
+
+/// What an edge copy must cost, of the predecessor's, to be made there.
+const EDGE_MARGIN: f64 = 0.9;
+
+/// `prices`: where none are known, a copy stays in its predecessor.
+#[derive(Default)]
+pub struct PhiElimination {
+    pub prices: Option<EdgePrices>,
+}
 
 impl LIRTransform for PhiElimination {
     fn class_name(&self) -> &'static str {
@@ -27,7 +197,7 @@ impl LIRTransform for PhiElimination {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        eliminated(&body)
+        eliminated_priced(&body, self.prices)
     }
 }
 
@@ -57,10 +227,27 @@ fn jump_to(target: i64) -> Semantics {
 
 /// `body` with every phi it can lower replaced by copies.
 pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
+    eliminated_priced(body, None)
+}
+
+/// `eliminated`, a copy put on its edge where `prices` say that costs less.
+pub fn eliminated_priced(
+    body: &LirBody,
+    prices: Option<EdgePrices>,
+) -> Result<LirBody, String> {
     let body = &_exits_copied(body);
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let successors: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.succ.len())).collect();
     let widths = _widths(body);
+    // Renaming a phi whose copies the predecessor could hold saves nothing
+    // (only an edge block); an x87 value has no copy to save.
+    let floating = crate::backend::ssaspill::floating(body);
+
+    // `copies` copies on the edge from `from` to `into` cost less than in
+    // `from`.
+    let on_edge = |from: i64, into: i64, copies: usize| {
+        prices.is_some_and(|prices| prices.cheaper_on_edge(body.odds.chance(from, &at_of[&from].succ, into), copies))
+    };
 
     let once = _read_once(body);
     // One per predecessor->successor edge. Every move a phi becomes on
@@ -97,7 +284,15 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                 // it define the phi's result outright says what the phi said.
                 if edges.iter().all(|&(w, v)| {
                     _defined_in(at_of[&w], v)
-                        && once.get(&v).copied() == Some(1)
+                        // A constant made in a loop to leave it runs every
+                        // trip.
+                        && !(on_edge(w, block.at, 1) && _constant_made_in(at_of[&w], v).is_some())
+                        && (once.get(&v).copied() == Some(1)
+                            || !floating.contains(&phi.result)
+                                && (_observed(body, &at_of, w, block.at, phi.result)
+                                    || _observed(body, &at_of, w, block.at, v))
+                                && _read_past_loop(&at_of, block.at, w, v))
+                        && _defined_in_place(at_of[&w], v, phi.result)
                         && !_live_after(&at_of, block.at, w, v, phi.result)
                 }) {
                     for &(_where, value) in &edges {
@@ -149,9 +344,14 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
             // A copy may run in the predecessor only when neither end needs
             // a distinct value on its other paths. Otherwise put it on its
             // actual edge.
-            if pairs.iter().any(|&(result, value)| {
-                _observed(body, &at_of, where_, block.at, result) || _observed(body, &at_of, where_, block.at, value)
-            }) {
+            // A copy goes where it costs least.
+            let leaves = on_edge(where_, block.at, pairs.len());
+            if leaves
+                || pairs.iter().any(|&(result, value)| {
+                    _observed(body, &at_of, where_, block.at, result)
+                        || _observed(body, &at_of, where_, block.at, value)
+                })
+            {
                 match split.entry((where_, block.at)).or_insert_with(|| Split::Pairs(Vec::new())) {
                     Split::Pairs(existing) => existing.extend(pairs.iter().copied()),
                     Split::Selected(_) => unreachable!("eliminated only splits pairs"),
@@ -181,7 +381,9 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
         return Ok(body.clone());
     }
     if !split.is_empty() {
-        return _split_edges(body, &split, &copies, &rename, &kept, &widths, false);
+        return _split_edges(body, &split, &copies, &rename, &kept, &widths, false, &|from, into| {
+            on_edge(from, into, 1)
+        });
     }
     let mut out = body.clone();
     for block in &mut out.blocks {
@@ -353,12 +555,97 @@ fn _live_after(
     false
 }
 
+/// Whether `value`, which `from` defines on the back edge into `header`, is
+/// read besides by the phi only outside the loop that edge closes (or on edges
+/// from `from`): the loop's variable then holds it wherever it is read, and the
+/// phi can define the variable outright, as gcc's out-of-SSA coalesces a phi's
+/// result with an argument they do not interfere (`tree-ssa-coalesce`) whoever
+/// else reads the argument.
+fn _read_past_loop(
+    at_of: &IndexMap<i64, &LirBlock>,
+    header: i64,
+    from: i64,
+    value: u32,
+) -> bool {
+    // The loop: what reaches `from` without passing the header. A header that
+    // does not dominate `from` is no loop.
+    let mut inside: BTreeSet<i64> = BTreeSet::from([header]);
+    let mut pending = vec![from];
+    while let Some(at) = pending.pop() {
+        if !inside.insert(at) {
+            continue;
+        }
+        let preds: Vec<i64> = at_of.values().filter(|block| block.succ.contains(&at)).map(|block| block.at).collect();
+        if preds.is_empty() && at != header {
+            return false;
+        }
+        pending.extend(preds);
+    }
+    at_of.values().all(|block| {
+        let in_loop = inside.contains(&block.at);
+        let phis_ok = block.phis.iter().all(|phi| {
+            phi.incoming.iter().all(|&(edge, read)| read != value || (edge == from && (block.at == header || !in_loop)))
+        });
+        let insns_ok = !block
+            .insns
+            .iter()
+            .any(
+                |one| (one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value))
+                    && in_loop
+                    && block.at != from,
+            );
+        phis_ok && insns_ok
+    })
+}
+
+/// Whether the instruction defining `value` may define `result` instead: not
+/// where it is a two-address operation that reads `result` as other than its
+/// first source, which the destination would then overwrite (`1 - cur` became
+/// `sub cur, cur`; a commutative one is swapped).
+fn _defined_in_place(
+    block: &LirBlock,
+    value: u32,
+    result: u32,
+) -> bool {
+    let Some(one) = block.insns.iter().find(|one| one.defines.contains(&value)) else { return true };
+    if !one.uses.contains(&result) {
+        return true;
+    }
+    let Some(what) = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return true };
+    let reads = |at: usize| {
+        matches!(
+            what.sources.get(at),
+            Some(Loc::Held(held)) if held.value == result
+        )
+    };
+    let commutes =
+        matches!(
+            what.name.as_deref(),
+            Some("add" | "and" | "or" | "xor" | "imul")
+        ) && what.sources.len() == 2;
+    commutes || !(1..what.sources.len()).any(reads)
+}
+
 /// Whether exactly one instruction in this block defines the value.
 fn _defined_in(
     block: &LirBlock,
     value: u32,
 ) -> bool {
     block.insns.iter().filter(|one| one.defines.contains(&value)).count() == 1
+}
+
+/// The move of an immediate into `value` where it is `block`'s one definition
+/// of it and nothing reads it there: a constant a phi takes from its
+/// predecessor.
+fn _constant_made_in(
+    block: &LirBlock,
+    value: u32,
+) -> Option<Semantics> {
+    let mut defining = block.insns.iter().filter(|one| one.defines.contains(&value));
+    let (Some(one), None) = (defining.next(), defining.next()) else { return None };
+    let what = one.what.as_ref()?;
+    let ([Loc::Held(into)], [Loc::Imm(_)]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
+    (what.op == Operation::Move && into.value == value && one.uses.is_empty()).then(|| what.clone())
 }
 
 /// One instruction defining the phi's result where it defined its own.
@@ -570,7 +857,7 @@ pub fn placed_on_edges(
         return out;
     }
     let kept: IndexMap<i64, Vec<Phi>> = body.blocks.iter().map(|block| (block.at, block.phis.clone())).collect();
-    _split_edges(body, &split, &copies, &IndexMap::default(), &kept, &IndexMap::default(), true)
+    _split_edges(body, &split, &copies, &IndexMap::default(), &kept, &IndexMap::default(), true, &|_, _| false)
         .expect("an empty rename cannot cycle")
 }
 
@@ -587,9 +874,14 @@ pub fn _split_edges(
     kept: &IndexMap<i64, Vec<Phi>>,
     widths: &IndexMap<u32, u32>,
     selected: bool,
+    cheaper_on_edge: &dyn Fn(i64, i64) -> bool,
 ) -> Result<LirBody, String> {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut made: IndexMap<(i64, i64), LirBlock> = IndexMap::default();
+    // The constants moved to their edges: the block they were made in and the
+    // register they were made into.
+    let mut moved: BTreeSet<(i64, u32)> = BTreeSet::new();
+    let read_by_phis = _read_once(body);
     let mut landing: IndexMap<(i64, i64), i64> = IndexMap::default();
     let mut edges: Vec<(&(i64, i64), &Split)> = split.iter().collect();
     edges.sort_by_key(|(key, _)| **key);
@@ -611,14 +903,27 @@ pub fn _split_edges(
             (false, Split::Pairs(pairs)) => pairs
                 .iter()
                 .map(|&(a, b)| {
-                    let mut copy = (*_made(
-                        beside,
-                        at,
-                        move_of(Held { value: a, width: widths[&a] }, Held { value: b, width: widths[&a] }),
-                        vec![a],
-                        vec![b],
-                    ))
-                    .clone();
+                    // A constant the predecessor made for this phi alone is
+                    // made on the edge instead: once, not
+                    // every trip.
+                    let constant = (read_by_phis.get(&b).copied() == Some(1) && cheaper_on_edge(where_, into))
+                        .then(|| _constant_made_in(at_of[&where_], b))
+                        .flatten();
+                    let mut copy = match constant {
+                        Some(what) => {
+                            moved.insert((where_, b));
+                            let into = Loc::Held(Held { value: a, width: widths[&a] });
+                            (*_made(beside, at, Semantics { dests: vec![into], ..what }, vec![a], vec![])).clone()
+                        }
+                        None => (*_made(
+                            beside,
+                            at,
+                            move_of(Held { value: a, width: widths[&a] }, Held { value: b, width: widths[&a] }),
+                            vec![a],
+                            vec![b],
+                        ))
+                        .clone(),
+                    };
                     copy.group = Some(number);
                     Arc::new(copy)
                 })
@@ -647,6 +952,7 @@ pub fn _split_edges(
         let mut insns: Vec<Arc<Insn>> =
             _before_the_terminator(block, copies.get(&block.at).map_or(&[][..], Vec::as_slice))
                 .iter()
+                .filter(|one| !one.defines.iter().any(|value| moved.contains(&(block.at, *value))))
                 .map(|one| _retargeted(one, &landing, block.at))
                 .collect();
         let last = block.insns.last();
@@ -931,6 +1237,7 @@ mod tests {
             &IndexMap::from_iter([(0, vec![])]),
             &IndexMap::from_iter([(2, 2)]),
             false,
+            &|_, _| false,
         )
         .unwrap();
         let edge = &done.blocks[done.blocks.len() - 1];
@@ -1203,7 +1510,7 @@ mod tests {
         // Port of tests/test_lir.py: `_settled` looked for a Held in
         // `Mem.through`, which is a register now, so a based cell kept the old
         // id.
-        let where_ = Addr { base: RegId::SI, ..Addr::new(Space::Segment, 0x10) };
+        let where_ = Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Segment, 0x10) };
         let cell = Mem {
             through: RegId::None,
             offset: 0,
@@ -1220,5 +1527,30 @@ mod tests {
         assert_eq!(got.width, cell.width);
         assert_eq!(got.offset, cell.offset);
         assert_eq!(got.disp_width, cell.disp_width);
+    }
+
+    /// A build for size kept a loop's guard-exit constants on an edge of their
+    /// own (a block, a `jmp` and the copies twice: 4 bytes in 25 of 67 programs
+    /// once the guard's odds moved); only a build for speed prices an edge
+    /// copy.
+    #[test]
+    fn test_a_build_for_size_keeps_its_phi_copies_in_the_predecessor() {
+        use super::EdgePrices;
+        use crate::backend::cpu;
+        assert!(EdgePrices::of(cpu::tuned("486", false).unwrap()).is_some());
+        assert!(EdgePrices::of(cpu::tuned("486", true).unwrap()).is_none());
+    }
+
+    /// An edge taken 24% of the time won by 0.06 clocks of 1 (`24% * (1 + 3) <
+    /// 1`): x_binsearch grew a block and a `jmp` for clocks the model could not
+    /// tell, and 25 of the 67 programs +1% in code once the guards' odds moved
+    /// to it.
+    #[test]
+    fn test_an_edge_that_wins_by_less_than_a_tenth_keeps_its_copy_in_the_predecessor() {
+        use super::EdgePrices;
+        let prices = EdgePrices { copy: 1.0, jump: 3.0 };
+        assert!(!prices.cheaper_on_edge(0.24, 1));
+        assert!(prices.cheaper_on_edge(0.1, 1));
+        assert!(prices.cheaper_on_edge(0.33, 2));
     }
 }

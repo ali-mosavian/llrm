@@ -1,8 +1,100 @@
-//! Port of `qbopt/backend/coalesce.py`: a copy whose two values can share a
-//! register is not a copy.
+//! Removes a copy whose two values can share a register.
 //!
-//! LLVM's `RegisterCoalescer`, conservative: Briggs and George before the
-//! join, since there is no undo.
+//! # How it works
+//! After `phielim` and `twoaddr` the body is full of `mov v2, v1` between
+//! values. If `v1` and `v2` never need different registers at once, they can
+//! be one value and the move is an identity that disappears. This is
+//! conservative coalescing: a join cannot be undone, so it is made only
+//! where it provably cannot make the body harder to colour.
+//!
+//! ```text
+//!  before                          after
+//!    v1 = load ...                   v1 = load ...
+//!    v2 = mov v1       (no clash)    ... v1 ...     v2 renamed v1
+//!    ... v2 ...                      the mov is gone
+//! ```
+//!
+//! The values are the nodes of an interference graph (`_interference`, built
+//! by walking each block backwards: values live at the same point are
+//! adjacent, the two ends of a copy not by that copy, and the sources of a
+//! parallel copy before any of its destinations is written). Each value also
+//! has a live interval. Copies are visited block by block, the deepest loops
+//! first and, within a loop, the busiest blocks first, so that of two joins
+//! that clash the one in the hotter code stays. For one copy `(a, b)` the webs
+//! already joined are looked up (union-find) and the join is refused when:
+//!
+//! - they are the same web, or are pinned to different registers;
+//! - they are adjacent in the graph;
+//! - the registers both may take (their class palettes) have none in common, or
+//!   every common register is destroyed somewhere in the merged interval
+//!   (`allocate::_clobbered`), or a pin is outside what is left;
+//! - Briggs and George both fail.
+//!
+//! Briggs counts the neighbours of the joined web that are significant (their
+//! degree reaches the size of their palette); the join is safe when fewer
+//! than `k` of them, `k` being the registers left. If that fails, George
+//! accepts when `gone` can join `kept` (or the reverse) because each neighbour
+//! of `gone` is already a neighbour of `kept`, cannot take a register of the
+//! join, or is neither pinned nor significant. George is not tried if either
+//! web is pinned.
+//!
+//! `Webs` keeps the significant and pinned neighbour counts per web as webs
+//! join, so a join costs the smaller web's neighbours, not the larger's. The
+//! joined web's interval is the union of the two (`_merged`), its pin is the
+//! pin of either, and the web kept is the one with more neighbours. At the
+//! end every value is renamed to its web's root and identity moves are
+//! dropped. `LLRM_CHECK_COALESCE=1` checks each count against a scan.
+//!
+//! # Example
+//! A multiply by 5: `v3` joins `v4`, so `v3 := mov v4` goes and the add updates
+//! `v4`. `v5 := mov v4` stays: `v4` and `v5` are pinned to EAX and EDX. `;
+//! inserted` notes are dropped.
+//!
+//! Before (`TwoAddress`):
+//!
+//! ```lir
+//! ; ...
+//! 0x0001  v4 := mov v2
+//! 0x0001  v4 := shl v4, 0x2
+//! 0x0001  v3 := mov v4
+//! 0x0001  v3 := add v3, v2
+//! 0x0002  v5 := mov v3
+//! 0x0002  v5 := shr v5, 0x10
+//! 0x0002     ; requires v3@EAX,v5@EDX
+//! ```
+//!
+//! After (`Coalescer`):
+//!
+//! ```lir
+//! ; ...
+//! 0x0001  v4 := mov v2
+//! 0x0001  v4 := shl v4, 0x2
+//! 0x0001  v4 := add v4, v2
+//! 0x0002  v5 := mov v4
+//! 0x0002  v5 := shr v5, 0x10
+//! 0x0002     ; requires v4@EAX,v5@EDX
+//! ```
+//!
+//! From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of `Times5& = x * 5` (function
+//! `TIMES5&`).
+//!
+//! # Runs
+//! Once per function, in the machine phases after `twoaddr` and before
+//! `regalloc`, at every -O level. Both routes run it.
+//!
+//! # Needs
+//! [`crate::backend::classes`] for the palettes, [`crate::backend::regclass`]
+//! for each value's register class, and `allocate::_masks` for the points
+//! that destroy registers. `_interference` and `_interference_among` are also
+//! read by `twoaddr.rs` and by the spiller's sibling pricing.
+//!
+//! # See also
+//! LLVM's `RegisterCoalescer` joins by live range and keeps no graph:
+//! <https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/RegisterCoalescer.cpp>
+//!
+//! The two tests: Briggs, Cooper and Torczon, "Improvements to graph coloring
+//! register allocation" (1994), and George and Appel, "Iterated register
+//! coalescing" (1996).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -116,7 +208,21 @@ pub fn joined(
     webs.begin(_interference(body), &held);
     let checking = llrm_support::env_set("LLRM_CHECK_COALESCE");
 
-    for block in &body.blocks {
+    // A join is kept, and the first of two that clash is the one that stays:
+    // the deepest loops first, as LLVM's `RegisterCoalescer` orders its
+    // worklist, and in a loop the blocks that run most often.
+    let busy = crate::analysis::frequency::Frequency::of(body);
+    let mut blocks: Vec<&LirBlock> = body.blocks.iter().collect();
+    let depth = ranges::depths_shared(body);
+    blocks.sort_by(|a, b| {
+        let (a_depth, b_depth) = (depth.get(&a.at).copied().unwrap_or(0), depth.get(&b.at).copied().unwrap_or(0));
+        b_depth
+            .cmp(&a_depth)
+            .then_with(
+                || if a_depth == 0 { std::cmp::Ordering::Equal } else { busy.block(b.at).total_cmp(&busy.block(a.at)) },
+            )
+    });
+    for block in blocks {
         for one in &block.insns {
             let Some(pair) = _copy(one) else {
                 continue;
@@ -787,20 +893,14 @@ pub fn _interference_among(
         (Some(found), Some(_)) => found.widths(body, &wanted),
         _ => crate::analysis::occurrences::widths_of(body.blocks.iter().flat_map(|block| &block.insns), &wanted),
     };
-    let mut graph = Building::default();
+    // Asked of a few values, their rows are bits from the start: a group of N
+    // live together is N rows given N bits at once, not N^2 pairs each
+    // written into a tree.
+    let mut graph = if only.is_some() { Building::bits() } else { Building::default() };
 
-    let edge = |graph: &mut Building, one: u32, other: u32| {
-        if one != other && wanted(one) && wanted(other) {
-            graph.link(one, other);
-        }
-    };
-    let all_pairs = |graph: &mut Building, alive: &BTreeSet<u32>| {
-        let named: Vec<u32> = alive.iter().copied().filter(|one| wanted(*one)).collect();
-        for value in &named {
-            for other in &named {
-                edge(graph, *value, *other);
-            }
-        }
+    let all_pairs = |graph: &mut Building, alive: &Alive| {
+        let named: Vec<u32> = alive.iter().filter(|one| wanted(*one)).collect();
+        graph.link_group(&named);
     };
 
     let targets: BTreeSet<i64> = body.blocks.iter().flat_map(|block| block.succ.iter().copied()).collect();
@@ -831,18 +931,25 @@ pub fn _interference_among(
         })
     });
     for (block_index, block) in body.blocks.iter().enumerate() {
-        let mut alive: BTreeSet<u32> = rows.leaving(block.at).into_iter().filter(|one| wanted(*one)).collect();
         if let Some(touched) = &touched {
+            // A quiet block (no value asked of in it, no entry, no phi, no
+            // parallel copy with two live) adds no pair, and what
+            // is live at its end is asked of the others only.
             let quiet = !touched.contains(&block_index)
                 && !entries.contains(&block.at)
                 && block.phis.is_empty()
-                && (alive.len() < 2 || !block.insns.iter().any(|one| one.group.is_some()));
+                && (!block.insns.iter().any(|one| one.group.is_some())
+                    || rows.leaving(block.at).into_iter().filter(|one| wanted(*one)).nth(1).is_none());
             if quiet {
                 continue;
             }
         }
+        let mut alive = Alive::of(only.is_some(), rows.leaving(block.at).into_iter().filter(|one| wanted(*one)));
         if entries.contains(&block.at) {
-            all_pairs(&mut graph, &rows.entering(block.at).into_iter().filter(|one| wanted(*one)).collect());
+            all_pairs(
+                &mut graph,
+                &Alive::of(only.is_some(), rows.entering(block.at).into_iter().filter(|one| wanted(*one))),
+            );
         }
         // The positions to walk, last first; every one where not asked of a
         // few.
@@ -883,7 +990,7 @@ pub fn _interference_among(
                 let mut before = alive.clone();
                 for item in group {
                     for value in &item.defines {
-                        before.remove(value);
+                        before.remove(*value);
                     }
                 }
                 for item in group {
@@ -917,21 +1024,49 @@ pub fn _interference_among(
                 }
             }
             for value in &one.defines {
-                for other in &alive {
-                    if Some(*other) != equal {
-                        edge(&mut graph, *value, *other);
+                if !wanted(*value) {
+                    continue;
+                }
+                match &alive {
+                    // The whole body: the pairs one at a time, as the tree is
+                    // walked.
+                    Alive::Tree(set) => {
+                        for other in set {
+                            if Some(*other) != equal && other != value && wanted(*other) {
+                                graph.link(*value, *other);
+                            }
+                        }
+                    }
+                    Alive::Bits(_) => {
+                        let near: Vec<u32> = alive
+                            .iter()
+                            .filter(|other| Some(*other) != equal && *other != *value && wanted(*other))
+                            .collect();
+                        graph.link_all(*value, &near);
                     }
                 }
             }
             for value in &one.defines {
-                alive.remove(value);
+                alive.remove(*value);
             }
             alive.extend(one.uses.iter().copied().filter(|value| wanted(*value)));
             index -= 1;
         }
         for value in block.arrives() {
-            for other in &alive {
-                edge(&mut graph, value, *other);
+            if wanted(value) {
+                match &alive {
+                    Alive::Tree(set) => {
+                        for other in set {
+                            if *other != value && wanted(*other) {
+                                graph.link(value, *other);
+                            }
+                        }
+                    }
+                    Alive::Bits(_) => {
+                        let near: Vec<u32> = alive.iter().filter(|other| *other != value && wanted(*other)).collect();
+                        graph.link_all(value, &near);
+                    }
+                }
             }
         }
     }
@@ -946,16 +1081,83 @@ struct Building {
     rows: Vec<Neighbours>,
     seen: Vec<bool>,
     order: Vec<u32>,
+    /// Rows are bits from the start (a few values asked of), not trees that
+    /// turn to bits.
+    bits: bool,
 }
 
 impl Building {
+    fn bits() -> Self {
+        Self { bits: true, ..Self::default() }
+    }
+
+    /// `value` next to each of `others`, in their order.
+    fn link_all(
+        &mut self,
+        value: u32,
+        others: &[u32],
+    ) {
+        if others.is_empty() {
+            return;
+        }
+        if !self.bits {
+            for other in others {
+                self.link(value, *other);
+            }
+            return;
+        }
+        self.touch(value);
+        let most = others.iter().copied().max().expect("not empty") as usize;
+        let mut mask = vec![0u64; most / 64 + 1];
+        for other in others {
+            self.touch(*other);
+            self.rows[*other as usize].insert(value);
+            mask[*other as usize / 64] |= 1u64 << (*other % 64);
+        }
+        self.rows[value as usize].join(&mask, value);
+    }
+
+    /// Every value of `group` next to every other.
+    fn link_group(
+        &mut self,
+        group: &[u32],
+    ) {
+        // A value alone is next to nothing, and is no node of the graph for it.
+        if group.len() < 2 {
+            return;
+        }
+        if !self.bits {
+            for value in group {
+                for other in group {
+                    if value != other {
+                        self.link(*value, *other);
+                    }
+                }
+            }
+            return;
+        }
+        let most = *group.iter().max().expect("not empty") as usize;
+        let mut mask = vec![0u64; most / 64 + 1];
+        for value in group {
+            mask[*value as usize / 64] |= 1u64 << (*value % 64);
+        }
+        for value in group {
+            self.touch(*value);
+            self.rows[*value as usize].join(&mask, *value);
+        }
+    }
+
     fn touch(
         &mut self,
         value: u32,
     ) {
         let at = value as usize;
         if at >= self.rows.len() {
-            self.rows.resize_with(at + 1, Neighbours::default);
+            if self.bits {
+                self.rows.resize_with(at + 1, || Neighbours::Dense { words: Vec::new(), len: 0 });
+            } else {
+                self.rows.resize_with(at + 1, Neighbours::default);
+            }
             self.seen.resize(at + 1, false);
         }
         if !self.seen[at] {
@@ -1468,5 +1670,84 @@ mod tests {
                 "pinned={pinned}"
             );
         }
+    }
+}
+
+/// The values live at a point: bits while a few values are asked of (a web), a
+/// tree for the whole body, where the values are many and a bit set is walked
+/// word by word.
+#[derive(Clone)]
+enum Alive {
+    Bits(Vec<u64>),
+    Tree(BTreeSet<u32>),
+}
+
+impl Alive {
+    fn of(
+        bits: bool,
+        values: impl IntoIterator<Item = u32>,
+    ) -> Self {
+        let mut alive = if bits { Self::Bits(Vec::new()) } else { Self::Tree(BTreeSet::new()) };
+        alive.extend(values);
+        alive
+    }
+
+    fn insert(
+        &mut self,
+        value: u32,
+    ) {
+        match self {
+            Self::Bits(words) => {
+                let at = value as usize / 64;
+                if at >= words.len() {
+                    words.resize(at + 1, 0);
+                }
+                words[at] |= 1u64 << (value % 64);
+            }
+            Self::Tree(set) => {
+                set.insert(value);
+            }
+        }
+    }
+
+    fn remove(
+        &mut self,
+        value: u32,
+    ) {
+        match self {
+            Self::Bits(words) => {
+                if let Some(word) = words.get_mut(value as usize / 64) {
+                    *word &= !(1u64 << (value % 64));
+                }
+            }
+            Self::Tree(set) => {
+                set.remove(&value);
+            }
+        }
+    }
+
+    /// The members, ascending.
+    fn iter(&self) -> Box<dyn Iterator<Item = u32> + '_> {
+        match self {
+            Self::Bits(words) => Box::new(words.iter().enumerate().flat_map(|(at, word)| {
+                let mut rest = *word;
+                std::iter::from_fn(move || {
+                    if rest == 0 {
+                        return None;
+                    }
+                    let bit = rest.trailing_zeros();
+                    rest &= rest - 1;
+                    Some(at as u32 * 64 + bit)
+                })
+            })),
+            Self::Tree(set) => Box::new(set.iter().copied()),
+        }
+    }
+
+    fn extend(
+        &mut self,
+        values: impl IntoIterator<Item = u32>,
+    ) {
+        values.into_iter().for_each(|value| self.insert(value));
     }
 }

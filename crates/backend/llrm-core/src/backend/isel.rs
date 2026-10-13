@@ -1,15 +1,159 @@
-//! Instruction selection from MIR: each function's instructions as LIR over
-//! virtual registers, as LLVM's SelectionDAG makes MachineInstrs. It chooses
-//! instructions and addressing only; two-address form, registers and the
-//! frame's size are the machine phases'.
+//! Instruction selection: one MIR function becomes LIR over virtual registers,
+//! as LLVM's SelectionDAG makes MachineInstrs.
+//!
+//! # How it works
+//! Selection chooses instructions and addressing. Two-address form, registers
+//! and the frame's size are left to the machine phases. The rules that choose
+//! are data, not code in this file: they are generated at build time and run by
+//! `isel/matcher.rs`.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   s["<b>family.isel +</b><br/><small>target patterns.isel +<br/>x86.instr</small>"]:::mid
+//!   c["<b>Compiled: automaton states,</b><br/><small>holds, cost, emit<br/>(one per target)</small>"]:::mid
+//!   m["<b>MIR function</b>"]:::mid
+//!   bd["<b>Selector::body: frame</b><br/><small>objects, edges,<br/>entry instructions</small>"]:::mid
+//!   bl["<b>blocks of LIR, phis,</b><br/><small>terminators</small>"]:::mid
+//!   l["<b>LirBody</b>"]:::mid
+//!   s -->|"llrm-iselgen"| c
+//!   m -->|"selected_with: analyses,<br/>convention, parameters"| bd
+//!   bd -->|"each instruction, in reverse<br/>postorder: features, automaton,<br/>candidates, holds/cost, emit"| bl
+//!   bl -->|"unread halves dropped,<br/>combined, widen,<br/>landing-pad root"| l
+//! ```
+//!
+//! *Instruction selection: build time (build.rs, top), run time per function
+//! (bottom)*
+//!
+//! ## Rules from generated definitions
+//! A target's `patterns.isel` is spliced into the x86 family's file, and
+//! `llrm-iselgen` checks every `emit` against the forms in `x86.instr`. Each
+//! pattern has one `match` line (opcode, result type, operand kinds and types,
+//! nested defining instructions), optional `when` predicates, `let` operand
+//! constructors, and a body: `emit` a form, `call` a hook written by hand
+//! (`hook_` in `matcher.rs`), `chain` an operation on a wide integer as its
+//! halves, `refuse` or `nothing`. `group` members with a `cost` compete; a
+//! pattern with `cover` takes over a nested instruction. The generator turns
+//! the `match` lines into a decision automaton, as TableGen merges common
+//! prefixes, and the rest into `holds`, `cost` and `emit` functions.
+//!
+//! ## Matching
+//! For an instruction the matcher computes its features (opcode, result type,
+//! and each operand's kind and type, up to three operands; a constant first
+//! operand of a commutative opcode is swapped second) and walks the automaton
+//! to a leaf: the patterns still standing, in file order. The first whose
+//! `when` predicates hold is chosen; if it is in a group, the cheapest holding
+//! member of the group is. Its `emit` appends LIR. A shape no pattern takes is
+//! refused, by the opcode's name.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   i["<b>add i16 %a, 7</b>"]:::mid
+//!   f["<b>features</b><br/><small>[add, i16, value, i16, int,<br/>i16, none, none ...]</small>"]:::mid
+//!   l["<b>leaf</b><br/><small>[selected_elsewhere,<br/>arithmetic_promoted,<br/>arithmetic]</small>"]:::mid
+//!   e["<b>arithmetic</b><br/><small>emit add result #lt;- x, y<br/>x = held(a), y = source(7)</small>"]:::mid
+//!   i --> f
+//!   f -->|"automaton: opcode? -#gt;<br/>type? -#gt; operand kinds? ..."| l
+//!   l -->|"holds(): first that holds<br/>(when promoted may fail)"| e
+//! ```
+//!
+//! *Selecting add i16 %a, 7*
+//!
+//! Decisions that need more than the instruction are made first, per
+//! instruction, before any is emitted: a comparison read only by its block's
+//! branch stays flags (`fuse`); a dword load read only through `trunc` is two
+//! word loads (`narrowed`); a quotient and a remainder of the same operands are
+//! one division (`pair`); the first covering pattern that holds marks what it
+//! covers (`covered_by_pattern`), and that instruction is then selected by the
+//! cover alone.
+//!
+//! ## What the hooks cover
+//! What is not pattern-shaped is in this file: calls (the convention decides
+//! what is pushed, passed in registers and popped, `called`), `memcpy` and
+//! `memset` (by pieces or `rep`), float conversions and compares, far pointers
+//! as an offset and a selector (`fars`), address arithmetic folded into memory
+//! operands (`indexed`), `switch`, and branch conditions merged into one chain.
+//! Allocas get frame cells (`alloca_groups`, `Selected::extents`); a parameter
+//! arrives in a cell or in registers, delivered by an entry instruction.
+//!
+//! ## Wide integers
+//! An integer wider than the target's native one is two halves, low first
+//! (`wide.rs`, `expand.rs`): `chain` patterns for add, sub and the bit
+//! operations, hooks for the rest. A value's sign bits can show that a product
+//! or quotient of 32-bit values needs one instruction.
+//!
+//! ```text
+//!  add i64 %a, %b  (32-bit target)
+//!    add  lo <- a.lo, b.lo
+//!    adc  hi <- a.hi, b.hi        takes the carry of the half below
+//! ```
+//!
+//! ## After the instructions
+//! Wide halves nothing reads are dropped. `combined` then makes the selections
+//! that need neighbours; `widen` marks exact address sums and makes a word
+//! value used as a dword address component a dword one
+//! (`addressforms::promote`); if the function has a landing pad, `rooted` adds
+//! a root block that reaches it. Block frequencies and branch odds are set from
+//! the MIR's.
+//!
+//! # Example
+//! Before, the loop of `Acc.run` inlined into `main` (the MIR `-O2` leaves):
+//!
+//! ```mir
+//! 2:
+//!   %lsr.iv1 = phi i16 [ -7, %b1 ], [ %lsr.iv.next, %2 ]
+//!   %3 = load i16, ptr addrspace(5) %1
+//!   %4 = add i16 %3, 3
+//!   store i16 %4, ptr addrspace(5) %1
+//!   %lsr.iv.next = add i16 %lsr.iv1, 1
+//!   %5 = icmp ne i16 %lsr.iv.next, 0
+//!   br i1 %5, label %2, label %6
+//! ```
+//!
+//! After, the block as the first machine phase receives it:
+//!
+//! ```lir
+//!     block 0x0004
+//!       v5 := phi 0x0000:v1 0x0004:v4
+//!       ; ...
+//!       0x0007  [[abs+0x0] v2@unplaced] := add [[abs+0x0] v2@unplaced], 0x3  ; inserted
+//!       0x0008  v4 := add v5, 0x1  ; inserted
+//!       0x000a  cmp v4, 0x0  ; inserted
+//!       0x000a  jne   ; inserted
+//! ```
+//!
+//! The load, add and store of one cell are one `add` on memory, and the
+//! compare and branch are `cmp` and `jne`; registers are still virtual.
+//!
+//! From `ISEL_DUMP=1` of a nib program (a struct method with a `while` loop,
+//! called from `main`) at `-m16 -O2`, stage `FarIndirectCalls`.
+//!
+//! # Runs
+//! First of the staged phases in `assemble::staged`, once per function and
+//! again at -Omax where a callee's known register effects were used (the second
+//! run selects without them and the cheaper is kept). Its output is the input
+//! of `framefree` and `frame::of`.
+//!
+//! # Needs
+//! `llrm_analysis` (CFG shape, memory, constants, ranges) for what the
+//! patterns' predicates ask; [`crate::backend::calleefacts`] for the registers
+//! a callee writes; the target's [`crate::backend::isel::Compiled`].
+//!
+//! # See also
+//! `docs/machine/targets.md`; LLVM `SelectionDAGISel`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use iced_x86::Register;
 use llrm_analysis::cfg;
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::ranges::{self, Facts};
+use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
@@ -94,7 +238,7 @@ pub enum Parameter {
     /// A `byval` aggregate: its bytes are the stack's from here up, and the
     /// parameter is their address.
     Bytes(i64),
-    Registers(Vec<Register>),
+    Registers(Vec<RegId>),
 }
 
 /// Where a function's parameters arrive and its result leaves, as its
@@ -103,12 +247,12 @@ pub enum Parameter {
 pub struct Convention {
     pub parameters: Vec<Parameter>,
     /// The registers a result leaves in, low part first.
-    pub returns: Vec<Register>,
+    pub returns: Vec<RegId>,
     /// The bytes the function pops as it returns.
     pub popped: i64,
     /// The registers its prologue may save: the convention's, but those its
     /// parameters arrive in.
-    pub saved: Vec<(Register, Register)>,
+    pub saved: Vec<(RegId, RegId)>,
 }
 
 /// How a calling convention pushes arguments and who pops them. C pushes
@@ -385,7 +529,7 @@ fn results(
     arch: &dyn llrm_target::Target,
     entry: Option<&llrm_target::calling::Convention>,
     width: u32,
-) -> Vec<Register> {
+) -> Vec<RegId> {
     entry.map_or_else(|| arch.results(width), |one| llrm_x86::calling::results(one, width))
 }
 
@@ -423,15 +567,15 @@ fn saved(
     arch: &dyn llrm_target::Target,
     entry: Option<&llrm_target::calling::Convention>,
     parameters: &[Parameter],
-    returns: &[Register],
-) -> Vec<(Register, Register)> {
+    returns: &[RegId],
+) -> Vec<(RegId, RegId)> {
     // What the function's own convention keeps, not the target's default's.
     let Some(entry) = entry else { return arch.callee_saved() };
     let kept = llrm_x86::calling::callee_saved(entry);
     if !(entry.arguments_clobbered || entry.results_clobbered) {
         return kept;
     }
-    let changed: Vec<Register> = parameters
+    let changed: Vec<RegId> = parameters
         .iter()
         .filter_map(
             |one| if let Parameter::Registers(registers) = one { Some(registers.iter().copied()) } else { None },
@@ -603,7 +747,8 @@ const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
 /// The width of a float value in LIR: x87's extended precision.
 const FLOAT: u32 = 10;
 
-/// The most stores a memset expands to, as LLVM's x86 MaxStoresPerMemset.
+/// The most stores a memset expands to where the CPU states no ratio, as
+/// LLVM's x86 MaxStoresPerMemset.
 const MEMSET_STORES: i64 = 16;
 
 /// The most load and store pairs a memcpy expands to, as LLVM's x86
@@ -664,40 +809,23 @@ enum Pointer {
         disp: i64,
         index: Option<Held>,
         scale: i64,
+        /// The frame object the address was made from, where `disp` may lie
+        /// outside it (a strength-reduced index): the slot its cells belong to.
+        /// None: the slot `disp` lies in.
+        home: Option<i64>,
     },
     /// `segment` is the register a stack pointer is read through; none, DS.
-    Based {
-        base: Held,
-        index: Option<Held>,
-        scale: i64,
-        offset: i64,
-        segment: Option<Register>,
-    },
+    Based { base: Held, index: Option<Held>, scale: i64, offset: i64, segment: Option<RegId> },
     /// A near global's symbol, a displacement from it, and a register
     /// holding a variable one, times `scale`: a scaled one is a dword index.
     /// A second register `plus`, added unscaled, makes the `[bx+si+symbol]`
     /// form.
-    Global {
-        space: Space,
-        index: i64,
-        offset: i64,
-        base: Option<Held>,
-        scale: i64,
-        plus: Option<Held>,
-    },
+    Global { space: Space, index: i64, offset: i64, base: Option<Held>, scale: i64, plus: Option<Held> },
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
-    Far {
-        selector: Held,
-        base: Option<Held>,
-        index: Option<Held>,
-        scale: i64,
-        offset: i64,
-    },
+    Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
     /// A near address no global owns, a constant: `[disp16]`.
-    Absolute {
-        offset: i64,
-    },
+    Absolute { offset: i64 },
 }
 
 /// `LLRM_CHECK_CALLEES=1`: the callees' effects selection was given are what a
@@ -755,7 +883,7 @@ pub fn selected_with<'c>(
     // each.
     let exposed = llrm_analysis::memory::exposed_frames(&unit);
     let unit = unit.with_exposed(&exposed);
-    let registers = llrm_analysis::consts::known(&unit, None, None, None);
+    let registers = llrm_analysis::consts::known(&unit);
     let unit = unit.with_registers(&registers);
     // One solve of the scoped bounds serves the exact offsets and, below, the
     // dword-indexed accesses.
@@ -862,7 +990,8 @@ pub fn selected_with<'c>(
     body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
     body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.cfa_variables = true;
-    let mut body = noted(module, function, name, &selector.ats, &selector.values, &selector.variables, body);
+    let mut body =
+        noted(module, function, name, &selector.ats, &selector.values, &selector.wides, &selector.variables, body);
     // An argument the caller pushed is in its cell from the entry.
     let named = body.named_values();
     let cells: Vec<(u32, i64, u32)> = function
@@ -941,7 +1070,20 @@ pub(crate) fn parameters(
                 // took it out.
                 None => DebugPlace::Gone,
             };
-            Some(DebugVariable { name, r#type, place, parameter: true, argument: None, arrives: None })
+            // A parameter in a register says which of the registers the entry
+            // delivers it is, as they come in the order of
+            // the parameters (a register's name there is the allocator's, and
+            // is not the convention's).
+            let argument = match (&place, at) {
+                (DebugPlace::Register(_), Some(at)) => Some(
+                    convention.parameters[..at]
+                        .iter()
+                        .map(|one| if let Parameter::Registers(registers) = one { registers.len() as i64 } else { 0 })
+                        .sum(),
+                ),
+                _ => None,
+            };
+            Some(DebugVariable { name, r#type, place, parameter: true, argument, arrives: None })
         })
         .collect()
 }
@@ -1073,6 +1215,7 @@ fn noted(
     name: &str,
     ats: &IndexMap<InstId, i64>,
     values: &IndexMap<ValueId, u32>,
+    wides: &IndexMap<ValueId, (Held, Held)>,
     declared: &[(String, DebugVariable)],
     body: LirBody,
 ) -> LirBody {
@@ -1099,6 +1242,17 @@ fn noted(
     // What the records say, by where each stands.
     let mut said_at: Vec<(i64, u32, Option<(u32, u32)>, NoteValue)> = Vec::new();
     for record in function.debug_records() {
+        // A value held in two registers (an i64's dwords on a 32-bit target, a
+        // long's words on a 16-bit one) is said as the two pieces it is.
+        if let llrm_mir::DebugWhat::Value(llrm_mir::Operand::Value(one)) = record.what
+            && let Some(&(low, high)) = wides.get(&one)
+            && let Some(&at) = ats.get(&record.before)
+        {
+            let bytes = low.width;
+            said_at.push((at, record.variable.0, Some((0, bytes)), NoteValue::Value(low.value)));
+            said_at.push((at, record.variable.0, Some((bytes, high.width)), NoteValue::Value(high.value)));
+            continue;
+        }
         let (value, piece) = match record.what {
             llrm_mir::DebugWhat::Declare(_) => continue,
             llrm_mir::DebugWhat::Value(one) => (said(one), None),
@@ -1146,6 +1300,30 @@ fn noted(
     for variable in function.debug_dropped() {
         notes.push(DebugNote { variable: variable.0, piece: None, value: NoteValue::Nothing });
     }
+    // A parameter that arrives in a register has no record of its own where
+    // nothing was optimised (it is no cell's): it is said to be in its
+    // register from the entry, as a note, and the tracking that follows a
+    // variable the code moves says for how long. Its number is past the
+    // metadata's.
+    let arrivals: Vec<(RegId, u32)> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .find(|one| one.arrival())
+        .map(|one| one.delivers.iter().map(|(held, register)| (*register, held.value)).collect())
+        .unwrap_or_default();
+    let mut entry_notes: Vec<u32> = Vec::new();
+    for (index, variable) in body.variables.iter_mut().enumerate() {
+        let (DebugPlace::Register(_), Some(delivered)) = (&variable.place, variable.argument) else { continue };
+        let Some(&(_, vreg)) = usize::try_from(delivered).ok().and_then(|delivered| arrivals.get(delivered)) else {
+            continue;
+        };
+        let node = u32::MAX - u32::try_from(index).expect("a few variables");
+        entry_notes.push(u32::try_from(notes.len()).expect("a few notes"));
+        notes.push(DebugNote { variable: node, piece: None, value: NoteValue::Value(vreg) });
+        named.insert(vreg);
+        variable.place = DebugPlace::Tracked(node);
+    }
     if notes.is_empty() {
         return body;
     }
@@ -1162,7 +1340,10 @@ fn noted(
                 .map(|one| {
                     let ats_here: Vec<i64> =
                         before.keys().copied().filter(|&at| at <= one.at && !taken.contains(&at)).collect();
-                    let ahead: Vec<u32> = ats_here.iter().flat_map(|at| before[at].iter().copied()).collect();
+                    let mut ahead: Vec<u32> = ats_here.iter().flat_map(|at| before[at].iter().copied()).collect();
+                    if one.arrival() {
+                        ahead.extend(&entry_notes);
+                    }
                     // An argument is made where the function is entered, by the
                     // instruction that says where each
                     // arrives: it tells which, by position, as the registers it
@@ -1379,7 +1560,7 @@ pub struct Selector<'m, 'c, 'p> {
     merges: IndexMap<InstId, (bool, InstId, InstId)>,
     /// The frame starts its locals zeroed, as B$ENRA zero-fills them.
     zeroed: bool,
-    pins: IndexMap<u32, Register>,
+    pins: IndexMap<u32, RegId>,
     inputs: BTreeSet<u32>,
     /// Each call's contract and register interface, from the ABI that
     /// knows the callee.
@@ -1471,7 +1652,7 @@ impl Selector<'_, '_, '_> {
                             },
                         );
                     let address = function.instruction(inst).result.expect("an address");
-                    self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1 });
+                    self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1, home: Some(disp) });
                     self.frame_objects.push((disp, size));
                     if exposed.contains(&address) {
                         reach.insert((disp, disp + size));
@@ -1539,7 +1720,7 @@ impl Selector<'_, '_, '_> {
         }
         let entry = function.entry().expect("a body");
         let mut prologue = Vec::new();
-        let mut arrived: Vec<(Held, Register)> = Vec::new();
+        let mut arrived: Vec<(Held, RegId)> = Vec::new();
         for (index, (&parameter, place)) in function.parameters().iter().zip(&convention.parameters).enumerate() {
             // Only a used argument is loaded, as a DAG has no node for an
             // unused one; one `-g` names and a debug format
@@ -1556,7 +1737,7 @@ impl Selector<'_, '_, '_> {
                 // Its own bytes are the stack's: the value is their address,
                 // and the body reaches the frame through it.
                 Parameter::Bytes(disp) => {
-                    self.pointers.insert(parameter, Pointer::Frame { disp: *disp, index: None, scale: 1 });
+                    self.pointers.insert(parameter, Pointer::Frame { disp: *disp, index: None, scale: 1, home: None });
                     self.unsealed = true;
                     continue;
                 }
@@ -1615,7 +1796,7 @@ impl Selector<'_, '_, '_> {
             // An interrupt handler's one parameter is the address of the
             // registers it saved.
             if function.calling_convention == llrm_mir::opcode::X86_INTR {
-                self.pointers.insert(parameter, Pointer::Frame { disp, index: None, scale: 1 });
+                self.pointers.insert(parameter, Pointer::Frame { disp, index: None, scale: 1, home: None });
                 self.unsealed = true;
                 continue;
             }
@@ -1624,7 +1805,7 @@ impl Selector<'_, '_, '_> {
                 self.float_loaded(
                     held,
                     "fld",
-                    Pointer::Frame { disp, index: None, scale: 1 },
+                    Pointer::Frame { disp, index: None, scale: 1, home: None },
                     size,
                     false,
                     block_at[&entry],
@@ -1634,7 +1815,7 @@ impl Selector<'_, '_, '_> {
             }
             if self.is_far(function.value(parameter).ty) {
                 let (offset, selector) = self.far_loaded(
-                    Pointer::Frame { disp, index: None, scale: 1 },
+                    Pointer::Frame { disp, index: None, scale: 1, home: None },
                     false,
                     block_at[&entry],
                     &mut prologue,
@@ -2772,7 +2953,7 @@ impl Selector<'_, '_, '_> {
         // The list holds a near data pointer.
         let width = self.layout.pointer(self.spaces.data).bits / 8;
         let held = Held { value: self.fresh(), width };
-        out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1 }, held)));
+        out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1, home: None }, held)));
         let list = self.pointer(arguments[0])?;
         out.push(insn(
             at,
@@ -2798,7 +2979,7 @@ impl Selector<'_, '_, '_> {
             }
             Pointer::Frame { disp, index: None, .. } => {
                 let address = AddressRef {
-                    through: Register::BP,
+                    through: RegId::BP,
                     disp_width: 2,
                     ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
                 };
@@ -2895,7 +3076,7 @@ impl Selector<'_, '_, '_> {
         moved: Pointer,
         ty: TypeId,
     ) -> Pointer {
-        let (Pointer::Frame { disp: from, .. }, Pointer::Frame { disp: to, index, scale }) = (base, moved) else {
+        let (Pointer::Frame { disp: from, .. }, Pointer::Frame { disp: to, index, scale, home }) = (base, moved) else {
             return moved;
         };
         let Type::Pointer(space) = self.types().get(ty) else { return moved };
@@ -2910,7 +3091,7 @@ impl Selector<'_, '_, '_> {
             return moved;
         };
         let inside = object + (to - object).rem_euclid(wrap);
-        if inside <= object + size { Pointer::Frame { disp: inside, index, scale } } else { moved }
+        if inside <= object + size { Pointer::Frame { disp: inside, index, scale, home } } else { moved }
     }
 
     /// A global's address, and a constant displacement from it. A far
@@ -3207,7 +3388,9 @@ impl Selector<'_, '_, '_> {
                     Some(Pointer::Based { base, index: Some(sum), scale: 1, offset, segment })
                 }
                 _ if chained && !self.only_addressed(address) => None,
-                Pointer::Frame { disp, index: None, .. } => Some(Pointer::Frame { disp, index: Some(sum), scale: 1 }),
+                Pointer::Frame { disp, index: None, home, .. } => {
+                    Some(Pointer::Frame { disp, index: Some(sum), scale: 1, home })
+                }
                 Pointer::Far { selector, base: Some(base), index: None, offset, .. } => {
                     Some(Pointer::Far { selector, base: Some(base), index: Some(sum), scale: 1, offset })
                 }
@@ -3616,7 +3799,9 @@ impl Selector<'_, '_, '_> {
         };
         let wide = Held { value: self.value(index), width: 4 };
         let (scaled, base) = match pointer {
-            Pointer::Frame { disp, index: None, .. } => (Pointer::Frame { disp, index: Some(wide), scale }, None),
+            Pointer::Frame { disp, index: None, home, .. } => {
+                (Pointer::Frame { disp, index: Some(wide), scale, home }, None)
+            }
             // A dword base is the wide register already; a word one is widened
             // where defined.
             Pointer::Based { base, index: None, offset, segment, .. }
@@ -3953,19 +4138,30 @@ impl Selector<'_, '_, '_> {
     ) -> Mem {
         match pointer {
             Pointer::Frame { disp, index: None, .. } => frame(disp, width),
-            // As addressforms spells an indexed frame cell: BP and the index,
-            // the displacement a literal no relocation owns, through SS. A
-            // dword index is the 67h form's, whose base is EBP.
-            Pointer::Frame { disp, index: Some(index), scale } => Mem {
-                through: if index.width == 4 { Register::EBP } else { Register::BP },
-                disp_width: 2,
-                index: Some(index),
-                scale,
-                ..Mem::new(
-                    Some(Addr { segment: regs.stack_segment_register(), ..Addr::new(Space::Literal, disp) }),
-                    width,
-                )
-            },
+            // A frame cell and an index: the frame's until layout resolves it,
+            // through BP, or EBP for a dword index (the 67h form's base).
+            // A frame cell and an index: the frame's until layout resolves it,
+            // through BP, or EBP for a dword index (the 67h form's base). It
+            // reaches the whole object its address was made from, which a based
+            // address says (`overlap`): the register is its `base`.
+            Pointer::Frame { disp, index: Some(index), scale, home } => {
+                let through = if index.width == 4 { RegId::EBP } else { RegId::BP };
+                let cell = frame(disp, width);
+                Mem {
+                    through,
+                    index: Some(index),
+                    scale,
+                    addr: cell
+                        .addr
+                        .map(
+                            |addr| {
+                                let addr = Addr { base: through.iced(), ..addr };
+                                home.map_or(addr, |home| addr.in_slot(home))
+                            },
+                        ),
+                    ..cell
+                }
+            }
             Pointer::Global { space, index, offset, base, scale: 1, plus } => Mem {
                 disp_width: 2,
                 base,
@@ -3989,7 +4185,7 @@ impl Selector<'_, '_, '_> {
                 base: Some(base),
                 offset,
                 disp_width: 2,
-                ..Mem::new(Some(Addr { segment, ..Addr::new(Space::Literal, offset) }), width)
+                ..Mem::new(Some(Addr { segment: segment.iced(), ..Addr::new(Space::Literal, offset) }), width)
             },
             // An indexed cell's displacement is a literal, as a based cell's is
             // in addressforms.
@@ -4001,7 +4197,7 @@ impl Selector<'_, '_, '_> {
                 disp_width: 2,
                 ..Mem::new(
                     Some(Addr {
-                        segment: segment.unwrap_or(Addr::new(Space::Literal, offset).segment),
+                        segment: (segment.unwrap_or(RegId::from(Addr::new(Space::Literal, offset).segment))).iced(),
                         ..Addr::new(Space::Literal, offset)
                     }),
                     width,
@@ -4014,7 +4210,7 @@ impl Selector<'_, '_, '_> {
                 base,
                 index,
                 selector: Some(selector),
-                ..Mem::new(Some(Addr { segment: regs.far(), ..Addr::new(Space::Far, offset) }), width)
+                ..Mem::new(Some(Addr { segment: regs.far().iced(), ..Addr::new(Space::Far, offset) }), width)
             },
         }
     }
@@ -4574,7 +4770,7 @@ impl Selector<'_, '_, '_> {
     fn listed(
         &self,
         effects: llrm_mir::memory::Effects,
-        disturbs: BTreeSet<Register>,
+        disturbs: BTreeSet<RegId>,
     ) -> Arc<crate::model::lir::CallMemory> {
         Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs })
     }
@@ -4928,7 +5124,7 @@ impl Selector<'_, '_, '_> {
                 let llrm_target::calling::Place::Registers(names) = place else { continue };
                 let argument = arguments[index];
                 let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
-                let registers: Vec<Register> = names.iter().map(|name| llrm_x86::calling::register(name)).collect();
+                let registers: Vec<RegId> = names.iter().map(|name| llrm_x86::calling::register(name)).collect();
                 if let [low, high] = registers[..] {
                     // A pair: an i64's dwords, a far pointer's offset and
                     // selector, or a long's words.
@@ -5013,10 +5209,10 @@ impl Selector<'_, '_, '_> {
                 // into it, as gcc does, and not stored to a
                 // cell and pushed from it.
                 if matches!(size, 4 | 8) && self.arch.object().bitness == 32 {
-                    let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+                    let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
                     let count = Loc::Imm(Imm { value: i64::from(size), width: 2, address: None });
                     out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp, count])));
-                    let top = Mem { through: Register::SP, disp_width: 0, ..Mem::new(None, size) };
+                    let top = Mem { through: RegId::SP, disp_width: 0, ..Mem::new(None, size) };
                     out.push(insn(
                         at,
                         semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(top)], vec![Loc::Held(held)]),
@@ -5136,13 +5332,13 @@ impl Selector<'_, '_, '_> {
                     .map(|name| llrm_x86::calling::register(name))
                     .map(|register| if register.is_gpr() { register.full_register32() } else { register })
                     .chain(unnamed)
-                    .collect::<BTreeSet<Register>>(),
+                    .collect::<BTreeSet<RegId>>(),
             )
         });
         let changed = changed.transpose()?;
         // What its convention says it disturbs, which a caller that keeps those
         // for its own caller saves before it.
-        let disturbs: BTreeSet<Register> = changed.clone().unwrap_or_else(|| {
+        let disturbs: BTreeSet<RegId> = changed.clone().unwrap_or_else(|| {
             let named =
                 self::entry(self.arch, convention, variadic).map(|entry| entry.clobbers(&[], None)).unwrap_or_default();
             named
@@ -5255,7 +5451,7 @@ impl Selector<'_, '_, '_> {
                 )
             }
         };
-        let whole: BTreeSet<Register> = self
+        let whole: BTreeSet<RegId> = self
             .arch
             .callee_saved()
             .into_iter()
@@ -5305,7 +5501,7 @@ impl Selector<'_, '_, '_> {
             Callee::Indirect(_) => {}
         }
         if contract.caller_cleanup > 0 {
-            let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+            let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
             let count = Loc::Imm(Imm { value: contract.caller_cleanup, width: 2, address: None });
             out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
         }
@@ -5352,7 +5548,7 @@ impl Selector<'_, '_, '_> {
         let bytes = i64::from(byval_bytes(self.module, &self.layout, self.arch, aggregate)?);
         let copy = self.layout.alloc_size(self.types(), aggregate) as i64;
         let from = self.pointer(source)?;
-        let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+        let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
         let count = Loc::Imm(Imm { value: bytes, width: if bytes > 0x7FFF { 4 } else { 2 }, address: None });
         out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp.clone(), count])));
         let base = self.fresh_held(self.address_bytes());
@@ -5370,6 +5566,27 @@ impl Selector<'_, '_, '_> {
         let each = if dwords > 1 { 4 } else { 8 };
         let setup = if dwords > 1 { 6 } else { 0 };
         setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
+    }
+
+    /// Whether a constant memset of `length` bytes is stores rather than a
+    /// fill: gcc's by-pieces rule (`default_use_by_pieces_infrastructure_p`,
+    /// targhooks.cc:1983): the stores are as many as the dwords and the pieces
+    /// of the tail, and are taken while they number under the CPU's ratio
+    /// (`CLEAR_RATIO` for zero, `SET_RATIO` for any other byte; the size
+    /// table's when tuned for size), else the CPU's stringop algorithm, `rep
+    /// stos`. A CPU whose ratios the description does not state (gcc's
+    /// algorithm for it is a loop or a call) keeps `MEMSET_STORES`.
+    fn stored_by_pieces(
+        &self,
+        zero: bool,
+        length: i64,
+    ) -> bool {
+        let stores = length / 4 + (length % 4).count_ones() as i64;
+        let ratio = self.cpu.operations.pieces(self.cpu.size, zero);
+        match ratio {
+            0 => stores <= MEMSET_STORES && !(self.cpu.size && Self::stored_bytes(length) > FILL_BYTES),
+            ratio => stores < ratio,
+        }
     }
 
     /// Whether a string operation names its segments: the target has selector
@@ -5701,8 +5918,7 @@ impl Selector<'_, '_, '_> {
         let imm = |value: i64, width: u32| Loc::Imm(Imm { value, width, address: None });
         let constant = byte.zip(self.constant(length, self.address_bytes()));
         if let Some((byte, length)) = constant
-            && length / 4 + (length % 4).count_ones() as i64 <= MEMSET_STORES
-            && !(self.cpu.size && Self::stored_bytes(length) > FILL_BYTES)
+            && self.stored_by_pieces(byte == 0, length)
         {
             // Two or more dwords store one register, as LLVM keeps a
             // memset's value in one: a dword immediate is four more bytes
@@ -6239,7 +6455,7 @@ impl Selector<'_, '_, '_> {
         self.scratch += size + size % 2;
         self.depth = self.depth.max(self.allocas + self.scratch);
         self.extents.push((-(self.allocas + self.scratch), size + size % 2));
-        Pointer::Frame { disp: -(self.allocas + self.scratch), index: None, scale: 1 }
+        Pointer::Frame { disp: -(self.allocas + self.scratch), index: None, scale: 1, home: None }
     }
 
     /// A float's `size` bytes stored to a stack temporary, where a push or
@@ -6305,7 +6521,7 @@ impl Pointer {
         by: i64,
     ) -> Pointer {
         match self {
-            Pointer::Frame { disp, index, scale } => Pointer::Frame { disp: disp + by, index, scale },
+            Pointer::Frame { disp, index, scale, home } => Pointer::Frame { disp: disp + by, index, scale, home },
             Pointer::Based { base, index, scale, offset, segment } => {
                 Pointer::Based { base, index, scale, offset: offset + by, segment }
             }
@@ -6324,7 +6540,7 @@ fn frame(
     disp: i64,
     width: u32,
 ) -> Mem {
-    Mem { through: Register::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), width) }
+    Mem { through: RegId::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), width) }
 }
 
 fn semantics(

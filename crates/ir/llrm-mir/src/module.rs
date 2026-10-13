@@ -133,11 +133,41 @@ pub struct Use {
 /// end when `next` is `None`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Change {
-    Inserted { inst: InstId, block: BlockId, next: Option<InstId> },
-    Cloned { from: InstId, to: InstId },
-    Moved { inst: InstId, block: BlockId, next: Option<InstId>, from: BlockId },
+    Inserted {
+        inst: InstId,
+        block: BlockId,
+        next: Option<InstId>,
+    },
+    Cloned {
+        from: InstId,
+        to: InstId,
+    },
+    Moved {
+        inst: InstId,
+        block: BlockId,
+        next: Option<InstId>,
+        from: BlockId,
+    },
     Rewritten(InstId),
-    Erased { inst: InstId, block: BlockId, next: Option<InstId> },
+    /// Operand `index` of `inst` was `was`: logged before the `Rewritten` of
+    /// the change, by what reads what an instruction read before (the
+    /// liveness of a value it stopped reading, the edge a branch stopped
+    /// taking).
+    Operand {
+        inst: InstId,
+        index: u32,
+        was: Operand,
+    },
+    /// The operands of `inst` were `was`, before the `Rewritten` that follows.
+    Operands {
+        inst: InstId,
+        was: Box<[Operand]>,
+    },
+    Erased {
+        inst: InstId,
+        block: BlockId,
+        next: Option<InstId>,
+    },
     BlockCreated(BlockId),
     BlockErased(BlockId),
 }
@@ -206,6 +236,11 @@ pub struct Mark {
 }
 
 impl Mark {
+    /// How many changes the function had logged at this point.
+    pub fn position(&self) -> usize {
+        self.at
+    }
+
     /// Whether `other` is a point in the same function's history: not a copy
     /// that took its own.
     pub fn same_history(
@@ -448,8 +483,12 @@ impl Function {
         &self,
         block: BlockId,
     ) -> Vec<BlockId> {
+        let operands = self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default();
+        if operands.len() > SCAN {
+            return Self::listed_once(operands);
+        }
         let mut out = Vec::new();
-        for operand in self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default() {
+        for operand in operands {
             if let Operand::Block(target) = operand
                 && !out.contains(target)
             {
@@ -459,13 +498,29 @@ impl Function {
         out
     }
 
+    /// The blocks `operands` name, once each, by a set: a switch of N cases
+    /// named N blocks, and a scan of what was listed for each was N^2.
+    #[cold]
+    fn listed_once(operands: &[Operand]) -> Vec<BlockId> {
+        let mut seen = crate::dense::IdSet::<u32>::new();
+        operands
+            .iter()
+            .filter_map(|operand| if let Operand::Block(target) = operand { Some(*target) } else { None })
+            .filter(|target| seen.insert(target.0))
+            .collect()
+    }
+
     /// The blocks whose terminators name `block`, once each.
     pub fn predecessors(
         &self,
         block: BlockId,
     ) -> Vec<BlockId> {
+        let users = self.block_users(block);
+        if users.len() > SCAN {
+            return self.parents_once(users);
+        }
         let mut out = Vec::new();
-        for one in self.block_users(block) {
+        for one in users {
             let user = one.user;
             if self.instruction(user).opcode.is_terminator()
                 && let Some(parent) = self.parent(user)
@@ -477,6 +532,21 @@ impl Function {
         out
     }
 
+    /// The blocks whose terminators are among `users`, once each, by a set.
+    #[cold]
+    fn parents_once(
+        &self,
+        users: &[Use],
+    ) -> Vec<BlockId> {
+        let mut seen = crate::dense::IdSet::<u32>::new();
+        users
+            .iter()
+            .filter(|one| self.instruction(one.user).opcode.is_terminator())
+            .filter_map(|one| self.parent(one.user))
+            .filter(|parent| seen.insert(parent.0))
+            .collect()
+    }
+
     /// Instructions in layout order, with their block.
     pub fn walk(&self) -> impl Iterator<Item = (BlockId, InstId)> + '_ {
         self.layout.iter().flat_map(move |&block| self.block(block).instructions.iter().map(move |&one| (block, one)))
@@ -485,7 +555,9 @@ impl Function {
     /// The log of changes since the last `take_changes`. They stay in the log,
     /// to `changes_since`, until it holds more than `LOG` of them.
     pub fn take_changes(&mut self) -> Vec<Change> {
-        const LOG: usize = 1 << 16;
+        // Twice what it was: the entries that tell what an operand was go with
+        // every rewrite.
+        const LOG: usize = 1 << 17;
         let kept_from = self.lineage.logged - self.changes.0.len();
         let out = self.changes.0[self.taken.max(kept_from) - kept_from..].to_vec();
         self.taken = self.lineage.logged;
@@ -507,6 +579,16 @@ impl Function {
     /// Where the function stands now.
     pub fn mark(&self) -> Mark {
         Mark { uid: self.lineage.uid, at: self.lineage.logged }
+    }
+
+    /// A copy to edit and put in this function's place, which carries on its
+    /// history: a mark taken of this one is a point in the copy's, and what
+    /// the copy logs follows it. For a copy that replaces the function, not
+    /// one kept beside it (`clone` is that: its edits are its own).
+    pub fn fork(&self) -> Self {
+        let mut copy = self.clone();
+        copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged };
+        copy
     }
 
     /// What changed since `mark`, in order; none where `mark` is of another
@@ -715,3 +797,6 @@ impl Module {
         }
     }
 }
+
+/// Operands scanned for a repeat before a set is used.
+const SCAN: usize = 16;

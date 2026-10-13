@@ -1,7 +1,57 @@
-//! A landing pad, which the runtime enters rather than an edge: the pad
-//! starts by forgetting every register, and the machine CFG reaches it by a
-//! branch from a root block that is never taken, as the old route's
-//! temporary side-entry switch reached an ON ERROR handler.
+//! Selects a landing pad, which the runtime enters rather than an edge reaches.
+//!
+//! # How it works
+//! The runtime transfers control to a pad with no register intact, so the pad
+//! begins with a pseudo-call, `__LANDING`, that clobbers every register and
+//! carries the one byte `cld`. `landing_pad` emits it and records the pad's
+//! position; a function has at most one pad, and its value must have no reader.
+//! Selection treats the pad's blocks as roots of reachability and selects them
+//! after the blocks the entry reaches.
+//!
+//! No edge leads to the pad, so `rooted` gives the function a new root block
+//! that compares the stack pointer with zero and branches to the pad on equal.
+//! The branch is never taken, and it makes the pad reachable in the machine
+//! CFG:
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   r["<b>root</b><br/><small>cmp sp, 0<br/>je pad</small>"]:::mid
+//!   e["<b>entry</b><br/><small>...</small>"]:::mid
+//!   p["<b>pad: __LANDING</b><br/><small>(cld#59; every register<br/>forgotten)<br/>...</small>"]:::mid
+//!   r --> e
+//!   r -.->|"never taken"| p
+//! ```
+//!
+//! *Landing-pad root block*
+//!
+//! # Example
+//! A QB program with `ON ERROR GOTO`. After selection the root block holds the
+//! never-taken branch, and the pad is a block that begins with the clobbering
+//! pseudo-call:
+//!
+//! ```lir
+//!     block 0x001d
+//!       0x001d  cmp SP, 0x0  ; inserted
+//!       0x001d  je   ; inserted
+//!     block 0x0000
+//!       ; ...
+//!     block 0x0007
+//!       0x0007  call   ; inserted; clobbers EAX,ECX,EDX,EBX,ES,DS,FS,GS
+//! ```
+//!
+//! From `ISEL_DUMP=1` of a QB program (`ON ERROR GOTO handler`, an `OPEN`, a
+//! `RESUME NEXT` handler) at `-O2`, stage `FarIndirectCalls`.
+//!
+//! # Runs
+//! During `Selector::body` (`pads`, `landing_pad`) and at its end (`rooted`);
+//! only in functions with a `landingpad`, which `ehprepare` has made enterable.
+//!
+//! # Needs
+//! [`crate::backend::ehprepare`]; the pad's registers contract is
+//! `abi::runtime::EVERY`.
 
 use std::sync::Arc;
 

@@ -1,7 +1,25 @@
-//! The contract of an inline routine the compiler places where an operation has
-//! no instruction (`llrm_x86::helpers`): what it reads and what it changes.
+//! The contract of an inline routine the compiler places where an operation
+//! has no instruction (`llrm_x86::helpers`): what it reads and what it changes.
+//!
+//! # How it works
+//! `_helper` makes the [`crate::abi::runtime::Contract`] of such a routine: it
+//! returns, pops nothing, reads and writes no memory, and clobbers the
+//! registers it is given. Its operands and results are in registers it
+//! states, and the clobber list describes the inline bytes exactly (it is not
+//! a separately called routine). `runtime_registers` maps register views
+//! (`AX`, `BL`, ...) to the runtime registers they belong to, and adds the
+//! flags where the routine changes them.
+//!
+//! # Example
+//! No honest example: this builds a routine's contract and rewrites no LIR.
+//! Read `isel/wide.rs` for the instructions that name it.
+//!
+//! # Used by
+//! `isel/wide` (64-bit arithmetic helpers) and `isel/unwind`.
 
 use std::collections::BTreeSet;
+
+use llrm_lir::registers::RegId;
 
 use crate::abi::runtime::{self, Reg};
 
@@ -40,16 +58,16 @@ pub(crate) fn _helper(
 /// The runtime registers `registers` are views of, and the flags too where
 /// `flags` says so.
 pub(crate) fn runtime_registers(
-    registers: &[iced_x86::Register],
+    registers: &[RegId],
     flags: bool,
 ) -> BTreeSet<Reg> {
     let mut out: BTreeSet<Reg> = registers
         .iter()
         .map(|register| match register.full_register32() {
-            iced_x86::Register::EAX => Reg::Ax,
-            iced_x86::Register::EBX => Reg::Bx,
-            iced_x86::Register::ECX => Reg::Cx,
-            iced_x86::Register::EDX => Reg::Dx,
+            RegId::EAX => Reg::Ax,
+            RegId::EBX => Reg::Bx,
+            RegId::ECX => Reg::Cx,
+            RegId::EDX => Reg::Dx,
             other => panic!("an inline routine names {other:?}"),
         })
         .collect();

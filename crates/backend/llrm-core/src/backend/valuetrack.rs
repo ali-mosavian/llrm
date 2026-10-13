@@ -1,26 +1,72 @@
-//! Where the value a variable has is, over the code as it was emitted: LLVM's
-//! instruction-referencing LiveDebugValues (`InstrRefBasedLDV`), after the
-//! allocator and every pass that follows it.
+//! Where each `-g` variable's value is over the emitted code.
 //!
-//! Instruction selection tells which instructions define a value `-g` names,
-//! and masm marks where each landed (`Mark::Def`: the register or frame cell
-//! the instruction before the mark wrote) and where a variable takes a value
-//! (`Mark::Note`). Nothing else of the allocator is read. The code is decoded
-//! and followed from its entry along every path, with what each register and
-//! frame cell holds: a move copies it, any other write loses it, a call loses
-//! what the callee clobbers, and where paths join only what all of them agree
-//! on is kept. A variable is where its value is: a register if one holds it,
-//! else a cell.
+//! # How it works
+//! Instruction selection says which instructions define a value a variable
+//! names, and masm marks where each landed: `Mark::Def` (the register or frame
+//! cell the instruction before the mark wrote) and `Mark::Note` (a variable
+//! takes a value). Nothing else of the allocator is read.
 //!
-//! No value is the answer wherever the code cannot be followed or the value is
-//! in no register or cell. An optimizer that wrote the value somewhere
-//! unrecorded costs the variable its location there, never a wrong one.
+//! The emitted bytes are decoded and followed from the entry along every path,
+//! with what each register and frame cell holds. A move of a whole register or
+//! cell copies what it holds, any other write loses it, a call loses what the
+//! callee clobbers, and a push loses the cells it covers. Where paths join,
+//! only what all of them agree on is kept. If the function lets a frame cell's
+//! address out, a call or a write through a pointer may write any cell, so
+//! those lose every cell.
+//!
+//! ```text
+//!  code:   mov [bp-4],ax        ; Def: value 7 is in [bp-4]
+//!          mov bx,ax            ; bx holds 7 too
+//!          call f               ; bx lost; [bp-4] kept unless it escaped
+//!  note:   x takes value 7      ; x is in [bp-4]
+//! ```
+//!
+//! A variable is where its value is: a register if one holds it, else a cell,
+//! or a constant. No value is the answer wherever the code cannot be followed
+//! or the value is in no register or cell. An optimizer that wrote the value
+//! somewhere unrecorded costs the variable its location there, never a wrong
+//! one.
+//!
+//! # Example
+//! Value 7 is defined in `eax` at offset 8 and tracked over this code.
+//!
+//! Schematic, from the fixture of test
+//! `a_variable_follows_its_value_from_the_register_to_the_cell_a_move_copied_it_to`
+//! (not printer output):
+//! ```text
+//!  0  push ebp
+//!  1  mov ebp, esp
+//!  3  mov eax, 5
+//!  8  mov [ebp-4], eax      ; Def: value 7 in eax; Note: x takes value 7
+//! 11  add eax, 1            ; eax now holds something else
+//! 14  ret
+//! ```
+//!
+//! ```text
+//! variable x   from  to   place
+//!              8     14   eax
+//!              14    15   [ebp-4] (4 bytes)
+//! ```
+//!
+//! The variable moves to the cell the `mov` copied it to once `eax` is
+//! rewritten.
+//!
+//! From unit test
+//! `a_variable_follows_its_value_from_the_register_to_the_cell_a_move_copied_it_to`
+//! in `valuetrack_tests.rs`.
+//!
+//! # Runs
+//! On the emitted code of a procedure, from `debuginfo`, when `-g` places
+//! variables. A variable any of whose notes was not emitted gets no location.
+//!
+//! # See also
+//! LLVM's instruction-referencing
+//! [`LiveDebugValues`](https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/LiveDebugValues/InstrRefBasedImpl.cpp).
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iced_x86::{
-    Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind, Register,
-};
+use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind};
+use llrm_lir::registers::RegId;
 use llrm_object::debug::FrameRow;
 
 use super::masm::{Mark, Place};
@@ -51,13 +97,13 @@ pub struct Regs {
 impl Regs {
     pub fn new(
         file: &[llrm_target::registers::Register],
-        frame: Register,
-        stack: Register,
+        frame: RegId,
+        stack: RegId,
     ) -> Self {
         let roots: BTreeMap<String, String> = file.iter().map(|one| (one.name.clone(), one.root.clone())).collect();
         let general =
             file.iter().filter(|one| one.is("gpr") && one.root == one.name).map(|one| one.name.clone()).collect();
-        let named = |register: Register| {
+        let named = |register: RegId| {
             let name = format!("{register:?}").to_lowercase();
             roots.get(&name).cloned().unwrap_or(name)
         };
@@ -68,7 +114,7 @@ impl Regs {
     /// not know is itself.
     fn root(
         &self,
-        register: Register,
+        register: RegId,
     ) -> String {
         let name = format!("{register:?}").to_lowercase();
         self.roots.get(&name).cloned().unwrap_or(name)
@@ -158,11 +204,11 @@ fn cell(
     bytes: u32,
     regs: &Regs,
 ) -> Option<Held> {
-    if one.memory_index() != Register::None || one.memory_base() == Register::None {
+    if one.memory_index() != (RegId::None).iced() || one.memory_base() == (RegId::None).iced() {
         return None;
     }
     let row = rows.iter().rev().find(|row| row.offset <= at)?;
-    let base = regs.root(one.memory_base());
+    let base = regs.root(RegId::from(one.memory_base()));
     if base != row.cfa_register {
         return None;
     }
@@ -178,12 +224,12 @@ fn step(
     rows: &[FrameRow],
     bias: i64,
     info: &mut InstructionInfoFactory,
-    clobbers: Option<&[Register]>,
+    clobbers: Option<&[RegId]>,
     exposed: bool,
     regs: &Regs,
 ) {
     let at = one.ip() as usize;
-    let size = |kind: OpKind, register: Register| {
+    let size = |kind: OpKind, register: RegId| {
         if kind == OpKind::Register { register.size() as u32 } else { one.memory_size().size() as u32 }
     };
     let copy = one.mnemonic() == Mnemonic::Mov
@@ -193,13 +239,17 @@ fn step(
             (OpKind::Register, OpKind::Register | OpKind::Memory) | (OpKind::Memory, OpKind::Register)
         );
     if copy {
-        let (to, from) = (size(one.op0_kind(), one.op0_register()), size(one.op1_kind(), one.op1_register()));
-        let place = |kind: OpKind, register: Register, bytes: u32| match kind {
+        let (to, from) = (
+            size(one.op0_kind(), RegId::from(one.op0_register())),
+            size(one.op1_kind(), RegId::from(one.op1_register())),
+        );
+        let place = |kind: OpKind, register: RegId, bytes: u32| match kind {
             OpKind::Register => Some(Held::Register(register)),
             _ => cell(one, rows, at, bias, bytes, regs),
         };
-        let source = place(one.op1_kind(), one.op1_register(), from).and_then(|held| state.holds.get(&held).copied());
-        let target = place(one.op0_kind(), one.op0_register(), to);
+        let source = place(one.op1_kind(), RegId::from(one.op1_register()), from)
+            .and_then(|held| state.holds.get(&held).copied());
+        let target = place(one.op0_kind(), RegId::from(one.op0_register()), to);
         match (target, source) {
             (Some(target), Some(value)) if to == from => state.set(target, value, regs),
             (Some(target), _) => state.lose(&target, regs),
@@ -219,7 +269,7 @@ fn step(
             register.access(),
             OpAccess::Write | OpAccess::CondWrite | OpAccess::ReadWrite | OpAccess::ReadCondWrite
         ) {
-            state.lose(&Held::Register(register.register()), regs);
+            state.lose(&Held::Register(RegId::from(register.register())), regs);
         }
     }
     for memory in used.used_memory() {
@@ -338,7 +388,7 @@ pub fn tracked(
     // call ending there clobbered.
     let mut defs: BTreeMap<usize, Vec<(u32, Place)>> = BTreeMap::new();
     let mut before: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
-    let mut clobbers: BTreeMap<usize, Vec<Register>> = BTreeMap::new();
+    let mut clobbers: BTreeMap<usize, Vec<RegId>> = BTreeMap::new();
     for &(at, mark) in marks {
         match mark {
             Mark::Def { tag, place } => defs.entry(at).or_default().push((tag, place)),
@@ -356,7 +406,9 @@ pub fn tracked(
         let mut found = false;
         while scan.can_decode() {
             let one = scan.decode();
-            if one.mnemonic() == Mnemonic::Lea && [&regs.frame, &regs.stack].contains(&&regs.root(one.memory_base())) {
+            if one.mnemonic() == Mnemonic::Lea
+                && [&regs.frame, &regs.stack].contains(&&regs.root(RegId::from(one.memory_base())))
+            {
                 found = true;
                 break;
             }

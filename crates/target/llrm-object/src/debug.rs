@@ -74,10 +74,11 @@ pub enum FrameBase {
     #[default]
     Register,
     /// The frame register as the code would set it: `bias` bytes below the
-    /// canonical frame address (the return address and the saved register).
+    /// canonical frame address (the return address and the saved register),
+    /// `far_bias` for a function called far, whose return address is longer.
     /// The code keeps none; a debugger finds the cell from the caller's frame,
     /// which call frame information gives at every address.
-    Cfa { bias: i64 },
+    Cfa { bias: i64, far_bias: i64 },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -183,6 +184,12 @@ pub enum Type {
     Array {
         element: TypeId,
         bytes: Option<u32>,
+    },
+    /// BASIC's array of `element`: a variable of it is `descriptor`, a struct
+    /// the program keeps the bounds and the data pointer in.
+    Described {
+        element: TypeId,
+        descriptor: TypeId,
     },
     /// A struct or, with `union`, a union: a type a member may reach again (a
     /// pointer to itself), by its index, which may be a later one.
@@ -349,6 +356,7 @@ impl Type {
         match self {
             Type::Scalar(_) | Type::Basic { .. } | Type::FixedString(_) => Vec::new(),
             Type::Array { element, .. } => vec![*element],
+            Type::Described { element, descriptor } => vec![*element, *descriptor],
             Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
             Type::Enum { underlying, .. } => vec![*underlying],
             Type::Pointer { target, .. }
@@ -384,6 +392,7 @@ impl Info {
             },
             Type::FixedString(bytes) => u64::from(*bytes),
             Type::Array { bytes, .. } => u64::from((*bytes)?),
+            Type::Described { descriptor, .. } => return self.size_of(*descriptor),
             Type::Struct { bytes, .. } => u64::from(*bytes),
             Type::Enum { underlying, .. } => return self.size_of(*underlying),
             Type::Pointer { bytes, .. } => u64::from(*bytes),

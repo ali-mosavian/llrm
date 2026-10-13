@@ -1,8 +1,58 @@
-//! Port of `qbopt/backend/twoaddr.py`: x86 writes into one of the registers
-//! it reads.
+//! Rewrites three-address arithmetic into x86's two-address form before
+//! register allocation.
 //!
-//! LLVM's `TwoAddressInstructionPass`: `c := a + b` becomes `c := a` then
-//! `c := c + b`.
+//! # How it works
+//! An instruction that writes the register of its first source (`Binary`,
+//! `Unary`, `Funnel`, and a one-destination `Multiply`) is split into a copy
+//! and the instruction on the copy:
+//!
+//! ```text
+//!  c := a + b          ==>      c := a
+//!                               c := c + b
+//! ```
+//!
+//! Three things happen first so the copy is less often needed.
+//!
+//! - Update in place: `c := a + b` followed by the copy `a := c`, with `a` dead
+//!   between, and `c` defined once and read only by that copy, becomes `a := a
+//!   + b`. No interval grows and the copy the coalescer might refuse is gone.
+//! - Commuting: for `add`, `and`, `or`, `xor` and `imul` the sources are
+//!   swapped when that lets the destination reuse a source that dies. A swap is
+//!   chosen when the second source is the destination already, when only the
+//!   second source dies, or when neither lives on and the second is less
+//!   blocked (by interference with the destination's copy neighbours) and
+//!   closer by copies. Interference is computed only among the values a swap
+//!   asks about.
+//! - A memory destination whose cell is not the first source (`[m] := a + b`)
+//!   is computed in a fresh register: load, operate, store.
+//!
+//! A source that is not a value (an immediate) is copied the same way. The
+//! inserted copies own no bytes of the input.
+//!
+//! # Example
+//! The body of a counted loop, before and after. Update in place made `v4 :=
+//! add v5, v7; v5 := mov v4` into `v5 := add v5, v7`, leaving self-moves for
+//! the coalescer:
+//!
+//! ```lir
+//! ; before (stage FloatAlloc)          ; after (stage TwoAddress)
+//! block 0x0005                         block 0x0005
+//!   v4 := add v5, v7                     v5 := add v5, v7
+//!   v6 := add v7, 0x1                    v7 := add v7, 0x1
+//!   v5 := mov v4   ; parallel-copy 2     v5 := mov v5   ; parallel-copy 2
+//!   v7 := mov v6   ; parallel-copy 2     v7 := mov v7   ; parallel-copy 2
+//! ```
+//!
+//! From `ISEL_DUMP=1` of unit test `test_a_counted_loop` in `isel_tests.rs`.
+//!
+//! # Runs
+//! A machine phase after `floatalloc` and before `coalesce`
+//! (`flow::machine_with`), at every level. The coalescer then removes the
+//! copies the allocator can share a register across.
+//!
+//! # See also
+//! LLVM's
+//! [`TwoAddressInstructionPass`](https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -89,7 +139,7 @@ pub fn tied(body: &LirBody) -> LirBody {
         .filter_map(|(one, _)| _swappable(one))
         .filter_map(|(into, first, second)| {
             let neighbours = copies.get(&into)?;
-            Some(neighbours.iter().copied().chain([first, second]))
+            Some(neighbours.iter().copied().chain([into, first, second]))
         })
         .flatten()
         .collect();
@@ -324,13 +374,12 @@ fn _commuted(
     let empty = BTreeSet::new();
     let affinities = copies.get(&into.value).unwrap_or(&empty);
 
+    // The copy into the destination of a tied source that interferes with it
+    // stays, so that source counts as blocked too.
     let blocked = |source: u32| -> usize {
-        affinities
-            .iter()
-            .filter(|other| {
-                interference.and_then(|graph| graph.get(&source)).is_some_and(|found| found.contains(other))
-            })
-            .count()
+        let found = interference.and_then(|graph| graph.get(&source));
+        affinities.iter().filter(|other| found.is_some_and(|found| found.contains(other))).count()
+            + usize::from(found.is_some_and(|found| found.contains(&into.value)))
     };
 
     let reusable = !alive.contains(&first.value)
@@ -722,6 +771,22 @@ mod tests {
             .collect();
 
         let chosen = _commuted(&one, &BTreeSet::from([3]), Some(&copies), Some(&interference)).expect("swapped");
+
+        assert_eq!(sources(&chosen), reversed(&one));
+    }
+
+    /// CRC's `(x >> 1) ^ t` tied the shifted copy, which interferes with the
+    /// loop phi it joins, and copied the result into place every iteration.
+    #[test]
+    fn test_a_source_that_interferes_with_the_destination_is_not_the_one_tied() {
+        let one = addition("xor");
+        let copies = graph(&[(3, &[1, 2])]);
+        let interference: crate::backend::coalesce::Graph = graph(&[(1, &[2, 3]), (2, &[1]), (3, &[1])])
+            .into_iter()
+            .map(|(value, near)| (value, near.into_iter().collect()))
+            .collect();
+
+        let chosen = _commuted(&one, &BTreeSet::new(), Some(&copies), Some(&interference)).expect("swapped");
 
         assert_eq!(sources(&chosen), reversed(&one));
     }

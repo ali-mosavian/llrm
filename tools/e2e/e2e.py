@@ -242,7 +242,7 @@ def run(
 ) -> Result:
     cfg = CONFIGS[tag]
     if not cfg.available:
-        raise SystemExit(f"no toolchain at {cfg.mount}; see docs/testing.md")
+        raise SystemExit(f"no toolchain at {cfg.mount}; see docs/working/testing.md")
 
     # a caller with its own disposable program set (tools/fuzzcheck.py) passes
     # `names` directly; everyone else still gets the suite via `programs()`

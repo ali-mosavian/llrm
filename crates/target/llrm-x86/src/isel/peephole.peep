@@ -204,6 +204,20 @@ rule fused_sourceless_unary
     rewrite anchor @0 ; @1: op c / ; anchor @2
 
 
+// `lea t,[a]; cmp x,o; mov x,t`: a step made before the compare that reads
+// the value it replaces, and copied back over it. The lea sets no flag, so
+// the branch after reads the compare's either way; made after it, the step
+// is in place and one register holds both values.
+group stepped_after_compare
+    walk window skip meta
+
+rule step_after_compare
+    match   lea t:reg, a:any ; cmp x:reg, o:any ; mov x, t
+    when    free(@0, rewritable), free(@1, settled), free(@2, synthetic), same_width(x, t), !same_root(x, t),
+            operand(o, t), dead(@2, lanes(t)), encodable($1)
+    rewrite @1 ; @0: =@0 x, a ; drop @2
+
+
 // Select compact INC/DEC for a unit add whose carry result is dead: they
 // differ from it only in keeping CF.
 group increments
@@ -242,18 +256,27 @@ rule doubled
     rewrite @0: add d, d, d
 
 
-// `cmp r,0; jcc` is `or r,r; jcc`, a byte shorter. Both clear carry and
+// `cmp r,0; jcc` is `test r,r; jcc`, a byte shorter: both clear carry and
 // overflow and set zero, sign and parity from r; only AF differs, so the
-// branch must be the block's last work and nothing after may read AF. The
-// branch reading straight after keeps OF clear of anything between --
-// DOSBox's dynamic core loses it across OR and SAHF.
+// branch must be the block's last work, or the last but a jump (which reads
+// no flag), and nothing after may read AF. `test` writes no register, where
+// `or r,r` rewrote r (a dependency for what reads it next), at the same
+// price. The branch reading straight after keeps OF clear of anything
+// between -- DOSBox's dynamic core loses it across OR and SAHF.
 group zero_compares
     walk gap skip inert
 
+set jump = op(Jump)
+
 rule zero_compare
     match   cmp r:reg, #0 ; ... moves(*) ; jcc ; $
-    when    free(@0, tested), register_named(r), flags_dead_out(AF)
-    rewrite @0: or r, r, r ; @1
+    when    free(@0, tested), register_named(r), flags_dead_out(AF), no_longer(@0, $0)
+    rewrite @0: test r, r ; @1
+
+rule zero_compare_before_a_jump
+    match   cmp r:reg, #0 ; ... moves(*) ; jcc ; jump ; $
+    when    free(@0, tested), register_named(r), flags_dead_out(AF), no_longer(@0, $0)
+    rewrite @0: test r, r ; @1 ; @2
 
 
 // Selection across instructions before allocation (isel::combined), on

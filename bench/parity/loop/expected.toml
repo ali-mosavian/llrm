@@ -1,10 +1,10 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
+blessed = "2026-10-12"
 
 [bas.O2]
 instructions = 143
 memory_operands = 14
-code_bytes = 261
+code_bytes = 263
 data_bytes = 13
 bss_bytes = 0
 kernel_ms = 0.0149
@@ -17,12 +17,41 @@ data_bytes = 13
 bss_bytes = 0
 kernel_ms = 0.0149
 
+[bq16.O2]
+instructions = 145
+memory_operands = 14
+code_bytes = 268
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.0094
+
+[bq16.Os]
+instructions = 143
+memory_operands = 14
+code_bytes = 239
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.0094
+
+[bq32.O2]
+instructions = 42440
+code_bytes = 220
+data_bytes = 19
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 42437
+code_bytes = 202
+data_bytes = 19
+bss_bytes = 0
+
 [c.O2]
 instructions = 127
 memory_operands = 10
-code_bytes = 145
+code_bytes = 148
 data_bytes = 0
 bss_bytes = 4
+kernel_ms = 0.0027
 
 [c.Os]
 instructions = 123
@@ -30,13 +59,15 @@ memory_operands = 10
 code_bytes = 125
 data_bytes = 0
 bss_bytes = 4
+kernel_ms = 0.0027
 
 [nib.O2]
 instructions = 111
 memory_operands = 0
-code_bytes = 104
+code_bytes = 106
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0032
 
 [nib.Os]
 instructions = 108
@@ -44,6 +75,7 @@ memory_operands = 0
 code_bytes = 84
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0033
 
 [ow.O2]
 instructions = 430

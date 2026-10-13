@@ -1,174 +1,36 @@
-# Whole-pointer offset lowering
+# Huge pointers
 
-MIR's `PTR_OFFSET(pointer, byte_displacement)` produces one whole pointer.
-It does not say how selectors, registers or segment boundaries work.
-`crates/backend/llrm-core/src/backend/pointers.rs` owns that representation and requires an explicit ABI
-model. CPU arithmetic tuning does not establish an operating-system ABI.
+For contributors to isel and the loop passes. A huge pointer is a far pointer whose offset carries into its selector; MIR states it as a pointer in the target's huge address space and isel gives it its representation.
 
-The runtime source `runtime/rt/gwini.asm` documents `b$HugeShift`: each 64K
-crossing advances the selector by `1 << b$HugeShift`. `nhinit.asm` initializes
-12 for DOS. All three shipped libraries export `b$HugeShift`; the production
-pipeline adds that external dependency when a body contains PTR_OFFSET and
-loads its initialized byte below MIR. It does not infer the ABI from CPU
-tuning. Direct backend callers can supply an established constant shift;
-calling pointer lowering without a model fails explicitly.
+## Representation
 
-```text
-MIR:     result = ptr_offset(base, bytes)
-backend: total = low16(base) + bytes
-         selector = high16(base) + ((total >> 16) << ABI.huge_shift)
-         result = pack16(selector, low16(total))
+MIR has `getelementptr` on a pointer of the huge space (`Spaces::huge`, from `datalayout.toml`). Nothing above isel knows selectors, registers or the stride. The stride is the platform's: `Machine::huge_shift` is 12 in real mode (64K is `1 << 12` paragraphs), a platform-stated value under protected addressing, and none on a flat target, where a huge pointer is refused ("a huge pointer on a machine that states no selector stride").
+
+```
+ MIR:   %q = getelementptr i16, ptr addrspace(huge) %p, i32 %i
+
+ isel (carried):  total    = zext(offset(p)) + index*2 + constant   ; dword
+                  offset'  = low16(total)
+                  selector' = selector(p) + ((total >> 16) << huge_shift)
+                  q = selector':offset'
 ```
 
-Both temporary arithmetic and output packing wrap at the target widths.
-On the DOS model, `2000:fffe + 2` becomes `3000:0000`, not `2001:0000`
-(ordinary integer addition) and not `2000:0000` (discarding carry).
-`2000:0004 - 8` becomes `1000:fffc`. A different established ABI can advance
-selectors by a different amount; no pass above lowering changes.
+Every huge pointer is made this way, so selector:offset is canonical within an object: comparison is lexicographic, and a difference is `((selector - selector') >> shift << 16) + (offset - offset')` (`pointer_difference`). Both temporary arithmetic and the packed result wrap at the target widths: `2000:fffe + 2` is `3000:0000`, and `2000:0004 - 8` is `1000:fffc`. A huge pointer is not an integer: casting it to one is refused, because its packed bits are not its address. Memory access through a huge pointer loads the selector into a segment register around the access; register allocation chooses every register.
 
-The lowering emits operations over abstract variables; register allocation
-still chooses every register. An unrelated live condition prevents inserting
-its flag-clobbering expansion. Focused tests exercise arithmetic carry/borrow,
-multi-page offsets, selector wrapping, alternate ABI, missing ABI and the
-live-condition guard. Replacing the implementation with ordinary packed
-integer addition makes four of the five DOS arithmetic cases fail.
+Code: `carried`, `window` and `pointer_difference` in [`isel.rs`](../optimizations/backend/isel.md).
 
-## Whole-pointer memory
+## Making the carry cheap
 
-Whole-pointer integer loads and stores now survive SSA substitution and
-lower to a local pointer materialization. For a word load, one possible
-allocation is:
+Built from a counter, each use pays the whole carry (`OperationCosts::carry`); stepped by a constant, the step pays a borrow spread to a mask, cut to the selector's stride and added to it (`carry_step`). So `lsr` walks a huge array with a huge pointer ([lsr](../optimizations/passes/lsr.md)).
 
-```text
-MIR:     value = load(pointer)
-backend: push es
-         push eax       ; whole pointer
-         pop bx         ; offset
-         pop es         ; selector
-         mov cx, es:[bx]
-         pop es         ; restore the surrounding address-space resource
+`window` ([`window.rs`](../optimizations/passes/window.md)) runs after `lsr`: a counted loop's huge recurrences are split into windows. Inside a window every recurrence is normalized (`llrm.ia16.window`) and the loop runs as many whole trips as the target's window holds (`Machine::huge_window`) on far pointers that never carry; an outer loop walks the windows. The split is priced: a window's setup against the carries it saves.
+
+```
+ for i in 0..n: a[i] = ...         for w in windows:
+   (carry on every i)       ==>      p = normalize(base + w)
+                                     for i in window: *p++ = ...   ; far, no carry
 ```
 
-The allocator chooses the general registers; MIR names none. The expansion
-preserves flags and balances the stack. Focused encoding tests check both
-load and store bytes. Distinct pointer values are not treated as proof of
-disjoint memory. Other pointer memory operations are explicitly unsupported.
+## BC objects
 
-Numeric HUGE accesses with a proved local integer memory consumer now
-use this path. The frontend sign-extends indices and lower bounds, zero-extends
-counts, accumulates the byte displacement at width 4, loads the descriptor's
-whole pointer and emits PTR_OFFSET. CSE can number that pure computation.
-No selector extraction is added to MIR. The frontend also proves that the
-helper's old selector result is dead before removing it. Unproved consumers,
-string indirection, floating accesses and other layouts still refuse explicitly.
-
-`tests/inputs/omf/regressions/huge2.bas` is compiled with `/AH` on QB 4.5, PDS 7.1
-and VBDOS. Its 201-by-201 INTEGER array includes two transposed pairs of
-accesses: `(4,161)/(5,161)` cross byte 65536 under QB/PDS, while
-`(163,2)/(163,3)` do so under VBDOS's reversed dimension order.
-Original and native programs print `123 456 789 111 222`, then `DONE`, on
-all three runtimes. All ten HARY calls disappear from the native objects.
-
-This probe caught a real emission defect: new descriptor loads encoded
-zero displacements without relocation records. VBDOS printed `123 789 789`
-on the first three-access version; the matching QB/PDS outputs were accidental.
-The assembler now carries newly introduced symbolic memory references through
-layout, and object writing creates their DGROUP-framed offset relocations.
-The regression checks the emitted descriptor fields and runtime external,
-and fails when those records are removed. Byte temporaries also carry their
-register class, preventing allocation to nonexistent byte halves of SI/DI.
-
-Remaining work includes generalized consumers and loop optimization, plus
-loop-entry bounds guards when checking is requested. Checked mode still uses
-the runtime helper; no bounds checks are silently retained in native output.
-
-`hugelp.bas` adds a loop over both boundary-crossing pairs. Its six helper
-sites (two in the loop and four reads after it) all become native MIR on
-QB, PDS and VBDOS. Each original/native pair prints `456 457 789 790` and
-`DONE`. Recognition permits stack-independent index calculations between
-argument pushes and scalar preparation before the memory consumer. A CFG
-walk checks every continuation, including loop exits, for an observation
-of the old selector before an established overwrite. Unknown paths refuse.
-Dead word-merge dependencies are removed only after checking transitive
-high-half uses; this prevents an unused offset from surviving in a loop phi.
-
-The production non-debug HARR case already has induction variables: the
-inner loop stores the current sum, accumulates it, increments that sum and
-advances the pointer by 42 bytes. The huge-loop path still needs comparable
-address induction; helper removal alone is not that performance result.
-
-HUGELP now proves its finite loop accesses stay within the allocation before
-claiming that element stores cannot overwrite descriptor memory. Unknown
-branches, out-of-range accesses, descriptor writes and proof-budget exhaustion
-discard the proof. An unknown call ends it; only references that no future
-path can revisit retain the established result. This is an exact bounded
-proof, not general symbolic range analysis or a runtime bounds check.
-
-Before, both loop accesses loaded descriptor metadata and the base pointer.
-After, dimension metadata folds to constants and the whole base pointer is
-loaded once before the loop; no descriptor loads remain inside it. The
-32-bit address calculations and PTR_OFFSET operations still remain per access.
-Original/native HUGELP outputs remain `456 457 789 790`, then `DONE`, on
-QB, PDS and VBDOS. Tests also preserve the existing HARR dimension proof.
-
-Folding exposed an encoding refusal: `sub reg, 0xfffffffe` was rejected
-instead of encoded as subtraction of -2. Immediate selection now normalizes
-the value to its operand width for both register and memory arithmetic.
-Regression cases compare the emitted bytes of signed and unsigned spellings.
-
-Byte-offset induction now also works across the narrow index's sign extension.
-Affine composition follows operand widths instead of assuming 16 bits. A
-sign-extended recurrence is admitted only when the canonical loop has a
-proven finite non-wrapping counter range and the entire narrow expression
-stays in its signed range. Extensions in the loop header are excluded because
-that header also executes for the terminating counter. Unknown ranges remain
-unreduced.
-
-For PDS HUGELP, before this reduction the loop recomputed
-`(sign_extend(i + 4) + 32763) * 2` and
-`((sign_extend(i + 2) + 2) * 201 + 163) * 2`.
-After, the byte offsets start at 65534 and 1934 before the loop and advance
-by 2 and 402. The emitted loop contains `add ecx,2` and `add ebx,192h`,
-with no address multiply or sign extension. All three compilers' native
-programs still print `456 457 789 790` and `DONE`.
-
-Whole-pointer induction follows the byte-offset reduction: an invariant
-pointer plus a byte recurrence becomes a pointer initialized in the preheader
-and advanced by that recurrence's stride at the latch. MIR uses PTR_OFFSET
-for both operations and names no representation. Backend contract tests check
-that repeated advancement matches recomputation across carries, borrows and
-32-bit byte-offset wrap for selector shifts 0, 3 and 12.
-
-In PDS HUGELP, before this second reduction the loop occupied 225 bytes
-(0x6c through the branch ending at 0x14d), with base/offset spill traffic.
-After, it occupies 158 bytes (0xd7 through the branch ending at 0x175),
-with two whole pointers carried in registers and no allocator-generated loop
-spills; BC's frame temporary stores/reloads still remain. This is
-code size, not a cycle measurement; initialization has moved outside the loop.
-All three original/native pairs still print `456 457 789 790` and `DONE`.
-The backend still emits general pointer-advance arithmetic and selector
-save/restore sequences. Those costs remain open optimization opportunities.
-
-Available-value analysis now tests the current MIR operation for CALL,
-not whether its source address used to name a call. Removed HARY sites
-otherwise erased the facts established by preceding frame stores. Actual
-unknown calls still invalidate the facts, including calls without metadata.
-For example, PDS HUGELP's loop changes from:
-
-```asm
-mov [bp-14h],dx
-mov dx,[bp-14h]
-push es
-```
-
-to:
-
-```asm
-mov [bp-14h],dx
-push es
-```
-
-Both frame reloads disappear, reducing the loop from 158 to 152 bytes.
-The stores remain; forwarding is not evidence that their eventual contents
-are unobservable. HUGELP, HARR and MATRIX each match their original outputs
-on QB, PDS and VBDOS after this change.
+BC calls `B$HARY` for the element address of a huge (`/AH`) array and the raise keeps it a call ([bounds-checks](../reference/semantics/bounds-checks.md)); a program compiled from source takes the path above in C, BASIC and Nib alike. The runtime's selector stride is the library's `b$HugeShift`.

@@ -3,6 +3,8 @@ formats = ["omf"]
 default = "omf"
 bitness = 16
 header = [".model medium", ".386"]
+# Open Watcom's wdump reads DWARF 2 (its own compiler writes it) and none of 5.
+dwarf_version = 2
 
 # How a C test is linked (tools/dosbatch): the start-up, the program, the externals, any
 # extras, then the last object, as jwlink's `file` lines; paths from the repository root.

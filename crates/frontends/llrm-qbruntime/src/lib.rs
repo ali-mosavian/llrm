@@ -433,7 +433,7 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                         "by all six allocatable GP registers; segments, BP/SP and direction ",
                         "are runtime environment. No transitive preservation, cleanup, ",
                         "memory or control claim: error paths and indirect dependencies ",
-                        "remain worst-case. See docs/optimizations/event-entry-blocker.md."
+                        "remain worst-case."
                     )
                     .to_owned(),
                     ..worst(_name)
@@ -1334,8 +1334,7 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                 name: "B$EVK1".to_owned(),
                 evidence: format!(
                     "{_library} evtcore.asm PUBDEF: B$EVK1 and B$EVCK both name \
-                     segment 1 offset {_offset}; exact entry aliases in this runtime family. \
-                     Library hashes and scope: docs/optimizations/event-entry-blocker.md. "
+                     segment 1 offset {_offset}; exact entry aliases in this runtime family. "
                 ) + &evck.evidence,
                 ..evck.clone()
             },

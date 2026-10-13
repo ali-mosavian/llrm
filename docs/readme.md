@@ -1,21 +1,30 @@
 # Docs
 
-| Folder | Holds |
-|---|---|
-| [architecture](architecture/readme.md) | The pipeline, the MIR boundary, HIR, source layout, packages |
-| [frontends/nib](frontends/nib/readme.md) | Nib: language spec, frontend, codegen plan, language server |
-| [frontends/qb](frontends/qb/readme.md) | The QuickBASIC source frontend |
-| [frontends/ow-contract](frontends/ow-contract.md) | What the Open Watcom C front end gathers and emits, and what each of our frontends states of it |
-| [semantics](semantics/switches.md) | Switches that change what a program means: bounds, overflow, floating point |
-| [optimizations](optimizations) | One note per optimization or blocker, each measured on a program |
-| [machine](machine) | x86 real mode: ABIs, prefixes, relocations, object formats |
-| [measurement](measurement/readme.md) | How we measure, the numbers, and per-program targets |
-| [qrender](qrender/readme.md) | The qrender correctness gate and its contract profiles |
-| [history](history) | Handover and takeover logs, the inherited plan, the Python port map |
-| [examples](../examples) | Nib, BASIC, Pascal and C interop sample programs |
+For readers and contributors of llrm. Read in this order; each section's readme lists its documents.
 
-[roadmap.md](roadmap.md) is the ordered plan; [testing.md](testing.md) says how to run the tests.
-[debugging.md](debugging.md) says how to find a miscompile in a DOS program with dosrun.
-[fragility.md](fragility.md) records what broke, or hid a break, and what guards it now.
-[codegen-improvements.md](codegen-improvements.md) ranks backend ideas from LLVM, gcc-ia16 and Open Watcom.
-[vs-gcc.md](vs-gcc.md) measures llrm m32 against gcc and clang on the C benchmarks, with eight findings.
+```
+ readme.md -> architecture -> frontends -> optimizations -> formats
+  (what, how    (pipeline,    (QB, Nib, C,   (one note per     (objects,
+   to build)     MIR, HIR)     BC objects)    optimization)     debug info)
+                                                    |
+                              working <- reference <- machine
+                           (test, debug,  (levels,    (x86 real mode,
+                            measure)       switches,   targets; abi)
+                                           tools, crates)
+```
+
+| Section | Holds |
+|---|---|
+| [root readme](../readme.md) | What llrm is, its programs, how to build and use them |
+| [architecture](architecture/readme.md) | The pipeline, the MIR boundary, HIR, analyses, source layout, packages |
+| [frontends](frontends/readme.md) | [QuickBASIC](frontends/qb/readme.md), [Nib](frontends/nib/readme.md), [what the Open Watcom C front end gathers](frontends/c/ow-contract.md), and [BC objects](frontends/bc.md) |
+| [optimizations](optimizations/readme.md) | One note per optimization, each measured on a program |
+| [formats](formats/readme.md) | The object model and its writers; debug information |
+| [machine](machine/readme.md) | x86 real mode: prefixes, pointer lowering, targets |
+| [register allocation](machine/register-allocation/readme.md) | How values get registers and frame slots, and how to debug it |
+| [abi](abi/readme.md) | Calling conventions: registers, stacks, near and far calls, how a convention is chosen, the tests that pin them |
+| [reference](reference/readme.md) | Optimization levels, the switches that change what a program means, the tools, the crates |
+| [comparison](comparison/readme.md) | llrm's output beside other compilers' |
+| [working](working/readme.md) | Testing, debugging, measuring, and what has broken before |
+
+Contributors also read [agents.md](../agents.md): the rules and method.

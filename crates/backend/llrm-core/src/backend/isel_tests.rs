@@ -142,7 +142,8 @@ done:
 ";
     let got = listing(text, "sum");
     // The comparison stays flags beside its branch; the phis' zeros are made in
-    // the entry, which runs a copy of the test rather than jump to it.
+    // the entry, which runs a copy of the test and falls into the loop (the
+    // likelier way) rather than copy the return over it.
     assert_eq!(
         got,
         [
@@ -153,9 +154,7 @@ done:
             "xor ax, ax",
             "xor cx, cx",
             "cmp cx, bx",
-            "jl L0_5",
-            "pop bp",
-            "retf",
+            "jge L0_8",
             "L0_5:",
             "add ax, cx",
             "inc cx",
@@ -885,9 +884,10 @@ out:
     );
 }
 
-/// A memset expands as LLVM's getMemset does: up to 16 stores, widest
-/// first; beyond that `rep stosd` through es:di, the tail by `stosw` and
-/// `stosb`, as the old route's `_fill`.
+/// A constant memset expands as gcc's by-pieces rule says: stores, widest
+/// first, while they number under the CPU's ratio (the 486's `SET_RATIO`, 3:
+/// `i486_cost` in x86-tune-costs.h), else `rep stosd` through es:di, the tail
+/// by `stosw` and `stosb`.
 #[test]
 fn test_a_memset_is_stores_or_a_string_fill() {
     let text = |size: u32| {
@@ -903,39 +903,42 @@ define i16 @f() addrspace(1) {{
         )
     };
     assert_eq!(
-        listing(&text(7), "f"),
+        listing(&text(8), "f"),
         [
             "push bp",
             "mov bp, sp",
             "sub sp, 8",
             "L0_0:",
-            "mov dword ptr [bp-8], 16843009",
-            "mov word ptr [bp-4], 257",
-            "mov byte ptr [bp-2], 1",
+            "mov eax, 16843009",
+            "mov dword ptr [bp-8], eax",
+            "mov dword ptr [bp-4], eax",
             "mov ax, word ptr [bp-8]",
             "leave",
             "retf",
-        ]
+        ],
+        "two stores are under the ratio"
     );
     assert_eq!(
-        listing(&text(70), "f"),
+        listing(&text(7), "f"),
         [
             "push bp",
             "mov bp, sp",
-            "sub sp, 70",
+            "sub sp, 8",
             "push di",
             "L0_0:",
-            "lea di, [bp-70]",
+            "lea di, [bp-8]",
             "mov es, ss",
             "mov eax, 16843009",
-            "mov cx, 17",
+            "mov cx, 1",
             "rep stosd",
             "stosw",
-            "mov ax, word ptr [bp-70]",
+            "stosb",
+            "mov ax, word ptr [bp-8]",
             "pop di",
             "leave",
             "retf",
-        ]
+        ],
+        "a dword, a word and a byte are three stores, not under 3"
     );
 }
 
@@ -2649,28 +2652,29 @@ fn test_an_i64_to_a_float_is_filds_qword() {
     );
 }
 
-/// A zeroed 22-byte array descriptor was five `mov dword ptr [bp-n], 0`, 8
-/// bytes each: qbdemo's WHITEFADE spent 45 bytes clearing it.
+/// A zeroed array descriptor was `mov dword ptr [bp-n], 0` each, 8 bytes each:
+/// qbdemo's WHITEFADE spent 45 bytes clearing 22. Two dwords, the most the
+/// 486's ratio allows as stores, hold the zero in one register.
 #[test]
 fn test_a_memsets_dwords_store_one_register() {
     let text = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
 define i16 @f() addrspace(1) {
-  %a = alloca [12 x i8]
-  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 12, i1 false)
+  %a = alloca [8 x i8]
+  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 8, i1 false)
   %v = load i16, ptr %a
   ret i16 %v
 }
 ";
     let got = listing(text, "f");
     let stores: Vec<&String> = got.iter().filter(|line| line.starts_with("mov dword ptr")).collect();
-    assert_eq!(stores.len(), 3, "{got:?}");
+    assert_eq!(stores.len(), 2, "{got:?}");
     assert!(stores.iter().all(|line| line.ends_with(", eax")), "{got:?}");
 }
 
-/// Tuned for size, a memset is the smaller of its stores and one
-/// `rep stosb`: a 22-byte descriptor's six stores are 31 bytes, the fill
-/// 16. Always stores, qbdemo cleared nine descriptors so and grew 1.5% at
-/// -Os; as `rep stosd` and a tail the fill was 23.
+/// Tuned for size, a memset is stores only under gcc's size ratio (2 for zero,
+/// `CLEAR_RATIO(false)`, i386.h:1871), else one `rep stosb`: a 22-byte
+/// descriptor's six stores are 31 bytes, the fill 16 (qbdemo cleared nine
+/// descriptors with stores and grew 1.5% at -Os).
 #[test]
 fn test_a_memset_tuned_for_size_is_the_smaller_form() {
     let text = |size: u32| {
@@ -2700,8 +2704,9 @@ define i16 @f() addrspace(1) {{
     let filled = sized(22);
     assert!(filled.contains("rep stosb") && !filled.contains("stosd") && !filled.contains("stosw"), "{filled}");
     assert!(filled.contains("mov cx, 22"), "{filled}");
-    assert!(!sized(8).contains("stos"), "{}", sized(8));
-    assert!(!assembled_on("486", &text(22)).contains("stos"));
+    assert!(!sized(4).contains("stos"), "{}", sized(4));
+    assert!(sized(8).contains("rep stosb"), "{}", sized(8));
+    assert!(assembled_on("486", &text(22)).contains("rep stosd"));
 }
 
 /// A far global is `seg name:offset name`, and a memset of a variable
@@ -5041,7 +5046,7 @@ define i16 @f() addrspace(1) {
 /// none to show.
 #[test]
 fn a_parameter_is_a_cell_a_register_or_gone() {
-    use iced_x86::Register;
+    use llrm_lir::registers::RegId;
     use llrm_mir::debuginfo as di;
 
     use crate::backend::isel::{Convention, Parameter};
@@ -5070,8 +5075,8 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     let convention = Convention {
         parameters: vec![
             Parameter::Cell(6),
-            Parameter::Registers(vec![Register::AX]),
-            Parameter::Registers(vec![Register::DX, Register::AX]),
+            Parameter::Registers(vec![RegId::AX]),
+            Parameter::Registers(vec![RegId::DX, RegId::AX]),
         ],
         returns: Vec::new(),
         popped: 0,
@@ -5086,7 +5091,7 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
         found,
         [
             ("a".to_owned(), DebugPlace::At(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 6))),
-            ("b".to_owned(), DebugPlace::Register(Register::AX)),
+            ("b".to_owned(), DebugPlace::Register(RegId::AX)),
             ("d".to_owned(), DebugPlace::Gone)
         ]
     );
@@ -5232,7 +5237,8 @@ fn test_an_i64_compare_and_convert_follow_the_native_width_not_a_dword() {
 #[test]
 fn test_a_wide_result_is_in_the_conventions_register_pair() {
     use llrm_target::Target;
-    let pair: Vec<iced_x86::Register> = llrm_x86_m16::M16.results(8).iter().map(|one| one.full_register32()).collect();
+    let pair: Vec<llrm_lir::registers::RegId> =
+        llrm_x86_m16::M16.results(8).iter().map(|one| one.full_register32()).collect();
     let selected =
         selected("declare i64 @g()\ndefine i64 @f() {\n  %x = call i64 @g()\n  ret i64 %x\n}\n", "f").expect("selects");
     let insns = selected.body.insns();

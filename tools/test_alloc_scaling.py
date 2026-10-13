@@ -179,6 +179,75 @@ def test_a_rewrite_patches_the_numbering_and_keeps_the_intervals_it_did_not_chan
     assert spent < 450, f"cells N=448 -O2: facts slots + facts intervals cost {spent} Minstr (450 allowed; 2063 before): {run}"
 
 
+def test_a_split_asks_the_values_segments_where_it_is_live_and_makes_no_rows_of_the_body():
+    """`split placing` solved liveness for every value over the whole body at each round of a function with branches: 868 Minstr on
+    `branches` at N=400 and 6,710 at 800 (slope 2.95), 21% of the compile. A split asks of one value, and its segments, which the
+    facts already keep and carry across a rewrite, say where it is live."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](400))
+        run = steps(compiler, source, "-O2")
+    assert run.get("split placing", 0.0) < 5, f"branches N=400 -O2: split placing cost {run.get('split placing')} Minstr (5 allowed; 868 before): {run}"
+
+
+def test_the_points_that_destroy_registers_are_not_looked_for_again_in_every_instruction_at_every_rewrite():
+    """Every rewrite walked every instruction of the body for the calls and other points that destroy registers: `facts masks` cost
+    397 Minstr on `cells` N=448 -O2 and 4.1x per doubling. The points of the instructions a rewrite kept are carried (LLVM's
+    `SlotIndexes` keep an instruction's index across an edit), and only those it added are looked at."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["facts masks"] < 100, f"cells N=448 -O2: facts masks cost {run['facts masks']} Minstr (100 allowed; 397 before): {run}"
+
+
+def test_a_rewrite_looks_again_at_the_values_it_disturbed_only_for_a_register_they_share():
+    """`after overlapping` found the values placed in one register that now clash by looking at every placed value after every
+    rewrite: 1,332 Minstr on `branches` at N=400 and 5,716 at 800 (9.5% of the compile). Values placed before a rewrite did not
+    clash, and nothing else moved: the values it named, those whose class moved and those held across a point it added are
+    looked at, with the holders they overlap."""
+
+
+def test_a_split_asks_what_holds_a_register_where_it_splits_and_gathers_none_of_it():
+    """`split occupied` gathered the segments of every value placed in any register, sorted, at each split: 220 Minstr on `branches` at
+    N=400 and 933 at 800 (slope 2.07). The union of holders answers by the span asked, as LLVM's `LiveIntervalUnion::Query` does."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](400))
+        run = steps(compiler, source, "-O2")
+    assert run["after overlapping"] < 500, f"branches N=400 -O2: after overlapping cost {run['after overlapping']} Minstr (500 allowed; 1332 before): {run}"
+
+
+    assert run.get("split occupied", 0.0) < 20, f"branches N=400 -O2: split occupied cost {run.get('split occupied')} Minstr (20 allowed; ~220 before): {run}"
+
+
+def test_a_rewrite_moves_the_holders_of_a_register_it_named_in_the_index_and_does_not_build_it_again():
+    """`union.refresh()` dropped the index of every register after every rewrite, and the next questions built it again from every
+    holder: `regalloc evict` 692 Minstr on `branches` at N=400 and 2,601 at 800, `recolor` and `base` their shares of 4 G. Only the
+    intervals of the values the rewrite named moved, and those are moved in the index."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](400))
+        run = steps(compiler, source, "-O2")
+    assert run["regalloc evict"] < 200, f"branches N=400 -O2: regalloc evict cost {run['regalloc evict']} Minstr (200 allowed; 692 before): {run}"
+
+
 def test_the_recolor_step_costs_what_it_did_before_the_intervals_were_shared():
     """`LiveRanges::get` was not inlined into the interference scans of `regalloc recolor`: the same 578k `busy` calls and 2.2M holder
     steps cost 702 Minstr on `cells` N=448 -O2, against 644 before the intervals were shared behind an `Arc` (the gate's recolor

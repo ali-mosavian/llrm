@@ -188,11 +188,7 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
                 "{at}"
             );
             assert_eq!(*analyses.get::<Annotated>(&module.context, &layout, function), alias::annotated(&unit), "{at}");
-            assert_eq!(
-                *analyses.get::<Registers>(&module.context, &layout, function),
-                consts::known(&unit, None, None, None),
-                "{at}"
-            );
+            assert_eq!(*analyses.get::<Registers>(&module.context, &layout, function), consts::known(&unit), "{at}");
             assert_eq!(
                 analyses
                     .get::<DominatedEdges>(&module.context, &layout, function)
@@ -207,11 +203,8 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
             assert_eq!(*analyses.get::<CallEffects>(&module.context, &layout, function), effects, "{at}");
             let calls: Calls =
                 effects.unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect::<IndexMap<_, _>>();
-            assert_eq!(
-                *analyses.get::<ThroughMemory>(&module.context, &layout, function),
-                Ok(consts::known(&unit, Some(&calls), None, None)),
-                "{at}"
-            );
+            let through = analyses.get::<ThroughMemory>(&module.context, &layout, function);
+            assert_eq!(*through, Ok(consts::known_walked(&unit, &calls)), "{at}");
         }
     }
 }
@@ -391,6 +384,29 @@ fn test_globals_aa_asks_each_bodys_exposed_frames_once() {
     let before = crate::frameescape::scans();
     analyses.get::<super::GlobalsAA>(&module);
     assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
+}
+
+/// Each entry whose summary grew woke every caller of something unknown, the
+/// bodies still queued among them: visits grew with entries squared (102 for
+/// 12 entries; GORILLA's `summaries visit` was 26% of compiling it at -O1).
+#[test]
+fn test_callbacks_are_taken_once_the_queued_bodies_are_visited() {
+    let count: usize = 12;
+    let globals: String = (0..count).map(|at| format!("@g{at} = internal global i16 0\n")).collect();
+    let bodies: String = (0..count)
+        .map(|at| {
+            format!(
+                "define internal void @h{at}() {{\nentry:\n  store i16 {at}, ptr @g{at}\n  ret void\n}}\n\
+                 define void @f{at}() {{\nentry:\n  call void @h{at}()\n  call void @ext()\n  ret void\n}}\n"
+            )
+        })
+        .collect();
+    let module = parsed(&format!("{DOS}declare void @ext()\n{globals}\n{bodies}"));
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let before = alias::visits();
+    analyses.get::<Summaries>(&module);
+    let visits = alias::visits() - before;
+    assert!(visits <= 4 * count, "{visits} visits for {count} entries");
 }
 
 /// Two loops, the second counting to `%lim`, which a block outside both makes.

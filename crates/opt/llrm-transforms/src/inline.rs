@@ -1,35 +1,173 @@
-//! Adapted from llrm-core's `optimize/inline.rs`, the port of
-//! `qbopt/optimize/inline.py`: selective whole-module MIR inlining.
+//! Whole-module MIR inlining: chooses the calls worth replacing by a copy of
+//! the callee's body, and makes the copies. A call costs its own instructions
+//! and hides the callee from the caller's passes; the copy saves the first and
+//! exposes the second.
 //!
-//! Inlining is a CFG operation, not a call peephole: split the caller at the
-//! call, clone the callee's blocks, bind formal parameters to the actual
-//! operands, and join every return back to the continuation.  The ordinary
-//! body pipeline then simplifies the result.
+//! # How it works
+//! Inlining is a CFG operation: the caller's block is split at the call, the
+//! callee's blocks are cloned in (`llrm_mir::splice`), formals become the
+//! actual operands, and each `ret` joins the continuation. The body pipeline
+//! then simplifies the result. A clone keeps its original's metadata and its
+//! memory operations; a body that reads or writes through its arguments or its
+//! own frame inlines like any other.
 //!
-//! A callee is a candidate when cloning it is safe; whether it is worth it is
-//! cost: the body's priced work copied against the calls it removes, in the
-//! target's clocks, or its code bytes at -Os, bounded by the `Threshold`
-//! (nominal: a body's budget is at most 24 operations).  A
-//! body that only reads or writes through its arguments or its own frame
-//! inlines like any other: the clone keeps its memory operations and the
-//! ordinary body pipeline turns the caller's argument cells into values.  A
-//! public callee is inlined at its sites and stays defined; a private one
-//! called nowhere else goes with its last site.  MIR chooses from semantic
-//! costs and never sees opcodes or registers.  The call's price is profit's
-//! `OperationCosts::call`.
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef note fill:transparent,stroke:transparent,color:#64748b
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   subgraph g_before["CALLER"]
+//!     a1["<b>A</b>"]:::mid
+//!     call_["<b>%r = call @g(%a, %b)</b>"]:::mid
+//!     b1["<b>B</b>"]:::mid
+//!   end
+//!   g["g(%x, %y): P#59; ret %v"]:::note
+//!   subgraph g_after["CALLER AFTER"]
+//!     a2["<b>A</b>"]:::mid
+//!     p["<b>P[%x:=%a, %y:=%b]</b>"]:::mid
+//!     b2["<b>B</b>"]:::mid
+//!   end
+//!   a1 --> call_
+//!   call_ --> b1
+//!   a2 --> p
+//!   p -->|"each ret branches here,<br/>%r := phi of the %v"| b2
+//!   call_ ==>|"inline"| p
+//!   style g_before fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+//!   style g_after fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+//! ```
 //!
-//! What changed with the IR: a call names its callee and carries its
-//! actuals, a formal is a parameter value, and the call's one result is what
-//! `ret` returns, so the old call-site and ARG tables, formal entry cells
-//! (`_parameter`), materialized actual copies, unmodelled extra call results
-//! and width checks have no counterpart; the function type decides whether a
-//! call fits its callee.  A candidate is a snapshot of its callee, as the old
-//! one held the body it was chosen from.  A clone keeps its original's
-//! metadata, which replaces merging the pointer and range side tables.  The
-//! old `sealed` flag is a definition; a clone keeps its memory operations,
-//! which replaces admitting only formal loads.  The clone is llrm-mir's
-//! `splice`.  SSA is checked by the verifier
-//! after each pass, not here.
+//! *Inlining a call to g*
+//!
+//! A callee is a candidate (`candidates`) when it can be cloned (`cloneable`:
+//! defined, `splice` carries it, it returns, it is not recursive, not
+//! `noinline`, and does not call `setjmp`-like functions), and then by price.
+//! The body's semantic operations (not phis, jumps, returns) must fit the
+//! budget `max(6, min(24, call_cost / 2)) * limit / 225` (`Threshold::budget`),
+//! and the work copied at every site beyond the last must stay below the calls
+//! removed, in the target's clocks, or in code bytes where size outranks speed
+//! (`-Os`). A routine marked `alwaysinline` is a candidate at any size and
+//! `noinline` at none; `inlinehint` scales the budget by 325/225. A body held
+//! only to inline from (`available_externally`) is a candidate at any size.
+//!
+//! A public callee, or one whose address is taken, stays defined; a private one
+//! goes with its last site. The last call of a function nothing else reaches
+//! moves the body whatever its price (`Candidate::moved`), up to
+//! `LAST_CALL_OPERATIONS`, where `Threshold::last` is on
+//! (`-finline-functions-called-once`).
+//!
+//! `constant_sites` admits a call whose actual is a known constant even where
+//! the body is not a candidate for every caller: `folded` prices what the known
+//! actuals remove from the body, and the copy is taken when what is left costs
+//! no more than the call, weighted by the site's frequency (a hot site, in a
+//! loop, by 525/225). The original stays for the other callers.
+//!
+//! A copy is allowed (`fits`, `grows_within_limits`) only where
+//!
+//! - the call's function type is the callee's and the callee is not variadic;
+//! - the stack the copy adds stays within `FRAME_LIMIT` (256 bytes), and no
+//!   body that allocates is copied into a recursive caller;
+//! - a parameter the callee `releases` is passed an object the caller owns;
+//! - the caller's growth stays within GCC's `caller_growth_limits`, whose
+//!   `large-function-insns` is the allocator's knee (`ALLOCATION_KNEE`), not
+//!   2700, and a body moved into a caller already past the knee is refused.
+//!
+//! `expanded_all` decides every site of a caller first (`Plan`), tracking the
+//! caller's size and stack as they grow and including what is inlined into each
+//! copy, then splices from the last site to the first so each split moves only
+//! what is left of its block. `byval` arguments the callee writes are copied
+//! first.
+//!
+//! Recursion is separate: `inlined_into_itself` gives a recursive function
+//! copies of itself (GCC's `recursive_inlining`) to depth 8, while the body
+//! stays under 450 operations and the call's block runs on more than a tenth of
+//! the function's calls;
+//! `peeled_into` gives a caller one copy of a recursive callee. `UnitSize`
+//! bounds the unit's growth as `inline-unit-growth` (40%).
+//!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! define i16 @min(ptr %x, ptr %y) {
+//! b1:
+//!   %a = load i16, ptr %x
+//!   %b = load i16, ptr %y
+//!   %less = icmp slt i16 %a, %b
+//!   br i1 %less, label %b2, label %b3
+//!
+//! b2:
+//!   ret i16 %a
+//!
+//! b3:
+//!   ret i16 %b
+//! }
+//!
+//! define i16 @main(i16 %p, i16 %q) {
+//! b1:
+//!   %x = alloca i16
+//!   %y = alloca i16
+//!   store i16 %p, ptr %x
+//!   store i16 %q, ptr %y
+//!   %r = call i16 @min(ptr %x, ptr %y)
+//!   ret i16 %r
+//! }
+//! ```
+//!
+//! After, `@min` unchanged:
+//!
+//! ```mir
+//! define i16 @main(i16 %p, i16 %q) {
+//! b1:
+//!   %x = alloca i16
+//!   %y = alloca i16
+//!   store i16 %p, ptr %x
+//!   store i16 %q, ptr %y
+//!   br label %0
+//!
+//! 0:
+//!   %a = load i16, ptr %x
+//!   %b = load i16, ptr %y
+//!   %less = icmp slt i16 %a, %b
+//!   br i1 %less, label %1, label %2
+//!
+//! 1:
+//!   br label %3
+//!
+//! 2:
+//!   br label %3
+//!
+//! 3:
+//!   %4 = phi i16 [ %a, %1 ], [ %b, %2 ]
+//!   ret i16 %4
+//! }
+//! ```
+//!
+//! The call is the callee's blocks with the formals bound to `%x` and `%y`; its
+//! two `ret`s branch to the block `3`, which takes the call's result as a phi
+//! of what they returned.
+//!
+//! From unit test
+//! `test_a_public_callee_reading_through_its_arguments_inlines_and_stays_defined`
+//! in `inline_tests.rs`.
+//!
+//! # Runs
+//! Library of [`crate::interprocedural`], which runs it once every body has
+//! reached its fixed point, then sends each changed body back through the
+//! pipeline (`inline<N>`, `ipa-inline<N>.`; `LLRM_DEBUG=inline` logs each
+//! verdict). Off at -O0; the threshold is 90 at -O1 and -Og, 225 at -O2, 250 at
+//! -O3 and -Omax. Per-level budgets are in `docs/reference/levels.md`.
+//!
+//! # Needs
+//! [`crate::profit`] (operation prices, block frequencies),
+//! [`llrm_analysis::consts`] (`folded`), and the module's call graph and
+//! callee effects.
+//!
+//! # See also
+//! LLVM's
+//! [`InlineCost.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InlineCost.cpp)
+//! and GCC's
+//! [`ipa-inline.cc`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/ipa-inline.cc).
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -219,6 +357,53 @@ fn semantic(
 /// limits count.
 pub fn operations(body: &Function) -> i64 {
     semantic_count(body)
+}
+
+/// `body`'s size as gcc's `estimate_num_insns` counts it (`eni_size_weights`),
+/// the unit of `max-inline-insns-auto`: a compare that only a conditional
+/// branch reads is that branch (GIMPLE_COND holds its comparison), an address
+/// computation only a load or store reads is the access (an ARRAY_REF), and a
+/// return counts one where a phi and an unconditional jump count none. The
+/// unit of every limit that is gcc's own number (`max-inline-insns-auto`,
+/// jump threading's copy limit).
+pub fn gcc_insns(body: &Function) -> i64 {
+    gcc_insns_in(body, body.walk().map(|(_, inst)| inst))
+}
+
+/// `gcc_insns` of the instructions `insts` of `body`: the size of a path
+/// jump threading copies.
+pub fn gcc_insns_in(
+    body: &Function,
+    insts: impl IntoIterator<Item = InstId>,
+) -> i64 {
+    let only_by = |inst: InstId, accepts: &dyn Fn(&Function, &llrm_mir::module::Use) -> bool| {
+        let Some(result) = body.instruction(inst).result else { return false };
+        let uses = body.users(result);
+        !uses.is_empty() && uses.iter().all(|one| accepts(body, one))
+    };
+    insts
+        .into_iter()
+        .filter(|&inst| {
+            let instruction = body.instruction(inst);
+            match instruction.opcode {
+                Opcode::Phi => false,
+                Opcode::Br => instruction.operands.len() != 1,
+                Opcode::ICmp(_) => !only_by(inst, &|body, one| {
+                    let user = body.instruction(one.user);
+                    user.opcode == Opcode::Br && user.operands.len() == 3 && one.index == 0
+                }),
+                Opcode::GetElementPtr { .. } => !only_by(inst, &|body, one| {
+                    let user = body.instruction(one.user);
+                    match user.opcode {
+                        Opcode::Load { .. } => one.index == 0,
+                        Opcode::Store { .. } => one.index == 1,
+                        _ => false,
+                    }
+                }),
+                _ => true,
+            }
+        })
+        .count() as i64
 }
 
 fn semantic_count(body: &Function) -> i64 {
@@ -923,6 +1108,11 @@ fn executed(
     }
     let anchor = placed.stack.range(..seq).next_back().map(|(_, &one)| one).or(placed.base);
     let copies = splice_before(context, function, call, &planned.candidate.body, anchor);
+    // The call was the entry's first instruction and is gone: the copies that
+    // come out of this one are anchored on what the entry starts with now.
+    if placed.base == Some(call) {
+        placed.base = function.entry().and_then(|entry| function.block(entry).instructions().first().copied());
+    }
     let body = &*planned.candidate.body;
     let entry = body.entry();
     let first = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret).zip(&copies).find(
@@ -1048,14 +1238,67 @@ fn grows_within_limits(
 ) -> bool {
     let callee_size = semantic_count(callee);
     let base = if caller.base > 0 { caller.base } else { own };
-    let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
     let after = own + callee_size;
     // A body moved into a caller already past the knee is the merge that costs
     // most: that caller does not grow by one.
     if moved && after >= callee_size && after > ALLOCATION_KNEE && own > ALLOCATION_KNEE {
         return false;
     }
-    !(after >= callee_size && after > LARGE_FUNCTION && after > limit)
+    within_function_limits(own, base, callee_size, LARGE_FUNCTION)
+}
+
+/// gcc's `caller_growth_limits` (ipa-inline.cc L170-190): a function of `own`
+/// operations grown by a body of `callee_size`, whose size before any inlining
+/// was `base`, stays within the larger of `large` operations and `base`'s (or
+/// the callee's) growth by `large-function-growth` (params.opt:369-370, 100%).
+fn within_function_limits(
+    own: i64,
+    base: i64,
+    callee_size: i64,
+    large: i64,
+) -> bool {
+    let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
+    let after = own + callee_size;
+    !(after >= callee_size && after > large && after > limit)
+}
+
+/// gcc's `large-function-insns` (params.opt:373-374): where its own limit on a
+/// function begins, against `LARGE_FUNCTION`, the knee of our allocator.
+const GCC_LARGE_FUNCTION: i64 = 2700;
+/// gcc's `inline-unit-growth` (params.opt:209-210), percent.
+const UNIT_GROWTH: i64 = 40;
+/// gcc's `large-unit-insns` (params.opt:385-386): a unit smaller than this is
+/// allowed to grow as if it had this many.
+const LARGE_UNIT: i64 = 10_000;
+
+/// A unit's operations as inlining began and as it stands: gcc's
+/// `compute_max_insns` (ipa-inline.cc L1801-1809), the bound the inline heap's
+/// loop holds the unit's growth to (L2210).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnitSize {
+    pub initial: i64,
+    pub now: i64,
+}
+
+impl UnitSize {
+    /// The unit `modules` make.
+    pub fn of(modules: &[Module]) -> Self {
+        let size = modules
+            .iter()
+            .flat_map(|module| module.functions())
+            .filter(|(_, _, function)| !function.is_declaration())
+            .map(|(_, _, function)| semantic_count(function))
+            .sum();
+        Self { initial: size, now: size }
+    }
+
+    /// Whether the unit may grow by `growth` operations.
+    pub fn admits(
+        &self,
+        growth: i64,
+    ) -> bool {
+        self.now + growth <= self.initial.max(LARGE_UNIT) * (100 + UNIT_GROWTH) / 100
+    }
 }
 
 /// Whether `operand` is an object the program owns: a variable, a frame object,
@@ -1098,13 +1341,62 @@ const RECURSIVE_SIZE: i64 = 450;
 /// this per call of it.
 const RECURSIVE_PROBABILITY: i64 = 10;
 
+/// Only a body the ordinary inline threshold admits
+/// (`want_inline_small_function_p` is asked of the recursive edge too), by its
+/// growth: the body less the call it replaces; and one that allocates no stack,
+/// each copy of which would add its frame.
+fn recursion_admits(
+    original: &Function,
+    budget: i64,
+) -> bool {
+    semantic_count(original) - 1 <= budget
+        && !original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. }))
+        && carries(original)
+}
+
+/// GCC's inlining of a recursive callee into a caller that is not it
+/// (ipa-inline.cc L2263-2290): `caller` is given a copy of `original`, the body
+/// of recursive `id` as it was before it was given copies of itself, at each
+/// call to it, under the limits the recursion's own copies are held to; the
+/// copies made. One level: gcc's frequency test
+/// (`want_inline_self_recursive_call_p`, `peeling`) is asked only of an edge
+/// inside a copy, the copies' own calls being the callee's to peel once it has
+/// grown.
+pub fn peeled_into(
+    id: GlobalId,
+    caller: &mut Function,
+    original: &Function,
+    budget: i64,
+    context: &mut Context,
+    unit: &mut UnitSize,
+) -> usize {
+    if !recursion_admits(original, budget) {
+        return 0;
+    }
+    let mut made = 0;
+    let base = semantic_count(caller);
+    let calls: Vec<InstId> =
+        caller.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, caller, inst) == Some(id)).collect();
+    for call in calls {
+        let copy = semantic_count(original);
+        if !within_function_limits(semantic_count(caller), base, copy, GCC_LARGE_FUNCTION) || !unit.admits(copy - 1) {
+            break;
+        }
+        unit.now += copy - 1;
+        splice(context, caller, call, original);
+        made += 1;
+    }
+    made
+}
+
 /// GCC's `recursive_inlining` (ipa-inline.cc): `function`, the body of `id`,
 /// with calls to itself replaced by copies of `original`, its body as it was,
 /// breadth first and each copy's own calls in turn, while a call is likelier
 /// than `RECURSIVE_PROBABILITY` percent of the function's calls, is no deeper
 /// than `RECURSIVE_DEPTH`, and the function stays under `RECURSIVE_SIZE`; the
-/// copies made. A function that allocates stack is left alone: each level would
-/// add its frame.
+/// copies made, and under gcc's function and unit growth limits. A function
+/// that allocates stack is left alone: each level would add its frame, which
+/// `large-stack-frame-growth` (params.opt:381-382) bounds in gcc.
 pub fn inlined_into_itself(
     id: GlobalId,
     function: &mut Function,
@@ -1112,17 +1404,12 @@ pub fn inlined_into_itself(
     budget: i64,
     frequencies: &dyn Fn(&Context, &Function) -> std::collections::BTreeMap<i64, i64>,
     context: &mut Context,
+    unit: &mut UnitSize,
 ) -> usize {
     let own = |function: &Function, context: &Context| -> Vec<InstId> {
         function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst) == Some(id)).collect()
     };
-    // Only a body the ordinary inline threshold admits
-    // (`want_inline_small_function_p` is asked of the recursive edge
-    // too), by its growth: the body less the call it replaces.
-    if semantic_count(original) - 1 > budget
-        || original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. }))
-        || !carries(original)
-    {
+    if !recursion_admits(original, budget) {
         return 0;
     }
     let mut depth: IndexMap<InstId, u32> = own(function, context).into_iter().map(|call| (call, 1)).collect();
@@ -1143,6 +1430,14 @@ pub fn inlined_into_itself(
         if semantic_count(function) + semantic_count(original) >= RECURSIVE_SIZE {
             break;
         }
+        // The limits every inline is held to (`can_inline_edge_by_limits_p`,
+        // forced for a recursive copy): the function's growth, as gcc's
+        // `caller_growth_limits` and the unit's.
+        let copy = semantic_count(original);
+        if !within_function_limits(semantic_count(function), copy, copy, GCC_LARGE_FUNCTION) || !unit.admits(copy - 1) {
+            break;
+        }
+        unit.now += copy - 1;
         let at = depth.get(&call).copied().unwrap_or(1);
         let before: BTreeSet<InstId> = own(function, context).into_iter().collect();
         splice(context, function, call, original);

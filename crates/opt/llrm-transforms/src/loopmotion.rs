@@ -1,37 +1,117 @@
-//! Loop stores nothing inside the loop observes, sunk to its single exit:
-//! LICM's store sinking, as `promoteLoopAccessesToScalars` leaves one store
-//! after the loop. Adapted from llrm-core's `optimize/loopmotion.rs`, the
-//! port of `qbopt/optimize/loopmotion.py`.
+//! Sinks the stores nothing in a loop observes to the loop's single exit, so a
+//! counter or accumulator is written once, not every trip: the store half of
+//! LICM, as `promoteLoopAccessesToScalars` leaves one store after the loop.
 //!
-//! Whether two accesses meet is `regions::overlapping` of the references
-//! and call writes `memoryssa::Accesses` holds, asked again after each loop
-//! that changed: a moved store's narrowing was its old block's.
+//! # How it works
+//! A loop is taken when it has exactly one exit edge `source -> destination`,
+//! where `source` is the destination's only predecessor and no block of the
+//! loop lacks a successor. Nothing in it may be more than a value, a store
+//! aside (`llrm_mir::memory::only_value`): a volatile access, a call that may
+//! touch memory, or an `invoke` refuses the loop.
 //!
-//! What changed with the IR:
-//! - A store is moved, not copied; one that goes with another value has it as
-//!   its operand. An address is an operand too, and must reach the exit.
-//! - What refuses a loop is what `llrm_mir::memory` says is more than a value,
-//!   a store aside: a volatile access (the old barrier), a call that may touch
-//!   memory, an `invoke` (a raise a handler here observes). The old refused
-//!   every call; one with no effect that returns is a value.
-//! - A stored cell is in an object (`MemRef::object`), as the old `Segment` and
-//!   `Frame` spaces were, with no selector.
-//! - `root` followed copies, which have no instruction.
+//! A store is moved when it is unobserved (`_unobserved`): not volatile,
+//! through an object's cell with no segment, whose base and root are defined
+//! outside the loop and dominate its header, and which no other access of the
+//! loop may overlap (`regions::overlapping` of the references `Accesses`
+//! holds). A moved store goes to the front of `destination`, so its address
+//! and value must reach there. Three cases:
+//! - it is in `source` (the exiting block): moved as it is;
+//! - the loop has one latch, `source` is the header, and a header phi's entry
+//!   and latch values are what the cell holds on every path into the preheader
+//!   and the latch (`_Exit::exit_value`): the store writes that phi, so an
+//!   accumulator is stored once after the loop. The answer is asked once per
+//!   block, not once per path;
+//! - the store is in the latch and writes a value the loop does not change,
+//!   where the loop certainly runs, or the counter, whose last value
+//!   (`induction::controlling`) is then a number.
 //!
-//! Dropped, no rich MIR analogue: the `excludes` an indexed store had to
-//! carry (a hole of the x86 region lattice), and the per-block intervals
-//! `sunk_stores` built, which alias's `annotated` now applies.
+//! ```text
+//!  b1: %i = phi [0,b0] [%next,b2]       b1: %i = phi [0,b0] [%next,b2]
+//!      store %i, @n                         %c = icmp slt %i, %k
+//!      %c = icmp slt %i, %k         =>      br %c, b2, b3
+//!      br %c, b2, b3                    b2: %next = add %i, 1 ; br b1
+//!  b2: %next = add %i, 1; br b1         b3: store %i, @n      ; once
+//!  b3: %v = load @n                         %v = load @n
+//! ```
 //!
-//! llrm-mir's `licm` hoists invariant instructions and loads to the
-//! preheader; it sinks no store.
+//! Alias is asked again after each loop that changed, because a moved store's
+//! narrowing was its old block's. A moved store keeps the blocks, values and
+//! facts about them: only the points-to solve and memory results are dropped.
+//!
+//! # Example
+//! Before:
+//! ```mir
+//! define ... @pipeline.body() ... {
+//! b1:
+//!   %0 = alloca i16
+//!   store i16 0, ptr %0, !tbaa !9
+//!   br label %b2
+//!
+//! b2:
+//!   %1 = phi i16 [ 0, %b1 ], [ %3, %b4 ]
+//!   %2 = icmp slt i16 %1, 10
+//!   br i1 %2, label %b4, label %b3
+//!
+//! b3:
+//!   ret void
+//!
+//! b4:
+//!   store i16 %1, ptr @_n, !tbaa !9
+//!   %3 = add nsw i16 %1, 1
+//!   store i16 %3, ptr %0, !tbaa !9
+//!   br label %b2
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define ... @pipeline.body() ... {
+//! b1:
+//!   %0 = alloca i16
+//!   store i16 0, ptr %0, !tbaa !9
+//!   br label %b2
+//!
+//! b2:
+//!   %1 = phi i16 [ 0, %b1 ], [ %3, %b4 ]
+//!   %2 = icmp slt i16 %1, 10
+//!   br i1 %2, label %b4, label %b3
+//!
+//! b3:
+//!   store i16 9, ptr @_n, !tbaa !9
+//!   store i16 %1, ptr %0, !tbaa !9
+//!   ret void
+//!
+//! b4:
+//!   %3 = add nsw i16 %1, 1
+//!   br label %b2
+//! }
+//! ```
+//! The loop runs ten times, so the store to `n` leaves it as the counter's last
+//! value, `9`; the store to the counter's own slot is sunk the same way.
+//!
+//! From `--dump` of `ten` (`for (i = 0; i < 10; i++) n = i;`, `n` global) at
+//! -O2 -m16, stages `dead` and `loopmotion` of the first body.
+//!
+//! # Runs
+//! In [`crate::pipeline`]'s per-body fixed point, after `hoist` and
+//! before `trivialunswitch`; on where `hoist` is (`-fmove-loop-invariants`,
+//! every level above -O0).
+//!
+//! # Needs
+//! `memoryssa::Accesses`, `Counted`, `Registers`, `cfg::Shape`.
+//!
+//! # Keeps
+//! `ExposedFrames`, `Annotated`, `Dominators`, `Loops`, `Registers`,
+//! `AssumptionCache`, `Counted`, `DominatedEdges` and `Bounded`.
+//!
+//! # See also
+//! [`crate::hoist`] moves invariant instructions and loads to the preheader; it
+//! sinks no store.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::consts::{self, Calls, Known, masked};
+use llrm_analysis::consts::{self, Known, masked};
 use llrm_analysis::graph::loops::{self, Loop};
-use llrm_analysis::manager::{
-    Annotated, AssumptionCache, Bounded, Counted, DominatedEdges, ExposedFrames, MemoryCells, Registers,
-};
+use llrm_analysis::manager::{Annotated, AssumptionCache, Bounded, Counted, DominatedEdges, ExposedFrames, Registers};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, regions};
@@ -138,8 +218,7 @@ pub fn sunk_stores(
             .with_registers(&registers)
             .with_shape(&shape)
             .with_counted(&counted);
-        let moved =
-            _moved(&unit, analyses, &accesses, loop_, &inside, &predecessors, &successors, &shape.dominance, source)?;
+        let moved = _moved(&unit, &accesses, loop_, &inside, &predecessors, &successors, &shape.dominance, source)?;
         if moved.is_empty() {
             continue;
         }
@@ -178,7 +257,6 @@ enum Stored {
 #[allow(clippy::too_many_arguments)]
 fn _moved(
     unit: &Unit,
-    analyses: &mut Analyses,
     accesses: &Accesses,
     loop_: &Loop,
     operations: &[InstId],
@@ -230,8 +308,7 @@ fn _moved(
     let nonempty = induction::nonempty(unit, loop_);
     let invariant =
         if nonempty { induction::invariant(function, &loop_.body) } else { induction::Invariant::default() };
-    let mut exit =
-        _Exit { unit, accesses, predecessors, entry: cfg::id(function.entry().expect("an entry")), analyses };
+    let mut exit = _Exit { unit, accesses, predecessors, entry: cfg::id(function.entry().expect("an entry")) };
     for &inst in operations {
         if moved.iter().any(|(one, _)| *one == inst)
             || !unobserved(inst)
@@ -284,7 +361,6 @@ struct _Exit<'a> {
     accesses: &'a Accesses,
     predecessors: &'a BTreeMap<i64, BTreeSet<i64>>,
     entry: i64,
-    analyses: &'a mut Analyses,
 }
 
 impl _Exit<'_> {
@@ -385,7 +461,7 @@ impl _Exit<'_> {
                 return (false, usize::MAX);
             };
             if let Some(wanted) = _known(unit, expected) {
-                let fact = consts::initialized(unit, inst, reference).or_else(|| self.after(inst, reference));
+                let fact = consts::initialized(unit, inst, reference);
                 if fact == Some(wanted) {
                     return (true, usize::MAX);
                 }
@@ -425,22 +501,6 @@ impl _Exit<'_> {
                 },
             );
         (answer, lowest)
-    }
-
-    /// What memory says `reference` holds once `inst` has run.
-    fn after(
-        &mut self,
-        inst: InstId,
-        reference: &MemRef,
-    ) -> Option<Known> {
-        let unit = self.unit;
-        let calls = Calls::default();
-        let cells = self.analyses.get::<MemoryCells>(unit.context, unit.layout, unit.function);
-        let before = cells.at(unit.function, inst).map(|here| (**here).clone()).unwrap_or_default();
-        let nothing = IndexMap::default();
-        let mut queries = consts::memory_queries(*unit, &nothing);
-        let after = consts::_kills(before, inst, &nothing, &calls, None, None, false, &mut queries);
-        consts::_cell(&after, reference)
     }
 }
 

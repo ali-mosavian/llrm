@@ -1052,3 +1052,184 @@ fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_tim
     let visits = result.facts.0.counted("jump-visits");
     assert!(visits <= 3 * (count as usize + 1), "{visits} block visits for {count} removable jumps");
 }
+
+/// The ends of a block's real instructions, by name.
+fn named(block: &LirBlock) -> Vec<String> {
+    block.insns.iter().filter_map(|one| one.what.as_ref()).map(|what| what.name.clone().unwrap_or_default()).collect()
+}
+
+fn with_odds(
+    mut made: LirBody,
+    edges: &[(i64, i64, f64)],
+) -> LirBody {
+    for &(from, to, chance) in edges {
+        made.odds.taken.insert((from, to), (chance * crate::model::lir::BlockOdds::CERTAIN) as u32);
+    }
+    made
+}
+
+/// x_adler's loop: the latch `jne top; jmp exit` with a short return as the
+/// exit. The copy of the return in the jump's place left the loop's back
+/// branch taken over the copy on every trip (9 clocks a trip, not 7): the
+/// likelier way of a branch before the jump is not given up for the jump's.
+#[test]
+fn test_a_tail_is_not_copied_over_the_likelier_way_of_the_branch_before_its_jump() {
+    let looped = with_odds(
+        body(
+            "f",
+            1,
+            vec![
+                block(1, vec![_move(1, imm(0))], vec![10]),
+                block(10, vec![_move(10, cx())], vec![20]),
+                block(20, vec![_compare(20), _branch(21, "jne", 10), _inserted(_jump(22, 30))], vec![10, 30]),
+                block(30, vec![_inserted(_return(30))], vec![]),
+            ],
+        ),
+        &[(20, 10, 31.0 / 32.0), (20, 30, 1.0 / 32.0)],
+    );
+    let copied = duplicated(&looped, true);
+    assert_eq!(named(&copied.blocks[2]), ["cmp", "jne", "jmp"], "the exit's return was copied into the latch");
+}
+
+/// Not a loop: the same rule on a guard whose branch is the likelier way, and,
+/// for the other way round, a copy that is made.
+#[test]
+fn test_a_tail_is_copied_where_the_jump_is_the_likelier_way() {
+    let make = |branch: f64| {
+        with_odds(
+            body(
+                "f",
+                1,
+                vec![
+                    block(1, vec![_compare(1), _branch(2, "je", 10), _inserted(_jump(3, 30))], vec![10, 30]),
+                    block(10, vec![_move(10, cx()), _jump(11, 40)], vec![40]),
+                    block(30, vec![_inserted(_return(30))], vec![]),
+                    block(40, vec![_return(40)], vec![]),
+                ],
+            ),
+            &[(1, 10, branch), (1, 30, 1.0 - branch)],
+        )
+    };
+    assert_eq!(named(&duplicated(&make(0.9), true).blocks[0]), ["cmp", "je", "jmp"], "copied over the likelier branch");
+    assert_eq!(
+        named(&duplicated(&make(0.1), true).blocks[0]),
+        ["cmp", "je", "", "ret"],
+        "not copied where the jump is likelier"
+    );
+}
+
+/// Every hoisted anchor solved the liveness of every value of the body afresh
+/// (a nest of 64 copied loops: a third of `lir jumps`); a value is live where
+/// its own reads and definitions say, so only the values a moved instruction
+/// names are solved. Held to the solve of all of them over random graphs of
+/// blocks with reads, definitions, delivered registers and phis.
+#[test]
+fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
+    for seed in 1..300u64 {
+        let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+        let mut next = move |most: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % most
+        };
+        let count = 3 + next(7) as usize;
+        let mut blocks: Vec<LirBlock> = Vec::new();
+        for at in 0..count as i64 {
+            let mut insns = Vec::new();
+            for step in 0..next(5) {
+                let defines = if next(2) == 0 { vec![next(6) as u32] } else { Vec::new() };
+                let uses = if next(3) > 0 { vec![next(6) as u32] } else { Vec::new() };
+                let mut one = Insn::new(at * 10 + step as i64, None, None, defines, uses);
+                if next(5) == 0 {
+                    one.requires = vec![(crate::model::ir::Held { value: next(6) as u32, width: 2 }, RegId::AX)];
+                }
+                insns.push(Arc::new(one));
+            }
+            let mut block = LirBlock::new(at, insns);
+            block.succ = (0..next(3)).map(|_| next(count as u64) as i64).collect();
+            block.succ.dedup();
+            blocks.push(block);
+        }
+        for at in 0..count {
+            if next(3) == 0 {
+                let from: Vec<i64> = (0..count as i64).filter(|_| next(2) == 0).collect();
+                blocks[at]
+                    .phis
+                    .push(
+                        crate::model::lir::Phi {
+                            result: 6 + next(2) as u32,
+                            incoming: from.iter().map(|f| (*f, next(6) as u32)).collect(),
+                        },
+                    );
+            }
+        }
+        let whole = _live_values(&blocks);
+        let some: BTreeSet<u32> = (0..9).filter(|_| next(2) == 0).collect();
+        let found = Mentions::of(&blocks).live_in_of(&blocks, &some);
+        for value in &some {
+            for block in &blocks {
+                assert_eq!(
+                    found[value].contains(&block.at),
+                    whole.get(&block.at).is_some_and(|live| live.contains(value)),
+                    "seed {seed}: value {value} at block {}",
+                    block.at
+                );
+            }
+        }
+    }
+}
+
+/// A loop of one block left by `je exit; jmp top` when the exit was laid out
+/// elsewhere: the trip that goes on paid a branch not taken and a jump. The
+/// likelier way is the conditional jump, `jne top`, and the exit is the jump.
+#[test]
+fn test_a_loop_block_with_neither_way_next_branches_back_conditionally() {
+    let mut looped = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0))], vec![5]),
+            block(5, vec![_compare(5), _branch(6, "je", 20), _jump(7, 5)], vec![20, 5]),
+            block(10, vec![_move(10, cx()), _return(11)], vec![]),
+            block(20, vec![_return(20)], vec![]),
+        ],
+    );
+    // The loop goes round 31 times in 32, as isel's heuristic odds have it.
+    let certain = crate::model::lir::BlockOdds::CERTAIN;
+    looped.odds.taken.insert((5, 5), (certain * 31.0 / 32.0).round() as u32);
+    looped.odds.taken.insert((5, 20), (certain / 32.0).round() as u32);
+    let result = inverted(&looped);
+    let names: Vec<(String, Option<i64>)> = result.blocks[1]
+        .insns
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .collect();
+    assert_eq!(names, [("cmp".to_owned(), None), ("jne".to_owned(), Some(5)), ("jmp".to_owned(), Some(20))]);
+}
+
+#[test]
+fn test_the_likelier_way_stays_the_conditional_jump() {
+    let mut looped = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0))], vec![5]),
+            block(5, vec![_compare(5), _branch(6, "jne", 5), _jump(7, 20)], vec![5, 20]),
+            block(10, vec![_move(10, cx()), _return(11)], vec![]),
+            block(20, vec![_return(20)], vec![]),
+        ],
+    );
+    let certain = crate::model::lir::BlockOdds::CERTAIN;
+    looped.odds.taken.insert((5, 5), (certain * 31.0 / 32.0).round() as u32);
+    looped.odds.taken.insert((5, 20), (certain / 32.0).round() as u32);
+    let result = inverted(&looped);
+    let names: Vec<(String, Option<i64>)> = result.blocks[1]
+        .insns
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .collect();
+    assert_eq!(names, [("cmp".to_owned(), None), ("jne".to_owned(), Some(5)), ("jmp".to_owned(), Some(20))]);
+}

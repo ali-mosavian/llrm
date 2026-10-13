@@ -110,6 +110,22 @@ impl Builder {
         self.intern(DebugKind::Array, "", Some(element), 0, DebugReach::Near, Vec::new())
     }
 
+    /// BASIC's array of `element` whose descriptor is the struct `descriptor`.
+    pub fn described_array(
+        &mut self,
+        element: i64,
+        descriptor: i64,
+    ) -> i64 {
+        let members = vec![DebugMember {
+            name: "descriptor".to_owned(),
+            r#type: descriptor,
+            offset: 0,
+            bit_start: None,
+            bit_width: None,
+        }];
+        self.intern(DebugKind::Array, "", Some(element), 0, DebugReach::Near, members)
+    }
+
     /// `bytes` of `element`s in place.
     pub fn sized(
         &mut self,

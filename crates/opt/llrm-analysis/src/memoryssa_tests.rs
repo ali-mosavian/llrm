@@ -19,7 +19,8 @@ struct Parsed {
 
 impl Parsed {
     fn new(body: &str) -> Self {
-        let module = parsed(&format!("{DOS}@g = global [64 x i8] zeroinitializer\ndeclare void @anything()\n\n{body}"));
+        let module =
+            parsed(&format!("{DOS}@g = global [256 x i8] zeroinitializer\ndeclare void @anything()\n\n{body}"));
         let layout = layout(&module);
         Self { module, layout }
     }
@@ -116,6 +117,21 @@ fn test_each_join_edge_retains_its_own_stored_value() {
         assert!(graph.available_on_edge(site(&unit, arm, 0), load, at(&unit, arm), &memory, None));
         assert!(!graph.available_on_edge(site(&unit, other, 0), load, at(&unit, arm), &memory, None));
     }
+}
+
+/// What a cell holds where a block ends, asked of the block (a counted float
+/// loop's preheader ends in a branch no access stands for): the live state
+/// before any store, the block's own store after it, both arms at the join.
+#[test]
+fn test_the_end_of_a_block_is_asked_of_the_block() {
+    let parsed = diamond();
+    let unit = parsed.unit();
+    let graph = graph(&unit);
+    let memory = cell(&unit, site(&unit, "b3", 0));
+    let id = |name: &str| graph.at(site(&unit, name, 0)).id;
+    assert_eq!(graph.clobbers_at_end(at(&unit, "b0"), &memory), BTreeSet::from([graph.live.id]));
+    assert_eq!(graph.clobbers_at_end(at(&unit, "b1"), &memory), BTreeSet::from([id("b1")]));
+    assert_eq!(graph.clobbers_at_end(at(&unit, "b3"), &memory), BTreeSet::from([id("b1"), id("b2")]));
 }
 
 #[test]
@@ -773,4 +789,63 @@ fn a_store_to_another_object_is_ruled_out_without_alias_reasoning() {
     let asked = MAY_CLOBBERS.with(std::cell::Cell::get) - before;
     assert_eq!(found.len(), 1, "only the live-on-entry memory reaches the load");
     assert_eq!(asked, 0, "{asked} alias questions for 20 stores to another object");
+}
+
+/// A cell written in one arm of each of N joins is reached, at the last, by N
+/// nearest writes, and the walk found them all: N^2 over a body of N loads
+/// (`joins` 256: 10% of the compile). A walk for a caller that serves a load
+/// from them stops past `MAX_NEAREST_WRITES`.
+#[test]
+fn test_a_walk_for_a_load_to_be_served_stops_once_more_writes_reach_it_than_can_serve_it() {
+    let joins = 400;
+    let diamonds: String = (0..joins)
+        .map(|k| {
+            format!(
+                "  br i1 %c, label %t{k}, label %j{k}\n\nt{k}:\n  store i16 7, ptr {CELL}\n  br label %j{k}\n\nj{k}:\n"
+            )
+        })
+        .collect();
+    let parsed = Parsed::new(&format!(
+        "define i16 @f(i1 %c) {{\nb0:\n  store i16 7, ptr {CELL}\n{diamonds}  %loaded = load i16, ptr {CELL}\n  ret i16 %loaded\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let graph = built(&unit, &accesses);
+    let load = site(&unit, &format!("j{}", joins - 1), 0);
+    let reference = &accesses.references[&load];
+    let before = STEPS.with(std::cell::Cell::get);
+    let all = graph.clobbers_ignoring_invariance(load, reference);
+    let walked_all = STEPS.with(std::cell::Cell::get) - before;
+    assert_eq!(all.len(), joins + 1, "every write reaches it");
+    let before = STEPS.with(std::cell::Cell::get);
+    let some = graph.nearest_writes(load, reference);
+    let walked_some = STEPS.with(std::cell::Cell::get) - before;
+    assert!(some.len() > MAX_NEAREST_WRITES, "past the limit the caller serves nothing");
+    assert!(walked_some * 3 < walked_all, "{walked_some} steps for a bounded walk, {walked_all} for the whole");
+}
+
+/// 200 stores to 200 cells of one object, then a load of each: each load walked
+/// back over every store after its own (200 x 200 / 2 pairs; the `cells` axis'
+/// through-memory was 2,088 Minstr at N=1024, quadratic). The index of a
+/// frame's last writes finds each at once, stepping over none of the others.
+#[test]
+fn test_a_load_of_one_of_many_fixed_cells_finds_its_store_without_walking_the_others() {
+    let cell = |at: usize| format!("getelementptr (i8, ptr @g, i16 {at})");
+    let stores: String = (0..200).map(|at| format!("  store i8 {at}, ptr {}\n", cell(at))).collect();
+    let loads: String = (0..200).map(|at| format!("  %y{at} = load i8, ptr {}\n", cell(at))).collect();
+    let parsed = Parsed::new(&format!("define void @f() {{\nb0:\n{stores}{loads}  ret void\n}}\n"));
+    let unit = parsed.unit();
+    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let graph = built(&unit, &accesses);
+    let before = STEPS.with(std::cell::Cell::get);
+    for at in 0..200 {
+        let load = site(&unit, "b0", 200 + at);
+        let found = graph.clobbers(load, &accesses.references[&load]);
+        let store = site(&unit, "b0", at);
+        assert_eq!(found, BTreeSet::from([graph.at(store).id]), "the load of cell {at}");
+    }
+    let steps = STEPS.with(std::cell::Cell::get) - before;
+    // The first loads walk (the index is made once the walks have stepped over
+    // enough).
+    assert!(steps <= 9000, "{steps} accesses stepped over for 200 loads");
 }

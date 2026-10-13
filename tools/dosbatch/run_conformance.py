@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import cpulimit  # noqa: E402
 import dosbatch  # noqa: E402
 llrmbin = dosbatch.llrmbin
 from dosbatch import BIN, ROOT, Job  # noqa: E402
@@ -50,7 +51,7 @@ def compile_one(directory: Path, manifest: dict, case: dict, obj: Path) -> str |
     dialect = manifest["dialect"].removesuffix("10")
     command = [str(BIN / "llrm-qb"), str(directory / case["source"]), "--dialect", dialect, "--runtime", dialect,
                *flags(case), "-o", str(obj)]
-    done = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    done = cpulimit.run(command, 300, capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-400:]
     return None

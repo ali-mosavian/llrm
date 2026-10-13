@@ -124,17 +124,17 @@ fn _trap_branches(
 /// trip (3 compare-and-branch pairs against C's none), 245,433 executed
 /// instructions against C's 163,105 (#453).
 ///
-/// The loop still keeps one: `lo < len`, invariant, is in the second block of
-/// the loop and trivial unswitch handles only a header's branch. The header
-/// copy with the branch the way in settles threaded takes it out (`-ftree-ch`);
-/// this reads 0 when that is on by default (#1194).
+/// The loop kept one without the header copy: `lo < len`, invariant, is in the
+/// second block of the loop and trivial unswitch handles only a header's
+/// branch. The header copy, on by default, settles the branch threaded and
+/// takes it out (#1194).
 #[test]
-fn test_a_partition_loop_has_one_bounds_check_in_it_until_the_header_copy_is_on() {
+fn test_a_partition_loop_has_no_bounds_check_in_it() {
     let function = _nib("partition", "partition", "_partition");
     let loops = _innermost_loops(&function);
     assert!(!loops.is_empty(), "premise: the loop is found\n{function}");
     for body in loops {
-        assert_eq!(_trap_branches(&function, &body), 1, "{body:#?}\n{function}");
+        assert_eq!(_trap_branches(&function, &body), 0, "{body:#?}\n{function}");
     }
 }
 
@@ -152,7 +152,9 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
         } else {
             format!("{}/src/runtime", env!("CARGO_MANIFEST_DIR"))
         };
-        std::fs::read_to_string(format!("{directory}/{name}")).unwrap()
+        // The assembly is laid out in columns: its words are what is compared.
+        let text = std::fs::read_to_string(format!("{directory}/{name}")).unwrap();
+        text.lines().map(|line| line.split_whitespace().collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n")
     };
     assert!(
         runtime("os.asm").contains(&format!("public {}", check.limit))
@@ -167,7 +169,7 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
         Some(llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check });
     let sum = _procedure(&nib::listing(&program, "sum", &nib::O2()), "_sum");
     assert!(
-        sum.contains("cmp sp, word ptr FOO") && sum.contains("call far ptr BAR") && !sum.contains("_llrm_os_stack_low"),
+        sum.contains("cmp sp, word ptr FOO") && sum.contains("call far ptr BAR") && !sum.contains("LL$STACK_LOW"),
         "{sum}"
     );
     let plain = _procedure(&nib::listing(&nib::parsed(&nib::fixture("sum.nib")), "sum", &nib::O2()), "_sum");

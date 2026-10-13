@@ -766,3 +766,15 @@ retains = "type_name,ranges,span"
 identity = "NtIdType"
 action = "TypeNameReference"
 retains = "name,span"
+
+[[emit]]
+identity = "opStDate_"
+action = "Runtime"
+operand = "DATE$"
+shape = "Runtime"
+
+[[emit]]
+identity = "opStTime_"
+action = "Runtime"
+operand = "TIME$"
+shape = "Runtime"

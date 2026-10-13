@@ -1,0 +1,46 @@
+# Optimizations
+
+How the compiler turns MIR into x86 code: the SSA optimizer in `crates/opt`, the backend in `crates/backend/llrm-core`, and one reference per pass family. For contributors.
+
+## Reference
+
+The reference for every pass, analysis and backend phase is the `//!` header at the top of its source file: what it does, how, where it runs, what it needs and keeps. `python3 tools/docsbuild/build.py --sync` writes one page per header, with an index for each directory: [passes](passes/readme.md), [analyses](analyses/readme.md) and [backend phases](backend/readme.md). The tests fail when a page is stale, or when a file of a required directory has no header.
+
+| Source | Holds |
+|---|---|
+| [`crates/opt/llrm-transforms/src`](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-transforms/src) | The MIR passes and the pipeline that orders them |
+| [`crates/opt/llrm-analysis/src`](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src) | The analyses and the pass manager |
+| [`crates/backend/llrm-core/src/backend`](https://github.com/ali-mosavian/llrm/tree/main/crates/backend/llrm-core/src/backend) | Lowering for selection, instruction selection and the machine phases |
+
+## Pass index, in pipeline order
+
+Levels and flags: [levels](../reference/levels.md).
+
+| Stage | Passes | Notes |
+|---|---|---|
+| Module, before bodies | `available-externally`, [`globalopt`](passes/globalopt.md), [`ports`](passes/ports.md), `stamp` |  |
+| Body rounds | `sroa`, [`fold`](passes/fold.md), [`floatfold`](passes/floatfold.md), [`decide`](passes/decide.md), [`phiopt`](passes/phiopt.md) |  |
+|  | `equalcalls`, [`gvn`](passes/gvn.md) |  |
+|  | [`tailrec`](passes/tailrec.md), [`loopsimplify`](passes/loopsimplify.md), [`lcssa`](passes/lcssa.md), [`floatloop`](passes/floatloop.md), [`trivialunswitch`](passes/trivialunswitch.md), [`inferspace`](passes/inferspace.md) |  |
+|  | [`hoist`](passes/hoist.md), [`loopmotion`](passes/loopmotion.md), [`indvars`](passes/indvars.md), [`algebraic`](passes/algebraic.md) |  |
+|  | [`dse`](passes/dse.md), [`promote`](passes/promote.md), [`dead`](passes/dead.md), [`fill`](passes/fill.md) |  |
+|  | [`unroll`](passes/unroll.md), [`peel`](passes/peel.md), [`unswitch`](passes/unswitch.md), `unroll-jam` |  |
+| Module, interprocedural | [`inline`](passes/inline.md), [`argpromotion`](passes/argpromotion.md), [`deadargs`](passes/deadargs.md), [`ipacp`](passes/ipacp.md), [`interprocedural`](passes/interprocedural.md) | [module-analyses](module-analyses.md), [early-summaries](early-summaries.md) |
+| After the interprocedural step | [`globaldce`](passes/globaldce.md), [`calleepop`](passes/calleepop.md), [`fixednarrow`](passes/fixednarrow.md), [`lsr`](passes/lsr.md), [`window`](passes/window.md), [`rotate`](passes/rotate.md), [`jumpthread`](passes/jumpthread.md), [`gepoffset`](passes/gepoffset.md), [`addresssink`](passes/addresssink.md), [`spares`](passes/spares.md), [`homes`](passes/homes.md) |  |
+| Backend | see the [backend phases](backend/readme.md) | [floating-pop-reuse](floating-pop-reuse.md), [second-frame](second-frame.md) |
+
+## Reference pages
+
+Each pass, analysis and backend phase has one page, generated from the `//!` header of its source file: [passes](passes/readme.md), [analyses](analyses/readme.md), [backend phases](backend/readme.md). Edit the header, then run `python3 tools/docsbuild/build.py --sync` and commit what it writes.
+
+## Notes
+
+| Doc | Subject |
+|---|---|
+| [raise-arguments](raise-arguments.md) | Word pairs, runtime helpers and numeric arguments of BC objects |
+| [floating-pop-reuse](floating-pop-reuse.md) | x87 stack allocation and popping arithmetic |
+| [second-frame](second-frame.md) | The second frame layout without a second backend run |
+| [module-analyses](module-analyses.md) | Module analyses brought up to date after an edit |
+| [early-summaries](early-summaries.md) | Summaries at fixed points; a parked design |
+
+Array bounds checks are in [bounds-checks](../reference/semantics/bounds-checks.md).

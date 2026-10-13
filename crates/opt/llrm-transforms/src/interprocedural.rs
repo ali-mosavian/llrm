@@ -1,26 +1,158 @@
-//! Adapted from llrm-core's `optimize/interprocedural.rs`: the whole-program
-//! step a frontend runs once every body has reached its own fixed point:
-//! inline, carry constants across direct calls, drop dead pure calls and
-//! the tails of terminal ones, and send each changed body back through its
-//! pipeline until no body changes.
+//! The whole-program step run once every body has reached its own fixed point:
+//! states what each body does, inlines, carries constants across direct calls,
+//! drops dead pure calls and the tails of calls that never return, and sends
+//! each changed body back through its pipeline. What one body proves about its
+//! callees or callers is invisible to a pass that sees one body; this step
+//! carries it across the calls.
 //!
+//! # How it works
 //! A frontend hands in its pipeline; nothing here names a language or a
-//! machine.
+//! machine. A body changes in place and is reported with
+//! `ModuleAnalyses::changed`, so the module analyses are updated for the
+//! bodies that differ rather than recomputed
+//! (`docs/optimizations/module-analyses.md`). A procedure has every caller in
+//! the program when the program does not export it (`unexported`); the roots
+//! are the exported bodies. Each stage re-runs the pipeline over the bodies it
+//! changed under a stage name (`LLRM_DEBUG=runs` and `--dump` use it).
 //!
-//! What changed with the IR: a call names its callee and carries its
-//! actuals, so the old `Procedure`'s call, parameter, constant and argument
-//! tables have no counterpart and a procedure is its module and
-//! `GlobalId`; a procedure has every caller in the program when the program
-//! does not export it, not by a parameter. A body changes in place, so the
-//! pipeline takes the module, its analyses and the body's id. `propagated`,
-//! the calls whose return was carried, has nothing to hold: a carried
-//! return leaves the call's result unread. The old `Module` is `Proved`,
-//! the name being llrm-mir's. `Interprocedural` is the step as a
-//! `ProgramPass`.
+//! The stages, in order:
 //!
-//! The old module had no tests of its own.
+//! 1. `stamped_all`: each exactly defined body is stamped with what is proved
+//!    of it, callees first: `memory(...)`, `nocapture`/`readonly`/`readnone`/
+//!    `writeonly`/`initializes` on pointer parameters, `willreturn`,
+//!    `norecurse`, `nounwind`. A stated attribute is only narrowed. The same
+//!    stamp is stated on the declarations of the body in other modules.
+//! 2. Inlining ([`crate::inline`]), repeated until a round changes nothing.
+//!    Each round removes the private bodies nothing reaches
+//!    (`bare_the_unreached`), picks candidates and constant sites by code
+//!    bytes, and splices (`inline<N>`). What only the clocks admit is tried on
+//!    copies sized after the pipeline ran over them with the site's constants,
+//!    and kept where the callers come to no more bytes than before, within the
+//!    estimate's error, plus what the clocks saved buy at `rate`
+//!    (`estimated_callees`, `estimated_sites`, `together_trial`). A private
+//!    function called once is not built in a round, as GCC takes its last call
+//!    before any body is made.
+//! 3. `promote.` ([`crate::argpromotion`]), `narrow.` ([`crate::narrowspace`]):
+//!    a pointer a body only reads is passed as the fields it reads; a far
+//!    pointer every call fills from DGROUP is passed as its offset.
+//! 4. `ipa<N>.`: a body whose every `ret` returns one integer has its calls'
+//!    results replaced by it (`llrm_analysis::interprocedural`); the call
+//!    stays.
+//! 5. A loop of: `ipa-args<N>.` (a private body whose every call passes the
+//!    same constant uses it), `ipa-cp.` ([`crate::ipacp`] cloning), and
+//!    `ipa-inline<N>.` (constant sites and callees inlined again), with return
+//!    propagation after each, until nothing changes.
+//! 6. `ipa-range<N>.`, up to four rounds, if `ranges` is set: the range every
+//!    caller passes a parameter is stated on it for the body's own proofs.
+//! 7. `ipa-deadargs.` ([`crate::deadargs`]): parameters nothing reads go.
+//! 8. `ipa-peel.` and `ipa-recursive.`: a function that calls itself gets
+//!    copies of itself, and its callers one copy
+//!    (`inline::inlined_into_itself`, `inline::peeled_into`); skipped where the
+//!    threshold is 0 or code size outranks speed.
+//! 9. `stamped_all` again, then `ipa-pure.` removes unused calls to bodies
+//!    proved pure and terminating, and `ipa-noreturn.` cuts the code after a
+//!    call to a private body every path of which stops, keeping the call.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef note fill:transparent,stroke:transparent,color:#64748b
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   st1["<b>stamp</b>"]:::mid
+//!   inl["<b>inline*</b>"]:::mid
+//!   pn["<b>promote/narrow</b>"]:::mid
+//!   rc["<b>ret consts</b>"]:::mid
+//!   lp["<b>[args, cp, inline]*</b>"]:::mid
+//!   rg["<b>ranges</b>"]:::mid
+//!   da["<b>deadargs</b>"]:::mid
+//!   rec["<b>recursion</b>"]:::mid
+//!   st2["<b>stamp</b>"]:::mid
+//!   pu["<b>pure</b>"]:::mid
+//!   nr["<b>noreturn</b>"]:::mid
+//!   re["each changed body re-enters<br/>the per-body pipeline"]:::note
+//!   st1 --> inl
+//!   inl --> pn
+//!   pn --> rc
+//!   rc --> lp
+//!   lp --> rg
+//!   rg --> da
+//!   da --> rec
+//!   rec --> st2
+//!   st2 --> pu
+//!   pu --> nr
+//!   nr -.-> re
+//! ```
+//!
+//! *Interprocedural stages, from bodies at their fixed points*
+//!
+//! The step returns `Proved`: the bodies that cannot return, and the ones a
+//! root still reaches.
+//!
+//! # Example
+//! The stage `ipa-noreturn.` on a call to a body every path of which stops.
+//! Before:
+//!
+//! ```mir
+//! define internal void @spin() {
+//! b:
+//!   br label %l
+//!
+//! l:
+//!   br label %l
+//! }
+//!
+//! define i16 @f(i16 %a) {
+//! b:
+//!   call void @spin()
+//!   %s = add i16 %a, 1
+//!   ret i16 %s
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! define internal void @spin() memory(none) nounwind norecurse {
+//! b:
+//!   br label %l
+//!
+//! l:
+//!   br label %l
+//! }
+//!
+//! define i16 @f(i16 %a) memory(none) nounwind norecurse {
+//! b:
+//!   call void @spin()
+//!   unreachable
+//! }
+//! ```
+//!
+//! The stamp states each body's attributes, and the code after the call that
+//! never returns is cut; the call stays. `@f` is run through its pipeline again
+//! as `ipa-noreturn.`.
+//!
+//! From unit test `test_a_private_terminal_body_cuts_its_callers_tail` in
+//! `interprocedural_tests.rs`.
+//!
+//! # Runs
+//! A `ProgramPass` after the per-body fixed point and before `globaldce`,
+//! and not at -O0. `Stamp` is the same stamping run earlier, before any body's
+//! pipeline, so loops are judged on what their callees do. Which stages run
+//! follows the level: `inline` and `ipa-cp` thresholds, `ipa-range`
+//! (`-fipa-vrp`, -O2 and up), `ipa-cp-clone` (-O3 and up). See
+//! `docs/reference/levels.md`.
+//!
+//! # Needs
+//! [`crate::inline`], [`crate::ipacp`], [`crate::profit`], and
+//! `llrm_analysis`' `Summaries`, `GlobalsAA`, `Callbacks`,
+//! `interprocedural` and `parameter_ranges`.
+//!
+//! # See also
+//! LLVM's FunctionAttrs and IPSCCP; GCC's `ipa-inline.cc`, `ipa-cp.cc` and
+//! `ipa-modref.cc`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::cfg::Shape;
@@ -1412,6 +1544,7 @@ pub fn optimized_with<E: From<String>>(
     // early passes have made them: a body with two calls would be a tree,
     // not a chain.
     if let Some(budget) = threshold.recursive_budget(reach).filter(|_| !threshold.single) {
+        let mut unit = inline::UnitSize::of(&program.modules);
         for at in 0..count {
             for &id in &procedures[at] {
                 let module = &mut program.modules[at];
@@ -1422,6 +1555,24 @@ pub fn optimized_with<E: From<String>>(
                 {
                     continue;
                 }
+                // gcc inlines the callee's body as it was into the callers that
+                // are not it, before the callee is given copies
+                // of itself (`inline::peeled_into`).
+                let callers: Vec<GlobalId> = procedures[at].iter().copied().filter(|&one| one != id).collect();
+                for one in callers {
+                    let module = &mut program.modules[at];
+                    if !module.global(one).function().is_some_and(|body| {
+                        body.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, body, inst) == Some(id))
+                    }) {
+                        continue;
+                    }
+                    let (context, body) = function_mut(module, one);
+                    if inline::peeled_into(id, body, &original, budget, context, &mut unit) > 0 {
+                        edited(&mut modules[at], &[one]);
+                        reoptimised(&mut program.modules[at], &mut modules[at], one, "ipa-peel.")?;
+                    }
+                }
+                let module = &mut program.modules[at];
                 let mut work = original.clone();
                 let (metadata, globals) =
                     (module.metadata.clone(), module.globals.iter().map(GlobalValue::declaration).collect::<Vec<_>>());
@@ -1434,6 +1585,7 @@ pub fn optimized_with<E: From<String>>(
                         crate::profit::_frequencies(context, &metadata, &globals, function, None).unwrap_or_default()
                     },
                     &mut module.context,
+                    &mut unit,
                 );
                 if made == 0 {
                     continue;
@@ -1576,6 +1728,10 @@ pub fn stamped(
     let graph = analyses.get::<CallGraphAnalysis>(module);
     let callees = llrm_mir::memory::callees(module);
     let never_reentered = graph.cannot_reenter(module);
+    let cycles: Vec<Vec<GlobalId>> =
+        graph.bottom_up_components().into_iter().filter(|(_, cyclic)| *cyclic).map(|(members, _)| members).collect();
+    let cycle: BTreeMap<GlobalId, usize> =
+        cycles.iter().enumerate().flat_map(|(at, members)| members.iter().map(move |&member| (member, at))).collect();
     for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(
@@ -1628,12 +1784,8 @@ pub fn stamped(
             let shape = Shape::of(function);
             // Found once for the function, not for each loop: the proofs of
             // every loop ask the same.
-            let registers = llrm_analysis::consts::known(
-                &unit_of(module, layout, function).with_spaces(program.target.spaces()),
-                None,
-                None,
-                None,
-            );
+            let registers =
+                llrm_analysis::consts::known(&unit_of(module, layout, function).with_spaces(program.target.spaces()));
             let proofs = |one| {
                 llrm_analysis::induction::counted(
                     &unit_of(module, layout, function)
@@ -1657,15 +1809,13 @@ pub fn stamped(
         };
         let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;
         let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, program.target.spaces(), function);
-        let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
-        for &inst in &calls {
-            let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };
-            let declared = llrm_mir::memory::callee(&module.context, function, inst)
-                .and_then(|one| declarations.get(one.0 as usize))
-                .and_then(GlobalValue::function)
-                .map_or(Effects::ANY, |one| llrm_mir::memory::inaccessible(&one.attrs));
-            hidden = _either(hidden, _both(declared, llrm_mir::memory::inaccessible(&info.attrs)));
-        }
+        // A cycle of calls is stamped together, as LLVM's
+        // PostOrderFunctionAttrs takes an SCC: each member does what
+        // all of them do besides calling one another.
+        let members = cycle.get(&id).map_or_else(|| vec![id], |at| cycles[*at].clone());
+        let hidden = members
+            .iter()
+            .fold(Effects::NONE, |all, &member| _either(all, hidden_by(module, member, &declarations, &graph)));
         let pointers = function
             .parameters()
             .iter()
@@ -1690,7 +1840,7 @@ pub fn stamped(
             if !Facts::of(attrs).no_capture() {
                 attrs.extend(Fact::NoCapture.attribute());
             }
-            let through = |slices: &BTreeSet<Slice>| {
+            let through = |slices: &llrm_analysis::sliceset::SliceSet| {
                 slices
                     .iter()
                     .any(
@@ -1724,6 +1874,40 @@ pub fn stamped(
     Ok(changed)
 }
 
+/// What body `id` does to inaccessible memory itself or through the calls it
+/// makes outside the cycle it is in: a volatile access, or a call whose callee
+/// and site do not rule it out.
+fn hidden_by(
+    module: &Module,
+    id: GlobalId,
+    declarations: &[GlobalValue],
+    graph: &CallGraph,
+) -> Effects {
+    let Some(function) = module.global(id).function() else { return Effects::ANY };
+    let volatile = function
+        .walk()
+        .any(
+            |(_, inst)| matches!(
+                function.instruction(inst).opcode,
+                Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
+            ),
+        );
+    let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
+    for (_, inst) in function.walk() {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };
+        let callee = llrm_mir::memory::callee(&module.context, function, inst);
+        if callee.is_some_and(|one| graph.together(id, one)) {
+            continue;
+        }
+        let declared = callee
+            .and_then(|one| declarations.get(one.0 as usize))
+            .and_then(GlobalValue::function)
+            .map_or(Effects::ANY, |one| llrm_mir::memory::inaccessible(&one.attrs));
+        hidden = _either(hidden, _both(declared, llrm_mir::memory::inaccessible(&info.attrs)));
+    }
+    hidden
+}
+
 fn unit_of<'a>(
     module: &'a Module,
     layout: &'a llrm_mir::datalayout::DataLayout,
@@ -1755,7 +1939,7 @@ fn _narrowed(
     hidden: Effects,
 ) {
     let local = |one: &Slice| matches!(one.object.kind, MemoryKind::Frame | MemoryKind::Stack);
-    let found = |slices: &BTreeSet<Slice>, parameter: bool| {
+    let found = |slices: &llrm_analysis::sliceset::SliceSet, parameter: bool| {
         slices.iter().filter(|one| !local(one)).any(|one| (one.object.kind == MemoryKind::Parameter) == parameter)
     };
     let (stated_arguments, stated_other) = llrm_mir::memory::located(attrs);

@@ -69,7 +69,7 @@ fn facts() -> Regex {
 }
 
 /// The one place that names the targets built in, which is its job
-/// (docs/targets.md, the first principle).
+/// (docs/machine/targets.md, the first principle).
 const REGISTRY: &str = "crates/backend/llrm-driver/src/lib.rs";
 
 fn is_test_file(path: &Path) -> bool {

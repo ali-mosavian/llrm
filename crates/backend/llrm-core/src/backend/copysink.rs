@@ -1,14 +1,56 @@
-//! Port of `qbopt/backend/copysink.py`: move a copy out of a loop when only
-//! what is after the loop reads it.
+//! Move a register copy out of a loop to its exit when only code after the
+//! loop reads it.
 //!
-//! A phi whose value is computed in a loop and read after it becomes a copy on
-//! the edge back to the header, so it runs every iteration to hand over a value
-//! nothing inside the loop looks at. The copy belongs on the exit edge. That is
-//! sound while every way out runs the copy first (its block dominates the
-//! exiting one: a loop left from its header before any trip never ran it, and
-//! the destination must keep what it held), the destination is read nowhere
-//! in the loop, and the source is not written between the copy and the exit,
-//! which is what this checks.
+//! # How it works
+//! A phi whose value is computed in a loop and read after it becomes a
+//! copy inside the loop, run every trip to hand over a value nothing in
+//! the loop looks at. The copy belongs at the top of the exit block.
+//!
+//! ```text
+//!   H: ...                           H: ...
+//!      mov dx, ax                       mov dx, ax
+//!      mov di, dx    (read only    =>   cmp ax, bx
+//!      cmp ax, bx     after the         jl  H
+//!      jl  H          loop)          X: mov di, dx     <- once
+//!   X: ... di ...                       ... di ...
+//! ```
+//!
+//! A loop is considered when it has one way out, from one block to one exit
+//! block that has no other predecessor. Within it a candidate is a plain
+//! `mov reg,reg` (same width, distinct, no constraints, relocation or spill
+//! marker) in a block that dominates the exiting block, so every way out
+//! has run it. Without that a loop left from its header before the first
+//! trip never ran the copy, and the destination must keep what it held.
+//! Lane sets (byte lanes of the registers, from decoded effects) decide the
+//! rest:
+//!
+//! - The destination is dead on every way round the loop, nested loops
+//!   included: a backward liveness over the loop's blocks, with the exit edge
+//!   left out because the exit's read is what the sink is for.
+//! - Between the copy and the exit, in its block and every loop block on a path
+//!   that avoids the copy's block, no instruction writes the destination or the
+//!   source, or reads the destination.
+//!
+//! A copy that passes is removed and put first in the exit block, in the
+//! order found.
+//!
+//! # Example
+//! No honest example: the pass runs inside the peephole phase, whose dump mixes
+//! it with every other rewrite, and its unit tests build the loop in Rust. They
+//! assert where each copy
+//! ends up: `test_copy_read_only_after_its_loop_moves_to_the_exit`.
+//!
+//! # Runs
+//! Inside the peephole phase, after copy propagation and extension
+//! rewrites, before `spillforward`. Once per peephole run. No flag of its own.
+//!
+//! # Needs
+//! [`crate::analysis::loops`] for loops and dominance, and
+//! [`crate::backend::liveness`] for the backward walk.
+//!
+//! # See also
+//! [`crate::backend`]. [`copy_of`] and [`touches`] are shared with
+//! `postrasink`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -343,7 +385,11 @@ mod tests {
         // Shellsort's gap loop: `mov cx,dx` in the inner loop's header saved
         // `i` for the inner loop's latch; it must not leave for the
         // outer exit.
-        use iced_x86::Register::{AX, BX, CX, DX, SI};
+        const AX: RegId = RegId::AX;
+        const BX: RegId = RegId::BX;
+        const CX: RegId = RegId::CX;
+        const DX: RegId = RegId::DX;
+        const SI: RegId = RegId::SI;
         let body = LirBody::new(
             "f",
             1,
@@ -360,14 +406,17 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        assert_eq!(_copies(&sunk(&body))[&38], vec![r(CX)]);
+        assert_eq!(_copies(&sunk(&body))[&38], vec![r(RegId::from(CX))]);
     }
 
     #[test]
     fn test_copy_read_only_after_its_loop_moves_to_the_exit() {
         // Plasmablobs: `mov di,dx` on the way back to the header ran every pass
         // for one read after the loop.
-        use iced_x86::Register::{AX, BX, DI, DX};
+        const AX: RegId = RegId::AX;
+        const BX: RegId = RegId::BX;
+        const DI: RegId = RegId::DI;
+        const DX: RegId = RegId::DX;
         let body = LirBody::new(
             "f",
             1,
@@ -384,7 +433,7 @@ mod tests {
             IndexMap::default(),
         );
         let copies = _copies(&sunk(&body));
-        assert!(copies[&5].is_empty() && copies[&9] == vec![r(DI)]);
+        assert!(copies[&5].is_empty() && copies[&9] == vec![r(RegId::from(DI))]);
     }
 
     #[test]
@@ -392,7 +441,10 @@ mod tests {
         // #111: the latch's `mov di,dx` left for the exit of a loop tested at
         // its header; run no times, the loop left DI the value DX happened to
         // hold, not the one DI held before it (5812 where 0 is right on DOS).
-        use iced_x86::Register::{AX, BX, DI, DX};
+        const AX: RegId = RegId::AX;
+        const BX: RegId = RegId::BX;
+        const DI: RegId = RegId::DI;
+        const DX: RegId = RegId::DX;
         let body = LirBody::new(
             "f",
             1,
@@ -406,7 +458,7 @@ mod tests {
             IndexMap::default(),
         );
         let copies = _copies(&sunk(&body));
-        assert!(copies[&5] == vec![r(DI)] && copies[&9].is_empty(), "{copies:?}");
+        assert!(copies[&5] == vec![r(RegId::from(DI))] && copies[&9].is_empty(), "{copies:?}");
     }
 
     fn _raw_insn(

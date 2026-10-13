@@ -1,32 +1,131 @@
-//! Adapted from llrm-core's `optimize/gvn.rs`, the port of
-//! `qbopt/optimize/gvn.py`: global value numbering and partial redundancy
-//! elimination.
+//! Reuses a value the function already has, so the same operation is not
+//! computed twice and the same bytes are not read again: LLVM's GVN and gcc's
+//! FRE/PRE. One pass owns reuse of a value, whether it came from arithmetic, a
+//! load or a store. `Gvn` is the pass; `EqualCalls` is its call part alone.
 //!
-//! One pass owns reuse, whether the value came from arithmetic or memory.
-//! `Gvn` is the pass; the old one sat with the pipeline in `transform.rs`.
+//! # How it works
+//! `Gvn` runs these steps on a body, in order.
 //!
-//! What changed with the IR:
-//! - A function argument is defined at the entry, ahead of everything.
-//! - An inserted expression goes before its predecessor's unconditional `br`; a
-//!   block leaves only by its terminator, so the old refusal of a predecessor
-//!   holding a branch, return or escape is that terminator.
-//! - The flags checks are gone: no value is the machine's flags. `Convert` (the
-//!   register-pair extension) and `Copy` have no instruction, so what `joined`
-//!   refuses of `_PURE` is the divisions, which may trap on a path that did not
-//!   divide.
-//! - `_on_edge` translates an instruction's operands; a phi's input may be a
-//!   constant.
+//! 1. Branch equality (`propagated`, LLVM's `propagateEquality`). In what the
+//!    edge to a successor dominates, the branch's condition is that edge's
+//!    constant.
+//! 2. Numbering (`transform::forwarded`, `transform::subexpressions`,
+//!    `transform::equal_calls`). A load a known value serves becomes that
+//!    value: a dominating store of the same bytes and type, or an earlier load
+//!    of them, with nothing between that may write them. Two pure operations on
+//!    the same operands are one, a copy counting as its source and a
+//!    commutative pair ordered. Two calls with the same callee and arguments
+//!    that read and write no memory are one.
+//! 3. Join PRE (`joined`). An expression every predecessor of a join already
+//!    computes becomes a phi of those values. With `pre`, a predecessor that
+//!    lacks it gets the computation inserted before its unconditional `br`, if
+//!    no loop is entered or left by the edge and the operands are available
+//!    there. Divisions (which may trap on a path that did not divide), loads
+//!    and floating expressions are never inserted here.
+//! 4. Load PRE (`loadjoins::reused`). A load at a join whose bytes every
+//!    predecessor holds becomes a phi of those values; with `pre`, a
+//!    predecessor holding none gets its own load on its edge where that
+//!    speculates nothing.
 //!
-//! `floatfold::checks` has no counterpart: the rich MIR observes no FP
-//! exception.
+//! A volatile access is never numbered. Floats are numbered like integers; a
+//! value serves a read only of its own type, so a float store reaches a float
+//! load exactly and nothing rounds. Which floats are exact constants is
+//! [`crate::floatfold`]'s question.
 //!
-//! What each instruction touches is `memoryssa::Accesses`, asked once
-//! before anything changes; without `Summaries` required, every call is
-//! to an unknown callee.
-//! `reused_divides` has no counterpart (see `transform`).
+//! What serves a load is a MemorySSA walk (`avail::forwardable_walk`).
+//! `memoryssa::Accesses` says what each instruction reads and writes,
+//! `alias::PointsTo` what each pointer may point to, and a call's footprint is
+//! its `CallEffects` from `Summaries`; without `Summaries` every callee is
+//! unknown. A call that may write the bytes, or a store that may overlap, ends
+//! the walk, and a walk past `MAX_NEAREST_WRITES` (100) writes gives up.
 //!
-//! The old module had no tests of its own; `subexpressions`' are in
-//! `transform` and these in `gvn_tests.rs`.
+//! A value held across a store saves a load but lengthens a live range. Where a
+//! load was served across a store the function is numbered twice, once crossing
+//! stores and once avoiding them, and the crossing one stands unless the
+//! careful one prices lower (`profit::motion_price`: work weighted by block
+//! frequency plus the spill forecast against the target's registers). Where
+//! nothing spills the crossing one stands. Trip counts are the proven ones
+//! (`profit::proven_trips`). Without `pre` there is no pricing and a load is
+//! served wherever it is redundant on every path.
+//!
+//! `EqualCalls` runs the call numbering alone, before `tailrec`, so two equal
+//! calls are one before one of them becomes the loop's next trip (EarlyCSE
+//! precedes tail-recursion elimination in LLVM, FRE in gcc). It asks for no
+//! analysis unless the body has two such calls.
+//!
+//! # Example
+//! A store's value reaches the load after it, and the load below a join takes
+//! the value each arm stored. Before:
+//!
+//! ```mir
+//! @g = global i16 0
+//!
+//! define i16 @f(i16 %x, i16 %y, i1 %c) {
+//! b0:
+//!   store i16 %x, ptr @g
+//!   %r = load i16, ptr @g
+//!   ret i16 %r
+//! }
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! define i16 @f(i16 %x, i16 %y, i1 %c) {
+//! b0:
+//!   store i16 %x, ptr @g
+//!   ret i16 %x
+//! }
+//! ```
+//!
+//! From unit test `test_gvn_forwards_a_stored_value_to_its_load` in
+//! `gvn_tests.rs`. Before:
+//!
+//! ```mir
+//! b0:
+//!   br i1 %c, label %b1, label %b2
+//!
+//! b1:
+//!   store i16 %x, ptr @g
+//!   br label %b3
+//!
+//! b2:
+//!   store i16 %y, ptr @g
+//!   br label %b3
+//!
+//! b3:
+//!   %r = load i16, ptr @g
+//!   ret i16 %r
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! b3:
+//!   %r1 = phi i16 [ %x, %b1 ], [ %y, %b2 ]
+//!   ret i16 %r1
+//! ```
+//!
+//! `b0` to `b2` are unchanged. From unit test
+//! `test_gvn_joins_the_values_each_arm_stored` in `gvn_tests.rs`.
+//!
+//! # Runs
+//! `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after
+//! `dse`, before `promote`. Both are on at every optimizing level and are
+//! turned off together by `-fno-gcse`. `Gvn`'s PRE steps and pricing (`pre`)
+//! are on from -O2, the -O1 level being FRE, and off with `-fno-tree-pre`. Each
+//! runs once per body pass.
+//!
+//! # Needs
+//! [`crate::transform`], [`crate::loadjoins`], `memoryssa::Accesses`,
+//! `alias::PointsTo`, `Summaries`, registers and loop trips for pricing.
+//!
+//! # Keeps
+//! Dominators and loops, unless a join split an edge.
+//!
+//! # See also
+//! Tests: `gvn_tests.rs`, `loadjoins_tests.rs`. Levels:
+//! `docs/reference/levels.md`. LLVM `GVN.cpp`; gcc `tree-ssa-pre.cc`.
 
 use std::collections::BTreeMap;
 
@@ -48,9 +147,18 @@ use crate::{edges, loadjoins, transform};
 
 /// The single value-reuse pass: scalar GVN and memory-aware PRE. The
 /// target's registers price it (`profit::registers`); none leaves pricing
-/// out.
-#[derive(Default)]
-pub struct Gvn;
+/// out. Without `pre` it only eliminates what is redundant on every path
+/// (gcc's `-ftree-fre`, -O1): nothing is inserted to make a partial
+/// redundancy full.
+pub struct Gvn {
+    pub pre: bool,
+}
+
+impl Default for Gvn {
+    fn default() -> Self {
+        Self { pre: true }
+    }
+}
 
 impl FunctionPass for Gvn {
     fn name(&self) -> &'static str {
@@ -70,7 +178,7 @@ impl FunctionPass for Gvn {
         // Numbering leaves the CFG alone: every candidate has these trips.
         let registers = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        let trips = if !profit::registers(analyses.outer()).priced() {
+        let trips = if !self.pre || !profit::registers(analyses.outer()).priced() {
             IndexMap::default()
         } else {
             let counted = analyses.get::<llrm_analysis::manager::Counted>(unit.context, unit.layout, unit.function);
@@ -82,13 +190,51 @@ impl FunctionPass for Gvn {
                 &registers,
             )
         };
-        match accesses
-            .and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape))
-        {
+        match accesses.and_then(|accesses| {
+            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.pre)
+        }) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("gvn: {error}"),
+        }
+    }
+}
+
+/// Whether the call `inst` of `function` reads and writes nothing.
+fn silent(
+    context: &llrm_mir::context::Context,
+    outer: &Outer,
+) -> impl Fn(&Function, InstId) -> bool {
+    move |function, inst| {
+        let effects = llrm_mir::memory::of(context, outer.callees(), function, inst);
+        !effects.reads && !effects.writes
+    }
+}
+
+/// What EarlyCSE does to calls: two equal calls that touch no memory are one,
+/// before `tailrec` makes the second a loop's trip and leaves the first alone.
+/// Arithmetic and loads stay for `Gvn`, which prices what a longer-lived value
+/// costs in spills; a call is always worth merging. No analysis is asked for
+/// unless the body has two such calls.
+#[derive(Default)]
+pub struct EqualCalls;
+
+impl FunctionPass for EqualCalls {
+    fn name(&self) -> &'static str {
+        "equalcalls"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        match transform::equal_calls(unit.function, &silent(unit.context, &outer)) {
+            Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
+            Ok(false) => PreservedAnalyses::all(),
+            Err(error) => panic!("equalcalls: {error}"),
         }
     }
 }
@@ -109,27 +255,26 @@ pub fn optimized(
     trips: &IndexMap<i64, i64>,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
+    pre: bool,
 ) -> Result<bool, String> {
     let equal = propagated(unit);
     // What is known of the body the manager saw, unless propagating a branch's
     // condition changed it.
     let fresh;
     let registers = if equal {
-        fresh = llrm_analysis::consts::known(
-            &memory::Unit::within(unit.context, unit.layout, unit.function, outer),
-            None,
-            None,
-            None,
-        );
+        fresh = llrm_analysis::consts::known(&memory::Unit::within(unit.context, unit.layout, unit.function, outer));
         &fresh
     } else {
         registers
     };
     let (numbered, subexpressed) =
-        _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer), trips, registers, shape)?;
+        // Without `pre` this is -O1's FRE: gcc's has no profit pricing, so a
+        // load is served wherever it is redundant and nothing is numbered
+        // twice.
+        _numbered(unit, outer, accesses, &profit::costs(outer), if pre { profit::registers(outer) } else { crate::spill::Room::default() }, trips, registers, shape)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
-    let combined = joined(unit.function, !subexpressed)?;
+    let combined = joined(unit.function, pre && !subexpressed)?;
     // Joining may split an edge, which the manager's shape has not seen.
     let joined_shape;
     let shape = if combined {
@@ -146,7 +291,7 @@ pub fn optimized(
         outer.callees(),
         accesses,
         pointers,
-        !combined,
+        pre && !combined,
         shape,
     )?;
     Ok(equal || numbered || combined || loaded)
@@ -231,7 +376,7 @@ fn _numbered(
     let crossed = std::cell::Cell::new(false);
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
-        let mut function = function.clone();
+        let mut function = function.fork();
         let forwarded = transform::forwarded(
             unit.context,
             unit.layout,
@@ -246,7 +391,10 @@ fn _numbered(
         )?;
         let subexpressed =
             transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
-        Ok((function, (forwarded || subexpressed, subexpressed)))
+        // Equal calls that touch nothing are one, after the arithmetic that
+        // makes their arguments equal.
+        let called = transform::equal_calls(&mut function, &silent(unit.context, outer))?;
+        Ok((function, (forwarded || subexpressed || called, subexpressed || called)))
     };
     let crossing = numbered(unit.function, false)?;
     let price = |one: &Function| {

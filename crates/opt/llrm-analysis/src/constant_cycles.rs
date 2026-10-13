@@ -1,15 +1,83 @@
-//! Sparse value propagation with distinct pending and overdefined states:
-//! llrm-core's `analysis/constant_cycles.rs`, a port of
-//! `qbopt/analysis/constant_cycles.py`, adapted to the rich MIR. An
-//! optional successor evaluator discovers executable edges. Pending values
-//! are never interpreted as LLVM undef: unresolved reachable values become
-//! overdefined before the final result, and unresolved branches retain
-//! every successor.
+//! Sparse value propagation over phis, with distinct pending and overdefined
+//! states, to find constants that only a cycle proves.
 //!
-//! A phi's incoming constant is known, as the old MIR's copy of one was.
+//! # How it works
+//! Each value has a state: `Pending` (nothing met yet), `Known(fact)` or
+//! `Overdefined`, with `Pending` the identity of the meet and two different
+//! facts meeting to `Overdefined`. `propagated(unit, seeds, successors, only)`
+//! takes the facts already known (`seeds`, from [`crate::consts`]) and settles
+//! the rest, which are the phis no seed has and the operations that depend on
+//! them: all of them, or the values `only` names (an incremental `Registers`
+//! brings up to date the values a change reached and no others). Values that
+//! cannot come out known (one made from an argument, a load or a call) are left
+//! out of the propagation. A body with no such open phi returns its seeds at
+//! once.
 //!
-//! Skipped, `test_cyclic_propagation_does_not_widen_a_known_word`: a phi's
-//! incoming values share its type, so a word cannot meet a long there.
+//! A worklist re-evaluates a value when one of its inputs changes. A phi meets
+//! the facts of its incoming values (constants evaluate through
+//! `consts::_operand`); a supported operation (a foldable binary operation,
+//! `trunc`, `sext`) folds through `consts::_result` when every input is known,
+//! stays pending while some input is pending and none is overdefined, and
+//! otherwise is overdefined. When nothing is left on the worklist and pending
+//! values remain, they are made overdefined and propagation continues.
+//! Pending is never read as LLVM `undef`: an unresolved value is overdefined
+//! before the result is returned.
+//!
+//! ```text
+//!  b1:  %i = phi [0, b0], [%j, b1]    %i: meet(Known 0, pending) = Known 0
+//!       %j = add %i, 0                %j: Known 0
+//!                                     %i again: meet(Known 0, Known 0), stable
+//! ```
+//!
+//! An optional successor evaluator (`Successors { choose, reads }`) finds the
+//! executable edges. Only the entry is live at first; a block's `choose`
+//! answers which successors run from the facts so far, and is asked again only
+//! when a value in `reads` for that block changes. A phi then meets only the
+//! incoming values of executable edges, and the entry's phis also meet
+//! `Overdefined`, since the entry runs before any back edge. A block whose
+//! branch `choose` defers (`None`) keeps every successor once nothing else is
+//! left to resolve.
+//!
+//! # Example
+//! A loop whose carried value adds 0 to itself, so only the cycle proves it:
+//!
+//! ```mir
+//! define void @f(i32 %incoming, i1 %more) {
+//! b0:
+//!   br label %b10
+//!
+//! b10:
+//!   %joined = phi i32 [ 7, %b0 ], [ %carried, %b10 ]
+//!   %carried = add i32 %joined, 0
+//!   br i1 %more, label %b10, label %b20
+//!
+//! b20:
+//!   ret void
+//! }
+//! ```
+//!
+//! | Value | Fact |
+//! | --- | --- |
+//! | `%joined` | `Known { n: 7, width: 32 }` |
+//! | `%carried` | `Known { n: 7, width: 32 }` |
+//!
+//! With step 1, or with `%incoming` as the source of the add, neither is known.
+//!
+//! From unit test `test_unchanged_loop_value_is_constant_through_its_backedge`
+//! in `constant_cycles_tests.rs`.
+//!
+//! # Provides
+//! `State`, `Successors` and `propagated`. Consumers: [`crate::consts`]
+//! (`known`, with no evaluator) and `decide` in `llrm-transforms`, which
+//! passes an evaluator to find which branches fold.
+//!
+//! # Needs
+//! [`crate::consts`] for the per-operation folding, and [`crate::cfg`].
+//!
+//! # See also
+//! LLVM SCCP (`SCCPSolver`) and its `unknown`, `constant`, `overdefined`
+//! lattice. `LLRM_CHECK_CYCLES` re-derives the result without the early
+//! return and asserts it matches.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -63,28 +131,153 @@ thread_local! {
     pub static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// What a value is folded from: the operations `propagated` evaluates.
+fn _supported(opcode: &Opcode) -> bool {
+    match opcode {
+        Opcode::Binary(kind) => consts::folds(*kind),
+        Opcode::Cast(CastOp::Trunc | CastOp::SExt) => true,
+        _ => false,
+    }
+}
+
+/// The values that can come out known: a phi, or an operation `_supported`
+/// evaluates, all of whose operands can. Any other value is overdefined at the
+/// end whatever the rest is (an operand that is overdefined makes a phi and a
+/// fold overdefined; `x ^ x` and `x - x` are zero for any `x`), so the
+/// propagation does not set a recipe up for it: a body of N counted loops has N
+/// phis to settle and every other value of it, which was 70% of what `analysis
+/// registers` cost at N=64.
+fn _possible(
+    unit: &Unit,
+    relevant: &[(llrm_mir::module::BlockId, InstId)],
+    seeded: &dyn Fn(&ValueId) -> bool,
+) -> llrm_mir::dense::IdSet<ValueId> {
+    use llrm_mir::dense::{IdMap, IdSet};
+    let function = unit.function;
+    let zeroes = |op: &llrm_mir::module::Instruction| {
+        matches!(
+            op.opcode,
+            Opcode::Binary(llrm_mir::opcode::BinaryOp::Xor | llrm_mir::opcode::BinaryOp::Sub)
+        )
+            && matches!(op.operands[0], Operand::Value(_))
+            && op.operands[0] == op.operands[1]
+    };
+    let mut possible = IdSet::<ValueId>::new();
+    fn named<'a>(
+        op: &'a llrm_mir::module::Instruction,
+        zero: bool,
+    ) -> impl Iterator<Item = ValueId> + 'a {
+        let step = if op.opcode == Opcode::Phi { 2 } else { 1 };
+        let kept = if zero { 0 } else { op.operands.len() };
+        op.operands
+            .iter()
+            .take(kept)
+            .step_by(step)
+            .filter_map(
+                |one| match one {
+                    Operand::Value(one) => Some(*one),
+                    _ => None,
+                },
+            )
+    }
+    let mut candidates = Vec::<(ValueId, InstId)>::new();
+    for &(_, inst) in relevant {
+        let op = function.instruction(inst);
+        let Some(value) = consts::_defined(unit, inst).filter(|value| !seeded(value)) else { continue };
+        if op.opcode == Opcode::Phi || _supported(&op.opcode) || zeroes(op) {
+            possible.insert(value);
+            candidates.push((value, inst));
+        }
+    }
+    let mut users = IdMap::<ValueId, Vec<ValueId>>::new();
+    let mut gone = Vec::<ValueId>::new();
+    for &(value, inst) in &candidates {
+        for one in named(function.instruction(inst), zeroes(function.instruction(inst))) {
+            if !seeded(&one) && !possible.contains(&one) {
+                if possible.remove(&value) {
+                    gone.push(value);
+                }
+            } else {
+                users.get_or_insert_with(one, Vec::new).push(value);
+            }
+        }
+    }
+    while let Some(value) = gone.pop() {
+        for &user in users.get(&value).into_iter().flatten() {
+            if possible.remove(&user) {
+                gone.push(user);
+            }
+        }
+    }
+    possible
+}
+
+thread_local! {
+    /// 1 while `LLRM_CHECK_CYCLES` works a propagation twice, 2 for the run
+    /// that leaves no value out.
+    static CHECKING: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// `only`, where given, names the values to settle: the others are final, as
+/// `seeds` has them or not at all.
 pub fn propagated(
     unit: &Unit,
-    seeds: &IndexMap<ValueId, Known>,
+    seeds: IndexMap<ValueId, Known>,
     successors: Option<Successors<'_>>,
+    only: Option<&llrm_mir::dense::IdSet<ValueId>>,
 ) -> IndexMap<ValueId, Known> {
+    if successors.is_none() && CHECKING.get() == 0 && llrm_support::env_set("LLRM_CHECK_CYCLES") {
+        CHECKING.set(1);
+        let found = propagated(unit, seeds.clone(), successors, only);
+        CHECKING.set(2);
+        let whole = propagated(unit, seeds, successors, only);
+        CHECKING.set(0);
+        assert!(found == whole, "constant cycles: leaving out the values that cannot be known changed the facts");
+        return found;
+    }
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else {
-        return seeds.clone();
+        return seeds;
     };
     let is_phi = |inst: InstId| function.instruction(inst).opcode == Opcode::Phi;
+    // The instructions that make the values to settle, in layout order where
+    // all are.
+    let relevant: Vec<(llrm_mir::module::BlockId, InstId)> = match only {
+        None => function.walk().collect(),
+        Some(only) => only
+            .iter()
+            .filter_map(|value| match function.value(value).def {
+                llrm_mir::module::ValueDef::Instruction(inst) => function.parent(inst).map(|block| (block, inst)),
+                llrm_mir::module::ValueDef::Argument(_) => None,
+            })
+            .collect(),
+    };
+    // A body with no phi that lacks a seed has nothing to settle: no more is
+    // set up for it.
+    let unseeded = |(_, inst): &(_, InstId)| {
+        is_phi(*inst) && consts::_defined(unit, *inst).is_some_and(|value| !seeds.contains_key(&value))
+    };
+    if !relevant.iter().any(unseeded) && !llrm_support::env_set("LLRM_CHECK_CYCLES") {
+        return seeds;
+    }
+    let possible = (successors.is_none() && CHECKING.get() != 2)
+        .then(|| _possible(unit, &relevant, &|value| seeds.contains_key(value)));
+    let possible = possible.as_ref();
     // What is left to propagate is a phi no seed has: every other value is as
     // `seeds` has it, or derives from them. Setting the propagation up (a
     // recipe for every value, the consumers, a copy of the graph) was 1.8% of
     // the -O1 compile of QCport, 25000 times for bodies with nothing to
     // resolve. LLRM_CHECK_CYCLES works it out anyway and asserts it comes to
     // the seeds.
-    let open = function
-        .walk()
+    let open = relevant
+        .iter()
         .filter(|(_, inst)| is_phi(*inst))
-        .any(|(_, inst)| consts::_defined(unit, inst).is_some_and(|value| !seeds.contains_key(&value)));
+        .any(
+            |&(_, inst)| consts::_defined(unit, inst)
+                .is_some_and(|value| !seeds.contains_key(&value) && possible.is_none_or(|kept| kept.contains(&value))),
+        );
     if !open && !llrm_support::env_set("LLRM_CHECK_CYCLES") {
-        return seeds.clone();
+        return seeds;
     }
     #[cfg(test)]
     WORKED.with(|worked| worked.set(worked.get() + 1));
@@ -92,8 +285,10 @@ pub fn propagated(
     let mut recipes = IndexMap::<ValueId, InstId>::default();
     let mut owners = IndexMap::<ValueId, i64>::default();
     for phis in [true, false] {
-        for (block, inst) in function.walk().filter(|(_, inst)| is_phi(*inst) == phis) {
-            if let Some(value) = consts::_defined(unit, inst) {
+        for &(block, inst) in relevant.iter().filter(|(_, inst)| is_phi(*inst) == phis) {
+            if let Some(value) = consts::_defined(unit, inst)
+                .filter(|value| possible.is_none_or(|kept| kept.contains(value) || seeds.contains_key(value)))
+            {
                 recipes.insert(value, inst);
                 owners.insert(value, cfg::id(block));
             }
@@ -103,8 +298,13 @@ pub fn propagated(
         .keys()
         .map(|value| (*value, seeds.get(value).cloned().map_or(State::Pending, State::Known)))
         .collect::<IndexMap<_, _>>();
-    for (value, fact) in seeds {
-        states.insert(*value, State::Known(fact.clone()));
+    // A body settled by `only` or by the values it has no edges for reads the
+    // seeds as they are.
+    let sparse = successors.is_none();
+    if !sparse {
+        for (value, fact) in &seeds {
+            states.insert(*value, State::Known(fact.clone()));
+        }
     }
     let values = |inst: InstId| -> Vec<Operand> {
         let op = function.instruction(inst);
@@ -118,10 +318,10 @@ pub fn propagated(
             }
         }
     }
-    let graph = cfg::graph(function);
+    let graph = if successors.is_some() { cfg::graph(function) } else { Vec::new() };
     let blocks = graph.iter().map(|block| (block.at, block)).collect::<IndexMap<_, _>>();
     let mut live = match successors {
-        None => blocks.keys().copied().collect::<PySet<i64>>(),
+        None => owners.values().copied().collect::<PySet<i64>>(),
         Some(_) => [entry].into_iter().collect(),
     };
     let mut edges = BTreeSet::<(i64, i64)>::new();
@@ -173,19 +373,14 @@ pub fn propagated(
         }
         true
     };
-    let supported = |opcode: &Opcode| match opcode {
-        Opcode::Binary(kind) => consts::folds(*kind),
-        Opcode::Cast(CastOp::Trunc | CastOp::SExt) => true,
-        _ => false,
-    };
+    let supported = _supported;
     let knowns = |states: &IndexMap<ValueId, State>| {
-        states
-            .iter()
-            .filter_map(|(value, state)| match state {
-                State::Known(fact) => Some((*value, fact.clone())),
-                _ => None,
-            })
-            .collect::<IndexMap<_, _>>()
+        let mut all = IndexMap::default();
+        all.extend(states.iter().filter_map(|(value, state)| match state {
+            State::Known(fact) => Some((*value, fact.clone())),
+            _ => None,
+        }));
+        all
     };
     // The blocks whose successors are to be asked again: those just live and
     // those that read a value whose state changed. The answers of the
@@ -297,7 +492,11 @@ pub fn propagated(
             if changed || !pending.is_empty() {
                 continue;
             }
-            assert!(open || facts == *seeds, "constant cycles: a body with no open phi came to more than its seeds");
+            assert!(
+                open || facts.iter().all(|(value, fact)| seeds.get(value) == Some(fact))
+                    && (sparse || facts.len() == seeds.len()),
+                "constant cycles: a body with no open phi came to more than its seeds"
+            );
             // The evaluator is asked only where a value it reads changed: asked
             // of every live block now, it names no edge that is not
             // already there.
@@ -319,7 +518,13 @@ pub fn propagated(
                     );
                 }
             }
-            return facts;
+            return if sparse {
+                let mut all = seeds;
+                all.extend(facts);
+                all
+            } else {
+                facts
+            };
         };
         queued.remove(&value);
         if seeds.contains_key(&value) || states[&value] == State::Overdefined {
@@ -328,7 +533,10 @@ pub fn propagated(
         let recipe = recipes[&value];
         let op = function.instruction(recipe);
         let state = |one: Operand| match one {
-            Operand::Value(one) => states.get(&one).cloned().unwrap_or(State::Overdefined),
+            Operand::Value(one) => match states.get(&one) {
+                Some(found) => found.clone(),
+                None => seeds.get(&one).cloned().map_or(State::Overdefined, State::Known),
+            },
             constant => {
                 consts::_operand(unit, constant, &IndexMap::default(), None).map_or(State::Overdefined, State::Known)
             }

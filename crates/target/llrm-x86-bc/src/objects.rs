@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_lir::registers::RegId;
 use llrm_mir::program::SegmentLayout;
 use llrm_mir::{
     CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId, GlobalVariable, Linkage, Module, Type, TypeId,
@@ -523,7 +524,7 @@ fn names_code(
             |node| {
                 let semantics = node.semantics();
                 semantics.sources.iter().chain(&semantics.dests).any(|one| match one {
-                    Loc::Reg(reg) => reg.register == iced_x86::Register::CS,
+                    Loc::Reg(reg) => reg.register == RegId::CS,
                     Loc::Imm(imm) => {
                         imm.address.is_some_and(|address| address.space == Space::Segment && address.index == code)
                     }

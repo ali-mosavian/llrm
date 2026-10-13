@@ -155,7 +155,7 @@ pub fn source(
         }
         let mask = if mask.is_empty() { "0".to_owned() } else { mask.join(" | ") };
         code.push_str(&format!(
-            "    table[{id}::{} as usize] = Some(llrm_lir::registers::Entry {{ id: {id}::{}, name: {:?}, bits: {}, root: {id}::{}, lane: {}, classes: {mask} }});\n",
+            "    table[{id}::{}.index()] = Some(llrm_lir::registers::Entry {{ id: {id}::{}, name: {:?}, bits: {}, root: {id}::{}, lane: {}, classes: {mask} }});\n",
             one.name.to_uppercase(),
             one.name.to_uppercase(),
             one.name,
@@ -190,7 +190,7 @@ pub fn source(
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root as usize;\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views }}\n}};\n",
         loads.join(", "),
         scratch.join(", "),
         columns.join(", "),
@@ -228,7 +228,7 @@ mod source_tests {
             "rows",
         )
         .expect("made");
-        assert!(made.contains("Reg::EAX as usize"), "{made}");
+        assert!(made.contains("Reg::EAX.index()"), "{made}");
         assert!(made.contains("llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT"), "{made}");
     }
 

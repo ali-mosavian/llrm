@@ -1,33 +1,133 @@
-//! A counted loop that stores one byte value into consecutive bytes is one
-//! `llvm.memset`: LLVM's LoopIdiomRecognize. Adapted from llrm-core's
-//! `optimize/fill.rs`, the port of `qbopt/optimize/fill.py`.
+//! Loop idiom recognition and store merging: a counted loop that fills or
+//! copies memory becomes one `llvm.memset`, `llvm.memcpy` or `llvm.memmove`
+//! (LLVM's LoopIdiomRecognize; gcc's loop distribution patterns), and
+//! straight-line adjacent stores become one memset or wider stores (LLVM's
+//! MemCpyOpt `tryMergingIntoMemset`, MergeConsecutiveStores; gcc's store
+//! merging).
 //!
-//! The loop keeps one trip, guarded by its header's test, which fills what
-//! every trip stored; its counters leave with their exit values.
+//! # How it works
+//! `Fill` rewrites one loop at a time, then looks again, with two shapes of
+//! loop: tested before its trips, or tested after them (a loop entered behind a
+//! copy of its test, `-ftree-ch`). The loop has one latch, a straight-line
+//! body, and a trip count `induction::counted` proves; what it does besides
+//! arithmetic is stores, loads and memsets that follow one of these forms:
 //!
-//! What changed with the IR:
-//! - The fill is `llvm.memset`, of bytes and a byte count: a wider store fills
-//!   only where each of its bytes is one number. A word fill of any other
-//!   value, `rep stosw`, is isel's shape; the rich MIR has none.
-//! - Where each trip stores is induction's `derived` address, a GEP off an
-//!   invariant pointer; its bytes per trip must be the element's. The old
-//!   `_offset` walked adds of a register base, and `_stepping` compared the
-//!   counter's step itself.
-//! - The fill's address is the store's own pointer, which the one trip left
-//!   computes from the counters' starts. The old one rebuilt it from the cell's
-//!   base, displacement, segment and storage class.
-//! - Its count in bytes must not wrap the index: a byte's trips never do, and
-//!   wider cells need `inbounds` GEPs or the proof's `maximum`. The counter
-//!   must be the index's width.
-//! - The memset is declared where the module has none, through the pass
-//!   manager's `Declared`.
-//! - `pure` is `memory::only_value` less loads and allocas, and less divisions,
-//!   which trap.
+//! - A fill: a store, or a memset, of a loop-invariant value that is one byte
+//!   repeated, through an address `induction` derives as a GEP off an invariant
+//!   pointer, striding by the element's size. A cell whose bytes do not repeat
+//!   is `llvm.experimental.memset.pattern`. A loop with several fills to bytes
+//!   no other reaches is a memset each; fills that tile adjacent bytes with the
+//!   same byte are one.
+//! - A copy: a load and a store of one cell each trip, the stored value being
+//!   the loaded one, from one pointer to another with the same step. Where the
+//!   ranges are apart it is `llvm.memcpy`; where they overlap but each trip
+//!   reads what the earlier trips left untouched (writes trail the reads going
+//!   up, or going down) it is `llvm.memmove`, tagged with its direction. Any
+//!   other overlap is a smear and stays.
 //!
-//! llrm-mir has no idiom pass.
+//! The count in bytes must not wrap the index: a byte's trips never do, and
+//! wider cells need `inbounds` GEPs or the proof's `maximum`. The counter must
+//! not be wider than the index. A huge pointer, which carries into its
+//! selector, is refused. A volatile access, a call, or a value the loop changes
+//! keeps the loop.
 //!
-//! Straight-line stores of one repeated byte to adjacent bytes of one
-//! object are one memset too: LLVM's MemCpyOpt, `tryMergingIntoMemset`.
+//! A loop with one fill of constant bytes is rewritten always. A pattern, a
+//! copy or a loop of several fills is priced (`_pays`, `_cheaper_by`) against
+//! what the loop costs for its trips (the proven count, or the profit model's
+//! estimate): the target's string-instruction setup and per-cell cost against
+//! the loop's operations, and a few cells are left as stores or loads and
+//! stores. At -Os the comparison is in code bytes of the loop against the
+//! call's.
+//!
+//! ```text
+//!   header: %i = phi [0,pre],[%n,body]      pre:   %cnt = trips (or n)
+//!           br (%i < n), body, exit                call memset(&a[0], 0, %cnt)
+//!   body:   store i8 0, &a[%i]       ==>     header: (one trip kept)
+//!           %n = add %i, 1                   exit:   phis read the counters'
+//!           br header                                exit values
+//! ```
+//!
+//! The loop is kept as one trip (the latch goes to the exit, the header's phis
+//! are replaced by their starts), guarded by the header's test unless the count
+//! is proven positive, and its counters leave with their exit values computed
+//! in the preheader (`counting::Seeds`). Later passes delete what is left. The
+//! memset is declared in the module where it has none, through the pass
+//! manager's `Declared`.
+//!
+//! `Merge` is a separate pass over straight-line code in each block. A run of
+//! at least two non-volatile stores of one repeated byte to adjacent bytes of
+//! one object (no other memory access between them) is one memset placed where
+//! the last stood, if profitable (LLVM's `isProfitableToUseMemset`: four stores
+//! or 16 bytes, or fewer only where the memset needs fewer widest-integer
+//! stores). A run of adjacent constants that are not one byte repeated becomes
+//! stores of the widest legal integer, when that is no more code bytes (a value
+//! stored more than once lives in a register, which is cheaper). `Merge` runs
+//! after the scalar passes have settled: no pass asks a memset what a cell
+//! holds, so merging sooner would lose a store's value to the forwarding after
+//! it.
+//!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! b1:
+//!   %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+//!   %c = icmp slt i16 %i, 10
+//!   br i1 %c, label %b2, label %b3
+//!
+//! b2:
+//!   %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i
+//!   store i16 0, ptr %p
+//!   %next = add i16 %i, 1
+//!   br label %b1
+//!
+//! b3:
+//!   %e = phi i16 [ %i, %b1 ]
+//!   ; ...
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! b1:
+//!   %c = icmp slt i16 0, 10
+//!   br label %b2
+//!
+//! b2:
+//!   %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 0
+//!   %0 = add i16 0, 10
+//!   call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 20, i1 false)
+//!   %next = add i16 0, 1
+//!   br label %b3
+//!
+//! b3:
+//!   %e = phi i16 [ %0, %b2 ]
+//!   ; ...
+//! ```
+//!
+//! Ten word stores are one memset of 20 bytes; the loop stays as one trip and
+//! the counter leaves with its exit value 10.
+//!
+//! From unit test `a_counted_word_loop_is_one_memset_of_its_bytes` in
+//! `fill_tests.rs` (first case; the printed text was taken from a run).
+//!
+//! # Runs
+//! Last in the function fixed point: `Fill`, then `Merge`, after `unroll` and
+//! `peel`. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og, on
+//! from -O1. `size` is set at -Os and -Oz.
+//!
+//! # Needs
+//! `induction` (`counted`, `trips`, `recurrences`, `derived` addresses),
+//! `consts` facts through `Standing`, aliasing (`MemRef`) and the target's
+//! costs (`profit`, `OperationCosts`).
+//!
+//! # Keeps
+//! Blocks and edges change (a loop becomes one trip): every analysis is
+//! invalidated when anything was rewritten.
+//!
+//! # See also
+//! [`crate::counting`] builds the count and exit values; [`crate::unroll`],
+//! [`crate::peel`] precede it.
 
 use std::collections::BTreeSet;
 
@@ -85,7 +185,11 @@ impl FunctionPass for Fill {
 /// The straight-line fills, once the scalar passes have settled: no pass
 /// asks a memset what a cell holds, so merged sooner a store's value is
 /// lost to the forwarding after it. LLVM merges stores in codegen, too.
-pub struct Merge;
+/// `size`: not priced in bytes where a register already holds the value, so
+/// that a pair of constants is not made one dword store under `-Os`.
+pub struct Merge {
+    pub size: bool,
+}
 
 impl FunctionPass for Merge {
     fn name(&self) -> &'static str {
@@ -97,8 +201,15 @@ impl FunctionPass for Merge {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        if merged(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), unit.declared)
-        {
+        if merged(
+            unit.context,
+            unit.layout,
+            analyses.outer().callees(),
+            unit.function,
+            analyses.outer(),
+            unit.declared,
+            self.size,
+        ) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -107,7 +218,9 @@ impl FunctionPass for Merge {
 }
 
 /// One store a merge may take: its object's address, the bytes it covers
-/// there, the byte it repeats, its pointer.
+/// there, the byte it repeats (none for a constant of several), its value,
+/// its pointer.
+#[derive(Clone)]
 struct _Cell {
     store: InstId,
     /// Its place in its block.
@@ -115,14 +228,18 @@ struct _Cell {
     root: Operand,
     low: i64,
     high: i64,
-    byte: u128,
+    byte: Option<u128>,
+    value: u128,
     pointer: Operand,
 }
 
 /// `function` with each run of at least two straight-line stores of one
 /// repeated byte to adjacent bytes of one object made one memset where the
-/// last of them stood; whether any was. Between them only work that touches
-/// no memory, and stores to other bytes, may stand.
+/// last of them stood, and each run of constants left, adjacent in one object,
+/// made stores of the widest legal integer (gcc's `store-merging`, LLVM's
+/// `MergeConsecutiveStores`: what lets a memset of a few bytes go unmade, since
+/// the stores are then as few); whether any was. Between them only work that
+/// touches no memory, and stores to other bytes, may stand.
 pub fn merged(
     context: &mut Context,
     layout: &DataLayout,
@@ -130,10 +247,25 @@ pub fn merged(
     function: &mut Function,
     outer: &Outer,
     declared: &mut Declared,
+    size: bool,
 ) -> bool {
     let mut runs: Vec<(Vec<_Cell>, u32, u32)> = Vec::new();
+    let wides: Vec<_Wide>;
     {
         let unit = Unit::within(context, layout, function, outer);
+        // How many stores of the function write each constant: a value stored
+        // more than once is held in a register, which a store reads without an
+        // immediate.
+        let mut stored: IndexMap<(u128, u32), usize> = IndexMap::default();
+        let mut left: Vec<Vec<_Cell>> = Vec::new();
+        let mut take = |open: Vec<_Cell>| {
+            for cell in &open {
+                *stored.entry((cell.value, (cell.high - cell.low) as u32)).or_default() += 1;
+            }
+            let (filled, rest) = _adjacent(&unit, open);
+            runs.extend(filled);
+            left.extend(rest);
+        };
         for block in function.layout() {
             let mut open: Vec<_Cell> = Vec::new();
             for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
@@ -142,10 +274,28 @@ pub fn merged(
                 } else if !memory::speculatable(unit.context, callees, function, inst)
                     || matches!(function.instruction(inst).opcode, Opcode::Store { .. })
                 {
-                    runs.extend(_adjacent(&unit, std::mem::take(&mut open)));
+                    take(std::mem::take(&mut open));
                 }
             }
-            runs.extend(_adjacent(&unit, open));
+            take(open);
+        }
+        let costs = outer.target().size_costs();
+        wides = _wide(&unit, left, &stored, &costs, size);
+    }
+    for wide in &wides {
+        let value = counting::constant(context, &BigInt::from(wide.value), wide.bits);
+        let void = context.types.void();
+        let last = wide.cells.iter().max_by_key(|one| one.order).expect("a run has stores").store;
+        let store = function.create_instruction(
+            Opcode::Store { align: None, volatile: false },
+            void,
+            vec![value, wide.pointer],
+            Flags::default(),
+            None,
+        );
+        function.insert(store, Position::Before(last)).expect("a placed store");
+        for one in &wide.cells {
+            function.erase(one.store).expect("a store has no result");
         }
     }
     for (run, space, width) in &runs {
@@ -153,7 +303,7 @@ pub fn merged(
         let (callee, function_type) = _memset(context, declared, *space, *width);
         let ty = context.types.ptr(0);
         let callee = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Global(callee) }));
-        let byte = counting::constant(context, &BigInt::from(run[0].byte), 8);
+        let byte = counting::constant(context, &BigInt::from(run[0].byte.expect("a repeated byte")), 8);
         let count = counting::constant(context, &BigInt::from(length), *width);
         let off = counting::constant(context, &BigInt::from(0), 1);
         let void = context.types.void();
@@ -179,7 +329,7 @@ pub fn merged(
             function.erase(one.store).expect("a store has no result");
         }
     }
-    !runs.is_empty()
+    !runs.is_empty() || !wides.is_empty()
 }
 
 /// The store `inst` is, where it writes one repeated byte at a constant
@@ -193,7 +343,8 @@ fn _cell(
     let Opcode::Store { volatile: false, .. } = op.opcode else { return None };
     let (value, pointer) = (op.operands[0], op.operands[1]);
     let width = unit.int_bits(value)?;
-    let byte = _repeated(unit, value, width)?;
+    let bits = unit.int_constant(value)?;
+    let byte = _repeated(unit, value, width);
     let reference = MemRef::at(unit, pointer, width / 8);
     let root =
         reference.root.filter(|_| reference.object && reference.base.is_none() && reference.segment.is_none())?;
@@ -204,6 +355,7 @@ fn _cell(
         low: reference.disp,
         high: reference.disp + i64::from(width / 8),
         byte,
+        value: bits,
         pointer,
     })
 }
@@ -238,11 +390,12 @@ fn _repeated(
 }
 
 /// The runs `open`'s stores make: those of one object and byte that tile
-/// its bytes without a gap, where no other store in `open` touches them.
+/// its bytes without a gap, where no other store in `open` touches them; and
+/// the stores left, in groups of one object and address space, by address.
 fn _adjacent(
     unit: &Unit,
     open: Vec<_Cell>,
-) -> Vec<(Vec<_Cell>, u32, u32)> {
+) -> (Vec<(Vec<_Cell>, u32, u32)>, Vec<Vec<_Cell>>) {
     let mut objects: Vec<Vec<_Cell>> = Vec::new();
     for cell in open {
         match objects.iter_mut().find(|object| object[0].root == cell.root) {
@@ -269,25 +422,148 @@ fn _adjacent(
         }
     }
     let mut runs = Vec::new();
+    let mut left = Vec::new();
     for group in groups {
-        let Some(space) = unit.space(group[0].pointer) else { continue };
+        let Some(space) = unit.space(group[0].pointer) else {
+            left.push(group);
+            continue;
+        };
         let width = unit.layout.pointer(space).index_bits;
         let widest = i64::from(unit.layout.largest_legal_integer() / 8).max(1);
+        let mut rest: Vec<_Cell> = Vec::new();
         let mut run: Vec<_Cell> = Vec::new();
-        for cell in group {
-            if run.last().is_some_and(|last| last.high != cell.low || last.byte != cell.byte) {
-                if _profitable(&run, widest) {
-                    runs.push((std::mem::take(&mut run), space, width));
-                }
-                run.clear();
+        let mut flush = |run: &mut Vec<_Cell>, rest: &mut Vec<_Cell>| {
+            if _profitable(run, widest) {
+                runs.push((std::mem::take(run), space, width));
+            } else {
+                rest.append(run);
             }
-            run.push(cell);
+        };
+        for cell in group {
+            if run.last().is_some_and(|last| last.high != cell.low || last.byte != cell.byte) || cell.byte.is_none() {
+                flush(&mut run, &mut rest);
+            }
+            if cell.byte.is_some() {
+                run.push(cell);
+            } else {
+                rest.push(cell);
+            }
         }
-        if _profitable(&run, widest) {
-            runs.push((run, space, width));
+        flush(&mut run, &mut rest);
+        left.push(rest);
+    }
+    (runs, left)
+}
+
+/// Stores of the widest legal integer in place of adjacent smaller constant
+/// ones: one run's cells, the value they make and its width.
+struct _Wide {
+    cells: Vec<_Cell>,
+    value: u128,
+    bits: u32,
+    /// The lowest cell's pointer.
+    pointer: Operand,
+}
+
+/// Whether one store of `wide` bytes is no more code bytes than `cells`'
+/// stores: `costs.store` is a store of an immediate of the operand size, so a
+/// register store (the form of a constant stored more than once in the
+/// function, which a register holds) is that less the operand, and a store of
+/// `width` bytes of immediate has them instead, each under the operand-size
+/// prefix where its width is not the operand's.
+fn _smaller(
+    unit: &Unit,
+    costs: &OperationCosts,
+    cells: &[_Cell],
+    wide: i64,
+    stored: &IndexMap<(u128, u32), usize>,
+) -> bool {
+    let Some(space) = unit.space(cells[0].pointer) else { return false };
+    let operand = i64::from(unit.layout.pointer(space).index_bits / 8);
+    let register = |width: i64| costs.sized(costs.store - operand, width, operand);
+    let immediate = |width: i64| register(width) + width;
+    let each: i64 = cells
+        .iter()
+        .map(|one| {
+            let width = one.high - one.low;
+            let held = stored.get(&(one.value, width as u32)).is_some_and(|&count| count > 1);
+            if held { register(width) } else { immediate(width) }
+        })
+        .sum();
+    immediate(wide) <= each
+}
+
+/// The wider stores the constants left in `groups` make: from each address, the
+/// widest power of two of bytes, up to the largest legal integer, that two or
+/// more adjacent stores tile exactly.
+fn _wide(
+    unit: &Unit,
+    groups: Vec<Vec<_Cell>>,
+    stored: &IndexMap<(u128, u32), usize>,
+    costs: &OperationCosts,
+    bytes_matter: bool,
+) -> Vec<_Wide> {
+    let widest = i64::from(unit.layout.largest_legal_integer() / 8).max(1);
+    let mut made = Vec::new();
+    for group in groups {
+        let mut cells = group.into_iter();
+        let mut pending: Vec<_Cell> = Vec::new();
+        let mut pieces: Vec<Vec<_Cell>> = Vec::new();
+        // Maximal runs of stores that tile bytes without a gap.
+        while let Some(cell) = cells.next() {
+            if pending.last().is_some_and(|last| last.high != cell.low) {
+                pieces.push(std::mem::take(&mut pending));
+            }
+            pending.push(cell);
+        }
+        pieces.push(pending);
+        for piece in pieces {
+            let mut at = 0;
+            while at < piece.len() {
+                let mut size = widest;
+                let mut took = None;
+                while size >= 2 {
+                    let mut bytes = 0;
+                    let mut end = at;
+                    while end < piece.len() && bytes < size {
+                        bytes += piece[end].high - piece[end].low;
+                        end += 1;
+                    }
+                    if bytes == size && end - at >= 2 && piece[at].low % size == 0 {
+                        took = Some(end);
+                        break;
+                    }
+                    size /= 2;
+                }
+                let Some(end) = took else {
+                    at += 1;
+                    continue;
+                };
+                let low = piece[at].low;
+                let mut value = 0u128;
+                for cell in &piece[at..end] {
+                    let bytes = (cell.high - cell.low) as u32;
+                    let mask = if bytes >= 16 { u128::MAX } else { (1u128 << (8 * bytes)) - 1 };
+                    value |= (cell.value & mask) << (8 * (cell.low - low) as u32);
+                }
+                let cells: Vec<_Cell> = piece[at..end].to_vec();
+                // Tuned for size, only where the one store is no more bytes
+                // than the stores it replaces, a value stored
+                // more than once being held in a register (a
+                // dword immediate with its operand-size prefix in 16-bit
+                // code is more than two register stores: sum_three -Os +3
+                // bytes).
+                let bits = 8 * (piece[end - 1].high - low) as u32;
+                if bytes_matter && !_smaller(unit, costs, &cells, i64::from(bits / 8), stored) {
+                    at += 1;
+                    continue;
+                }
+                made.push(_Wide { cells, value, bits, pointer: piece[at].pointer });
+                at = end;
+            }
         }
     }
-    runs
+    made
 }
 
 /// `function` with every such loop's body made one fill; whether any was.
@@ -326,6 +602,7 @@ pub fn filled_with(
     standing: &mut llrm_analysis::memory::Standing,
 ) -> bool {
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
+    let bytes = outer.target().size_costs();
     let mut changed = false;
     'again: loop {
         let shape = cfg::Shape::of(function);
@@ -333,7 +610,7 @@ pub fn filled_with(
             let found = {
                 let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
                 let facts = standing.of(&unit);
-                _fill(&unit.with_registers(facts), callees, &loop_, &costs, size)
+                _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
             };
             if let Some(found) = found {
                 _filled(context, declared, function, &found);
@@ -359,6 +636,17 @@ struct _Found {
     stored: Stored,
     /// Bytes each trip fills.
     bytes: BigInt,
+    /// The other fills of the loop, where it makes several that touch apart
+    /// bytes: each a memset of its own (LLVM's `LoopIdiomRecognize` takes each
+    /// store by itself; gcc's loop distribution splits the loop by them).
+    extras: Vec<Extra>,
+    /// Fills the one memset also makes: the loop's other streams, where they
+    /// tile the bytes after the first's with the same byte (gcc's loop
+    /// distribution, then its store merging).
+    absorbed: Vec<InstId>,
+    /// The last of the loop's effects: where the calls go, after every
+    /// address and count they read.
+    anchor: InstId,
     /// What the exit reads of the counters, by the value it reads: the counter,
     /// its step, and the trips more than the loop's count the value has
     /// taken (a tested-after loop's exit takes the counter of its last trip:
@@ -369,6 +657,14 @@ struct _Found {
     posttested: bool,
     /// The memset's pointer space and length width.
     memset: (u32, u32),
+}
+
+/// A fill of a loop that makes several.
+struct Extra {
+    effect: InstId,
+    pointer: Operand,
+    byte: Byte,
+    bytes: BigInt,
 }
 
 /// What a loop's trips make of the bytes they reach.
@@ -412,6 +708,7 @@ fn _fill(
     callees: &Callees,
     loop_: &Loop,
     costs: &OperationCosts,
+    bytes_costs: &OperationCosts,
     size: bool,
 ) -> Option<_Found> {
     let function = unit.function;
@@ -436,10 +733,34 @@ fn _fill(
     };
     let exit = *function.successors(test).iter().find(|to| !loop_.body.contains(&cfg::id(**to)))?;
 
+    // A loop is a fill only if what it does besides arithmetic is stores, loads
+    // and memsets that `_stored` or `_copied` take: asked before its trips are
+    // proved, which most loops are not worth (27 tries, 5.3 M of x_radix's
+    // compile at -O1).
+    let plain = |inst: InstId| memory::speculatable(unit.context, callees, function, inst);
+    let effects: Vec<InstId> = chain
+        .iter()
+        .flat_map(|&block| {
+            operations(function, block).into_iter().filter(move |&inst| function.terminator(block) != Some(inst))
+        })
+        .filter(|&inst| !plain(inst))
+        .collect();
+    let still = induction::invariant(function, &loop_.body);
+    let takes = match effects[..] {
+        [] => false,
+        [effect] => _stored(unit, callees, effect, &still).is_some(),
+        [one, other] => {
+            _copied(unit, one, other).is_some()
+                || (_stored(unit, callees, one, &still).is_some() && _stored(unit, callees, other, &still).is_some())
+        }
+        _ => effects.iter().all(|&effect| _stored(unit, callees, effect, &still).is_some()),
+    };
+    if !takes {
+        return None;
+    }
     // How many trips is `induction`'s to prove, whatever the counter's step or
     // test.
     let tested = operations(function, test);
-    let plain = |inst: InstId| memory::speculatable(unit.context, callees, function, inst);
     let proof = induction::counted(unit, loop_, None, true)
         .into_iter()
         .find(
@@ -464,24 +785,25 @@ fn _fill(
             operations(function, block).into_iter().filter(move |&inst| function.terminator(block) != Some(inst))
         })
         .collect::<Vec<_>>();
-    let effects = work.iter().copied().filter(|&inst| !plain(inst)).collect::<Vec<_>>();
     let steps = work.iter().copied().filter_map(|inst| _stepped(unit, &phis, latch, inst)).collect::<BTreeSet<_>>();
     if steps.len() != phis.len() {
         return None;
     }
-    let still = induction::invariant(function, &loop_.body);
-    let (effect, pointer, mut stored, bytes) = match effects[..] {
+    let walk = induction::recurrences(unit, loop_, &counters);
+    let (effect, pointer, mut stored, bytes, extras, absorbed) = match effects[..] {
         [effect] => {
             let (pointer, byte, bytes) = _stored(unit, callees, effect, &still)?;
-            (effect, pointer, Stored::Fill(byte), bytes)
+            (effect, pointer, Stored::Fill(byte), bytes, Vec::new(), Vec::new())
         }
-        [one, other] => _copied(unit, one, other)?,
-        _ => return None,
+        [one, other] => match _copied(unit, one, other) {
+            Some((effect, pointer, stored, bytes)) => (effect, pointer, stored, bytes, Vec::new(), Vec::new()),
+            None => _several(unit, callees, &effects, &still, &walk, &proof)?,
+        },
+        _ => _several(unit, callees, &effects, &still, &walk, &proof)?,
     };
 
     let facts = unit.registers();
     let Operand::Value(address) = pointer else { return None };
-    let walk = induction::recurrences(unit, loop_, &counters);
     let formula = walk.values.get(&address).filter(|one| one.pointer.is_some())?;
     let width = formula.width();
     // A huge pointer carries into its selector: `rep stos` through es:di wraps
@@ -491,7 +813,9 @@ fn _fill(
     }
     let stride = formula.step.known()?;
     let descending = matches!(stored, Stored::Copy(_)) && stride == -bytes.clone();
-    if (stride != bytes && !descending)
+    // Each stream strides by its own cell; the merged fill is all of them.
+    let each = &bytes / BigInt::from(1 + absorbed.len());
+    if (stride != each && !descending)
         || proof.width() > width
         || unit.layout.pointer(unit.space(pointer)?).index_bits != width
     {
@@ -521,9 +845,28 @@ fn _fill(
         Stored::Copy(copy) => Some((bytes.to_i64()?, copy.descending && copy.how == How::Overlapping)),
         Stored::Fill(_) => None,
     };
-    if (pattern || moved.is_some())
-        && !_pays(unit, callees, if posttested { &chain[1..] } else { &chain }, header, &proof, costs, size, moved)
+    // A loop of several fills is as many memsets: priced against the loop like
+    // a pattern's, since a few cells are as many stores each (bench: lru
+    // -O2 grew 78 bytes in 16-bit code where its 7-trip loop of two stores
+    // was 20).
+    let fills = 1 + extras.len() as i64;
+    let merged = !absorbed.is_empty();
+    // What each memset fills, for the price of its stores or its string.
+    let filled = match (&stored, proof.count.as_ref().and_then(ToPrimitive::to_i64), bytes.to_i64()) {
+        (Stored::Fill(Byte::Number(number)), Some(count), Some(bytes)) => Some((count * bytes, *number & 0xFF == 0)),
+        _ => None,
+    };
+    let body = if posttested { &chain[1..] } else { &chain };
+    if (pattern || moved.is_some() || fills > 1 || merged)
+        && !_pays(unit, callees, body, header, &proof, costs, size, moved, fills, filled)
     {
+        return None;
+    }
+    // And no larger than the loop, which a speed price does not say: in 16-bit
+    // code a dword store takes the operand-size prefix and its address, and
+    // seven of them are more bytes than the loop that made them (bench: lru
+    // -O2, 408 -> 486).
+    if (fills > 1 || merged) && !_pays(unit, callees, body, header, &proof, bytes_costs, true, moved, fills, filled) {
         return None;
     }
     // Trips of a byte never wrap the index; wider cells need a promise.
@@ -584,10 +927,108 @@ fn _fill(
         pointer,
         stored,
         bytes,
+        extras,
+        absorbed,
+        anchor: *effects.last().expect("an effect"),
         left,
         posttested,
         memset,
     })
+}
+
+/// The first of a loop's fills as `_fill` takes the only one, and the others as
+/// `Extra`s, where every effect of the loop is a fill of a plain byte, each
+/// strides by its cell over bytes no other reaches. The loop's trips then fill
+/// the same bytes in any order of the fills.
+fn _several(
+    unit: &Unit,
+    callees: &Callees,
+    effects: &[InstId],
+    still: &induction::Invariant,
+    walk: &induction::Users,
+    proof: &CountedLoop,
+) -> Option<(InstId, Operand, Stored, BigInt, Vec<Extra>, Vec<InstId>)> {
+    let mut fills = Vec::new();
+    for &effect in effects {
+        let (pointer, byte, bytes) = _stored(unit, callees, effect, still)?;
+        if matches!(byte, Byte::Pattern(..)) {
+            return None;
+        }
+        let Operand::Value(address) = pointer else { return None };
+        let formula = walk.values.get(&address).filter(|one| one.pointer.is_some())?;
+        if formula.step.known()? != bytes {
+            return None;
+        }
+        fills.push((effect, pointer, byte, bytes));
+    }
+    if fills.len() < 2 {
+        return None;
+    }
+    // At most the trips the loop can make, from each cell.
+    let trips = proof.count.clone().or_else(|| proof.maximum.clone())?;
+    for (at, one) in fills.iter().enumerate() {
+        let (first, other) = (MemRef::at(unit, one.1, 1), &fills[at + 1..]);
+        for two in other {
+            let second = MemRef::at(unit, two.1, 1);
+            let apart = match (&first.root, &second.root) {
+                (Some(left), Some(right)) if first.object && second.object && left != right => true,
+                (Some(left), Some(right)) if first.object && second.object => {
+                    first.base.is_some()
+                        && first.base == second.base
+                        && first.scale == second.scale
+                        && one.3 == two.3
+                        && BigInt::from((first.disp - second.disp).abs()) >= &one.3 * &trips
+                        && left == right
+                }
+                _ => false,
+            };
+            if !apart {
+                return None;
+            }
+        }
+    }
+    if let Some(count) = proof.count.clone() {
+        if let Some((effect, pointer, byte, bytes, absorbed)) = _tiled(unit, &fills, &count) {
+            return Some((effect, pointer, Stored::Fill(byte), bytes, Vec::new(), absorbed));
+        }
+    }
+    let mut fills = fills.into_iter();
+    let (effect, pointer, byte, bytes) = fills.next()?;
+    let extras = fills.map(|(effect, pointer, byte, bytes)| Extra { effect, pointer, byte, bytes }).collect();
+    Some((effect, pointer, Stored::Fill(byte), bytes, extras, Vec::new()))
+}
+
+/// The fills as one, where they set one number to the bytes of one object, each
+/// the same bytes a trip, and each starts where the one before it ends after
+/// all the trips: the lowest effect and pointer, the bytes a trip of them all,
+/// and the other effects. gcc distributes such a loop into memsets and merges
+/// the ones that are adjacent with the same byte.
+fn _tiled(
+    unit: &Unit,
+    fills: &[(InstId, Operand, Byte, BigInt)],
+    count: &BigInt,
+) -> Option<(InstId, Operand, Byte, BigInt, Vec<InstId>)> {
+    let Byte::Number(number) = fills[0].2 else { return None };
+    let bytes = &fills[0].3;
+    let mut placed = Vec::new();
+    for (effect, pointer, byte, each) in fills {
+        let Byte::Number(this) = byte else { return None };
+        let at = MemRef::at(unit, *pointer, 1);
+        if *this != number || each != bytes || !at.object || at.root.is_none() {
+            return None;
+        }
+        placed.push((at.disp, (at.root, at.base, at.scale), *effect, *pointer));
+    }
+    placed.sort_by_key(|one| one.0);
+    let span = bytes * count;
+    for pair in placed.windows(2) {
+        if pair[0].1 != pair[1].1 || BigInt::from(pair[1].0 - pair[0].0) != span {
+            return None;
+        }
+    }
+    let (_, _, effect, pointer) = placed[0].clone();
+    let absorbed = placed[1..].iter().map(|one| one.2).collect();
+    Some((effect, pointer, Byte::Number(number), bytes * BigInt::from(placed.len()), absorbed))
 }
 
 /// Whether the one fill is cheaper than the loop for its trips, the proven
@@ -603,6 +1044,8 @@ fn _pays(
     costs: &OperationCosts,
     size: bool,
     moved: Option<(i64, bool)>,
+    fills: i64,
+    stored: Option<(i64, bool)>,
 ) -> bool {
     let function = unit.function;
     let each: i64 = std::iter::once(&header)
@@ -621,7 +1064,7 @@ fn _pays(
         .sum();
     let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
     let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
-    _cheaper(each, known, most, costs, size, moved)
+    _cheaper_by(each, known, most, costs, size, moved, fills, stored)
 }
 
 /// Whether a fill beats a loop of `each` per trip, over `known` trips or, where
@@ -635,16 +1078,41 @@ fn _cheaper(
     size: bool,
     moved: Option<(i64, bool)>,
 ) -> bool {
+    _cheaper_by(each, known, most, costs, size, moved, 1, None)
+}
+
+/// `_cheaper`, for a loop whose trips are `fills` fills, each its own memset.
+fn _cheaper_by(
+    each: i64,
+    known: Option<i64>,
+    most: Option<i64>,
+    costs: &OperationCosts,
+    size: bool,
+    moved: Option<(i64, bool)>,
+    fills: i64,
+    stored: Option<(i64, bool)>,
+) -> bool {
     let trips = if size { 1 } else { known.unwrap_or_else(|| most.unwrap_or(i64::MAX).min(profit::UNKNOWN_TRIPS)) };
-    // Isel expands a few cells, whatever the target is tuned for, to stores,
-    // and a few bytes of a copy to loads and stores.
+    // Isel expands a few cells to stores, as gcc's by-pieces rule says, and a
+    // few bytes of a copy to loads and stores.
     let Some((bytes, backward)) = moved else {
         let string = costs.fill + trips * costs.fill_cell;
-        let fill = match known {
-            Some(count) if count <= 16 => count * costs.store,
+        let fill = match (stored, known) {
+            // The fill's length known: stores while they are under the CPU's
+            // ratio, as `memset` expands it (a CPU with none states keeps the
+            // cells it has always taken).
+            (Some((length, zero)), _) if costs.pieces(size, zero) > 0 => {
+                let pieces = length / 4 + i64::from((length % 4).count_ones());
+                if pieces < costs.pieces(size, zero) {
+                    pieces * costs.store
+                } else {
+                    costs.fill + (length + 3) / 4 * costs.fill_cell
+                }
+            }
+            (_, Some(count)) if count <= 16 => count * costs.store,
             _ => string,
         };
-        return trips * each > fill;
+        return trips * each > fills * fill;
     };
     let string = costs.copy + (trips * bytes + 3) / 4 * costs.copy_cell + if backward { costs.direction } else { 0 };
     let pairs = known.map(|count| count * bytes).map(|length| length / 4 + i64::from((length % 4).count_ones()));
@@ -734,6 +1202,17 @@ fn _filled(
     } else {
         seeds.computed(BinaryOp::Mul, vec![trips.clone(), AffineOperand::constant(found.bytes.clone(), width)])
     };
+    let extra_counts = found
+        .extras
+        .iter()
+        .map(|extra| {
+            if extra.bytes == BigInt::from(1) {
+                trips.clone()
+            } else {
+                seeds.computed(BinaryOp::Mul, vec![trips.clone(), AffineOperand::constant(extra.bytes.clone(), width)])
+            }
+        })
+        .collect::<Vec<_>>();
     seeds.width = counter;
     let finals = found
         .left
@@ -754,6 +1233,7 @@ fn _filled(
         .collect::<IndexMap<_, _>>();
     seeds.width = width;
     let count = seeds.operand(&count);
+    let extra_counts = extra_counts.iter().map(|count| seeds.operand(count)).collect::<Vec<_>>();
     let finals = finals.into_iter().map(|(value, sum)| (value, seeds.operand(&sum))).collect::<IndexMap<_, _>>();
     let void = seeds.context.types.void();
     let off = counting::constant(seeds.context, &BigInt::from(0), 1);
@@ -823,13 +1303,40 @@ fn _filled(
         attrs: Vec::new(),
         tail: Default::default(),
     };
+    let info_again = info.clone();
     let call = function.create_instruction(Opcode::Call(Box::new(info)), void, operands, Flags::default(), None);
-    function.insert(call, Position::Before(found.effect)).expect("a placed effect");
+    function.insert(call, Position::Before(found.anchor)).expect("a placed effect");
     if let Some(kind) = direction {
         let node = declared.node(MetadataNode { distinct: false, operands: Vec::new() });
         function.annotate(call, kind, node);
     }
     function.erase(found.effect).expect("an effect has no result");
+    for &one in &found.absorbed {
+        function.erase(one).expect("an effect has no result");
+    }
+    // The loop's other fills, each a memset of its own by the same trips.
+    for (extra, count) in found.extras.iter().zip(extra_counts) {
+        let (callee, function_type) = _memset(context, declared, found.memset.0, found.memset.1);
+        let byte = match extra.byte {
+            Byte::Operand(byte) => byte,
+            Byte::Number(byte) => counting::constant(context, &BigInt::from(byte), 8),
+            Byte::Pattern(value) => value,
+        };
+        let pointer_type = context.types.ptr(0);
+        let callee =
+            Operand::Constant(context.constant(Constant { ty: pointer_type, kind: ConstantKind::Global(callee) }));
+        let off = counting::constant(context, &BigInt::from(0), 1);
+        let info = CallInfo { function_type, ..info_again.clone() };
+        let call = function.create_instruction(
+            Opcode::Call(Box::new(info)),
+            void,
+            vec![extra.pointer, byte, count, off, callee],
+            Flags::default(),
+            None,
+        );
+        function.insert(call, Position::Before(found.anchor)).expect("a placed effect");
+        function.erase(extra.effect).expect("an effect has no result");
+    }
     if let Stored::Copy(copy) = &found.stored {
         function.erase(copy.load).expect("its only user is the store");
     }
