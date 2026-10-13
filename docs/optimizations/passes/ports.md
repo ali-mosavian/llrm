@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ports.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ports.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:a5168b1dbd380b5fab44a8d5bfc7ddc9ba627bcf13623da15467ef5c3d9b9216 -->
+<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:4d630711bcce2b756f4075ace5d296d88dc4e6e694e06bcea5cd28a486829ee8 -->
 
 # ports
 
@@ -9,8 +9,9 @@ target describes the port.
 ## How it works
 `llrm.ia16.in` and `out` intrinsic calls with no `memory` attribute are
 candidates. A call whose port range the target says reaches no memory
-(`Machine::port_touches_memory`; the x86-16 target reads each device's reach
-from its description) gets `memory(inaccessiblemem: readwrite)`: it touches
+(`Machine::port_touches_memory`; every target answers from its platform's
+port table, `pc-ports.toml` for the PC, so the 16-bit and the flat DOS
+targets alike) gets `memory(inaccessiblemem: readwrite)`: it touches
 only its own state, so alias and dead-store passes may move memory
 operations across it, and port calls still keep their order among
 themselves. A call to a port that may reach memory (a DMA controller, say)
