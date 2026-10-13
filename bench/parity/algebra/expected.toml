@@ -1,5 +1,5 @@
-reason = "ch default (user decision 2026-10-12) and the shrinkwrap, frequency and layout fixes landed with it: the rows main's bq16/bq32 columns add moved by -0.1% to +0.05% except nbody bq32 -O2 (+4.6%, the guard and rotated loops of the BASIC loops); the rest fewer instructions"
-blessed = "2026-10-12"
+reason = "bq32 is now net of the empty start-up program, as stated (#1553): the subtraction never ran, because the start-up's output ' 0' was compared with '0' and errored; every row held DOS/32A's load and the runtime's start-up (about 41.8k instructions)"
+blessed = "2026-10-13"
 
 [bas.O2]
 instructions = 64
@@ -34,13 +34,13 @@ bss_bytes = 0
 kernel_ms = 0.0083
 
 [bq32.O2]
-instructions = 42352
+instructions = 594
 code_bytes = 190
 data_bytes = 19
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 42348
+instructions = 590
 code_bytes = 184
 data_bytes = 19
 bss_bytes = 0
