@@ -1,4 +1,4 @@
-reason = "bq32 +126 instructions (+0.23%): VAL(\"0\") takes fin.c's exact path, the 53-bit quick path being wrong at m32 where long double is 8 bytes (#1572, #1573); a correct result costs 126 instructions"
+reason = "bq32 is now net of the empty start-up program, as stated (#1553): the subtraction never ran, because the start-up's output ' 0' was compared with '0' and errored; every row held DOS/32A's load and the runtime's start-up (about 41.8k instructions)"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -34,13 +34,13 @@ bss_bytes = 0
 kernel_ms = 0.0138
 
 [bq32.O2]
-instructions = 54701
+instructions = 12943
 code_bytes = 163
 data_bytes = 31
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 54701
+instructions = 12943
 code_bytes = 163
 data_bytes = 31
 bss_bytes = 0

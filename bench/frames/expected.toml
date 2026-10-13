@@ -1,5 +1,5 @@
-reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
-blessed = "2026-10-12"
+reason = "bq32 is now net of the empty start-up program, as stated (#1553): the subtraction never ran, because the start-up's output ' 0' was compared with '0' and errored; every row held DOS/32A's load and the runtime's start-up (about 41.8k instructions)"
+blessed = "2026-10-13"
 
 [bas.O2]
 instructions = 4847163
@@ -34,13 +34,13 @@ bss_bytes = 0
 kernel_ms = 69.4657
 
 [bq32.O2]
-instructions = 4897164
+instructions = 4855406
 code_bytes = 284
 data_bytes = 19
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 4825554
+instructions = 4783796
 code_bytes = 264
 data_bytes = 19
 bss_bytes = 0
