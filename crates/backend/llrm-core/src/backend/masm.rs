@@ -316,6 +316,8 @@ pub fn text_by(
                     if private { "para" } else { "word" },
                     if module.far_bss.contains(segment) {
                         "FAR_BSS"
+                    } else if segment == "BSSB" {
+                        "BSS"
                     } else if private {
                         "FAR_DATA"
                     } else {

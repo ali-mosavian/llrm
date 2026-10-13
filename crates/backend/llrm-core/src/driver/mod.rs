@@ -167,6 +167,7 @@ pub fn compiled(
                 mir.segments.data_space,
                 program.constant_segment.as_deref(),
                 options.machine.far_bss,
+                options.machine.bss_begin,
                 options.arch.layout().segment_bytes(),
             )
         })?;
