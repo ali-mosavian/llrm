@@ -1,5 +1,6 @@
 /* Disk files (QB rt/dkopen.asm, dkio.asm, dkutil.asm, dvstmt.asm). */
 #include "cndriver.h"
+#include "console.h"
 #include "file.h"
 #include "nhstutil.h"
 #include "rtinit.h"
@@ -273,6 +274,52 @@ void B_SSEK(short channel, long position)
     position_at(open_fdb(channel), position);
 }
 
+/* B$FINP: INPUT$(count [, #channel]) (QB rt/inputf.asm): `count` characters from the keyboard (channel 0), not echoed, waiting
+   for each; or from a file, whose end before the last is Input past end and which must be open for reading.  An extended key is
+   a zero and then its scan code, two characters. */
+SD *B_FINP(short count, short channel)
+{
+    static byte scan_code_waiting;
+    Fdb *fdb = NULL;
+    char *text;
+    SD *made;
+    short at;
+
+    if (count < 0)
+        qb_error(BE_ILLFUN);
+    if (channel != 0 && channel != 255) {
+        fdb = open_fdb(channel);
+        if (fdb->mode == MD_OUTPUT || fdb->mode == MD_APPEND)
+            qb_error(BE_PASTEND);
+    }
+    made = str_tmp(count, &text);
+    for (at = 0; at < count; at++) {
+        if (fdb) {
+            int c = get_byte(fdb);
+
+            if (c < 0)
+                qb_error(BE_PASTEND);
+            text[at] = (char)c;
+        } else if (scan_code_waiting) {
+            scan_code_waiting = 0;
+            text[at] = (char)llrm_os_console_read_key();
+        } else {
+            byte code;
+
+            cn_sync();
+            while (!llrm_os_console_key_ready())
+                if (cn_key_hook)
+                    cn_key_hook();
+            code = llrm_os_console_read_key();
+            if (code == 26)
+                qb_end();
+            scan_code_waiting = code == 0;
+            text[at] = (char)code;
+        }
+    }
+    return made;
+}
+
 /* B$FREF: FREEFILE, the lowest channel not in use. */
 int B_FREF(void)
 {
@@ -487,6 +534,7 @@ void file_xinit(void)
 #pragma aux B_GET4 "B$GET4"
 #pragma aux B_PUT4 "B$PUT4"
 #pragma aux B_SSEK "B$SSEK"
+#pragma aux B_FINP "B$FINP"
 #pragma aux B_FREF "B$FREF"
 #pragma aux B_FEOF "B$FEOF"
 #pragma aux B_CHOU "B$CHOU"

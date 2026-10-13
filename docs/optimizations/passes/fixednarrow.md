@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fixednarrow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fixednarrow.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:278991b96d202b001f5479f1bca08297197bc921b42067686ac355591210e108 -->
+<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:f835fb07ad687af8e762d6e8fabbf1c1b767edd1811ec19b5a614d97cfef7241 -->
 
 # fixednarrow
 

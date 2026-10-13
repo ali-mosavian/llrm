@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/storecombine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/storecombine.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/storecombine.rs sha256:b13df665f5d25363d721552b0a6d574525eeda92c8135e0b155cfc51c0a5f703 -->
+<!-- src: crates/backend/llrm-core/src/backend/storecombine.rs sha256:99df633f554654f43093f7a19fd157430bedad812077984d4c3db978ff9a1565 -->
 
 # storecombine
 
