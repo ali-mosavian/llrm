@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumpthread.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumpthread.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumpthread.rs sha256:206a2817c50ab768dd1dfe156cc0c219cbb3e631ebd99fe132c8810099889f15 -->
+<!-- src: crates/opt/llrm-transforms/src/jumpthread.rs sha256:9e9a46e793858f7172f2e15b334fe217187bf48e8cfc5c73afbc62c186b51b44 -->
 
 # jumpthread
 
@@ -71,7 +71,12 @@ result is not a natural loop where several cases lead back; later loop
 passes skip it.
 
 A conditional branch is threaded the same way where it tests an `i1` phi, or
-a compare of a phi with a constant, whatever the loop. With `correlated`, a
+a compare of a phi with a constant, whatever the loop. Every
+such branch of the function as it came is threaded, within the budget of
+copies (a branch the copies made is not, which would peel a loop a trip at a
+time, and a block a round threaded through is left to the next rounds): the
+peeled `place` of queens at -O3 tested a constant 5 times in 8 after the
+first branch alone was threaded. With `correlated`, a
 branch whose compare the way into its block already settles, from a branch
 on a compare of one of its operands above (`guards::on_edge`), is threaded
 to its arm on each way: the branches a header copy leaves. A path into a

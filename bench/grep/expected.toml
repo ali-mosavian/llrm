@@ -1,4 +1,4 @@
-reason = "OPEN no longer allocates a kilobyte of line buffer with its file block, so programs that open files in their kernel (grep, jpeg, stft: -3,063 instructions each) skip the string-space take it caused; scroll +3 for freeing the file name's temporary"
+reason = "jumpthread threads every branch on a phi of constants of the function, not the first: 9 rows smaller by 0.1-0.2% code (jpeg, bq16/bq32/bas), grep bq32 -O2 code +1.6%"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,8 +26,8 @@ bss_bytes = 0
 kernel_ms = 3703.8059
 
 [bq32.O2]
-instructions = 627521472
-code_bytes = 1471
+instructions = 627481849
+code_bytes = 1494
 data_bytes = 127
 bss_bytes = 0
 
