@@ -1,5 +1,5 @@
-reason = "branch odds combine as gcc 13.4 does (predict.cc combine_predictions_for_bb), a build for size keeps phi copies in the predecessor, an edge copy must win by a tenth, a recursive call is not exceptional against a returning base case; worse rows: bintree -Os instructions +1.3..1.6% (clocks +0.8%)"
-blessed = "2026-10-12"
+reason = "bq32 is now net of the empty start-up program, as stated (#1553): the subtraction never ran, because the start-up's output ' 0' was compared with '0' and errored; every row held DOS/32A's load and the runtime's start-up (about 41.8k instructions)"
+blessed = "2026-10-13"
 
 [bas.O2]
 instructions = 144
@@ -34,13 +34,13 @@ bss_bytes = 0
 kernel_ms = 0.0067
 
 [bq32.O2]
-instructions = 43683
+instructions = 1925
 code_bytes = 529
 data_bytes = 83
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 43636
+instructions = 1878
 code_bytes = 500
 data_bytes = 83
 bss_bytes = 0
