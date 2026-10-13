@@ -169,7 +169,8 @@ A `const` is declared at module level or in a function. Its value folds at
 compile time (section 3.9); a typed `const` has that type and an untyped one
 is a literal. A module's constants may name each other in any order, and one
 that depends on itself is an error. `let const` is another spelling inside a
-function.
+function. Assigning to a `const` (`K = 2`, `K += 2`) is a compile error, `K is a
+const and cannot be assigned`; a local that hides it is assignable.
 
 A destructuring `let` takes a pattern (chapter 6); `let mut` and a type
 annotation are for a single name only. `let _ = expr` just evaluates

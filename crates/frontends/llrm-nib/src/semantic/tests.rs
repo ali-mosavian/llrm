@@ -375,3 +375,18 @@ fn rejects_formatting_a_value_with_no_default_formatter() {
     .unwrap_err();
     assert!(bits.message.contains("a bits value has no default formatter"), "{}", bits.message);
 }
+
+/// Assigning to a const panicked the compiler (`a name stays a name`): the
+/// const's literal replaced the name the assignment writes. It is a
+/// diagnostic naming the const; a local of the same name is still assignable.
+#[test]
+fn rejects_assignment_to_a_const() {
+    for assignment in ["K = 2", "K += 2"] {
+        let error = compile_source(&format!("const K: i16 = 1\n\nfn main() -> i16:\n    {assignment}\n    return 0\n"))
+            .unwrap_err();
+        assert!(error.message.contains("K is a const and cannot be assigned"), "{assignment}: {}", error.message);
+    }
+    let shadowed =
+        compile_source("const K: i16 = 1\n\nfn main() -> i16:\n    let mut K: i16 = 5\n    K = 2\n    return K\n");
+    assert!(shadowed.is_ok(), "{:?}", shadowed.err().map(|one| one.message));
+}
