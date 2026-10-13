@@ -1046,11 +1046,37 @@ fn in_mode(
     }
 }
 
+/// The x87 operations that are no one instruction, with the bytes each is: a
+/// frontend's finalizer spells them (`fatan` is `fld1; fpatan`), and the
+/// encoder prices them as the same bytes, so that no operation the backend
+/// emits has no price.
+pub const X87_SEQUENCES: [(&str, &[u8]); 6] = [
+    ("fsin", &[0xd9, 0xfe]),
+    ("fcos", &[0xd9, 0xff]),
+    ("fatan", &[0xd9, 0xe8, 0xd9, 0xf3]),
+    ("flog2", &[0xd9, 0xe8, 0xd9, 0xc9, 0xd9, 0xf1]),
+    // 2**x: split x into its nearest integer n and fraction f, then
+    // (2**f) * (2**n).
+    (
+        "fexp2",
+        &[0xd9, 0xc0, 0xd9, 0xfc, 0xd9, 0xc9, 0xd8, 0xe1, 0xd9, 0xf0, 0xd9, 0xe8, 0xde, 0xc1, 0xd9, 0xfd, 0xdd, 0xd9],
+    ),
+    ("fround", &[0xd9, 0xfc]),
+];
+
+/// The bytes of the x87 operation `name` where it is a sequence.
+pub fn x87_sequence(name: &str) -> Option<&'static [u8]> {
+    X87_SEQUENCES.iter().find(|(one, _)| *one == name).map(|(_, bytes)| *bytes)
+}
+
 /// An instruction with no operands at all.
 pub fn bare(
     name: &str,
     at: At,
 ) -> Option<Emitted> {
+    if let Some(bytes) = x87_sequence(name) {
+        return Some(Emitted::new(bytes.to_vec()));
+    }
     let code = _code(&in_mode(BARE.get(name).copied().unwrap_or(""), at))?;
     _assemble(&Instruction::with(code), at, true)
 }
