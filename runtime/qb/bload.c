@@ -58,6 +58,7 @@ void B_BLOD(SD *name, unsigned offset, short supplied)
     unsigned long at;
 
     bsave_path(name, path);
+    str_tmp_free(name);
     handle = llrm_os_open((os_path)path, 0);
     if (handle < 0)
         qb_error(os_error(handle));
@@ -88,6 +89,7 @@ void B_BSAV(SD *name, unsigned offset, unsigned short length)
     long put = BSAVE_HEADER;
 
     bsave_path(name, path);
+    str_tmp_free(name);
     header[0] = BSAVE_TYPE;
     header[1] = (unsigned char)b_seg;
     header[2] = (unsigned char)(b_seg >> 8);

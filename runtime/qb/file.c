@@ -75,15 +75,13 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
     if (fdb_of(channel))
         qb_error(BE_FILEOPEN);
     path_of(name, path);
+    str_tmp_free(name);
     if (record_length == -1)
         record_length = DEFAULT_RECORD;
     if (record_length <= 0)
         qb_error(BE_ILLFUN);
     handle = open_file(path, mode);
-    /* a file read by line carries the line's buffer after its block, not a kilobyte of every program's DGROUP (QB reads a line
-       into string space) */
-    fdb = lh_alloc(sizeof(Fdb) + (mode == MD_INPUT || mode == MD_RANDOM || mode == MD_BINARY ? LINE_MAX + 1 : 0), LH_FILE, NULL,
-                   channel);
+    fdb = lh_alloc(sizeof(Fdb), LH_FILE, NULL, channel);
     if (!fdb) {
         llrm_os_close(handle);
         qb_error(BE_MEMORY);
@@ -411,15 +409,31 @@ void B_CHOU(short channel)
     cn_redirect(&file_driver);
 }
 
+/* The line an INPUT file is read into: a local heap entry made on first use, not room taken at every OPEN (a program that
+   reads no lines, or a DGROUP nearly full, pays nothing) and not a kilobyte of every program's DGROUP (QB reads a line into
+   string space).  Compaction would move it, so a hook follows it and the pointer INPUT # keeps into it. */
+static char *text_line;
+
+static void line_moved(void *data, int delta)
+{
+    if (qb_input_line >= (const char *)data && qb_input_line <= (const char *)data + LINE_MAX + 1)
+        qb_input_line += delta;
+    text_line += delta;
+}
+
 /* The next line of an INPUT file, without its line end; past the end of the
    file is Input past end. */
 static const char *next_line(void *file)
 {
     Fdb *fdb = file;
-    char *text_line = (char *)(fdb + 1);
     unsigned length = 0;
     int c;
 
+    if (!text_line) {
+        text_line = lh_alloc(LINE_MAX + 1, LH_LINE, NULL, 0);
+        if (!text_line)
+            qb_error(BE_MEMORY);
+    }
     c = get_byte(fdb);
 
     if (c < 0 || c == END_OF_TEXT)
@@ -462,6 +476,7 @@ static Comp comp = {0, C_DK, {0, 0, 0, 0, close_all}};
 void file_xinit(void)
 {
     qb_comp_add(&comp);
+    lh_on_move(LH_LINE, line_moved);
 }
 
 #pragma aux B_OPEN "B$OPEN"
