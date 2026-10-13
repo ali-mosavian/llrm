@@ -52,7 +52,9 @@ NO_ROW          equ     0FFFFFFFFh
 ;; B$OEGA - register the landing pad of ON ERROR GOTO.
 ;;
 ;; In the main code (cur_level 0) the caller's frame is kept: its ebp, its
-;; esp once this call has returned, and the call's return address.
+;; esp once this call has returned, and the call's return address; a call that
+;; disarms (0) keeps nothing: the pad's own disarm took the frame of the pad,
+;; and RESUME NEXT of the second error found no statement row after it.
 ;;
 ;; Args:
 ;;     erradr (esp+4): the landing pad, 0 for none.  The callee pops it.
@@ -63,6 +65,8 @@ B$OEGA          proc
 
                 cmp     _cur_level, 0
                 jne     @F
+                cmp     dword ptr [esp+4], 0
+                je      @F                      ;; disarming: the frame kept is the armed one's
                 ;; esp once the caller has the call behind it
                 lea     eax, [esp+8]
                 mov     _qb_land_sp, eax

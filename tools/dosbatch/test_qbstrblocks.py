@@ -59,9 +59,8 @@ oops:
 errs = errs + 1
 RESUME NEXT
 """
-# The flat runtime ends the program at a second error under ON ERROR (#1482): there only one is raised.
 MORE_ERRORS = 'MID$(b, 41, 1) = "x"\nMID$(b, 1, -1) = "x"'
-EXPECT = {qbbuild.REAL: [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 3], qbbuild.FLAT: [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 1]}
+EXPECT = [820, 820, 41, -3, 42, 66, 32, 20, 48, 80, 32, 52, 3]
 
 
 def instructions(where: Path) -> int:
@@ -104,9 +103,6 @@ def test_block_string_operations_cost_a_string_instruction_not_a_byte_loop(runne
 
 
 def test_comparison_and_fill_results_at_every_length(runner):
-    """The flat runtime ends the program at a second error under ON ERROR (#1482), so it raises one."""
-    got = {}
-    for target, text in ((qbbuild.REAL, CHECK % MORE_ERRORS), (qbbuild.FLAT, CHECK % "")):
-        got[target] = runner(f"check{target}", text)[target][0]
+    got = runner("check", CHECK % MORE_ERRORS)
     for target in qbbuild.TARGETS:
-        assert [int(word) for word in got[target].text.split()] == EXPECT[target], f"{target}"
+        assert [int(word) for word in got[target][0].text.split()] == EXPECT, f"{target}"
