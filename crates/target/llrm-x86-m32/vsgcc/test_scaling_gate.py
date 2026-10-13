@@ -1091,3 +1091,17 @@ def test_registers_brought_up_to_date_are_the_registers_of_a_table_lookup_afresh
         env={**os.environ, "LLRM_CHECK_REPLAY": "1"},
     )
     assert done.returncode == 0, done.stderr[-300:]
+
+
+def test_loopsimplify_groups_a_loops_edges_without_copying_the_function_for_it(tmp_path):
+    """branches at -O2 (every loop has a bridge to make behind the header copy): for each loop that needed grouping `mir loopsimplify` copied
+    the function to try the grouping on, built its graph and predecessors three times over (in `grouped` too), and rebuilt them after each
+    loop that changed: 1,235 Minstr at N=512 and 5,022 at N=1024 (x4.07). The edges are those of the loop's blocks and of the target, and
+    every grouping is checked before the first is made: 19 and 42 (x2.2). A bound of 2.7 on the doubling fails the first."""
+    own = {}
+    for n in (512, 1024):
+        source = tmp_path / f"branches{n}.c"
+        source.write_text(scaling.AXES["branches"](n))
+        own[n] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir loopsimplify"]
+    assert own[512] > 3.0, f"premise: loopsimplify ran ({own[512]:.1f} Minstr)"
+    assert own[1024] <= 2.7 * own[512], f"mir loopsimplify {own[512]:.0f} -> {own[1024]:.0f} Minstr"
