@@ -97,7 +97,7 @@ workspace builds; a missing tool skips by name and `LLRM_REQUIRE_TURBO` makes it
 - TLINK's Module Table of an llrm object equals Turbo C++'s for the same program.
 - `TDUMP` names a function pointer's type as Turbo C++ does.
 - A variable the allocator keeps in a register is a `register` in the table (`-O2`).
-- TLINK builds a table from a Nib program and from `-O2` C.
+- TLINK builds a table from a Nib program (`llrm-nib -m16 -O0 -gtd`, `tests/fixtures/matrix/known.nib`) and from `-O2` C. TDUMP of the Nib object names the function `add` (near, C, returns signed int), the locals `sum` and `total` (auto) and `second` (register), and the lines 2, 3, 6 and 7; `first`, which the first instruction overwrites, has no one place and is left out. Without `-gtd` the object names no source.
 - Turbo Debugger shows the same watch values for both programs (above).
 
 `tools/debug-matrix.py` records Turbo Debugger output as emitted but unread by it, and points at this test as

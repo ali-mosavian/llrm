@@ -148,8 +148,8 @@ What each writer says, refused or left out:
   ([#1514](https://github.com/ali-mosavian/llrm/issues/1514)).
 - A Nib program cannot be debugged in real CodeView where it has a code segment per procedure
   ([#892](https://github.com/ali-mosavian/llrm/issues/892)).
-- A Nib m16 parameter in two registers has no CodeView record
-  ([#883](https://github.com/ali-mosavian/llrm/issues/883)).
+- A parameter in two registers (a pair) has no CodeView record; at `-O0` no frontend produces one, with optimization it is
+  [#1368](https://github.com/ali-mosavian/llrm/issues/1368).
 - Turbo Debugger: register locals of unsupported registers, enums, bit fields beside padding, types past 64K
   ([#823](https://github.com/ali-mosavian/llrm/issues/823)).
 - COFF: COMDAT, `S_FRAMEPROC`, inlinee lines, multi-range functions
@@ -159,6 +159,8 @@ What each writer says, refused or left out:
 - `.debug_frame` has no Mach-O section name, so a Mach-O object whose functions have frame rows is refused.
 - The full matrix of frontend, bit width, object and flavor, and which reader accepts each:
   [#1338](https://github.com/ali-mosavian/llrm/issues/1338); `python3 tools/debug-matrix.py` prints it.
+
+No gap by construction: BASIC's CodeView dialect has no register record (QB locals are always cells, at every level); its array type is element-only, without bounds; `jwlink` reads COFF CodeView only as old CodeView 4, so link the OMF object instead. Waiting on others: QuickBASIC `-m32` on the runtime ABI ([#1160](https://github.com/ali-mosavian/llrm/issues/1160)); Turbo Debugger for QuickBASIC is not checked.
 
 ## Linkers and readers
 
@@ -180,7 +182,8 @@ What each writer says, refused or left out:
 | `tests/objwriters.rs` | LLVM tools read every bench COFF object and its CodeView; `lld-link` makes a PDB |
 | `crates/target/llrm-dwarf/src/tests.rs` | unit headers, relocations, line table, frame rows, `llvm-dwarfdump --verify` per class and version |
 | `tools/dwarf-coverage.sh llrm-c` | per level, how many source variables have a location and what share of their scope bytes it covers, against gcc |
-| `tools/debug-matrix.py` | the matrix of #1338 |
+| `tools/debug-matrix.py` | the matrix of #1338; every OMF DWARF cell is valid under `jwlink` and `wdump` (which reads DWARF 2 and 3 only, so OMF cells use `-gdwarf-2`; 32-bit `-gdwarf 4`/`5` crashes `wdump`) |
+| the emulator fork's symbol tests ([`tests/symbols/qb`](https://github.com/ali-mosavian/dosbox-x/blob/main/tests/symbols/qb/README.md)) | QuickBASIC images at `-m16` and `-m32` (under DOS/32A, linked with `jwlink`) read in the debugger with `-gcodeview` and `-gdwarf`: locals, and by-reference parameters read through their pointers |
 
 Tests that need a tool skip by name and fail where `LLRM_REQUIRE_DWARF`, `LLRM_REQUIRE_TURBO`,
 `LLRM_REQUIRE_CODEVIEW` or `LLRM_REQUIRE_WDUMP` is set (`tools/debug-gate.env`). Turbo Debugger and
