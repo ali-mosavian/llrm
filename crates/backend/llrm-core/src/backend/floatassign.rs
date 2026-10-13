@@ -983,11 +983,13 @@ struct Plan<'b> {
     /// asked for (in order, so a hit asks again and the frame is laid out as
     /// before).
     stepped: RefCell<HashMap<StepKey, Rc<(Vec<Arc<Insn>>, Vec<u32>)>>>,
+    /// The first value number no instruction of the body uses.
+    first_fresh: u32,
 }
 
 type StepKey = (i64, usize, Vec<bool>);
 
-type Shape = (usize, Vec<(usize, usize)>, Vec<BTreeSet<u32>>);
+type Shape = (usize, Vec<(usize, usize)>, Vec<BTreeSet<u32>>, Vec<Vec<usize>>);
 
 /// Where each value is kept and read: LLVM's SpillPlacement per bundle for
 /// the borders, and a segment per register stretch between them.
@@ -1479,7 +1481,7 @@ impl Plan<'_> {
         };
         let price = |form: &str| _price(cpu, form);
         let mut out = self.body.clone();
-        let mut fresh = _next_value(self.body);
+        let mut fresh = self.first_fresh;
         for block in &mut out.blocks {
             let at = block.at;
             let key = (at, self.roots[&at].iter().map(|root| spilled.contains(root)).collect::<Vec<bool>>());
@@ -1498,7 +1500,8 @@ impl Plan<'_> {
                 let leaving: BTreeSet<u32> =
                     live_out[&at].iter().copied().filter(|value| self.floating.contains(value)).collect();
                 let after = _live_after(block, &steps, &leaving, &self.floating);
-                Rc::new((cut, steps, after))
+                let touched = steps.iter().map(|&(first, last)| self.step_roots(block, first, last)).collect();
+                Rc::new((cut, steps, after, touched))
             }));
             let (cut, steps, after) = (shape.0, &shape.1, &shape.2);
             let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -1526,7 +1529,7 @@ impl Plan<'_> {
                 Ok(())
             };
             for (index, (first, last)) in steps.iter().copied().enumerate() {
-                let key = (at, first, self.step_spills(block, first, last, spilled));
+                let key = (at, first, shape.3[index].iter().map(|root| spilled.contains(root)).collect::<Vec<bool>>());
                 let hit = self.stepped.borrow().get(&key).cloned();
                 if let Some(done) = hit {
                     for value in &done.1 {
@@ -1683,15 +1686,14 @@ impl Plan<'_> {
         Ok(out)
     }
 
-    /// Which of the roots a step touches are spilled: all a step's output
-    /// depends on besides the block.
-    fn step_spills(
+    /// The roots a step touches: whether they are spilled is all a step's
+    /// output depends on besides the block.
+    fn step_roots(
         &self,
         block: &LirBlock,
         first: usize,
         last: usize,
-        spilled: &BTreeSet<usize>,
-    ) -> Vec<bool> {
+    ) -> Vec<usize> {
         let at = block.at;
         let mut roots: Vec<usize> = Vec::new();
         for position in first..=last {
@@ -1715,7 +1717,7 @@ impl Plan<'_> {
         }
         roots.sort_unstable();
         roots.dedup();
-        roots.iter().map(|root| spilled.contains(root)).collect()
+        roots
     }
 
     /// `one` reading spilled `value` straight from its home, where x87 has
@@ -1929,6 +1931,7 @@ pub fn assigned(
         written: RefCell::default(),
         shaped: RefCell::default(),
         stepped: RefCell::default(),
+        first_fresh: _next_value(&body),
     };
     plan.priced(cpu);
     let mut spilled = plan.in_memory();

@@ -1105,3 +1105,14 @@ def test_loopsimplify_groups_a_loops_edges_without_copying_the_function_for_it(t
         own[n] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir loopsimplify"]
     assert own[512] > 3.0, f"premise: loopsimplify ran ({own[512]:.1f} Minstr)"
     assert own[1024] <= 2.7 * own[512], f"mir loopsimplify {own[512]:.0f} -> {own[1024]:.0f} Minstr"
+
+
+def test_floatassign_does_not_walk_the_body_again_for_each_spill_round(tmp_path):
+    """nbody_single at -O3 (35 spill rounds over a 691-instruction block): each round numbered the body's values again and worked out
+    which roots each step touches, 436 Minstr in `lir floatassign` against 382 once (587 before the steps were kept). A bound of 410
+    fails the first."""
+    source = tmp_path / "nbody_single.c"
+    source.write_text(wrap.wrapped("nbody_single", programs.sources()["nbody_single"].read_text()))
+    own = gate.own_work([*gate.levels_time.command("llrm", "O3", source), *programs.LLRM_FLAGS])
+    assert own["lir floatassign"] > 100.0, f"premise: x87 values spilled ({own['lir floatassign']:.1f} Minstr)"
+    assert own["lir floatassign"] <= 410.0, own["lir floatassign"]
