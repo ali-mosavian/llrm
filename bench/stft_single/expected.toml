@@ -1,4 +1,4 @@
-reason = "bq32 counts the kernel without code the link map does not name (DOS, the extender: fork profile inclusive_unknown): every kernel loses its DOS calls, 596 for the lazy string heap's memory request in all that allocate a string (lru 895 -> 299, the largest relative move), 72k to 3.6M for the file readers (grep -0.57%, jpeg -0.08%, stft -0.44%); the compiler's and runtime's named code is unchanged"
+reason = "on top of main's #1603 runtime change: +-1 to 5 instructions (max 0.000005%) in the readers' named runtime code, none from this PR"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 72762369
+instructions = 72762370
 code_bytes = 1380
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73091970
+instructions = 73091975
 code_bytes = 1379
 data_bytes = 4733
 bss_bytes = 0
