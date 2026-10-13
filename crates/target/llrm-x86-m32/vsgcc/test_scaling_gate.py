@@ -1074,3 +1074,20 @@ def test_rotate_takes_the_dominators_the_manager_brings_up_to_date(tmp_path):
     assert own["mir rotate"] > 5.0, f"premise: rotate ran ({own['mir rotate']:.1f} Minstr)"
     both = own["mir rotate"] + own["analysis dominators"]
     assert both <= 250.0, f"rotate {own['mir rotate']:.1f} + dominators {own['analysis dominators']:.1f} Minstr"
+
+
+def test_registers_brought_up_to_date_are_the_registers_of_a_table_lookup_afresh(tmp_path):
+    """crc at -O3 under LLRM_CHECK_REPLAY: a load from a `constant` table is known by the bounds of its whole index (what `ranges` finds
+    from every value the index is made of, those with a known number and those without), so the incremental `analysis registers`, which
+    follows the users of the values a change touched through the values that have a fact, kept no fact for it where deriving it afresh
+    gave one, and the replay check panicked ('the result brought up to date is not what deriving it afresh gives'). A body that
+    indexes a constant global derives them afresh."""
+    source = tmp_path / "crc.c"
+    source.write_text(wrap.wrapped("crc", programs.sources()["crc"].read_text()))
+    done = subprocess.run(
+        [*gate.levels_time.command("llrm", "O3", source), *programs.LLRM_FLAGS],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "LLRM_CHECK_REPLAY": "1"},
+    )
+    assert done.returncode == 0, done.stderr[-300:]
