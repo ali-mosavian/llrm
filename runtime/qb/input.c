@@ -123,12 +123,9 @@ void B_INPP(SD *prompt, const InputBlock QB_FAR *block)
             break;
         cn_crlf();
         if (fin_error) {
-            const char *text = qb_error_text(fin_error);
-            unsigned length = 0;
+            char text[QB_ERROR_TEXT_MAX + 1];
 
-            while (text[length])
-                length++;
-            cn_write(text, length);
+            cn_write(text, qb_error_text(fin_error, text));
             cn_crlf();
         }
         cn_write(redo, sizeof redo - 1);

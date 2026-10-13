@@ -491,7 +491,16 @@ void B_CHOU(short channel)
     cn_redirect(&file_driver);
 }
 
-static char text_line[LINE_MAX + 1];
+/* The line an INPUT file is read into: a local heap entry made on first use, not a kilobyte of every program's DGROUP (QB reads a
+   line into string space).  Compaction moves it, so the hook follows it, and the pointer INPUT # keeps into it. */
+static char *text_line;
+
+static void line_moved(void *data, int delta)
+{
+    if (qb_input_line >= (const char *)data && qb_input_line <= (const char *)data + LINE_MAX + 1)
+        qb_input_line += delta;
+    text_line += delta;
+}
 
 /* The next line of an INPUT file, without its line end; past the end of the
    file is Input past end. */
@@ -499,7 +508,14 @@ static const char *next_line(void *file)
 {
     Fdb *fdb = file;
     unsigned length = 0;
-    int c = get_byte(fdb);
+    int c;
+
+    if (!text_line) {
+        text_line = lh_alloc(LINE_MAX + 1, LH_LINE, NULL, 0);
+        if (!text_line)
+            qb_error(BE_MEMORY);
+    }
+    c = get_byte(fdb);
 
     if (c < 0 || c == END_OF_TEXT)
         qb_error(BE_PASTEND);
@@ -541,6 +557,7 @@ static Comp comp = {0, C_DK, {0, 0, 0, 0, close_all}};
 void file_xinit(void)
 {
     qb_comp_add(&comp);
+    lh_on_move(LH_LINE, line_moved);
 }
 
 #pragma aux B_OPEN "B$OPEN"
