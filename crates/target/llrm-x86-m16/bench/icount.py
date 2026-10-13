@@ -13,6 +13,7 @@ stops the run and is reported, never guessed.
 from __future__ import annotations
 
 import struct
+import sys
 from pathlib import Path
 from dataclasses import field
 from dataclasses import dataclass
@@ -34,6 +35,19 @@ RETURNS = {Mnemonic.RET, Mnemonic.RETF}
 class Counts:
     instructions: int = 0
     memory_operands: int = 0
+    # The 486's clocks over the same instructions: vsgcc's table (crates/target/llrm-x86-m32/vsgcc/harness.py), the one the
+    # m32 comparison with gcc and clang prices by. A branch taken costs more than one not taken, so it is the stream's, not the count's.
+    clocks: int = 0
+
+
+def _prices():
+    """vsgcc's `cost` and `multiplier_of`: one table for both targets, not a copy of it."""
+    path = str(Path(__file__).resolve().parents[2] / "llrm-x86-m32" / "vsgcc")
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    import harness  # noqa: E402
+
+    return harness.cost, harness.multiplier_of
 
 
 @dataclass
@@ -43,6 +57,15 @@ class Run:
     region: Counts | None = None  # None: the region was never entered
     error: str = ""
     files: dict[str, bytes] = field(default_factory=dict)
+
+
+def _multiplier(multiplier_of, uc, one):
+    """The multiplier operand's value, or None (the table's least) where vsgcc's reader does not know the operand's form:
+    it reads 32-bit forms, and a 16-bit program also multiplies by a memory operand through a segment."""
+    try:
+        return multiplier_of(uc, one)
+    except (KeyError, ValueError):
+        return None
 
 
 def _decode(raw: bytes) -> tuple[int, bool, bool]:
@@ -76,7 +99,9 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
     result = Run()
     state = {"active": False, "done": False, "entry_sp": 0, "files": {}, "next": 5, "vectors": {}}
     counts = Counts()
+    price, multiplier_of = _prices()
     decoded: dict[int, tuple[int, bool, bool]] = {}
+    instructions = {}  # address -> iced instruction
     target = None if entry is None else LOAD * 16 + entry
 
     def step(uc, address, size, _):
@@ -94,9 +119,21 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         # A repeated string instruction fires the hook once per iteration, and once more with CX at 0, when it does nothing.
         if repeated and uc.reg_read(UC_X86_REG_CX) == 0:
             return
+        one = instructions.get(address)
+        if one is None:
+            one = instructions[address] = Decoder(16, bytes(uc.mem_read(address, min(size, 15))), ip=address).decode()
+        # An instruction costs what it did once the next one's address says whether its branch was taken.
+        before = state.get("before")
+        if before is not None:
+            counts.clocks += price(before[1], address != before[0] + before[1].len, state["first"], before[2], before[3])
+        state["first"] = not (repeated and before is not None and before[0] == address)
+        # The 486's multiply is data dependent: its multiplier, read before the instruction runs.
+        factor = _multiplier(multiplier_of, uc, one) if one.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL) else None
+        state["before"] = (address, one, memory, factor)
         counts.instructions += 1
         counts.memory_operands += memory
         if returns and uc.reg_read(UC_X86_REG_SP) == state["entry_sp"]:
+            counts.clocks += price(one, True, True, memory, factor)
             state["active"] = False
             state["done"] = True
 

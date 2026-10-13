@@ -1,4 +1,6 @@
-//! print and f-string formatting.
+//! print and f-string formatting. A type with no default formatter (a vec,
+//! dict, function, pointer, address or bits value) is a diagnostic at the
+//! value, not a formatter to look up.
 
 use llrm_core::abi::nib as rt;
 
@@ -136,6 +138,12 @@ impl<'a> FunctionCompiler<'a> {
             return Err(Diagnostic::new(expression.span(), "cannot format void"));
         }
         let type_name = value.type_name;
+        if let Some(kind) = super::unformatted(type_name) {
+            return Err(Diagnostic::new(
+                expression.span(),
+                format!("a {kind} has no default formatter: print what it holds, or give its type a `display` method"),
+            ));
+        }
         self.field(format, type_name, expression.span())?;
         self.emit_print(type_name, required(value, expression.span())?);
         Ok(())

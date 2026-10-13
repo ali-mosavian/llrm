@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 description = "What every x86 target shares: the instruction forms"
 
+[build-dependencies]
+iced-x86 = { workspace = true }
+
 [dependencies]
 toml = { workspace = true }
 iced-x86 = { workspace = true }

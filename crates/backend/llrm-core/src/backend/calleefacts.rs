@@ -1,18 +1,66 @@
-//! What a function nothing outside the program reaches leaves different: the
-//! registers its body, and the calls in it, write.
+//! Records which registers a private function writes, so its direct callers
+//! keep values in the others across the call.
 //!
-//! Such a function (`callgraph::direct_only`, in no cycle of calls) keeps its
-//! convention, and each direct call of it clobbers what it wrote and did not
-//! save, no more: a caller keeps a value in any other register across the call,
-//! the scratch ones among them. (LLVM's no-CSR mode also drops the saves of
-//! such a function, which hands the registers it then writes to every caller:
-//! on nbody_fixed that cost more than the pushes.) The fact is made when
-//! the function is machined, once, from its final LIR, and asked for by every
-//! caller; the functions are machined callees first so it is there when asked.
-//! LLVM's `RegUsageInfoCollector` and GCC's `-fipa-ra` do the same one function
-//! at a time; this one asks the call graph for the order, so no caller meets a
-//! callee whose fact is not yet made, and leaves a function in a cycle with its
-//! convention.
+//! # How it works
+//! A function nothing outside the module reaches (`callgraph::direct_only`),
+//! and in no cycle of calls, takes part. It keeps its convention, but each
+//! direct call of it clobbers only what its body wrote and did not save, not
+//! the whole convention. A caller may therefore keep a value in any other
+//! register across the call, scratch ones included.
+//!
+//! The fact is made once per function, from its final LIR: `written_by`
+//! collects the roots of every register the body writes (destinations,
+//! registers it pins values in or takes results from, what its calls
+//! disturb). `record` then takes away the frame's own registers and the ones
+//! the prologue saves and the epilogue restores. A register saved by its low
+//! half alone (a 16-bit push of a 32-bit one) and written loses its upper
+//! half to the caller (`Written::high`); so does a register whose upper half
+//! a callee in the body loses, unless this function saves it whole.
+//!
+//! ```text
+//!  machined first                    machined after
+//!    leaf  writes ax, dx  -record->  main: call leaf clobbers ax, dx
+//!                                          cx, si, di stay live across it
+//! ```
+//!
+//! `CalleeFacts::of` returns the facts and the order to machine the
+//! functions in, callees before callers, so a caller finds its callee's fact
+//! when it is selected (`isel.rs` reads `written`). A function that is
+//! exported, has its address taken, is an interrupt handler or is in a cycle
+//! takes no part and keeps the full convention.
+//!
+//! # Example
+//! `bump` (`return x + 1`) is private and called twice from `main`. Its fact is
+//! one register:
+//!
+//! ```text
+//! bump   writes eax      callers: clobbers EAX
+//! ```
+//!
+//! The two kinds of call in `main`, after selection (`; inserted` notes
+//! dropped), the runtime's `N$BGRW` first, then `bump`:
+//!
+//! ```lir
+//! call   requires v1@AX,v2@DX,v3@CX; delivers v4@EAX; clobbers EAX,ECX,EDX,EBX,ES,FS,GS
+//! call   requires v6@AX; delivers v7@EAX; clobbers EAX
+//! ```
+//!
+//! `main` keeps a value in `bx` across both calls of `bump`: its listing has
+//! `mov bx, word ptr [si-4]` before the first and `cmp bx, 2` after the second.
+//!
+//! From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
+//! -fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+//! -march=i386` of `examples/pass-docs/calleefacts.nib`, stage
+//! `FarIndirectCalls`.
+//!
+//! # Runs
+//! Per function in `assemble.rs`: `record` after the function is machined.
+//! With `-fallocation-search-all` (-Omax) a caller of a known callee is also
+//! machined without the facts and the cheaper kept.
+//!
+//! # See also
+//! LLVM's `RegUsageInfoCollector` and GCC's `-fipa-ra` do this one function
+//! at a time; this ordering comes from the call graph.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};

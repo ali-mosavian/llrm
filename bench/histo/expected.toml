@@ -1,5 +1,5 @@
-reason = "DemandedBits (algebraic): a mask over bits nothing reads is gone. 18 rows better: bintree bas/nib -O2/-Os (-8 B), histo nib (-3 B, -5%), quicksort bas/nib (-7 B). One worse: bintree nib -Os memory_operands 27650 -> 28250, 444 -> 446 B: the LCG state's 'and 65535' went and the allocator then keeps the seed in its slot (add [bp-6],imm) instead of a register."
-blessed = "2026-10-10"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+blessed = "2026-10-13"
 
 [bas.O2]
 instructions = 83615
@@ -7,12 +7,42 @@ memory_operands = 12675
 code_bytes = 245
 data_bytes = 8719
 bss_bytes = 0
+kernel_ms = 1.2015
 
 [bas.Os]
 instructions = 75807
 memory_operands = 13059
 code_bytes = 239
 data_bytes = 8719
+bss_bytes = 0
+kernel_ms = 1.0986
+
+[bq16.O2]
+instructions = 83617
+memory_operands = 12675
+code_bytes = 250
+data_bytes = 8719
+bss_bytes = 0
+kernel_ms = 1.1233
+
+[bq16.Os]
+instructions = 75809
+memory_operands = 13059
+code_bytes = 244
+data_bytes = 8719
+bss_bytes = 0
+kernel_ms = 1.0204
+
+[bq32.O2]
+instructions = 80283
+code_bytes = 284
+data_bytes = 8725
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 72089
+code_bytes = 276
+data_bytes = 8725
 bss_bytes = 0
 
 [c.O2]
@@ -21,6 +51,7 @@ memory_operands = 12672
 code_bytes = 125
 data_bytes = 0
 bss_bytes = 4608
+kernel_ms = 1.1388
 
 [c.Os]
 instructions = 71696
@@ -28,6 +59,7 @@ memory_operands = 13056
 code_bytes = 119
 data_bytes = 0
 bss_bytes = 4608
+kernel_ms = 1.0359
 
 [nib.O2]
 instructions = 79505
@@ -35,6 +67,7 @@ memory_operands = 12672
 code_bytes = 128
 data_bytes = 4608
 bss_bytes = 0
+kernel_ms = 1.0627
 
 [nib.Os]
 instructions = 71697
@@ -42,6 +75,7 @@ memory_operands = 13056
 code_bytes = 122
 data_bytes = 4608
 bss_bytes = 0
+kernel_ms = 0.9599
 
 [ow.O2]
 instructions = 88353

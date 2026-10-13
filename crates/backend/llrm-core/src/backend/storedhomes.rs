@@ -1,15 +1,42 @@
-//! The cells the optimizer proved hold a phi's value (`!llrm.home`,
-//! `LirBody.homes`), as the body now stands: the one fact both spillers ask. A
-//! spilled value read from its cell needs no store of its own and no cell of
-//! its own.
+//! Finds the memory cells that provably still hold a phi's value, so a spilled
+//! value read from one needs no store and no slot of its own.
 //!
-//! The proof is the optimizer's, over MIR. What is checked here is what a later
-//! pass may have changed: nothing writes the cell while the value lives, and
-//! every definition of the value is a plain copy, which spilling removes.
+//! # How it works
+//! MIR proves, for a phi, that a memory cell already holds its value
+//! (`!llrm.home`, carried into the body as `LirBody.homes`). A spilled value
+//! read from such a cell needs no store and no slot of its own. This module
+//! re-checks the proof against the machine code, since later phases may have
+//! changed it:
+//!
+//! ```text
+//!  held(body, wanted):
+//!    homes the body names, filtered by the caller's `wanted`
+//!      drop a value with a definition that is not a plain copy
+//!        (a spilled value's definitions are removed by spilling)
+//!      walk each block backward with the values live there
+//!        drop a value when an instruction may write its cell
+//!        and is not itself a store of that value to the cell
+//! ```
+//!
+//! `may_write` is the spiller's own test for the frame, plus any store to other
+//! memory that is not certainly elsewhere. `apart` says two cells are certainly
+//! different bytes: both are fixed addresses that `overlap` separates. A
+//! pointer, or two elements of an array, are never apart; what a pointer
+//! reaches is the optimizer's proof, not checked here.
+//!
+//! # Example
+//! No honest example: `held`, `may_write` and `apart` answer queries and print
+//! no LIR of their own. Read the spiller's `ISEL_DUMP=1` output (see
+//! [`crate::backend::lirtext`]) to see a spilled phi read from its home cell.
+//!
+//! # Used by
+//! [`crate::backend::spiller`] and [`crate::backend::floatassign`] (`held`);
+//! [`crate::backend::floatfold`] and [`crate::backend::pressuresink`]
+//! (`may_write`); [`crate::backend::postrasink`] (`apart`).
 
 use std::collections::BTreeSet;
 
-use crate::backend::allocate::live;
+use crate::backend::allocate::live_rows_by;
 use crate::backend::overlap;
 use crate::backend::spiller::_may_write;
 use crate::model::ir::{Loc, Mem, Operation};
@@ -108,18 +135,29 @@ pub fn held(
     if found.is_empty() {
         return found;
     }
+    // Only these values are looked at, where they occur: every instruction of
+    // the body was walked, and the liveness of every value solved, afresh
+    // for each spill round to read the few homes in it.
+    let asked: BTreeSet<u32> = found.keys().copied().collect();
     // Every definition is a copy.
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        if !copies(one) {
-            for value in &one.defines {
-                found.shift_remove(value);
+    let reads = crate::backend::postings::following(body, |postings| {
+        let mut reads: BTreeSet<usize> = BTreeSet::new();
+        for &value in &asked {
+            if postings.defs(value).iter().any(|at| !copies(&body.blocks[at.0 as usize].insns[at.1 as usize])) {
+                found.shift_remove(&value);
             }
+            reads.extend(postings.uses(value).iter().map(|at| at.0 as usize));
         }
-    }
-    let (_, live_out) = live(body);
-    for block in &body.blocks {
-        let mut alive: BTreeSet<u32> =
-            live_out[&block.at].iter().copied().filter(|value| found.contains_key(value)).collect();
+        reads
+    });
+    let live_out = live_rows_by(body, |value| asked.contains(&value));
+    for (position, block) in body.blocks.iter().enumerate() {
+        let mut alive: BTreeSet<u32> = live_out.leaving(block.at).filter(|value| found.contains_key(value)).collect();
+        // Nothing of these values is live at the exit or read here: no
+        // instruction changes anything.
+        if alive.is_empty() && !reads.contains(&position) {
+            continue;
+        }
         for one in block.insns.iter().rev() {
             // What a pointer reaches is the optimizer's proof; what is checked
             // is a write to the cell itself.

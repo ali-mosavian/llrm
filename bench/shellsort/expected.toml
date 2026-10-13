@@ -1,13 +1,12 @@
-reason = "guards prove more (a phi tested on every edge into its block): shellsort nib loses a bounds check (-1.0% instructions) and the CFG it leaves loads values[at - gap] twice (4 loads in the pipeline MIR, 3 before): memory operands +17%"
-blessed = "2026-10-09"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+blessed = "2026-10-13"
 
 [bas.O2]
-instructions = 10449
+instructions = 10790
 memory_operands = 2001
-code_bytes = 342
+code_bytes = 339
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 0.1557
 
 [bas.Os]
 instructions = 10795
@@ -17,10 +16,36 @@ data_bytes = 17
 bss_bytes = 0
 kernel_ms = 0.1604
 
+[bq16.O2]
+instructions = 11549
+memory_operands = 1903
+code_bytes = 353
+data_bytes = 17
+bss_bytes = 0
+
+[bq16.Os]
+instructions = 11553
+memory_operands = 1916
+code_bytes = 332
+data_bytes = 17
+bss_bytes = 0
+
+[bq32.O2]
+instructions = 11088
+code_bytes = 347
+data_bytes = 23
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 10794
+code_bytes = 322
+data_bytes = 23
+bss_bytes = 0
+
 [c.O2]
-instructions = 9036
+instructions = 9658
 memory_operands = 1629
-code_bytes = 159
+code_bytes = 165
 data_bytes = 0
 bss_bytes = 0
 
@@ -30,11 +55,12 @@ memory_operands = 1629
 code_bytes = 152
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.1262
 
 [nib.O2]
-instructions = 11258
+instructions = 11274
 memory_operands = 1939
-code_bytes = 205
+code_bytes = 220
 data_bytes = 0
 bss_bytes = 0
 
@@ -44,6 +70,7 @@ memory_operands = 2035
 code_bytes = 196
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.1583
 
 [ow.O2]
 instructions = 12654

@@ -1,12 +1,152 @@
-//! Adapted from llrm-core's `optimize/loopsimplify.rs`, the port of
-//! `qbopt/optimize/loopsimplify.py`: every reducible loop gets one
-//! preheader, one latch and dedicated exits.
+//! Loop canonical form: every reducible loop gets one preheader, one latch
+//! and dedicated exits, so the loop passes can assume them.
 //!
-//! The old body was immutable, so a refused grouping left it as it was; here
-//! each loop is simplified on a copy of the function, kept only when every
-//! grouping it needed went through. Every block ends in a terminator, so the
-//! old fall-through source, a block whose last operation merely precedes
-//! `target`, is a `br label`.
+//! # How it works
+//! For each loop the pass finds the edges to group and routes each group
+//! through one new block, which the target's phis read (`grouped`):
+//! - a preheader, when the header has more than one predecessor outside the
+//!   loop, or the one it has also branches elsewhere;
+//! - one latch, when the header has several backedges;
+//! - a dedicated exit, for each exit block that is also reached from outside
+//!   the loop, so all its predecessors are in the loop.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   a["<b>a</b>"]:::mid
+//!   b["<b>b</b>"]:::mid
+//!   h["<b>H</b>"]:::mid
+//!   l1["<b>L1</b>"]:::mid
+//!   l2["<b>L2</b>"]:::mid
+//!   x["<b>X</b>"]:::mid
+//!   y["<b>y</b>"]:::mid
+//!   a --> h
+//!   b --> h
+//!   h --> l1
+//!   h --> l2
+//!   l1 --> h
+//!   l2 --> h
+//!   h --> x
+//!   y --> x
+//! ```
+//!
+//! *Before: two entries, two latches, an exit also reached from y*
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   a["<b>a</b>"]:::mid
+//!   b["<b>b</b>"]:::mid
+//!   p["<b>P</b>"]:::mid
+//!   h["<b>H</b>"]:::mid
+//!   l1["<b>L1</b>"]:::mid
+//!   l2["<b>L2</b>"]:::mid
+//!   l["<b>L</b>"]:::mid
+//!   e["<b>E</b>"]:::mid
+//!   x["<b>X</b>"]:::mid
+//!   y["<b>y</b>"]:::mid
+//!   a --> p
+//!   b --> p
+//!   p --> h
+//!   h --> l1
+//!   h --> l2
+//!   l1 --> l
+//!   l2 --> l
+//!   l --> h
+//!   h --> e
+//!   e --> x
+//!   y --> x
+//! ```
+//!
+//! *After: preheader P, one latch L, dedicated exit E*
+//!
+//! A phi on the target is split: the grouped arms become a phi of the new
+//! block (or the one value they all share) and one arm of the target's phi.
+//! Grouping needs every source to end in a `br` whose edge can be retargeted,
+//! and every phi of the target to name exactly the target's predecessors.
+//!
+//! The loops are processed one at a time on a copy of the function, kept only
+//! when every grouping the loop needed went through, so a refused one leaves
+//! the body as it was. A loop already in the form makes no copy. The loops of
+//! the shape are updated for the new blocks rather than found again
+//! (`LLRM_CHECK_SHAPE` compares them with a new shape). A function with an
+//! irreducible loop is left alone.
+//!
+//! # Example
+//! Before:
+//! ```mir
+//! define i16 @f(i1 %c, i16 %s, i16 %t) {
+//! b0:
+//!   br i1 %c, label %b5, label %b4
+//!
+//! b5:
+//!   br label %b1
+//!
+//! b4:
+//!   br label %b1
+//!
+//! b1:
+//!   %carried = phi i16 [ %s, %b5 ], [ %t, %b4 ], [ %stepped, %b2 ]
+//!   br i1 %c, label %b2, label %b3
+//!
+//! b2:
+//!   %stepped = add i16 %carried, 1
+//!   br label %b1
+//!
+//! b3:
+//!   ret i16 %carried
+//! }
+//! ```
+//! After:
+//! ```mir
+//! define i16 @f(i1 %c, i16 %s, i16 %t) {
+//! b0:
+//!   br i1 %c, label %b5, label %b4
+//!
+//! b5:
+//!   br label %0
+//!
+//! b4:
+//!   br label %0
+//!
+//! b1:
+//!   %carried = phi i16 [ %stepped, %b2 ], [ %1, %0 ]
+//!   br i1 %c, label %b2, label %b3
+//!
+//! b2:
+//!   %stepped = add i16 %carried, 1
+//!   br label %b1
+//!
+//! b3:
+//!   ret i16 %carried
+//!
+//! 0:
+//!   %1 = phi i16 [ %s, %b5 ], [ %t, %b4 ]
+//!   br label %b1
+//! }
+//! ```
+//! `b1` was entered from `b5` and `b4`. Both now jump to the new preheader
+//! `%0`, whose phi holds the two seeds, so the header's phi has one arm from
+//! outside the loop.
+//!
+//! From unit test `test_grouping_preserves_each_phi_edge_value` in
+//! `loopsimplify_tests.rs`.
+//!
+//! # Runs
+//! In [`crate::pipeline`]'s per-body fixed point, after `tailrec` and before
+//! `lcssa`; again after the header copy of `-ftree-ch`, where it
+//! re-simplifies the loops that copy made; [`simplified`] is called by
+//! [`crate::lsr`] after it guards a loop. On at every level above -O0.
+//!
+//! # Keeps
+//! Nothing where it changes a body; it reads only the CFG's structure.
+//!
+//! # See also
+//! LLVM's `LoopSimplify`.
 
 use std::collections::BTreeSet;
 
@@ -184,31 +324,28 @@ fn _simplified(
         COPIES.with(|copies| copies.set(copies.get() + 1));
         let mut candidate = function.clone();
         let mut grouping = false;
+        // The blocks `grouped` makes, as (block, target, sources): what the
+        // loops of the shape gain from them, without a new shape of the
+        // function.
+        let mut bridges: Vec<(i64, i64, BTreeSet<i64>)> = Vec::new();
         let predecessors = loops::predecessors(&cfg::graph(&candidate));
         let outside = predecessors[&original.header].difference(&original.body).copied().collect::<BTreeSet<_>>();
         let Some(&parent) = outside.first() else { continue };
         if outside.len() != 1 || candidate.successors(cfg::block(parent)) != [cfg::block(original.header)] {
-            if grouped(&mut candidate, original.header, &outside).is_none() {
-                continue;
-            }
+            let Some(bridge) = grouped(&mut candidate, original.header, &outside) else { continue };
+            bridges.push((cfg::id(bridge), original.header, outside));
             grouping = true;
         }
         if original.latches.len() != 1 {
-            if grouped(&mut candidate, original.header, &original.latches).is_none() {
-                continue;
-            }
+            let Some(bridge) = grouped(&mut candidate, original.header, &original.latches) else { continue };
+            bridges.push((cfg::id(bridge), original.header, original.latches.clone()));
             grouping = true;
         }
         let graph = cfg::graph(&candidate);
-        let current = if grouping {
-            cfg::Shape::of(&candidate)
-                .loops
-                .into_iter()
-                .find(|loop_| loop_.header == original.header)
-                .expect("StopIteration")
-        } else {
-            original.clone()
-        };
+        let mut current = original.clone();
+        for (bridge, target, sources) in &bridges {
+            _bridged(&mut current, *bridge, *target, sources);
+        }
         let predecessors = loops::predecessors(&graph);
         let exits = graph
             .iter()
@@ -222,22 +359,68 @@ fn _simplified(
             let reaching = predecessors.get(&target).unwrap_or(&empty);
             let sources = reaching.intersection(&current.body).copied().collect::<BTreeSet<_>>();
             if !reaching.is_subset(&current.body) {
-                if grouped(&mut candidate, target, &sources).is_none() {
+                let Some(bridge) = grouped(&mut candidate, target, &sources) else {
                     broke = true;
                     break;
-                }
+                };
+                bridges.push((cfg::id(bridge), target, sources));
                 grouping = true;
             }
         }
         if !broke && grouping {
             *function = candidate;
             changed = true;
-            shape = cfg::Shape::of(function);
+            for loop_ in &mut shape.loops {
+                for (bridge, target, sources) in &bridges {
+                    _bridged(loop_, *bridge, *target, sources);
+                }
+            }
+            if cfg!(test) || llrm_support::env_set("LLRM_CHECK_SHAPE") {
+                _agrees(&shape, function);
+            }
             whole = cfg::graph(function);
             entered = loops::predecessors(&whole);
         }
     }
     changed
+}
+
+/// What `loop_` is once `bridge` stands on the edges from `sources` to
+/// `target`: the block joins it where `target` and every source are in it (it
+/// reaches the latch through `target`, and what reaches it came from inside),
+/// and becomes its only latch where `target` is its header.
+fn _bridged(
+    loop_: &mut loops::Loop,
+    bridge: i64,
+    target: i64,
+    sources: &BTreeSet<i64>,
+) {
+    if !loop_.body.contains(&target) || !sources.is_subset(&loop_.body) {
+        return;
+    }
+    loop_.body.insert(bridge);
+    if loop_.header == target {
+        loop_.latches = BTreeSet::from([bridge]);
+    }
+}
+
+/// `LLRM_CHECK_SHAPE`: the loops kept up to date are those of a new shape of
+/// the function.
+fn _agrees(
+    kept: &cfg::Shape,
+    function: &Function,
+) {
+    let fresh = cfg::Shape::of(function);
+    let by_header = |loops: &[loops::Loop]| {
+        loops
+            .iter()
+            .map(|one| (one.header, (one.body.clone(), one.latches.clone())))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    assert!(
+        by_header(&kept.loops) == by_header(&fresh.loops),
+        "the loops kept through loopsimplify differ from a new shape's"
+    );
 }
 
 #[cfg(test)]

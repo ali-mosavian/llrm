@@ -31,12 +31,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # The real-mode DOS emulator is x86-m16 code: it lives with the target.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm-x86-m16/bench"))
 
+import cpulimit  # noqa: E402
 import maps  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
 import icount  # noqa: E402
 import dosbatch  # noqa: E402
 llrmbin = dosbatch.llrmbin
+import qb32  # noqa: E402
+import qbbuild  # noqa: E402
+import qbruntime  # noqa: E402
 import run_tests  # noqa: E402
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
@@ -53,8 +57,15 @@ OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/b
 # needs its generated headers and 16-bit bootstrap, which this checkout lacks)
 OWLIB = Path(os.environ.get("OW_LIB", Path.home() / "dos/devtools/dev/c/watcom/lib286"))
 BENCH = ROOT / "bench"
-LANGUAGES = {"bas": ".bas", "c": ".c", "nib": ".nib"}
+# `bas` is BASIC on the Microsoft runtime (MS LINK, in DOSBox: only where QB45 and the others are installed); `bq16` the same source on
+# our runtime, real mode, linked by jwlink: always available.
+LANGUAGES = {"bas": ".bas", "bq16": ".bas", "bq32": ".bas", "c": ".c", "nib": ".nib"}
 BASIC_LANGUAGES = ("bas",)
+OURS_BASIC = ("bq16", "bq32")
+# The flat target is counted by the emulator the program runs in (guest instructions, on virtual time), net of its empty start-up
+# program: the unicorn emulator is real mode.
+FLAT = "bq32"
+LOADERS: dict[Path, tuple[Path, ...]] = {}  # an exe -> the files that must sit beside it (DOS/32A)
 COUNTERS = ("instructions", "memory_operands")
 # Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
 SIZES = ("code_bytes", "data_bytes", "bss_bytes")
@@ -72,13 +83,24 @@ BORLAND = {
     "tcpp": (TURBO / "tcpp30", "tcc", {"O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
-REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
+REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "bq16": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
 # BASIC references: the name in expected.toml -> the toolchain (run_tests.TOOLS) whose BC compiles and whose runtime links.
 BASIC_REFERENCES = {"bc": "qb45", "pds71": "pds71", "vbdos": "vbdos"}
 # Kernel time is a difference of two whole-program times, each a few cycles off from run to run: parity/loop's 139
 # instructions (0.0029 ms) read 3.5% apart on two runs. A change must clear both the relative and the absolute slack.
 TIME_TOLERANCE = 0.01
 TIME_SLACK_MS = 0.001
+
+
+def tools_missing(variant: "Variant") -> str | None:
+    """Why a Microsoft-runtime BASIC variant cannot be built here, or None: BC and LINK are the dialect's own install (the
+    environment variable names where it is), which a runner may not have."""
+    if variant.language not in BASIC_LANGUAGES:
+        return None
+    tools = run_tests.TOOLS[variant.dialect]
+    if tools.mount.is_dir():
+        return None
+    return f"{variant.dialect}: no Microsoft BASIC install at {tools.mount} (set {variant.dialect.upper()}_DIR); `{variant.language}` needs BC and LINK, `bq16` and `bq32` do not"
 
 
 def reference_level(reference: str, opt: str) -> str:
@@ -115,7 +137,8 @@ def variants(directory: Path) -> list[Variant]:
         source = directory / f"{directory.name}{suffix}"
         if source.exists():
             head = run_tests.header(source)
-            out.append(Variant(name, language, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45").split()[0],
+            region = settings["region"].get(language) or settings["region"]["bas"]  # our BASIC is the same kernel
+            out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
                               bool(settings.get("timed_only")), tuple(head.get("data", "").split())))
     return out
 
@@ -129,7 +152,12 @@ def nib_extras(source: Path) -> list[str]:
     return [str(one) for one in dosbatch.link_files(source, run_tests.header(source).get("link", "").split(), dosbatch.REAL_MODE)]
 
 
-def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
+def c_include_arguments(work: Path) -> list[str]:
+    """`-I` for the OS layer's C header (llrm_os.h), as tests/run gives every C program: a bench that includes bench_io.h needs it."""
+    return ["-I", str(dosbatch.c_include(dosbatch.REAL_MODE, work))]
+
+
+def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | None = None) -> tuple[Path, Path] | str:
     """(exe, linker map) of the variant at -`opt`, or why it did not build. BASIC is only compiled here: LINK runs in DOSBox."""
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
     # The kernel stays a call: inlined into main it has no entry to count from.
@@ -137,24 +165,36 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
     more = os.environ.get("LLRM_BENCH_FLAGS", "").split()
     flags = [f"-{opt}", "-fno-inline-functions", *more]
     # A BASIC kernel is a private SUB called once from main: it stays a call only where called-once inlining is off (a C one is public).
-    if variant.language in BASIC_LANGUAGES:
+    if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
         flags.append("-fno-inline-functions-called-once")
     try:
         if variant.language == "nib":
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
-            done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], capture_output=True, text=True, timeout=300,
-                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
+            done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
-        tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
+        if variant.language == FLAT:
+            built = qbbuild.one_target(variant.source, work, objects, tuple(flags), qbbuild.FLAT, stem, listing)
+            LOADERS[built.exe] = built.files
+            return built.exe, listing
+        tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-c"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
+        if variant.language in OURS_BASIC:
+            arguments = ["--dialect", "qb45", "-fqb-runtime=llrm"]
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
-        done = subprocess.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], capture_output=True, text=True, timeout=300)
+        if variant.language == "c":
+            extra += c_include_arguments(work)
+        done = cpulimit.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], 300, capture_output=True, text=True)
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == "c":
             exe = work / f"{stem}.exe"
             dosbatch.link_c(obj, exe, work, listing)
+            return exe, listing
+        if variant.language in OURS_BASIC:
+            exe = work / f"{stem}.exe"
+            qbbuild.link16(obj, objects[qbbuild.REAL], exe, qbruntime.linked_objects(variant.source, work, "llrm", (), stem), listing)
             return exe, listing
     except (dosbatch.BuildError, subprocess.TimeoutExpired) as error:
         return f"build: {error}"
@@ -195,7 +235,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     if got != want:
         return {"error": f"prints {got}, want {want}"}
     data, bss = sizes.data_bytes(obj)
-    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
 
 
 def references_available() -> bool:
@@ -208,7 +248,7 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
     flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
-    done = subprocess.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], capture_output=True, text=True, timeout=300)
+    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
     try:
@@ -232,6 +272,13 @@ def c_source(path: Path) -> bytes:
     return b"".join(lines[head:])
 
 
+def stage_shared_headers(folder: Path, text: bytes) -> bytes:
+    """`text`, a program's source, as it builds in `folder` (a DOS volume's root, which has no `..`): the benches' shared header
+    beside it, and `#include "../bench_io.h"` naming it there."""
+    shutil.copy(BENCH / "bench_io.h", folder / "bench_io.h")
+    return text.replace(b'"../bench_io.h"', b'"bench_io.h"')
+
+
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
     """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
     Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
@@ -240,7 +287,7 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
     folder = work / f"{language}{opt}"
     folder.mkdir(parents=True)
     for variant, stem in variants_:
-        text = c_source(variant.source)
+        text = stage_shared_headers(folder, c_source(variant.source))
         if home.name == "tc201":  # TC 2.01 reads a `#` after a bare LF as an illegal character: every program with a #define failed
             text = text.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         (folder / f"{stem}.c").write_bytes(text)
@@ -268,7 +315,7 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
 def with_startup(selected: list[str], timing: bool) -> list[tuple[Path, Variant]]:
     """Every (directory, variant) to build, plus under --time the empty-kernel programs that price each start-up."""
     todo = [(directory, variant) for directory in benchmarks(selected) for variant in variants(directory)]
-    return todo + [(STARTUP, variant) for variant in variants(STARTUP)] if timing else todo
+    return todo + [(STARTUP, variant) for variant in variants(STARTUP) if timing]
 
 
 def measure_references(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
@@ -338,6 +385,37 @@ def net_times(measured: dict) -> dict:
     return {key: value for key, value in measured.items() if key[0] != "startup"}
 
 
+def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
+    """The flat target's programs, each run on its own in DOSBox on virtual time with the emulator counting by function from the
+    program's link map: `instructions` are the kernel's own, its entry to its return and what it called, as the real-mode
+    emulator counts them. Not the whole run's: that holds the extender's load (about 40 instructions per relocation, so the
+    number of address references in the program) and the runtime's start-up, which are not what the compiler made. With the
+    program's object's sizes, and its output checked."""
+    work.mkdir(parents=True, exist_ok=True)
+
+    def one(item):
+        key, (stem, exe, obj, want, needed, listing, region) = item
+        if needed and "skip" in needed:
+            return key, {"error": "skipped: " + needed["skip"]}
+        ran = qbbuild.run(
+            qbbuild.Built(exe, LOADERS.get(exe, ())), work / f"{stem}-{key[2]}", needed["files"] if needed else (), qb32.BENCH_CONF, qb32.BUDGET_MS, profile=listing
+        )
+        if ran.status != "ok":
+            return key, {"error": f"run: {ran.status}"}
+        got = run_tests.lines(ran.output.decode("latin1"))
+        # BASIC's PRINT of a number leads with a blank
+        if [line.strip() for line in got] != [line.strip() for line in want]:
+            return key, {"error": f"prints {got}, want {want}"}
+        if region.upper() not in ran.inclusive:
+            return key, {"error": f"the kernel {region} is not in the link map's functions"}
+        data, bss = sizes.data_bytes(obj)
+        return key, {"instructions": ran.inclusive[region.upper()], "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+
+    with ThreadPoolExecutor() as pool:
+        found = dict(pool.map(one, flat.items()))
+    return {key: counts for key, counts in found.items() if key[0] != "startup"}
+
+
 def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
     """{(benchmark, language, opt): counts or {"error": why} or {"known": issue}}"""
     out: dict[tuple[str, str, str], dict] = {}
@@ -345,13 +423,18 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         folder = work / opt
         shutil.rmtree(folder, ignore_errors=True)
         folder.mkdir(parents=True)
-        todo = with_startup(selected, timing)
+        everything = with_startup(selected, timing)
+        for _, variant in everything:
+            if reason := tools_missing(variant):
+                out[(variant.name, variant.language, opt)] = {"skip": reason}
+        todo = [(directory, variant) for directory, variant in everything if not tools_missing(variant)]
         stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
+        objects = qbbuild.runtimes(work / "runtime") if any(v.language in OURS_BASIC for _, v in todo) else None
         with ThreadPoolExecutor() as pool:
-            built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)]), todo))
+            built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)], objects), todo))
         basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
         failed = link_basic(basic, folder)
-        jobs, plain, needs = [], {}, {}
+        jobs, plain, needs, flat = [], {}, {}, {}
         for (directory, variant), result in zip(todo, built):
             key = (variant.name, variant.language, opt)
             stem = stems[(variant.name, variant.language)]
@@ -360,14 +443,24 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
                 out[key] = {"error": why}
                 continue
             exe, listing = (folder / f"{stem}.exe", folder / f"{stem}.map") if variant.language in BASIC_LANGUAGES else result
-            if directory == STARTUP:
+            if variant.language == FLAT:
+                flat[key] = (stem, exe, folder / f"{stem}.{qbbuild.FLAT}.obj", expected_output(directory), timing_input(variant, directory), listing, variant.region)
+                if directory == STARTUP:
+                    plain[key] = exe
+                else:
+                    needs[key] = flat[key][4]
+                    jobs.append((key, None))
+            elif directory == STARTUP:
                 plain[key] = exe  # timed, not counted
             else:
                 jobs.append((key, (stem, exe, listing, None if variant.timed_only else variant.region, expected_output(directory), folder / f"{stem}.obj")))
                 needs[key] = timing_input(variant, directory)
         with ProcessPoolExecutor() as pool:
-            for (key, _), counts in zip(jobs, pool.map(measure, [job for _, job in jobs])):
+            counted = [(key, job) for key, job in jobs if job is not None]
+            for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
                 out[key] = counts
+        out |= measure_flat(flat, folder / "flat")
+        jobs = [(key, job if job is not None else (flat[key][0], flat[key][1], None, None, None, None)) for key, job in jobs]
         if timing:
             exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
             for key, timed in time_programs(exes, folder / "time", {key: needs[key] for key in exes if needs.get(key)}).items():
@@ -382,7 +475,7 @@ def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> 
     for variant in all_variants:
         if not variant.known:
             continue
-        keys = [(variant.name, variant.language, opt) for opt in opts]
+        keys = [(variant.name, variant.language, opt) for opt in opts if "skip" not in measured.get((variant.name, variant.language, opt), {})]
         broken = [key for key in keys if "error" in measured[key]]
         for key in keys:
             if key in broken:
@@ -421,7 +514,7 @@ def time_programs(exes: dict[tuple[str, str, str], Path], work: Path, inputs: di
         print(f"SKIP timing: {why}")
     out |= {key: {"error": "skipped: " + one["skip"]} for key, one in inputs.items() if "skip" in one}
     keys = [key for key in exes if key not in out]
-    jobs = [Job(f"W{at:03d}", "exe", exes[key], runner="TIMEIT.COM", files=(stub, *inputs.get(key, {}).get("files", ())), budget_ms=600_000 if key in inputs else None) for at, key in enumerate(keys)]
+    jobs = [Job(f"W{at:03d}", "exe", exes[key], runner="TIMEIT.COM", files=(stub, *LOADERS.get(exes[key], ()), *inputs.get(key, {}).get("files", ())), budget_ms=600_000 if key in inputs else None) for at, key in enumerate(keys)]
     ran = dosbatch.run(jobs, work / "run", conf=TIMING_CONF)
     for key, job in zip(keys, jobs):
         text = ran[job.stem].text
@@ -448,7 +541,7 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
     before = {one: dict(table) for one, table in read_expected(directory).items() if isinstance(table, dict)}
     tables = {one: dict(table) for one, table in before.items()}
     for (benchmark, language, opt), counts in measured.items():
-        if benchmark != name or "error" in counts:
+        if benchmark != name or "error" in counts or "skip" in counts:
             continue
         new = {one: counts[one] for one in (*COUNTERS, *SIZES, "kernel_ms") if one in counts}
         old = tables.get(language, {}).get(opt, {})
@@ -534,7 +627,7 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
             for opt in opts:
                 got = measured[(name, variant.language, opt)]
                 label = f"{name} {variant.language} -{opt}"
-                if "known" in got:
+                if "known" in got or "skip" in got:
                     continue
                 if "xpass" in got:
                     problems.append(f"{label}: works; remove its known mark ({got['xpass']})")
@@ -554,6 +647,16 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                     if (name, reference, level) in measured:
                         problems += drift_problems(f"{name} {reference} -{level}", measured[(name, reference, level)], baseline.get(reference, {}).get(level))
     return problems
+
+
+def clock_lines(measured: dict, selected: list[str]) -> list[str]:
+    """The 486 clocks of each selected benchmark's kernel beside its counts. Reported, not gated: the counts ratchet, and
+    a change that trades instructions for fewer clocks is judged by these."""
+    lines = []
+    for (name, language, opt), got in sorted(measured.items()):
+        if name in selected and language in (*LANGUAGES, *BASIC_LANGUAGES) and "clocks" in got:
+            lines.append(f"{name} {language} -{opt}: {got['clocks']} clocks, {got['instructions']} instructions, {got['memory_operands']} memory operands")
+    return lines
 
 
 def geomean(values: list[float]) -> float:
@@ -619,7 +722,11 @@ def main() -> int:
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
     problems = judge(measured, args.select, args.opt)
+    for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
+        print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
+    if args.select:
+        print(*clock_lines(measured, args.select), sep="\n")
     for one in problems:
         print("FAIL", one)
     print(f"{len(measured)} measurements: {len(problems)} problems")

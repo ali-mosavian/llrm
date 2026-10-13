@@ -1,24 +1,51 @@
-reason = "the frame register holds a value where nothing touches the frame (push/pop around the stretch): queens nib -Os instructions -3.9% and code -2.2% for memory operands +15.5% (the pushes and pops); sieve bas code -1.4%; quicksort bas +0.6% instructions; 10 rows better, 6 worse"
-blessed = "2026-10-11"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+blessed = "2026-10-13"
 
 [bas.O2]
-instructions = 17640
-memory_operands = 7057
-code_bytes = 285
+instructions = 17646
+memory_operands = 7059
+code_bytes = 289
 data_bytes = 15
 bss_bytes = 0
 
 [bas.Os]
-instructions = 17660
-memory_operands = 7070
-code_bytes = 269
+instructions = 17669
+memory_operands = 7082
+code_bytes = 271
+data_bytes = 15
+bss_bytes = 0
+kernel_ms = 0.2568
+
+[bq16.O2]
+instructions = 22883
+memory_operands = 6065
+code_bytes = 298
 data_bytes = 15
 bss_bytes = 0
 
+[bq16.Os]
+instructions = 22907
+memory_operands = 6088
+code_bytes = 283
+data_bytes = 15
+bss_bytes = 0
+
+[bq32.O2]
+instructions = 22788
+code_bytes = 312
+data_bytes = 21
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 22800
+code_bytes = 293
+data_bytes = 21
+bss_bytes = 0
+
 [c.O2]
-instructions = 12106
-memory_operands = 2727
-code_bytes = 146
+instructions = 12151
+memory_operands = 2901
+code_bytes = 180
 data_bytes = 0
 bss_bytes = 0
 
@@ -28,11 +55,12 @@ memory_operands = 3495
 code_bytes = 113
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.1766
 
 [nib.O2]
-instructions = 12086
+instructions = 12141
 memory_operands = 2727
-code_bytes = 136
+code_bytes = 133
 data_bytes = 0
 bss_bytes = 0
 
@@ -42,6 +70,7 @@ memory_operands = 3495
 code_bytes = 110
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.1776
 
 [ow.O2]
 instructions = 19596

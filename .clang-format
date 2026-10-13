@@ -1,0 +1,19 @@
+# The QB runtime's C (runtime/qb, tests/qbgfx, tests/hostgfx): code to 100
+# columns.  clang-format has one limit, so comments are left as they are
+# (ReflowComments) and tools/wrapcomments.py wraps them at 80.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 100
+BreakBeforeBraces: Linux
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+PointerAlignment: Right
+SortIncludes: Never
+ReflowComments: Never
+SeparateDefinitionBlocks: Always
+MaxEmptyLinesToKeep: 1
+IndentCaseLabels: false
+AttributeMacros: [QB_FAR]

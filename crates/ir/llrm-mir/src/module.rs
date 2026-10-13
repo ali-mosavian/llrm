@@ -133,11 +133,41 @@ pub struct Use {
 /// end when `next` is `None`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Change {
-    Inserted { inst: InstId, block: BlockId, next: Option<InstId> },
-    Cloned { from: InstId, to: InstId },
-    Moved { inst: InstId, block: BlockId, next: Option<InstId>, from: BlockId },
+    Inserted {
+        inst: InstId,
+        block: BlockId,
+        next: Option<InstId>,
+    },
+    Cloned {
+        from: InstId,
+        to: InstId,
+    },
+    Moved {
+        inst: InstId,
+        block: BlockId,
+        next: Option<InstId>,
+        from: BlockId,
+    },
     Rewritten(InstId),
-    Erased { inst: InstId, block: BlockId, next: Option<InstId> },
+    /// Operand `index` of `inst` was `was`: logged before the `Rewritten` of
+    /// the change, by what reads what an instruction read before (the
+    /// liveness of a value it stopped reading, the edge a branch stopped
+    /// taking).
+    Operand {
+        inst: InstId,
+        index: u32,
+        was: Operand,
+    },
+    /// The operands of `inst` were `was`, before the `Rewritten` that follows.
+    Operands {
+        inst: InstId,
+        was: Box<[Operand]>,
+    },
+    Erased {
+        inst: InstId,
+        block: BlockId,
+        next: Option<InstId>,
+    },
     BlockCreated(BlockId),
     BlockErased(BlockId),
 }
@@ -525,7 +555,9 @@ impl Function {
     /// The log of changes since the last `take_changes`. They stay in the log,
     /// to `changes_since`, until it holds more than `LOG` of them.
     pub fn take_changes(&mut self) -> Vec<Change> {
-        const LOG: usize = 1 << 16;
+        // Twice what it was: the entries that tell what an operand was go with
+        // every rewrite.
+        const LOG: usize = 1 << 17;
         let kept_from = self.lineage.logged - self.changes.0.len();
         let out = self.changes.0[self.taken.max(kept_from) - kept_from..].to_vec();
         self.taken = self.lineage.logged;

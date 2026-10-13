@@ -1,6 +1,21 @@
 --- a/bld/cc/c/ctype.c
 +++ b/bld/cc/c/ctype.c
-@@ -1038,6 +1038,7 @@
+@@ -106,6 +106,14 @@
+ {
+     DATA_TYPE   base_type;
+ 
++#ifdef LLRM_LDOUBLE_BYTES
++    /*
++     * llrm: a long double takes the bytes the target's description says in memory (gcc's 12 at -m32: 10 of x87
++     * rounded up to its alignment), so sizeof, arrays and struct members lay out as gcc's do.
++     */
++    CTypeSizes[TYP_LONG_DOUBLE] = LLRM_LDOUBLE_BYTES;
++    CTypeSizes[TYP_LDIMAGINARY] = LLRM_LDOUBLE_BYTES;
++#endif
+     TypeHead = NULL;
+     TagCount = 0;
+     FieldCount = 0;
+@@ -1038,6 +1046,7 @@
      decl_info           info;
      static field_level_stype struct_level = 0;
      const_val           cval;
@@ -8,7 +23,7 @@
  
      struct_level++;
      prev_unqualified_type = TYP_VOID;   /* so it doesn't match 1st time */
-@@ -1050,6 +1051,14 @@
+@@ -1050,6 +1059,14 @@
       */
      struct_size = start;
      next_offset = start;
@@ -23,7 +38,7 @@
      for(;;) {
          if( CurToken == T_SEMI_COLON && CompFlags.extensions_enabled ) {
              NextToken();
-@@ -1115,6 +1124,36 @@
+@@ -1115,6 +1132,36 @@
                  } else {
                      bits_width = U64Low( cval.value );
                  }
@@ -60,7 +75,7 @@
                  if( bits_width > bits_available || bits_width == 0 ) {
                      scalar_size = TypeSize( typ );
                      if( bits_available != bits_total ) {
-@@ -1139,6 +1178,11 @@
+@@ -1139,6 +1186,11 @@
                  }
                  bits_available -= bits_width;
              } else {

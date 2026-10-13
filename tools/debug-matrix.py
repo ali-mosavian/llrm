@@ -27,11 +27,16 @@ JWLINK = Path.home() / ".local/bin/jwlink"
 # What each program is, and what a reader must find in what it reads.
 PROGRAMS = {
     "c": {"file": "known.c", "functions": ["add", "main"], "variables": ["first", "second", "sum", "p", "counter"], "lines": [7, 8, 9, 14, 15, 16, 17], "types": ["pt"]},
-    "nib": {"file": "known.nib", "functions": ["add", "main"], "variables": ["first", "second", "sum", "total"], "lines": [2, 3, 6, 7], "types": [], "registers": ["first", "second"]},
+    "nib": {"file": "known.nib", "functions": ["add", "main"], "variables": ["first", "second", "sum", "total"], "lines": [2, 3, 6, 7], "types": [], "registers": ["first"]},
     "qb": {"file": "known.bas", "functions": ["add"], "variables": ["first", "second", "sum", "total"], "lines": [3, 4, 7, 8], "types": []},
 }
 OBJECTS = {16: ["omf"], 32: ["omf", "coff", "elf", "macho"]}
 FORMATS = {"codeview": "-gcodeview", "td": "-gtd", "dwarf": "-gdwarf"}
+
+
+def flag(fmt, obj):
+    # Open Watcom's wdump reads DWARF 2 and 3 only (it crashes on the 4 and 5 `-gdwarf` writes for 32 bits).
+    return "-gdwarf-2" if (fmt, obj) == ("dwarf", "omf") else FORMATS[fmt]
 
 
 def run(argv, **kw):
@@ -45,7 +50,7 @@ def missing(wanted, text, fold=True):
 
 def compile_cell(llrm, fe, bits, obj, fmt, out):
     program = PROGRAMS[fe]
-    res = run([llrm / f"llrm-{fe}", f"-m{bits}", "-O0", FORMATS[fmt], f"-fobject-format={obj}", ROOT / "tests/fixtures/matrix" / program["file"], "-o", out])
+    res = run([llrm / f"llrm-{fe}", f"-m{bits}", "-O0", flag(fmt, obj), f"-fobject-format={obj}", ROOT / "tests/fixtures/matrix" / program["file"], "-o", out])
     if res.returncode != 0:
         return False, (res.stderr.strip().splitlines() or ["failed"])[-1]
     return True, ""
@@ -61,13 +66,20 @@ def present(obj, path):
         if ".debug$S" in sections:
             found.add("codeview")
         return found
-    classes, data, at = set(), path.read_bytes(), 0
+    classes, data, at, dwarf = set(), path.read_bytes(), 0, False
     while at + 3 <= len(data):
         kind, size = data[at], int.from_bytes(data[at + 1 : at + 3], "little")
         if kind == 0x88 and size > 2:
             classes.add(data[at + 4])
+        # DWARF in OMF is segments named as ELF's sections: they are in the LNAMES.
+        if kind == 0x96 and b".debug_info" in data[at + 3 : at + 3 + size]:
+            dwarf = True
         at += 3 + size
-    return ({"codeview"} if 0xA1 in classes else set()) | ({"td"} if classes & {0xE3, 0xE5, 0xE0, 0xE1, 0xE2} else set())
+    return (
+        ({"codeview"} if 0xA1 in classes else set())
+        | ({"td"} if classes & {0xE3, 0xE5, 0xE0, 0xE1, 0xE2} else set())
+        | ({"dwarf"} if dwarf else set())
+    )
 
 
 def check_dwarf(fe, obj_path):
@@ -138,6 +150,27 @@ def check_omf_codeview(fe, bits, obj_path, work):
     return problems
 
 
+def check_omf_dwarf(fe, bits, obj_path, work):
+    """Linked by jwlink (`debug dwarf`), read by Open Watcom's wdump, which reads the 16-bit convention."""
+    program = PROGRAMS[fe]
+    image = work / "x.exe"
+    publics = re.findall(r"- '([^']+)' Type", run([WATCOM / "dmpobj", "-q", obj_path]).stdout)
+    start = next((name for name in publics if "main" in name.lower()), publics[0])
+    fmt = ["format", "dos"] if bits == 16 else ["format", "os2", "le"]
+    linked = run([JWLINK, *fmt, "debug", "dwarf", "file", obj_path, "name", image, "option", f"quiet,undefsok,start={start},nodefaultlibs"])
+    if not image.exists():
+        return [f"jwlink: {(linked.stdout + linked.stderr).strip().splitlines()[-1]}"]
+    dump = run([WATCOM / "wdump", "-q", "-d", "-Dx", image]).stdout
+    if "DW_AT_name" not in dump:
+        return ["wdump: no DWARF in the linked image"]
+    text = image.read_bytes().decode("latin-1")
+    wanted = {**program, "variables": [name for name in program["variables"] if name not in program.get("registers", [])]}
+    problems = [f"no {kind[:-1]} {name}" for kind in ("functions", "variables", "types") for name in missing(wanted[kind], text)]
+    rows = {int(m) for m in re.findall(r"line (\d+) column", dump)}
+    problems += [f"no line {line}" for line in program["lines"] if line not in rows]
+    return problems
+
+
 def cell(llrm, fe, bits, obj, fmt, work):
     out = work / f"{fe}-{bits}-{obj}-{fmt}.o"
     emitted, why = compile_cell(llrm, fe, bits, obj, fmt, out)
@@ -152,6 +185,8 @@ def cell(llrm, fe, bits, obj, fmt, work):
         problems = check_coff_codeview(fe, out, work)
     elif obj == "omf" and fmt == "codeview":
         problems = check_omf_codeview(fe, bits, out, work)
+    elif obj == "omf" and fmt == "dwarf":
+        problems = check_omf_dwarf(fe, bits, out, work)
     else:
         return "emitted", "no reader here: tests/turbo.rs (TLINK/TDUMP in DOSBox)"
     return ("valid", "") if not problems else ("BROKEN", "; ".join(problems))

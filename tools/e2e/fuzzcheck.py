@@ -14,7 +14,7 @@ passes per configuration:
 
   1. An identity transform, so `judge()`'s own BASEDIFF verdict means exactly
      "BC disagrees with the evaluator", with llrm not asked yet. This is
-     docs/testing.md's own rule ("an unexplained base is not a base") applied
+     docs/working/testing.md's own rule ("an unexplained base is not a base") applied
      to a generated corpus instead of a hand-written one, and it is this
      project's own prescribed order: confirm BC agrees with the evaluator
      before ever judging llrm against either.
@@ -156,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
 
     tags = args.tags or [t for t, c in CONFIGS.items() if c.available]
     if skipped := [t for t in CONFIGS if t not in tags]:
-        print(f"no toolchain for {', '.join(skipped)}; see docs/testing.md")
+        print(f"no toolchain for {', '.join(skipped)}; see docs/working/testing.md")
 
     shutil.rmtree(BUILD, ignore_errors=True)
     corpus_dir = BUILD / "corpus"

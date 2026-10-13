@@ -1,5 +1,5 @@
---- a/bld/cc/c/cgendata.c	2026-09-30 13:30:15.818998399 +0200
-+++ b/bld/cc/c/cgendata.c	2026-09-30 13:30:15.829953225 +0200
+--- a/bld/cc/c/cgendata.c
++++ b/bld/cc/c/cgendata.c
 @@ -38,6 +38,41 @@
  #include "feprotos.h"
  #include "cgen.h"
@@ -42,7 +42,7 @@
  #define ZEROS_BLOCK_SIZE    (8 * 1024)
  
  void EmitZeros( target_size amount )
-@@ -206,7 +241,19 @@
+@@ -206,8 +241,27 @@
          break;
      case QDT_LONG_DOUBLE:
      case QDT_LDIMAGINARY:
@@ -61,5 +61,13 @@
 +            DGBytes( TARGET_LDOUBLE, image );
 +        }
          size += TARGET_LDOUBLE;
++#ifdef LLRM_LDOUBLE_BYTES
++        /* llrm: the object is the target's bytes, the 10 of the image and the padding after */
++        if( LLRM_LDOUBLE_BYTES > TARGET_LDOUBLE ) {
++            DGUBytes( LLRM_LDOUBLE_BYTES - TARGET_LDOUBLE );
++            size += LLRM_LDOUBLE_BYTES - TARGET_LDOUBLE;
++        }
++#endif
          break;
      case QDT_STRING:
+         data_type = GetDQuadPointerCGType( dq->flags );

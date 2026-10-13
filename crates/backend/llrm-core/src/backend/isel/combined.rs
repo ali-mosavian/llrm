@@ -1,8 +1,67 @@
-//! What isel selects across instructions once each is selected: a far
-//! pointer's two words as `les`, a one-use load as a comparison's operand,
-//! a load, update and store as one read-modify-write, and a push's load or
-//! constant as its operand. Folding a single-use load or constant into its
-//! push, and pairing two word pushes, are rules in `peephole.peep`.
+//! Selections that need neighbouring instructions, made over each block once
+//! every instruction is selected.
+//!
+//! # How it works
+//! The patterns select one MIR instruction at a time. Some forms exist only
+//! across instructions, and are cheaper chosen while values are still virtual:
+//! after allocation the operands would sit in unrelated registers. In order,
+//! over each block:
+//!
+//! 1. A far pointer's two word loads become one `les`-form load
+//!    ([`crate::backend::farload`]).
+//! 2. A comparison's one-use load becomes its memory operand
+//!    ([`crate::backend::comparefold`]).
+//! 3. A step of a compared value sets the compare's flags
+//!    ([`crate::backend::stepflags`]).
+//! 4. A load, update and store of one cell become one read-modify-write
+//!    ([`crate::backend::rmw`]).
+//! 5. The target's `peephole.peep` groups `memory_arguments` (a single-use load
+//!    as a push's operand), `paired_pushes` and `immediate_arguments` (a
+//!    constant as a push's operand) run over held values.
+//! 6. A literal pushed several times is made again at each push, so no literal
+//!    address is kept live across a call (`_rematerialized_arguments`).
+//! 7. Two word loads of one dword's halves that are only pushed, high then low,
+//!    become one dword load pushed whole (`dword_pairs`).
+//!
+//! ```text
+//!  mov v1, [p]       ; low word            mov v3, dword [p]
+//!  mov v2, [p+2]     ; high word    =>     push v3
+//!  push v2
+//!  push v1
+//! ```
+//!
+//! Use counts are recomputed between steps, counting instruction reads, fixed
+//! register inputs and phi inputs.
+//!
+//! # Example
+//! The first three lines of the MIR below (a load, an add and a store of one
+//! cell) leave `isel` as separate selections and step 4 makes them one:
+//!
+//! ```mir
+//!   %3 = load i16, ptr addrspace(5) %1
+//!   %4 = add i16 %3, 3
+//!   store i16 %4, ptr addrspace(5) %1
+//! ```
+//!
+//! ```lir
+//!       0x0007  [[abs+0x0] v2@unplaced] := add [[abs+0x0] v2@unplaced], 0x3  ; inserted
+//! ```
+//!
+//! No dump prints the body before this step, so the result is shown against the
+//! MIR it came from.
+//!
+//! From `ISEL_DUMP=1` of a nib program (a struct method with a `while` loop,
+//! called from `main`) at `-m16 -O2`, stage `FarIndirectCalls`.
+//!
+//! # Runs
+//! Once per function, at the end of `Selector::body`, after unread wide halves
+//! are dropped and before address promotion (`widen`).
+//!
+//! # Needs
+//! The target's [`crate::backend::peep::Rules`] and the CPU profile.
+//!
+//! # See also
+//! The phase map: [`crate::backend`].
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

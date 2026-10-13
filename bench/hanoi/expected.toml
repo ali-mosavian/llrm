@@ -1,5 +1,5 @@
-reason = "hanoi (c, nib) -O2/-Os: equal calls to a function that touches no memory are one (self-recursive memory(none), GVN numbers the call, merged before tail recursion makes it a loop): 188,403 -> 111 instructions at c -O2. The row now measures a const recursion folded, not recursion."
-blessed = "2026-10-11"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+blessed = "2026-10-13"
 
 [bas.O2]
 instructions = 335856
@@ -7,42 +7,73 @@ memory_operands = 131059
 code_bytes = 213
 data_bytes = 15
 bss_bytes = 0
+kernel_ms = 4.4896
 
 [bas.Os]
-instructions = 344048
+instructions = 344047
 memory_operands = 131059
 code_bytes = 211
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 5.691
+
+[bq16.O2]
+instructions = 368621
+memory_operands = 131059
+code_bytes = 218
+data_bytes = 15
+bss_bytes = 0
+kernel_ms = 4.9232
+
+[bq16.Os]
+instructions = 376812
+memory_operands = 131059
+code_bytes = 216
+data_bytes = 15
+bss_bytes = 0
+
+[bq32.O2]
+instructions = 729846
+code_bytes = 405
+data_bytes = 21
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 770806
+code_bytes = 389
+data_bytes = 21
+bss_bytes = 0
 
 [c.O2]
-instructions = 111
+instructions = 98
 memory_operands = 0
-code_bytes = 39
+code_bytes = 37
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.002
 
 [c.Os]
-instructions = 111
+instructions = 98
 memory_operands = 0
-code_bytes = 39
+code_bytes = 37
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.002
 
 [nib.O2]
-instructions = 112
+instructions = 99
 memory_operands = 0
-code_bytes = 42
+code_bytes = 40
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0023
 
 [nib.Os]
-instructions = 112
+instructions = 99
 memory_operands = 0
-code_bytes = 42
+code_bytes = 40
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0023
 
 [ow.O2]
 instructions = 376809

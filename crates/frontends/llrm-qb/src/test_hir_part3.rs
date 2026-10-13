@@ -538,8 +538,13 @@ fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
     let raised =
         regex::Regex::new(r"mov word ptr \$QB\$FRAME\+\d+, (\d+)\n    pushw 5\n    call far ptr B\$SERR").unwrap();
     let statement = &raised.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];
-    let resumed = regex::Regex::new(&format!(r"cmp ax, {statement}\n    jne \w+\n\w+:\n")).unwrap();
-    let next = &assembly[resumed.find(&assembly).unwrap_or_else(|| panic!("{assembly}")).end()..];
+    // The dispatch continues at the statement's resume point, laid next
+    // (`jne` past it) or branched to (`je`) as the placement falls.
+    let dispatch = regex::Regex::new(&format!(r"cmp ax, {statement}\n    (?:jne \w+\n(\w+):|je (\w+))\n")).unwrap();
+    let found = dispatch.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"));
+    let label = found.get(1).or_else(|| found.get(2)).unwrap().as_str();
+    let start = assembly.find(&format!("\n{label}:\n")).unwrap_or_else(|| panic!("{assembly}"));
+    let next = &assembly[start..];
     let next = &next[..next.find("jmp ").unwrap_or(next.len())];
     assert!(next.contains("call far ptr B$PER4"), "{assembly}");
 }
@@ -2712,7 +2717,7 @@ fn module_body(program: &llrm_core::hir::model::Program) -> String {
 fn a_module_body_keeps_its_frame_in_static_data() {
     // `10 ON ERROR GOTO 100: 20 ERROR 5: 25 ERROR 6: 27 ON ERROR GOTO 0`
     // `28 ERROR 7: 30 END: 100 PRINT "h"; ERR: 110 RESUME NEXT`
-    let program = qb_driver::decoded(include_str!("fixtures/static_main_frame.json"), false).expect("decodes");
+    let program = qb_driver::decoded(include_str!("fixtures/static_main_frame.json"), false, 0).expect("decodes");
     let body = module_body(&program);
     // Premise: the body stores into a frame, BP's or the static one.
     assert!(body.contains("[bp-") || body.contains("$QB$FRAME"), "{body}");
@@ -2912,7 +2917,7 @@ fn an_error_in_the_outlined_handler_reports_its_line() {
 /// The same, pinned at the backend's input.
 #[test]
 fn an_outlined_handler_takes_a_row_per_line() {
-    let program = qb_driver::decoded(include_str!("fixtures/outlined_handler_lines.json"), false).expect("decodes");
+    let program = qb_driver::decoded(include_str!("fixtures/outlined_handler_lines.json"), false, 0).expect("decodes");
     // Premise: the frontend states each line's BASIC number.
     assert!(program.modules[0].line_numbers.contains(&(5, 110)));
     let found = handler_lines(&program);

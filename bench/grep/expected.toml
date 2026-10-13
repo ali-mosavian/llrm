@@ -1,41 +1,65 @@
-reason = "the frame register holds a value where nothing touches the frame (push/pop around the stretch): queens nib -Os instructions -3.9% and code -2.2% for memory operands +15.5% (the pushes and pops); sieve bas code -1.4%; quicksort bas +0.6% instructions; 10 rows better, 6 worse"
-blessed = "2026-10-11"
+reason = "OPEN no longer allocates a kilobyte of line buffer with its file block, so programs that open files in their kernel (grep, jpeg, stft: -3,063 instructions each) skip the string-space take it caused; scroll +3 for freeing the file name's temporary"
+blessed = "2026-10-13"
 
 [bas.O2]
-code_bytes = 993
+code_bytes = 1022
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.2019
+kernel_ms = 3753.5253
 
 [bas.Os]
 code_bytes = 942
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3886.6766
+kernel_ms = 3750.7177
+
+[bq16.O2]
+code_bytes = 997
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 3706.6112
+
+[bq16.Os]
+code_bytes = 931
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 3703.8059
+
+[bq32.O2]
+instructions = 627521472
+code_bytes = 1471
+data_bytes = 127
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 627512050
+code_bytes = 1334
+data_bytes = 127
+bss_bytes = 0
 
 [c.O2]
-code_bytes = 549
+code_bytes = 563
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3415.7936
+kernel_ms = 3547.0561
 
 [c.Os]
-code_bytes = 521
+code_bytes = 513
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3415.6629
+kernel_ms = 3682.6052
 
 [nib.O2]
-code_bytes = 1476
+code_bytes = 1514
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4239.5804
+kernel_ms = 4514.089
 
 [nib.Os]
-code_bytes = 1391
+code_bytes = 1398
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4239.6052
+kernel_ms = 4647.9981
 
 [ow.O2]
 code_bytes = 544

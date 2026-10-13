@@ -1,25 +1,52 @@
-reason = "a diamond-bodied loop's latch falls into the header (x_collatz -15.7% clocks); costs one jmp per loop entry: quicksort bas +2.1% instructions"
-blessed = "2026-10-09"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+blessed = "2026-10-13"
 
 [bas.O2]
-instructions = 308816
-memory_operands = 20126
-code_bytes = 312
+instructions = 316022
+memory_operands = 20866
+code_bytes = 324
 data_bytes = 13
 bss_bytes = 0
 
 [bas.Os]
-instructions = 308272
-memory_operands = 20866
-code_bytes = 301
+instructions = 305948
+memory_operands = 20126
+code_bytes = 305
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 4.1216
+kernel_ms = 4.0906
+
+[bq16.O2]
+instructions = 316022
+memory_operands = 20866
+code_bytes = 329
+data_bytes = 13
+bss_bytes = 0
+
+[bq16.Os]
+instructions = 305948
+memory_operands = 20126
+code_bytes = 310
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 4.0872
+
+[bq32.O2]
+instructions = 316830
+code_bytes = 287
+data_bytes = 19
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 306755
+code_bytes = 271
+data_bytes = 19
+bss_bytes = 0
 
 [c.O2]
-instructions = 172712
+instructions = 176401
 memory_operands = 20125
-code_bytes = 171
+code_bytes = 187
 data_bytes = 0
 bss_bytes = 0
 
@@ -29,11 +56,12 @@ memory_operands = 20866
 code_bytes = 168
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 2.3457
 
 [nib.O2]
-instructions = 171944
+instructions = 162687
 memory_operands = 20125
-code_bytes = 174
+code_bytes = 181
 data_bytes = 0
 bss_bytes = 0
 
@@ -43,6 +71,7 @@ memory_operands = 20125
 code_bytes = 170
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 2.3049
 
 [ow.O2]
 instructions = 1588281

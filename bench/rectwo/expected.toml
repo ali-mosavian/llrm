@@ -1,5 +1,5 @@
-reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -13%, rectwo -12%, recchop -4.5%, quicksort nib -1.7%)"
-blessed = "2026-10-09"
+reason = "branch odds combine as gcc 13.4 does (predict.cc combine_predictions_for_bb), a build for size keeps phi copies in the predecessor, an edge copy must win by a tenth, a recursive call is not exceptional against a returning base case; worse rows: bintree -Os instructions +1.3..1.6% (clocks +0.8%)"
+blessed = "2026-10-12"
 
 [c.O2]
 instructions = 1458578
@@ -7,9 +7,10 @@ memory_operands = 97238
 code_bytes = 79
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 19.4563
 
 [c.Os]
-instructions = 1896158
+instructions = 1896157
 memory_operands = 97238
 code_bytes = 80
 data_bytes = 0

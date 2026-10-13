@@ -20,7 +20,7 @@ from dataclasses import dataclass
 MARKER = "FINISHED.TXT"
 
 # core=dynamic and cycles=max: fast, and not a measurement. Anything that
-# produces a number uses the pinned profile instead -- see docs/measurement/readme.md.
+# produces a number uses the pinned profile instead -- see docs/working/measurement/readme.md.
 FAST = """\
 [sdl]
 priority=higher,normal

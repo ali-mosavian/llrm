@@ -1,13 +1,44 @@
-//! What each register holds, by where: LLVM's `LiveIntervalUnion` and the
-//! `LiveRegMatrix` over it.
+//! Answers which values already hold a register where an interval lies, so the
+//! allocator can test an assignment without visiting every holder. LLVM's
+//! `LiveIntervalUnion` and the `LiveRegMatrix` over it.
 //!
-//! A register's holders do not overlap one another, so a query for what meets
-//! an interval is a walk over the segments that start before it ends, back to
-//! the first that ends before it starts: logarithmic and the overlaps found,
-//! not the holders there are. A segment that does meet one already kept (a
-//! rewrite moves every interval, and leaves the clashes for the allocator to
-//! find) is kept apart and looked at one by one, so the answers are the
-//! pairwise ones in every case.
+//! # How it works
+//! The union keeps, per register, the values that hold it in the order they
+//! took it. A query asks which holders meet an interval. With few holders it
+//! looks at them one by one. Once a register has `BIG` holders and `ASKED`
+//! questions have come since the intervals last moved, the register gets an
+//! index built from where its holders are live.
+//!
+//! A register's holders normally do not overlap, so the index keeps their
+//! segments in an ordered map from start to (end, holder). A query walks the
+//! segments that start before the interval ends, back to the first that ends
+//! before it starts: logarithmic, and it visits the overlaps found rather than
+//! the holders there are.
+//!
+//! ```text
+//!   index of one register
+//!     kept    start -> (end, holder)   segments that meet no other kept
+//!     points  start -> holders         segments of no length
+//!     apart   [(start, end, holder)]   segments that meet one already kept
+//! ```
+//!
+//! A rewrite moves every interval and leaves the clashes for the allocator to
+//! find, so the holders can overlap. A segment that meets one already kept goes
+//! to `apart` and is compared one by one, so the answers equal the pairwise
+//! ones in every case. Zero-length segments are points, because a segment of
+//! no length still meets another it lies inside.
+//!
+//! `refresh` drops the indexes after the intervals move; `refresh_among` moves
+//! only the changed values. `check_index` asserts every index against the
+//! pairwise answer.
+//!
+//! # Example
+//! No honest example: the index answers queries inside the allocator and prints
+//! no LIR. Read `tests` in this file, which assert every index against the
+//! pairwise answer (`check_index`).
+//!
+//! # Used by
+//! `allocate` and `splitkit`.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -217,6 +248,53 @@ impl LiveUnion {
             *held.index.get_mut() = None;
         }
         self.asked.set(0);
+    }
+
+    /// The intervals of `changed` moved from what `before` says to what `after`
+    /// does and no others did: the indexes kept stand for the rest. A holder
+    /// that is no longer live in `after` leaves the index.
+    pub fn refresh_among(
+        &mut self,
+        changed: &crate::support::hash::HashSet<u32>,
+        before: &impl crate::backend::live::Ranges,
+        after: &impl crate::backend::live::Ranges,
+    ) {
+        for held in self.registers.values_mut() {
+            let Some(index) = held.index.get_mut() else { continue };
+            for value in changed {
+                let Some(&at) = index.taken.get(value) else { continue };
+                index.remove(*value, before);
+                if after.range(*value).is_some() {
+                    index.add(*value, at, after);
+                }
+            }
+        }
+    }
+
+    /// Every index kept answers as the pairwise look does, for every holder.
+    pub fn check_index(
+        &self,
+        live: &impl crate::backend::live::Ranges,
+    ) {
+        for (register, held) in &self.registers {
+            let Some(index) = held.index.borrow().clone() else { continue };
+            for value in &held.holders {
+                let Some(one) = live.range(*value) else { continue };
+                let mut found = BTreeSet::new();
+                for segment in &one.segments {
+                    index.meeting(segment.start, segment.end, &mut found);
+                }
+                let by_index: BTreeSet<u32> =
+                    found.into_iter().filter_map(|at| index.by_taking.get(&at).copied()).collect();
+                let pairwise: BTreeSet<u32> = held
+                    .holders
+                    .iter()
+                    .copied()
+                    .filter(|other| live.range(*other).is_some_and(|found| found.overlaps(one)))
+                    .collect();
+                assert_eq!(by_index, pairwise, "{register:?}: the holders meeting value#{value} by the index kept");
+            }
+        }
     }
 
     /// The holders of `register`, in the order they took it.
@@ -459,6 +537,41 @@ mod tests {
                     "{query:?} round {round}"
                 );
             }
+        }
+    }
+
+    /// A rewrite moves the intervals of the values it named and no others: the
+    /// index kept for 100 holders is updated for those, not built again, and
+    /// answers as the pairwise look does (the rebuild after every rewrite was
+    /// `regalloc evict` and `recolor`'s share of 4 G on `branches` at 800).
+    #[test]
+    fn test_an_index_kept_across_a_rewrite_moves_the_holders_that_moved_and_answers_as_the_pairwise_look_does() {
+        let mut before: IndexMap<u32, Interval> = IndexMap::default();
+        for value in 1..=100u32 {
+            let start = i64::from(value) * 10;
+            before.insert(value, interval(value, &[(start, start + 7)]));
+        }
+        let mut union = LiveUnion::new();
+        for value in 1..=100u32 {
+            union.add(RegId::AX, value, &before);
+        }
+        // Enough questions to have it indexed.
+        for k in 0..40 {
+            union.busy(&RegId::AX, &interval(0, &[(k * 30, k * 30 + 3)]), &before);
+        }
+        // 7 moves, 9 grows into 10's, 50 is gone.
+        let mut after = before.clone();
+        after.insert(7, interval(7, &[(500, 505)]));
+        after.insert(9, interval(9, &[(90, 112)]));
+        after.shift_remove(&50);
+        let changed: crate::support::hash::HashSet<u32> = [7, 9, 50].into_iter().collect();
+        union.refresh_among(&changed, &before, &after);
+        union.check_index(&after);
+        let holders = union.holders(&RegId::AX);
+        for k in 0..130 {
+            let one = interval(0, &[(k * 8, k * 8 + 1 + k % 7 * 5)]);
+            let found: Vec<u32> = union.meeting(&RegId::AX, &one, &after);
+            assert_eq!(found, pairwise(&holders, &after, &one), "query {k}");
         }
     }
 

@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import levels_time
+import llrmbin
 
 WORK = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
 COMPILERS = ("llrm", "gcc", "clang")
@@ -138,6 +139,38 @@ def cases(n: int) -> str:
     )
 
 
+def unrolled(loops: int) -> str:
+    """A recursive partition (quicksort's) unrolled until it has LOOPS partition loops (rounded down to 2**D - 1, D = loops.bit_length()),
+    each in a branch of the one before, in one function, as a compiler's recursive inlining makes it. Every analysis of the loops
+    (counted proofs, intervals, products) meets each loop of the function once for each of them. N is the loops, as in the other axes: the
+    other way (N the depth) made 2**32 loops of the size the generic tests give an axis, a compile that never ended."""
+    depth = max(1, loops.bit_length())
+    count = [0]
+
+    def body(left: int, lo: str, hi: str) -> str:
+        if left == 0:
+            return f"    fallback(a, {lo}, {hi});\n"
+        count[0] += 1
+        k = count[0]
+        return (
+            f"    {{ int lo{k} = {lo}, hi{k} = {hi};\n"
+            f"      if (lo{k} < hi{k}) {{ int pivot{k} = a[hi{k}], i{k} = lo{k}, j{k}, t{k};\n"
+            f"        for (j{k} = lo{k}; j{k} < hi{k}; ++j{k})\n"
+            f"          if (a[j{k}] < pivot{k}) {{ t{k} = a[i{k}]; a[i{k}] = a[j{k}]; a[j{k}] = t{k}; ++i{k}; }}\n"
+            f"        t{k} = a[i{k}]; a[i{k}] = a[hi{k}]; a[hi{k}] = t{k};\n"
+            + body(left - 1, f"lo{k}", f"i{k} - 1")
+            + body(left - 1, f"i{k} + 1", f"hi{k}")
+            + "      }\n    }\n"
+        )
+
+    return (
+        PRELUDE_C
+        + "extern void fallback(int *a, int lo, int hi);\n"
+        + f"void sort(int *a, int lo, int hi)\n{{\n{body(depth, 'lo', 'hi')}}}\n"
+        + _main("unrolled", "    int v[64], i;\n    for (i = 0; i < 64; ++i) v[i] = (i * 37) & 63;\n    sort(v, 0, 63);\n    return v[n & 63];\n")
+    )
+
+
 def cells(n: int) -> str:
     """One function reading and writing N distinct memory cells (elements of one static array), each read after the stores to every
     cell before it: the loads that memory forwarding looks up meet N different cells, so a pass that scans every cell held per load
@@ -189,7 +222,7 @@ def fjoins(n: int) -> str:
     return "".join(out)
 
 
-AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins, "fjoins": fjoins, "cases": cases}
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins, "fjoins": fjoins, "cases": cases, "unrolled": unrolled}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------
@@ -199,10 +232,13 @@ ENVIRONMENT_BYTES = 4096
 
 
 def measured_environment(env: dict | None = None) -> dict:
-    """What the compiler under measurement is given: PATH, LLRM_BIN where set, `env`'s own, and padding to a constant size. The bytes
+    """What the compiler under measurement is given: PATH, LLRM_BIN (the pinned directory, of one length), `env`'s own, and padding to a constant size. The bytes
     of the caller's environment (a sourced script, a longer worktree path) move the stack and the allocator's first pages, and `lir
     peephole` read 157.0 or 168.8 Minstr of cells(224) by 4 bytes of environment alone: base and head must be given the same bytes."""
-    kept = {"PATH": "/usr/bin:/bin", **({"LLRM_BIN": os.environ["LLRM_BIN"]} if "LLRM_BIN" in os.environ else {}), **(env or {})}
+    # The compiler reads LLRM_BIN too: the pinned directory stands for it always, of one length wherever the binaries are and whether
+    # the caller set it or not (llrmbin.pinned).
+    where = {"LLRM_BIN": str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c").parent)}
+    kept = {"PATH": "/usr/bin:/bin", **where, **(env or {})}
     used = sum(len(k) + len(v) + 2 for k, v in kept.items())
     return {**kept, "LLRM_PAD": "x" * max(0, ENVIRONMENT_BYTES - used - len("LLRM_PAD") - 2)}
 

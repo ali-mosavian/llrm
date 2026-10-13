@@ -98,5 +98,40 @@ fn test_a_body_with_no_open_phi_sets_no_propagation_up() {
         super::WORKED.with(std::cell::Cell::get)
     };
     assert_eq!(worked(straight), 0, "a body without a phi");
-    assert!(worked(&body_with_cycle(0, true)) > 0, "premise: a phi no seed has is propagated");
+    assert!(worked(&body_with_cycle(0, false)) > 0, "premise: a phi no seed has is propagated");
+    assert_eq!(worked(&body_with_cycle(0, true)), 0, "a phi that reads an argument cannot be known");
+}
+
+/// Values that cannot come out known have no recipe in the propagation; a cycle
+/// stepped by `x ^ x` (zero for any `x`) and one stepped by a loaded value,
+/// beside values that are overdefined, come out as they do with a recipe for
+/// every value.
+#[test]
+fn test_values_that_cannot_be_known_do_not_change_what_cycles_come_to() {
+    let text = "define void @f(i32 %n, ptr %p, i1 %more) {
+b0:
+  br label %b10
+
+b10:
+  %zeroed = phi i32 [ 7, %b0 ], [ %again, %b10 ]
+  %loaded = phi i32 [ 7, %b0 ], [ %next, %b10 ]
+  %zero = xor i32 %n, %n
+  %again = add i32 %zeroed, %zero
+  %memory = load i32, ptr %p
+  %next = add i32 %loaded, %memory
+  %mixed = add i32 %again, %next
+  br i1 %more, label %b10, label %b20
+
+b20:
+  ret void
+}
+";
+    let module = parsed(&format!("{DOS}{text}"));
+    let dl = layout(&module);
+    let f = function(&module, "f");
+    let found = known(&crate::testing::with_registers(Unit::of(&module, &dl, f)));
+    assert_eq!(found.get(&value(f, "zeroed")), Some(&Known::new(7, 32)));
+    assert_eq!(found.get(&value(f, "again")), Some(&Known::new(7, 32)));
+    assert_eq!(found.get(&value(f, "loaded")), None);
+    assert_eq!(found.get(&value(f, "mixed")), None);
 }

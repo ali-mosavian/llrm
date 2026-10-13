@@ -14,7 +14,8 @@ runs:
         curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
         echo "deb https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm20.list
         sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential autoconf automake libtool pkg-config nasm libpng-dev zlib1g-dev libncurses-dev gdb binutils llvm-20 clang-20 lld-20 zstd
+        sudo apt-get install -y -qq build-essential gcc-multilib autoconf automake libtool pkg-config nasm libpng-dev zlib1g-dev libncurses-dev gdb binutils llvm-20 clang-20 lld-20 zstd
+        # gcc-multilib: the vsgcc harness links gcc -m32 programs, which need the 32-bit libgcc (__divdi3).
         # ubuntu-24.04 is a fixed image: gdb 15.1, binutils 2.42 (printed below).
         echo /usr/lib/llvm-20/bin >> "$GITHUB_PATH"
         export PATH="/usr/lib/llvm-20/bin:$PATH"
@@ -30,13 +31,13 @@ runs:
       if: inputs.save != 'true'
       with:
         path: ~/.cache/llrm
-        key: llrm-forks-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/gcctorture.sh') }}
+        key: llrm-forks-${{ runner.os }}-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/wdump.sh', 'toolchain/gcctorture.sh') }}
         restore-keys: llrm-forks-
     - uses: actions/cache@v4
       if: inputs.save == 'true'
       with:
         path: ~/.cache/llrm
-        key: llrm-forks-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/gcctorture.sh') }}
+        key: llrm-forks-${{ runner.os }}-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/wdump.sh', 'toolchain/gcctorture.sh') }}
         restore-keys: llrm-forks-
     - name: Drop trees whose pin is gone
       shell: bash
@@ -45,6 +46,14 @@ runs:
           [ -d "$d" ] || continue
           grep -rqs "${d##*-}" toolchain/jwbuild.sh toolchain/dosrunbuild.sh toolchain/owshim/ow-commit toolchain/gcctorture.sh || { echo "pruned $d"; rm -rf "$d" "$d.lock"; }
         done
+    - name: wdump (Open Watcom's, built from the tree owshim pins)
+      shell: bash
+      run: |
+        # tests/dwarf.rs reads 16-bit DWARF images with it. About a second from the cached tree (the key above holds the pinned commit
+        # and the script); LLRM_REQUIRE_WDUMP makes a build that failed a red job, not a skipped test.
+        wdump=$(sh toolchain/wdump.sh)
+        echo "WDUMP=$wdump" >> "$GITHUB_ENV"
+        echo "LLRM_REQUIRE_WDUMP=1" >> "$GITHUB_ENV"
     - name: The gcc torture corpus (pinned, cached with the forks)
       shell: bash
       run: echo "TORTURE_CORPUS=$(sh toolchain/gcctorture.sh)" >> "$GITHUB_ENV"

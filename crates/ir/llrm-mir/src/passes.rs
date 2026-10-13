@@ -515,6 +515,21 @@ impl Analysis for Dominators {
     type Result = DominatorTree;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "dominators";
+    const INCREMENTAL: bool = true;
+
+    /// The blocks the changed edges reach are worked out again; nothing else
+    /// can move.
+    fn update(
+        previous: &DominatorTree,
+        changes: &[crate::module::Change],
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> Option<DominatorTree> {
+        previous.updated(function, changes)
+    }
+
     fn run(
         _: &Context,
         _: &DataLayout,
@@ -880,6 +895,21 @@ impl Analyses {
             .map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
     }
 
+    /// `result` as `A`'s, for `function` as it stands: a caller that has worked
+    /// out what the analysis would derive (a pass that knows what its own
+    /// edit did to it) hands it on, and what is asked next of this cache is
+    /// not derived again from it.
+    pub fn seed<A: Analysis>(
+        &mut self,
+        function: &Function,
+        result: Rc<A::Result>,
+    ) {
+        self.cache.insert(
+            TypeId::of::<A>(),
+            Box::new(Entry::<A> { result, outer: Rc::clone(&self.outer), mark: function.mark() }),
+        );
+    }
+
     /// `A`'s result for `function`, computed once until invalidated.
     pub fn get<A: Analysis>(
         &mut self,
@@ -911,10 +941,24 @@ impl Analyses {
             };
             drop(held);
             let changes = function.changes_since(mark)?;
+            // What it read of the outer facts is not what is there now: the
+            // changes of the function are not all that moved.
+            if A::READS_OUTER && !Rc::ptr_eq(&outer, &self.outer) {
+                return None;
+            }
             // Asking of a long log again and again is more than the run it
             // saves.
             if A::SKIPS
-                && changes.len() <= 256
+                // The entries that tell what an operand was are not changes of
+                // their own.
+                && changes
+                    .iter()
+                    .filter(|one| !matches!(
+                        one,
+                        crate::module::Change::Operand { .. } | crate::module::Change::Operands { .. }
+                    ))
+                    .count()
+                    <= 256
                 && (!A::READS_OUTER || Rc::ptr_eq(&outer, &self.outer))
                 && A::unaffected(changes, context, function)
             {

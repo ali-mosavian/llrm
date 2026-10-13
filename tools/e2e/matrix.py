@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
 
     tags = [t for t, c in CONFIGS.items() if c.available]
     if skipped := [t for t in CONFIGS if t not in tags]:
-        print(f"no toolchain for {', '.join(skipped)}; see docs/testing.md")
+        print(f"no toolchain for {', '.join(skipped)}; see docs/working/testing.md")
 
     # --no-absorb-calls is the M5 comparison: calls.py absorbs every
     # arithmetic call before a body reaches the MIR tower, so the MIR

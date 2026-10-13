@@ -1,14 +1,19 @@
-//! A whole body, emitted -- and everything that has to move when it does.
+//! The pairs of branch conditions that are each other's inverse.
 //!
-//! Port of `qbopt/backend/layout.py`. Blocks are placed, implicit edges made
-//! explicit and branches threaded; `asm` then measures, shrinks every branch
-//! to a fixed point and emits. What comes back is bytes plus the relocations,
-//! because a relocated displacement is emitted as zero and the fixup that
-//! names it has to be moved to wherever the field ended up.
+//! # How it works
+//! `_PAIRS` lists each condition mnemonic with the one that is true exactly
+//! when it is false (`je`/`jne`, `jb`/`jae`, and the aliases of each).
+//! `_OPPOSITE` is the table in both directions. `jcxz` and `loop*` are absent
+//! on purpose: they have no inverse to name, so a block ending in one keeps its
+//! jump.
 //!
-//! Refuses the whole body where it cannot emit one op.
+//! # Example
+//! No example: a table of condition names. See `jumps.rs` for the inversions it
+//! serves.
 //!
-//! Python's `id(op)` is the `Arc` pointer of an LIR occurrence.
+//! # Used by
+//! `jumps`, to invert a branch when it makes the other successor the
+//! fall-through.
 
 use std::sync::LazyLock;
 

@@ -45,7 +45,12 @@ pub fn desugar(module: &mut Module) -> Result<(), Diagnostic> {
             })?;
         }
         let mut locals = function.parameters.iter().map(|one| one.name.clone()).collect();
-        scopes::walk_mut(&mut function.body, &mut locals, &mut |expression, locals| {
+        scopes::walk_roles_mut(&mut function.body, &mut locals, &mut |expression, locals, role| {
+            if let (scopes::Role::Assigned, Expr::Name(name, span)) = (role, &*expression) {
+                if consts.contains_key(name.as_str()) && !locals.contains(name) {
+                    return Err(Diagnostic::new(*span, format!("{name} is a const and cannot be assigned")));
+                }
+            }
             constant(expression, &consts, locals);
             Ok::<(), Diagnostic>(())
         })?;

@@ -1,30 +1,11 @@
 # Tools
 
-Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
+Scripts and Python tools for building, running, measuring and comparing llrm. The list, by task, is
+[docs/reference/tools.md](../docs/reference/tools.md).
 
-| Tool | Does |
-|---|---|
-| `bench/bench.py` | the benchmark gate: executed instructions and memory operands per kernel against `bench/NAME/expected.toml`; `--bless --reason` to move a baseline; see `bench/readme.md` |
-| `bench/history.py`, `bench/dashboard.py` | the per-commit benchmark history on the `bench-history` branch, and the static HTML dashboard drawn from it |
-| `nib-build.sh` | builds a Nib program into a DOS `.EXE` |
-| `mir-corpus.sh` | regenerates `crates/opt/llrm-analysis/corpus`, the rich MIR the corpus tests read |
-| `baseline.sh OUT` | every stage dump of the OMF corpus and Nib examples; `diff -r` two of them |
-| `dosbatch/dosbatch.py` | many programs in one DOSBox launch: build, run each under a time budget, read stdout. Shared by `tests/run`, `loops` |
-| `dosbatch/run_tests.py` | `tests/run`: compile, run, diff with `NAME.out`; `cargo test --test run` calls it |
-| `e2e/e2e.py` | (route deleted in #318) BC compiles `tests/run/qb`, `llrm-omf` recompiles, LINK links, DOSBox runs, output compared |
-| `e2e/matrix.py` | `e2e` over all twelve BC configurations |
-| `e2e/fuzzgen.py`, `e2e/fuzzcheck.py` | random BASIC programs, judged by an evaluator, BC and `llrm-omf` |
-| `e2e/mkgolden.py` | the suite's expected outputs, computed from what each program means |
-| `e2e/mkfixtures.py` | rebuilds `tests/inputs/omf` with the BC toolchains |
-| `e2e/dosbox.py`, `e2e/cache.py`, `e2e/configs.py` | the DOSBox runner, its launch cache, the BC switch sets |
-| `identity.sh KIND BASE NEW [-m16|-m32]` | the identity gate: two builds of `llrm-nib` (`nib`) or `llrm-c` (`c`, `qcport`) make byte-identical objects for a whole corpus; fails on any DIFF or STATUS. Run it against a build of the base for any change that must not move a target's output; see below |
-| `qcport-run.py [llrm-c]` | QCport built by llrm-c runs beside the all-Borland build and draws the same (frames, polys, BENCH.BMP md5); QCPORT, QCPORT_INC, QCPORT_BORLAND name its sources and the Borland build; fails loudly on any difference |
-| `qcport-compile.sh [llrm-c]` | QCport's 65 C modules compiled at -O2 and -Os; each refusal listed (QCPORT, QCPORT_INC name its sources) |
-| `sizes.py BASE [NEW] [-O2 -Os ...]` | object bytes and the backend's expected instructions and memory operands of every test, bench, example and demo program, two builds side by side |
-| `innerloops.py` | each innermost loop's instructions and memory operands, from an object's bytes (OMF or ELF, x86 or msp430) |
-| `loops/run.py` | the loop corpus: cases in C, BASIC and Nib, checked by an oracle, llrm-mir and DOSBox, measured against hand-derived bounds and reference compilers; see below |
-| `analysis/qbfootprint.py` | linked code bytes per module from two LINK maps |
-| `analysis/runtime_writes.py` | what the QuickBASIC runtime writes, read off a linked image |
+Run Python tools with `uv run --project tools python tools/<dir>/<tool>.py`; each tool's header has its options.
+Format Rust with `tools/fmt.sh`. `toolchain/` (at the repository root, not here) holds what `build.rs` bootstraps:
+Open Watcom's `wccq`, `jwasm`, `jwlink` and DOSBox-X.
 
 ## The identity gate
 
@@ -40,43 +21,5 @@ QCPORT=... QCPORT_INC=... tools/identity.sh qcport BASE/llrm-c target/release/ll
 It prints how many programs came out SAME, and each one that is not: `DIFF` (the objects differ),
 `STATUS` (one build compiled what the other refused) or `REFUSED` (both refused: no evidence either
 way). A DIFF is a finding, or a base older than the change's branch: compare against `origin/main`
-as it is. `test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_one` keeps
-the instrument honest.
-
-## The loop corpus
-
-`loops/spec.py` is the one language a case is written in. `loops/oracle.py`
-computes what it reports, in each language's semantics: C's signed overflow and
-BASIC's error 6 make an input invalid there, Nib wraps. The emitters
-(`emit_c.py`, `emit_bas.py`, `emit_nib.py`) write each case with a driver that
-fills its arrays, calls it once per valid input and reports the result and a
-digest of every array it writes. `loops/cases/` holds the families:
-
-- `classic`: named anchors (dot, saxpy, memcpy, ... binary search).
-- `concurrent`: 1 to 12 arrays in one loop, by element sizes, index forms,
-  bases, source forms, trips, steps, starts and whole-segment walks, with
-  metamorphic variants composed from a recorded seed, each judged against its
-  base.
-- `cross`: every pair of values of every two dimensions of one base loop:
-  trip, condition, counter width, start, step, element and field, storage,
-  2-D walk order, use of the counter (non-affine ones included), shape and a
-  second counter.
-- `fuzz`: loops drawn from both at once, every dimension random; `--seed`
-  replays a draw, and each case's note holds its parameters.
-- `adversarial`: the pressure ladder (1 to 7 arrays by 0 to 6 accumulators),
-  pointer chasing, a u16 counter through 65535 to 0, an i8 one across its
-  range, one array passed as two parameters, and BASIC's SINGLE counter.
-
-`loops/expect.py` derives each inner loop's bound from the spec and the target's
-tables (registers, address-form partners, segments); `loops/quality.py` reads a
-loop's induction variables, invariant loads and exit shape from its bytes. The
-references are Open Watcom (`OW_BIN`, its `bwcc`), gcc-ia16's cc1 and as
-(`IA16_ROOT`; the 286 is its newest CPU) and LLVM 20 for msp430 (`LLVM20`), a
-mechanism check only.
-
-`run.py` compiles without inlining, so a loop is measured where its case put it;
-`--inline` lets the compiler inline the functions under test and judges
-correctness only.
-
-`toolchain/` holds what `build.rs` bootstraps: Open Watcom's `wccq`, jwasm,
-jwlink and DOSBox-X.
+as it is. `test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_one` (`tests/toolchain.rs`)
+keeps the instrument honest.

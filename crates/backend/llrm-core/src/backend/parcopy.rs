@@ -1,9 +1,83 @@
-//! Port of `qbopt/backend/parcopy.py`: scheduling a parallel copy, moves
-//! that happen at once, written in an order.
+//! Writes each parallel copy group (the copies a phi becomes on an edge, which
+//! happen at once) as a sequence of moves that computes the same thing.
 //!
-//! After allocation: which moves conflict is a question about locations. A
-//! move may go once nothing left in the group reads what it writes; a cycle
-//! is exchanged or rotated through the machine stack: every cycle can be.
+//! # How it works
+//! After allocation which copies conflict is a question about locations. A
+//! group is the run of instructions that share a `group` number. Inside it:
+//!
+//! 1. An identity copy (same place both sides) emits nothing but stays as an
+//!    anchor, because it still defines the virtual value its destination stands
+//!    for.
+//! 2. A copy is ready when no other copy still to come reads the place it
+//!    writes (`ready`). Ready copies are written, in their order, and the step
+//!    repeats.
+//! 3. When none is ready, every remaining copy waits on another: a cycle
+//!    (`in_cycle`, `_rotated`). It is broken by the cheapest of three routes,
+//!    in this tie order.
+//!
+//! ```text
+//!   cycle  a <- b <- c <- a
+//!
+//!   Exchanges   xchg a,b ; xchg b,c                 (n-1 exchanges; every
+//!                                                   adjacent pair must be
+//!                                                   exchangeable, one width)
+//!   Register    mov t,<closing source> ; the other moves in order ;
+//!               mov <closing dest>,t                (t: a register dead
+//!                                                   after the group that no
+//!                                                   copy names)
+//!   Stack       push <closing source> ; the other moves ; pop <closing dest>
+//! ```
+//!
+//! The target's prices (`CyclePrices`: `mov_rr`, `xchg_rr`, `push_r`, `pop_r`)
+//! choose the route. Where the CPU is tuned for size there are no prices and
+//! the route is exchanges where they apply, else the stack. A scratch register
+//! is a candidate only if the convention does not preserve it or the body
+//! already uses it, so no push and pop is added to save it. A cycle no move of
+//! which the stack can carry is malformed, and so is a group that is not a
+//! permutation of its places.
+//!
+//! A frame-to-frame copy of equal width (1, 2 or 4 bytes, a byte moved as a
+//! word) becomes `push` then `pop`, which needs no scratch register and keeps
+//! the flags.
+//!
+//! # Example
+//! `swaps` in a loop exchanges `a` and `b` each trip. The back edge's three
+//! copies are one group, and `AX`, `DX` form a cycle (`BX` only reads `CX`):
+//!
+//! Before:
+//!
+//! ```lir
+//! block 0x000b
+//!   0x000b  BX := mov CX  ; inserted; parallel-copy 2
+//!   0x000b  DX := mov AX  ; inserted; parallel-copy 2
+//!   0x000b  AX := mov DX  ; inserted; parallel-copy 2
+//!   0x000b  jmp   ; inserted
+//! ```
+//!
+//! After:
+//!
+//! ```lir
+//! block 0x000b
+//!   0x000b  BX := mov CX  ; inserted
+//!   0x000b  DX, AX := xchg AX, DX  ; inserted
+//!   0x000b     ; inserted
+//!   0x000b  jmp   ; inserted
+//! ```
+//!
+//! The ready copy is written first, the cycle becomes one `xchg`, and an anchor
+//! keeps the virtual definition the dropped copies stood for.
+//!
+//! From `ISEL_DUMP=1` of a C function whose loop does `t = a; a = b; b = t;`,
+//! compiled with `llrm-c -O2 -m16`: the `RegAlloc` and `ParallelCopy` stages.
+//!
+//! # Runs
+//! After `regalloc`, before `prologue` and the peephole, once per body, at
+//! every level. A body with no group is returned as it is. `parcopy` is the
+//! phase name.
+//!
+//! # Needs
+//! [`crate::backend::liveness`] (through `regthrash::_dead_after`) for the
+//! registers dead after a group, and the groups `phielim` marks.
 
 use std::fmt;
 use std::sync::Arc;
@@ -39,8 +113,17 @@ impl std::error::Error for Malformed {}
 #[derive(Clone, Copy, Debug)]
 pub struct CyclePrices {
     pub copy: i64,
+    pub exchange: i64,
     pub push: i64,
     pub pop: i64,
+}
+
+/// How a cycle of copies is broken.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Route {
+    Exchanges,
+    Register,
+    Stack,
 }
 
 impl CyclePrices {
@@ -49,17 +132,32 @@ impl CyclePrices {
         if cpu.size {
             return None;
         }
-        Some(Self { copy: cpu.cost("mov_rr").ok()?, push: cpu.cost("push_r").ok()?, pop: cpu.cost("pop_r").ok()? })
+        Some(Self {
+            copy: cpu.cost("mov_rr").ok()?,
+            exchange: cpu.cost("xchg_rr").ok()?,
+            push: cpu.cost("push_r").ok()?,
+            pop: cpu.cost("pop_r").ok()?,
+        })
     }
 
-    /// Whether a cycle of `moves` is cheaper rotated through a register than
-    /// through the stack.
-    fn register_is_cheaper(
+    /// The cheapest of the ways open to a cycle of `moves`, the exchanges
+    /// before the register before the stack where they cost the same.
+    fn route(
         &self,
         moves: usize,
-    ) -> bool {
+        exchanges: bool,
+        register: bool,
+    ) -> Route {
         let moves = moves as i64;
-        (moves + 1) * self.copy < self.push + (moves - 1) * self.copy + self.pop
+        let stack = self.push + (moves - 1) * self.copy + self.pop;
+        let mut best = (Route::Stack, stack);
+        if register && (moves + 1) * self.copy < best.1 {
+            best = (Route::Register, (moves + 1) * self.copy);
+        }
+        if exchanges && (moves - 1) * self.exchange <= best.1 {
+            best = (Route::Exchanges, (moves - 1) * self.exchange);
+        }
+        best.0
     }
 }
 
@@ -380,7 +478,28 @@ fn _rotated(
     // whose exchange would be `xchg ax,ebx`.
     let widths: IndexSet<u32> = operands.iter().map(_width).collect();
     let pairs: Vec<(&Loc, &Loc)> = operands.iter().zip(operands.iter().skip(1)).collect();
-    if widths.len() == 1 && pairs.iter().all(|(one, other)| target::exchangeable(regs, one, other)) {
+    let exchanges = widths.len() == 1 && pairs.iter().all(|(one, other)| target::exchangeable(regs, one, other));
+    let width = _width(&dest(&cycle[cycle.len() - 1]));
+    // A dead register for the closing copy's source, where one is.
+    let held = spare.and_then(|spare| {
+        spare
+            .free
+            .iter()
+            .find_map(
+                |full| {
+                    let register = regs.named(*full, i64::from(width));
+                    (regs.width_of(register) == Some(i64::from(width))).then_some(Reg { register, width })
+                },
+            )
+    });
+    // Where the target prices the ways, the cheapest; else the exchanges, then
+    // the stack.
+    let route = match spare {
+        Some(spare) => spare.prices.route(cycle.len(), exchanges, held.is_some()),
+        None if exchanges => Route::Exchanges,
+        None => Route::Stack,
+    };
+    if route == Route::Exchanges {
         let mut made: Vec<Arc<Insn>> = cycle
             .iter()
             .zip(&pairs)
@@ -402,36 +521,23 @@ fn _rotated(
         return Ok((made, cycle));
     }
 
-    // Through a dead register, where the target prices that under the stack
-    // (a pop is four clocks on the 486): the closing move's source is saved in
-    // it first, and every other move, in order, writes only what was read.
-    if let Some(spare) = spare.filter(|spare| spare.prices.register_is_cheaper(cycle.len())) {
-        let width = _width(&dest(&cycle[cycle.len() - 1]));
-        let held = spare
-            .free
-            .iter()
-            .find_map(
-                |full| {
-                    let register = regs.named(*full, i64::from(width));
-                    (regs.width_of(register) == Some(i64::from(width))).then_some(Reg { register, width })
-                },
-            );
-        if let Some(held) = held {
-            let count = cycle.len();
-            let (first, last) = (&cycle[0], &cycle[count - 1]);
-            let mut saving = (**first).clone();
-            saving.what = Some(semantics(Operation::Move, "mov", vec![Loc::Reg(held)], vec![source(last)]));
-            saving.group = None;
-            saving.defines = vec![];
-            saving.uses = vec![];
-            let mut restoring = (**last).clone();
-            restoring.what = Some(semantics(Operation::Move, "mov", vec![dest(last)], vec![Loc::Reg(held)]));
-            restoring.group = None;
-            let mut made = vec![Arc::new(saving)];
-            made.extend(cycle[..count - 1].iter().map(|one| ungrouped(one)));
-            made.push(Arc::new(restoring));
-            return Ok((made, cycle));
-        }
+    // Through the dead register: the closing move's source is saved in it
+    // first, and every other move, in order, writes only what was read.
+    if let (Route::Register, Some(held)) = (route, held) {
+        let count = cycle.len();
+        let (first, last) = (&cycle[0], &cycle[count - 1]);
+        let mut saving = (**first).clone();
+        saving.what = Some(semantics(Operation::Move, "mov", vec![Loc::Reg(held)], vec![source(last)]));
+        saving.group = None;
+        saving.defines = vec![];
+        saving.uses = vec![];
+        let mut restoring = (**last).clone();
+        restoring.what = Some(semantics(Operation::Move, "mov", vec![dest(last)], vec![Loc::Reg(held)]));
+        restoring.group = None;
+        let mut made = vec![Arc::new(saving)];
+        made.extend(cycle[..count - 1].iter().map(|one| ungrouped(one)));
+        made.push(Arc::new(restoring));
+        return Ok((made, cycle));
     }
 
     // Close the cycle on a move the stack can carry: its source is saved
@@ -656,12 +762,51 @@ mod tests {
             IndexMap::default(),
         );
         let order = |pop: i64| {
-            let done = scheduled_with(&body, Some(CyclePrices { copy: 1, push: 1, pop }), &[RegId::BX], &[]).unwrap();
+            let done =
+                scheduled_with(&body, Some(CyclePrices { copy: 1, exchange: 3, push: 1, pop }), &[RegId::BX], &[])
+                    .unwrap();
             names(&done.blocks[0].insns)
         };
         assert_eq!(order(4), ["mov", "mov", "mov"]);
         assert_eq!(order(1), ["push", "mov", "pop"]);
         assert_eq!(names(&scheduled(&body).unwrap().blocks[0].insns), ["push", "mov", "pop"]);
+    }
+
+    /// mandel with the chain copy: a cycle of three registers of one width was
+    /// two `xchg` every trip, priced as an add (1 clock) where the 486's is
+    /// 3: a dead register carries it in four copies, 4 clocks for 6. Where
+    /// the exchange costs one, the exchanges stay.
+    #[test]
+    fn test_a_cycle_of_one_width_is_exchanged_only_where_that_costs_less_than_a_dead_register() {
+        let mut first = LirBlock::new(
+            0,
+            vec![
+                Arc::new(grouped(reg(RegId::AX, 4), reg(RegId::CX, 4), 1)),
+                Arc::new(grouped(reg(RegId::CX, 4), reg(RegId::DX, 4), 1)),
+                Arc::new(grouped(reg(RegId::DX, 4), reg(RegId::AX, 4), 1)),
+            ],
+        );
+        first.succ = vec![1];
+        let reader = Insn::new(
+            1,
+            Some((1, 2)),
+            semantics(Operation::Move, "mov", vec![reg(RegId::BX, 4)], vec![reg(RegId::SI, 4)]),
+            vec![],
+            vec![],
+        );
+        let body = LirBody::new(
+            "one",
+            0,
+            vec![first, LirBlock::new(1, vec![Arc::new(reader)])],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let order = |exchange: i64| {
+            let prices = CyclePrices { copy: 1, exchange, push: 1, pop: 4 };
+            names(&scheduled_with(&body, Some(prices), &[RegId::BX], &[]).unwrap().blocks[0].insns)
+        };
+        assert_eq!(order(3), ["mov", "mov", "mov", "mov"]);
+        assert_eq!(order(1), ["xchg", "xchg", ""]);
     }
 
     #[test]

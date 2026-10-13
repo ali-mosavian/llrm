@@ -60,6 +60,10 @@ fn facts() -> Regex {
             parts.push(format!(r#"["'](?:{any})["']"#));
             parts.push(format!(r"\bRegister::(?:{any})\b"));
         }
+        // A long double's size where the line says long double: the stride is
+        // `f80` in the description (`Layout::long_double_bytes`), which
+        // is where a frontend reads it.
+        parts.push(format!(r"(?i:long.?double\w*[^\n]*\b{}\b)", target.layout().long_double_bytes()));
         if let Some(bytes) = target.layout().segment_bytes() {
             parts.push(number(bytes as u64));
             parts.push(number(bytes as u64 - 1));
@@ -69,7 +73,7 @@ fn facts() -> Regex {
 }
 
 /// The one place that names the targets built in, which is its job
-/// (docs/targets.md, the first principle).
+/// (docs/machine/targets.md, the first principle).
 const REGISTRY: &str = "crates/backend/llrm-driver/src/lib.rs";
 
 fn is_test_file(path: &Path) -> bool {
@@ -446,4 +450,27 @@ fn d() { "after the use"; }
     let kept = code_of(text, "//").join("\\n");
     assert!(kept.contains("after the static") && kept.contains("after the use") && kept.contains("shared"), "{kept}");
     assert!(!kept.contains("in-test"), "{kept}");
+}
+
+/// A long double's size was a literal in the frontends beside a wccq switch in
+/// one target's file: m32 said 8 where its description's `f80` entry says 12.
+/// The description is the source: 10 at m16, 12 at m32.
+#[test]
+fn a_long_double_is_ten_bytes_at_m16_and_twelve_at_m32_by_the_descriptions() {
+    let sizes: BTreeMap<String, u64> = llrm_driver::all()
+        .iter()
+        .map(|target| (target.name().to_owned(), target.layout().long_double_bytes()))
+        .collect();
+    assert_eq!(sizes["x86-m16"], 10, "{sizes:?}");
+    assert_eq!(sizes["x86-m32"], 12, "{sizes:?}");
+}
+
+/// The copies are found: a size beside `long double` in shared code is a fact
+/// it must read.
+#[test]
+fn a_size_written_beside_long_double_is_a_copy() {
+    let facts = facts();
+    assert!(facts.is_match(r#"        "TY_LONG_DOUBLE" => 10,"#));
+    assert!(facts.is_match("define(\"__SIZEOF_LONG_DOUBLE__\", 12)"));
+    assert!(!facts.is_match("long double x = 3;"));
 }

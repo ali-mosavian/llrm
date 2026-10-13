@@ -39,10 +39,23 @@ in_order                1    1    1    0    0    0    0    0
 prefix                  0    1    1    0    0    0    0    0
 partial_stall           0    0    0    7    0    1    1    2
 lcp_stall               0    0    0    6    0    0    0    3
+# gcc's by-pieces limits for a constant memset (x86-tune-costs.h, gcc 13.4.0): stores while their count is under
+# the ratio, else the CPU's stringop algorithm, `rep stos` of dwords here (i386_memset :146 is bytes, i486_memset
+# :256, pentium_memset :368); `-` where gcc's algorithm is a loop or a libcall (pentiumpro_memset :588, k6_memset
+# :808, athlon_memset :923, core_memset :3675) or it has no such CPU (K5), which keeps this target's own rule.
+# `set_ratio` (a nonzero byte) is MOVE_RATIO through defaults.h:1330's SET_RATIO: i386_cost :202, i486_cost :312,
+# pentium_cost :424; `clear_ratio` (zero) is CLEAR_RATIO: :203, :313, :425. The `_size` rows are the
+# optimise-for-size path every CPU takes: i386.h:1866 MOVE_RATIO(speed false) 3, :1871 CLEAR_RATIO 2, its algorithm
+# `rep stos` of bytes (ix86_size_memset :33).
+set_ratio               3    3    6    -    -    -    -    -
+clear_ratio             3    3    6    -    -    -    -    -
+set_ratio_size          3    3    3    3    3    3    3    3
+clear_ratio_size        2    2    2    2    2    2    2    2
 pairing                 0    0    1    0    0    0    0    0
 
 [clocks]
 alu_rr                  2    1    1    1    1    1    1    1   # add/and/or/xor/sub/cmp reg,reg
+xchg_rr                 3    3    3    3    2    2    2    3   # xchg reg,reg: the 486's is Intel's 3, not an ALU's 1
 alu_ri                  2    1    1    1    1    1    1    1   # ... reg,imm
 alu_rm                  6    2    2    1    1    1    1    1   # ... reg,[mem]
 alu_mr                  8    3    3    1    1    1    1    1   # ... [mem],reg
@@ -116,6 +129,7 @@ udiv_w4                38   40   41    -    -    -    -    -
 
 [latency]
 alu_rr                  2    1    1    1    1    1    1    1   # add/and/or/xor/sub/cmp reg,reg
+xchg_rr                 3    3    3    3    2    2    2    3   # xchg reg,reg: the 486's is Intel's 3, not an ALU's 1
 alu_rm                  6    2    2    4    3    3    3    4   # ... reg,[mem]
 alu_mr                  8    3    3    4    3    3    3    4   # ... [mem],reg
 mov_rr                  2    1    1    1    1    1    1    1

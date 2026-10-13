@@ -1,6 +1,75 @@
-//! MIR to MIR passes, each adapted from the llrm-core optimization that
-//! does it there, with that pass's tests. A pass asks llrm-analysis for
-//! its facts and names nothing about the machine.
+//! MIR to MIR transforms: the passes that rewrite a function or a module, the
+//! driver that orders them, and the models they price with.
+//!
+//! # How it works
+//! A pass asks `llrm_analysis` for its facts and changes the MIR; one that
+//! needs a machine fact (an operation's cost, the registers, a huge-pointer
+//! window) reads it from the program's target through [`crate::profit`] and
+//! [`crate::spill`]. [`crate::pipeline`] holds the order and the switches
+//! (`Options`, one per -O level); everything else is named by its role.
+//!
+//! ```mermaid
+//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+//! flowchart TB
+//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+//!   classDef note fill:transparent,stroke:transparent,color:#64748b
+//!   linkStyle default stroke:#64748b,stroke-width:2.2px
+//!   a["<b>globalopt, ports, Stamp</b><br/><small>(module / program)</small>"]:::mid
+//!   subgraph g_body["PER BODY, REPEATED TO A FIXED POINT"]
+//!     s1["<b>sroa (+ splitcopy)</b><br/><small>at boundaries</small>"]:::mid
+//!     s2["<b>cleanup: fold decide dead</b><br/><small>algebraic phiopt dse gvn<br/>promote inferspace<br/>calls: tailrec<br/>loops: loopsimplify lcssa<br/>hoist loopmotion<br/>trivialunswitch indvars<br/>floatloop fill</small>"]:::mid
+//!     s3["<b>after each round: unroll</b>"]:::mid
+//!     s4["<b>after it settles: peel,</b><br/><small>unswitch, unroll-jam, merge</small>"]:::mid
+//!   end
+//!   ipa["<b>interprocedural: inline,</b><br/><small>ipacp, argpromotion,<br/>deadargs, narrowspace</small>"]:::mid
+//!   dce["<b>globaldce</b><br/><small>availableexternally<br/>calleepop</small>"]:::mid
+//!   ch["<b>copy headers (rotate,</b><br/><small>loopsimplify, lcssa, fold,<br/>algebraic, indvars, dead)<br/>fixednarrow lsr window<br/>rotate jumpthread hoist<br/>gepoffset addresssink<br/>spares homes</small>"]:::mid
+//!   sel["selection"]:::note
+//!   a -->|"Fixed (per body)"| s1
+//!   s1 --> s2
+//!   s2 --> s3
+//!   s3 --> s4
+//!   s4 --> ipa
+//!   ipa -.->|"reruns Fixed on a<br/>changed body"| s1
+//!   ipa --> dce
+//!   dce --> ch
+//!   ch --> sel
+//!   style g_body fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
+//! ```
+//!
+//! *Pass order across a module*
+//!
+//! The modules fall into five groups.
+//!
+//! Driver: [`crate::pipeline`] (`Options`, `Fixed`, the order above) and
+//! [`crate::interprocedural`] (the whole-program step).
+//!
+//! Scalar and memory: `fold` (with `canonical` and `floatfold`), `decide`,
+//! `dead`, `algebraic`, `phiopt`, `cfg`, `dse`, `gvn` (with `loadjoins`),
+//! `promote` (`Sroa`, `Promote`, with `splitcopy`), `inferspace`, `jumpthread`,
+//! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
+//!
+//! Loops: `loopsimplify`, `lcssa` (with `lcssamerges`), `hoist`, `loopmotion`,
+//! `trivialunswitch`, `unswitch`, `indvars` (with `loopexit`, `exitfold`,
+//! `exitsink`), `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`,
+//! `unroll_jam`, `fill`, `floatloop`, `tailrec`.
+//!
+//! Whole program: `globalopt`, `globaldce`, `availableexternally`, `inline`,
+//! `ipacp`, `argpromotion`, `deadargs`, `narrowspace`, `calleepop`; and
+//! `spares` and `homes`, which record for selection what the optimizer proved.
+//!
+//! Shared by the rest: `profit` and `spill` (what a change costs and what
+//! register pressure costs), `loopclone` (loop iterations as CFG), `edges`,
+//! `counting` and `expand` (what a counted-loop rewrite places before a loop),
+//! `transform` (value reuse and phi cleanup).
+//!
+//! # Example
+//! None: this is the crate's index, with no transformation of its own. Read a
+//! module's own header, or `docs/optimizations/passes/readme.md`.
+//!
+//! # See also
+//! `docs/reference/levels.md` for which pass runs at which level, and each
+//! module's own header.
 
 pub mod addresssink;
 pub mod algebraic;
@@ -57,6 +126,7 @@ pub mod loopexit;
 pub mod loopmotion;
 pub mod loopsimplify;
 pub mod lsr;
+pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
@@ -78,6 +148,7 @@ pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
 pub mod unroll;
+pub mod unroll_jam;
 pub mod unswitch;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and

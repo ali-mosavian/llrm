@@ -853,3 +853,148 @@ fn test_a_loop_is_weighed_by_its_own_blocks_not_the_functions() {
     let (small, large) = (visits(40), visits(80));
     assert!(small > 0 && large <= 2 * small + 8, "{small} visits for 40 loops, {large} for 80");
 }
+
+/// queens -O2 at -m16: `IF SAFE(..) THEN` tests the call's result against zero
+/// (the value heuristic says it holds, 62.5%) and the arm it enters calls
+/// (the call heuristic says not taken, 33%). First-match put 62.5% on the
+/// arm, which in fact runs on a minority of the calls; GCC combines the two
+/// predictors (Dempster-Shafer): .625 * .33 / (.625 * .33 + .375 * .67), under
+/// a half, the other way.
+#[test]
+fn test_a_zero_test_and_a_call_on_the_taken_arm_are_combined() {
+    let (odds, at) = estimate(
+        "declare void @log(i16)
+define i16 @f(i16 %x) {
+entry:
+  %c = icmp ne i16 %x, 0
+  br i1 %c, label %then, label %else
+then:
+  call void @log(i16 %x)
+  br label %join
+else:
+  br label %join
+join:
+  ret i16 %x
+}
+",
+    );
+    let (zero, call) = (20.0 / 32.0, 33.0 / 100.0);
+    let want = zero * call / (zero * call + (1.0 - zero) * (1.0 - call));
+    assert!(want < 0.5, "the premise: the arm that calls ends up unlikelier");
+    assert!(close(odds.probability(at("entry"), at("then")), want), "{:?}", odds.probability(at("entry"), at("then")));
+}
+
+/// Predictors that agree strengthen each other: the zero test favours the arm,
+/// and the other arm calls.
+#[test]
+fn test_agreeing_predictors_are_stronger_than_either() {
+    let (odds, at) = estimate(
+        "declare void @log(i16)
+define i16 @f(i16 %x) {
+entry:
+  %c = icmp ne i16 %x, 0
+  br i1 %c, label %then, label %else
+then:
+  br label %join
+else:
+  call void @log(i16 %x)
+  br label %join
+join:
+  ret i16 %x
+}
+",
+    );
+    let (zero, call) = (20.0 / 32.0, 67.0 / 100.0);
+    let want = zero * call / (zero * call + (1.0 - zero) * (1.0 - call));
+    assert!(want > zero && want > call);
+    assert!(close(odds.probability(at("entry"), at("then")), want));
+}
+
+/// A first-match predictor (the loop's) decides alone: a call on the way out
+/// does not move its 124:4.
+#[test]
+fn test_a_loop_branch_is_not_combined_with_a_call() {
+    let (odds, at) = estimate(
+        "declare void @log(i16)
+define i16 @f(i16 %n) {
+entry:
+  br label %head
+head:
+  %i = phi i16 [ 0, %entry ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ne i16 %next, %n
+  br i1 %more, label %head, label %out
+out:
+  call void @log(i16 %i)
+  ret i16 %i
+}
+",
+    );
+    assert_eq!(odds.by.get(&at("head")), Some(&Heuristic::Loop));
+    assert!(close(odds.probability(at("head"), at("head")), 124.0 / 128.0));
+}
+
+/// The fold is order free, and two certainties that disagree say nothing.
+#[test]
+fn test_combining_is_symmetric_and_certain_disagreement_is_even() {
+    let (a, b, c) = (0.625, 0.33, 0.66);
+    let one = combined([a, b, c].into_iter());
+    assert!((one - combined([c, a, b].into_iter())).abs() < 1e-12);
+    assert!((one - combined([b, c, a].into_iter())).abs() < 1e-12);
+    assert_eq!(combined([1.0, 0.0].into_iter()), 0.5);
+    assert_eq!(combined(std::iter::empty()), 0.5);
+}
+
+/// hanoi/nib: `if n == 0 { 0 } else { f(n - 1) * 2 + 1 }`. The call heuristic
+/// counted the recursion as an error report and, combined with the zero test,
+/// made the leaf the likelier arm (55%): the recursive arm became the taken
+/// branch and the benchmark 12.6% slower. A call to the function itself is
+/// the work, not an exceptional case: the zero test decides alone.
+#[test]
+fn test_a_recursive_call_is_not_an_exceptional_one() {
+    let (odds, at) = estimate(
+        "define i16 @f(i16 %n) {
+entry:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %leaf, label %step
+leaf:
+  ret i16 0
+step:
+  %m = sub i16 %n, 1
+  %r = call i16 @f(i16 %m)
+  %d = add i16 %r, %r
+  ret i16 %d
+}
+",
+    );
+    let leaf = odds.probability(at("entry"), at("leaf"));
+    assert!(close(leaf, 12.0 / 32.0), "{leaf:?}");
+}
+
+/// quicksort/c -Os: the way to the recursive calls is not a base case; the
+/// call heuristic still counts the recursion there. Dropping it for every
+/// recursive call gave that way 50% for 33%, the partition loop a third less
+/// frequency (+1.05% clocks, +17 bytes).
+#[test]
+fn test_a_recursive_call_is_still_a_call_where_no_way_is_a_base_case() {
+    let (odds, at) = estimate(
+        "define void @f(i16 %n, i16 %m) {
+entry:
+  %c = icmp slt i16 %n, %m
+  br i1 %c, label %work, label %recurse
+work:
+  store volatile i16 %n, ptr null
+  br label %recurse
+recurse:
+  %k = sub i16 %n, 1
+  call void @f(i16 %k, i16 %m)
+  ret void
+}
+",
+    );
+    let way = odds.probability(at("entry"), at("recurse"));
+    // The call (33%) and the return (34%) heuristics, combined.
+    let (call, ret) = (0.33, 0.34);
+    let want = call * ret / (call * ret + (1.0 - call) * (1.0 - ret));
+    assert!(close(way, want), "{way:?}");
+}
