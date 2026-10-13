@@ -753,10 +753,6 @@ impl ModulePass for Edits {
     }
 }
 
-/// The required module analyses were made before every pass: before a module
-/// pass that changed the module and dropped them, for the next to drop them
-/// again (2% of the -O1 compile of QCport). A function pass reads them through
-/// `Outer`; they are made before it.
 thread_local! {
     static OUTER_RUNS: Cell<usize> = const { Cell::new(0) };
 }
@@ -822,6 +818,10 @@ fn an_incremental_result_made_under_other_outer_facts_is_derived_again() {
     assert_eq!(OUTER_RUNS.get(), 2, "brought up to date under other outer facts");
 }
 
+/// The required module analyses were made before every pass: before a module
+/// pass that changed the module and dropped them, for the next to drop them
+/// again (2% of the -O1 compile of QCport). A function pass reads them through
+/// `Outer`; they are made before it.
 #[test]
 fn the_required_module_analyses_are_made_before_a_function_pass_not_before_a_module_pass() {
     SUMMED.set(0);
