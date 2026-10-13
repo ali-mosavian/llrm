@@ -941,6 +941,11 @@ impl Analyses {
             };
             drop(held);
             let changes = function.changes_since(mark)?;
+            // What it read of the outer facts is not what is there now: the
+            // changes of the function are not all that moved.
+            if A::READS_OUTER && !Rc::ptr_eq(&outer, &self.outer) {
+                return None;
+            }
             // Asking of a long log again and again is more than the run it
             // saves.
             if A::SKIPS

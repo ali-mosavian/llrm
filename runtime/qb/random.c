@@ -44,7 +44,7 @@ float *B_RND1(float x)
    middle word of the seed. */
 void B_RNZP(double x)
 {
-    unsigned words[4];
+    unsigned short words[4];
 
     copy_bytes((char *)words, (const char *)&x, 8);
     seed = seed & 0xFF0000FFUL | (unsigned long)(words[2] ^ words[3]) << 8;

@@ -1,5 +1,5 @@
-reason = "where neither way is next, the likelier is the conditional jump (#1461): queens -O2 instructions -1.5%, mandel nib -5%, quicksort/shellsort smaller; worse by noise only: grep bq32 +15 instructions of 627M, stft_fixed nib +2 bytes"
-blessed = "2026-10-12"
+reason = "bq32 is now net of the empty start-up program, as stated (#1553): the subtraction never ran, because the start-up's output ' 0' was compared with '0' and errored; every row held DOS/32A's load and the runtime's start-up (about 41.8k instructions)"
+blessed = "2026-10-13"
 
 [bas.O2]
 instructions = 316022
@@ -32,13 +32,13 @@ bss_bytes = 0
 kernel_ms = 4.0872
 
 [bq32.O2]
-instructions = 358264
+instructions = 316506
 code_bytes = 287
 data_bytes = 19
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 348186
+instructions = 306428
 code_bytes = 271
 data_bytes = 19
 bss_bytes = 0
