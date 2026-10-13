@@ -1105,3 +1105,16 @@ def test_loopsimplify_groups_a_loops_edges_without_copying_the_function_for_it(t
         own[n] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir loopsimplify"]
     assert own[512] > 3.0, f"premise: loopsimplify ran ({own[512]:.1f} Minstr)"
     assert own[1024] <= 2.7 * own[512], f"mir loopsimplify {own[512]:.0f} -> {own[1024]:.0f} Minstr"
+
+
+def test_the_spiller_leaves_alone_the_blocks_with_no_update_to_merge(tmp_path):
+    """branches(1024) at -O2: merging a spilled value's updates (`spill short updates`, `spill local updates`) rewrote every block of the body
+    for each spill, though only the blocks that define a stored value by a plain move, or update it, can have a run to merge, and gave
+    each a new list of instructions, so that every check of what changed after it (`postings::following`, `ranges::changes`) compared the
+    instructions of the whole body: 2,726 and 1,639 Minstr. The other blocks are the very same blocks: 654 and 603 (what is left is the copy
+    of the list of blocks, a rewrite each). A bound of 1,000 on each fails the first."""
+    source = tmp_path / "branches1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["spill short updates"] > 50.0, f"premise: updates were merged ({own['spill short updates']:.1f} Minstr)"
+    assert own["spill short updates"] <= 1000.0 and own["spill local updates"] <= 1000.0, own
