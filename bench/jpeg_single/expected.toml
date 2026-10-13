@@ -1,4 +1,4 @@
-reason = "bq32 no longer holds noise from the program's size: no timer tick falls in a run (BENCH_RATE 1e8: the extender's tick handler, ~120 instructions each and by where it landed, was inside the counted kernel: stft -40, grep -88 for 40 bytes of dead code), the stack top and the arena start are 16-aligned (copies whose length depends on low address bits moved by a few more); every bq32 row loses its ticks"
+reason = "bq32 counts the kernel without code the link map does not name (DOS, the extender: fork profile inclusive_unknown): every kernel loses its DOS calls, 596 for the lazy string heap's memory request in all that allocate a string (lru 895 -> 299, the largest relative move), 72k to 3.6M for the file readers (grep -0.57%, jpeg -0.08%, stft -0.44%); the compiler's and runtime's named code is unchanged"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63955979
+instructions = 63879834
 code_bytes = 6709
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64295633
+instructions = 64219487
 code_bytes = 6224
 data_bytes = 29697
 bss_bytes = 0
