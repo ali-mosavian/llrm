@@ -65,7 +65,6 @@ LAYOUT_DEPENDENT: dict[str, str] = {
 # (program, target) where ours differs from BCOM45 for a bug that is open: it is expected to differ, and a pass fails the
 # test so the entry goes.  Only the flat target has any.
 KNOWN: dict[tuple[str, str], str] = {
-    ("rnd_val", qbbuild.FLAT): "#1512: RND after RANDOMIZE n",
     ("fre_lprint", qbbuild.FLAT): "#1539: FRE",
     ("environ_command", qbbuild.FLAT): "#1541: ENVIRON$ and COMMAND$ do not link",
     ("scores", qbbuild.FLAT): "#1542: the ' link: library does not compile for the flat runtime",

@@ -553,20 +553,10 @@ fn written_basic_inner(
     _basic_segment_classes(&emitted, &module.code)
 }
 
-/// `_CODE`: 80387 encodings. FEXP2 splits x into nearest integer n and
-/// fraction f, then computes (2**f) * (2**n).
-#[allow(non_snake_case)]
-fn _CODE(name: &str) -> Option<Vec<u8>> {
-    let hex: &str = match name {
-        "fsin" => "d9fe",
-        "fcos" => "d9ff",
-        "fatan" => "d9e8d9f3",     // fld1; fpatan
-        "flog2" => "d9e8d9c9d9f1", // fld1; fxch; fyl2x
-        "fexp2" => "d9c0d9fcd9c9d8e1d9f0d9e8dec1d9fdddd9",
-        "fround" => "d9fc", // frndint
-        _ => return None,
-    };
-    Some((0..hex.len()).step_by(2).map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()).collect())
+/// 80387 encodings (`llrm_x86::select::X87_SEQUENCES`, which the
+/// encoder prices from too).
+pub(crate) fn sequence_bytes(name: &str) -> Option<Vec<u8>> {
+    llrm_x86::select::x87_sequence(name).map(<[u8]>::to_vec)
 }
 
 #[derive(Clone, Debug)]
@@ -587,7 +577,7 @@ pub fn finalized(
         let mut instructions = Vec::new();
         for instruction in &block.insns {
             let what = instruction.what.as_ref();
-            let code = what.and_then(|what| _CODE(what.name.as_deref().unwrap_or("")));
+            let code = what.and_then(|what| sequence_bytes(what.name.as_deref().unwrap_or("")));
             let Some(code) = code else {
                 instructions.push(Arc::clone(instruction));
                 continue;

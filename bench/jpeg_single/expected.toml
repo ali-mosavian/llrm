@@ -1,4 +1,4 @@
-reason = "bq32 jpeg_single +1.9% (+1,236,797 instructions O2), jpeg_fixed +0.03%: READ of the SINGLE/DOUBLE DATA numbers takes fin.c's exact bigint path at m32, the 53-bit quick path being wrong where long double is 8 bytes (#1572); a correct result costs this until #1573 settles the size"
+reason = "bq32 is now net of the empty start-up program, as stated (#1553): the subtraction never ran, because the start-up's output ' 0' was compared with '0' and errored; every row held DOS/32A's load and the runtime's start-up (about 41.8k instructions)"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 65271897
+instructions = 65230139
 code_bytes = 6709
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 65610875
+instructions = 65569117
 code_bytes = 6224
 data_bytes = 29697
 bss_bytes = 0

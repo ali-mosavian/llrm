@@ -733,7 +733,7 @@ fn float_conditions(predicate: FloatPredicate) -> Option<(bool, Test)> {
 /// The x87 operation on st(0) each float function is. One no x87
 /// instruction is -- `fatan`, `flog2`, `fexp2` -- a frontend's finalizer
 /// spells as the sequence that computes it.
-const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
+pub(crate) const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
     (FloatFunction::Fabs, "fabs"),
     (FloatFunction::Sqrt, "fsqrt"),
     (FloatFunction::Rint, "frndint"),

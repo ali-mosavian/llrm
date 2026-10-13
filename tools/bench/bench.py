@@ -400,7 +400,8 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
         if ran.status != "ok":
             return key, {"error": f"run: {ran.status}"}
         got = run_tests.lines(ran.output.decode("latin1"))
-        if got != want:
+        # BASIC's PRINT of a number leads with a blank: the empty start-up program's ` 0` is the 0 it is stated as
+        if [line.strip() for line in got] != [line.strip() for line in want]:
             return key, {"error": f"prints {got}, want {want}"}
         data, bss = sizes.data_bytes(obj)
         return key, {"instructions": ran.instructions, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
