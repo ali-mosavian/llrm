@@ -1,4 +1,4 @@
-reason = "long double is the x87 type at m32 (#1573 step 2): fin.c/i8out.c's quick DOUBLE paths decide again (#1572's guard is gone): jpeg_single bq32 -1,236,399 instructions, parity/scalar -165, jpeg_fixed -28,530"
+reason = "the combined state of the long-double stack (#1583-#1587) and #1589-#1591: the rows are one truth, the quick DOUBLE paths back (#1573) and each program's load-time relocations of the runtime changes (about 40 instructions each)"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63993740
+instructions = 63997169
 code_bytes = 6709
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64332824
+instructions = 64335659
 code_bytes = 6224
 data_bytes = 29697
 bss_bytes = 0
