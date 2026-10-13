@@ -95,6 +95,24 @@ impl DataLayout {
         Ok(layout)
     }
 
+    /// The bytes between successive elements of an array of `kind`: its 80 bits
+    /// (10 bytes) rounded up to the layout's alignment for the x87 type, so 12
+    /// under `f80:32` and 10 under `f80:16`.
+    pub fn float_alloc_size(
+        &self,
+        kind: FloatKind,
+    ) -> u64 {
+        bytes(u64::from(float_bits(kind))).next_multiple_of(self.float_align(kind))
+    }
+
+    /// A float's ABI alignment, in bytes.
+    pub fn float_align(
+        &self,
+        kind: FloatKind,
+    ) -> u64 {
+        self.floats[&float_bits(kind)]
+    }
+
     /// Whether the target computes `bits`-wide integers natively: LLVM's
     /// `isLegalInteger`, so none without an `n`.
     pub fn legal_integer(

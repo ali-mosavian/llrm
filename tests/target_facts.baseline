@@ -13,7 +13,9 @@
 1 crates/backend/llrm-core/src/driver/basic.rs
 3 crates/bc/llrm-bcdriver/src/lib.rs
 3 crates/frontends/llrm-c/src/compile.rs
-1 crates/frontends/llrm-c/src/translate.rs
+1 crates/frontends/llrm-c/src/predefined.rs
+1 crates/frontends/llrm-c/src/raise_hir.rs
+2 crates/frontends/llrm-c/src/translate.rs
 1 crates/frontends/llrm-nib/src/declarations.rs
 1 crates/frontends/llrm-nib/src/library.rs
 1 crates/frontends/llrm-nib/src/semantic/assembly.rs
