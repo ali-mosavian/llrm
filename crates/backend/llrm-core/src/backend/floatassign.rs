@@ -35,7 +35,8 @@
 //! stack's depth (`_crowded`): at the first step with more live values than
 //! `float_stack`, the allocno read furthest ahead among those at that point is
 //! moved to memory (Belady, as LRA), and the body is rewritten again. Only the
-//! blocks the new victim reaches are rewritten.
+//! blocks the new victim reaches are rewritten, and a block's steps and the
+//! floats live after each, which no spill changes, are worked out once.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -143,6 +144,7 @@ use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 thread_local! {
     static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static WRITTEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SHAPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// x87 reads integers from memory, for named values and physical stack slots.
@@ -971,7 +973,12 @@ struct Plan<'b> {
     /// were spilled, so a round re-writes only the blocks a new victim
     /// reaches.
     written: RefCell<HashMap<(i64, Vec<bool>), Vec<Arc<Insn>>>>,
+    /// A block's cut, steps and floating values live after each step: the
+    /// block's own, whichever allocnos are spilled, so computed once.
+    shaped: RefCell<HashMap<i64, Rc<Shape>>>,
 }
+
+type Shape = (usize, Vec<(usize, usize)>, Vec<BTreeSet<u32>>);
 
 /// Where each value is kept and read: LLVM's SpillPlacement per bundle for
 /// the borders, and a segment per register stretch between them.
@@ -1472,11 +1479,17 @@ impl Plan<'_> {
             #[cfg(test)]
             WRITTEN.with(|one| one.set(one.get() + 1));
             let first_fresh = fresh;
-            let cut = _terminators(block);
-            let steps = _steps(block, cut);
-            let leaving: BTreeSet<u32> =
-                live_out[&at].iter().copied().filter(|value| self.floating.contains(value)).collect();
-            let after = _live_after(block, &steps, &leaving, &self.floating);
+            let shape = Rc::clone(self.shaped.borrow_mut().entry(at).or_insert_with(|| {
+                #[cfg(test)]
+                SHAPED.with(|one| one.set(one.get() + 1));
+                let cut = _terminators(block);
+                let steps = _steps(block, cut);
+                let leaving: BTreeSet<u32> =
+                    live_out[&at].iter().copied().filter(|value| self.floating.contains(value)).collect();
+                let after = _live_after(block, &steps, &leaving, &self.floating);
+                Rc::new((cut, steps, after))
+            }));
+            let (cut, steps, after) = (shape.0, &shape.1, &shape.2);
             let mut insns: Vec<Arc<Insn>> = Vec::new();
             let restore = |insns: &mut Vec<Arc<Insn>>,
                            position: usize,
@@ -1850,6 +1863,7 @@ pub fn assigned(
         cells,
         roots,
         written: RefCell::default(),
+        shaped: RefCell::default(),
     };
     plan.priced(cpu);
     let mut spilled = plan.in_memory();

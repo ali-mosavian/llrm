@@ -147,3 +147,18 @@ fn refuses_nothing(
     let done = alloc.transform(assigned);
     assert!(done.is_ok(), "{:?}", done.err());
 }
+
+/// Every round that wrote a block worked out its steps and the floats live
+/// after each again, though they are the block's own and no spill changes
+/// them: nbody_single -O3 (35 rounds over 4 blocks) spent a tenth of
+/// `floatassign` on it. A block's are worked out once.
+#[test]
+fn test_a_blocks_steps_and_liveness_are_worked_out_once() {
+    let (body, mut frame) = before_float_assign();
+    let cpu = crate::backend::cpu::profile("486").unwrap();
+    SHAPED.with(|one| one.set(0));
+    assigned(&body, Some(&mut frame), None, false, cpu).unwrap();
+    let (rounds, shaped) = (ROUNDS.with(|one| one.get()), SHAPED.with(|one| one.get()));
+    assert!(rounds > 1, "the premise: a body that spills ({rounds} rounds)");
+    assert!(shaped <= body.blocks.len(), "{shaped} shapes for {} blocks in {rounds} rounds", body.blocks.len());
+}

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatassign.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatassign.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatassign.rs sha256:f59e0488de2a70215f6f1508a0fb99130c1b5a7e5dab7719760ca3428f30e978 -->
+<!-- src: crates/backend/llrm-core/src/backend/floatassign.rs sha256:65acc4d76aad2bd5152e953e0129e8924a5766f472dfa7aa59c7fe53e72f516f -->
 
 # floatassign
 
@@ -40,7 +40,8 @@ The result is then rewritten (`Plan::rewritten`) and checked against the
 stack's depth (`_crowded`): at the first step with more live values than
 `float_stack`, the allocno read furthest ahead among those at that point is
 moved to memory (Belady, as LRA), and the body is rewritten again. Only the
-blocks the new victim reaches are rewritten.
+blocks the new victim reaches are rewritten, and a block's steps and the
+floats live after each, which no spill changes, are worked out once.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
