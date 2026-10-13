@@ -180,3 +180,33 @@ fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
     let code = crate::backend::select::priced_in(32, &what, 0, None, false, false, None).expect("a price");
     assert_eq!(code.code, [0x8d, 0x34, 0x5b]);
 }
+
+/// Every float function the selector can emit has a byte price, in both
+/// modes: `fatan`, `flog2` and `fexp2` are sequences of x87 instructions that
+/// no instruction encodes, and had none, so at -Os with `LLRM_VERIFY=1` a
+/// function of deedlines' TSC.BAS panicked ("no byte price for ... flog2
+/// ST0", llrm#1307) and, unverified, was priced as nothing.
+#[test]
+fn test_every_float_function_the_selector_emits_has_a_byte_price() {
+    let st0 = vec![ir::Loc::st(0)];
+    for bits in [16, 32] {
+        for (_, name) in crate::backend::isel::FLOAT_FUNCTIONS {
+            let what = ir::Semantics {
+                name: Some(name.to_owned()),
+                dests: st0.clone(),
+                sources: st0.clone(),
+                ..ir::Semantics::new(ir::Operation::FloatUnary)
+            };
+            let priced = crate::backend::select::priced_in(bits, &what, 0, None, false, false, None);
+            assert!(priced.is_some_and(|code| !code.code.is_empty()), "{name} at {bits} bits has no byte price");
+        }
+    }
+}
+
+/// The sequences the encoder prices are the bytes QB's finalizer places.
+#[test]
+fn test_the_sequences_priced_are_the_bytes_the_finalizer_places() {
+    for (name, bytes) in llrm_x86::select::X87_SEQUENCES {
+        assert_eq!(crate::driver::basic::sequence_bytes(name).as_deref(), Some(bytes), "{name}");
+    }
+}
