@@ -4,7 +4,9 @@
 
 use std::collections::BTreeMap;
 
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::spaces::Spaces;
+use llrm_mir::types::FloatKind;
 
 /// A target's address spaces: the roles the passes ask
 /// (`llrm_mir::spaces::Spaces`, reached through `Deref`) and what an unmarked
@@ -81,6 +83,22 @@ impl Layout {
         operation: &str,
     ) -> bool {
         self.promote.iter().any(|one| one == operation)
+    }
+
+    /// The bytes a `long double` takes in memory, an array's stride: the x87
+    /// type's 10 bytes rounded up to its alignment in the datalayout string
+    /// (`f80`). The one place the size is stated; a frontend reads it here.
+    pub fn long_double_bytes(&self) -> u64 {
+        self.data().float_alloc_size(FloatKind::X86Fp80)
+    }
+
+    /// A `long double`'s alignment in bytes.
+    pub fn long_double_align(&self) -> u64 {
+        self.data().float_align(FloatKind::X86Fp80)
+    }
+
+    fn data(&self) -> DataLayout {
+        DataLayout::parse(&self.datalayout).expect("a target's datalayout string parses")
     }
 
     /// The most bytes a data segment holds; none where segments are not.
@@ -187,6 +205,16 @@ mod tests {
         );
         assert_eq!(flat.spaces.unmarked(4), Ok(0));
         assert!(flat.spaces.unmarked(2).is_err());
+    }
+
+    /// A long double was 10 bytes everywhere in the frontends; the target's
+    /// `f80` entry says the stride.
+    #[test]
+    fn a_long_double_is_ten_bytes_rounded_up_to_the_layouts_f80_alignment() {
+        let with = |f80: &str| Layout::parse(&FLAT.replace("e-p:32:32", &format!("e-p:32:32-{f80}"))).unwrap();
+        assert_eq!((with("f80:16").long_double_bytes(), with("f80:16").long_double_align()), (10, 2));
+        assert_eq!((with("f80:32").long_double_bytes(), with("f80:32").long_double_align()), (12, 4));
+        assert_eq!(Layout::parse(FLAT).unwrap().long_double_bytes(), 10);
     }
 
     /// The segment size was the compiler's own 64K, cutting a flat program's

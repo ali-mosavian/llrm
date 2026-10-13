@@ -66,7 +66,7 @@ Files under `crates/target/llrm-x86-m32/src` (m16 has the same set):
 | `isel/peephole.peep` | form windows to forms |
 | `timings.times` | a column per CPU: clocks, latency, issue, prefix and stall costs |
 | `opcosts.txt` | each MIR operation priced as a sum of form prices; `unroll_budget` |
-| `machines/datalayout.toml` | data layout, address-space kinds, address forms |
+| `machines/datalayout.toml` | data layout, address-space kinds, address forms; the `f80` entry is the x87 `long double`'s alignment, so its size in memory (`Layout::long_double_bytes`: 10 at m16, 12 at m32) |
 | `machines/calling.toml` | conventions: slot size, argument registers, results, cleanup, preserved |
 | `machines/object.toml` | object writer and listing syntax |
 | `machines/dos.toml`, `dos32.toml` | the platform: memory map, ports (apart from the target) |
