@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/masm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/masm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:6490ab1fb16b647c4caa00cc4d12c1e1b6388ef33dd8d18ccdb98099d7de1cd1 -->
+<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:0626a7c1822ac5fc17bf9d4dcc502220ec527c5a8a082d571068526f0fb36998 -->
 
 # masm
 
@@ -35,11 +35,12 @@ rebuilt.
 Where the frame register is not needed (nothing holds a value in it), the
 frame is dropped and each cell is addressed through the stack pointer
 (`stack_addressed`): every instruction's stack effect moves the offset,
-and every way into a block must agree on it. Anything that puts that out
-of reach (the stack pointer written another way, inline code, an indirect
-call that may pop, the frame register read as a value) keeps the frame.
-Tuned for size, the stack-addressed form is kept only if it is no longer
-in bytes.
+and every way into a block (a branch, or the block before it falling through
+unless that one has no successor) must agree on it. Anything that puts that
+out of reach (the stack pointer written another way, inline code, an
+indirect call that may pop, the frame register read as a value) keeps the
+frame. Tuned for size, the stack-addressed form is kept only if it is no
+longer in bytes.
 
 Under `-g` the items also carry marks (line starts, body start and end,
 where a variable's value is defined) which encode to no bytes. A move of an
