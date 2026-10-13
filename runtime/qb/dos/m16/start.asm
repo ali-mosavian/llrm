@@ -58,6 +58,12 @@ qb_xi_end       word    O DGROUP:XIE
 qb_module_segment word  0                       ;; the module's code segment
 _DATA           ends
 
+;; every object with near uninitialised data opens it with an empty BSSB ahead
+;; of its _BSS (llrm-c -mbss-begin, as xi.h's trio): whichever object the
+;; linker meets first fixes BSSB before every _BSS, and the start-up zeroes
+;; from it, not from this object's own _BSS, which is where the linker put it
+BSSB            segment word public 'BSS'
+BSSB            ends
 _BSS            segment word public 'BSS'
 _BSS            ends
 
@@ -72,7 +78,7 @@ BC_SAB          segment word public 'BC_SEGS'
 bc_sa           label   byte
 BC_SAB          ends
 
-DGROUP          group   _NULL, _DATA, _BSS, XIB, XI, XIE, STACK, BC_SAB
+DGROUP          group   _NULL, _DATA, BSSB, _BSS, XIB, XI, XIE, STACK, BC_SAB
 
 .code
 ;; start - the startup of a QB45 compiled module.
@@ -118,7 +124,7 @@ start           proc
                 ;; the linker stores no BSS: zero it, up to the stack
                 mov     ax, ds
                 mov     es, ax
-                mov     di, O DGROUP:_BSS
+                mov     di, O DGROUP:BSSB
                 mov     cx, O DGROUP:STACK
                 sub     cx, di
                 mov     dx, cx

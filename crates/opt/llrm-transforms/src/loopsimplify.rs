@@ -69,9 +69,10 @@
 //! Grouping needs every source to end in a `br` whose edge can be retargeted,
 //! and every phi of the target to name exactly the target's predecessors.
 //!
-//! The loops are processed one at a time on a copy of the function, kept only
-//! when every grouping the loop needed went through, so a refused one leaves
-//! the body as it was. A loop already in the form makes no copy. The loops of
+//! The loops are processed one at a time. What a loop needs grouped is worked
+//! out from the edges of its blocks and of the targets, and every grouping is
+//! checked before the first is made, so a refused one leaves the body as it
+//! was. No copy of the function and no graph of it is made. The loops of
 //! the shape are updated for the new blocks rather than found again
 //! (`LLRM_CHECK_SHAPE` compares them with a new shape). A function with an
 //! irreducible loop is left alone.
@@ -183,6 +184,40 @@ impl FunctionPass for LoopSimplify {
     }
 }
 
+/// Whether the edges from `sources` into `target` can be routed through one
+/// block: they are edges of the target, it is not the entry, every source ends
+/// in a branch that takes the edge, and the target's phis read each predecessor
+/// once. Asked of the target's own predecessors, not of the graph of the
+/// function.
+fn groupable(
+    function: &Function,
+    target: i64,
+    sources: &BTreeSet<i64>,
+) -> bool {
+    let Some(entry) = function.entry().map(cfg::id) else { return false };
+    let destination = cfg::block(target);
+    let reaching: BTreeSet<i64> = function.predecessors(destination).into_iter().map(cfg::id).collect();
+    if sources.is_empty() || !sources.is_subset(&reaching) || target == entry {
+        return false;
+    }
+    for &parent in sources {
+        let Some(last) = function.terminator(cfg::block(parent)) else { return false };
+        match function.instruction(last).operands.len() {
+            _ if function.instruction(last).opcode != Opcode::Br => return false,
+            3 if !edges::conditional(function, cfg::block(parent), destination) => return false,
+            1 if function.successors(cfg::block(parent)) != [destination] => return false,
+            _ => {}
+        }
+    }
+    let at = |block: Operand| match block {
+        Operand::Block(block) => cfg::id(block),
+        _ => unreachable!("a phi's block operand"),
+    };
+    edges::phis(function, destination).iter().all(|&phi| {
+        function.instruction(phi).operands.chunks(2).map(|pair| at(pair[1])).collect::<BTreeSet<_>>() == reaching
+    })
+}
+
 /// The edges from `sources` into `target` routed through one new block,
 /// which `target`'s phis read; the new block, or `None`, changing nothing,
 /// where a source's terminator or a phi cannot be regrouped.
@@ -191,23 +226,10 @@ pub fn grouped(
     target: i64,
     sources: &BTreeSet<i64>,
 ) -> Option<BlockId> {
-    let graph = cfg::graph(function);
-    let predecessors = loops::predecessors(&graph);
-    let entry = cfg::id(function.entry()?);
-    let reaching = predecessors.get(&target)?;
-    if sources.is_empty() || !sources.is_subset(reaching) || target == entry {
+    if !groupable(function, target, sources) {
         return None;
     }
     let destination = cfg::block(target);
-    for &parent in sources {
-        let last = function.terminator(cfg::block(parent))?;
-        match function.instruction(last).operands.len() {
-            _ if function.instruction(last).opcode != Opcode::Br => return None,
-            3 if !edges::conditional(function, cfg::block(parent), destination) => return None,
-            1 if function.successors(cfg::block(parent)) != [destination] => return None,
-            _ => {}
-        }
-    }
     let phis = edges::phis(function, destination);
     let incoming = |function: &Function, phi| {
         function.instruction(phi).operands.chunks(2).map(|pair| (pair[0], pair[1])).collect::<Vec<_>>()
@@ -216,12 +238,6 @@ pub fn grouped(
         Operand::Block(block) => cfg::id(block),
         _ => unreachable!("a phi's block operand"),
     };
-    if phis
-        .iter()
-        .any(|&phi| incoming(function, phi).iter().map(|&(_, block)| at(block)).collect::<BTreeSet<_>>() != *reaching)
-    {
-        return None;
-    }
     let bridge = function.create_block(None);
     function.insert_block(bridge, None).expect("a new block");
     for phi in phis {
@@ -256,29 +272,14 @@ pub fn grouped(
     Some(bridge)
 }
 
-thread_local! {
-    static COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many copies of a function this thread has made to try grouping a loop
-/// on, for a test that a loop already in the form makes none.
-pub fn copies() -> usize {
-    COPIES.with(std::cell::Cell::get)
-}
-
-/// Whether `loop_` has a block to group in `function`, whose graph and
-/// predecessors are given: its entries from outside are not one block that only
-/// enters it, it has more than one latch, or an exit is reached from outside
-/// the loop too. What the rest of `_simplified` finds on a copy, found without
-/// one.
+/// Whether `loop_` has a block to group in `function`: its entries from outside
+/// are not one block that only enters it, it has more than one latch, or an
+/// exit is reached from outside the loop too.
 fn _needs_grouping(
     function: &Function,
-    graph: &[cfg::Block],
-    predecessors: &std::collections::BTreeMap<i64, BTreeSet<i64>>,
     loop_: &loops::Loop,
 ) -> bool {
-    let Some(entering) = predecessors.get(&loop_.header) else { return false };
-    let outside = entering.difference(&loop_.body).copied().collect::<BTreeSet<_>>();
+    let outside = _outside(function, loop_);
     let Some(&parent) = outside.first() else { return false };
     if outside.len() != 1
         || function.successors(cfg::block(parent)) != [cfg::block(loop_.header)]
@@ -286,13 +287,43 @@ fn _needs_grouping(
     {
         return true;
     }
-    let empty = BTreeSet::new();
-    graph
-        .iter()
-        .filter(|block| loop_.body.contains(&block.at))
-        .flat_map(|block| block.succ.iter().copied())
+    _exits(function, loop_).iter().any(|&target| !_reached_only_from(function, target, &loop_.body))
+}
+
+/// The predecessors of `loop_`'s header that are not in it.
+fn _outside(
+    function: &Function,
+    loop_: &loops::Loop,
+) -> BTreeSet<i64> {
+    function
+        .predecessors(cfg::block(loop_.header))
+        .into_iter()
+        .map(cfg::id)
         .filter(|at| !loop_.body.contains(at))
-        .any(|target| !predecessors.get(&target).unwrap_or(&empty).is_subset(&loop_.body))
+        .collect()
+}
+
+/// The blocks outside `loop_` that its blocks branch to.
+fn _exits(
+    function: &Function,
+    loop_: &loops::Loop,
+) -> BTreeSet<i64> {
+    loop_
+        .body
+        .iter()
+        .flat_map(|&at| function.successors(cfg::block(at)))
+        .map(cfg::id)
+        .filter(|at| !loop_.body.contains(at))
+        .collect()
+}
+
+/// Whether every predecessor of `target` is in `body`.
+fn _reached_only_from(
+    function: &Function,
+    target: i64,
+    body: &BTreeSet<i64>,
+) -> bool {
+    function.predecessors(cfg::block(target)).into_iter().all(|from| body.contains(&cfg::id(from)))
 }
 
 /// Whether any loop changed.
@@ -311,75 +342,55 @@ fn _simplified(
     }
     let mut changed = false;
     let headers = shape.loops.iter().map(|loop_| loop_.header).collect::<Vec<_>>();
-    // The function's graph, which only a loop that changes it makes stale.
-    let mut whole = cfg::graph(function);
-    let mut entered = loops::predecessors(&whole);
     for header in headers {
         let original = shape.loops.iter().find(|loop_| loop_.header == header).expect("StopIteration").clone();
-        // A loop that is already in the form has nothing to group: neither it
-        // nor the function is copied.
-        if !_needs_grouping(function, &whole, &entered, &original) {
+        // A loop that is already in the form has nothing to group.
+        if !_needs_grouping(function, &original) {
             continue;
         }
-        COPIES.with(|copies| copies.set(copies.get() + 1));
-        let mut candidate = function.clone();
-        let mut grouping = false;
-        // The blocks `grouped` makes, as (block, target, sources): what the
-        // loops of the shape gain from them, without a new shape of the
-        // function.
-        let mut bridges: Vec<(i64, i64, BTreeSet<i64>)> = Vec::new();
-        let predecessors = loops::predecessors(&cfg::graph(&candidate));
-        let outside = predecessors[&original.header].difference(&original.body).copied().collect::<BTreeSet<_>>();
+        // What is to be grouped, as (target, sources), worked out from the loop
+        // and the edges of its blocks alone: the groupings of the
+        // header do not touch the exits' predecessors, and the
+        // blocks they make are in the loop and branch to its header.
+        let mut plan: Vec<(i64, BTreeSet<i64>)> = Vec::new();
+        let outside = _outside(function, &original);
         let Some(&parent) = outside.first() else { continue };
-        if outside.len() != 1 || candidate.successors(cfg::block(parent)) != [cfg::block(original.header)] {
-            let Some(bridge) = grouped(&mut candidate, original.header, &outside) else { continue };
-            bridges.push((cfg::id(bridge), original.header, outside));
-            grouping = true;
+        if outside.len() != 1 || function.successors(cfg::block(parent)) != [cfg::block(original.header)] {
+            plan.push((original.header, outside));
         }
         if original.latches.len() != 1 {
-            let Some(bridge) = grouped(&mut candidate, original.header, &original.latches) else { continue };
-            bridges.push((cfg::id(bridge), original.header, original.latches.clone()));
-            grouping = true;
+            plan.push((original.header, original.latches.clone()));
         }
-        let graph = cfg::graph(&candidate);
-        let mut current = original.clone();
-        for (bridge, target, sources) in &bridges {
-            _bridged(&mut current, *bridge, *target, sources);
-        }
-        let predecessors = loops::predecessors(&graph);
-        let exits = graph
-            .iter()
-            .filter(|block| current.body.contains(&block.at))
-            .flat_map(|block| block.succ.iter().copied())
-            .filter(|at| !current.body.contains(at))
-            .collect::<BTreeSet<_>>();
-        let empty = BTreeSet::new();
-        let mut broke = false;
-        for target in exits {
-            let reaching = predecessors.get(&target).unwrap_or(&empty);
-            let sources = reaching.intersection(&current.body).copied().collect::<BTreeSet<_>>();
-            if !reaching.is_subset(&current.body) {
-                let Some(bridge) = grouped(&mut candidate, target, &sources) else {
-                    broke = true;
-                    break;
-                };
-                bridges.push((cfg::id(bridge), target, sources));
-                grouping = true;
+        for target in _exits(function, &original) {
+            if !_reached_only_from(function, target, &original.body) {
+                let sources = function
+                    .predecessors(cfg::block(target))
+                    .into_iter()
+                    .map(cfg::id)
+                    .filter(|from| original.body.contains(from))
+                    .collect::<BTreeSet<_>>();
+                plan.push((target, sources));
             }
         }
-        if !broke && grouping {
-            *function = candidate;
-            changed = true;
-            for loop_ in &mut shape.loops {
-                for (bridge, target, sources) in &bridges {
-                    _bridged(loop_, *bridge, *target, sources);
-                }
+        // All or none: a grouping that cannot be made leaves the loop as it is.
+        if plan.is_empty() || !plan.iter().all(|(target, sources)| groupable(function, *target, sources)) {
+            continue;
+        }
+        let mut bridges: Vec<(i64, i64, BTreeSet<i64>)> = Vec::new();
+        for (target, sources) in plan {
+            let Some(bridge) = grouped(function, target, &sources) else {
+                unreachable!("groupable said it could be made");
+            };
+            bridges.push((cfg::id(bridge), target, sources));
+        }
+        changed = true;
+        for loop_ in &mut shape.loops {
+            for (bridge, target, sources) in &bridges {
+                _bridged(loop_, *bridge, *target, sources);
             }
-            if cfg!(test) || llrm_support::env_set("LLRM_CHECK_SHAPE") {
-                _agrees(&shape, function);
-            }
-            whole = cfg::graph(function);
-            entered = loops::predecessors(&whole);
+        }
+        if cfg!(test) || llrm_support::env_set("LLRM_CHECK_SHAPE") {
+            _agrees(&shape, function);
         }
     }
     changed

@@ -445,3 +445,18 @@ def test_a_flat_kernels_count_does_not_move_with_work_outside_it(tmp_path):
     assert all("instructions" in one for one in counts.values()), counts
     assert whole["MORE"] != whole["PLAIN"], "the experiment moves the whole run"
     assert counts[("MORE", "bq32", "O2")]["instructions"] == counts[("PLAIN", "bq32", "O2")]["instructions"], (counts, whole)
+
+
+def test_no_bench_program_runs_long_enough_for_a_timer_tick_at_the_flat_rate():
+    """A tick is 55 ms of the emulated clock: at 100,000 instructions a millisecond that was 5.5M instructions, and each of the
+    13 to 114 ticks in a long kernel (stft, grep) ran the extender's interrupt handler (~120 instructions, its length by where it
+    landed) inside the counted function: a few bytes of code anywhere moved the row by tens (#1603: -40 on stft_single)."""
+    import tomllib
+
+    longest = max(
+        counts["instructions"]
+        for path in bench.BENCH.rglob("expected.toml")
+        for level in tomllib.loads(path.read_text()).get("bq32", {}).values()
+        for counts in [level]
+    )
+    assert longest < bench.qb32.BENCH_RATE * 55, (longest, bench.qb32.BENCH_RATE)
