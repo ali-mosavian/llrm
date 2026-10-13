@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/globalsaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/globalsaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/globalsaa.rs sha256:da0e9093e3073d368115e76748dfad4ad6e2edae50e647ddaa04aa9e5c7afae1 -->
+<!-- src: crates/opt/llrm-analysis/src/globalsaa.rs sha256:abc77eadb9336c9d67ff3a39823bf9eee10466dce3ae3668d0221f6df7121cdf -->
 
 # globalsaa
 

@@ -55,6 +55,19 @@ offsets in different objects are not the same storage. Raw segmented memory
 object and force conservative alias and call effects. Unequal segment:offset
 spellings are never proof that two physical addresses differ.
 
+## Raw offsets from an array's start (one address space)
+
+At a target with one address space (m32) a pointer is the whole linear address: `VARPTR(x)` is it, `VARSEG(x)` is 0, and `DEF SEG`
+with no value is 0. `DEF SEG = VARSEG(x)` followed by `PEEK(VARPTR(x) + i)` reaches `x`.
+
+Not supported: `DEF SEG = VARSEG(array(i))` followed by `PEEK(o)` and `POKE o, v` with offsets counted from the array's start, which
+is what real mode's far array gives (its data begins at offset 0 of its own segment). Here `o` is a linear address, so such a
+program reads and writes low memory (the interrupt table, BIOS data): qbdemo's `fracline` died that way. The compiler warns at the
+`DEF SEG` line. It cannot work by a segment value instead, because a 16-bit `VARSEG` cannot name an object above 1 MB, and the
+demos' arrays are above it: DOS/32A puts the program's heap in extended memory (`VARPTR` of a `$DYNAMIC` array is about 5.4 MB, of a
+variable in the data about 1.5 MB). A program of this class runs at m16 and not at m32 until the target has segments (a selector per
+object); that is the memory-models decision, not a runtime fix.
+
 ## Runtime profiles
 
 QB 4.5, PDS 7.1, and VBDOS are distinct ABI profiles; `llrm` is QB 4.5's

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/prologue.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/prologue.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/prologue.rs sha256:1f215034c7c076000d6bd7b5f7de50de9105e2bc8cdc3a955bafa12da48c9f71 -->
+<!-- src: crates/backend/llrm-core/src/backend/prologue.rs sha256:12c01b33ce7e33f41a4c5826a25449fc0207db0e3031d798b3ee62ac3679f8f9 -->
 
 # prologue
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/asm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/asm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/asm.rs sha256:98ac4097103a5e9f4bc5d670850a838ee5f67aa7f75d699242c375842c28c395 -->
+<!-- src: crates/backend/llrm-core/src/backend/asm.rs sha256:3d6eb6a9cf9650131d2a3fc992733398e7fc7395bfb1e7d05639063284029881 -->
 
 # asm
 

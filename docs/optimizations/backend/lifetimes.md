@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lifetimes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lifetimes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lifetimes.rs sha256:d4d3eb3259b23450a856da0ee3705b83b21c1e2c1563e26f63069a58b371f857 -->
+<!-- src: crates/backend/llrm-core/src/backend/lifetimes.rs sha256:839612c4d1f334208eb3a50ba426dfdcf178145591ac5ef53f6e58ed9eb87fcd -->
 
 # lifetimes
 
