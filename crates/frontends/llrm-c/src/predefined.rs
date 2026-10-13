@@ -8,7 +8,7 @@
 use crate::raise_hir::widths_for;
 
 /// The `#define`s of a unit, flat (the 386 tree) or not.
-pub fn header(flat: bool) -> String {
+pub fn header(flat: bool, long_double_bytes: u64) -> String {
     let size = |type_: &str| i64::from(widths_for(flat, type_).expect("a front-end type has a width"));
     let (int, short, long, long_long, pointer) =
         (size("TY_INTEGER"), size("TY_INT_2"), size("TY_INT_4"), size("TY_INT_8"), size("TY_NEAR_POINTER"));
@@ -23,7 +23,7 @@ pub fn header(flat: bool) -> String {
         ("POINTER", pointer),
         ("FLOAT", 4),
         ("DOUBLE", 8),
-        ("LONG_DOUBLE", i64::from(widths_for(flat, "TY_LONG_DOUBLE").expect("a front-end type has a width"))),
+        ("LONG_DOUBLE", long_double_bytes as i64),
     ] {
         define(&format!("__SIZEOF_{name}__"), bytes.to_string());
     }
@@ -111,7 +111,7 @@ mod tests {
     /// branch of an `#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__`, both sides 0.
     #[test]
     fn test_the_macros_follow_the_targets_sizes() {
-        let (flat, segmented) = (header(true), header(false));
+        let (flat, segmented) = (header(true, 12), header(false, 10));
         assert_eq!(
             (value(&flat, "__INT_MAX__"), value(&segmented, "__INT_MAX__")),
             ("2147483647".to_owned(), "32767".to_owned())
