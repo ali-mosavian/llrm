@@ -3416,8 +3416,9 @@ impl Compiler {
                     }
                 },
                 Statement::DefSeg { value, .. } => {
-                    if let Some(value) = value {
-                        self.warn_segment_of_an_array(value);
+                    if self.options.one_space() {
+                        self.warn_def_seg_ignored();
+                    } else if let Some(value) = value {
                         let value = self.unsigned_word(value)?;
                         // B$DSEG only stores this word in the runtime-owned
                         // b$seg cell.  PEEK/POKE in every procedure and module
@@ -7519,29 +7520,17 @@ impl Compiler {
         self.convert(value, type_id, integer_type(self.options.near(), true))
     }
 
-    /// Where one address space has no segments, `DEF SEG = VARSEG(array(i))` is
-    /// the far-array idiom of real mode, whose PEEKs and POKEs count from
-    /// the array's start: here VARSEG is 0 and the address is VARPTR's, so
-    /// those offsets reach low memory.
-    fn warn_segment_of_an_array(
-        &mut self,
-        value: &Expr,
-    ) {
-        let Expr::Apply { name, arguments, .. } = value else { return };
-        if !self.options.one_space() || !name.eq_ignore_ascii_case("VARSEG") {
-            return;
-        }
-        if matches!(
-            arguments.first(),
-            Some(Expr::Apply { .. } | Expr::Index { .. })
-        ) {
-            self.warnings.push(format!(
-                "line {}: warning: DEF SEG = VARSEG(array element) is not supported at one address space: VARSEG is 0 and the \
-                 pointer is VARPTR's whole address, so PEEK and POKE with offsets from the array's start address low memory \
-                 (docs/frontends/qb/memory-model.md)",
-                self.current_source_line
-            ));
-        }
+    /// One address space has no segments: DEF SEG does nothing, VARSEG is 0,
+    /// and PEEK, POKE, BLOAD and BSAVE take the whole address.  An absolute
+    /// address (video memory) is held in a variable by the program: `vram& =
+    /// &HB8000`.
+    fn warn_def_seg_ignored(&mut self) {
+        self.warnings.push(format!(
+            "line {}: warning: DEF SEG is ignored at one address space: VARSEG is 0 and PEEK, POKE, BLOAD and BSAVE take the whole \
+             address, so an absolute address (video memory) is held in a variable, as vram& = &HB8000 \
+             (docs/frontends/qb/memory-model.md)",
+            self.current_source_line
+        ));
     }
 
     /// The byte pointer an address names: the offset from DEF SEG's paragraph.
@@ -7549,11 +7538,17 @@ impl Compiler {
         &mut self,
         offset: Operand,
     ) -> u32 {
-        let segment_place = self.def_segment_place();
-        let segment = self.value(INTEGER);
-        self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
-        self.tag_last(Tag::ReadSegment);
-        let segment = Operand::Value(segment);
+        // One address space: the address is the offset whole, no segment is
+        // read.
+        let segment = if self.options.one_space() {
+            Operand::Constant(INTEGER, Number::Integer(0))
+        } else {
+            let segment_place = self.def_segment_place();
+            let segment = self.value(INTEGER);
+            self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
+            self.tag_last(Tag::ReadSegment);
+            Operand::Value(segment)
+        };
         let pointer_type = self.far_pointer_type(BYTE);
         let pointer = self.value(pointer_type);
         self.emit("concat", vec![pointer], vec![segment, offset]);
@@ -7619,6 +7614,11 @@ impl Compiler {
         }
 
         let (path, offset, supplied) = match arguments {
+            [_] if self.options.one_space() => {
+                return self.fail(
+                    "BLOAD without an offset loads where the image says, a 16-bit segment and offset: give the address (BLOAD name, address)",
+                );
+            }
             [path] => (path, Operand::Constant(INTEGER, Number::Integer(0)), 0),
             [path, offset] => (path, self.address_word(offset)?, 1),
             _ => return self.fail("BLOAD expects a path and optional offset"),

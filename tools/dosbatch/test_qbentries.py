@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 
-PROBES = sorted(path for path in (qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("*.bas") if not path.name.startswith("gfx_"))
+PROBES = sorted(path for path in (qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("*.bas") if not path.name.startswith("gfx_") and ".flat" not in path.name)
 ALL_SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_sources(), *sorted((qbruntime.dosbatch.ROOT / "examples" / "basic").glob("*.bas"))]}
 
 
@@ -49,7 +49,7 @@ def test_every_runtime_entry_is_called_by_a_probe_under_llrm(tmp_path_factory):
         # The *USED names are markers the compiler refers to, not routines to call.
         exported |= {name for name in symbols(obj, 0x90) if name in entries and not name.endswith("USED")}
     called = set()
-    pictures = sorted((qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("gfx_*.bas"))
+    pictures = sorted(path for path in (qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("gfx_*.bas") if ".flat" not in path.name)
     for name, source in {**ALL_SOURCES, **{path.stem: path for path in pictures}}.items():
         obj = work / f"{name}.obj"
         assert qbruntime.compile_basic(source, obj, "llrm") is None

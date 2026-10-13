@@ -17,7 +17,7 @@ import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 
 # The graphics probes are compared as pictures (test_qbgfx.py).
-PROBES = sorted(path for path in (qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("*.bas") if not path.name.startswith("gfx_"))
+PROBES = sorted(path for path in (qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("*.bas") if not path.name.startswith("gfx_") and ".flat" not in path.name)
 EXAMPLES = sorted((qbruntime.dosbatch.ROOT / "examples" / "basic").glob("*.bas"))
 # Event trapping, key traps, the absent devices and VARPTR$ are what BC refuses without its /V (test_qbbc.py compares them with BC
 # under it, test_qbkeys.py the keys); they have no BCOM45 run to differ from, but they still call runtime entries.
