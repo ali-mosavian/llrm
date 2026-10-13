@@ -13,7 +13,7 @@ unsigned b_inonerr;
 
 /* The text of each error (inc/messages.inc), packed: a code byte (the number,
    or 200 + the low byte of a fatal one), the text and a NUL. */
-static const char messages[] = "\x02"
+static const char QB_FAR messages[] = "\x02"
                                "Syntax error\0"
                                "\x03"
                                "RETURN without GOSUB\0"
@@ -100,19 +100,25 @@ static const char messages[] = "\x02"
                                "\xcf"
                                "Out of stack space\0";
 
-const char *qb_error_text(unsigned n)
+unsigned qb_error_text(unsigned n, char *out)
 {
-    const char *at = messages;
+    const char QB_FAR *at = messages;
     byte want = n < 200 ? (byte)n : (byte)(200 + (n & 0xFF));
+    unsigned length = 0;
 
     while (at < messages + sizeof messages - 1) {
-        if ((byte)*at == want)
-            return at + 1;
+        if ((byte)*at == want) {
+            for (at++; *at && length < QB_ERROR_TEXT_MAX; at++)
+                out[length++] = *at;
+            out[length] = 0;
+            return length;
+        }
         while (*++at)
             ;
         at++;
     }
-    return "Unprintable error";
+    copy_bytes(out, "Unprintable error", 18);
+    return 17;
 }
 
 static void write_text(const char *text)
@@ -137,10 +143,11 @@ static void write_hex(unsigned value)
 /* The message an error nothing handles ends the program with. */
 static void fatal(unsigned n)
 {
-    char name[MODULE_NAME_LENGTH];
+    char name[MODULE_NAME_LENGTH], text[QB_ERROR_TEXT_MAX + 1];
 
     cn_crlf();
-    write_text(qb_error_text(n));
+    qb_error_text(n, text);
+    write_text(text);
     write_text(" in line No line number in module ");
     module_name(name);
     cn_write(name, MODULE_NAME_LENGTH);
