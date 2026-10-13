@@ -5,7 +5,7 @@
 #include "rtinit.h"
 #include "llrm_os.h"
 
-enum { MAX_CHANNEL = 15, DEFAULT_RECORD = 128, PATH_MAX = 128, ORIGIN_START = 0, ORIGIN_END = 2 };
+enum { MAX_CHANNEL = 15, DEFAULT_RECORD = 128, PATH_MAX = 128, ORIGIN_START = 0, ORIGIN_END = 2, LINE_MAX = 1023 };
 
 /* QB's number for what DOS refused with (messages.inc). */
 static unsigned os_error(long code)
@@ -80,7 +80,10 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
     if (record_length <= 0)
         qb_error(BE_ILLFUN);
     handle = open_file(path, mode);
-    fdb = lh_alloc(sizeof(Fdb), LH_FILE, NULL, channel);
+    /* a file read by line carries the line's buffer after its block, not a kilobyte of every program's DGROUP (QB reads a line
+       into string space) */
+    fdb = lh_alloc(sizeof(Fdb) + (mode == MD_INPUT || mode == MD_RANDOM || mode == MD_BINARY ? LINE_MAX + 1 : 0), LH_FILE, NULL,
+                   channel);
     if (!fdb) {
         llrm_os_close(handle);
         qb_error(BE_MEMORY);
@@ -95,7 +98,7 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
 
 /* One buffer serves whichever file is being read or written by character: the
    other operations on the file first give back what it holds. */
-enum { BUFFER = 128, LINE_MAX = 1023, END_OF_TEXT = 26, FILE_WIDTH = 255 };
+enum { BUFFER = 128, END_OF_TEXT = 26, FILE_WIDTH = 255 };
 
 static char buffer[BUFFER];
 static Fdb *owner;
@@ -408,15 +411,16 @@ void B_CHOU(short channel)
     cn_redirect(&file_driver);
 }
 
-static char text_line[LINE_MAX + 1];
-
 /* The next line of an INPUT file, without its line end; past the end of the
    file is Input past end. */
 static const char *next_line(void *file)
 {
     Fdb *fdb = file;
+    char *text_line = (char *)(fdb + 1);
     unsigned length = 0;
-    int c = get_byte(fdb);
+    int c;
+
+    c = get_byte(fdb);
 
     if (c < 0 || c == END_OF_TEXT)
         qb_error(BE_PASTEND);

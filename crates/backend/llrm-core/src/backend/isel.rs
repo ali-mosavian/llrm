@@ -5208,16 +5208,21 @@ impl Selector<'_, '_, '_> {
                 // stack pointer base): the space made, then the value stored
                 // into it, as gcc does, and not stored to a
                 // cell and pushed from it.
-                if matches!(size, 4 | 8) && self.arch.object().bitness == 32 {
+                if matches!(size, 4 | 8 | 10) && self.arch.object().bitness == 32 {
+                    // An extended float takes whole slots (12 bytes), its 10
+                    // stored at the lower addresses: the
+                    // callee reads the next argument 12 bytes on.
+                    let slot = (i64::from(size) + self.arch.stack_slot_bytes() - 1) / self.arch.stack_slot_bytes()
+                        * self.arch.stack_slot_bytes();
                     let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
-                    let count = Loc::Imm(Imm { value: i64::from(size), width: 2, address: None });
+                    let count = Loc::Imm(Imm { value: slot, width: 2, address: None });
                     out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp, count])));
                     let top = Mem { through: RegId::SP, disp_width: 0, ..Mem::new(None, size) };
                     out.push(insn(
                         at,
                         semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(top)], vec![Loc::Held(held)]),
                     ));
-                    pushed += i64::from(size);
+                    pushed += slot;
                     continue;
                 }
                 let cell = self.float_stored(held, "fstp", size, at, out);

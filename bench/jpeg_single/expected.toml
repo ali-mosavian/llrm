@@ -1,4 +1,4 @@
-reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+reason = "the combined state of the long-double stack (#1583-#1587) and #1589-#1591: the rows are one truth, the quick DOUBLE paths back (#1573) and each program's load-time relocations of the runtime changes (about 40 instructions each)"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 65193651
+instructions = 63997169
 code_bytes = 6709
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 65533189
+instructions = 64335659
 code_bytes = 6224
 data_bytes = 29697
 bss_bytes = 0

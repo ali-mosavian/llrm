@@ -10,6 +10,8 @@ void qb_no_resume(void);
 /* END: the files are closed and the program leaves. */
 void qb_end(void);
 /* The message of an error number. */
-const char *qb_error_text(unsigned n);
+/* The text of error `n` copied to `out` (QB_ERROR_TEXT_MAX + 1 bytes), and its length: the table is far, not in DGROUP. */
+enum { QB_ERROR_TEXT_MAX = 39 };
+unsigned qb_error_text(unsigned n, char *out);
 
 #endif

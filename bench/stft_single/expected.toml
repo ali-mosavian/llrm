@@ -1,4 +1,4 @@
-reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
+reason = "bq32 counts include DOS/32A's load work, about 40 instructions per relocation (adding one reference to a program changed it by +43): the combined #1589-#1591 (INPUT's line buffer in the file block and the far error table remove references, BLOAD/BSAVE are their own object, the process OS group adds some) moves each program by its relocation count, -228 on programs that link file.c"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 73084774
+instructions = 73100569
 code_bytes = 1380
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73414250
+instructions = 73430019
 code_bytes = 1379
 data_bytes = 4733
 bss_bytes = 0

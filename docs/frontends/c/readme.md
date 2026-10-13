@@ -46,9 +46,10 @@ what `int` is, and the switches `wccq` is given (`runtime/c/x86-m16/c.toml`,
 `runtime/c/x86-m32/c.toml`).
 
 On real mode the default is Borland C 3.1's medium model: far code, near
-data, cdecl, signed `char`, 80-bit `long double`, byte-packed structs, 16-bit
+data, cdecl, signed `char`, byte-packed structs, 16-bit
 enums, inline x87 and no stack probes. The patched front end also lays bit
-fields out as Borland C does. `-mabi=ABI` selects another ABI of the target:
+fields out as Borland C does. `long double` is x87's 80-bit type at every target (llrm-c adds `-fld` where the layout has it; the
+size in memory is the description's, `Layout::long_double_bytes`, the front end is built with it and `__SIZEOF_LONG_DOUBLE__` is it: 12 at m32, with 4-byte alignment, and an argument takes whole 12-byte slots). `-mabi=ABI` selects another ABI of the target:
 
 | Target | ABIs |
 |---|---|
