@@ -1,4 +1,4 @@
-reason = "branch odds combine as gcc 13.4 does (predict.cc combine_predictions_for_bb), a build for size keeps phi copies in the predecessor, an edge copy must win by a tenth, a recursive call is not exceptional against a returning base case; worse rows: bintree -Os instructions +1.3..1.6% (clocks +0.8%)"
+reason = "where neither way is next, the likelier is the conditional jump (#1461): queens -O2 instructions -1.5%, mandel nib -5%, quicksort/shellsort smaller; worse by noise only: grep bq32 +15 instructions of 627M, stft_fixed nib +2 bytes"
 blessed = "2026-10-12"
 
 [bas.O2]
@@ -50,7 +50,7 @@ bss_bytes = 5122
 kernel_ms = 524.8356
 
 [nib.O2]
-code_bytes = 2573
+code_bytes = 2575
 data_bytes = 5149
 bss_bytes = 0
 kernel_ms = 810.366
