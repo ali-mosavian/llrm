@@ -15,7 +15,8 @@ pub enum FloatKind {
 }
 
 impl FloatKind {
-    /// The bytes a value of the kind stores (x87's 80 bits: 10), not the stride of an array of them, which is the
+    /// The bytes a value of the kind stores (x87's 80 bits: 10), not the stride
+    /// of an array of them, which is the
     /// target's (`Layout::long_double_bytes`).
     pub fn value_bytes(self) -> u32 {
         crate::datalayout::float_bits(self).div_ceil(8)

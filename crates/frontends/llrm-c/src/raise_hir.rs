@@ -9,10 +9,9 @@
 use std::collections::BTreeSet;
 
 use llrm_core::abi::runtime;
-use llrm_target::calling::Convention;
-
 /// `WIDTHS.get(type_)`.
 use llrm_mir::types::FloatKind;
+use llrm_target::calling::Convention;
 
 pub fn widths(type_: &str) -> Option<u32> {
     widths_for(false, type_)
