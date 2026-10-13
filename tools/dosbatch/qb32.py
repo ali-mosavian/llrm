@@ -202,7 +202,10 @@ def link(program: Path, objects: dict[str, Path], exe: Path, work: Path) -> tupl
 # does its per-millisecond work (timers, events) every `rate` instructions, so a program that computes wants a high one
 # (the 25 bench programs took 5 minutes at 2000, half a minute at 100000), and one that waits on TIMER a low one (the
 # demos' delay loops cost their instructions, so 1/50th of the wall time at 2000).  A game's speed follows the rate.
-BENCH_RATE = 100_000
+# The bench's rate puts no timer tick in a run (a tick is 55 ms: 5.5e9 instructions, the longest bench program runs 6e8): the interrupt handler
+# the extender chains to cost about 120 instructions a tick, which of them fell inside a counted kernel, and in what context,
+# moved every row by tens of instructions when the program's size moved the phase.  No bench program waits on TIMER.
+BENCH_RATE = 100_000_000
 DEMO_RATE = 2_000
 BUDGET_INSTRUCTIONS = 12_000_000_000
 
@@ -215,7 +218,8 @@ def virtual_conf(rate: int) -> str:
 
 BENCH_CONF = virtual_conf(BENCH_RATE)
 DEMO_CONF = virtual_conf(DEMO_RATE)
-BUDGET_MS = BUDGET_INSTRUCTIONS // BENCH_RATE
+# the emulated clock a run may take: grep's 10 MB of disk reads cost 1 to 3 s of it (the instruction budget is no longer this)
+BUDGET_MS = 10_000
 
 
 def run_jobs(jobs, work: Path):
