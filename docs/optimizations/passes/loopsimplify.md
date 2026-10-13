@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:e733a0785224b0b09556c38f0f12ef818f5d8358449584fc73f984a7bbbc1acb -->
+<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:05477eb602e7efd57e543b963911e3071fd7e0858b1b3da4eeb5ec5c7c1268b9 -->
 
 # loopsimplify
 
@@ -74,9 +74,10 @@ block (or the one value they all share) and one arm of the target's phi.
 Grouping needs every source to end in a `br` whose edge can be retargeted,
 and every phi of the target to name exactly the target's predecessors.
 
-The loops are processed one at a time on a copy of the function, kept only
-when every grouping the loop needed went through, so a refused one leaves
-the body as it was. A loop already in the form makes no copy. The loops of
+The loops are processed one at a time. What a loop needs grouped is worked
+out from the edges of its blocks and of the targets, and every grouping is
+checked before the first is made, so a refused one leaves the body as it
+was. No copy of the function and no graph of it is made. The loops of
 the shape are updated for the new blocks rather than found again
 (`LLRM_CHECK_SHAPE` compares them with a new shape). A function with an
 irreducible loop is left alone.
