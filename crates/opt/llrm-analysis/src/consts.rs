@@ -859,10 +859,42 @@ pub fn holds(
     }
 }
 
+/// The loads that read a `constant` global at an index: the fact of each is the
+/// bytes the index can only be one value to read, which `ranges` finds from the
+/// index's whole expression (the facts and the bounds of every value it is made
+/// of, those that are known numbers and those that are not), so no change to a
+/// value it is made from leaves one as it was.
+pub fn table_loads(unit: &Unit) -> Vec<InstId> {
+    let function = unit.function;
+    function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| {
+            matches!(
+                function.instruction(inst).opcode,
+                Opcode::Load { volatile: false, .. }
+            )
+                && MemRef::of(unit, inst).is_some_and(|reference| {
+                    reference.base.is_some()
+                        && matches!(
+                            reference.root,
+                            Some(Operand::Constant(root)) if matches!(
+                                unit.context.get(root).kind,
+                                ConstantKind::Global(global) if matches!(
+                                    unit.globals.get(global.0 as usize).map(|one| &one.kind),
+                                    Some(llrm_mir::module::GlobalKind::Variable(variable)) if variable.constant
+                                )
+                            )
+                        )
+                })
+        })
+        .collect()
+}
+
 /// Every value this function computes that is a number, to a fixed point,
 /// without memory (`known_walked` has it).
 pub fn known(unit: &Unit) -> IndexMap<ValueId, Known> {
-    known_from(unit, IndexMap::default(), None)
+    known_from(unit, IndexMap::default(), None, &[])
 }
 
 /// `known`, from the facts `kept` of the values `dirty` leaves out (all of them
@@ -873,6 +905,7 @@ pub fn known_from(
     unit: &Unit,
     kept: IndexMap<ValueId, Known>,
     dirty: Option<&llrm_mir::dense::IdSet<ValueId>>,
+    tables: &[InstId],
 ) -> IndexMap<ValueId, Known> {
     REGISTER_DERIVATIONS.with(|count| count.set(count.get() + 1));
     // Each access asks whether its frame object is exposed: found once for the
@@ -911,15 +944,27 @@ pub fn known_from(
         };
         let mut region = dirty.clone();
         let mut queue: Vec<InstId> = dirty.iter().filter_map(defining).collect();
-        while let Some(inst) = queue.pop() {
-            let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else { continue };
-            let Some(found) = settled(inst, &facts) else { continue };
-            facts.insert(target, found);
-            for user in function.users(target) {
-                if function.parent(user.user).is_some() {
-                    region.extend(function.instruction(user.user).result);
-                    queue.push(user.user);
+        loop {
+            while let Some(inst) = queue.pop() {
+                let Some(target) = _defined(unit, inst).filter(|target| !facts.contains_key(target)) else { continue };
+                let Some(found) = settled(inst, &facts) else { continue };
+                facts.insert(target, found);
+                for user in function.users(target) {
+                    if function.parent(user.user).is_some() {
+                        region.extend(function.instruction(user.user).result);
+                        queue.push(user.user);
+                    }
                 }
+            }
+            // A table load is known by the bounds of its whole index, so a fact
+            // that came to a value the index is made of (and not to
+            // the load's own operand) asks it again.
+            queue.extend(tables.iter().copied().filter(|&inst| {
+                _defined(unit, inst)
+                    .is_some_and(|target| !facts.contains_key(&target) && settled(inst, &facts).is_some())
+            }));
+            if queue.is_empty() {
+                break;
             }
         }
         return constant_cycles::propagated(unit, facts, None, Some(&region));
