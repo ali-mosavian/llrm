@@ -87,7 +87,7 @@ fn data_role(
 ) -> Role {
     match name {
         "_DATA" => Role::Data,
-        "_BSS" => Role::Bss,
+        "_BSS" | "BSSB" => Role::Bss,
         "CONST" => Role::ROData,
         _ if far_bss => Role::Bss,
         _ => Role::Data,

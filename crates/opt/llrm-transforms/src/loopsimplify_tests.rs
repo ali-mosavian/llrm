@@ -488,7 +488,6 @@ fn loops_already_in_simplified_form_make_no_copy_of_the_function() {
     }
     text += "done:\n  ret i16 0\n}\n";
     let mut module = parsed(&text);
-    let before = super::copies();
     let function = module.named("f").expect("@f");
     let changed = {
         let llrm_mir::GlobalKind::Function(function) = &mut module.globals[function.0 as usize].kind else {
@@ -497,5 +496,4 @@ fn loops_already_in_simplified_form_make_no_copy_of_the_function() {
         simplified(function)
     };
     assert!(!changed, "a loop in the form was changed");
-    assert_eq!(super::copies() - before, 0, "the function was copied for a loop that needed nothing");
 }

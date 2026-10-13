@@ -1,4 +1,4 @@
-reason = "jumpthread threads every branch on a phi of constants of the function, not the first: 9 rows smaller by 0.1-0.2% code (jpeg, bq16/bq32/bas), grep bq32 -O2 code +1.6%"
+reason = "jumpthread threads every branch on a phi of constants: jpeg_fixed/jpeg_single code -8..-15 B (bas, bq16, bq32) and bq32 instructions -0.003%; grep bq32 -O2 code 1471 -> 1494 B (+1.6%), instructions -0.006%"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63954747
+instructions = 63953485
 code_bytes = 6694
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64296886
+instructions = 64295633
 code_bytes = 6224
 data_bytes = 29697
 bss_bytes = 0

@@ -362,6 +362,8 @@ def _compile_c(source: Path, obj: Path, include: Path) -> None:
             str(dosbatch.BIN / "llrm-c"),
             str(source),
             dosbatch.m_flag(dosbatch.REAL_MODE),
+            # An empty BSSB ahead of each object's _BSS: start.asm zeroes from it (the objects' order is the linker's).
+            "-mbss-begin",
             "-Os",
             "-I",
             str(include),

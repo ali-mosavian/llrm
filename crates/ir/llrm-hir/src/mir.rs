@@ -390,9 +390,6 @@ fn class_tags(
 }
 
 struct Tables<'h> {
-    /// The node that marks an access made volatile for `-g`'s sake
-    /// (`llrm_mir::debuginfo::OBSERVED`), where the module declares any.
-    observed: Option<MetadataId>,
     /// The target's address spaces: what the HIR's near, far, segment, huge and
     /// fixed addresses are.
     spaces: AddressSpaces,
@@ -456,7 +453,6 @@ pub const DEBUG_LINE: &str = "dbg";
 
 /// Node numbers the lowering names `-g`'s nodes by until they are made, past
 /// any a module has.
-const PROVISIONAL_OBSERVED: MetadataId = MetadataId(0x7000_0000);
 const PROVISIONAL_LINES: u32 = 0x6000_0000;
 pub(crate) const PROVISIONAL_VARIABLES: u32 = 0x4000_0000;
 
@@ -653,7 +649,6 @@ fn emit_module<'h>(
         place_facts,
         field_facts,
         variables: HashMap::default(),
-        observed: None,
     };
     tables.tags.arrays(&mut module, hir);
     match fact_nodes(&mut module, &tables.spaces, hir, &tables.types) {
@@ -790,9 +785,7 @@ fn emit_module<'h>(
     // order differently). The code is lowered naming those nodes by numbers
     // it chooses; the nodes are made last and the code renumbered.
     tables.variables = debug::provisional(hir);
-    if !tables.variables.is_empty() {
-        tables.observed = Some(PROVISIONAL_OBSERVED);
-    }
+    if !tables.variables.is_empty() {}
     tables.lines = hir
         .functions
         .iter()
@@ -872,9 +865,6 @@ fn emit_module<'h>(
             variables.into_iter().filter_map(|(key, node)| tables.variables.get(&key).map(|chosen| (*chosen, node))),
         ),
         Err(why) => refused.push((hir.name.clone(), why)),
-    }
-    if tables.observed.is_some() {
-        real.insert(PROVISIONAL_OBSERVED, llrm_mir::debuginfo::observed_node(&mut module));
     }
     real.extend(
         line_nodes(&mut module, hir)
@@ -2170,7 +2160,6 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         for block in emission_order(self.function).into_iter().filter(|one| !elsewhere.contains(&one.id)) {
             self.emit_block(block)?;
         }
-        self.observe_declared_stores();
         self.close_handling()
     }
 
@@ -2222,53 +2211,6 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
         };
         self.b.debug_say(variable, what);
-    }
-
-    /// The instruction made as the `first`th is volatile for `-g`'s sake alone.
-    fn observe(
-        &mut self,
-        first: usize,
-    ) {
-        if let Some(node) = self.tables.observed {
-            self.b.function.annotate(llrm_mir::InstId(first as u32), llrm_mir::debuginfo::OBSERVED, node);
-        }
-    }
-
-    fn observe_declared_stores(&mut self) {
-        let declared: HashSet<llrm_mir::Operand> = self
-            .b
-            .function
-            .debug_records()
-            .iter()
-            .filter_map(|one| if let llrm_mir::DebugWhat::Declare(at) = one.what { Some(at) } else { None })
-            .collect();
-        if declared.is_empty() {
-            return;
-        }
-        let layout = llrm_mir::datalayout::DataLayout::parse("").expect("the default layout");
-        let stores: Vec<llrm_mir::InstId> = self
-            .b
-            .function
-            .walk()
-            .map(|(_, inst)| inst)
-            .filter(|&inst| {
-                matches!(
-                    self.b.function.instruction(inst).opcode,
-                    llrm_mir::Opcode::Store { volatile: false, .. }
-                )
-            })
-            .collect();
-        for inst in stores {
-            let pointer = self.b.function.instruction(inst).operands[1];
-            if declared
-                .contains(&llrm_mir::valuetracking::underlying(self.b.context, &layout, self.b.function, pointer).0)
-            {
-                self.b.function.make_store_volatile(inst);
-                if let Some(node) = self.tables.observed {
-                    self.b.function.annotate(inst, llrm_mir::debuginfo::OBSERVED, node);
-                }
-            }
-        }
     }
 
     fn emit_block(
@@ -2971,14 +2913,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let (to_space, from_space) = (space(self, to), space(self, from));
                 let callee = Value::Constant(self.tables.callees[&memcpy_name(to_space, from_space)]);
                 let ty = memcpy_type(&mut self.b.context.types, to_space, from_space);
-                // As a store to a declared variable: the copy into it stays.
-                let observed = self.declared_place(&instruction.operands[0]);
-                let (size, volatile) = (self.b.int(16, i128::from(*bytes)), self.b.int(1, i128::from(observed)));
-                let first = self.b.function.instruction_count();
+                let (size, volatile) = (self.b.int(16, i128::from(*bytes)), self.b.int(1, 0));
                 self.b.call(ty, callee, &[to, from, size, volatile], "");
-                if observed {
-                    self.observe(first);
-                }
             }
             Op::Copy | Op::Load => {
                 let value = self.value(&instruction.operands[0])?;
@@ -2987,14 +2923,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             Op::Store => {
                 let (pointer, _, volatile, tag) = self.place(&instruction.operands[0])?;
                 let value = self.value(&instruction.operands[1])?;
-                // A debugger reads a declared variable from its cell at any
-                // time: every store to it stays, in order, as
-                // one to a volatile does. The optimiser asks nothing else.
-                let observed = self.declared_place(&instruction.operands[0]);
-                let first = self.b.function.instruction_count();
-                self.b.store(value, pointer, volatile || observed);
-                if observed && !volatile {
-                    self.observe(first);
+                self.b.store(value, pointer, volatile);
+                if !volatile && self.declared_place(&instruction.operands[0]) {
                     self.say_stored(&instruction.operands[0], value);
                 }
                 self.tagged(tag);

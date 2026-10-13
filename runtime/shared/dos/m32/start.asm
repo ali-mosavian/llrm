@@ -30,6 +30,9 @@ endif
 
 .code
 start:
+                ;; the extender's stack top is wherever the image ends: aligned, so the frames of a program (and the copies out of them
+                ;; whose length depends on an address's low bits) do not move with its size
+                and     esp, -16
                 mov     LL$PSP, es              ;; the PSP's selector, for the command line and the environment
                 push    ds
                 pop     es

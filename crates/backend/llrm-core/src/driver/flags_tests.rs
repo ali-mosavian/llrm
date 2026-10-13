@@ -228,6 +228,22 @@ fn far_zero_data_is_stored_unless_the_startup_zeroes_it() {
     assert!(!machine(&["-mfar-bss", "-mno-far-bss"]));
 }
 
+/// `-mbss-begin` marks the start of the near uninitialised data in every
+/// object; off unless asked.
+#[test]
+fn the_bss_begin_marker_is_off_unless_asked() {
+    let machine = |arguments: &[&str]| {
+        parsed(arguments)
+            .unwrap()
+            .machine(&llrm_x86_m16::M16, llrm_x86_m16::machine::BUILT_IN.clone())
+            .unwrap()
+            .bss_begin
+    };
+    assert!(!machine(&[]));
+    assert!(machine(&["-mbss-begin"]));
+    assert!(!machine(&["-mbss-begin", "-mno-bss-begin"]));
+}
+
 /// gcc's run-time check names: each sanitizer alone, `undefined` all of
 /// them, `-fno-sanitize` and `-ftrapv` as gcc reads them.
 #[test]
