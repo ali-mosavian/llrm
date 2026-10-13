@@ -23,7 +23,7 @@ pub fn header(flat: bool) -> String {
         ("POINTER", pointer),
         ("FLOAT", 4),
         ("DOUBLE", 8),
-        ("LONG_DOUBLE", 10),
+        ("LONG_DOUBLE", i64::from(widths_for(flat, "TY_LONG_DOUBLE").expect("a front-end type has a width"))),
     ] {
         define(&format!("__SIZEOF_{name}__"), bytes.to_string());
     }
