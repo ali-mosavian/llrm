@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:a17c74c1dbcd8d64673b600cec88f153ebb9909c5aa119fe04bedc953ccaa2c5 -->
+<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:484513e31025de73c0e73028fb1d81a9ba4fe6f77db96bdd724f0b342708dcc8 -->
 
 # ranges
 

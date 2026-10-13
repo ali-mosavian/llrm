@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/occurrence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/occurrence.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/occurrence.rs sha256:0a0118f5d5e434a55f74858a60acf9fefa5c7a5930fc5e6c32c6b1f44e46d9e3 -->
+<!-- src: crates/opt/llrm-analysis/src/occurrence.rs sha256:0c45131327119d4b1d4ccc426e0b4bfc4d34b5a65a4a9629711d4a6717e0402b -->
 
 # occurrence
 

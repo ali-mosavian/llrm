@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/neighbours.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/neighbours.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/neighbours.rs sha256:72c9114467d43e692f49f7266f4a980f03c807a57870fdcf91eddafe852e768f -->
+<!-- src: crates/backend/llrm-core/src/backend/neighbours.rs sha256:5603b1bb942464527479b9b0c8ffc915be7c4e2b376756b2e09fe5424f3a4f46 -->
 
 # neighbours
 

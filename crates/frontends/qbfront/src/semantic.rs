@@ -3417,6 +3417,7 @@ impl Compiler {
                 },
                 Statement::DefSeg { value, .. } => {
                     if let Some(value) = value {
+                        self.warn_segment_of_an_array(value);
                         let value = self.unsigned_word(value)?;
                         // B$DSEG only stores this word in the runtime-owned
                         // b$seg cell.  PEEK/POKE in every procedure and module
@@ -7516,6 +7517,31 @@ impl Compiler {
             (value, type_id)
         };
         self.convert(value, type_id, integer_type(self.options.near(), true))
+    }
+
+    /// Where one address space has no segments, `DEF SEG = VARSEG(array(i))` is
+    /// the far-array idiom of real mode, whose PEEKs and POKEs count from
+    /// the array's start: here VARSEG is 0 and the address is VARPTR's, so
+    /// those offsets reach low memory.
+    fn warn_segment_of_an_array(
+        &mut self,
+        value: &Expr,
+    ) {
+        let Expr::Apply { name, arguments, .. } = value else { return };
+        if !self.options.one_space() || !name.eq_ignore_ascii_case("VARSEG") {
+            return;
+        }
+        if matches!(
+            arguments.first(),
+            Some(Expr::Apply { .. } | Expr::Index { .. })
+        ) {
+            self.warnings.push(format!(
+                "line {}: warning: DEF SEG = VARSEG(array element) is not supported at one address space: VARSEG is 0 and the \
+                 pointer is VARPTR's whole address, so PEEK and POKE with offsets from the array's start address low memory \
+                 (docs/frontends/qb/memory-model.md)",
+                self.current_source_line
+            ));
+        }
     }
 
     /// The byte pointer an address names: the offset from DEF SEG's paragraph.

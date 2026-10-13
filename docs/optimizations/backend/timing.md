@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/timing.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/timing.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/timing.rs sha256:f6a3227c026c56d22b7406c377ffc88f375cd310ce48c85b91d94862b1ad4f32 -->
+<!-- src: crates/backend/llrm-core/src/backend/timing.rs sha256:6e8ca8e6116720845d48cecfe0acd41cc338ead89f35fab78e0c7d8df13d1e2a -->
 
 # timing
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/argpromotion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/argpromotion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/argpromotion.rs sha256:fce528fac49863813cfac121baef6ac4016ca82abf79addfa17a6df8df0dacc1 -->
+<!-- src: crates/opt/llrm-transforms/src/argpromotion.rs sha256:a2f28793dfd96e353f95c1b59759add434aae2ed2201e2172e5b7618229bdb2f -->
 
 # argpromotion
 
