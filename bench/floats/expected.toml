@@ -1,4 +1,4 @@
-reason = "bq32 is now net of the empty start-up program, as stated (#1553): the subtraction never ran, because the start-up's output ' 0' was compared with '0' and errored; every row held DOS/32A's load and the runtime's start-up (about 41.8k instructions)"
+reason = "bq32 counts include DOS/32A's load work, about 40 instructions per relocation (adding one reference to a program changed it by +43): the combined #1589-#1591 (INPUT's line buffer in the file block and the far error table remove references, BLOAD/BSAVE are their own object, the process OS group adds some) moves each program by its relocation count, -228 on programs that link file.c"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -32,13 +32,13 @@ bss_bytes = 0
 kernel_ms = 0.0749
 
 [bq32.O2]
-instructions = 5853
+instructions = 5852
 code_bytes = 246
 data_bytes = 37
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 5854
+instructions = 5813
 code_bytes = 249
 data_bytes = 37
 bss_bytes = 0
