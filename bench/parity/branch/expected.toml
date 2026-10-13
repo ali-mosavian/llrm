@@ -1,4 +1,4 @@
-reason = "bq32 is now net of the empty start-up program, as stated (#1553): the subtraction never ran, because the start-up's output ' 0' was compared with '0' and errored; every row held DOS/32A's load and the runtime's start-up (about 41.8k instructions)"
+reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -34,13 +34,13 @@ bss_bytes = 0
 kernel_ms = 0.0079
 
 [bq32.O2]
-instructions = 557
+instructions = 887
 code_bytes = 173
 data_bytes = 19
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 593
+instructions = 882
 code_bytes = 161
 data_bytes = 19
 bss_bytes = 0
