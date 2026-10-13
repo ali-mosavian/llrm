@@ -10,7 +10,7 @@ use llrm_transforms::pipeline;
 use crate::abi::machine::Machine;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,6 +160,7 @@ pub struct Flags {
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
+    bss_begin: Option<bool>,
     /// `--clocks-per-byte N`: the clocks an inline must save for each byte of
     /// code it adds (default 16; 0 allows no growth).
     milliclocks_per_byte: Option<i64>,
@@ -200,6 +201,7 @@ impl Default for Flags {
             mode: None,
             stack_is_data: None,
             far_bss: None,
+            bss_begin: None,
             milliclocks_per_byte: None,
             output: None,
             assembly: false,
@@ -263,6 +265,8 @@ impl Flags {
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mfar-bss" => self.far_bss = Some(true),
             "-mno-far-bss" => self.far_bss = Some(false),
+            "-mbss-begin" => self.bss_begin = Some(true),
+            "-mno-bss-begin" => self.bss_begin = Some(false),
             "--clocks-per-byte" => {
                 let text = value("--clocks-per-byte")?;
                 let clocks = text.parse::<f64>().ok().filter(|clocks| clocks.is_finite() && *clocks >= 0.0);
@@ -394,6 +398,9 @@ impl Flags {
         }
         if let Some(far_bss) = self.far_bss {
             machine.far_bss = far_bss;
+        }
+        if let Some(bss_begin) = self.bss_begin {
+            machine.bss_begin = bss_begin;
         }
         Ok(machine)
     }

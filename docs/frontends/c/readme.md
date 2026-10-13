@@ -81,7 +81,8 @@ writes assembly. The object format is `-fobject-format=omf|elf|macho|coff`.
 
 The shared options of `llrm-qb`, `llrm-c` and `llrm-nib` apply: `-O0` to
 `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og`, `-f[no-]PASS`, `-march`, `-mtune`,
-`-m[no-]stack-is-data`, `-m[no-]far-bss`, `--machine`, `-fstack-usage` and
+`-m[no-]stack-is-data`, `-m[no-]far-bss`, `-m[no-]bss-begin` (an empty `BSSB` segment
+ahead of each object's `_BSS`, where a start-up zeroes from it, as the QB runtime's does), `--machine`, `-fstack-usage` and
 `-Wstack-usage`. `llrm-c --help` prints the full list.
 
 A program that includes `llrm_os.h` finds it without `-I`: the header is the

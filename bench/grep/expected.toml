@@ -1,4 +1,4 @@
-reason = "OPEN no longer allocates a kilobyte of line buffer with its file block, so programs that open files in their kernel (grep, jpeg, stft: -3,063 instructions each) skip the string-space take it caused; scroll +3 for freeing the file name's temporary"
+reason = "bq32 no longer holds noise from the program's size: no timer tick falls in a run (BENCH_RATE 1e8: the extender's tick handler, ~120 instructions each and by where it landed, was inside the counted kernel: stft -40, grep -88 for 40 bytes of dead code), the stack top and the arena start are 16-aligned (copies whose length depends on low address bits moved by a few more); every bq32 row loses its ticks"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 3703.8059
 
 [bq32.O2]
-instructions = 627521472
+instructions = 627501637
 code_bytes = 1471
 data_bytes = 127
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 627512050
+instructions = 627492151
 code_bytes = 1334
 data_bytes = 127
 bss_bytes = 0
