@@ -34,6 +34,7 @@ FLAT=${LLRM_FLAT:?LLRM_FLAT comes from the target description}
 NEAR=${LLRM_NEAR_BYTES:?LLRM_NEAR_BYTES comes from the target description}
 FAR=${LLRM_FAR_BYTES:?LLRM_FAR_BYTES comes from the target description}
 INT=${LLRM_INT_BYTES:?LLRM_INT_BYTES comes from the target description}
+LDOUBLE=${LLRM_LDOUBLE_BYTES:?LLRM_LDOUBLE_BYTES comes from the target description}
 CC_OBJ="$OWROOT/bld/cc/$CPU/binbuild"
 OUT="${1:-$HERE/$BIN}"
 mkdir -p "$OUT"
@@ -51,7 +52,7 @@ CC_LINE=$(set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && cd "$CC_OBJ" \
     | grep -- '-o ccheck.obj' | sed -e 's|"||g' -e 's| -o ccheck.obj||' -e 's| [^ ]*/ccheck\.c$||')
 [ -n "$CC_LINE" ] || { echo "no compile line for ccheck.obj in $CC_OBJ" >&2; exit 1; }
 
-compile() { ( cd "$CC_OBJ" && $CC_LINE -I"$HERE" -DLLRM_FLAT=$FLAT -DLLRM_NEAR_BYTES=$NEAR -DLLRM_FAR_BYTES=$FAR -DLLRM_INT_BYTES=$INT -o "$1" "$2" ); }
+compile() { ( cd "$CC_OBJ" && $CC_LINE -I"$HERE" -DLLRM_FLAT=$FLAT -DLLRM_NEAR_BYTES=$NEAR -DLLRM_FAR_BYTES=$FAR -DLLRM_INT_BYTES=$INT -DLLRM_LDOUBLE_BYTES=$LDOUBLE -o "$1" "$2" ); }
 
 compile "$OUT/cgshim.o" "$HERE/cgshim.c"
 compile "$OUT/i64.o" "$OWROOT/bld/watcom/c/i64.c"

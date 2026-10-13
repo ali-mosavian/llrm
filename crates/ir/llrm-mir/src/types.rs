@@ -14,6 +14,15 @@ pub enum FloatKind {
     X86Fp80,
 }
 
+impl FloatKind {
+    /// The bytes a value of the kind stores (x87's 80 bits: 10), not the stride
+    /// of an array of them, which is the
+    /// target's (`Layout::long_double_bytes`).
+    pub fn value_bytes(self) -> u32 {
+        crate::datalayout::float_bits(self).div_ceil(8)
+    }
+}
+
 /// The 10 bytes of x87's extended format holding the double whose bits
 /// are `double`: its sign and exponent rebiased to 15 bits, and its fraction
 /// under an explicit integer bit.

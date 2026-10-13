@@ -9,9 +9,10 @@
 use std::collections::BTreeSet;
 
 use llrm_core::abi::runtime;
+/// `WIDTHS.get(type_)`.
+use llrm_mir::types::FloatKind;
 use llrm_target::calling::Convention;
 
-/// `WIDTHS.get(type_)`.
 pub fn widths(type_: &str) -> Option<u32> {
     widths_for(false, type_)
 }
@@ -47,7 +48,7 @@ pub fn widths_for(
         // x87.
         "TY_SINGLE" => 4,
         "TY_DOUBLE" => 8,
-        "TY_LONG_DOUBLE" => 10,
+        "TY_LONG_DOUBLE" => FloatKind::X86Fp80.value_bytes(),
         _ => return None,
     })
 }
