@@ -66,7 +66,7 @@ LAYOUT_DEPENDENT: dict[str, str] = {
 # test so the entry goes.  Only the flat target has any.
 KNOWN: dict[tuple[str, str], str] = {
     ("fre_lprint", qbbuild.FLAT): "#1539: FRE",
-    ("scores", qbbuild.FLAT): "#1542: the ' link: library does not compile for the flat runtime",
+    ("scores", qbbuild.FLAT): "#1542: a library for BASIC is not supported at a flat target (llrm-nib refuses it by saying so)",
 }
 
 

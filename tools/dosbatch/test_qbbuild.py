@@ -45,3 +45,13 @@ def test_a_program_with_files_but_no_bload_does_not_link_bload_or_def_seg(tmp_pa
         linked = {one.stem for one in qbbuild.needed((obj,), objects[target])}
         assert "file" in linked and not {"bload", "defseg"} & linked, f"{target}: {sorted(linked)}"
         assert built.exe.exists()
+
+
+def test_a_basic_program_linking_a_nib_library_is_refused_at_the_flat_target_by_saying_so(tmp_path):
+    """The library's build stopped in the compiler on "this target defines no regparm3 calling convention", out of the BASIC adapters;
+    llrm-nib now refuses a library for BASIC at a flat target (#1542)."""
+    source = dosbatch.ROOT / "examples" / "basic" / "scores.bas"
+    objects = qbbuild.runtimes(tmp_path)
+    (tmp_path / "b").mkdir()
+    with pytest.raises(dosbatch.BuildError, match="a library for BASIC is not supported at a flat target"):
+        qbbuild.one_target(source, tmp_path / "b", objects, ("-O2",), qbbuild.FLAT)

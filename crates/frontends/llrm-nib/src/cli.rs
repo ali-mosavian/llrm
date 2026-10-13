@@ -59,6 +59,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut used_by = Vec::new();
     let mut os_layer = None;
     let mut declare = None;
+    let mut basic_runtime: Option<String> = None;
     let (mut warn_target_width, mut unchecked_bounds) = (true, false);
     let mut at = 0;
     while at < argv.len() {
@@ -88,7 +89,11 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
                 )
             }
             "--os-layer" => os_layer = Some(value("--os-layer")?),
-            "--basic-runtime" => super::standard::set_basic_runtime(&value("--basic-runtime")?)?,
+            "--basic-runtime" => {
+                let runtime = value("--basic-runtime")?;
+                super::standard::set_basic_runtime(&runtime)?;
+                basic_runtime = Some(runtime);
+            }
             "-Wno-target-width" => warn_target_width = false,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
             "--unchecked-bounds" => unchecked_bounds = true,
@@ -105,6 +110,16 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         (None, None) => return Err("the following arguments are required: source".to_owned()),
     };
     let bound = llrm_driver::target(&flags, None)?;
+    // A library for BASIC is built against the 16-bit BASIC ABI (pascal16, near
+    // and far descriptors with word fields): a flat target has no such
+    // convention and its runtime's descriptors are wider. The port is #1542.
+    if basic_runtime.is_some_and(|runtime| runtime == "llrm") && bound.target.object().bitness == 32 {
+        return Err(
+            "--basic-runtime=llrm: a library for BASIC is not supported at a flat target (the BASIC ABI of Nib is 16-bit: pascal16, \
+             near and far descriptors); see #1542"
+                .to_owned(),
+        );
+    }
     let frontend = super::Frontend {
         debug: flags.debug,
         checked_stack: flags.sanitize.stack,
@@ -363,5 +378,23 @@ mod tests {
         let error = super::super::Os::for_target(&Bare(llrm_x86_m16::M16)).expect_err("refused");
         assert_eq!(error, "target x86-m16 has no Nib runtime");
         assert!(super::super::Os::for_target(&llrm_x86_m16::M16).is_ok());
+    }
+
+    /// `' link: sortlib.nib` at -m32 stopped in the compiler on "this target
+    /// defines no regparm3 calling convention" from deep in the
+    /// BASIC adapters; the flag now says what it cannot do at a flat target.
+    #[test]
+    fn a_library_for_basic_on_the_llrm_runtime_is_refused_at_a_flat_target_by_saying_so() {
+        let args = |flags: &[&str]| -> Result<(), String> {
+            let argv: Vec<String> =
+                ["lib.nib", "--basic-runtime=llrm"].iter().chain(flags).map(|one| (*one).to_owned()).collect();
+            super::parse_args(&argv).map(|_| ())
+        };
+        let error = args(&["-m32"]).expect_err("refused");
+        assert!(
+            error.contains("a library for BASIC is not supported at a flat target") && error.contains("#1542"),
+            "{error}"
+        );
+        args(&["-m16"]).expect("real mode builds it");
     }
 }
