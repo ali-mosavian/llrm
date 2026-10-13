@@ -117,8 +117,13 @@ fn test_a_counted_exits_number_lets_its_counter_step_in_place() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let in_place = lines.windows(2).any(|pair| pair[0].starts_with("inc e") && pair[1].starts_with("je "));
+    // The step is the `inc` and the branch reads its flags, whichever way the
+    // placement lays the exit (`je exit; jmp top` or `jne top; jmp exit`).
+    let in_place = lines
+        .windows(2)
+        .any(|pair| pair[0].starts_with("inc e") && (pair[1].starts_with("je ") || pair[1].starts_with("jne ")));
     assert!(in_place, "{text}");
+    assert!(!text.contains("lea eax, [edx+1]"), "the old counter is kept alive past its step: {text}");
 }
 
 /// `for (x = 1; x < n - 1; ++x)` behind its copied header is counted by the
