@@ -956,6 +956,13 @@ impl Analysis for Registers {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
+        // A load from a table is known by the bounds of its whole index,
+        // whatever it is made of.
+        if consts::indexes_constant_memory(&unit) {
+            return None;
+        }
         let mut kept = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
         // The values touched, and the facts that were made from them, which no
         // longer stand.
@@ -996,8 +1003,6 @@ impl Analysis for Registers {
                 }
             }
         }
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
         Some(consts::known_from(&unit, kept, Some(&dirty)))
     }
 

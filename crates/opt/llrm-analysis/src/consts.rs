@@ -859,6 +859,36 @@ pub fn holds(
     }
 }
 
+/// Whether a load reads a `constant` global at an index: its fact is the bytes
+/// the index can only be one value to read, which `ranges` finds from the
+/// index's whole expression (facts and bounds of every value the index
+/// is made of, those that are known numbers and those that are not), so no
+/// change to a value it is made from leaves it as it was.
+pub fn indexes_constant_memory(unit: &Unit) -> bool {
+    let function = unit.function;
+    function
+        .walk()
+        .any(
+            |(_, inst)| matches!(
+                function.instruction(inst).opcode,
+                Opcode::Load { volatile: false, .. }
+            )
+                && MemRef::of(unit, inst).is_some_and(|reference| {
+                    reference.base.is_some()
+                        && matches!(
+                            reference.root,
+                            Some(Operand::Constant(root)) if matches!(
+                                unit.context.get(root).kind,
+                                ConstantKind::Global(global) if matches!(
+                                    unit.globals.get(global.0 as usize).map(|one| &one.kind),
+                                    Some(llrm_mir::module::GlobalKind::Variable(variable)) if variable.constant
+                                )
+                            )
+                        )
+                }),
+        )
+}
+
 /// Every value this function computes that is a number, to a fixed point,
 /// without memory (`known_walked` has it).
 pub fn known(unit: &Unit) -> IndexMap<ValueId, Known> {

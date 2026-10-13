@@ -757,6 +757,71 @@ impl ModulePass for Edits {
 /// pass that changed the module and dropped them, for the next to drop them
 /// again (2% of the -O1 compile of QCport). A function pass reads them through
 /// `Outer`; they are made before it.
+thread_local! {
+    static OUTER_RUNS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Reads the outer facts and can be brought up to date.
+struct ReadsOuter;
+
+impl Analysis for ReadsOuter {
+    type Result = usize;
+    const NAME: &'static str = "reads-outer";
+    const INCREMENTAL: bool = true;
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> usize {
+        OUTER_RUNS.set(OUTER_RUNS.get() + 1);
+        function.layout().len()
+    }
+
+    fn update(
+        previous: &usize,
+        _: &[Change],
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut Analyses,
+    ) -> Option<usize> {
+        Some(*previous)
+    }
+}
+
+/// An incremental result made under other facts of the module than the ones now
+/// (a global that became constant, say) was brought up to date from the
+/// function's changes alone: `registers` kept no fact of a load from a
+/// table `globalopt` had since made constant, and `crc` at -Omax panicked under
+/// `LLRM_CHECK_REPLAY`.
+#[test]
+fn an_incremental_result_made_under_other_outer_facts_is_derived_again() {
+    OUTER_RUNS.set(0);
+    let mut module = module();
+    let id = module.named("f").unwrap();
+    let (first, second) =
+        (Rc::new(crate::passes::Outer::of(&module, None)), Rc::new(crate::passes::Outer::of(&module, None)));
+    let layout = DataLayout::default();
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    {
+        let function = module.global(id).function().unwrap();
+        analyses.manager(id, &first).get::<ReadsOuter>(&module.context, &layout, function);
+    }
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let entry = function.entry().unwrap();
+        let branch = function.terminator(entry).unwrap();
+        let at = function.instruction(branch).operands.len() - 1;
+        let same = function.instruction(branch).operands[at];
+        function.set_operand(branch, at, same);
+    }
+    let function = module.global(id).function().unwrap();
+    analyses.manager(id, &first).invalidate(function, &PreservedAnalyses::none());
+    analyses.manager(id, &second).get::<ReadsOuter>(&module.context, &layout, function);
+    assert_eq!(OUTER_RUNS.get(), 2, "brought up to date under other outer facts");
+}
+
 #[test]
 fn the_required_module_analyses_are_made_before_a_function_pass_not_before_a_module_pass() {
     SUMMED.set(0);
