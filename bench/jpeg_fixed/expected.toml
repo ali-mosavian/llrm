@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 93479354
+instructions = 93403205
 code_bytes = 6921
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 95570321
+instructions = 95494064
 code_bytes = 6417
 data_bytes = 29209
 bss_bytes = 0
