@@ -1,4 +1,4 @@
-reason = "bq32 no longer holds noise from the program's size: no timer tick falls in a run (BENCH_RATE 1e8: the extender's tick handler, ~120 instructions each and by where it landed, was inside the counted kernel: stft -40, grep -88 for 40 bytes of dead code), the stack top and the arena start are 16-aligned (copies whose length depends on low address bits moved by a few more); every bq32 row loses its ticks"
+reason = "#1603 adds code to the flat runtime; the kernels' own functions are unchanged and the move (grep -119, others +-1..5, max 0.00002%) is in (unknown), the DOS/extender code that runs inside the file readers' window (grep: kernel functions identical, (unknown) -75)"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63955979
+instructions = 63955982
 code_bytes = 6709
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64295633
+instructions = 64295630
 code_bytes = 6224
 data_bytes = 29697
 bss_bytes = 0
