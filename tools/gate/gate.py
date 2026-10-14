@@ -1,7 +1,7 @@
 """The gate in tiers: pick the tier and steps a diff needs (tiers.toml), run them concurrently.
 
     gate.py plan [--base REF] [--files F...] [--tier auto|fast|full]
-    gate.py run  [same]            needs CARGO_TARGET_DIR; JOBS=N sets the concurrency (default 4)
+    gate.py run  [same]            needs CARGO_TARGET_DIR; JOBS=N sets the concurrency (default half the cores)
     gate.py plan --json            the plan as JSON: tier, the CI job groups with something to run, the skipped steps
     gate.py run --group G          only the steps of group G (tiers.toml [groups]), after the build; G=build: the build alone
                                    With GATE_ALLOW_MISSING=1 (CI) a step whose [capability] is missing on this host is SKIPPED with its reason, never run;
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import os
+import shutil
 import signal
 import functools
 import re
@@ -277,7 +278,8 @@ def narrowed(p: Plan, cfg: dict, live: list[str]) -> Plan:
         steps.append("integration")
     for directory in sorted({d for f in live if (d := data_dir(f))}):
         steps += sorted(readers(directory, cfg))
-    if any(f.startswith(("bench/", "tools/bench/")) for f in live):
+    # bench/ and the bench tool are its inputs, and so is the runtime the programs link: the bq32 rows count the kernel's calls into it.
+    if any(f.startswith(("bench/", "tools/bench/", "runtime/")) for f in live):
         steps.append("bench")
     if any(f.startswith("tools/torture/") for f in live):
         steps.append("torture")
@@ -393,7 +395,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         if cfg["fmt"]["enforced"]
         else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
-        "pytest": "PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider -p pytest_cpulimit --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py),
+        "pytest": "PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-durations.json tools crates tests/*.py --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py) + " -- -q -p no:cacheprovider -p pytest_cpulimit",
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
         "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python -m pytest tools/dosbatch -m slow_dos -q -p no:cacheprovider',
@@ -628,7 +630,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         env["LLRM_BIN"] = str(snapshot_binaries(Path(target) / "release", Path(target) / "gate-bins"))
     alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
-    jobs = int(os.environ.get("JOBS", "4"))
+    jobs = default_jobs(os.environ)
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
         order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
@@ -709,6 +711,23 @@ def watch_main(force: bool, every: int = 5, hours: float = 2.0) -> int:
     return 1
 
 
+def default_jobs(environ: dict, cpus: int | None = None) -> int:
+    """Steps at once: JOBS, else half the cores (at least 4). The fixed 4 left a 32-core host idle behind the four longest steps."""
+    cpus = os.cpu_count() or 8 if cpus is None else cpus
+    return int(environ.get("JOBS") or max(4, cpus // 2))
+
+
+def scoped(argv: list[str], environ: dict | None = None, have: str | None = None) -> list[str] | None:
+    """`argv` under its own systemd user scope with a high CPU weight, or None when it already is (GATE_SCOPED) or the host has no
+    systemd-run. Session builds share one scope with the gate by default and starve it; the weight is GATE_CPU_WEIGHT (1000)."""
+    environ = os.environ if environ is None else environ
+    have = shutil.which("systemd-run") if have is None else have
+    if environ.get("GATE_SCOPED") or not have or environ.get("GATE_CPU_WEIGHT") == "0":
+        return None
+    weight = environ.get("GATE_CPU_WEIGHT") or "1000"
+    return [have, "--user", "--scope", "-q", "-p", f"CPUWeight={weight}", "--setenv=GATE_SCOPED=1", *argv]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("command", choices=["plan", "run", "bisect", "main"])
@@ -733,6 +752,8 @@ def main() -> int:
             print(f"gate: {why}")
             return 2
         print(f"gate: HEAD {head} {'dirty (allowed)' if dirty else 'clean'}", flush=True)
+        if args.command == "run" and not args.json and (wrapped := scoped([sys.executable, *sys.argv])):
+            os.execv(wrapped[0], wrapped)
     p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
     if args.steps:
         p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))

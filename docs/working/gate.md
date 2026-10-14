@@ -104,9 +104,11 @@ Every step exits 0 to pass, 77 when SKIPPED, and anything else to fail. A cargo 
 
 `turbo`, `cv4`, `identity`, `pytest-programs`, `dos-slow`, `qcport`, `rfmt-post` and `measure` are heavy: the fast tier runs one only when a path in its `owners` changed. The rest are cheap and run in every tier that has code. Python tests declare a tool they need with `REQUIRES = [...]` at module level and are dropped by name where it is missing.
 
+The `pytest` step runs one pytest process per test file, `PYTEST_SHARDS` at a time, longest first by the times of the last green run (`tools/gate/pytest_shards.py`). It fails when any file fails, and when the tests reported are fewer than the tests collected.
+
 Clippy is not run. `-D warnings` in the `build` step keeps the tree free of compiler warnings.
 
-Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pytest-programs` 60 s, `qcport` 100 s, `rfmt-post` 40 s cold, `dos-slow` 5 to 8 minutes, `measure` 3 to 8 minutes when its base is not yet measured. The budgets are 5 minutes for fast and 10 for full on the loaded host. Steps run `JOBS` at a time, longest first, so the wall is about the longest step. [testing](testing.md) describes the steps' tools; [compile time](measurement/compile-time.md) describes `measure`.
+Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pytest-programs` 60 s, `qcport` 100 s, `rfmt-post` 40 s cold, `dos-slow` 5 to 8 minutes, `measure` 3 to 8 minutes when its base is not yet measured. The budgets are 5 minutes for fast and 10 for full on the loaded host. Steps run `JOBS` at a time (default half the cores, at least 4), longest first, so the wall is about the longest step. [testing](testing.md) describes the steps' tools; [compile time](measurement/compile-time.md) describes `measure`.
 
 ## Running it locally
 
@@ -116,7 +118,7 @@ Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pyt
     python3 tools/gate/gate.py run --steps lib integration
     python3 tools/gate/gate.py run --tier full --expect SHA
 
-`run` refuses a tree that differs from `HEAD` in tracked files (`--allow-dirty` runs it and says so), and `--expect SHA` refuses unless `HEAD` starts with SHA, so a pass names the commit that ran. To gate a commit while you keep working, check it out detached in a worktree of its own with its own `CARGO_TARGET_DIR`; building or switching in a tree a gate is using breaks it.
+`run` re-executes itself in its own systemd user scope with `CPUWeight=1000` (`GATE_CPU_WEIGHT`, `0` to turn off), so session builds sharing one scope do not starve it. `run` refuses a tree that differs from `HEAD` in tracked files (`--allow-dirty` runs it and says so), and `--expect SHA` refuses unless `HEAD` starts with SHA, so a pass names the commit that ran. To gate a commit while you keep working, check it out detached in a worktree of its own with its own `CARGO_TARGET_DIR`; building or switching in a tree a gate is using breaks it.
 
 Output is one `[time] STEP ok|FAIL|SKIPPED|INCOMPLETE` line per step, what each failing test printed, a per-step CPU table, and a last line `GATE TIER PASS|FAIL: steps at SHA in Ns`. Read the last line at the commit you meant. Logs are `$CARGO_TARGET_DIR/gate-logs/STEP.log`, and `STEP.failed.log` for a step that failed. A step that prints nothing and uses no CPU for `GATE_STALL_MINUTES` (default 10) is killed.
 

@@ -1,4 +1,4 @@
-reason = "m32 word multiply by a constant runs as a dword chain; a lea starts an address chain"
+reason = "word add/sub/mul promotion rows against the merged frame-register branch"
 blessed = "2026-10-14"
 
 [bas.O2]
