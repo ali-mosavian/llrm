@@ -1,4 +1,4 @@
-reason = "switch: a dense and a sparse switch, new (gcc 13.4 lowers them to a table and a tree; ours: switchlower and the table jump)"
+reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -30,8 +30,8 @@ data_bytes = 15
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 166981
-code_bytes = 583
+instructions = 162980
+code_bytes = 600
 data_bytes = 21
 bss_bytes = 0
 

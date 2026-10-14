@@ -271,27 +271,34 @@ pub fn assembled_by(
                         .flatten(),
                     registers,
                 };
-                let overhead = timed("masm return overhead", || masm::return_overhead_bytes(&procedure))
-                    .map_err(|error| error.to_string())? as i64;
-                let body =
-                    timed("lir duplicated returns", || jumps::duplicated_returns(procedure.body.clone(), overhead));
-                let procedure = masm::Procedure { body, ..procedure };
-                let enough = std::cell::OnceCell::new();
-                let body = timed("lir shrink-wrap tails", || {
-                    crate::backend::shrinkwrap::tails_split(&procedure.body, &|candidate| {
-                        // Asked only once a tail could be copied.
-                        if !procedure.size
-                            && *enough.get_or_init(|| {
-                                masm::pieces_to_set_up(&procedure) >= crate::backend::shrinkwrap::PIECES
-                            })
-                        {
-                            masm::wrapped_pieces(&procedure, candidate)
-                        } else {
-                            0
-                        }
-                    })
-                });
-                procedures.push(masm::Procedure { body, ..procedure });
+                // Copies of returns and split tails only make code better: -O0
+                // has neither.
+                let procedure = if !cpu.optimized {
+                    procedure
+                } else {
+                    let overhead = timed("masm return overhead", || masm::return_overhead_bytes(&procedure))
+                        .map_err(|error| error.to_string())? as i64;
+                    let body =
+                        timed("lir duplicated returns", || jumps::duplicated_returns(procedure.body.clone(), overhead));
+                    let procedure = masm::Procedure { body, ..procedure };
+                    let enough = std::cell::OnceCell::new();
+                    let body = timed("lir shrink-wrap tails", || {
+                        crate::backend::shrinkwrap::tails_split(&procedure.body, &|candidate| {
+                            // Asked only once a tail could be copied.
+                            if !procedure.size
+                                && *enough.get_or_init(|| {
+                                    masm::pieces_to_set_up(&procedure) >= crate::backend::shrinkwrap::PIECES
+                                })
+                            {
+                                masm::wrapped_pieces(&procedure, candidate)
+                            } else {
+                                0
+                            }
+                        })
+                    });
+                    masm::Procedure { body, ..procedure }
+                };
+                procedures.push(procedure);
             }
             _ => {}
         }
@@ -972,17 +979,29 @@ fn staged(
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
-    // A BASIC module's frames are BP's (its listing addresses cells through the
-    // frame register and the runtime walks the chain), so its frame
-    // register is never a value register.
-    let classes: Rc<RegisterClasses> = if !target.basic
+    // A frame the BASIC runtime builds (`B$ENRA`) is BP's and the runtime walks
+    // the chain, so its frame register is never a value register; a frame the
+    // compiler builds is like any other (an error landing, which restores BP,
+    // keeps it: `landing`). Inline code that is only x87 register operations
+    // (`fsin` as bytes) touches no stack cell. Not where BASIC is tuned for
+    // size: `[esp+d]` is a byte longer than `[ebp+d]`, and masm's comparison of
+    // the two cannot run once the register holds a value (bq32 -Os grew 4-7%).
+    let classes: Rc<RegisterClasses> = if !(target.basic && (target.zeroed || target.cpu.size))
         && crate::backend::framefree::without_frame_register(
             &body,
             &registers,
             &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
-            !inline.is_empty(),
+            // Tuned for size any inline code keeps the frame register until
+            // masm has compared the two forms; x87 register operations alone
+            // do not otherwise.
+            if target.cpu.size {
+                !inline.is_empty()
+            } else {
+                inline.values().any(|bytes| !crate::backend::framefree::x87_registers_only(bytes))
+            },
             false,
             landing.is_some(),
+            target.cpu.size,
         ) {
         registers.free = true;
         registers.saved.push((registers.pointer, registers.pointer));

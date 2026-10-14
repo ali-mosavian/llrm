@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/affine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/affine.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/affine.rs sha256:c8c512e60f279d38a94cc6c6fe79d10f93ebf2a778d5074c2ef60b600055731f -->
+<!-- src: crates/backend/llrm-core/src/backend/affine.rs sha256:19743c63e42f768e939bc585cf12f89b2709a3c8cdf0715de9cb01229b488bc7 -->
 
 # affine
 
@@ -13,7 +13,9 @@ instruction as `Copy`, `Add`, `Scale` or `AddRegister` and prices it from
 the CPU profile. Only 16- and 32-bit integer registers qualify, and an
 instruction with side effects beyond its operands (`plain`) never does.
 
-A chain of such steps leaves a register equal to `sum(multiple * reg) +
+A chain begins at a copy, or at a symbol-free `lea` (`lea_start`), and its
+steps may be words or the dwords the target ran them as (`promote`). A
+chain of such steps leaves a register equal to `sum(multiple * reg) +
 disp`, kept as `Terms`. `form` turns terms into the address-size-
 prefixed 32-bit address that names them (`[base+index*scale+disp]`, the
 index never the stack pointer, the scale one the target's form takes).

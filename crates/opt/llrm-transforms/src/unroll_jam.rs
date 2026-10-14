@@ -110,8 +110,9 @@
 //! # Runs
 //! Once per body, after `unswitch`, so an invariant guard is out of the
 //! nest. If it fused a nest, `sroa` and the fixed point run again over the
-//! result (the fused stores merge there). -O3 only: `-floop-unroll-and-jam`.
-//! Not run where one pass is selected by name. See `docs/reference/levels.md`.
+//! result (the fused stores merge there). -O3 and -Omax:
+//! `-floop-unroll-and-jam`. Not run where one pass is selected by name. See
+//! `docs/reference/levels.md`.
 //!
 //! # Needs
 //! `induction` (trip counts), `dependence`, `Registers` (`llrm_analysis`);
@@ -127,14 +128,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::dependence::{self, Access, Subscript};
+use llrm_analysis::access::{self, Roots};
+use llrm_analysis::dependence::{self, Access};
 use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::{cfg, induction, memory};
-use llrm_mir::dense::{IdMap, IdSet};
+use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
+use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use num_traits::ToPrimitive;
 
@@ -443,244 +445,15 @@ fn defined(
     }
 }
 
-/// A number the signed integer `bits` of `width` bits is.
-fn signed(
-    bits: u128,
-    width: u32,
-) -> i64 {
-    let width = width.min(64);
-    let shift = 128 - width;
-    (((bits << shift) as i128) >> shift) as i64
-}
-
-/// An address or an index as an affine function of the counters: bytes (or
-/// units) `c + outer * i + inner * j + sum of invariant terms`.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct Lin {
-    c: i64,
-    outer: i64,
-    inner: i64,
-    symbols: BTreeMap<u32, i64>,
-}
-
-impl Lin {
-    fn constant(c: i64) -> Self {
-        Self { c, ..Self::default() }
-    }
-
-    fn is_constant(&self) -> bool {
-        self.outer == 0 && self.inner == 0 && self.symbols.is_empty()
-    }
-
-    fn plus(
-        &self,
-        other: &Self,
-        sign: i64,
-    ) -> Self {
-        let mut symbols = self.symbols.clone();
-        for (&symbol, &factor) in &other.symbols {
-            *symbols.entry(symbol).or_insert(0) += sign * factor;
-        }
-        symbols.retain(|_, factor| *factor != 0);
-        Self {
-            c: self.c + sign * other.c,
-            outer: self.outer + sign * other.outer,
-            inner: self.inner + sign * other.inner,
-            symbols,
-        }
-    }
-
-    fn scaled(
-        &self,
-        by: i64,
-    ) -> Self {
-        Self {
-            c: self.c * by,
-            outer: self.outer * by,
-            inner: self.inner * by,
-            symbols: self
-                .symbols
-                .iter()
-                .map(|(&symbol, &factor)| (symbol, factor * by))
-                .filter(|(_, factor)| *factor != 0)
-                .collect(),
-        }
-    }
-}
-
-struct Addresses<'a> {
-    unit: &'a memory::Unit<'a>,
-    nest: &'a Nest,
-    /// The counters of the two headers, as functions of the iteration number.
-    counters: IdMap<ValueId, Lin>,
-}
-
-impl<'a> Addresses<'a> {
-    fn new(
-        unit: &'a memory::Unit<'a>,
-        nest: &'a Nest,
-    ) -> Self {
-        let function = unit.function;
-        let mut counters = IdMap::new();
-        let mut me = Self { unit, nest, counters: IdMap::new() };
-        for (header, latch, outer) in [
-            (nest.outer_header(), cfg::block(*nest.outer.latches.first().expect("one")), true),
-            (nest.inner_header(), nest.inner_latch(), false),
-        ] {
-            for phi in phis(function, header) {
-                let result = function.instruction(phi).result.expect("a phi's value");
-                let mut start = None;
-                let mut next = None;
-                for (value, from) in arms(function, phi) {
-                    if from == latch {
-                        next = Some(value);
-                    } else {
-                        start = Some(value);
-                    }
-                }
-                let (Some(start), Some(next)) = (start, next) else { continue };
-                let Some(start) = me.lin(start, 0) else { continue };
-                let Some(step) = me.step(next, result) else { continue };
-                let counter = if outer { Lin { outer: step, ..start } } else { Lin { inner: step, ..start } };
-                counters.insert(result, counter);
-            }
-        }
-        me.counters = counters;
-        me
-    }
-
-    /// The constant `next` adds to `phi`.
-    fn step(
-        &self,
-        next: Operand,
-        phi: ValueId,
-    ) -> Option<i64> {
-        let (_, op) = self.unit.defining(next)?;
-        let Opcode::Binary(kind @ (BinaryOp::Add | BinaryOp::Sub)) = op.opcode else { return None };
-        let width = self.unit.int_bits(next)?;
-        let constant = |operand: Operand| self.unit.int_constant(operand).map(|bits| signed(bits, width));
-        match (op.operands[0] == Operand::Value(phi), op.operands[1] == Operand::Value(phi)) {
-            (true, false) => constant(op.operands[1]).map(|step| if kind == BinaryOp::Add { step } else { -step }),
-            (false, true) if kind == BinaryOp::Add => constant(op.operands[0]),
-            _ => None,
-        }
-    }
-
-    fn lin(
-        &self,
-        operand: Operand,
-        depth: u32,
-    ) -> Option<Lin> {
-        if depth > 12 {
-            return None;
-        }
-        let width = self.unit.int_bits(operand)?;
-        if let Some(bits) = self.unit.int_constant(operand) {
-            return Some(Lin::constant(signed(bits, width)));
-        }
-        let Operand::Value(value) = operand else { return None };
-        if let Some(counter) = self.counters.get(&value) {
-            return Some(counter.clone());
-        }
-        let function = self.unit.function;
-        let Some(inst) = defined(function, value) else {
-            return Some(Lin { symbols: BTreeMap::from([(value.0, 1)]), ..Lin::default() });
-        };
-        let at = cfg::id(function.parent(inst)?);
-        if !self.nest.outer.body.contains(&at) {
-            return Some(Lin { symbols: BTreeMap::from([(value.0, 1)]), ..Lin::default() });
-        }
-        let op = function.instruction(inst);
-        let one = |i: usize| self.lin(op.operands[i], depth + 1);
-        match &op.opcode {
-            Opcode::Binary(BinaryOp::Add) => Some(one(0)?.plus(&one(1)?, 1)),
-            Opcode::Binary(BinaryOp::Sub) => Some(one(0)?.plus(&one(1)?, -1)),
-            Opcode::Binary(BinaryOp::Mul) => {
-                let (left, right) = (one(0)?, one(1)?);
-                if right.is_constant() {
-                    Some(left.scaled(right.c))
-                } else if left.is_constant() {
-                    Some(right.scaled(left.c))
-                } else {
-                    None
-                }
-            }
-            Opcode::Binary(BinaryOp::Shl) => {
-                let (left, right) = (one(0)?, one(1)?);
-                (right.is_constant() && (0..32).contains(&right.c)).then(|| left.scaled(1 << right.c))
-            }
-            Opcode::Cast(CastOp::SExt) => one(0),
-            _ => None,
-        }
-    }
-
-    /// `pointer` as an identified object and the bytes into it.
-    fn address(
-        &self,
-        pointer: Operand,
-    ) -> Option<(Operand, Lin)> {
-        let function = self.unit.function;
-        if let Some((_, op)) = self.unit.defining(pointer) {
-            if let Opcode::GetElementPtr { source } = op.opcode {
-                let [base, index] = op.operands[..] else { return None };
-                let size = self.unit.layout.alloc_size(&self.unit.context.types, source) as i64;
-                let (root, bytes) = self.address(base)?;
-                return Some((root, bytes.plus(&self.lin(index, 0)?.scaled(size), 1)));
-            }
-        }
-        if let Operand::Value(value) = pointer {
-            if defined(function, value)
-                .and_then(|inst| function.parent(inst))
-                .is_some_and(|block| self.nest.outer.body.contains(&cfg::id(block)))
-            {
-                return None;
-            }
-        }
-        memory::object_of(self.unit, pointer)?;
-        Some((pointer, Lin::default()))
-    }
-}
-
 /// The accesses of the inner loop, for the dependence tester; None where one
 /// is not affine over an identified object, or the loop calls out.
 fn accesses(
     unit: &memory::Unit,
     nest: &Nest,
 ) -> Option<Vec<Access>> {
-    let function = unit.function;
-    let addresses = Addresses::new(unit, nest);
-    let mut roots: Vec<Operand> = Vec::new();
-    let mut out = Vec::new();
-    for &at in &nest.inner.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
-            let op = function.instruction(inst);
-            let (pointer, ty, write) = match op.opcode {
-                Opcode::Load { volatile: false, .. } => (op.operands[0], op.ty, false),
-                Opcode::Store { volatile: false, .. } => (op.operands[1], unit.operand_type(op.operands[0])?, true),
-                Opcode::Load { .. }
-                | Opcode::Store { .. }
-                | Opcode::Call(_)
-                | Opcode::Invoke(_)
-                | Opcode::Alloca { .. } => {
-                    return None;
-                }
-                _ => continue,
-            };
-            let (root, bytes) = addresses.address(pointer)?;
-            let object = roots.iter().position(|one| *one == root).unwrap_or_else(|| {
-                roots.push(root);
-                roots.len() - 1
-            }) as u64;
-            out.push(Access {
-                object,
-                subscripts: vec![Subscript { constant: bytes.c, outer: bytes.outer, inner: bytes.inner }],
-                symbols: bytes.symbols.into_iter().collect(),
-                width: unit.layout.store_size(&unit.context.types, ty) as u32,
-                write,
-            });
-        }
-    }
-    Some(out)
+    let counters = [&nest.outer, &nest.inner];
+    let found = access::references(unit, &counters, &nest.outer.body, &nest.inner.body, &mut Roots::default())?;
+    found.iter().all(|one| one.identified).then(|| found.into_iter().map(|one| one.access).collect())
 }
 
 /// The first nest this jams, if any; whether there was one.

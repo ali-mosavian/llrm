@@ -1076,7 +1076,13 @@ fn procedure(
             Some(one) => names[&(globals::space(module, one), i64::from(one.0))].clone(),
             None => abi.linked(callee),
         };
-        callees.insert(*at, masm::Callee::new(linked, machined.far.contains(at)));
+        callees.insert(
+            *at,
+            masm::Callee {
+                pops: machined.pops.get(at).copied().unwrap_or(0),
+                ..masm::Callee::new(linked, machined.far.contains(at))
+            },
+        );
     }
     let procedure = masm::Procedure {
         name: names[&(Space::Segment, i64::from(id.0))].clone(),
@@ -1087,10 +1093,11 @@ fn procedure(
         reserve,
         callees,
         interrupt: None,
-        size: false,
+        size: target.cpu.size,
         entry,
         stack_check,
-        registers: target.arch.frame_registers(),
+        // What allocation used: a freed frame register and the registers saved.
+        registers: machined.registers.clone(),
     };
     Ok((procedure, machined.landing, statics))
 }

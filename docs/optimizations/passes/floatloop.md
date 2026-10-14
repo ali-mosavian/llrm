@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/floatloop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/floatloop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/floatloop.rs sha256:39c4ebdefb4180470e0ab49ea4b1e1d25fa6b2cbe72fc41da4ccb64b53c8aa01 -->
+<!-- src: crates/opt/llrm-transforms/src/floatloop.rs sha256:ea486c5e79d5a086ba28c2778f66ca0216cdbabc1a3074eee541cea1ac05ac45 -->
 
 # floatloop
 
@@ -106,8 +106,10 @@ From unit test `test_exact_loop_runs_its_last_trip_alone` in
 ## Runs
 Per-body pipeline, after `lcssa` and before `hoist`: LICM may move an
 invariant preparation out of the loop afterwards. Skipped for a body with
-no float value (`floatfacts::touches`; `LLRM_CHECK_FLOATSKIP=1` runs it
-anyway and asserts it changed nothing). On at -O1 and up;
+no float value (`floatfacts::touches`) and for one with no loop of the
+shape above whose latch touches one (`float_loop`, seen without the solve;
+no gcc or LLVM pass is its counterpart); `LLRM_CHECK_FLOATSKIP=1` runs it
+anyway and asserts it changed nothing. On at -O1 and up;
 `Options::floatloop` turns it off for bisection. See
 `docs/reference/levels.md`.
 

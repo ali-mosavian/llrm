@@ -134,19 +134,30 @@ pub fn touches(
     context: &Context,
     function: &Function,
 ) -> bool {
+    function.walk().any(|(_, inst)| touches_instruction(context, function, inst))
+}
+
+/// Whether `insts` of `function` have any floating-point value or operand.
+pub fn touches_in(
+    context: &Context,
+    function: &Function,
+    insts: &[InstId],
+) -> bool {
+    insts.iter().any(|&inst| touches_instruction(context, function, inst))
+}
+
+fn touches_instruction(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> bool {
     let types = &context.types;
-    function
-        .walk()
-        .any(
-            |(_, inst)| {
-                let instruction = function.instruction(inst);
-                instruction.result.is_some_and(|value| floating(types, function.value(value).ty))
-                    || instruction
-                        .operands
-                        .iter()
-                        .any(|&operand| function.operand_type(context, operand).is_some_and(|ty| floating(types, ty)))
-            },
-        )
+    let instruction = function.instruction(inst);
+    instruction.result.is_some_and(|value| floating(types, function.value(value).ty))
+        || instruction
+            .operands
+            .iter()
+            .any(|&operand| function.operand_type(context, operand).is_some_and(|ty| floating(types, ty)))
 }
 
 /// Python's `fractions.Fraction`: always in lowest terms, denominator positive.
@@ -397,7 +408,9 @@ pub fn rule(
             (operation, vec![float(0)?, float(1)?], returned()?)
         }
         Opcode::FNeg => (Operation::Neg, vec![float(0)?], returned()?),
-        Opcode::Cast(CastOp::FPExt | CastOp::FPTrunc) => (Operation::Convert, vec![float(0)?], returned()?),
+        Opcode::Cast(CastOp::FPExt | CastOp::FPTrunc | CastOp::FPRound) => {
+            (Operation::Convert, vec![float(0)?], returned()?)
+        }
         Opcode::Cast(CastOp::SIToFP) => (Operation::Convert, vec![int(0, true)?], returned()?),
         Opcode::Cast(CastOp::UIToFP) => (Operation::Convert, vec![int(0, false)?], returned()?),
         Opcode::Cast(CastOp::FPToSI) => (Operation::Truncate, vec![float(0)?], integer(true)?),

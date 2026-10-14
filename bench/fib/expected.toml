@@ -1,4 +1,4 @@
-reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out (hanoi 729041 -> 352237)"
+reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -34,14 +34,14 @@ bss_bytes = 0
 kernel_ms = 5.4082
 
 [bq32.O2]
-instructions = 415928
-code_bytes = 186
+instructions = 372144
+code_bytes = 181
 data_bytes = 21
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 415928
-code_bytes = 186
+instructions = 415925
+code_bytes = 180
 data_bytes = 21
 bss_bytes = 0
 

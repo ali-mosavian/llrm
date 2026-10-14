@@ -1,5 +1,6 @@
-//! Data dependence distances over a two-deep loop nest, and the outer unroll
-//! factor that unroll-and-jam may use for them.
+//! Data dependence distances over a two-deep loop nest, the outer unroll
+//! factor that unroll-and-jam may use for them, and whether two loops may be
+//! fused.
 //!
 //! # How it works
 //! An `Access` is one memory reference of the nest body: an object, a list of
@@ -36,6 +37,22 @@
 //! `removed * 100 / accesses` is below `min_percent`. `min_percent = 0` applies
 //! always, with at least 2. The result is `min(unroll, profit, max_unroll)`.
 //!
+//! `fusable(first, second, trips)` asks it of two loops of the same trip
+//! count, `first` run before `second`: fused, iteration `i` of `second` runs
+//! before iteration `i + 1` of `first`, so a pair that touches the same bytes
+//! with the later loop's access at an earlier iteration than the earlier
+//! loop's is reordered. Both loops' accesses are `inner` subscripts. For a
+//! pair with one write, on one object, of one coefficient `c` and the same
+//! symbols, the accesses at `a + c * i` (width `w`) and `b + c * j` (width `v`)
+//! overlap where `b - a - w < c * (i - j) < b - a + v`; the pair prevents
+//! fusion when some `i - j` in `1..trips` does (`trips` unknown: any). A pair
+//! with other coefficients or symbols is `Unknown` and prevents it.
+//!
+//! ```text
+//!   loop 0: a[i] = ..        loop 1: .. = a[i + 1]     i - j = 1: prevents
+//!   loop 0: a[i] = ..        loop 1: .. = a[i - 1]     i - j = -1: allows
+//! ```
+//!
 //! # Example
 //! The 100 passes of `px[j] = px[j] + vx[j]` (bench/particle). The nest has no
 //! MIR form here: the caller hands `Access`es, each a `Subscript { constant,
@@ -60,15 +77,18 @@
 //! `dependence_tests.rs`.
 //!
 //! # Provides
-//! `distances`, `factor`. Consumer: `unroll_jam`
-//! (`crates/opt/llrm-transforms/src/unroll_jam.rs`).
+//! `distances`, `factor`, `fusable`. Consumers: `unroll_jam`
+//! (`crates/opt/llrm-transforms/src/unroll_jam.rs`) and `loopfuse`
+//! (`crates/opt/llrm-transforms/src/loopfuse.rs`).
 //!
 //! # See also
 //! gcc `tree-data-ref.cc` distance vectors read by `adjust_unroll_factor`
 //! ([`gimple-loop-jam.cc:403`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/gimple-loop-jam.cc#L403)),
 //! `tree_loop_unroll_and_jam`
 //! ([`gimple-loop-jam.cc:504`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/gimple-loop-jam.cc#L504));
-//! LLVM `DependenceAnalysis` and `LoopUnrollAndJam`.
+//! LLVM `DependenceAnalysis` and `LoopUnrollAndJam`; `fusable` is LLVM
+//! `LoopFuse`'s `dependencesAllowFusion`
+//! ([`LoopFuse.cpp:1178`](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/lib/Transforms/Scalar/LoopFuse.cpp#L1178)).
 
 /// One subscript of an access, in elements or bytes: `constant + outer * i +
 /// inner * j`, `i` and `j` the iteration numbers of the outer and inner loop.
@@ -241,6 +261,51 @@ pub fn factor(
         profit = 1;
     }
     Factor { unroll: unroll.min(profit).min(max_unroll), profit, removed }
+}
+
+/// Whether the loop of `second`, run after the loop of `first` and of the
+/// same `trips`, may run in the same iterations as it: no pair with a write
+/// touches bytes at an earlier iteration of `second` than of `first`.
+pub fn fusable(
+    first: &[Access],
+    second: &[Access],
+    trips: Option<i64>,
+) -> bool {
+    first
+        .iter()
+        .flat_map(|one| second.iter().map(move |other| (one, other)))
+        .filter(|(one, other)| one.write || other.write)
+        .all(|(one, other)| !reordered(one, other, trips))
+}
+
+/// `first`, in the earlier loop, and `second`, in the later, meet at an
+/// iteration of `second` before the one of `first`.
+fn reordered(
+    first: &Access,
+    second: &Access,
+    trips: Option<i64>,
+) -> bool {
+    if first.object != second.object {
+        return false;
+    }
+    let ([one], [other]) = (&first.subscripts[..], &second.subscripts[..]) else { return true };
+    if first.symbols != second.symbols || one.inner != other.inner || one.outer != 0 || other.outer != 0 {
+        return true;
+    }
+    // `first` at iteration `i` and `second` at `j` are `step * (i - j)` apart
+    // plus the constants' difference; reordered is `i - j` in `1..=latest`.
+    let step = i128::from(one.inner);
+    let latest = trips.map_or(1 << 40, |trips| i128::from(trips) - 1);
+    let below = i128::from(other.constant) - i128::from(one.constant) - i128::from(first.width);
+    let above = i128::from(other.constant) - i128::from(one.constant) + i128::from(second.width);
+    if step == 0 {
+        return below < 0 && 0 < above && latest >= 1;
+    }
+    // `|step| * e` in `(below, above)` for the least `e` in range, where `e`
+    // is `i - j` (rising step) or `j - i` (falling).
+    let (size, low, high) = if step > 0 { (step, 1, latest) } else { (-step, -latest, -1) };
+    let least = low.max(below.div_euclid(size) + 1);
+    least <= high && size * least < above
 }
 
 #[cfg(test)]

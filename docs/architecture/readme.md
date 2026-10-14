@@ -174,6 +174,7 @@ flowchart TB
   chg(["<b>changed?</b>"]):::mid
   peel["<b>peel</b><br/><small>(repeat while loops drop)</small>"]:::mid
   unsw["<b>unswitch (-O3)</b>"]:::mid
+  fu["<b>fuse (-Omax)</b>"]:::mid
   uj["<b>unroll-jam (-O3)</b>"]:::mid
   merge["<b>merge</b>"]:::mid
   sroa --> round
@@ -182,7 +183,8 @@ flowchart TB
   chg -->|"yes: next round"| round
   chg -->|"no"| peel
   peel --> unsw
-  unsw --> uj
+  unsw --> fu
+  fu --> uj
   uj --> merge
 ```
 

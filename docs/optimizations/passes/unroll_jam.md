@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unroll_jam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll_jam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:27a437bb0fe6c35dcc7536e3e8895277fdb9209bb33a4165d2e4a0fe5c481e38 -->
+<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:db9413ec32c840994399ac278abaa531c490ba07997ccfd08d5cfdd6b32b7d19 -->
 
 # unroll_jam
 
@@ -115,8 +115,9 @@ are shown.
 ## Runs
 Once per body, after `unswitch`, so an invariant guard is out of the
 nest. If it fused a nest, `sroa` and the fixed point run again over the
-result (the fused stores merge there). -O3 only: `-floop-unroll-and-jam`.
-Not run where one pass is selected by name. See `docs/reference/levels.md`.
+result (the fused stores merge there). -O3 and -Omax:
+`-floop-unroll-and-jam`. Not run where one pass is selected by name. See
+`docs/reference/levels.md`.
 
 ## Needs
 `induction` (trip counts), `dependence`, `Registers` (`llrm_analysis`);

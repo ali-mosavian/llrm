@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/dependence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/dependence.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:9ba8d4f1fc4faaebe22dc789a18749b48437b084dd53757b4c18ff370a821010 -->
+<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:ed2577eab812022846c43e6c505bcc6f65305bdc940ed6a10b1ed47be11e1642 -->
 
 # dependence
 
-Data dependence distances over a two-deep loop nest, and the outer unroll
-factor that unroll-and-jam may use for them.
+Data dependence distances over a two-deep loop nest, the outer unroll
+factor that unroll-and-jam may use for them, and whether two loops may be
+fused.
 
 ## How it works
 An `Access` is one memory reference of the nest body: an object, a list of
@@ -41,6 +42,22 @@ counts such vectors, and the factor is refused (`profit = 1`) if
 `removed * 100 / accesses` is below `min_percent`. `min_percent = 0` applies
 always, with at least 2. The result is `min(unroll, profit, max_unroll)`.
 
+`fusable(first, second, trips)` asks it of two loops of the same trip
+count, `first` run before `second`: fused, iteration `i` of `second` runs
+before iteration `i + 1` of `first`, so a pair that touches the same bytes
+with the later loop's access at an earlier iteration than the earlier
+loop's is reordered. Both loops' accesses are `inner` subscripts. For a
+pair with one write, on one object, of one coefficient `c` and the same
+symbols, the accesses at `a + c * i` (width `w`) and `b + c * j` (width `v`)
+overlap where `b - a - w < c * (i - j) < b - a + v`; the pair prevents
+fusion when some `i - j` in `1..trips` does (`trips` unknown: any). A pair
+with other coefficients or symbols is `Unknown` and prevents it.
+
+```text
+  loop 0: a[i] = ..        loop 1: .. = a[i + 1]     i - j = 1: prevents
+  loop 0: a[i] = ..        loop 1: .. = a[i - 1]     i - j = -1: allows
+```
+
 ## Example
 The 100 passes of `px[j] = px[j] + vx[j]` (bench/particle). The nest has no
 MIR form here: the caller hands `Access`es, each a `Subscript { constant,
@@ -65,12 +82,15 @@ From unit test
 `dependence_tests.rs`.
 
 ## Provides
-`distances`, `factor`. Consumer: `unroll_jam`
-(`crates/opt/llrm-transforms/src/unroll_jam.rs`).
+`distances`, `factor`, `fusable`. Consumers: `unroll_jam`
+(`crates/opt/llrm-transforms/src/unroll_jam.rs`) and `loopfuse`
+(`crates/opt/llrm-transforms/src/loopfuse.rs`).
 
 ## See also
 gcc `tree-data-ref.cc` distance vectors read by `adjust_unroll_factor`
 ([`gimple-loop-jam.cc:403`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/gimple-loop-jam.cc#L403)),
 `tree_loop_unroll_and_jam`
 ([`gimple-loop-jam.cc:504`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/gimple-loop-jam.cc#L504));
-LLVM `DependenceAnalysis` and `LoopUnrollAndJam`.
+LLVM `DependenceAnalysis` and `LoopUnrollAndJam`; `fusable` is LLVM
+`LoopFuse`'s `dependencesAllowFusion`
+([`LoopFuse.cpp:1178`](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/lib/Transforms/Scalar/LoopFuse.cpp#L1178)).

@@ -22,8 +22,9 @@
 //!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
 //!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
-//!     unsw["<b>unswitch (-O3)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
-//!     jam["<b>unroll-jam (-O3)</b><br/><small>sroa, then B's rounds</small>"]:::mid
+//!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+//!     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+//!     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     mrg["<b>merge (once)</b>"]:::mid
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
@@ -34,7 +35,8 @@
 //!   sroa --> rnd
 //!   rnd --> peel
 //!   peel --> unsw
-//!   unsw --> jam
+//!   unsw --> fuse
+//!   fuse --> jam
 //!   jam --> mrg
 //!   mrg --> c
 //!   c -.->|"a changed body goes<br/>back through B"| sroa
@@ -101,7 +103,8 @@
 //! | `fill` | `fill`, `merge` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
-//! | `unswitch`, `unroll_jam` | the passes of that name (off by default) |
+//! | `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
+//! | `fuse` | `fuse` (off by default; on at -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `expensive`
@@ -136,9 +139,9 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
-    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, switchlower, tailrec, trivialunswitch, unroll, unroll_jam,
-    unswitch, window,
+    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopfuse, loopmotion,
+    loopsimplify, loopsplit, lsr, peel, phiopt, ports, promote, rotate, switchlower, tailrec, trivialunswitch, unroll,
+    unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -181,8 +184,15 @@ pub struct Options {
     pub fill: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
+    /// A loop with a test of its counter against an invariant becomes two,
+    /// one either side of where it flips (gcc's `-fsplit-loops`, -O3; -Omax
+    /// too).
+    pub split: bool,
+    /// Two adjacent loops of the same trips become one (LLVM's `LoopFuse`;
+    /// -Omax only, `-floop-fusion`).
+    pub fuse: bool,
     /// A nest's outer loop unrolled and its inner copies fused (gcc's
-    /// `-floop-unroll-and-jam`, -O3 only).
+    /// `-floop-unroll-and-jam`, -O3; -Omax too).
     pub unroll_jam: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
@@ -229,6 +239,8 @@ impl Default for Options {
             fill: true,
             sibcalls: true,
             unswitch: false,
+            split: false,
+            fuse: false,
             unroll_jam: false,
             copy_headers: true,
             for_size: false,
@@ -267,6 +279,8 @@ impl Options {
             sibcalls: false,
             peel: false,
             unswitch: false,
+            split: false,
+            fuse: false,
             expensive: false,
             switch_conversion: false,
             ..Self::default()
@@ -282,6 +296,8 @@ impl Options {
             limits: Limits { grows: false, ..Self::default().limits },
             peel: false,
             unswitch: false,
+            split: false,
+            fuse: false,
             ..Self::default()
         }
     }
@@ -293,6 +309,8 @@ impl Options {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
+            split: true,
+            fuse: false,
             unroll_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
@@ -305,6 +323,10 @@ impl Options {
         Self {
             limits: Limits { target_percent: 200, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            unswitch: true,
+            split: true,
+            fuse: true,
+            unroll_jam: true,
             exhaustive: true,
             ..Self::default()
         }
@@ -691,6 +713,8 @@ pub struct Fixed {
     /// Once, after everything else.
     last: Vec<Box<dyn FunctionPass>>,
     unswitch: Option<unswitch::Unswitch>,
+    split: Option<loopsplit::Split>,
+    fuse: Option<loopfuse::Fuse>,
     jam: Option<unroll_jam::UnrollJam>,
     only: bool,
     dump: Option<PathBuf>,
@@ -714,16 +738,18 @@ impl Fixed {
         let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
         let (last, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "merge");
         // A candidate is judged after the whole pipeline, unswitching off.
-        let unswitch = applied
-            .options
-            .unswitch
-            .then(
-                || {
-                    let options = Options { unswitch: false, unroll_jam: false, ..applied.options.clone() };
-                    let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
-                    unswitch::Unswitch { passes: vec![Box::new(Fixed::new(&reoptimize))] }
-                },
-            );
+        let unswitch = applied.options.unswitch.then(|| {
+            let options =
+                Options { unswitch: false, split: false, fuse: false, unroll_jam: false, ..applied.options.clone() };
+            let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
+            unswitch::Unswitch { passes: vec![Box::new(Fixed::new(&reoptimize))] }
+        });
+        let fuse = applied.options.fuse.then(|| {
+            let options =
+                Options { unswitch: false, split: false, fuse: false, unroll_jam: false, ..applied.options.clone() };
+            let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
+            loopfuse::Fuse { passes: vec![Box::new(Fixed::new(&reoptimize))] }
+        });
         Self {
             boundary,
             passes,
@@ -731,6 +757,8 @@ impl Fixed {
             peelers,
             last,
             unswitch,
+            split: (applied.options.split && only.is_none()).then_some(loopsplit::Split),
+            fuse: fuse.filter(|_| only.is_none()),
             jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
             only: only.is_some(),
             dump: applied.dump.clone(),
@@ -773,6 +801,20 @@ impl Fixed {
         }
         if let Some(unswitch) = &mut self.unswitch {
             run.step(unswitch, "unswitch", unit, analyses);
+        }
+        // After unswitching, before jamming, as gcc's pass order has it. Each
+        // half is cleaned as a peeled loop is.
+        if let Some(split) = &mut self.split {
+            if run.step(split, "split", unit, analyses) {
+                self.scalarized(unit, analyses, run, "split");
+                self.fixed(unit, analyses, run, "split-")?;
+            }
+        }
+        // Loops that follow one another and count alike, once unswitching and
+        // splitting have made what they are. A fused loop was cleaned by the
+        // pipeline that judged it.
+        if let Some(fuse) = &mut self.fuse {
+            run.step(fuse, "fuse", unit, analyses);
         }
         // After unswitching, as gcc's pass order has it: an invariant guard is
         // out of the nest by then. The fused copies are cleaned as a peeled

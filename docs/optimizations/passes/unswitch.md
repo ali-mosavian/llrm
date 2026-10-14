@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unswitch.rs sha256:7bacaf4d75264917ad710c9c6a6101ebf88c41a1413ca806123720360294daf0 -->
+<!-- src: crates/opt/llrm-transforms/src/unswitch.rs sha256:b7808dabe1589137c28036a7280ce0ae7386b6da445c7b0de7bc8c32d18b89ff -->
 
 # unswitch
 
@@ -68,11 +68,9 @@ flowchart TB
 
 The copy is a candidate, not yet a result. It is run through the same
 pipeline with unswitching and unroll-and-jam off (`Unswitch::passes`),
-then judged against the original. It is kept only if it has fewer loops,
-no more operations, and a no larger price: [`crate::profit::weighted`](profit.md) at
-the target's operation costs, each block weighted by the trips induction
-proves. A body holding an operation the target does not price is never
-better. Otherwise the original stays untouched.
+then judged against the original by [`crate::candidate`](candidate.md), on the work
+alone: kept only if it has fewer loops, no more operations and no larger
+price. Otherwise the original stays untouched.
 
 ## Example
 Before:
@@ -136,10 +134,10 @@ re-optimized.
 
 ## Runs
 Once per body, after the fixed point and the peel rounds settle and before
-unroll-jam. -O3 only: `-funswitch-loops`. -Omax does not set it.
+unroll-jam. -O3 and -Omax: `-funswitch-loops`.
 
 ## Needs
-[`crate::lcssa`](lcssa.md), [`crate::loopclone`](loopclone.md), [`crate::profit`](profit.md), and the
+[`crate::lcssa`](lcssa.md), [`crate::loopclone`](loopclone.md), [`crate::candidate`](candidate.md), and the
 target's operation costs.
 
 ## Keeps

@@ -21,9 +21,14 @@
 //!    (`rises_unsigned`), becomes a counter of that width. C's `unsigned short
 //!    i` reads `a[zext i]`, a conversion per trip, which hides the loop from
 //!    idioms and strength reduction. The wide counter ends the loop against the
-//!    bound extended once in the preheader; other readers of the narrow one
-//!    read its low part.
-//! 6. `rewound`: see below.
+//!    bound extended once in the preheader; an unsigned or equality compare of
+//!    the narrow one with a value the loop leaves alone compares the wide one
+//!    with that value extended (`WidenIV::widenLoopCompare`); other readers of
+//!    the narrow one read its low part.
+//! 6. `congruent`: header counters with one start and one step are one counter
+//!    (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
+//!    first, and `dead` removes them.
+//! 7. `rewound`: see below.
 //!
 //! `rewound` carries an exact inner recurrence's exit value around the outer
 //! loop. An inner loop running exactly `count` trips leaves as
@@ -200,6 +205,7 @@ impl FunctionPass for IndVars {
             standing.changed();
         }
         let widened = widened_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound(
             unit.context,
             unit.layout,
@@ -208,16 +214,89 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (sunk || rewound || widened || valued) && dead::dead(unit.context, outer.callees(), unit.function);
+        let dead = (sunk || rewound || widened || valued || merged)
+            && dead::dead(unit.context, outer.callees(), unit.function);
         if evaluated || folded || valued {
             PreservedAnalyses::none()
-        } else if sunk || rewound || widened || dead {
+        } else if sunk || rewound || widened || merged || dead {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {
             PreservedAnalyses::all()
         }
     }
+}
+
+/// Header counters that start at one value and step by one value are one
+/// counter: each later one's readers read the first (`SCEVExpander::
+/// replaceCongruentIVs`). Two loops fused, or one written with a counter twice,
+/// leave such a pair, and what is indexed by either is then the same address.
+fn congruent(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &passes::Outer,
+    standing: &mut llrm_analysis::memory::Standing,
+) -> bool {
+    if !alike_phis(function) {
+        return false;
+    }
+    let shape = cfg::Shape::of(function);
+    let mut merged = Vec::new();
+    {
+        let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
+        let facts = standing.of(&unit);
+        let unit = unit.with_registers(facts);
+        for loop_ in shape.loops.iter() {
+            let counters = induction::basics(&unit, loop_);
+            let mut kept = IndexMap::default();
+            for (&value, counter) in &counters {
+                let first = *kept.entry((&counter.start, &counter.step)).or_insert(value);
+                if first != value {
+                    merged.push((value, first));
+                }
+            }
+        }
+    }
+    for &(later, first) in &merged {
+        function.replace_all_uses_with(later, Operand::Value(first));
+    }
+    !merged.is_empty()
+}
+
+/// Two phis of one block take the same value from each predecessor, or the
+/// same operation of one operand on themselves: the cheap look, over the
+/// phis alone, before the loops and their counters are asked of.
+fn alike_phis(function: &Function) -> bool {
+    #[derive(Eq, Hash, PartialEq)]
+    enum Arm {
+        Value(Operand),
+        Stepped(&'static str, Vec<Operand>),
+    }
+    let mut seen = llrm_support::hash::IndexSet::default();
+    llrm_analysis::occurrence::phis(function).any(|(phi, block, _)| {
+        let result = function.instruction(phi).result.map(Operand::Value);
+        let mut key = arms(function, phi)
+            .into_iter()
+            .map(|(value, from)| {
+                let stepped = match value {
+                    Operand::Value(one) => _defining(function, one).map(|inst| function.instruction(inst)),
+                    _ => None,
+                }
+                .filter(|step| step.operands.iter().any(|&operand| Some(operand) == result));
+                let arm = match stepped {
+                    Some(step) => Arm::Stepped(
+                        step.opcode.mnemonic(),
+                        step.operands.iter().copied().filter(|&operand| Some(operand) != result).collect(),
+                    ),
+                    None => Arm::Value(value),
+                };
+                (from, arm)
+            })
+            .collect::<Vec<_>>();
+        key.sort_by_key(|(from, _)| from.0);
+        !seen.insert((block, key))
+    })
 }
 
 /// A counted exit's phi values that are affine in the loop's counters, the
@@ -706,6 +785,9 @@ struct _Found {
     extensions: Vec<InstId>,
     /// Every other reader: its instruction and operand.
     rest: Vec<(InstId, u32)>,
+    /// The readers that compare it, unsigned, with a value the loop does not
+    /// define: they compare the wide counter with that value extended.
+    compares: Vec<(InstId, u32)>,
     /// The loop is tested after its trips: the compare reads the counter
     /// stepped.
     after: bool,
@@ -783,6 +865,7 @@ fn _find(
         let Some(wide) = wide else { continue };
         let mut extensions = Vec::new();
         let mut rest = Vec::new();
+        let mut compares = Vec::new();
         for one in function.users(counter) {
             let user = function.instruction(one.user);
             if one.user == proof.compare || one.user == next_inst {
@@ -790,6 +873,8 @@ fn _find(
             }
             if user.opcode == Opcode::Cast(CastOp::ZExt) && unit.int_bits(Operand::Value(user.result?)) == Some(wide) {
                 extensions.push(one.user);
+            } else if _compares_extended(user, one.index, &still) {
+                compares.push((one.user, one.index));
             } else {
                 rest.push((one.user, one.index));
             }
@@ -805,10 +890,33 @@ fn _find(
             wide,
             extensions,
             rest,
+            compares,
             after,
         });
     }
     None
+}
+
+/// `user` compares the counter, read as its `index`th operand, as unsigned
+/// numbers or for equality with a value `still` says the loop leaves alone:
+/// the counter never passes the narrow width, so its extension compares as it
+/// does (LLVM's `WidenIV::widenLoopCompare`).
+fn _compares_extended(
+    user: &llrm_mir::module::Instruction,
+    index: u32,
+    still: &induction::Invariant,
+) -> bool {
+    matches!(
+        user.opcode,
+        Opcode::ICmp(
+            IntPredicate::Eq
+                | IntPredicate::Ne
+                | IntPredicate::Ult
+                | IntPredicate::Ule
+                | IntPredicate::Ugt
+                | IntPredicate::Uge
+        )
+    ) && still.operand(user.operands[1 - index as usize])
 }
 
 /// `operand` zero-extended to `ty` at the end of `preheader`: a number is its
@@ -876,6 +984,12 @@ fn _widen(
         let old = function.instruction(extension).result.expect("a value");
         function.replace_all_uses_with(old, value);
         function.erase(extension).expect("its uses were replaced");
+    }
+    for &(user, index) in &found.compares {
+        let other = function.instruction(user).operands[1 - index as usize];
+        let other = _extended(context, function, found.preheader, other, ty);
+        function.set_operand(user, index as usize, value);
+        function.set_operand(user, 1 - index as usize, other);
     }
     // What else reads the counter reads its low part, cut where it is read.
     let narrow = function.value(counter).ty;

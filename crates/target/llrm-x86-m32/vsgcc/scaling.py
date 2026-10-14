@@ -244,6 +244,7 @@ def measured_environment(env: dict | None = None) -> dict:
 
 
 WALL_PER_CPU = 10  # a run that burns no CPU (a deadlock, a wait) is given this many wall seconds per CPU second of its budget
+WALL_FLOOR = 300  # and at least this many: a 1 s budget gave 10 s, which a host at load 200 spent starting `perf stat`
 
 
 def _cpu_limited(seconds: float):
@@ -261,7 +262,7 @@ def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tup
 
     `timeout` is CPU seconds of the run, not wall: a count has no wall-clock budget that load can break (a compile of 3 s timed out
     at 120 s wall under a load average of 100). A hang that spins is stopped by the CPU limit; one that waits, by a wall backstop
-    `WALL_PER_CPU` times as long.
+    `WALL_PER_CPU` times as long (never under `WALL_FLOOR`).
 
     The child sees no LLRM_ variable of the caller's but LLRM_BIN (and `env`'s own): LLRM_CHECK_*, LLRM_VERIFY and the like add work to
     the step they check, and a count taken under them is not the compiler's (regparm16: 'lir peephole' read 4.5 Minstr over at every size).
@@ -280,7 +281,7 @@ def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tup
         if Path(cmd[0]).name.startswith("llrm-") and Path(cmd[0]).is_file():
             (Path(here) / Path(cmd[0]).name).symlink_to(Path(cmd[0]).resolve())
             cmd = [f"./{Path(cmd[0]).name}", *cmd[1:]]
-        done = subprocess.run([*levels_time.UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=timeout * WALL_PER_CPU, cwd=here, env=measured_environment(env), preexec_fn=_cpu_limited(timeout))
+        done = subprocess.run([*levels_time.UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=max(timeout * WALL_PER_CPU, WALL_FLOOR), cwd=here, env=measured_environment(env), preexec_fn=_cpu_limited(timeout))
         # perf stat exits 0 for a child a signal killed, and says only what the shell would.
         if "CPU time limit exceeded" in done.stderr or done.returncode in (-signal.SIGXCPU, 128 + signal.SIGXCPU):
             raise TimeoutError(f"{' '.join(cmd[-1:])}: more than {timeout:g} CPU seconds")

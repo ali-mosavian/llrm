@@ -2548,3 +2548,42 @@ fn test_a_symbolic_start_past_the_signed_maximum_under_nsw_is_not_extended() {
     let small = zero_extended_walk("40", "160", "nsw ");
     assert!(inner_recurrences_of(&small).contains_key(&small.value("wide")));
 }
+
+/// Loops `0..n`, `0..n`, `0..m`, `1..n` and `0..8`, `4..12`, `0..9`, in this
+/// order and one after another.
+fn sequence() -> Parsed {
+    let spans = [("0", "%n"), ("0", "%n"), ("0", "%m"), ("1", "%n"), ("0", "8"), ("4", "12"), ("0", "9")];
+    let mut body = String::from("define void @f(i32 %n, i32 %m) {\nb0:\n  br label %h0\n");
+    for (at, (start, bound)) in spans.iter().enumerate() {
+        let next = if at + 1 < spans.len() { format!("h{}", at + 1) } else { "done".to_string() };
+        body += &format!(
+            "h{at}:\n  %i{at} = phi i32 [ {start}, %{before} ], [ %n{at}, %body{at} ]\n  %c{at} = icmp slt i32 %i{at}, {bound}\n  br i1 %c{at}, label %body{at}, label %{next}\nbody{at}:\n  %n{at} = add i32 %i{at}, 1\n  br label %h{at}\n",
+            before = if at == 0 { "b0".to_string() } else { format!("h{}", at - 1) },
+        );
+    }
+    body += "done:\n  ret void\n}\n";
+    Parsed::new(&body)
+}
+
+/// Same trips: the same symbolic bound from the same start, or equal
+/// constant counts from different starts; not a different bound, start or
+/// count. Fusing `0..n` with `1..n` would run the second a trip short.
+#[test]
+fn loops_of_one_symbolic_bound_or_one_constant_count_make_the_same_trips() {
+    let parsed = sequence();
+    let unit = parsed.unit();
+    let found = loops::loops(&cfg::graph(parsed.function()), None);
+    let proof = |at: usize| {
+        let one = found
+            .iter()
+            .find(|one| one.header == cfg::id(crate::testing::block(parsed.function(), &format!("h{at}"))))
+            .unwrap();
+        counted(&unit, one, None, false).into_iter().next().expect("counted")
+    };
+    assert!(same_trips(&proof(0), &proof(1)));
+    assert!(!same_trips(&proof(0), &proof(2)), "bound %m");
+    assert!(!same_trips(&proof(0), &proof(3)), "start 1");
+    assert!(same_trips(&proof(4), &proof(5)), "8 trips either way");
+    assert!(!same_trips(&proof(4), &proof(6)), "8 against 9");
+    assert!(!same_trips(&proof(0), &proof(4)), "a count against a symbol");
+}

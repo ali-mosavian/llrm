@@ -1487,7 +1487,7 @@ impl Parser {
             flags = match op {
                 CastOp::Trunc => self.flags(&["nuw", "nsw"]),
                 CastOp::ZExt | CastOp::UIToFP => self.flags(&["nneg"]),
-                CastOp::FPTrunc | CastOp::FPExt => self.flags(&fast),
+                CastOp::FPTrunc | CastOp::FPExt | CastOp::FPRound => self.flags(&fast),
                 _ => Flags::default(),
             };
             let (_, value) = self.typed_value(local)?;

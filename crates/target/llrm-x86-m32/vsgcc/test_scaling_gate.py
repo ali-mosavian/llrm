@@ -552,10 +552,12 @@ def test_copy_forwarding_does_not_clone_the_instruction_for_each_operand_it_trie
     """cells(224) at -O2: `copyprop::forward_use` cloned the whole instruction (`Semantics`) before asking of each source and each
     address register whether an older copy fits, and answered no almost always: `lir peephole` read 157 to 174 Minstr (the clones
     cost 2.3x as much when mimalloc's page for their size class was recycled at every free, by the length of a path), 135 once the
-    operand is asked of the instruction itself. Above 145 fails (#1293)."""
+    operand is asked of the instruction itself. Above 150 fails (#1293). It was 145: the count moves 2% with nothing but the
+    length of the m32 datalayout's `promote` list (143.0 at three entries, 146.1 at six, identical listings at every stage and
+    the whole process within 0.01%): the heap layout, as for the 2.3x above, not work the pass does."""
     source = tmp_path / "cells224.c"
     source.write_text(scaling.cells(224))
-    assert gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir peephole"] <= 145.0
+    assert gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir peephole"] <= 150.0
 
 
 def test_a_carve_touches_the_blocks_it_changes_not_every_block(tmp_path):
@@ -1165,3 +1167,15 @@ def test_the_allocator_requeues_the_values_a_rewrite_changed_and_the_ones_the_qu
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["after queue"] > 1.0, f"premise: events requeued ({own['after queue']:.1f} Minstr)"
     assert own["after queue"] <= 40.0, f"after queue {own['after queue']:.1f} Minstr"
+
+
+def test_promote_asks_a_write_only_the_cells_whose_bytes_it_may_reach(tmp_path):
+    """cells(896) at -O2: N constant elements of one static array, each written after reads of others. `mir promote` asked each write
+    every available cell of the array's bucket (typed and foreign checks twice, then the slices): N^2 questions, 983 Minstr at N=896
+    (255 at 448, x3.9). Cells named by provenance alone are indexed by the hull of their slice, and a write asks those whose bytes meet
+    its own: 53 (29 at 448). A bound of 150 fails the first."""
+    source = tmp_path / "cells896.c"
+    source.write_text(scaling.AXES["cells"](896))
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["mir promote"] > 5.0, f"premise: promote ran ({own['mir promote']:.1f} Minstr)"
+    assert own["mir promote"] <= 150.0, own["mir promote"]

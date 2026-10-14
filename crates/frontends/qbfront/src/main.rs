@@ -156,6 +156,7 @@ fn main() -> ExitCode {
             far_bytes,
             // This is BC's command line: its /Zi writes BC's layout.
             bc_codeview: true,
+            ..qbfront::semantic::Options::default()
         },
         debug,
         syntax,

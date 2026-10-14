@@ -40,6 +40,9 @@ pub struct Frontend {
     pub runtime: String,
     pub array_order: String,
     pub huge_arrays: bool,
+    /// What is stored to a SINGLE or DOUBLE variable is rounded to its type, as
+    /// BC does: `-fexcess-precision=standard` or `-ffloat-store`.
+    pub float_store: bool,
     pub checked_arrays: bool,
     /// Integer division raises error 11 in code:
     /// `-fsanitize=integer-divide-by-zero`.
@@ -87,6 +90,7 @@ impl Frontend {
             runtime: runtime.into(),
             array_order: "column-major".into(),
             huge_arrays: false,
+            float_store: false,
             checked_arrays: false,
             checked_division: false,
             debug: false,
@@ -129,6 +133,7 @@ fn _options(
         options: qbfront::semantic::Options {
             row_major: array_order == "row-major",
             huge_arrays: frontend.huge_arrays,
+            float_store: frontend.float_store,
             checked_arrays: frontend.checked_arrays,
             checked_division: frontend.checked_division,
             checked_overflow: frontend.checked_overflow,

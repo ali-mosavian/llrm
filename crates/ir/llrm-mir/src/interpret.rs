@@ -1094,7 +1094,7 @@ pub(crate) fn cast(
         (CastOp::SExt, Val::Int { bits, width: from_width }) => {
             Val::Int { bits: signed(bits, from_width) as u128 & mask(width), width }
         }
-        (CastOp::FPTrunc | CastOp::FPExt, Val::Float(kind, bits)) => {
+        (CastOp::FPTrunc | CastOp::FPExt | CastOp::FPRound, Val::Float(kind, bits)) => {
             let value = to_f64(kind, bits);
             let Type::Float(target) = types.get(to) else { unreachable!("a floating type") };
             from_f64(*target, value)

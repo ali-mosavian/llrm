@@ -77,15 +77,26 @@ LOOKS = 3               # successive looks at a screen that must show the same p
 LOOK_EVERY = 0.03       # host seconds between looks: the guest runs between them, so looks back to back would all see one frame
 
 
+def expiry(session, seconds: float):
+    """A function that says the wait is over: `seconds` of the emulator's CPU time, which a loaded host does not stretch (the guest runs on
+    virtual time, so a step that needs 8 CPU seconds needs them whatever the wall says: 'Press any key' never appeared at host load 150,
+    ali-mosavian/llrm#1570), else of the wall clock where there is no emulator behind the session."""
+    if getattr(session, "process", None):
+        return session.limit(seconds)
+    deadline = time.monotonic() + seconds
+    return lambda: time.monotonic() > deadline
+
+
 def ready(session, since: int, shown: str | None) -> None:
     """Returns once the program has taken the keys and has put up what the step waits for: the text it names (a text
     screen), else the fork's `key_wait` event, which arrives when the program reads the keyboard and finds nothing there."""
     if shown:
-        deadline = time.monotonic() + LONGEST
+        late = expiry(session, LONGEST)
         while shown not in session.screen():
-            if time.monotonic() > deadline:
+            if late():
                 # `IBM ROM BASIC NOT IMPLEMENTED` on the screen is the fork's flake, ali-mosavian/llrm#1570.
                 raise TimeoutError(f"{shown!r} never appeared")
+            time.sleep(LOOK_EVERY)
         since = len(session.events)
         session.send({"cmd": "key_wait_arm"})
     session.wait_event("key_wait", since, LONGEST)
@@ -97,8 +108,8 @@ def settled(session, work: Path, name: str | None, before: bytes | None) -> None
     part has changed from `before`."""
     if not name:
         return
-    deadline, same, last = time.monotonic() + LONGEST, 0, None
-    while time.monotonic() < deadline:
+    late, same, last = expiry(session, LONGEST), 0, None
+    while not late():
         look = session.screen_hash()
         same = same + 1 if look == last else 1
         if same >= LOOKS and (before is None or look != before):
