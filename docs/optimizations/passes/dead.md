@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dead.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dead.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:bf541bd8858f37fb1e5191deb35f7e17a4ca3c96682d771b24f1e7cdd44d2a02 -->
+<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:5c764eece154732e73d42d301702ae3a6fd7b583a8c9cc4f1b20a9ec754d9886 -->
 
 # dead
 
