@@ -1,7 +1,11 @@
 """The loop corpus's own instruments: tools/loops."""
 
 import sys
+import shutil
+import tempfile
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "loops"))
 
@@ -9,6 +13,17 @@ from tools import innerloops, llrmbin  # noqa: E402
 from tests.test_innerloops import _object  # noqa: E402
 
 import quality  # noqa: E402
+
+
+@pytest.fixture
+def disk_path(request):
+    """A scratch directory on disk. The tests that compile a batch dump its MIR stages, and the compilers refuse a stage dump on
+    tmpfs (#1641), where pytest's tmp_path is. (A second conftest.py would collide with tools/dosbatch's when one run collects both.)"""
+    base = llrmbin.target_dir() / "pytest-tmp"
+    base.mkdir(parents=True, exist_ok=True)
+    path = Path(tempfile.mkdtemp(prefix=f"{request.node.name[:40]}-", dir=base))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def _facts(code: bytes):
@@ -233,7 +248,7 @@ def test_a_far_array_past_64k_is_huge():
             assert array.ptr != "far" or array.bytes <= 0x10000, (case.name, array.name)
 
 
-def test_a_case_s_quality_does_not_depend_on_its_batch(tmp_path):
+def test_a_case_s_quality_does_not_depend_on_its_batch(disk_path):
     """A case's loop was read from the batch's object, and llrm compiles a
     loop differently beside other functions: --quick and the full run
     disagreed on the same case, so the ratchet flapped."""
@@ -246,7 +261,7 @@ def test_a_case_s_quality_does_not_depend_on_its_batch(tmp_path):
     seen = []
     for group in ([case], [other, case]):
         plans, streams = run.plans_for(group, "c")
-        batch = run.Batch("c", group, config, tmp_path / str(len(group)), plans, streams, 0)
+        batch = run.Batch("c", group, config, disk_path / str(len(group)), plans, streams, 0)
         batch.compile()
         result = run.Result()
         run.measure(run.measured_from(batch, group.index(case)), result)
@@ -305,7 +320,7 @@ def test_zero_extending_bp_keeps_the_frame():
     assert quality.bp_problems(text) == []
 
 
-def test_a_nib_case_keeps_its_symbolic_stride(tmp_path):
+def test_a_nib_case_keeps_its_symbolic_stride(disk_path):
     """Nib's case functions are internal and every input passed m = 2, so
     llrm propagated the constant: the symbolic-stride case was measured as
     a constant stride of 4 bytes."""
@@ -314,7 +329,7 @@ def test_a_nib_case_keeps_its_symbolic_stride(tmp_path):
     import mir
     case = next(one for one in concurrent.cases() if one.name == "conc1_s2_xt_bpn_index_n_st1_sum")
     plans, streams = run.plans_for([case], "nib")
-    batch = run.Batch("nib", [case], build.Config(), tmp_path, plans, streams, 0)
+    batch = run.Batch("nib", [case], build.Config(), disk_path, plans, streams, 0)
     batch.compile()
     _, last = mir.stages(batch.work / "stages")
     text = last.read_text()
