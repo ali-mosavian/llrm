@@ -467,7 +467,13 @@ fn floating_function_has_the_hidden_microsoft_result_pointer() {
     )
     .unwrap();
     let hir = compile(&module, "float_function", Dialect::VbDos, "vbdos").unwrap();
-    assert!(hir.contains("\"name\":\"ADDHALF\",\"linkage\":\"external\",\"parameters\":[1,2]"));
+    // the value and the hidden result pointer: two parameters (their place
+    // numbers move with what a function allocates first)
+    let listed = hir
+        .split("\"name\":\"ADDHALF\",\"linkage\":\"external\",\"parameters\":[")
+        .nth(1)
+        .expect("ADDHALF's parameters");
+    assert_eq!(listed.split(']').next().expect("a list").split(',').count(), 2, "{hir}");
     assert!(hir.contains("\"parameter_bytes\":6"), "{hir}");
     assert!(hir.contains("\"op\":\"address\""), "{hir}");
 }

@@ -450,8 +450,9 @@ str_enum!(Op {
     PointerOffset("POINTER_OFFSET") = "pointer_offset",
     Concat("CONCAT") = "concat",
     Convert("CONVERT") = "convert",
-    // A float of the operand's own type rounded to that type's precision, as a store to a variable of it rounds a value the
-    // target holds wider; the one operand and the result have one type.
+    // A float of the operand's own type rounded to that type's precision, as a
+    // store to a variable of it rounds a value the target holds wider; the one
+    // operand and the result have one type.
     Round("ROUND") = "round",
     // A float to an integer, rounded toward zero; CONVERT rounds as the
     // environment does.

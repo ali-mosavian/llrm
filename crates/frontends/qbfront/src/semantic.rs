@@ -9119,9 +9119,11 @@ impl Compiler {
         Ok((place, payload, payload_type))
     }
 
-    /// QB rounds what it stores to a SINGLE or DOUBLE variable to that type (BC stores through memory), while HIR evaluates
-    /// floating expressions in extended precision and the optimizer may keep a variable in a register: the stored value
-    /// is made a `round` of itself, which a promoted variable keeps. A value that is a load or a round already is one.
+    /// QB rounds what it stores to a SINGLE or DOUBLE variable to that type (BC
+    /// stores through memory), while HIR evaluates floating expressions in
+    /// extended precision and the optimizer may keep a variable in a register:
+    /// the stored value is made a `round` of itself, which a promoted
+    /// variable keeps. A value that is a load or a round already is one.
     fn rounded_store(
         &mut self,
         mut operands: Vec<Operand>,
@@ -9143,16 +9145,20 @@ impl Compiler {
         let rounded = self.value(type_id);
         let id = self.next_instruction;
         self.next_instruction += 1;
-        self.blocks[self.current_block].instructions.push(Instruction {
-            id,
-            op: "round",
-            results: vec![rounded],
-            operands: vec![Operand::Value(value)],
-            callee: None,
-            tag: None,
-            nowrap: false,
-            line: self.current_source_line,
-        });
+        self.blocks[self.current_block]
+            .instructions
+            .push(
+                Instruction {
+                    id,
+                    op: "round",
+                    results: vec![rounded],
+                    operands: vec![Operand::Value(value)],
+                    callee: None,
+                    tag: None,
+                    nowrap: false,
+                    line: self.current_source_line,
+                },
+            );
         operands[1] = Operand::Value(rounded);
         operands
     }

@@ -397,7 +397,9 @@ pub fn rule(
             (operation, vec![float(0)?, float(1)?], returned()?)
         }
         Opcode::FNeg => (Operation::Neg, vec![float(0)?], returned()?),
-        Opcode::Cast(CastOp::FPExt | CastOp::FPTrunc | CastOp::FPRound) => (Operation::Convert, vec![float(0)?], returned()?),
+        Opcode::Cast(CastOp::FPExt | CastOp::FPTrunc | CastOp::FPRound) => {
+            (Operation::Convert, vec![float(0)?], returned()?)
+        }
         Opcode::Cast(CastOp::SIToFP) => (Operation::Convert, vec![int(0, true)?], returned()?),
         Opcode::Cast(CastOp::UIToFP) => (Operation::Convert, vec![int(0, false)?], returned()?),
         Opcode::Cast(CastOp::FPToSI) => (Operation::Truncate, vec![float(0)?], integer(true)?),

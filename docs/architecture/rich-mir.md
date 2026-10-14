@@ -58,7 +58,7 @@ Instructions
 | --- | --- |
 | Terminators | `ret`, `br`, `switch`, `invoke`, `resume`, `unreachable` |
 | Arithmetic | `add sub mul udiv sdiv urem srem shl lshr ashr and or xor`, `fadd fsub fmul fdiv frem`, `fneg` |
-| Casts | `trunc zext sext fptrunc fpext fptoui fptosi uitofp sitofp ptrtoint inttoptr bitcast addrspacecast` |
+| Casts | `trunc zext sext fptrunc fpext fpround fptoui fptosi uitofp sitofp ptrtoint inttoptr bitcast addrspacecast` |
 | Aggregates | `extractvalue`, `insertvalue` |
 | Memory | `alloca`, `load`, `store` (both with `volatile`), `getelementptr` |
 | Other | `icmp`, `fcmp`, `phi`, `select`, `freeze`, `call`, `landingpad` |

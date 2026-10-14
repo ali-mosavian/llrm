@@ -31,8 +31,9 @@ pub enum CastOp {
     SExt,
     FPTrunc,
     FPExt,
-    /// A float rounded to its own type's precision: what a store to a variable of that type does to a value the
-    /// target holds wider (x87's extended). The operand and the result have one type.
+    /// A float rounded to its own type's precision: what a store to a variable
+    /// of that type does to a value the target holds wider (x87's
+    /// extended). The operand and the result have one type.
     FPRound,
     FPToUI,
     FPToSI,
