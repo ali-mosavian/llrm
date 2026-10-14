@@ -47,6 +47,32 @@ class ResolverTests(unittest.TestCase):
             os.utime(release / "llrm-c", (3000, 3000))  # newer than the source, older than the generated file
             self.assertEqual(llrmbin.bin_dir({"LLRM_BIN": str(release)}, repo), release)
 
+    def test_binaries_are_judged_against_the_tree_they_were_built_from(self):
+        """The gate's measure step builds the base commit in a tree of its own and reads its binaries; gates 69 and 71 failed it with
+        "stale binaries ... older than the source they are built from" because the check took the toolchain patches' times from the tree
+        being gated (checked out a minute ago), not from the base's."""
+        with tempfile.TemporaryDirectory() as gated, tempfile.TemporaryDirectory() as base:
+            gated, base = Path(gated), Path(base)
+            for root in (gated, base):
+                (root / "crates").mkdir()
+                (root / "Cargo.toml").write_text('[[bin]]\nname = "llrm-c"\npath = "x.rs"\n')
+                (root / "toolchain/owshim").mkdir(parents=True)
+                (root / "toolchain/owshim/ow-commit").write_text("")
+            release = base / "target" / "release"
+            release.mkdir(parents=True)
+            source = base / "crates" / "lib.rs"
+            source.write_text("")
+            (release / "llrm-c").write_text("")
+            (release / "llrm-c.d").write_text(f"{release}/llrm-c: {source}\n")
+            os.utime(source, (2000, 2000))
+            os.utime(base / "toolchain/owshim/ow-commit", (2000, 2000))
+            os.utime(release / "llrm-c", (3000, 3000))
+            os.utime(gated / "toolchain/owshim/ow-commit", (9000, 9000))  # checked out after the base was built
+            self.assertEqual(llrmbin.stale_binaries(release, gated), [])
+            self.assertEqual(llrmbin.bin_dir({"LLRM_BIN": str(release)}, gated), release)
+            os.utime(base / "toolchain/owshim/ow-commit", (9500, 9500))  # its own patch changed since: stale
+            self.assertEqual(llrmbin.stale_binaries(release, gated), ["llrm-c"])
+
     def test_the_shell_scripts_ask_the_resolver_not_a_copy_of_it(self):
         """Eleven scripts spelled `target/release` and `LLRM_BIN` themselves: the same fact, and wrong in a tree built elsewhere."""
         import os

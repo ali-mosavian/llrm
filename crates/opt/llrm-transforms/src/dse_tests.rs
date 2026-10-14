@@ -543,3 +543,20 @@ fn a_switch_asks_only_the_cells_its_arms_differ_in() {
     assert_eq!(after.matches("store").count(), 0, "every slot is dead: {after}");
     assert!(asked <= 2 * arms, "{asked} asks for a switch of {arms} arms");
 }
+
+/// The cells of one array were compared in pairs, every cell with all of its
+/// object's: `joins` 256, `mir dse` 1,270 Minstr and 3.8x for twice the size. A
+/// cell at fixed bytes is compared with the cells whose bytes meet its own.
+#[test]
+fn a_cell_of_an_array_is_compared_with_the_cells_that_meet_its_bytes_not_with_the_whole_array() {
+    let cells = 200;
+    let stores: String =
+        (0..cells).map(|i| format!("  store i16 {i}, ptr getelementptr (i8, ptr @arr, i16 {})\n", 2 * i)).collect();
+    let before = llrm_analysis::avail::related_pairs();
+    let after = dropped(&format!(
+        "@arr = global [400 x i8] zeroinitializer\n\ndefine i16 @f() {{\nb0:\n{stores}{stores}  ret i16 0\n}}\n"
+    ));
+    let asked = llrm_analysis::avail::related_pairs() - before;
+    assert_eq!(after.matches("store").count(), cells, "the first of each pair of stores is dead: {after}");
+    assert!(asked <= 8 * cells, "{asked} pairs asked for {cells} cells of one array");
+}
