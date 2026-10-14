@@ -1,5 +1,5 @@
-reason = "bq32's kernel ends where its CodeView procedure record says, and leaves out code the debug info and map do not name (DOS, the extender). The map gave a function no length, so the last function of a module took in the module's main code after it and every runtime call made from there: an empty kernel beside a PRINT read 785 (about 250 to 760 of every small kernel's count, 596 of it the extender's memory request when the lazy string heap starts); the file readers lose their DOS time (72k to 3.6M). The compiler's and runtime's named code is unchanged"
-blessed = "2026-10-13"
+reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out (hanoi 729041 -> 352237)"
+blessed = "2026-10-14"
 
 [bas.O2]
 instructions = 83615
@@ -34,14 +34,14 @@ bss_bytes = 0
 kernel_ms = 1.0204
 
 [bq32.O2]
-instructions = 79434
-code_bytes = 284
+instructions = 79426
+code_bytes = 257
 data_bytes = 8725
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 71240
-code_bytes = 276
+instructions = 71232
+code_bytes = 249
 data_bytes = 8725
 bss_bytes = 0
 

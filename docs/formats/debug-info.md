@@ -146,8 +146,6 @@ What each writer says, refused or left out:
 
 - Module-level BASIC variables are missing from CodeView unless `--bc-codeview`, and have no size
   ([#1514](https://github.com/ali-mosavian/llrm/issues/1514)).
-- A Nib program cannot be debugged in real CodeView where it has a code segment per procedure
-  ([#892](https://github.com/ali-mosavian/llrm/issues/892)).
 - A parameter in two registers (a pair) has no CodeView record; at `-O0` no frontend produces one, with optimization it is
   [#1368](https://github.com/ali-mosavian/llrm/issues/1368).
 - Turbo Debugger: register locals of unsupported registers, enums, bit fields beside padding, types past 64K

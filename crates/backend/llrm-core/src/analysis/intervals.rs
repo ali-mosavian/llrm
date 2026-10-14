@@ -1,4 +1,4 @@
-//! Port of `qbopt/analysis/intervals.py`: where each value is live, as
+//! Where each value is live, as
 //! ranges rather than as sets per block.
 //!
 //! LLVM's `LiveIntervals`, two slots per instruction: where it reads, and

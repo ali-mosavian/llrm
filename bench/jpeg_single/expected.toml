@@ -1,8 +1,8 @@
-reason = "#1600 grows the flat runtime (INPUT$), which moves where the readers' strings fall: B$COPY takes its byte path when the destination is 0 to 3 bytes above the source, so a few calls change path and B$COPY/B$SMID run 13 instructions fewer (stft_single -O2: B$COPY -9, B$SMID -4; the kernel's own count, code_bytes and data_bytes are unchanged); max 0.00002%"
+reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out"
 blessed = "2026-10-14"
 
 [bas.O2]
-code_bytes = 5230
+code_bytes = 5222
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5262
+code_bytes = 5254
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63879837
-code_bytes = 6709
+instructions = 63757438
+code_bytes = 6477
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64219483
-code_bytes = 6224
+instructions = 64085823
+code_bytes = 6152
 data_bytes = 29697
 bss_bytes = 0
 

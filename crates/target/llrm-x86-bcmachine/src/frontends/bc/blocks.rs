@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/blocks.py`: which bytes of a module are code,
+//! Which bytes of a module are code,
 //! and where control goes.
 //!
 //! Reachability decides it: start from the entry points the records name,
@@ -695,7 +695,6 @@ pub fn instructions(module: &Module) -> Result<Vec<Insn>, String> {
     Ok(mapped.starts.iter().filter_map(|&at| decoded_instruction(module, at)).collect())
 }
 
-/// Port of `qbopt/frontend/blocks.py:Block`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Block {
     pub at: usize,

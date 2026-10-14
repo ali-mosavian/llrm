@@ -1107,6 +1107,30 @@ def test_loopsimplify_groups_a_loops_edges_without_copying_the_function_for_it(t
     assert own[1024] <= 2.7 * own[512], f"mir loopsimplify {own[512]:.0f} -> {own[1024]:.0f} Minstr"
 
 
+def test_floatassign_does_not_walk_the_body_again_for_each_spill_round(tmp_path):
+    """nbody_single at -O3 (35 spill rounds over a 691-instruction block): each round numbered the body's values again and worked out
+    which roots each step touches, 436 Minstr in `lir floatassign` against 382 once (587 before the steps were kept). A bound of 410
+    fails the first."""
+    source = tmp_path / "nbody_single.c"
+    source.write_text(wrap.wrapped("nbody_single", programs.sources()["nbody_single"].read_text()))
+    own = gate.own_work([*gate.levels_time.command("llrm", "O3", source), *programs.LLRM_FLAGS])
+    assert own["lir floatassign"] > 100.0, f"premise: x87 values spilled ({own['lir floatassign']:.1f} Minstr)"
+    assert own["lir floatassign"] <= 410.0, own["lir floatassign"]
+
+
+def test_floatassign_finds_the_allocnos_at_a_spill_point_by_the_point(tmp_path):
+    """nbody_single at -O3 (35 spill rounds): choosing a victim asked every allocno whether it held a register at the crowded point,
+    a scan of its points, a round: 382 Minstr in `lir floatassign` against 197 when the allocnos at a point are found by the point.
+    A bound of 260 fails the first."""
+    source = tmp_path / "nbody_single.c"
+    source.write_text(wrap.wrapped("nbody_single", programs.sources()["nbody_single"].read_text()))
+    own = gate.own_work([*gate.levels_time.command("llrm", "O3", source), *programs.LLRM_FLAGS])
+    assert own["lir floatassign"] > 100.0, f"premise: x87 values spilled ({own['lir floatassign']:.1f} Minstr)"
+    assert own["lir floatassign"] <= 260.0, own["lir floatassign"]
+
+
+
+
 def test_counted_branches_share_what_a_counter_is_at_a_trip(tmp_path):
     """nbody_single at -O3: `peel` asked the odds of every branch of each loop, and `counted` ran a loop's counters once but worked out the
     compare's operands again for every branch at every trip, and found the loop's phis again for each: 118 Minstr in `mir peel` against 48

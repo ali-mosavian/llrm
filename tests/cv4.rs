@@ -196,6 +196,7 @@ fn synthetic() -> (llrm_object::Object, String) {
             },
         ],
         omf_groups: Vec::new(),
+        omf_comdat: Vec::new(),
         debug: Some(info),
     };
     (object, "int main(void)\n{\n    enum color e = GREEN;\n    register int r = 42;\n    { const int k = 7;\n      r = k; }\n    return 0;\n}\n".to_owned())
@@ -294,6 +295,90 @@ fn codeview_reads_a_nib_variable_the_allocator_keeps_in_a_register() {
         return;
     };
     assert!(screen.contains("reg short k = 12"), "no register `k = 12` in CodeView's screen:\n{screen}");
+}
+
+/// A segment per procedure of one name is one segment to Microsoft's LINK,
+/// which keeps the last one's length: the procedures longer than it drew L1103
+/// (#899), and with the error hidden the image lost the code of the rest
+/// (`main` mapped into `big`'s bytes). A COMDAT per procedure, as MSC's /Gy
+/// writes, is placed, packed and dropped by every linker: the program and the
+/// runtime cut to what it names are linked by LINK, with and without /CO, and
+/// RUN. Both print what the jwlink-linked program prints.
+#[test]
+fn ms_link_links_a_comdat_per_procedure_and_the_program_runs() {
+    let Some(microsoft) = directory("VBDOS_DIR", "work/other/d32x/toolchains/vbdos", "BIN/LINK.EXE") else {
+        skipped("needs VB/DOS's LINK (VBDOS_DIR)");
+        return;
+    };
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().to_owned();
+    if !dosbox::binary().exists() || !bin.join("jwasm").exists() {
+        skipped("needs the DOSBox-X this crate builds and jwasm beside the compiler");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("p.nib"),
+        "fn big(a: i16) -> i16:\n    let mut v = a\n    v = v * 3 + 1\n    v = v * 3 + 2\n    return v\n\nfn mid(a: i16) -> i16:\n    print(big(a))\n    return big(a) + 1\n\nfn main() -> i16:\n    print(mid(1))\n    return 0\n",
+    )
+    .unwrap();
+    let run = |program: PathBuf, args: Vec<String>| {
+        let done = Command::new(&program).args(&args).current_dir(root).output().unwrap();
+        assert!(
+            done.status.success(),
+            "{} {args:?}: {}{}",
+            program.display(),
+            String::from_utf8_lossy(&done.stdout),
+            String::from_utf8_lossy(&done.stderr)
+        );
+    };
+    let path = |name: &str| scratch.path().join(name).display().to_string();
+    let layer = PathBuf::from(os_layer("directory"));
+    let defines: Vec<String> = os_layer("defines").split_whitespace().map(|one| format!("-D{one}")).collect();
+    for (output, source) in [
+        ("start.obj", layer.join(os_layer("start"))),
+        ("impl.obj", layer.join(os_layer("implementation"))),
+        ("hook.obj", PathBuf::from(os_layer("language_file"))),
+    ] {
+        let mut args = vec!["-q".to_owned(), "-c".into(), "-Cp".into(), "-Zg".into(), "-omf".into()];
+        args.extend(defines.iter().cloned());
+        args.extend([format!("-Fo{}", path(output)), source.display().to_string()]);
+        run(bin.join("jwasm"), args);
+    }
+    let nib = bin.join("llrm-nib");
+    let runtime = root.join("crates/frontends/llrm-nib/src/runtime/runtime.nib").display().to_string();
+    for (program, cut, flags) in [("p.obj", "rt.obj", None), ("pg.obj", "rtg.obj", Some("-g"))] {
+        let mut arguments: Vec<String> = vec!["-m16".into(), "-O0".into(), "--procedure-segments".into()];
+        arguments.extend(flags.map(str::to_owned));
+        arguments.extend([path("p.nib"), "-o".into(), path(program)]);
+        run(nib.clone(), arguments);
+        let mut arguments: Vec<String> = vec!["-m16".into(), "-O0".into(), "--procedure-segments".into()];
+        for used in [program, "start.obj", "hook.obj", "impl.obj"] {
+            arguments.extend(["--used-by".into(), path(used)]);
+        }
+        arguments.extend([runtime.clone(), "-o".into(), path(cut)]);
+        run(nib.clone(), arguments);
+    }
+    dosbox::run(
+        &[('v', &microsoft), ('w', scratch.path())],
+        "v:\\bin",
+        &[
+            "link /NOI start.obj hook.obj p.obj rt.obj impl.obj,p.exe,p.map,; > link.txt".into(),
+            "link /CO /NOI start.obj hook.obj pg.obj rtg.obj impl.obj,pg.exe,pg.map,; > linkg.txt".into(),
+            "p.exe > p.out".into(),
+            "pg.exe > pg.out".into(),
+        ],
+    );
+    for (exe, log, out) in [("P.EXE", "LINK.TXT", "P.OUT"), ("PG.EXE", "LINKG.TXT", "PG.OUT")] {
+        let said = std::fs::read_to_string(scratch.path().join(log)).unwrap_or_default();
+        assert!(scratch.path().join(exe).exists(), "LINK made no {exe}: {said}");
+        let printed = std::fs::read_to_string(scratch.path().join(out)).unwrap_or_default();
+        assert_eq!(
+            printed.split_whitespace().collect::<Vec<_>>(),
+            ["14", "15"],
+            "{exe} printed {printed:?}; LINK said {said}"
+        );
+    }
 }
 
 /// `fixture` (a Nib program of tests/fixtures/codeview) built with `flags` as

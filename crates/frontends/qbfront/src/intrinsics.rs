@@ -50,6 +50,8 @@ pub enum Lowering {
     ToDouble,
     PointerOffset,
     PointerSegment,
+    VarptrString,
+    StringAddress,
     Abs,
     Sqrt,
     Sign,
@@ -229,6 +231,8 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("STICK", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$STIK")),
     intrinsic!("STRIG", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FSTG")),
     intrinsic!("PEN", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FPEN")),
+    intrinsic!("$VARPTR", 1..=1, String, Runtime, Lowering::VarptrString),
+    intrinsic!("SADD", 1..=1, Integer, Pure, Lowering::StringAddress),
     intrinsic!("PLAY", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FPLY")),
     intrinsic!("POS", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FPOS")),
     // The event checks the front end writes (never a program's: `$` cannot

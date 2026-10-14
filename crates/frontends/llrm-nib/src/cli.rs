@@ -1,4 +1,4 @@
-//! `tools/modernexe.py`'s compile, to an object rather than a linked
+//! Compile to an object rather than a linked
 //! executable, plus `--dump DIR`, which writes the stages.
 //!
 //! ```text
@@ -172,7 +172,7 @@ fn used(objects: &[PathBuf]) -> Result<std::collections::BTreeSet<String>, Strin
         let bytes = std::fs::read(object).map_err(|error| format!("{}: {error}", object.display()))?;
         let records =
             llrm_core::objectfile::omf::parse(&bytes).map_err(|error| format!("{}: {error:?}", object.display()))?;
-        names.extend(llrm_core::objectfile::omf::externals(&records).into_iter().skip(1));
+        names.extend(llrm_core::objectfile::omf::imports(&records));
     }
     Ok(names)
 }

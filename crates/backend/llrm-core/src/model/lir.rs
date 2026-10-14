@@ -1,6 +1,6 @@
 //! What each lowered operation requires of a register.
 //!
-//! Direct port of `qbopt.model.lir`.  This is deliberately not the newer
+//! This is deliberately not the newer
 //! generic Machine IR: LIR owns source-byte spans, and carries from the MIR
 //! the answers it was selected with, such as what a call may touch.
 
@@ -106,7 +106,7 @@ impl Eq for DebugTags {}
 
 /// One machine instruction, as the thing that emits it needs it.
 ///
-/// Direct port of `qbopt.model.lir:Insn`.  `call` is a shared owned reference
+/// `call` is a shared owned reference
 /// so cloned LIR instructions retain it, as Python's frozen dataclass copies
 /// do.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -520,8 +520,6 @@ impl Insn {
 }
 
 /// One value that is two definitions above this block, by id.
-///
-/// Direct port of `qbopt.model.lir:Phi`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Phi {
     pub result: u32,
@@ -535,8 +533,6 @@ impl Repr for Phi {
 }
 
 /// One LIR CFG block.
-///
-/// Direct port of `qbopt.model.lir:LirBlock`.
 #[derive(Debug, Eq, PartialEq)]
 pub struct LirBlock {
     pub at: i64,
@@ -760,8 +756,6 @@ impl PartialEq for BlockFrequencies {
 impl Eq for BlockFrequencies {}
 
 /// One lowered procedure.  Blocks remain in emitted order.
-///
-/// Direct port of `qbopt.model.lir:LirBody`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LirBody {
     pub name: String,
@@ -1055,8 +1049,6 @@ pub fn inert() -> Semantics {
 }
 
 /// Keep virtual dataflow and source-byte ownership for an elided machine op.
-///
-/// Direct port of `qbopt.model.lir:anchor`.
 #[must_use]
 pub fn anchor(one: Arc<Insn>) -> Arc<Insn> {
     let mut anchored = (*one).clone();
@@ -1092,7 +1084,7 @@ pub fn bytes_only(one: &Arc<Insn>) -> Arc<Insn> {
 
 /// `insns` without the ones `drop` picks, their bytes given to a survivor.
 ///
-/// Direct port of `qbopt.model.lir:without`.  The retained operation is the
+/// The retained operation is the
 /// rewritten occurrence, while ownership decisions are deliberately made
 /// against the original occurrence, matching Python's two-phase loop.
 #[must_use]
@@ -1269,7 +1261,7 @@ mod tests {
 
     #[test]
     fn direct_lir_model_without_gives_removed_bytes_to_the_previous_owner() {
-        // Port of qbopt.model.lir:without: a removed identity copy may hand
+        // without: a removed identity copy may hand
         // its exact contiguous bytes backwards, never to a later entry.
         let prior = instruction(0x10, Some((0x10, 0x12)));
         let removed = instruction(0x12, Some((0x12, 0x14)));
@@ -1280,7 +1272,7 @@ mod tests {
 
     #[test]
     fn direct_lir_model_without_transfers_the_first_owner_to_its_successor() {
-        // Port of qbopt.model.lir:without's final first-instruction case:
+        // the final first-instruction case:
         // only a block's first source span can safely move forward.
         let removed = instruction(0x10, Some((0x10, 0x12)));
         let following = instruction(0x12, Some((0x12, 0x14)));
@@ -1291,7 +1283,7 @@ mod tests {
 
     #[test]
     fn direct_lir_model_without_retains_noncontiguous_or_spread_source_owners() {
-        // Port of qbopt.model.lir:without byte-ownership refusals: no valid
+        // without byte-ownership refusals: no valid
         // predecessor or multiple disjoint spans means the copy stays.
         let detached = instruction(0x20, Some((0x20, 0x22)));
         let next = instruction(0x30, Some((0x30, 0x32)));

@@ -1,12 +1,12 @@
 //! What the language states, as Open Watcom's front end and our patch to it
 //! tell it: the one table from their words to facts (`llrm_mir::facts`).
 //!
-//! The patched front end speaks in terms of the language (`restrict`), never
-//! in llrm's; `translate` states whatever this table says and holds no code
-//! of its own for any fact. A stream from a build of another version is
-//! refused, not misread.
+//! The patched front end speaks in terms of the language (`restrict`,
+//! `__attribute__((noinline))`), never in llrm's; `translate` states whatever
+//! this table says and holds no code of its own for any fact. A stream from a
+//! build of another version is refused, not misread.
 
-use llrm_mir::facts::{Effect, Fact};
+use llrm_mir::facts::{Effect, Fact, Inlining};
 use llrm_support::hash::HashMap;
 
 use crate::hir::{Node, Unit, Unsupported, handle};
@@ -57,10 +57,13 @@ const ABORTS: i64 = 0x2;
 const NORETURN: i64 = 0x4;
 const NO_MEMORY_READ: i64 = 0x100;
 const NO_MEMORY_CHANGED: i64 = 0x200;
+/// Not Open Watcom's: `__attribute__((noinline))`, the bit
+/// `toolchain/owshim/llrmattr.h` adds to the class.
+const NO_INLINE: i64 = 0x800;
 
 /// Every bit the call class has, and what is done with it: a bit not in this
 /// table is refused, not dropped.
-const CLASS: [(i64, &str, Bit); 11] = [
+const CLASS: [(i64, &str, Bit); 12] = [
     (0x1, "REVERSE_PARMS", Bit::Abi("Symbol::in_order")),
     (ABORTS, "ABORTS", Bit::Fact),
     (NORETURN, "NORETURN", Bit::Fact),
@@ -72,11 +75,13 @@ const CLASS: [(i64, &str, Bit); 11] = [
     (NO_MEMORY_READ, "NO_MEMORY_READ", Bit::Fact),
     (NO_MEMORY_CHANGED, "NO_MEMORY_CHANGED", Bit::Fact),
     (0x400, "DLL_EXPORT", Bit::Ignored("a Windows export")),
+    (NO_INLINE, "NO_INLINE", Bit::Fact),
 ];
 
-/// The facts a routine's call class states: it does not return, and what it
-/// does not do to memory (`#pragma aux ... nomemory`). A bit that changes
-/// meaning and has no carrier, or that this table does not know, refuses.
+/// The facts a routine's call class states: it does not return, it is not
+/// inlined, and what it does not do to memory (`#pragma aux ... nomemory`). A
+/// bit that changes meaning and has no carrier, or that this table does not
+/// know, refuses.
 pub fn of_call_class(class: i64) -> Result<Vec<Fact>, Unsupported> {
     let known = CLASS.iter().fold(0, |all, (bit, ..)| all | bit);
     if class & !known != 0 {
@@ -90,6 +95,9 @@ pub fn of_call_class(class: i64) -> Result<Vec<Fact>, Unsupported> {
     let mut facts = Vec::new();
     if class & (ABORTS | NORETURN) != 0 {
         facts.push(Fact::NoReturn);
+    }
+    if class & NO_INLINE != 0 {
+        facts.push(Fact::Inline(Inlining::Never));
     }
     match (class & NO_MEMORY_READ != 0, class & NO_MEMORY_CHANGED != 0) {
         (true, true) => facts.push(Fact::Memory(Effect::None)),
@@ -179,6 +187,14 @@ mod tests {
         assert_eq!(of_call_class(0x180).unwrap(), vec![Fact::Memory(Effect::Write)]);
     }
 
+    /// `__attribute__((noinline))` was a syntax error in the front end; its bit
+    /// of the call class is `Inlining::Never`, and no other fact.
+    #[test]
+    fn a_call_class_states_that_a_routine_is_never_inlined() {
+        assert_eq!(of_call_class(0x800).unwrap(), vec![Fact::Inline(Inlining::Never)]);
+        assert_eq!(of_call_class(0x804).unwrap(), vec![Fact::NoReturn, Fact::Inline(Inlining::Never)]);
+    }
+
     #[test]
     fn restrict_states_noalias_of_the_parameter_it_names() {
         let mut unit = Unit::default();
@@ -199,7 +215,7 @@ mod tests {
         assert_eq!(of_call_class(0x40).unwrap(), Vec::<Fact>::new());
         assert!(returns_twice(0x40) && !returns_twice(0x80));
         assert!(of_call_class(0x88).unwrap_err().0.contains("PARMS_BY_ADDRESS"));
-        assert!(of_call_class(0x800).unwrap_err().0.contains("no table"));
+        assert!(of_call_class(0x1000).unwrap_err().0.contains("no table"));
         // The ABI bits and the ignored one pass.
         assert_eq!(of_call_class(0x1 | 0x10 | 0x20 | 0x80 | 0x400).unwrap(), Vec::<Fact>::new());
         // Each bit is in the table once.

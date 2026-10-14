@@ -232,6 +232,9 @@ pub struct OperationCosts {
     pub pieces_clear: i64,
     pub pieces_set_size: i64,
     pub pieces_clear_size: i64,
+    /// The fewest case values for which a switch is a jump table (gcc's
+    /// `case_values_threshold`); 0: the target has no table jump.
+    pub jump_table: i64,
 }
 
 impl OperationCosts {
@@ -332,6 +335,7 @@ impl Default for OperationCosts {
             pieces_clear: 0,
             pieces_set_size: 0,
             pieces_clear_size: 0,
+            jump_table: 0,
         }
     }
 }

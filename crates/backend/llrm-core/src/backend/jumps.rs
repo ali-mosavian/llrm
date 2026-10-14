@@ -1537,6 +1537,9 @@ pub fn _redirected(
                     if let Some(old) = what.target {
                         let what = Semantics { target: Some(target(old)), ..what.clone() };
                         one = Arc::new(Insn { what: Some(what), ..(*one).clone() });
+                    } else if !what.table.is_empty() {
+                        let table = what.table.iter().map(|at| target(*at)).collect();
+                        one = Arc::new(Insn { what: Some(Semantics { table, ..what.clone() }), ..(*one).clone() });
                     }
                 }
             }
@@ -1818,6 +1821,43 @@ pub fn _step(
             .iter()
             .find(|next| !next.phis.is_empty() || next.insns.iter().any(|one| !one.is_meta()))
             .map(|next| next.at);
+        if !last_what.table.is_empty() {
+            // A table jump's index to a block that only jumps goes to where it
+            // jumps. None of the rules below read a jump with no target.
+            let table: Vec<i64> = last_what
+                .table
+                .iter()
+                .map(|&entry| _through(&blocks, at, Some(entry), protected).unwrap_or(entry))
+                .collect();
+            if table == last_what.table {
+                continue;
+            }
+            let changed: Vec<(i64, i64)> = last_what
+                .table
+                .iter()
+                .zip(&table)
+                .filter(|(old, new)| old != new)
+                .map(|(&old, &new)| (old, new))
+                .collect();
+            for &(old, onward) in &changed {
+                body.odds.rerouted(block.at, &block.succ, old, &[(onward, 1.0)]);
+            }
+            let moved = Arc::new(Insn {
+                what: Some(Semantics { table: table.clone(), ..last_what.clone() }),
+                ..(**last).clone()
+            });
+            let succ: IndexSet<i64> = table.iter().copied().collect();
+            let insns =
+                block.insns.iter().map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&moved) } else { Arc::clone(one) });
+            blocks[index] = LirBlock { succ: succ.into_iter().collect(), ..block.with_insns(insns.collect()) };
+            body.blocks = blocks;
+            for (old, _) in changed {
+                if old != body.entry && !body.blocks.iter().any(|one| one.succ.contains(&old)) {
+                    _stranded(body, at);
+                }
+            }
+            return Some(at.get(&here).copied().unwrap_or(0));
+        }
         let target = _through(&blocks, at, last_what.target, protected);
         if target != last_what.target {
             let onward = target.expect("a passage names its target");
