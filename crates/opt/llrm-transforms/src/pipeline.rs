@@ -137,8 +137,8 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopmotion,
-    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, tailrec, trivialunswitch, unroll, unroll_jam, unswitch,
-    window,
+    loopsimplify, lsr, peel, phiopt, ports, promote, rotate, switchlower, tailrec, trivialunswitch, unroll, unroll_jam,
+    unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -167,6 +167,12 @@ pub struct Options {
     /// the path that lacks it: gcc's `-ftree-pre`, -O2 and up. Without it
     /// `gvn` only removes what is redundant on every path (`-ftree-fre`, -O1).
     pub pre: bool,
+    /// A switch that only picks constants is a load from an array: gcc's
+    /// `-ftree-switch-conversion`, -O2 and up.
+    pub switch_conversion: bool,
+    /// A dense switch may be a jump table: gcc's `-fjump-tables`, on at every
+    /// level.
+    pub jump_tables: bool,
     pub drop_stores: bool,
     pub promote: bool,
     pub strength: bool,
@@ -227,6 +233,8 @@ impl Default for Options {
             copy_headers: true,
             for_size: false,
             expensive: true,
+            switch_conversion: true,
+            jump_tables: true,
             search: true,
             routes: true,
             exhaustive: false,
@@ -260,6 +268,7 @@ impl Options {
             peel: false,
             unswitch: false,
             expensive: false,
+            switch_conversion: false,
             ..Self::default()
         }
     }
@@ -526,6 +535,10 @@ pub fn recorded(
         ranges: applied.options.ipa_ranges,
         rate: Some(if applied.options.prefers_size() { 0 } else { applied.options.limits.milliclocks_per_byte }),
     });
+    // A global no body loads from any more (the loads were forwarded) needs
+    // none of its stores, as LLVM's GlobalOpt and gcc's ipa find a variable
+    // only written; the dead-code pass then finds nothing names it.
+    manager.add_module(globalopt::WriteOnly);
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
@@ -613,6 +626,22 @@ pub fn recorded(
     // sinks.
     if applied.options.wanted("addresssink") {
         manager.add(addresssink::AddressSink);
+    }
+    // Last of the passes that reshape the body, as gcc's `pass_lower_switch`
+    // follows its optimizations.
+    if applied.options.switch_conversion && applied.options.wanted("switchconv") {
+        manager.add(switchlower::SwitchLower {
+            convert: true,
+            jump_tables: applied.options.jump_tables,
+            size: applied.options.prefers_size(),
+        });
+    }
+    if applied.options.wanted("switchlower") {
+        manager.add(switchlower::SwitchLower {
+            convert: false,
+            jump_tables: applied.options.jump_tables,
+            size: applied.options.prefers_size(),
+        });
     }
     // Last: what it names are the instructions selection sees.
     manager.add_module(crate::spares::Spares);

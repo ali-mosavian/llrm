@@ -34,6 +34,110 @@ const GROUP_TARGET: u8 = 1;
 const EXTERNAL_TARGET: u8 = 2;
 const GROUP_FRAME: u8 = 1;
 const TARGET_FRAME: u8 = 5;
+/// COMDAT, and the symbol-relative line numbers (LINSYM) that go with it, each
+/// with its 32-bit twin.
+const COMDAT: u8 = 0xC2;
+const LINSYM: u8 = 0xC4;
+/// A COMDAT's attributes: allocated explicitly in the segment named, no
+/// duplicate allowed.
+const COMDAT_EXPLICIT: u8 = 0;
+/// The COMDAT flag bit: this data continues the one before it.
+const COMDAT_CONTINUATION: u8 = 1;
+
+/// The sections written as COMDATs: each is named by its symbol at offset 0,
+/// which a fixup reaches as an external (the way MSC's /Gy objects do it), the
+/// linker finding the COMDAT that defines it.
+struct Comdats {
+    /// Section index to the symbol that names it.
+    main: std::collections::BTreeMap<usize, usize>,
+    /// Section index to the name the COMDAT is written under: the symbol's, or
+    /// for a local one (a linker finds a local COMDAT through no external)
+    /// that name made the module's own.
+    names: std::collections::BTreeMap<usize, String>,
+    /// Section index to the index of its EXTDEF, where a fixup refers to it.
+    extdef: std::collections::BTreeMap<usize, usize>,
+}
+
+impl Comdats {
+    fn of(
+        object: &Object,
+        undefined: usize,
+    ) -> Result<Self, Error> {
+        let mut main = std::collections::BTreeMap::new();
+        for &section in &object.omf_comdat {
+            let named = object
+                .symbols
+                .iter()
+                .position(
+                    |symbol| matches!(
+                        symbol.definition,
+                        Definition::Defined { section: at, offset: 0 } if at == section
+                    ),
+                );
+            let Some(named) = named else {
+                return Err(unencodable(format!(
+                    "{}: a COMDAT section with no symbol at its start",
+                    object.sections[section].name
+                )));
+            };
+            main.insert(section, named);
+        }
+        // The module's key: its name and everything it holds (not the debug
+        // sections: `-g` changes no name), so two modules of one name,
+        // as two `m.nib` of different directories, do not meet in a local
+        // function's name.
+        let mut own = 0xcbf2_9ce4_8422_2325_u64;
+        let mut feed = |bytes: &[u8]| {
+            for &byte in bytes {
+                own = (own ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            // A separator, so that two halves cannot trade bytes.
+            own = (own ^ 0xff).wrapping_mul(0x0000_0100_0000_01b3);
+        };
+        feed(object.name.as_bytes());
+        for section in object.sections.iter().filter(|section| section.role != Role::Debug) {
+            feed(section.name.as_bytes());
+            feed(&section.image);
+            for reloc in &section.relocs {
+                feed(&reloc.at.to_le_bytes());
+                feed(format!("{:?}{}", reloc.target, reloc.addend).as_bytes());
+            }
+        }
+        for symbol in &object.symbols {
+            feed(symbol.name.as_bytes());
+            feed(format!("{:?}", symbol.definition).as_bytes());
+        }
+        let names = main
+            .iter()
+            .map(|(&section, &symbol)| {
+                let one = &object.symbols[symbol];
+                let name = if one.binding == llrm_object::Binding::Public {
+                    one.name.clone()
+                } else {
+                    format!("{}${own:016X}", one.name)
+                };
+                (section, name)
+            })
+            .collect();
+        let reached = |target: &Target| match *target {
+            Target::Section(section) => Some(section),
+            Target::Symbol(symbol) => match object.symbols[symbol].definition {
+                Definition::Defined { section, .. } => Some(section),
+                Definition::Undefined => None,
+            },
+            Target::OmfGroup(_) => None,
+        };
+        let referenced: std::collections::BTreeSet<usize> = object
+            .sections
+            .iter()
+            .flat_map(|section| section.relocs.iter())
+            .filter_map(|reloc| reached(&reloc.target))
+            .filter(|section| main.contains_key(section))
+            .collect();
+        let extdef = referenced.into_iter().enumerate().map(|(at, section)| (section, undefined + at)).collect();
+        Ok(Comdats { main, names, extdef })
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -141,6 +245,7 @@ struct Resolved {
 fn resolved(
     object: &Object,
     extern_index: &[usize],
+    comdats: &Comdats,
     section: &Section,
     at: usize,
 ) -> Result<Resolved, Error> {
@@ -149,8 +254,14 @@ fn resolved(
     let in_group = |section: usize| object.omf_groups.iter().position(|group| group.members.contains(&section));
     let (method, datum, group) = match reloc.target {
         Target::OmfGroup(group) => (GROUP_TARGET, group as i64 + 1, Some(group)),
+        Target::Section(section) if comdats.extdef.contains_key(&section) => {
+            (EXTERNAL_TARGET, comdats.extdef[&section] as i64 + 1, None)
+        }
         Target::Section(section) => (SEGMENT_TARGET, section as i64 + 1, in_group(section)),
         Target::Symbol(symbol) => match (&object.symbols[symbol], object.symbols[symbol].definition) {
+            (_, Definition::Defined { section, .. }) if comdats.extdef.contains_key(&section) => {
+                (EXTERNAL_TARGET, comdats.extdef[&section] as i64 + 1, None)
+            }
             (_, Definition::Defined { section, .. }) => (SEGMENT_TARGET, section as i64 + 1, in_group(section)),
             (named, Definition::Undefined) => (EXTERNAL_TARGET, extern_index[symbol] as i64 + 1, named.group),
         },
@@ -216,10 +327,79 @@ fn linnum(
         .collect()
 }
 
-/// Section `index`'s LEDATA and FIXUPP records.
+/// A COMDAT record: `payload` is the bytes of the function from `offset` on; a
+/// record after the first of a function continues it.
+fn comdat_record(
+    bits: u32,
+    name: i64,
+    flags: u8,
+    group: i64,
+    segment: i64,
+    offset: usize,
+    payload: &[u8],
+) -> Result<Rc<omf::Record>, Error> {
+    // Alignment 0: the segment's own. Type index 0: none.
+    let mut body = vec![flags, COMDAT_EXPLICIT, 0];
+    if bits == 32 {
+        body.extend((offset as u32).to_le_bytes());
+    } else {
+        body.extend(u16::try_from(offset).map_err(|_| unencodable("a COMDAT past 64K"))?.to_le_bytes());
+    }
+    body.extend(omf::as_index(0)?);
+    body.extend(omf::as_index(group)?);
+    body.extend(omf::as_index(segment)?);
+    body.extend(omf::as_index(name)?);
+    body.extend_from_slice(payload);
+    Ok(Rc::new(omf::Record::new(if bits == 32 { COMDAT + 1 } else { COMDAT }, body)))
+}
+
+/// Where a COMDAT's data is named: the LNAMES index of its symbol.
+struct Named {
+    name: i64,
+}
+
+/// A COMDAT's line numbers: LINSYM, which names the COMDAT's symbol where
+/// LINNUM names a segment.
+fn linsym(
+    bits: u32,
+    named: &Named,
+    lines: &[(u32, usize)],
+) -> Result<Vec<Rc<omf::Record>>, Error> {
+    let width = if bits == 32 { 4 } else { 2 };
+    lines
+        .chunks(CHUNK / (2 + width))
+        .enumerate()
+        .map(|(number, chunk)| {
+            // Flags: a record after the first continues it.
+            let mut body = vec![u8::from(number > 0)];
+            body.extend(omf::as_index(named.name)?);
+            for &(line, at) in chunk {
+                let Ok(line) = u16::try_from(line) else {
+                    return Err(unencodable(format!("line {line} at {at:#x} does not fit LINSYM")));
+                };
+                body.extend(line.to_le_bytes());
+                if bits == 32 {
+                    body.extend((at as u32).to_le_bytes());
+                } else {
+                    body.extend(
+                        u16::try_from(at)
+                            .map_err(|_| unencodable(format!("line {line} at {at:#x} does not fit LINSYM")))?
+                            .to_le_bytes(),
+                    );
+                }
+            }
+            Ok(Rc::new(omf::Record::new(if bits == 32 { LINSYM + 1 } else { LINSYM }, body)))
+        })
+        .collect()
+}
+
+/// Section `index`'s LEDATA and FIXUPP records, or its COMDAT and FIXUPP
+/// records where `named`.
 fn ledata(
     object: &Object,
     extern_index: &[usize],
+    comdats: &Comdats,
+    named: Option<&Named>,
     index: usize,
 ) -> Result<Vec<Rc<omf::Record>>, Error> {
     let bits = object.arch.bits();
@@ -229,7 +409,7 @@ fn ledata(
     let mut image = section.image.clone();
     let mut subrecords = std::collections::BTreeMap::new();
     for &at in &at_sorted {
-        let made = resolved(object, extern_index, section, at)?;
+        let made = resolved(object, extern_index, comdats, section, at)?;
         let kind = section.relocs.iter().find(|one| one.at == at).expect("sorted from them").kind;
         if kind == Kind::SegmentBase && made.value != 0 {
             return Err(unencodable(format!("{}: a segment base with an addend", section.name)));
@@ -238,6 +418,8 @@ fn ledata(
         subrecords.insert(at, (made.subrecord, kind));
     }
     let (mut out, mut placed) = (Vec::new(), 0);
+    let group =
+        object.omf_groups.iter().position(|group| group.members.contains(&index)).map_or(0, |one| one as i64 + 1);
     for &[mut start, end] in &section.spans {
         while start < end {
             let mut stop = end.min(start + CHUNK);
@@ -247,7 +429,10 @@ fn ledata(
                 }
             }
             let payload = &image[start..stop];
-            out.push(if bits == 32 {
+            out.push(if let Some(named) = named {
+                let flags = if out.is_empty() { 0 } else { COMDAT_CONTINUATION };
+                comdat_record(bits, named.name, flags, group, index as i64 + 1, start, payload)?
+            } else if bits == 32 {
                 omf::ledata_record32(index as i64 + 1, start as i64, payload)?
             } else {
                 omf::ledata_record(index as i64 + 1, start as i64, payload)?
@@ -331,7 +516,9 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     let mut segdefs = Vec::new();
     for section in &object.sections {
         let (klass, name) = (lname(class(section)), lname(&section.name));
-        let size = section.image.len();
+        // A COMDAT's bytes are the linker's to place: its segment here is the
+        // empty one it is placed in.
+        let size = if object.omf_comdat.contains(&segdefs.len()) { 0 } else { section.image.len() };
         // A USE32 segment is dword aligned at least: its offsets are 32-bit.
         let alignment = if selector(section) {
             PARAGRAPH
@@ -378,9 +565,15 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
             Some(index)
         })
         .collect();
+    let undefined = object.symbols.iter().filter(|symbol| symbol.definition == Definition::Undefined).count();
+    let comdats = Comdats::of(object, undefined)?;
+    let mut named_comdats: std::collections::BTreeMap<usize, Named> = std::collections::BTreeMap::new();
+    for (&section, name) in &comdats.names {
+        named_comdats.insert(section, Named { name: lname(name) });
+    }
     let mut data = Vec::new();
     for index in 0..object.sections.len() {
-        data.extend(ledata(object, &extern_index, index)?);
+        data.extend(ledata(object, &extern_index, &comdats, named_comdats.get(&index), index)?);
     }
 
     let mut records = vec![Rc::new(omf::Record::new(omf::THEADR, string(&object.name)))];
@@ -400,11 +593,28 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     records.extend(grpdefs);
     let declared: Vec<&llrm_object::Symbol> =
         object.symbols.iter().filter(|symbol| symbol.definition == Definition::Undefined).collect();
-    if !declared.is_empty() {
-        let body = declared.iter().flat_map(|symbol| [string(&symbol.name), vec![0]].concat()).collect();
+    // The COMDATs a fixup reaches are declared as externals, in the order their
+    // indices were given.
+    let mut names: Vec<&str> = declared.iter().map(|symbol| symbol.name.as_str()).collect();
+    names.extend(comdats.extdef.keys().map(|section| comdats.names[section].as_str()));
+    if !names.is_empty() {
+        let body = names.iter().flat_map(|name| [string(name), vec![0]].concat()).collect();
         records.push(Rc::new(omf::Record::new(omf::EXTDEF, body)));
     }
     for index in 0..object.sections.len() {
+        // A COMDAT's symbol is defined by the COMDAT itself.
+        if comdats.main.contains_key(&index) {
+            if let Some(inside) = object.symbols.iter().find(|symbol| {
+                symbol.binding == llrm_object::Binding::Public
+                    && matches!(
+                        symbol.definition,
+                        Definition::Defined { section, offset } if section == index && offset != 0
+                    )
+            }) {
+                return Err(unencodable(format!("{}: a public symbol inside a COMDAT", inside.name)));
+            }
+            continue;
+        }
         let defined: Vec<(usize, &str, usize)> = object
             .symbols
             .iter()
@@ -461,7 +671,10 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     records.extend(data);
     records.extend(td.iter().map(|one| Rc::clone(&one.source)));
     for (index, lines) in lines.iter().enumerate() {
-        records.extend(linnum(index + 1, lines)?);
+        match named_comdats.get(&index) {
+            Some(named) => records.extend(linsym(bits, named, lines)?),
+            None => records.extend(linnum(index + 1, lines)?),
+        }
     }
     records.push(Rc::new(omf::Record::new(omf::MODEND, vec![0])));
     Ok(records.iter().flat_map(|record| record.emit()).collect())
@@ -494,7 +707,72 @@ mod tests {
         sections: Vec<Section>,
         symbols: Vec<Symbol>,
     ) -> Object {
-        Object { name: "t.c".into(), arch, sections, symbols, omf_groups: Vec::new(), debug: None }
+        Object {
+            name: "t.c".into(),
+            arch,
+            sections,
+            symbols,
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            debug: None,
+        }
+    }
+
+    /// A COMDAT object of one local function `helper` whose bytes are `code`,
+    /// as an object named `t.c`.
+    fn with_helper(code: Vec<u8>) -> Object {
+        let mut made = object(
+            Arch::I8086,
+            vec![section("T", code, Vec::new())],
+            vec![Symbol {
+                name: "helper".into(),
+                binding: Binding::Local,
+                definition: Definition::Defined { section: 0, offset: 0 },
+                group: None,
+            }],
+        );
+        made.omf_comdat = vec![0];
+        made
+    }
+
+    /// The names of the module's COMDATs, as LNAMES holds them.
+    fn comdat_names(made: &Object) -> Vec<String> {
+        let records = crate::omf::parse(&write(made).unwrap()).unwrap();
+        let lnames = records.iter().find(|one| one.r#type == omf::LNAMES).expect("LNAMES");
+        let (mut names, mut at) = (Vec::new(), 0);
+        while at < lnames.body.len() {
+            let size = usize::from(lnames.body[at]);
+            names.push(String::from_utf8_lossy(&lnames.body[at + 1..at + 1 + size]).into_owned());
+            at += 1 + size;
+        }
+        names.into_iter().filter(|name| name.starts_with("helper")).collect()
+    }
+
+    /// A local function of one name in two modules of one name (`m.nib` of two
+    /// directories) was the same COMDAT name in both, which jwlink refused
+    /// as a redefinition (and a linker that kept the first would bind both to
+    /// one body): a local COMDAT's name carries a key of what its module
+    /// holds.
+    #[test]
+    fn a_local_comdat_of_the_same_name_in_two_modules_of_one_name_has_two_names() {
+        let (first, second) =
+            (comdat_names(&with_helper(vec![0x90, 0xC3])), comdat_names(&with_helper(vec![0x40, 0xC3])));
+        assert_eq!((first.len(), second.len()), (1, 1), "{first:?} {second:?}");
+        assert_ne!(first, second);
+        assert!(first[0].starts_with("helper$"), "{first:?}");
+        assert_eq!(first, comdat_names(&with_helper(vec![0x90, 0xC3])), "the same module has the same name each time");
+    }
+
+    /// A public function keeps its name, which other modules call it by, and
+    /// the COMDAT alone defines it.
+    #[test]
+    fn a_public_comdat_keeps_its_name_and_is_defined_by_the_comdat_alone() {
+        let mut made = with_helper(vec![0x90, 0xC3]);
+        made.symbols[0].binding = Binding::Public;
+        let records = crate::omf::parse(&write(&made).unwrap()).unwrap();
+        assert_eq!(comdat_names(&made), ["helper"]);
+        assert_eq!(records.iter().filter(|one| one.r#type == 0xC2).count(), 1);
+        assert_eq!(records.iter().filter(|one| one.r#type == omf::PUBDEF).count(), 0);
     }
 
     /// NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was

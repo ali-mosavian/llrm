@@ -172,7 +172,7 @@ def test_the_torture_step_has_no_wall_clock_limit_of_its_own():
 
 def test_every_step_the_planner_can_produce_is_in_exactly_one_ci_group():
     """A step in no group would never run in CI, silently: the matrix is built from the groups."""
-    plans = [gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full"), gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "auto"), gate.plan(["crates/backend/x.rs"], "fast")]  # `scans` and `measure` are fast-tier steps
+    plans = [gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full"), gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "auto"), gate.plan(["crates/backend/x.rs"], "fast"), gate.plan(["tools/gate/gate.py"]), gate.plan(["crates/backend/x.rs", "docs/a.md"], "smoke")]  # `scans` and `measure` are fast-tier steps
     everything = [s for q in plans for s in q.steps if s != "build"]  # the build is its own job
     grouped = [s for members in gate.load()["groups"].values() for s in members]
     assert sorted(grouped) == sorted(set(grouped)), "a step is in two groups"
@@ -632,11 +632,11 @@ def test_the_build_makes_one_set_of_crates_for_the_binaries_and_the_tests():
 def test_a_diff_without_compiler_source_plans_only_the_steps_that_cover_its_files():
     """The user's rule: a PR that changes nothing under crates/ or in the Cargo files does not run the compiler gate, it merges on narrow
     tests of what it changed. A gate.py edit planned the full tier (every step, 4,340 CPU-s); its own tests are the pytest step."""
-    assert gate.plan(["tools/gate/gate.py", "tools/gate/test_gate.py"]).steps == ["pytest"]
+    assert gate.plan(["tools/gate/gate.py", "tools/gate/test_gate.py"]).steps == ["pytest", "facts"]
     assert gate.plan(["tools/measure.py"]).steps[-1] == "measure" and "lib" not in gate.plan(["tools/measure.py"]).steps
     narrow = gate.plan(["tests/target_facts.rs"])
     assert narrow.tier == "fast" and narrow.steps == ["build", "pytest", "integration", "fmt"], narrow
-    assert gate.plan(["tools/torture/torture.py"]).steps == ["build", "pytest", "torture"]
+    assert gate.plan(["tools/torture/torture.py"]).steps == ["build", "pytest", "facts", "torture"]
     assert "build" not in gate.plan(["tools/gate/tiers.toml"]).steps
     # compiler source, or a Cargo file anywhere, takes the tiers as before
     assert gate.plan(["crates/ir/llrm-mir/src/lib.rs", "tools/gate/gate.py"]).tier == "full"
@@ -644,6 +644,14 @@ def test_a_diff_without_compiler_source_plans_only_the_steps_that_cover_its_file
     assert "lib" in gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]).steps
     # asking for the full tier still runs every step: the gate's own PRs run the gate
     assert gate.plan(["tools/gate/gate.py"], "full").tier == "full" and len(gate.plan(["tools/gate/gate.py"], "full").steps) > 8
+
+
+def test_a_runtime_change_alone_plans_the_bench_whose_counts_it_moves():
+    """#1669 changed runtime/qb/console.c and nothing else; its gate planned no bench, so the ten bq32 rows (which link that runtime and
+    count the kernel's calls into it) moved by 1 to 13 instructions in 10^8 unseen, and the next four gates failed on main as their base."""
+    assert "bench" in gate.plan(["runtime/qb/console.c"]).steps
+    assert "bench" in gate.plan(["runtime/c/x86-m32/ext.asm"]).steps
+    assert "bench" not in gate.plan(["docs/working/gate.md"]).steps
 
 
 def test_a_benchmark_added_on_its_own_plans_every_step_that_reads_bench():
@@ -671,8 +679,10 @@ def test_a_step_with_no_log_growth_and_no_cpu_is_killed_with_its_last_lines(tmp_
 
     env = {**__import__("os").environ}
     began = _time.time()
-    _, code, wall, _ = gate.run_step("hang", "echo before the hang; sleep 63.7", tmp_path, env, stall=2)
-    assert code == gate.STALL_CODE and wall < 20 and _time.time() - began < 20, (code, wall)
+    # A sleep no other run of this test (the gate runs files side by side) has: the leak check looks for it in `ps`.
+    sleeper = f"sleep 63.{__import__('os').getpid()}"
+    _, code, wall, _ = gate.run_step("hang", f"echo before the hang; {sleeper}", tmp_path, env, stall=2)
+    assert code == gate.STALL_CODE and wall < 120 and _time.time() - began < 120, (code, wall)
     log = (tmp_path / "hang.failed.log").read_text()
     assert "before the hang" in log and "STALLED" in log
     # writing keeps a step alive without CPU; computing keeps it alive without writing
@@ -680,7 +690,7 @@ def test_a_step_with_no_log_growth_and_no_cpu_is_killed_with_its_last_lines(tmp_
     spin = 'python3 -c "import time; t = time.process_time()\nwhile time.process_time() - t < 4: pass"'
     assert gate.run_step("spin", spin, tmp_path, env, stall=2)[1] == 0
     # the killed step took its subprocesses with it
-    assert "sleep 63.7" not in sp_out(["ps", "-eo", "args"]), "the stalled step's sleep outlived it"
+    assert sleeper not in sp_out(["ps", "-eo", "args"]), "the stalled step's sleep outlived it"
 
 
 def test_a_test_over_its_cpu_limit_fails_with_its_name_and_its_subprocess_is_killed(tmp_path):
@@ -787,3 +797,196 @@ def test_a_change_to_a_tool_the_integration_tests_run_plans_the_integration_step
     for touched in ("toolchain/wdump.sh", "toolchain/jwbuild.sh", "tools/debug-gate.env"):
         assert "integration" in gate.plan([touched]).steps, touched
     assert "integration" not in gate.plan(["tools/measure.py"]).steps
+
+
+def test_the_gate_runs_in_its_own_high_weight_scope_once_and_only_when_systemd_is_there():
+    """Without it the gate shared one cgroup with every session's builds and was starved (17 min wall)."""
+    cmd = gate.scoped(["python3", "gate.py", "run"], {}, "/usr/bin/systemd-run")
+    assert cmd[:3] == ["/usr/bin/systemd-run", "--user", "--scope"] and cmd[cmd.index("-p") + 1] == "CPUWeight=1000" and cmd[-3:] == ["python3", "gate.py", "run"]
+    assert any(c == "--setenv=GATE_SCOPED=1" for c in cmd)
+    assert "CPUWeight=300" in gate.scoped(["x"], {"GATE_CPU_WEIGHT": "300"}, "/s")
+    assert gate.scoped(["x"], {"GATE_SCOPED": "1"}, "/s") is None, "the re-executed gate must not wrap itself again"
+    assert gate.scoped(["x"], {"GATE_CPU_WEIGHT": "0"}, "/s") is None
+    assert gate.scoped(["x"], {}, "") is None
+
+
+def test_steps_at_once_scale_with_the_cores_not_a_fixed_four():
+    """JOBS defaulted to 4: a full gate ran four steps at a time on 32 cores, and its wall was the sum of the queue."""
+    assert gate.default_jobs({}, 32) == 16 and gate.default_jobs({}, 4) == 4 and gate.default_jobs({"JOBS": "6"}, 32) == 6
+
+
+def _shards(tmp_path, files: dict[str, str], *extra: str):
+    import subprocess as sp
+    import sys as _sys
+
+    for name, body in files.items():
+        (tmp_path / name).write_text(body)
+    return sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "-j", "3", "test_a.py", "test_b.py", "test_c.py", *extra], capture_output=True, text=True, cwd=tmp_path, timeout=60)
+
+
+def test_a_failing_test_in_any_shard_fails_the_run_and_is_printed(tmp_path):
+    """Sharding must not hide a red: the failing file's output is printed whole and the exit is 1."""
+    done = _shards(tmp_path, {"test_a.py": "def test_fine():\n    pass\n", "test_b.py": "def test_broken_in_b():\n    assert 1 == 2\n", "test_c.py": "def test_ok():\n    pass\n"})
+    assert done.returncode == 1, done.stdout
+    assert "test_broken_in_b" in done.stdout and "assert 1 == 2" in done.stdout and "FAILED files: test_b.py" in done.stdout
+    assert "3 files, 3 runs, 1 failed" in done.stdout
+
+
+def test_a_collection_error_in_a_shard_fails_the_run(tmp_path):
+    """A file that cannot be imported collects no test; it must be a red, not a missing file."""
+    done = _shards(tmp_path, {"test_a.py": "def test_fine():\n    pass\n", "test_b.py": "import no_such_module_anywhere\n", "test_c.py": "def test_ok():\n    pass\n"})
+    assert done.returncode == 1 and "no_such_module_anywhere" in done.stdout
+
+
+def test_all_shards_green_exits_zero_and_records_every_files_seconds(tmp_path):
+    rec = tmp_path / "rec.json"
+    done = _shards(tmp_path, {f"test_{x}.py": "def test_ok():\n    pass\n" for x in "abc"}, "--durations", str(rec))
+    assert done.returncode == 0, done.stdout
+    import json as _json
+
+    assert sorted(_json.loads(rec.read_text())) == ["test_a.py", "test_b.py", "test_c.py"]
+
+
+def test_the_pytest_step_runs_through_the_sharder_with_the_ignores_and_the_cpu_limit():
+    cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages(), skip_py=("tests/x.py",))["pytest"]
+    assert "pytest_shards.py" in cmd and "--ignore=tests/x.py" in cmd and "-- -q" in cmd and "-p pytest_cpulimit" in cmd
+
+
+def test_a_file_recorded_slow_is_cut_into_parts_that_together_hold_every_test_once(monkeypatch):
+    """One file (test_scaling_gate.py, 429 s) was the floor of the whole sharded run: it is dealt out over several processes."""
+    import pytest_shards
+
+    monkeypatch.setattr(pytest_shards, "SPLITTABLE", frozenset({"big.py"}))
+    ids = [f"big.py::test_{i}" for i in range(10)]
+    work = pytest_shards.units({"big.py": ids, "small.py": ["small.py::test_x"]}, {"big.py": 300.0, "small.py": 2.0})
+    big = [args for label, args in work if label.startswith("big.py")]
+    assert len(big) == 10 and sorted(sum(big, [])) == sorted(ids)
+    assert [a for l, a in work if l == "small.py"] == [["small.py"]]
+    assert work[0][0].startswith("big.py"), "longest first"
+
+
+def test_a_run_that_reports_fewer_tests_than_were_collected_fails(tmp_path):
+    """A shard killed or filtered to nothing must not read as green: the counts must agree."""
+    (tmp_path / "test_a.py").write_text("def test_ok():\n    pass\n\n\ndef test_two():\n    pass\n")
+    (tmp_path / "conftest.py").write_text("def pytest_collection_modifyitems(config, items):\n    if not config.option.collectonly:\n        del items[1:]\n")
+    import subprocess as sp
+    import sys as _sys
+
+    done = sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "-j", "2", "test_a.py"], capture_output=True, text=True, cwd=tmp_path, timeout=60)
+    assert done.returncode == 1 and "2 tests collected, 1 reported" in done.stdout, done.stdout
+
+
+def test_a_file_with_a_module_fixture_is_never_cut_into_parts():
+    """test_qbrt.py's module fixture runs every program in one DOSBox launch: cut in five it ran five launches, 185 s each against 134 s whole."""
+    import pytest_shards
+
+    ids = [f"tools/dosbatch/test_qbrt.py::test_{i}" for i in range(40)]
+    assert [a for _, a in pytest_shards.units({"tools/dosbatch/test_qbrt.py": ids}, {"tools/dosbatch/test_qbrt.py": 500.0})] == [["tools/dosbatch/test_qbrt.py"]]
+
+
+def test_flags_after_the_double_dash_reach_pytest_with_their_values(tmp_path):
+    """`-- -m slow_dos` made `slow_dos` a path and `-m` a flag with no value: nothing was collected."""
+    (tmp_path / "test_a.py").write_text("import pytest\n\n\n@pytest.mark.marked\ndef test_in():\n    pass\n\n\ndef test_out():\n    pass\n")
+    done = _shards(tmp_path, {"test_b.py": "def test_ok():\n    pass\n", "test_c.py": "def test_ok():\n    pass\n"}, "--", "-m", "marked", "-q")
+    assert done.returncode == 0 and "1 files" in done.stdout, done.stdout
+
+
+def test_the_dos_slow_step_runs_through_the_sharder_with_its_marker():
+    """One pytest process played every slow DOS test in turn: 283 s."""
+    cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
+    assert "pytest_shards.py" in cmd and "-- -m slow_dos" in cmd and "tools/dosbatch" in cmd
+
+
+def test_the_turbo_binary_runs_whole_in_the_turbo_step_and_not_in_integration():
+    """Its five Turbo Debugger tests sleep-polled for 168 s inside `integration`, which every code change runs."""
+    cmds = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())
+    assert cmds["turbo"].endswith("--test turbo") and "--skip" not in cmds["turbo"]
+    assert "--test turbo" not in cmds["integration"].replace("--test turbo_", "")
+    assert "--test cv4" not in cmds["integration"]
+
+
+def test_a_change_to_a_python_or_shell_file_in_a_scanned_tree_plans_the_target_facts_test_alone():
+    """tests/target_facts.rs reads them: a tools-only PR planned only pytest and landed four copies of a target fact; main went red."""
+    for path in ("tools/gate/pytest_shards.py", "tools/dosbatch/qbplay.py"):
+        assert "facts" in gate.plan([path]).steps, path
+    assert "integration" in gate.plan(["crates/target/x/run.sh"]).steps, "with compiler source the integration step has the test"
+    assert "facts" not in gate.plan(["tools/readme.md"]).steps and "build" not in gate.plan(["tools/gate/pytest_shards.py"]).steps
+
+
+NAME, MAKER = "Clau" + "de", "Anthro" + "pic"  # spelt in halves: the smoke tier refuses a diff that carries them
+
+
+def _repo(tmp_path):
+    import subprocess as sp
+
+    def git(*args, cwd=tmp_path):
+        return sp.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True, env={**__import__("os").environ, "GIT_AUTHOR_NAME": "a", "GIT_AUTHOR_EMAIL": "a@a", "GIT_COMMITTER_NAME": "a", "GIT_COMMITTER_EMAIL": "a@a"}).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "f").write_text("one\n")
+    git("add", "f")
+    git("commit", "-q", "-m", "base")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    return git
+
+
+def test_smoke_plans_the_fast_tiers_steps_cut_to_the_smoke_list_with_docs_and_the_diffs_tests():
+    p = gate.plan(["crates/backend/llrm-core/src/a.rs", "tools/gate/test_gate.py"], "smoke")
+    assert p.tier == "smoke" and p.steps[0] == "build"
+    assert set(p.steps) <= set(gate.load()["smoke"]["steps"]) and {"docs", "changed-tests", "pytest-programs", "fmt"} <= set(p.steps)
+    assert not {"run", "bench", "torture", "qcport", "measure", "identity", "turbo", "cv4", "dos-slow", "integration", "pytest"} & set(p.steps)
+    assert "facts" in gate.plan(["tools/gate/pytest_shards.py"], "smoke").steps and "facts" in p.steps
+    docs_only = gate.plan(["docs/working/gate.md"], "smoke")
+    assert docs_only.steps == ["docs", "changed-tests"], "a docs-only PR still has its generated pages checked, and builds nothing"
+
+
+def test_the_changed_tests_step_runs_the_test_beside_a_changed_tool_and_the_root_binary_it_changed():
+    cmd = gate.changed_tests(["tools/gate/gate.py", "tests/turbo.rs", "docs/x.md"])
+    assert "tools/gate/test_gate.py" in cmd and "--test turbo" in cmd
+    assert gate.changed_tests(["docs/x.md"]) == "true"
+
+
+def test_smoke_refuses_a_base_that_is_not_main_a_conflict_a_mention_and_a_dirty_tree(tmp_path):
+    git = _repo(tmp_path)
+    assert gate.refusals(tmp_path) == []
+    assert any("stacked" in r for r in gate.refusals(tmp_path, pr={"baseRefName": "alim/other", "title": "t", "body": ""}))
+    assert any("names the assistant" in r for r in gate.refusals(tmp_path, pr={"baseRefName": "main", "title": "t", "body": "Generated with " + NAME + " Code"}))
+    (tmp_path / "f").write_text("dirty\n")
+    assert any("differs" in r for r in gate.refusals(tmp_path))
+    git("checkout", "-q", "f")
+    git("checkout", "-q", "-b", "pr")
+    (tmp_path / "g").write_text("a line by " + MAKER + "\n")
+    git("add", "g")
+    git("commit", "-q", "-m", "feat: g")
+    assert any("diff adds" in r for r in gate.refusals(tmp_path))
+    git("commit", "-q", "--amend", "-m", "feat: g\n\nCo-Authored-By: " + NAME + " <x@y>")
+    assert any("commit message" in r for r in gate.refusals(tmp_path))
+
+
+def test_smoke_refuses_a_branch_that_conflicts_with_main(tmp_path):
+    git = _repo(tmp_path)
+    git("checkout", "-q", "-b", "pr")
+    (tmp_path / "f").write_text("pr\n")
+    git("commit", "-qam", "pr edit")
+    git("checkout", "-q", "main")
+    (tmp_path / "f").write_text("main\n")
+    git("commit", "-qam", "main edit")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "pr")
+    assert any("conflicts" in r for r in gate.refusals(tmp_path))
+
+
+def test_a_passed_smoke_run_leaves_a_mark_for_its_head_that_the_train_reads(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLRM_SMOKE_DIR", str(tmp_path / "smoke"))
+    assert not gate.smoked("abc123")
+    gate.record_smoke("abc123")
+    assert gate.smoked("abc123") and not gate.smoked("abc124")
+
+def test_the_bench_step_runs_in_batch_mode_only_when_the_train_asks_and_still_needs_zero_problems(monkeypatch):
+    plan = gate.plan(["tools/gate/gate.py"], "full")
+    monkeypatch.delenv("LLRM_BENCH_BATCH", raising=False)
+    plain = gate.commands(plan, gate.load(), gate.packages())["bench"]
+    monkeypatch.setenv("LLRM_BENCH_BATCH", "1")
+    batch = gate.commands(plan, gate.load(), gate.packages())["bench"]
+    assert "--batch" not in plain and "bench.py --batch" in batch
+    assert '" 0 problems"' in batch, "a batch's better counts pass; its problems must still be zero"

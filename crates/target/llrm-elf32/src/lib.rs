@@ -112,7 +112,15 @@ mod tests {
         sections: Vec<Section>,
         symbols: Vec<Symbol>,
     ) -> Object {
-        Object { name: "a.c".into(), arch: Arch::I386, sections, symbols, omf_groups: Vec::new(), debug: None }
+        Object {
+            name: "a.c".into(),
+            arch: Arch::I386,
+            sections,
+            symbols,
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            debug: None,
+        }
     }
 
     /// `call f`: REL puts S + A - P in the field, so the field is -4 where the

@@ -1,7 +1,6 @@
 //! Total decoded source occurrences for one OMF body.
 //!
-//! Direct port of `qbopt.model.ir.py:{Opaque,Long,Call,Restore,TableKind,
-//! Data,Node,RESTORE_EFFECTS,pinned,span}`.  This is frontend OMF data: it
+//! This is frontend OMF data: it
 //! retains source-byte spans and must not be projected onto generic MIR.
 
 use std::cmp::Ordering;
@@ -16,8 +15,6 @@ use crate::frontends::bc::declen::Insn;
 use crate::model::ir::lift::Decoded;
 
 /// An instruction with no long-pair or call idiom attached to it.
-///
-/// Direct port of `qbopt.model.ir:Opaque`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Opaque {
     pub insn: Insn,
@@ -36,8 +33,6 @@ impl Opaque {
 }
 
 /// One `lift.classify()` long-pair source form.
-///
-/// Direct port of `qbopt.model.ir:Long`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Long {
     pub insn: Insn,
@@ -58,8 +53,6 @@ impl Long {
 }
 
 /// A far call identified by its OMF fixup name.
-///
-/// Direct port of `qbopt.model.ir:Call`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Call {
     pub insn: Insn,
@@ -80,8 +73,6 @@ impl Call {
 }
 
 /// The pair-specific effects of `lift::FIXUP`'s restore bytes.
-///
-/// Direct port of `qbopt.model.ir:RESTORE_EFFECTS`.
 pub static RESTORE_EFFECTS: LazyLock<BTreeMap<usize, Effects>> = LazyLock::new(|| {
     BTreeMap::from([
         (0, restore_effects(iced_x86::Register::EAX, iced_x86::Register::EDX)),
@@ -107,8 +98,6 @@ fn restore_effects(
 }
 
 /// A three-instruction widened-value restore idiom.
-///
-/// Direct port of `qbopt.model.ir:Restore`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Restore {
     pub at: usize,
@@ -131,8 +120,6 @@ impl Restore {
 }
 
 /// The purpose of an inline OMF data table.
-///
-/// Direct port of `qbopt.model.ir:TableKind`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum TableKind {
     Jump,
@@ -177,8 +164,6 @@ impl PartialOrd for TableKind {
 }
 
 /// Inline body data that is not an instruction.
-///
-/// Direct port of `qbopt.model.ir:Data`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Data {
     pub at: usize,
@@ -203,8 +188,6 @@ impl Data {
 }
 
 /// Every source occurrence in a decoded OMF body.
-///
-/// Direct port of `qbopt.model.ir:Node`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Node {
     Opaque(Opaque),
@@ -237,8 +220,6 @@ impl Node {
 }
 
 /// Registers a barrier must retain at this source occurrence.
-///
-/// Direct port of `qbopt.model.ir:pinned`.
 #[must_use]
 pub fn pinned(node: &Node) -> Option<BTreeSet<RegId>> {
     if !barrier(node.semantics()) {
@@ -252,8 +233,6 @@ pub fn pinned(node: &Node) -> Option<BTreeSet<RegId>> {
 }
 
 /// The exact source-byte span represented by a node.
-///
-/// Direct port of `qbopt.model.ir:span`.
 #[must_use]
 pub fn span(node: &Node) -> (usize, usize) {
     match node {

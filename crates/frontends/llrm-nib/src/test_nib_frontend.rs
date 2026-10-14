@@ -1,7 +1,7 @@
 //! Port of `tests/test_nib_frontend.py`.
 //!
-//! skipped: `execute.run` assertions (`qbopt/hir/execute.py` is tools-only),
-//! and the tests made of nothing else;
+//! skipped: `execute.run` assertions (the reference executor is not in this
+//! tree), and the tests made of nothing else;
 //! test_dos_bootstrap_enters_the_runtime_before_language_main (reads runtime
 //! sources, no compiler).
 
@@ -1742,6 +1742,48 @@ fn test_each_procedure_has_a_code_segment_the_linker_may_drop() {
     assert_eq!(segments, 3);
 }
 
+/// Procedures of one object that are each a segment of one name are one segment
+/// to Microsoft's LINK, which keeps the last one's length (L1103 for each
+/// longer one, and the code of the rest lost): each is a COMDAT, as MSC's /Gy
+/// writes it, its segment empty, its symbol defined by the COMDAT (no PUBDEF),
+/// a call between them through an external of that name.
+#[test]
+fn test_a_procedure_per_segment_is_a_comdat_each() {
+    use llrm_core::objectfile::omf;
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "long.nib",
+        "fn big(a: i16) -> i16:\n    let mut v = a\n    v = v * 3 + 1\n    v = v * 3 + 2\n    return v\n\nfn small(a: i16) -> i16:\n    return a\n\nfn main() -> i16:\n    return big(small(1))\n",
+    );
+    let object = object_of(
+        &parsed(&source),
+        "main",
+        &source,
+        &level("O0"),
+        llrm_core::backend::objbuild::CodeLayout::PerProcedure,
+    )
+    .expect("writes");
+    let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
+    let count = |kind: u8| records.iter().filter(|one| one.r#type == kind).count();
+    assert_eq!(count(0xC2), 3, "a COMDAT for each of the three procedures");
+    let lengths: Vec<u16> = records
+        .iter()
+        .filter(|one| one.r#type & 0xFE == omf::SEGDEF)
+        .map(|one| u16::from_le_bytes([one.body[1], one.body[2]]))
+        .collect();
+    // The three procedures' segments are empty; _DATA's is the last.
+    assert_eq!(&lengths[..3], &[0, 0, 0], "{lengths:?}");
+    assert_eq!(count(omf::PUBDEF), 0, "the COMDATs define the symbols");
+    // `main` calls `big` and `small`, which are local to the module: two
+    // externals, named as the COMDATs are, made the module's own so that
+    // two modules' locals of one name do not meet.
+    let names: Vec<u8> =
+        records.iter().filter(|one| one.r#type == omf::EXTDEF).flat_map(|one| one.body.clone()).collect();
+    let has = |text: &[u8]| names.windows(text.len()).any(|window| window == text);
+    assert!(has(b"_big$") && has(b"_small$"), "{:?}", String::from_utf8_lossy(&names));
+}
+
 #[test]
 fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure() {
     // A segment per procedure, all of one name, was the default: Microsoft
@@ -1953,7 +1995,7 @@ fn test_a_far_pointer_result_comes_back_in_dx_ax() {
     let source = written(
         &directory,
         "far.nib",
-        "@extern(\"cdecl16\")\nfn get(number: u16) -> *far u8\n\nvar kept: *far u8 = 0\n\nfn main() -> i16:\n    unsafe:\n        kept = get(3)\n    return 0\n",
+        "@extern(\"cdecl16\")\nfn get(number: u16) -> *far u8\n\nvar kept: *far u8 = 0\n\n@export(\"cdecl16\")\nfn peek() -> u8:\n    unsafe:\n        return *kept\n\nfn main() -> i16:\n    unsafe:\n        kept = get(3)\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
     assert!(Regex::new(r"mov word ptr \S+\+2, dx\n").unwrap().is_match(&text), "{text}");

@@ -328,6 +328,84 @@ fn test_a_branch_on_a_compare_of_a_phi_of_constants_is_decided_on_each_path() {
     assert_eq!(printed.matches("icmp ne").count(), 0, "{printed}");
 }
 
+/// Two inlined `safe()` calls in one loop: each result is a phi of constants
+/// tested by the branch after it.
+const TWO_TESTED_RESULTS: &str = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %step ]
+  %acc = phi i16 [ 0, %b0 ], [ %acc2, %step ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %test, label %done
+
+test:
+  %c = icmp sgt i16 %k, %i
+  br i1 %c, label %yes, label %no
+
+yes:
+  br label %join
+
+no:
+  br label %join
+
+join:
+  %r = phi i16 [ 1, %yes ], [ 0, %no ]
+  %t = icmp ne i16 %r, 0
+  br i1 %t, label %hit, label %mid
+
+hit:
+  %h = add i16 %acc, %i
+  br label %mid
+
+mid:
+  %acc1 = phi i16 [ %acc, %join ], [ %h, %hit ]
+  %d = icmp slt i16 %k, %i
+  br i1 %d, label %yes2, label %no2
+
+yes2:
+  br label %join2
+
+no2:
+  br label %join2
+
+join2:
+  %r2 = phi i16 [ 1, %yes2 ], [ 0, %no2 ]
+  %t2 = icmp ne i16 %r2, 0
+  br i1 %t2, label %hit2, label %step
+
+hit2:
+  %h2 = add i16 %acc1, %k
+  br label %step
+
+step:
+  %acc2 = phi i16 [ %acc1, %join2 ], [ %h2, %hit2 ]
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+done:
+  ret i16 %acc
+}
+";
+
+/// Every branch of the function as it came is threaded, not the first alone: a
+/// round looked at one branch with paths and later rounds at none, so the
+/// peeled place of queens at -O3 kept 5 of its 8 tests of a constant
+/// (`xor eax, eax; test eax, eax; je`, 5% of its instructions, 109,038 clocks
+/// against gcc's 94,839; threaded 94,416).
+#[test]
+fn test_every_branch_on_a_phi_of_constants_is_decided_not_the_first_alone() {
+    let pairs: Vec<Vec<i128>> =
+        [(0, 0), (1, 5), (7, 3), (10, -4), (13, 9), (30, 2)].iter().map(|&(n, k)| vec![n, k]).collect();
+    let inputs: Vec<&[i128]> = pairs.iter().map(Vec::as_slice).collect();
+    let before = parsed(&format!("{DOS}{TWO_TESTED_RESULTS}"));
+    let mut after = before.clone();
+    let printed = managed(&mut after, JumpThread { size: false, correlated: false, states: true });
+    assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
+    assert_eq!(printed.matches("icmp ne").count(), 0, "{printed}");
+}
+
 /// Tuned for size GCC threads a branch whose copies would be empty
 /// (`tree-ssa-threadupdate.cc:2077`): the result of an inlined call tested by
 /// the next branch costs nothing to decide on each path (queens -Os: 187348 ->

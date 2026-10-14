@@ -1,4 +1,5 @@
-//! Mark internal globals that are only ever loaded from as `constant`.
+//! Mark internal globals that are only ever loaded from as `constant`, and drop
+//! the stores of those only ever stored to.
 //!
 //! # How it works
 //! A variable qualifies when it is internal or private, initialized, not yet
@@ -12,6 +13,14 @@
 //! initializer's bytes (`memory::constant_bits`), which the body passes fold.
 //! Every defined function is reported as changed so each body is run through
 //! its pipeline again.
+//!
+//! `WriteOnly`, after the pipeline has forwarded what loads it could, is the
+//! other half (LLVM's GlobalOpt: "if the global is never loaded (but may be
+//! stored to), it is dead"; gcc's ipa `write-only` flag): a variable that is
+//! internal or private, not named by another global's initializer, and whose
+//! every use in every function is a non-volatile store's address (through the
+//! same `gep`s and casts) loses those stores. Nothing names it then, and
+//! `globaldce` deletes it.
 //!
 //! # Example
 //! Before:
@@ -115,19 +124,64 @@ fn only_loaded(
     function: &Function,
     global: GlobalId,
 ) -> bool {
-    function
-        .walk()
-        .all(
-            |(_, inst)| {
-                let op = function.instruction(inst);
-                op.operands.iter().enumerate().all(|(index, &operand)| {
-                    let Operand::Constant(id) = operand else { return true };
-                    let mut named = std::collections::BTreeSet::new();
-                    embedded(context, id, &mut named);
-                    !named.contains(&global) || (addresses(context, id, global) && loads_through(function, inst, index))
-                })
-            },
-        )
+    only_used(context, function, global, &|op, index| matches!(op.opcode, Opcode::Load { .. }) && index == 0)
+}
+
+/// Every way `function` uses `global`'s address, found once: the operands that
+/// take the address as it stands (`uses`), and the address arithmetic and casts
+/// between the global and them (`moved`).
+struct Reach {
+    uses: Vec<(InstId, usize)>,
+    moved: Vec<InstId>,
+}
+
+/// `global`'s uses in `function`, through address arithmetic and casts; none
+/// where an operand names the global other than as its address.
+fn reach(
+    context: &Context,
+    function: &Function,
+    global: GlobalId,
+) -> Option<Reach> {
+    let mut work = Vec::new();
+    for (_, inst) in function.walk() {
+        for (index, &operand) in function.instruction(inst).operands.iter().enumerate() {
+            let Operand::Constant(id) = operand else { continue };
+            let mut named = std::collections::BTreeSet::new();
+            embedded(context, id, &mut named);
+            if named.contains(&global) {
+                if !addresses(context, id, global) {
+                    return None;
+                }
+                work.push((inst, index));
+            }
+        }
+    }
+    let mut found = Reach { uses: Vec::new(), moved: Vec::new() };
+    while let Some((inst, index)) = work.pop() {
+        let op = function.instruction(inst);
+        match op.opcode {
+            Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if index == 0 => {
+                found.moved.push(inst);
+                if let Some(value) = op.result {
+                    work.extend(function.users(value).iter().map(|one| (one.user, one.index as usize)));
+                }
+            }
+            _ => found.uses.push((inst, index)),
+        }
+    }
+    Some(found)
+}
+
+/// Whether every use of `global` in `function` is, through address arithmetic
+/// and casts, the address `access` says a use is.
+fn only_used(
+    context: &Context,
+    function: &Function,
+    global: GlobalId,
+    access: &dyn Fn(&llrm_mir::module::Instruction, usize) -> bool,
+) -> bool {
+    reach(context, function, global)
+        .is_some_and(|found| found.uses.iter().all(|&(inst, index)| access(function.instruction(inst), index)))
 }
 
 /// Whether `constant` is `global`'s address, moved or cast.
@@ -148,22 +202,73 @@ fn addresses(
     }
 }
 
-/// Whether operand `index` of `inst`, an address, is only loaded from.
-fn loads_through(
-    function: &Function,
-    inst: InstId,
-    index: usize,
-) -> bool {
-    let op = function.instruction(inst);
-    match op.opcode {
-        Opcode::Load { .. } => index == 0,
-        Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if index == 0 => {
-            op.result.is_some_and(|value| {
-                function.users(value).iter().all(|one| loads_through(function, one.user, one.index as usize))
-            })
-        }
-        _ => false,
+/// The stores of the globals nothing loads: removed from every body, which are
+/// the returned.
+pub struct WriteOnly;
+
+impl ModulePass for WriteOnly {
+    fn name(&self) -> &'static str {
+        "writeonly"
     }
+
+    fn run(
+        &mut self,
+        module: &mut Module,
+        _: &mut ModuleAnalyses,
+    ) -> Vec<GlobalId> {
+        let found = never_loaded(module);
+        if found.is_empty() {
+            return Vec::new();
+        }
+        let Module { context, globals, .. } = module;
+        let mut changed = Vec::new();
+        for (at, global) in globals.iter_mut().enumerate() {
+            let GlobalKind::Function(function) = &mut global.kind else { continue };
+            // Every use of a found global is a store's address or address
+            // arithmetic that only stores use, so the stores and the arithmetic
+            // between them and the globals all go; arithmetic left unused
+            // before goes with them.
+            let mut dead = std::collections::BTreeSet::new();
+            for &global in &found {
+                if let Some(reach) = reach(context, function, global) {
+                    dead.extend(reach.uses.iter().map(|&(inst, _)| inst).chain(reach.moved));
+                }
+            }
+            let dead: Vec<InstId> = dead.into_iter().collect();
+            if !dead.is_empty() && function.erase_all(&dead).is_ok() {
+                changed.push(GlobalId(at as u32));
+            }
+        }
+        changed
+    }
+}
+
+/// The internal variables no body loads from, and whose every use is a
+/// non-volatile store's address.
+pub fn never_loaded(module: &Module) -> Vec<GlobalId> {
+    let mut held = std::collections::BTreeSet::new();
+    for global in &module.globals {
+        if let GlobalKind::Variable(variable) = &global.kind {
+            variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut held));
+        }
+    }
+    let stores = |op: &llrm_mir::module::Instruction, index: usize| {
+        matches!(op.opcode, Opcode::Store { volatile: false, .. }) && index == 1
+    };
+    let candidates = module
+        .globals
+        .iter()
+        .enumerate()
+        .filter_map(
+            |(at, global)| {
+                let GlobalKind::Variable(variable) = &global.kind else { return None };
+                let internal = matches!(global.linkage, Linkage::Internal | Linkage::Private);
+                (internal && !variable.constant && !held.contains(&GlobalId(at as u32))).then_some(GlobalId(at as u32))
+            },
+        );
+    candidates
+        .filter(|&id| module.functions().all(|(_, _, function)| only_used(&module.context, function, id, &stores)))
+        .collect()
 }
 
 #[cfg(test)]

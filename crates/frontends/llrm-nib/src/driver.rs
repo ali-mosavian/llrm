@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/modern/driver.py`: run the modern frontend and
+//! Run the modern frontend and
 //! decode its common-HIR document.
 
 use std::fmt;

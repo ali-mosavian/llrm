@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/qb/driver.py`: compile with qbfront, linked in, and
+//! Compile with qbfront, linked in, and
 //! decode its common-HIR document.
 
 use std::fmt;

@@ -62,6 +62,12 @@ pub fn _terminator(what: Option<&Semantics>) -> bool {
     })
 }
 
+/// Whether `what` ends its block: a branch or a jump, a table jump too, which
+/// reads the register that indexes the table and so is no `_terminator`.
+pub fn _leaves(what: Option<&Semantics>) -> bool {
+    _terminator(what) || what.is_some_and(|what| what.op == Operation::Jump && what.indirect && !what.table.is_empty())
+}
+
 // Machine state a generated return itself needs beside its explicit results.
 // SI and DI are callee-saved at the ABI boundary, but their incoming values
 // live in the prologue's stack saves, not in transient body registers.  The

@@ -28,6 +28,12 @@ declare so is read once by a counted loop (TEXTFILL, the palette loops), and the
 same holds of `DIM` and `DIM SHARED` variables. HIR records `volatile` on the
 place or indirect place and lowering preserves it as an ordered memory access.
 
+A variable passed as a `BYREF` actual goes as its own address, and a callee's write reaches it. Only a far
+pointer to a field of a far dynamic array is bridged through a near slot, copied in before the call and out after it,
+as BC does: where far pointers are the near ones (`m32`, one space) a four-byte pointer is the near address and no slot
+is made. It was, and `Hanoi%`'s two recursive calls copied three arguments in and out each, 729,041 instructions to
+`m16`'s 368,621 (`tests/qb_byref_flat.rs`).
+
 A call-site side table records the stack permutation, far-call distance, and
 cleanup owner. Those facts are applied after semantic optimization by emitting
 the existing MIR `ARG` form. The semantic `CALL` therefore keeps its typed
@@ -123,6 +129,9 @@ listings establish an exact stack shape:
 | `B$GET3`, `B$PUT3` | channel word, record far pointer, length word | 8 |
 | `B$GET4`, `B$PUT4` | channel word, record number dword, record far pointer, length word | 12 |
 | `B$SSEK` | channel word, record number dword | 6 |
+| `B$VARP` | address (the target's near integer: a dword at m32), type word | 4 (m16; whole slots at m32) |
+| `B$SADD` | string descriptor pointer | 2 |
+| `B$FINP` | count word, channel word (0: the keyboard) | 4 |
 | `B$BLOD`, `B$BSAV` | file name descriptor, offset (word; a dword at m32), word (BLOAD: 1 if an offset was given; BSAVE: length) | 6 |
 | `B$LEFT`, `B$STRI`, `B$STRS` | two near words | 4 |
 | `B$FEVS`, `B$FEVI` | descriptor pointer or ordinal word | 2 |

@@ -1,7 +1,5 @@
-//! Ports of the `tests/test_hir.py` cases that exercise `qbopt/frontend/qb`
-//! and `tools/qbstages.py`, plus `tests/test_qbstages.py` and the portable
-//! `tests/test_qb_frontend_command.py` cases. The `qbopt/hir`-only cases are
-//! in `crates/backend/llrm-core/src/hir/test_hir.rs`.
+//! Tests of the QB frontend, the stage dump and the command line. The cases
+//! that need no frontend are in `crates/backend/llrm-core/src/hir/test_hir.rs`.
 //!
 //! Sources are compiled by qbfront, linked in, exactly as the driver does.
 
@@ -116,6 +114,30 @@ pub(super) fn records(
     name: &str,
 ) -> Vec<std::rc::Rc<omf::Record>> {
     omf::parse(&object_bytes(program, name).expect("emits")).expect("parses")
+}
+
+/// `records` where nothing is optimised: a variable only stored to is in its
+/// cell, and an expression only stored is computed.
+pub(super) fn records_unoptimised(
+    program: &Program,
+    name: &str,
+) -> Vec<std::rc::Rc<omf::Record>> {
+    let mut options = codegen();
+    options.pipeline.optimize = false;
+    let bytes = qb_compile::object_bytes(program, Path::new(name), None, &options).expect("emits");
+    omf::parse(&bytes).expect("parses")
+}
+
+/// `records` where no function is inlined into its one caller: what a
+/// procedure reads of a variable is read from the variable.
+pub(super) fn records_calls_kept(
+    program: &Program,
+    name: &str,
+) -> Vec<std::rc::Rc<omf::Record>> {
+    let mut options = codegen();
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    let bytes = qb_compile::object_bytes(program, Path::new(name), None, &options).expect("emits");
+    omf::parse(&bytes).expect("parses")
 }
 
 /// `text.split(start, 1)[1].split(end, 1)[0]`.

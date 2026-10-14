@@ -19,10 +19,14 @@
 //!   `x % 1`, decided self-compares, a `select` on a constant; two single-use
 //!   shifts, scales, offsets or bitwise constants become one; `(x + a) * k + b`
 //!   distributes; `(x + a) + a` is `x + (a << 1)`; `x - (x + y)` is `-y`.
-//! - Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, `sext` of
-//!   a value whose sign bit is clear, logic or a phi of like extensions done at
-//!   the narrow type, `ptrtoint(inttoptr x)`, a byte offset from a constant
-//!   near address as the constant address.
+//! - Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, a mask
+//!   over a `sext` that reads only the low bits (`and (sext (trunc v)), M` is
+//!   `and v, M`; `and (sext x), 2^N-1` over an N-bit `x` is `zext x`),
+//!   `inttoptr (add x, y)` of a flat pointer as `gep i8, (inttoptr x), y` (a
+//!   constant `y` not under `size`), `sext` of a value whose sign bit is clear,
+//!   logic or a phi of like extensions done at the narrow type,
+//!   `ptrtoint(inttoptr x)`, a byte offset from a constant near address as the
+//!   constant address.
 //! - Compares: `icmp P (x + C1), C2` is `icmp P x, C2 - C1` (an ordered test
 //!   needs `nsw` or `nuw` for its signedness); a compare of extensions is a
 //!   compare of the sources; `xor (icmp P a b), true` is the inverse compare;
@@ -113,7 +117,7 @@ use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::{DemandedBits, Ranges, Registers};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, induction, ranges};
-use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask};
+use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
@@ -227,7 +231,7 @@ pub fn simplified(
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
-                round |= _rewritten(context, layout, function, &recurrences, inst);
+                round |= _rewritten(context, layout, function, &recurrences, inst, size);
             }
         }
         round |= _reassociated_recurrences(function);
@@ -255,15 +259,18 @@ fn _rewritten(
     function: &mut Function,
     recurrences: &BTreeSet<ValueId>,
     inst: InstId,
+    size: bool,
 ) -> bool {
     _mask_scaled(context, function, recurrences, inst)
         || _constant_address(context, function, inst)
+        || _offset_address(context, layout, function, &|value| recurrences.contains(&value), inst, size)
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
         || _narrowed_binary(context, function, inst)
         || _nonnegative_sext(context, function, inst)
         || _unsigned_power_of_two(context, function, inst)
         || _masked_extension(context, layout, function, inst)
+        || _masked_truncation(context, function, inst)
         || _extended_mask(context, function, inst)
         || _casted_logic(context, function, inst)
         || _phi_of_casts(context, function, inst)
@@ -915,6 +922,60 @@ fn _nonnegative_sext(
     true
 }
 
+/// A mask over an extension looks only at the extended value's low bits
+/// (`M` inside its N bits):
+/// - `and (sext (trunc v to iN)), M` is `and v, M`, for any N: the truncation
+///   keeps those bits and the extension only copies upward (a `zext` of a
+///   truncation is the narrow form already, and its range fits the mask);
+/// - `and (sext x), M` is `zext x` where `M` is all of `x`'s N bits (a partial
+///   mask stays: it would turn a counter's wide use into a narrow one, and
+///   `histo` kept a second 16-bit counter).
+///
+/// The range proof of `_redundant_masks` then sees `v` itself, not a
+/// sign-extended halfword that spans [-2^(N-1), 2^(N-1)) and never fits the
+/// mask; and a masked narrow counter is a `zext`, which the induction
+/// analysis can follow where the narrow value cannot wrap.
+fn _masked_truncation(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    let Some((BinaryOp::And, left, right, wide)) = _binary(context, function, inst) else { return false };
+    let Some((value, mask)) = _value_and_constant(context, BinaryOp::And, left, right) else { return false };
+    let Some(extension) = _definition(function, value) else { return false };
+    let kind = match function.instruction(extension).opcode {
+        Opcode::Cast(kind @ (CastOp::SExt | CastOp::ZExt)) => kind,
+        _ => return false,
+    };
+    let inner = function.instruction(extension).operands[0];
+    let Some(kept) = function.operand_type(context, inner).and_then(|ty| context.types.int_bits(ty)) else {
+        return false;
+    };
+    if kept >= wide || kept > 64 || mask >> kept != 0 {
+        return false;
+    }
+    let constant =
+        function.instruction(inst).operands.iter().copied().find(|operand| matches!(operand, Operand::Constant(_)));
+    let Some(constant) = constant else { return false };
+    if kind != CastOp::SExt {
+        return false;
+    }
+    if let Some(cut) =
+        _definition(function, inner).filter(|&cut| function.instruction(cut).opcode == Opcode::Cast(CastOp::Trunc))
+    {
+        let source = function.instruction(cut).operands[0];
+        if function.operand_type(context, source).and_then(|ty| context.types.int_bits(ty)) == Some(wide) {
+            _replace(function, inst, Opcode::Binary(BinaryOp::And), vec![source, constant]);
+            return true;
+        }
+    }
+    if mask != (1_u128 << kept) - 1 {
+        return false;
+    }
+    _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![inner]);
+    true
+}
+
 /// `and (zext x), c` where `c` has no bit above `x`'s width is `zext (and x,
 /// c)`, as InstCombine's `visitAnd` narrows a mask under an extension: the
 /// extension no longer waits for the mask, and `and x, 2^k-1` is the
@@ -1093,6 +1154,59 @@ fn _constant_address(
     });
     function.replace_value(result, Operand::Constant(address));
     _erase(function, inst);
+    true
+}
+
+/// `inttoptr (add x, y)` of a flat pointer is a byte offset from `inttoptr x`:
+/// `gep i8, (inttoptr x), y`. The access reads base + index (+ displacement) as
+/// one address (`mov [esi+655360], al`, `movzx ax, byte [ebx+ecx]`), where the
+/// integer sum was an `add` or a `lea` before it. A constant addend is not
+/// taken in a build for size: each access then carries the displacement (4
+/// bytes at m32) where one register held the base for all (textfill +3 bytes);
+/// a variable one costs nothing. Of two values, the index is the one that is a
+/// loop's recurrence. A far or huge pointer is no flat address (its offset
+/// wraps apart from its selector), and a selector-alone space is no address at
+/// all.
+fn _offset_address(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    is_recurrence: &dyn Fn(ValueId) -> bool,
+    inst: InstId,
+    size: bool,
+) -> bool {
+    let instruction = function.instruction(inst);
+    if instruction.opcode != Opcode::Cast(CastOp::IntToPtr) || !_single_use(function, instruction.operands[0]) {
+        return false;
+    }
+    let pointer = instruction.ty;
+    let llrm_mir::types::Type::Pointer(space) = *context.types.get(pointer) else { return false };
+    let Some(made) = _definition(function, instruction.operands[0]) else { return false };
+    let Some((BinaryOp::Add, left, right, width)) = _binary(context, function, made) else { return false };
+    // Only the default space, the near or flat one: a selector-alone space
+    // (`ptr addrspace(2)`) holds a segment, which no access reads as an address
+    // and no byte offset moves.
+    if space != 0 || layout.is_pair(space) || layout.offset_bits(space) != width {
+        return false;
+    }
+    let (value, index) = match _value_and_constant(context, BinaryOp::Add, left, right) {
+        Some(_) if size => return false,
+        Some((value, offset)) => {
+            let integer = context.types.int(width);
+            (value, Operand::Constant(context.int(integer, signed(offset, width))))
+        }
+        None => {
+            let (Operand::Value(_), Operand::Value(_)) = (left, right) else { return false };
+            let counted = |operand: Operand| matches!(operand, Operand::Value(value) if is_recurrence(value));
+            if counted(left) && !counted(right) { (right, left) } else { (left, right) }
+        }
+    };
+    let base =
+        function.create_instruction(Opcode::Cast(CastOp::IntToPtr), pointer, vec![value], Flags::default(), None);
+    function.insert(base, Position::Before(inst)).expect("a placed instruction");
+    let base = Operand::Value(function.instruction(base).result.expect("a value"));
+    let byte = context.types.int(8);
+    _replace(function, inst, Opcode::GetElementPtr { source: byte }, vec![base, index]);
     true
 }
 

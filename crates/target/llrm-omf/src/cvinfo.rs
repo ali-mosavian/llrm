@@ -1,4 +1,4 @@
-//! Port of `qbopt/objectfile/cvinfo.py`: BC's own /Zi debug symbols, read
+//! BC's own /Zi debug symbols, read
 //! straight out of the .OBJ, no LINK or CVPACK.
 //!
 //! $$SYMBOLS holds one variable-length record per name and $$TYPES the type

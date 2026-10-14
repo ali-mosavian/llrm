@@ -1,4 +1,4 @@
-//! Port of `qbopt/cfront/hir.py`: the stream as a unit, its symbols, its data,
+//! The stream as a unit, its symbols, its data,
 //! and each procedure's trees.
 //!
 //! The trees are the code generator's own: a node is the call that built it,

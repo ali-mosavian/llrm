@@ -287,6 +287,9 @@ struct Compiler {
     module_name: String,
     types: Vec<Type>,
     variables: BTreeMap<String, Variable>,
+    /// The scalars looked up so far, in source order: a DIM of one of them runs
+    /// where it stands.
+    seen: BTreeSet<String>,
     constants: BTreeMap<String, (u32, Number)>,
     signatures: BTreeMap<String, Signature>,
     callables: Vec<Callable>,
@@ -1629,6 +1632,7 @@ impl Compiler {
             module_name: module_name.into(),
             types,
             variables: BTreeMap::new(),
+            seen: BTreeSet::new(),
             constants: BTreeMap::new(),
             signatures: BTreeMap::new(),
             callables: Vec::new(),
@@ -1730,6 +1734,7 @@ impl Compiler {
         places: Vec<Place>,
     ) {
         self.variables = variables;
+        self.seen.clear();
         self.constants = constants;
         self.next_place = places.iter().map(|place| place.id).max().unwrap_or(0) + 1;
         self.places = places;
@@ -2226,6 +2231,15 @@ impl Compiler {
         marker: &str,
     ) -> String {
         let declared = format!("{name}{marker}");
+        // `v&` names the variable `DIM v AS LONG` declared (BC: one variable);
+        // a suffix of another type is a Duplicate definition,
+        // refused where the name is looked up.
+        if let Some(sign) = name.strip_suffix(['%', '&', '!', '#', '$']).map(|base| &name[base.len()..]) {
+            let base = format!("{}{marker}", canonical(name));
+            if self.variables.get(&base).is_some_and(|one| type_suffix(one.element.unwrap_or(one.type_id)) == sign) {
+                return base;
+            }
+        }
         if suffix(name).is_some() || self.variables.contains_key(&declared) {
             return declared;
         }
@@ -2573,6 +2587,37 @@ impl Compiler {
         self.emit_runtime_call("B$DDIM", Vec::new(), operands);
         self.holds(bounds::Held::Place(descriptor_place), Some(stated));
         self.tag_last(Tag::Allocate(Shape { descriptor, records, element }));
+        Ok(())
+    }
+
+    /// BC runs the DIM of a scalar the program already used: it stores the
+    /// type's zero where the DIM stands. A DIM that is the name's first sight
+    /// allocates and emits nothing, so one in a loop does not clear it again.
+    fn rezero(
+        &mut self,
+        item: &Declaration,
+    ) -> Result<(), SemanticError> {
+        if item.array {
+            return Ok(());
+        }
+        let each = item.name.strip_prefix(EACH);
+        let item = Declaration { name: each.unwrap_or(&item.name).into(), ..item.clone() };
+        let key = self.declaration_key(&item)?;
+        if !self.seen.contains(&key) {
+            return Ok(());
+        }
+        let Some(variable) = self.variables.get(&key).cloned() else { return Ok(()) };
+        let span = item.span;
+        let target = Expr::Name(item.name.clone(), span);
+        if variable.type_id == STRING {
+            let zero = Expr::Literal(Literal::String(String::new()), span);
+            return self.statement_list(&[Statement::Assign { target, value: zero, span }]);
+        }
+        if integral(variable.type_id) || matches!(variable.type_id, SINGLE | DOUBLE) {
+            let zero = Expr::Literal(Literal::Integer(0, TypeName::Integer), span);
+            return self.statement_list(&[Statement::Assign { target, value: zero, span }]);
+        }
+        // a record or fixed-length string has no use before its DIM
         Ok(())
     }
 
@@ -3248,6 +3293,7 @@ impl Compiler {
                 Statement::Dim(items) => {
                     for item in items {
                         self.allocate(item)?;
+                        self.rezero(item)?;
                     }
                 }
                 Statement::Static(_)
@@ -5736,6 +5782,9 @@ impl Compiler {
             if intrinsic.is_some_and(|one| one.lowering == Lowering::FormatField) {
                 return self.format_field(arguments);
             }
+            if intrinsic.is_some_and(|one| one.lowering == Lowering::VarptrString) {
+                return self.varptr_string(arguments);
+            }
             let runtime = intrinsic.and_then(|intrinsic| match intrinsic.lowering {
                 Lowering::RuntimeString(callee) => Some(callee),
                 Lowering::Character => Some("B$FCHR"),
@@ -5794,6 +5843,23 @@ impl Compiler {
                 let pointer_type = self.pointer_type(STRING);
                 let result = self.value(pointer_type);
                 self.emit_runtime_call(callee, vec![result], vec![length, repeated]);
+                return Ok(Operand::Value(result));
+            }
+            if intrinsic.is_some_and(|one| one.lowering == Lowering::InputText) {
+                // INPUT$(n [, [#]channel]): n characters from the keyboard, or
+                // from a file; B$FINP(count, channel), 0 the keyboard.
+                let (count, count_type) = self.expression(&arguments[0])?;
+                let count = self.convert(count, count_type, INTEGER)?;
+                let channel = match arguments.get(1) {
+                    Some(channel) => {
+                        let (channel, channel_type) = self.expression(channel)?;
+                        self.convert(channel, channel_type, INTEGER)?
+                    }
+                    None => Operand::Constant(INTEGER, Number::Integer(0)),
+                };
+                let pointer_type = self.pointer_type(STRING);
+                let result = self.value(pointer_type);
+                self.emit_runtime_call("B$FINP", vec![result], vec![count, channel]);
                 return Ok(Operand::Value(result));
             }
             if intrinsic.is_some_and(|one| one.lowering == Lowering::Space) {
@@ -6855,6 +6921,35 @@ impl Compiler {
         Ok(())
     }
 
+    /// VARPTR$: B$VARP(address, type) makes the string of the variable's type
+    /// byte and its address.
+    fn varptr_string(
+        &mut self,
+        arguments: &[Expr],
+    ) -> Result<Operand, SemanticError> {
+        let (place, type_id) = self.destination(&arguments[0])?;
+        let code = match type_id {
+            INTEGER => 2,
+            STRING => 3,
+            SINGLE => 4,
+            DOUBLE => 8,
+            LONG => 0x14,
+            _ => return self.fail("VARPTR$ takes a variable of a simple type"),
+        };
+        let pointer = self.far_address(place, type_id);
+        let word = if self.options.one_space() { integer_type(self.options.near(), true) } else { INTEGER };
+        let address = self.value(word);
+        self.emit("pointer_offset", vec![address], vec![Operand::Value(pointer)]);
+        let result_type = self.pointer_type(STRING);
+        let result = self.value(result_type);
+        self.emit_runtime_call(
+            "B$VARP",
+            vec![result],
+            vec![Operand::Value(address), Operand::Constant(INTEGER, Number::Integer(code))],
+        );
+        Ok(Operand::Value(result))
+    }
+
     fn builtin(
         &mut self,
         name: &str,
@@ -7041,6 +7136,19 @@ impl Compiler {
                 vec![Operand::Value(pointer)],
             );
             return Ok(Some((Operand::Value(result), result_type)));
+        }
+        if intrinsic.lowering == Lowering::VarptrString {
+            let result = self.varptr_string(arguments)?;
+            let result_type = self.pointer_type(STRING);
+            return Ok(Some((result, result_type)));
+        }
+        if intrinsic.lowering == Lowering::StringAddress {
+            // B$SADD(descriptor): where the characters are.
+            let descriptor = self.string_descriptor(&arguments[0])?;
+            let word = if self.options.one_space() { integer_type(self.options.near(), true) } else { INTEGER };
+            let result = self.value(word);
+            self.emit_runtime_call("B$SADD", vec![result], vec![descriptor]);
+            return Ok(Some((Operand::Value(result), word)));
         }
         if matches!(intrinsic.lowering, Lowering::Abs | Lowering::Sqrt) {
             let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
@@ -7780,12 +7888,14 @@ impl Compiler {
                                 || SemanticError { message: "BYREF indirect base has no pointer type".into() },
                             )?;
                         let original = Operand::Indirect { base, offset, type_id, volatile, inbounds };
-                        if self.width(pointer_type) == 4 {
+                        if !self.options.one_space() && self.width(pointer_type) == 4 {
                             // Ordinary BASIC BYREF formals carry a near
                             // address. BC bridges a field in a far dynamic
                             // array with a near copy-in/copy-out slot; pushing
                             // the four-byte field pointer leaves two words on
-                            // the stack after the callee's RETF n.
+                            // the stack after the callee's RETF n. Where far
+                            // pointers are the near ones (a flat target) the
+                            // four-byte pointer is the near address: no slot.
                             let temporary = self.temporary(*parameter_type)?;
                             let aggregate = self.udts.values().any(|record| record.type_id == *parameter_type)
                                 || self.string_width(*parameter_type).is_some_and(|width| width != 0);
@@ -8548,6 +8658,7 @@ impl Compiler {
         &self,
         name: &str,
     ) -> Result<Variable, SemanticError> {
+        self.refuse_other_suffix(name, "()")?;
         match self.variables.get(&self.array_key(name)) {
             Some(variable) => Ok(variable.clone()),
             None => {
@@ -8581,12 +8692,32 @@ impl Compiler {
         Ok(())
     }
 
+    /// BC: `x%` after `DIM x AS LONG` is a Duplicate definition, not another
+    /// variable; so is `a%(1)` after `DIM a(5) AS LONG`. `marker` is the
+    /// namespace's: "" for scalars, "()" for arrays.
+    fn refuse_other_suffix(
+        &self,
+        name: &str,
+        marker: &str,
+    ) -> Result<(), SemanticError> {
+        let Some(sign) = suffix(name).map(|_| &name[canonical(name).len()..]) else { return Ok(()) };
+        let declared = self.variables.get(&format!("{}{marker}", canonical(name)));
+        match declared.map(|one| (one.element, one.type_id)) {
+            Some((element, type_id)) if type_suffix(element.unwrap_or(type_id)) != sign => {
+                self.fail("Duplicate definition")
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn variable(
         &mut self,
         name: &str,
     ) -> Result<Variable, SemanticError> {
         self.refuse_keyword(name)?;
+        self.refuse_other_suffix(name, "")?;
         let key = self.variable_key(name);
+        self.seen.insert(key.clone());
         if let Some(variable) = self.variables.get(&key) {
             return Ok(variable.clone());
         }

@@ -1,8 +1,8 @@
-reason = "on top of main's #1603 runtime change: +-1 to 5 instructions (max 0.000005%) in the readers' named runtime code, none from this PR"
-blessed = "2026-10-13"
+reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out"
+blessed = "2026-10-14"
 
 [bas.O2]
-code_bytes = 5551
+code_bytes = 5543
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 990.2466
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 990.065
 
 [bq16.O2]
-code_bytes = 5587
+code_bytes = 5579
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 1078.9088
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 93405703
-code_bytes = 6936
+instructions = 87690344
+code_bytes = 6672
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 95494064
-code_bytes = 6417
+instructions = 89343506
+code_bytes = 6322
 data_bytes = 29209
 bss_bytes = 0
 
