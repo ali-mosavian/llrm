@@ -35,7 +35,10 @@
 //! stack's depth (`_crowded`): at the first step with more live values than
 //! `float_stack`, the allocno read furthest ahead among those at that point is
 //! moved to memory (Belady, as LRA), and the body is rewritten again. Only the
-//! blocks the new victim reaches are rewritten.
+//! steps the new victim reaches are rewritten (a step is kept by which of the
+//! roots it touches are spilled), and a block's steps and the floats live after
+//! each, which no spill changes, are worked out once. The allocnos holding a
+//! register at a point are found by the point.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -143,6 +146,8 @@ use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 thread_local! {
     static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static WRITTEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SHAPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static STEPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// x87 reads integers from memory, for named values and physical stack slots.
@@ -912,6 +917,9 @@ struct Allocnos {
     at_def: HashMap<(i64, usize, u32), usize>,
     restores: IndexMap<(i64, usize), Vec<usize>>,
     exits: IndexMap<(i64, usize), Vec<usize>>,
+    /// The segments holding a register before a position, found by the
+    /// position, not by asking each segment's points.
+    holding: HashMap<(i64, usize), Vec<usize>>,
 }
 
 impl Allocnos {
@@ -969,7 +977,21 @@ struct Plan<'b> {
     /// were spilled, so a round re-writes only the blocks a new victim
     /// reaches.
     written: RefCell<HashMap<(i64, Vec<bool>), Vec<Arc<Insn>>>>,
+    /// A block's cut, steps and floating values live after each step: the
+    /// block's own, whichever allocnos are spilled, so computed once.
+    shaped: RefCell<HashMap<i64, Rc<Shape>>>,
+    /// A step as `rewritten` wrote it, by block, first instruction and which
+    /// of the roots it touches were spilled, with the values whose home it
+    /// asked for (in order, so a hit asks again and the frame is laid out as
+    /// before).
+    stepped: RefCell<HashMap<StepKey, Rc<(Vec<Arc<Insn>>, Vec<u32>)>>>,
+    /// The first value number no instruction of the body uses.
+    first_fresh: u32,
 }
+
+type StepKey = (i64, usize, Vec<bool>);
+
+type Shape = (usize, Vec<(usize, usize)>, Vec<BTreeSet<u32>>, Vec<Vec<usize>>);
 
 /// Where each value is kept and read: LLVM's SpillPlacement per bundle for
 /// the borders, and a segment per register stretch between them.
@@ -1005,6 +1027,7 @@ fn _allocnos(
         at_def: HashMap::default(),
         restores: IndexMap::default(),
         exits: IndexMap::default(),
+        holding: HashMap::default(),
     };
     let mut borders: IndexMap<(u32, usize), usize> = IndexMap::default();
     let mut border =
@@ -1135,6 +1158,11 @@ fn _allocnos(
             border(&mut allocnos, value, exit, segment);
         }
     }
+    for (index, segment) in allocnos.segments.iter().enumerate() {
+        for point in &segment.points {
+            allocnos.holding.entry(*point).or_default().push(index);
+        }
+    }
     allocnos
 }
 
@@ -1214,10 +1242,9 @@ impl Plan<'_> {
             .map(|what| _held_floats(&what.sources).into_iter().chain(_held_floats(&what.dests)).collect())
             .unwrap_or_default();
         let mut next: IndexMap<usize, (usize, usize)> = IndexMap::default();
-        for (index, segment) in self.allocnos.segments.iter().enumerate() {
+        for &index in self.allocnos.holding.get(&(block, position)).into_iter().flatten() {
             let root = self.allocnos.root(index);
-            if spilled.contains(&root) || busy.contains(&segment.value) || !segment.points.contains(&(block, position))
-            {
+            if spilled.contains(&root) || busy.contains(&self.allocnos.segments[index].value) {
                 continue;
             }
             next.entry(root).or_insert((usize::MAX, usize::MAX));
@@ -1445,7 +1472,9 @@ impl Plan<'_> {
     ) -> Result<LirBody, Raised> {
         let (live_out, cells) = (&self.live_out, &self.cells);
         let mut homes = self.homes.clone();
+        let asked: Rc<RefCell<Vec<u32>>> = Rc::default();
         let mut home = |value: u32, frame: &mut Option<&mut Frame>| -> Result<Arc<Insn>, Raised> {
+            asked.borrow_mut().push(value);
             if let Some(home) = homes.get(&value) {
                 return Ok(Arc::clone(home));
             }
@@ -1459,7 +1488,7 @@ impl Plan<'_> {
         };
         let price = |form: &str| _price(cpu, form);
         let mut out = self.body.clone();
-        let mut fresh = _next_value(self.body);
+        let mut fresh = self.first_fresh;
         for block in &mut out.blocks {
             let at = block.at;
             let key = (at, self.roots[&at].iter().map(|root| spilled.contains(root)).collect::<Vec<bool>>());
@@ -1470,11 +1499,18 @@ impl Plan<'_> {
             #[cfg(test)]
             WRITTEN.with(|one| one.set(one.get() + 1));
             let first_fresh = fresh;
-            let cut = _terminators(block);
-            let steps = _steps(block, cut);
-            let leaving: BTreeSet<u32> =
-                live_out[&at].iter().copied().filter(|value| self.floating.contains(value)).collect();
-            let after = _live_after(block, &steps, &leaving, &self.floating);
+            let shape = Rc::clone(self.shaped.borrow_mut().entry(at).or_insert_with(|| {
+                #[cfg(test)]
+                SHAPED.with(|one| one.set(one.get() + 1));
+                let cut = _terminators(block);
+                let steps = _steps(block, cut);
+                let leaving: BTreeSet<u32> =
+                    live_out[&at].iter().copied().filter(|value| self.floating.contains(value)).collect();
+                let after = _live_after(block, &steps, &leaving, &self.floating);
+                let touched = steps.iter().map(|&(first, last)| self.step_roots(block, first, last)).collect();
+                Rc::new((cut, steps, after, touched))
+            }));
+            let (cut, steps, after) = (shape.0, &shape.1, &shape.2);
             let mut insns: Vec<Arc<Insn>> = Vec::new();
             let restore = |insns: &mut Vec<Arc<Insn>>,
                            position: usize,
@@ -1500,6 +1536,17 @@ impl Plan<'_> {
                 Ok(())
             };
             for (index, (first, last)) in steps.iter().copied().enumerate() {
+                let key = (at, first, shape.3[index].iter().map(|root| spilled.contains(root)).collect::<Vec<bool>>());
+                let hit = self.stepped.borrow().get(&key).cloned();
+                if let Some(done) = hit {
+                    for value in &done.1 {
+                        home(*value, frame)?;
+                    }
+                    insns.extend(done.0.iter().cloned());
+                    continue;
+                }
+                let (begin, fresh_before) = (insns.len(), fresh);
+                asked.borrow_mut().clear();
                 restore(&mut insns, first, block.insns[first].at, frame, &mut home)?;
                 let survives = |value: u32| after[index].contains(&value);
                 let mut pieces: Vec<Piece> = Vec::new();
@@ -1625,6 +1672,13 @@ impl Plan<'_> {
                         piece.emitted(&mut insns);
                     }
                 }
+                // A fresh value is numbered across blocks: a step that took
+                // none is the same in any round.
+                if fresh == fresh_before {
+                    #[cfg(test)]
+                    STEPPED.with(|one| one.set(one.get() + 1));
+                    self.stepped.borrow_mut().insert(key, Rc::new((insns[begin..].to_vec(), asked.take())));
+                }
             }
             let here = block.insns.get(cut).or(block.insns.last()).map_or(at, |one| one.at);
             restore(&mut insns, cut, here, frame, &mut home)?;
@@ -1637,6 +1691,40 @@ impl Plan<'_> {
             block.insns = insns.into();
         }
         Ok(out)
+    }
+
+    /// The roots a step touches: whether they are spilled is all a step's
+    /// output depends on besides the block.
+    fn step_roots(
+        &self,
+        block: &LirBlock,
+        first: usize,
+        last: usize,
+    ) -> Vec<usize> {
+        let at = block.at;
+        let mut roots: Vec<usize> = Vec::new();
+        for position in first..=last {
+            roots.extend(
+                self.allocnos
+                    .exits
+                    .get(&(at, position))
+                    .into_iter()
+                    .chain(self.allocnos.restores.get(&(at, position)))
+                    .flatten()
+                    .map(|segment| self.allocnos.root(*segment)),
+            );
+            if let Some(what) = block.insns[position].what.as_ref() {
+                for value in _held_floats(&what.sources) {
+                    roots.extend(self.allocnos.at_use.get(&(at, position, value)).map(|s| self.allocnos.root(*s)));
+                }
+                for value in _held_floats(&what.dests) {
+                    roots.extend(self.allocnos.at_def.get(&(at, position, value)).map(|s| self.allocnos.root(*s)));
+                }
+            }
+        }
+        roots.sort_unstable();
+        roots.dedup();
+        roots
     }
 
     /// `one` reading spilled `value` straight from its home, where x87 has
@@ -1848,6 +1936,9 @@ pub fn assigned(
         cells,
         roots,
         written: RefCell::default(),
+        shaped: RefCell::default(),
+        stepped: RefCell::default(),
+        first_fresh: _next_value(&body),
     };
     plan.priced(cpu);
     let mut spilled = plan.in_memory();
