@@ -418,6 +418,21 @@ fn noretain_is_a_parameter_attribute_that_round_trips() {
     assert_eq!(round(&once), once);
 }
 
+/// `nearcode` is a function attribute the Nib frontend and `nearcode::placed`
+/// write (callgraph::NEAR_CODE); the parser refused it ("expected `{`, found
+/// `nearcode`"), so llrm-mir --run could not read any module the compiler
+/// dumped with a near-entered procedure, and tools/loops reported every such
+/// case wrong (#1634).
+#[test]
+fn nearcode_is_a_function_attribute_that_round_trips() {
+    let text =
+        format!("{DATALAYOUT}\ndefine internal i16 @f(i16 %a) addrspace(1) nearcode {{\nb0:\n  ret i16 %a\n}}\n");
+    let once = round(&text);
+    assert!(once.contains("nearcode"), "{once}");
+    assert_eq!(round(&once), once);
+    assert!(crate::opcode::FLAG_ATTRIBUTES.contains(&crate::callgraph::NEAR_CODE));
+}
+
 /// Each use asked `instruction_dominates` of its definition, which scanned the
 /// block for both: the verifier was 12% of compiling 800 BASIC statements
 /// (#560). The positions are made once.

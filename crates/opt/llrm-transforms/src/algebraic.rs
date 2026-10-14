@@ -19,10 +19,11 @@
 //!   `x % 1`, decided self-compares, a `select` on a constant; two single-use
 //!   shifts, scales, offsets or bitwise constants become one; `(x + a) * k + b`
 //!   distributes; `(x + a) + a` is `x + (a << 1)`; `x - (x + y)` is `-y`.
-//! - Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, `sext` of
-//!   a value whose sign bit is clear, logic or a phi of like extensions done at
-//!   the narrow type, `ptrtoint(inttoptr x)`, a byte offset from a constant
-//!   near address as the constant address.
+//! - Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, `inttoptr
+//!   (add x, y)` of a flat pointer as `gep i8, (inttoptr x), y` (a constant `y`
+//!   not under `size`), `sext` of a value whose sign bit is clear, logic or a
+//!   phi of like extensions done at the narrow type, `ptrtoint(inttoptr x)`, a
+//!   byte offset from a constant near address as the constant address.
 //! - Compares: `icmp P (x + C1), C2` is `icmp P x, C2 - C1` (an ordered test
 //!   needs `nsw` or `nuw` for its signedness); a compare of extensions is a
 //!   compare of the sources; `xor (icmp P a b), true` is the inverse compare;
@@ -113,7 +114,7 @@ use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::{DemandedBits, Ranges, Registers};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, induction, ranges};
-use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask};
+use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
@@ -227,7 +228,7 @@ pub fn simplified(
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
-                round |= _rewritten(context, layout, function, &recurrences, inst);
+                round |= _rewritten(context, layout, function, &recurrences, inst, size);
             }
         }
         round |= _reassociated_recurrences(function);
@@ -255,9 +256,11 @@ fn _rewritten(
     function: &mut Function,
     recurrences: &BTreeSet<ValueId>,
     inst: InstId,
+    size: bool,
 ) -> bool {
     _mask_scaled(context, function, recurrences, inst)
         || _constant_address(context, function, inst)
+        || _offset_address(context, layout, function, &|value| recurrences.contains(&value), inst, size)
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
         || _narrowed_binary(context, function, inst)
@@ -1093,6 +1096,59 @@ fn _constant_address(
     });
     function.replace_value(result, Operand::Constant(address));
     _erase(function, inst);
+    true
+}
+
+/// `inttoptr (add x, y)` of a flat pointer is a byte offset from `inttoptr x`:
+/// `gep i8, (inttoptr x), y`. The access reads base + index (+ displacement) as
+/// one address (`mov [esi+655360], al`, `movzx ax, byte [ebx+ecx]`), where the
+/// integer sum was an `add` or a `lea` before it. A constant addend is not
+/// taken in a build for size: each access then carries the displacement (4
+/// bytes at m32) where one register held the base for all (textfill +3 bytes);
+/// a variable one costs nothing. Of two values, the index is the one that is a
+/// loop's recurrence. A far or huge pointer is no flat address (its offset
+/// wraps apart from its selector), and a selector-alone space is no address at
+/// all.
+fn _offset_address(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    is_recurrence: &dyn Fn(ValueId) -> bool,
+    inst: InstId,
+    size: bool,
+) -> bool {
+    let instruction = function.instruction(inst);
+    if instruction.opcode != Opcode::Cast(CastOp::IntToPtr) || !_single_use(function, instruction.operands[0]) {
+        return false;
+    }
+    let pointer = instruction.ty;
+    let llrm_mir::types::Type::Pointer(space) = *context.types.get(pointer) else { return false };
+    let Some(made) = _definition(function, instruction.operands[0]) else { return false };
+    let Some((BinaryOp::Add, left, right, width)) = _binary(context, function, made) else { return false };
+    // Only the default space, the near or flat one: a selector-alone space
+    // (`ptr addrspace(2)`) holds a segment, which no access reads as an address
+    // and no byte offset moves.
+    if space != 0 || layout.is_pair(space) || layout.offset_bits(space) != width {
+        return false;
+    }
+    let (value, index) = match _value_and_constant(context, BinaryOp::Add, left, right) {
+        Some(_) if size => return false,
+        Some((value, offset)) => {
+            let integer = context.types.int(width);
+            (value, Operand::Constant(context.int(integer, signed(offset, width))))
+        }
+        None => {
+            let (Operand::Value(_), Operand::Value(_)) = (left, right) else { return false };
+            let counted = |operand: Operand| matches!(operand, Operand::Value(value) if is_recurrence(value));
+            if counted(left) && !counted(right) { (right, left) } else { (left, right) }
+        }
+    };
+    let base =
+        function.create_instruction(Opcode::Cast(CastOp::IntToPtr), pointer, vec![value], Flags::default(), None);
+    function.insert(base, Position::Before(inst)).expect("a placed instruction");
+    let base = Operand::Value(function.instruction(base).result.expect("a value"));
+    let byte = context.types.int(8);
+    _replace(function, inst, Opcode::GetElementPtr { source: byte }, vec![base, index]);
     true
 }
 
