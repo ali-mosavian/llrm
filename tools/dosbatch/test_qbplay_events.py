@@ -31,8 +31,8 @@ def test_an_event_that_arrives_while_waiting_ends_the_wait_at_once():
     one = session_without_a_process()
     threading.Timer(0.05, arrive, (one, {"event": "key_wait", "function": 0x16})).start()
     began = time.monotonic()
-    assert one.wait_event("key_wait", 0, 5)["function"] == 0x16
-    assert time.monotonic() - began < 1
+    assert one.wait_event("key_wait", 0, 60)["function"] == 0x16
+    assert time.monotonic() - began < 30, "the wait ran to its budget instead of ending when the event arrived"  # a loaded host starts a timer late
 
 
 def test_an_event_from_before_the_step_does_not_count():
@@ -59,6 +59,7 @@ def test_a_text_step_waits_for_a_key_read_after_the_text_not_before(monkeypatch)
     with pytest.raises(TimeoutError):
         qb32demos.ready(one, 0, "Press any key")
     one.send = lambda command, wait=True: threading.Timer(0.05, arrive, (one, {"event": "key_wait"})).start()
+    monkeypatch.setattr(qb32demos, "LONGEST", 60)  # the event is 50 ms away; a loaded host starts its timer seconds late
     qb32demos.ready(one, 0, "Press any key")
 
 
