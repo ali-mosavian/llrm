@@ -111,7 +111,6 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::analysis::loops::{dominance, immediate_dominators, loops};
-use crate::model::ir::Semantics;
 use crate::model::ir::{self, Loc, Mem};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 
@@ -518,13 +517,7 @@ fn tail_copied(
             .insns
             .iter()
             .filter(|one| {
-                one.what
-                    .as_ref()
-                    .is_some_and(
-                        |what| matches!(what.op, ir::Operation::Branch | ir::Operation::Jump)
-                            && !what.indirect
-                            && what.target == Some(tail.at),
-                    )
+                one.what.as_ref().is_some_and(|what| what.remapped(|to| if to == tail.at { -1 } else { to }).is_some())
             })
             .count();
         if named > 1 || block.succ.iter().filter(|&&to| to == tail.at).count() != 1 {
@@ -535,17 +528,13 @@ fn tail_copied(
         odds.rerouted(block.at, &block.succ, tail.at, &[(copy, 1.0)]);
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         for one in block.insns.iter() {
-            match one.what.as_ref() {
-                Some(what)
-                    if matches!(what.op, ir::Operation::Branch | ir::Operation::Jump)
-                        && !what.indirect
-                        && what.target == Some(tail.at) =>
-                {
+            match one.what.as_ref().and_then(|what| what.remapped(|to| if to == tail.at { copy } else { to })) {
+                Some(what) => {
                     let mut moved = (**one).clone();
-                    moved.what = Some(Semantics { target: Some(copy), ..what.clone() });
+                    moved.what = Some(what);
                     insns.push(Arc::new(moved));
                 }
-                _ => insns.push(Arc::clone(one)),
+                None => insns.push(Arc::clone(one)),
             }
         }
         let succ = block.succ.iter().map(|&to| if to == tail.at { copy } else { to }).collect();

@@ -1,4 +1,4 @@
-reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out"
+reason = "jump tables: the QB runtime's dense switches are table jumps (jpeg bq32 rows move by at most 3 instructions in 10^8)"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 87690346
-code_bytes = 6672
+instructions = 93403209
+code_bytes = 6921
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89343506
-code_bytes = 6322
+instructions = 95494062
+code_bytes = 6417
 data_bytes = 29209
 bss_bytes = 0
 

@@ -463,7 +463,7 @@ impl Printer<'_> {
                         )
                     })
                     .collect();
-                format!("switch {}, {} [\n{cases}  ]", typed(0), typed(1))
+                format!("switch{flags} {}, {} [\n{cases}  ]", typed(0), typed(1))
             }
             Opcode::Unreachable => "unreachable".to_owned(),
             Opcode::FNeg | Opcode::Freeze => format!("{}{flags} {}", inst.opcode.mnemonic(), typed(0)),

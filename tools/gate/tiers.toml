@@ -298,7 +298,8 @@ why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the heade
 [[measure.accepted]]
 row = "programs -Os"
 geomean = 1.0057
-why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+worst = 1.035
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559. Also the late switch lowering (docs/reference/levels.md, `switchlower`): x_switch_sparse -Os +2.9% (74.4M to 76.6M instructions), of which 1.0M is the analyses of the one function it changes made again and 1.2M the selection of the lowered code; the module analyses frozen at the end of the pipeline stand."
 
 [[measure.accepted]]
 row = "branches O2"
