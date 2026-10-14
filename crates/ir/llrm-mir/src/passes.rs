@@ -1315,6 +1315,10 @@ pub struct ModuleAnalyses {
     /// (`invalidate`): a pass that edits bodies says which, and the
     /// declarations of the rest then stand without a look at each.
     edited: BTreeSet<GlobalId>,
+    /// Every body reported edited, in order and never cleared: an analysis
+    /// that keeps a position in it is told which bodies moved since its last
+    /// run without a look at each.
+    edit_log: Vec<GlobalId>,
     declarations_open: bool,
     metadata_open: bool,
     /// What an analysis keeps for its next run, by its type: the working of an
@@ -1335,6 +1339,7 @@ impl ModuleAnalyses {
             outer: None,
             functions: HashMap::default(),
             edited: BTreeSet::new(),
+            edit_log: Vec::new(),
             declarations_open: true,
             metadata_open: true,
             memos: HashMap::default(),
@@ -1532,6 +1537,12 @@ impl ModuleAnalyses {
     ) {
         self.functions.remove(&id);
         self.edited.insert(id);
+        self.edit_log.push(id);
+    }
+
+    /// The bodies reported edited so far, oldest first.
+    pub fn edit_log(&self) -> &[GlobalId] {
+        &self.edit_log
     }
 
     /// Body `id` was edited by a function pass over it alone, which left
@@ -1542,6 +1553,7 @@ impl ModuleAnalyses {
         preserved: &PreservedAnalyses,
     ) {
         self.edited.insert(id);
+        self.edit_log.push(id);
         self.invalidate_bodies(preserved);
     }
 
