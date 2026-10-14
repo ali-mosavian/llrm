@@ -24,7 +24,7 @@ It is an executed-instruction count. It models no latency, so it ranks code for 
 
 ## What the compiler expects: `tools/sizes.py`
 
-Object bytes and the backend's cost estimate (instructions and memory operands per call, summed) of every program, for two builds side by side. An estimate on MIR before lowering, not an execution: use it to find what moved, and `tools/bench` to say what it cost.
+Object code bytes of every program, for two builds side by side. It prints no instruction or memory-operand column: the backend's per-call cost estimate, summed, was not comparable across builds (#390, #433, #481). `tools/bench` counts what runs.
 
     python3 tools/sizes.py BASE_BIN_DIR [NEW_BIN_DIR] [-O2 -Os ...]
 

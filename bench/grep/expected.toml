@@ -1,4 +1,4 @@
-reason = "OPEN no longer allocates a kilobyte of line buffer with its file block, so programs that open files in their kernel (grep, jpeg, stft: -3,063 instructions each) skip the string-space take it caused; scroll +3 for freeing the file name's temporary"
+reason = "bq32 counts the kernel without code the link map does not name (DOS, the extender: fork profile inclusive_unknown): every kernel loses its DOS calls, 596 for the lazy string heap's memory request in all that allocate a string (lru 895 -> 299, the largest relative move), 72k to 3.6M for the file readers (grep -0.57%, jpeg -0.08%, stft -0.44%); the compiler's and runtime's named code is unchanged"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 3703.8059
 
 [bq32.O2]
-instructions = 627521472
+instructions = 623915658
 code_bytes = 1471
 data_bytes = 127
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 627512050
+instructions = 623905943
 code_bytes = 1334
 data_bytes = 127
 bss_bytes = 0

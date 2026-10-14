@@ -129,7 +129,7 @@ use crate::cfg;
 use crate::memory::{MemRef, Unit};
 use crate::memoryssa::{self, Accesses, covered, covers, may_clobber, placed, same_bytes};
 use crate::ranges;
-use crate::regions::{OverlapBucket, OverlapBuckets, overlap_bucket, overlap_buckets};
+use crate::regions::{OverlapBucket, OverlapBuckets, displaced_buckets, overlap_bucket, overlap_buckets, overlap_span};
 
 /// The cell `inst` purely loads, and the value it lands in.
 pub fn loaded_into(
@@ -246,7 +246,7 @@ impl Stored {
         let cells: Vec<MemRef> = number.keys().cloned().collect();
         let mut buckets = OverlapBuckets::default();
         let index = CellMap::new((0..cells.len()).map(|at| (at, ())).collect(), |at| {
-            (overlap_bucket(&mut buckets, &cells[*at]), None)
+            (overlap_bucket(&mut buckets, &cells[*at]), overlap_span(&cells[*at]))
         });
         let mut marked = Bits::new(cells.len());
         if let Some(private) = private {
@@ -291,10 +291,12 @@ impl Stored {
         // Cells that share bytes share a bucket.
         match overlap_buckets(&self.cells[at], &self.index.parts) {
             None => (0..self.cells.len()).for_each(&mut test),
-            Some(buckets) => buckets
-                .iter()
-                .filter_map(|bucket| self.index.buckets.get(bucket))
-                .flat_map(IndexMap::keys)
+            // A cell at fixed bytes of a frame asks only the cells of its
+            // buckets whose bytes meet its own.
+            Some(buckets) => self
+                .index
+                .asked(Some(buckets), displaced_buckets(&self.cells[at], &self.index.parts))
+                .into_iter()
                 .for_each(|&one| test(one)),
         }
         if llrm_support::env_set("LLRM_CHECK_CLOBBERS") {

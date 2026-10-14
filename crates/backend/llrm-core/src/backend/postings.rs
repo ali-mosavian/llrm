@@ -317,8 +317,9 @@ fn current(
     held.blocks.len() == body.blocks.len()
         && held.blocks.iter().zip(&body.blocks).all(|((at, before), block)| {
             *at == block.at
-                && before.len() == block.insns.len()
-                && before.iter().zip(&block.insns).all(|(old, new)| Arc::ptr_eq(old, new))
+                && (before.same_as(&block.insns)
+                    || before.len() == block.insns.len()
+                        && before.iter().zip(&block.insns).all(|(old, new)| Arc::ptr_eq(old, new)))
         })
 }
 
@@ -348,8 +349,9 @@ pub fn following<R>(
             } else {
                 let held = state.as_mut().expect("checked");
                 for (block, (one, (_, before))) in body.blocks.iter().zip(&mut held.blocks).enumerate() {
-                    let unchanged = before.len() == one.insns.len()
-                        && before.iter().zip(&one.insns).all(|(old, new)| Arc::ptr_eq(old, new));
+                    let unchanged = before.same_as(&one.insns)
+                        || before.len() == one.insns.len()
+                            && before.iter().zip(&one.insns).all(|(old, new)| Arc::ptr_eq(old, new));
                     if unchanged {
                         continue;
                     }
