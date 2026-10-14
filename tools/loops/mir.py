@@ -24,6 +24,10 @@ SILENT = {"N$PN", "B$CEND"}
 FUEL = 400_000_000
 
 
+class Unparsable(RuntimeError):
+    """llrm-mir could not read the dump: the compiler's printer and its parser disagree, which no stub or oracle can explain."""
+
+
 class Unrunnable(Exception):
     """The MIR calls something no stub models."""
 
@@ -159,6 +163,12 @@ def stages(directory: Path) -> tuple[Path, Path]:
     return files[0], files[-1]
 
 
+def refusal(target: str, stderr: str) -> RuntimeError:
+    """A parse error (`file:line N: ...`) is the dump unreadable; anything else is the run trapping."""
+    kind = Unparsable if re.search(r":line \d+:", stderr) else RuntimeError
+    return kind(f"{target}: {stderr.strip()[:500]}")
+
+
 def run(path: Path, lang: str, work: Path) -> int:
     text = harness(path.read_text(), lang)
     target = work / f"{path.stem}.run.ll"
@@ -168,7 +178,7 @@ def run(path: Path, lang: str, work: Path) -> int:
         capture_output=True, text=True,
     )
     if done.returncode != 0:
-        raise RuntimeError(f"{target}: {done.stderr.strip()[:500]}")
+        raise refusal(str(target), done.stderr)
     return int(done.stdout.strip()) & 0xFFFFFFFF
 
 

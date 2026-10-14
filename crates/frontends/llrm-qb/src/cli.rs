@@ -1,5 +1,5 @@
-//! Port of `qbopt/frontend/qb/__main__.py`, plus `tools/qbstages.py`'s
-//! `--dump DIR` and `--mbf`.
+//! Port of `qbopt/frontend/qb/__main__.py`, plus `--dump DIR` (the stage
+//! dump, `qbstages`) and `--mbf`.
 //!
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]

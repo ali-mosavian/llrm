@@ -1,4 +1,4 @@
-reason = "jump tables: the QB runtime's dense switches are table jumps (jpeg/stft bq32 rows move by at most 9 instructions in 10^8)"
+reason = "jump tables: the QB runtime's dense switches are table jumps (jpeg/stft bq32 rows move by at most 10 instructions in 10^8)"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63879836
+instructions = 63879839
 code_bytes = 6709
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64219488
+instructions = 64219483
 code_bytes = 6224
 data_bytes = 29697
 bss_bytes = 0
