@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/fppatches.py`: the FP emulator's own patch sites,
+//! The FP emulator's own patch sites,
 //! and the records without their fixups.
 
 use std::collections::BTreeSet;

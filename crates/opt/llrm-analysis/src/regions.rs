@@ -363,7 +363,6 @@ fn foreign_apart(
         || (grouped(other) && foreign(one, known, Some(program)).is_some())
 }
 
-/// Python `qbopt.analysis.regions:may_alias`.
 ///
 /// Each reference gets its own interval facts. If both have provenance,
 /// their concrete objects decide.
@@ -385,7 +384,7 @@ pub fn may_alias(
 
 /// Whether a write through `other` could land on `one`.
 ///
-/// Python `qbopt.model.mir:overlapping`. Provenance answers the symbolic
+/// Provenance answers the symbolic
 /// part; when two references keep one root and index, their byte intervals
 /// answer the remaining displacement question.
 pub fn overlapping(

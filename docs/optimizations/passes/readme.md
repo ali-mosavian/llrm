@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 59 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 60 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -31,7 +31,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | fold | Replaces every integer value [`llrm_analysis::consts`] knows by its constant, folds a pure operation on each edge of a join, and puts compares and identities in canonical form. | Second in the per-body pipeline, after `sroa`, and again after the header | [fold](fold.md) |
 | gepoffset | Moves the constant an index adds into a `gep` of its own, where address modes take it as a displacement: `a[i + 8]` then needs no add, and no register for the sum, to reach its element. | Once, after the body fixed point and after `hoist`: a hoisted constant `gep` | [gepoffset](gepoffset.md) |
 | globaldce | Delete the module's own bodies and variables that nothing live names. | Once, as a program pass after the interprocedural step, so the bodies that | [globaldce](globaldce.md) |
-| globalopt | Mark internal globals that are only ever loaded from as `constant`. | Once, as a module pass before the per-body pipeline and before the | [globalopt](globalopt.md) |
+| globalopt | Mark internal globals that are only ever loaded from as `constant`, and drop the stores of those only ever stored to. | Once, as a module pass before the per-body pipeline and before the | [globalopt](globalopt.md) |
 | gvn | Reuses a value the function already has, so the same operation is not computed twice and the same bytes are not read again: LLVM's GVN and gcc's FRE/PRE. | `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after | [gvn](gvn.md) |
 | hoist | Moves work whose operands do not change in a loop, and loads nothing in it writes, to before the loop, so it runs once and not every trip: LLVM's LICM hoisting and gcc's `-fmove-loop-invariants`. | Early, after `floatloop` and before `loopmotion`; and again after | [hoist](hoist.md) |
 | homes | Marks each phi whose value also sits in a memory cell with `!llrm.home`, naming a store of that cell, so a spill of the phi reads the cell instead of paying for a slot. | Last in the module pipeline, after `spares`, so the instruction ids it names | [homes](homes.md) |
@@ -60,6 +60,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |
 | splitcopy | A `memcpy` into a local nothing else can reach becomes the loads and stores of the bytes the local is read as. | Inside [`crate::promote`](promote.md)'s `Sroa`, before it scalarizes the aggregate's | [splitcopy](splitcopy.md) |
+| switchlower | A switch lowered as gcc 13.4 lowers one: a lookup table where every case only picks constants, bit tests for few targets in a narrow range, and otherwise a balanced tree of range tests. | As two passes, gcc's: `switchconv` (`pass_convert_switch`, -O2 and up), | [switchlower](switchlower.md) |
 | tailrec | A call a function makes to itself as the last thing it does becomes a branch to its own entry with the arguments rewritten. | In the function pipeline after `gvn::EqualCalls`, so two equal calls are | [tailrec](tailrec.md) |
 | transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] and [`crate::loopexit`] share: value reuse, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `subexpressions`, `equal_calls` and `forwarded` on each | [transform](transform.md) |
 | trivialunswitch | A branch in a loop's header on a loop-invariant condition, one side of which leaves the loop, is decided in the preheader instead of on every trip. | In the function pipeline's fixed point, after `loopmotion` and before | [trivialunswitch](trivialunswitch.md) |

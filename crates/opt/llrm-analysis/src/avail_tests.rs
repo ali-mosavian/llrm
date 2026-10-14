@@ -656,3 +656,17 @@ fn test_a_load_tries_the_nearest_load_of_its_bytes_first() {
     assert!(found.len() >= 40, "each second load is served by the first: {}", found.len());
     assert!(asked < 10 * 40, "{asked} walks for 80 loads in 40 stages");
 }
+
+/// A load whose nearest usable load of its bytes has a write between collected
+/// and sorted every load above it as well: N^2 for N stages, 338 of the 707
+/// Minstr `memory_providers` spent on `branches` at N=1024.
+#[test]
+fn test_a_load_blocked_by_its_nearest_load_collects_no_others() {
+    let parsed = Parsed::new(&stages_of_loads(40));
+    let unit = parsed.unit();
+    let before = crate::avail::collected_candidates();
+    let found = forwarded(&unit, &Calls::default());
+    let collected = crate::avail::collected_candidates() - before;
+    assert!(found.len() >= 40, "each second load is served by the first: {}", found.len());
+    assert!(collected < 10 * 40, "{collected} candidates collected for 80 loads in 40 stages");
+}

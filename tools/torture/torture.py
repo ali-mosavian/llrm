@@ -31,7 +31,8 @@ os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase
 BIN = dosbatch.BIN
 CORPUS = Path(os.environ.get("TORTURE_CORPUS", Path.home() / "work/personal/gcc/gcc/testsuite/gcc.c-torture/execute"))
 LEVELS = {"O0": "-O0", "O2": "-O2", "Os": "-Os"}
-BATCH = 150
+BATCH = 150  # the most programs in one DOSBox launch
+LAUNCHES = 12  # launches at once: each has its own work directory and emulator
 BUDGET_MS = 15_000
 COMPILE_SECONDS = 60  # of CPU time, not wall clock: a loaded host runs the same compile slower, not longer
 
@@ -190,6 +191,18 @@ def launched(jobs: list, work: Path) -> dict:
         return {**launched(jobs[:middle], work), **launched(jobs[middle:], work)}
 
 
+def batches(order: list, launches: int = LAUNCHES, most: int = BATCH) -> list[list]:
+    """`order` in as few groups as keep every launch busy and none over `most`."""
+    size = min(most, max(1, -(-len(order) // launches)))
+    return [order[start : start + size] for start in range(0, len(order), size)]
+
+
+def run_batches(groups: list[list], launch, work: Path) -> list[dict]:
+    """The result of each group, run at once, each in a work directory of its own (a launch clears the one it is given)."""
+    with ThreadPoolExecutor(max_workers=max(1, len(groups))) as pool:
+        return list(pool.map(lambda at_group: launch(at_group[1], work / f"run{at_group[0]}"), enumerate(groups)))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("names", nargs="*")
@@ -243,13 +256,11 @@ def run(args, work: Path) -> int:
             else:
                 result[case] = (kind, why)
     if args.stage == "run":
-        order = list(exes)
-        for start in range(0, len(order), BATCH):
-            group = order[start : start + BATCH]
-            loader = dosbatch.target_link(target).get("loader")
-            files = (Path(loader.replace("{ow}", str(dosbatch.ow_root()))),) if loader else ()
-            jobs = [dosbatch.Job(names[case], "exe", exes[case], files=files) for case in group]
-            ran = launched(jobs, work / "run")
+        loader = dosbatch.target_link(target).get("loader")
+        files = (Path(loader.replace("{ow}", str(dosbatch.ow_root()))),) if loader else ()
+        groups = batches(list(exes))
+        jobs = [[dosbatch.Job(names[case], "exe", exes[case], files=files) for case in group] for group in groups]
+        for group, ran in zip(groups, run_batches(jobs, launched, work)):
             for case in group:
                 outcome = ran[names[case]]
                 if outcome.status != "ok":
@@ -258,7 +269,7 @@ def run(args, work: Path) -> int:
                     result[case] = ("wrong", "aborted" if outcome.exit_code == 134 else f"exit code {outcome.exit_code}")
                 else:
                     result[case] = ("pass", "")
-            print(f"ran {min(start + BATCH, len(order))}/{len(order)}", file=sys.stderr)
+        print(f"ran {len(exes)}/{len(exes)}", file=sys.stderr)
     by_design = differences()
     for case, (kind, why) in list(result.items()):
         if kind == "wrong" and case[0].stem in by_design:

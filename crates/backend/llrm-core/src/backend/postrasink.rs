@@ -475,11 +475,11 @@ pub fn sunk(body: &LirBody) -> LirBody {
         let mut insns = block.insns.to_vec();
         let mut jumped = false;
         for one in &mut insns {
-            if let Some(what) = one.what.as_ref().filter(|what| {
-                matches!(what.op, Operation::Branch | Operation::Jump) && !what.indirect && what.target == Some(target)
-            }) {
+            if let Some(what) =
+                one.what.as_ref().and_then(|what| what.remapped(|to| if to == target { bridge } else { to }))
+            {
                 let mut made = (**one).clone();
-                made.what = Some(Semantics { target: Some(bridge), ..what.clone() });
+                made.what = Some(what);
                 *one = Arc::new(made);
                 jumped = true;
             }

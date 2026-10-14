@@ -48,8 +48,21 @@
 //!
 //! Afterwards `fisttp` is made as a 387 has it: `fistp` between `fldcw` of a
 //! control word with rounding set toward zero and a `fldcw` of the saved one.
-//! The two words are saved once at entry, and a run of conversions switches
-//! once.
+//! The two words are saved once at entry.
+//!
+//! Where the switches go is gcc's mode switching, in one analysis and one
+//! placement over the graph (`_needs`, `_modes`;
+//! [`optimize_mode_switching`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/mode-switching.cc#L495),
+//! the i386 entity
+//! [`I387_TRUNC`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/config/i386/i386.cc#L14607)).
+//! Each instruction needs a mode: truncating for a conversion, the caller's for
+//! whatever rounds, a call or a return, none for exact work. A block assumes on
+//! entry the mode its first need names, or its successors' (the heavier by loop
+//! depth), and a switch goes on each edge whose ends disagree, so a loop of
+//! conversions switches on its entry edge and its exits, not twice a trip
+//! (`fldcw` is 4 clocks on a 486, 7 on a P5), and a run of blocks switches
+//! once. Unlike gcc's lazy code motion this does not solve for the least number
+//! of insertions: it follows demand and takes a critical edge's source mode.
 //!
 //! # Example
 //! The same `keep` as in `floatassign`. Each value becomes `ST0`, the stack
@@ -104,12 +117,13 @@
 //! `X86FloatingPoint.cpp`.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
+use crate::analysis::loops;
 use crate::backend::allocate::live;
 use crate::backend::classes::RegisterClasses;
 #[cfg(test)]
@@ -1106,20 +1120,159 @@ pub fn allocated<'a>(
     _truncating(&_converted(&assigned, &RegisterClasses::of(&llrm_x86_m16::M16))?, frame)
 }
 
+/// The control word an x87 instruction needs: the one place the fact lives.
+/// `fisttp` as a 387 has it is `fistp` with the word set to round toward zero
+/// (`I387_TRUNC` in gcc's i386 `ix86_mode_needed`); anything that rounds
+/// needs the caller's, and so does a call or a return; exact work (integer
+/// instructions, x87 loads, exchanges, compares, sign changes, branches)
+/// needs none.
+fn _needs(one: &Insn) -> Option<Mode> {
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && name_is(what, "fisttp")) {
+        return Some(Mode::Chop);
+    }
+    let branches = one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch));
+    (!branches && !_exact(one)).then_some(Mode::Caller)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mode {
+    Caller,
+    Chop,
+}
+
+/// What each block assumes of the control word on entry, and whether each
+/// restores the caller's before it ends: gcc's `optimize_mode_switching`
+/// ([mode-switching.cc](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/mode-switching.cc)),
+/// whose lazy code motion puts a mode where it is wanted ahead of its uses and
+/// out of loops. Here a block wants the mode its first instruction needs, or
+/// the one its successors want, most weighted by loop depth; an edge whose two
+/// ends disagree gets the switch, at the end of its source if that has one way
+/// on, else at the start of its target if that has one way in. A critical edge
+/// takes its source's mode for its target instead, and where the modes cannot
+/// all agree every block restores the caller's before it ends.
+struct Modes {
+    entering: BTreeMap<i64, Mode>,
+    restore: bool,
+}
+
+fn _modes(body: &LirBody) -> Modes {
+    let graph = &body.blocks;
+    let predecessors = loops::predecessors(graph);
+    let index = graph.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
+    let mut weight = BTreeMap::<i64, i64>::new();
+    for one in loops::loops(graph, Some(body.entry)) {
+        for at in &one.body {
+            *weight.entry(*at).or_insert(1) *= 8;
+        }
+    }
+    let (first, last): (BTreeMap<_, _>, BTreeMap<_, _>) = graph
+        .iter()
+        .map(|block| {
+            let needs = block.insns.iter().filter_map(|one| _needs(one)).collect::<Vec<_>>();
+            ((block.at, needs.first().copied()), (block.at, needs.last().copied()))
+        })
+        .unzip();
+    let mut want = first.clone();
+    for _ in 0..=graph.len() {
+        let mut changed = false;
+        for block in graph.iter().filter(|block| first[&block.at].is_none()) {
+            let (mut caller, mut chop) = (0, 0);
+            for to in &block.succ {
+                match want[to] {
+                    Some(Mode::Caller) => caller += weight.get(to).copied().unwrap_or(1),
+                    Some(Mode::Chop) => chop += weight.get(to).copied().unwrap_or(1),
+                    None => {}
+                }
+            }
+            let voted = match caller.cmp(&chop) {
+                std::cmp::Ordering::Less => Some(Mode::Chop),
+                std::cmp::Ordering::Greater => Some(Mode::Caller),
+                std::cmp::Ordering::Equal => None,
+            };
+            changed |= std::mem::replace(want.get_mut(&block.at).expect("every block"), voted) != voted;
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut entering = graph
+        .iter()
+        .map(|block| {
+            (block.at, if block.at == body.entry { Mode::Caller } else { want[&block.at].unwrap_or(Mode::Caller) })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let leaving = |entering: &BTreeMap<i64, Mode>, at: i64| last[&at].unwrap_or(entering[&at]);
+    let placeable = |entering: &BTreeMap<i64, Mode>, from: i64, to: i64| {
+        leaving(entering, from) == entering[&to]
+            || graph[index[&from]].succ.len() == 1
+            || (predecessors[&to].len() == 1 && to != body.entry)
+    };
+    for _ in 0..=2 * graph.len() {
+        let mut changed = false;
+        for block in graph {
+            for &to in &block.succ {
+                if !placeable(&entering, block.at, to) && to != body.entry {
+                    entering.insert(to, leaving(&entering, block.at));
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // The switches an assignment costs, each weighted by its block's depth:
+    // none if an edge cannot take its switch.
+    let cost = |entering: &BTreeMap<i64, Mode>, restore: bool| -> Option<i64> {
+        let mut total = 0;
+        for block in graph {
+            let at = weight.get(&block.at).copied().unwrap_or(1);
+            let mut current = entering[&block.at];
+            let mut switches = 0;
+            for one in &block.insns {
+                if let Some(needed) = _needs(one).filter(|needed| *needed != current) {
+                    switches += 1;
+                    current = needed;
+                }
+            }
+            if (restore || block.succ.is_empty()) && current != Mode::Caller {
+                switches += 1;
+            }
+            total += at * switches;
+            for &to in block.succ.iter().filter(|_| !restore) {
+                if current != entering[&to] {
+                    if !placeable(entering, block.at, to) {
+                        return None;
+                    }
+                    total += at;
+                }
+            }
+        }
+        Some(total)
+    };
+    let restoring = graph.iter().map(|block| (block.at, Mode::Caller)).collect::<BTreeMap<_, _>>();
+    // Following demand can cost more than restoring at the end of each block: a
+    // loop that converts and rounds alike in a trip gains nothing from entering
+    // in one mode and pays the switch on its entry and exit.
+    match (cost(&entering, false), cost(&restoring, true)) {
+        (Some(following), Some(restored)) if following <= restored => Modes { entering, restore: false },
+        (Some(_), None) => Modes { entering, restore: false },
+        _ => Modes { entering: restoring, restore: true },
+    }
+}
+
 /// `fisttp` as a 387 has it: `fistp` with the control word set to round
 /// toward zero and put back. After allocation, so the control-word barriers
 /// split no region.
 ///
 /// The caller's control word and its truncating form are saved once, at
 /// entry: a callee leaves the control word as it found it, and nothing else
-/// in the body writes it.
+/// in the body writes it. The switches are placed by `_modes`.
 fn _truncating(
     body: &LirBody,
     frame: Option<&mut Frame>,
 ) -> Result<LirBody, Raised> {
-    let fisttp =
-        |one: &Insn| one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && name_is(what, "fisttp"));
-    if !body.insns().iter().any(|one| fisttp(one)) {
+    if !body.insns().iter().any(|one| _needs(one) == Some(Mode::Chop)) {
         return Ok(body.clone());
     }
     let Some(frame) = frame else {
@@ -1148,8 +1301,15 @@ fn _truncating(
         made.widths = widths;
         Arc::new(made)
     };
+    let switch = |mode: Mode, at: i64| {
+        let cell = if mode == Mode::Chop { &chop } else { &saved };
+        insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(cell.clone())]), at)
+    };
 
+    let modes = _modes(body);
     let mut blocks = Vec::new();
+    // Each block's insns with the mode it leaves in.
+    let mut walked = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
         let arrivals =
@@ -1172,36 +1332,64 @@ fn _truncating(
                 insn(semantics(Operation::Move, "mov", vec![Loc::Mem(chop.clone())], vec![Loc::Held(chopped)]), at),
             ]);
         }
-        // Chopping, once switched on, stays on across what rounding cannot
-        // change, so a run of conversions switches once.
-        let mut chopping = false;
+        let mut current = modes.entering[&block.at];
         for one in &block.insns[arrivals..] {
-            if fisttp(one) {
-                if !chopping {
-                    insns.push(insn(
-                        semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(chop.clone())]),
-                        one.at,
-                    ));
-                    chopping = true;
+            if let Some(needed) = _needs(one) {
+                if needed != current {
+                    insns.push(switch(needed, one.at));
+                    current = needed;
                 }
+            }
+            if one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && name_is(what, "fisttp")) {
                 let mut made = (**one).clone();
                 made.what =
                     Some(Semantics { name: Some("fistp".to_owned()), ..one.what.clone().expect("checked above") });
                 insns.push(Arc::new(made));
+            } else {
+                insns.push(Arc::clone(one));
+            }
+        }
+        walked.push((insns, current));
+    }
+    // The switch on each edge whose ends disagree.
+    let mut ends = BTreeMap::<i64, Vec<Mode>>::new();
+    let mut starts = BTreeMap::<i64, Mode>::new();
+    for (block, (_, current)) in body.blocks.iter().zip(&walked) {
+        if modes.restore {
+            continue;
+        }
+        for &to in &block.succ {
+            if *current == modes.entering[&to] {
                 continue;
             }
-            if chopping && !_unrounded(one) {
-                insns.push(insn(
-                    semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(saved.clone())]),
-                    one.at,
-                ));
-                chopping = false;
+            if block.succ.len() == 1 {
+                ends.entry(block.at).or_default().push(modes.entering[&to]);
+            } else {
+                starts.insert(to, modes.entering[&to]);
             }
-            insns.push(Arc::clone(one));
         }
-        if chopping {
-            let at = block.insns.last().map_or(block.at, |last| last.at);
-            insns.push(insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(saved.clone())]), at));
+    }
+    for (block, (mut insns, current)) in body.blocks.iter().zip(walked) {
+        let at = block.insns.last().map_or(block.at, |last| last.at);
+        let mut tail = ends.remove(&block.at).unwrap_or_default();
+        // A block with no way on leaves the function: the caller's word again.
+        if (modes.restore || block.succ.is_empty()) && current != Mode::Caller {
+            tail.push(Mode::Caller);
+        }
+        // Before the branches that end the block: they must stay last.
+        let branches = insns
+            .iter()
+            .rev()
+            .take_while(|one| {
+                one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch))
+            })
+            .count();
+        for mode in tail {
+            insns.insert(insns.len() - branches, switch(mode, at));
+        }
+        if let Some(mode) = starts.get(&block.at) {
+            let first = block.insns.first().map_or(block.at, |first| first.at);
+            insns.insert(0, switch(*mode, first));
         }
         let mut made = block.clone();
         made.insns = insns.into();
@@ -1214,7 +1402,7 @@ fn _truncating(
 
 /// Whether `one` neither rounds nor leaves the block: integer work, and
 /// the x87 loads, exchanges, compares and sign changes, which are exact.
-fn _unrounded(one: &Insn) -> bool {
+fn _exact(one: &Insn) -> bool {
     let Some(what) = &one.what else { return false };
     let name = what.name.as_deref().unwrap_or_default();
     match what.op {

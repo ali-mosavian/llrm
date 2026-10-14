@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/qb`: QB HIR to a BASIC-envelope OMF object.
+//! QB HIR to a BASIC-envelope OMF object.
 
 pub use llrm_core::abi::qb as abi;
 pub mod cli;

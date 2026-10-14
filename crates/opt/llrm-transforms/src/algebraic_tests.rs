@@ -1251,3 +1251,98 @@ b0:
 ",
     );
 }
+
+/// The QB flat port's `(ofs) AND &HFFFF&` of a 16-bit INTEGER sum computed wide
+/// was `trunc`, `sext`, `and 65535`: the mask looks at the low 16 bits only, so
+/// it is `and v, 65535`, and `_redundant_masks` can see `v` (2x + 640y, in
+/// range) instead of a halfword spanning [-32768, 32768). The `movsx; and` pair
+/// stayed in TSC's copy loop beside a second counter.
+#[test]
+fn test_a_mask_over_a_sign_extension_of_a_truncation_looks_at_the_low_bits() {
+    for extension in ["sext"] {
+        let text = format!(
+            "define i32 @f(i32 %v) {{\nb0:\n  %t = trunc i32 %v to i16\n  %e = {extension} i16 %t to i32\n  %r = and i32 %e, 65535\n  ret i32 %r\n}}\n"
+        );
+        assert_eq!(
+            checked(&text, &singles(&edges(16))),
+            "define i32 @f(i32 %v) {\nb0:\n  %0 = and i32 %v, 65535\n  ret i32 %0\n}\n",
+            "{extension}"
+        );
+    }
+    // Any width, and a mask inside it.
+    assert_eq!(
+        checked(
+            "define i32 @f(i32 %v) {\nb0:\n  %t = trunc i32 %v to i8\n  %e = sext i8 %t to i32\n  %r = and i32 %e, 127\n  ret i32 %r\n}\n",
+            &singles(&edges(16))
+        ),
+        "define i32 @f(i32 %v) {\nb0:\n  %0 = and i32 %v, 127\n  ret i32 %0\n}\n"
+    );
+    // A mask reaching past the truncation sees the copied sign bits: stays.
+    unchanged(
+        "define i32 @f(i32 %v) {\nb0:\n  %t = trunc i32 %v to i16\n  %e = sext i16 %t to i32\n  %r = and i32 %e, 131071\n  ret i32 %r\n}\n",
+    );
+}
+
+/// `and (sext x), 65535` over a 16-bit `x` is `zext x` (TSC's narrow counter:
+/// `movsx ecx, bx; and ecx, 65535`, one `movzx` now).
+#[test]
+fn test_a_mask_over_a_sign_extension_of_its_whole_width_is_a_zero_extension() {
+    assert_eq!(
+        checked(
+            "define i32 @f(i16 %x) {\nb0:\n  %e = sext i16 %x to i32\n  %r = and i32 %e, 65535\n  ret i32 %r\n}\n",
+            &singles(&edges(16))
+        ),
+        "define i32 @f(i16 %x) {\nb0:\n  %0 = zext i16 %x to i32\n  ret i32 %0\n}\n"
+    );
+    // A mask inside the width stays over the `sext`: `histo`'s `i & 127` would
+    // become a narrow use of its counter and keep a second one.
+    unchanged("define i32 @f(i16 %x) {\nb0:\n  %e = sext i16 %x to i32\n  %r = and i32 %e, 4095\n  ret i32 %r\n}\n");
+    unchanged("define i32 @f(i16 %x) {\nb0:\n  %e = sext i16 %x to i32\n  %r = and i32 %e, 65536\n  ret i32 %r\n}\n");
+}
+
+/// `*(char *)(0xA0000 + o[i])` was `add esi, 655360; mov [esi], al`: the
+/// integer sum under `inttoptr` was not an address mode. A constant added to
+/// the integer of a flat pointer is a byte offset from it, which isel reads as
+/// a displacement (`mov [esi+655360], al`).
+#[test]
+fn test_a_constant_added_under_inttoptr_is_a_byte_offset_of_the_pointer() {
+    let text =
+        "define ptr @f(i32 %x) {\nb0:\n  %a = add i32 %x, 655360\n  %p = inttoptr i32 %a to ptr\n  ret ptr %p\n}\n";
+    let (_, after) = simplified_in(text, false, FLAT);
+    let after = bare(&after);
+    assert!(after.contains("getelementptr i8, ptr %0, i32 655360") && !after.contains("add i32"), "{after}");
+    // Not in a build for size: each access would carry the displacement.
+    let sized = bare(&simplified_in(text, true, FLAT).1);
+    assert!(!sized.contains("getelementptr"), "{sized}");
+    // The same on a near 16-bit pointer.
+    let near = "define ptr @f(i16 %x) {\nb0:\n  %a = add i16 %x, 4\n  %p = inttoptr i16 %a to ptr\n  ret ptr %p\n}\n";
+    let after = bare(&simplified_in(near, false, "e-p:16:16-n8:16:32").1);
+    assert!(after.contains("getelementptr i8, ptr %0, i16 4") && !after.contains("add i16"), "{after}");
+    // A selector-alone space holds a segment, not an address: the gep on
+    // `inttoptr (add sel, 4) to ptr addrspace(2)` made demo-deedlines refuse
+    // to compile ("an access through a ptr addrspace(2)").
+    let segment = "define ptr addrspace(2) @f(i16 %x) {\nb0:\n  %a = add i16 %x, 4\n  %p = inttoptr i16 %a to ptr addrspace(2)\n  ret ptr addrspace(2) %p\n}\n";
+    let kept = bare(&simplified_in(segment, false, "e-p:16:16-p2:16:16-n8:16:32").1);
+    assert!(!kept.contains("getelementptr"), "{kept}");
+    // A sum read elsewhere stays.
+    let shared = "define i32 @f(i32 %x) {\nb0:\n  %a = add i32 %x, 655360\n  %p = inttoptr i32 %a to ptr\n  %v = load i8, ptr %p\n  %z = zext i8 %v to i32\n  %r = add i32 %z, %a\n  ret i32 %r\n}\n";
+    assert!(!bare(&simplified_in(shared, false, FLAT).1).contains("getelementptr"));
+}
+
+/// `*(char *)(base + i)` with a variable `base` was `lea eax, [ebx+ecx]; movzx
+/// ax, byte [eax]` (QB's palette loop): the integer sum of two values under
+/// `inttoptr` is one base-plus-index address, `gep i8, (inttoptr x), y`. The
+/// counter is the index; this costs no displacement, so a build for size takes
+/// it too.
+#[test]
+fn test_a_sum_of_two_values_under_inttoptr_is_a_base_and_an_index() {
+    let text =
+        "define ptr @f(i32 %x, i32 %y) {\nb0:\n  %a = add i32 %x, %y\n  %p = inttoptr i32 %a to ptr\n  ret ptr %p\n}\n";
+    for size in [false, true] {
+        let after = bare(&simplified_in(text, size, FLAT).1);
+        assert!(after.contains("getelementptr i8, ptr %0, i32 %y") && !after.contains("add i32"), "{size}: {after}");
+    }
+    // A sum read elsewhere stays.
+    let shared = "define i32 @f(i32 %x, i32 %y) {\nb0:\n  %a = add i32 %x, %y\n  %p = inttoptr i32 %a to ptr\n  %v = load i8, ptr %p\n  %z = zext i8 %v to i32\n  %r = add i32 %z, %a\n  ret i32 %r\n}\n";
+    assert!(!bare(&simplified_in(shared, false, FLAT).1).contains("getelementptr"));
+}

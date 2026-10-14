@@ -127,7 +127,6 @@ use crate::cfg::Shape;
 use crate::consts::Known;
 use crate::globalsaa::Globals;
 
-/// Python `qbopt.model.memory:Kind`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MemoryKind {
     Unknown,
@@ -179,7 +178,6 @@ pub enum Identity {
     Tuple(Vec<Identity>),
 }
 
-/// Python `qbopt.model.memory:Object`.
 ///
 /// `addressed` and `captured` are `field(compare=False)`: equality, hashing
 /// and order ignore them.
@@ -496,7 +494,6 @@ impl From<MemoryObject> for ObjectRef {
 pub const WHOLE_LOW: i64 = -(1_i64 << 31);
 pub const WHOLE_HIGH: i64 = 1_i64 << 31;
 
-/// Python `qbopt.model.memory:Slice`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Slice {
     pub object: ObjectRef,
@@ -631,7 +628,7 @@ pub fn gcd(
     one
 }
 
-/// Python `qbopt.model.memory:Provenance`. `restrict` holds the `noalias`
+/// `restrict` holds the `noalias`
 /// parameters a pointer is based on.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Provenance {
@@ -693,7 +690,7 @@ impl Provenance {
     }
 }
 
-/// Python `qbopt.model.memory:AliasClass`: all `objects_may_alias` asks of
+/// All `objects_may_alias` asks of
 /// an object besides its identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct AliasClass {
@@ -1586,6 +1583,52 @@ pub fn wrapped(
     bits: u32,
 ) -> i64 {
     signed(value as u128 & llrm_mir::context::mask(bits), bits) as i64
+}
+
+/// The bytes of the object `root` is the address of, where they are known:
+/// a defined global's or a sized alloca's. A declaration's type is not
+/// promised to be its size.
+pub fn extent_of(
+    unit: &Unit,
+    root: Operand,
+) -> Option<i64> {
+    if let Operand::Constant(id) = root {
+        let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
+        let GlobalKind::Variable(variable) = &unit.globals.get(global.0 as usize)?.kind else { return None };
+        variable.initializer?;
+    }
+    object_of(unit, root)?.extent
+}
+
+/// A pointer as an object, the variable indexes added to it on the way, and
+/// whether every GEP between was `inbounds`: `MemRef` keeps only the first
+/// index, this keeps them all.
+#[derive(Clone, Debug)]
+pub struct Indexed {
+    pub root: Operand,
+    /// Each variable index and the bytes it is scaled by.
+    pub indices: Vec<(ValueId, i64)>,
+    pub inbounds: bool,
+}
+
+/// `pointer` walked back through its GEPs and casts to the pointer none
+/// computed, with every variable index met.
+pub fn indexed(
+    unit: &Unit,
+    pointer: Operand,
+) -> Indexed {
+    let mut found = Indexed { root: pointer, indices: Vec::new(), inbounds: true };
+    while let Some(next) = step(unit, found.root) {
+        match next {
+            Step::Through(inner) => found.root = inner,
+            Step::Offset { pointer: inner, variable, inbounds, .. } => {
+                found.indices.extend(variable);
+                found.inbounds &= inbounds;
+                found.root = inner;
+            }
+        }
+    }
+    found
 }
 
 enum Step {

@@ -23,7 +23,11 @@ CONF = qb32.virtual_conf(2000)
 pytestmark = pytest.mark.slow_dos
 # (program, target) that differ from BC for a bug that is open: expected to differ, and a pass fails the test so the entry goes.
 KNOWN: dict = {}
-SOURCES = sorted([*(dosbatch.ROOT / "tests" / "qbrt").glob("events_*.bas"), *(dosbatch.ROOT / "tests" / "qbrt").glob("bc_*.bas")])
+QBRT = dosbatch.ROOT / "tests" / "qbrt"
+SOURCES = sorted([*QBRT.glob("events_*.bas"), *QBRT.glob("bc_*.bas")])
+# Programs BC cannot run under DOSBox (it hangs), that check themselves: the output is the `' expect:` lines of the source each target
+# builds (a program with a NAME.flat.bas is built from it at m32).
+CHECKED = sorted(path for path in QBRT.glob("llrm_*.bas") if ".flat" not in path.name)
 
 
 @pytest.fixture(scope="module")
@@ -56,3 +60,16 @@ def test_program_matches_bc(tmp_path, objects, source: Path):
             assert want != got, f"m{target} now matches BC: remove it from KNOWN ({reason})"
             continue
         assert want == got, f"m{target}: " + ("\n".join(differ[:20]) or f"BC {want!r}, llrm {got!r}")
+
+
+@pytest.mark.parametrize("source", CHECKED, ids=lambda path: path.stem)
+def test_program_prints_what_it_expects(tmp_path, objects, source: Path):
+    if not dosbatch.QB45.is_dir():
+        pytest.skip("QB45_DIR is unavailable")
+    built = qbbuild.build(source, tmp_path / "build", objects)
+    for target in qbbuild.TARGETS:
+        one = built[target]
+        used = qbbuild.flat_source(source) if target == qbbuild.FLAT else source
+        expected = [line.split("expect:", 1)[1].strip() for line in used.read_text().splitlines() if "expect:" in line]
+        text = run_text(dosbatch.Job("LLRM", "exe", one.exe, files=one.files, screen=True, budget_ms=60000), tmp_path / f"LLRM{target}")
+        assert [" ".join(line.split()) for line in text.splitlines() if line.strip()] == expected, f"m{target}: {text!r}"

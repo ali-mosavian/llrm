@@ -8,10 +8,11 @@
 //!
 //! `int` builds a sum of terms `factor * (v1 * v2 * ...)` plus a constant. Each
 //! monomial's values are multiplied (a value wider than the sum is truncated
-//! first); the product is scaled by the factor's magnitude (`scaled`: nothing
-//! for 1, `shl` for a power of two, else `mul`); positive terms are added,
-//! negative ones subtracted afterwards, then the constant is added. Where no
-//! term is variable the result is the constant.
+//! first, one narrower is zero-extended: only an extended recurrence's start
+//! names one, after its proof); the product is scaled by the factor's magnitude
+//! (`scaled`: nothing for 1, `shl` for a power of two, else `mul`); positive
+//! terms are added, negative ones subtracted afterwards, then the constant is
+//! added. Where no term is variable the result is the constant.
 //!
 //! ```text
 //!  sum = 4*a*b + 3*c - 7
@@ -188,7 +189,8 @@ fn sum_of(
 }
 
 /// The unknowns of `product` multiplied once, a product of invariants in
-/// the block `at` is in: each factor is its value's low bits.
+/// the block `at` is in: each factor is its value's low bits, or its value
+/// zero-extended where the value is narrower than the product.
 fn product_of(
     context: &mut Context,
     function: &mut Function,
@@ -207,6 +209,10 @@ fn product_of(
         let bits = context.types.int_bits(function.value(value).ty).unwrap_or(width);
         let factor = if bits > width {
             placed(context, function, Opcode::Cast(CastOp::Trunc), ty, vec![Operand::Value(value)], at)
+        } else if bits < width {
+            // A narrower factor is read zero-extended: only `extended` builds
+            // one, after proving its value never leaves `[0, 2^bits)`.
+            placed(context, function, Opcode::Cast(CastOp::ZExt), ty, vec![Operand::Value(value)], at)
         } else {
             Operand::Value(value)
         };

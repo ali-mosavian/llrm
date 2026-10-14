@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/raising_control.py`: apply established runtime
+//! Apply established runtime
 //! control contracts before constructing value SSA.
 
 use llrm_qbruntime::{Contract, Control};

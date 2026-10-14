@@ -919,6 +919,7 @@ pub fn assembled(
         names.insert((Space::Segment, id), label.clone());
         pooled.extend([masm::Datum::Object(masm::Label { name: label }), masm::Datum::Bytes(bytes.to_vec())]);
     }
+    pooled.extend(masm::jump_tables(&procedures, &mut names, module));
     let laid: BTreeSet<&str> = object
         .segments
         .iter()

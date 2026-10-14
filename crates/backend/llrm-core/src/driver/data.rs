@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 use llrm_support::hash::IndexMap;
 
-use crate::backend::{globals, masm};
+use crate::backend::{constpool, globals, masm};
 use crate::hir::model;
 use crate::objectfile::module::Space;
 use crate::support::hash::HashMap;
@@ -61,10 +61,16 @@ impl Placed {
         segment_bytes: Option<usize>,
     ) -> Result<(), String> {
         let (default, items) = built.data.pop().ok_or("an assembled module without its data segment")?;
-        // What assembly adds after the globals' data: its constant pool.
+        // What assembly adds after the globals' data: its constant pool and
+        // jump tables.
         let pool: Vec<masm::Datum> = items
             .into_iter()
-            .skip_while(|one| !matches!(one, masm::Datum::Label(label) if label.name.starts_with("$K")))
+            .skip_while(|one| {
+                !matches!(
+                    one,
+                    masm::Datum::Label(label) | masm::Datum::Object(label) if constpool::is_pool(&label.name)
+                )
+            })
             .collect();
         let placed: BTreeSet<&str> = self.segments.iter().flat_map(|(_, names)| names).map(String::as_str).collect();
         let mut unplaced = Vec::new();

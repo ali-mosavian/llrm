@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/induction.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/induction.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:2de6e11a5ecd92797b62b14c9e1e840ece3223511ccb8778a40221a40fcbb4ef -->
+<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:5da89c7c78464cb39fd507936c09ef32cf402fa7783b4e563e8e91c00e128d7a -->
 
 # induction
 
@@ -45,7 +45,15 @@ Recurrences. A `Scev` is a polynomial in loop-invariant unknowns modulo a
 width (sums of `Monomial`s, at most 16 terms and degree 4), in one canonical
 form so equal values are equal. A `Recurrence` is `pointer + start + step *
 trip` with `Scev` start and step: LLVM's add recurrence. `recurrences` walks
-a loop and gives every value affine in a counter one; `users` lists the
+a loop and gives every value affine in a counter one (a narrow counter
+extended with `zext` too, where its start is made of values the enclosing
+loop computes as recurrences and the whole walk stays inside the narrow
+width unsigned (the bound is the enclosing loop's own recurrence and trip
+count, induction's domain: the signed `ranges::Interval` cannot hold a
+16-bit value past 32767, and a second range evaluator would duplicate it):
+the wide start names those values as narrow unknowns,
+which the expander reads zero-extended; an `nsw` operation past the signed
+maximum is poison and proves nothing); `users` lists the
 operands that read them, each as an `IvUse` of kind `Address`, `Compare` or
 `Basic` with the low bits it observes (LLVM's IVUsers).
 

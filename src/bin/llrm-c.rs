@@ -1,10 +1,14 @@
-//! `python -m qbopt.cfront`, ported.
+//! Compile C to an object.
 
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(why) = llrm_mir::dumpdir::refuse(&argv) {
+        eprintln!("llrm-c: {why}");
+        std::process::exit(2);
+    }
     let code = llrm_core::support::debug::run_main(|| llrm_c::compile::main(&argv));
     std::process::exit(code);
 }

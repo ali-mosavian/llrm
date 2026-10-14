@@ -10,7 +10,7 @@ Three measurements, all user-space instructions (`perf stat`), so a loaded host 
 programs and QCport's modules at -O1/-O2/-O3/-Os (tools/compile-cost.py); the ratio of the compile at 2N to N on generated programs
 (vsgcc/scaling_gate.py); and the same ratio for each step of the compile (`LLRM_DEBUG=time`'s [instr] rows).
 
-A measurement is stored per commit under ~/.cache/llrm/measure (LLRM_MEASURE_DIR), never in the repository, so two branches never
+A measurement is stored per tree under ~/.cache/llrm/measure (LLRM_MEASURE_DIR), never in the repository, so two branches never
 touch a shared file. The base's is read from there; if it is missing the base is built in a tree and target directory of its own
 and measured with this tree's tools and inputs (only the compiler differs), then stored. A rise past the tolerances in tiers.toml
 [measure] fails; a drop does not need recording, the next branch's base has it. LLVM's compile-time tracker compares with the
@@ -150,19 +150,29 @@ def measure_all(jobs: int) -> dict:
 # --- the store -------------------------------------------------------------------------------------------------------
 
 
-def stored_path(sha: str, which: str) -> Path:
-    return CACHE / f"{sha}-{which}.json"
+def tree_of(sha: str, cwd: Path | None = None) -> str | None:
+    """The tree `sha` holds, or None for a name git does not know. What the compiler is made of is the tree, not the commit: the squash
+    that lands a gated branch is another commit of the same tree, and its measurement is the gated branch's."""
+    done = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{tree}}"], cwd=cwd or ROOT, capture_output=True, text=True)
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def stored_path(sha: str, which: str, by: str | None = None) -> Path:
+    return CACHE / f"{by or sha}-{which}.json"
 
 
 def stored(sha: str, which: str) -> dict | None:
-    one = stored_path(sha, which)
-    return json.loads(one.read_text()) if one.is_file() else None
+    """The measurement of `sha`'s tree, else one stored under the commit itself (made before trees were the key)."""
+    for key in (tree_of(sha), sha):
+        if key and (one := stored_path(sha, which, key)).is_file():
+            return json.loads(one.read_text())
+    return None
 
 
 def save(sha: str, data: dict) -> Path:
     """Written whole or not at all: a session reading while another writes never sees half a file."""
     CACHE.mkdir(parents=True, exist_ok=True)
-    one = stored_path(sha, data["method"])
+    one = stored_path(sha, data["method"], tree_of(sha))
     with tempfile.NamedTemporaryFile("w", dir=CACHE, suffix=".part", delete=False) as part:
         part.write(json.dumps(data, separators=(",", ":")) + "\n")
     os.replace(part.name, one)
@@ -408,8 +418,8 @@ def check(jobs: int, ref: str) -> int:
     lines, bad = rises(base, now)
     print(f"measured {now['binary']['path']} ({now['binary']['sha']}) against {base_sha[:9]}")
     print("\n".join(lines))
-    # A commit of the reference branch is a base for the next branches; a branch's own head is not.
-    if not git("status", "--porcelain", "--untracked-files=no") and stored(head, now["method"]) is None and subprocess.run(["git", "merge-base", "--is-ancestor", head, ref], cwd=ROOT).returncode == 0:
+    # The gated head is stored by its tree: the commit that lands it (a squash of the same tree) is the next run's base, measured here.
+    if not git("status", "--porcelain", "--untracked-files=no") and stored(head, now["method"]) is None:
         save(head, now)
     if bad:
         print("COMPILE COST RISE:", *bad, sep="\n  ")
@@ -437,7 +447,7 @@ def main() -> int:
     parser.add_argument("command", choices=["check", "record", "show", "creep", "compare"])
     parser.add_argument("rest", nargs="*", help="record: SHA [BIN]; compare: BASE_SHA SHA, two stored measurements, nothing measured")
     parser.add_argument("--base", default=os.environ.get("LLRM_MEASURE_REF", "origin/main"), help="check: the branch the merge-base is taken with")
-    parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
+    parser.add_argument("--jobs", type=int, default=gate.default_jobs(os.environ))
     args = parser.parse_args()
     if args.command == "check":
         return check(args.jobs, args.base)

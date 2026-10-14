@@ -1,4 +1,4 @@
-//! Port of `qbopt/cycles/cycles.py`.
+//! Instruction cycle counts.
 //!
 //! Vendored from the runtime pass (`~/work/badlogic/mgl,
 //! tools/cycles/cycles.py`, taken 2026-08-29). Published latencies rather than
@@ -130,7 +130,7 @@ pub fn classify(
         return "rep_string";
     }
     if mnem == "jmp" {
-        return "jmp_short";
+        return if mem(dst) { "jmp_indirect" } else { "jmp_short" };
     }
     if mnem.starts_with('j') {
         return "jcc";
@@ -536,7 +536,7 @@ pub fn table(
     }
 }
 
-/// `python -m qbopt.cycles.cycles [hex]`.
+/// The command line: `[hex]`.
 pub fn main(argv: &[String]) -> i32 {
     if let Some(hexs) = argv.first() {
         let (_, cnt, tot, det) = report("argv", hexs);

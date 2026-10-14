@@ -41,7 +41,8 @@ fn final_mir(
 #[test]
 fn nothing_is_volatile_with_g_or_without() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
-    let scratch = tempfile::tempdir().unwrap();
+    // On disk: the tools refuse a dump on tmpfs, where /tmp is (#1641).
+    let scratch = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     for (level, debug) in [("-O2", false), ("-O2", true), ("-O0", true)] {
         let arguments: Vec<&str> = ["-m32", level].into_iter().chain(debug.then_some("-g")).collect();
         let mir = final_mir(&fixtures.join("observed.c"), &arguments, scratch.path());

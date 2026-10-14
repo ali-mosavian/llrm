@@ -43,6 +43,7 @@ pub static SET_RATIO: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table
 pub static CLEAR_RATIO: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.clear_ratio));
 pub static SET_RATIO_SIZE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.set_ratio_size));
 pub static CLEAR_RATIO_SIZE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.clear_ratio_size));
+pub static JUMP_TABLE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.jump_table));
 
 /// Instructions retired per cycle.
 pub static ISSUE: LazyLock<[i64; 7]> = LazyLock::new(|| scalars(|table| table.issue));
@@ -116,8 +117,8 @@ mod tests {
     /// them so.
     #[test]
     fn the_cost_and_latency_tables_list_the_forms_they_did() {
-        assert_eq!(COST.len(), 57);
-        assert_eq!(LATENCY.len(), 57);
+        assert_eq!(COST.len(), 58);
+        assert_eq!(LATENCY.len(), 58);
         assert_eq!(COST.keys().next(), Some(&"alu_rr"));
         assert_eq!(COST.keys().last(), Some(&"jcc_not_taken"));
         assert_eq!(LATENCY.keys().last(), Some(&"jcc_not_taken"));

@@ -98,8 +98,8 @@ use crate::occurrence::{operations, phis};
 
 /// A substitution followed a cycle.
 ///
-/// Direct port of `qbopt.analysis.ssa:provider`'s
-/// `ValueError("cyclic value substitution")`.
+/// The error for a substitution that followed a cycle (Python raised
+/// `ValueError("cyclic value substitution")`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SubstitutionError {
     CyclicValueSubstitution,
@@ -135,8 +135,6 @@ fn reads(instruction: &Instruction) -> impl Iterator<Item = ValueId> + '_ {
 ///
 /// Users come in layout order; each operation occurs at most once in a
 /// value's list.
-///
-/// Direct port of `qbopt.analysis.ssa:use_index`.
 pub fn use_index(
     function: &Function,
     values: Option<&BTreeSet<ValueId>>,
@@ -156,8 +154,6 @@ pub fn use_index(
 
 /// Drop phis nothing needs, including cycles only other dead phis read.
 /// Whether any went.
-///
-/// Direct port of `qbopt.analysis.ssa:pruned_phis`.
 pub fn pruned_phis(
     function: &mut Function,
     roots: &BTreeSet<ValueId>,
@@ -188,8 +184,6 @@ pub fn pruned_phis(
 }
 
 /// Follow a substitution until its provider is unchanged.
-///
-/// Direct port of `qbopt.analysis.ssa:provider`.
 pub fn provider(
     value: Operand,
     swap: &BTreeMap<ValueId, Operand>,
@@ -212,8 +206,7 @@ pub fn provider(
 
 /// An instruction's operands with each value read through `swap`.
 ///
-/// The definition is deliberately not rewritten.  Direct port of
-/// `qbopt.analysis.ssa:substituted`.
+/// The definition is deliberately not rewritten.
 pub fn substituted(
     instruction: &Instruction,
     swap: &BTreeMap<ValueId, Operand>,
@@ -223,8 +216,6 @@ pub fn substituted(
 
 /// Every value a function mentions, in layout order: each instruction's
 /// result, then the values it reads.
-///
-/// Direct port of `qbopt.analysis.ssa:values`.
 pub fn values(function: &Function) -> impl Iterator<Item = ValueId> + '_ {
     function
         .walk()

@@ -42,8 +42,7 @@ static void read_line(void)
 
     cn_waiting(1);
     for (;;) {
-        cn_sync();
-        key = llrm_os_console_read_key();
+        key = cn_wait_key();
         if (key == END_OF_FILE)
             qb_error(BE_PASTEND);
         if (key == ENTER)
