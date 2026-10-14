@@ -301,6 +301,7 @@ pub fn assembled_by(
         names.insert((Space::Segment, id), name.clone());
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
+    data.extend(masm::jump_tables(&procedures, &mut names, module));
     timed("stack checks", || {
         crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names), &*arch)
     });

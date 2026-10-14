@@ -97,6 +97,13 @@ pub struct Unit<'a> {
     pub declared: &'a mut Declared,
 }
 
+/// A global a pass has declared and the module has yet to get.
+#[derive(Clone, Debug)]
+enum Pending {
+    Function(String, crate::types::TypeId),
+    Table(String, crate::module::GlobalVariable),
+}
+
 /// What a function pass declares in its module, as LLVM's
 /// `Intrinsic::getDeclaration` adds a declaration: its id at once, the
 /// declaration once the pass has run over the function.
@@ -109,7 +116,7 @@ pub struct Declared {
     /// `Declarations`.
     held: Option<Rc<Vec<GlobalValue>>>,
     next: u32,
-    pending: Vec<(String, crate::types::TypeId)>,
+    pending: Vec<Pending>,
     /// Metadata nodes made, numbered after the module's.
     nodes: Vec<crate::module::MetadataNode>,
     first_node: u32,
@@ -185,7 +192,38 @@ impl Declared {
         let id = GlobalId(self.next);
         self.next += 1;
         self.names().insert(name.to_owned(), id);
-        self.pending.push((name.to_owned(), ty));
+        self.pending.push(Pending::Function(name.to_owned(), ty));
+        id
+    }
+
+    /// A private constant of type `ty`, `initializer` its value, named `stem`
+    /// and the first number after it that no global has; a table already made
+    /// with the same type and value is that one.
+    pub fn table(
+        &mut self,
+        stem: &str,
+        ty: crate::types::TypeId,
+        initializer: crate::context::ConstantId,
+    ) -> GlobalId {
+        let same = |one: &Pending| {
+            matches!(
+                one,
+                Pending::Table(_, held) if held.ty == ty && held.initializer == Some(initializer)
+            )
+        };
+        if let Some(at) = self.pending.iter().position(same) {
+            let Pending::Table(name, _) = &self.pending[at] else { unreachable!("a table") };
+            let name = name.clone();
+            return self.names()[&name];
+        }
+        let name =
+            (0..).map(|n| format!("{stem}.{n}")).find(|name| !self.names().contains_key(name)).expect("a free name");
+        let id = GlobalId(self.next);
+        self.next += 1;
+        self.names().insert(name.clone(), id);
+        let variable =
+            crate::module::GlobalVariable { ty, constant: true, initializer: Some(initializer), align: None };
+        self.pending.push(Pending::Table(name, variable));
         id
     }
 
@@ -195,8 +233,17 @@ impl Declared {
         module: &mut Module,
     ) -> Result<usize, String> {
         let made = self.pending.len();
-        for (name, ty) in std::mem::take(&mut self.pending) {
-            let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
+        for one in std::mem::take(&mut self.pending) {
+            let (name, id) = match one {
+                Pending::Function(name, ty) => {
+                    let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
+                    (name, id)
+                }
+                Pending::Table(name, variable) => {
+                    let id = module.add_variable(&name, variable, crate::module::Linkage::Private)?;
+                    (name, id)
+                }
+            };
             assert_eq!(Some(&id), self.names().get(&name), "declared in order");
         }
         assert_eq!(module.metadata.len() as u32, self.first_node, "nodes numbered after the module's");

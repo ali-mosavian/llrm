@@ -1,7 +1,5 @@
-//! The QuickBASIC-family runtime's `B$` routine contracts, a port of
-//! `qbopt/abi/runtime.py`: what a call into BC's runtime can do to
-//! the caller, routine by routine. The Python module docstring is the full
-//! account.
+//! The QuickBASIC-family runtime's `B$` routine contracts: what a call into
+//! BC's runtime can do to the caller, routine by routine.
 //!
 //! `TABLE` is the text of `runtime.toml`, included at build time, not its path.
 
@@ -1831,7 +1829,7 @@ mod tests {
         names
     }
 
-    // qbopt.legacy.calls COMPARE, MULTIPLY, DIVIDE, REMAINDER.
+    // The compare, multiply, divide and remainder helpers.
     const ABSORBED: [&str; 4] = ["B$CPI4", "B$MUI4", "B$DVI4", "B$RMI4"];
 
     const X87: [&str; 6] = ["B$FCMP", "B$FILD", "B$FIL2", "B$FIST", "B$FIS2", "B$FUST"];

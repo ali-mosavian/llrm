@@ -130,6 +130,28 @@ pub fn program(
     };
     let mut callables = callables;
     for symbol in unit.symbols.values().filter(|one| one.proc()) {
+        // A routine this unit defines is no callable (its calls name the
+        // function), so its class's facts, which
+        // `__attribute__((noinline))` makes of a definition, have no subject:
+        // it gets one, stating nothing else. A class bit with no
+        // carrier stays what it was for a definition, unread.
+        if !callables.iter().any(|one| one.name == symbol.object_name())
+            && defined.contains(symbol.object_name().as_str())
+            && crate::ow_facts::of_call_class(symbol.call_class).is_ok_and(|facts| !facts.is_empty())
+        {
+            callables.push(h::Callable {
+                id: callables.iter().map(|one| one.id).max().unwrap_or(0) + 1,
+                name: symbol.object_name(),
+                result_type: None,
+                parameter_types: Vec::new(),
+                by_value: Vec::new(),
+                segmented: Vec::new(),
+                arrays: Vec::new(),
+                defined: true,
+                returns_twice: false,
+                symbol: None,
+            });
+        }
         if let Some(callable) = callables.iter_mut().find(|one| one.name == symbol.object_name()) {
             callable.returns_twice =
                 crate::ow_facts::returns_twice(symbol.call_class) || crate::libfunc::returns_twice(&callable.name);

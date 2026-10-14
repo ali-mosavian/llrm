@@ -1,0 +1,70 @@
+reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
+blessed = "2026-10-14"
+
+[bas.O2]
+instructions = 172976
+memory_operands = 32005
+code_bytes = 789
+data_bytes = 15
+bss_bytes = 0
+
+[bas.Os]
+instructions = 166625
+memory_operands = 30006
+code_bytes = 614
+data_bytes = 15
+bss_bytes = 0
+
+[bq16.O2]
+instructions = 178976
+memory_operands = 32005
+code_bytes = 794
+data_bytes = 15
+bss_bytes = 0
+
+[bq16.Os]
+instructions = 172625
+memory_operands = 30006
+code_bytes = 619
+data_bytes = 15
+bss_bytes = 0
+
+[bq32.O2]
+instructions = 164980
+code_bytes = 602
+data_bytes = 21
+bss_bytes = 0
+
+[bq32.Os]
+instructions = 146626
+code_bytes = 507
+data_bytes = 21
+bss_bytes = 0
+
+[c.O2]
+instructions = 79843
+memory_operands = 3708
+code_bytes = 304
+data_bytes = 12
+bss_bytes = 0
+
+[c.Os]
+instructions = 68138
+memory_operands = 3708
+code_bytes = 272
+data_bytes = 12
+bss_bytes = 0
+
+[nib.O2]
+instructions = 116974
+memory_operands = 2002
+code_bytes = 419
+data_bytes = 0
+bss_bytes = 0
+
+[nib.Os]
+instructions = 108974
+memory_operands = 2002
+code_bytes = 407
+data_bytes = 0
+bss_bytes = 0

@@ -233,7 +233,7 @@ pub fn extended(
 ) -> LirBlock {
     let mut insns = block.insns.to_vec();
     let at = insns.last().map_or(block.at, |one| one.at);
-    let position = if insns.last().is_some_and(|one| liveness::_terminator(one.what.as_ref())) {
+    let position = if insns.last().is_some_and(|one| liveness::_leaves(one.what.as_ref())) {
         insns.len() - 1
     } else {
         insns.len()

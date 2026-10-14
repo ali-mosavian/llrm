@@ -114,6 +114,7 @@ mod tests {
                 symbol("ptr", Binding::Local, 2, 0),
             ],
             omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
             debug: None,
         }
     }

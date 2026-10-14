@@ -1,4 +1,4 @@
-//! Port of `qbopt/analysis/loops.py`: which blocks are a loop, and how
+//! Which blocks are a loop, and how
 //! deeply nested each one is.
 //!
 //! Python's frozensets become `BTreeSet`s and its result dicts `BTreeMap`s:

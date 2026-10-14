@@ -142,6 +142,7 @@ pub mod rotate;
 pub mod spares;
 pub mod spill;
 pub mod splitcopy;
+pub mod switchlower;
 pub mod tailrec;
 #[cfg(test)]
 pub mod testing;

@@ -45,11 +45,13 @@ pub fn spaces() -> llrm_mir::spaces::Spaces {
 pub struct M16;
 
 fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
-    std::rc::Rc::new(
+    let mut dos =
         Dos::priced(&prices.costs, prices.prefix, prices.address_stall, prices.registers, prices.call_registers)
             .private(prices.private.clone())
-            .calling(prices.calling),
-    )
+            .calling(prices.calling);
+    // What the CPU's table states beside its clocks.
+    dos.costs.jump_table = prices.operations.jump_table;
+    std::rc::Rc::new(dos)
 }
 
 impl llrm_target::Target for M16 {

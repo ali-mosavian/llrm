@@ -199,6 +199,7 @@ fn _restore(
         sources: vec![Loc::Reg(ir::Reg { register: through, width: 2 })],
         target: None,
         indirect: false,
+        table: Vec::new(),
     };
     let mut made = Insn::new(one.at, Some((at, at)), Some(what), vec![], vec![]);
     made.call = one.call.clone();

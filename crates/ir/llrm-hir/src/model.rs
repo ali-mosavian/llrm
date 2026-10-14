@@ -1,4 +1,4 @@
-//! Port of `qbopt/hir/model.py`: typed source semantics shared by source
+//! Typed source semantics shared by source
 //! frontends.
 //!
 //! This is intentionally not an AST and not another optimizer.  Frontends

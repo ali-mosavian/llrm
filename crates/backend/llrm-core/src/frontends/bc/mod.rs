@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend`'s BC object raise.
+//! The BC object raise.
 //!
 //! Machine form, in `llrm-x86-bcmachine` so it cannot reach MIR: `blocks`,
 //! `declen`, `escaped`, `extent`, `fppatches`, `raising_control`,

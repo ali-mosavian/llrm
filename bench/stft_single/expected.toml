@@ -1,4 +1,4 @@
-reason = "merge main into the frame-register branch: re-measured against main's new jpeg/stft/scroll rows"
+reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 72230416
+instructions = 72230433
 code_bytes = 1404
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73089928
+instructions = 73089929
 code_bytes = 1379
 data_bytes = 4733
 bss_bytes = 0
