@@ -1,4 +1,4 @@
-reason = "gvn meets blocks dominators first (#1053, #1656): a dominator laid out after the block it dominates now serves it; shellsort nib 4 loads -> 3"
+reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -31,8 +31,8 @@ data_bytes = 17
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 11088
-code_bytes = 347
+instructions = 10356
+code_bytes = 345
 data_bytes = 23
 bss_bytes = 0
 

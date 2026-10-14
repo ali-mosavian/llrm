@@ -1,4 +1,4 @@
-reason = "write-only globals removed (#1649): sum_three's six QB static locals (index, total and the loop's temporaries, 12 data bytes, 41 code bytes at bq32) and memory's one global are only stored to, so their stores are gone; no program's output moves"
+reason = "frame register held as a value at m32 against main's new matmul/parity rows: matmul +10 bytes, parity/sum_three +1..2 instructions, esp-addressed cells are a byte longer"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -30,14 +30,14 @@ data_bytes = 91
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 72
-code_bytes = 289
+instructions = 73
+code_bytes = 286
 data_bytes = 127
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73
-code_bytes = 273
+instructions = 75
+code_bytes = 267
 data_bytes = 127
 bss_bytes = 0
 

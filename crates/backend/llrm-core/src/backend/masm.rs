@@ -33,9 +33,11 @@
 //! and every way into a block (a branch, or the block before it falling through
 //! where the next block is among its successors) must agree on it. Anything
 //! that puts that out of reach (the stack pointer written another way, inline
-//! code, an indirect call that may pop, the frame register read as a value)
-//! keeps the frame. Tuned for size, the stack-addressed form is kept only if it
-//! is no longer in bytes.
+//! code other than x87 register operations, an indirect call that may pop, the
+//! frame register read as a value) keeps the frame. A BASIC procedure's
+//! compiler-built frame is like any other; one the runtime builds (`B$ENRA`)
+//! is walked by the runtime and kept. Tuned for size, the stack-addressed form
+//! is kept only if it is no longer in bytes.
 //!
 //! Under `-g` the items also carry marks (line starts, body start and end,
 //! where a variable's value is defined) which encode to no bytes. A move of an
@@ -1102,6 +1104,20 @@ fn moved_return(
     ]
 }
 
+/// Whether a callee's inline code leaves the stack and the frame alone: none,
+/// or bytes that are only x87 register operations (`fsin`).
+fn inert(callee: &Callee) -> bool {
+    callee
+        .code
+        .iter()
+        .all(
+            |part| matches!(
+                part,
+                InlinePart::Bytes(bytes) if crate::backend::framefree::x87_registers_only(bytes)
+            ),
+        )
+}
+
 /// The items of a procedure that needs no frame register, its cells addressed
 /// through the stack pointer: gcc's `-fomit-frame-pointer`, as the target's
 /// `frame_optional` allows. A cell the frame register held at `[bp+d]` is at
@@ -1121,7 +1137,7 @@ fn stack_addressed(
         || procedure.entry != 0
         || procedure.body.bits != 32
         || (!procedure.body.variables.is_empty() && !procedure.body.cfa_variables)
-        || procedure.callees.values().any(|one| !one.code.is_empty())
+        || procedure.callees.values().any(|one| !inert(one))
     {
         llrm_support::debug!(
             "frame",
@@ -1132,7 +1148,7 @@ fn stack_addressed(
             procedure.entry,
             procedure.body.bits,
             procedure.body.variables.len(),
-            procedure.callees.values().filter(|one| !one.code.is_empty()).count()
+            procedure.callees.values().filter(|one| !inert(one)).count()
         );
         return None;
     }

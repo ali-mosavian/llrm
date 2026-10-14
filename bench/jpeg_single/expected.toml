@@ -1,4 +1,4 @@
-reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out"
+reason = "commuted keeps the copy it drops as an anchor (its value was still read): runtime rows +0.001%"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63757438
-code_bytes = 6477
+instructions = 63541517
+code_bytes = 6488
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64085823
-code_bytes = 6152
+instructions = 64616599
+code_bytes = 6126
 data_bytes = 29697
 bss_bytes = 0
 

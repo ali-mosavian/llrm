@@ -1,4 +1,4 @@
-reason = "jump tables: the QB runtime's dense switches are table jumps (jpeg/stft bq32 rows move by at most 10 instructions in 10^8)"
+reason = "commuted keeps the copy it drops as an anchor (its value was still read): runtime rows +0.001%"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,8 +26,8 @@ bss_bytes = 0
 kernel_ms = 1527.6111
 
 [bq32.O2]
-instructions = 99049635
-code_bytes = 1636
+instructions = 98394529
+code_bytes = 1663
 data_bytes = 4709
 bss_bytes = 0
 
