@@ -750,6 +750,10 @@ impl alias::Bodies for Table<'_> {
         self.facts[&self.slots.ids[at]].calls.as_ref().expect("found before")
     }
 
+    fn globals(&self) -> Option<&Globals> {
+        (!self.ids.is_empty()).then_some(self.globals)
+    }
+
     fn procedure(
         &self,
         at: usize,

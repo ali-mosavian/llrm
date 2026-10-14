@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/framefree.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/framefree.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/framefree.rs sha256:f3d7cc6ccb9a01cb9fd0d670ad690c787df79112b208d676f4e38e4550fc37f5 -->
+<!-- src: crates/backend/llrm-core/src/backend/framefree.rs sha256:318454265f297f925b9daedf3a4030e7def9efdfa4125292f64ba88e67632226 -->
 
 # framefree
 
@@ -34,12 +34,6 @@ flowchart TB
 
 *Frame depth at each block; every way into a block must agree, every return
 at depth 0*
-
-A way into a block is a branch to it, or the block laid out before it falling
-through, which it does only if the next block is among its successors. A block
-that ends in a call that never returns, or in a jump elsewhere, does not fall
-through: the depth at the label after it is the branches' alone (llrm#1466: a runtime-error call inside a loop that had
-pushed a register left the next label "reached at depth 584 and 588").
 
 The frame register is kept where any of these holds: the target does not
 allow freeing it (`registers.optional`), the body is not 32-bit, or it has

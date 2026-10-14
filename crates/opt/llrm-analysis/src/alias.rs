@@ -1249,6 +1249,8 @@ pub trait Bodies {
         &self,
         at: usize,
     ) -> Procedure<'_>;
+    /// The globals' facts the bodies were made under.
+    fn globals(&self) -> Option<&crate::globalsaa::Globals>;
 }
 
 impl Bodies for IndexMap<String, Procedure<'_>> {
@@ -1283,11 +1285,10 @@ impl Bodies for IndexMap<String, Procedure<'_>> {
     ) -> Procedure<'_> {
         self.get_index(at).expect("a member of the graph").1.clone()
     }
-}
 
-/// The globals' facts the bodies were made under: the first body's.
-fn globals_of<B: Bodies + ?Sized>(procedures: &B) -> Option<&crate::globalsaa::Globals> {
-    (procedures.len() > 0).then(|| procedures.procedure(0).unit.globals_aa).flatten()
+    fn globals(&self) -> Option<&crate::globalsaa::Globals> {
+        self.values().next().and_then(|one| one.unit.globals_aa)
+    }
 }
 
 /// What a run of `summaries` leaves for the next: the summaries, the bodies'
@@ -1357,7 +1358,8 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
     let topology =
         llrm_support::debug::timed("summaries topology", || _topology(procedures, &result, memo, whole, &dirty_names));
     let Topology { component, order, rank, readers, callers_of_unknown, .. } = &*topology;
-    let entries: Vec<usize> = globals_of(procedures)
+    let entries: Vec<usize> = procedures
+        .globals()
         .map(|found| found.entries().iter().filter_map(|name| procedures.position(name)).collect())
         .unwrap_or_default();
     // The bodies that read a call back into the module, and their callers
@@ -1428,7 +1430,7 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
         let name = procedures.name(at);
         result.insert(name.to_owned(), Summary { captures: BTreeSet::new(), ..direct[name].clone() });
     };
-    let mut called_back = globals_of(procedures).and_then(|globals| CalledBack::of(globals, &result));
+    let mut called_back = procedures.globals().and_then(|globals| CalledBack::of(globals, &result));
     let mut callbacks = called_back.as_ref().and_then(CalledBack::summary);
     // What each body's points-to facts were found from: they change only with
     // the callees' captures, not with the effects a revisit is for. A visit
@@ -1472,7 +1474,7 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
                 start(*at, &mut result);
                 reset[*at] = true;
             }
-            called_back = globals_of(procedures).and_then(|globals| CalledBack::of(globals, &result));
+            called_back = procedures.globals().and_then(|globals| CalledBack::of(globals, &result));
             callbacks = called_back.as_ref().and_then(CalledBack::summary);
             version += 1;
             for at in coupled {
@@ -1520,13 +1522,13 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
                     match called_back.as_mut() {
                         Some(held) => held.changed(name, &result[name]),
                         None => {
-                            called_back = globals_of(procedures).and_then(|globals| CalledBack::of(globals, &result));
+                            called_back = procedures.globals().and_then(|globals| CalledBack::of(globals, &result));
                         }
                     }
                     called_back.as_ref().and_then(CalledBack::summary)
                 });
                 if llrm_support::env_set("LLRM_CHECK_CALLBACKS") {
-                    let fresh = globals_of(procedures).and_then(|globals| callbacks_over(globals, &result));
+                    let fresh = procedures.globals().and_then(|globals| callbacks_over(globals, &result));
                     assert!(now == fresh, "the callbacks folded in are not what adding the entries up again gives");
                 }
                 if now != callbacks {
