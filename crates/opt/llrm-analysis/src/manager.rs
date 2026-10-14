@@ -1266,6 +1266,8 @@ impl Analysis for Registers {
                 Change::BlockCreated(_) | Change::BlockErased(_) | Change::Operand { .. } | Change::Operands { .. } => {
                     continue;
                 }
+                // An argument's fact is of its position.
+                Change::Parameters => return None,
             };
             if let Some(result) = function.instruction(inst).result
                 && touched.insert(result)
@@ -1455,7 +1457,7 @@ pub fn reached_by(
     let mut work: Vec<InstId> = Vec::new();
     for change in changes {
         let (inst, placed) = match *change {
-            Change::BlockCreated(_) | Change::BlockErased(_) => return None,
+            Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return None,
             Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
             Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
             Change::Rewritten(inst) => (inst, Vec::new()),

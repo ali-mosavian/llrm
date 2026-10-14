@@ -1466,7 +1466,7 @@ impl llrm_mir::passes::Analysis for Pressure {
         };
         for change in changes {
             match change {
-                Change::BlockCreated(_) | Change::BlockErased(_) => return None,
+                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return None,
                 Change::Inserted { inst, .. } | Change::Moved { inst, .. } | Change::Erased { inst, .. } => {
                     if function.instruction(*inst).opcode.is_terminator() {
                         return None;
