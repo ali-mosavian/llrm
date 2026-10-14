@@ -355,8 +355,14 @@ m2:
 m3:
   ret i16 %t
 ";
+    let before = super::products_runs();
     let printed = same(&program(&[("a", "i16", 2)], "i16", body), TRIPS);
     assert!(counters(&printed) <= 2, "{printed}");
+    // A loop counted onto another counter rewrites its exit branch and no
+    // edge; the second loop's frequencies were worked out again from scratch
+    // for it (`unrolled` 128: 16 of the compile's 46 Ginstr in `lsr`).
+    let runs = super::products_runs() - before;
+    assert!(runs <= 2, "{runs} full frequency runs for two loops");
 }
 
 /// A dword index into a word address: the address wraps as the pointer's

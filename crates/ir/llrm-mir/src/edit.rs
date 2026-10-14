@@ -110,10 +110,15 @@ impl Function {
         &self,
         name: &str,
     ) -> String {
-        let taken = |candidate: &str| {
-            self.values.iter().any(|one| one.name.as_deref() == Some(candidate))
-                || self.blocks.iter().any(|one| !one.erased && one.name.as_deref() == Some(candidate))
-        };
+        // One pass over the names, not one per candidate: a function whose
+        // `iv` is taken N times scanned every value N times for each new one.
+        let names: std::collections::HashSet<&str> = self
+            .values
+            .iter()
+            .filter_map(|one| one.name.as_deref())
+            .chain(self.blocks.iter().filter(|one| !one.erased).filter_map(|one| one.name.as_deref()))
+            .collect();
+        let taken = |candidate: &str| names.contains(candidate);
         if !taken(name) {
             return name.to_owned();
         }

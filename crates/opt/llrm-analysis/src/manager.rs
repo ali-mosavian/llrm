@@ -1451,6 +1451,23 @@ pub fn reached_by(
     function: &Function,
     changes: &[Change],
 ) -> Option<Reach> {
+    reached_through(function, changes, false)
+}
+
+/// `reached_by` for a caller that has checked the edges are the ones it had:
+/// a rewritten terminator is a touched instruction, not a change of the CFG.
+pub fn reached_keeping_edges(
+    function: &Function,
+    changes: &[Change],
+) -> Option<Reach> {
+    reached_through(function, changes, true)
+}
+
+fn reached_through(
+    function: &Function,
+    changes: &[Change],
+    edges_kept: bool,
+) -> Option<Reach> {
     let mut blocks = BTreeSet::new();
     let mut work: Vec<InstId> = Vec::new();
     for change in changes {
@@ -1462,7 +1479,8 @@ pub fn reached_by(
             Change::Operand { .. } | Change::Operands { .. } => continue,
             Change::Cloned { to, .. } => (to, Vec::new()),
         };
-        if function.instruction(inst).opcode.is_terminator() {
+        if function.instruction(inst).opcode.is_terminator() && !(edges_kept && matches!(change, Change::Rewritten(_)))
+        {
             return None;
         }
         blocks.extend(placed);
