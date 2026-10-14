@@ -194,6 +194,11 @@ Module `$STATIC` numeric arrays split storage from metadata. Elements live in
 pointer to the elements. BASIC startup clears `BC_DATA`, so a descriptor
 emitted there would be zero when a procedure passed it to the runtime.
 
+A module array whose bound is a LONG constant (`DIM SHARED a(32000&) AS INTEGER`) is made as a `$DYNAMIC` one even under
+`$STATIC`: BC allocates it in far memory when the program starts, whatever its size, while `a(30000)` stays in `BC_DATA` (probed
+with BC 4.5, `tests/qbrt/bc_static_arrays_far.bas`). Two such arrays together may exceed DGROUP. Known difference: `ERASE` frees it
+instead of clearing it.
+
 `$DYNAMIC` arrays own a mutable descriptor in `BC_DATA`; a bounded declaration
 executes `B$DDIM`, and a later `REDIM` passes the same descriptor to
 `B$RDIM`. The element allocation is not in DGROUP. VBDOS `MOD_TEX` and

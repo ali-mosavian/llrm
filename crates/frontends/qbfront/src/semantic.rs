@@ -2672,6 +2672,33 @@ impl Compiler {
         self.record_dimensions(bounds.len()).into_iter().map(|dimension| bounds[dimension].clone()).collect()
     }
 
+    /// BC allocates a static array whose bound is a LONG constant (`a(32000&)`)
+    /// in far memory when the program starts, as a $DYNAMIC one is, and
+    /// keeps the rest in DGROUP (probed: `a(100&)` leaves BC_DATA at its
+    /// descriptor, `a(30000)` puts 60,002 bytes in it). Such an array is
+    /// made as a $DYNAMIC one: a B$DDIM where its DIM stands. Only where
+    /// DGROUP is a segment.
+    fn spills_to_far(
+        &mut self,
+        declaration: &Declaration,
+        element: u32,
+    ) -> Result<bool, SemanticError> {
+        if !declaration.array || declaration.bounds.is_empty() || declaration.dynamic || element == STRING {
+            return Ok(false);
+        }
+        if self.options.segment_bytes.is_none() {
+            return Ok(false);
+        }
+        for one in &declaration.bounds {
+            for bound in one.lower.iter().chain(std::iter::once(&one.upper)) {
+                if self.constant(bound).is_ok_and(|(type_id, _)| type_id == LONG) {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     fn declare_as(
         &mut self,
         declaration: &Declaration,
@@ -2706,10 +2733,11 @@ impl Compiler {
             self.named_type(&declaration.name, declaration.type_name.as_ref())?
         };
         let module_symbol = self.basic_global_name(&declaration.name, selected, element);
+        let spills = storage == "module" && self.spills_to_far(declaration, element)?;
         let runtime_bounds = declaration.array
             && !declaration.bounds.is_empty()
             && storage != "static"
-            && (element == STRING || declaration.dynamic);
+            && (element == STRING || declaration.dynamic || spills);
         let bounds = if runtime_bounds {
             Vec::new()
         } else {
