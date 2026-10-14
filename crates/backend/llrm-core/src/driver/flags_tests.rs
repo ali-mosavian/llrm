@@ -370,3 +370,16 @@ fn only_o3_and_omax_distribute_loops_and_the_flag_overrides_it() {
         assert!(pipeline(&[level, "-ftree-loop-distribution"]).distribute, "{level}");
     }
 }
+
+/// gcc turns `-floop-interchange` on at -O3 and no lower (opts.cc:677);
+/// -Omax is everything.
+#[test]
+fn only_o3_and_omax_interchange_loops_and_the_flag_overrides_it() {
+    assert!(pipeline(&["-Omax"]).interchange);
+    for level in ["-O1", "-O2", "-Os"] {
+        assert!(!pipeline(&[level]).interchange, "{level}");
+        assert!(pipeline(&[level, "-floop-interchange"]).interchange, "{level}");
+    }
+    assert!(pipeline(&["-O3"]).interchange);
+    assert!(!pipeline(&["-O3", "-fno-loop-interchange"]).interchange);
+}

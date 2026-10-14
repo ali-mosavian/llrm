@@ -260,6 +260,15 @@ mod tests {
         assert_eq!((p5.set_ratio_size, p5.clear_ratio_size), (Some(3), Some(2)));
     }
 
+    /// Loop interchange prices a walk by the cache line: 16 bytes on the 486's
+    /// 8 KB cache, 32 on the Pentium's (the 64 it would take for a CPU that
+    /// states none made a 486 walk of 32 bytes cost as two lines).
+    #[test]
+    fn test_the_cache_line_is_the_cpus() {
+        let (i486, p5) = (TIMINGS.cpu("486").expect("a 486"), TIMINGS.cpu("P5").expect("a P5"));
+        assert_eq!((i486.cache_line, p5.cache_line), (Some(16), Some(32)));
+    }
+
     const EAX: RegId = RegId::EAX;
     const EBP: RegId = RegId::EBP;
     const EBX: RegId = RegId::EBX;

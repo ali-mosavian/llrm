@@ -55,6 +55,11 @@ clear_ratio_size        2    2    2    2    2    2    2    2
 # (4 with a `casesi` pattern, else 5); i386.md has `tablejump` (:15824) and no `casesi`, and i386.cc sets no
 # TARGET_CASE_VALUES_THRESHOLD.
 jump_table              5    5    5    5    5    5    5    5
+# Bytes of a line of the first-level data cache, which loop interchange prices
+# a walk by: the 486's 8 KB cache has 16 byte lines (Intel's i486 data sheet),
+# the Pentium's, Pentium Pro's, K5's and K6's 32 (Intel and AMD's manuals), the
+# Athlon's and Core 2's 64. The 386 has no cache on the chip.
+cache_line              -   16   32   32   32   32   64   64
 pairing                 0    0    1    0    0    0    0    0
 
 [clocks]

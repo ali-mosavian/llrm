@@ -25,6 +25,7 @@
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+//!     swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     mrg["<b>merge (once)</b>"]:::mid
 //!   end
@@ -38,7 +39,8 @@
 //!   peel --> unsw
 //!   unsw --> fuse
 //!   fuse --> dist
-//!   dist --> jam
+//!   dist --> swap
+//!   swap --> jam
 //!   jam --> mrg
 //!   mrg --> c
 //!   c -.->|"a changed body goes<br/>back through B"| sroa
@@ -105,7 +107,7 @@
 //! | `fill` | `fill`, `merge` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
-//! | `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
+//! | `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
 //! | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 //! | `fuse` | `fuse` (off by default; on at -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
@@ -143,8 +145,8 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
-    loopfuse, loopmotion, loopsimplify, loopsplit, lsr, peel, phiopt, ports, promote, rotate, switchlower, tailrec,
-    trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, lsr, peel, phiopt, ports, promote, rotate,
+    switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -200,6 +202,9 @@ pub struct Options {
     /// A nest's outer loop unrolled and its inner copies fused (gcc's
     /// `-floop-unroll-and-jam`, -O3; -Omax too).
     pub unroll_jam: bool,
+    /// `-floop-interchange`, -O3 (gcc's `gimple-loop-interchange.cc`); -Omax
+    /// too. LLVM's `LoopInterchange` is off in its pipelines.
+    pub interchange: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -249,6 +254,7 @@ impl Default for Options {
             fuse: false,
             distribute: false,
             unroll_jam: false,
+            interchange: false,
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -322,6 +328,7 @@ impl Options {
             fuse: false,
             distribute: true,
             unroll_jam: true,
+            interchange: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
         }
@@ -338,6 +345,7 @@ impl Options {
             fuse: true,
             distribute: true,
             unroll_jam: true,
+            interchange: true,
             exhaustive: true,
             ..Self::default()
         }
@@ -727,6 +735,7 @@ pub struct Fixed {
     split: Option<loopsplit::Split>,
     distribute: Option<loopdistribute::Distribute>,
     fuse: Option<loopfuse::Fuse>,
+    interchange: Option<loopinterchange::Interchange>,
     jam: Option<unroll_jam::UnrollJam>,
     only: bool,
     dump: Option<PathBuf>,
@@ -737,7 +746,15 @@ pub struct Fixed {
 /// `options` less the passes that try a rewrite on a copy and judge it: what
 /// a candidate goes through before it is judged.
 fn without_candidates(options: &Options) -> Options {
-    Options { unswitch: false, split: false, fuse: false, distribute: false, unroll_jam: false, ..options.clone() }
+    Options {
+        unswitch: false,
+        split: false,
+        fuse: false,
+        distribute: false,
+        unroll_jam: false,
+        interchange: false,
+        ..options.clone()
+    }
 }
 
 impl Fixed {
@@ -778,6 +795,7 @@ impl Fixed {
             split: (applied.options.split && only.is_none()).then_some(loopsplit::Split),
             distribute: distribute.filter(|_| only.is_none()),
             fuse: fuse.filter(|_| only.is_none()),
+            interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
             jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
             only: only.is_some(),
             dump: applied.dump.clone(),
@@ -840,6 +858,14 @@ impl Fixed {
         // split has cleaned it.
         if let Some(distribute) = &mut self.distribute {
             run.step(distribute, "distribute", unit, analyses);
+        }
+        // Before jamming: the swapped nest is the one that is jammed. Cleaned
+        // as a peeled loop is.
+        if let Some(interchange) = &mut self.interchange {
+            if run.step(interchange, "interchange", unit, analyses) {
+                self.scalarized(unit, analyses, run, "interchanged");
+                self.fixed(unit, analyses, run, "interchanged-")?;
+            }
         }
         // After unswitching, as gcc's pass order has it: an invariant guard is
         // out of the nest by then. The fused copies are cleaned as a peeled

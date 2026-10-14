@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 65 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 67 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -49,7 +49,9 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopdistribute | Loop distribution: a loop whose stores do not need each other's trips becomes one loop for each group of them, so each loop is smaller, holds fewer values live and may be an idiom (a fill, a copy) of its own. | Once per body, after `unswitch`, `split` and `fuse`, at -O3 and -Omax | [loopdistribute](loopdistribute.md) |
 | loopexit | Replaces what a counted loop computes, as read after it, by an expression of its trip count, and deletes a loop that only counts, so the code after the loop does not wait for the loop to produce a number the compiler can write down. | Not a pipeline pass of its own: [`crate::indvars`](indvars.md) calls | [loopexit](loopexit.md) |
 | loopfuse | Loop fusion: two adjacent loops of the same trips become one, so the data is walked once and the loop's own work is paid once. | After `unswitch` and `split`, before unroll-jam, at -Omax only | [loopfuse](loopfuse.md) |
+| loopinterchange | Loop interchange: the two loops of a nest swap places, so the inner loop walks the memory the outer one did (gcc's `gimple-loop-interchange.cc`, LLVM's `LoopInterchange`). | Once per body, before `unroll-jam`; a swapped nest goes through `sroa` and | [loopinterchange](loopinterchange.md) |
 | loopmotion | Sinks the stores nothing in a loop observes to the loop's single exit, so a counter or accumulator is written once, not every trip: the store half of LICM, as `promoteLoopAccessesToScalars` leaves one store after the loop. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `hoist` and | [loopmotion](loopmotion.md) |
+| loopnest | Where a loop holds exactly one other loop: the nest's blocks, and what may be asked of it (an inner loop that counts the same in every outer trip, the accesses of its body). | `Nest`, `nest_of`, `inner_is_invariant`, `accesses`. Consumers: `unroll_jam` | [loopnest](loopnest.md) |
 | loopshape | What loop fusion and loop distribution ask of a loop alike: that one counter's test is the loop's only exit, that its body only reads and writes memory and cannot trap, and that nothing it computes is read outside it. | `controls`, `quiet`, `header_quiet`, `read_outside`. | [loopshape](loopshape.md) |
 | loopsimplify | Loop canonical form: every reducible loop gets one preheader, one latch and dedicated exits, so the loop passes can assume them. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `tailrec` and before | [loopsimplify](loopsimplify.md) |
 | loopsplit | A loop with a test of its counter against an invariant in its body becomes two loops, one for the trips before the test flips and one for those after, neither with the test. | Once per body, after unswitching and before unroll-jam, at -O3 and -Omax | [loopsplit](loopsplit.md) |
