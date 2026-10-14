@@ -27,7 +27,7 @@ fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
 [--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] \
-[--include INCLUDE] [--dump DUMP] {} source",
+[--include INCLUDE] [--dump DUMP] [-fexcess-precision=standard|fast] [-ffloat-store] {} source",
         flags::USAGE
     )
 }
@@ -57,6 +57,23 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             frontend.runtime = runtime.to_owned();
             at += 1;
             continue;
+        }
+        // gcc's names: the default is its fast excess precision (x87 keeps a
+        // variable wider in a register); `standard`, or -ffloat-store,
+        // rounds what is stored to a SINGLE or DOUBLE variable to that type, as
+        // BC does.
+        match argv[at].as_str() {
+            "-fexcess-precision=standard" | "-ffloat-store" => {
+                frontend.float_store = true;
+                at += 1;
+                continue;
+            }
+            "-fexcess-precision=fast" | "-fno-float-store" => {
+                frontend.float_store = false;
+                at += 1;
+                continue;
+            }
+            _ => {}
         }
         if flags.take(argv, &mut at)? {
             at += 1;

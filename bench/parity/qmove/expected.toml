@@ -1,43 +1,46 @@
-reason = "QB rounds what it stores to a SINGLE or DOUBLE variable (BC stores through memory; #1701), so a promoted variable keeps an fpround (fstp+fld, or one fstp into its cell) per assignment: floats +40% instructions, nbody_single +39%, fpbench +37%, nbody (double) +13%, jpeg_single +4%, stft_single +3%; clocks(486) +10%/+23%/+24%; still 0.3-0.4x of BC's instructions"
+reason = "-Os float constant stores are fldz/fld1 + fstp: fewer bytes, a few more instructions"
 blessed = "2026-10-14"
 
 [bas.O2]
-instructions = 98
-memory_operands = 34
-code_bytes = 414
+instructions = 89
+memory_operands = 28
+code_bytes = 389
 data_bytes = 17
 bss_bytes = 0
+kernel_ms = 0.0142
 
 [bas.Os]
-instructions = 92
-memory_operands = 34
-code_bytes = 354
+instructions = 83
+memory_operands = 28
+code_bytes = 329
 data_bytes = 17
 bss_bytes = 0
 
 [bq16.O2]
-instructions = 100
-memory_operands = 34
-code_bytes = 419
+instructions = 90
+memory_operands = 28
+code_bytes = 394
 data_bytes = 17
 bss_bytes = 0
+kernel_ms = 0.0087
 
 [bq16.Os]
-instructions = 94
-memory_operands = 34
-code_bytes = 359
+instructions = 84
+memory_operands = 28
+code_bytes = 334
 data_bytes = 17
 bss_bytes = 0
+kernel_ms = 0.0086
 
 [bq32.O2]
-instructions = 99
-code_bytes = 403
+instructions = 89
+code_bytes = 363
 data_bytes = 23
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 93
-code_bytes = 351
+instructions = 83
+code_bytes = 314
 data_bytes = 23
 bss_bytes = 0
 

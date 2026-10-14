@@ -1,3 +1,4 @@
+' flags: -fexcess-precision=standard
 ' A value stored to a SINGLE or DOUBLE variable is rounded to that type, as BC does by storing through memory: a loop that
 ' accumulates one reads 1.280029E+08 (not the exact 1.28008E+08) in BC; llrm-qb -O1/-O2 kept the variable in an x87 register
 ' at extended precision.

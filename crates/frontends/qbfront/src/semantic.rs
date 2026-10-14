@@ -480,6 +480,11 @@ pub struct Options {
     pub row_major: bool,
     /// /Ah.
     pub huge_arrays: bool,
+    /// gcc's -fexcess-precision=standard: a value stored to a SINGLE or DOUBLE
+    /// variable is rounded to that type (BC stores through memory); off,
+    /// x87 may keep a variable wider in a register and a sum can differ from
+    /// BC's in the last digits.
+    pub float_store: bool,
     /// /D: every subscript checked against its dimension.
     pub checked_arrays: bool,
     /// /D's division check: integer division raises its error 11 in code,
@@ -9128,6 +9133,9 @@ impl Compiler {
         &mut self,
         mut operands: Vec<Operand>,
     ) -> Vec<Operand> {
+        if !self.options.float_store {
+            return operands;
+        }
         let Some(&Operand::Value(value)) = operands.get(1) else { return operands };
         let Some(&(_, type_id)) = self.values.iter().find(|(id, _)| *id == value) else { return operands };
         if !matches!(type_id, SINGLE | DOUBLE) {

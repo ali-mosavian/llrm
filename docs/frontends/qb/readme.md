@@ -95,7 +95,7 @@ Without `-o` and `-S` the HIR text is printed. `-o OUT` writes the OMF object,
 The gcc-style options of `llrm-c` and `llrm-nib` apply too: `-O0` to `-O3`,
 `-Os`, `-Oz`, `-Og`, `-f[no-]PASS`, `-march`, `-mtune`, `-m16`, `-m32`, `-g` and
 `-S`. `-fsanitize=bounds,integer-divide-by-zero,signed-integer-overflow` (or
-`undefined`) are BC's `/D` checks, `-fsanitize=stack` is its stack check, and
+`undefined`) are BC's `/D` checks, `-fsanitize=stack` is its stack check, `-fexcess-precision=standard` (or `-ffloat-store`) rounds every value stored to a SINGLE or DOUBLE variable to its type as BC does (off by default: [floating environment](../../reference/semantics/floating-environment.md)), and
 `-g` writes line numbers. `--own-frames` is accepted and does nothing. The
 usage text printed by a bad argument lists every option.
 

@@ -1,39 +1,39 @@
-reason = "QB rounds what it stores to a SINGLE or DOUBLE variable (BC stores through memory; #1701), so a promoted variable keeps an fpround (fstp+fld, or one fstp into its cell) per assignment: floats +40% instructions, nbody_single +39%, fpbench +37%, nbody (double) +13%, jpeg_single +4%, stft_single +3%; clocks(486) +10%/+23%/+24%; still 0.3-0.4x of BC's instructions"
+reason = "jump tables: the QB runtime's dense switches are table jumps (jpeg/stft bq32 rows move by at most 10 instructions in 10^8)"
 blessed = "2026-10-14"
 
 [bas.O2]
-code_bytes = 1306
+code_bytes = 1267
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 872.2605
 
 [bas.Os]
-code_bytes = 1245
+code_bytes = 1206
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 871.4082
 
 [bq16.O2]
-code_bytes = 1283
+code_bytes = 1243
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 1132.917
 
 [bq16.Os]
-code_bytes = 1223
+code_bytes = 1184
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 74988031
-code_bytes = 1417
+instructions = 72762378
+code_bytes = 1380
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 75317633
-code_bytes = 1416
+instructions = 73091974
+code_bytes = 1379
 data_bytes = 4733
 bss_bytes = 0
 
