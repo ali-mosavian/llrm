@@ -4,6 +4,7 @@ import sys
 import unittest
 from argparse import Namespace
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -75,6 +76,28 @@ class InvariantLoadsTests(unittest.TestCase):
         result.facts[("case", "ow", "486-O2")] = [loop(2, 0, calls=1)]
         result.facts[("case", "gcc", "486-O2")] = [loop(10, 3)]
         self.assertEqual(run.reference_bars(result, "case", "486-O2"), [(10, 3)])
+
+
+class KnownBugTests(unittest.TestCase):
+    def test_an_entry_no_failing_line_matches_is_stale(self):
+        """known.toml tagged two #109 patterns for a bug that was fixed; no failing line matched them, nothing said so, and they
+        would have tagged its return as known (#389)."""
+        import known
+
+        with mock.patch.object(known, "bugs", return_value=[("conc[67]_s2", "#109"), ("did not finish", "#104")]):
+            self.assertEqual(known.stale(["x nib on DOS: conc6_s2 is wrong"]), [("did not finish", "#104")])
+            self.assertEqual(known.stale([]), [("conc[67]_s2", "#109"), ("did not finish", "#104")])
+
+    def test_only_a_run_of_everything_can_call_an_entry_stale(self):
+        """A run of one case matches few of the known bugs; calling the rest stale would fail every narrow run."""
+        import known
+
+        result = run.Result()
+        full = Namespace(family=None, case=None, lang=None, config=None, quick=False, inline=False, stale_ok=False)
+        with mock.patch.object(known, "bugs", return_value=[("gone", "#1")]):
+            self.assertEqual(run.stale_known(full, result), [("gone", "#1")])
+            for narrow in ("family", "case", "lang", "config", "quick", "inline", "stale_ok"):
+                self.assertEqual(run.stale_known(Namespace(**{**vars(full), narrow: ["x"]}), result), [], narrow)
 
 
 if __name__ == "__main__":
