@@ -21,11 +21,11 @@ NO_TESTS = 5
 SPLIT_SECONDS = 45.0  # a file in SPLITTABLE recorded slower than this is run in parts
 PART_SECONDS = 30.0
 MAX_PARTS = 12
-# Files whose tests are independent. A file with a module fixture is not here: test_qbrt.py's fixture runs every program in one DOSBox
+# Files whose tests are independent (test_qbgfx.py builds each probe when its test asks). A file with a module fixture that does all the work is not here: test_qbrt.py's fixture runs every program in one DOSBox
 # launch, so five parts ran it five times (185 s each, against 134 s whole).
-SPLITTABLE = frozenset({"crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py", "crates/target/llrm-x86-m32/vsgcc/test_scaling.py"})
+SPLITTABLE = frozenset({"tools/dosbatch/test_qbgfx.py", "tools/dosbatch/test_qbgorilla.py", "crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py", "crates/target/llrm-x86-m32/vsgcc/test_scaling.py"})
 # Seconds of the files that were slowest when measured, for a run with nothing recorded yet.
-SEEDS = {"crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py": 300.0, "tools/dosbatch/test_qbrt.py": 130.0, "crates/target/llrm-x86-m32/vsgcc/test_scaling.py": 60.0}
+SEEDS = {"tools/dosbatch/test_qbgfx.py": 190.0, "crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py": 300.0, "tools/dosbatch/test_qbrt.py": 130.0, "crates/target/llrm-x86-m32/vsgcc/test_scaling.py": 60.0}
 
 
 def pytest(*args: str) -> subprocess.CompletedProcess:
@@ -74,9 +74,9 @@ def main() -> int:
     ap.add_argument("--ignore", action="append", default=[])
     ap.add_argument("--durations", help="JSON {file: seconds}, read for the order (longest first) and rewritten after the run")
     ap.add_argument("paths", nargs="+")
-    args, flags = ap.parse_known_args(sys.argv[1:])
-    if "--" in flags:
-        flags.remove("--")
+    argv = sys.argv[1:]
+    at = argv.index("--") if "--" in argv else len(argv)
+    args, flags = ap.parse_args(argv[:at]), argv[at + 1 :]  # what follows `--` is pytest's, whatever it looks like
     tests, broken = collect(args.paths, args.ignore, flags)
     if broken is not None:
         print(broken)
