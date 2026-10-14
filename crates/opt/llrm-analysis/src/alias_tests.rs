@@ -1296,3 +1296,36 @@ entry:
     assert!(collapsed > 0, "the premise: the pointers walked past the limit");
     assert!(rounds < 4 * crate::alias::MAX_FIELDS_FOR_FIELD_SENSITIVE, "{rounds} rounds");
 }
+
+/// An entry whose summary shrank made the callbacks add every entry up again:
+/// 549 of GORILLA's 1,175 changes at -O1, 545 of the `summaries callbacks`
+/// row's 1,039 Minstr. A slice has its owners counted, so a change costs the
+/// slices it moved.
+#[test]
+fn an_entry_that_loses_a_slice_others_hold_moves_that_slice_and_not_every_entry() {
+    let entries = 24;
+    let held: Vec<Slice> =
+        (0..40).map(|k| Slice::new(object(MemoryKind::Global, Identity::Int(k), None), 0, 4, 1, 4).unwrap()).collect();
+    let summary = |reads: &[Slice]| Summary {
+        reads: reads.iter().copied().collect::<BTreeSet<_>>().into(),
+        ..Summary::default()
+    };
+    let parts: IndexMap<String, Summary> = (0..entries).map(|k| (format!("e{k}"), summary(&held))).collect();
+    let mut back = super::CalledBack::from_parts(parts.clone());
+    let before = super::callback_slices_moved();
+    for k in 0..entries {
+        // The entry loses a slice the others hold, then gets it back.
+        back.changed(&format!("e{k}"), &summary(&held[1..]));
+        assert_eq!(back.summary().unwrap().reads, summary(&held).reads, "the others still hold it");
+        back.changed(&format!("e{k}"), &summary(&held));
+    }
+    let moved = super::callback_slices_moved() - before;
+    assert!(moved <= 4 * entries, "{moved} slices moved for {} changes of one slice", 2 * entries);
+    // and the sum is what adding the entries up gives, after entries drop what
+    // only they held
+    let own = Slice::new(object(MemoryKind::Global, Identity::Int(99), None), 0, 4, 1, 4).unwrap();
+    back.changed("e0", &summary(&[held.as_slice(), &[own]].concat()));
+    assert!(back.summary().unwrap().reads.contains(&own));
+    back.changed("e0", &summary(&held));
+    assert!(!back.summary().unwrap().reads.contains(&own), "the last owner dropped it");
+}

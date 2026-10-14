@@ -1,9 +1,10 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/globalopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globalopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:73ee999af46fe31ef744cbd2a7dfe04531a5ab911f0ecff50e91cfe4ab257990 -->
+<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:1f857f1f9557b6d3a624fcf3cf8a5cc90b32063dfed3edb1a77a1abbed3d8b9d -->
 
 # globalopt
 
-Mark internal globals that are only ever loaded from as `constant`, and drop the stores of those only ever stored to.
+Mark internal globals that are only ever loaded from as `constant`, and drop
+the stores of those only ever stored to.
 
 ## How it works
 A variable qualifies when it is internal or private, initialized, not yet
@@ -18,10 +19,13 @@ initializer's bytes (`memory::constant_bits`), which the body passes fold.
 Every defined function is reported as changed so each body is run through
 its pipeline again.
 
-`WriteOnly`, after the pipeline has forwarded what loads it could, is the other half (LLVM's GlobalOpt: "if the global is never loaded
-(but may be stored to), it is dead"; gcc's ipa `write-only` flag): a variable that is internal or private, not named by another global's
-initializer, and whose every use in every function is a non-volatile store's address (through the same `gep`s and casts) loses those
-stores. Nothing names it then, and `globaldce` deletes it.
+`WriteOnly`, after the pipeline has forwarded what loads it could, is the
+other half (LLVM's GlobalOpt: "if the global is never loaded (but may be
+stored to), it is dead"; gcc's ipa `write-only` flag): a variable that is
+internal or private, not named by another global's initializer, and whose
+every use in every function is a non-volatile store's address (through the
+same `gep`s and casts) loses those stores. Nothing names it then, and
+`globaldce` deletes it.
 
 ## Example
 Before:
