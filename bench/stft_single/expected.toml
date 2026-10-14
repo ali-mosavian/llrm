@@ -1,4 +1,4 @@
-reason = "a BASIC procedure at m32 holds a value in the frame register and builds no frame (the driver now records the bytes a runtime callee pops, a push of a value is sized, x87 register bytes are inert, the freed registers reach masm): bq32 -O2 instructions -0..-10.5% (fib -10.5%, nbody -9.9%, particle -6.9%, shellsort -6.6%, hanoi -3.4%), code -3%..+7% ([esp+d] is a byte longer than [ebp+d]); -Os keeps BASIC's frame where size is tuned and masm compares the bytes: -4%..+0%, instructions +0..+2.5%"
+reason = "main moved since the bq32 frame-register bless (#perf/basic-frame-free): +-5 executed instructions in the jpeg, stft and scroll bq32 rows"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 72230415
+instructions = 72230416
 code_bytes = 1404
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73089926
+instructions = 73089928
 code_bytes = 1379
 data_bytes = 4733
 bss_bytes = 0
