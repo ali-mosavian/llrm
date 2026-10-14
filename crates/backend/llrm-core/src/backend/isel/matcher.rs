@@ -1085,10 +1085,12 @@ impl Selector<'_, '_, '_> {
         // X86 keeps them legal immediates, so it does not turn their
         // stores into integer ones (X86ISelLowering.cpp L777-780,
         // DAGCombiner.cpp L24445-24448). Not otherwise: two `mov`s take fewer
-        // clocks.
+        // clocks. A lone float 0.0 or -1.0 is not: `x87_store_pays`.
         if self.cpu.size && matches!(size, 4 | 8) {
             let value = if size == 4 { f64::from(f32::from_bits(bits as u32)) } else { f64::from_bits(bits) };
-            if let Some((name, negated)) = crate::backend::constpool::x87_constant(value) {
+            if let Some((name, negated)) = crate::backend::constpool::x87_constant(value)
+                .filter(|_| crate::backend::constpool::x87_store_pays(value, size as u64))
+            {
                 let mut held = self.fresh_held(FLOAT);
                 out.push(insn(m.at, semantics(Operation::FloatLoad, name, vec![Loc::Held(held)], vec![])));
                 if negated {

@@ -55,6 +55,10 @@
 //! constant (0 and 1 use `fldz` and `fld1`). The pool is shared by every
 //! function of a module, so `$K` names are module-wide.
 //!
+//! Tuned for size, `isel/matcher.rs` stores a double 0.0, -0.0, 1.0 or -1.0,
+//! or a float 1.0, as `fldz`/`fld1` (and `fchs`) and an `fstp`
+//! (`x87_store_pays`); a lone float 0.0 or -1.0 stays an integer store.
+//!
 //! # See also
 //! GCC `force_const_mem`; [`crate::backend`]
 
@@ -106,6 +110,18 @@ pub fn x87_constant(value: f64) -> Option<(&'static str, bool)> {
     } else {
         None
     }
+}
+
+/// Whether storing `value` (`size` bytes) as `x87_constant` and an `fstp` beats
+/// the integer stores. A float of 0.0 or -1.0 is one dword: it shares a zeroed
+/// register (4 bytes, 3 at m32) or ties `fld1`, `fchs`, `fstp` (7), so only 1.0
+/// and the doubles, two dwords, pay.
+#[must_use]
+pub fn x87_store_pays(
+    value: f64,
+    size: u64,
+) -> bool {
+    x87_constant(value).is_some() && (size == 8 || value == 1.0)
 }
 
 /// `value` in the narrowest float format that holds it exactly, as GCC's

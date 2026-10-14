@@ -2202,7 +2202,10 @@ define void @f() addrspace(1) {
 /// an `fstp`, where gcc and clang keep these constants in the x87 and two dword
 /// immediates are 14 bytes: vsgcc's worst `-Os` code row, `nbody` (495 bytes
 /// against gcc's 393), was 22 of them. Not tuned for size, or for any other
-/// constant, the integer stores stay (two `mov`s take fewer clocks).
+/// constant, the integer stores stay (two `mov`s take fewer clocks). A lone
+/// float 0.0 or -1.0 stays one integer store too: it shares a zeroed register
+/// (4 bytes) or ties the `fld1`, `fchs`, `fstp` (7): `fpbench` -Os grew 2 bytes
+/// at m32 and 12 instructions in C.
 #[test]
 fn test_a_float_constant_store_tuned_for_size_is_the_x87_constant_where_there_is_one() {
     let text = "define void @f(ptr %p) addrspace(1) {
@@ -2211,6 +2214,8 @@ fn test_a_float_constant_store_tuned_for_size_is_the_x87_constant_where_there_is
   store double 1.0, ptr %p
   store double -1.0, ptr %p
   store float 1.0, ptr %p
+  store float 0.0, ptr %p
+  store float -1.0, ptr %p
   store double 2.5, ptr %p
   ret void
 }
@@ -2236,7 +2241,11 @@ fn test_a_float_constant_store_tuned_for_size_is_the_x87_constant_where_there_is
         (2, 3, 2, 5),
         "{small}"
     );
-    assert_eq!(small.matches("mov dword ptr").count(), 2, "2.5 is its two dwords: {small}");
+    assert_eq!(
+        small.matches("mov dword ptr").count(),
+        4,
+        "2.5 is its two dwords; float 0.0 and -1.0 stay one store: {small}"
+    );
     let fast = on(false);
     assert_eq!((count(&fast, "fldz"), count(&fast, "fld1"), count(&fast, "fstp")), (0, 0, 0), "{fast}");
 }
