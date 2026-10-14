@@ -213,6 +213,41 @@ b2:
     assert!(llrm_analysis::manager::float_solves() > before, "a body with floats is solved");
 }
 
+/// A body with floats and no loop whose latch touches one was solved for floats
+/// whole, every round, and never changed (d_faces.c at -O1: float-facts 169 M of
+/// 9679 M, in 55 runs, for no float loop). It is not solved.
+#[test]
+fn test_a_body_with_floats_and_no_float_loop_is_not_solved_for_floats() {
+    let straight = "define float @f(float %x) {
+b0:
+  %a = fadd float %x, 1.000000e+00
+  ret float %a
+}
+";
+    let counted_integer_loop = "define float @g(float %x, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  %a = fadd float %x, 1.000000e+00
+  ret float %a
+}
+";
+    for text in [straight, counted_integer_loop] {
+        let before = llrm_analysis::manager::float_solves();
+        let mut module = parsed(&format!("{DOS}{text}"));
+        let printed_before = printed(&module);
+        assert_eq!(crate::testing::managed(&mut module, super::FloatLoop), printed_before);
+        assert_eq!(llrm_analysis::manager::float_solves(), before, "solved the floats of {text}");
+    }
+}
+
 #[test]
 fn test_what_touches_floats_is_every_float_value_operand_and_aggregate() {
     let touches = |text: &str| {
