@@ -1,4 +1,4 @@
-reason = "m32 word multiply by a constant runs as a dword chain; a lea starts an address chain"
+reason = "a narrow counter whose start is made of values the enclosing loop computes, zero-extended, is the wide recurrence (induction extended, QB INTEGER / C unsigned short): matmul c m16 -O2/-Os instructions -1.6%, code -7 bytes"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -32,32 +32,30 @@ data_bytes = 15
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 7557
-code_bytes = 559
+instructions = 7757
+code_bytes = 557
 data_bytes = 21
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 7636
-code_bytes = 550
+instructions = 7652
+code_bytes = 558
 data_bytes = 21
 bss_bytes = 0
 
 [c.O2]
-instructions = 5837
-memory_operands = 1561
-code_bytes = 236
+instructions = 5742
+memory_operands = 1545
+code_bytes = 229
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0789
 
 [c.Os]
-instructions = 5829
-memory_operands = 1561
-code_bytes = 234
+instructions = 5734
+memory_operands = 1545
+code_bytes = 227
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0788
 
 [nib.O2]
 instructions = 5969

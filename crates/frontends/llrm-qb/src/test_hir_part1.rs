@@ -131,7 +131,7 @@ fn test_inline_module_math_does_not_create_a_native_bp_frame() {
     let tmp = tempfile::TempDir::new().unwrap();
     let source = written(&tmp, "ATNREAD.BAS", b"pi# = atn(1#)\r\ndata 7\r\nread value&\r\n");
     let program = qb45(&source);
-    let records = records(&program, "ATNREAD.BAS");
+    let records = records_unoptimised(&program, "ATNREAD.BAS");
     let code_size = omf::segments(&records)[1].as_ref().unwrap().1;
     let code = omf::segment_image(&records, 1, code_size);
 
@@ -344,7 +344,7 @@ fn test_module_exit_rewrite_preserves_conditional_false_edges() {
     let listing = listing(&parsed(&source));
     let main = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
 
-    assert!(main.contains("cmp eax, 42\n    je L"), "{main}");
+    assert!(main.contains("cmp dword ptr $QB$FRAME, 42\n    je L"), "{main}");
     assert_eq!(main.matches("call far ptr B$PESD").count(), 2, "{main}");
     // Each arm ends in its own exit: the jump to the shared `ret` is replaced
     // by a copy of it (gcc's `copy_bb_p`, `jumps::duplicated`), and

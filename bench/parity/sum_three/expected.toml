@@ -1,46 +1,44 @@
-reason = "m32 word multiply by a constant runs as a dword chain; a lea starts an address chain"
+reason = "write-only globals removed (#1649): sum_three's six QB static locals (index, total and the loop's temporaries, 12 data bytes, 41 code bytes at bq32) and memory's one global are only stored to, so their stores are gone; no program's output moves"
 blessed = "2026-10-14"
 
 [bas.O2]
-instructions = 84
-memory_operands = 38
-code_bytes = 294
-data_bytes = 103
+instructions = 67
+memory_operands = 30
+code_bytes = 248
+data_bytes = 91
 bss_bytes = 0
 
 [bas.Os]
-instructions = 86
-memory_operands = 44
-code_bytes = 301
-data_bytes = 103
+instructions = 75
+memory_operands = 32
+code_bytes = 259
+data_bytes = 91
 bss_bytes = 0
-kernel_ms = 0.0109
 
 [bq16.O2]
-instructions = 86
-memory_operands = 38
-code_bytes = 291
-data_bytes = 103
+instructions = 69
+memory_operands = 30
+code_bytes = 245
+data_bytes = 91
 bss_bytes = 0
 
 [bq16.Os]
-instructions = 87
-memory_operands = 44
-code_bytes = 298
-data_bytes = 103
+instructions = 76
+memory_operands = 32
+code_bytes = 256
+data_bytes = 91
 bss_bytes = 0
-kernel_ms = 0.0072
 
 [bq32.O2]
-instructions = 79
-code_bytes = 339
-data_bytes = 139
+instructions = 72
+code_bytes = 289
+data_bytes = 127
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 81
-code_bytes = 303
-data_bytes = 139
+instructions = 73
+code_bytes = 273
+data_bytes = 127
 bss_bytes = 0
 
 [c.O2]

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/expand.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/expand.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/expand.rs sha256:5db34dc787a84f1fea592ce1c66b90a14a8b03b315c759e2d4513f43eed81e0e -->
+<!-- src: crates/opt/llrm-transforms/src/expand.rs sha256:ebe8a02749acf2582f91b0c33b2edcd9116314c0f5f9cda377e4ccf15acce3c2 -->
 
 # expand
 
@@ -13,10 +13,11 @@ by sum and type, so the same sum or monomial is built once.
 
 `int` builds a sum of terms `factor * (v1 * v2 * ...)` plus a constant. Each
 monomial's values are multiplied (a value wider than the sum is truncated
-first); the product is scaled by the factor's magnitude (`scaled`: nothing
-for 1, `shl` for a power of two, else `mul`); positive terms are added,
-negative ones subtracted afterwards, then the constant is added. Where no
-term is variable the result is the constant.
+first, one narrower is zero-extended: only an extended recurrence's start
+names one, after its proof); the product is scaled by the factor's magnitude
+(`scaled`: nothing for 1, `shl` for a power of two, else `mul`); positive
+terms are added, negative ones subtracted afterwards, then the constant is
+added. Where no term is variable the result is the constant.
 
 ```text
  sum = 4*a*b + 3*c - 7

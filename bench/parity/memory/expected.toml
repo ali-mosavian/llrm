@@ -1,4 +1,4 @@
-reason = "m32 word multiply by a constant runs as a dword chain; a lea starts an address chain"
+reason = "write-only globals removed (#1649): sum_three's six QB static locals (index, total and the loop's temporaries, 12 data bytes, 41 code bytes at bq32) and memory's one global are only stored to, so their stores are gone; no program's output moves"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -34,14 +34,14 @@ bss_bytes = 0
 kernel_ms = 0.0083
 
 [bq32.O2]
-instructions = 50
-code_bytes = 194
+instructions = 51
+code_bytes = 190
 data_bytes = 19
 bss_bytes = 0
 
 [bq32.Os]
 instructions = 48
-code_bytes = 183
+code_bytes = 184
 data_bytes = 19
 bss_bytes = 0
 
@@ -62,12 +62,11 @@ bss_bytes = 4
 kernel_ms = 0.0017
 
 [nib.O2]
-instructions = 35
-memory_operands = 7
-code_bytes = 97
-data_bytes = 4
+instructions = 34
+memory_operands = 6
+code_bytes = 91
+data_bytes = 2
 bss_bytes = 0
-kernel_ms = 0.0022
 
 [nib.Os]
 instructions = 35
