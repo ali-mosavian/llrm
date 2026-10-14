@@ -389,19 +389,48 @@ pub fn materialized(
         // Where the parallel copy being copied begins in `insns`: what its
         // moves read is made before all of them, not between two.
         let mut copy: Option<(i64, usize)> = None;
-        for (position, original) in block.insns.iter().enumerate() {
+        let mut next_position = 0;
+        let mut next_touch = 0;
+        loop {
+            let position = next_position;
+            if position >= block.insns.len() {
+                break;
+            }
+            next_position = position + 1;
+            // The positions that name one are in order, and this is the next.
+            while touching[block_index].get(next_touch).is_some_and(|at| (*at as usize) < position) {
+                next_touch += 1;
+            }
+            // What names none of the values is left as it is, a run of it at
+            // once; and the parallel copy it ends in is the one a reload would
+            // be put before.
+            if !check_postings() && touching[block_index].get(next_touch).is_none_or(|at| *at as usize != position) {
+                let stop = touching[block_index].get(next_touch).map_or(block.insns.len(), |at| *at as usize);
+                let base = insns.len();
+                insns.extend_from_slice(&block.insns[position..stop]);
+                copy = match block.insns[stop - 1].group {
+                    None => None,
+                    Some(group) => {
+                        let mut first = stop - 1;
+                        while first > position && block.insns[first - 1].group == Some(group) {
+                            first -= 1;
+                        }
+                        match copy {
+                            Some((open, at)) if first == position && open == group => Some((open, at)),
+                            _ => Some((group, base + (first - position))),
+                        }
+                    }
+                };
+                next_position = stop;
+                continue;
+            }
+            let original = &block.insns[position];
             let mut one = Arc::clone(original);
             copy = match (one.group, copy) {
                 (Some(group), Some((open, at))) if group == open => Some((open, at)),
                 (Some(group), _) => Some((group, insns.len())),
                 (None, _) => None,
             };
-            // One that names none of the values is left as it is.
-            let untouched = touching[block_index].binary_search(&(position as u32)).is_err();
-            if untouched && !check_postings() {
-                insns.push(one);
-                continue;
-            }
             if _identity(&one, &stored, frame) {
                 marked.insert(block_index);
                 identities.insert(key(&one));
