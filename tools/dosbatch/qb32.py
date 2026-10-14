@@ -7,6 +7,7 @@ the one each bench program states (bench/NAME/NAME.out).
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import tempfile
@@ -56,6 +57,7 @@ def cached(key: str, obj: Path, produce) -> None:
     tools made from the same files, so nothing is rebuilt that has not changed."""
     import hashlib
     import shutil
+    import uuid
 
     kept = OBJECTS / (hashlib.sha256(key.encode()).hexdigest()[:32] + ".obj")
     if kept.exists():
@@ -63,8 +65,14 @@ def cached(key: str, obj: Path, produce) -> None:
         return
     produce()
     OBJECTS.mkdir(parents=True, exist_ok=True)
-    shutil.copy(obj, kept.with_suffix(".tmp"))
-    kept.with_suffix(".tmp").replace(kept)
+    # a name of its own: runs sharing the cache write the same key at the same time, and a shared one was renamed away
+    # from under the second (FileNotFoundError); the rename is atomic and the objects equal, so whichever lands is right
+    scratch = kept.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        shutil.copy(obj, scratch)
+        scratch.replace(kept)
+    finally:
+        scratch.unlink(missing_ok=True)
 
 
 def records(path: Path):

@@ -13,6 +13,7 @@ For maintainers running llrm's `m32` output against gcc and clang. Method, comma
 | `build.sh PROG` | one program at -O1, -O2, -O3, -Os in llrm (OMF; ELF for `loops.py`), gcc and clang |
 | `wrap.py` | the copy every compiler builds: `main` calls the kernel through a volatile pointer |
 | `harness.py` | links, runs `main` in unicorn, counts the kernel's instructions, memory operands, 486 clocks |
+| `against_m16.py` | llrm's m32 against its m16 on the same programs ([m32-vs-m16](../../../../docs/comparison/m32-vs-m16.md)); `VSGCC_ONLY=llrm build.sh PROG` builds llrm's objects alone |
 | `table.py`, `loops.py` | the tables, the hottest loop |
 | `programs.py`, `kernels/x_*` | the programs; `x_*` are kernels written for this comparison, each with a `.out` self-check from gcc `-O0` on the host, which every variant must reproduce or `table.py` refuses |
 | `levels_time.py`, `ctime.py` | compile cost per level, compile wall clock |
