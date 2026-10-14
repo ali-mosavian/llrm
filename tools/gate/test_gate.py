@@ -646,6 +646,14 @@ def test_a_diff_without_compiler_source_plans_only_the_steps_that_cover_its_file
     assert gate.plan(["tools/gate/gate.py"], "full").tier == "full" and len(gate.plan(["tools/gate/gate.py"], "full").steps) > 8
 
 
+def test_a_runtime_change_alone_plans_the_bench_whose_counts_it_moves():
+    """#1669 changed runtime/qb/console.c and nothing else; its gate planned no bench, so the ten bq32 rows (which link that runtime and
+    count the kernel's calls into it) moved by 1 to 13 instructions in 10^8 unseen, and the next four gates failed on main as their base."""
+    assert "bench" in gate.plan(["runtime/qb/console.c"]).steps
+    assert "bench" in gate.plan(["runtime/c/x86-m32/ext.asm"]).steps
+    assert "bench" not in gate.plan(["docs/working/gate.md"]).steps
+
+
 def test_a_benchmark_added_on_its_own_plans_every_step_that_reads_bench():
     """#1458 merged jpeg_single and jpeg_fixed on a run of the bench step alone and broke pytest-programs, measure and the integration tests
     that iterate bench/ (dwarf, objwriters, toolchain) on main. The steps are the ones whose tests name the directory, found in the tests."""
