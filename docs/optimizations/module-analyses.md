@@ -41,6 +41,7 @@ flowchart TB
 - `Summaries::run` ([`manager.rs`](analyses/manager.md)) keeps each body's calls and exposed-frame facts while the body's `mark` and the declarations are unchanged, and passes the dirty set to `alias::summaries_updating` ([`alias.rs`](analyses/alias.md)). A body outside the closure reads nothing inside it, so its summary stands. A change of the globals' facts, an added or removed global, or a missing memo makes it a whole run.
 - `GlobalsAA` ([`globalsaa.rs`](analyses/globalsaa.md)) keeps its per-body contributions in a memo keyed by body and refolds them.
 - Analyses that read no body (type ancestry, global sizes, call registers) survive a body edit.
+- What a call back into the module may do (`alias::CalledBack`, the entries' summaries added up) counts each slice's owners: an entry whose summary changed moves the slices it gained and lost, and the sum is made again only when a slice gains its first owner or loses its last. Adding every entry up again on each shrink was 545 of GORILLA -O1's 1,039 Minstr for `summaries callbacks` (now 218, same object); `LLRM_CHECK_CALLBACKS=1` checks the incremental sum against a fresh one.
 
 ## Check switch
 

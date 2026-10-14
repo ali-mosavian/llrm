@@ -9,8 +9,8 @@ directory are not read; a module's header belongs to its own `mod.rs`/`NAME.rs` 
 
 A page holds a banner, the file stem as its title and the header with its `# ` headings demoted
 one level and its rustdoc links turned into Markdown links. Each page carries a digest of its
-header, of this tool and of the names it could link to; a page whose digest is unchanged is left
-as committed.
+header, of this tool and of what its own links resolve to, so adding a file changes only the pages
+that link its name; a page whose digest is unchanged is left as committed.
 """
 from __future__ import annotations
 
@@ -68,8 +68,6 @@ class Names:
     pages: dict[str, str]  # file stem -> page directory name (passes, analyses, backend)
     files: dict[str, list[str]]  # file stem -> repository paths of `crates/**/STEM.rs`
 
-    def digest(self) -> str:
-        return key_of(repr(sorted(self.pages.items())), repr(sorted((k, sorted(v)) for k, v in self.files.items())))
 
 
 def names_of(root: Path, documented: dict[str, str]) -> Names:
@@ -183,7 +181,6 @@ def plan(root: Path, force: bool = False) -> Plan:
             else:
                 bare[name].append(src.stem)
     names = names_of(root, {stem: n for n, hs in headers.items() for stem in hs})
-    context = names.digest()
     wanted: set[str] = set()
     for name, title, directory, kind in passdocs.PAGES:
         rows: list[tuple] = []
@@ -191,7 +188,7 @@ def plan(root: Path, force: bool = False) -> Plan:
         for stem, lines in sorted(headers[name].items()):
             path = f"{OUT}/{name}/{stem}.md"
             wanted.add(path)
-            key = key_of("\n".join(lines), tool_digest(), context)
+            key = key_of("\n".join(lines), tool_digest(), "\n".join(relink(lines, name, names)))
             old = (root / path).read_text(encoding="utf-8") if (root / path).is_file() else None
             if force or old is None or committed_key(old) != key:
                 text = page_text(f"{directory}/{stem}.rs", lines, name, names, key)
