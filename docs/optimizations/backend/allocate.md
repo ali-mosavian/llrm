@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:a5ab40e1ef5606ce78b251e72dbe3241d973984738bd22a28632795f156460a1 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:a5df1fd79fd95f784ffb3df57afbc110ec69564b0d0d68fb710cfd1f15e00217 -->
 
 # allocate
 
