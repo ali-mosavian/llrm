@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/cfi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/cfi.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/cfi.rs sha256:bc61c0f749abc25d020563c5e11d5d7046984476369cf2db55c96c991894bd3c -->
+<!-- src: crates/backend/llrm-core/src/backend/cfi.rs sha256:87e658d1124c179ba0d62c8b1d985031fdebfd0aa8c3aa5c27f268d4e487d13f -->
 
 # cfi
 

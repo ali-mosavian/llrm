@@ -15,7 +15,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from iced_x86 import Decoder, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
+from iced_x86 import CpuidFeature, Decoder, MemorySize, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
 
@@ -35,6 +35,7 @@ LLRM = llrmbin.bin_dir() / "llrm-c"   # where cargo put it; build.sh and ctime.p
 STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
 BASE = 0x10000
 OMF_VARIANTS = ("llrmO1", "llrm", "llrmO3", "llrmOs")   # "llrm" is -O2
+X87 = {CpuidFeature.FPU, CpuidFeature.FPU287, CpuidFeature.FPU287XL_ONLY, CpuidFeature.FPU387, CpuidFeature.FPU387SL_ONLY}
 MEMORY = {OpKind.MEMORY, OpKind.MEMORY_SEG_SI, OpKind.MEMORY_SEG_ESI, OpKind.MEMORY_ESDI, OpKind.MEMORY_ESEDI}
 
 
@@ -253,8 +254,19 @@ def cost(ins, taken, first_rep, mem, multiplier=None):
         return 6 if m == Mnemonic.FCHS else 3
     if m in (Mnemonic.FNSTSW, Mnemonic.FNSTCW, Mnemonic.FLDCW):
         return 3 if m == Mnemonic.FNSTSW else 4
+    # Integer memory operands (Intel 240440-002, the 486 table; the least of each range, which does not
+    # favour the compiler that uses them): m32int / m16int. They were unpriced and fell through to 1 clock,
+    # which made gcc's `fimul` (x_matmul_f) free.
+    if m in (Mnemonic.FIADD, Mnemonic.FISUB, Mnemonic.FISUBR):
+        return 19 if ins.memory_size == MemorySize.INT32 else 20
+    if m == Mnemonic.FIMUL:
+        return 22 if ins.memory_size == MemorySize.INT32 else 23
+    if m in (Mnemonic.FIDIV, Mnemonic.FIDIVR):
+        return 84 if ins.memory_size == MemorySize.INT32 else 85
     if m == Mnemonic.SAHF:
         return 2
+    if X87.intersection(ins.cpuid_features()):
+        raise ValueError(f"the model has no price for the x87 instruction {Formatter(FormatterSyntax.INTEL).format(ins)}")
     return 1
 
 
