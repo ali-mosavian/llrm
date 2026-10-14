@@ -231,6 +231,27 @@ def references(cases: list[Case], config: build.Config, work: Path, result: Resu
                 quality.facts(one) for one in loops if one.name.rsplit("#", 1)[0].lstrip("_") == case.symbol]
 
 
+def on_tmpfs(path: Path, mounts: str | None = None) -> bool:
+    """Whether `path` is on a tmpfs, by the longest mount point above it in /proc/mounts. A corpus run dumps hundreds of
+    thousands of files (one configuration: 707,000 files, 8.8 GB) and a tmpfs has about a million inodes for
+    the whole host: one run left /tmp without any and stopped six sessions."""
+    if mounts is None:
+        try:
+            mounts = Path("/proc/mounts").read_text()
+        except OSError:
+            return False
+    where = str(path.resolve())
+    best, kind = "", ""
+    for line in mounts.splitlines():
+        fields = line.split()
+        if len(fields) < 3:
+            continue
+        point = fields[1].replace("\\040", " ")
+        if (where == point or where.startswith(point.rstrip("/") + "/")) and len(point) > len(best):
+            best, kind = point, fields[2]
+    return kind == "tmpfs"
+
+
 def lacks_references(args, langs: list[str]) -> bool:
     """Whether a run builds no Open Watcom or gcc-ia16 loops, which `judge` takes
     as no reference meeting any bound: every ivs reads as ivs-ideal."""
@@ -246,6 +267,25 @@ def _far(case: Case) -> bool:
 
 def total(facts: list) -> tuple[int, int]:
     return sum(f.size for f in facts), sum(f.memory for f in facts)
+
+
+def reference_bars(result: Result, case: str, config: str) -> list[tuple[int, int]]:
+    """(instructions, memory operands) of the loops Open Watcom and gcc-ia16 compiled for the case. A reference
+    loop that calls a helper hides its cost: it is no bar."""
+    refs = [result.facts.get((case, ref, config)) for ref in ("ow", "gcc")]
+    return [total(r) for r in refs if r and not any(f.calls for f in r)]
+
+
+def invariant_loads_short(facts: list, bars: list[tuple[int, int]]) -> bool | None:
+    """Whether a loop that reloads what it never changes falls short: only where a reference compiled it with fewer
+    instructions or fewer memory operands (the bar of size-vs-ref and memory-vs-ref). A register file smaller than
+    the loop's live values makes a reload the minimum, and gcc reaches "no reload" by spilling a cell the loop
+    changes, at more memory operands: 150 of the 190 x_ kernels with a reload at 486-O2 had no more of either than
+    both references. None where no reference was built: there is no bar to judge by."""
+    if not bars:
+        return None
+    size, memory = total(facts)
+    return sum(f.invariant_loads for f in facts) > 0 and (size > min(b[0] for b in bars) or memory > min(b[1] for b in bars))
 
 
 def reference_meets(result: Result, case: str, config: str, bound: int) -> bool:
@@ -296,9 +336,11 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result, re
                         if counted and max(counted) > bound:
                             result.short.add((*key, "mir-" + kind))
                 if fits and all(w.invariant_loads == 0 for w in wants):
-                    result.judged.add((*key, "invariant-loads"))
-                    if sum(f.invariant_loads for f in facts) > 0:
-                        result.short.add((*key, "invariant-loads"))
+                    short = invariant_loads_short(facts, reference_bars(result, case.name, config.tag) if references else [])
+                    if short is not None:
+                        result.judged.add((*key, "invariant-loads"))
+                        if short:
+                            result.short.add((*key, "invariant-loads"))
                 if len(wants) == 1 and wants[0].shape and len(facts) == 1:
                     result.judged.add((*key, "shape"))
                     f = facts[0]
@@ -419,6 +461,8 @@ def main() -> int:
     if args.case:
         cases = [c for c in cases if any(c.name.startswith(p) for p in args.case)]
     langs = args.lang or list(EMITTERS)
+    if on_tmpfs(args.dump):
+        parser.error(f"--dump {args.dump} is on a tmpfs: a run writes hundreds of thousands of files, more than its inodes")
     if args.write_known and lacks_references(args, langs):
         parser.error("--write-known needs the reference compilers: no --no-refs, no --inline, and C among --lang")
     configs = configs_from(args)
