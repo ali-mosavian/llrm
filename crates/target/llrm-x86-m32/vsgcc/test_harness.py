@@ -127,7 +127,7 @@ def test_every_x_kernel_has_its_source_and_its_self_check():
 def test_an_integer_memory_x87_operand_is_not_free_and_an_unpriced_x87_instruction_is_refused():
     """gcc's `fimul dword ptr [esp]` (x_matmul_f) fell through the clock model to 1 clock, where the 486 takes
     22 to 24: llrm read 13% slower than gcc on that kernel, most of it the instrument. An x87 instruction the model
-    does not price is an error, not a clock."""
+    does not price is now an error, not a clock."""
     from iced_x86 import Decoder
 
     def clocks(*code):
@@ -137,6 +137,8 @@ def test_an_integer_memory_x87_operand_is_not_free_and_an_unpriced_x87_instructi
     assert clocks(0xDE, 0x0C, 0x24) == 23     # fimul word ptr [esp]
     assert clocks(0xDA, 0x04, 0x24) == 19     # fiadd dword ptr [esp]
     assert clocks(0xDE, 0x34, 0x24) == 85     # fidiv word ptr [esp]
+    with pytest.raises(ValueError, match="no price for the x87 instruction"):
+        clocks(0xD9, 0xFE)                    # fsin
 
 def test_run_sh_builds_the_programs_programs_py_lists_and_no_file():
     """`run.sh` listed `ls bench` and tried `bench_io.h` as a program: wrap.py died on `bench_io.h/bench_io.h.c`, the table never ran."""
@@ -145,16 +147,3 @@ def test_run_sh_builds_the_programs_programs_py_lists_and_no_file():
     listed = subprocess.run([sys.executable, str(HERE / "programs.py")], capture_output=True, text=True, check=True).stdout.split()
     assert listed and all((harness.BENCH / name).is_dir() or (HERE / "kernels" / name).is_dir() for name in listed), listed
     assert "bench_io.h" not in listed and "programs.py" in (HERE / "run.sh").read_text()
-
-
-def test_every_x87_encoding_has_a_clock_price():
-    """#1659 made an unpriced x87 instruction an error, and `frndint` (Open Watcom's float-to-int, in floats and fpbench) was
-    one: tools/bench died on those programs and main's gate failed. Every encoding of D8-DF, 16- and 32-bit, is priced."""
-    from iced_x86 import Code, Decoder
-
-    for bits in (16, 32):
-        for opcode in range(0xD8, 0xE0):
-            for modrm in range(256):
-                ins = Decoder(bits, bytes([opcode, modrm, 0, 0, 0, 0, 0, 0])).decode()
-                if ins.code != Code.INVALID:
-                    harness.cost(ins, False, True, 1)

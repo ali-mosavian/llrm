@@ -1588,6 +1588,52 @@ pub fn wrapped(
     signed(value as u128 & llrm_mir::context::mask(bits), bits) as i64
 }
 
+/// The bytes of the object `root` is the address of, where they are known:
+/// a defined global's or a sized alloca's. A declaration's type is not
+/// promised to be its size.
+pub fn extent_of(
+    unit: &Unit,
+    root: Operand,
+) -> Option<i64> {
+    if let Operand::Constant(id) = root {
+        let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
+        let GlobalKind::Variable(variable) = &unit.globals.get(global.0 as usize)?.kind else { return None };
+        variable.initializer?;
+    }
+    object_of(unit, root)?.extent
+}
+
+/// A pointer as an object, the variable indexes added to it on the way, and
+/// whether every GEP between was `inbounds`: `MemRef` keeps only the first
+/// index, this keeps them all.
+#[derive(Clone, Debug)]
+pub struct Indexed {
+    pub root: Operand,
+    /// Each variable index and the bytes it is scaled by.
+    pub indices: Vec<(ValueId, i64)>,
+    pub inbounds: bool,
+}
+
+/// `pointer` walked back through its GEPs and casts to the pointer none
+/// computed, with every variable index met.
+pub fn indexed(
+    unit: &Unit,
+    pointer: Operand,
+) -> Indexed {
+    let mut found = Indexed { root: pointer, indices: Vec::new(), inbounds: true };
+    while let Some(next) = step(unit, found.root) {
+        match next {
+            Step::Through(inner) => found.root = inner,
+            Step::Offset { pointer: inner, variable, inbounds, .. } => {
+                found.indices.extend(variable);
+                found.inbounds &= inbounds;
+                found.root = inner;
+            }
+        }
+    }
+    found
+}
+
 enum Step {
     /// The same address, spelled otherwise.
     Through(Operand),

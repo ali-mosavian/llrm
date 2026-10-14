@@ -288,3 +288,73 @@ fn a_functions_frequencies_are_worked_out_once_for_all_the_loops_asking() {
     assert!(changed);
     assert!(worked <= 2, "{worked} estimates for {loops} loops");
 }
+
+/// A loop of an unknown `%n` trips that stores and reads `@a[i]`, six
+/// dwords, through a GEP with `flags`.
+fn walk(
+    flags: &str,
+    globals: &str,
+) -> String {
+    format!(
+        "{globals}define i32 @f(i32 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  %acc = phi i32 [ 0, %b0 ], [ %sum, %b2 ]
+  %go = icmp slt i32 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %off = mul i32 %i, 4
+  %p = getelementptr {flags}i8, ptr @a, i32 %off
+  %v = add i32 %i, 7
+  store i32 %v, ptr %p
+  %w = load i32, ptr %p
+  %sum = add i32 %acc, %w
+  %next = add nsw i32 %i, 1
+  br label %b1
+
+b3:
+  ret i32 %acc
+}}
+"
+    )
+}
+
+const SIX: &str = "@a = internal global [24 x i8] zeroinitializer\n\n";
+const WALKED: &[&[i128]] = &[&[0], &[1], &[5], &[6]];
+
+/// The count of `@a`'s six dwords bounds a loop of unknown trips: GCC peels
+/// it as `infer_loop_bounds_from_array` says (x_matmul_f's `k` loop, 12 of a
+/// `double[12][12]`, stayed rolled at -O3 for want of it: 78,749 clocks
+/// against 67,907). Six copies, each keeping its exit, and no back edge.
+#[test]
+fn a_loop_walking_an_object_is_peeled_by_its_extent() {
+    let mut module = parsed(&walk("inbounds ", SIX));
+    let before = results(&module, WALKED);
+    managed(&mut module, Peel::default());
+    let text = printed(&module);
+    assert_eq!(results(&module, WALKED), before, "{text}");
+    assert_eq!(loops_of(&mut module), 0, "{text}");
+    assert_eq!(text.matches("store i32").count(), 7, "{text}");
+}
+
+/// Without `inbounds` the object's size promises nothing, and nor does a
+/// declaration's: an extern's type is not its size.
+#[test]
+fn a_loop_without_the_promise_or_a_defined_object_is_not_peeled() {
+    for (flags, globals) in [("", SIX), ("inbounds ", "@a = external global [24 x i8]\n\n")] {
+        let (changed, mut module) = through_walk(&walk(flags, globals));
+        assert!(!changed, "{flags}{globals}");
+        assert_eq!(loops_of(&mut module), 1, "{flags}{globals}");
+    }
+}
+
+fn through_walk(text: &str) -> (bool, Module) {
+    let mut module = parsed(text);
+    let before = printed(&module);
+    let after = managed(&mut module, Peel::default());
+    (after != before, module)
+}

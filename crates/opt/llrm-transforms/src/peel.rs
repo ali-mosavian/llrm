@@ -6,7 +6,14 @@
 //! Peeling is the CFG counterpart of full straight-line unrolling. For each
 //! loop of a copy of the body, closed to LCSSA (`lcssa::closed`), the pass
 //! - takes the trip count (`induction::trip_count`, else `trip_bound`) and
-//!   skips the loop below two trips;
+//!   skips the loop below two trips; with neither, the most backedges the
+//!   objects its `inbounds` accesses walk allow (`induction::object_backedges`,
+//!   GCC's `infer_loop_bounds_from_array`), after which the residual loop's
+//!   latch is made `unreachable`, as GCC's `try_unroll_loop_completely` does
+//!   with a bound it cannot fold
+//!   ([tree-ssa-loop-ivcanon.cc:686](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-loop-ivcanon.cc#L686)):
+//!   `k < n` over `B[k][j]` of a 12 x 12 array is twelve copies, each with its
+//!   exit test;
 //! - asks `llrm_analysis::peelsize::admitted` whether the copies are worth
 //!   their size: the budgets are `peelsize::Limits`, counted in instructions,
 //!   and the loop's `Site` comes from `profit::site`;
@@ -166,18 +173,21 @@
 
 use std::collections::BTreeSet;
 
+use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::manager::Registers;
 use llrm_analysis::peelsize::{self, Limits};
 use llrm_analysis::{cfg, induction, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::edit::Position;
 use llrm_mir::module::Function;
+use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::profit;
-use crate::{lcssa, loopclone};
+use crate::{edges, lcssa, loopclone};
 
 #[derive(Default)]
 pub struct Peel {
@@ -249,9 +259,11 @@ fn _candidate(
         }
         let unit =
             memory::Unit::within(context, layout, &closed, analyses.outer()).with_registers(&facts).with_shape(&shape);
-        let Some(count) =
-            induction::trip_count(&unit, &loop_, &facts).or_else(|| induction::trip_bound(&unit, &loop_, &facts))
-        else {
+        let exact =
+            induction::trip_count(&unit, &loop_, &facts).or_else(|| induction::trip_bound(&unit, &loop_, &facts));
+        // No count: the most backedges the object an access walks allows.
+        let bounded = exact.is_none();
+        let Some(count) = exact.or_else(|| induction::object_backedges(&unit, &loop_)) else {
             continue;
         };
         if count < BigInt::from(2)
@@ -270,10 +282,33 @@ fn _candidate(
             continue;
         };
         if loopclone::peeled(&mut closed, &loop_, count)?.is_some() {
+            if bounded {
+                _without_back_edge(&mut closed, &loop_, latch)?;
+            }
             return Ok(Some((closed, latch)));
         }
     }
     Ok(None)
+}
+
+/// `loop_`'s latch ends in `unreachable`: after `bound` backedges were peeled
+/// out ahead of it, the next one is the one the bound rules out, and nothing
+/// would otherwise tell `Dead` so (GCC's `remove_exits_and_undefined_stmts`).
+fn _without_back_edge(
+    function: &mut Function,
+    loop_: &Loop,
+    latch: i64,
+) -> Result<(), String> {
+    let (latch, header) = (cfg::block(latch), cfg::block(loop_.header));
+    for phi in edges::phis(function, header) {
+        let kept = lcssa::arms(function, phi).into_iter().filter(|&(_, source)| source != latch).collect::<Vec<_>>();
+        function.set_operands(phi, lcssa::from_arms(&kept));
+    }
+    let jump = function.terminator(latch).ok_or("a latch without a terminator")?;
+    let void = function.instruction(jump).ty;
+    function.erase(jump)?;
+    let stop = function.create_instruction(Opcode::Unreachable, void, Vec::new(), Flags::default(), None);
+    function.insert(stop, Position::End(latch))
 }
 
 #[cfg(test)]

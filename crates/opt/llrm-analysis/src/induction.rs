@@ -123,7 +123,7 @@ use num_bigint::BigInt;
 use crate::cfg::{self, Around};
 use crate::consts::{Known, masked};
 use crate::graph::loops::Loop;
-use crate::memory::{MemRef, Unit};
+use crate::memory::{self, MemRef, Unit};
 use crate::noreturn;
 use crate::occurrence::{operations_in, phis};
 
@@ -1843,26 +1843,82 @@ pub fn inbounds_backedges(
     unit: &Unit,
     loop_: &Loop,
 ) -> Option<BigInt> {
+    _by_index(unit, loop_, &advances(unit, loop_))
+}
+
+fn _by_index(
+    unit: &Unit,
+    loop_: &Loop,
+    step: &IndexMap<ValueId, BigInt>,
+) -> Option<BigInt> {
+    accesses(unit, loop_)
+        .filter_map(|(at, reference)| {
+            let advance = step.get(&reference.base?)? * reference.scale;
+            let room = (BigInt::from(1) << reference.index_bits) - reference.width;
+            _allowed(loop_, at, room, advance)
+        })
+        .min()
+}
+
+/// `inbounds_backedges`, and where the object is known to be `n` bytes, so
+/// is i*s + width <= n: GCC's `infer_loop_bounds_from_array`
+/// ([tree-ssa-loop-niter.cc:4225](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-loop-niter.cc#L4225)),
+/// which reads the extent off the array's type, here off the object. Every
+/// GEP to the object counts, not the one `MemRef` keeps: `A[i][k]` is two
+/// indexes, and `k` bounds the trips by the row.
+pub fn object_backedges(
+    unit: &Unit,
+    loop_: &Loop,
+) -> Option<BigInt> {
     let step = advances(unit, loop_);
+    let still = invariant(unit.function, &loop_.body);
+    let by_extent = accesses(unit, loop_)
+        .filter_map(|(at, reference)| {
+            let walked = memory::indexed(unit, reference.pointer?);
+            if !walked.inbounds {
+                return None;
+            }
+            let extent = memory::extent_of(unit, walked.root).filter(|&extent| extent >= i64::from(reference.width))?;
+            let mut advance = BigInt::from(0);
+            for (index, scale) in walked.indices {
+                match step.get(&index) {
+                    Some(per_trip) => advance += per_trip * scale,
+                    None if still.contains(index) => {}
+                    None => return None,
+                }
+            }
+            _allowed(loop_, at, BigInt::from(extent - i64::from(reference.width)), advance)
+        })
+        .min();
+    by_extent.into_iter().chain(_by_index(unit, loop_, &step)).min()
+}
+
+/// The inbounds accesses a loop makes every trip, each with its block.
+fn accesses<'a>(
+    unit: &'a Unit,
+    loop_: &'a Loop,
+) -> impl Iterator<Item = (i64, MemRef)> + 'a {
     let shape = unit.shape();
-    let latch = *loop_.latches.first()?;
+    let latch = loop_.latches.first().copied();
     loop_
         .body
         .iter()
-        .filter(|at| shape.dominance.dominates(**at, latch))
+        .filter(move |at| latch.is_some_and(|latch| shape.dominance.dominates(**at, latch)))
         .flat_map(|&at| unit.function.block(cfg::block(at)).instructions().iter().map(move |&inst| (at, inst)))
         .filter_map(|(at, inst)| Some((at, MemRef::of(unit, inst)?)))
         .filter(|(_, reference)| reference.inbounds)
-        .filter_map(|(at, reference)| {
-            let advance = step.get(&reference.base?)? * reference.scale;
-            // The access runs at least once a backedge, and the header once
-            // more.
-            (advance != BigInt::from(0)).then(|| {
-                ((BigInt::from(1) << reference.index_bits) - reference.width) / abs(&advance) + 1
-                    - BigInt::from(u8::from(at == loop_.header))
-            })
-        })
-        .min()
+}
+
+/// The backedges an access allows whose address moves `advance` bytes a trip
+/// within `room` bytes: it runs at least once a backedge, and the header once
+/// more.
+fn _allowed(
+    loop_: &Loop,
+    at: i64,
+    room: BigInt,
+    advance: BigInt,
+) -> Option<BigInt> {
+    (advance != BigInt::from(0)).then(|| room / abs(&advance) + 1 - BigInt::from(u8::from(at == loop_.header)))
 }
 
 /// `term`'s number at `width`, where known.

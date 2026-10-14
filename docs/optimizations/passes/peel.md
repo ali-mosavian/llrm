@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/peel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/peel.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:12e2da54ee5d13b9bfeb013bad5817ac03ff94a5c31940e4a52b168971033423 -->
+<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:047d7e110ec15b843399b8530e67c16123f4c682293a6888aa1f786e3980201e -->
 
 # peel
 
@@ -11,7 +11,13 @@ and Dead prove the residual loop unreachable.
 Peeling is the CFG counterpart of full straight-line unrolling. For each
 loop of a copy of the body, closed to LCSSA (`lcssa::closed`), the pass
 - takes the trip count (`induction::trip_count`, else `trip_bound`) and
-  skips the loop below two trips;
+  skips the loop below two trips; with neither, the most backedges the
+  objects its `inbounds` accesses walk allow (`induction::object_backedges`,
+  GCC's `infer_loop_bounds_from_array`), after which the residual loop's
+  latch is made `unreachable`, as GCC's `try_unroll_loop_completely` does
+  with a bound it cannot fold ([tree-ssa-loop-ivcanon.cc:686](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-loop-ivcanon.cc#L686)):
+  `k < n` over `B[k][j]` of a 12 x 12 array is twelve copies, each with its
+  exit test;
 - asks `llrm_analysis::peelsize::admitted` whether the copies are worth
   their size: the budgets are `peelsize::Limits`, counted in instructions,
   and the loop's `Site` comes from `profit::site`;
