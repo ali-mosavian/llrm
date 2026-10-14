@@ -172,7 +172,7 @@ def test_the_torture_step_has_no_wall_clock_limit_of_its_own():
 
 def test_every_step_the_planner_can_produce_is_in_exactly_one_ci_group():
     """A step in no group would never run in CI, silently: the matrix is built from the groups."""
-    plans = [gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full"), gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "auto"), gate.plan(["crates/backend/x.rs"], "fast")]  # `scans` and `measure` are fast-tier steps
+    plans = [gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full"), gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "auto"), gate.plan(["crates/backend/x.rs"], "fast"), gate.plan(["tools/gate/gate.py"]), gate.plan(["crates/backend/x.rs", "docs/a.md"], "smoke")]  # `scans` and `measure` are fast-tier steps
     everything = [s for q in plans for s in q.steps if s != "build"]  # the build is its own job
     grouped = [s for members in gate.load()["groups"].values() for s in members]
     assert sorted(grouped) == sorted(set(grouped)), "a step is in two groups"
@@ -632,11 +632,11 @@ def test_the_build_makes_one_set_of_crates_for_the_binaries_and_the_tests():
 def test_a_diff_without_compiler_source_plans_only_the_steps_that_cover_its_files():
     """The user's rule: a PR that changes nothing under crates/ or in the Cargo files does not run the compiler gate, it merges on narrow
     tests of what it changed. A gate.py edit planned the full tier (every step, 4,340 CPU-s); its own tests are the pytest step."""
-    assert gate.plan(["tools/gate/gate.py", "tools/gate/test_gate.py"]).steps == ["pytest"]
+    assert gate.plan(["tools/gate/gate.py", "tools/gate/test_gate.py"]).steps == ["pytest", "facts"]
     assert gate.plan(["tools/measure.py"]).steps[-1] == "measure" and "lib" not in gate.plan(["tools/measure.py"]).steps
     narrow = gate.plan(["tests/target_facts.rs"])
     assert narrow.tier == "fast" and narrow.steps == ["build", "pytest", "integration", "fmt"], narrow
-    assert gate.plan(["tools/torture/torture.py"]).steps == ["build", "pytest", "torture"]
+    assert gate.plan(["tools/torture/torture.py"]).steps == ["build", "pytest", "facts", "torture"]
     assert "build" not in gate.plan(["tools/gate/tiers.toml"]).steps
     # compiler source, or a Cargo file anywhere, takes the tiers as before
     assert gate.plan(["crates/ir/llrm-mir/src/lib.rs", "tools/gate/gate.py"]).tier == "full"
@@ -905,8 +905,72 @@ def test_the_turbo_binary_runs_whole_in_the_turbo_step_and_not_in_integration():
     assert "--test cv4" not in cmds["integration"]
 
 
-def test_a_change_to_a_python_or_shell_file_in_a_scanned_tree_plans_the_integration_step():
+def test_a_change_to_a_python_or_shell_file_in_a_scanned_tree_plans_the_target_facts_test_alone():
     """tests/target_facts.rs reads them: a tools-only PR planned only pytest and landed four copies of a target fact; main went red."""
-    for path in ("tools/gate/pytest_shards.py", "tools/dosbatch/qbplay.py", "crates/target/x/run.sh"):
-        assert "integration" in gate.plan([path]).steps, path
-    assert "integration" not in gate.plan(["tools/readme.md"]).steps
+    for path in ("tools/gate/pytest_shards.py", "tools/dosbatch/qbplay.py"):
+        assert "facts" in gate.plan([path]).steps, path
+    assert "integration" in gate.plan(["crates/target/x/run.sh"]).steps, "with compiler source the integration step has the test"
+    assert "facts" not in gate.plan(["tools/readme.md"]).steps and "build" not in gate.plan(["tools/gate/pytest_shards.py"]).steps
+
+
+NAME, MAKER = "Clau" + "de", "Anthro" + "pic"  # spelt in halves: the smoke tier refuses a diff that carries them
+
+
+def _repo(tmp_path):
+    import subprocess as sp
+
+    def git(*args, cwd=tmp_path):
+        return sp.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True, env={**__import__("os").environ, "GIT_AUTHOR_NAME": "a", "GIT_AUTHOR_EMAIL": "a@a", "GIT_COMMITTER_NAME": "a", "GIT_COMMITTER_EMAIL": "a@a"}).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "f").write_text("one\n")
+    git("add", "f")
+    git("commit", "-q", "-m", "base")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    return git
+
+
+def test_smoke_plans_the_fast_tiers_steps_cut_to_the_smoke_list_with_docs_and_the_diffs_tests():
+    p = gate.plan(["crates/backend/llrm-core/src/a.rs", "tools/gate/test_gate.py"], "smoke")
+    assert p.tier == "smoke" and p.steps[0] == "build"
+    assert set(p.steps) <= set(gate.load()["smoke"]["steps"]) and {"docs", "changed-tests", "pytest-programs", "fmt"} <= set(p.steps)
+    assert not {"run", "bench", "torture", "qcport", "measure", "identity", "turbo", "cv4", "dos-slow", "integration", "pytest"} & set(p.steps)
+    assert "facts" in gate.plan(["tools/gate/pytest_shards.py"], "smoke").steps and "facts" in p.steps
+    docs_only = gate.plan(["docs/working/gate.md"], "smoke")
+    assert docs_only.steps == ["docs", "changed-tests"], "a docs-only PR still has its generated pages checked, and builds nothing"
+
+
+def test_the_changed_tests_step_runs_the_test_beside_a_changed_tool_and_the_root_binary_it_changed():
+    cmd = gate.changed_tests(["tools/gate/gate.py", "tests/turbo.rs", "docs/x.md"])
+    assert "tools/gate/test_gate.py" in cmd and "--test turbo" in cmd
+    assert gate.changed_tests(["docs/x.md"]) == "true"
+
+
+def test_smoke_refuses_a_base_that_is_not_main_a_conflict_a_mention_and_a_dirty_tree(tmp_path):
+    git = _repo(tmp_path)
+    assert gate.refusals(tmp_path) == []
+    assert any("stacked" in r for r in gate.refusals(tmp_path, pr={"baseRefName": "alim/other", "title": "t", "body": ""}))
+    assert any("names the assistant" in r for r in gate.refusals(tmp_path, pr={"baseRefName": "main", "title": "t", "body": "Generated with " + NAME + " Code"}))
+    (tmp_path / "f").write_text("dirty\n")
+    assert any("differs" in r for r in gate.refusals(tmp_path))
+    git("checkout", "-q", "f")
+    git("checkout", "-q", "-b", "pr")
+    (tmp_path / "g").write_text("a line by " + MAKER + "\n")
+    git("add", "g")
+    git("commit", "-q", "-m", "feat: g")
+    assert any("diff adds" in r for r in gate.refusals(tmp_path))
+    git("commit", "-q", "--amend", "-m", "feat: g\n\nCo-Authored-By: " + NAME + " <x@y>")
+    assert any("commit message" in r for r in gate.refusals(tmp_path))
+
+
+def test_smoke_refuses_a_branch_that_conflicts_with_main(tmp_path):
+    git = _repo(tmp_path)
+    git("checkout", "-q", "-b", "pr")
+    (tmp_path / "f").write_text("pr\n")
+    git("commit", "-qam", "pr edit")
+    git("checkout", "-q", "main")
+    (tmp_path / "f").write_text("main\n")
+    git("commit", "-qam", "main edit")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "pr")
+    assert any("conflicts" in r for r in gate.refusals(tmp_path))

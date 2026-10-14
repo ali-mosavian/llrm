@@ -112,6 +112,10 @@ Clippy is not run. `-D warnings` in the `build` step keeps the tree free of comp
 
 Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pytest-programs` 60 s, `qcport` 100 s, `rfmt-post` 40 s cold, `dos-slow` 5 to 8 minutes, `measure` 3 to 8 minutes when its base is not yet measured. The budgets are 5 minutes for fast and 10 for full on the loaded host. Steps run `JOBS` at a time (default half the cores, at least 4), longest first, so the wall is about the longest step. [testing](testing.md) describes the steps' tools; [compile time](measurement/compile-time.md) describes `measure`.
 
+## The smoke tier
+
+`gate.py run --tier smoke [--pr N]` is the cheap check of one PR (about a minute on a warm target): the fast tier's plan cut to `build`, `lib`, `crate-tests`, `scans`, `facts` (the target-facts audit), `fmt`, `docs` (generated pages and pass pages current), `pytest-programs` (every program compiles; with the build) and `changed-tests` (the test files the diff touches or sits beside). It refuses first, exit 2: a dirty tree, a PR whose base is not `main` (stacked; `--pr` reads it from `gh`), a branch that conflicts with `origin/main`, and a commit message, PR text or added line that names the assistant or its maker. A smoke PASS is not a merge licence: only a full gate on the tip is.
+
 ## Running it locally
 
     export CARGO_TARGET_DIR=/path/to/target
