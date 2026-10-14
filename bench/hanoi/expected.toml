@@ -1,4 +1,4 @@
-reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
+reason = "word promotion rows against current main and the frame branch; worse rows are 1-4 bytes/instructions in tiny parity programs"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -33,13 +33,13 @@ bss_bytes = 0
 
 [bq32.O2]
 instructions = 335853
-code_bytes = 241
+code_bytes = 237
 data_bytes = 21
 bss_bytes = 0
 
 [bq32.Os]
 instructions = 376812
-code_bytes = 223
+code_bytes = 217
 data_bytes = 21
 bss_bytes = 0
 

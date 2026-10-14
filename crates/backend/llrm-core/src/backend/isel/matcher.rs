@@ -640,10 +640,14 @@ impl Selector<'_, '_, '_> {
         // Nor where a compare reads the result: the word's flags serve it, and
         // the dword's are of bits it cannot ignore (`inc cx; jne` against
         // `inc ecx; test cx, cx; jne`).
-        let compared = instruction.result.is_some_and(|result| {
-            let users = self.function.users(result);
-            users.iter().any(|user| matches!(self.function.instruction(user.user).opcode, Opcode::ICmp(_)))
-        });
+        let compared = instruction
+            .result
+            .is_some_and(
+                |result| {
+                    let users = self.function.users(result);
+                    users.iter().any(|user| matches!(self.function.instruction(user.user).opcode, Opcode::ICmp(_)))
+                },
+            );
         bits < self.native_width() * 8
             && self.promote.iter().any(|one| *one == format!("{}.i{bits}", instruction.opcode.mnemonic()))
             && !foldable
@@ -771,7 +775,8 @@ impl Selector<'_, '_, '_> {
     ) -> Option<(Vec<(&'static str, i64)>, i64)> {
         let width = self.width(self.function.instruction(m.inst).ty).ok()?;
         let n = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && (1 < n || n < -1))?;
-        // Run on the whole register (`promote`) it is a dword chain, `lea`s too.
+        // Run on the whole register (`promote`) it is a dword chain, `lea`s
+        // too.
         if width == 4 || self.is_promoted(m) {
             arithmetic::cheapest_chain(n, self.cpu)
         } else {
@@ -859,8 +864,7 @@ impl Selector<'_, '_, '_> {
         let promoted = self.is_promoted(m);
         let a = if promoted { self.op_promoted(m, out, source)? } else { self.op_held(m, out, source)? };
         let (chain, _) = self.chain(m, factor).expect("a scalable factor");
-        let Loc::Held(result) =
-            (if promoted { self.op_promoted_result(m, out)? } else { self.op_result(m, out)? })
+        let Loc::Held(result) = (if promoted { self.op_promoted_result(m, out)? } else { self.op_result(m, out)? })
         else {
             unreachable!("a register")
         };

@@ -1,4 +1,4 @@
-reason = "write-only globals removed (#1649): sum_three's six QB static locals (index, total and the loop's temporaries, 12 data bytes, 41 code bytes at bq32) and memory's one global are only stored to, so their stores are gone; no program's output moves"
+reason = "word promotion rows against current main and the frame branch; worse rows are 1-4 bytes/instructions in tiny parity programs"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -30,14 +30,14 @@ data_bytes = 91
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 72
-code_bytes = 289
+instructions = 73
+code_bytes = 283
 data_bytes = 127
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73
-code_bytes = 273
+instructions = 75
+code_bytes = 262
 data_bytes = 127
 bss_bytes = 0
 

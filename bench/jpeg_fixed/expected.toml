@@ -1,4 +1,4 @@
-reason = "commuted keeps the copy it drops as an anchor (its value was still read): runtime rows +0.001%"
+reason = "word promotion rows against current main and the frame branch; worse rows are 1-4 bytes/instructions in tiny parity programs"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84338490
-code_bytes = 6709
+instructions = 84338459
+code_bytes = 6590
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89431914
-code_bytes = 6300
+instructions = 89432878
+code_bytes = 6168
 data_bytes = 29209
 bss_bytes = 0
 
