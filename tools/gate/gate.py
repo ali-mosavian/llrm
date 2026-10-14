@@ -1,7 +1,7 @@
 """The gate in tiers: pick the tier and steps a diff needs (tiers.toml), run them concurrently.
 
     gate.py plan [--base REF] [--files F...] [--tier auto|fast|full]
-    gate.py run  [same]            needs CARGO_TARGET_DIR; JOBS=N sets the concurrency (default 4)
+    gate.py run  [same]            needs CARGO_TARGET_DIR; JOBS=N sets the concurrency (default half the cores)
     gate.py plan --json            the plan as JSON: tier, the CI job groups with something to run, the skipped steps
     gate.py run --group G          only the steps of group G (tiers.toml [groups]), after the build; G=build: the build alone
                                    With GATE_ALLOW_MISSING=1 (CI) a step whose [capability] is missing on this host is SKIPPED with its reason, never run;
@@ -629,7 +629,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         env["LLRM_BIN"] = str(snapshot_binaries(Path(target) / "release", Path(target) / "gate-bins"))
     alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
-    jobs = int(os.environ.get("JOBS", "4"))
+    jobs = default_jobs(os.environ)
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
         order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
@@ -708,6 +708,12 @@ def watch_main(force: bool, every: int = 5, hours: float = 2.0) -> int:
         bisect(green, head, [s for s in failed if s != "build"] or ["build"])
         git("checkout", "-q", "--detach", head)
     return 1
+
+
+def default_jobs(environ: dict, cpus: int | None = None) -> int:
+    """Steps at once: JOBS, else half the cores (at least 4). The fixed 4 left a 32-core host idle behind the four longest steps."""
+    cpus = os.cpu_count() or 8 if cpus is None else cpus
+    return int(environ.get("JOBS") or max(4, cpus // 2))
 
 
 def scoped(argv: list[str], environ: dict | None = None, have: str | None = None) -> list[str] | None:

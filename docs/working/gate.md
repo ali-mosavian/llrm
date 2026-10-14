@@ -106,7 +106,7 @@ Every step exits 0 to pass, 77 when SKIPPED, and anything else to fail. A cargo 
 
 Clippy is not run. `-D warnings` in the `build` step keeps the tree free of compiler warnings.
 
-Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pytest-programs` 60 s, `qcport` 100 s, `rfmt-post` 40 s cold, `dos-slow` 5 to 8 minutes, `measure` 3 to 8 minutes when its base is not yet measured. The budgets are 5 minutes for fast and 10 for full on the loaded host. Steps run `JOBS` at a time, longest first, so the wall is about the longest step. [testing](testing.md) describes the steps' tools; [compile time](measurement/compile-time.md) describes `measure`.
+Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pytest-programs` 60 s, `qcport` 100 s, `rfmt-post` 40 s cold, `dos-slow` 5 to 8 minutes, `measure` 3 to 8 minutes when its base is not yet measured. The budgets are 5 minutes for fast and 10 for full on the loaded host. Steps run `JOBS` at a time (default half the cores, at least 4), longest first, so the wall is about the longest step. [testing](testing.md) describes the steps' tools; [compile time](measurement/compile-time.md) describes `measure`.
 
 ## Running it locally
 

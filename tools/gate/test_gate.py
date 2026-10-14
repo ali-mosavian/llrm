@@ -798,3 +798,8 @@ def test_the_gate_runs_in_its_own_high_weight_scope_once_and_only_when_systemd_i
     assert gate.scoped(["x"], {"GATE_SCOPED": "1"}, "/s") is None, "the re-executed gate must not wrap itself again"
     assert gate.scoped(["x"], {"GATE_CPU_WEIGHT": "0"}, "/s") is None
     assert gate.scoped(["x"], {}, "") is None
+
+
+def test_steps_at_once_scale_with_the_cores_not_a_fixed_four():
+    """JOBS defaulted to 4: a full gate ran four steps at a time on 32 cores, and its wall was the sum of the queue."""
+    assert gate.default_jobs({}, 32) == 16 and gate.default_jobs({}, 4) == 4 and gate.default_jobs({"JOBS": "6"}, 32) == 6
