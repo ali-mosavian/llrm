@@ -31,11 +31,11 @@
 //! frame is dropped and each cell is addressed through the stack pointer
 //! (`stack_addressed`): every instruction's stack effect moves the offset,
 //! and every way into a block (a branch, or the block before it falling through
-//! unless that one has no successor) must agree on it. Anything that puts that
-//! out of reach (the stack pointer written another way, inline code, an
-//! indirect call that may pop, the frame register read as a value) keeps the
-//! frame. Tuned for size, the stack-addressed form is kept only if it is no
-//! longer in bytes.
+//! where the next block is among its successors) must agree on it. Anything
+//! that puts that out of reach (the stack pointer written another way, inline
+//! code, an indirect call that may pop, the frame register read as a value)
+//! keeps the frame. Tuned for size, the stack-addressed form is kept only if it
+//! is no longer in bytes.
 //!
 //! Under `-g` the items also carry marks (line starts, body start and end,
 //! where a variable's value is defined) which encode to no bytes. A move of an
@@ -1113,14 +1113,15 @@ fn stack_addressed(
     // learned.
     let mut known: IndexMap<String, i64> = IndexMap::default();
     let mut dead = false;
-    // The blocks that follow one nothing leaves: a call that never returns
-    // ends its block with no jump after it, and the code laid out next is not
-    // entered from it (LLVM's CFI instructions follow the CFG the same way).
+    // A block's code runs into the next label only if the next block is among
+    // its successors: a call that never returns leaves none, and a jump leaves
+    // another. `built` lists the blocks in the order of `body.blocks`, so the
+    // block after a block in the listing is the next of that list.
     let after_dead_end: BTreeSet<String> = procedure
         .body
         .blocks
         .windows(2)
-        .filter(|pair| pair[0].succ.is_empty())
+        .filter(|pair| !pair[0].succ.contains(&pair[1].at))
         .map(|pair| label(number, pair[1].at))
         .collect();
     loop {

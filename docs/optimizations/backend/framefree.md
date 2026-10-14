@@ -36,9 +36,9 @@ flowchart TB
 at depth 0*
 
 A way into a block is a branch to it, or the block laid out before it falling
-through. A block with no successor (it ends in a call that never returns, with
-no jump after it) does not fall through: the depth at the label after it is
-the branches' alone (llrm#1466: a runtime-error call inside a loop that had
+through, which it does only if the next block is among its successors. A block
+that ends in a call that never returns, or in a jump elsewhere, does not fall
+through: the depth at the label after it is the branches' alone (llrm#1466: a runtime-error call inside a loop that had
 pushed a register left the next label "reached at depth 584 and 588").
 
 The frame register is kept where any of these holds: the target does not
