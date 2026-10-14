@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/counting.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/counting.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/counting.rs sha256:fea19763514d402ee911102103f685927e10e0a4f7bba2f4cc6380d4aa2b6601 -->
+<!-- src: crates/opt/llrm-transforms/src/counting.rs sha256:4a05153dfe3ec99e2a574a177520ba6bf2c8e661d262de7f1b87fb97a32bd8c4 -->
 
 # counting
 

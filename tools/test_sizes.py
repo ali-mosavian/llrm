@@ -2,6 +2,7 @@
 
 sizes.py's instrument: it counts code, not the records the linker consumes (rule 3)."""
 
+import re
 import sys
 from pathlib import Path
 
@@ -123,3 +124,31 @@ def test_a_basic_benchmark_without_a_dialect_is_built_as_qb45():
     arguments = built["grep/grep.bas"]
     assert arguments[arguments.index("--dialect") + 1] == "qb45"
     assert "--dialect" not in built["grep/grep.c"] and "--dialect" not in built["grep/grep.nib"]
+
+
+def test_sizes_reports_bytes_and_no_cost_estimate(monkeypatch, tmp_path, capsys):
+    """The instruction and memory-operand columns were the backend's per-call `cost` estimate, summed. Across two builds they read
+    40M -> 137M where the executed counts moved by under 1% (#390), inlining into a loop inflated them (#433), and tally.nib's was
+    20x off (#481). Bytes are the only column left; executed counts are tools/bench's."""
+    import sizes
+
+    seen = {}
+
+    def run(command, timeout, **options):
+        seen.update(options.get("env", {}))
+        return type("Done", (), {"stderr": ""})()
+
+    monkeypatch.delenv("LLRM_DEBUG", raising=False)
+    monkeypatch.setattr(sizes.cpulimit, "run", run)
+    assert sizes.measure(["llrm-c", "x.c"], "-O2") is None
+    assert "LLRM_DEBUG" not in seen, "measure asked the compiler for its cost estimate"
+
+    tables = iter([{"a/a.c": 100, "b/b.c": 50}, {"a/a.c": 120, "b/b.c": 50}])
+    monkeypatch.setattr(sizes, "table", lambda *args, **kwargs: next(tables))
+    monkeypatch.setattr(sys, "argv", ["sizes.py", "base", "new", "-O2"])
+    with pytest.raises(SystemExit):
+        sizes.main()
+    out = capsys.readouterr().out
+    assert re.search(r"a/a\.c\s+bytes\s+100 ->\s+120 \(\+20\)", out), out
+    assert "b/b.c" not in out, "an unchanged program is not listed"
+    assert " ins " not in out and " mem " not in out and "TOTAL bytes 150 -> 170" in out, out

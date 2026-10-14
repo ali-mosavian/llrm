@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/nearcode.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/nearcode.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/nearcode.rs sha256:0ac3c6b707fb4ac9960a86db65f7e1eee8c6fa1910a87a5391c1f77173583c23 -->
+<!-- src: crates/backend/llrm-core/src/backend/nearcode.rs sha256:8d0b316852c683fe88c597f80b8bd15d3ca4b2b7736bf7664cbfdfd49bf9927a -->
 
 # nearcode
 

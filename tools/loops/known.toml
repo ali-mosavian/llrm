@@ -1,15 +1,3 @@
 # Known llrm bugs: a pattern a failing line matches, and its issue
 # (tools/loops/run.py names them in its report). What falls short is in
 # shortfalls.txt.
-
-[[bug]]
-match = "llrm-c did not finish"
-issue = "#104"
-
-[[bug]]
-match = 'Core-O. nib on DOS.*conc[67]_s2_xi_bgnlnpfpn'
-issue = "#109"
-
-[[bug]]
-match = 'nib on DOS: rnd98_0185'
-issue = "#109"
