@@ -1,6 +1,7 @@
 ' VARPTR$ and SADD, and what DRAW and PLAY do with them: = takes a variable's
-' value, X runs a string variable.  BC hangs on a DRAW or PLAY given a VARPTR$
-' string under DOSBox, so this program checks itself and test_qbbc compares its
+' value (an integer, single or double: a LONG is an Illegal function call, as in BC), X runs a string variable.  BC raises Illegal
+' function call when text follows a VARPTR$ string in the command string, which llrm accepts (a known difference), so this
+' program checks itself and test_qbbc compares its
 ' output with the expectations below.  m32 (a VARPTR$ string is 5 bytes: the type and the
 ' 32-bit flat address; DEF SEG is ignored there, so the program has none).
 ' expect: 5 2 20 4 8 3
@@ -13,6 +14,7 @@ DIM g!, d#, l&
 OPEN "L.TXT" FOR OUTPUT AS #1
 n = 30
 l& = 12
+m = 12
 g! = 7.5
 d# = 3.4
 a$ = "R10 D10 L10 U10"
@@ -21,7 +23,7 @@ PRINT #1, LEN(v$); ASC(LEFT$(v$, 1)); ASC(VARPTR$(l&)); ASC(VARPTR$(g!)); ASC(VA
 PRINT #1, PEEK(SADD(a$)) = ASC(a$); PEEK(SADD(a$) + 4) = ASC("D")
 SCREEN 13
 DRAW "BM10,10 C2 R30 D12 L3 U8"
-DRAW "BM110,10 C2 R=" + VARPTR$(n) + "; D=" + VARPTR$(l&) + "; L=" + VARPTR$(d#) + "; U=" + VARPTR$(g!) + ";"
+DRAW "BM110,10 C2 R=" + VARPTR$(n) + "; D=" + VARPTR$(m) + "; L=" + VARPTR$(d#) + "; U=" + VARPTR$(g!) + ";"
 same1 = -1
 FOR y = 0 TO 20
   FOR x = 0 TO 50
