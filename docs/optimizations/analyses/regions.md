@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/regions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/regions.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/regions.rs sha256:ef7de0d6c14a059fb625beef6514ea11c5d15920c514dd27000143c42ed0e2e0 -->
+<!-- src: crates/opt/llrm-analysis/src/regions.rs sha256:4815dff255566395ec020b38418bb822261312a8758d7a9ff3f757896c1a51d3 -->
 
 # regions
 
@@ -46,7 +46,9 @@ interned (object, frame, alias class) shape. `overlap_buckets` picks, for a
 write, only the buckets that can hold a cell `overlapping` does not rule
 out: objectless ones, the write's frame, its objects, and any class that may
 alias. `displaced_buckets` and `displaced_span` serve a write at fixed
-displacements in a frame. `Index` does the same for lists of references:
+displacements in a frame; `hull_buckets` and `hull_span` serve a write and
+cells named by provenance alone (no root), by the hull of their slices in
+one object. `Index` does the same for lists of references:
 `near` returns the entries that name an object the reference may alias,
 every addressed one if the reference names an addressed object, and every
 entry without provenance; more than needed, never fewer.

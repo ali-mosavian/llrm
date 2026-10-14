@@ -648,7 +648,12 @@ fn _available(
             let mut buckets = regions::OverlapBuckets::default();
             llrm_analysis::cellmap::CellMap::<usize, (), regions::OverlapBucket>::new(
                 (0..refs.len()).map(|at| (at, ())).collect(),
-                |at| (regions::overlap_bucket(&mut buckets, &refs[*at]), None),
+                |at| {
+                    (
+                        regions::overlap_bucket(&mut buckets, &refs[*at]),
+                        regions::overlap_span(&refs[*at]).or_else(|| regions::hull_span(&refs[*at])),
+                    )
+                },
             )
         });
         reached
@@ -659,13 +664,21 @@ fn _available(
                 for written in writes {
                     match regions::overlap_buckets(written, &index.parts) {
                         None => return None,
-                        Some(picked) => cells.extend(
-                            picked
-                                .iter()
-                                .filter_map(|bucket| index.buckets.get(bucket))
-                                .flat_map(IndexMap::keys)
-                                .copied(),
-                        ),
+                        // A cell at fixed bytes of an object (or of a frame) is
+                        // asked only if its bytes meet the write's: N cells of
+                        // one array, N writes, were N squared questions.
+                        Some(picked) => {
+                            let mut near = regions::hull_buckets(written, &index.parts);
+                            near.extend(regions::displaced_buckets(written, &index.parts));
+                            let mut rest = picked.clone();
+                            for (held, span) in near {
+                                let (here, others): (Vec<_>, Vec<_>) =
+                                    rest.into_iter().partition(|bucket| held.contains(bucket));
+                                rest = others;
+                                cells.extend(index.asked(Some(here), Some((held, span))).into_iter().copied());
+                            }
+                            cells.extend(index.asked(Some(rest), None).into_iter().copied());
+                        }
                     }
                 }
                 cells.sort_unstable();
@@ -724,6 +737,22 @@ fn _available(
                     Some(cells) => cells.iter().copied().filter(|&at| available.contains(at)).collect(),
                     None => available.iter().collect(),
                 };
+                if llrm_support::env_set("LLRM_CHECK_PROMOTED") && near.is_some() {
+                    let asked: HashSet<usize> = asked.iter().copied().collect();
+                    for at in available.iter().filter(|at| !asked.contains(at)) {
+                        assert!(
+                            !writes.iter().any(|written| regions::overlapping(
+                                &refs[at],
+                                written,
+                                None,
+                                None,
+                                unit.program
+                            )
+                            .unwrap_or(true)),
+                            "LLRM_CHECK_PROMOTED: a cell the write reaches was not asked"
+                        );
+                    }
+                }
                 let gone = asked
                     .into_iter()
                     .filter(|&at| {

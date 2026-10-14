@@ -833,3 +833,38 @@ fn the_required_module_analyses_are_made_before_a_function_pass_not_before_a_mod
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(SUMMED.get(), 1, "made before a module pass");
 }
+
+thread_local! {
+    static LOGGED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Records how many edits the log of reported edits held when it was computed.
+struct Logged;
+
+impl ModuleAnalysis for Logged {
+    type Result = usize;
+    const NAME: &'static str = "logged";
+    fn run(
+        _: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> usize {
+        LOGGED.set(analyses.edit_log().len());
+        analyses.edit_log().len()
+    }
+}
+
+/// `Summaries` trusts the log of reported edits for which bodies it looks at:
+/// a body a function pass edited under the manager was not in it, and the
+/// summaries (and the point values kept with them) were of the body as it was
+/// (`dse` kept an observed store's summaries; a compile died at `alias.rs`
+/// `incoming[&block]`).
+#[test]
+fn a_body_a_function_pass_edited_is_in_the_log_of_edits() {
+    LOGGED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Logged>();
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(LookSteady);
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(LOGGED.get(), 1, "the edit the pass made was not reported");
+}
