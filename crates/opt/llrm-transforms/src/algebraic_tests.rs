@@ -1270,6 +1270,12 @@ fn test_a_constant_added_under_inttoptr_is_a_byte_offset_of_the_pointer() {
     let near = "define ptr @f(i16 %x) {\nb0:\n  %a = add i16 %x, 4\n  %p = inttoptr i16 %a to ptr\n  ret ptr %p\n}\n";
     let after = bare(&simplified_in(near, false, "e-p:16:16-n8:16:32").1);
     assert!(after.contains("getelementptr i8, ptr %0, i16 4") && !after.contains("add i16"), "{after}");
+    // A selector-alone space holds a segment, not an address: the gep on
+    // `inttoptr (add sel, 4) to ptr addrspace(2)` made demo-deedlines refuse
+    // to compile ("an access through a ptr addrspace(2)").
+    let segment = "define ptr addrspace(2) @f(i16 %x) {\nb0:\n  %a = add i16 %x, 4\n  %p = inttoptr i16 %a to ptr addrspace(2)\n  ret ptr addrspace(2) %p\n}\n";
+    let kept = bare(&simplified_in(segment, false, "e-p:16:16-p2:16:16-n8:16:32").1);
+    assert!(!kept.contains("getelementptr"), "{kept}");
     // A sum read elsewhere, a variable addend, and a width that is not the
     // pointer's stay.
     for stays in [
