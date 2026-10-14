@@ -1129,6 +1129,8 @@ def test_floatassign_finds_the_allocnos_at_a_spill_point_by_the_point(tmp_path):
     assert own["lir floatassign"] <= 260.0, own["lir floatassign"]
 
 
+
+
 def test_the_spiller_leaves_alone_the_blocks_with_no_update_to_merge(tmp_path):
     """branches(1024) at -O2: merging a spilled value's updates (`spill short updates`, `spill local updates`) rewrote every block of the body
     for each spill, though only the blocks that define a stored value by a plain move, or update it, can have a run to merge, and gave
