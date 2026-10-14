@@ -66,17 +66,15 @@ Each axis is a generated C program that prints a checksum; `check` compiles ever
 What still grows faster than its input at `-O2`, by axis and step (names as `LLRM_DEBUG=time` prints them). Read the numbers with
 `scaling.py run --axis NAME` and `report`, or `scaling_gate.py`; none are copied here, they would be stale by the next merge.
 
-- **One cause, the allocator's spill rounds** (#924, owner: slopes). A round of spilling rewrites the function's whole list of blocks, so the
-  rewrite costs the size of the function, not of what changed, once for each round, and the rounds grow with the live values. The steps that
-  repeat it show it:
+- **The allocator's spill, facts and interval steps** (#1229, owner: slopes and regalloc). They grow faster than the function does, and
+  move together, so a fix to one row alone will not show. The rows:
   - `branches`, 512 to 1024: `siblings interference`, `ssa simulated`, `spill short updates`, `spill local updates`, `intervals homes`,
     `lir phielim`, and `regalloc` `spill`, `candidates` and `after queue`.
   - `chain` and `live`, 128 to 256: the same spill-round rows.
 - Rows that are superlinear on one axis and flat on the others belong to a pass, not to this cause (`mir unroll` on `branches` is one).
   They have their own issues.
 
-To tell the two apart, take the axis where only the spill rounds change (`live`, `branches`): if the rows above move together, it is
-the cause above, and fixing a row alone will not show.
+To tell the two apart, take the axis where only the spill rounds change (`live`, `branches`): rows that move together there are #1229's.
 
 ## Caveats
 
