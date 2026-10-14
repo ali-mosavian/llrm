@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/slots.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/slots.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/slots.rs sha256:6c3ba8e108e00e119802648f8e4a621b8f4d2fb0fc927678d9f73a4c3e06c8d7 -->
+<!-- src: crates/backend/llrm-core/src/backend/slots.rs sha256:efdf73f83c459ee7ae1f5636e7d80aeab0ae7963a438c517324540d81a3cfdbf -->
 
 # slots
 

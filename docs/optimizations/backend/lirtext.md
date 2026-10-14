@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lirtext.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lirtext.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:e9e21f719d5df7f1d3fc782d4cb37a19de11d0c189d0159ce7f931761222115c -->
+<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:76b8722622a62489d4be07b223994b84865d5a63b5e3a7c740b497bc152bebc1 -->
 
 # lirtext
 

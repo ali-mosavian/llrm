@@ -71,3 +71,39 @@ def flat_found(tmp_path_factory):
 @pytest.mark.parametrize("name", FLAT_PROGRAMS)
 def test_flat_only_program_prints_what_it_should(flat_found, name: str):
     assert flat_found[name] == ""
+
+
+def test_two_runs_writing_one_cached_object_at_once_both_finish(tmp_path, monkeypatch):
+    """Both runs copied to the cache's one shared `.tmp` name, the first renamed it away and the second's rename raised
+    FileNotFoundError: gate 69's dos-slow failed on it while other runs shared ~/.cache/llrm/qb32-objs."""
+    import shutil
+    import threading
+
+    monkeypatch.setattr(qb32, "OBJECTS", tmp_path / "cache")
+    both_copied = threading.Barrier(2, timeout=10)
+    real_copy = shutil.copy
+
+    def copy_then_wait(source, target, *args, **kwargs):
+        done = real_copy(source, target, *args, **kwargs)
+        if str(target).endswith(".tmp"):
+            both_copied.wait()
+        return done
+
+    monkeypatch.setattr(shutil, "copy", copy_then_wait)
+    failures = []
+
+    def run(name: str):
+        obj = tmp_path / f"{name}.obj"
+        obj.write_bytes(b"object")
+        try:
+            qb32.cached("one key", obj, lambda: None)
+        except Exception as error:  # noqa: BLE001
+            failures.append(error)
+
+    threads = [threading.Thread(target=run, args=(name,)) for name in ("a", "b")]
+    for one in threads:
+        one.start()
+    for one in threads:
+        one.join()
+    assert not failures, failures
+    assert [path.suffix for path in (tmp_path / "cache").iterdir()] == [".obj"]

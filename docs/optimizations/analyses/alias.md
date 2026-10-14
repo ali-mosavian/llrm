@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/alias.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/alias.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:9d0506d520e3cd544001d7dc4163d4d913de2885ff139c9d25243fe79cd11b02 -->
+<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:74cf78a552b9e1fa6c6336435ae84e736236fe959f9684d208ba8b0594f1e148 -->
 
 # alias
 

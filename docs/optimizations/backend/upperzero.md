@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/upperzero.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/upperzero.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:c97d22a6a626a7a4196b6c19be4273399f20a8a7bb70a8092fc92391408f0f09 -->
+<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:a80c701b55e25885eacbe9cd5cf1fe2e3e29be670cb5d2a9204911f15da4ef61 -->
 
 # upperzero
 

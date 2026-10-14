@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/transform.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/transform.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:298ca38b05e04d7714d0b4aa5b7375309b610f8c7b0555028fc43f8b60e1b4d1 -->
+<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:99d8185df771680e2cff3acd40fb0872d756f2822b4b8fdf964306bee86a69be -->
 
 # transform
 

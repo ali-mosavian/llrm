@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unswitch.rs sha256:960192a4fd43647634a2919239ffeed58225551405a1be351e879577bc526858 -->
+<!-- src: crates/opt/llrm-transforms/src/unswitch.rs sha256:b824bc72cc51d783df138a16cd6d506a94a52c0a964089fa722044dc5caa9de6 -->
 
 # unswitch
 

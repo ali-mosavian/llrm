@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/callregs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/callregs.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/callregs.rs sha256:b95ca1199578f624f7a63cfd7f614ed15315ae8c59037cc3d94b70ba82a01660 -->
+<!-- src: crates/backend/llrm-core/src/backend/callregs.rs sha256:562aa8281a9fa749e0489771601704d51136caaf607b6fa4cec986f68f89a52f -->
 
 # callregs
 

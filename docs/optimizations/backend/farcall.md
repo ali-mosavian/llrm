@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/farcall.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/farcall.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/farcall.rs sha256:7973bc566eeebb78f9cea2288d4ad5ed0d4ddba513057d2b01b392d77f721a1a -->
+<!-- src: crates/backend/llrm-core/src/backend/farcall.rs sha256:eef22c81479d084ac382561bc5a38fb7b5daa5a2a746863667d8d0535bf43827 -->
 
 # farcall
 
