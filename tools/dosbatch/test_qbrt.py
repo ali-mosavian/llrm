@@ -57,7 +57,6 @@ WAITING: dict[str, str] = {}
 # (program, target) where ours differs from BCOM45 for a bug that is open: it is expected to differ, and a pass fails the
 # test so the entry goes.  Only the flat target has any.
 KNOWN: dict[tuple[str, str], str] = {
-    ("fre_lprint", qbbuild.FLAT): "#1539: FRE",
     ("scores", qbbuild.FLAT): "#1542: a library for BASIC is not supported at a flat target (llrm-nib refuses it by saying so)",
 }
 

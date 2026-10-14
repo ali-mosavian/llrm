@@ -4,8 +4,9 @@
 //! # How it works
 //! `llrm.ia16.in` and `out` intrinsic calls with no `memory` attribute are
 //! candidates. A call whose port range the target says reaches no memory
-//! (`Machine::port_touches_memory`; the x86-16 target reads each device's reach
-//! from its description) gets `memory(inaccessiblemem: readwrite)`: it touches
+//! (`Machine::port_touches_memory`; every target answers from its platform's
+//! port table, `pc-ports.toml` for the PC, so the 16-bit and the flat DOS
+//! targets alike) gets `memory(inaccessiblemem: readwrite)`: it touches
 //! only its own state, so alias and dead-store passes may move memory
 //! operations across it, and port calls still keep their order among
 //! themselves. A call to a port that may reach memory (a DMA controller, say)

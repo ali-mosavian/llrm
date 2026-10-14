@@ -254,19 +254,29 @@ impl Machine {
     /// What an access to any port in the inclusive range may do to memory.
     pub fn port_memory(
         &self,
-        (low, high): (i64, i64),
+        range: (i64, i64),
     ) -> PortMemory {
-        let mut widest = PortMemory::None;
-        let mut at = low;
-        while at <= high {
-            let Some(port) = self.ports.iter().find(|port| port.low <= at && at < port.high) else {
-                return PortMemory::Any;
-            };
-            widest = widest.max(port.memory);
-            at = port.high;
-        }
-        widest
+        port_reach(&self.ports, range)
     }
+}
+
+/// What an access to any port in the inclusive range may do to memory, by the
+/// table `ports`: the widest of its rows' reach, and any memory where a port is
+/// in none.
+pub fn port_reach(
+    ports: &[Port],
+    (low, high): (i64, i64),
+) -> PortMemory {
+    let mut widest = PortMemory::None;
+    let mut at = low;
+    while at <= high {
+        let Some(port) = ports.iter().find(|port| port.low <= at && at < port.high) else {
+            return PortMemory::Any;
+        };
+        widest = widest.max(port.memory);
+        at = port.high;
+    }
+    widest
 }
 
 fn ports(table: &toml::Table) -> Result<Vec<Port>, String> {
