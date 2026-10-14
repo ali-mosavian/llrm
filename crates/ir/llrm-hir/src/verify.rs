@@ -1,4 +1,4 @@
-//! Port of `qbopt/hir/verify.py`: structural and semantic checks at the
+//! Structural and semantic checks at the
 //! source/frontend boundary.
 
 use std::fmt;

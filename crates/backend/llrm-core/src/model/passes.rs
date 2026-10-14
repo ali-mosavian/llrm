@@ -1,4 +1,4 @@
-//! Port of `qbopt/model/passes.py`: what a pass is, MIR in and MIR out.
+//! What a pass is, MIR in and MIR out.
 //!
 //! `transform(body) -> body` is the whole contract. Anything a pass needs to
 //! know about the module it is compiling is given when the pass is made.
@@ -24,8 +24,7 @@ impl Exception {
         Self::defined_in("builtins", kind, message)
     }
 
-    /// A class a qbopt module defines, e.g. `qbopt.backend.masm`'s
-    /// `Unprintable`.
+    /// A class a module defines, e.g. `backend.masm`'s `Unprintable`.
     pub fn defined_in(
         module: &'static str,
         kind: &'static str,

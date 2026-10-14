@@ -1,4 +1,4 @@
-//! Port of `qbopt/hir/escape.py`: which data objects a module lets a pointer
+//! Which data objects a module lets a pointer
 //! reach.
 //!
 //! A load or store names its place; anything else given the place --

@@ -1,4 +1,4 @@
-//! `python -m qbopt.frontend.qb`, ported.
+//! Compile QuickBASIC to an object.
 
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;

@@ -1,4 +1,4 @@
-//! Port of `qbopt/cfront`: C through Open Watcom's front end.
+//! C through Open Watcom's front end.
 
 #[cfg(test)]
 mod callconv_tests;

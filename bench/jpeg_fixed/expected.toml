@@ -1,8 +1,8 @@
-reason = "#1600 grows the flat runtime (INPUT$), which moves where the readers' strings fall: B$COPY takes its byte path when the destination is 0 to 3 bytes above the source, so a few calls change path and B$COPY/B$SMID run 13 instructions fewer (stft_single -O2: B$COPY -9, B$SMID -4; the kernel's own count, code_bytes and data_bytes are unchanged); max 0.00002%"
+reason = "jumpthread threads every branch on a phi of constants: jpeg_fixed/jpeg_single code -8..-15 B (bas, bq16, bq32) and bq32 instructions -0.003%; grep bq32 -O2 code 1471 -> 1494 B (+1.6%), instructions -0.006%"
 blessed = "2026-10-14"
 
 [bas.O2]
-code_bytes = 5551
+code_bytes = 5543
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 990.2466
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 990.065
 
 [bq16.O2]
-code_bytes = 5587
+code_bytes = 5579
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 1078.9088
@@ -26,8 +26,8 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 93405704
-code_bytes = 6936
+instructions = 93403207
+code_bytes = 6921
 data_bytes = 29209
 bss_bytes = 0
 

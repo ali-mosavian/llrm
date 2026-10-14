@@ -60,7 +60,15 @@ mod tests {
         sections: Vec<Section>,
         symbols: Vec<Symbol>,
     ) -> Object {
-        Object { name: "a.c".into(), arch: Arch::X8664, sections, symbols, omf_groups: Vec::new(), debug: None }
+        Object {
+            name: "a.c".into(),
+            arch: Arch::X8664,
+            sections,
+            symbols,
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            debug: None,
+        }
     }
 
     fn defined(
