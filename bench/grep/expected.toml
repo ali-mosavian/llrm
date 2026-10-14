@@ -1,5 +1,5 @@
-reason = "bq32 counts the kernel without code the link map does not name (DOS, the extender: fork profile inclusive_unknown): every kernel loses its DOS calls, 596 for the lazy string heap's memory request in all that allocate a string (lru 895 -> 299, the largest relative move), 72k to 3.6M for the file readers (grep -0.57%, jpeg -0.08%, stft -0.44%); the compiler's and runtime's named code is unchanged"
-blessed = "2026-10-13"
+reason = "jumpthread threads every branch on a phi of constants: jpeg_fixed/jpeg_single code -8..-15 B (bas, bq16, bq32) and bq32 instructions -0.003%; grep bq32 -O2 code 1471 -> 1494 B (+1.6%), instructions -0.006%"
+blessed = "2026-10-14"
 
 [bas.O2]
 code_bytes = 1022
@@ -26,8 +26,8 @@ bss_bytes = 0
 kernel_ms = 3703.8059
 
 [bq32.O2]
-instructions = 623915658
-code_bytes = 1471
+instructions = 623875846
+code_bytes = 1494
 data_bytes = 127
 bss_bytes = 0
 
