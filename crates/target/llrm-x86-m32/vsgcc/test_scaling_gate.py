@@ -1118,3 +1118,15 @@ def test_the_spiller_leaves_alone_the_blocks_with_no_update_to_merge(tmp_path):
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["spill short updates"] > 50.0, f"premise: updates were merged ({own['spill short updates']:.1f} Minstr)"
     assert own["spill short updates"] <= 1000.0 and own["spill local updates"] <= 1000.0, own
+
+
+def test_the_allocator_requeues_the_values_a_rewrite_changed_and_the_ones_the_queue_gave_up(tmp_path):
+    """branches at -O2: after each spill or split the allocator looked at every live value of the body to put those that compete again back
+    in the queue (the events are proportional to N, so the step was quadratic): `after queue` read 193 Minstr at N=512 and 803 at N=1024
+    (x4.2). The values it requeues are those the rewrite changed, those the queue gave up and those the rewrite brought to life: 5.4 and
+    10.9 (x2.0; LLRM_CHECK_IDLE compares them with the scan of every value). A bound of 40 Minstr at N=1024 fails the first."""
+    source = tmp_path / "branches1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["after queue"] > 1.0, f"premise: events requeued ({own['after queue']:.1f} Minstr)"
+    assert own["after queue"] <= 40.0, f"after queue {own['after queue']:.1f} Minstr"
