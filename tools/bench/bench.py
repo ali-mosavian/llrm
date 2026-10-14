@@ -665,6 +665,12 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     return problems
 
 
+def split_better(problems: list[str]) -> tuple[list[str], list[str]]:
+    """(what still fails, the counts that got better): a train lets a better count pass and blesses it afterwards."""
+    better = [one for one in problems if "(better:" in one]
+    return [one for one in problems if one not in better], better
+
+
 def clock_lines(measured: dict, selected: list[str]) -> list[str]:
     """The 486 clocks of each selected benchmark's kernel beside its counts. Reported, not gated: the counts ratchet, and
     a change that trades instructions for fewer clocks is judged by these."""
@@ -713,6 +719,7 @@ def main() -> int:
     parser.add_argument("--time", action="store_true", help="also the kernel's time in DOSBox from RDTSC, net of start-up; gates the time ratio to each reference")
     parser.add_argument("--references", action="store_true", help="measure Open Watcom and BCC (C) and BC 4.5 (BASIC) again: they must equal the stored ones, or --bless records them")
     parser.add_argument("--bless", action="store_true")
+    parser.add_argument("--batch", action="store_true", help="the merge train's mode: a count below its baseline is listed as BETTER, not failed; with --bless, only when nothing else fails")
     parser.add_argument("--reason", default="")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
@@ -724,6 +731,12 @@ def main() -> int:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
+    if args.bless and args.batch:
+        # blessing a batch writes only numbers that went down: anything worse, missing or broken is not blessed over
+        if (left := split_better(judge(measured, args.select, args.opt))[0]):
+            print(*(f"FAIL {one}" for one in left), sep="\n")
+            print(f"not blessing: {len(left)} problems that are not a better count")
+            return 1
     if args.bless:
         names = {key[0] for key in measured}
         changed = 0
@@ -737,7 +750,7 @@ def main() -> int:
         print(f"blessed {len(names)} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
-    problems = judge(measured, args.select, args.opt)
+    problems, better = split_better(judge(measured, args.select, args.opt)) if args.batch else (judge(measured, args.select, args.opt), [])
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
@@ -745,7 +758,9 @@ def main() -> int:
         print(*clock_lines(measured, args.select), sep="\n")
     for one in problems:
         print("FAIL", one)
-    print(f"{len(measured)} measurements: {len(problems)} problems")
+    for one in better:
+        print("BETTER", one)
+    print(f"{len(measured)} measurements: {len(problems)} problems" + (f", {len(better)} better" if args.batch else ""))
     return 1 if problems else 0
 
 

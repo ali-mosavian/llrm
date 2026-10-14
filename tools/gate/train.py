@@ -118,11 +118,13 @@ class Verdict:
     text: str = ""
 
 
-def full_gate(tip: str, tree: Path, steps: list[str] | None = None) -> Verdict:
-    """The full tier at `tip` (checked out in `tree`), or only `steps` of it."""
+def full_gate(tip: str, tree: Path, steps: list[str] | None = None, strict: bool = False) -> Verdict:
+    """The full tier at `tip` (checked out in `tree`), or only `steps` of it. The bench step runs in batch mode (a better count passes)
+    unless `strict`."""
     git("checkout", "-q", "--detach", tip, cwd=tree)
     command = [sys.executable, "tools/gate/gate.py", "run", "--tier", "full", "--expect", tip, *(["--steps", *steps] if steps else [])]
-    done = subprocess.run(command, cwd=tree, capture_output=True, text=True)
+    env = {k: v for k, v in os.environ.items() if k != "LLRM_BENCH_BATCH"} | ({} if strict else {"LLRM_BENCH_BATCH": "1"})
+    done = subprocess.run(command, cwd=tree, capture_output=True, text=True, env=env)
     text = done.stdout + done.stderr
     last = [l for l in text.splitlines() if l.startswith("GATE ")][-1:] or [""]
     failed = re.findall(r"^\[time\] (\S+) (?:FAIL|INCOMPLETE)", text, re.M)
@@ -147,7 +149,7 @@ def search(prs: list[Pr], gated: Callable[[list[Pr], list[str]], Verdict], faile
     return green, culprits
 
 
-def run(prs: list[Pr], tip_of: Callable[[list[Pr]], tuple[str, list]], gate_at: Callable[[str, list[str] | None], Verdict], on_main: Callable[[list[str]], Verdict], report: Callable[[str], None] = print) -> int:
+def run(prs: list[Pr], tip_of: Callable[[list[Pr]], tuple[str, list]], gate_at: Callable[[str, list[str] | None], Verdict], on_main: Callable[[list[str]], Verdict], report: Callable[[str], None] = print, blessed: Callable[[str, list[Pr]], tuple[str, Verdict | None]] | None = None) -> int:
     """One batch end to end. `tip_of(prs)` builds the tip, `gate_at(tip, steps)` gates it, `on_main(steps)` gates origin/main alone."""
     tip, bounced = tip_of(prs)
     for pr, why in bounced:
@@ -158,7 +160,7 @@ def run(prs: list[Pr], tip_of: Callable[[list[Pr]], tuple[str, list]], gate_at: 
         return 1
     verdict = gate_at(tip, None)
     if verdict.ok:
-        return land(tip, merged, report)
+        return land_blessed(tip, merged, report, blessed)
     if on_main(verdict.failed).ok is False:
         report(f"TRAIN ENV: {', '.join(verdict.failed)} fail on origin/main alone; no PR is blamed")
         return 3
@@ -177,7 +179,34 @@ def run(prs: list[Pr], tip_of: Callable[[list[Pr]], tuple[str, list]], gate_at: 
     if not final.ok:
         report(f"TRAIN FAIL: the green rest ({' '.join('#%d' % p.number for p in green)}) fails the full gate together: {', '.join(final.failed)}")
         return 1
-    return land(tip, green, report)
+    return land_blessed(tip, green, report, blessed)
+
+
+def bless(tip: str, prs: list[Pr], tree: Path) -> tuple[str, Verdict | None]:
+    """`tip` with the better bench counts of the batch blessed in one commit that names the PRs, and that commit gated on bench alone, strictly
+    (a better count then fails): (the tip to offer, the verdict of that gate; None when nothing got better). Nothing worse is ever written."""
+    git("checkout", "-q", "--detach", tip, cwd=tree)
+    names = " ".join(f"#{p.number}" for p in prs)
+    env = {k: v for k, v in os.environ.items() if k != "LLRM_BENCH_BATCH"}
+    done = subprocess.run([sys.executable, "tools/bench/bench.py", "--batch", "--bless", "--reason", f"train: {names}"], cwd=tree, capture_output=True, text=True, env=env)
+    if done.returncode:
+        return tip, Verdict(False, ["bench"], done.stdout + done.stderr)
+    if not git("status", "--porcelain", "--", "bench", cwd=tree).stdout.strip():
+        return tip, None
+    git("add", "bench", cwd=tree)
+    git("commit", "-q", "-m", f"chore(bench): bless the counts that got better (train: {names})", cwd=tree)
+    new = git("rev-parse", "HEAD", cwd=tree).stdout.strip()
+    return new, full_gate(new, tree, ["bench"], strict=True)
+
+
+def land_blessed(tip: str, prs: list[Pr], report: Callable[[str], None], blessed) -> int:
+    """`land` after the bless step: a bless that fails its strict bench gate offers nothing."""
+    if blessed is not None:
+        tip, verdict = blessed(tip, prs)
+        if verdict is not None and not verdict.ok:
+            report("TRAIN FAIL: blessing the better bench counts did not pass the strict bench gate:\n" + (gate.failure_text(verdict.text) or verdict.text[-1500:]))
+            return 1
+    return land(tip, prs, report)
 
 
 def land(tip: str, prs: list[Pr], report: Callable[[str], None]) -> int:
@@ -220,7 +249,7 @@ def main() -> int:
             git("worktree", "remove", "--force", str(main_tree), check=False)
         git("worktree", "add", "--detach", str(main_tree), BASE)
         for batch in batches(ready, args.max):
-            code |= run(batch, lambda some: build_tip(some, tree), lambda tip, steps: full_gate(tip, tree, steps), lambda steps: full_gate(git("rev-parse", BASE).stdout.strip(), main_tree, steps))
+            code |= run(batch, lambda some: build_tip(some, tree), lambda tip, steps: full_gate(tip, tree, steps), lambda steps: full_gate(git("rev-parse", BASE).stdout.strip(), main_tree, steps), blessed=lambda tip, some: bless(tip, some, tree))
     finally:
         for one in (tree, Path.home() / "scratch/train-main"):
             git("worktree", "remove", "--force", str(one), check=False)
