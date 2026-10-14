@@ -275,7 +275,7 @@ void B_SSEK(short channel, long position)
 }
 
 /* B$FINP: INPUT$(count [, #channel]) (QB rt/inputf.asm): `count` characters from the keyboard (channel 0), not echoed, waiting
-   for each; or from a file, whose end before the last is Input past end and which must be open for reading.  An extended key is
+   for each; or from a file, whose end before the last is Input past end (a BINARY file's short read is the shorter string) and which must be open for reading.  An extended key is
    a zero and then its scan code, two characters. */
 SD *B_FINP(short count, short channel)
 {
@@ -297,20 +297,19 @@ SD *B_FINP(short count, short channel)
         if (fdb) {
             int c = get_byte(fdb);
 
-            if (c < 0)
+            if (c < 0) {
+                /* a binary file's short read is the characters there were (QB rt/inputf.asm) */
+                if (fdb->mode == MD_BINARY)
+                    return str_tmp_copy(made, 0, at);
                 qb_error(BE_PASTEND);
+            }
             text[at] = (char)c;
         } else if (scan_code_waiting) {
             scan_code_waiting = 0;
             text[at] = (char)llrm_os_console_read_key();
         } else {
-            byte code;
+            byte code = cn_wait_key();
 
-            cn_sync();
-            while (!llrm_os_console_key_ready())
-                if (cn_key_hook)
-                    cn_key_hook();
-            code = llrm_os_console_read_key();
             if (code == 26)
                 qb_end();
             scan_code_waiting = code == 0;
