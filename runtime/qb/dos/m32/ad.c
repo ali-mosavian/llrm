@@ -22,7 +22,7 @@ void *ad_near_data(const AD *ad)
 
 unsigned long ad_free_bytes(void)
 {
-    unsigned long largest = 0;
+    unsigned long largest = 0, room;
     const char *at = heap_low;
 
     while (at < heap_top) {
@@ -33,7 +33,11 @@ unsigned long ad_free_bytes(void)
             largest = room;
         at += entry->size;
     }
-    return largest;
+    /* the free end of string space, which the heap takes when it asks (lh_take_from_strings): the heap starts with none */
+    room = str_free_bytes();
+    if (room > sizeof(LhEntry) + sizeof(uword))
+        room -= sizeof(LhEntry) + sizeof(uword);
+    return room > largest ? room : largest;
 }
 
 void ad_far_alloc(AD *ad, unsigned long bytes)

@@ -437,7 +437,9 @@ def test_a_flat_kernels_count_does_not_move_with_work_outside_it(tmp_path):
         source = tmp_path / f"{name}.BAS"
         source.write_text(text)
         (tmp_path / name).mkdir()
-        built = bench.qbbuild.one_target(source, tmp_path / name, objects, ("-O2",), bench.qbbuild.FLAT, listing=tmp_path / f"{name}.map")
+        built = bench.qbbuild.one_target(
+            source, tmp_path / name, objects, ("-O2", "-fno-inline-functions", "-fno-inline-functions-called-once", "-g"), bench.qbbuild.FLAT, listing=tmp_path / f"{name}.map", before=("debug", "codeview")
+        )
         bench.LOADERS[built.exe] = built.files
         flat[(name, "bq32", "O2")] = (name, built.exe, tmp_path / name / f"{name}.{bench.qbbuild.FLAT}.obj", ["5050"], None, tmp_path / f"{name}.map", "Kern")
         whole[name] = bench.qbbuild.run(built, tmp_path / f"whole{name}", conf=bench.qb32.BENCH_CONF, budget_ms=bench.qb32.BUDGET_MS).instructions
@@ -445,3 +447,69 @@ def test_a_flat_kernels_count_does_not_move_with_work_outside_it(tmp_path):
     assert all("instructions" in one for one in counts.values()), counts
     assert whole["MORE"] != whole["PLAIN"], "the experiment moves the whole run"
     assert counts[("MORE", "bq32", "O2")]["instructions"] == counts[("PLAIN", "bq32", "O2")]["instructions"], (counts, whole)
+
+
+def test_a_kernels_count_does_not_hold_the_code_after_it(tmp_path):
+    """The link map gives a function no length, so a kernel that was the last function of its module took in the module's
+    main code after it and every call from there into the runtime: an empty kernel (`Kern% = g%`, 2 instructions) beside a
+    PRINT in main read 785 (bq32: lru 895 against bq16's 145).  The kernel's length is the image's CodeView procedure
+    record."""
+    source = tmp_path / "EMPTY.BAS"
+    source.write_text(
+        "DECLARE FUNCTION Kern% ()\nDIM SHARED g%\ng% = LEN(COMMAND$) + 7\nr% = Kern%\nPRINT r%\nEND\nFUNCTION Kern%\n  Kern% = g%\nEND FUNCTION\n"
+    )
+    objects = bench.qbbuild.runtimes(tmp_path / "runtime")
+    (tmp_path / "b").mkdir()
+    built = bench.qbbuild.one_target(
+        source, tmp_path / "b", objects, ("-O2", "-fno-inline-functions", "-fno-inline-functions-called-once", "-g"), bench.qbbuild.FLAT, listing=tmp_path / "e.map", before=("debug", "codeview")
+    )
+    bench.LOADERS[built.exe] = built.files
+    flat = {("EMPTY", "bq32", "O2"): ("EMPTY", built.exe, tmp_path / "b" / f"EMPTY.{bench.qbbuild.FLAT}.obj", ["7"], None, tmp_path / "e.map", "Kern")}
+    counts = bench.measure_flat(flat, tmp_path / "flat")
+    assert counts[("EMPTY", "bq32", "O2")]["instructions"] <= 5, counts
+
+
+def test_a_file_readers_count_does_not_move_with_what_dos_does(tmp_path):
+    """A flat kernel that reads a file runs DOS and the extender inside its window, and their instruction count follows where
+    in the file and in memory a read falls: 93,464 of the kernel below were 73,383 of DOS's, and the same program reading from
+    another offset moved the number (grep, #1603: -119; stft, jpeg: up to 5).  The kernel's count leaves out what ran in code
+    the link map does not name, so the same code reading from several offsets counts the same."""
+    data = tmp_path / "DATA.BIN"
+    data.write_bytes(bytes(range(256)) * 800)
+    flat = {}
+    objects = bench.qbbuild.runtimes(tmp_path / "runtime")
+    for start in (1, 2, 7, 129, 1001):
+        name = f"S{start}"
+        source = tmp_path / f"{name}.BAS"
+        source.write_text(
+            "DECLARE FUNCTION Kern% ()\nPRINT Kern%\nEND\n"
+            f'FUNCTION Kern%\n  OPEN "DATA.BIN" FOR BINARY AS #1\n  SEEK #1, {start}\n  buf$ = SPACE$(1000)\n  n% = 0\n'
+            "  FOR i& = 1 TO 150\n    GET #1, , buf$\n    n% = n% + 1\n  NEXT\n  CLOSE #1\n  Kern% = n%\nEND FUNCTION\n"
+        )
+        (tmp_path / name).mkdir()
+        built = bench.qbbuild.one_target(
+            source, tmp_path / name, objects, ("-O2", "-fno-inline-functions", "-fno-inline-functions-called-once", "-g"), bench.qbbuild.FLAT, listing=tmp_path / f"{name}.map", before=("debug", "codeview")
+        )
+        bench.LOADERS[built.exe] = built.files
+        flat[(name, "bq32", "O2")] = (name, built.exe, tmp_path / name / f"{name}.{bench.qbbuild.FLAT}.obj", ["150"], {"files": (data,)}, tmp_path / f"{name}.map", "Kern")
+    counts = bench.measure_flat(flat, tmp_path / "flat")
+    ran = bench.qbbuild.run(
+        bench.qbbuild.Built(built.exe, built.files), tmp_path / "ran", (data,), bench.qb32.BENCH_CONF, bench.qb32.BUDGET_MS, profile=tmp_path / f"{name}.map"
+    )
+    assert ran.outside["KERN"] > 3 * ran.inclusive["KERN"], ran
+    assert all("instructions" in one for one in counts.values()), counts
+    assert len({one["instructions"] for one in counts.values()}) == 1, counts
+
+def test_no_bench_program_runs_long_enough_for_a_timer_tick_at_the_flat_rate():
+    """A tick is 55 ms of the emulated clock: at 100,000 instructions a millisecond that was 5.5M instructions, and each of the
+    13 to 114 ticks in a long kernel (stft, grep) ran the extender's interrupt handler (~120 instructions, its length by where it
+    landed) inside the counted function: a few bytes of code anywhere moved the row by tens (#1603: -40 on stft_single)."""
+    import tomllib
+
+    longest = max(
+        counts["instructions"]
+        for path in bench.BENCH.rglob("expected.toml")
+        for level in tomllib.loads(path.read_text()).get("bq32", {}).values()
+        for counts in [level]
+    )
+    assert longest < bench.qb32.BENCH_RATE * 55, (longest, bench.qb32.BENCH_RATE)
