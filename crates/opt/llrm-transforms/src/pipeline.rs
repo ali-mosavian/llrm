@@ -625,9 +625,16 @@ pub fn recorded(
     }
     // Last of the passes that reshape the body, as gcc's `pass_lower_switch`
     // follows its optimizations.
+    if applied.options.switch_conversion && applied.options.wanted("switchconv") {
+        manager.add(switchlower::SwitchLower {
+            convert: true,
+            jump_tables: applied.options.jump_tables,
+            size: applied.options.prefers_size(),
+        });
+    }
     if applied.options.wanted("switchlower") {
         manager.add(switchlower::SwitchLower {
-            tables: applied.options.switch_conversion,
+            convert: false,
             jump_tables: applied.options.jump_tables,
             size: applied.options.prefers_size(),
         });

@@ -26,7 +26,11 @@ fn lowered_by(
     let mut module = before.clone();
     let machine =
         Tuned { costs: crate::profit::OperationCosts { jump_table, ..Default::default() }, ..Default::default() };
-    let after = managed_on(&mut module, SwitchLower { tables, jump_tables: true, size: false }, machine);
+    let machine = || Tuned { costs: machine.costs.clone(), ..Default::default() };
+    if tables {
+        managed_on(&mut module, SwitchLower { convert: true, jump_tables: true, size: false }, machine());
+    }
+    let after = managed_on(&mut module, SwitchLower { convert: false, jump_tables: true, size: false }, machine());
     let inputs: Vec<[i128; 1]> = inputs.into_iter().map(|one| [one]).collect();
     let inputs: Vec<&[i128]> = inputs.iter().map(|one| &one[..]).collect();
     assert_eq!(results(&module, &inputs), results(&before, &inputs), "{after}");
@@ -167,11 +171,11 @@ b0:
   ]
 
 a:
-  %pa = phi i32 [ 1, %b0 ]
+  %pa = phi i32 [ 1, %b0 ], [ 1, %b0 ], [ 1, %b0 ]
   ret i32 %pa
 
 b:
-  %pb = phi i32 [ 2, %b0 ]
+  %pb = phi i32 [ 2, %b0 ], [ 2, %b0 ]
   ret i32 %pb
 
 c:

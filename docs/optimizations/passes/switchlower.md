@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlower.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlower.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:2730450eddf283039309e0e842f250f4e4a7634ba33e73758250b4c521ffb09b -->
+<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:c56715a8012ab887856d974292b7f9d86a22470ae8ef977b08468affd7c92f2e -->
 
 # switchlower
 
@@ -40,9 +40,11 @@ every index a block that only jumps on; the backend makes it a jump through
 a table of code addresses. `-fno-jump-tables` leaves them in the tree.
 
 ## Runs
-Last of the function passes, as gcc's `pass_lower_switch` follows its
-optimizations; every level that optimizes. Switch conversion is
-`-ftree-switch-conversion`, -O2 and up.
+As two passes, gcc's: `switchconv` (`pass_convert_switch`, -O2 and up),
+which makes the lookup tables and so adds loads, and last of the function
+passes `switchlower` (`pass_lower_switch`), every level that optimizes,
+which adds no memory operation: the module analyses frozen at the end of the
+pipeline stand past it.
 
 ## Example
 Before:

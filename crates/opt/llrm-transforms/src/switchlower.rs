@@ -35,9 +35,11 @@
 //! a table of code addresses. `-fno-jump-tables` leaves them in the tree.
 //!
 //! # Runs
-//! Last of the function passes, as gcc's `pass_lower_switch` follows its
-//! optimizations; every level that optimizes. Switch conversion is
-//! `-ftree-switch-conversion`, -O2 and up.
+//! As two passes, gcc's: `switchconv` (`pass_convert_switch`, -O2 and up),
+//! which makes the lookup tables and so adds loads, and last of the function
+//! passes `switchlower` (`pass_lower_switch`), every level that optimizes,
+//! which adds no memory operation: the module analyses frozen at the end of the
+//! pipeline stand past it.
 //!
 //! # Example
 //! Before:
@@ -72,9 +74,12 @@ const BRANCH_RATIO: u128 = 8;
 /// gcc's `bit_test_cluster::m_max_case_bit_tests`.
 const MOST_TARGETS: usize = 3;
 
-/// `tables`: switch conversion, gcc's -O2 and up.
+/// `convert`: gcc's `pass_convert_switch`, which makes the lookup tables
+/// (-O2 and up) and so adds the loads; else `pass_lower_switch`, which adds no
+/// memory operation and leaves the module analyses frozen at the end of the
+/// pipeline standing.
 pub struct SwitchLower {
-    pub tables: bool,
+    pub convert: bool,
     /// A dense switch may be a jump table (`-fjump-tables`).
     pub jump_tables: bool,
     /// Tuned for size: gcc's jump tables may grow the code less.
@@ -83,7 +88,11 @@ pub struct SwitchLower {
 
 impl FunctionPass for SwitchLower {
     fn name(&self) -> &'static str {
-        "switchlower"
+        if self.convert { "switchconv" } else { "switchlower" }
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.convert
     }
 
     fn run(
@@ -110,8 +119,7 @@ impl FunctionPass for SwitchLower {
                 flip: 0,
                 edges: Vec::new(),
             };
-            lowering.run(self.tables);
-            changed = true;
+            changed |= lowering.run(self.convert);
         }
         if !changed {
             return PreservedAnalyses::all();
@@ -224,10 +232,12 @@ struct Lowering<'a, 'b> {
 }
 
 impl Lowering<'_, '_> {
+    /// Whether the switch was lowered: `convert` makes only the lookup table
+    /// and leaves any other switch be.
     fn run(
         &mut self,
-        tables: bool,
-    ) {
+        convert: bool,
+    ) -> bool {
         let sign = 1u128 << (self.switch.bits - 1);
         let grouped = |flip: u128| {
             let mut cases: Vec<(u128, BlockId)> =
@@ -250,8 +260,8 @@ impl Lowering<'_, '_> {
         } else {
             unsigned
         };
-        if !clusters.is_empty() && tables && self.converted(&clusters) {
-            return;
+        if convert {
+            return !clusters.is_empty() && self.converted(&clusters);
         }
         let clusters = self.with_bit_tests(clusters);
         let clusters = self.with_jump_tables(clusters);
@@ -269,6 +279,7 @@ impl Lowering<'_, '_> {
             _ => self.node(block, root.as_deref()),
         }
         self.fixed(&originals);
+        true
     }
 
     /// Switch conversion: the phis of the join every case reaches become loads
