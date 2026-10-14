@@ -1116,3 +1116,14 @@ def test_floatassign_does_not_walk_the_body_again_for_each_spill_round(tmp_path)
     own = gate.own_work([*gate.levels_time.command("llrm", "O3", source), *programs.LLRM_FLAGS])
     assert own["lir floatassign"] > 100.0, f"premise: x87 values spilled ({own['lir floatassign']:.1f} Minstr)"
     assert own["lir floatassign"] <= 410.0, own["lir floatassign"]
+
+
+def test_floatassign_finds_the_allocnos_at_a_spill_point_by_the_point(tmp_path):
+    """nbody_single at -O3 (35 spill rounds): choosing a victim asked every allocno whether it held a register at the crowded point,
+    a scan of its points, a round: 382 Minstr in `lir floatassign` against 197 when the allocnos at a point are found by the point.
+    A bound of 260 fails the first."""
+    source = tmp_path / "nbody_single.c"
+    source.write_text(wrap.wrapped("nbody_single", programs.sources()["nbody_single"].read_text()))
+    own = gate.own_work([*gate.levels_time.command("llrm", "O3", source), *programs.LLRM_FLAGS])
+    assert own["lir floatassign"] > 100.0, f"premise: x87 values spilled ({own['lir floatassign']:.1f} Minstr)"
+    assert own["lir floatassign"] <= 260.0, own["lir floatassign"]

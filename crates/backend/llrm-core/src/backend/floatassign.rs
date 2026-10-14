@@ -37,7 +37,8 @@
 //! moved to memory (Belady, as LRA), and the body is rewritten again. Only the
 //! steps the new victim reaches are rewritten (a step is kept by which of the
 //! roots it touches are spilled), and a block's steps and the floats live after
-//! each, which no spill changes, are worked out once.
+//! each, which no spill changes, are worked out once. The allocnos holding a
+//! register at a point are found by the point.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -918,6 +919,9 @@ struct Allocnos {
     at_def: HashMap<(i64, usize, u32), usize>,
     restores: IndexMap<(i64, usize), Vec<usize>>,
     exits: IndexMap<(i64, usize), Vec<usize>>,
+    /// The segments holding a register before a position, found by the
+    /// position, not by asking each segment's points.
+    holding: HashMap<(i64, usize), Vec<usize>>,
 }
 
 impl Allocnos {
@@ -1025,6 +1029,7 @@ fn _allocnos(
         at_def: HashMap::default(),
         restores: IndexMap::default(),
         exits: IndexMap::default(),
+        holding: HashMap::default(),
     };
     let mut borders: IndexMap<(u32, usize), usize> = IndexMap::default();
     let mut border =
@@ -1155,6 +1160,11 @@ fn _allocnos(
             border(&mut allocnos, value, exit, segment);
         }
     }
+    for (index, segment) in allocnos.segments.iter().enumerate() {
+        for point in &segment.points {
+            allocnos.holding.entry(*point).or_default().push(index);
+        }
+    }
     allocnos
 }
 
@@ -1234,10 +1244,9 @@ impl Plan<'_> {
             .map(|what| _held_floats(&what.sources).into_iter().chain(_held_floats(&what.dests)).collect())
             .unwrap_or_default();
         let mut next: IndexMap<usize, (usize, usize)> = IndexMap::default();
-        for (index, segment) in self.allocnos.segments.iter().enumerate() {
+        for &index in self.allocnos.holding.get(&(block, position)).into_iter().flatten() {
             let root = self.allocnos.root(index);
-            if spilled.contains(&root) || busy.contains(&segment.value) || !segment.points.contains(&(block, position))
-            {
+            if spilled.contains(&root) || busy.contains(&self.allocnos.segments[index].value) {
                 continue;
             }
             next.entry(root).or_insert((usize::MAX, usize::MAX));

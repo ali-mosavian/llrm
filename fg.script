@@ -1,0 +1,9 @@
+
+	    71dc50860494 _dl_lookup_symbol_x
+	    71dc50864e91 _dl_relocate_object_no_relro
+	    71dc508683c1 _dl_relocate_object
+	    71dc5087a363 dl_main
+	    71dc50876bc6 _dl_sysdep_start
+	    71dc508782a1 _dl_start
+	    71dc50877148 _dl_start_user
+
