@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/candidate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/candidate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/candidate.rs sha256:a95d2ad4c5f397e4a4f59ac05f4f0dff1fafb64c448d265babaf33fe292d24b5 -->
+<!-- src: crates/opt/llrm-transforms/src/candidate.rs sha256:214a615bc4b13039e27f0f139fe4cb235c3a83beb028889d862e04fd46503e73 -->
 
 # candidate
 
@@ -30,7 +30,8 @@ alone, [`crate::loopfuse`](loopfuse.md) a fused one with the spills, and
 [`crate::loopdistribute`](loopdistribute.md) a split one by its price alone.
 
 ## Provides
-`adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`.
+`adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`,
+`Baseline`.
 
 ## Needs
 [`crate::profit`](profit.md) and the target's operation costs.

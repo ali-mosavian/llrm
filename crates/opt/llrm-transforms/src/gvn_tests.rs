@@ -1111,3 +1111,30 @@ b3:
     );
     assert_eq!(text.lines().filter(|line| line.contains("call i16 @")).count(), 1, "{text}");
 }
+
+/// A pointer a loop's copy is told is restrict (`llrm.noalias`) is apart from
+/// another so told: a store through one does not change what the other holds,
+/// so a second read of it is the first. Told of one only, the read stays.
+#[test]
+fn a_restrict_pointer_is_apart_from_another_the_pass_made_restrict() {
+    for (both, reloaded) in [(true, false), (false, true)] {
+        let second = if both { "call ptr @llrm.noalias.p0(ptr %q)" } else { "getelementptr i8, ptr %q, i16 0" };
+        let text = format!(
+            "declare ptr @llrm.noalias.p0(ptr)
+
+define i16 @f(ptr %p, ptr %q) {{
+b0:
+  %pp = call ptr @llrm.noalias.p0(ptr %p)
+  %qq = {second}
+  %a = load i16, ptr %qq
+  store i16 2, ptr %pp
+  %b = load i16, ptr %qq
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        );
+        let after = numbered(&text);
+        assert_eq!(after.matches("load i16, ptr %qq").count() == 2, reloaded, "{both}\n{after}");
+    }
+}

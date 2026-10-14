@@ -305,7 +305,7 @@ b0:
 }
 ",
     );
-    super::assumptions_dropped(&mut module);
+    super::markers_dropped(&mut module);
     let text = llrm_mir::print::module(&module);
     assert!(!text.contains("llvm.assume(i1 %") && !text.contains("slt i16 %x, 10"), "{text}");
     assert!(text.contains("icmp sgt i16 %x, 3"), "what else reads a compare stays:\n{text}");

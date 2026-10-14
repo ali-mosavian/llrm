@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dead.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dead.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:5c764eece154732e73d42d301702ae3a6fd7b583a8c9cc4f1b20a9ec754d9886 -->
+<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:f5da5a7be707be525408847f84250a3bb5a1389eceeacc0adf9277cf73951d1c -->
 
 # dead
 
@@ -29,7 +29,7 @@ reads, goes in the same run.
 Lifetime markers go first: those of an object that, leaving the markers out,
 nothing that stays reads are erased with it.
 
-`assumptions_dropped` is a separate step over a module. It erases every call
+`markers_dropped` is a separate step over a module. It erases every call
 of `llvm.assume` and then runs `dead` on each function until nothing
 changes, so a condition kept alive only by its assume costs no compare.
 
@@ -59,7 +59,7 @@ in `dead_tests.rs`.
 ## Runs
 Once per pass of the function fixed point, after `algebraic`, and again
 after the loop-header copy (`-ftree-ch`). `lsr`, `window`, `indvars` and
-`jumpthread` call it on the code they leave. `assumptions_dropped` runs once
+`jumpthread` call it on the code they leave. `markers_dropped` runs once
 after the whole pipeline, before exception-handling preparation and
 selection, once every reader has used the assumptions. `-fno-tree-dce` turns
 off the pass only, not those calls; nothing runs at -O0.

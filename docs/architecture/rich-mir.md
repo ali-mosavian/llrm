@@ -69,7 +69,7 @@ There are no atomics, `indirectbr` or `undef`; the parser refuses them. Flags
 Intrinsics are one table
 ([`intrinsics.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/ir/llrm-mir/src/intrinsics.rs)):
 the overflow, min/max, `fmuladd`, math, `memcpy`/`memmove`/`memset`, `assume`,
-`lifetime` and `va_start` intrinsics of LLVM, plus llrm's `llrm.ia16.*`
+`lifetime` and `va_start` intrinsics of LLVM, plus llrm's `llrm.noalias` (restrict, said of a loop's pointers by versioning) and `llrm.ia16.*`
 (port I/O, huge-pointer difference and window, inline code and assembly).
 The table gives each its signature and attributes; the parser sets them as
 LLVM does, the verifier checks them, the interpreter runs them.

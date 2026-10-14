@@ -391,3 +391,61 @@ fn a_loop_with_two_exits_is_not_copied() {
     assert!(super::copied(f(&mut module), &one, 1).expect("clones").is_none());
     assert_eq!(printed(&module), before);
 }
+
+/// A loop that sums `%n` cells and returns the sum through an exit phi.
+const SUMMING: &str = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  %a = alloca [64 x i16]
+  store i16 3, ptr %a
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %sum = phi i16 [ 0, %b0 ], [ %total, %b2 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %o = mul i16 %i, 2
+  %p = getelementptr i8, ptr %a, i16 %o
+  store i16 %i, ptr %p
+  %v = load i16, ptr %p
+  %total = add i16 %sum, %v
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %out = phi i16 [ %sum, %b1 ]
+  %r = add i16 %out, %k
+  ret i16 %r
+}
+";
+
+/// A second copy of the loop is entered where the guard holds and leaves to the
+/// same exit: whichever runs, the answer is the loop's, and there are two
+/// loops.
+#[test]
+fn a_versioned_loop_runs_either_copy_to_one_exit() {
+    let mut module = parsed(SUMMING);
+    let one = only_loop(&mut module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let bit = context.types.int(1);
+    let k = function.parameters()[1];
+    let made = super::versioned(function, &one, &mut |function, before| {
+        let compare = function.create_instruction(
+            llrm_mir::opcode::Opcode::ICmp(llrm_mir::opcode::IntPredicate::Slt),
+            bit,
+            vec![Operand::Value(k), Operand::Value(function.parameters()[0])],
+            llrm_mir::opcode::Flags::default(),
+            None,
+        );
+        function.insert(compare, llrm_mir::edit::Position::Before(before))?;
+        Ok(Operand::Value(function.instruction(compare).result.expect("a compare's value")))
+    })
+    .expect("versions");
+    assert!(made.is_some());
+    let function = f(&mut module);
+    assert_eq!(loops::loops(&cfg::graph(function), function.entry().map(cfg::id)).len(), 2, "{}", printed(&module));
+    let inputs: &[&[i128]] = &[&[0, 0], &[0, 5], &[4, 2], &[4, 9], &[9, 3], &[-2, 1]];
+    assert_eq!(results(&module, inputs), results(&parsed(SUMMING), inputs));
+}

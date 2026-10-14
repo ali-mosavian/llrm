@@ -1412,3 +1412,34 @@ fn a_run_over_the_bodies_it_had_asks_for_the_edited_one_alone() {
     let (small, large) = (asked_for(16), asked_for(64));
     assert!(large <= small + 8, "a run over 4x the bodies asked {large} times where {small} sufficed");
 }
+
+/// Whether `@f`'s two stores, through `%p` and `%q` as `restricted` makes
+/// them, may overlap.
+fn restricted_overlap(restricted: &str) -> bool {
+    let parsed = Parsed::new(&format!(
+        "declare ptr @llrm.noalias.p0(ptr)
+
+define void @f(ptr %p, ptr %q) {{
+b0:
+{restricted}  store i16 0, ptr %pp
+  store i16 0, ptr %qq
+  ret void
+}}
+"
+    ));
+    let tagged = annotated(&parsed.unit()).unwrap();
+    let stores = parsed.all(|op| matches!(op, Opcode::Store { .. }));
+    overlaps(&tagged[&stores[0]], &tagged[&stores[1]])
+}
+
+/// Two pointers each made restrict by the pass that tested their ranges are
+/// apart; one alone is not, nor is one made so twice.
+#[test]
+fn pointers_made_restrict_are_apart_and_a_lone_one_is_not() {
+    let both = "  %pp = call ptr @llrm.noalias.p0(ptr %p)\n  %qq = call ptr @llrm.noalias.p0(ptr %q)\n";
+    let first = "  %pp = call ptr @llrm.noalias.p0(ptr %p)\n  %qq = getelementptr i8, ptr %q, i16 0\n";
+    let none = "  %pp = getelementptr i8, ptr %p, i16 0\n  %qq = getelementptr i8, ptr %q, i16 0\n";
+    assert!(!restricted_overlap(both));
+    assert!(restricted_overlap(first));
+    assert!(restricted_overlap(none));
+}

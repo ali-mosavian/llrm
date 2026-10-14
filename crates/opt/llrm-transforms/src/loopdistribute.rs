@@ -119,7 +119,7 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use num_traits::ToPrimitive;
 
-use crate::candidate::{self, Gain, Pricing};
+use crate::candidate::{self, Baseline, Gain, Pricing};
 use crate::dead::Dead;
 use crate::fill;
 use crate::lcssa::operations;
@@ -223,7 +223,16 @@ pub fn optimized(
             refused.insert(header);
             continue;
         }
-        if candidate::adopted(unit, outer, costs, copy, reoptimize, Pricing::WithSpills, Gain::CheaperBy(MIN_PERCENT)) {
+        if candidate::adopted(
+            unit,
+            outer,
+            costs,
+            copy,
+            reoptimize,
+            Pricing::WithSpills,
+            Gain::CheaperBy(MIN_PERCENT),
+            Baseline::Kept,
+        ) {
             llrm_support::debug!("distribute", "split the loop with header b{header} in {}", split.partitions.len());
             changed = true;
             whole = None;

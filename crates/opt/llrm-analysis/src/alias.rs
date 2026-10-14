@@ -2392,6 +2392,14 @@ fn _direct(
             let object = object_of(unit, Operand::Value(result)).expect("an alloca is an object");
             Provenance::one_with_slice(object, 0, 1, 1, 1, BTreeSet::new()).map(Some).map_err(|error| error.to_string())
         }
+        // The same bytes as its operand, said restrict: what it and what is
+        // based on it reach is reached by nothing that is not.
+        Opcode::Call(_) if unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Restrict) => {
+            let Some(source) = _operand(unit, op.operands[0], values) else { return Ok(None) };
+            let mut restrict = source.restrict.clone();
+            restrict.insert(Identity::Value(result.0));
+            Ok(Some(Provenance { slices: source.slices, restrict }))
+        }
         // A callee whose result is `noalias` returns a pointer to an object
         // nothing else points to: its own, apart from every other.
         Opcode::Call(_) | Opcode::Invoke(_) if returns_unique(unit, inst) => {
