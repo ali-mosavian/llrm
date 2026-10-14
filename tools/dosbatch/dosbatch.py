@@ -68,6 +68,8 @@ LOAD_LIMIT = 560_000
 def place(source: Path, target: Path) -> None:
     """`source` as `target` in a job's directory: once for the whole launch, and a hard link where the volume allows
     (a 10 MB corpus per job was 250 MB copied per run)."""
+    if not source.exists():  # even when the name is taken: another job's copy of that name does not make this path right
+        raise FileNotFoundError(f"a job's data file is missing: {source}")
     if target.exists():
         return
     try:
