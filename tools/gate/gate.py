@@ -35,7 +35,7 @@ import proctree
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 LANGUAGES = ("qb", "c", "nib")
-NO_BINARIES = {"pytest", "fmt", "rfmt-post"}  # steps that do not run the release binaries, so need no build first
+NO_BINARIES = {"pytest", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
 SERIAL_STEPS = frozenset({"rfmt-post"})
 
 
@@ -95,6 +95,7 @@ class Plan:
     steps: list[str] = field(default_factory=list)
     packages: list[str] | None = None  # None: the whole workspace
     languages: list[str] = field(default_factory=list)
+    files: list[str] = field(default_factory=list)  # the changed files, kept for the steps that run what the diff touches (smoke)
 
 
 def head_state() -> tuple[str, bool]:
@@ -170,7 +171,60 @@ def reading(cfg: dict, pkgs: dict[str, dict], live: list[str]) -> set[str]:
     return {r["package"] for r in cfg.get("reads", []) if r["package"] in pkgs and any(matches(f, r["paths"]) for f in live)}
 
 
+# the two names a commit must not carry, spelt in halves so this file does not carry them
+MENTION = re.compile("clau" + "de|anthro" + "pic", re.I)
+
+
+def refusals(root: Path = ROOT, base: str = "origin/main", pr: dict | None = None) -> list[str]:
+    """Why a branch is not for the smoke tier (and the train): each reason on a line, none when it may go on. `pr` is `gh pr view --json
+    baseRefName,title,body` where the PR is known."""
+    def git_out(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+
+    out = []
+    if git_out("status", "--porcelain", "--untracked-files=no").stdout.strip():
+        out.append("the tree differs from HEAD")
+    if pr is not None and pr.get("baseRefName") != "main":
+        out.append(f"the PR's base is {pr.get('baseRefName')!r}, not main: a stacked PR waits for its parent to land")
+    if git_out("merge-base", "--is-ancestor", base, "HEAD").returncode != 0:
+        # not on top of main: behind it, and merging must not conflict
+        if git_out("merge-tree", "--write-tree", base, "HEAD").returncode != 0:
+            out.append(f"HEAD conflicts with {base}")
+    text = git_out("log", "--format=%B", f"{base}..HEAD").stdout
+    added = [l[1:] for l in git_out("diff", "--unified=0", f"{base}...HEAD").stdout.splitlines() if l.startswith("+") and not l.startswith("+++")]
+    if pr is not None:
+        text += f"\n{pr.get('title', '')}\n{pr.get('body', '')}"
+    if MENTION.search(text):
+        out.append("a commit message or the PR text names the assistant or its maker")
+    if any(MENTION.search(l) for l in added):
+        out.append("the diff adds a line naming the assistant or its maker")
+    return out
+
+
+def pull_request(number: int | None) -> dict | None:
+    if number is None:
+        return None
+    done = subprocess.run(["gh", "pr", "view", str(number), "--json", "baseRefName,title,body"], capture_output=True, text=True)
+    if done.returncode:
+        sys.exit(f"gate: gh pr view {number}: {done.stderr.strip()}")
+    return json.loads(done.stdout)
+
+
+def smoke_plan(files: list[str]) -> Plan:
+    """The fast tier's plan cut to the smoke steps, plus docs and the diff's own tests."""
+    fast = plan(files)  # narrowed when no compiler source changed
+    if fast.tier == "full":
+        fast = plan(files, "fast")
+    keep = load()["smoke"]["steps"]
+    built = "build" in fast.steps
+    # the audit of target facts is integration's in the fast tier: the smoke tier runs it alone
+    steps = [s for s in keep if s in ("docs", "changed-tests") or s in fast.steps or (s == "pytest-programs" and built) or (s == "facts" and "integration" in fast.steps)]
+    return Plan("smoke", "the fast tier cut to the smoke steps", steps, fast.packages, fast.languages, list(files))
+
+
 def plan(files: list[str], forced: str = "auto") -> Plan:
+    if forced == "smoke":
+        return smoke_plan(files)
     cfg = load()
     pkgs = packages()
     live = [f for f in files if not matches(f, cfg["inert"]["paths"])]
@@ -274,9 +328,12 @@ def narrowed(p: Plan, cfg: dict, live: list[str]) -> Plan:
     """The steps for a diff with none of the compiler's source: each covers the files it was written for. The binaries are built first
     where a step runs them."""
     steps = ["pytest"]
-    # tests/target_facts.rs reads every .py and .sh under tools/, crates/ and src/ (a tools-only PR landed four copies of a target fact).
-    if any(f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/")) or matches(f, cfg["integration_inputs"]["paths"]) or matches(f, cfg["scan_inputs"]["paths"]) for f in live):
+    if any(f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/")) or matches(f, cfg["integration_inputs"]["paths"]) for f in live):
         steps.append("integration")
+    # tests/target_facts.rs reads every .py and .sh under tools/, crates/ and src/ (a tools-only PR landed four copies of a target fact):
+    # that one binary, with no release build of the others.
+    elif any(matches(f, cfg["scan_inputs"]["paths"]) for f in live):
+        steps.append("facts")
     for directory in sorted({d for f in live if (d := data_dir(f))}):
         steps += sorted(readers(directory, cfg))
     # bench/ and the bench tool are its inputs, and so is the runtime the programs link: the bq32 rows count the kernel's calls into it.
@@ -319,7 +376,7 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
     steps = [n for n in dict.fromkeys(names) if n != "build"]
     if any(one not in NO_BINARIES for one in steps) or "build" in names:
         steps.insert(0, "build")
-    return Plan(p.tier, p.reason + " (steps asked for)", steps, p.packages, p.languages)
+    return Plan(p.tier, p.reason + " (steps asked for)", steps, p.packages, p.languages, p.files)
 
 
 # The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
@@ -360,6 +417,27 @@ def shuffle() -> str:
     return f"--shuffle-seed {int(seed)}" if seed else "--shuffle"
 
 
+def changed_tests(files: list[str]) -> str:
+    """The command running the tests the diff touches: a test_*.py it changed or that sits beside a .py it changed (test_X.py for X.py),
+    and the root test binaries tests/NAME.rs it changed. `true` where there are none."""
+    python, binaries = [], []
+    for f in files:
+        path = ROOT / f
+        if not f.endswith(".py") or not path.exists():
+            if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/"):] and path.exists():
+                binaries.append(path.stem)
+            continue
+        beside = path.with_name(path.name if path.name.startswith("test_") else f"test_{path.name}")
+        if beside.exists() and f.startswith(("tools/", "crates/", "tests/")):
+            python.append(str(beside.relative_to(ROOT)))
+    commands = []
+    if python:
+        commands.append("PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py " + " ".join(sorted(set(python))) + " -- -q -p no:cacheprovider -p pytest_cpulimit")
+    if binaries:
+        commands.append("cargo test --release -q --no-fail-fast " + " ".join(f"--test {b}" for b in sorted(set(binaries))))
+    return " && ".join(commands) or "true"
+
+
 # Commands. Each runs under bash in the repo root with CARGO_TARGET_DIR set.
 def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str] = frozenset(), skip_py: tuple[str, ...] = ()) -> dict[str, str]:
     scope = "--workspace" if p.packages is None else " ".join(f"-p {n}" for n in p.packages)
@@ -379,6 +457,9 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     )
     steps = {
         "build": BUILD,
+        "facts": f"{cargo} --test target_facts",
+        "docs": "python3 tools/docsbuild/build.py --check && python3 tools/passdocs.py --check",
+        "changed-tests": changed_tests(p.files),
         "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
         # rustdoc over every crate costs 456 CPU-s to find no test: it runs when a doc comment has a fence to run.
         "doc": f"if python3 tools/gate/doctests.py crates src tests; then {cargo} {libs} --doc; else {SKIPPED_DOC}; fi" if libs else "true",
@@ -596,7 +677,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     skipped = skipped_steps(p.steps, missing, languages)
     if group:
         members = [] if group == "build" else load()["groups"][group]  # "build": the build alone, for the job that makes what the others share
-        p = Plan(p.tier, p.reason, [s for s in p.steps if s == "build" or s in members], p.packages, p.languages)
+        p = Plan(p.tier, p.reason, [s for s in p.steps if s == "build" or s in members], p.packages, p.languages, p.files)
     start = time.time()
     results: dict[str, tuple[int, float, float]] = {}
 
@@ -738,23 +819,28 @@ def main() -> int:
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--expect", metavar="SHA", help="refuse to run unless HEAD starts with this: the commit the run is to report on")
     ap.add_argument("--allow-dirty", action="store_true", help="run on a tree that differs from HEAD (the verdict is then of no commit)")
+    ap.add_argument("--pr", type=int, help="smoke: the PR number, whose base and text are checked too (needs gh)")
     ap.add_argument("--group")
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--tier", default="auto", choices=["auto", "fast", "full"])
+    ap.add_argument("--tier", default="auto", choices=["auto", "fast", "full", "smoke"])
     ap.add_argument("--steps", nargs="+", metavar="STEP", help="only these steps (the plan is otherwise as planned); `build measure`")
     args = ap.parse_args()
     if args.command == "main":
         return watch_main(args.force)
     if args.command == "bisect":
         return bisect(args.rest[0], args.rest[1], args.rest[2:])
+    if args.command == "run" and args.tier == "smoke":
+        if why := refusals(pr=pull_request(args.pr)):
+            print("gate: smoke refuses:\n  " + "\n  ".join(why))
+            return 2
     if args.command == "run":
         head, dirty = head_state()
         if (why := refusal(head, dirty, args.expect, args.allow_dirty)) is not None:
             print(f"gate: {why}")
             return 2
+        if not args.json and (wrapped := scoped([sys.executable, *sys.argv])):
+            os.execv(wrapped[0], wrapped)  # before the first line is printed: the re-executed run prints it
         print(f"gate: HEAD {head} {'dirty (allowed)' if dirty else 'clean'}", flush=True)
-        if args.command == "run" and not args.json and (wrapped := scoped([sys.executable, *sys.argv])):
-            os.execv(wrapped[0], wrapped)
     p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
     if args.steps:
         p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))
