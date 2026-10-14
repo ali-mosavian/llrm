@@ -133,7 +133,7 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use num_traits::ToPrimitive;
 
-use crate::candidate::{self, Gain, Pricing};
+use crate::candidate::{self, Baseline, Gain, Pricing};
 use crate::lcssa::{arms, from_arms, operations};
 use crate::loopshape;
 use crate::profit::{self, OperationCosts};
@@ -199,7 +199,16 @@ pub fn optimized(
             refused.insert(key);
             continue;
         }
-        if candidate::adopted(unit, outer, costs, copy, reoptimize, Pricing::WithSpills, Gain::FewerLoops) {
+        if candidate::adopted(
+            unit,
+            outer,
+            costs,
+            copy,
+            reoptimize,
+            Pricing::WithSpills,
+            Gain::FewerLoops,
+            Baseline::Kept,
+        ) {
             llrm_support::debug!("fuse", "fused the loops with headers b{}, b{}", key.0, key.1);
             changed = true;
             analyses.invalidate(unit.function, &PreservedAnalyses::none());

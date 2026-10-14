@@ -132,6 +132,7 @@ pub mod loopmotion;
 pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopsplit;
+pub mod loopversion;
 pub mod lsr;
 pub mod mirror;
 pub mod narrowspace;
@@ -158,6 +159,8 @@ pub mod trivialunswitch;
 pub mod unroll;
 pub mod unroll_jam;
 pub mod unswitch;
+pub mod versionalias;
+pub mod versionstride;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called

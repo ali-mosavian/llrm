@@ -519,7 +519,7 @@ impl<'m> Machine<'m> {
                 _ => Val::Poison,
             },
             // Flat memory: the same address.
-            Intrinsic::Window => argument(0),
+            Intrinsic::Window | Intrinsic::Restrict => argument(0),
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
             Intrinsic::VaStart => return unsupported("a variadic argument list"),
             Intrinsic::Code => return unsupported("inline code"),
