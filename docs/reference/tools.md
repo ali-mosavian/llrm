@@ -17,7 +17,7 @@ name them in an environment variable, listed in the tool's header.
 | `wrapcomments.py` | Wraps the comments of C files at 80 columns |
 | `gate/gate.py` | The gate in tiers: `plan` picks the steps a diff needs from `gate/tiers.toml`, `run` runs them concurrently |
 | `gate/tiers.toml` | The path map: which paths select which tests |
-| `gate/doctests.py` | Exit 0 when a doc comment holds a fence rustdoc would run, so the gate runs `cargo test --doc` only then |
+| `gate/doctests.py` | Exit 0 when a doc comment holds a fence or an indented block rustdoc would run, so the gate runs `cargo test --doc` only then |
 | `gate/proctree.py`, `gate/pytest_cpulimit.py` | CPU of a process tree; a pytest plugin that fails a test by CPU seconds, not wall time |
 | `ci/nib_lsp_paths.py` | The paths whose change can change the `nib-lsp` binary; `--write` puts them in the release workflow |
 | `ci/restore_mtime.py` | Sets each file's mtime to its last commit's so a restored build cache stays valid |

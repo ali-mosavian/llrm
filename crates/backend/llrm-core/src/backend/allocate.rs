@@ -31,6 +31,12 @@
 //!                     data group)
 //! ```
 //!
+//! After a rewrite the values that compete again are those it changed, those it
+//! brought to life that no one has queued, and those the queue gave up on and
+//! has not got back (`popped`): the others are placed, spilled or waiting, so
+//! the live values are not all looked at (`LLRM_CHECK_IDLE` compares with the
+//! scan of all of them).
+//!
 //! A value may use a register when no value placed there overlaps its
 //! interval (`LiveUnion::busy`) and no mask point lies inside it
 //! (`_clobbered`). Registers are compared by root, so `AX` and `EAX` are one
@@ -1958,6 +1964,10 @@ fn _allocated(
         .collect();
     // How many entries each value has in the queue.
     let mut waiting: IndexMap<u32, usize> = IndexMap::default();
+    // The values the queue gave up and has not got back: what `waiting` reached
+    // nothing for. The rest of the values wait in the queue, are placed, or
+    // are spilled.
+    let mut popped: BTreeSet<u32> = BTreeSet::new();
     for Reverse(Queued(_, _, one)) in &queue {
         *waiting.entry(*one).or_insert(0) += 1;
     }
@@ -1968,7 +1978,14 @@ fn _allocated(
     while !queue.is_empty() && seen < BUDGET {
         seen += 1;
         let Reverse(Queued(_flexible, _prio, value)) = queue.pop().expect("queue is not empty");
-        *waiting.entry(value).or_insert(1) -= 1;
+        let left = {
+            let count = waiting.entry(value).or_insert(1);
+            *count -= 1;
+            *count
+        };
+        if left == 0 {
+            popped.insert(value);
+        }
         if r#where.contains_key(&value) || spilled.contains(&value) {
             continue;
         }
@@ -2400,12 +2417,53 @@ fn _allocated(
         // What the rewrite made or moved competes again; the rest still waits.
         let changed: BTreeSet<u32> = made.iter().chain(&gone).chain(&clashing).copied().collect();
         llrm_support::debug::timed("after queue", || {
-            for one in facts.live.keys().copied().filter(|one| !r#where.contains_key(one) && !spilled.contains(one)) {
-                if changed.contains(&one) || waiting.get(&one).copied().unwrap_or(0) == 0 {
-                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined, &facts.index));
-                    *waiting.entry(one).or_insert(0) += 1;
-                }
+            // The values that compete again are those the rewrite changed and
+            // those the queue gave up: a value in neither is
+            // placed, spilled, or waiting. (And those a rewrite
+            // brought to life that no one has queued: the values it named, with
+            // no count. Where the rewrite is not told, every
+            // value.)
+            let looked: Option<BTreeSet<u32>> = changes
+                .as_ref()
+                .map(
+                    |changes| changed
+                        .iter()
+                        .chain(&popped)
+                        .copied()
+                        .chain(
+                            changes
+                                .touched
+                                .iter()
+                                .copied()
+                                .filter(|one| facts.live.contains_key(one) && !waiting.contains_key(one)),
+                        )
+                        .collect(),
+                );
+            let again = |one: &u32, waiting: &IndexMap<u32, usize>| {
+                facts.live.contains_key(one)
+                    && !r#where.contains_key(one)
+                    && !spilled.contains(one)
+                    && (changed.contains(one) || waiting.get(one).copied().unwrap_or(0) == 0)
+            };
+            let found: Vec<u32> = match &looked {
+                Some(looked) => looked.iter().copied().filter(|one| again(one, &waiting)).collect(),
+                None => facts.live.keys().copied().filter(|one| again(one, &waiting)).collect(),
+            };
+            if llrm_support::env_set("LLRM_CHECK_IDLE") {
+                let whole: Vec<u32> = facts.live.keys().copied().filter(|one| again(one, &waiting)).collect();
+                assert!(
+                    found.iter().copied().collect::<BTreeSet<_>>() == whole.iter().copied().collect::<BTreeSet<_>>(),
+                    "{}: the values that compete again, from the changed and the given up, differ from the whole's",
+                    body.name
+                );
             }
+            for one in found {
+                queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined, &facts.index));
+                *waiting.entry(one).or_insert(0) += 1;
+            }
+            popped.retain(|one| {
+                waiting.get(one).copied().unwrap_or(0) == 0 && !r#where.contains_key(one) && !spilled.contains(one)
+            });
         });
     }
     if seen >= BUDGET {
