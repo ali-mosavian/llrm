@@ -1,0 +1,7 @@
+description = "A dense and a sparse switch (gcc: lookup table / jump table / tree)"
+repetitions = 1
+
+[region]
+bas = "BenchSwitch"
+c = "bench_switch"
+nib = "bench_switch"

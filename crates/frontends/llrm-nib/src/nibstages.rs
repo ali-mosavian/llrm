@@ -58,7 +58,7 @@ pub fn dumped(
 
 #[cfg(test)]
 mod tests {
-    //! Port of `tests/test_modernstages.py`.
+    //! The stage dump (`--dump DIR`).
 
     use llrm_core::support::pyjson::{self, Json};
 

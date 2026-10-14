@@ -763,7 +763,7 @@ fn test_a_counted_loop_is_run_once_for_all_the_branches_in_it() {
     let names: Vec<(String, i64)> =
         function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
     let at = move |name: &str| names.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no %{name}")).1;
-    let before = loops_run();
+    let (before, worked) = (loops_run(), values_evaluated());
     let odds = estimated(
         &module.context,
         &module.metadata,
@@ -773,6 +773,10 @@ fn test_a_counted_loop_is_run_once_for_all_the_branches_in_it() {
         &BTreeMap::from([(at("outer"), 4)]),
     );
     assert_eq!(loops_run() - before, 1, "the loop is run once for {guards} branches");
+    // Every guard compares the one counter, `%i`: it is worked out once for
+    // each of the 4 trips, not once for each guard at each trip (nbody_single
+    // -O3: `peel` 79 Minstr, 62% of it in `evaluated`).
+    assert_eq!(values_evaluated() - worked, 4, "the counter at each trip is worked out once for {guards} guards");
     for k in 0..guards {
         assert_eq!(odds.by.get(&at(&format!("g{k}"))), Some(&Heuristic::Counted), "g{k}");
     }

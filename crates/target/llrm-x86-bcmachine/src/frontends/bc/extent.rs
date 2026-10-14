@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/extent.py`: whose code a byte is -- the module's
+//! Whose code a byte is -- the module's
 //! own main body, or one of its SUB/FUNCTIONs.
 //!
 //! Built entirely on blocks.rs's reachability, not on CodeView. Every

@@ -1233,3 +1233,46 @@ fn test_the_likelier_way_stays_the_conditional_jump() {
         .collect();
     assert_eq!(names, [("cmp".to_owned(), None), ("jne".to_owned(), Some(5)), ("jmp".to_owned(), Some(20))]);
 }
+
+/// A table jump's index to a block that only jumps goes to where it jumps: the
+/// block is dropped and the table kept naming it ("references to nothing
+/// defined or declared: L0_14").
+#[test]
+fn test_a_table_entry_for_a_block_that_only_jumps_goes_to_its_target() {
+    let table = Semantics {
+        name: Some("jmp".to_owned()),
+        sources: vec![bx()],
+        indirect: true,
+        table: vec![2, 3, 2],
+        ..Semantics::new(Operation::Jump)
+    };
+    let table_jump = Arc::new(Insn::new(1, Some((1, 1)), Some(table), Vec::new(), Vec::new()));
+    let result = threaded(&body(
+        "f",
+        1,
+        vec![
+            block(1, vec![table_jump], vec![2, 3]),
+            block(2, vec![_jump(2, 4)], vec![4]),
+            block(3, vec![_move(3, cx()), _return(4)], vec![]),
+            block(4, vec![_return(5)], vec![]),
+        ],
+    ));
+    let first = &result.blocks[0];
+    let jump = first.insns.last().and_then(|one| one.what.as_ref()).expect("the table jump");
+    assert_eq!(jump.table, vec![4, 3, 4]);
+    assert_eq!(first.succ, vec![4, 3]);
+    assert!(result.blocks.iter().all(|one| one.at != 2));
+}
+
+/// `Semantics::remapped` renames the target and each index of a table, and is
+/// `None` for what it leaves be.
+#[test]
+fn test_a_branch_or_table_is_remapped_by_its_blocks() {
+    let to = |at: i64| if at == 2 { 9 } else { at };
+    let direct = Semantics { target: Some(2), ..Semantics::new(Operation::Branch) };
+    assert_eq!(direct.remapped(to).and_then(|one| one.target), Some(9));
+    let table = Semantics { indirect: true, table: vec![2, 3, 2], ..Semantics::new(Operation::Jump) };
+    assert_eq!(table.remapped(to).map(|one| one.table), Some(vec![9, 3, 9]));
+    assert!(Semantics { target: Some(3), ..Semantics::new(Operation::Jump) }.remapped(to).is_none());
+    assert!(Semantics::new(Operation::Move).remapped(to).is_none());
+}

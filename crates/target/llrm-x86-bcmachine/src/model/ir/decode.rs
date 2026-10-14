@@ -1,4 +1,4 @@
-//! Port of `qbopt/model/ir.py`: `emit` through `decode_module`.
+//! `emit` through `decode_module`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

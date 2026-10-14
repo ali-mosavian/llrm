@@ -1,4 +1,4 @@
-//! `root` from `qbopt/model/ir.py`: the 32-bit register a general register is a
+//! `root`: the 32-bit register a general register is a
 //! view of.
 
 use crate::registers::RegId;

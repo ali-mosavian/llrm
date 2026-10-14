@@ -213,8 +213,11 @@ impl Flags {
     pub const NSZ: Flags = Flags(1 << 11);
     pub const ARCP: Flags = Flags(1 << 12);
     pub const FAST: Flags = Flags(0x7f << 8);
+    /// On a `switch`: the backend lowers it as a jump table, its cases the
+    /// indices `0..n` in a register of the pointer's width.
+    pub const TABLE: Flags = Flags(1 << 15);
 
-    pub const NAMES: [(Flags, &'static str); 16] = [
+    pub const NAMES: [(Flags, &'static str); 17] = [
         (Flags::DISJOINT, "disjoint"),
         (Flags::EXACT, "exact"),
         (Flags::INBOUNDS, "inbounds"),
@@ -231,6 +234,7 @@ impl Flags {
         (Flags::ARCP, "arcp"),
         (Flags(1 << 13), "contract"),
         (Flags(1 << 14), "afn"),
+        (Flags::TABLE, "table"),
     ];
 
     pub fn contains(
@@ -309,7 +313,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 41] = [
+pub const FLAG_ATTRIBUTES: [&str; 42] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -322,6 +326,7 @@ pub const FLAG_ATTRIBUTES: [&str; 41] = [
     "minsize",
     "mustprogress",
     "naked",
+    "nearcode",
     "nest",
     "noalias",
     "nobuiltin",

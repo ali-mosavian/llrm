@@ -1,4 +1,4 @@
-//! Port of `qbopt/hir/codec.py`: deterministic, strict JSON wire format for
+//! Deterministic, strict JSON wire format for
 //! HIR producers.
 //!
 //! Python reflects over each dataclass's type hints; `_Hint` and `_Record`

@@ -1,10 +1,8 @@
 //! MIR to machine bytes: the instructions this pass writes itself.
 //!
-//! Port of `qbopt/backend/select.py`. Python's iced `Instruction.create_*`
-//! calls are iced's own `Instruction::with*`, so every encoding is the same
-//! library's answer. An exception Python lets escape (an immediate iced
-//! refuses outside a `try`, an index out of range) panics here with the
-//! same message.
+//! Every encoding is iced's own `Instruction::with*`, so the same library's
+//! answer. An error iced refuses (an immediate outside a `try`, an index out
+//! of range) panics here.
 
 use std::sync::LazyLock;
 
@@ -659,6 +657,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
         sources,
         target: None,
         indirect: false,
+        table: Vec::new(),
     };
     let (push, pop) = (
         |source: &Loc| step(Operation::Push, "push", vec![], vec![source.clone()]),
@@ -2084,6 +2083,18 @@ pub fn emit_in(
     if let (Operation::Jump, Some(target)) = (op, what.target) {
         return jump(target, at, short);
     }
+    if op == Operation::Jump && what.indirect && sources.len() == 1 {
+        // A near jump through a table of code addresses, each as wide as the
+        // mode's word.
+        let (near, code) = (i64::from(at.bits / 8), if at.bits == 32 { Code::Jmp_rm32 } else { Code::Jmp_rm16 });
+        if let Loc::Mem(cell) = &sources[0]
+            && i64::from(cell.width) == near
+            && let Some((built, relocated)) = operand_of(cell, at.bits)
+        {
+            return _assemble(&raised(create_mem(code, built)), at, relocated);
+        }
+        return None;
+    }
     if op == Operation::Call && what.indirect && sources.len() == 1 {
         // A near code pointer is as wide as the mode's word; a pointer of two
         // words (offset and selector) is a far one, which only a
@@ -2451,7 +2462,7 @@ mod sweep_support {
         target: Option<i64>,
         indirect: bool,
     ) -> Semantics {
-        Semantics { op, name: name.map(str::to_owned), dests, sources, target, indirect }
+        Semantics { op, name: name.map(str::to_owned), dests, sources, target, indirect, table: Vec::new() }
     }
 
     type Want = Option<(&'static str, Option<usize>, Option<usize>, Vec<usize>, bool)>;

@@ -1514,7 +1514,8 @@ fn simulated(
 ) -> Simulated {
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
-    let shared = shared_slots(body, flow, remakes, &wanted, memory);
+    let places = Places::of(body, flow);
+    let shared = shared_slots(body, &places, flow, remakes, &wanted, memory);
     let mut edits: IndexMap<i64, Arc<Edits>> = IndexMap::default();
     let mut stored: BTreeSet<u32> = BTreeSet::new();
     let resume = memo.nearest(order, memory, dropped, admit);
@@ -1883,6 +1884,7 @@ fn memory_phis(
     }
     let home: IndexMap<u32, i64> =
         flow.defines.iter().flat_map(|(at, made)| made.keys().map(move |value| (*value, *at))).collect();
+    let places = Places::of(body, flow);
     let mut chosen: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
         let Some(edit) = first.edits.get(&block.at) else { continue };
@@ -1902,7 +1904,7 @@ fn memory_phis(
                 // definition of an argument that shares the
                 // slot.
                 let one = BTreeSet::from([phi.result]);
-                let shared = shared_slots(body, flow, remakes, &wanted, &one);
+                let shared = shared_slots(body, &places, flow, remakes, &wanted, &one);
                 let stores: f64 = phi
                     .incoming
                     .iter()
@@ -1970,12 +1972,47 @@ fn memory_phis(
     }
 }
 
+/// What `shared_slots` looks up, found once for a body: the blocks by position,
+/// where each phi's result is made and in what order the phis come, and where
+/// each value is defined.
+struct Places<'a> {
+    by_at: IndexMap<i64, &'a LirBlock>,
+    /// A phi's result: its block's position in `body.blocks` and its own in the
+    /// block's phis.
+    phis: IndexMap<u32, (usize, usize)>,
+    /// A value: the block that first defines it, and where.
+    defined: IndexMap<u32, (i64, usize)>,
+}
+
+impl<'a> Places<'a> {
+    fn of(
+        body: &'a LirBody,
+        flow: &Flow,
+    ) -> Self {
+        let mut phis: IndexMap<u32, (usize, usize)> = IndexMap::default();
+        for (at, block) in body.blocks.iter().enumerate() {
+            for (position, phi) in block.phis.iter().enumerate() {
+                phis.entry(phi.result).or_insert((at, position));
+            }
+        }
+        let mut defined: IndexMap<u32, (i64, usize)> = IndexMap::default();
+        for (at, made) in &flow.defines {
+            for (value, position) in made {
+                defined.entry(*value).or_insert((*at, *position));
+            }
+        }
+        Self { by_at: body.blocks.iter().map(|block| (block.at, block)).collect(), phis, defined }
+    }
+}
+
 /// The arguments of the memory phis in `memory` that share their result's slot:
 /// stored where they are defined, which leaves the phi no code on the edge. A
 /// value shares only where it is dead whenever another member of the web is
-/// defined; any other argument is stored on its edge.
+/// defined; any other argument is stored on its edge. Only the phis of `memory`
+/// are looked at, in the order of the body.
 fn shared_slots(
     body: &LirBody,
+    places: &Places<'_>,
     flow: &Flow,
     remakes: &IndexMap<u32, Arc<Insn>>,
     wanted: &dyn Fn(u32) -> bool,
@@ -1985,34 +2022,31 @@ fn shared_slots(
     if memory.is_empty() || !SHARED_SLOTS.with(std::cell::Cell::get) {
         return shared;
     }
-    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let phi_block: IndexMap<u32, i64> =
-        body.blocks.iter().flat_map(|block| block.phis.iter().map(move |phi| (phi.result, block.at))).collect();
     // Whether `x` is live where `y` is defined.
     let live_at_def = |x: u32, y: u32| -> bool {
-        if let Some(at) = phi_block.get(&y) {
-            return flow.live_in[at].contains(&x) || by_at[at].phis.iter().any(|phi| phi.result == x);
+        if let Some(&(block, _)) = places.phis.get(&y) {
+            let at = &body.blocks[block].at;
+            return flow.live_in[at].contains(&x) || places.by_at[at].phis.iter().any(|phi| phi.result == x);
         }
-        flow.defines
-            .iter()
-            .find_map(|(at, made)| made.get(&y).map(|position| (*at, *position)))
-            .is_some_and(|(at, position)| flow.live_after(at, position, x))
+        places.defined.get(&y).is_some_and(|&(at, position)| flow.live_after(at, position, x))
     };
     let apart = |x: u32, y: u32| !live_at_def(x, y) && !live_at_def(y, x);
+    let mut ordered: Vec<(usize, usize)> =
+        memory.iter().filter_map(|result| places.phis.get(result).copied()).collect();
+    ordered.sort_unstable();
     let mut webs: IndexMap<u32, Vec<u32>> = IndexMap::default();
-    for block in &body.blocks {
-        for phi in block.phis.iter().filter(|phi| memory.contains(&phi.result)) {
-            let web = webs.entry(phi.result).or_insert_with(|| vec![phi.result]);
-            for (_, value) in &phi.incoming {
-                let alone = !shared.contains_key(value)
-                    && *value != phi.result
-                    && !remakes.contains_key(value)
-                    && wanted(*value)
-                    && !memory.contains(value);
-                if alone && web.iter().all(|member| apart(*member, *value)) {
-                    shared.insert(*value, phi.result);
-                    web.push(*value);
-                }
+    for (block, position) in ordered {
+        let phi = &body.blocks[block].phis[position];
+        let web = webs.entry(phi.result).or_insert_with(|| vec![phi.result]);
+        for (_, value) in &phi.incoming {
+            let alone = !shared.contains_key(value)
+                && *value != phi.result
+                && !remakes.contains_key(value)
+                && wanted(*value)
+                && !memory.contains(value);
+            if alone && web.iter().all(|member| apart(*member, *value)) {
+                shared.insert(*value, phi.result);
+                web.push(*value);
             }
         }
     }
@@ -2310,12 +2344,14 @@ fn written(
                 one = folded_into(&one, *value, &cell).expect("a fold the simulation chose");
             }
             if one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch)) {
-                if let Some(what) = &one.what {
-                    if let Some(to) = what.target.and_then(|to| retarget.get(&(block.at, to))) {
-                        let mut made = (*one).clone();
-                        made.what = Some(Semantics { target: Some(*to), ..what.clone() });
-                        one = Arc::new(made);
-                    }
+                if let Some(what) = one
+                    .what
+                    .as_ref()
+                    .and_then(|what| what.remapped(|to| retarget.get(&(block.at, to)).copied().unwrap_or(to)))
+                {
+                    let mut made = (*one).clone();
+                    made.what = Some(what);
+                    one = Arc::new(made);
                 }
             }
             insns.push(Arc::clone(&one));

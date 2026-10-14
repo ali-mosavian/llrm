@@ -2534,7 +2534,7 @@ fn assignable(state: &mut ParseState) -> Result<Expr, ParseResult> {
             let span = Span { line: value.span().line, start: value.span().start, end: field.span.end };
             value = Expr::Field { base: Box::new(value), name, span };
         } else if consume_named(state, "tkLParen") {
-            let arguments = expression_list(state)?;
+            let arguments = expression_list(state, false)?;
             let end = previous_end(state);
             let span = Span { line: value.span().line, start: value.span().start, end };
             value = match value {
@@ -2729,7 +2729,12 @@ fn name_or_apply(
             let span = Span { line: value.span().line, start: value.span().start, end: field.span.end };
             value = Expr::Field { base: Box::new(value), name, span };
         } else if consume_named(state, "tkLParen") {
-            let arguments = match slice_or_arguments(state)? {
+            // INPUT$(n, #channel): the file number may carry its #
+            let file_number = matches!(
+                &value,
+                Expr::Name(name, _) if name.eq_ignore_ascii_case("INPUT$")
+            );
+            let arguments = match slice_or_arguments(state, file_number)? {
                 Ok(arguments) => arguments,
                 Err((start, end, step)) => {
                     state.slices = true;
@@ -2755,9 +2760,12 @@ type SliceParts = (Option<Box<Expr>>, Option<Box<Expr>>, Option<Box<Expr>>);
 /// After `(`: a parenthesized argument list, or under QuickrBASIC a slice,
 /// which has a colon where a list has a comma. Inside parentheses a colon
 /// cannot end a statement.
-fn slice_or_arguments(state: &mut ParseState) -> Result<Result<Vec<Expr>, SliceParts>, ParseResult> {
+fn slice_or_arguments(
+    state: &mut ParseState,
+    file_number: bool,
+) -> Result<Result<Vec<Expr>, SliceParts>, ParseResult> {
     if !state.python_expressions {
-        return expression_list(state).map(Ok);
+        return expression_list(state, file_number).map(Ok);
     }
     let part = |state: &mut ParseState| -> Result<Option<Box<Expr>>, ParseResult> {
         if at_named(state, "tkColon") || at_named(state, "tkRParen") {
@@ -2784,6 +2792,9 @@ fn slice_or_arguments(state: &mut ParseState) -> Result<Result<Vec<Expr>, SliceP
     let mut values = vec![*first];
     loop {
         if consume_named(state, "tkComma") {
+            if file_number {
+                consume_named(state, "tkLbs");
+            }
             values.push(expression(state, 0)?);
         } else if consume_named(state, "tkRParen") {
             return Ok(Ok(values));
@@ -2793,7 +2804,10 @@ fn slice_or_arguments(state: &mut ParseState) -> Result<Result<Vec<Expr>, SliceP
     }
 }
 
-fn expression_list(state: &mut ParseState) -> Result<Vec<Expr>, ParseResult> {
+fn expression_list(
+    state: &mut ParseState,
+    file_number: bool,
+) -> Result<Vec<Expr>, ParseResult> {
     let mut values = Vec::new();
     if consume_named(state, "tkRParen") {
         return Ok(values);
@@ -2805,6 +2819,9 @@ fn expression_list(state: &mut ParseState) -> Result<Vec<Expr>, ParseResult> {
                 return Err(ParseResult::BadSyntax);
             }
             return Ok(values);
+        }
+        if file_number {
+            consume_named(state, "tkLbs");
         }
     }
 }

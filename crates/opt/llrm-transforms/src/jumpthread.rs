@@ -66,7 +66,12 @@
 //! passes skip it.
 //!
 //! A conditional branch is threaded the same way where it tests an `i1` phi, or
-//! a compare of a phi with a constant, whatever the loop. With `correlated`, a
+//! a compare of a phi with a constant, whatever the loop. Every
+//! such branch of the function as it came is threaded, within the budget of
+//! copies (a branch the copies made is not, which would peel a loop a trip at a
+//! time, and a block a round threaded through is left to the next rounds): the
+//! peeled `place` of queens at -O3 tested a constant 5 times in 8 after the
+//! first branch alone was threaded. With `correlated`, a
 //! branch whose compare the way into its block already settles, from a branch
 //! on a compare of one of its operands above (`guards::on_edge`), is threaded
 //! to its arm on each way: the branches a header copy leaves. A path into a
@@ -298,10 +303,19 @@ pub fn threaded(
     // The paths of the branches are those of the function as it came: a branch
     // the copies made is not threaded again, or a loop would be peeled one
     // trip at a time. GCC registers its threads once and applies them together.
-    let mut rounds = 0;
-    while let Some(paths) = found(context, layout, function, outer, copied, size, rounds == 0, correlate, states) {
-        rounds += 1;
+    let originals: IdSet<BlockId> = function.layout().iter().copied().collect();
+    // The blocks a round threaded through, which later rounds leave: their
+    // phis and edges are those of the paths that were made.
+    let mut touched: IdSet<BlockId> = IdSet::new();
+    while let Some(paths) =
+        found(context, layout, function, outer, copied, size, &originals, &touched, correlate, states)
+    {
         llrm_support::debug!("jumpthread", "{} paths, {} instructions copied so far", paths.len(), copied);
+        for path in &paths {
+            touched.insert(path.from);
+            touched.insert(path.target);
+            touched.extend(path.blocks.iter().copied());
+        }
         // A path of phis and a branch copies no instruction and still spends
         // the budget: or a loop of them never ends.
         copied += copy(context, function, &paths).max(paths.len());
@@ -322,7 +336,8 @@ fn found(
     outer: &Outer,
     copied: usize,
     size: bool,
-    branches: bool,
+    originals: &IdSet<BlockId>,
+    touched: &IdSet<BlockId>,
     correlate: bool,
     states: bool,
 ) -> Option<Vec<Path>> {
@@ -335,6 +350,9 @@ fn found(
         .collect();
     for block in blocks {
         let Some(last) = function.terminator(block) else { continue };
+        // A branch the copies made is not threaded again, which would peel a
+        // loop one trip at a time; each branch of the function as it came is.
+        let branches = originals.contains(&block) && !touched.contains(&block);
         // The innermost loop holding the block, the one a chain of blocks to
         // the state's phi stays within.
         let loop_ =
@@ -351,7 +369,8 @@ fn found(
             let mut paths = Vec::new();
             let mut spent = copied;
             for (source, target) in ways {
-                if source == block
+                if touched.contains(&source)
+                    || source == block
                     || !copyable(function, block)
                     || shape.loops.iter().any(|l| l.header == cfg::id(block) && !l.body.contains(&cfg::id(source)))
                 {
@@ -426,6 +445,9 @@ fn found(
             for (source, prefix, number) in ways {
                 let Some(target) = decide(number) else { continue };
                 let blocks: Vec<BlockId> = prefix.into_iter().chain(chain.iter().copied()).collect();
+                if touched.contains(&source) || blocks.iter().any(|one| touched.contains(one)) {
+                    continue;
+                }
                 if blocks.contains(&source) {
                     continue;
                 }

@@ -64,6 +64,7 @@ fn object(
             group: None,
         }],
         omf_groups: Vec::new(),
+        omf_comdat: Vec::new(),
         debug: Some(info),
     }
 }

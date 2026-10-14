@@ -27,12 +27,27 @@ GRAPHICS_MODE = 0x10   # SCREEN 9: what the probes draw in, unless the name says
 BIOS_MODES = {"gfx_getput1": 4, "gfx_getput2": 6, "gfx_getput7": 0x0D, "gfx_getput13": 0x13, "gfx_screen7": 0x0D, "gfx_screen8": 0x0E, "gfx_screen12": 0x12, "gfx_screen13": 0x13, "gfx_screen1": 4, "gfx_screen1_default": 4, "gfx_text1": 4, "gfx_text2": 6, "gfx_text13": 0x13, "gfx_text12": 0x12, "gfx_text8": 0x0E, "gfx_screen2": 6}
 
 
+class Lazy:
+    """Both builds of a probe, linked, made when a test asks: a run of some of the probes (the gate deals them over processes) builds only those."""
+
+    def __init__(self, factory):
+        self.factory, self.made = factory, {}
+
+    def __getitem__(self, name: str):
+        if name not in self.made:
+            self.made[name] = qplay_built(name, self.factory.mktemp("qbgfx"))
+        return self.made[name]
+
+
+def qplay_built(name: str, work: Path):
+    return qbplay.built({name: next(path for path in PROBES if path.stem == name)}, work)[name]
+
+
 @pytest.fixture(scope="module")
 def programs(tmp_path_factory):
-    """Both builds of every probe, linked."""
     if not dosbatch.QB45.is_dir():
         pytest.skip("QB45_DIR is unavailable")
-    return qbplay.built({source.stem: source for source in PROBES}, tmp_path_factory.mktemp("qbgfx"))
+    return Lazy(tmp_path_factory)
 
 
 # Probes that go back to text before they wait: nothing to see change but the clock.

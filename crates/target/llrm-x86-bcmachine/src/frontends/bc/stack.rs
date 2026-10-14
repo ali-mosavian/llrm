@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/stack.py`: what a call's arguments are, when they
+//! What a call's arguments are, when they
 //! are not all pushed immediately before it.
 //!
 //! Scoped to one basic block. An ordinary instruction that provably never

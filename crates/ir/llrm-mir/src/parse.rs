@@ -1521,6 +1521,7 @@ impl Parser {
                     }
                 }
                 "switch" => {
+                    flags = self.flags(&["table"]);
                     let (ty, condition) = self.typed_value(local)?;
                     self.expect_punct(',')?;
                     let default = self.label(local)?;

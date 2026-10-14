@@ -1021,14 +1021,11 @@ fn _retargeted(
     let Some(what) = &one.what else {
         return Arc::clone(one);
     };
-    let Some(target) = what.target else {
-        return Arc::clone(one);
-    };
-    let Some(&at) = landing.get(&(here, target)) else {
+    let Some(moved) = what.remapped(|to| landing.get(&(here, to)).copied().unwrap_or(to)) else {
         return Arc::clone(one);
     };
     let mut out = (**one).clone();
-    out.what = Some(Semantics { target: Some(at), ..what.clone() });
+    out.what = Some(moved);
     Arc::new(out)
 }
 
@@ -1087,13 +1084,13 @@ pub fn unsplit(body: &LirBody) -> LirBody {
         let insns = block
             .insns
             .iter()
-            .map(|one| match &one.what {
-                Some(what) if what.target.is_some_and(|target| bypass.contains_key(&target)) => {
+            .map(|one| match one.what.as_ref().and_then(|what| what.remapped(where_)) {
+                Some(what) => {
                     let mut out = (**one).clone();
-                    out.what = Some(Semantics { target: what.target.map(where_), ..what.clone() });
+                    out.what = Some(what);
                     Arc::new(out)
                 }
-                _ => Arc::clone(one),
+                None => Arc::clone(one),
             })
             .collect();
         let phis = block
