@@ -303,10 +303,10 @@ pub fn threaded(
     // The paths of the branches are those of the function as it came: a branch
     // the copies made is not threaded again, or a loop would be peeled one
     // trip at a time. GCC registers its threads once and applies them together.
-    let originals: BTreeSet<BlockId> = function.layout().iter().copied().collect();
+    let originals: IdSet<BlockId> = function.layout().iter().copied().collect();
     // The blocks a round threaded through, which later rounds leave: their
     // phis and edges are those of the paths that were made.
-    let mut touched: BTreeSet<BlockId> = BTreeSet::new();
+    let mut touched: IdSet<BlockId> = IdSet::new();
     while let Some(paths) =
         found(context, layout, function, outer, copied, size, &originals, &touched, correlate, states)
     {
@@ -336,8 +336,8 @@ fn found(
     outer: &Outer,
     copied: usize,
     size: bool,
-    originals: &BTreeSet<BlockId>,
-    touched: &BTreeSet<BlockId>,
+    originals: &IdSet<BlockId>,
+    touched: &IdSet<BlockId>,
     correlate: bool,
     states: bool,
 ) -> Option<Vec<Path>> {
