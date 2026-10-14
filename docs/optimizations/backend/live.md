@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/live.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/live.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/live.rs sha256:ca83208114d49451ee981d2a1c7d1351a12d284011071d59670149f2767c7f45 -->
+<!-- src: crates/backend/llrm-core/src/backend/live.rs sha256:f2cfef811cb5e911e5dacc3716a861039dd170b7925f31250b2169d594f0d562 -->
 
 # live
 
@@ -30,6 +30,11 @@ or one the caller protects) weighs infinity.
 
 After an edit, `LiveRanges::edited` drops the intervals of the touched
 values and puts the recomputed ones in; the rest are shared by `Arc`. The
+allocator's own facts are carried to the next round and edited where they
+are (`edit`, `Indexes::patch`): nothing else holds them (`release` clears
+the spiller's copy, `snapshot` keeps the touched values' old intervals for
+`LiveUnion::refresh_among`), so a round copies nothing of the values it did
+not name. The
 allocator also leaves its latest intervals in a thread-local (`hold`); the
 spiller it calls takes them back (`held`) when the body is exactly the one
 they were made of, instead of working them out again.

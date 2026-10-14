@@ -2099,8 +2099,19 @@ fn test_the_points_that_destroy_registers_carried_across_a_rewrite_are_those_of_
                 current = edited;
                 continue;
             };
-            let found = changes(&current, &edited)
-                .and_then(|changes| Masks::after(&masks, &numbering, &patched, segments, &changes));
+            let found = changes(&current, &edited).and_then(|changes| {
+                let gone: IndexMap<usize, i64> = changes
+                    .gone
+                    .iter()
+                    .filter_map(|one| {
+                        numbering
+                            .at
+                            .get(&crate::analysis::intervals::key(one))
+                            .map(|slot| (crate::analysis::intervals::key(one), *slot))
+                    })
+                    .collect();
+                Masks::after(&masks, &gone, &patched, segments, &changes)
+            });
             let fresh = _masks(&edited, &patched, segments);
             let found = found.expect("a rewrite of the same shape carries the points");
             assert!(found.same_points(&fresh), "seed {seed}: the points carried differ from a fresh look");

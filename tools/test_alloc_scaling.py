@@ -372,3 +372,20 @@ def test_a_reload_inserted_in_a_long_block_renumbers_no_occurrence_after_it():
         run = steps(compiler, source, "-O2")
     spent = run["spill cleanup"] + run["regalloc split"]
     assert spent < 360, f"cells N=448 -O2: spill cleanup and regalloc split cost {spent} Minstr (360 allowed; 660 before): {run}"
+
+
+def test_the_facts_of_a_rewrite_are_edited_where_they_are_not_copied():
+    """After each spill or split the allocator's facts of the body (the numbering of the instructions, the copy hints, the intervals) were
+    copied whole and then edited for the few values the rewrite named: `facts slots` cost 83 Minstr and `facts hints` 139 on `cells` at
+    N=448 (316 and 519 at 896), one copy of every instruction's slot and every value's hints for each of ~1,800 rounds. They are carried
+    to the next round and edited where they are."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    spent = run["facts slots"] + run["facts hints"]
+    assert spent < 110, f"cells N=448 -O2: facts slots and facts hints cost {spent} Minstr (110 allowed; 222 before): {run}"

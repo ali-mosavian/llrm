@@ -1598,6 +1598,13 @@ struct Facts {
 struct Carried {
     hints: IndexMap<u32, Vec<u32>>,
     widths: IndexMap<u32, u32>,
+    live: Arc<LiveRanges>,
+    index: Arc<Indexes>,
+    siblings: Siblings,
+    folds: Arc<IndexMap<u32, f64>>,
+    epoch: u64,
+    /// The slots the instructions the rewrite removed had.
+    gone: IndexMap<usize, i64>,
 }
 
 impl Facts {
@@ -1612,13 +1619,31 @@ impl Facts {
         prior: Option<(&Facts, &ranges::Changes, &LirBody)>,
         carried: Option<Carried>,
     ) -> Self {
-        let (mut carried_hints, mut carried_widths) = match carried {
-            Some(one) => (Some(one.hints), Some(one.widths)),
-            None => (None, None),
-        };
+        let (mut carried_hints, mut carried_widths, mut carried_live, mut carried_index) = (None, None, None, None);
+        let (mut carried_siblings, mut carried_folds) = (None, None);
+        let mut old_epoch = None;
+        let mut gone_slots = IndexMap::default();
+        if let Some(one) = carried {
+            carried_hints = Some(one.hints);
+            carried_widths = Some(one.widths);
+            carried_live = Some(Arc::try_unwrap(one.live).unwrap_or_else(|shared| (*shared).clone()).apart());
+            carried_index = Some(one.index);
+            carried_siblings = Some(one.siblings);
+            carried_folds = Some(one.folds);
+            old_epoch = Some(one.epoch);
+            gone_slots = one.gone;
+        }
+        let same_numbering = |index: &Indexes| old_epoch == Some(index.epoch);
         let _span = llrm_support::debug::span("regalloc facts");
         let index = llrm_support::debug::timed("facts slots", || {
-            let patched = prior.and_then(|(held, _, was)| held.index.patched(was, body));
+            let patched = prior
+                .zip(carried_index.take())
+                .and_then(
+                    |((_, _, was), held)| {
+                        let mut held = Arc::try_unwrap(held).unwrap_or_else(|shared| (*shared).clone());
+                        held.patch(was, body).then_some(held)
+                    },
+                );
             if let Some(found) = &patched {
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     let whole = ranges::indexed_consecutive(body);
@@ -1639,13 +1664,15 @@ impl Facts {
             Arc::new(patched.unwrap_or_else(|| ranges::indexed(body)))
         });
         let live = llrm_support::debug::timed("facts intervals", || {
-            let kept = prior.filter(|(held, changes, _)| {
-                held.index.epoch == index.epoch && changes.touched.len() * 3 <= held.live.len() + 16
-            });
+            let kept = prior
+                .zip(carried_live.take())
+                .filter(
+                    |((_, changes, _), held)| same_numbering(&index) && changes.touched.len() * 3 <= held.len() + 16,
+                );
             match kept {
-                Some((held, changes, _)) => {
+                Some(((_, changes, _), held)) => {
                     let (again, totals) = ranges::worked_among(body, &index, busy, &changes.touched);
-                    held.live.edited(&changes.touched, again, totals, Arc::clone(&index))
+                    held.edit(&changes.touched, again, totals, Arc::clone(&index))
                 }
                 None => {
                     let (all, total) = ranges::worked_out_with_totals(body, &index, busy, &|_| true);
@@ -1654,15 +1681,23 @@ impl Facts {
             }
         });
         let siblings = llrm_support::debug::timed("facts sibling prices", || match prior {
-            Some((before, changes, _)) if before.index.epoch == index.epoch => {
-                _sibling_free_after(&before.siblings, body, &live, busy, changes)
-            }
+            Some((_, changes, _)) if same_numbering(&index) => _sibling_free_after(
+                carried_siblings.take().expect("carried with the prior facts"),
+                body,
+                &live,
+                busy,
+                changes,
+            ),
             _ => _sibling_free(body, &live, busy),
         });
         let folds = llrm_support::debug::timed("facts fold prices", || match prior {
-            Some((before, changes, _)) if before.index.epoch == index.epoch => {
-                Arc::new(_fold_free_after(&before.folds, body, profile, busy, &changes.touched))
-            }
+            Some((_, changes, _)) if same_numbering(&index) => _fold_free_after(
+                carried_folds.take().expect("carried with the prior facts"),
+                body,
+                profile,
+                busy,
+                &changes.touched,
+            ),
             _ => Arc::new(_fold_free(body, profile, busy)),
         });
         // A spiller product lives for one use: a spill gains nothing.
@@ -1692,8 +1727,8 @@ impl Facts {
         }
         let masks = llrm_support::debug::timed("facts masks", || {
             let found = match prior {
-                Some((before, changes, _)) if before.index.epoch == index.epoch => {
-                    Masks::after(&before.masks, &before.index, &index, segments, changes)
+                Some((before, changes, _)) if same_numbering(&index) => {
+                    Masks::after(&before.masks, &gone_slots, &index, segments, changes)
                 }
                 _ => None,
             };
@@ -1710,7 +1745,8 @@ impl Facts {
         let widths = llrm_support::debug::timed("facts widths", || match prior {
             Some((before, changes, _)) => {
                 let _ = before;
-                let found = _widest_after(carried_widths.take().expect("carried with the prior facts"), body, &changes.touched);
+                let found =
+                    _widest_after(carried_widths.take().expect("carried with the prior facts"), body, &changes.touched);
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(found == _widest(body), "{}: the widths kept from the body before differ", body.name);
                 }
@@ -1736,7 +1772,11 @@ impl Facts {
         let hints = llrm_support::debug::timed("facts hints", || match prior {
             Some((before, changes, _)) => {
                 let _ = before;
-                let found = _copy_hints_after(carried_hints.take().expect("carried with the prior facts"), body, &changes.touched);
+                let found = _copy_hints_after(
+                    carried_hints.take().expect("carried with the prior facts"),
+                    body,
+                    &changes.touched,
+                );
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(found == _copy_hints(body), "{}: the hints kept from the body before differ", body.name);
                 }
@@ -1929,7 +1969,8 @@ fn _allocated(
     // The values merging updates made: spilled in their turn they are not
     // merged again, which would make the value spilled again, without end.
     let mut plain: BTreeSet<u32> = BTreeSet::new();
-    let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body), None, None);
+    let mut facts =
+        Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body), None, None);
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
     }
@@ -2347,10 +2388,28 @@ fn _allocated(
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value_following(&body));
         let changes = before.as_ref().and_then(|before| ranges::changes(before, &body));
-        let earlier_live = Arc::clone(&facts.live);
+        // The intervals the facts hold are edited where they are: the copy
+        // that stood for them here is only of the values the rewrite named.
+        let before_ranges = changes.as_ref().map(|changes| facts.live.snapshot(&changes.touched));
+        crate::backend::live::release();
         let carried = changes
             .as_ref()
-            .map(|_| Carried { hints: std::mem::take(&mut facts.hints), widths: std::mem::take(&mut facts.widths) });
+            .map(
+                |changes| Carried {
+                    hints: std::mem::take(&mut facts.hints),
+                    widths: std::mem::take(&mut facts.widths),
+                    epoch: facts.index.epoch,
+                    gone: changes
+                        .gone
+                        .iter()
+                        .filter_map(|one| facts.index.at.get(&ranges::key(one)).map(|slot| (ranges::key(one), *slot)))
+                        .collect(),
+                    live: std::mem::replace(&mut facts.live, Arc::new(LiveRanges::empty())),
+                    index: std::mem::replace(&mut facts.index, Arc::new(Indexes::plain())),
+                    siblings: std::mem::take(&mut facts.siblings),
+                    folds: std::mem::take(&mut facts.folds),
+                },
+            );
         facts = Facts::of(
             &body,
             profile,
@@ -2403,7 +2462,11 @@ fn _allocated(
         match &changes {
             // Only the intervals of the values the rewrite named moved.
             Some(changes) => {
-                union.refresh_among(&changes.touched, &*earlier_live, &*facts.live);
+                union.refresh_among(
+                    &changes.touched,
+                    before_ranges.as_ref().expect("taken with the changes"),
+                    &*facts.live,
+                );
                 if llrm_support::env_set("LLRM_CHECK_HOLDERS") {
                     union.check_index(&facts.live);
                 }
@@ -2815,7 +2878,7 @@ impl Masks {
     /// not come from a body.
     pub fn after(
         before: &Masks,
-        before_index: &Indexes,
+        gone_slots: &IndexMap<usize, i64>,
         index: &Indexes,
         segments: &Segments,
         changes: &ranges::Changes,
@@ -2829,7 +2892,7 @@ impl Masks {
         };
         let mut removed: Vec<usize> = Vec::new();
         for one in &changes.gone {
-            let Some(slot) = before_index.at.get(&ranges::key(one)) else { continue };
+            let Some(slot) = gone_slots.get(&ranges::key(one)) else { continue };
             if let Some(at) = owner_of(*slot, ranges::key(one), &before.list, &before.owners) {
                 removed.push(at);
             }
@@ -3949,13 +4012,13 @@ fn _sibling_priced(
 /// `held`: the values the changed instructions name, and the other sides of
 /// their copies, are priced again from where they occur; the rest stand.
 fn _sibling_free_after(
-    held: &Siblings,
+    held: Siblings,
     body: &LirBody,
     live: &impl crate::backend::live::Ranges,
     busy: &Frequency,
     changes: &ranges::Changes,
 ) -> Siblings {
-    let mut siblings = held.clone();
+    let mut siblings = held;
     let mut affected: crate::support::hash::HashSet<u32> = changes.touched.clone();
     for (one, put) in changes.gone.iter().map(|one| (one, false)).chain(changes.added.iter().map(|one| (one, true))) {
         for value in _impure_names(one) {
@@ -3983,7 +4046,8 @@ fn _sibling_free_after(
         partners
     });
     affected.extend(partners);
-    let mut free = (*siblings.free).clone();
+    let mut kept = std::mem::take(&mut siblings.free);
+    let free = Arc::make_mut(&mut kept);
     for value in &affected {
         free.swap_remove(value);
     }
@@ -4005,7 +4069,7 @@ fn _sibling_free_after(
             }
         }
     });
-    siblings.free = Arc::new(free);
+    siblings.free = kept;
     siblings
 }
 
@@ -4272,14 +4336,15 @@ fn _fold_free(
 /// value a changed instruction names can have a different sum, worked out again
 /// from where it is read, in the order the whole body adds it.
 fn _fold_free_after(
-    held: &IndexMap<u32, f64>,
+    held: Arc<IndexMap<u32, f64>>,
     body: &LirBody,
     profile: &Profile,
     busy: &Frequency,
     touched: &crate::support::hash::HashSet<u32>,
-) -> IndexMap<u32, f64> {
+) -> Arc<IndexMap<u32, f64>> {
     let discounts = FoldDiscounts::of(profile);
-    let mut free = held.clone();
+    let mut held = held;
+    let free = Arc::make_mut(&mut held);
     for value in touched {
         free.swap_remove(value);
     }
@@ -4301,7 +4366,7 @@ fn _fold_free_after(
             }
         }
     });
-    free
+    held
 }
 
 /// Discount reads by the target-specific saving from folding them.
