@@ -61,8 +61,13 @@ class InvariantLoadsTests(unittest.TestCase):
     def test_a_loop_with_no_reload_falls_short_of_nothing(self):
         self.assertFalse(run.invariant_loads_short([loop(20, 9)], [(5, 1)]))
 
-    def test_no_reference_is_no_bar(self):
-        self.assertIsNone(run.invariant_loads_short([loop(11, 3, invariant=2)], []))
+    def test_a_run_without_references_judges_nothing(self):
+        self.assertIsNone(run.invariant_loads_short([loop(11, 3, invariant=2)], [], references=False))
+
+    def test_references_that_gave_no_bar_leave_no_shortfall(self):
+        """x_elemf64_usesquare: Open Watcom's loop calls a helper and gcc built none: 19 f64 rows stayed listed, as
+        unjudged, whatever was done."""
+        self.assertFalse(run.invariant_loads_short([loop(16, 6, invariant=3)], []))
 
     def test_a_reference_that_calls_a_helper_is_no_bar(self):
         result = run.Result()

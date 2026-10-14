@@ -276,14 +276,18 @@ def reference_bars(result: Result, case: str, config: str) -> list[tuple[int, in
     return [total(r) for r in refs if r and not any(f.calls for f in r)]
 
 
-def invariant_loads_short(facts: list, bars: list[tuple[int, int]]) -> bool | None:
+def invariant_loads_short(facts: list, bars: list[tuple[int, int]], references: bool = True) -> bool | None:
     """Whether a loop that reloads what it never changes falls short: only where a reference compiled it with fewer
     instructions or fewer memory operands (the bar of size-vs-ref and memory-vs-ref). A register file smaller than
     the loop's live values makes a reload the minimum, and gcc reaches "no reload" by spilling a cell the loop
     changes, at more memory operands: 150 of the 190 x_ kernels with a reload at 486-O2 had no more of either than
-    both references. None where no reference was built: there is no bar to judge by."""
-    if not bars:
+    both references. None where no reference was built (`references` False): there is nothing to judge by. Where they were
+    built and none is a bar (it failed to build, or calls a helper that hides its cost) the loop is judged and not
+    short: a gap needs a loop to be smaller than."""
+    if not references:
         return None
+    if not bars:
+        return False
     size, memory = total(facts)
     return sum(f.invariant_loads for f in facts) > 0 and (size > min(b[0] for b in bars) or memory > min(b[1] for b in bars))
 
@@ -336,7 +340,7 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result, re
                         if counted and max(counted) > bound:
                             result.short.add((*key, "mir-" + kind))
                 if fits and all(w.invariant_loads == 0 for w in wants):
-                    short = invariant_loads_short(facts, reference_bars(result, case.name, config.tag) if references else [])
+                    short = invariant_loads_short(facts, reference_bars(result, case.name, config.tag), references)
                     if short is not None:
                         result.judged.add((*key, "invariant-loads"))
                         if short:
