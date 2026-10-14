@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatassign.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatassign.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatassign.rs sha256:f59e0488de2a70215f6f1508a0fb99130c1b5a7e5dab7719760ca3428f30e978 -->
+<!-- src: crates/backend/llrm-core/src/backend/floatassign.rs sha256:4664a01db44601d63cb1b0cf8211b5bc66c7b21a42309b76d2bf1bb38f6e1ceb -->
 
 # floatassign
 

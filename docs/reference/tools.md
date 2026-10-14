@@ -17,7 +17,7 @@ name them in an environment variable, listed in the tool's header.
 | `wrapcomments.py` | Wraps the comments of C files at 80 columns |
 | `gate/gate.py` | The gate in tiers: `plan` picks the steps a diff needs from `gate/tiers.toml`, `run` runs them concurrently |
 | `gate/tiers.toml` | The path map: which paths select which tests |
-| `gate/doctests.py` | Exit 0 when a doc comment holds a fence rustdoc would run, so the gate runs `cargo test --doc` only then |
+| `gate/doctests.py` | Exit 0 when a doc comment holds a fence or an indented block rustdoc would run, so the gate runs `cargo test --doc` only then |
 | `gate/proctree.py`, `gate/pytest_cpulimit.py` | CPU of a process tree; a pytest plugin that fails a test by CPU seconds, not wall time |
 | `ci/nib_lsp_paths.py` | The paths whose change can change the `nib-lsp` binary; `--write` puts them in the release workflow |
 | `ci/restore_mtime.py` | Sets each file's mtime to its last commit's so a restored build cache stays valid |
@@ -65,7 +65,7 @@ name them in an environment variable, listed in the tool's header.
 | `sizes-known.txt` | Programs `sizes.py` builds that do not compile yet; it may only shrink |
 | `innerloops.py`, `msp430.py` | Each innermost loop's instructions and memory operands, from an object's bytes (OMF or ELF, x86 or MSP430) |
 | `loops/run.py` | The loop corpus: cases written once in `loops/spec.py`, emitted as C, BASIC and Nib, checked by an oracle and measured against bounds `loops/expect.py` derives from the target; `--quick` for a short run |
-| `loops/shortfalls.txt`, `loops/known.toml` | What falls short today, each with its issue; a run fails on a new shortfall and on a listed one that is gone. `invariant-loads` (a loop reloading what it never changes) is a shortfall only where Open Watcom or gcc compiled the same loop with fewer instructions or fewer memory operands, the bar of `size-vs-ref`; with no reference built it is not judged. `--dump` refuses a tmpfs: a run writes hundreds of thousands of files |
+| `loops/shortfalls.txt`, `loops/known.toml` | What falls short today, each with its issue; a run fails on a new shortfall and on a listed one that is gone, and a run of everything fails on a `known.toml` bug no failing line matches. `invariant-loads` (a loop reloading what it never changes) is a shortfall only where Open Watcom or gcc compiled the same loop with fewer instructions or fewer memory operands, the bar of `size-vs-ref`; where no reference gave a bar (gcc built none, or Open Watcom's loop calls a helper) the class is `invariant-loads-ideal`, as `ivs-ideal` is, and it stays a shortfall; with no reference built it is not judged. `--dump` refuses a tmpfs: a run writes hundreds of thousands of files |
 | `scoreboard.py` | `llrm-c` against gcc: instructions per level, and where llrm's go, by family |
 | `pressure.py` | The spill model's forecast beside the allocator's spill code, per function of the bench programs |
 | `dwarf-coverage.sh` | `llvm-dwarfdump --statistics` of every bench C program built by `llrm-c` and by gcc |
