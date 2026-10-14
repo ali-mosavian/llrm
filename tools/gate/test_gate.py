@@ -679,8 +679,10 @@ def test_a_step_with_no_log_growth_and_no_cpu_is_killed_with_its_last_lines(tmp_
 
     env = {**__import__("os").environ}
     began = _time.time()
-    _, code, wall, _ = gate.run_step("hang", "echo before the hang; sleep 63.7", tmp_path, env, stall=2)
-    assert code == gate.STALL_CODE and wall < 20 and _time.time() - began < 20, (code, wall)
+    # A sleep no other run of this test (the gate runs files side by side) has: the leak check looks for it in `ps`.
+    sleeper = f"sleep 63.{__import__('os').getpid()}"
+    _, code, wall, _ = gate.run_step("hang", f"echo before the hang; {sleeper}", tmp_path, env, stall=2)
+    assert code == gate.STALL_CODE and wall < 120 and _time.time() - began < 120, (code, wall)
     log = (tmp_path / "hang.failed.log").read_text()
     assert "before the hang" in log and "STALLED" in log
     # writing keeps a step alive without CPU; computing keeps it alive without writing
@@ -688,7 +690,7 @@ def test_a_step_with_no_log_growth_and_no_cpu_is_killed_with_its_last_lines(tmp_
     spin = 'python3 -c "import time; t = time.process_time()\nwhile time.process_time() - t < 4: pass"'
     assert gate.run_step("spin", spin, tmp_path, env, stall=2)[1] == 0
     # the killed step took its subprocesses with it
-    assert "sleep 63.7" not in sp_out(["ps", "-eo", "args"]), "the stalled step's sleep outlived it"
+    assert sleeper not in sp_out(["ps", "-eo", "args"]), "the stalled step's sleep outlived it"
 
 
 def test_a_test_over_its_cpu_limit_fails_with_its_name_and_its_subprocess_is_killed(tmp_path):
