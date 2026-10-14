@@ -1,4 +1,4 @@
-reason = "bq32: ASC's result is a word of the target, so the description's body for it is inlined at m32 as at m16 (crc 1533 -> 1184, jpeg -7%); stft +9 to +13 instructions of a hundred million"
+reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out (hanoi 729041 -> 352237)"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 57537499
-code_bytes = 6337
+instructions = 63758974
+code_bytes = 6446
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 57864098
-code_bytes = 6057
+instructions = 64085820
+code_bytes = 6152
 data_bytes = 29697
 bss_bytes = 0
 

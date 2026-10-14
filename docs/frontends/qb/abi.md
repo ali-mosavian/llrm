@@ -160,5 +160,3 @@ that site (VBDOS only).
 `ON ERROR` registration is executable state, not function metadata. Each
 source statement materializes `B$OEGA` with a far module offset or `B$OEGP`
 with a local offset. `ON ERROR GOTO 0` passes zero at that exact position.
-
-The runtime's bodies for `ASC`, `LEN`, `MID$` and `CHR$` (`runtime.toml`'s `semantics`) are defined for the inliner with the target's word as their integer; the front end declares each call with that type (`ASC`'s result too), or the module's declaration does not match and the call stays a call (`tests/qb_flat_meanings.rs`).
