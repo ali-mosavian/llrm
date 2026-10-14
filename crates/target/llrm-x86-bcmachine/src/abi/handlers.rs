@@ -1,4 +1,4 @@
-//! Port of `qbopt/abi/handlers.py`: code entries passed to the runtime's
+//! Code entries passed to the runtime's
 //! established far-address registrations.
 
 use std::collections::{BTreeMap, BTreeSet};

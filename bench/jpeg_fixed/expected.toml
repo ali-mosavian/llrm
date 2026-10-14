@@ -1,8 +1,8 @@
-reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out (hanoi 729041 -> 352237)"
+reason = "jumpthread threads every branch on a phi of constants: jpeg_fixed/jpeg_single code -8..-15 B (bas, bq16, bq32) and bq32 instructions -0.003%; grep bq32 -O2 code 1471 -> 1494 B (+1.6%), instructions -0.006%"
 blessed = "2026-10-14"
 
 [bas.O2]
-code_bytes = 5551
+code_bytes = 5543
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 990.2466
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 990.065
 
 [bq16.O2]
-code_bytes = 5587
+code_bytes = 5579
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 1078.9088
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 87691882
-code_bytes = 6641
+instructions = 93403207
+code_bytes = 6921
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89343506
-code_bytes = 6322
+instructions = 95494065
+code_bytes = 6417
 data_bytes = 29209
 bss_bytes = 0
 

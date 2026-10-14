@@ -1,10 +1,8 @@
 //! MIR to machine bytes: the instructions this pass writes itself.
 //!
-//! Port of `qbopt/backend/select.py`. Python's iced `Instruction.create_*`
-//! calls are iced's own `Instruction::with*`, so every encoding is the same
-//! library's answer. An exception Python lets escape (an immediate iced
-//! refuses outside a `try`, an index out of range) panics here with the
-//! same message.
+//! Every encoding is iced's own `Instruction::with*`, so the same library's
+//! answer. An error iced refuses (an immediate outside a `try`, an index out
+//! of range) panics here.
 
 use std::sync::LazyLock;
 

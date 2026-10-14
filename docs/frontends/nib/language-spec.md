@@ -2099,7 +2099,7 @@ the value; the table doubles before an insert that would pass a load of 3/4.
 The compiler emits length, indexing, slicing, and iteration inline. The
 runtime is written in the language itself (`crates/frontends/llrm-nib/src/runtime/*.nib`);
 only start-up and the OS layer are assembly. Each routine is a code segment of
-its own when `--procedure-segments` is given, so a program links only the
+its own COMDAT when `--procedure-segments` is given, so a program links only the
 routines it reaches. Routines are named `N$`, a letter for the group, then
 the operation:
 

@@ -1,6 +1,6 @@
 //! The machine operand model: `Reg`, `Held`, `Imm`, `Address`, `Mem`, `Loc`,
-//! `Effects`, `Operation` and `Semantics`. Direct port of Python's
-//! `qbopt.model.ir` machine-semantics vocabulary, in a crate of its own so the
+//! `Effects`, `Operation` and `Semantics`. The machine-semantics
+//! vocabulary, in a crate of its own so the
 //! BC lifter and the backend both depend on it and neither owns it.
 //!
 //! This is deliberately distinct from the existing `MachineInstruction`
@@ -27,8 +27,6 @@ pub mod registers;
 pub use registers::{FRAME, STACK};
 
 /// One physical register operand, at the instruction's width.
-///
-/// Direct port of `qbopt.model.ir:Reg`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Reg {
     pub register: RegId,
@@ -63,8 +61,6 @@ impl Reg {
 }
 
 /// An SSA value held in an as-yet undecided physical register.
-///
-/// Direct port of `qbopt.model.ir:Held`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Held {
     pub value: u32,
@@ -72,8 +68,6 @@ pub struct Held {
 }
 
 /// An immediate instruction operand.
-///
-/// Direct port of `qbopt.model.ir:Imm`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Imm {
     pub value: i64,
@@ -83,7 +77,7 @@ pub struct Imm {
 
 /// An address used as a value, rather than a memory access.
 ///
-/// Direct port of `qbopt.model.ir:Address`. Equality and hashing take every
+/// Equality and hashing take every
 /// field: two addresses spelled through different registers or displacements
 /// are different addresses. (Python left the encoding fields out;
 /// that made `==` mean "the same address modulo how it is encoded", which is no
@@ -123,7 +117,7 @@ impl AddressRef {
 
 /// A memory operand.
 ///
-/// Direct port of `qbopt.model.ir:Mem`. Equality and hashing take every field,
+/// Equality and hashing take every field,
 /// the encoding details (`through`, `offset`, `disp_width`, `index_through`)
 /// included: see `Address`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -224,8 +218,6 @@ fn _in_frame(addr: Option<Addr>) -> bool {
 }
 
 /// Every selected machine operand Python LIR may carry.
-///
-/// Direct port of `qbopt.model.ir:Loc`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Loc {
     Reg(Reg),
@@ -289,8 +281,6 @@ impl Loc {
 pub use flag::Flag;
 
 /// Conservative decoded effects of one selected operation.
-///
-/// Direct port of `qbopt.model.ir:Effects`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Effects {
     pub defs: Option<BTreeSet<RegId>>,
@@ -331,7 +321,7 @@ pub static ANY_MEMORY: LazyLock<Vec<Mem>> = LazyLock::new(|| vec![Mem::new(None,
 
 /// What a selected operation computes.
 ///
-/// Direct port of `qbopt.model.ir:Operation`; the display spelling is the
+/// The display spelling is the
 /// Python `StrEnum` value, not a target opcode.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Operation {
@@ -450,8 +440,6 @@ impl fmt::Display for Operation {
 }
 
 /// Typed selected semantics for one instruction.
-///
-/// Direct port of `qbopt.model.ir:Semantics`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Semantics {
     pub op: Operation,
