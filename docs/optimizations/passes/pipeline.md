@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:5a2f4287ee7cb64342060922d8bcfcdd3cd3c298d503ad78cfcd2c9acc0df464 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:ec5de1aeb445ad9ba9701699ee0e93df5e8b35fde06050506b74f059bec7855f -->
 
 # pipeline
 
@@ -28,6 +28,7 @@ flowchart TB
     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+    dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
     mrg["<b>merge (once)</b>"]:::mid
@@ -41,7 +42,8 @@ flowchart TB
   rnd --> peel
   peel --> unsw
   unsw --> fuse
-  fuse --> jam
+  fuse --> dist
+  dist --> jam
   jam --> mrg
   mrg --> c
   c -.->|"a changed body goes<br/>back through B"| sroa
@@ -109,6 +111,7 @@ counterpart of each limit, is
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
 | `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
+| `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 | `fuse` | `fuse` (off by default; on at -Omax) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 

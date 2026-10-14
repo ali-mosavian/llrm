@@ -2,10 +2,12 @@
 //! pipeline's own passes and replaces the body only if it is better.
 //!
 //! # How it works
-//! `adopted(unit, outer, costs, candidate, reoptimize, pricing)` runs
-//! `reoptimize` over `candidate`, then compares it with the body in `unit`. It
-//! is kept only when it has fewer loops, no more operations and no larger
-//! price; a body with an operation the target does not price is never better.
+//! `adopted(unit, outer, costs, candidate, reoptimize, pricing, gain)` runs
+//! `reoptimize` over `candidate`, then compares it with the body in `unit`. By
+//! `Gain::FewerLoops` it is kept only when it has fewer loops, no more
+//! operations and no larger price; by `Gain::CheaperBy(percent)` when its price
+//! is smaller by that percent. A body with an operation the target does not
+//! price is never better.
 //! The price is [`crate::profit::weighted`] (`Pricing::Work`) or
 //! [`crate::profit::motion_price`], which adds what the registers spill
 //! (`Pricing::WithSpills`), each block weighted by the trips `induction`
@@ -19,10 +21,11 @@
 //!
 //! # Example
 //! None: a library. [`crate::unswitch`] judges a specialised loop by work
-//! alone, [`crate::loopfuse`] a fused one with the spills.
+//! alone, [`crate::loopfuse`] a fused one with the spills, and
+//! [`crate::loopdistribute`] a split one by its price alone.
 //!
 //! # Provides
-//! `adopted`, `Pricing`.
+//! `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`.
 //!
 //! # Needs
 //! [`crate::profit`] and the target's operation costs.
@@ -38,6 +41,18 @@ use llrm_mir::passes::{Outer, Unit};
 
 use crate::profit::{self, OperationCosts};
 
+/// What makes a candidate better than the body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gain {
+    /// Fewer loops, no more operations and no larger price: a rewrite that
+    /// joins or removes loops.
+    FewerLoops,
+    /// A price smaller by this percent, whatever the loops and operations: a
+    /// rewrite that makes more of them, kept only for what it saves, and
+    /// that by more than the price's own error.
+    CheaperBy(i64),
+}
+
 /// What a body is priced by.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Pricing {
@@ -48,9 +63,54 @@ pub enum Pricing {
     WithSpills,
 }
 
+/// How often each block of `state` runs per entry, as `adopted` prices it: the
+/// trips `induction` proves in place of the conventional ten.
+pub fn frequencies(
+    unit: &Unit,
+    outer: &Outer,
+    state: &Function,
+) -> Option<std::collections::BTreeMap<i64, i64>> {
+    let within = memory::Unit::within(unit.context, unit.layout, state, outer);
+    // A body of its own, which no manager has seen.
+    let registers = llrm_analysis::consts::known(&within);
+    let shape = cfg::Shape::of(state);
+    let within = within.with_registers(&registers).with_shape(&shape);
+    let trips = profit::proven_trips(&within, &registers);
+    profit::_frequencies(unit.context, unit.metadata, &outer.globals, state, Some(&trips))
+}
+
+/// What `state` costs at `frequency`, as `adopted` judges it: a body with an
+/// operation the target does not price has none.
+pub fn priced_at(
+    unit: &Unit,
+    outer: &Outer,
+    costs: &OperationCosts,
+    state: &Function,
+    pricing: Pricing,
+    frequency: &std::collections::BTreeMap<i64, i64>,
+) -> Option<i64> {
+    match pricing {
+        Pricing::Work => profit::weighted(unit.context, unit.layout, state, outer.callees(), costs, frequency),
+        Pricing::WithSpills => {
+            profit::motion_price(unit.context, unit.layout, outer, state, costs, profit::registers(outer), frequency)
+        }
+    }
+}
+
+/// What `state` costs, as `adopted` judges it.
+pub fn priced(
+    unit: &Unit,
+    outer: &Outer,
+    costs: &OperationCosts,
+    state: &Function,
+    pricing: Pricing,
+) -> Option<i64> {
+    priced_at(unit, outer, costs, state, pricing, &frequencies(unit, outer, state)?)
+}
+
 /// `candidate`, made over `unit`'s body, cleaned by `reoptimize` and put in
-/// its place when it has fewer loops, no more operations and no larger price;
-/// whether it was. `outer` is what the prices' analyses read of the module.
+/// its place when it is better by `gain`; whether it was. `outer` is what the
+/// prices' analyses read of the module.
 pub fn adopted(
     unit: &mut Unit,
     outer: &Outer,
@@ -58,6 +118,7 @@ pub fn adopted(
     mut candidate: Function,
     reoptimize: &mut dyn FnMut(&mut Unit),
     pricing: Pricing,
+    gain: Gain,
 ) -> bool {
     reoptimize(&mut Unit {
         context: &mut *unit.context,
@@ -71,32 +132,29 @@ pub fn adopted(
 
     let size = |state: &Function| occurrence::operations(state).count();
     let count = |state: &Function| cfg::Shape::of(state).loops.len();
-    let price = |state: &Function| {
-        let within = memory::Unit::within(unit.context, unit.layout, state, outer);
-        // A body of its own, which no manager has seen.
-        let registers = llrm_analysis::consts::known(&within);
-        let shape = cfg::Shape::of(state);
-        let within = within.with_registers(&registers).with_shape(&shape);
-        let trips = profit::proven_trips(&within, &registers);
-        let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, state, Some(&trips))?;
-        match pricing {
-            Pricing::Work => profit::weighted(unit.context, unit.layout, state, outer.callees(), costs, &frequency),
-            Pricing::WithSpills => profit::motion_price(
-                unit.context,
-                unit.layout,
-                outer,
-                state,
-                costs,
-                profit::registers(outer),
-                &frequency,
-            ),
-        }
-    };
-    let worse = match (price(unit.function), price(&candidate)) {
-        (Some(before), Some(after)) => after > before,
+    let price = |state: &Function| priced(unit, outer, costs, state, pricing);
+    let prices = (price(unit.function), price(&candidate));
+    llrm_support::debug!(
+        "candidate",
+        "price {:?} -> {:?}, loops {} -> {}",
+        prices.0,
+        prices.1,
+        count(unit.function),
+        count(&candidate)
+    );
+    let worse = |kept: &dyn Fn(i64, i64) -> bool| match prices {
+        (Some(before), Some(after)) => !kept(after, before),
         _ => true,
     };
-    if count(&candidate) >= count(unit.function) || size(&candidate) > size(unit.function) || worse {
+    let refused = match gain {
+        Gain::FewerLoops => {
+            count(&candidate) >= count(unit.function)
+                || size(&candidate) > size(unit.function)
+                || worse(&|after, before| after <= before)
+        }
+        Gain::CheaperBy(percent) => worse(&|after, before| after * 100 < before * (100 - percent)),
+    };
+    if refused {
         return false;
     }
     *unit.function = candidate;

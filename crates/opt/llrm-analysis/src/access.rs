@@ -17,7 +17,8 @@
 //! access, a call, an `invoke` or an `alloca` in `scanned`. A value defined
 //! anywhere else is an invariant term.
 //!
-//! `Roots` numbers the distinct roots, so two listings made with one `Roots`
+//! `Apart` says which references through different roots may meet. `Roots`
+//! numbers the distinct roots, so two listings made with one `Roots`
 //! (two loops, say) agree on which accesses share an object. A `Reference`
 //! says whether its root is an object's own address (`memory::object_of`: an
 //! alloca or a global): two such roots that differ are different objects, and
@@ -43,8 +44,8 @@
 //! `access_tests.rs`.
 //!
 //! # Provides
-//! `references`, `Reference`, `Roots`. Consumers: `unroll_jam` and `loopfuse`
-//! (`crates/opt/llrm-transforms`).
+//! `references`, `Reference`, `Roots`, `Apart`. Consumers: `unroll_jam` and
+//! `loopfuse` (`crates/opt/llrm-transforms`).
 //!
 //! # See also
 //! LLVM ScalarEvolution add recurrences read by `DependenceAnalysis`; gcc's
@@ -71,6 +72,43 @@ pub struct Reference {
     pub root: Operand,
     /// `root` is an object's own address: an alloca or a global.
     pub identified: bool,
+}
+
+/// Asked of two references through different roots: whether they cannot meet.
+/// Both roots are objects' own addresses (`memory::object_of`: two such that
+/// differ are two objects), or what each may reach, as the alias owner's
+/// points-to puts it, is disjoint. The points-to is found at the first pair
+/// that needs it.
+pub struct Apart<'a> {
+    unit: &'a memory::Unit<'a>,
+    points: std::cell::OnceCell<Option<std::borrow::Cow<'a, crate::alias::PointsTo>>>,
+}
+
+impl<'a> Apart<'a> {
+    pub fn new(unit: &'a memory::Unit<'a>) -> Self {
+        Self { unit, points: std::cell::OnceCell::new() }
+    }
+
+    /// `one` and `other` are through different roots and may meet: nothing
+    /// says they do not.
+    pub fn unknown(
+        &self,
+        one: &Reference,
+        other: &Reference,
+    ) -> bool {
+        if one.root == other.root || (one.identified && other.identified) {
+            return false;
+        }
+        let points = self.points.get_or_init(|| self.unit.pointers().ok());
+        let provenance = |access: &Reference| {
+            let reference = self.unit.reference(access.inst)?;
+            points.as_ref()?.reference(self.unit, &reference)
+        };
+        match (provenance(one), provenance(other)) {
+            (Some(left), Some(right)) => left.intersects(&right),
+            _ => true,
+        }
+    }
 }
 
 /// The distinct roots of the references listed with it, numbered in order of

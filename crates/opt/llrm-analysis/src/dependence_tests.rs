@@ -162,3 +162,34 @@ fn unlike_accesses_conflict_only_where_unknown() {
     let symbolic = Access { symbols: vec![(7, 1)], ..walker(0, 4, 4, false) };
     assert!(!fusable(&[write], &[symbolic], None));
 }
+
+/// `a[i] = ..` then `.. = a[i - 1]`: the read meets the write of the trip
+/// before, so the write comes first: forward only, and a loop of the write and
+/// a loop of the read after it is right. `a[i + 1]` is read before it is
+/// written: backward only.
+#[test]
+fn a_body_s_accesses_meet_forward_or_backward_by_their_offset() {
+    let write = walker(0, 4, 4, true);
+    assert_eq!(meetings(&write, &walker(0, 4, 4, false), None), Meetings { forward: true, backward: false });
+    assert_eq!(meetings(&write, &walker(-4, 4, 4, false), None), Meetings { forward: true, backward: false });
+    assert_eq!(meetings(&write, &walker(4, 4, 4, false), None), Meetings { forward: false, backward: true });
+    assert_eq!(meetings(&write, &walker(400, 4, 4, false), Some(10)), Meetings { forward: false, backward: false });
+}
+
+/// An invariant cell is met by every pair of trips, both ways, from two trips
+/// on.
+#[test]
+fn an_invariant_cell_is_met_both_ways_by_two_trips_and_one_way_by_one() {
+    let (write, read) = (walker(0, 0, 4, true), walker(0, 0, 4, false));
+    assert_eq!(meetings(&write, &read, None), Meetings { forward: true, backward: true });
+    assert_eq!(meetings(&write, &read, Some(1)), Meetings { forward: true, backward: false });
+}
+
+/// What is not known apart on one object meets both ways; two objects never.
+#[test]
+fn unlike_accesses_of_one_body_meet_both_ways_and_two_objects_none() {
+    let both = Meetings { forward: true, backward: true };
+    assert_eq!(meetings(&walker(0, 4, 4, true), &walker(0, 8, 4, false), None), both);
+    let other = Access { object: 1, ..walker(0, 4, 4, false) };
+    assert_eq!(meetings(&walker(0, 4, 4, true), &other, None), Meetings { forward: false, backward: false });
+}

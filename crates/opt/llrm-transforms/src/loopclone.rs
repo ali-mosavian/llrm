@@ -67,6 +67,10 @@
 //! The residual loop stays so the result is right whatever the trip count;
 //! the caller proves it unreachable where the count is exact.
 //!
+//! `copied(function, loop, count)` makes `count` whole loops of it, each
+//! running every trip, one after another ahead of the original: the copy loop
+//! distribution and loop versioning start from.
+//!
 //! `chained(function, loop, copies)` is the partial unroll LLVM's `UnrollLoop`
 //! makes when no iteration is left over. The loop must leave only from its
 //! header, by a conditional branch. The copies hold no header test: the
@@ -128,8 +132,9 @@
 //! peeled once where the test peels twice.
 //!
 //! # Runs
-//! Called by [`crate::peel`] and [`crate::unswitch`] (`peeled`) and
-//! [`crate::unroll_jam`] (`chained`); not a pass.
+//! Called by [`crate::peel`] and [`crate::unswitch`] (`peeled`),
+//! [`crate::unroll_jam`] (`chained`) and [`crate::loopdistribute`] (`copied`);
+//! not a pass.
 //!
 //! # Needs
 //! LCSSA ([`crate::lcssa`]) and a simplified loop ([`crate::loopsimplify`]).
@@ -144,10 +149,84 @@ use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{Flags, Opcode};
 
 use crate::edges;
 use crate::lcssa::{arms, definitions, from_arms, operations};
+
+/// What cloning a loop starts from: the graph, the one block that enters the
+/// loop, its latch and its blocks in layout order.
+struct Plan {
+    graph: Vec<cfg::Block>,
+    entry: i64,
+    latch: i64,
+    originals: Vec<i64>,
+}
+
+/// `loop_`'s `Plan`, or `None` where it is not a loop these functions clone;
+/// `leaves_from_latch` lets its latch also leave it, as a loop tested after
+/// each trip does.
+fn plan(
+    function: &Function,
+    loop_: &Loop,
+    leaves_from_latch: bool,
+) -> Option<Plan> {
+    let graph = cfg::graph(function);
+    let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
+    let predecessors = loops::predecessors(&graph);
+    if Some(loop_.header) == function.entry().map(cfg::id) || loop_.latches.len() != 1 {
+        return None;
+    }
+    let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();
+    if outside.len() != 1 {
+        return None;
+    }
+    let entry = outside[0];
+    let latch = *loop_.latches.first().expect("one latch");
+    let back =
+        blocks[&latch].succ.contains(&loop_.header) && (leaves_from_latch || blocks[&latch].succ == [loop_.header]);
+    if blocks[&entry].succ != [loop_.header] || !back {
+        return None;
+    }
+    if loop_.body.iter().any(|at| *at != loop_.header && !predecessors[at].is_subset(&loop_.body)) {
+        return None;
+    }
+    let originals =
+        graph.iter().filter(|block| loop_.body.contains(&block.at)).map(|block| block.at).collect::<Vec<_>>();
+    if originals.iter().any(|&at| {
+        blocks[&at].succ.len() > 1
+            && function
+                .terminator(cfg::block(at))
+                .is_none_or(|last| !matches!(function.instruction(last).opcode, Opcode::Br | Opcode::Switch))
+    }) {
+        return None;
+    }
+    let defined = definitions(function, &loop_.body);
+    for block in graph.iter().filter(|block| !loop_.body.contains(&block.at)) {
+        let at = cfg::block(block.at);
+        let reads = |inst: InstId| {
+            function
+                .instruction(inst)
+                .operands
+                .iter()
+                .any(|operand| matches!(operand, Operand::Value(value) if defined.contains_key(value)))
+        };
+        if operations(function, at).into_iter().any(reads) {
+            return None;
+        }
+        if edges::phis(function, at).into_iter().any(|phi| {
+            arms(function, phi)
+                .into_iter()
+                .any(
+                    |(value, source)| matches!(value, Operand::Value(value) if defined.contains_key(&value))
+                        && !loop_.body.contains(&cfg::id(source)),
+                )
+        }) {
+            return None;
+        }
+    }
+    Some(Plan { graph, entry, latch, originals })
+}
 
 /// `count` iterations of `loop_` cloned ahead of it, or `None`, changing
 /// nothing, where the loop is not one this can clone. Each iteration's map
@@ -161,59 +240,7 @@ pub fn peeled(
         return Err("peeling needs a positive iteration count".to_owned());
     }
     let count = count as usize;
-    let graph = cfg::graph(function);
-    let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
-    let predecessors = loops::predecessors(&graph);
-    if Some(loop_.header) == function.entry().map(cfg::id) || loop_.latches.len() != 1 {
-        return Ok(None);
-    }
-    let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();
-    if outside.len() != 1 {
-        return Ok(None);
-    }
-    let entry = outside[0];
-    let latch = *loop_.latches.first().expect("one latch");
-    if blocks[&entry].succ != [loop_.header] || blocks[&latch].succ != [loop_.header] {
-        return Ok(None);
-    }
-    if loop_.body.iter().any(|at| *at != loop_.header && !predecessors[at].is_subset(&loop_.body)) {
-        return Ok(None);
-    }
-    let originals =
-        graph.iter().filter(|block| loop_.body.contains(&block.at)).map(|block| block.at).collect::<Vec<_>>();
-    if originals.iter().any(|&at| {
-        blocks[&at].succ.len() > 1
-            && function
-                .terminator(cfg::block(at))
-                .is_none_or(|last| !matches!(function.instruction(last).opcode, Opcode::Br | Opcode::Switch))
-    }) {
-        return Ok(None);
-    }
-    let defined = definitions(function, &loop_.body);
-    for block in graph.iter().filter(|block| !loop_.body.contains(&block.at)) {
-        let at = cfg::block(block.at);
-        let reads = |inst: InstId| {
-            function
-                .instruction(inst)
-                .operands
-                .iter()
-                .any(|operand| matches!(operand, Operand::Value(value) if defined.contains_key(value)))
-        };
-        if operations(function, at).into_iter().any(reads) {
-            return Ok(None);
-        }
-        if edges::phis(function, at).into_iter().any(|phi| {
-            arms(function, phi)
-                .into_iter()
-                .any(
-                    |(value, source)| matches!(value, Operand::Value(value) if defined.contains_key(&value))
-                        && !loop_.body.contains(&cfg::id(source)),
-                )
-        }) {
-            return Ok(None);
-        }
-    }
-
+    let Some(Plan { graph, entry, latch, originals }) = plan(function, loop_, false) else { return Ok(None) };
     let mut labels: Vec<BTreeMap<i64, BlockId>> = Vec::new();
     let mut copies: Vec<BTreeMap<ValueId, ValueId>> = Vec::new();
     let mut cloned = Vec::new();
@@ -309,6 +336,130 @@ pub fn peeled(
         }
     }
     Ok(Some(labels))
+}
+
+/// One copy of a loop `copied` made: its blocks and instructions by their
+/// originals'.
+#[derive(Clone, Debug)]
+pub struct LoopCopy {
+    pub blocks: BTreeMap<i64, BlockId>,
+    pub instructions: IdMap<InstId, InstId>,
+}
+
+/// `count` whole copies of `loop_`, each a loop of its own that runs every
+/// trip, in order ahead of `loop_`, which runs last: each copy's one exit
+/// enters the next, through a block of its own. `None`, changing nothing,
+/// where the loop is not one `peeled` can clone or has other than one exit.
+/// The copies' values are theirs: what the loop defines is not read outside it
+/// (LCSSA, as `peeled` needs), so no exit phi gains an arm.
+pub fn copied(
+    function: &mut Function,
+    loop_: &Loop,
+    count: usize,
+) -> Result<Option<Vec<LoopCopy>>, String> {
+    if count < 1 {
+        return Err("copying needs a positive number of copies".to_owned());
+    }
+    let Some(Plan { graph, entry, originals, .. }) = plan(function, loop_, true) else { return Ok(None) };
+    let leaving = graph
+        .iter()
+        .filter(|block| loop_.body.contains(&block.at))
+        .flat_map(|block| block.succ.iter().filter(|to| !loop_.body.contains(to)))
+        .count();
+    if leaving != 1 {
+        return Ok(None);
+    }
+    let header = cfg::block(loop_.header);
+    let mut copies = Vec::new();
+    let mut values: Vec<IdMap<ValueId, ValueId>> = Vec::new();
+    for _ in 0..count {
+        let blocks = originals.iter().map(|&at| (at, function.create_block(None))).collect::<BTreeMap<_, _>>();
+        let mut instructions = IdMap::new();
+        let mut renamed = IdMap::new();
+        for &at in &originals {
+            function.insert_block(blocks[&at], None)?;
+            for inst in function.block(cfg::block(at)).instructions().to_vec() {
+                let copy = function.clone_instruction(inst);
+                function.insert(copy, Position::End(blocks[&at]))?;
+                if let (Some(original), Some(result)) =
+                    (function.instruction(inst).result, function.instruction(copy).result)
+                {
+                    renamed.insert(original, result);
+                }
+                instructions.insert(inst, copy);
+            }
+        }
+        copies.push(LoopCopy { blocks, instructions });
+        values.push(renamed);
+    }
+    // Where each copy's exit goes: a block that enters the next copy, the last
+    // one the loop itself.
+    let joints = (0..count).map(|_| function.create_block(None)).collect::<Vec<_>>();
+    for &joint in &joints {
+        function.insert_block(joint, None)?;
+    }
+    let start = |k: usize| if k == 0 { cfg::block(entry) } else { joints[k - 1] };
+    let renamed = |operand: Operand, k: usize| match operand {
+        Operand::Value(one) => Operand::Value(values[k].get(&one).copied().unwrap_or(one)),
+        other => other,
+    };
+    for (k, copy) in copies.iter().enumerate() {
+        for (original, &cloned) in copy.instructions.iter() {
+            let at = cfg::id(function.parent(original).expect("a placed instruction"));
+            let operands = if function.instruction(original).opcode == Opcode::Phi {
+                arms(function, original)
+                    .into_iter()
+                    .filter(|&(_, source)| at != loop_.header || cfg::id(source) != entry)
+                    .map(|(value, source)| (renamed(value, k), copy.blocks[&cfg::id(source)]))
+                    .chain((at == loop_.header).then(|| {
+                        let from = arms(function, original).into_iter().find(|&(_, source)| cfg::id(source) == entry);
+                        (from.expect("a value from the entry").0, start(k))
+                    }))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            if function.instruction(original).opcode == Opcode::Phi {
+                function.set_operands(cloned, from_arms(&operands));
+                continue;
+            }
+            let operands = function
+                .instruction(original)
+                .operands
+                .iter()
+                .map(|&operand| match operand {
+                    Operand::Block(target) => Operand::Block(match copy.blocks.get(&cfg::id(target)) {
+                        Some(&inside) => inside,
+                        None => joints[k],
+                    }),
+                    other => renamed(other, k),
+                })
+                .collect();
+            function.set_operands(cloned, operands);
+        }
+    }
+    // The joints, and the loop itself entered from the last.
+    for (k, &joint) in joints.iter().enumerate() {
+        let next = if k + 1 < count { copies[k + 1].blocks[&loop_.header] } else { header };
+        let jump = function.create_instruction(
+            Opcode::Br,
+            function.instruction(function.terminator(cfg::block(entry)).expect("a terminated entry")).ty,
+            vec![Operand::Block(next)],
+            Flags::default(),
+            None,
+        );
+        function.insert(jump, Position::End(joint))?;
+    }
+    let jump = function.terminator(cfg::block(entry)).expect("a terminated block");
+    edges::retarget(function, jump, header, copies[0].blocks[&loop_.header]);
+    for phi in edges::phis(function, header) {
+        let incoming = arms(function, phi)
+            .into_iter()
+            .map(|(value, source)| (value, if cfg::id(source) == entry { joints[count - 1] } else { source }))
+            .collect::<Vec<_>>();
+        function.set_operands(phi, from_arms(&incoming));
+    }
+    Ok(Some(copies))
 }
 
 /// `loop_` with `copies` more bodies chained in it: the latch of each runs on
