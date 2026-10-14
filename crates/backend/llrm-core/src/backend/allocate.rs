@@ -2331,9 +2331,7 @@ fn _allocated(
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value_following(&body));
-        let changes = llrm_support::debug::timed("regalloc changes", || {
-            before.as_ref().and_then(|before| ranges::changes(before, &body))
-        });
+        let changes = before.as_ref().and_then(|before| ranges::changes(before, &body));
         let earlier_live = Arc::clone(&facts.live);
         facts = Facts::of(
             &body,
