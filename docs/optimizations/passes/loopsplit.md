@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopsplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopsplit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopsplit.rs sha256:5d81a63e67eb8e0ddcb5998ca5ecb73ec5efb494c302f3529527fa1408fba4e2 -->
+<!-- src: crates/opt/llrm-transforms/src/loopsplit.rs sha256:1ac9666413401300c6e7036b945876af09532f049bba7e43b3e3fd121e166cdc -->
 
 # loopsplit
 
@@ -110,8 +110,8 @@ From unit test `an_early_test_of_the_counter_splits_the_loop` in
 `loopsplit_tests.rs`.
 
 ## Runs
-Once per body, after unswitching and before unroll-jam, at -O3
-(`-fsplit-loops`; not -Omax). The halves go through the scalar rounds again.
+Once per body, after unswitching and before unroll-jam, at -O3 and -Omax
+(`-fsplit-loops`). The halves go through the scalar rounds again.
 
 ## Needs
 [`crate::lcssa`](lcssa.md), [`crate::loopclone`](loopclone.md), `induction`'s counted proofs.

@@ -1,6 +1,6 @@
 # Optimization levels
 
-TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart with the source line. `-Omax` is every pass on with LLVM's -O3 budgets; `-O0..-O3` are gcc's definitions of the passes this compiler has.
+TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart with the source line. `-Omax` is every pass on with LLVM's -O3 budgets, except `unswitch` and `unroll_jam`, which stay off by decision (below); `-O0..-O3` are gcc's definitions of the passes this compiler has.
 
 ## Passes by level
 
@@ -38,7 +38,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir fill` | x | on | on | on | on | x |
 | `mir merge` | x | on | on | on | on | x |
 | `mir unswitch` | x | x | x | on | x | x |
-| `mir split` | x | x | x | on | x | x |
+| `mir split` | x | x | x | on | on | x |
 | `mir unroll-jam`: outer unroll at most 4 | x | x | x | on | x | x |
 | *MIR, whole module (`mir interprocedural`; stages as `LLRM_DEBUG=runs` names them)* | | | | | | |
 | `mir interprocedural` | x | on | on | on | on | on |
@@ -107,7 +107,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `masm cleaned returns` | on | on | on | on | on | on |
 | `stack checks` | on | on | on | on | on | on |
 
-Unroll and peel budgets are the target's `unroll_budget` (m32 150, m16 200) times `target_percent` (100; -O3 and -Omax 200). -O3's 300 departs from gcc's 200 (`max-completely-peeled-insns`) to clang's [`UnrollThresholdAggressive`](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L201), by the user's decision of 2026-10-11, on the 66 programs at -O3 (model clocks, 150 -> 300): geomean vs gcc 1.0193 -> 0.9828, vs clang 0.8814 -> 0.8499, worst row matmul 8.27 -> hanoi 3.60; five programs change (matmul 10,399 -> 1,189 clocks; crc, fpbench, nbody_single, x_nbody_f 4-10% faster), code of the 66 +16% (28,099 -> 32,695 B), compile instructions +14% on the programs (all from those five) and +0.29% on QCport (65 modules, one changes). -Os and -Oz are not in the table: -Os is -O2's passes, `peel` on, no copy grows the code, `inline` hint and hot bonuses off, 0 clocks per byte; -Oz is -Os less `unroll` and `peel`. -Omax does not turn `unswitch` on; gcc's -O3 does, and so does ours now.
+Unroll and peel budgets are the target's `unroll_budget` (m32 150, m16 200) times `target_percent` (100; -O3 and -Omax 200). -O3's 300 departs from gcc's 200 (`max-completely-peeled-insns`) to clang's [`UnrollThresholdAggressive`](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L201), by the user's decision of 2026-10-11, on the 66 programs at -O3 (model clocks, 150 -> 300): geomean vs gcc 1.0193 -> 0.9828, vs clang 0.8814 -> 0.8499, worst row matmul 8.27 -> hanoi 3.60; five programs change (matmul 10,399 -> 1,189 clocks; crc, fpbench, nbody_single, x_nbody_f 4-10% faster), code of the 66 +16% (28,099 -> 32,695 B), compile instructions +14% on the programs (all from those five) and +0.29% on QCport (65 modules, one changes). -Os and -Oz are not in the table: -Os is -O2's passes, `peel` on, no copy grows the code, `inline` hint and hot bonuses off, 0 clocks per byte; -Oz is -Os less `unroll` and `peel`. -Omax leaves `unswitch` and `unroll_jam` off on purpose, until the user decides otherwise; every other pass is on there, `split` included. gcc's -O3 turns `unswitch` on, and so does ours.
 
 Not rows: the frontend and link steps (`mir runtime`, `mir link`, `mir verify frontend`), the wrappers `mir pipeline` and `candidate first frame`, the pass manager's own (`mir declared`, `interface`, `invalidate`, `outer analyses`), the analyses, and the allocator's inner steps (`regalloc *`, `spill *`, `split *`, `ssa *`, `siblings *`, `intervals *`, `facts *`); each runs wherever its pass does.
 
@@ -142,7 +142,7 @@ Sources read:
 | `unroll` / `unroll-loops` | complete unrolling (`cunroll`) is in the loop passes at every level with loop optimisation; it may *grow* the code only with `-O3`, `-funroll-loops` or `-fpeel-loops` (`opts.cc` [1311-1316](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L1311-L1316), `flag_cunroll_grow_size`) | -O1 and up; may grow at -O3 | -O1 and up, may grow at -O3 ([`limits.grows`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-analysis/src/peelsize.rs#L83)) |
 | `peel` / `peel-loops` | `-fpeel-loops` | -O3 ([679](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L679)) | -O3 |
 | `unswitch` / `unswitch-loops` | `-funswitch-loops` | -O3 ([685](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L685)) | -O3 |
-| `split` / `split-loops` | `-fsplit-loops` | -O3 ([681](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L681)) | -O3, after `unswitch`; not -Omax, as `unswitch` is not. A counted loop that counts up by one, tested with `<`, with a test of its counter against an invariant in its body ([`loopsplit.rs`](../optimizations/passes/loopsplit.md)) |
+| `split` / `split-loops` | `-fsplit-loops` | -O3 ([681](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L681)) | -O3 and -Omax, after `unswitch`. A counted loop that counts up by one, tested with `<`, with a test of its counter against an invariant in its body ([`loopsplit.rs`](../optimizations/passes/loopsplit.md)) |
 | `unroll_jam` / `loop-unroll-and-jam` | `-floop-unroll-and-jam` | -O3 ([678](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L678)); the pass runs after unswitch and loop splitting ([`passes.def:282`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/passes.def#L282)) | -O3, after `unswitch` ([`pipeline.rs`](../optimizations/passes/pipeline.md)); not -Omax, as `unswitch` is not. Narrower than gcc's: an outer count the factor divides, no loads between the loops, header-tested loops ([`unroll_jam.rs`](../optimizations/passes/unroll_jam.md)). User decision 2026-10-11: particle -O3 compile +33% (169M -> 225M instructions) for 1.65x run time (165,949 -> 100,256 clocks, gcc 105,651); the extra rounds are the fixed point that merges the jammed stores. The other 65 programs and QCport: +0.07% |
 | `inline.cp_clone` / `ipa-cp-clone` | `-fipa-cp-clone` | -O3 ([676](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L676)) | -O3: `ipacp` copies a function for the constants a hot call passes |
 | (`program_parameters`) | `-fipa-cp` | -O2 ([629](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L629)) | every level above -O0: a constant every call passes is the parameter's value |

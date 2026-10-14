@@ -105,8 +105,8 @@
 //! `loopsplit_tests.rs`.
 //!
 //! # Runs
-//! Once per body, after unswitching and before unroll-jam, at -O3
-//! (`-fsplit-loops`; not -Omax). The halves go through the scalar rounds again.
+//! Once per body, after unswitching and before unroll-jam, at -O3 and -Omax
+//! (`-fsplit-loops`). The halves go through the scalar rounds again.
 //!
 //! # Needs
 //! [`crate::lcssa`], [`crate::loopclone`], `induction`'s counted proofs.
