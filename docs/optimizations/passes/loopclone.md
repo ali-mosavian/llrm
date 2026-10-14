@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopclone.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopclone.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:79464197ecb88109dbc55e12fa8815a3eebf1396302242d2784eda879aba6faf -->
+<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:59c2e5fb95f41f5323f59d49b93fccde3bc307c6f4edfe86f93107f6cb2f1bbe -->
 
 # loopclone
 
@@ -72,6 +72,10 @@ copy's latch value. Every exit phi gains an arm for each copy's exit edge.
 The residual loop stays so the result is right whatever the trip count;
 the caller proves it unreachable where the count is exact.
 
+`copied(function, loop, count)` makes `count` whole loops of it, each
+running every trip, one after another ahead of the original: the copy loop
+distribution and loop versioning start from.
+
 `chained(function, loop, copies)` is the partial unroll LLVM's `UnrollLoop`
 makes when no iteration is left over. The loop must leave only from its
 header, by a conditional branch. The copies hold no header test: the
@@ -133,8 +137,9 @@ From the fixture of unit test
 peeled once where the test peels twice.
 
 ## Runs
-Called by [`crate::peel`](peel.md) and [`crate::unswitch`](unswitch.md) (`peeled`) and
-[`crate::unroll_jam`](unroll_jam.md) (`chained`); not a pass.
+Called by [`crate::peel`](peel.md) and [`crate::unswitch`](unswitch.md) (`peeled`),
+[`crate::unroll_jam`](unroll_jam.md) (`chained`) and [`crate::loopdistribute`](loopdistribute.md) (`copied`);
+not a pass.
 
 ## Needs
 LCSSA ([`crate::lcssa`](lcssa.md)) and a simplified loop ([`crate::loopsimplify`](loopsimplify.md)).

@@ -3598,7 +3598,10 @@ impl RegAlloc {
             let mut pins = prefer.clone();
             pins.extend(constrain::required(candidate, &self.classes));
             let before = last_resorts();
-            let (got, out, spilled) = rewritten(
+            // Each spill gets a slot of its own; they are shared once, over the
+            // allocation kept (`spiller::slots_colored`).
+            frame.borrow_mut().defer_colours = true;
+            let allocated = rewritten(
                 candidate,
                 Some(&pins),
                 Some(unspillable),
@@ -3608,7 +3611,9 @@ impl RegAlloc {
                 &self.classes,
                 &mut frame.borrow_mut(),
                 splitting,
-            )?;
+            );
+            frame.borrow_mut().defer_colours = false;
+            let (got, out, spilled) = allocated?;
             let cost = llrm_support::debug::timed("regalloc cost", || _emitted(&out));
             Ok(Outcome { cost, got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
         };
@@ -3706,8 +3711,11 @@ impl RegAlloc {
             }
         }
         frame.borrow_mut().restore(&best.slots);
+        let colored = llrm_support::debug::timed("spill slots shared", || {
+            spiller::slots_colored(&best.out, &mut frame.borrow_mut())
+        });
         let _apply = llrm_support::debug::span("regalloc apply");
-        applied(&best.out, &best.got, &self.classes).map(|placed| datagroup::restored(&placed, data_free, &segments))
+        applied(&colored, &best.got, &self.classes).map(|placed| datagroup::restored(&placed, data_free, &segments))
     }
 }
 

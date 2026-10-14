@@ -328,3 +328,66 @@ fn test_a_loop_with_a_second_exit_is_not_chained() {
     assert_eq!(chained(f(&mut module), &inner, 1).unwrap(), None);
     assert_eq!(printed(&module), before);
 }
+
+/// A loop that stores each trip and then returns what it stored last: three
+/// whole copies of it before the loop leave the same answer, and four loops.
+const STORING: &str = "define i16 @f(i16 %n) {
+b0:
+  %a = alloca [64 x i16]
+  store i16 7, ptr %a
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %o = mul i16 %i, 2
+  %p = getelementptr i8, ptr %a, i16 %o
+  %v = mul i16 %i, 3
+  store i16 %v, ptr %p
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %x = load i16, ptr %a
+  %q = getelementptr i8, ptr %a, i16 6
+  %y = load i16, ptr %q
+  %z = add i16 %x, %y
+  ret i16 %z
+}
+";
+
+/// Each copy is a loop of its own that runs every trip, and none reaches the
+/// loop's exit but the loop.
+#[test]
+fn whole_copies_of_a_loop_are_loops_before_it() {
+    let mut module = parsed(STORING);
+    let one = only_loop(&mut module);
+    let made = super::copied(f(&mut module), &one, 3).expect("clones").expect("a loop it clones");
+    assert_eq!(made.len(), 3);
+    let function = f(&mut module);
+    assert_eq!(loops::loops(&cfg::graph(function), function.entry().map(cfg::id)).len(), 4, "{}", printed(&module));
+    let exits = function.predecessors(
+        function.layout().iter().copied().find(|&at| function.block(at).name.as_deref() == Some("b3")).unwrap(),
+    );
+    assert_eq!(exits.len(), 1, "{}", printed(&module));
+    let inputs: &[&[i128]] = &[&[0], &[1], &[5], &[9]];
+    assert_eq!(results(&module, inputs), results(&parsed(STORING), inputs));
+}
+
+/// A loop with two ways out is not copied: each copy would need one more
+/// place to go.
+#[test]
+fn a_loop_with_two_exits_is_not_copied() {
+    let text = STORING.replace(
+        "  %next = add i16 %i, 1\n  br label %b1",
+        "  %next = add i16 %i, 1\n  %big = icmp sgt i16 %next, 20\n  br i1 %big, label %b3, label %b1",
+    );
+    let mut module = parsed(&text);
+    let one = only_loop(&mut module);
+    let before = printed(&module);
+    assert!(super::copied(f(&mut module), &one, 1).expect("clones").is_none());
+    assert_eq!(printed(&module), before);
+}

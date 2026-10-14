@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/access.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/access.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/access.rs sha256:25d8022ca5dac7d8e4a1e235e307332d70f96998190f90fdc0aa1e62bedfb2d0 -->
+<!-- src: crates/opt/llrm-analysis/src/access.rs sha256:e21ac4b6d77166973095aa5c802d370bf24f43df4d25c70933505635cf995851 -->
 
 # access
 
@@ -22,7 +22,8 @@ constant and `sext`, to depth 12; any other operation, or a root that
 access, a call, an `invoke` or an `alloca` in `scanned`. A value defined
 anywhere else is an invariant term.
 
-`Roots` numbers the distinct roots, so two listings made with one `Roots`
+`Apart` says which references through different roots may meet. `Roots`
+numbers the distinct roots, so two listings made with one `Roots`
 (two loops, say) agree on which accesses share an object. A `Reference`
 says whether its root is an object's own address (`memory::object_of`: an
 alloca or a global): two such roots that differ are different objects, and
@@ -48,8 +49,8 @@ From unit test `an_array_walked_by_a_counter_is_an_affine_access` in
 `access_tests.rs`.
 
 ## Provides
-`references`, `Reference`, `Roots`. Consumers: `unroll_jam` and `loopfuse`
-(`crates/opt/llrm-transforms`).
+`references`, `Reference`, `Roots`, `Apart`. Consumers: `unroll_jam` and
+`loopfuse` (`crates/opt/llrm-transforms`).
 
 ## See also
 LLVM ScalarEvolution add recurrences read by `DependenceAnalysis`; gcc's

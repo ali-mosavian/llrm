@@ -208,7 +208,7 @@ class StallTests(unittest.TestCase):
             began = time.monotonic()
             with self.assertRaises(subprocess.TimeoutExpired):
                 dosbatch._launch([sys.executable, "-c", "while True: pass"], Path(where), None, 1 << 20, stall=2, cwd=where)
-            self.assertLess(time.monotonic() - began, 20)
+            self.assertLess(time.monotonic() - began, 300)  # 2 CPU seconds, which a host at load 200 gives over minutes
 
 
 def test_a_program_run_on_its_own_is_not_given_the_microsoft_install_as_v(tmp_path):

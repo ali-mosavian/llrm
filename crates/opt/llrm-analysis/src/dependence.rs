@@ -48,6 +48,12 @@
 //! fusion when some `i - j` in `1..trips` does (`trips` unknown: any). A pair
 //! with other coefficients or symbols is `Unknown` and prevents it.
 //!
+//! `meetings(first, second, trips)` is the same question of two accesses of one
+//! body, `first` earlier in it: whether they meet with `first` at or before
+//! `second` (`forward`, `i - j` in `1 - trips..=0`) or after it (`backward`,
+//! `1..trips`). Loop distribution puts the two in one loop where both hold and
+//! in two, in body order, where only `forward` does.
+//!
 //! ```text
 //!   loop 0: a[i] = ..        loop 1: .. = a[i + 1]     i - j = 1: prevents
 //!   loop 0: a[i] = ..        loop 1: .. = a[i - 1]     i - j = -1: allows
@@ -77,9 +83,10 @@
 //! `dependence_tests.rs`.
 //!
 //! # Provides
-//! `distances`, `factor`, `fusable`. Consumers: `unroll_jam`
+//! `distances`, `factor`, `fusable`, `meetings`. Consumers: `unroll_jam`
 //! (`crates/opt/llrm-transforms/src/unroll_jam.rs`) and `loopfuse`
-//! (`crates/opt/llrm-transforms/src/loopfuse.rs`).
+//! (`crates/opt/llrm-transforms/src/loopfuse.rs`) and `loopdistribute`
+//! (`crates/opt/llrm-transforms/src/loopdistribute.rs`).
 //!
 //! # See also
 //! gcc `tree-data-ref.cc` distance vectors read by `adjust_unroll_factor`
@@ -275,37 +282,60 @@ pub fn fusable(
         .iter()
         .flat_map(|one| second.iter().map(move |other| (one, other)))
         .filter(|(one, other)| one.write || other.write)
-        .all(|(one, other)| !reordered(one, other, trips))
+        .all(|(one, other)| !meetings(one, other, trips).backward)
 }
 
-/// `first`, in the earlier loop, and `second`, in the later, meet at an
-/// iteration of `second` before the one of `first`.
-fn reordered(
+/// The ways two accesses of one loop's body meet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Meetings {
+    /// Some trip of `first` is at or before a trip of `second` that touches
+    /// the same bytes: `first` must come before `second` where they are told
+    /// apart.
+    pub forward: bool,
+    /// Some trip of `first` is after a trip of `second` that touches the same
+    /// bytes: `second` must come before `first`.
+    pub backward: bool,
+}
+
+/// How `first`, earlier in the body, and `second`, later in it (or the same
+/// access of a loop run before the other's, as `fusable` asks), meet over the
+/// loop's `trips`. Both ways where they are on one object and not known
+/// apart, neither where they are on two. Told apart, a loop that runs them as
+/// two loops in this order is right only if no pair meets backward; one that
+/// runs `second` first, only if none meets forward.
+pub fn meetings(
     first: &Access,
     second: &Access,
     trips: Option<i64>,
-) -> bool {
+) -> Meetings {
+    let (some, none) = (Meetings { forward: true, backward: true }, Meetings { forward: false, backward: false });
     if first.object != second.object {
-        return false;
+        return none;
     }
-    let ([one], [other]) = (&first.subscripts[..], &second.subscripts[..]) else { return true };
+    let ([one], [other]) = (&first.subscripts[..], &second.subscripts[..]) else { return some };
     if first.symbols != second.symbols || one.inner != other.inner || one.outer != 0 || other.outer != 0 {
-        return true;
+        return some;
     }
-    // `first` at iteration `i` and `second` at `j` are `step * (i - j)` apart
-    // plus the constants' difference; reordered is `i - j` in `1..=latest`.
+    // `first` at trip `i` and `second` at `j` are `step * (i - j)` apart plus
+    // the constants' difference; the trips are `0..trips`.
     let step = i128::from(one.inner);
     let latest = trips.map_or(1 << 40, |trips| i128::from(trips) - 1);
     let below = i128::from(other.constant) - i128::from(one.constant) - i128::from(first.width);
     let above = i128::from(other.constant) - i128::from(one.constant) + i128::from(second.width);
-    if step == 0 {
-        return below < 0 && 0 < above && latest >= 1;
-    }
-    // `|step| * e` in `(below, above)` for the least `e` in range, where `e`
-    // is `i - j` (rising step) or `j - i` (falling).
-    let (size, low, high) = if step > 0 { (step, 1, latest) } else { (-step, -latest, -1) };
-    let least = low.max(below.div_euclid(size) + 1);
-    least <= high && size * least < above
+    let meet = |from: i128, to: i128| {
+        if from > to {
+            return false;
+        }
+        if step == 0 {
+            return below < 0 && 0 < above;
+        }
+        // `|step| * e` in `(below, above)` for the least `e` in range, where
+        // `e` is `i - j` (rising step) or `j - i` (falling).
+        let (size, low, high) = if step > 0 { (step, from, to) } else { (-step, -to, -from) };
+        let least = low.max(below.div_euclid(size) + 1);
+        least <= high && size * least < above
+    };
+    Meetings { forward: meet(-latest, 0), backward: meet(1, latest) }
 }
 
 #[cfg(test)]

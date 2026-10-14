@@ -6,7 +6,7 @@ which crate owns each step.
 Contents: [split](split.md), [source layout](source-layout.md),
 [HIR](hir/readme.md), [HIR model](hir/model.md), [MIR](rich-mir.md),
 [strong alias analysis](strong-alias.md), [call effects](modref.md),
-[points-to across edits](points-to-lifetime.md), [packages design](https://github.com/ali-mosavian/llrm/issues/1526),
+[points-to across edits](points-to-lifetime.md), [optimizer pipeline design](pipeline-design.md), [packages design](https://github.com/ali-mosavian/llrm/issues/1526),
 [object model](../formats/object-model.md).
 
 Source frontends (QB, C through Open Watcom, Nib) produce HIR. HIR is emitted
@@ -175,6 +175,7 @@ flowchart TB
   peel["<b>peel</b><br/><small>(repeat while loops drop)</small>"]:::mid
   unsw["<b>unswitch (-O3)</b>"]:::mid
   fu["<b>fuse (-Omax)</b>"]:::mid
+  di["<b>distribute (-O3)</b>"]:::mid
   uj["<b>unroll-jam (-O3)</b>"]:::mid
   merge["<b>merge</b>"]:::mid
   sroa --> round
@@ -184,7 +185,8 @@ flowchart TB
   chg -->|"no"| peel
   peel --> unsw
   unsw --> fu
-  fu --> uj
+  fu --> di
+  di --> uj
   uj --> merge
 ```
 
