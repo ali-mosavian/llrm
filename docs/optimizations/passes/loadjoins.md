@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loadjoins.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loadjoins.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loadjoins.rs sha256:036b6fe07110e6c7e8f112d5e4d2b05f847f3b274e97080331c11830694f7b06 -->
+<!-- src: crates/opt/llrm-transforms/src/loadjoins.rs sha256:5c5f11c870fbe80638db2030a8753f089c4982c5a8fafbf25e0c896d78a8a768 -->
 
 # loadjoins
 

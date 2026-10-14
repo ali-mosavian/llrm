@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/frame.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/frame.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/frame.rs sha256:19caa93a8b640da6251dfad084ef73e36f851b553737085f0dcc230ba86727e7 -->
+<!-- src: crates/backend/llrm-core/src/backend/frame.rs sha256:2f4aa05ff8ab2c1e72467c0431b750318cf93396dbb10fbfef3ac742cb2a2407 -->
 
 # frame
 

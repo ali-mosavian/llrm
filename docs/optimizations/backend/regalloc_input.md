@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/regalloc_input.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regalloc_input.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/regalloc_input.rs sha256:e51ef477f4d8fd9f7c150ffca7d62dde6244aeaa8e3bef1845c0186cd2c242e8 -->
+<!-- src: crates/backend/llrm-core/src/backend/regalloc_input.rs sha256:ebbb864052beb3924e9bcad8a6d89cfc9a105a3a9829ab6f8a750b23cbaae1a4 -->
 
 # regalloc_input
 

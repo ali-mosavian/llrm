@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/trivialunswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/trivialunswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/trivialunswitch.rs sha256:8d668fce3ba980ea1a609666ffc84c9e7490afca4211b36cde133170976947fb -->
+<!-- src: crates/opt/llrm-transforms/src/trivialunswitch.rs sha256:c4fa5f6218e6e186622e7d4303492e6c693c73182f3be0d8d1172c0b4be3a824 -->
 
 # trivialunswitch
 

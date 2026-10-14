@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:d1353a2fbc328f1f600417fed66e9fa1af5f52ab83f2109058ca302bd8203717 -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:d61dde277625efea5595a87d32e4ff2a2f45c62fdb81c9fe2396277a542315d1 -->
 
 # manager
 

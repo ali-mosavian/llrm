@@ -88,6 +88,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("ipa-vrp", |options, on| options.ipa_ranges = on),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
     ("tree-pre", |options, on| options.pre = on),
+    ("tree-switch-conversion", |options, on| options.switch_conversion = on),
     ("tree-dse", |options, on| options.drop_stores = on),
     ("tree-dce", |options, on| options.dead = on),
     ("tree-sra", |options, on| options.promote = on),

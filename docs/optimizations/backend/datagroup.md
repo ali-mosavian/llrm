@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/datagroup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/datagroup.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/datagroup.rs sha256:95470d5a0e95cd0be163b7f108345ccbe872be1db53f65997214e2ce881c2e71 -->
+<!-- src: crates/backend/llrm-core/src/backend/datagroup.rs sha256:2d89fb618f1d7c9a0822b83e5253a37e0c1eb0302418adf2f8103a100e0ccf07 -->
 
 # datagroup
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/objbuild.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/objbuild.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/objbuild.rs sha256:aaff35d50cd5365bdd1b0a62c72e99301c3d28d745297f79386ecf1a268f206d -->
+<!-- src: crates/backend/llrm-core/src/backend/objbuild.rs sha256:9b3e0766c05d8c296d7cf49d57fe379330ca648fec71e0f2e6da49595cdfb81a -->
 
 # objbuild
 

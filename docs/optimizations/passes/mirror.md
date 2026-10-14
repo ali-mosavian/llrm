@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/mirror.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/mirror.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/mirror.rs sha256:207f95fcf84a7741f77c3a8bcff3afa07e25d55a32ebfce20b555b52c9755cbd -->
+<!-- src: crates/opt/llrm-transforms/src/mirror.rs sha256:793cc86fcdd9b4bc911f6740fc52ae1b01296eb1ef4df9b00579092d3729fec0 -->
 
 # mirror
 

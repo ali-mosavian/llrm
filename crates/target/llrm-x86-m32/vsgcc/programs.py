@@ -1,4 +1,4 @@
-"""The 66 programs the vsgcc comparison compiles, and the flags llrm-c compiles them with."""
+"""The 70 programs the vsgcc comparison compiles, and the flags llrm-c compiles them with."""
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent

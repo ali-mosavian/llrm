@@ -1,5 +1,5 @@
-reason = "on top of main's #1603 runtime change: +-1 to 5 instructions (max 0.000005%) in the readers' named runtime code, none from this PR"
-blessed = "2026-10-13"
+reason = "switchlower: the QB runtime's switches are bit tests, ranges and tables (jpeg/stft bq32 rows move by at most 8 instructions in 10^8)"
+blessed = "2026-10-14"
 
 [bas.O2]
 code_bytes = 5551
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 93405703
+instructions = 93405702
 code_bytes = 6936
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 95494064
+instructions = 95494066
 code_bytes = 6417
 data_bytes = 29209
 bss_bytes = 0
