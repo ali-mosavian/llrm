@@ -771,7 +771,8 @@ impl Selector<'_, '_, '_> {
     ) -> Option<(Vec<(&'static str, i64)>, i64)> {
         let width = self.width(self.function.instruction(m.inst).ty).ok()?;
         let n = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && (1 < n || n < -1))?;
-        if width == 4 {
+        // Run on the whole register (`promote`) it is a dword chain, `lea`s too.
+        if width == 4 || self.is_promoted(m) {
             arithmetic::cheapest_chain(n, self.cpu)
         } else {
             arithmetic::cheapest_narrow_chain(n, self.cpu)
@@ -855,9 +856,14 @@ impl Selector<'_, '_, '_> {
         source: Operand,
         factor: Operand,
     ) -> Result<(), Unselected> {
-        let a = self.op_held(m, out, source)?;
+        let promoted = self.is_promoted(m);
+        let a = if promoted { self.op_promoted(m, out, source)? } else { self.op_held(m, out, source)? };
         let (chain, _) = self.chain(m, factor).expect("a scalable factor");
-        let Loc::Held(result) = self.op_result(m, out)? else { unreachable!("a register") };
+        let Loc::Held(result) =
+            (if promoted { self.op_promoted_result(m, out)? } else { self.op_result(m, out)? })
+        else {
+            unreachable!("a register")
+        };
         let mut current = a.clone();
         for (index, &(name, count)) in chain.iter().enumerate() {
             let into = if index == chain.len() - 1 { result } else { self.fresh_held(result.width) };

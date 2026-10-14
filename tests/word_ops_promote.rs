@@ -104,3 +104,26 @@ fn a_word_counter_that_ends_a_loop_keeps_its_flags() {
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(!text.contains("test cx, cx"), "the counter was promoted and tested again:\n{text}");
 }
+
+/// A word product by a constant was a chain of word `lea`s and adds, each under
+/// the operand-size prefix (`lea bx, [..]`; `add si, si`: four of them for
+/// `a * 11` and `b * 7`), where the dword chain is two `lea`s without one.
+#[test]
+fn a_word_product_by_a_constant_is_a_chain_on_the_whole_register() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.bas"),
+        "DEFINT A-Z\nDECLARE FUNCTION F% (a AS INTEGER, b AS INTEGER)\nPRINT F%(3, 4)\n\
+         FUNCTION F% (a AS INTEGER, b AS INTEGER)\n    F% = ((a * 11) + (b * 7)) AND 511\nEND FUNCTION\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+        .current_dir(scratch.path())
+        .args(["a.bas", "--dialect", "qb45", "-fqb-runtime=llrm", "-O2", "-m32", "-march=i486", "-S", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let words = text.lines().filter(|line| line.trim_start().starts_with("lea ") && !line.contains("lea e")).count();
+    assert_eq!(words, 0, "a word lea is left:\n{text}");
+}

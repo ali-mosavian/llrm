@@ -2087,16 +2087,21 @@ fn _affine_address(
     let Some(wide) = cpu.dword_address_form() else {
         return Ok(None);
     };
-    let Some((dest, affine::Step::Copy(source), mut old)) = affine::step(regs, copy, cpu) else {
-        return Ok(None);
+    let (dest, mut terms, mut disp, mut old) = match affine::step(regs, copy, cpu) {
+        Some((dest, affine::Step::Copy(source), old)) => {
+            if full32(source.register) == full32(dest.register) {
+                return Ok(None);
+            }
+            (dest, vec![(full32(source.register), 1)], 0, old)
+        }
+        _ => match affine::lea_start(regs, copy, cpu) {
+            Some(start) => start,
+            None => return Ok(None),
+        },
     };
     let z = full32(dest.register);
-    if full32(source.register) == z {
-        return Ok(None);
-    }
     let bits = i64::from(dest.width) * 8;
     let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
-    let (mut terms, mut disp): (affine::Terms, i64) = (vec![(full32(source.register), 1)], 0);
     let mut best: Option<(usize, AddressRef, i64, bool, Reg)> = None;
     for (at, one) in parts.iter().enumerate().skip(1) {
         let Some((written, step, cost)) = affine::step(regs, one, cpu) else {

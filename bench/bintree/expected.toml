@@ -1,4 +1,4 @@
-reason = "m32 word add/sub on the whole register (no 66h): code bytes down in 50+ rows; a few runtime instructions up by under 0.001%"
+reason = "m32 word multiply by a constant runs as a dword chain; a lea starts an address chain"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -31,13 +31,13 @@ bss_bytes = 0
 
 [bq32.O2]
 instructions = 159123
-code_bytes = 741
+code_bytes = 737
 data_bytes = 23
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 165956
-code_bytes = 660
+instructions = 165656
+code_bytes = 655
 data_bytes = 23
 bss_bytes = 0
 
