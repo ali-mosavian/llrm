@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/branchprob.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/branchprob.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/branchprob.rs sha256:bb8102a98b63afef969c79ddf1385e478b89c1382f33aa7f68c63ed9782909e8 -->
+<!-- src: crates/opt/llrm-analysis/src/branchprob.rs sha256:605dba40f898b741a54642660f9f014222d2b09e541cdd7be4648f39ccc1aef2 -->
 
 # branchprob
 
@@ -25,9 +25,10 @@ wider one takes the first of them (`Heuristic` records which one fired):
    weights).
 5. `Counted`: a branch on a compare of the counters of an enclosing loop
    whose trip count induction proved (`trips`, at most 4096). The counters
-   (header phis from a constant start) are stepped trip by trip and the edge
-   is taken on the share of trips the compare holds on, clamped away from 0
-   and 1.
+   (header phis from a constant start) are stepped trip by trip, once for
+   the loop, and a value the compares read is worked out once at each trip;
+   the edge is taken on the share of trips the compare holds on, clamped
+   away from 0 and 1.
 6. `Pointer`, `Zero`, `Float`, from the compare feeding a `br`: `p == q` on
    pointers fails (20:12), as do `x == 0`, `x == -1`, `x < 0` and `x <= 0`
    on integers, and `x == y` on floats; `isnan` (`uno`) is 1 in 2^20. Truth

@@ -14,8 +14,10 @@
 //!    value: a dominating store of the same bytes and type, or an earlier load
 //!    of them, with nothing between that may write them. Two pure operations on
 //!    the same operands are one, a copy counting as its source and a
-//!    commutative pair ordered. Two calls with the same callee and arguments
-//!    that read and write no memory are one.
+//!    commutative pair ordered. The blocks are met dominators first, not in
+//!    layout order, which a removed join leaves behind the blocks it came to
+//!    dominate. Two calls with the same callee and arguments that read and
+//!    write no memory are one.
 //! 3. Join PRE (`joined`). An expression every predecessor of a join already
 //!    computes becomes a phi of those values. With `pre`, a predecessor that
 //!    lacks it gets the computation inserted before its unconditional `br`, if

@@ -253,6 +253,7 @@ use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
 use crate::backend::live::LiveRanges;
+use crate::backend::liveunion::Placed;
 use crate::backend::liveunion::{LiveUnion, Overlaps};
 use crate::backend::target::{self, Segments};
 use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit};
@@ -1496,7 +1497,7 @@ impl Claims {
         live: &LiveRanges,
         value: u32,
         mine: &Interval,
-        placed: &IndexMap<u32, RegId>,
+        placed: &Placed,
     ) -> BTreeSet<RegId> {
         if self.tree.is_none() {
             self.asked += 1;
@@ -1747,7 +1748,7 @@ impl Facts {
 /// to a point that destroys it, or leave their class: the later of each pair.
 fn _overlapping(
     union: &LiveUnion,
-    r#where: &IndexMap<u32, RegId>,
+    r#where: &Placed,
     facts: &Facts,
 ) -> BTreeSet<u32> {
     let found = _overlapping_by_start(union, r#where, facts);
@@ -1769,7 +1770,7 @@ fn _overlapping(
 /// holders of a whole register, in the order they took it.
 fn _overlapping_after(
     union: &LiveUnion,
-    r#where: &IndexMap<u32, RegId>,
+    r#where: &Placed,
     facts: &Facts,
     touched: &crate::support::hash::HashSet<u32>,
     reclassed: &[u32],
@@ -1830,7 +1831,7 @@ fn _overlapping_after(
 
 fn _overlapping_by_start(
     union: &LiveUnion,
-    r#where: &IndexMap<u32, RegId>,
+    r#where: &Placed,
     facts: &Facts,
 ) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
@@ -1864,7 +1865,7 @@ fn _overlapping_by_start(
 /// What `_overlapping` was: each value against every one kept before it.
 fn _overlapping_reference(
     union: &LiveUnion,
-    r#where: &IndexMap<u32, RegId>,
+    r#where: &Placed,
     facts: &Facts,
 ) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
@@ -1929,7 +1930,7 @@ fn _allocated(
     let preferred = preferred.unwrap_or(&no_preference);
 
     let mut union = LiveUnion::new();
-    let mut r#where: IndexMap<u32, RegId> = IndexMap::default();
+    let mut r#where: Placed = Placed::default();
     let mut stage: IndexMap<u32, Stage> = IndexMap::default();
     let mut spilled: BTreeSet<u32> = BTreeSet::new();
     let mut cost = 0.0;
@@ -2089,7 +2090,7 @@ fn _allocated(
                 }
                 for one in victims {
                     union.remove(_whole(got), one, &facts.live);
-                    r#where.shift_remove(&one);
+                    r#where.remove(&one);
                     cascades.insert(one, cascades[&value]);
                     stage.insert(one, Stage::Assign);
                     queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined, &facts.index));
@@ -2268,7 +2269,7 @@ fn _allocated(
                 );
                 for one in victims {
                     union.remove(_whole(got), one, &facts.live);
-                    r#where.shift_remove(&one);
+                    r#where.remove(&one);
                     stage.insert(one, Stage::Spill);
                     queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined, &facts.index));
                     *waiting.entry(one).or_insert(0) += 1;
@@ -2300,7 +2301,7 @@ fn _allocated(
                     })?);
                     llrm_support::debug!("spill", "{}: spill {value} with {:?}", body.name, chosen);
                     for one in &chosen {
-                        if let Some(register) = r#where.shift_remove(one) {
+                        if let Some(register) = r#where.remove(one) {
                             union.remove(_whole(register), *one, &facts.live);
                         }
                     }
@@ -2391,7 +2392,7 @@ fn _allocated(
             None => union.refresh(),
         }
         fenced = fixed.keys().copied().chain(protected.iter().copied()).collect();
-        let gone: Vec<u32> = r#where.keys().copied().filter(|one| !facts.live.contains_key(one)).collect();
+        let gone: Vec<u32> = r#where.values_unordered().filter(|one| !facts.live.contains_key(one)).collect();
         let clashing = llrm_support::debug::timed("after overlapping", || {
             match (&changes, facts.masks.added(), &facts.reclassed) {
                 (Some(changes), Some(added), Some(reclassed)) => {
@@ -2410,7 +2411,7 @@ fn _allocated(
             }
         });
         for one in gone.iter().chain(&clashing) {
-            if let Some(register) = r#where.shift_remove(one) {
+            if let Some(register) = r#where.remove(one) {
                 union.remove(_whole(register), *one, &facts.live);
             }
         }
@@ -2486,7 +2487,7 @@ fn _allocated(
         .with(|stats| stats.set((splits_made, pieces.len(), pieces.intersection(&spilled).count(), spilled.len())));
     Ok((
         Assignment {
-            r#where,
+            r#where: r#where.ordered(),
             spilled: if rewrite.is_some() { BTreeSet::new() } else { spilled.clone() },
             cost,
             optimal: false,
@@ -2535,12 +2536,12 @@ struct Settled<'a> {
 /// the register it has; each joined copy is a deleted move. Every move
 /// joins more pairs than it splits, so this ends.
 fn _recolored_hints(
-    r#where: &mut IndexMap<u32, RegId>,
+    r#where: &mut Placed,
     union: &mut LiveUnion,
     settled: &Settled<'_>,
     pinned: impl Fn(u32) -> bool,
 ) {
-    let joined = |value: u32, register: RegId, r#where: &IndexMap<u32, RegId>| {
+    let joined = |value: u32, register: RegId, r#where: &Placed| {
         settled.hints[&value]
             .iter()
             .filter(|other| r#where.get(*other).is_some_and(|theirs| _whole(*theirs) == register))
@@ -2549,8 +2550,11 @@ fn _recolored_hints(
     let mut moved = true;
     while moved {
         moved = false;
-        let values: Vec<u32> =
-            r#where.keys().copied().filter(|value| settled.hints.contains_key(value) && !pinned(*value)).collect();
+        let values: Vec<u32> = r#where
+            .in_order()
+            .into_iter()
+            .filter(|value| settled.hints.contains_key(value) && !pinned(*value))
+            .collect();
         for value in values {
             let (now, Some(mine)) = (_whole(r#where[&value]), settled.live.get(&value)) else {
                 continue;
@@ -3252,7 +3256,7 @@ pub fn last_resorts() -> usize {
 /// `VirtRegMap`.
 pub struct Coloring<'a> {
     pub union: &'a mut LiveUnion,
-    pub r#where: &'a mut IndexMap<u32, RegId>,
+    pub r#where: &'a mut Placed,
     pub live: &'a LiveRanges,
     pub index: &'a Indexes,
     pub masks: &'a Masks,
@@ -3291,7 +3295,7 @@ impl Coloring<'_> {
         &mut self,
         value: u32,
     ) {
-        if let Some(register) = self.r#where.shift_remove(&value) {
+        if let Some(register) = self.r#where.remove(&value) {
             self.union.remove(_whole(register), value, self.live);
         }
     }
@@ -5337,7 +5341,7 @@ mod tests {
             _ => vec![RegId::AX],
         };
         let mut union = LiveUnion::of([(_whole(RegId::AX), vec![1]), (_whole(RegId::BX), vec![2])], &live);
-        let mut placed: IndexMap<u32, RegId> = IndexMap::from_iter([(1, RegId::AX), (2, RegId::BX)]);
+        let mut placed: Placed = Placed::from(&IndexMap::from_iter([(1, RegId::AX), (2, RegId::BX)]));
         let mut coloring = Coloring {
             union: &mut union,
             r#where: &mut placed,
@@ -5371,8 +5375,13 @@ mod tests {
             registers.iter().enumerate().map(|(at, register)| (_whole(*register), vec![at as u32 + 1])),
             &live,
         );
-        let mut placed: IndexMap<u32, RegId> =
-            registers.iter().enumerate().map(|(at, register)| (at as u32 + 1, *register)).collect();
+        let mut placed: Placed = Placed::from(
+            &registers
+                .iter()
+                .enumerate()
+                .map(|(at, register)| (at as u32 + 1, *register))
+                .collect::<IndexMap<u32, RegId>>(),
+        );
         let mut coloring = Coloring {
             union: &mut union,
             r#where: &mut placed,
@@ -5407,7 +5416,7 @@ mod tests {
             None,
         );
         let union = LiveUnion::of([(_whole(RegId::AX), vec![1])], &facts.live);
-        let placed = IndexMap::from_iter([(1, RegId::AX)]);
+        let placed = Placed::from(&IndexMap::from_iter([(1, RegId::AX)]));
         assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
     }
 
@@ -5445,7 +5454,7 @@ mod tests {
             _ => vec![RegId::AX],
         };
         let mut union = LiveUnion::of([(_whole(RegId::AX), vec![1]), (_whole(RegId::BX), vec![2])], &live);
-        let mut placed: IndexMap<u32, RegId> = IndexMap::from_iter([(1, RegId::AX), (2, RegId::BX)]);
+        let mut placed: Placed = Placed::from(&IndexMap::from_iter([(1, RegId::AX), (2, RegId::BX)]));
         let mut coloring = Coloring {
             union: &mut union,
             r#where: &mut placed,
@@ -5459,7 +5468,7 @@ mod tests {
             stack: Vec::new(),
         };
         assert!(!coloring.recolor(3, 0, &mut BTreeSet::new()));
-        assert_eq!(placed, IndexMap::from_iter([(1, RegId::AX), (2, RegId::BX)]));
+        assert_eq!(placed.ordered(), IndexMap::from_iter([(1, RegId::AX), (2, RegId::BX)]));
         assert_eq!(union.holders(&_whole(RegId::AX)), vec![1]);
         assert_eq!(union.holders(&_whole(RegId::BX)), vec![2]);
     }

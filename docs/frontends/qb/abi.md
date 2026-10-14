@@ -125,6 +125,7 @@ listings establish an exact stack shape:
 | `B$SSEK` | channel word, record number dword | 6 |
 | `B$VARP` | address (the target's near integer: a dword at m32), type word | 4 (m16; whole slots at m32) |
 | `B$SADD` | string descriptor pointer | 2 |
+| `B$FINP` | count word, channel word (0: the keyboard) | 4 |
 | `B$BLOD`, `B$BSAV` | file name descriptor, offset (word; a dword at m32), word (BLOAD: 1 if an offset was given; BSAVE: length) | 6 |
 | `B$LEFT`, `B$STRI`, `B$STRS` | two near words | 4 |
 | `B$FEVS`, `B$FEVI` | descriptor pointer or ordinal word | 2 |
