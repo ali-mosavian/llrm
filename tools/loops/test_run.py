@@ -52,22 +52,23 @@ class InvariantLoadsTests(unittest.TestCase):
     gcc's 13 and 4 and Open Watcom's 14 and 4)."""
 
     def test_a_reload_is_no_shortfall_where_llrm_is_no_larger_than_every_reference(self):
-        self.assertFalse(run.invariant_loads_short([loop(11, 3, invariant=2)], [(14, 4), (13, 4)]))
+        self.assertEqual(run.invariant_loads([loop(11, 3, invariant=2)], [(14, 4), (13, 4)]), ("invariant-loads", False))
 
     def test_a_reload_is_a_shortfall_where_a_reference_has_fewer_memory_operands_or_fewer_instructions(self):
-        self.assertTrue(run.invariant_loads_short([loop(9, 5, invariant=2)], [(12, 4), (12, 6)]))
-        self.assertTrue(run.invariant_loads_short([loop(8, 3, invariant=1)], [(7, 4)]))
+        self.assertEqual(run.invariant_loads([loop(9, 5, invariant=2)], [(12, 4), (12, 6)]), ("invariant-loads", True))
+        self.assertEqual(run.invariant_loads([loop(8, 3, invariant=1)], [(7, 4)]), ("invariant-loads", True))
 
     def test_a_loop_with_no_reload_falls_short_of_nothing(self):
-        self.assertFalse(run.invariant_loads_short([loop(20, 9)], [(5, 1)]))
+        self.assertEqual(run.invariant_loads([loop(20, 9)], [(5, 1)]), ("invariant-loads", False))
 
     def test_a_run_without_references_judges_nothing(self):
-        self.assertIsNone(run.invariant_loads_short([loop(11, 3, invariant=2)], [], references=False))
+        self.assertIsNone(run.invariant_loads([loop(11, 3, invariant=2)], [], references=False))
 
-    def test_references_that_gave_no_bar_leave_no_shortfall(self):
-        """x_elemf64_usesquare: Open Watcom's loop calls a helper and gcc built none: 19 f64 rows stayed listed, as
-        unjudged, whatever was done."""
-        self.assertFalse(run.invariant_loads_short([loop(16, 6, invariant=3)], []))
+    def test_references_that_gave_no_bar_leave_the_reload_an_ideal_not_dropped(self):
+        """x_elemf64_usesquare: Open Watcom's loop calls a helper and gcc built none. Its loop reloads two x87 control
+        words every trip: #1638 judged it not short, and the gap went out of view."""
+        self.assertEqual(run.invariant_loads([loop(16, 6, invariant=3)], []), ("invariant-loads-ideal", True))
+        self.assertEqual(run.invariant_loads([loop(9, 2)], []), ("invariant-loads-ideal", False))
 
     def test_a_reference_that_calls_a_helper_is_no_bar(self):
         result = run.Result()
