@@ -3308,12 +3308,13 @@ impl Coloring<'_> {
     }
 
     /// Whether more values are live at one point of `value` than there are
-    /// registers for them all: the values placed in a register `value` could
-    /// take that are live at a point of `value`, with `value`, need a register
-    /// each of the registers any of them could take, and moving them about
-    /// changes neither the number of them nor the registers there are. When
-    /// they outnumber the registers no recoloring places `value`, and `recolor`
-    /// would fail whatever it tried (Hall's condition, the necessary half).
+    /// registers for them: the values placed in a register `value` could take
+    /// that are live at a point of `value`, with `value`, need a register each
+    /// out of the registers each could end in (its order, less those a point
+    /// in it destroys), and moving them about changes neither. When the ones
+    /// whose registers all lie among a set outnumber the set, no recoloring
+    /// places `value`, and `recolor` would fail whatever it tried (Hall's
+    /// condition, the necessary half).
     fn crowded(
         &self,
         value: u32,
@@ -3327,21 +3328,61 @@ impl Coloring<'_> {
                 }
             }
         }
-        let mut registers: BTreeSet<RegId> = BTreeSet::new();
+        // The registers each could end in: its own order less those a point
+        // inside it destroys, as a bit of the registers there are.
+        let mut registers: Vec<RegId> = Vec::new();
+        let mut allowed: Vec<u64> = Vec::with_capacity(group.len());
         for one in &group {
-            registers.extend((self.order)(*one).into_iter().map(|register| _whole(register)));
+            let mut bits = 0u64;
+            for register in (self.order)(*one) {
+                if _clobbered(&self.live[one], register, self.masks, (self.width)(*one)) {
+                    continue;
+                }
+                let whole = _whole(register);
+                let at = match registers.iter().position(|held| *held == whole) {
+                    Some(at) => at,
+                    None => {
+                        registers.push(whole);
+                        registers.len() - 1
+                    }
+                };
+                if at >= 64 {
+                    return false;
+                }
+                bits |= 1 << at;
+            }
+            allowed.push(bits);
         }
-        // The most of them live at once within `value`: a count at each point
-        // one of them starts.
         let live_at = |one: u32, point: i64| {
             self.live[&one].segments.iter().any(|segment| segment.start <= point && point < segment.end)
         };
+        // At each point one of them starts within `value`: those live there
+        // need a register each, and the ones whose registers all lie among
+        // some set of them, no more than the set has.
+        let mut seen: Vec<i64> = Vec::new();
         for one in &group {
             for segment in &self.live[one].segments {
                 let point = segment.start;
-                if mine.segments.iter().any(|inside| inside.start <= point && point < inside.end)
-                    && group.iter().filter(|other| live_at(**other, point)).count() > registers.len()
+                if seen.contains(&point)
+                    || !mine.segments.iter().any(|inside| inside.start <= point && point < inside.end)
                 {
+                    continue;
+                }
+                seen.push(point);
+                let here: Vec<u64> = group
+                    .iter()
+                    .zip(&allowed)
+                    .filter(|(other, _)| live_at(**other, point))
+                    .map(|(_, bits)| *bits)
+                    .collect();
+                for set in &here {
+                    let within = here.iter().filter(|bits| **bits & !*set == 0).count();
+                    if within > set.count_ones() as usize {
+                        return true;
+                    }
+                }
+                let every = here.iter().fold(0u64, |all, bits| all | bits);
+                if here.len() > every.count_ones() as usize {
                     return true;
                 }
             }
