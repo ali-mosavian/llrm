@@ -53,8 +53,11 @@
 //! private cells in the set (nothing but a named access can read those); any
 //! other unknown instruction empties it.
 //!
-//! Cells that share bytes share an overlap bucket (`regions`), so a cell is
-//! compared with its bucket and not with all cells.
+//! Cells that share bytes share an overlap bucket (`regions`), so a write asks
+//! its bucket and not all cells; a cell is related to another (covers, names
+//! the same bytes, is placed against) only where `placed` can place them, which
+//! takes one displaced frame or one base pointer and bytes that meet, so it is
+//! compared with those (`Members::meeting`) and not with its object's cells.
 //!
 //! # Example
 //! Forwarding. Both arms of a join store `%v` to the cell, so the load at the
@@ -129,7 +132,7 @@ use crate::cfg;
 use crate::memory::{MemRef, Unit};
 use crate::memoryssa::{self, Accesses, covered, covers, may_clobber, placed, same_bytes};
 use crate::ranges;
-use crate::regions::{OverlapBucket, OverlapBuckets, displaced_buckets, overlap_bucket, overlap_buckets, overlap_span};
+use crate::regions::{OverlapBucket, OverlapBuckets, overlap_bucket, overlap_buckets, overlap_span};
 
 /// The cell `inst` purely loads, and the value it lands in.
 pub fn loaded_into(
@@ -217,6 +220,11 @@ struct Stored {
     cells: Vec<MemRef>,
     number: IndexMap<MemRef, usize>,
     index: CellMap<usize, (), OverlapBucket>,
+    /// The cells that can share bytes with a cell, by what `placed` needs to
+    /// place two of them: one displaced frame, or one base pointer.
+    groups: HashMap<Group, Members>,
+    /// A cell's groups and its bytes in each.
+    group_of: Vec<[Option<(Group, i128, i128)>; 2]>,
     private: Bits,
     /// The cells that do not certainly name their own bytes.
     selfless: Bits,
@@ -228,6 +236,39 @@ struct Stored {
     /// set.
     alike_cells: RefCell<Vec<Option<Rc<[usize]>>>>,
     pieces: RefCell<Vec<Option<Rc<Bits>>>>,
+}
+
+/// What two cells share when `placed` can place one against the other: both at
+/// displacements of one frame, or both at constant offsets from one pointer.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum Group {
+    Frame(crate::regions::Frame),
+    Base(Operand),
+}
+
+/// The cells of one group by where their bytes begin, and the widest of them.
+#[derive(Default)]
+struct Members {
+    /// (first byte, last byte plus one, cell), in order of the first.
+    by_first: Vec<(i128, i128, usize)>,
+    widest: i128,
+}
+
+impl Members {
+    /// The cells whose bytes meet `low..high` (and a cell with none, which is
+    /// never ruled out by where it is).
+    fn meeting(
+        &self,
+        low: i128,
+        high: i128,
+    ) -> impl Iterator<Item = usize> + '_ {
+        let from = self.by_first.partition_point(|(first, _, _)| *first < low - self.widest);
+        self.by_first[from..]
+            .iter()
+            .take_while(move |(first, _, _)| *first <= high)
+            .filter(move |(first, last, _)| *last >= low && *first <= high)
+            .map(|(_, _, cell)| *cell)
+    }
 }
 
 impl Stored {
@@ -253,6 +294,26 @@ impl Stored {
             cells.iter().enumerate().filter(|(_, one)| private(one)).for_each(|(at, _)| marked.insert(at));
         }
         let size = cells.len();
+        let mut groups: HashMap<Group, Members> = HashMap::default();
+        let mut group_of = Vec::with_capacity(size);
+        for (at, cell) in cells.iter().enumerate() {
+            let keys = memoryssa::byte_keys(unit, cell);
+            let mine = [
+                keys.frame.map(|(frame, low, high)| (Group::Frame(frame), low, high)),
+                keys.pointer.map(|(base, offset, bytes)| {
+                    (Group::Base(base), i128::from(offset), i128::from(offset) + i128::from(bytes))
+                }),
+            ];
+            for (group, low, high) in mine.iter().flatten() {
+                let members = groups.entry(group.clone()).or_default();
+                members.by_first.push((*low, *high, at));
+                members.widest = members.widest.max(high - low);
+            }
+            group_of.push(mine);
+        }
+        for members in groups.values_mut() {
+            members.by_first.sort_unstable();
+        }
         let mut selfless = Bits::new(size);
         (0..size).filter(|&at| !same_bytes(unit, &cells[at], &cells[at])).for_each(|at| selfless.insert(at));
         Self {
@@ -260,6 +321,8 @@ impl Stored {
             cells,
             number,
             index,
+            groups,
+            group_of,
             private: marked,
             covering: RefCell::new(vec![None; size]),
             alike: RefCell::new(vec![None; size]),
@@ -288,17 +351,16 @@ impl Stored {
                 found.insert(one);
             }
         };
-        // Cells that share bytes share a bucket.
-        match overlap_buckets(&self.cells[at], &self.index.parts) {
-            None => (0..self.cells.len()).for_each(&mut test),
-            // A cell at fixed bytes of a frame asks only the cells of its
-            // buckets whose bytes meet its own.
-            Some(buckets) => self
-                .index
-                .asked(Some(buckets), displaced_buckets(&self.cells[at], &self.index.parts))
-                .into_iter()
-                .for_each(|&one| test(one)),
+        // Every relation asked here needs `placed` to place the two cells,
+        // which takes one frame or one base pointer in common
+        // (`ByteKeys`) and bytes that meet: the cell itself and the
+        // cells of its groups whose bytes meet its own are the ones
+        // that can be related.
+        let mut asked: BTreeSet<usize> = BTreeSet::from([at]);
+        for (group, low, high) in self.group_of[at].iter().flatten() {
+            asked.extend(self.groups[group].meeting(*low, *high));
         }
+        asked.into_iter().for_each(&mut test);
         if llrm_support::env_set("LLRM_CHECK_CLOBBERS") {
             let all =
                 (0..self.cells.len()).filter(|&one| related(&self.cells[at], &self.cells[one])).collect::<Vec<_>>();

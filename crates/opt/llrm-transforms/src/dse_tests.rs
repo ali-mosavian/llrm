@@ -560,3 +560,32 @@ fn a_cell_of_an_array_is_compared_with_the_cells_that_meet_its_bytes_not_with_th
     assert_eq!(after.matches("store").count(), cells, "the first of each pair of stores is dead: {after}");
     assert!(asked <= 8 * cells, "{asked} pairs asked for {cells} cells of one array");
 }
+
+/// The cells of one array at variable indices (`a[i]`, `a[j]`, `a[hi]` of each
+/// of N unrolled partition loops) were compared in pairs, all with all, though
+/// two of them can only be related when `placed` places one against the other
+/// and no two share a base and a constant offset: `unrolled` 128, `mir dse`
+/// 28,484 Minstr and the slope 2.0. A cell is compared with the cells of its
+/// frame or base pointer whose bytes meet its own.
+#[test]
+fn a_cell_at_a_variable_index_is_compared_with_no_cell_that_cannot_be_placed_against_it() {
+    let cells = 40;
+    let parameters: String = (0..cells).map(|i| format!("i32 %x{i}")).collect::<Vec<_>>().join(", ");
+    let pointers: String =
+        (0..cells).map(|i| format!("  %p{i} = getelementptr inbounds i32, ptr @a, i32 %x{i}\n")).collect();
+    let stores: String = (0..cells).map(|i| format!("  store i32 {i}, ptr %p{i}\n")).collect();
+    let text = format!(
+        "@a = global [64 x i32] zeroinitializer\n\ndefine i32 @f({parameters}) {{\nb0:\n{pointers}{stores}{stores}  ret i32 0\n}}\n"
+    );
+    let mut module = parsed(&text);
+    let before = llrm_analysis::avail::related_pairs();
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = printed(&module);
+    let asked = llrm_analysis::avail::related_pairs() - before;
+    assert_eq!(after.matches("store").count(), cells, "the first of each pair of stores is dead: {after}");
+    assert!(asked <= 4 * cells, "{asked} pairs asked for {cells} cells of one base at variable indices");
+}

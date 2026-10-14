@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/avail.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/avail.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/avail.rs sha256:cdee8cd7b50aaec7c37de5160ffe47c9af4983f39bfbc85f29f4fe42d280c1e2 -->
+<!-- src: crates/opt/llrm-analysis/src/avail.rs sha256:59366d0d2a65a1bf2de6affe80d1130f7f882a39573250bb18b8f61076902b71 -->
 
 # avail
 
@@ -58,8 +58,11 @@ starts from every cell. A call whose accesses are not known keeps only the
 private cells in the set (nothing but a named access can read those); any
 other unknown instruction empties it.
 
-Cells that share bytes share an overlap bucket (`regions`), so a cell is
-compared with its bucket and not with all cells.
+Cells that share bytes share an overlap bucket (`regions`), so a write asks
+its bucket and not all cells; a cell is related to another (covers, names
+the same bytes, is placed against) only where `placed` can place them, which
+takes one displaced frame or one base pointer and bytes that meet, so it is
+compared with those (`Members::meeting`) and not with its object's cells.
 
 ## Example
 Forwarding. Both arms of a join store `%v` to the cell, so the load at the
