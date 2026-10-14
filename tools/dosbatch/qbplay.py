@@ -96,7 +96,11 @@ class Session:
         """Until the DOS shell takes commands: `wait_for_shell` can answer before the emulator has run far enough, so the
         status says."""
         late = self.limit(seconds)
-        while not self.send({"cmd": "status"}).get("shellReady"):
+        while not (status := self.send({"cmd": "status"})).get("shellReady"):
+            if status.get("socketFrozen"):
+                # The emulator freezes at launch and waits for `continue`; one sent before it had frozen was lost, and a frozen
+                # emulator burns no CPU, so `late` never ended the wait (gate 65: 40 minutes, #1570).
+                self.send({"cmd": "continue"})
             if late():
                 raise TimeoutError("the DOS shell never came up")
             time.sleep(0.01)
