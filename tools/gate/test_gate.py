@@ -888,3 +888,10 @@ def test_the_turbo_binary_runs_whole_in_the_turbo_step_and_not_in_integration():
     assert cmds["turbo"].endswith("--test turbo") and "--skip" not in cmds["turbo"]
     assert "--test turbo" not in cmds["integration"].replace("--test turbo_", "")
     assert "--test cv4" not in cmds["integration"]
+
+
+def test_a_change_to_a_python_or_shell_file_in_a_scanned_tree_plans_the_integration_step():
+    """tests/target_facts.rs reads them: a tools-only PR planned only pytest and landed four copies of a target fact; main went red."""
+    for path in ("tools/gate/pytest_shards.py", "tools/dosbatch/qbplay.py", "crates/target/x/run.sh"):
+        assert "integration" in gate.plan([path]).steps, path
+    assert "integration" not in gate.plan(["tools/readme.md"]).steps

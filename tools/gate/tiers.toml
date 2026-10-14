@@ -111,7 +111,7 @@ filter = "test_the_identity_gate_passes"
 # skipped llrm-mir's dense-key ratchet and main's full run went red on it). A test that reads sources and is not listed here fails
 # test_gate. `step = "integration"`: a root test binary the integration step runs on every code change anyway.
 [scan_inputs]
-paths = ["**/*.rs", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
+paths = ["**/*.rs", "tools/**/*.py", "tools/**/*.sh", "crates/**/*.py", "crates/**/*.sh", "src/**/*.py", "src/**/*.sh", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
 
 [[scan]]
 file = "crates/ir/llrm-mir/src/tests.rs"
