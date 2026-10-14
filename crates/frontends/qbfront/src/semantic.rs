@@ -287,6 +287,9 @@ struct Compiler {
     module_name: String,
     types: Vec<Type>,
     variables: BTreeMap<String, Variable>,
+    /// The scalars looked up so far, in source order: a DIM of one of them runs
+    /// where it stands.
+    seen: BTreeSet<String>,
     constants: BTreeMap<String, (u32, Number)>,
     signatures: BTreeMap<String, Signature>,
     callables: Vec<Callable>,
@@ -1629,6 +1632,7 @@ impl Compiler {
             module_name: module_name.into(),
             types,
             variables: BTreeMap::new(),
+            seen: BTreeSet::new(),
             constants: BTreeMap::new(),
             signatures: BTreeMap::new(),
             callables: Vec::new(),
@@ -2585,6 +2589,37 @@ impl Compiler {
         Ok(())
     }
 
+    /// BC runs the DIM of a scalar the program already used: it stores the
+    /// type's zero where the DIM stands. A DIM that is the name's first sight
+    /// allocates and emits nothing, so one in a loop does not clear it again.
+    fn rezero(
+        &mut self,
+        item: &Declaration,
+    ) -> Result<(), SemanticError> {
+        if item.array {
+            return Ok(());
+        }
+        let each = item.name.strip_prefix(EACH);
+        let item = Declaration { name: each.unwrap_or(&item.name).into(), ..item.clone() };
+        let key = self.declaration_key(&item)?;
+        if !self.seen.contains(&key) {
+            return Ok(());
+        }
+        let Some(variable) = self.variables.get(&key).cloned() else { return Ok(()) };
+        let span = item.span;
+        let target = Expr::Name(item.name.clone(), span);
+        if variable.type_id == STRING {
+            let zero = Expr::Literal(Literal::String(String::new()), span);
+            return self.statement_list(&[Statement::Assign { target, value: zero, span }]);
+        }
+        if integral(variable.type_id) || matches!(variable.type_id, SINGLE | DOUBLE) {
+            let zero = Expr::Literal(Literal::Integer(0, TypeName::Integer), span);
+            return self.statement_list(&[Statement::Assign { target, value: zero, span }]);
+        }
+        let extent = self.places[variable.place as usize].extent;
+        self.zero_aggregate(Operand::Place(variable.place), extent)
+    }
+
     /// B$DDIM's or B$RDIM's operands for `bounds`, and the bounds in
     /// descriptor record order. The runtime fills record 0 from the pair
     /// pushed last.
@@ -3229,6 +3264,7 @@ impl Compiler {
                 Statement::Dim(items) => {
                     for item in items {
                         self.allocate(item)?;
+                        self.rezero(item)?;
                     }
                 }
                 Statement::Static(_)
@@ -8582,6 +8618,7 @@ impl Compiler {
         self.refuse_keyword(name)?;
         self.refuse_other_suffix(name)?;
         let key = self.variable_key(name);
+        self.seen.insert(key.clone());
         if let Some(variable) = self.variables.get(&key) {
             return Ok(variable.clone());
         }
