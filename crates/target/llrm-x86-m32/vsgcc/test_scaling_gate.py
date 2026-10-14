@@ -1130,3 +1130,15 @@ def test_the_allocator_requeues_the_values_a_rewrite_changed_and_the_ones_the_qu
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["after queue"] > 1.0, f"premise: events requeued ({own['after queue']:.1f} Minstr)"
     assert own["after queue"] <= 40.0, f"after queue {own['after queue']:.1f} Minstr"
+
+
+def test_promote_asks_a_write_only_the_cells_whose_bytes_it_may_reach(tmp_path):
+    """cells(896) at -O2: N constant elements of one static array, each written after reads of others. `mir promote` asked each write
+    every available cell of the array's bucket (typed and foreign checks twice, then the slices): N^2 questions, 983 Minstr at N=896
+    (255 at 448, x3.9). Cells named by provenance alone are indexed by the hull of their slice, and a write asks those whose bytes meet
+    its own: 53 (29 at 448). A bound of 150 fails the first."""
+    source = tmp_path / "cells896.c"
+    source.write_text(scaling.AXES["cells"](896))
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["mir promote"] > 5.0, f"premise: promote ran ({own['mir promote']:.1f} Minstr)"
+    assert own["mir promote"] <= 150.0, own["mir promote"]
