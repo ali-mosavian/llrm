@@ -108,6 +108,8 @@ pub struct Profile {
     /// The platform's linear ranges no program data occupies, for a flat
     /// target.
     pub foreign: llrm_target::Foreign,
+    /// The platform's ports and what an access to each may do to memory.
+    pub ports: llrm_target::PortTable,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
     pub call_register_capacity: i64,
@@ -226,6 +228,7 @@ impl Profile {
             private: self.private.clone(),
             calling: self.calling.map(|one| one.0),
             foreign: self.foreign,
+            ports: self.ports,
         }
     }
 
@@ -263,6 +266,7 @@ impl Profile {
             private: private_convention(arch),
             calling: Some(llrm_target::calling::Stated(arch.calling())),
             foreign: arch.flat_foreign(),
+            ports: arch.flat_ports(),
             operand_bytes: arch.operand_bytes(),
             call_register_capacity: arch.callee_saved().len() as i64,
             address_scales: BTreeSet::from([1]),
