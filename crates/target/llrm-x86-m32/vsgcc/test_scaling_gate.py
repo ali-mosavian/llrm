@@ -1107,6 +1107,7 @@ def test_loopsimplify_groups_a_loops_edges_without_copying_the_function_for_it(t
     assert own[1024] <= 2.7 * own[512], f"mir loopsimplify {own[512]:.0f} -> {own[1024]:.0f} Minstr"
 
 
+<<<<<<< HEAD
 def test_counted_branches_share_what_a_counter_is_at_a_trip(tmp_path):
     """nbody_single at -O3: `peel` asked the odds of every branch of each loop, and `counted` ran a loop's counters once but worked out the
     compare's operands again for every branch at every trip, and found the loop's phis again for each: 118 Minstr in `mir peel` against 48
@@ -1116,3 +1117,28 @@ def test_counted_branches_share_what_a_counter_is_at_a_trip(tmp_path):
     own = gate.own_work([*gate.levels_time.command("llrm", "O3", source), *programs.LLRM_FLAGS])
     assert own["mir peel"] > 20.0, f"premise: loops were peeled ({own['mir peel']:.1f} Minstr)"
     assert own["mir peel"] <= 70.0, own["mir peel"]
+=======
+def test_the_spiller_leaves_alone_the_blocks_with_no_update_to_merge(tmp_path):
+    """branches(1024) at -O2: merging a spilled value's updates (`spill short updates`, `spill local updates`) rewrote every block of the body
+    for each spill, though only the blocks that define a stored value by a plain move, or update it, can have a run to merge, and gave
+    each a new list of instructions, so that every check of what changed after it (`postings::following`, `ranges::changes`) compared the
+    instructions of the whole body: 2,726 and 1,639 Minstr. The other blocks are the very same blocks: 654 and 603 (what is left is the copy
+    of the list of blocks, a rewrite each). A bound of 1,000 on each fails the first."""
+    source = tmp_path / "branches1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["spill short updates"] > 50.0, f"premise: updates were merged ({own['spill short updates']:.1f} Minstr)"
+    assert own["spill short updates"] <= 1000.0 and own["spill local updates"] <= 1000.0, own
+
+
+def test_the_allocator_requeues_the_values_a_rewrite_changed_and_the_ones_the_queue_gave_up(tmp_path):
+    """branches at -O2: after each spill or split the allocator looked at every live value of the body to put those that compete again back
+    in the queue (the events are proportional to N, so the step was quadratic): `after queue` read 193 Minstr at N=512 and 803 at N=1024
+    (x4.2). The values it requeues are those the rewrite changed, those the queue gave up and those the rewrite brought to life: 5.4 and
+    10.9 (x2.0; LLRM_CHECK_IDLE compares them with the scan of every value). A bound of 40 Minstr at N=1024 fails the first."""
+    source = tmp_path / "branches1024.c"
+    source.write_text(scaling.AXES["branches"](1024))
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["after queue"] > 1.0, f"premise: events requeued ({own['after queue']:.1f} Minstr)"
+    assert own["after queue"] <= 40.0, f"after queue {own['after queue']:.1f} Minstr"
+>>>>>>> origin/main

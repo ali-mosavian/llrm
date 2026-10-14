@@ -10,6 +10,7 @@ list, never grow it.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 from dataclasses import dataclass
@@ -49,6 +50,11 @@ def bugs() -> list[tuple[str, str]]:
     if not PATH.exists():
         return []
     return [(one["match"], one["issue"]) for one in tomllib.loads(PATH.read_text()).get("bug", [])]
+
+
+def stale(lines: list[str]) -> list[tuple[str, str]]:
+    """The known.toml entries no failing line matches: a bug that is fixed. Left in, the entry tags its return as known."""
+    return [(match, issue) for match, issue in bugs() if not any(re.search(match, line) for line in lines)]
 
 
 def compare(short: set, judged: set) -> Ratchet:
