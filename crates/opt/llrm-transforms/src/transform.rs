@@ -272,7 +272,7 @@ pub fn subexpressions(
     // What a name is rewritten to, and so what it numbers as.
     let mut swap: BTreeMap<ValueId, Operand> = BTreeMap::new();
     let mut gone: BTreeSet<InstId> = BTreeSet::new();
-    for &block in function.layout() {
+    for block in dominators_first(function, &dominance) {
         let here = order[&block];
         let instructions = function.block(block).instructions();
         for (index, &inst) in instructions.iter().enumerate() {
@@ -361,6 +361,12 @@ pub fn equal_calls(
     }
     let dominance = cfg::Dominance::of(function);
     let layout = function.layout().to_vec();
+    let rank: IndexMap<BlockId, usize> =
+        dominators_first(function, &dominance).into_iter().enumerate().map(|(rank, block)| (block, rank)).collect();
+    let mut groups = groups;
+    for calls in &mut groups {
+        calls.sort_by_key(|&(at, index, _)| (rank[&layout[at]], index));
+    }
     let mut swap: Vec<(ValueId, ValueId)> = Vec::new();
     for calls in &groups {
         let mut leaders: Vec<(usize, usize, InstId)> = Vec::new();
@@ -449,6 +455,20 @@ pub fn _computation(
         }
     }
     Some(_Computation { opcode: op.opcode.clone(), flags: op.flags, ty: op.ty, operands: (unordered, named) })
+}
+
+/// The blocks with each before the ones it dominates: by dominator depth, not
+/// by the layout, which a removed join leaves behind the blocks it came to
+/// dominate. A numbering that serves a later computation from an earlier one
+/// meets the dominating one first this way.
+pub fn dominators_first(
+    function: &Function,
+    dominance: &cfg::Dominance,
+) -> Vec<BlockId> {
+    let depths = dominance.depths(function);
+    let mut blocks = function.layout().to_vec();
+    blocks.sort_by_key(|&block| depths.get(&cfg::id(block)).copied().filter(|&depth| depth > 0).unwrap_or(usize::MAX));
+    blocks
 }
 
 /// Whether the earlier operation has certainly run by the later one.

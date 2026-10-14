@@ -30,6 +30,8 @@ void cn_putc(char c);
 void cn_crlf(void);
 /* Puts the screen's cursor where the console has it. */
 void cn_sync(void);
+/* The next key, waited for with the key hook looking at each key that comes in (INPUT$ and a line's typing). */
+byte cn_wait_key(void);
 /* The screen's cursor is shown while a program waits for typing and hidden
    while it runs, unless LOCATE asked for it; this is the wait. */
 void cn_waiting(int waiting);

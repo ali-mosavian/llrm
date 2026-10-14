@@ -1,4 +1,4 @@
-reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out (hanoi 729041 -> 352237)"
+reason = "gvn meets blocks dominators first (#1656): the sext/mul/gep of an index and a reload of a pointer field, recomputed in a block laid out before its dominator, are served from the dominator; lru c -O2/-Os"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -34,31 +34,30 @@ bss_bytes = 0
 kernel_ms = 0.0067
 
 [bq32.O2]
-instructions = 126
-code_bytes = 504
+instructions = 134
+code_bytes = 529
 data_bytes = 83
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 125
-code_bytes = 473
+instructions = 133
+code_bytes = 500
 data_bytes = 83
 bss_bytes = 0
 
 [c.O2]
-instructions = 127
+instructions = 124
 memory_operands = 55
-code_bytes = 390
+code_bytes = 384
 data_bytes = 0
 bss_bytes = 78
 
 [c.Os]
-instructions = 126
+instructions = 123
 memory_operands = 55
-code_bytes = 353
+code_bytes = 347
 data_bytes = 0
 bss_bytes = 78
-kernel_ms = 0.0031
 
 [nib.O2]
 instructions = 205

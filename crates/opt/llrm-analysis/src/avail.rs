@@ -723,6 +723,16 @@ pub fn same_runs() -> usize {
     SAMES.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    static COLLECTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many loads this thread has collected as candidates for a missing one in
+/// `memory_providers`, for a test that a load blocked by a write collects none.
+pub fn collected_candidates() -> usize {
+    COLLECTED.with(std::cell::Cell::get)
+}
+
 /// Whether `holder` can stand for `value`: it has its type.
 fn serves(
     unit: &Unit,
@@ -855,17 +865,39 @@ fn memory_providers(
         // None for a site the entry does not reach: nothing is `available`
         // there.
         let reached = function.parent(site).filter(|&block| tree.is_reachable(block));
-        let mut candidates: Vec<usize> = reached
-            .map(|block| {
-                nearest
-                    .dominating(tree, &keys.iter().collect::<Vec<_>>(), block)
-                    .map(|(_, at)| at)
-                    .filter(|&at| names(load_group[at]))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let walk = || {
+            reached
+                .into_iter()
+                .flat_map(|block| nearest.dominating(tree, &keys.iter().collect::<Vec<_>>(), block).map(|(_, at)| at))
+        };
+        // Nearest first (the order `dominating` yields), the first load that is
+        // usable here: a write between it and the site is between every
+        // load above it and the site too, so where its walk finds one, no other
+        // load can serve, and the loads above it, tens to thousands of
+        // them on a chain of branches, are neither collected nor sorted (338 of
+        // the 707 Minstr `memory_providers` spent on `branches` at
+        // N=1024).
+        let usable = |&at: &usize| {
+            let (source, (_, value)) = &loads[at];
+            available(*source, site) && serves(unit, Operand::Value(*value), result)
+        };
+        let nearest_usable = walk().filter(|&at| names(load_group[at])).find(|at| usable(at));
+        let checked = llrm_support::env_set("LLRM_CHECK_GROUPS");
+        let served = nearest_usable.filter(|&at| {
+            let (source, (loaded, _)) = &loads[at];
+            graph.unchanged(*source, site, loaded)
+        });
+        if !checked {
+            if let Some(at) = served {
+                found.push(Forward { at: site, value: Operand::Value(loads[at].1.1) });
+            }
+            continue;
+        }
+        let none_can_serve = served.is_none();
+        let mut candidates: Vec<usize> = walk().filter(|&at| names(load_group[at])).collect();
         candidates.sort_unstable();
-        if llrm_support::env_set("LLRM_CHECK_GROUPS") {
+        COLLECTED.with(|runs| runs.set(runs.get() + candidates.len()));
+        if checked {
             let every: Vec<usize> = groups
                 .iter()
                 .filter(|(loaded, _)| same_bytes(unit, loaded, &cell))
@@ -887,6 +919,7 @@ fn memory_providers(
         // fails every load that dominates it too: the write lies on a path
         // from the farther one through the nearer, so those are not walked.
         let mut failed: Vec<InstId> = Vec::new();
+        let before = found.len();
         for at in candidates.into_iter().rev() {
             let (source, (loaded, value)) = &loads[at];
             if !available(*source, site)
@@ -901,6 +934,10 @@ fn memory_providers(
             }
             failed.push(*source);
         }
+        assert!(
+            !(none_can_serve && found.len() > before),
+            "LLRM_CHECK_GROUPS: the nearest usable load's walk found a write, and another load served"
+        );
     }
     found
 }

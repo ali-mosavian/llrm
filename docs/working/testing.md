@@ -170,7 +170,7 @@ llrm-c, HIR, its verifier or MIR lowering.
 `tools/torture/torture.py` builds GCC's `gcc.c-torture/execute` (`TORTURE_CORPUS` names the directory) at -O0, -O2 and -Os for m32
 and runs each program on the emulator; a program passes by exiting 0. Every program ends in one class: pass, refused by design
 (`tools/torture/expected.toml` `[[refused]]`), differs by design (`[[differs]]`), or a finding. None is skipped quietly. The
-gate runs `--gate`, the fixed sample of `tools/torture/sample.txt`.
+gate runs `--gate`, the fixed sample of `tools/torture/sample.txt`. The run stage splits the programs over up to 12 DOSBox launches at once, each in its own work directory (50 s against 291 s in serial batches of 150).
 
     uv run --project tools python tools/torture/torture.py [names...] [--levels O0,O2,Os] [--stage compile] [--out results.json]
 

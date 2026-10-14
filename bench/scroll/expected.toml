@@ -1,4 +1,4 @@
-reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out (hanoi 729041 -> 352237); main's own moves of a few instructions"
+reason = "bq32 rows re-blessed: #1669's runtime change (console.c) moved ten rows by 1 to 13 instructions in up to 10^8, and no gate re-blessed them (a runtime-only diff planned no bench). The count is the same in another cwd, with a 30 KB environment, and at virtual-time rates 5e7 to 2e8: it depends on the binary alone"
 blessed = "2026-10-14"
 
 [bas.O2]
