@@ -94,6 +94,12 @@ runtime and any foreign files, and links; it needs the DOS toolchain
 the default build bootstraps. `cargo test --test run` builds `examples/` and
 runs each in DOSBox against its `.out`.
 
+For the flat target, `tools/dosbatch/nib32.py [NAME ...]` builds each bench program with a Nib source for `-m32` (a COMDAT per
+procedure, the runtime cut to what the program names, DOS/32A) and runs them in one DOSBox session against `bench/NAME/NAME.out`. A
+program's header says how: `# flags: A | B` (B is the flat target's), `# data: FILE` (the file it opens, beside it or `@corpus`)
+and `# targets: x86-m16`, which leaves the flat target out (`grep`, `huge` and `lru` use far pointers: a real-mode idea). The
+rest, 26 programs, print their `.out` at `-m32` (`tools/dosbatch/test_nib32.py` runs a sample of seven).
+
 Diagnostics are `file:line:column: message`. The checker stops at the first
 error.
 
