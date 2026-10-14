@@ -5,7 +5,7 @@ compiler accepts, how it is invoked, and how a program flows from source to an
 OMF object.
 
 `llrm-qb` compiles QuickBASIC 4.5, QBasic 1.1, PDS 7.1, VBDOS and QuickrBASIC
-source for 386+ real-mode DOS. It is a source compiler: it lexes and parses the
+source for 386+ real-mode DOS (`-m16`) and for the flat 32-bit DOS target (`-m32`, under DOS/32A). It is a source compiler: it lexes and parses the
 program, lowers it to HIR, and hands MIR to the optimizer and backend shared
 with every other frontend.
 
@@ -93,7 +93,7 @@ Without `-o` and `-S` the HIR text is printed. `-o OUT` writes the OMF object,
 | `--dump DIR` | Write `00-input.bas` and `01-hir.json` to `DIR`; `LLRM_MIR_STAGES` dumps the MIR passes |
 
 The gcc-style options of `llrm-c` and `llrm-nib` apply too: `-O0` to `-O3`,
-`-Os`, `-Oz`, `-Og`, `-f[no-]PASS`, `-march`, `-mtune`, `-m16`, `-g` and
+`-Os`, `-Oz`, `-Og`, `-f[no-]PASS`, `-march`, `-mtune`, `-m16`, `-m32`, `-g` and
 `-S`. `-fsanitize=bounds,integer-divide-by-zero,signed-integer-overflow` (or
 `undefined`) are BC's `/D` checks, `-fsanitize=stack` is its stack check, and
 `-g` writes line numbers. `--own-frames` is accepted and does nothing. The
@@ -105,8 +105,10 @@ usage text printed by a bad argument lists every option.
 
 ## Scope
 
-The target is an Intel 386 or newer CPU running 16-bit real-mode DOS, not a
-flat 32-bit target and not an 8086/286 code generator. The compiler links
+The targets are an Intel 386 or newer CPU running 16-bit real-mode DOS (`-m16`)
+and the flat 32-bit DOS target (`-m32`, one address space: see
+[memory-model](memory-model.md#one-address-space-m32-flat-addresses-no-segments)),
+not an 8086/286 code generator. The compiler links
 against the selected runtime rather than reimplementing it, apart from the
 `llrm` runtime.
 
