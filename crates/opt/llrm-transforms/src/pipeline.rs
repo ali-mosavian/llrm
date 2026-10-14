@@ -170,6 +170,9 @@ pub struct Options {
     /// A switch that only picks constants is a load from an array: gcc's
     /// `-ftree-switch-conversion`, -O2 and up.
     pub switch_conversion: bool,
+    /// A dense switch may be a jump table: gcc's `-fjump-tables`, on at every
+    /// level.
+    pub jump_tables: bool,
     pub drop_stores: bool,
     pub promote: bool,
     pub strength: bool,
@@ -231,6 +234,7 @@ impl Default for Options {
             for_size: false,
             expensive: true,
             switch_conversion: true,
+            jump_tables: true,
             search: true,
             routes: true,
             exhaustive: false,
@@ -622,7 +626,11 @@ pub fn recorded(
     // Last of the passes that reshape the body, as gcc's `pass_lower_switch`
     // follows its optimizations.
     if applied.options.wanted("switchlower") {
-        manager.add(switchlower::SwitchLower { tables: applied.options.switch_conversion });
+        manager.add(switchlower::SwitchLower {
+            tables: applied.options.switch_conversion,
+            jump_tables: applied.options.jump_tables,
+            size: applied.options.prefers_size(),
+        });
     }
     // Last: what it names are the instructions selection sees.
     manager.add_module(crate::spares::Spares);

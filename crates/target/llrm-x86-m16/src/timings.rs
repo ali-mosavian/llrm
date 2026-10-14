@@ -43,6 +43,7 @@ pub static SET_RATIO: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table
 pub static CLEAR_RATIO: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.clear_ratio));
 pub static SET_RATIO_SIZE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.set_ratio_size));
 pub static CLEAR_RATIO_SIZE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.clear_ratio_size));
+pub static JUMP_TABLE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.jump_table));
 
 /// Instructions retired per cycle.
 pub static ISSUE: LazyLock<[i64; 7]> = LazyLock::new(|| scalars(|table| table.issue));

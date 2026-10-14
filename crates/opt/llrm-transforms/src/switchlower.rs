@@ -26,8 +26,13 @@
 //! `x - low <= span` when it is a leaf, a node with children by the compares
 //! `x > high`, `x >= low`.
 //!
-//! gcc's jump tables are not made: the backend has no table jump to lower
-//! to, so those cases stay in the tree.
+//! Jump tables (`jump_table_cluster`), over the plain clusters left: the fewest
+//! runs whose span is at most 8 times (3 tuned for size) the comparisons they
+//! replace, and at least the target's `jump_table` cases (gcc's
+//! `case_values_threshold`, 5 on x86; 0: no table jump). Such a run is `x -
+//! low` behind its range test and a `switch table` over the indices `0..n`,
+//! every index a block that only jumps on; the backend makes it a jump through
+//! a table of code addresses. `-fno-jump-tables` leaves them in the tree.
 //!
 //! # Runs
 //! Last of the function passes, as gcc's `pass_lower_switch` follows its
@@ -70,6 +75,10 @@ const MOST_TARGETS: usize = 3;
 /// `tables`: switch conversion, gcc's -O2 and up.
 pub struct SwitchLower {
     pub tables: bool,
+    /// A dense switch may be a jump table (`-fjump-tables`).
+    pub jump_tables: bool,
+    /// Tuned for size: gcc's jump tables may grow the code less.
+    pub size: bool,
 }
 
 impl FunctionPass for SwitchLower {
@@ -80,14 +89,24 @@ impl FunctionPass for SwitchLower {
     fn run(
         &mut self,
         unit: &mut Unit,
-        _analyses: &mut Analyses,
+        analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        let threshold = if self.jump_tables { analyses.outer().target().costs().jump_table } else { 0 };
         let word = unit.layout.largest_legal_integer().min(64);
         let pointer = unit.layout.pointer(0).bits;
         let mut changed = false;
         for block in unit.function.layout().to_vec() {
             let Some(switch) = switch_at(unit.context, unit.function, block) else { continue };
-            let mut lowering = Lowering { unit: &mut *unit, switch, word, pointer, flip: 0, edges: Vec::new() };
+            let mut lowering = Lowering {
+                unit: &mut *unit,
+                switch,
+                word,
+                pointer,
+                threshold,
+                size: self.size,
+                flip: 0,
+                edges: Vec::new(),
+            };
             lowering.run(self.tables);
             changed = true;
         }
@@ -108,6 +127,8 @@ struct Cluster {
     target: BlockId,
     /// A run of cases as bit tests: the mask of each target, from `low`.
     tests: Vec<(u128, BlockId)>,
+    /// A run of cases as a jump table: each case's values and target.
+    parts: Vec<(u128, u128, BlockId)>,
 }
 
 impl Cluster {
@@ -189,6 +210,10 @@ struct Lowering<'a, 'b> {
     /// The widest native integer, and the pointer's width.
     word: u32,
     pointer: u32,
+    /// The fewest cases of a jump table, 0 where the target has none, and
+    /// whether the code is tuned for size.
+    threshold: i64,
+    size: bool,
     /// The order's flip: a key is the value xor this.
     flip: u128,
     /// The edges the lowering made, source and target, for the targets' phis.
@@ -209,7 +234,7 @@ impl Lowering<'_, '_> {
             for (key, target) in cases {
                 match clusters.last_mut() {
                     Some(last) if last.target == target && last.high + 1 == key => last.high = key,
-                    _ => clusters.push(Cluster { low: key, high: key, target, tests: Vec::new() }),
+                    _ => clusters.push(Cluster { low: key, high: key, target, tests: Vec::new(), parts: Vec::new() }),
                 }
             }
             clusters
@@ -226,6 +251,7 @@ impl Lowering<'_, '_> {
             return;
         }
         let clusters = self.with_bit_tests(clusters);
+        let clusters = self.with_jump_tables(clusters);
         let root = balanced(&clusters);
         let originals = self.originals();
         let block = self.switch.block;
@@ -233,6 +259,9 @@ impl Lowering<'_, '_> {
         match &root {
             Some(root) if clusters.len() == 1 && !root.cluster.tests.is_empty() => {
                 self.tests(block, &root.cluster, true)
+            }
+            Some(root) if clusters.len() == 1 && !root.cluster.parts.is_empty() => {
+                self.table(block, &root.cluster, true)
             }
             _ => self.node(block, root.as_deref()),
         }
@@ -543,7 +572,7 @@ impl Lowering<'_, '_> {
                 }
                 (None, None) => {}
             }
-        } else if node.has_child() || !cluster.tests.is_empty() {
+        } else if node.has_child() || !cluster.tests.is_empty() || !cluster.parts.is_empty() {
             let above = right.map(|_| self.fresh(block));
             let inside = self.fresh(block);
             if cluster.high == mask(self.switch.bits) {
@@ -551,7 +580,8 @@ impl Lowering<'_, '_> {
             } else {
                 self.test(block, Order::Greater, cluster.high, above.unwrap_or(default), inside);
             }
-            let hit = if cluster.tests.is_empty() { cluster.target } else { self.fresh(inside) };
+            let special = !cluster.tests.is_empty() || !cluster.parts.is_empty();
+            let hit = if special { self.fresh(inside) } else { cluster.target };
             let below = left.map(|_| self.fresh(inside));
             if cluster.low == 0 {
                 self.jump(inside, hit);
@@ -560,6 +590,8 @@ impl Lowering<'_, '_> {
             }
             if !cluster.tests.is_empty() {
                 self.tests(hit, cluster, false);
+            } else if !cluster.parts.is_empty() {
+                self.table(hit, cluster, false);
             }
             if let (Some(below), Some(left)) = (below, left) {
                 self.node(below, Some(left));
@@ -616,6 +648,87 @@ impl Lowering<'_, '_> {
         }
     }
 
+    /// `find_jump_tables`: over each run of clusters left plain, the fewest
+    /// that a table can take (values at most 8 times the comparisons they
+    /// replace, 3 times tuned for size); the runs of at least the target's
+    /// threshold become one cluster.
+    fn with_jump_tables(
+        &self,
+        clusters: Vec<Cluster>,
+    ) -> Vec<Cluster> {
+        let threshold = self.threshold as usize;
+        if threshold == 0 {
+            return clusters;
+        }
+        let ratio: u128 = if self.size { 300 } else { 800 };
+        let plain = |one: &Cluster| one.tests.is_empty() && one.parts.is_empty();
+        let mut out = Vec::new();
+        let mut run: Vec<Cluster> = Vec::new();
+        for one in clusters {
+            if plain(&one) {
+                run.push(one);
+            } else {
+                out.extend(tabled_runs(std::mem::take(&mut run), threshold, ratio));
+                out.push(one);
+            }
+        }
+        out.extend(tabled_runs(run, threshold, ratio));
+        out
+    }
+
+    /// `jump_table_cluster::emit`: the index in the pointer's width, and a
+    /// `switch` the backend makes a table jump of; each index goes to a block
+    /// that only jumps on, so the edges are not critical.
+    fn table(
+        &mut self,
+        mut block: BlockId,
+        cluster: &Cluster,
+        entry: bool,
+    ) {
+        let default = self.switch.default;
+        let index = self.offset(block, cluster.low);
+        let span = cluster.high - cluster.low;
+        if entry {
+            let limit = Operand::Constant(self.unit.context.int(self.switch.ty, span as i128));
+            let outside = self.compare(block, IntPredicate::Ugt, index, limit);
+            let next = self.fresh(block);
+            self.branch(block, outside, default, next);
+            block = next;
+        }
+        let (pointer, bits) = (self.pointer, self.switch.bits);
+        let wide = self.unit.context.types.int(pointer);
+        let index = match bits.cmp(&pointer) {
+            std::cmp::Ordering::Less => self.put(block, Opcode::Cast(CastOp::ZExt), wide, vec![index]),
+            std::cmp::Ordering::Greater => self.put(block, Opcode::Cast(CastOp::Trunc), wide, vec![index]),
+            std::cmp::Ordering::Equal => index,
+        };
+        let mut landings: Vec<(BlockId, BlockId)> = Vec::new();
+        let mut operands = vec![index, Operand::Block(default)];
+        for at in 0..=span {
+            let target = cluster
+                .parts
+                .iter()
+                .find(|&&(low, high, _)| low - cluster.low <= at && at <= high - cluster.low)
+                .map_or(default, |&(_, _, target)| target);
+            let land = match landings.iter().find(|&&(to, _)| to == target) {
+                Some(&(_, land)) => land,
+                None => {
+                    let land = self.fresh(block);
+                    self.jump(land, target);
+                    landings.push((target, land));
+                    land
+                }
+            };
+            operands.extend([Operand::Constant(self.unit.context.int(wide, at as i128)), Operand::Block(land)]);
+        }
+        // The default is never taken, the index being in range: any case's.
+        operands[1] = operands[3];
+        let void = self.unit.context.types.void();
+        let inst = self.unit.function.create_instruction(Opcode::Switch, void, operands, Flags::TABLE, None);
+        self.unit.function.insert(inst, Position::End(block)).expect("a placed instruction");
+        self.edges.extend(landings.iter().map(|&(_, land)| (block, land)));
+    }
+
     /// `find_bit_tests`: the fewest runs of clusters, each narrower than a
     /// word with at most 3 targets, that a bit test can take; the ones that
     /// gain by it become one cluster.
@@ -663,7 +776,7 @@ impl Lowering<'_, '_> {
                     tests[at].0 |= (one.low - low..=one.high - low).fold(0u128, |all, bit| all | 1 << bit);
                 }
                 tests.sort_by_key(|&(bits, _)| std::cmp::Reverse(bits.count_ones()));
-                out.push(Cluster { low, high: run[run.len() - 1].high, target: unique[0], tests });
+                out.push(Cluster { low, high: run[run.len() - 1].high, target: unique[0], tests, parts: Vec::new() });
             } else {
                 out.extend(run.iter().rev().cloned());
             }
@@ -729,6 +842,56 @@ fn cell_width(
         }
     }
     (bits, CastOp::ZExt)
+}
+
+/// `jump_table_cluster::find_jump_tables` over `run`, clusters in order.
+fn tabled_runs(
+    run: Vec<Cluster>,
+    threshold: usize,
+    ratio: u128,
+) -> Vec<Cluster> {
+    let count = run.len();
+    let comparisons = |one: &Cluster| 1 + u128::from(one.high != one.low);
+    // The fewest clusters up to each, where the last starts, and the cases
+    // left out of tables on the way.
+    let mut best = vec![(usize::MAX, 0usize, usize::MAX); count + 1];
+    best[0] = (0, 0, 0);
+    for end in 1..=count {
+        let mut compares: u128 = run[..end].iter().map(comparisons).sum();
+        for start in 0..end {
+            let left = best[start].2 + if end - start < threshold { end - start } else { 0 };
+            let handled = start + 1 == end || 100 * (run[end - 1].high - run[start].low + 1) <= ratio * compares;
+            let (fewer, tied) = (best[start].0 + 1 < best[end].0, best[start].0 + 1 == best[end].0);
+            if (fewer || (tied && left < best[end].2)) && handled {
+                best[end] = (best[start].0 + 1, start, left);
+            }
+            compares -= comparisons(&run[start]);
+        }
+    }
+    if best[count].0 == count {
+        return run;
+    }
+    let mut out = Vec::new();
+    let mut end = count;
+    while end > 0 {
+        let start = best[end].1;
+        let one = &run[start..end];
+        if one.len() > 1 && one.len() >= threshold {
+            let parts = one.iter().map(|case| (case.low, case.high, case.target)).collect();
+            out.push(Cluster {
+                low: one[0].low,
+                high: one[one.len() - 1].high,
+                target: one[0].target,
+                tests: Vec::new(),
+                parts,
+            });
+        } else {
+            out.extend(one.iter().rev().cloned());
+        }
+        end = start;
+    }
+    out.reverse();
+    out
 }
 
 /// `bit_test_cluster::is_beneficial`.

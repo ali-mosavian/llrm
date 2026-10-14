@@ -64,6 +64,8 @@ use crate::support::hash::IndexMap;
 #[derive(Clone, Debug, Default)]
 pub struct Pool {
     first: i64,
+    /// Ids handed out: the data' and the jump tables'.
+    count: i64,
     entries: IndexMap<Vec<u8>, i64>,
 }
 
@@ -71,7 +73,7 @@ impl Pool {
     /// Data object ids from `first` on are the pool's.
     #[must_use]
     pub fn new(first: i64) -> Self {
-        Self { first, entries: IndexMap::default() }
+        Self { first, count: 0, entries: IndexMap::default() }
     }
 
     /// The readonly cell holding `bytes`.
@@ -80,15 +82,37 @@ impl Pool {
         bytes: Vec<u8>,
     ) -> Mem {
         let width = bytes.len() as u32;
-        let next = self.first + self.entries.len() as i64;
-        let id = *self.entries.entry(bytes).or_insert(next);
+        let id = match self.entries.get(&bytes) {
+            Some(&id) => id,
+            None => {
+                let id = self.first + self.count;
+                self.count += 1;
+                self.entries.insert(bytes, id);
+                id
+            }
+        };
         Mem { disp_width: 2, ..Mem::new(Some(Addr { index: id, ..Addr::new(Space::Segment, 0) }), width) }
+    }
+
+    /// A new jump table's id. Its entries are the final procedure's, written
+    /// where the module is assembled: a body that was selected and not kept
+    /// leaves an id nothing names.
+    pub fn table(&mut self) -> i64 {
+        let id = self.first + self.count;
+        self.count += 1;
+        id
     }
 
     /// Every datum and its data object id, in the order first asked for.
     pub fn entries(&self) -> impl Iterator<Item = (&[u8], i64)> {
         self.entries.iter().map(|(bytes, id)| (bytes.as_slice(), *id))
     }
+}
+
+/// Whether `name` is a label assembly made for the pool: `$K` a constant, `$J`
+/// a jump table.
+pub fn is_pool(name: &str) -> bool {
+    name.starts_with("$K") || name.starts_with("$J")
 }
 
 /// `value` in the narrowest float format that holds it exactly, as GCC's

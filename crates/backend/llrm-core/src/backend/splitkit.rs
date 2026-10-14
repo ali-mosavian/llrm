@@ -663,13 +663,15 @@ pub fn carved_moving(
         let rewritten: Vec<Arc<Insn>> = original
             .insns
             .iter()
-            .map(|one| match &one.what {
-                Some(what) if what.target == Some(outside) => {
-                    let mut made = (**one).clone();
-                    made.what = Some(Semantics { target: Some(bridge), ..what.clone() });
-                    Arc::new(made)
+            .map(|one| {
+                match one.what.as_ref().and_then(|what| what.remapped(|to| if to == outside { bridge } else { to })) {
+                    Some(what) => {
+                        let mut made = (**one).clone();
+                        made.what = Some(what);
+                        Arc::new(made)
+                    }
+                    None => Arc::clone(one),
                 }
-                _ => Arc::clone(one),
             })
             .collect();
         out[place] = LirBlock {

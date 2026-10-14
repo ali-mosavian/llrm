@@ -21,6 +21,8 @@ pub struct CpuTable {
     pub clear_ratio: Option<i64>,
     pub set_ratio_size: Option<i64>,
     pub clear_ratio_size: Option<i64>,
+    /// The fewest case values for which a switch is a jump table.
+    pub jump_table: Option<i64>,
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
@@ -90,6 +92,7 @@ impl Timings {
                     ("scalars", "clear_ratio") => table.clear_ratio = Some(number()?),
                     ("scalars", "set_ratio_size") => table.set_ratio_size = Some(number()?),
                     ("scalars", "clear_ratio_size") => table.clear_ratio_size = Some(number()?),
+                    ("scalars", "jump_table") => table.jump_table = Some(number()?),
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),

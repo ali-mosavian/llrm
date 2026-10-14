@@ -2310,12 +2310,14 @@ fn written(
                 one = folded_into(&one, *value, &cell).expect("a fold the simulation chose");
             }
             if one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch)) {
-                if let Some(what) = &one.what {
-                    if let Some(to) = what.target.and_then(|to| retarget.get(&(block.at, to))) {
-                        let mut made = (*one).clone();
-                        made.what = Some(Semantics { target: Some(*to), ..what.clone() });
-                        one = Arc::new(made);
-                    }
+                if let Some(what) = one
+                    .what
+                    .as_ref()
+                    .and_then(|what| what.remapped(|to| retarget.get(&(block.at, to)).copied().unwrap_or(to)))
+                {
+                    let mut made = (*one).clone();
+                    made.what = Some(what);
+                    one = Arc::new(made);
                 }
             }
             insns.push(Arc::clone(&one));

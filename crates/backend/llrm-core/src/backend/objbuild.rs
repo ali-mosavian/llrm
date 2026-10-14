@@ -707,7 +707,13 @@ pub fn _items(
             fixups: vec![Fixup::new(1, POINTER, name.clone())],
         })],
         masm::Item::Callee(masm::Callee { name, .. }) => vec![Encoded::Near(Near { name: name.clone() })],
-        masm::Item::Semantics(Semantics { op: Operation::Branch | Operation::Jump, name, target, .. }) => {
+        masm::Item::Semantics(Semantics {
+            op: Operation::Branch | Operation::Jump,
+            name,
+            target,
+            indirect: false,
+            ..
+        }) => {
             let name = name.as_deref().filter(|one| !one.is_empty());
             let Some(target) = target else {
                 return Err(Unencodable(format!("{} with no target", name.unwrap_or("jump"))));

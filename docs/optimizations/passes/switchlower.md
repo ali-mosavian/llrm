@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlower.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlower.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:9a666a55b1f99ae27e2d3ab0a5957dd19a4b638850720bcf8eb8157861c21954 -->
+<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:277689b5bb4648b0db6d5a655805e0d27ad5067393c89ae17eed0dff630f0ded -->
 
 # switchlower
 
@@ -31,8 +31,13 @@ tested as `emit_case_nodes` does: a single value by equality, a range by
 `x - low <= span` when it is a leaf, a node with children by the compares
 `x > high`, `x >= low`.
 
-gcc's jump tables are not made: the backend has no table jump to lower
-to, so those cases stay in the tree.
+Jump tables (`jump_table_cluster`), over the plain clusters left: the fewest
+runs whose span is at most 8 times (3 tuned for size) the comparisons they
+replace, and at least the target's `jump_table` cases (gcc's
+`case_values_threshold`, 5 on x86; 0: no table jump). Such a run is `x -
+low` behind its range test and a `switch table` over the indices `0..n`,
+every index a block that only jumps on; the backend makes it a jump through
+a table of code addresses. `-fno-jump-tables` leaves them in the tree.
 
 ## Runs
 Last of the function passes, as gcc's `pass_lower_switch` follows its

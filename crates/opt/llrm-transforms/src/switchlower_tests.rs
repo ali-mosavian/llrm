@@ -12,9 +12,21 @@ fn lowered(
     inputs: impl IntoIterator<Item = i128>,
     tables: bool,
 ) -> String {
+    lowered_by(text, inputs, tables, 0)
+}
+
+/// `lowered` for a target with a table jump from `jump_table` cases.
+fn lowered_by(
+    text: &str,
+    inputs: impl IntoIterator<Item = i128>,
+    tables: bool,
+    jump_table: i64,
+) -> String {
     let before = parsed(&format!("{DOS}{text}"));
     let mut module = before.clone();
-    let after = managed_on(&mut module, SwitchLower { tables }, Tuned::default());
+    let machine =
+        Tuned { costs: crate::profit::OperationCosts { jump_table, ..Default::default() }, ..Default::default() };
+    let after = managed_on(&mut module, SwitchLower { tables, jump_tables: true, size: false }, machine);
     let inputs: Vec<[i128; 1]> = inputs.into_iter().map(|one| [one]).collect();
     let inputs: Vec<&[i128]> = inputs.iter().map(|one| &one[..]).collect();
     assert_eq!(results(&module, &inputs), results(&before, &inputs), "{after}");
@@ -239,4 +251,86 @@ d:
 ";
     let after = lowered(text, [0, 1, 2, 3, 4, 40], true);
     assert!(!after.contains("switch"), "{after}");
+}
+
+/// Cases that each go their own way, dense, are a jump table where the target
+/// has one (gcc's `jump_table_cluster`, from 5 cases): a range test, then a
+/// `switch` the backend lowers.
+#[test]
+fn test_dense_cases_are_a_jump_table_where_the_target_has_one() {
+    let cases: Vec<(i128, u32)> = (0..8).map(|at| (at + 10, at as u32 + 1)).collect();
+    let after = lowered_by(&returns("i32", &cases), -3..30, true, 5);
+    assert!(after.contains("switch table i16"), "{after}");
+    assert!(after.contains("icmp ugt i32"), "{after}");
+}
+
+/// A target with no table jump keeps the tree.
+#[test]
+fn test_no_jump_table_where_the_target_has_none() {
+    let cases: Vec<(i128, u32)> = (0..8).map(|at| (at + 10, at as u32 + 1)).collect();
+    let after = lowered_by(&returns("i32", &cases), -3..30, true, 0);
+    assert!(!after.contains("switch"), "{after}");
+}
+
+/// Fewer cases than the target's threshold stay a tree.
+#[test]
+fn test_four_cases_are_no_jump_table() {
+    let cases: Vec<(i128, u32)> = (0..4).map(|at| (at + 10, at as u32 + 1)).collect();
+    let after = lowered_by(&returns("i32", &cases), -3..30, true, 5);
+    assert!(!after.contains("switch"), "{after}");
+}
+
+/// Holes in the table go to the default; a span over 8 per comparison is no
+/// table.
+#[test]
+fn test_a_table_with_holes_sends_them_to_the_default() {
+    let cases: Vec<(i128, u32)> =
+        [0, 1, 3, 4, 6, 9].iter().enumerate().map(|(at, &value)| (value, at as u32 + 1)).collect();
+    let after = lowered_by(&returns("i32", &cases), -2..14, true, 5);
+    assert!(after.contains("switch table"), "{after}");
+    let sparse: Vec<(i128, u32)> =
+        [0, 20, 40, 60, 80, 100].iter().enumerate().map(|(at, &value)| (value, at as u32 + 1)).collect();
+    let after = lowered_by(&returns("i32", &sparse), (-2..110).step_by(1), true, 5);
+    assert!(!after.contains("switch"), "{after}");
+}
+
+/// Each index lands in a block of its own that jumps on, so a phi of the
+/// target names it, not the switch's block.
+#[test]
+fn test_a_table_target_with_a_phi_names_its_landing() {
+    let text = "define i32 @f(i32 %x) {
+b0:
+  switch i32 %x, label %d [
+    i32 0, label %a
+    i32 1, label %b
+    i32 2, label %a
+    i32 3, label %c
+    i32 4, label %b
+    i32 5, label %a
+    i32 6, label %e
+    i32 7, label %e
+  ]
+
+a:
+  %pa = phi i32 [ 1, %b0 ], [ 1, %b0 ], [ 1, %b0 ]
+  ret i32 %pa
+
+b:
+  %pb = phi i32 [ 2, %b0 ], [ 2, %b0 ]
+  ret i32 %pb
+
+c:
+  %pc = phi i32 [ 3, %b0 ]
+  ret i32 %pc
+
+e:
+  %pe = phi i32 [ 4, %b0 ], [ 4, %b0 ]
+  ret i32 %pe
+
+d:
+  ret i32 0
+}
+";
+    let after = lowered_by(text, -2..10, true, 5);
+    assert!(after.contains("switch table"), "{after}");
 }

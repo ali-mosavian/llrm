@@ -33,8 +33,45 @@ fn a_switch_of_constants_is_a_load_and_a_character_class_a_few_ranges() {
     }
 }
 
-/// Without `-ftree-switch-conversion` the same cases are a tree of compares.
+/// Without `-ftree-switch-conversion` the same cases are a jump table, and
+/// without `-fjump-tables` either a tree of compares.
 #[test]
-fn without_switch_conversion_the_constants_are_compares() {
-    assert!(compares("x_switch_dense", &["-O2", "-fno-tree-switch-conversion"]) >= 11);
+fn without_switch_conversion_the_constants_are_a_table_or_compares() {
+    assert!(compares("x_switch_dense", &["-O2", "-fno-tree-switch-conversion"]) <= 4);
+    assert!(compares("x_switch_dense", &["-O2", "-fno-tree-switch-conversion", "-fno-jump-tables"]) >= 11);
+}
+
+fn listing(flags: &[&str]) -> String {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/run/c/switch_jump_table.c");
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(flags)
+        .args(["-march=i486", "-S", "-o", "a.s", source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    std::fs::read_to_string(scratch.path().join("a.s")).unwrap()
+}
+
+/// A dense switch whose cases each do their own work was a compare for each
+/// case, in order; it is a jump through a table of code addresses, in 32-bit
+/// code (a dword each, scaled) and in real mode (a word each, the index
+/// doubled).
+#[test]
+fn a_dense_switch_is_a_jump_through_a_table() {
+    let flat = listing(&["-m32", "-O2"]);
+    assert!(flat.contains("jmp dword ptr $J"), "{flat}");
+    assert!(flat.matches("    dd L0_").count() >= 10, "{flat}");
+    let real = listing(&["-m16", "-O2"]);
+    assert!(real.contains("jmp word ptr $J"), "{real}");
+    assert!(real.matches("    dw L0_").count() >= 10, "{real}");
+    // Tuned for size the table is still the smaller code.
+    assert!(listing(&["-m32", "-Os"]).contains("jmp dword ptr $J"));
+}
+
+/// At -O0 the pass does not run: the switch is the chain of compares it was.
+#[test]
+fn at_o0_a_switch_is_not_a_table() {
+    assert!(!listing(&["-m32", "-O0"]).contains("$J"));
 }

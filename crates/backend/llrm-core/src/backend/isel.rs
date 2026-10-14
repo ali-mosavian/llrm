@@ -1922,6 +1922,17 @@ impl Selector<'_, '_, '_> {
                     self.pair_copies(block, self.ats[&inst], &mut insns)?;
                     insns.splice(start..start, std::mem::take(&mut self.materialized));
                 }
+                if instruction.opcode == Opcode::Switch && instruction.flags.contains(llrm_mir::opcode::Flags::TABLE) {
+                    self.table_switch(
+                        inst,
+                        &block_at,
+                        block_at[&block],
+                        std::mem::take(&mut insns),
+                        std::mem::take(&mut phis),
+                        blocks,
+                    )?;
+                    break;
+                }
                 if instruction.opcode == Opcode::Switch {
                     self.switch(
                         inst,
@@ -2676,6 +2687,62 @@ impl Selector<'_, '_, '_> {
         let mut tail = Vec::new();
         branched(self, b, taken, &mut tail)?;
         blocks.push(LirBlock { succ: vec![taken, otherwise], ..LirBlock::new(second, tail) });
+        Ok(())
+    }
+
+    /// A switch the middle end made a table of: the index, in a register of
+    /// the pointer's width, picks the block from a table of code addresses.
+    /// Each case is a block of its own, as the index's value, so the table's
+    /// cell is `$J` plus the index times the address's bytes (a 16-bit index
+    /// is doubled first: only the 386's 32-bit addressing scales).
+    fn table_switch(
+        &mut self,
+        inst: InstId,
+        block_at: &IndexMap<BlockId, i64>,
+        from: i64,
+        mut insns: Vec<Arc<Insn>>,
+        phis: Vec<Phi>,
+        blocks: &mut Vec<LirBlock>,
+    ) -> Result<(), Unselected> {
+        let at = self.ats[&inst];
+        let operands = self.function.instruction(inst).operands.clone();
+        let ty = self.function.operand_type(&self.module.context, operands[0]).expect("a typed value");
+        let targets: Vec<i64> = operands[2..]
+            .chunks(2)
+            .map(|pair| match pair[1] {
+                Operand::Block(target) => block_at[&target],
+                _ => unreachable!("a case's block"),
+            })
+            .collect();
+        let index = self.held(operands[0], ty, at, &mut insns)?;
+        let bytes = self.address_bytes();
+        let (base, scale) = if bytes == 2 {
+            let doubled = self.fresh_held(index.width);
+            insns.push(insn(
+                at,
+                semantics(Operation::Binary, "add", vec![Loc::Held(doubled)], vec![Loc::Held(index), Loc::Held(index)]),
+            ));
+            (doubled, 1)
+        } else {
+            (index, i64::from(bytes))
+        };
+        let id = self.pool.table();
+        let cell = Self::memory(
+            self.regs(),
+            Pointer::Global { space: Space::Segment, index: id, offset: 0, base: Some(base), scale, plus: None },
+            bytes,
+        );
+        let table = targets.clone();
+        let jump =
+            Semantics { indirect: true, table, ..semantics(Operation::Jump, "jmp", vec![], vec![Loc::Mem(cell)]) };
+        insns.push(insn(at, jump));
+        let mut succ: Vec<i64> = Vec::new();
+        for target in targets {
+            if !succ.contains(&target) {
+                succ.push(target);
+            }
+        }
+        blocks.push(LirBlock { succ, phis, ..LirBlock::new(from, insns) });
         Ok(())
     }
 
