@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/jumps.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/jumps.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:eac1a160a4a7fa2b3711e5f8c89b6acde39fc3a2e9c9829276595bab81bdd87e -->
+<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:73654aa17d002ce2873f0392d4b7ee10e4e50ecca36a35872515c21f4bd69146 -->
 
 # jumps
 
@@ -97,7 +97,9 @@ called from `main`) at `-m16 -O2`, stages `Scheduler` and `ControlFlow`.
 ## Runs
 `ControlFlow` is the last machine phase, because this physical order
 decides which explicit edge is the fall-through. `jumps` shows as the
-phase name. A body in source order (`source_order`) is only made explicit.
+phase name. A body in source order (`source_order`) is only made explicit;
+at -O0 (`Profile::optimized` off) every body is, and its redundant jumps are
+dropped, as gcc's and clang's -O0 place no blocks.
 `LLRM_DEBUG=blocks` prints each block's frequency and size afterwards.
 `duplicated_returns` runs once per procedure in `assemble::assembled_by`
 (`lir duplicated returns`).

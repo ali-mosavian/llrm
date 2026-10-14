@@ -92,7 +92,9 @@
 //! # Runs
 //! `ControlFlow` is the last machine phase, because this physical order
 //! decides which explicit edge is the fall-through. `jumps` shows as the
-//! phase name. A body in source order (`source_order`) is only made explicit.
+//! phase name. A body in source order (`source_order`) is only made explicit;
+//! at -O0 (`Profile::optimized` off) every body is, and its redundant jumps are
+//! dropped, as gcc's and clang's -O0 place no blocks.
 //! `LLRM_DEBUG=blocks` prints each block's frequency and size afterwards.
 //! `duplicated_returns` runs once per procedure in `assemble::assembled_by`
 //! (`lir duplicated returns`).
@@ -159,7 +161,10 @@ impl ControlFlow<'_> {
         &self,
         body: &LirBody,
     ) -> Result<LirBody, masm::Unprintable> {
-        let placed = optimized(body, self.cpu)?;
+        // -O0 keeps the blocks in source order and drops the jumps that order
+        // makes redundant: no tails merged, no block copied, no trace chosen.
+        let placed =
+            if self.cpu.optimized { optimized(body, self.cpu)? } else { threaded(&body.with_blocks(_explicit(body)?)) };
         if crate::support::debug::enabled("blocks") {
             let frequency = crate::analysis::frequency::Frequency::of(&placed);
             for block in &placed.blocks {
