@@ -1088,13 +1088,7 @@ impl Selector<'_, '_, '_> {
         // clocks.
         if self.cpu.size && matches!(size, 4 | 8) {
             let value = if size == 4 { f64::from(f32::from_bits(bits as u32)) } else { f64::from_bits(bits) };
-            let (name, negated) = match value {
-                v if v == 0.0 => ("fldz", v.is_sign_negative()),
-                v if v == 1.0 => ("fld1", false),
-                v if v == -1.0 => ("fld1", true),
-                _ => ("", false),
-            };
-            if !name.is_empty() {
+            if let Some((name, negated)) = crate::backend::constpool::x87_constant(value) {
                 let mut held = self.fresh_held(FLOAT);
                 out.push(insn(m.at, semantics(Operation::FloatLoad, name, vec![Loc::Held(held)], vec![])));
                 if negated {

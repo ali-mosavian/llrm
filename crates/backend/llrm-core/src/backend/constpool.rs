@@ -91,6 +91,23 @@ impl Pool {
     }
 }
 
+/// The x87 instruction that loads `value` with no memory operand, and whether
+/// an `fchs` follows: +-0.0 and +-1.0, the ones gcc's
+/// `standard_80387_constant_p` knows (i386.cc L5113-5153) and LLVM keeps legal
+/// immediates (X86ISelLowering.cpp L777-780).
+#[must_use]
+pub fn x87_constant(value: f64) -> Option<(&'static str, bool)> {
+    if value == 0.0 {
+        Some(("fldz", value.is_sign_negative()))
+    } else if value == 1.0 {
+        Some(("fld1", false))
+    } else if value == -1.0 {
+        Some(("fld1", true))
+    } else {
+        None
+    }
+}
+
 /// `value` in the narrowest float format that holds it exactly, as GCC's
 /// `compress_float_constant`: its bytes.
 #[must_use]

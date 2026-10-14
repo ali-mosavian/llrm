@@ -2241,6 +2241,39 @@ fn test_a_float_constant_store_tuned_for_size_is_the_x87_constant_where_there_is
     assert_eq!((count(&fast, "fldz"), count(&fast, "fld1"), count(&fast, "fstp")), (0, 0, 0), "{fast}");
 }
 
+/// A float operand of -0.0 or -1.0 loaded from the constant pool (6 bytes)
+/// where `fldz`/`fld1` and `fchs` are 4: tuned for size they are the x87
+/// constants; not tuned for size, the pool load stays (`fchs` takes more
+/// clocks).
+#[test]
+fn test_a_negative_float_operand_tuned_for_size_is_the_x87_constant_and_an_fchs() {
+    let text = "define double @f(double %a) addrspace(1) {
+  %x = fadd double %a, -1.0
+  %y = fadd double %x, -0.0
+  ret double %y
+}
+";
+    let on = |size: bool| {
+        let cpu = crate::backend::cpu::tuned("486", size).expect("a target");
+        let module = assemble::assembled(
+            &parsed(text),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(cpu),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
+        masm::text(&module).expect("prints")
+    };
+    let count = |listing: &str, mnemonic: &str| {
+        listing.lines().map(str::trim).filter(|line| line.split_whitespace().next() == Some(mnemonic)).count()
+    };
+    let small = on(true);
+    assert_eq!((count(&small, "fld1"), count(&small, "fldz"), count(&small, "fchs")), (1, 1, 2), "{small}");
+    let fast = on(false);
+    assert_eq!((count(&fast, "fld1"), count(&fast, "fldz"), count(&fast, "fchs")), (0, 0, 0), "{fast}");
+}
+
 /// A dword compared for equality with a constant xors only the halves the
 /// constant sets: QCport -Os had `xor dx,0` (3 bytes, no effect) in 71 `got !=
 /// 73`-style compares.
