@@ -2226,6 +2226,15 @@ impl Compiler {
         marker: &str,
     ) -> String {
         let declared = format!("{name}{marker}");
+        // `v&` names the variable `DIM v AS LONG` declared (BC: one variable);
+        // a suffix of another type is a Duplicate definition,
+        // refused where the name is looked up.
+        if let Some(sign) = name.strip_suffix(['%', '&', '!', '#', '$']).map(|base| &name[base.len()..]) {
+            let base = format!("{}{marker}", canonical(name));
+            if self.variables.get(&base).is_some_and(|one| type_suffix(one.type_id) == sign) {
+                return base;
+            }
+        }
         if suffix(name).is_some() || self.variables.contains_key(&declared) {
             return declared;
         }
@@ -8553,11 +8562,25 @@ impl Compiler {
         Ok(())
     }
 
+    /// BC: `x%` after `DIM x AS LONG` is a Duplicate definition, not another
+    /// variable.
+    fn refuse_other_suffix(
+        &self,
+        name: &str,
+    ) -> Result<(), SemanticError> {
+        let Some(sign) = suffix(name).map(|_| &name[canonical(name).len()..]) else { return Ok(()) };
+        match self.variables.get(canonical(name)) {
+            Some(one) if one.element.is_none() && type_suffix(one.type_id) != sign => self.fail("Duplicate definition"),
+            _ => Ok(()),
+        }
+    }
+
     fn variable(
         &mut self,
         name: &str,
     ) -> Result<Variable, SemanticError> {
         self.refuse_keyword(name)?;
+        self.refuse_other_suffix(name)?;
         let key = self.variable_key(name);
         if let Some(variable) = self.variables.get(&key) {
             return Ok(variable.clone());
