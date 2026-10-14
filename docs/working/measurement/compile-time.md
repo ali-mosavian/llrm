@@ -83,3 +83,4 @@ A change that saves compile time is checked byte-identical on the programs with 
 - [#1105](https://github.com/ali-mosavian/llrm/issues/1105) fixed-point loops not yet on the dataflow solver.
 - [#1088](https://github.com/ali-mosavian/llrm/issues/1088) the spiller route runs the machine phases twice.
 - [#1110](https://github.com/ali-mosavian/llrm/issues/1110) loop passes cost O(depth^2).
+- [#1229](https://github.com/ali-mosavian/llrm/issues/1229) the allocator's spill, facts and interval steps are superlinear: the rows of `branches`, `chain` and `live` ([vsgcc/scaling.md](../../../crates/target/llrm-x86-m32/vsgcc/scaling.md#known-remaining-superlinear)).

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/jumps.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/jumps.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:02639fecb3e82c14752dbad895411b8e234382b29b9547c8bd63500c9f23f5ee -->
+<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:a9c6097fc0084ce69b277820e7e95cf890535484e0500a56e876a07db1b739f0 -->
 
 # jumps
 
@@ -36,11 +36,19 @@ Then, unless sized for code size, `duplicated_tails` replaces a `jmp` to a
 short tail (at most `TAIL_DUPLICATION` plain instructions besides its
 jumps) by a copy of the tail, where the copy's own fall-through jump runs
 less often than the jump removed, and a copy that would make a loop
-irreducible is refused. `duplicated` then does the same for tails that
-return, `rotated` rotates a loop so its latch falls into the header
-(gcc's bb-reorder `rotate_loop`) when that takes fewer jumps by the
-target's jump prices, and `inverted` flips each `jcc L; jmp M` the copying
-left where `L` is next.
+irreducible is refused. A tail is not copied into a jump that follows a
+branch whose other way is likelier than the tail (and is not the block
+itself): the copy would leave code between that branch and what follows
+it, and the likelier way would be taken whatever is laid next (a latch with
+a short exit tail would pay a taken back edge every trip to save the exit's
+one jump). `duplicated` then does the same for tails that return,
+`rotated` rotates a loop so its latch falls into the header (gcc's
+bb-reorder `rotate_loop`) when that takes fewer jumps by the target's jump
+prices, and `inverted` flips each `jcc L; jmp M` the copying left where `L`
+is next; where neither way is next, it makes the likelier way the
+conditional jump, so the trip that goes on pays one taken branch, not a
+branch not taken and a jump (the loop that went round by `je exit; jmp
+top`).
 
 ```text
   before                       after (placed, threaded)
