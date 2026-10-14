@@ -15,11 +15,16 @@
 //!
 //! A plain copy of a value made again is made again the same way.
 //!
-//! Slots are shared by [`crate::backend::slots`]. Stored values are sorted
-//! widest first, and each takes the first slot that is wide enough and whose
-//! holders never overlap its live range, preferring the slot of a value it is
-//! copied to or from, so that copy vanishes. After `setjmp` returns twice no
-//! slot is shared.
+//! Slots are shared by [`crate::backend::slots`]. Within an allocation each
+//! stored value takes a slot of its own (`Frame::defer_colours`); once the
+//! allocation is kept, `slots_colored` shares them, as LLVM's
+//! `StackSlotColoring` does after register allocation and GCC's IRA reuses
+//! stack slots after its spill decisions: the homes, most named first, each
+//! take the first slot that is as wide and whose holders never overlap its
+//! cells' live range, preferring the slot of a home it is copied to or from, so
+//! that copy vanishes. Outside an allocation (the spiller before it, the
+//! SSA spiller) `_color_slots` still colours as each value is stored. After
+//! `setjmp` returns twice no slot is shared.
 //!
 //! `materialized` writes the plan. Every definition of a stored value is
 //! followed by a store into its slot and every read is preceded by a reload
@@ -1236,6 +1241,14 @@ fn _color_slots(
     widths: &IndexMap<u32, u32>,
     frame: &mut Frame,
 ) -> Result<(), Error> {
+    // Each value its own slot: `slots_colored` shares them, once, over the
+    // allocation kept.
+    if frame.defer_colours {
+        for value in values {
+            frame.slot(*value, widths[value])?;
+        }
+        return Ok(());
+    }
     let (mut colors, live) = _existing_colors(body, frame);
     let by_home: IndexMap<i64, usize> = colors.iter().enumerate().map(|(at, (home, _, _))| (*home, at)).collect();
     // `siblings()` may reserve one home for a copy web before this batch.
@@ -1293,6 +1306,306 @@ fn _color_slots(
         colors[color].2.push(interval.clone());
     }
     Ok(())
+}
+
+/// The spill slots of `body` shared by what is never live together, once, as
+/// the allocation is kept: LLVM's `StackSlotColoring`, which runs after
+/// register allocation over the slots `InlineSpiller` gave each spilled
+/// register, and GCC's IRA slot reuse (`ira_reuse_stack_slot`), which colours
+/// slots after the spill decisions. Colouring each slot as it was made cost
+/// every spill the intervals of every home (`intervals homes`, 5% of a large
+/// function's compile) for allocations that were then thrown away.
+///
+/// The homes are coloured most-named first, as LLVM colours by decreasing
+/// weight, and in the order they were made too; the colouring with fewer bytes
+/// is kept (the first where they tie). A home goes to the slot of a home it is
+/// copied to or from, where that fits (`slots::choose`: the copy vanishes),
+/// else the first that fits. The slots are laid out again, the most named where
+/// a one-byte displacement reaches: from BP the top of the frame, the first
+/// slot made, as 16-bit code reaches it; from SP the bottom, where 32-bit code,
+/// which omits the frame register, reaches it. Every cell moves with its home.
+/// The frame and the body are returned changed; a body with no two homes that
+/// can share is returned as it is.
+pub fn slots_colored(
+    body: &LirBody,
+    frame: &mut Frame,
+) -> LirBody {
+    if body.returns_twice || frame.native.is_some() || frame.slots.is_empty() {
+        return body.clone();
+    }
+    let (colors, _live) = _existing_colors(body, frame);
+    let by_home: IndexMap<i64, &(i64, u32, Vec<Interval>)> = colors.iter().map(|color| (color.0, color)).collect();
+    // The order the homes were made in.
+    let mut order: Vec<i64> = Vec::new();
+    for home in frame.slots.values() {
+        if !order.contains(home) {
+            order.push(*home);
+        }
+    }
+    let mut sorted_homes: Vec<i64> = order.clone();
+    sorted_homes.sort_unstable();
+    // The home a cell lies in: a cell of the selector's slots lies in none.
+    let home_of = |disp: i64| -> Option<i64> {
+        let home = sorted_homes.partition_point(|home| *home <= disp).checked_sub(1).map(|at| sorted_homes[at])?;
+        by_home.get(&home).filter(|color| disp < home + i64::from(color.1)).map(|_| home)
+    };
+    let mut home_uses: IndexMap<i64, usize> = IndexMap::default();
+    for block in &body.blocks {
+        for one in block.insns.iter() {
+            for (disp, _, _) in frame_cells(one) {
+                if let Some(home) = home_of(disp) {
+                    *home_uses.entry(home).or_default() += 1;
+                }
+            }
+        }
+    }
+    // The homes a loop reads or writes: `loopslots` holds one in a register
+    // through the loop unless some access is wider than a word.
+    let depths = body.facts.0.get::<crate::analysis::graph::LoopDepths>(body);
+    let mut in_loop: BTreeSet<i64> = BTreeSet::new();
+    for block in &body.blocks {
+        if depths.get(&block.at).copied().unwrap_or(0) == 0 {
+            continue;
+        }
+        for one in block.insns.iter() {
+            for (disp, _, _) in frame_cells(one) {
+                if let Some(home) = home_of(disp) {
+                    in_loop.insert(home);
+                }
+            }
+        }
+    }
+    let mut partners_of: IndexMap<i64, Vec<i64>> = IndexMap::default();
+    for (from, to) in _slot_copies(body) {
+        if let (Some(a), Some(b)) = (home_of(from.0), home_of(to.0)) {
+            if a != b {
+                partners_of.entry(a).or_default().push(b);
+                partners_of.entry(b).or_default().push(a);
+            }
+        }
+    }
+    let colour = |processing: &[i64]| -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<i64, usize>) {
+        let mut shared: Vec<(i64, u32, Vec<Interval>)> = Vec::new();
+        let mut looped: Vec<bool> = Vec::new();
+        let mut into: IndexMap<i64, usize> = IndexMap::default();
+        for home in processing {
+            let Some((_, capacity, occupants)) = by_home.get(home).copied() else { continue };
+            let mut interval = Interval::new(0, Vec::new());
+            interval.segments = occupants.iter().flat_map(|one| one.segments.iter().copied()).collect();
+            interval.segments.sort_unstable_by_key(|segment| (segment.start, segment.end));
+            let partners: Vec<i64> = partners_of
+                .get(home)
+                .into_iter()
+                .flatten()
+                .filter_map(|other| into.get(other).map(|at| shared[*at].0))
+                .collect();
+            // A loop's slot is shared only by what is as wide: a word shares no
+            // slot a double word is read from, which no register stands in for
+            // (`loopslots`).
+            let same = |at: &usize| shared[*at].1 == *capacity || (!looped[*at] && !in_loop.contains(home));
+            let chosen = partners
+                .iter()
+                .find_map(|home| {
+                    shared
+                        .iter()
+                        .position(|one| one.0 == *home && crate::backend::slots::fits(one, &interval, *capacity))
+                })
+                .filter(same)
+                .or_else(|| {
+                    (0..shared.len())
+                        .filter(same)
+                        .find(|at| crate::backend::slots::fits(&shared[*at], &interval, *capacity))
+                });
+            match chosen {
+                Some(at) => {
+                    shared[at].2.push(interval);
+                    looped[at] |= in_loop.contains(home);
+                    into.insert(*home, at);
+                }
+                None => {
+                    shared.push((*home, *capacity, vec![interval]));
+                    looped.push(in_loop.contains(home));
+                    into.insert(*home, shared.len() - 1);
+                }
+            }
+        }
+        (shared, into)
+    };
+    // The colouring with fewest bytes of the orders tried: by where each home
+    // begins (first-fit in that order is optimal for intervals of one
+    // segment), most named, and made.
+    let begins = |home: &i64| -> i64 {
+        by_home
+            .get(home)
+            .and_then(|(_, _, occupants)| {
+                occupants.iter().flat_map(|one| one.segments.first()).map(|one| one.start).min()
+            })
+            .unwrap_or(i64::MAX)
+    };
+    let mut by_start = order.clone();
+    by_start.sort_by_key(begins);
+    let mut by_weight = order.clone();
+    by_weight.sort_by_key(|home| std::cmp::Reverse(home_uses.get(home).copied().unwrap_or(0)));
+    let mut by_size = order.clone();
+    by_size.sort_by_key(|home| (std::cmp::Reverse(by_home.get(home).map_or(0, |one| one.1)), begins(home)));
+    // What a colouring costs: the cells (by how many name each slot) beyond the
+    // reach of a one-byte displacement once the most named slots are nearest,
+    // then the bytes of the slots.
+    let score = |found: &(Vec<(i64, u32, Vec<Interval>)>, IndexMap<i64, usize>)| -> (usize, u64) {
+        let mut uses: Vec<(usize, u32)> = found.0.iter().map(|one| (0, one.1)).collect();
+        for (home, count) in &home_uses {
+            if let Some(color) = found.1.get(home) {
+                uses[*color].0 += count;
+            }
+        }
+        uses.sort_by_key(|one| std::cmp::Reverse(one.0));
+        let (mut at, mut far) = (0u32, 0usize);
+        for (count, capacity) in uses {
+            at += capacity;
+            if at > REACH {
+                far += count;
+            }
+        }
+        (far, found.0.iter().map(|one| u64::from(one.1)).sum())
+    };
+    let mut best = colour(&by_start);
+    for tried in [&by_size, &by_weight, &order] {
+        let found = colour(tried);
+        if score(&found) < score(&best) {
+            best = found;
+        }
+    }
+    let (shared, into) = best;
+    if shared.len() == order.len() {
+        return body.clone();
+    }
+    let mut uses: Vec<usize> = vec![0; shared.len()];
+    for (home, count) in &home_uses {
+        if let Some(color) = into.get(home) {
+            uses[*color] += count;
+        }
+    }
+    let mut ranked: Vec<usize> = (0..shared.len()).collect();
+    ranked.sort_by_key(|color| (std::cmp::Reverse(uses[*color]), *color));
+    if body.bits == 32 {
+        ranked.reverse();
+    }
+    let mut again = Frame { slots: IndexMap::default(), capacities: IndexMap::default(), ..frame.clone() };
+    let mut first_key: Vec<Option<SlotKey>> = vec![None; shared.len()];
+    for (key, home) in &frame.slots {
+        if let Some(color) = into.get(home) {
+            first_key[*color].get_or_insert_with(|| key.clone());
+        }
+    }
+    let mut placed: Vec<Option<i64>> = vec![None; shared.len()];
+    for color in ranked {
+        let Some(key) = first_key[color].clone() else { continue };
+        let Ok(new) = again.slot(key, i64::from(shared[color].1)) else { return body.clone() };
+        placed[color] = Some(new);
+    }
+    let mut moved: IndexMap<i64, i64> = IndexMap::default();
+    for (key, home) in &frame.slots {
+        let new = into.get(home).and_then(|color| placed[*color]).unwrap_or(*home);
+        again.slots.insert(key.clone(), new);
+        moved.insert(*home, new);
+    }
+    let Some(out) = crate::backend::slots::moved(body, &moved) else { return body.clone() };
+    *frame = again;
+    _identities_dropped(&out)
+}
+
+/// A plain move between a value and one frame cell: the value and the cell
+/// (displacement, width).
+fn _cell_move(
+    one: &Insn,
+    load: bool,
+) -> Option<(u32, (i64, u32))> {
+    let what = one.what.as_ref()?;
+    if what.op != Operation::Move
+        || what.name.as_deref() != Some("mov")
+        || one.group.is_some()
+        || !one.requires.is_empty()
+        || !one.delivers.is_empty()
+        || !one.clobbers.is_empty()
+        || what.dests.len() != 1
+        || what.sources.len() != 1
+    {
+        return None;
+    }
+    let (held, cell) = if load { (&what.dests[0], &what.sources[0]) } else { (&what.sources[0], &what.dests[0]) };
+    let (Loc::Held(held), Loc::Mem(cell)) = (held, cell) else { return None };
+    let addr = cell.addr.filter(|addr| addr.space == Space::Frame)?;
+    (held.width == cell.width).then_some((held.value, (addr.disp, cell.width)))
+}
+
+/// The cells a value is reloaded from and stored back to in the next
+/// instruction of `block`: a copy of one slot to another, through a value read
+/// only there.
+fn _slot_copies(body: &LirBody) -> Vec<((i64, u32), (i64, u32))> {
+    let (mut defined, mut used): (IndexMap<u32, usize>, IndexMap<u32, usize>) = Default::default();
+    for one in body.insns() {
+        for value in &one.defines {
+            *defined.entry(*value).or_default() += 1;
+        }
+        for value in &one.uses {
+            *used.entry(*value).or_default() += 1;
+        }
+    }
+    let mut found = Vec::new();
+    for block in &body.blocks {
+        for pair in block.insns.windows(2) {
+            if let (Some((value, from)), Some((stored, to))) = (_cell_move(&pair[0], true), _cell_move(&pair[1], false))
+            {
+                if value == stored && defined.get(&value) == Some(&1) && used.get(&value) == Some(&1) {
+                    found.push((from, to));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// `body` without the copies of a slot to itself that sharing slots made: a
+/// reload of a cell into a value that only the store back into that cell reads
+/// (a move between two spilled values that now share one slot).
+fn _identities_dropped(body: &LirBody) -> LirBody {
+    let (mut defined, mut used): (IndexMap<u32, usize>, IndexMap<u32, usize>) = Default::default();
+    let mut candidates = 0usize;
+    for one in body.insns() {
+        for value in &one.defines {
+            *defined.entry(*value).or_default() += 1;
+        }
+        for value in &one.uses {
+            *used.entry(*value).or_default() += 1;
+        }
+        candidates += usize::from(frame_cells(&one).next().is_some());
+    }
+    if candidates == 0 {
+        return body.clone();
+    }
+    let cell_move = _cell_move;
+    let mut changed = false;
+    let mut blocks = Vec::with_capacity(body.blocks.len());
+    for block in &body.blocks {
+        let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
+        let mut at = 0;
+        while at < block.insns.len() {
+            if let (Some((value, cell)), Some(next)) = (cell_move(&block.insns[at], true), block.insns.get(at + 1)) {
+                if cell_move(next, false) == Some((value, cell))
+                    && defined.get(&value) == Some(&1)
+                    && used.get(&value) == Some(&1)
+                {
+                    changed = true;
+                    at += 2;
+                    continue;
+                }
+            }
+            insns.push(Arc::clone(&block.insns[at]));
+            at += 1;
+        }
+        blocks.push(LirBlock { insns: insns.into(), ..block.clone() });
+    }
+    if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
 /// What each of `values` is copied to or from: another value, or a frame cell's
@@ -1585,6 +1898,10 @@ pub fn homes_redone(body: &LirBody) -> usize {
 /// than finding the homes again (cells N=448: 895 Minstr kept, 316 never kept;
 /// d_faces the other way).
 const FACTOR: usize = 1;
+
+/// The bytes a one-byte displacement reaches below a frame register
+/// (`-128..128`).
+const REACH: u32 = 128;
 
 /// Whether the homes' intervals of a body are worth keeping for the next:
 /// keeping them costs a fixed `FIXED` instructions a call (the state, the
