@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/spiller.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/spiller.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/spiller.rs sha256:1ddb46bb06195bd643d8cb83ff1a4553ae1f0ba1e68e757bbe6f1f73bdaad834 -->
+<!-- src: crates/backend/llrm-core/src/backend/spiller.rs sha256:5ef5761048d648dd22aab508355f357b7f6fe63032aec29fb58c0f30e37ead8b -->
 
 # spiller
 
@@ -20,11 +20,16 @@ value of the set gets one of these, in this order:
 
 A plain copy of a value made again is made again the same way.
 
-Slots are shared by [`crate::backend::slots`](slots.md). Stored values are sorted
-widest first, and each takes the first slot that is wide enough and whose
-holders never overlap its live range, preferring the slot of a value it is
-copied to or from, so that copy vanishes. After `setjmp` returns twice no
-slot is shared.
+Slots are shared by [`crate::backend::slots`](slots.md). Within an allocation each
+stored value takes a slot of its own (`Frame::defer_colours`); once the
+allocation is kept, `slots_colored` shares them, as LLVM's
+`StackSlotColoring` does after register allocation and GCC's IRA reuses
+stack slots after its spill decisions: the homes, most named first, each
+take the first slot that is as wide and whose holders never overlap its
+cells' live range, preferring the slot of a home it is copied to or from, so
+that copy vanishes. Outside an allocation (the spiller before it, the
+SSA spiller) `_color_slots` still colours as each value is stored. After
+`setjmp` returns twice no slot is shared.
 
 `materialized` writes the plan. Every definition of a stored value is
 followed by a store into its slot and every read is preceded by a reload

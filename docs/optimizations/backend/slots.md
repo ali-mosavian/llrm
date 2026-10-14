@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/slots.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/slots.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/slots.rs sha256:959d443b27f32487307c0efa24387471a954a55e7e226f7fc182aab7d17b9fc9 -->
+<!-- src: crates/backend/llrm-core/src/backend/slots.rs sha256:750463fae910a6ca045b77cfda8f954349311b857bca35e8e1338bf2b73618d3 -->
 
 # slots
 
@@ -12,6 +12,8 @@ and the interval each holder occupies. `fits` accepts a new holder when the
 slot is big enough and its interval overlaps no holder's. `choose` returns
 the first slot listed in `partners` (homes the caller prefers) that fits,
 else the first slot that fits, else none, and the caller opens a new slot.
+`moved` rewrites a body's frame cells when slots are laid out again, each
+cell keeping its place in its slot and taking the new slot's tag.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','textColor':'#64748b','titleColor':'#64748b','gridColor':'#94a3b8','sectionBkgColor':'transparent','sectionBkgColor2':'transparent','altSectionBkgColor':'transparent','taskTextColor':'#ffffff','taskTextOutsideColor':'#64748b','taskTextLightColor':'#ffffff','taskTextDarkColor':'#ffffff','doneTaskBkgColor':'#16a34a','doneTaskBorderColor':'#166534','activeTaskBkgColor':'#2563eb','activeTaskBorderColor':'#1e40af','critBkgColor':'#dc2626','critBorderColor':'#991b1b','taskBkgColor':'#475569','taskBorderColor':'#334155','todayLineColor':'transparent'},'gantt':{'barHeight':34,'barGap':12,'topPadding':48,'leftPadding':150,'fontSize':14,'sectionFontSize':14,'numberSectionStyles':2}}}%%
@@ -35,6 +37,7 @@ of its own. Its effect shows in the spill slots of the `spiller` and
 
 ## Used by
 - [`crate::backend::spiller`](spiller.md), which shares spill slots by the live range of
-  each spilled value and prefers the slot of a related value.
+  each spilled value and prefers the slot of a related value, and
+  `slots_colored`, which does so once over the allocation kept.
 - [`crate::backend::isel`](isel.md), which shares the slots of block locals by their
   lifetimes.

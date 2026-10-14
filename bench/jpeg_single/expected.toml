@@ -1,62 +1,62 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
+reason = "Spill slots are shared once over the kept allocation (LLVM StackSlotColoring, GCC IRA slot reuse): hot slots nearest the displacement reach (huge bq16 -O2 code -2.3%, grep bq16 -O2 -2.7%, jpeg c -O2 -2.3%) and identity copies between slots that now share one dropped; no row worse"
 blessed = "2026-10-14"
 
 [bas.O2]
-code_bytes = 5222
+code_bytes = 5212
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
 
 [bas.Os]
-code_bytes = 4903
+code_bytes = 4853
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5254
+code_bytes = 5244
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
 
 [bq16.Os]
-code_bytes = 4935
+code_bytes = 4885
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63443183
-code_bytes = 6372
+instructions = 63443158
+code_bytes = 6278
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64616409
-code_bytes = 5997
+instructions = 64616356
+code_bytes = 5868
 data_bytes = 29697
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 3215
+code_bytes = 3145
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 308.3791
 
 [c.Os]
-code_bytes = 2901
+code_bytes = 2896
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 310.1458
 
 [nib.O2]
-code_bytes = 6286
+code_bytes = 6182
 data_bytes = 17198
 bss_bytes = 0
 kernel_ms = 392.1278
 
 [nib.Os]
-code_bytes = 5867
+code_bytes = 5772
 data_bytes = 17198
 bss_bytes = 0
 kernel_ms = 399.1843
