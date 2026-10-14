@@ -1977,6 +1977,33 @@ pub fn agreed_count(proofs: &[CountedLoop]) -> Option<BigInt> {
     if counts.len() == 1 { counts.into_iter().next() } else { None }
 }
 
+/// Whether two loops make the same trips, tested at the same place: LLVM's
+/// `haveIdenticalTripCounts`. Both count trips by constants that are equal, or
+/// by the same test, step and `bound - start`, as symbolic values.
+pub fn same_trips(
+    first: &CountedLoop,
+    second: &CountedLoop,
+) -> bool {
+    if (first.posttested, first.stepped, first.shifted) != (second.posttested, second.stepped, second.shifted) {
+        return false;
+    }
+    match (&first.count, &second.count) {
+        (Some(one), Some(other)) => one == other,
+        (None, None) => {
+            let distance = |proof: &CountedLoop| {
+                let width = proof.width();
+                Scev::of(&proof.bound, width).minus(&Scev::of(&proof.start, width))
+            };
+            first.test == second.test
+                && first.step == second.step
+                && first.reach == second.reach
+                && first.width() == second.width()
+                && distance(first) == distance(second)
+        }
+        _ => false,
+    }
+}
+
 /// The loop's trips, where its counters agree on a positive count.
 pub fn trip_count(
     unit: &Unit,

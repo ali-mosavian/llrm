@@ -44,7 +44,7 @@
 //! The three walks. Consumers: [`crate::induction`], [`crate::ssa`], and the
 //! `unswitch` and `loopexit` passes in llrm-transforms.
 
-use llrm_mir::module::{BlockId, Function, InstId, Instruction};
+use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand};
 use llrm_mir::opcode::Opcode;
 
 fn instructions(
@@ -80,6 +80,27 @@ pub fn operations_in<'a>(
 /// Enumerate every phi in layout/block order.
 pub fn phis(function: &Function) -> impl Iterator<Item = (InstId, BlockId, &Instruction)> {
     instructions(function, true)
+}
+
+/// A phi's inputs, each value with the block it comes from.
+pub fn arms(
+    function: &Function,
+    phi: InstId,
+) -> Vec<(Operand, BlockId)> {
+    function
+        .instruction(phi)
+        .operands
+        .chunks(2)
+        .map(|pair| match pair[1] {
+            Operand::Block(block) => (pair[0], block),
+            other => unreachable!("a phi's block operand, not {other:?}"),
+        })
+        .collect()
+}
+
+/// The operands of a phi with these inputs: `arms`' inverse.
+pub fn from_arms(arms: &[(Operand, BlockId)]) -> Vec<Operand> {
+    arms.iter().flat_map(|&(value, block)| [value, Operand::Block(block)]).collect()
 }
 
 #[cfg(test)]

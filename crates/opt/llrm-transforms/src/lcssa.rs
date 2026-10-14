@@ -137,25 +137,7 @@ pub(crate) fn operations(
         .collect()
 }
 
-/// A phi's inputs, each value with the block it comes from.
-pub(crate) fn arms(
-    function: &Function,
-    phi: InstId,
-) -> Vec<(Operand, BlockId)> {
-    function
-        .instruction(phi)
-        .operands
-        .chunks(2)
-        .map(|pair| match pair[1] {
-            Operand::Block(block) => (pair[0], block),
-            other => unreachable!("a phi's block operand, not {other:?}"),
-        })
-        .collect()
-}
-
-pub(crate) fn from_arms(arms: &[(Operand, BlockId)]) -> Vec<Operand> {
-    arms.iter().flat_map(|&(value, block)| [value, Operand::Block(block)]).collect()
-}
+pub(crate) use llrm_analysis::occurrence::{arms, from_arms};
 
 /// The values defined in `blocks`, each with its block.
 pub(crate) fn definitions(

@@ -63,11 +63,9 @@
 //!
 //! The copy is a candidate, not yet a result. It is run through the same
 //! pipeline with unswitching and unroll-and-jam off (`Unswitch::passes`),
-//! then judged against the original. It is kept only if it has fewer loops,
-//! no more operations, and a no larger price: [`crate::profit::weighted`] at
-//! the target's operation costs, each block weighted by the trips induction
-//! proves. A body holding an operation the target does not price is never
-//! better. Otherwise the original stays untouched.
+//! then judged against the original by [`crate::candidate`], on the work
+//! alone: kept only if it has fewer loops, no more operations and no larger
+//! price. Otherwise the original stays untouched.
 //!
 //! # Example
 //! Before:
@@ -134,7 +132,7 @@
 //! unroll-jam. -O3 and -Omax: `-funswitch-loops`.
 //!
 //! # Needs
-//! [`crate::lcssa`], [`crate::loopclone`], [`crate::profit`], and the
+//! [`crate::lcssa`], [`crate::loopclone`], [`crate::candidate`], and the
 //! target's operation costs.
 //!
 //! # Keeps
@@ -147,14 +145,15 @@
 
 use std::collections::BTreeMap;
 
+use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::{self, Loop};
-use llrm_analysis::{cfg, memory, occurrence};
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 
+use crate::candidate::{self, Pricing};
 use crate::lcssa::{self, arms, from_arms, operations};
 use crate::profit::{self, OperationCosts};
 use crate::{edges, loopclone, transform};
@@ -199,41 +198,10 @@ pub fn optimized(
     costs: &OperationCosts,
     reoptimize: &mut dyn FnMut(&mut Unit),
 ) -> Result<bool, String> {
-    let Some(mut candidate) = specialized(unit.context, unit.function)? else {
+    let Some(candidate) = specialized(unit.context, unit.function)? else {
         return Ok(false);
     };
-    reoptimize(&mut Unit {
-        context: &mut *unit.context,
-        layout: unit.layout,
-        function: &mut candidate,
-        // A specialised copy: its calls to the original are not calls to
-        // itself.
-        id: None,
-        metadata: unit.metadata,
-        declared: &mut *unit.declared,
-    });
-
-    let size = |state: &Function| occurrence::operations(state).count();
-    let count = |state: &Function| cfg::Shape::of(state).loops.len();
-    let price = |state: &Function| {
-        let within = memory::Unit::within(unit.context, unit.layout, state, outer);
-        // A body of its own, which no manager has seen.
-        let registers = llrm_analysis::consts::known(&within);
-        let shape = cfg::Shape::of(state);
-        let within = within.with_registers(&registers).with_shape(&shape);
-        let trips = profit::proven_trips(&within, &registers);
-        let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, state, Some(&trips))?;
-        profit::weighted(unit.context, unit.layout, state, outer.callees(), costs, &frequency)
-    };
-    let worse = match (price(unit.function), price(&candidate)) {
-        (Some(before), Some(after)) => after > before,
-        _ => true,
-    };
-    if count(&candidate) >= count(unit.function) || size(&candidate) > size(unit.function) || worse {
-        return Ok(false);
-    }
-    *unit.function = candidate;
-    Ok(true)
+    Ok(candidate::adopted(unit, outer, costs, candidate, reoptimize, Pricing::Work))
 }
 
 /// `function` with its first loop that has a pure invariant condition

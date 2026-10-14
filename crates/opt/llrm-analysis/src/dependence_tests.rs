@@ -85,3 +85,80 @@ fn accesses_to_different_objects_do_not_depend() {
     one.symbols = vec![(8, 1)];
     assert_eq!(distances(&one, &other, 4, None), Distances::Unknown);
 }
+
+fn walker(
+    constant: i64,
+    step: i64,
+    width: u32,
+    write: bool,
+) -> Access {
+    Access { object: 0, subscripts: vec![sub(constant, 0, step)], symbols: Vec::new(), width, write }
+}
+
+/// Loop 0 writes `a[i]`: loop 1 reading `a[i]` or an earlier element is run
+/// after the write in the fused loop as it was before; `a[i + 1]` is written
+/// only in the next iteration of loop 0, which fused runs after the read.
+#[test]
+fn a_later_loop_may_read_what_the_earlier_wrote_not_what_it_will() {
+    let write = [walker(0, 4, 4, true)];
+    assert!(fusable(&write, &[walker(0, 4, 4, false)], None));
+    assert!(fusable(&write, &[walker(-4, 4, 4, false)], None));
+    assert!(!fusable(&write, &[walker(4, 4, 4, false)], None));
+}
+
+/// The same for what the later loop writes over what the earlier read.
+#[test]
+fn a_later_loop_may_not_write_what_the_earlier_will_read() {
+    let read = [walker(0, 4, 4, false)];
+    assert!(fusable(&read, &[walker(-4, 4, 4, true)], None));
+    assert!(!fusable(&read, &[walker(4, 4, 4, true)], None));
+}
+
+/// `a[i]` written four bytes wide, read at two bytes in: the bytes overlap
+/// the next element's write, which fused runs after the read.
+#[test]
+fn a_partial_overlap_is_a_dependence() {
+    assert!(!fusable(&[walker(0, 4, 4, true)], &[walker(2, 4, 4, false)], None));
+    assert!(fusable(&[walker(0, 8, 4, true)], &[walker(4, 8, 4, false)], None), "bytes 4..8 of each 8");
+}
+
+/// A distance of eight is out of reach of eight trips.
+#[test]
+fn a_distance_past_the_trips_is_not_a_dependence() {
+    let (write, read) = ([walker(0, 4, 4, true)], [walker(32, 4, 4, false)]);
+    assert!(!fusable(&write, &read, None));
+    assert!(!fusable(&write, &read, Some(9)));
+    assert!(fusable(&write, &read, Some(8)));
+}
+
+/// A cell no iteration moves is written by every iteration of loop 0: the
+/// read of loop 1 would see only some of them, unless there is one trip.
+#[test]
+fn an_invariant_cell_written_then_read_is_fused_only_for_one_trip() {
+    let (write, read) = ([walker(0, 0, 4, true)], [walker(0, 0, 4, false)]);
+    assert!(!fusable(&write, &read, None));
+    assert!(!fusable(&write, &read, Some(2)));
+    assert!(fusable(&write, &read, Some(1)));
+}
+
+/// A descending walk is the same question with the distance reversed.
+#[test]
+fn a_descending_walk_is_judged_by_its_own_direction() {
+    let write = [walker(400, -4, 4, true)];
+    assert!(fusable(&write, &[walker(400, -4, 4, false)], None));
+    assert!(fusable(&write, &[walker(404, -4, 4, false)], None));
+    assert!(!fusable(&write, &[walker(396, -4, 4, false)], None));
+}
+
+/// Unlike steps, symbols or objects: two reads never conflict, a write does
+/// where the bytes are not known apart, and distinct objects never do.
+#[test]
+fn unlike_accesses_conflict_only_where_unknown() {
+    let (write, slow) = (walker(0, 4, 4, true), walker(0, 8, 4, false));
+    assert!(!fusable(&[write.clone()], &[slow.clone()], None));
+    assert!(fusable(&[walker(0, 4, 4, false)], &[slow], None));
+    let other = Access { object: 1, ..walker(0, 4, 4, false) };
+    assert!(fusable(&[write.clone()], &[other], None));
+    let symbolic = Access { symbols: vec![(7, 1)], ..walker(0, 4, 4, false) };
+    assert!(!fusable(&[write], &[symbolic], None));
+}

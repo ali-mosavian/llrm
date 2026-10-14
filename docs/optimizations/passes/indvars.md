@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:2d6ea8a1672f8862a4417fc3ea54bc14b7b7b08ae6ebc7a0b8f2529562d83530 -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:719eb55a80241f028a30b4ede700d8e9521872c40fe9ab1fee64a583e84c9e8b -->
 
 # indvars
 
@@ -30,7 +30,10 @@ changed the body.
    the narrow one with a value the loop leaves alone compares the wide one
    with that value extended (`WidenIV::widenLoopCompare`); other readers of
    the narrow one read its low part.
-6. `rewound`: see below.
+6. `congruent`: header counters with one start and one step are one counter
+   (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
+   first, and `dead` removes them.
+7. `rewound`: see below.
 
 `rewound` carries an exact inner recurrence's exit value around the outer
 loop. An inner loop running exactly `count` trips leaves as

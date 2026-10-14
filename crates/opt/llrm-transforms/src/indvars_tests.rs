@@ -15,7 +15,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, Module, Operand};
 use llrm_mir::passes::{Analyses, Outer};
 
-use super::rewound;
+use super::{IndVars, rewound};
 use crate::profit::OperationCosts;
 use crate::rotate::Rotate;
 use crate::testing::{f, managed, parsed, printed, results};
@@ -509,4 +509,79 @@ fn a_signed_compare_of_a_widened_counter_reads_its_low_part() {
     let (changed, after) = widening(&text);
     assert!(changed, "{after}");
     assert!(after.contains("trunc i32 %widen.iv to i16"), "{after}");
+}
+
+// ---------------------------------------------------------------- congruent
+
+/// `a[i] = i` and `b[j] = j` in one loop, `j` starting at `start` and
+/// stepping by `step` where `i` starts at 0 and steps by 1.
+fn two_counters(
+    start: i16,
+    step: i16,
+) -> String {
+    format!(
+        "define i16 @f(i16 %n) {{
+b0:
+  %a = alloca [64 x i16]
+  %b = alloca [64 x i16]
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b2 ]
+  %j = phi i16 [ {start}, %b0 ], [ %j.next, %b2 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %io = mul i16 %i, 2
+  %ia = getelementptr i8, ptr %a, i16 %io
+  store i16 %i, ptr %ia
+  %jo = mul i16 %j, 2
+  %jb = getelementptr i8, ptr %b, i16 %jo
+  store i16 %j, ptr %jb
+  %i.next = add i16 %i, 1
+  %j.next = add i16 %j, {step}
+  br label %b1
+
+b3:
+  %x = load i16, ptr %a
+  %y = load i16, ptr %b
+  %z = add i16 %x, %y
+  ret i16 %z
+}}
+"
+    )
+}
+
+fn header_phis(module: &mut Module) -> usize {
+    let function = f(module);
+    let [one] = &loops::loops(&cfg::graph(function), function.entry().map(cfg::id))[..] else { panic!("one loop") };
+    function
+        .block(cfg::block(one.header))
+        .instructions()
+        .iter()
+        .filter(|&&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+        .count()
+}
+
+/// Two counters that start and step alike are one: the loop kept both and
+/// addressed `b` by a counter that always equalled `i`.
+#[test]
+fn counters_with_one_start_and_one_step_are_one_counter() {
+    let mut module = parsed(&two_counters(0, 1));
+    managed(&mut module, IndVars { exit_values: false });
+    assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
+    let mut other = parsed(&two_counters(0, 1));
+    assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
+    assert_eq!(header_phis(&mut other), 2);
+}
+
+/// A counter that starts or steps otherwise is another counter.
+#[test]
+fn counters_that_start_or_step_otherwise_stay_two() {
+    for (start, step) in [(1, 1), (0, 2)] {
+        let mut module = parsed(&two_counters(start, step));
+        managed(&mut module, IndVars { exit_values: false });
+        assert_eq!(header_phis(&mut module), 2, "{start} {step}: {}", printed(&module));
+    }
 }

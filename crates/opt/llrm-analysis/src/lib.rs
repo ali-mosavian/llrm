@@ -17,7 +17,8 @@
 //!   [`guards`] (what dominating compares and `assume`s prove),
 //!   [`assumptions`].
 //! - Loops: [`induction`] (counters, trip counts, recurrences), [`peelsize`]
-//!   (is a full copy worth it), [`dependence`] (distances for unroll-and-jam).
+//!   (is a full copy worth it), [`access`] (affine access functions),
+//!   [`dependence`] (distances for unroll-and-jam and loop fusion).
 //! - Memory: [`memory`] (objects, slices, `MemRef`, `Unit`), [`pointerfacts`],
 //!   [`regions`], [`alias`] (points-to, summaries), [`effects`],
 //!   [`frameescape`], [`globalsaa`], [`sliceset`] and [`cellmap`] (containers),
@@ -88,6 +89,7 @@
 //! The manager contract is `crates/ir/llrm-mir/src/passes.rs`. LLVM's
 //! `AnalysisManager` and `PreservedAnalyses` are its counterpart.
 
+pub mod access;
 pub mod alias;
 pub mod assumptions;
 pub mod avail;
