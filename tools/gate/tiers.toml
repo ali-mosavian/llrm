@@ -102,11 +102,6 @@ nib = ["crates/frontends/llrm-nib/**", "tests/run/nib/**"]
 
 # One slow test inside an otherwise cheap binary: split out, so the binary's other tests stay cheap.
 [[split]]
-step = "turbo"
-bin = "turbo"
-filter = "turbo_debugger_shows_the_same_values"
-
-[[split]]
 step = "identity"
 bin = "toolchain"
 filter = "test_the_identity_gate_passes"
@@ -116,7 +111,7 @@ filter = "test_the_identity_gate_passes"
 # skipped llrm-mir's dense-key ratchet and main's full run went red on it). A test that reads sources and is not listed here fails
 # test_gate. `step = "integration"`: a root test binary the integration step runs on every code change anyway.
 [scan_inputs]
-paths = ["**/*.rs", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
+paths = ["**/*.rs", "tools/**/*.py", "tools/**/*.sh", "crates/**/*.py", "crates/**/*.sh", "src/**/*.py", "src/**/*.sh", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
 
 [[scan]]
 file = "crates/ir/llrm-mir/src/tests.rs"
@@ -148,6 +143,8 @@ step = "integration"
 # Whole binaries that are heavy: every test in them is slow.
 [whole]
 cv4 = "cv4"
+# The binary's five tests sleep-poll Turbo Debugger: 168 s of the integration step, which the turbo step (its owners: debug info) now runs.
+turbo = "turbo"
 
 # Binaries that change the working tree or run cargo on it (a probe file under crates/, a nested build): the run test
 # compares the tree before and after, and cargo's lock serialises the rest. They run alone, after the other steps.
@@ -155,12 +152,18 @@ cv4 = "cv4"
 build-script-reruns = "build_script_reruns"
 
 # CI job groups (.github/workflows/ci.yml runs one job per group that has a step to run, in parallel, after the build).
+# The smoke tier: one PR on origin/main, in about a minute. Its steps are the fast tier's, cut to these, plus `docs` (the generated pages
+# and the pass pages are current) and `changed-tests` (the test files the diff touches or sits beside). `pytest-programs` (every program
+# compiles) joins when the build does. A smoke PASS is never a merge licence: the train's full gate on the tip is.
+[smoke]
+steps = ["build", "lib", "crate-tests", "scans", "facts", "fmt", "docs", "pytest-programs", "changed-tests"]
+
 # Every step the planner can produce is in exactly one group (a test checks).
 [groups]
-unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post"]
+unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post", "docs", "facts"]
 integration = ["integration", "build-script-reruns"]
 run = ["run"]
-python = ["pytest", "pytest-programs"]
+python = ["pytest", "pytest-programs", "changed-tests"]
 tools = ["bench", "torture"]
 identity = ["identity"]
 reference = ["turbo", "cv4", "qcport"]

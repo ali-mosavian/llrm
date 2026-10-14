@@ -4,11 +4,14 @@ their screens can be compared at the same points."""
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import queue
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -21,6 +24,15 @@ CONF = dosbatch.CONF
 BACKSTOP = 3600  # wall seconds: for an emulator that waits and burns no CPU
 
 
+@contextlib.contextmanager
+def port_claim():
+    """One session at a time picks a free port and gets its emulator to hold it: the port is free between the pick and the emulator's
+    bind, and a second session picking in that gap got the same one (sessions of other processes run at once in the gate)."""
+    with open(Path(tempfile.gettempdir()) / "llrm-qbplay-port.lock", "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
 class Session:
     def limit(self, seconds: float):
         """A function that says whether the emulator has used `seconds` of CPU time since now. The wall clock is the host's
@@ -30,27 +42,28 @@ class Session:
 
     def __init__(self, work: Path, conf: str = CONF):
         self.work = work
-        probe = socket.socket()
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-        probe.close()
-        (work / "play.conf").write_text(conf + f"[autoexec]\nmount c {work}\nc:\n")
-        env = {**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSBOX_DEBUG_PORT": str(port)}
-        self.process = subprocess.Popen(
-            [str(dosbatch.DOSBOX), "-nolog", "-conf", str(work / "play.conf")],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        late = self.limit(30)
-        while True:
-            try:
-                self.sock = socket.create_connection(("127.0.0.1", port))
-                break
-            except OSError:
-                if late():
-                    raise
-                time.sleep(0.2)
+        with port_claim():
+            probe = socket.socket()
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+            probe.close()
+            (work / "play.conf").write_text(conf + f"[autoexec]\nmount c {work}\nc:\n")
+            env = {**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSBOX_DEBUG_PORT": str(port)}
+            self.process = subprocess.Popen(
+                [str(dosbatch.DOSBOX), "-nolog", "-conf", str(work / "play.conf")],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            late = self.limit(30)
+            while True:
+                try:
+                    self.sock = socket.create_connection(("127.0.0.1", port))
+                    break
+                except OSError:
+                    if late():
+                        raise
+                    time.sleep(0.2)
         self.pending = 0
         self.replies: queue.Queue = queue.Queue()
         self.events: list[dict] = []
