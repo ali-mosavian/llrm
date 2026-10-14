@@ -880,3 +880,11 @@ def test_a_file_with_a_module_fixture_is_never_cut_into_parts():
 
     ids = [f"tools/dosbatch/test_qbrt.py::test_{i}" for i in range(40)]
     assert [a for _, a in pytest_shards.units({"tools/dosbatch/test_qbrt.py": ids}, {"tools/dosbatch/test_qbrt.py": 500.0})] == [["tools/dosbatch/test_qbrt.py"]]
+
+
+def test_the_turbo_binary_runs_whole_in_the_turbo_step_and_not_in_integration():
+    """Its five Turbo Debugger tests sleep-polled for 168 s inside `integration`, which every code change runs."""
+    cmds = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())
+    assert cmds["turbo"].endswith("--test turbo") and "--skip" not in cmds["turbo"]
+    assert "--test turbo" not in cmds["integration"].replace("--test turbo_", "")
+    assert "--test cv4" not in cmds["integration"]
