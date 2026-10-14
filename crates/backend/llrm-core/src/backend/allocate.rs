@@ -1462,21 +1462,27 @@ fn _wanted(
     hints: &IndexMap<u32, Vec<u32>>,
     fixed: &IndexMap<u32, RegId>,
 ) -> IndexMap<u32, RegId> {
-    let mut wanted: IndexMap<u32, RegId> = fixed.iter().map(|(value, register)| (*value, _whole(*register))).collect();
-    let mut frontier: Vec<u32> = wanted.keys().copied().collect();
+    // Only the values that are reached are kept: a pinned value is looked up in
+    // `fixed`, which is not copied.
+    let mut wanted: IndexMap<u32, RegId> = IndexMap::with_capacity_and_hasher(hints.len(), Default::default());
+    let mut frontier: Vec<u32> = fixed.keys().copied().collect();
     while !frontier.is_empty() {
         let mut reached = Vec::new();
         for value in frontier {
+            let register = match fixed.get(&value) {
+                Some(register) => _whole(*register),
+                None => wanted[&value],
+            };
             for other in hints.get(&value).into_iter().flatten() {
-                if !wanted.contains_key(other) {
-                    wanted.insert(*other, wanted[&value]);
+                if !fixed.contains_key(other) && !wanted.contains_key(other) {
+                    wanted.insert(*other, register);
                     reached.push(*other);
                 }
             }
         }
         frontier = reached;
     }
-    wanted.into_iter().filter(|(value, _)| !fixed.contains_key(value)).collect()
+    wanted
 }
 
 /// The registers wanted by the values that want one and have none yet, where
