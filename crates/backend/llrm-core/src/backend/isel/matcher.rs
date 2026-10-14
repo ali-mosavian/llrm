@@ -1077,6 +1077,44 @@ impl Selector<'_, '_, '_> {
             }
             return Ok(());
         }
+        // Tuned for size, +-0.0 and +-1.0 are `fldz`/`fld1` (and `fchs`) and a
+        // store of the register: 5 to 7 bytes where two dword
+        // immediates are 14. gcc allows these constants in `*movdf_internal`
+        // when optimising for size (i386.md L3758-3772, the ones
+        // `standard_80387_constant_p` knows, i386.cc L5113-5153), and LLVM's
+        // X86 keeps them legal immediates, so it does not turn their
+        // stores into integer ones (X86ISelLowering.cpp L777-780,
+        // DAGCombiner.cpp L24445-24448). Not otherwise: two `mov`s take fewer
+        // clocks.
+        if self.cpu.size && matches!(size, 4 | 8) {
+            let value = if size == 4 { f64::from(f32::from_bits(bits as u32)) } else { f64::from_bits(bits) };
+            let (name, negated) = match value {
+                v if v == 0.0 => ("fldz", v.is_sign_negative()),
+                v if v == 1.0 => ("fld1", false),
+                v if v == -1.0 => ("fld1", true),
+                _ => ("", false),
+            };
+            if !name.is_empty() {
+                let mut held = self.fresh_held(FLOAT);
+                out.push(insn(m.at, semantics(Operation::FloatLoad, name, vec![Loc::Held(held)], vec![])));
+                if negated {
+                    let flipped = self.fresh_held(FLOAT);
+                    out.push(insn(
+                        m.at,
+                        semantics(Operation::FloatUnary, "fchs", vec![Loc::Held(flipped)], vec![Loc::Held(held)]),
+                    ));
+                    held = flipped;
+                }
+                let store = semantics(
+                    Operation::FloatStore,
+                    "fstp",
+                    vec![Loc::Mem(Self::memory(regs, pointer, size as u32))],
+                    vec![Loc::Held(held)],
+                );
+                out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, store) }));
+                return Ok(());
+            }
+        }
         let bits = if size == 4 { u128::from(bits as u32) } else { u128::from(bits) };
         let low = semantics(
             Operation::Move,
