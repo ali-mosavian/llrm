@@ -3,6 +3,8 @@ import importlib
 import os
 import subprocess
 import sys
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -391,6 +393,12 @@ def test_a_new_row_of_seven_tenths_of_the_compile_on_an_axis_that_rose_still_fai
     )
     bad = measure.rises(base, grown, TOL)[1]
     assert any("pointer-values" in line for line in bad), bad
+
+
+def test_the_tree_key_covers_the_toolchain_because_the_tree_pins_it():
+    """A measurement is stored by tree: a rustc outside the tree would make two builds of one tree differ and share a key."""
+    pinned = tomllib.loads((measure.ROOT / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", pinned), f"rust-toolchain.toml channel {pinned!r} is not an exact version: put the rustc version in measure.method()"
 
 
 def _repo_with_two_commits_of_one_tree(tmp_path):

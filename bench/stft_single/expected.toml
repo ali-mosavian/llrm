@@ -1,4 +1,4 @@
-reason = "word add/sub/mul promotion rows against the merged frame-register branch"
+reason = "commuted keeps the copy it drops as an anchor (its value was still read): runtime rows +0.001%"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 72230408
-code_bytes = 1390
+instructions = 72232465
+code_bytes = 1404
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73090429
-code_bytes = 1363
+instructions = 73091974
+code_bytes = 1379
 data_bytes = 4733
 bss_bytes = 0
 

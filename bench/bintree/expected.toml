@@ -1,4 +1,4 @@
-reason = "m32 word multiply by a constant runs as a dword chain; a lea starts an address chain"
+reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -30,14 +30,14 @@ data_bytes = 17
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 159123
-code_bytes = 737
+instructions = 72488
+code_bytes = 650
 data_bytes = 23
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 165656
-code_bytes = 655
+instructions = 74425
+code_bytes = 591
 data_bytes = 23
 bss_bytes = 0
 

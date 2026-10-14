@@ -21,11 +21,12 @@ NO_TESTS = 5
 SPLIT_SECONDS = 45.0  # a file in SPLITTABLE recorded slower than this is run in parts
 PART_SECONDS = 30.0
 MAX_PARTS = 12
-# Files whose tests are independent. A file with a module fixture is not here: test_qbrt.py's fixture runs every program in one DOSBox
-# launch, so five parts ran it five times (185 s each, against 134 s whole).
-SPLITTABLE = frozenset({"crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py", "crates/target/llrm-x86-m32/vsgcc/test_scaling.py"})
+# Files whose tests are independent, by name (a path here would name a target: tests/target_facts.rs reads this file). test_qbgfx.py
+# builds each probe when its test asks. A file with a module fixture that does all the work is not here: test_qbrt.py's runs every program
+# in one DOSBox launch, so five parts ran it five times (185 s each, against 134 s whole).
+SPLITTABLE = frozenset({"test_qbgfx.py", "test_qbgorilla.py", "test_scaling_gate.py", "test_scaling.py"})
 # Seconds of the files that were slowest when measured, for a run with nothing recorded yet.
-SEEDS = {"crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py": 300.0, "tools/dosbatch/test_qbrt.py": 130.0, "crates/target/llrm-x86-m32/vsgcc/test_scaling.py": 60.0}
+SEEDS = {"test_qbgfx.py": 190.0, "test_scaling_gate.py": 300.0, "test_qbrt.py": 130.0, "test_scaling.py": 60.0}
 
 
 def pytest(*args: str) -> subprocess.CompletedProcess:
@@ -49,8 +50,9 @@ def units(tests: dict[str, list[str]], known: dict[str, float]) -> list[tuple[st
     file held the whole run to its 430 s."""
     out: list[tuple[str, list[str], float]] = []
     for name, ids in tests.items():
-        took = known.get(name, SEEDS.get(name, UNKNOWN_SECONDS))
-        parts = min(MAX_PARTS, len(ids), math.ceil(took / PART_SECONDS)) if took > SPLIT_SECONDS and name in SPLITTABLE else 1
+        base = Path(name).name
+        took = known.get(name, SEEDS.get(base, UNKNOWN_SECONDS))
+        parts = min(MAX_PARTS, len(ids), math.ceil(took / PART_SECONDS)) if took > SPLIT_SECONDS and base in SPLITTABLE else 1
         if parts == 1:
             out.append((name, [name], took))
         else:
@@ -74,9 +76,9 @@ def main() -> int:
     ap.add_argument("--ignore", action="append", default=[])
     ap.add_argument("--durations", help="JSON {file: seconds}, read for the order (longest first) and rewritten after the run")
     ap.add_argument("paths", nargs="+")
-    args, flags = ap.parse_known_args(sys.argv[1:])
-    if "--" in flags:
-        flags.remove("--")
+    argv = sys.argv[1:]
+    at = argv.index("--") if "--" in argv else len(argv)
+    args, flags = ap.parse_args(argv[:at]), argv[at + 1 :]  # what follows `--` is pytest's, whatever it looks like
     tests, broken = collect(args.paths, args.ignore, flags)
     if broken is not None:
         print(broken)

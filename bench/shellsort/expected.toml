@@ -1,4 +1,4 @@
-reason = "m32 word add/sub on the whole register (no 66h): code bytes down in 50+ rows; a few runtime instructions up by under 0.001%"
+reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -38,7 +38,7 @@ bss_bytes = 0
 
 [bq32.Os]
 instructions = 10794
-code_bytes = 316
+code_bytes = 322
 data_bytes = 23
 bss_bytes = 0
 
@@ -58,19 +58,18 @@ bss_bytes = 0
 kernel_ms = 0.1262
 
 [nib.O2]
-instructions = 11274
-memory_operands = 1939
-code_bytes = 220
+instructions = 10508
+memory_operands = 1661
+code_bytes = 196
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 11682
-memory_operands = 2035
-code_bytes = 196
+instructions = 10595
+memory_operands = 1757
+code_bytes = 179
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.1583
 
 [ow.O2]
 instructions = 12654

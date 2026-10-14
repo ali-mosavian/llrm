@@ -123,6 +123,8 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         ("B$SLEP", 4),
         ("B$SOND", 6),
         ("B$DRAW", 2),
+        ("B$VARP", 4),
+        ("B$SADD", 2),
         ("B$SDAT", 2),
         ("B$STIM", 2),
         ("B$FDAT", 0),
@@ -516,6 +518,15 @@ fn _contract_keeping(
                  [BP+6]; VBDOS D_SURF.OBJ 2d1c..2d24 shows that one pushed word, \
                  and farstr strfcn.asm's Pascal entry returns past 2 bytes. \
                  Allocation, alias and error effects remain conservative."
+            ),
+        ));
+    }
+    if name == "B$FINP" && pushed == 4 {
+        return Ok(returns(
+            4,
+            format!(
+                "{evidence} QB45 rt/inputf.asm `cProc B$FINP,<PUBLIC,FAR>` with ParmW cbInp and \
+                 ParmW Channel, so cEnd returns past 4 bytes. Allocation, file and error effects remain conservative."
             ),
         ));
     }

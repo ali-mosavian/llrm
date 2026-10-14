@@ -6,6 +6,7 @@
 #include "gfx.h"
 #include "nhstutil.h"
 #include "qb.h"
+#include "varptr.h"
 
 void B_PAIN(short fill, short border);
 #pragma aux B_PAIN "B$PAIN"
@@ -15,7 +16,7 @@ enum { FRACTION = 256, HALF = 128 };
 enum { NO_DRAW = 1, NO_MOVE = 2 };
 
 typedef struct Drawing {
-    const char *at, *end;
+    Macro m;
     int scale;  /* quarters; 0 for none, as QB's initial */
     int angle;  /* degrees */
     byte flags; /* B and N, for the next move */
@@ -27,15 +28,6 @@ static void illegal(void)
     qb_error(BE_ILLFUN);
 }
 
-static char next_command(Drawing *d)
-{
-    while (d->at < d->end && (*d->at == ' ' || *d->at == ';'))
-        d->at++;
-    if (d->at >= d->end)
-        return 0;
-    return *d->at >= 'a' && *d->at <= 'z' ? (char)(*d->at++ - 'a' + 'A') : *d->at++;
-}
-
 /* A number with its signs, or `fallback` where there is none.  Up to five
    digits, wrapping as a 16-bit integer does; more is an error. */
 static long number(Drawing *d, long fallback)
@@ -44,20 +36,24 @@ static long number(Drawing *d, long fallback)
     int sign = 1, digits = 0;
 
     for (;;) {
-        while (d->at < d->end && *d->at == ' ')
-            d->at++;
-        if (d->at < d->end && (*d->at == '+' || *d->at == '-'))
-            sign = *d->at++ == '-' ? -sign : sign;
+        while (d->m.at < d->m.end && *d->m.at == ' ')
+            d->m.at++;
+        if (d->m.at < d->m.end && (*d->m.at == '+' || *d->m.at == '-'))
+            sign = *d->m.at++ == '-' ? -sign : sign;
         else
             break;
     }
-    while (d->at < d->end && *d->at >= '0' && *d->at <= '9') {
-        value = value * 10 + (unsigned)(*d->at++ - '0');
+    while (d->m.at < d->m.end && *d->m.at >= '0' && *d->m.at <= '9') {
+        value = value * 10 + (unsigned)(*d->m.at++ - '0');
         if (++digits > 5)
             illegal();
     }
-    if (d->at < d->end && *d->at == '=')
-        illegal();
+    if (!digits) {
+        long value;
+
+        if (macro_equals(&d->m, &value))
+            return sign * (long)(short)value;
+    }
     return digits ? sign * (long)(short)value : fallback;
 }
 
@@ -149,13 +145,13 @@ static void move(Drawing *d)
     int relative;
     long x, y;
 
-    while (d->at < d->end && *d->at == ' ')
-        d->at++;
-    relative = d->at < d->end && (*d->at == '+' || *d->at == '-');
+    while (d->m.at < d->m.end && *d->m.at == ' ')
+        d->m.at++;
+    relative = d->m.at < d->m.end && (*d->m.at == '+' || *d->m.at == '-');
     x = number(d, 0);
-    while (d->at < d->end && *d->at == ' ')
-        d->at++;
-    if (d->at >= d->end || *d->at++ != ',')
+    while (d->m.at < d->m.end && *d->m.at == ' ')
+        d->m.at++;
+    if (d->m.at >= d->m.end || *d->m.at++ != ',')
         illegal();
     y = number(d, 0);
     if (relative)
@@ -165,60 +161,53 @@ static void move(Drawing *d)
 }
 
 /* B$DRAW: DRAW with the string of commands. */
-void B_DRAW(SD *commands)
+/* The commands of the string `d` is at, to its end. */
+static void execute(Drawing *d)
 {
-    /* the scale, the angle and the fractions stay as they were from one DRAW
-       to the next */
-    static Drawing d = {0, 0, 0, 0, 0, HALF, HALF};
     char command;
     long n;
 
-    if (!gfx_current)
-        illegal();
-    d.at = commands->ptr;
-    d.end = commands->ptr + commands->len;
-    d.flags = 0;
-    while ((command = next_command(&d)) != 0) {
+    while ((command = macro_next(&d->m)) != 0) {
         switch (command) {
         case 'U':
-            move_by(&d, 0, -number(&d, 1));
+            move_by(d, 0, -number(d, 1));
             break;
         case 'D':
-            move_by(&d, 0, number(&d, 1));
+            move_by(d, 0, number(d, 1));
             break;
         case 'L':
-            move_by(&d, -number(&d, 1), 0);
+            move_by(d, -number(d, 1), 0);
             break;
         case 'R':
-            move_by(&d, number(&d, 1), 0);
+            move_by(d, number(d, 1), 0);
             break;
         case 'E':
-            n = number(&d, 1);
-            move_by(&d, n, -n);
+            n = number(d, 1);
+            move_by(d, n, -n);
             break;
         case 'F':
-            n = number(&d, 1);
-            move_by(&d, n, n);
+            n = number(d, 1);
+            move_by(d, n, n);
             break;
         case 'G':
-            n = number(&d, 1);
-            move_by(&d, -n, n);
+            n = number(d, 1);
+            move_by(d, -n, n);
             break;
         case 'H':
-            n = number(&d, 1);
-            move_by(&d, -n, -n);
+            n = number(d, 1);
+            move_by(d, -n, -n);
             break;
         case 'M':
-            move(&d);
+            move(d);
             break;
         case 'B':
-            d.flags |= NO_DRAW;
+            d->flags |= NO_DRAW;
             break;
         case 'N':
-            d.flags |= NO_MOVE;
+            d->flags |= NO_MOVE;
             break;
         case 'C':
-            n = number(&d, -1);
+            n = number(d, -1);
             if (n < 0)
                 illegal();
             /* the attribute is the low byte of the number */
@@ -227,34 +216,34 @@ void B_DRAW(SD *commands)
             gfx_foreground = (byte)(n & 0xFF);
             break;
         case 'S':
-            n = number(&d, -1);
+            n = number(d, -1);
             if (n < 1 || n > 255)
                 illegal();
-            d.scale = (int)n;
+            d->scale = (int)n;
             break;
         case 'A':
-            n = number(&d, -1);
+            n = number(d, -1);
             if (n < 0 || n > 3)
                 illegal();
-            d.angle = (int)n * 90;
+            d->angle = (int)n * 90;
             break;
         case 'T':
-            if (next_command(&d) != 'A')
+            if (macro_next(&d->m) != 'A')
                 illegal();
-            n = number(&d, 0);
+            n = number(d, 0);
             if (n < 0)
                 n += 360;
             if (n > 360)
                 illegal();
-            d.angle = (int)n;
+            d->angle = (int)n;
             break;
         case 'P': {
             long border;
 
-            n = number(&d, -1);
-            if (n < 0 || d.at >= d.end || *d.at++ != ',')
+            n = number(d, -1);
+            if (n < 0 || d->m.at >= d->m.end || *d->m.at++ != ',')
                 illegal();
-            border = number(&d, -1);
+            border = number(d, -1);
             if (border < 0)
                 illegal();
             gfx_x1 = gfx_last_x;
@@ -262,10 +251,33 @@ void B_DRAW(SD *commands)
             B_PAIN((short)n, (short)border);
             break;
         }
+        case 'X': {
+            /* the commands of a string variable, then on with these */
+            Macro outer;
+
+            macro_enter(&d->m, &outer);
+            execute(d);
+            macro_leave(&d->m, &outer);
+            break;
+        }
         default:
             illegal();
         }
     }
+}
+
+/* B$DRAW: DRAW with the string of commands. */
+void B_DRAW(SD *commands)
+{
+    /* the scale, the angle and the fractions stay as they were from one DRAW
+       to the next */
+    static Drawing d = {{0, 0, 0}, 0, 0, 0, HALF, HALF};
+
+    if (!gfx_current)
+        illegal();
+    macro_begin(&d.m, commands);
+    d.flags = 0;
+    execute(&d);
     str_tmp_free(commands);
 }
 

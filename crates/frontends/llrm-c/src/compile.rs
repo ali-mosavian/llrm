@@ -1,4 +1,4 @@
-//! Port of `qbopt/cfront/compile.py`: C through Open Watcom's front end and
+//! C through Open Watcom's front end and
 //! the backend, to an object or jwasm source.
 //!
 //! ```text

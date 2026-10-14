@@ -161,6 +161,11 @@ pub struct Object {
     /// in the order they are declared.
     pub symbols: Vec<Symbol>,
     pub omf_groups: Vec<OmfGroup>,
+    /// OMF: the code sections written as COMDAT records, one function each,
+    /// which the linker places in a segment of its own and drops where
+    /// nothing refers to them. Each has one public symbol at offset 0
+    /// that names it. Indices into `sections`.
+    pub omf_comdat: Vec<usize>,
     pub debug: Option<debug::Info>,
 }
 

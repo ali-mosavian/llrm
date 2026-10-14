@@ -111,7 +111,7 @@ filter = "test_the_identity_gate_passes"
 # skipped llrm-mir's dense-key ratchet and main's full run went red on it). A test that reads sources and is not listed here fails
 # test_gate. `step = "integration"`: a root test binary the integration step runs on every code change anyway.
 [scan_inputs]
-paths = ["**/*.rs", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
+paths = ["**/*.rs", "tools/**/*.py", "tools/**/*.sh", "crates/**/*.py", "crates/**/*.sh", "src/**/*.py", "src/**/*.sh", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
 
 [[scan]]
 file = "crates/ir/llrm-mir/src/tests.rs"
@@ -152,12 +152,18 @@ turbo = "turbo"
 build-script-reruns = "build_script_reruns"
 
 # CI job groups (.github/workflows/ci.yml runs one job per group that has a step to run, in parallel, after the build).
+# The smoke tier: one PR on origin/main, in about a minute. Its steps are the fast tier's, cut to these, plus `docs` (the generated pages
+# and the pass pages are current) and `changed-tests` (the test files the diff touches or sits beside). `pytest-programs` (every program
+# compiles) joins when the build does. A smoke PASS is never a merge licence: the train's full gate on the tip is.
+[smoke]
+steps = ["build", "lib", "crate-tests", "scans", "facts", "fmt", "docs", "pytest-programs", "changed-tests"]
+
 # Every step the planner can produce is in exactly one group (a test checks).
 [groups]
-unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post"]
+unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post", "docs", "facts"]
 integration = ["integration", "build-script-reruns"]
 run = ["run"]
-python = ["pytest", "pytest-programs"]
+python = ["pytest", "pytest-programs", "changed-tests"]
 tools = ["bench", "torture"]
 identity = ["identity"]
 reference = ["turbo", "cv4", "qcport"]
@@ -278,8 +284,8 @@ why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the heade
 [[measure.accepted]]
 row = "programs -O3"
 geomean = 1.135
-worst = 1.7309
-why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+worst = 1.93
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559. Worst 1.7309 -> 1.93 (read 1.9122), x_matmul_f: peeling by object extent (#1673, coordinator's decision 2026-10-14) copies its 12-trip k loop 12 times as gcc -O3 does; x_matmul_f runs 8% faster and nbody 7.6% at -O3. The whole compile goes 125.6 -> 271 Minstr with the function's code 279 -> 509 B, every later pass scaling with it (lsr 9 -> 30, bounded 5 -> 23, hoist 4 -> 19, peel 8, peephole 17 -> 26): growth, no step out of line."
 
 [[measure.accepted]]
 row = "branches O1"
@@ -292,7 +298,8 @@ why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the heade
 [[measure.accepted]]
 row = "programs -Os"
 geomean = 1.0057
-why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+worst = 1.035
+why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559. Also the late switch lowering (docs/reference/levels.md, `switchlower`): x_switch_sparse -Os +2.9% (74.4M to 76.6M instructions), of which 1.0M is the analyses of the one function it changes made again and 1.2M the selection of the lowered code; the module analyses frozen at the end of the pipeline stand."
 
 [[measure.accepted]]
 row = "branches O2"

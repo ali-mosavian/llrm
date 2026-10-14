@@ -115,6 +115,7 @@ pub fn without_frame_register(
     inline: bool,
     far: bool,
     landing: bool,
+    size: bool,
 ) -> bool {
     let regs = body.regs();
     let pointer = registers.pointer;
@@ -162,7 +163,9 @@ pub fn without_frame_register(
                     let [place] = &places[..] else { return false };
                     let width = match place {
                         Loc::Reg(reg) => reg.register.size() as i64,
-                        Loc::Held(held) => i64::from(held.width),
+                        // Tuned for size a push of a value keeps the frame, for
+                        // masm to compare the two forms in bytes.
+                        Loc::Held(held) if !size => i64::from(held.width),
                         Loc::Imm(imm) => i64::from(imm.width),
                         Loc::Mem(cell) => i64::from(cell.width),
                         _ => return false,

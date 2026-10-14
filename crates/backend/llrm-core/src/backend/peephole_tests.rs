@@ -375,6 +375,35 @@ fn test_forwarded_register_copy_retains_its_virtual_definition() {
     );
 }
 
+/// `mov t,a ; mov a,x ; add a,a,t` became `mov t,a ; add a,a,x` and the second
+/// copy, which defines a value a later call requires in EAX, was gone: under
+/// LLRM_VERIFY the Nib runtime's `format.put` (m32, a freed frame register)
+/// failed with "value is read but never defined".
+#[test]
+fn test_commuted_accumulator_leaves_the_dropped_copys_value_defined() {
+    let [accumulator, temporary, term] = [RegId::ECX, RegId::ESI, RegId::EAX].map(|register| r(register, 4));
+    let sems = [
+        sem(Operation::Move, "mov", vec![Loc::Reg(temporary)], vec![Loc::Reg(accumulator)]),
+        sem(Operation::Move, "mov", vec![Loc::Reg(accumulator)], vec![Loc::Reg(term)]),
+        sem(Operation::Binary, "add", vec![Loc::Reg(accumulator)], vec![Loc::Reg(accumulator), Loc::Reg(temporary)]),
+    ];
+    let make = |at: i64, what: Option<Semantics>, defines: Vec<u32>, uses: Vec<u32>| {
+        Arc::new(insn(at, Some((at, at + 1)), what, defines, uses))
+    };
+    let insns = vec![
+        make(0, None, vec![0, 3], vec![]),
+        make(1, Some(sems[0].clone()), vec![1], vec![0]),
+        make(2, Some(sems[1].clone()), vec![2], vec![3]),
+        make(3, Some(sems[2].clone()), vec![4], vec![0, 1]),
+        make(4, None, vec![], vec![2]),
+    ];
+    let input = body("dropped-copy", 0, vec![block(0, insns, vec![])]);
+    let done = commuted(rules(), &input);
+    assert_ne!(done, input, "the rule fired");
+    let said = verify::verify(&done, false);
+    assert!(said.is_empty(), "{said:?}");
+}
+
 #[test]
 fn test_commuted_accumulator_keeps_the_saved_value() {
     // NBODY's saved accumulator must remain valid even when a later instruction
@@ -408,7 +437,12 @@ fn test_commuted_accumulator_keeps_the_saved_value() {
                 assert_eq!(result, input);
                 continue;
             }
-            let out = result.insns();
+            // The dropped copy stays as an anchor (see the test below).
+            let out: Vec<_> = result
+                .insns()
+                .into_iter()
+                .filter(|one| one.what.as_ref().is_some_and(|what| what.op != Operation::Nothing))
+                .collect();
             assert_eq!(out.len(), 2);
             assert_eq!(out[0].what.as_ref(), Some(&semantics[0]));
             assert_eq!(out[1].what.as_ref().unwrap().sources, [Loc::Reg(accumulator), Loc::Reg(term)]);

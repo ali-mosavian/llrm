@@ -1,0 +1,62 @@
+# Same algorithm as switch.c.
+
+fn weight(k: i32) -> i32:
+    match k:
+        0:
+            return 3
+        1:
+            return 14
+        2:
+            return 15
+        3:
+            return 92
+        4:
+            return 65
+        5:
+            return 35
+        6:
+            return 89
+        7:
+            return 79
+        8:
+            return 32
+        9:
+            return 38
+        10:
+            return 46
+        11:
+            return 26
+        _:
+            return 1
+
+fn route(op: i32) -> i32:
+    match op:
+        0:
+            return 11
+        37:
+            return 7
+        148:
+            return 23
+        333:
+            return 5
+        592:
+            return 19
+        925:
+            return 2
+        1332:
+            return 13
+        _:
+            return 1
+
+fn bench_switch(n: i16) -> i32:
+    let mut state: i32 = 1
+    let mut sum: i32 = 0
+    for i in 0..n:
+        state = (state * 75 + 74) % 65537
+        let digit = state % 10
+        sum += weight(state % 14) + route(digit * digit * 37)
+    return sum
+
+fn main() -> i16:
+    print(bench_switch(2000))
+    return 0

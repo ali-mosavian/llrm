@@ -1,4 +1,4 @@
-//! Port of `qbopt/objectfile/module.py`: one BC module, as the analysis
+//! One BC module, as the analysis
 //! layer needs to see it.
 //!
 //! `defines` panics where Python's `omf.pubdef_names` raises: every

@@ -31,6 +31,10 @@ set_ratio               3    6
 clear_ratio             3    6
 set_ratio_size          3    3
 clear_ratio_size        2    2
+# A switch of at least `jump_table` case values is a jump table: gcc's case_values_threshold, targhooks.cc:1846
+# (4 with a `casesi` pattern, else 5); i386.md has `tablejump` (:15824) and no `casesi`, and i386.cc sets no
+# TARGET_CASE_VALUES_THRESHOLD.
+jump_table              5    5
 pairing                 0    1
 
 [clocks]
@@ -61,6 +65,7 @@ pop_r        4   1
 pop_m        6   1
 leave        5   3
 jmp_short    3   1
+jmp_indirect  5   2
 jcc          3   1
 call_near    3   1
 ret_near     5   2
@@ -135,6 +140,7 @@ pop_r        4   1
 pop_m        6   1
 leave        5   3
 jmp_short    3   1
+jmp_indirect  5   2
 jcc          3   1
 call_near    3   1
 ret_near     5   2
