@@ -210,6 +210,20 @@ def pull_request(number: int | None) -> dict | None:
     return json.loads(done.stdout)
 
 
+def smoke_dir() -> Path:
+    return Path(os.environ.get("LLRM_SMOKE_DIR") or Path.home() / ".cache/llrm/smoke")
+
+
+def record_smoke(sha: str) -> None:
+    """A whole smoke run passed at `sha`: the train takes only PRs whose head has this."""
+    smoke_dir().mkdir(parents=True, exist_ok=True)
+    (smoke_dir() / sha).write_text(f"{time.time():.0f}\n")
+
+
+def smoked(sha: str) -> bool:
+    return (smoke_dir() / sha).is_file()
+
+
 def smoke_plan(files: list[str]) -> Plan:
     """The fast tier's plan cut to the smoke steps, plus docs and the diff's own tests."""
     fast = plan(files)  # narrowed when no compiler source changed
@@ -854,7 +868,10 @@ def main() -> int:
     print("steps:", " ".join(p.steps), "| run languages:", " ".join(p.languages), "| crates:", "all" if p.packages is None else f"{len(p.packages)}")
     if args.command == "plan" or p.tier == "none":
         return 0
-    return execute(p, args.group)[0]
+    code = execute(p, args.group)[0]
+    if code == 0 and p.tier == "smoke" and not args.steps and not args.group:
+        record_smoke(head_state()[0])
+    return code
 
 
 if __name__ == "__main__":
