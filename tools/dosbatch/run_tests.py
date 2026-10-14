@@ -216,6 +216,9 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
 
 def build(program: Program, work: Path, stem: str) -> Job | str:
     """The job that runs `program`, or why it did not build."""
+    # `place` skips a name another job has placed, so a path that exists nowhere passed while it shared a launch with a job of the same name
+    if gone := [one for one in data_files(program) if not one.exists()]:
+        return f"data file missing: {gone[0]}"
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".nib" and target != dosbatch.REAL_MODE:
         exe, obj = work / f"{stem}.exe", work / f"{stem}.obj"
@@ -276,6 +279,14 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
     return Job(stem, "obj", obj, objects=tuple(extras), files=data_files(program))
 
 
+LAUNCHES = 8  # DOSBox launches at once per dialect: each its own work directory
+
+
+def dealt(jobs: list, shares: int) -> list[list]:
+    """`jobs` in `shares` runs, dealt round-robin (neighbouring programs cost alike)."""
+    return [jobs[at::shares] for at in range(max(1, min(shares, len(jobs))))]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
@@ -306,11 +317,14 @@ def main() -> int:
     stems = {p.name: f"T{at:03d}" for at, p in enumerate(programs)}
     with ThreadPoolExecutor() as pool:
         built = dict(zip((p.name for p in programs), pool.map(lambda p: build(p, objs, stems[p.name]), programs)))
-    ran = {}
+    launches = []
     for dialect, tools in TOOLS.items():
         jobs = [dataclasses.replace(built[p.name], args=f"< {p.stdin.upper()}") if p.stdin else built[p.name] for p in programs if p.dialect == dialect and isinstance(built[p.name], Job)]
-        if jobs:
-            ran |= dosbatch.run(jobs, work / dialect, tools=tools)
+        launches += [(share, work / f"{dialect}{at}", tools) for at, share in enumerate(dealt(jobs, LAUNCHES)) if share]
+    ran = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(launches))) as pool:
+        for got in pool.map(lambda one: dosbatch.run(one[0], one[1], tools=one[2]), launches):
+            ran |= got
     bad = passed = known = 0
     for program in programs:
         problem = built[program.name] if isinstance(built[program.name], str) else None

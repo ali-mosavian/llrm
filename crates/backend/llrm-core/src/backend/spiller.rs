@@ -1549,6 +1549,12 @@ struct HomesState {
     count: usize,
 }
 
+/// How many times this body's facts have compared a held state's structure
+/// with the body's, block by block.
+pub fn homes_structures_compared(body: &LirBody) -> usize {
+    body.facts.0.counted("homes-structures-compared")
+}
+
 /// How many homes' intervals this body's facts have found afresh from their
 /// occurrences, for a test that an edit finds those it touched only.
 pub fn homes_redone(body: &LirBody) -> usize {
@@ -1596,6 +1602,7 @@ impl HomesStructure {
         &self,
         body: &LirBody,
     ) -> bool {
+        body.facts.0.bump("homes-structures-compared");
         self.entry == body.entry
             && self.blocks.len() == body.blocks.len()
             && self
@@ -1803,15 +1810,32 @@ fn homes_kept(
         }
         plan.ranges(body, index, &values)
     };
-    let kept = body.facts.0.stash(|held: &mut HomesHeld| {
-        held.0
-            .iter()
-            .filter(|state| state.structure.is_of(body))
-            .min_by_key(|state| {
-                state.insns.iter().zip(&body.blocks).filter(|(insns, block)| !insns.same_insns(&block.insns)).count()
-            })
-            .cloned()
-    });
+    // The state with the fewest blocks that differ from this body's, of those
+    // whose structure is this body's: the blocks are told apart by identity,
+    // and the structure, which is compared block by block, only for the states
+    // taken in that order until one is.
+    let kept = body
+        .facts
+        .0
+        .stash(
+            |held: &mut HomesHeld| {
+                let mut by_change: Vec<(usize, &Arc<HomesState>)> = held
+                    .0
+                    .iter()
+                    .map(|state| {
+                        let differing = state
+                            .insns
+                            .iter()
+                            .zip(&body.blocks)
+                            .filter(|(insns, block)| !insns.same_insns(&block.insns))
+                            .count();
+                        (differing, state)
+                    })
+                    .collect();
+                by_change.sort_by_key(|(differing, _)| *differing);
+                by_change.into_iter().find(|(_, state)| state.structure.is_of(body)).map(|(_, state)| Arc::clone(state))
+            },
+        );
     let mut result: Option<IndexMap<u32, Interval>> = None;
     if let Some(state) = &kept {
         let blocks: Vec<(i64, &crate::model::lir::Insns)> =
@@ -1882,9 +1906,10 @@ fn homes_kept(
             body.name
         );
     }
+    // A state kept is one whose structure is this body's.
     let structure = match &kept {
-        Some(state) if state.structure.is_of(body) => Arc::clone(&state.structure),
-        _ => Arc::new(HomesStructure::of(body)),
+        Some(state) => Arc::clone(&state.structure),
+        None => Arc::new(HomesStructure::of(body)),
     };
     if !worth_keeping(body.blocks.len(), result.values().map(|found| found.segments.len()).sum()) {
         return result;
@@ -6310,6 +6335,7 @@ mod tests {
                 .collect(),
         );
         let redone = super::homes_redone(&after);
+        let compared = super::homes_structures_compared(&after);
         let kept = super::homes_kept(
             &after,
             &ranges::indexed_shared(&after),
@@ -6318,6 +6344,11 @@ mod tests {
             first,
         );
         assert_eq!(super::homes_redone(&after) - redone, 1, "the homes the change does not name were found again");
+        assert_eq!(
+            super::homes_structures_compared(&after) - compared,
+            1,
+            "the structure of the state kept was compared block by block more than once"
+        );
         let index = ranges::indexed_shared(&after);
         let values: Vec<u32> = (first..first + 3).collect();
         let afresh =
