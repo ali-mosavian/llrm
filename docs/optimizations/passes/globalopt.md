@@ -1,9 +1,9 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/globalopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globalopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:bf60591f40eb0319b4320a0ccc5c9a3043d5cfaf9c87e3023b2678ba2170a610 -->
+<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:73ee999af46fe31ef744cbd2a7dfe04531a5ab911f0ecff50e91cfe4ab257990 -->
 
 # globalopt
 
-Mark internal globals that are only ever loaded from as `constant`.
+Mark internal globals that are only ever loaded from as `constant`, and drop the stores of those only ever stored to.
 
 ## How it works
 A variable qualifies when it is internal or private, initialized, not yet
@@ -17,6 +17,11 @@ A qualifying variable gets `constant = true`. A load of it is then its
 initializer's bytes (`memory::constant_bits`), which the body passes fold.
 Every defined function is reported as changed so each body is run through
 its pipeline again.
+
+`WriteOnly`, after the pipeline has forwarded what loads it could, is the other half (LLVM's GlobalOpt: "if the global is never loaded
+(but may be stored to), it is dead"; gcc's ipa `write-only` flag): a variable that is internal or private, not named by another global's
+initializer, and whose every use in every function is a non-volatile store's address (through the same `gep`s and casts) loses those
+stores. Nothing names it then, and `globaldce` deletes it.
 
 ## Example
 Before:
