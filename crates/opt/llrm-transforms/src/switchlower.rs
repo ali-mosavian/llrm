@@ -91,12 +91,15 @@ impl FunctionPass for SwitchLower {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let threshold = if self.jump_tables { analyses.outer().target().costs().jump_table } else { 0 };
+        let mut threshold = None;
         let word = unit.layout.largest_legal_integer().min(64);
         let pointer = unit.layout.pointer(0).bits;
         let mut changed = false;
         for block in unit.function.layout().to_vec() {
             let Some(switch) = switch_at(unit.context, unit.function, block) else { continue };
+            // Asked of the target once a function has a switch to lower.
+            let threshold = *threshold
+                .get_or_insert_with(|| if self.jump_tables { analyses.outer().target().costs().jump_table } else { 0 });
             let mut lowering = Lowering {
                 unit: &mut *unit,
                 switch,
