@@ -199,6 +199,7 @@ pub mod parcopy;
 pub mod peep;
 pub mod peephole;
 pub mod phielim;
+pub mod placed;
 pub mod pointers;
 pub mod postings;
 pub mod postrasink;
