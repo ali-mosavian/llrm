@@ -552,10 +552,12 @@ def test_copy_forwarding_does_not_clone_the_instruction_for_each_operand_it_trie
     """cells(224) at -O2: `copyprop::forward_use` cloned the whole instruction (`Semantics`) before asking of each source and each
     address register whether an older copy fits, and answered no almost always: `lir peephole` read 157 to 174 Minstr (the clones
     cost 2.3x as much when mimalloc's page for their size class was recycled at every free, by the length of a path), 135 once the
-    operand is asked of the instruction itself. Above 145 fails (#1293)."""
+    operand is asked of the instruction itself. Above 150 fails (#1293). It was 145: the count moves 2% with nothing but the
+    length of the m32 datalayout's `promote` list (143.0 at three entries, 146.1 at six, identical listings at every stage and
+    the whole process within 0.01%): the heap layout, as for the 2.3x above, not work the pass does."""
     source = tmp_path / "cells224.c"
     source.write_text(scaling.cells(224))
-    assert gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir peephole"] <= 145.0
+    assert gate.own_work(gate.levels_time.command("llrm", "O2", source))["lir peephole"] <= 150.0
 
 
 def test_a_carve_touches_the_blocks_it_changes_not_every_block(tmp_path):

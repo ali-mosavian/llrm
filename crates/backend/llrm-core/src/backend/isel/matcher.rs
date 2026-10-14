@@ -613,6 +613,21 @@ impl Selector<'_, '_, '_> {
     ) -> bool {
         let instruction = self.function.instruction(m.inst);
         let Some(bits) = self.types().int_bits(instruction.ty) else { return false };
+        // What decides most operations first: asked of every add, and / or /
+        // xor of a function, so no allocation and none of what follows
+        // for a dword.
+        if bits >= self.native_width() * 8 || self.promote.is_empty() {
+            return false;
+        }
+        let mnemonic = instruction.opcode.mnemonic();
+        let listed = |one: &String| {
+            one.strip_suffix(&format!("i{bits}"))
+                .and_then(|rest| rest.strip_suffix('.'))
+                .is_some_and(|rest| rest == mnemonic)
+        };
+        if !self.promote.iter().any(listed) {
+            return false;
+        }
         // Not where a load nothing else reads can be the operation's memory
         // operand (the other is a register, not a constant), or its cell is
         // updated in place (a store is the only reader of the result): the word
@@ -648,10 +663,7 @@ impl Selector<'_, '_, '_> {
                     users.iter().any(|user| matches!(self.function.instruction(user.user).opcode, Opcode::ICmp(_)))
                 },
             );
-        bits < self.native_width() * 8
-            && self.promote.iter().any(|one| *one == format!("{}.i{bits}", instruction.opcode.mnemonic()))
-            && !foldable
-            && !compared
+        !foldable && !compared
     }
 
     /// The bytes of the widest integer the target computes natively.

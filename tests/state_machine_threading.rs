@@ -24,8 +24,9 @@ const MACHINE: &str = "extern void report(long value);\n\
         return sum;\n\
     }\n";
 
-/// How many times the loop's `r = r * a + 12345` runs in the listing: once per
-/// path the state machine was split into.
+/// How many times the loop's `r = r * a + 12345` runs in the listing (its
+/// constant, as an immediate or a `lea` displacement): once per path the state
+/// machine was split into.
 fn copies_of_the_step(level: &str) -> usize {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
@@ -36,7 +37,7 @@ fn copies_of_the_step(level: &str) -> usize {
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    std::fs::read_to_string(directory.join("a.s")).unwrap().matches(", 12345").count()
+    std::fs::read_to_string(directory.join("a.s")).unwrap().matches("12345").count()
 }
 
 /// -O1 threaded the switch into 13 copies of the loop's tail (x_switch: 1405
