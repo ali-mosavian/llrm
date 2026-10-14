@@ -38,8 +38,10 @@ form: `SEGDEF`, `PUBDEF`, `LINNUM`, `FIXUPP`, `LEDATA`, `MODEND`.
 | 0x96 | LNAMES | class, segment, group names |
 | 0x98 | SEGDEF | one per `Section` |
 | 0x9A | GRPDEF | one per `OmfGroup` |
-| 0x9C | FIXUPP | relocations of the LEDATA before it |
+| 0x9C | FIXUPP | relocations of the LEDATA or COMDAT before it |
 | 0xA0 | LEDATA | data of a `[start, end)` span |
+| 0xC2 | COMDAT | the data of a section listed in `Object::omf_comdat` (0xC3 for 32 bits) |
+| 0xC4 | LINSYM | line numbers of a COMDAT, by its name (0xC5 for 32 bits) |
 
 ## Layout of an object
 
@@ -92,8 +94,18 @@ joins modules end to end. A 16-bit segment of 0x10000 bytes sets the big bit. A 
 An `OmfGroup` is a GRPDEF listing its member segments by index. Without a group, the name `DGROUP` is still
 entered in LNAMES.
 
-`CodeLayout::PerProcedure` (in `objbuild`) writes a segment for each procedure under one name, so the
-linker's `option eliminate` drops each procedure nothing calls.
+`CodeLayout::PerProcedure` (in `objbuild`) makes a section for each procedure and lists them in
+`Object::omf_comdat`, so the linker drops each procedure nothing calls (jwlink's `option eliminate`, Microsoft's
+/PACKFUNCTIONS). The writer gives each a COMDAT, as MSC's /Gy and Watcom's -zm do: an empty SEGDEF of the
+code's class to be placed in, then a COMDAT record naming the function, allocated explicitly in that segment, with
+its FIXUPPs after it and its lines as a LINSYM. The COMDAT defines the symbol, so there is no PUBDEF for it; a
+fixup that reaches it (a call, a debug address) names an EXTDEF of the same name. A local function's name gets
+`$` and a hash of the object's name, because a linker finds a local COMDAT by no external and two modules' locals
+may share a name.
+
+A segment per procedure of one name was tried first and is wrong for Microsoft's LINK 5.31: it reads the SEGDEFs of
+one name in an object as one segment, keeps the length of the last, and rejects each procedure longer than it
+(L1103, #899); hiding the error leaves the image without the code of the rest.
 
 ## Relocation fixups
 

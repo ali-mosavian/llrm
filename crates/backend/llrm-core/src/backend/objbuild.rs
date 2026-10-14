@@ -456,10 +456,10 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
 pub enum CodeLayout {
     /// All of it in one segment, where a near call may reach any procedure.
     OneSegment,
-    /// A segment of its own for each procedure, all of one name, so that the
-    /// linker's `option eliminate` drops each one nothing calls. A near call
-    /// between them is a relative fixup to the other segment, which the linker
-    /// merges.
+    /// Each procedure its own unit for the linker, which drops each one nothing
+    /// calls (`option eliminate`, /PACKFUNCTIONS). An OMF object writes each as
+    /// a COMDAT; a near call between them is a relative fixup to the other's
+    /// name.
     PerProcedure,
 }
 
@@ -559,7 +559,15 @@ fn built_inner(
         return Err(Unencodable("-g of the BASIC dialect with a code segment per procedure".into()).into());
     }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
-    object_of(module, source, segments, &symbols, &externs)
+    let mut object = object_of(module, source, segments, &symbols, &externs)?;
+    // A segment per procedure of one name is one segment to Microsoft's LINK,
+    // which keeps the last one's length and loses the rest; a COMDAT per
+    // procedure is what MSC's /Gy and Watcom's -zm write, which every linker
+    // places, packs and drops where nothing refers to it.
+    if layout == CodeLayout::PerProcedure {
+        object.omf_comdat = (0..groups.len()).collect();
+    }
+    Ok(object)
 }
 
 pub fn _data(
@@ -1038,6 +1046,7 @@ pub fn object_of(
         sections,
         symbols: table,
         omf_groups,
+        omf_comdat: Vec::new(),
         debug,
     })
 }
