@@ -1,39 +1,39 @@
-reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out"
+reason = "QB rounds what it stores to a SINGLE or DOUBLE variable (BC stores through memory; #1701), so a promoted variable keeps an fpround (fstp+fld, or one fstp into its cell) per assignment: floats +40% instructions, nbody_single +39%, fpbench +37%, nbody (double) +13%, jpeg_single +4%, stft_single +3%; clocks(486) +10%/+23%/+24%; still 0.3-0.4x of BC's instructions"
 blessed = "2026-10-14"
 
 [bas.O2]
-code_bytes = 5222
+code_bytes = 5246
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
 
 [bas.Os]
-code_bytes = 4903
+code_bytes = 4927
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5254
+code_bytes = 5278
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
 
 [bq16.Os]
-code_bytes = 4935
+code_bytes = 4959
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63757438
-code_bytes = 6477
+instructions = 66313343
+code_bytes = 6501
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64085823
-code_bytes = 6152
+instructions = 66641725
+code_bytes = 6176
 data_bytes = 29697
 bss_bytes = 0
 

@@ -1,44 +1,43 @@
-reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
-blessed = "2026-10-13"
+reason = "QB rounds what it stores to a SINGLE or DOUBLE variable (BC stores through memory; #1701), so a promoted variable keeps an fpround (fstp+fld, or one fstp into its cell) per assignment: floats +40% instructions, nbody_single +39%, fpbench +37%, nbody (double) +13%, jpeg_single +4%, stft_single +3%; clocks(486) +10%/+23%/+24%; still 0.3-0.4x of BC's instructions"
+blessed = "2026-10-14"
 
 [bas.O2]
-instructions = 21692
-memory_operands = 5066
-code_bytes = 713
+instructions = 29972
+memory_operands = 12746
+code_bytes = 765
 data_bytes = 23
 bss_bytes = 0
 
 [bas.Os]
-instructions = 21763
-memory_operands = 5120
-code_bytes = 707
+instructions = 30043
+memory_operands = 12800
+code_bytes = 759
 data_bytes = 23
 bss_bytes = 0
-kernel_ms = 0.3015
 
 [bq16.O2]
-instructions = 22562
-memory_operands = 5119
-code_bytes = 722
+instructions = 30842
+memory_operands = 12799
+code_bytes = 774
 data_bytes = 23
 bss_bytes = 0
 
 [bq16.Os]
-instructions = 22631
-memory_operands = 5173
-code_bytes = 716
+instructions = 30911
+memory_operands = 12853
+code_bytes = 768
 data_bytes = 23
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 21770
-code_bytes = 818
+instructions = 30050
+code_bytes = 868
 data_bytes = 29
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 21777
-code_bytes = 814
+instructions = 30057
+code_bytes = 864
 data_bytes = 29
 bss_bytes = 0
 
