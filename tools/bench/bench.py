@@ -175,7 +175,8 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
                                 env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
-            built = qbbuild.one_target(variant.source, work, objects, tuple(flags), qbbuild.FLAT, stem, listing)
+            # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
+            built = qbbuild.one_target(variant.source, work, objects, (*flags, "-g"), qbbuild.FLAT, stem, listing, before=("debug", "codeview"))
             LOADERS[built.exe] = built.files
             return built.exe, listing
         tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-c"
@@ -408,6 +409,8 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
             return key, {"error": f"prints {got}, want {want}"}
         if region.upper() not in ran.inclusive:
             return key, {"error": f"the kernel {region} is not in the link map's functions"}
+        if not ran.sized.get(region.upper()):
+            print(f"WARNING {key}: {region} has no length in the image's debug info, so code after it that no symbol names is counted in it", file=sys.stderr)
         data, bss = sizes.data_bytes(obj)
         return key, {"instructions": ran.inclusive[region.upper()], "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
 

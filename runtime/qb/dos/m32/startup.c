@@ -35,7 +35,11 @@ void qb_dynamic_region(char **first, char **top)
         char *room = (char *)llrm_os_more(sizes[at]);
 
         if (room) {
-            *first = room;
+            /* the extender's block starts wherever the image ends: strings and arrays begin on a paragraph, so where they fall
+               (and the copies whose length depends on an address's low bits) does not move with the size of the program */
+            unsigned long skip = (16 - ((unsigned long)room & 15)) & 15;
+
+            *first = room + skip;
             *top = room + sizes[at];
             return;
         }
