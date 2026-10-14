@@ -13,7 +13,10 @@
 //!   with a bound it cannot fold
 //!   ([tree-ssa-loop-ivcanon.cc:686](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-loop-ivcanon.cc#L686)):
 //!   `k < n` over `B[k][j]` of a 12 x 12 array is twelve copies, each with its
-//!   exit test;
+//!   exit test. A function of more than 150 instructions keeps such loops
+//!   rolled: nothing folds in their copies, and the passes that compare memory
+//!   accesses in pairs grow faster than the code (qcport/mod_tex -O3: 2.3 times
+//!   the instructions for 1.6 times the code);
 //! - asks `llrm_analysis::peelsize::admitted` whether the copies are worth
 //!   their size: the budgets are `peelsize::Limits`, counted in instructions,
 //!   and the loop's `Site` comes from `profit::site`;
@@ -189,6 +192,9 @@ use num_traits::ToPrimitive;
 use crate::profit;
 use crate::{edges, lcssa, loopclone};
 
+/// Instructions past which a loop bounded only by its object is not copied out.
+const MAX_BOUNDED_FUNCTION_OPS: usize = 150;
+
 #[derive(Default)]
 pub struct Peel {
     pub limits: Limits,
@@ -263,6 +269,13 @@ fn _candidate(
             induction::trip_count(&unit, &loop_, &facts).or_else(|| induction::trip_bound(&unit, &loop_, &facts));
         // No count: the most backedges the object an access walks allows.
         let bounded = exact.is_none();
+        // Nothing folds in the copies of a loop bounded only by an object, and
+        // the analyses that compare memory accesses in pairs grow faster than
+        // the code does: qcport/mod_tex at -O3 took 2.3 times the instructions
+        // for 1.6 times the code. A large function is left rolled.
+        if bounded && closed.walk().count() > MAX_BOUNDED_FUNCTION_OPS {
+            continue;
+        }
         let Some(count) = exact.or_else(|| induction::object_backedges(&unit, &loop_)) else {
             continue;
         };

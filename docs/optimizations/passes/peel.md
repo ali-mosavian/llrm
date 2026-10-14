@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/peel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/peel.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:34c4dca29c43f82078b6a8cbefbaa718e0a0c4e65fe236ff30caf492e71b5d24 -->
+<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:69f9cf22c48c05e56cf201d49119054ded9b10d7d309510d1d3fe3dae9c630d0 -->
 
 # peel
 
@@ -18,7 +18,10 @@ loop of a copy of the body, closed to LCSSA (`lcssa::closed`), the pass
   with a bound it cannot fold
   ([tree-ssa-loop-ivcanon.cc:686](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-loop-ivcanon.cc#L686)):
   `k < n` over `B[k][j]` of a 12 x 12 array is twelve copies, each with its
-  exit test;
+  exit test. A function of more than 150 instructions keeps such loops
+  rolled: nothing folds in their copies, and the passes that compare memory
+  accesses in pairs grow faster than the code (qcport/mod_tex -O3: 2.3 times
+  the instructions for 1.6 times the code);
 - asks `llrm_analysis::peelsize::admitted` whether the copies are worth
   their size: the budgets are `peelsize::Limits`, counted in instructions,
   and the loop's `Site` comes from `profit::site`;

@@ -358,3 +358,15 @@ fn through_walk(text: &str) -> (bool, Module) {
     let after = managed(&mut module, Peel::default());
     (after != before, module)
 }
+
+/// qcport/mod_tex at -O3 took 2.3 times the instructions of main for 1.6 times
+/// the code once its loops over 10-element arrays were copied out inside a
+/// function of 655 instructions: a function that large keeps them rolled.
+#[test]
+fn a_loop_bounded_by_its_object_in_a_large_function_is_not_peeled() {
+    let filler = (0..200).map(|at| format!("  %p{at} = add i32 %n, {at}\n")).collect::<String>();
+    let text = walk("inbounds ", SIX).replace("b0:\n  br label %b1", &format!("b0:\n{filler}  br label %b1"));
+    let (changed, mut module) = through_walk(&text);
+    assert!(!changed, "{}", printed(&module));
+    assert_eq!(loops_of(&mut module), 1);
+}
