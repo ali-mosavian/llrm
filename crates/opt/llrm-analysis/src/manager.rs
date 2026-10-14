@@ -751,7 +751,7 @@ impl alias::Bodies for Table<'_> {
     }
 
     fn globals(&self) -> Option<&Globals> {
-        (!self.ids.is_empty()).then_some(self.globals)
+        (!self.slots.ids.is_empty()).then_some(self.globals)
     }
 
     fn procedure(
