@@ -711,28 +711,24 @@ fn _short_update_runs<'b>(
 ) -> Result<(Cow<'b, LirBody>, u32), Error> {
     // A run is a plain move into a stored value followed by something: only a
     // definition of one can start it.
-    let possible = postings::following(body, |postings| {
+    let relevant: BTreeSet<usize> = postings::following(body, |postings| {
         stored
             .iter()
-            .any(
-                |&value| postings
-                    .defs(value)
-                    .iter()
-                    .any(
-                        |at| {
-                            let insns = &body.blocks[at.0 as usize].insns;
-                            matches!(
-                                _plain_move(&insns[at.1 as usize]),
-                                Some((into, _)) if into == value
-                            ) && insns.get(at.1 as usize + 1).is_some()
-                        },
-                    ),
-            )
+            .flat_map(|&value| postings.defs(value).iter().map(move |at| (value, at)))
+            .filter(|(value, at)| {
+                let insns = &body.blocks[at.0 as usize].insns;
+                matches!(
+                    _plain_move(&insns[at.1 as usize]),
+                    Some((into, _)) if into == *value
+                ) && insns.get(at.1 as usize + 1).is_some()
+            })
+            .map(|(_, at)| at.0 as usize)
+            .collect()
     });
-    if !possible {
+    if relevant.is_empty() {
         return Ok((Cow::Borrowed(body), fresh));
     }
-    let (made, next) = _short_update_runs_whole(body, stored, frame, fresh)?;
+    let (made, next) = _short_update_runs_whole(body, stored, frame, fresh, &relevant)?;
     Ok((Cow::Owned(made), next))
 }
 
@@ -741,6 +737,7 @@ fn _short_update_runs_whole(
     stored: &BTreeSet<u32>,
     frame: &mut Frame,
     fresh: u32,
+    relevant: &BTreeSet<usize>,
 ) -> Result<(LirBody, u32), Error> {
     let (index, live) = match crate::backend::live::held(body) {
         Some(held) => (Arc::clone(held.index()), Shared::Held(held)),
@@ -751,7 +748,13 @@ fn _short_update_runs_whole(
         }
     };
     let mut blocks = Vec::new();
-    for block in &body.blocks {
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        // A run starts at a plain move into a stored value: a block with none
+        // is as it was, the very same instructions.
+        if !relevant.contains(&block_index) {
+            blocks.push(block.clone());
+            continue;
+        }
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         let mut position = 0;
         while position < block.insns.len() {
@@ -812,13 +815,18 @@ fn _local_updates<'b>(
     fresh: u32,
 ) -> Result<(Cow<'b, LirBody>, u32), Error> {
     // An update defines a stored value and reads it.
-    let possible = postings::following(body, |postings| {
-        stored.iter().any(|&value| postings.defs(value).iter().any(|at| _at(body, *at).uses.contains(&value)))
+    let relevant: BTreeSet<usize> = postings::following(body, |postings| {
+        stored
+            .iter()
+            .flat_map(|&value| postings.defs(value).iter().map(move |at| (value, at)))
+            .filter(|(value, at)| _at(body, **at).uses.contains(value))
+            .map(|(_, at)| at.0 as usize)
+            .collect()
     });
-    if !possible {
+    if relevant.is_empty() {
         return Ok((Cow::Borrowed(body), fresh));
     }
-    let (made, next) = _local_updates_whole(body, stored, frame, fresh)?;
+    let (made, next) = _local_updates_whole(body, stored, frame, fresh, &relevant)?;
     Ok((Cow::Owned(made), next))
 }
 
@@ -827,6 +835,7 @@ fn _local_updates_whole(
     stored: &BTreeSet<u32>,
     frame: &mut Frame,
     mut fresh: u32,
+    relevant: &BTreeSet<usize>,
 ) -> Result<(LirBody, u32), Error> {
     let (index, live) = match crate::backend::live::held(body) {
         Some(held) => (Arc::clone(held.index()), Shared::Held(held)),
@@ -847,7 +856,13 @@ fn _local_updates_whole(
             })
     };
     let mut blocks = Vec::new();
-    for block in &body.blocks {
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        // An update defines a stored value and reads it: a block with none is
+        // as it was.
+        if !relevant.contains(&block_index) {
+            blocks.push(block.clone());
+            continue;
+        }
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut position = 0;
         while position < insns.len() {

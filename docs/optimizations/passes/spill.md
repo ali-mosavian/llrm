@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/spill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/spill.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/spill.rs sha256:61b0ac680a4c58eadbb128b985d86498a9bb1acdd1fe581b0d5073d78322a82f -->
+<!-- src: crates/opt/llrm-transforms/src/spill.rs sha256:23e3473e239ebbd4d5ffab7401b658893c8f128ccd2fe86a326129c2467483ff -->
 
 # spill
 
