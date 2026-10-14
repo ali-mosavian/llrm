@@ -1,4 +1,4 @@
-//! Port of `qbopt/cfront/raise_hir.py`: one procedure's trees as a MirBody.
+//! One procedure's trees as a MirBody.
 //!
 //! Every C variable is a frame cell and every tree node a fresh value, so the
 //! body is in SSA by construction and promotion is left to the passes. The

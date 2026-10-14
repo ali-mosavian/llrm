@@ -278,6 +278,22 @@ def test_a_memory_phi_asks_its_own_slot_sharing_and_not_a_pass_over_every_block(
     assert run["ssa simulated"] < 150, f"branches N=400 -O2: ssa simulated cost {run['ssa simulated']} Minstr (150 allowed; 693 before): {run}"
 
 
+def test_taking_a_placed_value_out_does_not_shift_every_value_placed_after_it():
+    """The allocator's table of placed values was an insertion-ordered map, and last-chance recoloring takes holders out of its middle
+    and puts them back at every try: `IndexMap::shift_remove` moved every entry after the one taken (14% of the compile of `branches`
+    at N=800): `regalloc recolor` cost 1,202 Minstr at N=400 and 3,004 at 800. The order is a number each value was given when
+    placed, and a list only at the end of an allocation."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](400))
+        run = steps(compiler, source, "-O2")
+    assert run["regalloc recolor"] < 1100, f"branches N=400 -O2: regalloc recolor cost {run['regalloc recolor']} Minstr (1100 allowed; 1202 before): {run}"
+
+
 def test_a_spill_asks_whether_a_candidate_sibling_meets_its_group_and_not_the_web_of_copies_whole():
     """`siblings` worked out the interference graph of the whole copy web (150 values at `branches` N=400, whose phi families are
     large) for each spill, to ask it of a group of one or two: `siblings interference` cost 877 Minstr at N=400 and 3,343 at 800 (slope

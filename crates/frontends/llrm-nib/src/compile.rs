@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/modern/compile.py`: common HIR from the modern
+//! Common HIR from the modern
 //! frontend to a fresh 16-bit OMF object.
 
 use std::collections::BTreeSet;

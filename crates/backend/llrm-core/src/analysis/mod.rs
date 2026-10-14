@@ -1,4 +1,4 @@
-//! Ports of `qbopt/analysis`.
+//! The analyses.
 
 pub use llrm_x86_bcmachine::analysis::flags;
 

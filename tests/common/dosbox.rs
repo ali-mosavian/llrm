@@ -66,7 +66,25 @@ pub fn run(
     lines.push("exit".into());
     let file = work.1.join("dos.conf");
     std::fs::write(&file, conf(mounts, path, &lines)).unwrap();
-    Command::new(binary()).args(["-nolog", "-conf"]).arg(&file).env("SDL_VIDEODRIVER", "dummy").output().unwrap();
+    // A program that never returns (a broken image) is killed, and its missing
+    // output is what the test reports.
+    let mut child = Command::new(binary())
+        .args(["-nolog", "-conf"])
+        .arg(&file)
+        .env("SDL_VIDEODRIVER", "dummy")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(600);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 pub struct Session {

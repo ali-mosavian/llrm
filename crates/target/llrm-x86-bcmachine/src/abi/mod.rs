@@ -1,4 +1,4 @@
-//! Ports of `qbopt/abi`: the pieces the machine layer reads.
+//! The pieces the machine layer reads.
 
 pub mod callsite;
 pub mod events;

@@ -148,6 +148,7 @@ fn object() -> Object {
         sections: vec![text, data],
         symbols: vec![public("_f", 0, 0), public("_g", 1, 0)],
         omf_groups: Vec::new(),
+        omf_comdat: Vec::new(),
         debug: Some(info),
     }
 }
