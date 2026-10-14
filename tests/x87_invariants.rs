@@ -1,5 +1,10 @@
 //! A float loop's carried values are read back from the cells the program
 //! stores them to.
+//!
+//! Compiled with `-fno-peel-loops`, the shape these were written for: peeling
+//! the `j` loop by the extent of `x[4]` (#1673) copies the pair loops out as
+//! well (38 stores to 21 cells instead of 12; nbody -O3
+//! 383,565 → 354,259 clocks), which is not what they count.
 
 use std::process::Command;
 
@@ -46,7 +51,7 @@ fn test_a_stored_loop_carried_float_is_spilled_to_the_cell_the_program_stores_it
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(directory)
-        .args(["-m32", "-O3", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        .args(["-m32", "-O3", "-fno-peel-loops", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -88,7 +93,7 @@ fn test_a_constant_nothing_reads_is_not_loaded_and_popped() {
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(directory)
-        .args(["-m32", "-O3", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        .args(["-m32", "-O3", "-fno-peel-loops", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
