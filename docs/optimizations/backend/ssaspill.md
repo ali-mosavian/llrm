@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/ssaspill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ssaspill.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/ssaspill.rs sha256:018fe422130eb11d48710502533e089d54030718b3b0b61cdf412548eb35b587 -->
+<!-- src: crates/backend/llrm-core/src/backend/ssaspill.rs sha256:f44669e3d73cb6f4319d0ec0340186fd317cbc1130135dc0b6fa01498c41591e -->
 
 # ssaspill
 
@@ -119,7 +119,9 @@ The first machine phase after `far-indirect-calls`, before `phielim`, on the
 spiller route only: `machine_with` drops it when the route is not taken. The
 route is tried at every level but -O0, and kept where it is cheaper; see
 `crate::backend` and `docs/reference/levels.md`. Assembly
-drops the route when `until_changed` is set and the run changed nothing.
+drops the route when `until_changed` is set and the run changed nothing:
+moved no access to or from memory (a body that only lost its trivial phis is
+no change; the route that follows would be the allocator alone's).
 
 ## See also
 [`crate::backend::spiller`](spiller.md) is the counterpart that spills during

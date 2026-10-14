@@ -714,3 +714,27 @@ fn test_a_walk_that_differs_at_a_loop_entry_resumes_there_not_from_the_top() {
     let (walked, resumed) = (body.facts.0.counted("sim-blocks-walked"), body.facts.0.counted("sim-blocks-resumed"));
     assert!(resumed > 0, "{walked} blocks walked and none taken from an earlier walk");
 }
+
+/// A body whose trivial phis the spiller removes, with nothing to spill, moved
+/// no access: the run says it changed nothing, so the route that follows is
+/// dropped for the allocator alone's. It reported a change for the phis alone,
+/// and x_matmul_f at -Os ran its spiller route to the end (17.7 M instructions
+/// against 1.7 M) to reach the allocator alone's cost.
+#[test]
+fn test_removing_trivial_phis_alone_is_no_change_of_the_run() {
+    use crate::backend::ssaspill::{Run, SsaSpill};
+    use crate::model::passes::LIRTransform;
+    let (body, _) = before_phase(Calls::C, "samephi.ll", "_f", "486", "SsaSpill");
+    assert!(body.blocks.iter().any(|block| !block.phis.is_empty()), "premise: the body has a phi");
+    let run = Run::new(true);
+    let mut phase = SsaSpill {
+        frame: std::rc::Rc::new(std::cell::RefCell::new(Frame::new(0))),
+        segments: target::BUILT_IN.clone(),
+        classes: crate::backend::classes::RegisterClasses::m16(),
+        prices: Prices::clocks(),
+        run: std::rc::Rc::clone(&run),
+    };
+    let after = phase.transform(body).expect("runs");
+    assert!(after.blocks.iter().all(|block| block.phis.is_empty()), "premise: the trivial phi is removed");
+    assert!(!run.changed(), "no access moved, and the run says it changed the body");
+}

@@ -114,7 +114,9 @@
 //! spiller route only: `machine_with` drops it when the route is not taken. The
 //! route is tried at every level but -O0, and kept where it is cheaper; see
 //! [`crate::backend`] and `docs/reference/levels.md`. Assembly
-//! drops the route when `until_changed` is set and the run changed nothing.
+//! drops the route when `until_changed` is set and the run changed nothing:
+//! moved no access to or from memory (a body that only lost its trivial phis is
+//! no change; the route that follows would be the allocator alone's).
 //!
 //! # See also
 //! [`crate::backend::spiller`] is the counterpart that spills during
@@ -281,9 +283,6 @@ impl LIRTransform for SsaSpill {
         // A body nothing was done to is returned as it came: a copy loses what
         // later phases know of it.
         let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments, &self.classes, self.prices, &self.run)?;
-        if made.is_some() {
-            self.run.changed.set(true);
-        }
         Ok(made.unwrap_or(body))
     }
 }
@@ -918,9 +917,12 @@ fn changed(
         });
         result.merge(one);
     }
+    // A body that only lost its trivial phis moved no access: the route that
+    // follows is the allocator alone's.
     if result.stored.is_empty() {
         return Ok(simple);
     }
+    run.changed.set(true);
     // A value is stored once after its definition, or where it leaves the
     // registers, whichever runs less.
     let mut home: IndexMap<u32, i64> = IndexMap::default();
