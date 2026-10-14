@@ -356,3 +356,18 @@ def test_a_spill_asks_no_slot_colouring_of_the_homes_it_leaves_behind():
         run = steps(compiler, source, "-O2")
     spent = run.get("intervals homes", 0.0) + run.get("spill color slots", 0.0)
     assert spent < 20, f"branches N=400 -O2: intervals homes and spill color slots cost {spent} Minstr (20 allowed; 202 before): {run}"
+
+
+def test_a_value_with_more_values_live_than_registers_is_not_recolored():
+    """Last-chance recoloring (LLVM's `tryLastChanceRecoloring`) searched for a register for every value no split rescued, and 99% of its
+    sessions fail: `regalloc recolor` cost 599 Minstr on `cells` at N=448 and 991 on `branches` at 400. Where more values are live at a point
+    of the value, with it, than there are registers for them, no moving about places it: the session is not made."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["regalloc recolor"] < 200, f"cells N=448 -O2: regalloc recolor cost {run['regalloc recolor']} Minstr (200 allowed; 599 before): {run}"

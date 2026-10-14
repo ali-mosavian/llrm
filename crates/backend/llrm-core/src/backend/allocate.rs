@@ -119,6 +119,11 @@
 //! the queue. The loop stops when the queue is empty (`BUDGET` visits at
 //! most, 200000).
 //!
+//! The last chance before a value is spilled is recoloring (`Coloring`,
+//! LLVM's `tryLastChanceRecoloring`): move what holds a register it could take.
+//! It is not tried where more values are live at one point of the value than
+//! there are registers for them (`crowded`): no moving about places it.
+//!
 //! Last, `_recolored_hints` moves a value into a copy partner's register when
 //! that register is free over its whole interval and joins more copies than
 //! the one it has, so each joined copy becomes a deleted move.
@@ -3275,7 +3280,9 @@ impl Coloring<'_> {
     /// LLVM's `lcr-max-depth` and `lcr-max-interf`.
     pub const DEPTH: usize = 5;
     pub const INTERFERENCES: usize = 8;
-    /// Registers tried per recoloring session. A search that fails tries every
+    /// Registers tried per recoloring session. (A session is not made at all
+    /// where `crowded`: more of the values live at a point of the value than
+    /// there are registers for them.) A search that fails tries every
     /// register at every level, so it grows with the class (x_ll_arith: 7
     /// registers instead of 6 took 8 of 25 sessions to the old 2000, 3x the
     /// time). Of 19.6k sessions on QCport and the 66 programs, 178 succeed
@@ -3356,7 +3363,7 @@ impl Coloring<'_> {
             return false;
         }
         if depth == 0 && self.crowded(value) {
-                        if llrm_support::env_set("LLRM_CHECK_RECOLOR") {
+            if llrm_support::env_set("LLRM_CHECK_RECOLOR") {
                 let mut again = Coloring {
                     union: &mut *self.union,
                     r#where: &mut *self.r#where,
@@ -3369,7 +3376,10 @@ impl Coloring<'_> {
                     budget: Self::BUDGET,
                     stack: Vec::new(),
                 };
-                assert!(!again.search(value, 0, &mut BTreeSet::new()), "value#{value}: crowded, and recolored all the same");
+                assert!(
+                    !again.search(value, 0, &mut BTreeSet::new()),
+                    "value#{value}: crowded, and recolored all the same"
+                );
             }
             return false;
         }
