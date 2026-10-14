@@ -129,15 +129,12 @@ class PrivateWorkTests(unittest.TestCase):
         self.assertFalse(work.exists() or objs.exists())
 
 
-def test_a_data_path_that_exists_nowhere_fails_even_when_another_job_placed_that_name(tmp_path):
+def test_a_program_naming_a_data_file_that_exists_nowhere_does_not_build(tmp_path):
     """jpeg_fixed.nib named ../jpeg_fixed/photo.jpg (no such file) and passed for as long as another job had placed PHOTO.JPG first;
     split over launches, it failed with FileNotFoundError."""
-    import dosbatch
-    import pytest
-
-    (tmp_path / "PHOTO.JPG").write_bytes(b"x")
-    with pytest.raises(FileNotFoundError):
-        dosbatch.place(tmp_path / "gone" / "photo.jpg", tmp_path / "PHOTO.JPG")
+    (tmp_path / "g.c").write_text("int main(void){return 0;}\n")
+    program = run_tests.Program(tmp_path / "g.c", [], None, data=("../nowhere/photo.jpg",))
+    assert "data file missing" in run_tests.build(program, tmp_path, "T000")
 
 
 def test_jobs_are_dealt_round_robin_over_the_launches_with_none_lost_or_empty():
