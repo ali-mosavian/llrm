@@ -1,4 +1,4 @@
-reason = "OPEN no longer allocates a kilobyte of line buffer with its file block, so programs that open files in their kernel (grep, jpeg, stft: -3,063 instructions each) skip the string-space take it caused; scroll +3 for freeing the file name's temporary"
+reason = "on top of main's #1603 runtime change: +-1 to 5 instructions (max 0.000005%) in the readers' named runtime code, none from this PR"
 blessed = "2026-10-13"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 73084713
+instructions = 72762370
 code_bytes = 1380
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73414194
+instructions = 73091975
 code_bytes = 1379
 data_bytes = 4733
 bss_bytes = 0

@@ -78,6 +78,12 @@ struct Variable {
     descriptor_data: &'static str,
 }
 
+/// A value kept for a block the statement jumps to (`carried`, `reloaded`).
+enum Carried {
+    Constant(Operand),
+    Cell(u32),
+}
+
 #[derive(Clone)]
 enum Operand {
     Value(u32),
@@ -4051,46 +4057,28 @@ impl Compiler {
                         let mask = |this: &mut Self, expression: &Expr| {
                             let (value, value_type) = this.expression(expression)?;
                             let value = this.convert(value, value_type, BYTE)?;
-                            let cell = this.temporary(BYTE)?;
-                            this.emit("store", Vec::new(), vec![Operand::Place(cell), value]);
-                            Ok::<_, SemanticError>(cell)
+                            this.carried(value, BYTE)
                         };
-                        let port_value = self.unsigned_word(port)?;
-                        let port_cell = match port_value.clone() {
-                            Operand::Constant(..) => None,
-                            value => {
-                                let cell = self.temporary(INTEGER)?;
-                                self.emit("store", Vec::new(), vec![Operand::Place(cell), value]);
-                                Some(cell)
-                            }
-                        };
-                        let and_cell = mask(self, and_mask)?;
-                        let xor_cell = xor_mask.map(|one| mask(self, one)).transpose()?;
+                        let port = self.unsigned_word(port)?;
+                        let port = self.carried(port, INTEGER)?;
+                        let and_mask = mask(self, and_mask)?;
+                        let xor_mask = xor_mask.map(|one| mask(self, one)).transpose()?;
                         let poll = self.new_block();
                         let done = self.new_block();
                         self.terminate("jump", Vec::new(), vec![poll])?;
                         self.select_block(poll);
-                        let port = match port_cell {
-                            Some(cell) => {
-                                let port = self.value(INTEGER);
-                                self.emit("load", vec![port], vec![Operand::Place(cell)]);
-                                Operand::Value(port)
-                            }
-                            None => port_value.clone(),
-                        };
+                        let port = self.reloaded(&port, INTEGER);
                         let mut read = self.value(BYTE);
                         self.emit("port_in", vec![read], vec![port]);
-                        if let Some(xor_cell) = xor_cell {
-                            let xor = self.value(BYTE);
-                            self.emit("load", vec![xor], vec![Operand::Place(xor_cell)]);
+                        if let Some(xor_mask) = xor_mask {
+                            let xor = self.reloaded(&xor_mask, BYTE);
                             let flipped = self.value(BYTE);
-                            self.emit("xor", vec![flipped], vec![Operand::Value(read), Operand::Value(xor)]);
+                            self.emit("xor", vec![flipped], vec![Operand::Value(read), xor]);
                             read = flipped;
                         }
-                        let and = self.value(BYTE);
-                        self.emit("load", vec![and], vec![Operand::Place(and_cell)]);
+                        let and = self.reloaded(&and_mask, BYTE);
                         let masked = self.value(BYTE);
-                        self.emit("and", vec![masked], vec![Operand::Value(read), Operand::Value(and)]);
+                        self.emit("and", vec![masked], vec![Operand::Value(read), and]);
                         let ready = self.value(BOOLEAN);
                         self.emit(
                             "ne",
@@ -8713,6 +8701,38 @@ impl Compiler {
         type_id: u32,
     ) -> Result<u32, SemanticError> {
         self.compiler_temporary("$arg", type_id)
+    }
+
+    /// `value` kept for a block the statement jumps to: a constant is the same
+    /// there, and anything else is stored in a cell and loaded
+    /// again (a value is its block's).
+    fn carried(
+        &mut self,
+        value: Operand,
+        type_id: u32,
+    ) -> Result<Carried, SemanticError> {
+        if matches!(value, Operand::Constant(..)) {
+            return Ok(Carried::Constant(value));
+        }
+        let cell = self.temporary(type_id)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(cell), value]);
+        Ok(Carried::Cell(cell))
+    }
+
+    /// What `carried` kept, in the block now selected.
+    fn reloaded(
+        &mut self,
+        carried: &Carried,
+        type_id: u32,
+    ) -> Operand {
+        match carried {
+            Carried::Constant(value) => value.clone(),
+            Carried::Cell(cell) => {
+                let value = self.value(type_id);
+                self.emit("load", vec![value], vec![Operand::Place(*cell)]);
+                Operand::Value(value)
+            }
+        }
     }
 
     fn compiler_temporary(

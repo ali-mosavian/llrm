@@ -34,9 +34,22 @@ def declared(repo: Path) -> set[str]:
     return {one["name"] for one in tomllib.loads(manifest.read_text()).get("bin", [])} if manifest.is_file() else set()
 
 
+def built_from(directory: Path, default: Path) -> Path:
+    """The tree the binaries in `directory` were built from: the root (a Cargo.toml beside a crates/) above the first workspace source
+    their dep-info lists, else `default`. A measurement's base is built in a tree of its own, not in the one being gated."""
+    for info in sorted(directory.glob("*.d")) if directory.is_dir() else []:
+        for path in info.read_text().partition(":")[2].replace("\\\n", " ").split():
+            for parent in Path(path).parents:
+                if (parent / "Cargo.toml").is_file() and (parent / "crates").is_dir():
+                    return parent
+    return default
+
+
 def stale_binaries(directory: Path, repo: Path = REPO) -> list[str]:
     """The binaries in `directory` older than a file cargo's dep-info says they are built from, or than the toolchain
-    patches (build.rs reruns on them; dep-info does not list them). A directory without dep-info is not checked."""
+    patches (build.rs reruns on them; dep-info does not list them) of the tree they were built from, which is `repo` unless
+    their dep-info names another. A directory without dep-info is not checked."""
+    repo = built_from(directory, repo)
     patches = [one.stat().st_mtime for one in (repo / "toolchain/owshim").rglob("*") if one.is_file()]
     stale, built_here = [], declared(repo)
     for info in sorted(directory.glob("*.d")) if directory.is_dir() else []:

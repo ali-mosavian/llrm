@@ -68,6 +68,12 @@ pub struct Machine {
     /// FAR_BSS), as DOS leaves memory past the image as it found it. Where
     /// it does not, zero far data is stored.
     pub far_bss: bool,
+    /// Every object with near uninitialised data (`_BSS`) opens it with an
+    /// empty segment `BSSB` of the same class, so that a start-up zeroing from
+    /// `BSSB` finds the first byte of all of it whatever order the linker
+    /// meets the objects in (the way `XIB`, `XI` and `XIE` bracket the
+    /// initializers).
+    pub bss_begin: bool,
     /// The data layout and address spaces of the target this machine is the
     /// platform of: a recompiler of objects (BC's) reads them from the
     /// machine it is handed, not from a target it names.
@@ -161,6 +167,7 @@ impl Machine {
             segment_end_faults,
             protected_huge_shift: table.get("huge_shift").and_then(toml::Value::as_integer).map(|shift| shift as u32),
             far_bss: table.get("far_bss").and_then(toml::Value::as_bool).unwrap_or(false),
+            bss_begin: table.get("bss_begin").and_then(toml::Value::as_bool).unwrap_or(false),
             layout: None,
         })
     }
@@ -247,19 +254,29 @@ impl Machine {
     /// What an access to any port in the inclusive range may do to memory.
     pub fn port_memory(
         &self,
-        (low, high): (i64, i64),
+        range: (i64, i64),
     ) -> PortMemory {
-        let mut widest = PortMemory::None;
-        let mut at = low;
-        while at <= high {
-            let Some(port) = self.ports.iter().find(|port| port.low <= at && at < port.high) else {
-                return PortMemory::Any;
-            };
-            widest = widest.max(port.memory);
-            at = port.high;
-        }
-        widest
+        port_reach(&self.ports, range)
     }
+}
+
+/// What an access to any port in the inclusive range may do to memory, by the
+/// table `ports`: the widest of its rows' reach, and any memory where a port is
+/// in none.
+pub fn port_reach(
+    ports: &[Port],
+    (low, high): (i64, i64),
+) -> PortMemory {
+    let mut widest = PortMemory::None;
+    let mut at = low;
+    while at <= high {
+        let Some(port) = ports.iter().find(|port| port.low <= at && at < port.high) else {
+            return PortMemory::Any;
+        };
+        widest = widest.max(port.memory);
+        at = port.high;
+    }
+    widest
 }
 
 fn ports(table: &toml::Table) -> Result<Vec<Port>, String> {

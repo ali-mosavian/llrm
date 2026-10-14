@@ -65,7 +65,7 @@ name them in an environment variable, listed in the tool's header.
 | `sizes-known.txt` | Programs `sizes.py` builds that do not compile yet; it may only shrink |
 | `innerloops.py`, `msp430.py` | Each innermost loop's instructions and memory operands, from an object's bytes (OMF or ELF, x86 or MSP430) |
 | `loops/run.py` | The loop corpus: cases written once in `loops/spec.py`, emitted as C, BASIC and Nib, checked by an oracle and measured against bounds `loops/expect.py` derives from the target; `--quick` for a short run |
-| `loops/shortfalls.txt`, `loops/known.toml` | What falls short today, each with its issue; a run fails on a new shortfall and on a listed one that is gone |
+| `loops/shortfalls.txt`, `loops/known.toml` | What falls short today, each with its issue; a run fails on a new shortfall and on a listed one that is gone. `invariant-loads` (a loop reloading what it never changes) is a shortfall only where Open Watcom or gcc compiled the same loop with fewer instructions or fewer memory operands, the bar of `size-vs-ref`; where no reference gave a bar (gcc built none, or Open Watcom's loop calls a helper) the class is `invariant-loads-ideal`, as `ivs-ideal` is, and it stays a shortfall; with no reference built it is not judged. `--dump` refuses a tmpfs: a run writes hundreds of thousands of files |
 | `scoreboard.py` | `llrm-c` against gcc: instructions per level, and where llrm's go, by family |
 | `pressure.py` | The spill model's forecast beside the allocator's spill code, per function of the bench programs |
 | `dwarf-coverage.sh` | `llvm-dwarfdump --statistics` of every bench C program built by `llrm-c` and by gcc |
