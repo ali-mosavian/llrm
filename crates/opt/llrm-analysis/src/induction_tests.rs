@@ -2461,3 +2461,90 @@ b2:
     // A different start is not the counter and a constant.
     assert_eq!(derived(1, 2).basics().len(), 1);
 }
+
+/// The innermost loop's recurrences.
+fn inner_recurrences_of(parsed: &Parsed) -> std::collections::BTreeMap<ValueId, Recurrence> {
+    let unit = parsed.unit();
+    let found = loops::loops(&cfg::graph(parsed.function()), None);
+    let inner = found.first().expect("a loop").clone();
+    let counters = basics(&unit, &inner);
+    recurrences(&unit, &inner, &counters).values
+}
+
+/// QB's `(y * 640 + x * 2) AND &HFFFF&`: the 16-bit offset `iv` starts at `v`,
+/// which the outer loop computes as `y * 640` for `y` in 0..100 (at most
+/// 63360, inside 16 bits unsigned though past them signed), and steps by 2
+/// over 160 trips. Its zero extension is the wide recurrence `v + 2 * trip`,
+/// where `v` is the narrow value read zero-extended: nothing wraps. Before, a
+/// start made of invariants was refused, and the loop kept a second counter
+/// for the extension (the TSC copy loop).
+fn zero_extended_walk(
+    outer_bound: &str,
+    inner_bound: &str,
+    flags: &str,
+) -> Parsed {
+    Parsed::new(&format!(
+        "define void @f(i16 %n, i1 %c) {{
+b0:
+  br label %outer
+
+outer:
+  %y = phi i16 [ 0, %b0 ], [ %ynext, %outerlatch ]
+  %v = mul {flags}i16 %y, 640
+  br label %inner
+
+inner:
+  %iv = phi i16 [ %v, %outer ], [ %next, %inner ]
+  %x = phi i16 [ 0, %outer ], [ %xnext, %inner ]
+  %next = add {flags}i16 %iv, 2
+  %wide = zext i16 %iv to i32
+  %xnext = add nsw i16 %x, 1
+  %again = icmp slt i16 %xnext, {inner_bound}
+  br i1 %again, label %inner, label %outerlatch
+
+outerlatch:
+  %ynext = add nsw i16 %y, 1
+  %more = icmp slt i16 %ynext, {outer_bound}
+  br i1 %more, label %outer, label %done
+
+done:
+  ret void
+}}
+"
+    ))
+}
+
+#[test]
+fn test_a_zero_extended_narrow_counter_with_a_symbolic_start_is_a_wide_recurrence() {
+    let parsed = zero_extended_walk("100", "160", "");
+    let wide = inner_recurrences_of(&parsed).remove(&parsed.value("wide")).expect("the extension is a recurrence");
+    let start = Scev::monomial(Monomial::of(parsed.value("v")), BigInt::from(1), 32);
+    assert_eq!(wide, Recurrence { pointer: None, start, step: Scev::constant(2, 32) });
+}
+
+/// The same loop where the outer count is not known to keep `y * 640` inside
+/// 16 bits unsigned (an outer bound of 200 reaches 127360): the extension is
+/// not the wide recurrence, as it would be wrong once the offset wrapped; and
+/// the inner walk itself must stay inside 16 bits from the greatest start
+/// (63360 + 2 * 2000 does not).
+#[test]
+fn test_a_symbolic_start_that_can_wrap_is_not_extended() {
+    let long = zero_extended_walk("100", "2000", "");
+    assert_eq!(inner_recurrences_of(&long).remove(&long.value("wide")), None, "2000 trips");
+    for bound in ["200", "%n"] {
+        let parsed = zero_extended_walk(bound, "160", "");
+        assert_eq!(inner_recurrences_of(&parsed).remove(&parsed.value("wide")), None, "{bound}");
+    }
+}
+
+/// With `nsw` on the 16-bit multiply and step, a value past 32767 is poison:
+/// the range argument says nothing about it, so the proof does not fire (the
+/// frontend's 16-bit arithmetic wraps and carries no `nsw`).
+#[test]
+fn test_a_symbolic_start_past_the_signed_maximum_under_nsw_is_not_extended() {
+    let parsed = zero_extended_walk("100", "160", "nsw ");
+    assert_eq!(inner_recurrences_of(&parsed).remove(&parsed.value("wide")), None);
+    // Inside the signed range the flags say nothing against it.
+    let small = zero_extended_walk("40", "160", "nsw ");
+    assert!(inner_recurrences_of(&small).contains_key(&small.value("wide")));
+}

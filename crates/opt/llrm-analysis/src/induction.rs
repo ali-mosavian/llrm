@@ -40,7 +40,12 @@
 //! width (sums of `Monomial`s, at most 16 terms and degree 4), in one canonical
 //! form so equal values are equal. A `Recurrence` is `pointer + start + step *
 //! trip` with `Scev` start and step: LLVM's add recurrence. `recurrences` walks
-//! a loop and gives every value affine in a counter one; `users` lists the
+//! a loop and gives every value affine in a counter one (a narrow counter
+//! extended with `zext` too, where its start is made of values the enclosing
+//! loop computes as recurrences and the whole walk stays inside the narrow
+//! width unsigned: the wide start names those values as narrow unknowns,
+//! which the expander reads zero-extended; an `nsw` operation past the signed
+//! maximum is poison and proves nothing); `users` lists the
 //! operands that read them, each as an `IvUse` of kind `Address`, `Compare` or
 //! `Basic` with the low bits it observes (LLVM's IVUsers).
 //!
@@ -3017,8 +3022,11 @@ impl Walk<'_> {
         let wide = unit.int_bits(Operand::Value(op.result?))?;
         let width = unit.int_bits(op.operands[0])?;
         let of = self.rec(found, op.operands[0], width)?;
-        if width >= wide || !of.start.terms.is_empty() || !of.step.terms.is_empty() {
+        if width >= wide || !of.step.terms.is_empty() {
             return None;
+        }
+        if !of.start.terms.is_empty() {
+            return (cast == CastOp::ZExt).then(|| self.extended_symbolic(found, of, width, wide, in_header)).flatten();
         }
         let (raw_start, raw_step) = (of.start.constant.clone(), of.step.constant.clone());
         let Some(count) = trip_count(unit, self.loop_, &self.facts).filter(|count| *count != BigInt::from(0)) else {
@@ -3049,6 +3057,133 @@ impl Walk<'_> {
             return None;
         }
         Some(Recurrence { pointer: None, start: Scev::constant(initial, wide), step: Scev::constant(stride, wide) })
+    }
+
+    /// A narrow recurrence whose start is made of invariants, zero-extended:
+    /// each invariant is itself a recurrence of the enclosing loop that runs
+    /// from a constant start by a constant step and never leaves `[0, 2^w)`
+    /// there (`outer_span`), so the start lies in a known unsigned interval and
+    /// the walk from it, over this loop's trips, stays inside the width too:
+    /// nothing wraps, and the extension is the wide recurrence whose start is
+    /// the invariants' own zero-extended values (LLVM's `getZeroExtendExpr` of
+    /// an add recurrence proved `nuw`). The invariants stay narrow unknowns
+    /// of the wide `Scev`, which the expander reads zero-extended.
+    fn extended_symbolic(
+        &self,
+        found: &Users,
+        of: &Recurrence,
+        width: u32,
+        wide: u32,
+        in_header: bool,
+    ) -> Option<Recurrence> {
+        if !of.step.terms.is_empty() {
+            return None;
+        }
+        let count = trip_count(self.unit, self.loop_, &self.facts).filter(|count| *count != BigInt::from(0))?;
+        let step = _as_signed(&of.step.constant, width);
+        let mut low = _as_signed(&of.start.constant, width);
+        let mut high = low.clone();
+        let mut start = Scev::constant(low.clone(), wide);
+        for (product, factor) in &of.start.terms {
+            let [value] = product.values() else { return None };
+            let (least, most) = self.outer_span(*value, width)?;
+            let factor = _as_signed(factor, width);
+            let (a, b) = (&factor * least, &factor * most);
+            low += a.clone().min(b.clone());
+            high += a.max(b);
+            start = start.plus(&Scev::monomial(Monomial::of(*value), factor, wide));
+        }
+        let last = if in_header { count.clone() } else { &count - 1 };
+        let reach = &step * last;
+        // The values the walk takes run from `low` to `high` plus the reach.
+        let (lowest, highest) = if step >= BigInt::from(0) { (low, high + reach) } else { (low + reach, high) };
+        // An `nsw` operation of the narrow web that this range takes past the
+        // signed maximum is poison there: the walk the proof describes never
+        // happens, so nothing is said of it.
+        let poisoned = self.nsw_overflows(found, width, &count, Some((of, &lowest, &highest)));
+        (lowest >= BigInt::from(0) && highest < BigInt::from(1) << width && !poisoned).then(|| Recurrence {
+            pointer: None,
+            start,
+            step: Scev::constant(step, wide),
+        })
+    }
+
+    /// Whether an `nsw` instruction of `found`'s web, computing `width` bits,
+    /// takes a value outside the signed range over `count` trips: poison. A
+    /// recurrence with a constant start is evaluated; one with the same
+    /// invariants as `anchor` (a recurrence and the least and greatest value
+    /// it takes) is the anchor's span moved by the constants' difference.
+    fn nsw_overflows(
+        &self,
+        found: &Users,
+        width: u32,
+        count: &BigInt,
+        anchor: Option<(&Recurrence, &BigInt, &BigInt)>,
+    ) -> bool {
+        let top = BigInt::from(1) << (width - 1);
+        found.web.iter().any(|&inst| {
+            let one = self.unit.function.instruction(inst);
+            let Some(result) = one.result else { return false };
+            if !one.flags.contains(llrm_mir::opcode::Flags::NSW)
+                || self.unit.int_bits(Operand::Value(result)) != Some(width)
+            {
+                return false;
+            }
+            let Some(of) = found.values.get(&result).filter(|of| of.pointer.is_none() && of.step.terms.is_empty())
+            else {
+                return false;
+            };
+            let step = _as_signed(&of.step.constant, width);
+            let start = _as_signed(&of.start.constant, width);
+            let (low, high) = match anchor {
+                Some((base, lowest, highest)) if !of.start.terms.is_empty() && of.start.terms == base.start.terms => {
+                    let moved = &start - _as_signed(&base.start.constant, width);
+                    (lowest + &moved, highest + moved)
+                }
+                _ if of.start.terms.is_empty() => {
+                    let end = &start + &step * count;
+                    (start.clone().min(end.clone()), start.max(end))
+                }
+                _ => return false,
+            };
+            high >= top || low < -top.clone()
+        })
+    }
+
+    /// The unsigned interval of `value`, a narrow value the enclosing loop
+    /// computes as a recurrence from a constant start by a constant step: its
+    /// values over that loop's trips, where none leaves `[0, 2^w)`.
+    fn outer_span(
+        &self,
+        value: ValueId,
+        width: u32,
+    ) -> Option<(BigInt, BigInt)> {
+        let unit = self.unit;
+        let ValueDef::Instruction(inst) = unit.function.value(value).def else { return None };
+        let at = cfg::id(unit.function.parent(inst)?);
+        let shape = unit.shape();
+        let outer = shape
+            .loops
+            .iter()
+            .filter(|one| {
+                one.header != self.loop_.header && one.body.contains(&self.loop_.header) && one.body.contains(&at)
+            })
+            .min_by_key(|one| one.body.len())?;
+        let counters = basics(unit, outer);
+        let users = recurrences(unit, outer, &counters);
+        let of = users.values.get(&value)?;
+        if of.pointer.is_some() || of.width() != width || !of.start.terms.is_empty() || !of.step.terms.is_empty() {
+            return None;
+        }
+        let count = trip_count(unit, outer, &self.facts).filter(|count| *count != BigInt::from(0))?;
+        let step = _as_signed(&of.step.constant, width);
+        let start = of.start.constant.clone();
+        let last = if at == outer.header { count.clone() } else { &count - 1 };
+        let end = &start + &step * last;
+        let (least, most) = (start.clone().min(end.clone()), start.max(end));
+        // An `nsw` value or step past the signed maximum is poison.
+        let poisoned = self.nsw_overflows(&users, width, &count, None);
+        (least >= BigInt::from(0) && most < (BigInt::from(1) << width) && !poisoned).then_some((least, most))
     }
 
     /// A narrow unit-step counter that a symbolic bound ends with `ult`: its
