@@ -105,6 +105,31 @@ def test_iterated_data_counts_what_it_expands_to(tmp_path):
     assert data_bytes(path) == (400, 0)
 
 
+def comdat(kind: int, segment: int, function: int, length: int, flags: int = 0, attributes: int = 0) -> bytes:
+    """A COMDAT of `length` bytes, placed in `segment` and named by LNAMES entry `function`."""
+    wide = kind == 0xC3
+    return record(kind, bytes([flags, attributes, 0]) + bytes(4 if wide else 2) + bytes([0, 0, segment, function]) + bytes(length))
+
+
+def test_a_function_per_comdat_counts_in_the_segment_it_is_placed_in(tmp_path):
+    """PerProcedure writes each function as a COMDAT into an empty code SEGDEF; the segment read 0 code bytes and the
+    bench's sizes of a flat program were the start-up program's (`COMDAT records, which segments() does not read`).
+    A function in two records counts both; a 32-bit COMDAT is read as a 16-bit one."""
+    path = tmp_path / "c.obj"
+    path.write_bytes(
+        record(0x80, name("x")) + lnames("_TEXT", "CODE", "f", "g", "h") + segdef(0, 1, 2) + comdat(0xC2, 1, 3, 30) + comdat(0xC2, 1, 3, 12, flags=1) + comdat(0xC3, 1, 4, 8) + comdat(0xC2, 1, 5, 5)
+    )
+    assert code_bytes(path) == 55
+
+
+def test_a_comdat_the_linker_places_is_refused_not_missed(tmp_path):
+    """An allocation other than explicit leaves the segment to the linker: its bytes cannot be attributed."""
+    path = tmp_path / "f.obj"
+    path.write_bytes(record(0x80, name("x")) + lnames("_TEXT", "CODE", "f") + segdef(0, 1, 2) + record(0xC2, bytes([0, 1, 0, 0, 0, 0, 0, 3]) + bytes(9)))
+    with pytest.raises(ValueError):
+        code_bytes(path)
+
+
 def test_a_linked_image_is_not_an_object(tmp_path):
     """Sizes come from the program's own object. An EXE holds the start-up and the libraries too, and reads as a size
     that is not the program's: it is refused."""

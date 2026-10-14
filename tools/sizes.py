@@ -96,7 +96,7 @@ def expanded(body: bytes, at: int, wide: bool) -> int:
 
 def segments(obj: Path) -> list[Segment]:
     """The OMF object's segments, with the bytes its data records carry. Only an object: a linked image or a
-    library has other records, and COMDAT, which this reader does not follow, is refused rather than missed."""
+    library has other records. A COMDAT counts in the segment it is placed in; one the linker places is refused."""
     data = Path(obj).read_bytes()
     if not data or data[0] != 0x80:
         raise ValueError(f"{obj} is not an OMF object: it does not start with a THEADR record")
@@ -129,8 +129,18 @@ def segments(obj: Path) -> list[Segment]:
             segment, i = omf_index(body, 0)
             i += 4 if wide else 2  # the offset
             found[segment - 1][3] += len(body) - i if kind < 0xA2 else expanded(body, i, wide)
-        elif kind in (0xC2, 0xC3):
-            raise ValueError(f"{obj} has COMDAT records, which segments() does not read")
+        elif kind in (0xC2, 0xC3):  # COMDAT: a function's bytes, in the segment it is explicitly placed in
+            wide = kind == 0xC3
+            flags, allocation = body[0], body[1] & 0x0F
+            if allocation != 0:
+                raise ValueError(f"{obj}: a COMDAT the linker places has no segment to count it in")
+            _, i = omf_index(body, 3 + (4 if wide else 2))  # the type index
+            _, i = omf_index(body, i)  # the group
+            segment, i = omf_index(body, i)
+            _, i = omf_index(body, i)  # the name
+            length = expanded(body, i, wide) if flags & 2 else len(body) - i
+            found[segment - 1][2] += length
+            found[segment - 1][3] += length
     return [Segment(name, klass, size, min(loaded, size)) for name, klass, size, loaded in found]
 
 

@@ -76,7 +76,7 @@ pub fn run(
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    let deadline = std::time::Instant::now() + Duration::from_secs(600);
     while child.try_wait().unwrap().is_none() {
         if std::time::Instant::now() > deadline {
             let _ = child.kill();

@@ -104,6 +104,9 @@ fixup that reaches it (a call, a debug address) names an EXTDEF of the same name
 finds a local COMDAT by no external and two modules' locals may share a name, two objects of one name (an `m.nib`
 in two directories) included.
 
+A module's imports are its EXTDEFs less its own COMDATs (`omf::imports`): `llrm-nib --used-by` cuts the runtime to
+what a program imports, and a program's own COMDATs are not that.
+
 A segment per procedure of one name was tried first and is wrong for Microsoft's LINK 5.31: it reads the SEGDEFs of
 one name in an object as one segment, keeps the length of the last, and rejects each procedure longer than it
 (L1103, #899); hiding the error leaves the image without the code of the rest.

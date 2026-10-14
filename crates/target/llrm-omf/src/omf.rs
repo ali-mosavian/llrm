@@ -277,6 +277,35 @@ pub fn externals(recs: &[Rc<Record>]) -> Vec<String> {
     out
 }
 
+/// The names the module's COMDAT records define.
+pub fn comdat_names(recs: &[Rc<Record>]) -> Vec<String> {
+    let lnames = names(recs);
+    recs.iter()
+        .filter(|record| COMDAT.contains(&record.r#type))
+        .map(|record| {
+            let body = &record.body;
+            // Flags, attributes, alignment, offset, then the type index.
+            let (_, at) = _index(body, 3 + if record.r#type == COMDAT[1] { 4 } else { 2 });
+            // Only an explicit allocation (attributes 0) names a group and a
+            // segment.
+            let at = if body[1] & 0x0F == 0 {
+                let (_, at) = _index(body, at);
+                _index(body, at).1
+            } else {
+                at
+            };
+            lnames[_index(body, at).0 as usize].clone()
+        })
+        .collect()
+}
+
+/// The names the module reaches for and does not define itself: its EXTDEFs
+/// less its own COMDATs, which a fixup within the module also names by EXTDEF.
+pub fn imports(recs: &[Rc<Record>]) -> Vec<String> {
+    let own = comdat_names(recs);
+    externals(recs).into_iter().skip(1).filter(|name| !own.contains(name)).collect()
+}
+
 /// PUBDEF's own name for each offset it declares into segment `seg`.
 ///
 /// Mirrors code_offsets()'s PUBDEF branch, but keeps the name it skips past.
@@ -1483,6 +1512,25 @@ mod tests {
             records.push(rec(kind, b"\x00"));
             assert!(refusals(&records).iter().any(|reason| reason.contains(why)));
         }
+    }
+
+    /// `runtime.nib` was cut to what a program imports, and a program written
+    /// per procedure imports its own COMDATs too (a fixup within the module
+    /// names them by EXTDEF): `N$ESHF` and `N$EBND` stayed in the runtime
+    /// beside the program's own, and jwlink refused E2027 (flat_bigheap).
+    #[test]
+    fn a_module_does_not_import_the_functions_its_own_comdats_define() {
+        let record = |kind, body: Vec<u8>| Rc::new(Record::new(kind, body));
+        let name = |text: &str| [vec![text.len() as u8], text.as_bytes().to_vec()].concat();
+        let records = [
+            record(LNAMES, [name("_TEXT"), name("CODE"), name("f")].concat()),
+            record(EXTDEF, [name("f"), vec![0], name("g"), vec![0]].concat()),
+            // Explicit allocation in group 0, segment 1, named by `f`.
+            record(COMDAT[0], vec![0, 0, 0, 0, 0, 0, 0, 1, 3, 0x90]),
+            record(COMDAT[1], vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0x90]),
+        ];
+        assert_eq!(comdat_names(&records), ["f", "f"]);
+        assert_eq!(imports(&records), ["g"]);
     }
 
     // tests/test_pointer_dependency.py
