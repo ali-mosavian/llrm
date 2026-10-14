@@ -7752,12 +7752,14 @@ impl Compiler {
                                 || SemanticError { message: "BYREF indirect base has no pointer type".into() },
                             )?;
                         let original = Operand::Indirect { base, offset, type_id, volatile, inbounds };
-                        if self.width(pointer_type) == 4 {
+                        if !self.options.one_space() && self.width(pointer_type) == 4 {
                             // Ordinary BASIC BYREF formals carry a near
                             // address. BC bridges a field in a far dynamic
                             // array with a near copy-in/copy-out slot; pushing
                             // the four-byte field pointer leaves two words on
-                            // the stack after the callee's RETF n.
+                            // the stack after the callee's RETF n. Where far
+                            // pointers are the near ones (a flat target) the
+                            // four-byte pointer is the near address: no slot.
                             let temporary = self.temporary(*parameter_type)?;
                             let aggregate = self.udts.values().any(|record| record.type_id == *parameter_type)
                                 || self.string_width(*parameter_type).is_some_and(|width| width != 0);
