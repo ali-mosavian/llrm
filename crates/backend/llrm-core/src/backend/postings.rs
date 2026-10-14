@@ -238,14 +238,34 @@ impl Postings {
         value: u32,
         with_needs: bool,
     ) -> Vec<(u32, &Arc<Insn>)> {
-        let mut found: Vec<&Entry> = self.defs.get(&value).into_iter().flatten().collect();
-        found.extend(self.uses.get(&value).into_iter().flatten());
-        if with_needs {
-            found.extend(self.needs.get(&value).into_iter().flatten());
+        let empty: &[Entry] = &[];
+        let lists = [
+            self.defs.get(&value).map_or(empty, Vec::as_slice),
+            self.uses.get(&value).map_or(empty, Vec::as_slice),
+            if with_needs { self.needs.get(&value).map_or(empty, Vec::as_slice) } else { empty },
+        ];
+        let mut at = [0usize; 3];
+        let mut found: Vec<(u32, &Arc<Insn>)> = Vec::with_capacity(lists.iter().map(|list| list.len()).sum());
+        let mut last: Option<(u32, u32)> = None;
+        loop {
+            // The earliest entry not yet taken among the three lists.
+            let mut best: Option<usize> = None;
+            for (which, list) in lists.iter().enumerate() {
+                if let Some(entry) = list.get(at[which]) {
+                    if best.is_none_or(|other| entry.key() < lists[other][at[other]].key()) {
+                        best = Some(which);
+                    }
+                }
+            }
+            let Some(which) = best else { break };
+            let entry = &lists[which][at[which]];
+            at[which] += 1;
+            if last != Some(entry.key()) {
+                found.push((entry.block, &entry.insn));
+                last = Some(entry.key());
+            }
         }
-        found.sort_unstable_by_key(|entry| entry.key());
-        found.dedup_by_key(|entry| entry.key());
-        found.into_iter().map(|entry| (entry.block, &entry.insn)).collect()
+        found
     }
 
     /// How many instructions define, read or require `value`.
