@@ -370,3 +370,15 @@ fn only_o3_and_omax_distribute_loops_and_the_flag_overrides_it() {
         assert!(pipeline(&[level, "-ftree-loop-distribution"]).distribute, "{level}");
     }
 }
+
+/// gcc turns `-fversion-loops` on at -O3 and no lower; -Omax is
+/// everything.
+#[test]
+fn only_o3_and_omax_version_loops_for_strides_and_the_flag_overrides_it() {
+    assert!(pipeline(&["-Omax"]).version && pipeline(&["-O3"]).version);
+    assert!(!pipeline(&["-O3", "-fno-version-loops"]).version);
+    for level in ["-O1", "-O2", "-Os"] {
+        assert!(!pipeline(&[level]).version, "{level}");
+        assert!(pipeline(&[level, "-fversion-loops"]).version, "{level}");
+    }
+}

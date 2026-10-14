@@ -171,6 +171,11 @@ impl Declared {
         })
     }
 
+    /// The metadata nodes made so far, which the module has after the pass.
+    pub fn nodes(&self) -> &[crate::module::MetadataNode] {
+        &self.nodes
+    }
+
     /// A metadata node, its id at once, added to the module after the pass.
     pub fn node(
         &mut self,
@@ -1737,6 +1742,14 @@ pub struct PassManager {
 }
 
 impl PassManager {
+    /// `pass`, already boxed.
+    pub fn add_boxed(
+        &mut self,
+        pass: Box<dyn FunctionPass>,
+    ) {
+        self.passes.push(Pass::Function(pass));
+    }
+
     pub fn add(
         &mut self,
         pass: impl FunctionPass + 'static,

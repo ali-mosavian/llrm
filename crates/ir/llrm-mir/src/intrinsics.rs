@@ -47,6 +47,11 @@ pub enum Intrinsic {
     /// `llvm.assume`: its condition holds here, which a pass may use and no
     /// code checks. Undefined where it does not.
     Assume,
+    /// `llrm.noalias`: its argument, which it, and what is based on it, is
+    /// reached by no pointer that is not, while anything based on it is used:
+    /// C's `restrict`, said of a loop's pointers by the pass that tested that
+    /// the bytes they reach do not meet. A pass may use it and no code runs it.
+    Restrict,
     /// An I/O port's value, read: a target intrinsic, as `llvm.x86.*` are.
     PortIn,
     /// A value written to an I/O port.
@@ -275,7 +280,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 34] = [
+const TABLE: [Spec; 35] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -387,6 +392,15 @@ const TABLE: [Spec; 34] = [
         memory: &[(Some("inaccessiblemem"), "write")],
     },
     Spec {
+        name: "llrm.noalias",
+        intrinsic: Intrinsic::Restrict,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[(Slot::Any(0), &[])],
+        attrs: PURE,
+        memory: NO_MEMORY,
+    },
+    Spec {
         name: "llvm.lifetime.start",
         intrinsic: Intrinsic::LifetimeStart,
         overloads: &[Kind::Pointer],
@@ -482,7 +496,7 @@ pub fn window_name(
 }
 
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.") || name.starts_with("llrm.ia16.")
+    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.

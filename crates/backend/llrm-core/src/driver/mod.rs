@@ -311,7 +311,7 @@ pub fn optimized(
         ..Default::default()
     };
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
-    timed("mir assumptions", || program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped));
+    timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
         program.modules.iter_mut().try_for_each(|module| {
             crate::backend::ehprepare::prepared(module, llrm_target::Target::layout(&*options.arch).spaces.far)
