@@ -68,7 +68,7 @@
 
 use llrm_analysis::globalsaa::embedded;
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
-use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
+use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand};
 use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::passes::{ModuleAnalyses, ModulePass};
 
@@ -127,6 +127,51 @@ fn only_loaded(
     only_used(context, function, global, &|op, index| matches!(op.opcode, Opcode::Load { .. }) && index == 0)
 }
 
+/// Every way `function` uses `global`'s address, found once: the operands that
+/// take the address as it stands (`uses`), and the address arithmetic and casts
+/// between the global and them (`moved`).
+struct Reach {
+    uses: Vec<(InstId, usize)>,
+    moved: Vec<InstId>,
+}
+
+/// `global`'s uses in `function`, through address arithmetic and casts; none
+/// where an operand names the global other than as its address.
+fn reach(
+    context: &Context,
+    function: &Function,
+    global: GlobalId,
+) -> Option<Reach> {
+    let mut work = Vec::new();
+    for (_, inst) in function.walk() {
+        for (index, &operand) in function.instruction(inst).operands.iter().enumerate() {
+            let Operand::Constant(id) = operand else { continue };
+            let mut named = std::collections::BTreeSet::new();
+            embedded(context, id, &mut named);
+            if named.contains(&global) {
+                if !addresses(context, id, global) {
+                    return None;
+                }
+                work.push((inst, index));
+            }
+        }
+    }
+    let mut found = Reach { uses: Vec::new(), moved: Vec::new() };
+    while let Some((inst, index)) = work.pop() {
+        let op = function.instruction(inst);
+        match op.opcode {
+            Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if index == 0 => {
+                found.moved.push(inst);
+                if let Some(value) = op.result {
+                    work.extend(function.users(value).iter().map(|one| (one.user, one.index as usize)));
+                }
+            }
+            _ => found.uses.push((inst, index)),
+        }
+    }
+    Some(found)
+}
+
 /// Whether every use of `global` in `function` is, through address arithmetic
 /// and casts, the address `access` says a use is.
 fn only_used(
@@ -135,15 +180,8 @@ fn only_used(
     global: GlobalId,
     access: &dyn Fn(&llrm_mir::module::Instruction, usize) -> bool,
 ) -> bool {
-    function.walk().all(|(_, inst)| {
-        let op = function.instruction(inst);
-        op.operands.iter().enumerate().all(|(index, &operand)| {
-            let Operand::Constant(id) = operand else { return true };
-            let mut named = std::collections::BTreeSet::new();
-            embedded(context, id, &mut named);
-            !named.contains(&global) || (addresses(context, id, global) && used_through(function, inst, index, access))
-        })
-    })
+    reach(context, function, global)
+        .is_some_and(|found| found.uses.iter().all(|&(inst, index)| access(function.instruction(inst), index)))
 }
 
 /// Whether `constant` is `global`'s address, moved or cast.
@@ -161,25 +199,6 @@ fn addresses(
             addresses(context, *value, global)
         }
         _ => false,
-    }
-}
-
-/// Whether operand `index` of `inst`, an address, is only used as `access`
-/// says, through address arithmetic and casts.
-fn used_through(
-    function: &Function,
-    inst: InstId,
-    index: usize,
-    access: &dyn Fn(&llrm_mir::module::Instruction, usize) -> bool,
-) -> bool {
-    let op = function.instruction(inst);
-    match op.opcode {
-        Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if index == 0 => {
-            op.result.is_some_and(|value| {
-                function.users(value).iter().all(|one| used_through(function, one.user, one.index as usize, access))
-            })
-        }
-        _ => access(op, index),
     }
 }
 
@@ -205,55 +224,22 @@ impl ModulePass for WriteOnly {
         let mut changed = Vec::new();
         for (at, global) in globals.iter_mut().enumerate() {
             let GlobalKind::Function(function) = &mut global.kind else { continue };
-            let dead: Vec<InstId> = function
-                .walk()
-                .filter(|&(_, inst)| {
-                    let op = function.instruction(inst);
-                    matches!(op.opcode, Opcode::Store { volatile: false, .. })
-                        && op.operands.get(1).is_some_and(|&address| {
-                            found.iter().any(|&global| address_of(context, function, address, global))
-                        })
-                })
-                .map(|(_, inst)| inst)
-                .collect();
-            let dead = with_orphaned_addresses(context, function, &found, dead);
+            // Every use of a found global is a store's address or address
+            // arithmetic that only stores use, so the stores and the arithmetic
+            // between them and the globals all go; arithmetic left unused
+            // before goes with them.
+            let mut dead = std::collections::BTreeSet::new();
+            for &global in &found {
+                if let Some(reach) = reach(context, function, global) {
+                    dead.extend(reach.uses.iter().map(|&(inst, _)| inst).chain(reach.moved));
+                }
+            }
+            let dead: Vec<InstId> = dead.into_iter().collect();
             if !dead.is_empty() && function.erase_all(&dead).is_ok() {
                 changed.push(GlobalId(at as u32));
             }
         }
         changed
-    }
-}
-
-/// `dead` and the address arithmetic of `found` globals that nothing uses once
-/// they are gone, whether they were the stores' or were left unused before:
-/// what still names a global would keep it.
-fn with_orphaned_addresses(
-    context: &Context,
-    function: &Function,
-    found: &[GlobalId],
-    mut dead: Vec<InstId>,
-) -> Vec<InstId> {
-    loop {
-        let more: Vec<InstId> = function
-            .walk()
-            .map(|(_, inst)| inst)
-            .filter(|inst| !dead.contains(inst))
-            .filter(|&inst| {
-                let op = function.instruction(inst);
-                matches!(
-                    op.opcode,
-                    Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
-                ) && op.result.is_some_and(|value| function.users(value).iter().all(|one| dead.contains(&one.user)))
-                    && found.iter().any(|&global| {
-                        op.operands.first().is_some_and(|&base| address_of(context, function, base, global))
-                    })
-            })
-            .collect();
-        if more.is_empty() {
-            return dead;
-        }
-        dead.extend(more);
     }
 }
 
@@ -283,30 +269,6 @@ pub fn never_loaded(module: &Module) -> Vec<GlobalId> {
     candidates
         .filter(|&id| module.functions().all(|(_, _, function)| only_used(&module.context, function, id, &stores)))
         .collect()
-}
-
-/// Whether `address`, an operand, is `global`'s address, moved or cast: a
-/// constant, or a value made of one by `gep`s and casts.
-fn address_of(
-    context: &Context,
-    function: &Function,
-    address: Operand,
-    global: GlobalId,
-) -> bool {
-    match address {
-        Operand::Constant(id) => addresses(context, id, global),
-        Operand::Value(value) => match function.value(value).def {
-            ValueDef::Instruction(def) => {
-                let op = function.instruction(def);
-                matches!(
-                    op.opcode,
-                    Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
-                ) && op.operands.first().is_some_and(|&base| address_of(context, function, base, global))
-            }
-            _ => false,
-        },
-        _ => false,
-    }
 }
 
 #[cfg(test)]
