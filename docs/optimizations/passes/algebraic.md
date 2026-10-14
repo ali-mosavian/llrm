@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/algebraic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/algebraic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:172bba1ebbafdac9fd1ffd9827a4d4fcde7cf00ca4c8a39bb6200cdeb5773a51 -->
+<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:d7a42d3309a8eecf10e5148080ad524b25dfc3d36ec9d84134864469c05414c6 -->
 
 # algebraic
 
@@ -25,10 +25,10 @@ original did not. The rules fall in groups.
   shifts, scales, offsets or bitwise constants become one; `(x + a) * k + b`
   distributes; `(x + a) + a` is `x + (a << 1)`; `x - (x + y)` is `-y`.
 - Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, `inttoptr
-  (add x, C)` of a flat pointer as `gep i8, (inttoptr x), C` (not under
-  `size`), `sext` of a value whose sign bit is clear, logic or a phi of like
-  extensions done at the narrow type, `ptrtoint(inttoptr x)`, a byte offset
-  from a constant near address as the constant address.
+  (add x, y)` of a flat pointer as `gep i8, (inttoptr x), y` (a constant `y`
+  not under `size`), `sext` of a value whose sign bit is clear, logic or a
+  phi of like extensions done at the narrow type, `ptrtoint(inttoptr x)`, a
+  byte offset from a constant near address as the constant address.
 - Compares: `icmp P (x + C1), C2` is `icmp P x, C2 - C1` (an ordered test
   needs `nsw` or `nuw` for its signedness); a compare of extensions is a
   compare of the sources; `xor (icmp P a b), true` is the inverse compare;
