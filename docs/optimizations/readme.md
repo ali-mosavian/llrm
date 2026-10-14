@@ -27,7 +27,7 @@ Levels and flags: [levels](../reference/levels.md).
 |  | [`unroll`](passes/unroll.md), [`peel`](passes/peel.md), [`unswitch`](passes/unswitch.md), [`loopsplit`](passes/loopsplit.md), [`loopfuse`](passes/loopfuse.md), [`loopdistribute`](passes/loopdistribute.md), `unroll-jam` |  |
 | Module, interprocedural | [`inline`](passes/inline.md), [`argpromotion`](passes/argpromotion.md), [`deadargs`](passes/deadargs.md), [`ipacp`](passes/ipacp.md), [`interprocedural`](passes/interprocedural.md) | [module-analyses](module-analyses.md), [early-summaries](early-summaries.md) |
 | After the interprocedural step | [`globaldce`](passes/globaldce.md), [`calleepop`](passes/calleepop.md), [`fixednarrow`](passes/fixednarrow.md), [`lsr`](passes/lsr.md), [`window`](passes/window.md), [`rotate`](passes/rotate.md), [`jumpthread`](passes/jumpthread.md), [`gepoffset`](passes/gepoffset.md), [`addresssink`](passes/addresssink.md), [`spares`](passes/spares.md), [`homes`](passes/homes.md) |  |
-| Backend | see the [backend phases](backend/readme.md) | [floating-pop-reuse](floating-pop-reuse.md), [second-frame](second-frame.md) |
+| Backend | see the [backend phases](backend/readme.md) | [floating-pop-reuse](floating-pop-reuse.md), [second-frame](second-frame.md), [allocation-algorithm](allocation-algorithm.md) |
 
 ## Reference pages
 
@@ -40,6 +40,7 @@ Each pass, analysis and backend phase has one page, generated from the `//!` hea
 | [raise-arguments](raise-arguments.md) | Word pairs, runtime helpers and numeric arguments of BC objects |
 | [floating-pop-reuse](floating-pop-reuse.md) | x87 stack allocation and popping arithmetic |
 | [second-frame](second-frame.md) | The second frame layout without a second backend run |
+| [allocation-algorithm](allocation-algorithm.md) | Where allocation time goes, measured, and the single-allocation design |
 | [module-analyses](module-analyses.md) | Module analyses brought up to date after an edit |
 | [early-summaries](early-summaries.md) | Summaries at fixed points; a parked design |
 
