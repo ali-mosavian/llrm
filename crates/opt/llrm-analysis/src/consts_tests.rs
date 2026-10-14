@@ -127,6 +127,29 @@ fn a_load_reached_by_more_than_a_hundred_writes_is_not_served_by_them() {
     assert_eq!(chain(150).solved("loaded", &Calls::default()), None, "151 writes reach it: past the limit");
 }
 
+/// `fill`'s merge makes two byte stores of constants one word store before a
+/// later round's forwarding asks: a byte of that word is a known byte (the low
+/// one and the high one alike), so merging does not take a load's value from
+/// it.
+#[test]
+fn a_byte_of_a_merged_constant_store_is_a_known_byte() {
+    let parsed = Parsed::new(
+        "@g = global [2 x i8] zeroinitializer
+
+define i8 @f() {
+b0:
+  store i16 2312, ptr @g
+  %low = load i8, ptr @g
+  %high = load i8, ptr getelementptr (i8, ptr @g, i16 1)
+  %sum = add i8 %low, %high
+  ret i8 %sum
+}
+",
+    );
+    assert_eq!(parsed.solved("low", &Calls::default()), Some(Known::new(8, 8)));
+    assert_eq!(parsed.solved("high", &Calls::default()), Some(Known::new(9, 8)));
+}
+
 #[test]
 fn a_store_through_a_constant_index_is_read_back() {
     let parsed = Parsed::new(
