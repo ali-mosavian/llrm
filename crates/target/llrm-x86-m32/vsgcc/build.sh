@@ -13,11 +13,15 @@ ABI=${VSGCC_ABI:-sysv}
 echo -n $ABI > $O/abi
 EMU=$(python3 "$R/tools/linkrecipe.py" x86-m32 ld-emulation)
 # the 64-bit divides gcc and clang call, from each compiler's own 32-bit runtime
+# VSGCC_ONLY=llrm: llrm's objects alone, for what compares llrm with itself (m16.py), with no gcc or clang installed
+if [ -z "${VSGCC_ONLY:-}" ]; then
 RT_gcc=$(gcc -m32 -print-libgcc-file-name)
 RT_clang=$(clang -m32 --rtlib=compiler-rt -print-libgcc-file-name)
+fi
 $LLRM -m32 -mabi=$ABI -O2 -march=i486 -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || echo "FAIL llrm $P"
 $LLRM -m32 -mabi=$ABI -Os -march=i486 -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.err || echo "FAIL llrmOs $P"
 for o in O1 O3; do $LLRM -m32 -mabi=$ABI -$o -march=i486 -o $O/o/$P.llrm$o.obj $S 2>$O/o/$P.llrm$o.err || echo "FAIL llrm$o $P"; done
+[ -z "${VSGCC_ONLY:-}" ] || exit 0
 cd $O/b
 F="-Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
 for o in O1 O2 O3 Os; do
