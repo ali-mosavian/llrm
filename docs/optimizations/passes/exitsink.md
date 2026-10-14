@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/exitsink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitsink.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/exitsink.rs sha256:7af2335c060d186a4d8080474965043108fca3c1750c9d782fbd8d7c139d5bfd -->
+<!-- src: crates/opt/llrm-transforms/src/exitsink.rs sha256:3deb4e2242cb14cde1915ce5a8370566b2b676997fa7e099a9acb459444f4c9e -->
 
 # exitsink
 

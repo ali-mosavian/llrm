@@ -80,6 +80,11 @@ impl llrm_target::Target for M32 {
         llrm_target::Foreign(|| &FOREIGN)
     }
 
+    fn flat_ports(&self) -> llrm_target::PortTable {
+        static PORTS: LazyLock<Vec<llrm_target::machine::Port>> = LazyLock::new(|| M32.machine().ports);
+        llrm_target::PortTable(|| &PORTS)
+    }
+
     fn cpus(&self) -> &'static [&'static str] {
         &CPUS
     }
@@ -267,6 +272,32 @@ mod tests {
 
     use super::*;
 
+    /// The flat target's machine answered every port with "may touch any
+    /// memory" (the trait's default) though its platform lists the PC's
+    /// devices, so a load of a cell before `in al, dx` was reloaded after it:
+    /// the table is the platform's, whatever the CPU mode.
+    #[test]
+    fn test_m32_answers_whether_a_port_reaches_memory_from_its_platforms_table() {
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout().spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M32.flat_ports(),
+        };
+        let model = (M32.cost_model())(&prices);
+        assert!(!model.port_touches_memory((0x3DA, 0x3DA)), "the VGA status register");
+        assert!(model.port_touches_memory((0x0B, 0x0B)), "the 8237's mode register may start a transfer");
+        assert!(model.port_touches_memory((0x300, 0x300)), "a port the platform does not list");
+    }
+
     /// -Os on m32 priced in clocks: the description had no byte table, so
     /// `size_costs` was the clock costs and a pass asked what a hoisted
     /// float costs in bytes was told 3, a load's clocks, not the 2 bytes of its
@@ -285,6 +316,7 @@ mod tests {
             private: None,
             calling: None,
             foreign: llrm_target::Foreign::none(),
+            ports: llrm_target::PortTable::none(),
         };
         let model = (M32.cost_model())(&prices);
         let sizes = model.size_costs();
@@ -326,6 +358,7 @@ mod tests {
             private: None,
             calling: None,
             foreign: llrm_target::Foreign::none(),
+            ports: llrm_target::PortTable::none(),
         });
         assert_eq!((model.registers(), model.call_registers()), (6, 5));
         assert_eq!(model.address_forms(), forms);
