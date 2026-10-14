@@ -120,3 +120,34 @@ class CompileLimitTests(unittest.TestCase):
 
         done = torture.run_within_cpu([sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"], 5)
         self.assertEqual((done.returncode, done.stderr), (3, "boom"))
+
+
+def test_batches_are_run_at_once_each_in_a_work_directory_of_its_own(tmp_path):
+    """489 runs went through DOSBox in serial batches of 150 (279 s on one core); a launch clears the directory it is given."""
+    import threading
+
+    order = list(range(489))
+    groups = torture.batches(order)
+    assert len(groups) <= torture.LAUNCHES and sum(groups, []) == order and max(map(len, groups)) <= torture.BATCH
+    seen, gate = [], threading.Barrier(len(groups), timeout=10)
+
+    def launch(group, work):
+        seen.append(work)
+        gate.wait()  # every launch is in flight together, or this times out
+        return {"n": len(group)}
+
+    done = torture.run_batches(groups, launch, tmp_path)
+    assert [d["n"] for d in done] == list(map(len, groups))
+    assert len(set(seen)) == len(groups)
+
+
+def test_a_launch_that_raises_fails_the_run_instead_of_vanishing(tmp_path):
+    def launch(group, work):
+        if group == [2]:
+            raise RuntimeError("lost")
+        return {}
+
+    import pytest
+
+    with pytest.raises(RuntimeError):
+        torture.run_batches([[1], [2]], launch, tmp_path)

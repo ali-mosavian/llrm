@@ -513,3 +513,30 @@ def test_no_bench_program_runs_long_enough_for_a_timer_tick_at_the_flat_rate():
         for counts in [level]
     )
     assert longest < bench.qb32.BENCH_RATE * 55, (longest, bench.qb32.BENCH_RATE)
+
+
+def test_the_levels_are_measured_at_once_and_a_failure_at_any_of_them_reaches_the_result(monkeypatch, tmp_path):
+    """The levels went one after the other (96 s of 4 x 24 s). Run side by side, an error at one level must still be in the result and
+    every level must be there once."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def measure_opt(selected, opt, work, timing=False):
+        return {("b", "c", opt): {"error": "boom"} if opt == "O2" else {"instructions": 1}}
+
+    monkeypatch.setattr(bench, "measure_opt", measure_opt)
+    monkeypatch.setattr(bench, "ProcessPoolExecutor", ThreadPoolExecutor)  # a process pool cannot carry a patched function
+    monkeypatch.setattr(bench, "mark_known", lambda measured, variants, opts: measured)
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
+    got = bench.measure_all([], ["O1", "O2", "O3", "Os"], tmp_path)
+    assert sorted(got) == [("b", "c", o) for o in ("O1", "O2", "O3", "Os")]
+    assert got[("b", "c", "O2")] == {"error": "boom"} and got[("b", "c", "O1")] == {"instructions": 1}
+
+
+def test_a_timed_run_measures_the_levels_one_after_the_other(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(bench, "measure_opt", lambda selected, opt, work, timing=False: seen.append(opt) or {})
+    monkeypatch.setattr(bench, "net_times", lambda out: out)
+    monkeypatch.setattr(bench, "mark_known", lambda measured, variants, opts: measured)
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
+    bench.measure_all([], ["O1", "O2"], tmp_path, timing=True)
+    assert seen == ["O1", "O2"]

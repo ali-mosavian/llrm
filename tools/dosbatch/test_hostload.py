@@ -97,7 +97,10 @@ def test_a_session_wait_is_the_emulators_cpu_time_not_the_wall_clock():
     session.process = subprocess.Popen(["sh", "-c", "while :; do :; done"])
     try:
         late = session.limit(0.3)
-        time.sleep(1.2)
+        # The spinner owes 0.3 s of CPU, not 1.2 s of wall: a host with 300 runnable processes gives it that late.
+        deadline = time.monotonic() + 120
+        while not late() and time.monotonic() < deadline:
+            time.sleep(0.2)
         assert late()
     finally:
         session.process.kill()
