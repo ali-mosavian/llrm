@@ -1072,7 +1072,11 @@ fn siblings_over(
     let whole: std::cell::OnceCell<coalesce::Graph> = std::cell::OnceCell::new();
     // Whether `candidate` is live with a member of `group` where a register
     // could not hold both.
-    let interferes = |candidate: u32, group: &PySet<i64>| -> bool {
+    let interferes = |candidate: u32,
+                      group: &PySet<i64>,
+                      round: &BTreeSet<u32>,
+                      graph: &std::cell::OnceCell<coalesce::Graph>|
+     -> bool {
         // Values live nowhere together are not asked of the body: no point
         // has two of them live, and no definition of one meets the other.
         let apart = live.is_some_and(|live| {
@@ -1083,10 +1087,12 @@ fn siblings_over(
         if apart && !llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
             return false;
         }
-        let mut among: BTreeSet<u32> = group.iter().map(|one| *one as u32).collect();
-        among.insert(candidate);
-        let near =
-            llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(&among)));
+        // The graph of the group and every candidate of this round, made once
+        // where one pair meets: a candidate that joins is a member for the
+        // ones after it.
+        let near = graph.get_or_init(|| {
+            llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(round)))
+        });
         let found = group.iter().any(|one| near.get(&candidate).is_some_and(|found| found.contains(&(*one as u32))));
         if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
             let every = whole.get_or_init(|| coalesce::_interference(body));
@@ -1102,6 +1108,8 @@ fn siblings_over(
                 "{}: value#{candidate} is live nowhere with its group and still interferes",
                 body.name
             );
+            let mut among: BTreeSet<u32> = group.iter().map(|one| *one as u32).collect();
+            among.insert(candidate);
             let widths = _widest(body, &among);
             for value in &among {
                 assert!(
@@ -1180,17 +1188,22 @@ fn siblings_over(
                 .flat_map(|one| adjacent.of(*one))
                 .filter(|one| !members.contains(one) && !taken.contains(one) && !fixed.contains(one))
                 .collect();
+            let round: BTreeSet<u32> = members.iter().chain(&frontier).copied().collect();
+            let graph: std::cell::OnceCell<coalesce::Graph> = std::cell::OnceCell::new();
             for candidate in frontier {
                 if width_of(candidate) != width_of(first) {
                     continue;
                 }
-                if interferes(candidate, &group) {
+                // Whether it is worth joining is cheap to say and is asked
+                // first: the graph is made for the ones that would.
+                if !(values.contains(&candidate) || worth(candidate, &group)) {
                     continue;
                 }
-                if values.contains(&candidate) || worth(candidate, &group) {
-                    group.add(i64::from(candidate));
-                    growing = true;
+                if interferes(candidate, &group, &round, &graph) {
+                    continue;
                 }
+                group.add(i64::from(candidate));
+                growing = true;
             }
         }
         let slots: BTreeSet<i64> =
