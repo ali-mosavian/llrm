@@ -1025,3 +1025,42 @@ entry:
     analyses.invalidate(&PreservedAnalyses::none());
     assert!(nounwind(&analyses.outer(&module), a));
 }
+
+/// `LLRM_CHECK_SUMMARIES` compares the facts kept for every body with those a
+/// run from nothing finds: a stale entry (calls of an edited body kept) must
+/// not pass, or the check says nothing about the incremental run.
+#[test]
+fn the_summaries_check_refuses_a_kept_fact_other_than_scratch_finds() {
+    let module = parsed(&format!(
+        "{DOS}define internal void @take(ptr %p) {{
+b0:
+  store i16 1, ptr %p
+  ret void
+}}
+define void @f(ptr %q) {{
+b0:
+  call void @take(ptr %q)
+  ret void
+}}
+"
+    ));
+    let program = llrm_mir::program::Program::new(vec![module.clone()], Rc::new(Neutral)).unwrap();
+    let mut analyses = ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
+    let globals = analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let program = analyses.program().clone();
+    let globals = Result::as_ref(&*globals).unwrap();
+    let f = module.named("f").unwrap();
+    let shapes: IndexMap<_, _> =
+        super::bodies(&module).map(|(id, one)| (id, Rc::new(crate::cfg::Shape::of(one)))).collect();
+    let mut facts = std::mem::take(&mut analyses.memo::<super::SummariesMemo>().facts);
+    let table = super::Table::of(&module, &program, globals, &shapes, &facts);
+    table.check_against_scratch(&module, &program, globals);
+    let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut other = facts.clone();
+        other[&f].calls = Some(Rc::new(crate::alias::CallFacts::default()));
+        super::Table::of(&module, &program, globals, &shapes, &other).check_against_scratch(&module, &program, globals);
+    }));
+    facts.clear();
+    assert!(stale.is_err(), "a body whose kept calls are not scratch's passed the check");
+}

@@ -14,7 +14,7 @@ out=${1:-$root/crates/opt/llrm-analysis/corpus}
 demos=${QBDEMOS:-$HOME/work/qbdemos/orig}
 cargo build -q --release --bin llrm-qb --bin llrm-nib --bin hir-mir --manifest-path "$root/Cargo.toml" 2>/dev/null || { echo "mir-corpus: build fails" >&2; exit 2; }
 bin=$(python3 "$root/tools/llrmbin.py" bin)
-work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+work=$(mktemp -d -p "$(python3 "$root/tools/llrmbin.py" target)"); trap 'rm -rf "$work"' EXIT
 rm -rf "$out" && mkdir -p "$out/emitted" "$out/optimized"
 declare -A seen
 # kept FILE DIR/NAME.ll: FILE copied there unless DIR already holds its text.

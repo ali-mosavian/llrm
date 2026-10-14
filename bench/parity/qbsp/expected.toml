@@ -1,5 +1,5 @@
-reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
-blessed = "2026-10-13"
+reason = "-Os float constant stores are fldz/fld1 + fstp: fewer bytes, a few more instructions"
+blessed = "2026-10-14"
 
 [bas.O2]
 instructions = 1054
@@ -9,12 +9,11 @@ data_bytes = 13
 bss_bytes = 0
 
 [bas.Os]
-instructions = 1134
+instructions = 1135
 memory_operands = 535
-code_bytes = 658
+code_bytes = 654
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0244
 
 [bq16.O2]
 instructions = 1431
@@ -24,9 +23,9 @@ data_bytes = 13
 bss_bytes = 0
 
 [bq16.Os]
-instructions = 1512
+instructions = 1513
 memory_operands = 569
-code_bytes = 667
+code_bytes = 663
 data_bytes = 13
 bss_bytes = 0
 
@@ -37,8 +36,8 @@ data_bytes = 19
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 1426
-code_bytes = 663
+instructions = 1427
+code_bytes = 662
 data_bytes = 19
 bss_bytes = 0
 
@@ -50,12 +49,11 @@ data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 274
+instructions = 276
 memory_operands = 77
-code_bytes = 315
+code_bytes = 309
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.004
 
 [nib.O2]
 instructions = 299
@@ -65,12 +63,11 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 316
+instructions = 318
 memory_operands = 82
-code_bytes = 381
+code_bytes = 375
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.005
 
 [ow.O2]
 instructions = 387
