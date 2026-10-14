@@ -42,5 +42,6 @@ Each pass, analysis and backend phase has one page, generated from the `//!` hea
 | [second-frame](second-frame.md) | The second frame layout without a second backend run |
 | [module-analyses](module-analyses.md) | Module analyses brought up to date after an edit |
 | [early-summaries](early-summaries.md) | Summaries at fixed points; a parked design |
+| [single-allocation-decisions](single-allocation-decisions.md) | What best-of-six allocation decides, and the in-run step for each |
 
 Array bounds checks are in [bounds-checks](../reference/semantics/bounds-checks.md).
