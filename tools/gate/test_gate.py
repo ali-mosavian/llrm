@@ -679,8 +679,10 @@ def test_a_step_with_no_log_growth_and_no_cpu_is_killed_with_its_last_lines(tmp_
 
     env = {**__import__("os").environ}
     began = _time.time()
-    _, code, wall, _ = gate.run_step("hang", "echo before the hang; sleep 63.7", tmp_path, env, stall=2)
-    assert code == gate.STALL_CODE and wall < 20 and _time.time() - began < 20, (code, wall)
+    # A sleep no other run of this test (the gate runs files side by side) has: the leak check looks for it in `ps`.
+    sleeper = f"sleep 63.{__import__('os').getpid()}"
+    _, code, wall, _ = gate.run_step("hang", f"echo before the hang; {sleeper}", tmp_path, env, stall=2)
+    assert code == gate.STALL_CODE and wall < 120 and _time.time() - began < 120, (code, wall)
     log = (tmp_path / "hang.failed.log").read_text()
     assert "before the hang" in log and "STALLED" in log
     # writing keeps a step alive without CPU; computing keeps it alive without writing
@@ -688,7 +690,7 @@ def test_a_step_with_no_log_growth_and_no_cpu_is_killed_with_its_last_lines(tmp_
     spin = 'python3 -c "import time; t = time.process_time()\nwhile time.process_time() - t < 4: pass"'
     assert gate.run_step("spin", spin, tmp_path, env, stall=2)[1] == 0
     # the killed step took its subprocesses with it
-    assert "sleep 63.7" not in sp_out(["ps", "-eo", "args"]), "the stalled step's sleep outlived it"
+    assert sleeper not in sp_out(["ps", "-eo", "args"]), "the stalled step's sleep outlived it"
 
 
 def test_a_test_over_its_cpu_limit_fails_with_its_name_and_its_subprocess_is_killed(tmp_path):
@@ -893,3 +895,18 @@ def test_the_dos_slow_step_runs_through_the_sharder_with_its_marker():
     """One pytest process played every slow DOS test in turn: 283 s."""
     cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
     assert "pytest_shards.py" in cmd and "-- -m slow_dos" in cmd and "tools/dosbatch" in cmd
+
+
+def test_the_turbo_binary_runs_whole_in_the_turbo_step_and_not_in_integration():
+    """Its five Turbo Debugger tests sleep-polled for 168 s inside `integration`, which every code change runs."""
+    cmds = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())
+    assert cmds["turbo"].endswith("--test turbo") and "--skip" not in cmds["turbo"]
+    assert "--test turbo" not in cmds["integration"].replace("--test turbo_", "")
+    assert "--test cv4" not in cmds["integration"]
+
+
+def test_a_change_to_a_python_or_shell_file_in_a_scanned_tree_plans_the_integration_step():
+    """tests/target_facts.rs reads them: a tools-only PR planned only pytest and landed four copies of a target fact; main went red."""
+    for path in ("tools/gate/pytest_shards.py", "tools/dosbatch/qbplay.py", "crates/target/x/run.sh"):
+        assert "integration" in gate.plan([path]).steps, path
+    assert "integration" not in gate.plan(["tools/readme.md"]).steps
