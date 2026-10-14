@@ -19,9 +19,11 @@
 //!   `x % 1`, decided self-compares, a `select` on a constant; two single-use
 //!   shifts, scales, offsets or bitwise constants become one; `(x + a) * k + b`
 //!   distributes; `(x + a) + a` is `x + (a << 1)`; `x - (x + y)` is `-y`.
-//! - Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, `sext` of
-//!   a value whose sign bit is clear, logic or a phi of like extensions done at
-//!   the narrow type, `ptrtoint(inttoptr x)`, a byte offset from a constant
+//! - Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, a mask
+//!   over a `sext` that reads only the low bits (`and (sext (trunc v)), M` is
+//!   `and v, M`; `and (sext x), 2^N-1` over an N-bit `x` is `zext x`), `sext`
+//!   of a value whose sign bit is clear, logic or a phi of like extensions done
+//!   at the narrow type, `ptrtoint(inttoptr x)`, a byte offset from a constant
 //!   near address as the constant address.
 //! - Compares: `icmp P (x + C1), C2` is `icmp P x, C2 - C1` (an ordered test
 //!   needs `nsw` or `nuw` for its signedness); a compare of extensions is a
@@ -264,6 +266,7 @@ fn _rewritten(
         || _nonnegative_sext(context, function, inst)
         || _unsigned_power_of_two(context, function, inst)
         || _masked_extension(context, layout, function, inst)
+        || _masked_truncation(context, function, inst)
         || _extended_mask(context, function, inst)
         || _casted_logic(context, function, inst)
         || _phi_of_casts(context, function, inst)
@@ -912,6 +915,60 @@ fn _nonnegative_sext(
         return false;
     }
     _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![source]);
+    true
+}
+
+/// A mask over an extension looks only at the extended value's low bits
+/// (`M` inside its N bits):
+/// - `and (sext (trunc v to iN)), M` is `and v, M`, for any N: the truncation
+///   keeps those bits and the extension only copies upward (a `zext` of a
+///   truncation is the narrow form already, and its range fits the mask);
+/// - `and (sext x), M` is `zext x` where `M` is all of `x`'s N bits (a partial
+///   mask stays: it would turn a counter's wide use into a narrow one, and
+///   `histo` kept a second 16-bit counter).
+///
+/// The range proof of `_redundant_masks` then sees `v` itself, not a
+/// sign-extended halfword that spans [-2^(N-1), 2^(N-1)) and never fits the
+/// mask; and a masked narrow counter is a `zext`, which the induction
+/// analysis can follow where the narrow value cannot wrap.
+fn _masked_truncation(
+    context: &mut Context,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    let Some((BinaryOp::And, left, right, wide)) = _binary(context, function, inst) else { return false };
+    let Some((value, mask)) = _value_and_constant(context, BinaryOp::And, left, right) else { return false };
+    let Some(extension) = _definition(function, value) else { return false };
+    let kind = match function.instruction(extension).opcode {
+        Opcode::Cast(kind @ (CastOp::SExt | CastOp::ZExt)) => kind,
+        _ => return false,
+    };
+    let inner = function.instruction(extension).operands[0];
+    let Some(kept) = function.operand_type(context, inner).and_then(|ty| context.types.int_bits(ty)) else {
+        return false;
+    };
+    if kept >= wide || kept > 64 || mask >> kept != 0 {
+        return false;
+    }
+    let constant =
+        function.instruction(inst).operands.iter().copied().find(|operand| matches!(operand, Operand::Constant(_)));
+    let Some(constant) = constant else { return false };
+    if kind != CastOp::SExt {
+        return false;
+    }
+    if let Some(cut) =
+        _definition(function, inner).filter(|&cut| function.instruction(cut).opcode == Opcode::Cast(CastOp::Trunc))
+    {
+        let source = function.instruction(cut).operands[0];
+        if function.operand_type(context, source).and_then(|ty| context.types.int_bits(ty)) == Some(wide) {
+            _replace(function, inst, Opcode::Binary(BinaryOp::And), vec![source, constant]);
+            return true;
+        }
+    }
+    if mask != (1_u128 << kept) - 1 {
+        return false;
+    }
+    _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![inner]);
     true
 }
 

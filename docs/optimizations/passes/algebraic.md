@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/algebraic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/algebraic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:82840ddf7cbce56b462d6488c7f4a798ffc4753c72fc953ad502752443bbe090 -->
+<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:a62aa3c8f5a56938a88587c6ddcadf354ff7c2bd6b7d00efcc4ea663087f895f -->
 
 # algebraic
 
@@ -24,9 +24,11 @@ original did not. The rules fall in groups.
   `x % 1`, decided self-compares, a `select` on a constant; two single-use
   shifts, scales, offsets or bitwise constants become one; `(x + a) * k + b`
   distributes; `(x + a) + a` is `x + (a << 1)`; `x - (x + y)` is `-y`.
-- Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, `sext` of
-  a value whose sign bit is clear, logic or a phi of like extensions done at
-  the narrow type, `ptrtoint(inttoptr x)`, a byte offset from a constant
+- Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, a mask
+  over a `sext` that reads only the low bits (`and (sext (trunc v)), M` is
+  `and v, M`; `and (sext x), 2^N-1` over an N-bit `x` is `zext x`), `sext`
+  of a value whose sign bit is clear, logic or a phi of like extensions done
+  at the narrow type, `ptrtoint(inttoptr x)`, a byte offset from a constant
   near address as the constant address.
 - Compares: `icmp P (x + C1), C2` is `icmp P x, C2 - C1` (an ordered test
   needs `nsw` or `nuw` for its signedness); a compare of extensions is a
