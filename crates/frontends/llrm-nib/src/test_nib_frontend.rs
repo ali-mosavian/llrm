@@ -1953,7 +1953,7 @@ fn test_a_far_pointer_result_comes_back_in_dx_ax() {
     let source = written(
         &directory,
         "far.nib",
-        "@extern(\"cdecl16\")\nfn get(number: u16) -> *far u8\n\nvar kept: *far u8 = 0\n\nfn main() -> i16:\n    unsafe:\n        kept = get(3)\n    return 0\n",
+        "@extern(\"cdecl16\")\nfn get(number: u16) -> *far u8\n\nvar kept: *far u8 = 0\n\n@export(\"cdecl16\")\nfn peek() -> u8:\n    unsafe:\n        return *kept\n\nfn main() -> i16:\n    unsafe:\n        kept = get(3)\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
     assert!(Regex::new(r"mov word ptr \S+\+2, dx\n").unwrap().is_match(&text), "{text}");

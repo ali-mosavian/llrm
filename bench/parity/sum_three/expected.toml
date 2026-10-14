@@ -1,46 +1,44 @@
-reason = "bq32's kernel ends where its CodeView procedure record says, and leaves out code the debug info and map do not name (DOS, the extender). The map gave a function no length, so the last function of a module took in the module's main code after it and every runtime call made from there: an empty kernel beside a PRINT read 785 (about 250 to 760 of every small kernel's count, 596 of it the extender's memory request when the lazy string heap starts); the file readers lose their DOS time (72k to 3.6M). The compiler's and runtime's named code is unchanged"
-blessed = "2026-10-13"
+reason = "write-only globals removed (#1649): sum_three's six QB static locals (index, total and the loop's temporaries, 12 data bytes, 41 code bytes at bq32) and memory's one global are only stored to, so their stores are gone; no program's output moves"
+blessed = "2026-10-14"
 
 [bas.O2]
-instructions = 84
-memory_operands = 38
-code_bytes = 294
-data_bytes = 103
+instructions = 67
+memory_operands = 30
+code_bytes = 248
+data_bytes = 91
 bss_bytes = 0
 
 [bas.Os]
-instructions = 86
-memory_operands = 44
-code_bytes = 301
-data_bytes = 103
+instructions = 75
+memory_operands = 32
+code_bytes = 259
+data_bytes = 91
 bss_bytes = 0
-kernel_ms = 0.0109
 
 [bq16.O2]
-instructions = 86
-memory_operands = 38
-code_bytes = 291
-data_bytes = 103
+instructions = 69
+memory_operands = 30
+code_bytes = 245
+data_bytes = 91
 bss_bytes = 0
 
 [bq16.Os]
-instructions = 87
-memory_operands = 44
-code_bytes = 298
-data_bytes = 103
+instructions = 76
+memory_operands = 32
+code_bytes = 256
+data_bytes = 91
 bss_bytes = 0
-kernel_ms = 0.0072
 
 [bq32.O2]
-instructions = 78
-code_bytes = 344
-data_bytes = 139
+instructions = 72
+code_bytes = 289
+data_bytes = 127
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 79
-code_bytes = 314
-data_bytes = 139
+instructions = 73
+code_bytes = 273
+data_bytes = 127
 bss_bytes = 0
 
 [c.O2]

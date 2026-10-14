@@ -118,6 +118,30 @@ pub(super) fn records(
     omf::parse(&object_bytes(program, name).expect("emits")).expect("parses")
 }
 
+/// `records` where nothing is optimised: a variable only stored to is in its
+/// cell, and an expression only stored is computed.
+pub(super) fn records_unoptimised(
+    program: &Program,
+    name: &str,
+) -> Vec<std::rc::Rc<omf::Record>> {
+    let mut options = codegen();
+    options.pipeline.optimize = false;
+    let bytes = qb_compile::object_bytes(program, Path::new(name), None, &options).expect("emits");
+    omf::parse(&bytes).expect("parses")
+}
+
+/// `records` where no function is inlined into its one caller: what a
+/// procedure reads of a variable is read from the variable.
+pub(super) fn records_calls_kept(
+    program: &Program,
+    name: &str,
+) -> Vec<std::rc::Rc<omf::Record>> {
+    let mut options = codegen();
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    let bytes = qb_compile::object_bytes(program, Path::new(name), None, &options).expect("emits");
+    omf::parse(&bytes).expect("parses")
+}
+
 /// `text.split(start, 1)[1].split(end, 1)[0]`.
 pub(super) fn between<'t>(
     text: &'t str,

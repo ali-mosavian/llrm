@@ -750,8 +750,8 @@ fn test_readonly_literals_use_the_measured_near_descriptor_and_far_payload() {
     let records = records(&source, "readonly-data.bas");
     let by_name = by_name(&records);
 
-    // six-byte BASIC prefix plus the writable LONG
-    assert_eq!(by_name["BC_DATA"].1, 10);
+    // six-byte BASIC prefix; the LONG `n` is only stored to and is gone
+    assert_eq!(by_name["BC_DATA"].1, 6);
     let (descriptor, size) = by_name["BC_CN"];
     assert_eq!(size, 6);
     let (constant, size) = by_name["FSL_CONST"];
@@ -790,8 +790,8 @@ fn test_a_descriptor_nothing_reads_takes_no_dgroup() {
 #[test]
 fn test_a_scalar_and_an_array_of_one_name_do_not_share_storage() {
     let directory = tempfile::tempdir().expect("a temporary directory");
-    let source = written(&directory, "T.BAS", b"DIM SHARED g%(3)\r\ng% = 7\r\ng%(0) = 5\r\nPRINT g%, g%(0)\r\n");
-    let records = records(&parsed_as(&source, "qb45", "qb45"), "T.BAS");
+    let source = written(&directory, "T.BAS", b"DIM SHARED g%(3)\r\nDIM SHARED g%\r\ng% = 7\r\ng%(0) = 5\r\nCALL show\r\nEND\r\nSUB show\r\nPRINT g%, g%(0)\r\nEND SUB\r\n");
+    let records = records_calls_kept(&parsed_as(&source, "qb45", "qb45"), "T.BAS");
     let (code, size) = by_name(&records)["T_CODE"];
     let image = omf::segment_image(&records, code, size);
     let stored = |value: u8| {
@@ -897,8 +897,10 @@ fn test_resume_next_retains_runtime_statement_entries() {
     let body = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
     // RESUME NEXT returns to the statement after ERROR 11.
     let lines: Vec<&str> = body.lines().collect();
+    // `resumed = 1` is gone (nothing reads it after the fold), so the statement
+    // after ERROR is the test of `handled` that follows.
     let after =
-        lines.iter().position(|line| line.contains("mov word ptr RESUMED%, 1")).expect("the statement after ERROR");
+        lines.iter().position(|line| line.contains("cmp word ptr HANDLED%, 1")).expect("the statement after ERROR");
     let labels: Vec<&str> = lines[..after].iter().rev().map_while(|line| line.strip_suffix(':')).collect();
     assert!(
         labels.iter().any(|label| body.contains(&format!("jmp {label}\n")) || body.contains(&format!("je {label}\n"))),
