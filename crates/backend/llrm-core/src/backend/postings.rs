@@ -64,7 +64,20 @@ pub type At = (u32, u32);
 
 /// An instruction by its block and its slot: the number it was given in the
 /// block, which a rewrite of the rest of the block leaves.
-type Entry = (u32, u32);
+#[derive(Clone, Debug)]
+struct Entry {
+    block: u32,
+    slot: u32,
+    /// The instruction itself, so that a reader that wants the instruction and
+    /// not its place does not look the place up.
+    insn: Arc<Insn>,
+}
+
+impl Entry {
+    fn key(&self) -> (u32, u32) {
+        (self.block, self.slot)
+    }
+}
 
 /// The gap between the slots a block is first numbered with: an instruction put
 /// between two takes the middle of the gap, so ten are put between two before
@@ -115,16 +128,146 @@ impl Postings {
         block: u32,
         slot: u32,
     ) -> u32 {
-        self.slots[block as usize].binary_search(&slot).expect("a slot the block holds") as u32
+        Self::locate(&self.slots[block as usize], slot) as u32
+    }
+
+    /// Where `slot` is in `list`: a block is first numbered `STRIDE` apart, so
+    /// the guess is the slot's place there, and it is looked for outward from
+    /// it, which is a step or two where the block has been edited little.
+    fn locate(
+        list: &[u32],
+        slot: u32,
+    ) -> usize {
+        let guess = ((slot / STRIDE) as usize).saturating_sub(1).min(list.len().saturating_sub(1));
+        if list.get(guess) == Some(&slot) {
+            return guess;
+        }
+        let (low, high);
+        if list.get(guess).is_some_and(|here| *here < slot) {
+            let mut start = guess + 1;
+            let mut step = 1;
+            while start + step < list.len() && list[start + step] < slot {
+                start += step;
+                step *= 2;
+            }
+            low = start;
+            high = (start + step + 1).min(list.len());
+        } else {
+            let mut end = guess;
+            let mut step = 1;
+            while end > step && list[end - step] >= slot {
+                end -= step;
+                step *= 2;
+            }
+            low = end.saturating_sub(step);
+            high = (end + 1).min(list.len());
+        }
+        let found = low + list[low..high].partition_point(|one| *one < slot);
+        debug_assert_eq!(list.get(found), Some(&slot), "a slot the block holds");
+        found
+    }
+
+    /// The positions of `entries`, which are by block and slot: within a block
+    /// each is looked for after the one before.
+    fn walk<'a>(
+        &'a self,
+        entries: Option<&'a Vec<Entry>>,
+    ) -> impl Iterator<Item = At> + 'a {
+        entries
+            .into_iter()
+            .flatten()
+            .map(move |entry| (entry.block, Self::locate(&self.slots[entry.block as usize], entry.slot) as u32))
     }
 
     fn positions(
         &self,
         entries: Option<&Vec<Entry>>,
     ) -> Vec<At> {
-        entries.map_or_else(Vec::new, |list| {
-            list.iter().map(|&(block, slot)| (block, self.position(block, slot))).collect()
-        })
+        self.walk(entries).collect()
+    }
+
+    /// `defs`, as it is read: no list is made.
+    pub fn defs_at(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = At> + '_ {
+        self.walk(self.defs.get(&value))
+    }
+
+    pub fn uses_at(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = At> + '_ {
+        self.walk(self.uses.get(&value))
+    }
+
+    pub fn needs_at(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = At> + '_ {
+        self.walk(self.needs.get(&value))
+    }
+
+    /// The instructions that define `value`, with their blocks: no place is
+    /// looked up.
+    pub fn defs_insns(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = (u32, &Arc<Insn>)> + '_ {
+        self.defs.get(&value).into_iter().flatten().map(|entry| (entry.block, &entry.insn))
+    }
+
+    pub fn uses_insns(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = (u32, &Arc<Insn>)> + '_ {
+        self.uses.get(&value).into_iter().flatten().map(|entry| (entry.block, &entry.insn))
+    }
+
+    pub fn needs_insns(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = (u32, &Arc<Insn>)> + '_ {
+        self.needs.get(&value).into_iter().flatten().map(|entry| (entry.block, &entry.insn))
+    }
+
+    /// The instructions that name `value` (and, if asked, require it in a
+    /// register), each once, in body order, with their blocks.
+    pub fn named_insns(
+        &self,
+        value: u32,
+        with_needs: bool,
+    ) -> Vec<(u32, &Arc<Insn>)> {
+        let mut found: Vec<&Entry> = self.defs.get(&value).into_iter().flatten().collect();
+        found.extend(self.uses.get(&value).into_iter().flatten());
+        if with_needs {
+            found.extend(self.needs.get(&value).into_iter().flatten());
+        }
+        found.sort_unstable_by_key(|entry| entry.key());
+        found.dedup_by_key(|entry| entry.key());
+        found.into_iter().map(|entry| (entry.block, &entry.insn)).collect()
+    }
+
+    /// How many instructions define, read or require `value`.
+    pub fn defs_count(
+        &self,
+        value: u32,
+    ) -> usize {
+        self.defs.get(&value).map_or(0, Vec::len)
+    }
+
+    pub fn uses_count(
+        &self,
+        value: u32,
+    ) -> usize {
+        self.uses.get(&value).map_or(0, Vec::len)
+    }
+
+    pub fn needs_count(
+        &self,
+        value: u32,
+    ) -> usize {
+        self.needs.get(&value).map_or(0, Vec::len)
     }
 
     pub fn defs(
@@ -198,13 +341,13 @@ impl Postings {
             insns.iter().zip(&slots).filter(|(one, _)| is_framed(one)).map(|(_, slot)| *slot).collect();
         for (one, slot) in insns.iter().zip(&slots) {
             for value in &one.defines {
-                self.defs.entry(*value).or_default().push((block, *slot));
+                self.defs.entry(*value).or_default().push(Entry { block, slot: *slot, insn: Arc::clone(one) });
             }
             for value in &one.uses {
-                self.uses.entry(*value).or_default().push((block, *slot));
+                self.uses.entry(*value).or_default().push(Entry { block, slot: *slot, insn: Arc::clone(one) });
             }
             for (held, _) in &one.requires {
-                self.needs.entry(held.value).or_default().push((block, *slot));
+                self.needs.entry(held.value).or_default().push(Entry { block, slot: *slot, insn: Arc::clone(one) });
             }
         }
         self.slots[block as usize] = slots;
@@ -255,9 +398,9 @@ impl Postings {
                 [(&mut self.defs, &fresh.defs), (&mut self.uses, &fresh.uses), (&mut self.needs, &fresh.needs)]
             {
                 let list = mine.entry(value).or_default();
-                let from = list.partition_point(|at| at.0 < block);
-                let to = list.partition_point(|at| at.0 <= block);
-                list.splice(from..to, theirs.get(&value).into_iter().flatten().copied());
+                let from = list.partition_point(|at| at.block < block);
+                let to = list.partition_point(|at| at.block <= block);
+                list.splice(from..to, theirs.get(&value).into_iter().flatten().cloned());
                 if list.is_empty() {
                     mine.remove(&value);
                 }
@@ -348,7 +491,7 @@ impl Postings {
         let entry = (block, slot);
         let cut = |map: &mut HashMap<u32, Vec<Entry>>, value: u32| {
             if let Some(list) = map.get_mut(&value) {
-                if let Ok(at) = list.binary_search(&entry) {
+                if let Ok(at) = list.binary_search_by_key(&entry, Entry::key) {
                     list.remove(at);
                 }
                 if list.is_empty() {
@@ -371,13 +514,12 @@ impl Postings {
         &mut self,
         block: u32,
         slot: u32,
-        one: &Insn,
+        one: &Arc<Insn>,
     ) {
-        let entry = (block, slot);
         let put = |map: &mut HashMap<u32, Vec<Entry>>, value: u32| {
             let list = map.entry(value).or_default();
-            let at = list.partition_point(|held| *held < entry);
-            list.insert(at, entry);
+            let at = list.partition_point(|held| held.key() < (block, slot));
+            list.insert(at, Entry { block, slot, insn: Arc::clone(one) });
         };
         for value in &one.defines {
             put(&mut self.defs, *value);

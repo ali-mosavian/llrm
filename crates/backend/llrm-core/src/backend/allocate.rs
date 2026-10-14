@@ -1398,13 +1398,10 @@ fn _copy_hints_after(
     }
     crate::backend::postings::following(body, |postings| {
         for value in touched {
-            let mut at: Vec<crate::backend::postings::At> =
-                postings.defs(*value).into_iter().chain(postings.uses(*value)).collect();
-            at.sort_unstable();
-            at.dedup();
-            let partners: Vec<u32> = at
-                .iter()
-                .filter_map(|one| _copy_pair(&body.blocks[one.0 as usize].insns[one.1 as usize]))
+            let partners: Vec<u32> = postings
+                .named_insns(*value, false)
+                .into_iter()
+                .filter_map(|(_, one)| _copy_pair(one))
                 .map(|(dest, source)| if dest == *value { source } else { dest })
                 .collect();
             if !partners.is_empty() {
@@ -2690,7 +2687,7 @@ fn _named_among(
             .iter()
             .copied()
             .filter(|value| {
-                arrives.contains(value) || !postings.defs(*value).is_empty() || !postings.uses(*value).is_empty()
+                arrives.contains(value) || postings.defs_count(*value) != 0 || postings.uses_count(*value) != 0
             })
             .collect()
     });
@@ -2811,12 +2808,7 @@ fn _widest_after(
     }
     crate::backend::postings::following(body, |postings| {
         for value in touched {
-            let mut at: Vec<crate::backend::postings::At> =
-                postings.defs(*value).into_iter().chain(postings.uses(*value)).chain(postings.needs(*value)).collect();
-            at.sort_unstable();
-            at.dedup();
-            for one in at {
-                let one = &body.blocks[one.0 as usize].insns[one.1 as usize];
+            for (_, one) in postings.named_insns(*value, true) {
                 for (named, width) in _named_widths(one).filter(|(named, _)| named == value) {
                     let widest = out.entry(named).or_insert(0);
                     *widest = (*widest).max(width);
@@ -4042,8 +4034,7 @@ fn _sibling_free_after(
     let partners: Vec<u32> = crate::backend::postings::following(body, |postings| {
         let mut partners = Vec::new();
         for value in &changes.touched {
-            for at in postings.defs(*value).into_iter().chain(postings.uses(*value)) {
-                let one = &body.blocks[at.0 as usize].insns[at.1 as usize];
+            for (_, one) in postings.defs_insns(*value).chain(postings.uses_insns(*value)) {
                 if let Some((into, out_of)) = spiller::_plain_move(one).filter(|pair| pair.0 != pair.1) {
                     partners.push(if into == *value { out_of } else { into });
                 }
@@ -4059,18 +4050,12 @@ fn _sibling_free_after(
     }
     crate::backend::postings::following(body, |postings| {
         for value in &affected {
-            let mut at: Vec<crate::backend::postings::At> =
-                postings.defs(*value).into_iter().chain(postings.uses(*value)).collect();
-            at.sort_unstable();
-            at.dedup();
-            for at in at {
-                let block = &body.blocks[at.0 as usize];
-                let Some(pair) = spiller::_plain_move(&block.insns[at.1 as usize]).filter(|pair| pair.0 != pair.1)
-                else {
+            for (block, one) in postings.named_insns(*value, false) {
+                let Some(pair) = spiller::_plain_move(one).filter(|pair| pair.0 != pair.1) else {
                     continue;
                 };
                 if _freed(&siblings, live, pair) {
-                    *free.entry(*value).or_insert(0.0) += busy.block(block.at);
+                    *free.entry(*value).or_insert(0.0) += busy.block(body.blocks[block as usize].at);
                 }
             }
         }
@@ -4356,11 +4341,8 @@ fn _fold_free_after(
     }
     crate::backend::postings::following(body, |postings| {
         for value in touched {
-            let mut at: Vec<crate::backend::postings::At> = postings.uses(*value).to_vec();
-            at.sort_unstable();
-            for at in at {
-                let block = &body.blocks[at.0 as usize];
-                let one = &block.insns[at.1 as usize];
+            for (block, one) in postings.uses_insns(*value) {
+                let block = &body.blocks[block as usize];
                 let discount = discounts.of_insn(one);
                 if discount == 0.0 {
                     continue;
