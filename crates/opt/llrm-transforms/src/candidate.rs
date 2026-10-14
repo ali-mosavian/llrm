@@ -25,7 +25,8 @@
 //! [`crate::loopdistribute`] a split one by its price alone.
 //!
 //! # Provides
-//! `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`.
+//! `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`,
+//! `Baseline`.
 //!
 //! # Needs
 //! [`crate::profit`] and the target's operation costs.
@@ -53,6 +54,16 @@ pub enum Gain {
     CheaperBy(i64),
 }
 
+/// What the candidate is judged against.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Baseline {
+    /// The body as it is.
+    Kept,
+    /// The body put through what the candidate is: where the candidate is
+    /// judged after passes the body has not yet had, the body is too.
+    Reoptimized,
+}
+
 /// What a body is priced by.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Pricing {
@@ -76,7 +87,9 @@ pub fn frequencies(
     let shape = cfg::Shape::of(state);
     let within = within.with_registers(&registers).with_shape(&shape);
     let trips = profit::proven_trips(&within, &registers);
-    profit::_frequencies(unit.context, unit.metadata, &outer.globals, state, Some(&trips))
+    // The nodes the passes made on the copy are numbered after the module's.
+    let metadata = [unit.metadata, unit.declared.nodes()].concat();
+    profit::_frequencies(unit.context, &metadata, &outer.globals, state, Some(&trips))
 }
 
 /// What `state` costs at `frequency`, as `adopted` judges it: a body with an
@@ -119,7 +132,22 @@ pub fn adopted(
     reoptimize: &mut dyn FnMut(&mut Unit),
     pricing: Pricing,
     gain: Gain,
+    baseline: Baseline,
 ) -> bool {
+    let mut kept = match baseline {
+        Baseline::Kept => None,
+        Baseline::Reoptimized => Some(unit.function.clone()),
+    };
+    if let Some(body) = kept.as_mut() {
+        reoptimize(&mut Unit {
+            context: &mut *unit.context,
+            layout: unit.layout,
+            function: body,
+            id: None,
+            metadata: unit.metadata,
+            declared: &mut *unit.declared,
+        });
+    }
     reoptimize(&mut Unit {
         context: &mut *unit.context,
         layout: unit.layout,
@@ -133,13 +161,14 @@ pub fn adopted(
     let size = |state: &Function| occurrence::operations(state).count();
     let count = |state: &Function| cfg::Shape::of(state).loops.len();
     let price = |state: &Function| priced(unit, outer, costs, state, pricing);
-    let prices = (price(unit.function), price(&candidate));
+    let body = kept.as_ref().unwrap_or(&*unit.function);
+    let prices = (price(body), price(&candidate));
     llrm_support::debug!(
         "candidate",
         "price {:?} -> {:?}, loops {} -> {}",
         prices.0,
         prices.1,
-        count(unit.function),
+        count(body),
         count(&candidate)
     );
     let worse = |kept: &dyn Fn(i64, i64) -> bool| match prices {
@@ -148,9 +177,7 @@ pub fn adopted(
     };
     let refused = match gain {
         Gain::FewerLoops => {
-            count(&candidate) >= count(unit.function)
-                || size(&candidate) > size(unit.function)
-                || worse(&|after, before| after <= before)
+            count(&candidate) >= count(body) || size(&candidate) > size(body) || worse(&|after, before| after <= before)
         }
         Gain::CheaperBy(percent) => worse(&|after, before| after * 100 < before * (100 - percent)),
     };

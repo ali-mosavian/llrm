@@ -24,7 +24,7 @@
 //! Lifetime markers go first: those of an object that, leaving the markers out,
 //! nothing that stays reads are erased with it.
 //!
-//! `assumptions_dropped` is a separate step over a module. It erases every call
+//! `markers_dropped` is a separate step over a module. It erases every call
 //! of `llvm.assume` and then runs `dead` on each function until nothing
 //! changes, so a condition kept alive only by its assume costs no compare.
 //!
@@ -54,7 +54,7 @@
 //! # Runs
 //! Once per pass of the function fixed point, after `algebraic`, and again
 //! after the loop-header copy (`-ftree-ch`). `lsr`, `window`, `indvars` and
-//! `jumpthread` call it on the code they leave. `assumptions_dropped` runs once
+//! `jumpthread` call it on the code they leave. `markers_dropped` runs once
 //! after the whole pipeline, before exception-handling preparation and
 //! selection, once every reader has used the assumptions. `-fno-tree-dce` turns
 //! off the pass only, not those calls; nothing runs at -O0.
@@ -177,21 +177,23 @@ pub fn _removable(
 #[path = "dead_tests.rs"]
 mod tests;
 
-/// The calls of `llvm.assume` gone from `module`, and what only they read:
-/// the last step before selection, once every reader has used them. A
-/// condition kept alive by its assume would cost a compare for nothing.
-pub fn assumptions_dropped(module: &mut llrm_mir::Module) {
-    let assumes = module
-        .globals
-        .iter()
-        .enumerate()
-        .filter(|(_, global)| {
-            global.name.as_deref().and_then(llrm_mir::intrinsics::Intrinsic::named)
-                == Some(llrm_mir::intrinsics::Intrinsic::Assume)
-        })
-        .map(|(at, _)| llrm_mir::GlobalId(at as u32))
-        .collect::<BTreeSet<_>>();
-    if assumes.is_empty() {
+/// The calls of `llvm.assume` and `llrm.noalias` gone from `module`, and what
+/// only they read: the last step before selection, once every reader has used
+/// them. A condition kept alive by its assume would cost a compare for nothing;
+/// a restrict pointer is its operand.
+pub fn markers_dropped(module: &mut llrm_mir::Module) {
+    use llrm_mir::intrinsics::Intrinsic;
+    let named = |wanted: Intrinsic| {
+        module
+            .globals
+            .iter()
+            .enumerate()
+            .filter(|(_, global)| global.name.as_deref().and_then(Intrinsic::named) == Some(wanted))
+            .map(|(at, _)| llrm_mir::GlobalId(at as u32))
+            .collect::<BTreeSet<_>>()
+    };
+    let (assumes, restricts) = (named(Intrinsic::Assume), named(Intrinsic::Restrict));
+    if assumes.is_empty() && restricts.is_empty() {
         return;
     }
     let callees = llrm_mir::memory::callees(module);
@@ -201,12 +203,19 @@ pub fn assumptions_dropped(module: &mut llrm_mir::Module) {
         let calls = function
             .walk()
             .map(|(_, inst)| inst)
-            .filter(|&inst| {
-                llrm_mir::memory::callee(context, function, inst).is_some_and(|callee| assumes.contains(&callee))
+            .filter_map(|inst| {
+                let callee = llrm_mir::memory::callee(context, function, inst)?;
+                (assumes.contains(&callee) || restricts.contains(&callee))
+                    .then_some((inst, restricts.contains(&callee)))
             })
             .collect::<Vec<_>>();
-        for inst in calls {
-            function.erase(inst).expect("a call of void is read by nothing");
+        for (inst, restrict) in calls {
+            if restrict {
+                let result = function.instruction(inst).result.expect("a restrict pointer has a value");
+                let pointer = function.instruction(inst).operands[0];
+                function.replace_all_uses_with(result, pointer);
+            }
+            function.erase(inst).expect("a call nothing reads");
         }
         while dead(context, &callees, function) {}
     }

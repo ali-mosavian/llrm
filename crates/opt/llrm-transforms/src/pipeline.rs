@@ -24,6 +24,7 @@
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+//!     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
@@ -39,7 +40,8 @@
 //!   peel --> unsw
 //!   unsw --> fuse
 //!   fuse --> dist
-//!   dist --> swap
+//!   dist --> ver
+//!   ver --> swap
 //!   swap --> jam
 //!   jam --> mrg
 //!   mrg --> c
@@ -109,6 +111,7 @@
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
 //! | `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
 //! | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
+//! | `version` | `version` (off by default; on at -O3 and -Omax) |
 //! | `fuse` | `fuse` (off by default; on at -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
@@ -145,8 +148,8 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
-    loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, lsr, peel, phiopt, ports, promote, rotate,
-    switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, peel, phiopt, ports, promote,
+    rotate, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -199,6 +202,11 @@ pub struct Options {
     /// A loop whose stores do not need each other's trips becomes a loop
     /// for each (gcc's `-ftree-loop-distribution`, -O3; -Omax too).
     pub distribute: bool,
+    /// A loop is copied for what is true of it at run time, behind a test of
+    /// it: a stride of one, pointers apart (gcc's
+    /// `-fversion-loops-for-strides`, -O3; LLVM's `LoopVersioning`; -Omax
+    /// too).
+    pub version: bool,
     /// A nest's outer loop unrolled and its inner copies fused (gcc's
     /// `-floop-unroll-and-jam`, -O3; -Omax too).
     pub unroll_jam: bool,
@@ -253,6 +261,7 @@ impl Default for Options {
             split: false,
             fuse: false,
             distribute: false,
+            version: false,
             unroll_jam: false,
             interchange: false,
             copy_headers: true,
@@ -295,6 +304,7 @@ impl Options {
             split: false,
             fuse: false,
             distribute: false,
+            version: false,
             expensive: false,
             switch_conversion: false,
             ..Self::default()
@@ -313,6 +323,7 @@ impl Options {
             split: false,
             fuse: false,
             distribute: false,
+            version: false,
             ..Self::default()
         }
     }
@@ -327,6 +338,7 @@ impl Options {
             split: true,
             fuse: false,
             distribute: true,
+            version: true,
             unroll_jam: true,
             interchange: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
@@ -344,6 +356,7 @@ impl Options {
             split: true,
             fuse: true,
             distribute: true,
+            version: true,
             unroll_jam: true,
             interchange: true,
             exhaustive: true,
@@ -532,6 +545,11 @@ pub fn recorded(
     manager.require::<Summaries>();
     manager.require::<Callbacks>();
     manager.require_program::<ProgramSummaries>();
+    // Before any summary is made: the module names what a loop's copy is told
+    // its pointers are by.
+    if applied.options.version {
+        manager.add_module(loopversion::DeclareRestrict);
+    }
     // As LLVM's O2 runs GlobalOpt before the function pipeline.
     manager.add_module(globalopt::GlobalOpt);
     // Over every body first, so a caller's pipeline sees each callee's
@@ -601,25 +619,8 @@ pub fn recorded(
     // -Os (`optimize_loop_for_size_p`): there only a loop proven to run is
     // entered at its body, which the last `Rotate` does.
     let guarded = applied.options.copy_headers && !applied.options.prefers_size();
-    if guarded {
-        manager.add(rotate::Rotate { proven: false, copy: true });
-        manager.add(loopsimplify::LoopSimplify);
-        manager.add(lcssa::LoopClosedSSA);
-        // What the copy leaves in the latch (a test of the step: `x - 2 < 2`)
-        // is cleaned as gcc's DOM, forwprop and DCE do after `pass_ch`.
-        manager.add(fold::Fold);
-        manager.add(algebraic::Algebraic { size: false });
-        // A counted exit's values are numbers where the copy made its test
-        // the one that leaves.
-        manager.add(indvars::IndVars { exit_values: true });
-        manager.add(dead::Dead);
-    }
-    // A loop entered at its body runs it at least once: what it loads
-    // unchanged leaves it before its counters are chosen, as LLVM runs LICM
-    // before LoopStrengthReduce. Only the copy has entered loops at their
-    // body by here; without it the last `Rotate` has not, and hoist follows it.
-    if guarded && applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist { size: applied.options.prefers_size() });
+    for pass in header_copied(applied) {
+        manager.add_boxed(pass);
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
@@ -690,6 +691,34 @@ pub fn recorded(
     manager.run(program)
 }
 
+/// What `pass_ch` runs and what it leaves to clean: the loops' headers copied,
+/// the loops simplified again, what the copy leaves in the latch cleaned as
+/// gcc's DOM, forwprop and DCE do, and what a loop entered at its body runs
+/// at least once loads unchanged moved out before its counters are chosen, as
+/// LLVM runs LICM before LoopStrengthReduce. Only the copy has entered loops at
+/// their body by here; without it the last `Rotate` has not, and hoist follows
+/// it. Not at -Os (`optimize_loop_for_size_p`): there only a loop proven to run
+/// is entered at its body.
+pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
+    let mut passes: Vec<Box<dyn FunctionPass>> = Vec::new();
+    if !(applied.options.copy_headers && !applied.options.prefers_size()) {
+        return passes;
+    }
+    passes.push(Box::new(rotate::Rotate { proven: false, copy: true }));
+    passes.push(Box::new(loopsimplify::LoopSimplify));
+    passes.push(Box::new(lcssa::LoopClosedSSA));
+    passes.push(Box::new(fold::Fold));
+    passes.push(Box::new(algebraic::Algebraic { size: false }));
+    // A counted exit's values are numbers where the copy made its test the one
+    // that leaves.
+    passes.push(Box::new(indvars::IndVars { exit_values: true }));
+    passes.push(Box::new(dead::Dead));
+    if applied.options.wanted("hoist") {
+        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size() }));
+    }
+    passes
+}
+
 thread_local! {
     /// What made the interprocedural step run a body's pipeline again (empty:
     /// the first run), for `LLRM_DEBUG=runs`.
@@ -734,6 +763,7 @@ pub struct Fixed {
     unswitch: Option<unswitch::Unswitch>,
     split: Option<loopsplit::Split>,
     distribute: Option<loopdistribute::Distribute>,
+    version: Option<loopversion::Version>,
     fuse: Option<loopfuse::Fuse>,
     interchange: Option<loopinterchange::Interchange>,
     jam: Option<unroll_jam::UnrollJam>,
@@ -751,6 +781,7 @@ fn without_candidates(options: &Options) -> Options {
         split: false,
         fuse: false,
         distribute: false,
+        version: false,
         unroll_jam: false,
         interchange: false,
         ..options.clone()
@@ -784,6 +815,16 @@ impl Fixed {
         };
         let unswitch = applied.options.unswitch.then(|| unswitch::Unswitch { passes: vec![judged()] });
         let distribute = applied.options.distribute.then(|| loopdistribute::Distribute { passes: vec![judged()] });
+        // A loop the copy changes the shape of is judged as it will be run:
+        // its header copied and what it loads unchanged moved out.
+        let version = applied
+            .options
+            .version
+            .then(
+                || loopversion::Version {
+                    passes: std::iter::once(judged() as Box<dyn FunctionPass>).chain(header_copied(applied)).collect(),
+                },
+            );
         let fuse = applied.options.fuse.then(|| loopfuse::Fuse { passes: vec![judged()] });
         Self {
             boundary,
@@ -794,6 +835,7 @@ impl Fixed {
             unswitch,
             split: (applied.options.split && only.is_none()).then_some(loopsplit::Split),
             distribute: distribute.filter(|_| only.is_none()),
+            version: version.filter(|_| only.is_none()),
             fuse: fuse.filter(|_| only.is_none()),
             interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
             jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
@@ -858,6 +900,11 @@ impl Fixed {
         // split has cleaned it.
         if let Some(distribute) = &mut self.distribute {
             run.step(distribute, "distribute", unit, analyses);
+        }
+        // A loop that is a stride from a fill or a unit step, once what runs
+        // before has parted and joined what it will.
+        if let Some(version) = &mut self.version {
+            run.step(version, "version", unit, analyses);
         }
         // Before jamming: the swapped nest is the one that is jammed. Cleaned
         // as a peeled loop is.
