@@ -725,6 +725,7 @@ b0:
     analyses.get::<super::GlobalsAA>(&module);
     analyses.get::<super::Summaries>(&module);
     let memo = analyses.memo::<super::SummariesMemo>();
+    assert_eq!(super::runs_from_the_log(), 1, "an edit reported to one body made a scan of every body's mark");
     assert!(Rc::ptr_eq(&before.1, memo.facts[&h].calls.as_ref().unwrap()), "an unedited body's calls were found again");
     assert!(!Rc::ptr_eq(&before.0, memo.facts[&f].calls.as_ref().unwrap()), "an edited body's calls were kept");
 }

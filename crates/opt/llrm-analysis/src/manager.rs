@@ -458,6 +458,7 @@ impl Summaries {
                 );
             }
         }
+        FROM_LOG.with(|runs| runs.set(runs.get() + 1));
         counted("summaries from the log", true);
         let found = Self::solved(&table, known.as_ref(), &mut memo.summaries, Some(&dirty));
         for &id in &refresh {
@@ -502,6 +503,17 @@ impl Summaries {
         }
         found
     }
+}
+
+thread_local! {
+    static FROM_LOG: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many runs of `Summaries` on this thread were brought up to date from
+/// the edit log alone, for a test that an edit reported to one body does not
+/// look at the rest.
+pub fn runs_from_the_log() -> usize {
+    FROM_LOG.with(std::cell::Cell::get)
 }
 
 /// What `Summaries` keeps for its next run.
