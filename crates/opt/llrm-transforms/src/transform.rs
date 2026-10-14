@@ -248,7 +248,7 @@ pub fn _floating(opcode: &Opcode) -> bool {
         opcode,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)
             | Opcode::Cast(
-                CastOp::FPTrunc | CastOp::FPExt | CastOp::FPToUI | CastOp::FPToSI | CastOp::UIToFP | CastOp::SIToFP
+                CastOp::FPTrunc | CastOp::FPExt | CastOp::FPRound | CastOp::FPToUI | CastOp::FPToSI | CastOp::UIToFP | CastOp::SIToFP
             )
     )
 }

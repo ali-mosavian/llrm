@@ -1,7 +1,7 @@
 //! The `.isel` pattern language's reader.
 
 /// MIR opcodes a pattern may match, as `Opcode::mnemonic` spells them.
-pub const OPCODES: [&str; 51] = [
+pub const OPCODES: [&str; 52] = [
     "ret",
     "br",
     "switch",
@@ -32,6 +32,7 @@ pub const OPCODES: [&str; 51] = [
     "sext",
     "fptrunc",
     "fpext",
+    "fpround",
     "fptoui",
     "fptosi",
     "uitofp",
@@ -65,6 +66,7 @@ pub const OPCODE_SETS: [(&str, &[&str]); 2] = [
             "sext",
             "fptrunc",
             "fpext",
+            "fpround",
             "fptoui",
             "fptosi",
             "uitofp",

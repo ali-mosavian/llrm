@@ -9119,12 +9119,51 @@ impl Compiler {
         Ok((place, payload, payload_type))
     }
 
+    /// QB rounds what it stores to a SINGLE or DOUBLE variable to that type (BC stores through memory), while HIR evaluates
+    /// floating expressions in extended precision and the optimizer may keep a variable in a register: the stored value
+    /// is made a `round` of itself, which a promoted variable keeps. A value that is a load or a round already is one.
+    fn rounded_store(
+        &mut self,
+        mut operands: Vec<Operand>,
+    ) -> Vec<Operand> {
+        let Some(&Operand::Value(value)) = operands.get(1) else { return operands };
+        let Some(&(_, type_id)) = self.values.iter().find(|(id, _)| *id == value) else { return operands };
+        if !matches!(type_id, SINGLE | DOUBLE) {
+            return operands;
+        }
+        let exact = self.blocks[self.current_block]
+            .instructions
+            .iter()
+            .rev()
+            .find(|one| one.results.contains(&value))
+            .is_some_and(|one| matches!(one.op, "load" | "round"));
+        if exact {
+            return operands;
+        }
+        let rounded = self.value(type_id);
+        let id = self.next_instruction;
+        self.next_instruction += 1;
+        self.blocks[self.current_block].instructions.push(Instruction {
+            id,
+            op: "round",
+            results: vec![rounded],
+            operands: vec![Operand::Value(value)],
+            callee: None,
+            tag: None,
+            nowrap: false,
+            line: self.current_source_line,
+        });
+        operands[1] = Operand::Value(rounded);
+        operands
+    }
+
     fn emit(
         &mut self,
         op: &'static str,
         results: Vec<u32>,
         operands: Vec<Operand>,
     ) {
+        let operands = if op == "store" { self.rounded_store(operands) } else { operands };
         let id = self.next_instruction;
         self.next_instruction += 1;
         if op == "load" {

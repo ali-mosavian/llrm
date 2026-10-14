@@ -455,6 +455,7 @@ impl Checker<'_> {
             (CastOp::ZExt | CastOp::SExt, Type::Int(x), Type::Int(y)) => y > x,
             (CastOp::FPTrunc, Type::Float(x), Type::Float(y)) => (*x as u8) > (*y as u8),
             (CastOp::FPExt, Type::Float(x), Type::Float(y)) => (*x as u8) < (*y as u8),
+            (CastOp::FPRound, Type::Float(x), Type::Float(y)) => x == y,
             (CastOp::FPToUI | CastOp::FPToSI, Type::Float(_), Type::Int(_)) => true,
             (CastOp::UIToFP | CastOp::SIToFP, Type::Int(_), Type::Float(_)) => true,
             (CastOp::PtrToInt, Type::Pointer(_), Type::Int(_)) => true,

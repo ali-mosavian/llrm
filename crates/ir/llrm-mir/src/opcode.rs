@@ -31,6 +31,9 @@ pub enum CastOp {
     SExt,
     FPTrunc,
     FPExt,
+    /// A float rounded to its own type's precision: what a store to a variable of that type does to a value the
+    /// target holds wider (x87's extended). The operand and the result have one type.
+    FPRound,
     FPToUI,
     FPToSI,
     UIToFP,
@@ -130,12 +133,13 @@ pub const BINARY: [(BinaryOp, &str); 18] = [
     (BinaryOp::FRem, "frem"),
 ];
 
-pub const CAST: [(CastOp, &str); 13] = [
+pub const CAST: [(CastOp, &str); 14] = [
     (CastOp::Trunc, "trunc"),
     (CastOp::ZExt, "zext"),
     (CastOp::SExt, "sext"),
     (CastOp::FPTrunc, "fptrunc"),
     (CastOp::FPExt, "fpext"),
+    (CastOp::FPRound, "fpround"),
     (CastOp::FPToUI, "fptoui"),
     (CastOp::FPToSI, "fptosi"),
     (CastOp::UIToFP, "uitofp"),

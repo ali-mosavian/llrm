@@ -4518,7 +4518,8 @@ impl Selector<'_, '_, '_> {
                 let held = self.float(operand, at, out)?;
                 self.values.insert(result, held.value);
             }
-            CastOp::FPTrunc => {
+            // A float's own precision: the narrower format's rounding, to the same width.
+            CastOp::FPTrunc | CastOp::FPRound => {
                 // Rounded to the narrower format's width: a float's 4 bytes, a
                 // double's 8.
                 let size = self.size(to)? as u32;
