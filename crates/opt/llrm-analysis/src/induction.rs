@@ -43,7 +43,10 @@
 //! a loop and gives every value affine in a counter one (a narrow counter
 //! extended with `zext` too, where its start is made of values the enclosing
 //! loop computes as recurrences and the whole walk stays inside the narrow
-//! width unsigned: the wide start names those values as narrow unknowns,
+//! width unsigned (the bound is the enclosing loop's own recurrence and trip
+//! count, induction's domain: the signed `ranges::Interval` cannot hold a
+//! 16-bit value past 32767, and a second range evaluator would duplicate it):
+//! the wide start names those values as narrow unknowns,
 //! which the expander reads zero-extended; an `nsw` operation past the signed
 //! maximum is poison and proves nothing); `users` lists the
 //! operands that read them, each as an `IvUse` of kind `Address`, `Compare` or

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/induction.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/induction.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:df2e1ba6ec7d185ecd10e8cce0020a2c5e2ba7675ced8fb335a49df5fce16938 -->
+<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:c57ee995fe1709a3cf07ff1f3f9bcfb6badcb34e30a26e06aa34d818c9371240 -->
 
 # induction
 
@@ -48,7 +48,10 @@ trip` with `Scev` start and step: LLVM's add recurrence. `recurrences` walks
 a loop and gives every value affine in a counter one (a narrow counter
 extended with `zext` too, where its start is made of values the enclosing
 loop computes as recurrences and the whole walk stays inside the narrow
-width unsigned: the wide start names those values as narrow unknowns,
+width unsigned (the bound is the enclosing loop's own recurrence and trip
+count, induction's domain: the signed `ranges::Interval` cannot hold a
+16-bit value past 32767, and a second range evaluator would duplicate it):
+the wide start names those values as narrow unknowns,
 which the expander reads zero-extended; an `nsw` operation past the signed
 maximum is poison and proves nothing); `users` lists the
 operands that read them, each as an `IvUse` of kind `Address`, `Compare` or
