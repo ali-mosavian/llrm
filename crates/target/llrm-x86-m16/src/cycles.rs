@@ -130,7 +130,7 @@ pub fn classify(
         return "rep_string";
     }
     if mnem == "jmp" {
-        return "jmp_short";
+        return if mem(dst) { "jmp_indirect" } else { "jmp_short" };
     }
     if mnem.starts_with('j') {
         return "jcc";

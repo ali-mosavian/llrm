@@ -3,6 +3,11 @@
 ' PLAY(0) counts the notes waiting.
 DEFINT A-Z
 OPEN "L.TXT" FOR OUTPUT AS #1
+' Start on a clock tick: how long the program took to load decided which side of the first tick
+' the first note fell, so one more relocation in the runtime flipped the first line.
+t! = TIMER
+DO WHILE TIMER = t!
+LOOP
 t! = TIMER
 FOR i = 1 TO 4
   SOUND 440, 18

@@ -248,6 +248,7 @@ pub fn costs(arch: &str) -> OperationCosts {
         pieces_clear: timings::CLEAR_RATIO[at],
         pieces_set_size: timings::SET_RATIO_SIZE[at],
         pieces_clear_size: timings::CLEAR_RATIO_SIZE[at],
+        jump_table: timings::JUMP_TABLE[at],
         ..DESCRIPTION.operations(&|kind| timings::COST[kind][at], timings::PREFIX[at])
     }
 }

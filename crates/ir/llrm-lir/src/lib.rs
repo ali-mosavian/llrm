@@ -448,6 +448,9 @@ pub struct Semantics {
     pub sources: Vec<Loc>,
     pub target: Option<i64>,
     pub indirect: bool,
+    /// A table jump (`indirect`, its one source the table's cell): the block
+    /// each index of the table goes to. Empty for any other instruction.
+    pub table: Vec<i64>,
 }
 
 impl Semantics {
@@ -469,12 +472,36 @@ impl Semantics {
             && self.name == other.name
             && self.target == other.target
             && self.indirect == other.indirect
+            && self.table == other.table
             && same(&self.dests, &other.dests)
             && same(&self.sources, &other.sources)
     }
 
+    /// The blocks a branch or jump names (its target, or each index of its
+    /// table) are `to` of themselves: the same instruction going where `to`
+    /// says; `None` where it names none of them differently.
+    pub fn remapped(
+        &self,
+        to: impl Fn(i64) -> i64,
+    ) -> Option<Self> {
+        if !matches!(self.op, Operation::Branch | Operation::Jump) {
+            return None;
+        }
+        let target = self.target.map(&to);
+        let table: Vec<i64> = self.table.iter().map(|at| to(*at)).collect();
+        (target != self.target || table != self.table).then(|| Self { target, table, ..self.clone() })
+    }
+
     pub fn new(op: Operation) -> Self {
-        Self { op, name: None, dests: Vec::new(), sources: Vec::new(), target: None, indirect: false }
+        Self {
+            op,
+            name: None,
+            dests: Vec::new(),
+            sources: Vec::new(),
+            target: None,
+            indirect: false,
+            table: Vec::new(),
+        }
     }
 }
 
@@ -489,6 +516,7 @@ pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
     sources: Vec::new(),
     target: None,
     indirect: false,
+    table: Vec::new(),
 });
 
 /// Python `TABLE_DATA`.
@@ -583,6 +611,7 @@ pub fn restoring(
         sources: vec![wide],
         target: None,
         indirect: false,
+        table: Vec::new(),
     }
 }
 

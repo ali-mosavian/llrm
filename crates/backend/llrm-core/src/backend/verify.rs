@@ -175,6 +175,21 @@ fn _blocks(body: &LirBody) -> Vec<String> {
             }
         }
     }
+    for block in &body.blocks {
+        for what in block.insns.iter().filter_map(|one| one.what.as_ref()).filter(|what| !what.table.is_empty()) {
+            let (mut listed, mut leaves) = (what.table.clone(), block.succ.clone());
+            listed.sort_unstable();
+            listed.dedup();
+            leaves.sort_unstable();
+            leaves.dedup();
+            if listed != leaves || listed.iter().any(|one| !at_of.contains_key(one)) {
+                out.push(format!(
+                    "block {:#06x}'s table jump lists blocks {listed:x?} and the block goes to {leaves:x?}",
+                    block.at
+                ));
+            }
+        }
+    }
     let (mut seen, mut todo) = (BTreeSet::new(), vec![body.entry]);
     while let Some(at) = todo.pop() {
         if seen.contains(&at) || !at_of.contains_key(&at) {
@@ -440,6 +455,41 @@ mod tests {
         let mut body = body("input", vec![LirBlock::new(1, vec![Arc::new(incoming)])]);
         body.inputs = BTreeSet::from([1]);
         assert!(verify(&body, false).is_empty());
+    }
+
+    /// A table jump whose block went to other blocks than the table names: the
+    /// listing then had a label the object did not define ("references to
+    /// nothing defined or declared: L0_14").
+    #[test]
+    fn test_a_table_jump_goes_where_its_block_goes() {
+        let jump = |table: Vec<i64>| {
+            let what =
+                ir::Semantics { indirect: true, table, ..semantics(Operation::Jump, "jmp", vec![], vec![held(1, 2)]) };
+            Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![], vec![1]))
+        };
+        let ret = || {
+            Arc::new(Insn::new(
+                2,
+                Some((2, 2)),
+                Some(semantics(Operation::Return, "ret", vec![], vec![])),
+                vec![],
+                vec![],
+            ))
+        };
+        let blocks = |table: Vec<i64>| {
+            vec![
+                LirBlock { succ: vec![2, 3], ..LirBlock::new(1, vec![jump(table)]) },
+                LirBlock::new(2, vec![ret()]),
+                LirBlock::new(3, vec![ret()]),
+            ]
+        };
+        let mut body = body("table", blocks(vec![2, 3, 2]));
+        body.inputs = BTreeSet::from([1]);
+        assert!(verify(&body, false).is_empty(), "{:?}", verify(&body, false));
+        let mut stale = self::body("stale", blocks(vec![2, 9, 2]));
+        stale.inputs = BTreeSet::from([1]);
+        let said = verify(&stale, false);
+        assert!(said.iter().any(|complaint| complaint.contains("table jump lists")), "{said:?}");
     }
 
     #[test]

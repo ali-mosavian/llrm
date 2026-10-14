@@ -354,6 +354,40 @@ pub fn text_by(
     Ok(out.join("\n") + "\n")
 }
 
+/// The jump tables of the procedures that were kept, named for the jumps that
+/// read them: for each index of a table jump the code address of its block, a
+/// pointer as wide as the module's.
+pub fn jump_tables(
+    procedures: &[Procedure],
+    names: &mut IndexMap<(Space, i64), String>,
+    module: &llrm_mir::Module,
+) -> Vec<Datum> {
+    let bytes = module
+        .datalayout
+        .as_deref()
+        .and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok())
+        .map_or(2, |layout| layout.pointer(0).bits / 8);
+    let mut out = Vec::new();
+    for (number, procedure) in procedures.iter().enumerate() {
+        let jumps =
+            procedure.body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| one.what.as_ref());
+        for what in jumps.filter(|what| what.op == Operation::Jump && what.indirect && !what.table.is_empty()) {
+            let Some(Loc::Mem(ir::Mem { addr: Some(addr), .. })) = what.sources.first() else { continue };
+            let name = format!("$J{}", addr.index);
+            names.insert((Space::Segment, addr.index), name.clone());
+            out.push(Datum::Object(Label { name }));
+            out.extend(
+                what.table
+                    .iter()
+                    .map(
+                        |&target| Datum::Pointer(Pointer { name: label(number, target), offset: 0, far: false, bytes }),
+                    ),
+            );
+        }
+    }
+    out
+}
+
 pub fn datum(item: &Datum) -> Vec<String> {
     match item {
         Datum::Label(Label { name }) | Datum::Object(Label { name }) => vec![format!("{name} label byte")],
@@ -1693,6 +1727,7 @@ pub fn _instruction(
         Operation::Exchange if name == "fxch" => vec![format!("fxch {}", dests[1])],
         Operation::Exchange => vec![format!("xchg {}, {}", dests[0], dests[1])],
         Operation::Funnel => vec![format!("{name} {}, {}, {}", dests[0], sources[1], sources[2])],
+        Operation::Jump if what.indirect && sources.len() == 1 => vec![format!("jmp {}", sources[0])],
         Operation::Branch | Operation::Jump => {
             let Some(target) = what.target else {
                 return Err(Unprintable(format!("{} with no target", if name.is_empty() { "jump" } else { name })));
