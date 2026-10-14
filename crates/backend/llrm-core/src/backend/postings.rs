@@ -346,7 +346,7 @@ impl Postings {
         one: &Insn,
     ) {
         let entry = (block, slot);
-        let mut cut = |map: &mut HashMap<u32, Vec<Entry>>, value: u32| {
+        let cut = |map: &mut HashMap<u32, Vec<Entry>>, value: u32| {
             if let Some(list) = map.get_mut(&value) {
                 if let Ok(at) = list.binary_search(&entry) {
                     list.remove(at);
