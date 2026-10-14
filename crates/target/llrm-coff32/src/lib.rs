@@ -132,7 +132,15 @@ mod tests {
         sections: Vec<Section>,
         symbols: Vec<Symbol>,
     ) -> Object {
-        Object { name: "a.c".into(), arch: Arch::I386, sections, symbols, omf_groups: Vec::new(), debug: None }
+        Object {
+            name: "a.c".into(),
+            arch: Arch::I386,
+            sections,
+            symbols,
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            debug: None,
+        }
     }
 
     /// REL32 is relative to the field's end, so the field holds the addend, not

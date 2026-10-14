@@ -70,7 +70,7 @@ unknown option prints. Nib's own flags:
 |---|---|
 | `--entry NAME` | the entry function, default `main` |
 | `--dump DIR` | writes the input, tokens, syntax, HIR and every pipeline stage under `DIR`, then compiles |
-| `--procedure-segments` | one code segment per procedure, for a linker that drops unreferenced ones |
+| `--procedure-segments` | one COMDAT per procedure (OMF), for a linker that drops unreferenced ones: jwlink's `option eliminate`, Microsoft's LINK /PACKFUNCTIONS |
 | `--used-by OBJ` | keeps only the exports those objects import (repeatable) |
 | `--unchecked-bounds` | no index or slice bounds checks, as in `unsafe` |
 | `--declare h\|bi\|inc` | prints the C, BASIC or assembler declarations of the program's exports instead of compiling |

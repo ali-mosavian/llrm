@@ -442,6 +442,7 @@ mod tests {
                 defined("_flag", 2, 8),
             ],
             omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
             debug: None,
         }
     }
@@ -543,6 +544,7 @@ _flag:  .byte 0
                 },
             ],
             omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
             debug: None,
         };
         std::fs::write(dir.join("mine.o"), write(&made).unwrap()).unwrap();
