@@ -4590,20 +4590,28 @@ pub fn _renamed(
     rename: &IndexMap<u32, u32>,
 ) -> Arc<Insn> {
     let swap = |value: &u32| rename.get(value).copied().unwrap_or(*value);
-    _with(one, |made| {
-        if let Some(what) = &one.what {
-            made.what = Some(Semantics {
+    let what = one
+        .what
+        .as_ref()
+        .map(
+            |what| Semantics {
+                op: what.op,
+                name: what.name.clone(),
                 dests: what.dests.iter().map(|x| _settled(x, rename)).collect(),
                 sources: what.sources.iter().map(|x| _settled(x, rename)).collect(),
-                ..what.clone()
-            });
-        }
-        made.defines = one.defines.iter().map(swap).collect();
-        made.uses = one.uses.iter().map(swap).collect();
-        made.requires = _wants(&one.requires, rename);
-        made.delivers = _wants(&one.delivers, rename);
-        made.widths = one.widths.iter().map(|(value, width)| (swap(value), *width)).collect();
-    })
+                target: what.target,
+                indirect: what.indirect,
+                table: what.table.clone(),
+            },
+        );
+    Arc::new(one.remade(
+        what,
+        one.defines.iter().map(swap).collect(),
+        one.uses.iter().map(swap).collect(),
+        _wants(&one.requires, rename),
+        _wants(&one.delivers, rename),
+        one.widths.iter().map(|(value, width)| (swap(value), *width)).collect(),
+    ))
 }
 
 /// One operand with every value it names put through the rename.

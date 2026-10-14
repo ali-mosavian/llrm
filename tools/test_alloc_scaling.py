@@ -356,3 +356,18 @@ def test_a_spill_asks_no_slot_colouring_of_the_homes_it_leaves_behind():
         run = steps(compiler, source, "-O2")
     spent = run.get("intervals homes", 0.0) + run.get("spill color slots", 0.0)
     assert spent < 20, f"branches N=400 -O2: intervals homes and spill color slots cost {spent} Minstr (20 allowed; 202 before): {run}"
+
+
+def test_renaming_the_uses_of_a_value_does_not_copy_what_it_then_replaces():
+    """A split renames the value in each instruction that names it: the instruction was cloned whole (its operands, the values it defines and
+    reads, its requirements) and then each of those built again, so every one was made twice: `split carving` cost 332 Minstr on `cells` at
+    N=448 (258 on `d_faces` -O1 where 192 is enough). The instruction is made once, from the fields that stay."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["split carving"] < 310, f"cells N=448 -O2: split carving cost {run['split carving']} Minstr (310 allowed; 332 before): {run}"

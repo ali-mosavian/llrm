@@ -145,6 +145,49 @@ pub struct Insn {
     pub ident: Derived<u64>,
 }
 
+impl Insn {
+    /// This instruction with the operands and the values it names given, the
+    /// rest as it is: what `Insn { .. ..(*self).clone() }` makes, without the
+    /// copy of the fields that are replaced.
+    #[allow(clippy::too_many_arguments)]
+    pub fn remade(
+        &self,
+        what: Option<Semantics>,
+        defines: Vec<u32>,
+        uses: Vec<u32>,
+        requires: Vec<(Held, RegId)>,
+        delivers: Vec<(Held, RegId)>,
+        widths: Vec<(u32, u32)>,
+    ) -> Insn {
+        Insn {
+            at: self.at,
+            covers: self.covers,
+            what,
+            defines,
+            uses,
+            clobbers: self.clobbers.clone(),
+            clobbers_high: self.clobbers_high.clone(),
+            spread: self.spread.clone(),
+            call: self.call.clone(),
+            group: self.group,
+            requires,
+            delivers,
+            widths,
+            symbol: self.symbol,
+            spill_reload: self.spill_reload,
+            spill_store: self.spill_store,
+            frame_adjust: self.frame_adjust,
+            rematerialized: self.rematerialized,
+            volatile: self.volatile,
+            reads_complete: self.reads_complete,
+            line: self.line,
+            debug: self.debug.clone(),
+            effect: Derived::default(),
+            ident: Derived::default(),
+        }
+    }
+}
+
 /// A fact worked out from an instruction's fields, kept on it for every pass
 /// that asks. Cloning gives an empty one: a clone is made to be changed (`Insn
 /// { what: x, ..(**one).clone() }`, a hundred places), and the old
