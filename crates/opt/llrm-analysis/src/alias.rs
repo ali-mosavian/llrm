@@ -1250,6 +1250,14 @@ pub trait Bodies {
     ) -> Procedure<'_>;
     /// The globals' facts the bodies were made under.
     fn globals(&self) -> Option<&crate::globalsaa::Globals>;
+
+    /// A token for these bodies' names and order, and for their facts: the
+    /// same token as the run before says the names are the same, and the
+    /// facts of a body outside the dirty set are the very ones it had. Zero
+    /// where the bodies say nothing, and every run compares them.
+    fn layout(&self) -> u64 {
+        0
+    }
 }
 
 impl Bodies for IndexMap<String, Procedure<'_>> {
@@ -1302,6 +1310,16 @@ pub struct SummaryMemo {
     topology: Option<Rc<Topology>>,
     /// The bodies the topology was made of, in order, and their calls.
     made_of: Vec<(String, Rc<CallFacts>)>,
+    /// The `layout` of the bodies the last run was over.
+    layout: u64,
+    /// Where the next run's versions start: past every version a kept visit
+    /// holds, so that none of them is current and none is reset.
+    epoch: usize,
+    /// The version each body was last visited with, the run each was last
+    /// started from nothing in, and the run each is queued in.
+    seen: Vec<usize>,
+    started: Vec<usize>,
+    queued: Vec<usize>,
 }
 
 /// `summaries`, where only the bodies in `dirty` differ from the run `memo`
@@ -1322,17 +1340,22 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
     memo: &mut SummaryMemo,
     dirty: Option<&BTreeSet<String>>,
 ) -> Result<IndexMap<String, Summary>, String> {
-    let names: Vec<&str> = (0..procedures.len()).map(|at| procedures.name(at)).collect();
-    let same_bodies = memo.result.len() >= procedures.len()
-        && names.iter().all(|name| memo.direct.contains_key(*name) && memo.result.contains_key(*name))
-        && memo.direct.len() == procedures.len();
+    let layout = procedures.layout();
+    let same_layout = layout != 0 && memo.layout == layout && memo.found.len() == procedures.len();
+    let same_bodies = same_layout || {
+        let names: Vec<&str> = (0..procedures.len()).map(|at| procedures.name(at)).collect();
+        memo.result.len() >= procedures.len()
+            && names.iter().all(|name| memo.direct.contains_key(*name) && memo.result.contains_key(*name))
+            && memo.direct.len() == procedures.len()
+    };
     let whole = dirty.is_none() || !same_bodies || memo.known.as_ref() != known;
     if whole {
         *memo = SummaryMemo::default();
     }
+    let same_layout = same_layout && !whole;
     let dirty_names: BTreeSet<&str> = match dirty {
         Some(dirty) if !whole => dirty.iter().map(String::as_str).collect(),
-        _ => names.iter().copied().collect(),
+        _ => (0..procedures.len()).map(|at| procedures.name(at)).collect(),
     };
     // What a body captures grows from nothing: a call captures what its
     // callee's summary says, so a least fixed point, as a recursive one
@@ -1340,10 +1363,12 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
     // What a body does on its own does not change from round to round: made
     // once, and again only for a body that was edited.
     llrm_support::debug::timed("summaries direct", || {
-        for (at, name) in names.iter().enumerate() {
-            if whole || dirty_names.contains(name) {
-                memo.direct.insert((*name).to_owned(), _direct_summary(&procedures.procedure(at).unit)?);
-            }
+        // In the bodies' order: the objects a summary names are numbered as
+        // they are first met.
+        let mut dirty_at: Vec<usize> = dirty_names.iter().filter_map(|name| procedures.position(name)).collect();
+        dirty_at.sort_unstable();
+        for at in dirty_at {
+            memo.direct.insert(procedures.name(at).to_owned(), _direct_summary(&procedures.procedure(at).unit)?);
         }
         Ok::<(), String>(())
     })?;
@@ -1356,7 +1381,7 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
     }
     let topology =
         llrm_support::debug::timed("summaries topology", || _topology(procedures, &result, memo, whole, &dirty_names));
-    let Topology { component, order, rank, readers, callers_of_unknown, .. } = &*topology;
+    let Topology { component, order, rank, readers, callers_of_unknown, external, .. } = &*topology;
     let entries: Vec<usize> = procedures
         .globals()
         .map(|found| found.entries().iter().filter_map(|name| procedures.position(name)).collect())
@@ -1365,7 +1390,7 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
     // among them: when an entry is one of those, an entry's summary feeds
     // what it is made of, so they stand or fall together and are worked out
     // from nothing as one, after everything else has settled.
-    let coupled = topology
+    let (coupled, in_coupled) = topology
         .coupled
         .get_or_init(
             || {
@@ -1374,30 +1399,33 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
                 while let Some(at) = todo.pop() {
                     todo.extend(readers[at].iter().copied().filter(|reader| up.insert(*reader)));
                 }
-                if entries.iter().any(|one| up.contains(one)) { up.into_iter().collect() } else { Vec::new() }
+                let list: Vec<usize> =
+                    if entries.iter().any(|one| up.contains(one)) { up.into_iter().collect() } else { Vec::new() };
+                let mut flags = vec![false; procedures.len()];
+                list.iter().for_each(|at| flags[*at] = true);
+                (list, flags)
             },
         );
-    let mut in_coupled = vec![false; procedures.len()];
-    for at in coupled {
-        in_coupled[*at] = true;
-    }
     // Whether the coupled bodies wait (the others are being settled).
     let mut waiting_coupled = !whole && !coupled.is_empty();
     let mut deferred = false;
-    let mut reset = vec![whole; procedures.len()];
+    let run = memo.epoch;
+    let mut started = std::mem::take(&mut memo.started);
+    started.resize(procedures.len(), usize::MAX);
+    let mut queued = std::mem::take(&mut memo.queued);
+    queued.resize(procedures.len(), usize::MAX);
     // A body is worked out again from what it reads now, and its readers
     // when it came out other than it was: gcc's summaries stop where a
     // function's does not change. A cycle of calls is worked out from nothing,
     // as its least fixed point is.
-    let mut queued = vec![false; procedures.len()];
     let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> = Default::default();
     macro_rules! wake {
         ($at:expr) => {{
             let at: usize = $at;
             if waiting_coupled && in_coupled[at] {
                 deferred = true;
-            } else if !queued[at] {
-                queued[at] = true;
+            } else if queued[at] != run {
+                queued[at] = run;
                 work.push(std::cmp::Reverse(rank[at]));
             }
         }};
@@ -1414,13 +1442,8 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
         }
         // A callee defined elsewhere whose declaration was restated: its
         // callers read it.
-        for at in 0..procedures.len() {
-            if procedures
-                .facts(at)
-                .calls
-                .values()
-                .any(|target| dirty_names.contains(target.as_str()) && procedures.position(target).is_none())
-            {
+        for name in &dirty_names {
+            for &at in external.get(*name).into_iter().flatten() {
                 wake!(at);
             }
         }
@@ -1437,22 +1460,31 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
     // for the callbacks it had: that is worked out again.
     // A body that was edited has other facts than its last visit found.
     let mut last = std::mem::take(&mut memo.found);
-    let mut found: Vec<Option<Visit>> = names
-        .iter()
-        .enumerate()
-        .map(|(at, name)| {
-            last.get_mut(at)
-                .filter(|(then, _)| then == name)
-                .and_then(|(_, visit)| visit.take())
-                .filter(|_| !dirty_names.contains(name))
-                .map(|visit| Visit { version: None, ..visit })
-        })
-        .collect();
-    let mut version = 0;
+    if same_layout {
+        for name in &dirty_names {
+            if let Some(at) = procedures.position(name) {
+                last[at].1 = None;
+            }
+        }
+    } else {
+        last = (0..procedures.len())
+            .map(|at| {
+                let name = procedures.name(at);
+                let visit = last
+                    .get_mut(at)
+                    .filter(|(then, _)| then == name)
+                    .and_then(|(_, visit)| visit.take())
+                    .filter(|_| !dirty_names.contains(name));
+                (name.to_owned(), visit)
+            })
+            .collect();
+    }
+    let mut version = memo.epoch;
     // The callbacks' version each body was last visited with: a change to the
     // callbacks wakes the bodies that read them once the queue has drained,
     // the ones still in it being visited with the new callbacks anyway.
-    let mut seen = vec![usize::MAX; procedures.len()];
+    let mut seen = std::mem::take(&mut memo.seen);
+    seen.resize(procedures.len(), usize::MAX);
     let mut stale = false;
     loop {
         let Some(std::cmp::Reverse(first)) = work.pop() else {
@@ -1471,7 +1503,7 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
             stale = false;
             for at in coupled {
                 start(*at, &mut result);
-                reset[*at] = true;
+                started[*at] = run;
             }
             called_back = procedures.globals().and_then(|globals| CalledBack::of(globals, &result));
             callbacks = called_back.as_ref().and_then(CalledBack::summary);
@@ -1482,13 +1514,13 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
             continue;
         };
         let at = order[first];
-        queued[at] = false;
-        if !reset[at] && component[at].1 {
+        queued[at] = usize::MAX;
+        if !(whole || started[at] == run) && component[at].1 {
             // The first of a cycle to be worked out: all of it, from nothing.
             let id = component[at];
             for member in (0..procedures.len()).filter(|member| component[*member] == id) {
                 start(member, &mut result);
-                reset[member] = true;
+                started[member] = run;
                 wake!(member);
             }
             continue;
@@ -1504,7 +1536,7 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
                 &direct[name],
                 &result,
                 (callbacks.as_ref(), version),
-                &mut found[at],
+                &mut last[at].1,
                 component,
                 procedures,
             )
@@ -1541,19 +1573,12 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
             }
         }
     }
-    last.truncate(procedures.len());
-    for (at, (name, visit)) in names.iter().zip(found).enumerate() {
-        match last.get_mut(at) {
-            Some(slot) => {
-                if slot.0 != *name {
-                    (*name).clone_into(&mut slot.0);
-                }
-                slot.1 = visit;
-            }
-            None => last.push(((*name).to_owned(), visit)),
-        }
-    }
     memo.found = last;
+    memo.layout = layout;
+    memo.epoch = version + 1;
+    memo.seen = seen;
+    memo.started = started;
+    memo.queued = queued;
     memo.direct = direct;
     memo.known = known.cloned();
     memo.result = result.clone();
@@ -1574,7 +1599,9 @@ struct Topology {
     callers_of_unknown: BTreeSet<usize>,
     /// The bodies worked out together from nothing when a call back into the
     /// module feeds an entry: none when it cannot.
-    coupled: std::cell::OnceCell<Vec<usize>>,
+    coupled: std::cell::OnceCell<(Vec<usize>, Vec<bool>)>,
+    /// The bodies that call each function defined elsewhere, by its name.
+    external: llrm_support::hash::HashMap<String, Vec<usize>>,
 }
 
 /// `procedures`' topology: the last run's where only the dirty bodies' calls
@@ -1587,11 +1614,19 @@ fn _topology<B: Bodies + ?Sized>(
     dirty_names: &BTreeSet<&str>,
 ) -> Rc<Topology> {
     if let Some(mut kept) = memo.topology.take().filter(|_| !whole) {
+        let layout = procedures.layout();
+        let same_layout = layout != 0 && memo.layout == layout;
         let same_bodies = memo.made_of.len() == procedures.len()
-            && memo.made_of.iter().enumerate().all(|(at, (then, _))| procedures.name(at) == then);
+            && (same_layout || memo.made_of.iter().enumerate().all(|(at, (then, _))| procedures.name(at) == then));
         // The bodies whose calls are not the facts last held: only the dirty
-        // ones may be.
-        let moved: Vec<usize> = if same_bodies {
+        // ones may be (the layout says so where it is the same).
+        let moved: Vec<usize> = if same_layout {
+            dirty_names
+                .iter()
+                .filter_map(|name| procedures.position(name))
+                .filter(|at| !Rc::ptr_eq(procedures.facts(*at), &memo.made_of[*at].1))
+                .collect()
+        } else if same_bodies {
             (0..procedures.len()).filter(|at| !Rc::ptr_eq(procedures.facts(*at), &memo.made_of[*at].1)).collect()
         } else {
             Vec::new()
@@ -1651,9 +1686,34 @@ fn _topology<B: Bodies + ?Sized>(
     }
     memo.made_of =
         (0..procedures.len()).map(|at| (procedures.name(at).to_owned(), Rc::clone(procedures.facts(at)))).collect();
-    let made = Rc::new(Topology { component, order, rank, readers, callers_of_unknown, coupled: Default::default() });
+    let mut external: llrm_support::hash::HashMap<String, Vec<usize>> = Default::default();
+    for at in 0..procedures.len() {
+        for target in procedures.facts(at).calls.values().filter(|target| procedures.position(target).is_none()) {
+            let callers = external.entry(target.clone()).or_default();
+            if callers.last() != Some(&at) {
+                callers.push(at);
+            }
+        }
+    }
+    let made = Rc::new(Topology {
+        component,
+        order,
+        rank,
+        readers,
+        callers_of_unknown,
+        coupled: Default::default(),
+        external,
+    });
     memo.topology = Some(Rc::clone(&made));
     made
+}
+
+/// The functions `facts` calls that are not among `procedures`.
+fn _outside<'f, B: Bodies + ?Sized>(
+    procedures: &B,
+    facts: &'f CallFacts,
+) -> BTreeSet<&'f String> {
+    facts.calls.values().filter(|target| procedures.position(target).is_none()).collect()
 }
 
 /// `kept` brought up to date for the bodies `changed` (whose calls are not
@@ -1687,6 +1747,19 @@ fn _rewired<B: Bodies + ?Sized>(
         let before: BTreeSet<usize> =
             memo.made_of[at].1.calls.values().filter_map(|target| procedures.position(target)).collect();
         let now = targets(procedures.facts(at));
+        let (was_outside, is_outside) =
+            (_outside(procedures, &memo.made_of[at].1), _outside(procedures, procedures.facts(at)));
+        for gone in was_outside.difference(&is_outside) {
+            if let Some(callers) = held.external.get_mut(*gone) {
+                callers.retain(|caller| *caller != at);
+            }
+        }
+        for added in is_outside.difference(&was_outside) {
+            let callers = held.external.entry((*added).clone()).or_default();
+            if !callers.contains(&at) {
+                callers.push(at);
+            }
+        }
         for gone in before.difference(&now) {
             held.readers[*gone].remove(&at);
         }

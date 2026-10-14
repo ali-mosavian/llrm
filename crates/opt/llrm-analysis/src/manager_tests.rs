@@ -720,10 +720,12 @@ b0:
     let (_, function) = module.function_mut("f").unwrap();
     let (x, a) = (value(function, "x"), function.parameters()[0]);
     function.replace_all_uses_with(x, Operand::Value(a));
+    analyses.changed(f);
     analyses.invalidate(&PreservedAnalyses::none());
     analyses.get::<super::GlobalsAA>(&module);
     analyses.get::<super::Summaries>(&module);
     let memo = analyses.memo::<super::SummariesMemo>();
+    assert_eq!(super::runs_from_the_log(), 1, "an edit reported to one body made a scan of every body's mark");
     assert!(Rc::ptr_eq(&before.1, memo.facts[&h].calls.as_ref().unwrap()), "an unedited body's calls were found again");
     assert!(!Rc::ptr_eq(&before.0, memo.facts[&f].calls.as_ref().unwrap()), "an edited body's calls were kept");
 }
@@ -1051,15 +1053,12 @@ b0:
     let program = analyses.program().clone();
     let globals = Result::as_ref(&*globals).unwrap();
     let f = module.named("f").unwrap();
-    let shapes: IndexMap<_, _> =
-        super::bodies(&module).map(|(id, one)| (id, Rc::new(crate::cfg::Shape::of(one)))).collect();
     let mut facts = std::mem::take(&mut analyses.memo::<super::SummariesMemo>().facts);
-    let table = super::Table::of(&module, &program, globals, &shapes, &facts);
-    table.check_against_scratch(&module, &program, globals);
+    super::Table::of(&module, &program, globals, &facts, None).check_against_scratch();
     let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut other = facts.clone();
         other[&f].calls = Some(Rc::new(crate::alias::CallFacts::default()));
-        super::Table::of(&module, &program, globals, &shapes, &other).check_against_scratch(&module, &program, globals);
+        super::Table::of(&module, &program, globals, &other, None).check_against_scratch();
     }));
     facts.clear();
     assert!(stale.is_err(), "a body whose kept calls are not scratch's passed the check");

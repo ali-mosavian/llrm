@@ -1329,3 +1329,86 @@ fn an_entry_that_loses_a_slice_others_hold_moves_that_slice_and_not_every_entry(
     back.changed("e0", &summary(&held));
     assert!(!back.summary().unwrap().reads.contains(&own), "the last owner dropped it");
 }
+
+/// The bodies of a run, as `Bodies` that count what a run asks of them, and
+/// say they are the bodies of the run before (a layout) when told to.
+struct Counting<'a> {
+    inner: &'a IndexMap<String, Procedure<'a>>,
+    asked: std::cell::Cell<usize>,
+    layout: u64,
+}
+
+impl super::Bodies for Counting<'_> {
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn name(
+        &self,
+        at: usize,
+    ) -> &str {
+        self.asked.set(self.asked.get() + 1);
+        super::Bodies::name(self.inner, at)
+    }
+
+    fn position(
+        &self,
+        name: &str,
+    ) -> Option<usize> {
+        self.asked.set(self.asked.get() + 1);
+        super::Bodies::position(self.inner, name)
+    }
+
+    fn facts(
+        &self,
+        at: usize,
+    ) -> &std::rc::Rc<super::CallFacts> {
+        self.asked.set(self.asked.get() + 1);
+        super::Bodies::facts(self.inner, at)
+    }
+
+    fn procedure(
+        &self,
+        at: usize,
+    ) -> Procedure<'_> {
+        self.asked.set(self.asked.get() + 1);
+        super::Bodies::procedure(self.inner, at)
+    }
+
+    fn globals(&self) -> Option<&crate::globalsaa::Globals> {
+        super::Bodies::globals(self.inner)
+    }
+
+    fn layout(&self) -> u64 {
+        self.layout
+    }
+}
+
+/// Every run over a chain of N bodies asked each of them for its name and its
+/// calls to find the ones that moved and to build what it kept (chain N=2048:
+/// 74 runs of 2,048 bodies, `analysis summaries` 3.2x per doubling, gcc's 1.0).
+/// Told they are the bodies it had, a run asks only for the edited one's.
+#[test]
+fn a_run_over_the_bodies_it_had_asks_for_the_edited_one_alone() {
+    let asked_for = |n: usize| {
+        let mut text = String::from("define i16 @h0(i16 %x) {\nb0:\n  ret i16 %x\n}\n");
+        for k in 1..n {
+            text +=
+                &format!("define i16 @h{k}(i16 %x) {{\nb0:\n  %y = call i16 @h{}(i16 %x)\n  ret i16 %y\n}}\n", k - 1);
+        }
+        let parsed = Parsed::new(&text);
+        let names: Vec<String> = (0..n).map(|k| format!("h{k}")).collect();
+        let procedures =
+            IndexMap::from_iter(names.iter().map(|name| (name.clone(), Procedure::of(parsed.unit_of(name)))));
+        let mut memo = super::SummaryMemo::default();
+        let bodies = Counting { inner: &procedures, asked: 0.into(), layout: 7 };
+        super::summaries_updating(&bodies, None, &mut memo, None).unwrap();
+        bodies.asked.set(0);
+        let dirty = BTreeSet::from(["h0".to_owned()]);
+        let again = super::summaries_updating(&bodies, None, &mut memo, Some(&dirty)).unwrap();
+        assert_eq!(again, summaries(&procedures, None).unwrap());
+        bodies.asked.get()
+    };
+    let (small, large) = (asked_for(16), asked_for(64));
+    assert!(large <= small + 8, "a run over 4x the bodies asked {large} times where {small} sufficed");
+}

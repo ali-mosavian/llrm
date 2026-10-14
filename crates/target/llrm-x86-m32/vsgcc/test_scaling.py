@@ -127,6 +127,20 @@ def test_the_budget_of_a_run_is_its_cpu_not_the_wall_clock_so_load_cannot_break_
             one.wait()
 
 
+def test_the_wall_backstop_of_a_short_budget_is_not_shorter_than_a_loaded_host_needs_to_start_the_run(monkeypatch):
+    """A 1 s CPU budget had a 10 s wall backstop: under load the run had not started by then, and `perf stat` timed out (the gate's pytest)."""
+    seen = []
+
+    def fake(cmd, **kw):
+        seen.append(kw["timeout"])
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    monkeypatch.setattr(scaling.subprocess, "run", fake)
+    with pytest.raises(subprocess.TimeoutExpired):
+        scaling.sample([sys.executable, "-c", "pass"], timeout=1)
+    assert seen[0] >= 300, seen
+
+
 def test_the_compilers_environment_and_path_do_not_depend_on_where_the_binaries_are(monkeypatch, tmp_path):
     """`functions` at 2N read 3,192,407,376 or 3,192,925,702 instructions by the length of the directory the compiler ran from (its
     argv[0], and LLRM_BIN in its environment): a gate's tree and a base's differ in it by more than the ratio's tolerance."""
