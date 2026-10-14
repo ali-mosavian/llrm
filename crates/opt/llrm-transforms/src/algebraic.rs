@@ -1106,8 +1106,9 @@ fn _constant_address(
 /// taken in a build for size: each access then carries the displacement (4
 /// bytes at m32) where one register held the base for all (textfill +3 bytes);
 /// a variable one costs nothing. Of two values, the index is the one that is a
-/// loop's recurrence. A far or huge pointer is no flat address: its offset
-/// wraps apart from its selector.
+/// loop's recurrence. A far or huge pointer is no flat address (its offset
+/// wraps apart from its selector), and a selector-alone space is no address at
+/// all.
 fn _offset_address(
     context: &mut Context,
     layout: &DataLayout,
@@ -1124,7 +1125,10 @@ fn _offset_address(
     let llrm_mir::types::Type::Pointer(space) = *context.types.get(pointer) else { return false };
     let Some(made) = _definition(function, instruction.operands[0]) else { return false };
     let Some((BinaryOp::Add, left, right, width)) = _binary(context, function, made) else { return false };
-    if layout.is_pair(space) || layout.offset_bits(space) != width {
+    // Only the default space, the near or flat one: a selector-alone space
+    // (`ptr addrspace(2)`) holds a segment, which no access reads as an address
+    // and no byte offset moves.
+    if space != 0 || layout.is_pair(space) || layout.offset_bits(space) != width {
         return false;
     }
     let (value, index) = match _value_and_constant(context, BinaryOp::Add, left, right) {
