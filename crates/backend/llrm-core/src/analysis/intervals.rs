@@ -1428,7 +1428,18 @@ pub fn intervals_by_occurrences(
     let count = body.blocks.len();
     let graph = crate::analysis::graph::Graph::of(body);
     let predecessors = &graph.parents;
-    let spans: Vec<(i64, i64)> = body.blocks.iter().map(|block| index.span[&block.at]).collect();
+    // The blocks are numbered in the order of the body, so the span of the
+    // block at a position is the entry at that position; one that is not
+    // is looked up.
+    let spans: Vec<(i64, i64)> = body
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(at, block)| match index.span.get_index(at) {
+            Some((held, span)) if *held == block.at => *span,
+            _ => index.span[&block.at],
+        })
+        .collect();
     // Marks by block, a mark current when it equals the value's turn: no table
     // is cleared between values.
     let (mut in_mark, mut out_mark, mut written_mark, mut run_mark, mut reach_mark) =

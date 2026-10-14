@@ -71,6 +71,9 @@ struct Entry {
     /// The instruction itself, so that a reader that wants the instruction and
     /// not its place does not look the place up.
     insn: Arc<Insn>,
+    /// Where the slot was in its block when last looked for: a guess to start
+    /// from.
+    hint: std::cell::Cell<u32>,
 }
 
 impl Entry {
@@ -128,7 +131,7 @@ impl Postings {
         block: u32,
         slot: u32,
     ) -> u32 {
-        Self::locate(&self.slots[block as usize], slot) as u32
+        Self::locate(&self.slots[block as usize], slot, (slot / STRIDE) as usize) as u32
     }
 
     /// Where `slot` is in `list`: a block is first numbered `STRIDE` apart, so
@@ -137,8 +140,9 @@ impl Postings {
     fn locate(
         list: &[u32],
         slot: u32,
+        guess: usize,
     ) -> usize {
-        let guess = ((slot / STRIDE) as usize).saturating_sub(1).min(list.len().saturating_sub(1));
+        let guess = guess.min(list.len().saturating_sub(1));
         if list.get(guess) == Some(&slot) {
             return guess;
         }
@@ -176,7 +180,13 @@ impl Postings {
         entries
             .into_iter()
             .flatten()
-            .map(move |entry| (entry.block, Self::locate(&self.slots[entry.block as usize], entry.slot) as u32))
+            .map(
+                move |entry| {
+                    let at = Self::locate(&self.slots[entry.block as usize], entry.slot, entry.hint.get() as usize);
+                    entry.hint.set(at as u32);
+                    (entry.block, at as u32)
+                },
+            )
     }
 
     fn positions(
@@ -359,15 +369,16 @@ impl Postings {
         let slots = Self::numbered(insns.len());
         self.frames[block as usize] =
             insns.iter().zip(&slots).filter(|(one, _)| is_framed(one)).map(|(_, slot)| *slot).collect();
-        for (one, slot) in insns.iter().zip(&slots) {
+        for (at, (one, slot)) in insns.iter().zip(&slots).enumerate() {
+            let entry = || Entry { block, slot: *slot, insn: Arc::clone(one), hint: std::cell::Cell::new(at as u32) };
             for value in &one.defines {
-                self.defs.entry(*value).or_default().push(Entry { block, slot: *slot, insn: Arc::clone(one) });
+                self.defs.entry(*value).or_default().push(entry());
             }
             for value in &one.uses {
-                self.uses.entry(*value).or_default().push(Entry { block, slot: *slot, insn: Arc::clone(one) });
+                self.uses.entry(*value).or_default().push(entry());
             }
             for (held, _) in &one.requires {
-                self.needs.entry(held.value).or_default().push(Entry { block, slot: *slot, insn: Arc::clone(one) });
+                self.needs.entry(held.value).or_default().push(entry());
             }
         }
         self.slots[block as usize] = slots;
@@ -481,7 +492,7 @@ impl Postings {
             self.remove_entries(block, old_slots_at(&self.slots, block, position), &old[position]);
         }
         for &position in &found.added {
-            self.insert_entries(block, new_slots[position], &new[position]);
+            self.insert_entries(block, new_slots[position], position, &new[position]);
         }
         let frames = &mut self.frames[block as usize];
         for &position in &found.gone {
@@ -534,12 +545,13 @@ impl Postings {
         &mut self,
         block: u32,
         slot: u32,
+        position: usize,
         one: &Arc<Insn>,
     ) {
         let put = |map: &mut HashMap<u32, Vec<Entry>>, value: u32| {
             let list = map.entry(value).or_default();
             let at = list.partition_point(|held| held.key() < (block, slot));
-            list.insert(at, Entry { block, slot, insn: Arc::clone(one) });
+            list.insert(at, Entry { block, slot, insn: Arc::clone(one), hint: std::cell::Cell::new(position as u32) });
         };
         for value in &one.defines {
             put(&mut self.defs, *value);
