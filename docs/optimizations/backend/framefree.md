@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/framefree.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/framefree.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/framefree.rs sha256:f3d7cc6ccb9a01cb9fd0d670ad690c787df79112b208d676f4e38e4550fc37f5 -->
+<!-- src: crates/backend/llrm-core/src/backend/framefree.rs sha256:cae7a86fc5945878fe3d1e8f830b09726c1559868c613945cc92f12222acacf2 -->
 
 # framefree
 
@@ -37,13 +37,14 @@ at depth 0*
 
 The frame register is kept where any of these holds: the target does not
 allow freeing it (`registers.optional`), the body is not 32-bit, or it has
-inline assembly, a landing pad, `returns_twice`, or debug variables not
-located by the CFA. It is kept where the frame register is read or written
-as a value, or is a base or index of anything but a frame cell; the stack
-pointer is written other than by `add`/`sub` with an immediate; there is an
-indirect call, jump or branch, a `leave`, an escape or a barrier other than
-`fnstcw`, `fldcw`, `fnstsw`, `in` and `out`, a push or pop of a width other
-than 2 or 4, or two edges disagree on the depth.
+inline code (bytes of x87 register operations, `fsin` for one, touch no
+stack cell and do not count), a landing pad, `returns_twice`, or debug
+variables not located by the CFA. It is kept where the frame register is
+read or written as a value, or is a base or index of anything but a frame
+cell; the stack pointer is written other than by `add`/`sub` with an
+immediate; there is an indirect call, jump or branch, a `leave`, an escape
+or a barrier other than `fnstcw`, `fldcw`, `fnstsw`, `in` and `out`, a push
+or pop of a width other than 2 or 4, or two edges disagree on the depth.
 
 When freed, the frame register joins the allocatable set and the saved
 registers (the prologue pushes it where it is used).

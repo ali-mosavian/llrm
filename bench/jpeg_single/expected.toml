@@ -1,5 +1,5 @@
-reason = "on top of main's #1603 runtime change: +-1 to 5 instructions (max 0.000005%) in the readers' named runtime code, none from this PR"
-blessed = "2026-10-13"
+reason = "a BASIC procedure at m32 holds a value in the frame register and builds no frame (the driver now records the bytes a runtime callee pops, a push of a value is sized, x87 register bytes are inert, the freed registers reach masm): bq32 -O2 instructions -0..-10.5% (fib -10.5%, nbody -9.9%, particle -6.9%, shellsort -6.6%, hanoi -3.4%), code -3%..+7% ([esp+d] is a byte longer than [ebp+d]); -Os keeps BASIC's frame where size is tuned and masm compares the bytes: -4%..+0%, instructions +0..+2.5%"
+blessed = "2026-10-14"
 
 [bas.O2]
 code_bytes = 5230
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63879834
-code_bytes = 6709
+instructions = 63663481
+code_bytes = 6720
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64219484
-code_bytes = 6224
+instructions = 64749823
+code_bytes = 6198
 data_bytes = 29697
 bss_bytes = 0
 

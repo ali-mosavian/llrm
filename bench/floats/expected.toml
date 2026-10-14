@@ -1,5 +1,5 @@
-reason = "bq32's kernel ends where its CodeView procedure record says, and leaves out code the debug info and map do not name (DOS, the extender). The map gave a function no length, so the last function of a module took in the module's main code after it and every runtime call made from there: an empty kernel beside a PRINT read 785 (about 250 to 760 of every small kernel's count, 596 of it the extender's memory request when the lazy string heap starts); the file readers lose their DOS time (72k to 3.6M). The compiler's and runtime's named code is unchanged"
-blessed = "2026-10-13"
+reason = "a BASIC procedure at m32 holds a value in the frame register and builds no frame (the driver now records the bytes a runtime callee pops, a push of a value is sized, x87 register bytes are inert, the freed registers reach masm): bq32 -O2 instructions -0..-10.5% (fib -10.5%, nbody -9.9%, particle -6.9%, shellsort -6.6%, hanoi -3.4%), code -3%..+7% ([esp+d] is a byte longer than [ebp+d]); -Os keeps BASIC's frame where size is tuned and masm compares the bytes: -4%..+0%, instructions +0..+2.5%"
+blessed = "2026-10-14"
 
 [bas.O2]
 instructions = 5051
@@ -38,8 +38,8 @@ data_bytes = 37
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 5051
-code_bytes = 249
+instructions = 5053
+code_bytes = 243
 data_bytes = 37
 bss_bytes = 0
 

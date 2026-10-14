@@ -971,15 +971,19 @@ fn staged(
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
-    // A BASIC module's frames are BP's (its listing addresses cells through the
-    // frame register and the runtime walks the chain), so its frame
-    // register is never a value register.
-    let classes: Rc<RegisterClasses> = if !target.basic
+    // A frame the BASIC runtime builds (`B$ENRA`) is BP's and the runtime walks
+    // the chain, so its frame register is never a value register; a frame the
+    // compiler builds is like any other (an error landing, which restores BP,
+    // keeps it: `landing`). Inline code that is only x87 register operations
+    // (`fsin` as bytes) touches no stack cell. Not where BASIC is tuned for
+    // size: `[esp+d]` is a byte longer than `[ebp+d]`, and masm's comparison of
+    // the two cannot run once the register holds a value (bq32 -Os grew 4-7%).
+    let classes: Rc<RegisterClasses> = if !(target.basic && (target.zeroed || target.cpu.size))
         && crate::backend::framefree::without_frame_register(
             &body,
             &registers,
             &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
-            !inline.is_empty(),
+            inline.values().any(|bytes| !crate::backend::framefree::x87_registers_only(bytes)),
             false,
             landing.is_some(),
         ) {

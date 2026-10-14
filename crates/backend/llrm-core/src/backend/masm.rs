@@ -32,7 +32,10 @@
 //! (`stack_addressed`): every instruction's stack effect moves the offset,
 //! and every way into a block must agree on it. Anything that puts that out
 //! of reach (the stack pointer written another way, inline code, an indirect
-//! call that may pop, the frame register read as a value) keeps the frame.
+//! call that may pop, inline code other than x87 register operations, the
+//! frame register read as a value) keeps the frame. A BASIC procedure's
+//! compiler-built frame is like any other; one the runtime builds (`B$ENRA`)
+//! is walked by the runtime and kept.
 //! Tuned for size, the stack-addressed form is kept only if it is no longer
 //! in bytes.
 //!
@@ -1067,6 +1070,20 @@ fn moved_return(
     ]
 }
 
+/// Whether a callee's inline code leaves the stack and the frame alone: none,
+/// or bytes that are only x87 register operations (`fsin`).
+fn inert(callee: &Callee) -> bool {
+    callee
+        .code
+        .iter()
+        .all(
+            |part| matches!(
+                part,
+                InlinePart::Bytes(bytes) if crate::backend::framefree::x87_registers_only(bytes)
+            ),
+        )
+}
+
 /// The items of a procedure that needs no frame register, its cells addressed
 /// through the stack pointer: gcc's `-fomit-frame-pointer`, as the target's
 /// `frame_optional` allows. A cell the frame register held at `[bp+d]` is at
@@ -1086,7 +1103,7 @@ fn stack_addressed(
         || procedure.entry != 0
         || procedure.body.bits != 32
         || (!procedure.body.variables.is_empty() && !procedure.body.cfa_variables)
-        || procedure.callees.values().any(|one| !one.code.is_empty())
+        || procedure.callees.values().any(|one| !inert(one))
     {
         llrm_support::debug!(
             "frame",
@@ -1097,7 +1114,7 @@ fn stack_addressed(
             procedure.entry,
             procedure.body.bits,
             procedure.body.variables.len(),
-            procedure.callees.values().filter(|one| !one.code.is_empty()).count()
+            procedure.callees.values().filter(|one| !inert(one)).count()
         );
         return None;
     }
