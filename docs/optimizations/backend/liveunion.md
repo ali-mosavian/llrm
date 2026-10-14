@@ -1,11 +1,15 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/liveunion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/liveunion.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/liveunion.rs sha256:4021e0706941eaa9162dbaf51aaadad513973d1d795a5f93c66925ae964e6211 -->
+<!-- src: crates/backend/llrm-core/src/backend/liveunion.rs sha256:d7e329c460db0c6630bcb5e181dd24bc8e05455decfc3eac83be0e45176b86b9 -->
 
 # liveunion
 
 Answers which values already hold a register where an interval lies, so the
 allocator can test an assignment without visiting every holder. LLVM's
 `LiveIntervalUnion` and the `LiveRegMatrix` over it.
+
+`Placed`, here too, is the allocator's table of where each value is: a
+register by value, with the order the values were placed in kept as a number
+so that taking a value out of the middle shifts nothing.
 
 ## How it works
 The union keeps, per register, the values that hold it in the order they
