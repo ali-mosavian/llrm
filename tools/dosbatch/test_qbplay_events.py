@@ -60,3 +60,40 @@ def test_a_text_step_waits_for_a_key_read_after_the_text_not_before(monkeypatch)
         qb32demos.ready(one, 0, "Press any key")
     one.send = lambda command, wait=True: threading.Timer(0.05, arrive, (one, {"event": "key_wait"})).start()
     qb32demos.ready(one, 0, "Press any key")
+
+
+def test_a_text_step_gives_the_emulator_cpu_seconds_not_wall_seconds(monkeypatch):
+    """At host load 150 'Press any key' needed more than 15 wall seconds of a guest that had used 3 of CPU, and NIBBLES and GORILLA failed
+    (#1570). An emulator that uses no CPU is not late however long the wall runs."""
+    import subprocess
+    import time
+
+    import qb32demos
+    import qbplay
+
+    one = session_without_a_process()
+    one.limit = lambda seconds: qbplay.Session.limit(one, seconds)
+    one.process = subprocess.Popen(["sleep", "30"])
+    shown = []
+    one.screen = lambda: "Press any key" if shown else "loading"
+    one.send = lambda command, wait=True: arrive(one, {"event": "key_wait"})
+    monkeypatch.setattr(qb32demos, "LONGEST", 0.3)
+    outcome = []
+
+    def step():
+        try:
+            qb32demos.ready(one, 0, "Press any key")
+            outcome.append("done")
+        except TimeoutError as error:
+            outcome.append(str(error))
+
+    thread = threading.Thread(target=step)
+    try:
+        thread.start()
+        time.sleep(1.5)  # five times LONGEST on the wall; the emulator used no CPU
+        assert outcome == [], outcome
+        shown.append(1)
+        thread.join(10)
+        assert outcome == ["done"]
+    finally:
+        one.process.kill()
