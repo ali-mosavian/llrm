@@ -157,7 +157,7 @@ impl Occurrences {
         for value in values {
             let mut named: std::collections::BTreeMap<Place, Named> = std::collections::BTreeMap::new();
             for (list, defined) in [(postings.defs(*value), true), (postings.uses(*value), false)] {
-                for &(block, position) in list {
+                for (block, position) in list {
                     let place = (block as usize, position as usize);
                     let made = named.entry(place).or_insert(Named { place, defined: false, used: false, mentions: 0 });
                     made.defined |= defined;

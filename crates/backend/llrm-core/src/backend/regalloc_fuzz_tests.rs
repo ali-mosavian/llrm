@@ -1091,9 +1091,9 @@ fn test_intervals_from_occurrences_are_those_of_the_walk() {
             for &value in &values {
                 let mut at: Vec<ranges::Place> = postings
                     .defs(value)
-                    .iter()
+                    .into_iter()
                     .chain(postings.uses(value))
-                    .map(|(block, position)| (*block as usize, *position as usize))
+                    .map(|(block, position)| (block as usize, position as usize))
                     .collect();
                 at.sort_unstable();
                 at.dedup();

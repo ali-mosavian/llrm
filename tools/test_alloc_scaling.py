@@ -340,3 +340,19 @@ def test_a_spill_rewrite_keeps_the_instructions_that_name_no_spilled_value_at_on
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["spill rewrite"] < 100, f"cells N=448 -O2: spill rewrite cost {run['spill rewrite']} Minstr (100 allowed; 167 before): {run}"
+
+
+def test_a_reload_inserted_in_a_long_block_renumbers_no_occurrence_after_it():
+    """The postings named each occurrence by its position in its block, so one reload put in a block of thousands renumbered the
+    entries of every value named after it: `spill cleanup` cost 452 Minstr on `cells` at N=448 and 1,882 at 896 (x4.2 per doubling), 
+    `regalloc split` 207 and 777. An occurrence is named by a slot its block gave the instruction, which an insertion leaves."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    spent = run["spill cleanup"] + run["regalloc split"]
+    assert spent < 360, f"cells N=448 -O2: spill cleanup and regalloc split cost {spent} Minstr (360 allowed; 660 before): {run}"
