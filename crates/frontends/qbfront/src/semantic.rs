@@ -1734,6 +1734,7 @@ impl Compiler {
         places: Vec<Place>,
     ) {
         self.variables = variables;
+        self.seen.clear();
         self.constants = constants;
         self.next_place = places.iter().map(|place| place.id).max().unwrap_or(0) + 1;
         self.places = places;
@@ -2616,8 +2617,8 @@ impl Compiler {
             let zero = Expr::Literal(Literal::Integer(0, TypeName::Integer), span);
             return self.statement_list(&[Statement::Assign { target, value: zero, span }]);
         }
-        let extent = self.places[variable.place as usize].extent;
-        self.zero_aggregate(Operand::Place(variable.place), extent)
+        // a record or fixed-length string has no use before its DIM
+        Ok(())
     }
 
     /// B$DDIM's or B$RDIM's operands for `bounds`, and the bounds in
