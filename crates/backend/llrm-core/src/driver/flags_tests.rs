@@ -315,10 +315,11 @@ fn fwrapv_makes_signed_arithmetic_wrap() {
     assert!(!parsed(&["-fwrapv", "-fno-wrapv"]).unwrap().wrapv && !parsed(&[]).unwrap().wrapv);
 }
 
-/// gcc turns `-fsplit-loops` on at -O3 and no lower.
+/// gcc turns `-fsplit-loops` on at -O3 and no lower; -Omax is everything.
 #[test]
-fn only_o3_splits_loops_and_the_flag_overrides_it() {
-    for level in ["-O1", "-O2", "-Os", "-Omax"] {
+fn only_o3_and_omax_split_loops_and_the_flag_overrides_it() {
+    assert!(pipeline(&["-Omax"]).split);
+    for level in ["-O1", "-O2", "-Os"] {
         assert!(!pipeline(&[level]).split, "{level}");
         assert!(pipeline(&[level, "-fsplit-loops"]).split, "{level}");
     }

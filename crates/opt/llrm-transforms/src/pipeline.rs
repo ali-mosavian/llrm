@@ -182,7 +182,8 @@ pub struct Options {
     pub sibcalls: bool,
     pub unswitch: bool,
     /// A loop with a test of its counter against an invariant becomes two,
-    /// one either side of where it flips (gcc's `-fsplit-loops`, -O3 only).
+    /// one either side of where it flips (gcc's `-fsplit-loops`, -O3; -Omax
+    /// too).
     pub split: bool,
     /// A nest's outer loop unrolled and its inner copies fused (gcc's
     /// `-floop-unroll-and-jam`, -O3 only).
@@ -312,6 +313,7 @@ impl Options {
         Self {
             limits: Limits { target_percent: 200, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            split: true,
             exhaustive: true,
             ..Self::default()
         }
