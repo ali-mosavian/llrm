@@ -110,8 +110,9 @@
 //! # Runs
 //! Once per body, after `unswitch`, so an invariant guard is out of the
 //! nest. If it fused a nest, `sroa` and the fixed point run again over the
-//! result (the fused stores merge there). -O3 only: `-floop-unroll-and-jam`.
-//! Not run where one pass is selected by name. See `docs/reference/levels.md`.
+//! result (the fused stores merge there). -O3 and -Omax:
+//! `-floop-unroll-and-jam`. Not run where one pass is selected by name. See
+//! `docs/reference/levels.md`.
 //!
 //! # Needs
 //! `induction` (trip counts), `dependence`, `Registers` (`llrm_analysis`);

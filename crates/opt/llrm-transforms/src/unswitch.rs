@@ -131,7 +131,7 @@
 //!
 //! # Runs
 //! Once per body, after the fixed point and the peel rounds settle and before
-//! unroll-jam. -O3 only: `-funswitch-loops`. -Omax does not set it.
+//! unroll-jam. -O3 and -Omax: `-funswitch-loops`.
 //!
 //! # Needs
 //! [`crate::lcssa`], [`crate::loopclone`], [`crate::profit`], and the

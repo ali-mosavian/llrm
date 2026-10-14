@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:3b0779740d2990c07327226b17f9520d8e755e7b171cb733ee8c60258f42d5d5 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:231c4cc927b45e1bf4ff3f822024b2501b33e490c3b33b6647f75a7c03285fa5 -->
 
 # pipeline
 
@@ -27,8 +27,8 @@ flowchart TB
     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
-    unsw["<b>unswitch (-O3)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
-    jam["<b>unroll-jam (-O3)</b><br/><small>sroa, then B's rounds</small>"]:::mid
+    unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+    jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
     mrg["<b>merge (once)</b>"]:::mid
   end
   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
@@ -106,7 +106,7 @@ counterpart of each limit, is
 | `fill` | `fill`, `merge` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
-| `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default) |
+| `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
 `pre` makes `gvn` insert on the path that lacks a value; `expensive`

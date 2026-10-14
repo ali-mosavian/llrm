@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unswitch.rs sha256:7bacaf4d75264917ad710c9c6a6101ebf88c41a1413ca806123720360294daf0 -->
+<!-- src: crates/opt/llrm-transforms/src/unswitch.rs sha256:7f1fbb966a2ff30b76b5d35fc09b3207c380256771d865e83b0a3b372b925227 -->
 
 # unswitch
 
@@ -136,7 +136,7 @@ re-optimized.
 
 ## Runs
 Once per body, after the fixed point and the peel rounds settle and before
-unroll-jam. -O3 only: `-funswitch-loops`. -Omax does not set it.
+unroll-jam. -O3 and -Omax: `-funswitch-loops`.
 
 ## Needs
 [`crate::lcssa`](lcssa.md), [`crate::loopclone`](loopclone.md), [`crate::profit`](profit.md), and the
