@@ -1,4 +1,4 @@
-reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out (hanoi 729041 -> 352237)"
+reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -31,14 +31,14 @@ data_bytes = 15
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 327127
-code_bytes = 498
+instructions = 334817
+code_bytes = 542
 data_bytes = 21
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 332237
-code_bytes = 458
+instructions = 339405
+code_bytes = 452
 data_bytes = 21
 bss_bytes = 0
 

@@ -186,3 +186,87 @@ fn test_a_label_a_known_branch_reaches_ends_the_run_taken_for_dead() {
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(!text.contains("[esp-"), "a cell below the stack pointer: {text}");
 }
+
+/// A BASIC module's procedures were never freed ("the runtime walks the
+/// chain": only a frame B$ENRA builds is walked; a compiler-built one is any
+/// other), and where one could have been, three things kept the frame: the
+/// driver recorded no bytes a runtime callee pops (so `masm` saw the stack
+/// 20 bytes deep at every return), a `push` of a value not yet in a register
+/// was no push the walk could size, and `fsin` as bytes was inline code that
+/// might touch the stack. A BASIC procedure at m32 holds a value in EBP and
+/// builds no frame (qbdemo's PLASMA was 28 instructions a trip with three
+/// reloads of its array bases).
+const MIX: &str = "DEFINT A-Z
+DECLARE SUB mix (n)
+'$DYNAMIC
+DIM SHARED t1(255) AS INTEGER, t2(255) AS INTEGER, t3(255) AS INTEGER, t4(255) AS INTEGER, o1(255) AS INTEGER, o2(255) AS INTEGER
+mix 100
+SUB mix (n)
+  DIM a(64) AS INTEGER
+  s1 = 1: s2 = 2: s3 = 3: s4 = 4: s5 = 5
+  FOR i = 0 TO n
+    o1(i AND 255) = t1((i * 3 + s1) AND 255) + t2((i * 5 + s2) AND 255)
+    o2(i AND 255) = t3((i * 7 + s3) AND 255) + t4((i * 9 + s4) AND 255) + a(i AND 63)
+    s1 = s1 + 2: s2 = s2 + 3: s3 = s3 + 4: s4 = s4 + 5: s5 = s5 + 1
+  NEXT
+  PRINT s5
+END SUB
+";
+
+const WAVE: &str = "DEFINT A-Z
+DECLARE SUB wave (n)
+wave 10
+SUB wave (n)
+  DIM a(64) AS INTEGER
+  FOR i = 0 TO n
+    a(i) = SIN(i / 10!) * 100
+  NEXT
+  PRINT a(n)
+END SUB
+";
+
+/// The procedure `name` of a BASIC program at m32 -O2: its listing, and the
+/// object's status (an encoding failure is a failed compile).
+fn basic_procedure(
+    source: &str,
+    name: &str,
+) -> String {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(directory.join("T.BAS"), source).unwrap();
+    for output in ["t.s", "t.obj"] {
+        let flags: &[&str] = if output == "t.s" { &["-S"] } else { &[] };
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+            .current_dir(directory)
+            .args(["T.BAS", "--dialect", "qb45", "-fqb-runtime=llrm", "-O2", "-m32", "-march=i486"])
+            .args(flags)
+            .args(["-o", output])
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "{output}: {}", String::from_utf8_lossy(&done.stderr));
+    }
+    let text = std::fs::read_to_string(directory.join("t.s")).unwrap();
+    let from = text.find(&format!("{name} proc")).expect("the procedure");
+    text[from..].lines().take_while(|line| !line.contains(&format!("{name} endp"))).collect::<Vec<_>>().join("\n")
+}
+
+#[test]
+fn test_a_basic_procedure_calling_the_runtime_holds_a_value_in_ebp_and_builds_no_frame_at_m32() {
+    let text = basic_procedure(MIX, "MIX");
+    assert!(!text.contains("mov ebp, esp"), "a frame is built: {text}");
+    assert!(
+        text.lines().any(|line| line.contains("ebp") && !line.contains("push ebp") && !line.contains("pop ebp")),
+        "the frame register holds no value: {text}"
+    );
+}
+
+#[test]
+fn test_a_basic_procedure_with_a_sine_builds_no_frame_at_m32() {
+    let text = basic_procedure(WAVE, "WAVE");
+    assert!(!text.contains("mov ebp, esp"), "a frame is built: {text}");
+    assert!(text.contains("db 0d9h,0feh"), "the sine is not inline bytes: {text}");
+    assert!(
+        text.lines().any(|line| line.contains("ebp") && !line.contains("push ebp") && !line.contains("pop ebp")),
+        "the frame register holds no value: {text}"
+    );
+}

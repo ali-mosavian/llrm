@@ -1,5 +1,5 @@
-reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
-blessed = "2026-10-13"
+reason = "a BASIC procedure at m32 holds a value in the frame register and builds no frame (the driver now records the bytes a runtime callee pops, a push of a value is sized, x87 register bytes are inert, the freed registers reach masm): bq32 -O2 instructions -0..-10.5% (fib -10.5%, nbody -9.9%, particle -6.9%, shellsort -6.6%, hanoi -3.4%), code -3%..+7% ([esp+d] is a byte longer than [ebp+d]); -Os keeps BASIC's frame where size is tuned and masm compares the bytes: -4%..+0%, instructions +0..+2.5%"
+blessed = "2026-10-14"
 
 [bas.O2]
 instructions = 127350
@@ -32,14 +32,14 @@ bss_bytes = 0
 kernel_ms = 1.7961
 
 [bq32.O2]
-instructions = 147859
-code_bytes = 623
+instructions = 137658
+code_bytes = 618
 data_bytes = 187
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 147758
-code_bytes = 615
+instructions = 147958
+code_bytes = 613
 data_bytes = 187
 bss_bytes = 0
 

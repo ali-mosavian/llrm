@@ -32,13 +32,14 @@
 //!
 //! The frame register is kept where any of these holds: the target does not
 //! allow freeing it (`registers.optional`), the body is not 32-bit, or it has
-//! inline assembly, a landing pad, `returns_twice`, or debug variables not
-//! located by the CFA. It is kept where the frame register is read or written
-//! as a value, or is a base or index of anything but a frame cell; the stack
-//! pointer is written other than by `add`/`sub` with an immediate; there is an
-//! indirect call, jump or branch, a `leave`, an escape or a barrier other than
-//! `fnstcw`, `fldcw`, `fnstsw`, `in` and `out`, a push or pop of a width other
-//! than 2 or 4, or two edges disagree on the depth.
+//! inline code (bytes of x87 register operations, `fsin` for one, touch no
+//! stack cell and do not count), a landing pad, `returns_twice`, or debug
+//! variables not located by the CFA. It is kept where the frame register is
+//! read or written as a value, or is a base or index of anything but a frame
+//! cell; the stack pointer is written other than by `add`/`sub` with an
+//! immediate; there is an indirect call, jump or branch, a `leave`, an escape
+//! or a barrier other than `fnstcw`, `fldcw`, `fnstsw`, `in` and `out`, a push
+//! or pop of a width other than 2 or 4, or two edges disagree on the depth.
 //!
 //! When freed, the frame register joins the allocatable set and the saved
 //! registers (the prologue pushes it where it is used).
@@ -97,6 +98,14 @@ fn is_frame(
     register != RegId::None && crate::model::ir::root(register) == crate::model::ir::root(pointer)
 }
 
+/// Whether `bytes` are x87 register operations only: pairs of an escape opcode
+/// (`D8`..`DF`) and a register-form ModRM (`C0` and up), as the sequences a
+/// frontend spells as bytes (`fsin`, `fatan`, `fexp2`). Such code reads no
+/// memory, so it cannot name the stack or the frame.
+pub fn x87_registers_only(bytes: &[u8]) -> bool {
+    bytes.len() % 2 == 0 && bytes.chunks(2).all(|pair| (0xd8..=0xdf).contains(&pair[0]) && pair[1] >= 0xc0)
+}
+
 /// Whether the function described by `body` (its calls' popped bytes in `pops`)
 /// can have no frame register.
 pub fn without_frame_register(
@@ -106,6 +115,7 @@ pub fn without_frame_register(
     inline: bool,
     far: bool,
     landing: bool,
+    size: bool,
 ) -> bool {
     let regs = body.regs();
     let pointer = registers.pointer;
@@ -153,6 +163,9 @@ pub fn without_frame_register(
                     let [place] = &places[..] else { return false };
                     let width = match place {
                         Loc::Reg(reg) => reg.register.size() as i64,
+                        // Tuned for size a push of a value keeps the frame, for
+                        // masm to compare the two forms in bytes.
+                        Loc::Held(held) if !size => i64::from(held.width),
                         Loc::Imm(imm) => i64::from(imm.width),
                         Loc::Mem(cell) => i64::from(cell.width),
                         _ => return false,
@@ -227,4 +240,25 @@ pub fn without_frame_register(
     }
     llrm_support::debug!("frame", "{}: freed", body.name);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::x87_registers_only;
+
+    /// QB's `fsin`, `fatan` and `fexp2` are bytes the assembler has no
+    /// mnemonic for. Any inline code kept the frame register, and a function
+    /// that took a sine (qbdemo's PLASMA) could not hold a value in it. A byte
+    /// string of x87 register operations touches no stack cell; one with a
+    /// memory operand (`fld dword ptr [esp]`, ModRM below C0) or other code
+    /// may.
+    #[test]
+    fn test_x87_register_operations_touch_no_stack_cell() {
+        assert!(x87_registers_only(&[0xd9, 0xfe]));
+        assert!(x87_registers_only(&[0xd9, 0xe8, 0xd9, 0xf3]));
+        assert!(!x87_registers_only(&[0xd9, 0x04, 0x24]), "fld dword ptr [esp]");
+        assert!(!x87_registers_only(&[0xd9, 0x44, 0x24, 0x04]), "fld dword ptr [esp+4]");
+        assert!(!x87_registers_only(&[0x90, 0x90]), "nops are not x87");
+        assert!(!x87_registers_only(&[0xd9]), "half an instruction");
+    }
 }
