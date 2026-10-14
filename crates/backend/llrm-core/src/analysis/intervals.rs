@@ -639,43 +639,45 @@ pub fn changes(
         return None;
     }
     let mut found = Changes { gone: Vec::new(), added: Vec::new(), touched: Default::default() };
-    for (one, two) in before.blocks.iter().zip(&after.blocks) {
+    // The blocks that differ, with the positions of what each lost and gained.
+    let mut differing: Vec<(usize, Vec<usize>, Vec<usize>)> = Vec::new();
+    for (block, (one, two)) in before.blocks.iter().zip(&after.blocks).enumerate() {
         if one.insns.same_insns(&two.insns) {
             continue;
         }
-        match aligned_insns(&one.insns, &two.insns).as_deref() {
-            Some(alike) => {
-                found.gone.extend(alike.gone.iter().map(|at| Arc::clone(&one.insns[*at])));
-                found.added.extend(alike.added.iter().map(|at| Arc::clone(&two.insns[*at])));
-            }
-            None => {
-                found.gone.extend(one.insns.iter().cloned());
-                found.added.extend(two.insns.iter().cloned());
-            }
-        }
+        let (gone, added): (Vec<usize>, Vec<usize>) = match aligned_insns(&one.insns, &two.insns).as_deref() {
+            Some(alike) => (alike.gone.clone(), alike.added.clone()),
+            None => ((0..one.insns.len()).collect(), (0..two.insns.len()).collect()),
+        };
+        found.gone.extend(gone.iter().map(|at| Arc::clone(&one.insns[*at])));
+        found.added.extend(added.iter().map(|at| Arc::clone(&two.insns[*at])));
+        differing.push((block, gone, added));
     }
     found.touched = found.gone.iter().chain(&found.added).flat_map(|insn| names(insn)).collect();
     // A parallel copy's moves are all read and written at its last, which a
     // change to any of them moves: the values of the moves it keeps are
     // touched too.
-    for (one, two) in before.blocks.iter().zip(&after.blocks) {
-        if one.insns.same_insns(&two.insns) {
-            continue;
-        }
-        for (insns, shows) in [(&one.insns, &found.gone), (&two.insns, &found.added)] {
-            for member in shows.iter() {
-                let Some(group) = member.group else { continue };
-                if let Some(at) = insns.iter().position(|insn| Arc::ptr_eq(insn, member)) {
-                    let mut from = at;
-                    while from > 0 && insns[from - 1].group == Some(group) {
-                        from -= 1;
-                    }
-                    let mut to = at + 1;
-                    while to < insns.len() && insns[to].group == Some(group) {
-                        to += 1;
-                    }
-                    found.touched.extend(insns[from..to].iter().flat_map(|insn| names(insn)));
+    for (block, gone, added) in &differing {
+        let (one, two) = (&before.blocks[*block], &after.blocks[*block]);
+        for (insns, shown) in [(&one.insns, gone), (&two.insns, added)] {
+            // The members of a group are met in order: the range of one is
+            // gone over once.
+            let mut covered = 0;
+            for at in shown {
+                if *at < covered {
+                    continue;
                 }
+                let Some(group) = insns[*at].group else { continue };
+                let mut from = *at;
+                while from > 0 && insns[from - 1].group == Some(group) {
+                    from -= 1;
+                }
+                let mut to = *at + 1;
+                while to < insns.len() && insns[to].group == Some(group) {
+                    to += 1;
+                }
+                found.touched.extend(insns[from..to].iter().flat_map(|insn| names(insn)));
+                covered = to;
             }
         }
     }

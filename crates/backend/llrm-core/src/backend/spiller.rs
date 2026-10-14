@@ -4974,6 +4974,33 @@ mod tests {
         insns.iter().position(|other| Arc::ptr_eq(other, one)).expect("present")
     }
 
+    /// A parallel copy's moves are all read and written at its last: a change
+    /// to one touches the values of the moves it keeps, and the group is gone
+    /// over once however many of its moves changed.
+    #[test]
+    fn test_changing_a_move_of_a_parallel_copy_touches_the_values_of_the_others() {
+        let before = _body(vec![
+            _move(1, 2, Some(7), 0x10),
+            _move(3, 4, Some(7), 0x11),
+            _move(5, 6, Some(7), 0x12),
+            _add(8, 8, 0x13),
+        ]);
+        let mut insns = before.insns();
+        insns[1] = Arc::new(_move(3, 9, Some(7), 0x11));
+        let after = _body(insns.iter().map(|one| (**one).clone()).collect());
+        let kept = [before.insns()[0].clone(), before.insns()[2].clone(), before.insns()[3].clone()];
+        let after = {
+            let mut block = after.blocks[0].clone();
+            block.insns = vec![kept[0].clone(), insns[1].clone(), kept[1].clone(), kept[2].clone()].into();
+            after.with_blocks(vec![block])
+        };
+        let found = crate::analysis::intervals::changes(&before, &after).expect("the same shape");
+        for value in [1, 2, 3, 4, 5, 6, 9] {
+            assert!(found.touched.contains(&value), "value#{value} is touched: {:?}", found.touched);
+        }
+        assert!(!found.touched.contains(&8), "an add outside the group is not touched");
+    }
+
     /// A hoisted index add may not land before a SETcc, which reads the
     /// flags an earlier compare left: `setl` was read as neither reading
     /// nor writing them, so the add behind it looked safe to hoist.
