@@ -340,3 +340,19 @@ def test_a_spill_rewrite_keeps_the_instructions_that_name_no_spilled_value_at_on
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["spill rewrite"] < 100, f"cells N=448 -O2: spill rewrite cost {run['spill rewrite']} Minstr (100 allowed; 167 before): {run}"
+
+
+def test_a_spill_asks_no_slot_colouring_of_the_homes_it_leaves_behind():
+    """Each spill coloured its slot against the intervals of every existing home, found again each time: `intervals homes` cost 165 Minstr
+    on `branches` at N=400 and 847 at 800 (slope 2.3 per doubling), `spill color slots` 37 and 142, for allocations that were then
+    thrown away. A spill takes a slot of its own and the kept allocation's slots are shared once (`spill slots shared`)."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](400))
+        run = steps(compiler, source, "-O2")
+    spent = run.get("intervals homes", 0.0) + run.get("spill color slots", 0.0)
+    assert spent < 20, f"branches N=400 -O2: intervals homes and spill color slots cost {spent} Minstr (20 allowed; 202 before): {run}"

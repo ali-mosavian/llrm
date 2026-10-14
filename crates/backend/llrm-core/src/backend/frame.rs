@@ -154,6 +154,9 @@ pub struct Frame {
     /// The slots the selector laid out (first byte, size); see
     /// `isel::Selected::extents`.
     pub extents: Vec<(i64, i64)>,
+    /// Whether the spiller gives each spilled value a slot of its own, to be
+    /// shared once the allocation is chosen (`spiller::slots_colored`).
+    pub defer_colours: bool,
 }
 
 impl Frame {
@@ -167,6 +170,7 @@ impl Frame {
             capacities: IndexMap::default(),
             hole: 0,
             extents: Vec::new(),
+            defer_colours: false,
         }
     }
 
@@ -293,13 +297,13 @@ impl Frame {
     /// This value's displacement, creating one where it has none.
     ///
     /// A slot belongs to its value: `Frame::slot` shares none. The sharing is
-    /// the colourers', `spiller::_color_slots` and isel's `alloca_groups`
-    /// (the rule is `slots`), and both stand down in a function that calls
-    /// a `returns_twice` routine (`LirBody::returns_twice`,
-    /// `memory::calls_returns_twice`): after `longjmp` a value
-    /// spilled before `setjmp` is read from its slot, so a slot recycled for
-    /// another value (LLVM's stack colouring) would hand back the wrong
-    /// one.
+    /// the colourers', `spiller::_color_slots`, `spiller::slots_colored` and
+    /// isel's `alloca_groups` (the rule is `slots`), and both stand down in
+    /// a function that calls a `returns_twice` routine
+    /// (`LirBody::returns_twice`, `memory::calls_returns_twice`): after
+    /// `longjmp` a value spilled before `setjmp` is read from its slot, so
+    /// a slot recycled for another value (LLVM's stack colouring) would
+    /// hand back the wrong one.
     pub fn slot(
         &mut self,
         value: impl Into<SlotKey>,
