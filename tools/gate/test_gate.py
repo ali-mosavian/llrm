@@ -974,3 +974,10 @@ def test_smoke_refuses_a_branch_that_conflicts_with_main(tmp_path):
     git("update-ref", "refs/remotes/origin/main", "HEAD")
     git("checkout", "-q", "pr")
     assert any("conflicts" in r for r in gate.refusals(tmp_path))
+
+
+def test_a_passed_smoke_run_leaves_a_mark_for_its_head_that_the_train_reads(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLRM_SMOKE_DIR", str(tmp_path / "smoke"))
+    assert not gate.smoked("abc123")
+    gate.record_smoke("abc123")
+    assert gate.smoked("abc123") and not gate.smoked("abc124")
