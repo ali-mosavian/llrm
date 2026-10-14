@@ -1988,7 +1988,12 @@ impl PassManager {
                         return Err(format!("{name} claims to preserve {} but changed them", stale.join(", ")));
                     }
                 }
+                // An analysis that reads the log of edits is told of this one.
+                let moved = function.mark() != before;
                 stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
+                if moved {
+                    analyses.edit_log.push(id);
+                }
                 spanned("declared", || declared.place(module))?;
             }
             if self.verify_invalidation {
