@@ -1,7 +1,7 @@
 //! Port of `tests/test_nib_frontend.py`.
 //!
-//! skipped: `execute.run` assertions (`qbopt/hir/execute.py` is tools-only),
-//! and the tests made of nothing else;
+//! skipped: `execute.run` assertions (the reference executor is not in this
+//! tree), and the tests made of nothing else;
 //! test_dos_bootstrap_enters_the_runtime_before_language_main (reads runtime
 //! sources, no compiler).
 

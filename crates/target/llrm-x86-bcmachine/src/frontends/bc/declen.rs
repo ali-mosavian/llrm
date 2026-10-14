@@ -1,8 +1,7 @@
 //! Object-code instruction lengths and operand locations.
 //!
-//! Port of `qbopt/frontend/declen.py:{Insn,to_signed,stood_in_for,emulated,
-//! decode,length,run}`. The Python decoder is the specification: this keeps
-//! the iced instruction and records the object-file offsets that fixups use.
+//! This keeps the iced instruction and records the object-file offsets that
+//! fixups use.
 
 use std::ops::{Range, RangeInclusive};
 

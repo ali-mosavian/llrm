@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/qb/__main__.py`, plus `--dump DIR` (the stage
+//! The command line, plus `--dump DIR` (the stage
 //! dump, `qbstages`) and `--mbf`.
 //!
 //! ```text

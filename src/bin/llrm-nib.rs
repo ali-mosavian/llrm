@@ -1,4 +1,4 @@
-//! `tools/modernexe.py`'s compile to an object, ported.
+//! Compile Nib to an object.
 
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;

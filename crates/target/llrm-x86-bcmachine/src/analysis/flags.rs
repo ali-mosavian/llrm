@@ -1,4 +1,4 @@
-//! Port of `qbopt/analysis/flags.py`: which flags are live.
+//! Which flags are live.
 
 use iced_x86::FlowControl;
 pub use llrm_lir::flag::{ALL, Flag};

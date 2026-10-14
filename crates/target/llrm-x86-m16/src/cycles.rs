@@ -1,4 +1,4 @@
-//! Port of `qbopt/cycles/cycles.py`.
+//! Instruction cycle counts.
 //!
 //! Vendored from the runtime pass (`~/work/badlogic/mgl,
 //! tools/cycles/cycles.py`, taken 2026-08-29). Published latencies rather than
@@ -536,7 +536,7 @@ pub fn table(
     }
 }
 
-/// `python -m qbopt.cycles.cycles [hex]`.
+/// The command line: `[hex]`.
 pub fn main(argv: &[String]) -> i32 {
     if let Some(hexs) = argv.first() {
         let (_, cnt, tot, det) = report("argv", hexs);

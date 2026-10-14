@@ -1,4 +1,4 @@
-//! `tools/modernexe.py`'s compile, to an object rather than a linked
+//! Compile to an object rather than a linked
 //! executable, plus `--dump DIR`, which writes the stages.
 //!
 //! ```text

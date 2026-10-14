@@ -1,4 +1,4 @@
-//! Port of `qbopt/objectfile/omf.py`: read and write Intel OMF object files
+//! Read and write Intel OMF object files
 //! -- the format BC hands to LINK.
 //!
 //! Records are: type byte, then a length word covering the body AND a
