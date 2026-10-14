@@ -513,3 +513,72 @@ def test_no_bench_program_runs_long_enough_for_a_timer_tick_at_the_flat_rate():
         for counts in [level]
     )
     assert longest < bench.qb32.BENCH_RATE * 55, (longest, bench.qb32.BENCH_RATE)
+
+
+def test_the_levels_are_measured_at_once_and_a_failure_at_any_of_them_reaches_the_result(monkeypatch, tmp_path):
+    """The levels went one after the other (96 s of 4 x 24 s). Run side by side, an error at one level must still be in the result and
+    every level must be there once."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def measure_opt(selected, opt, work, timing=False):
+        return {("b", "c", opt): {"error": "boom"} if opt == "O2" else {"instructions": 1}}
+
+    monkeypatch.setattr(bench, "measure_opt", measure_opt)
+    monkeypatch.setattr(bench, "ProcessPoolExecutor", ThreadPoolExecutor)  # a process pool cannot carry a patched function
+    monkeypatch.setattr(bench, "mark_known", lambda measured, variants, opts: measured)
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
+    got = bench.measure_all([], ["O1", "O2", "O3", "Os"], tmp_path)
+    assert sorted(got) == [("b", "c", o) for o in ("O1", "O2", "O3", "Os")]
+    assert got[("b", "c", "O2")] == {"error": "boom"} and got[("b", "c", "O1")] == {"instructions": 1}
+
+
+def test_a_timed_run_measures_the_levels_one_after_the_other(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(bench, "measure_opt", lambda selected, opt, work, timing=False: seen.append(opt) or {})
+    monkeypatch.setattr(bench, "net_times", lambda out: out)
+    monkeypatch.setattr(bench, "mark_known", lambda measured, variants, opts: measured)
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
+    bench.measure_all([], ["O1", "O2"], tmp_path, timing=True)
+    assert seen == ["O1", "O2"]
+
+
+def _main(monkeypatch, capsys, argv, problems, tmp_path):
+    monkeypatch.setattr(sys, "argv", ["bench.py", *argv, "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
+    monkeypatch.setattr(bench, "judge", lambda *a: list(problems))
+    monkeypatch.setattr(bench, "standing", lambda *a: [])
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
+    code = bench.main()
+    return code, capsys.readouterr().out
+
+
+BETTER = "a c -O2: instructions 90 < 100 (better: --bless --reason)"
+WORSE = "b c -O2: instructions 110 > 100 (worse)"
+
+
+def test_a_better_count_still_fails_the_gate_outside_a_batch(monkeypatch, capsys, tmp_path):
+    code, out = _main(monkeypatch, capsys, [], [BETTER], tmp_path)
+    assert code == 1 and f"FAIL {BETTER}" in out
+
+
+def test_in_a_batch_a_better_count_is_listed_not_failed_and_a_worse_one_still_fails(monkeypatch, capsys, tmp_path):
+    """Two PRs that improve one row: the second is below the first's baseline, and failed 'better' until someone blessed it by hand."""
+    code, out = _main(monkeypatch, capsys, ["--batch"], [BETTER], tmp_path)
+    assert code == 0 and f"BETTER {BETTER}" in out and "1 better" in out and "FAIL" not in out
+    code, out = _main(monkeypatch, capsys, ["--batch"], [BETTER, WORSE], tmp_path)
+    assert code == 1 and f"FAIL {WORSE}" in out and f"BETTER {BETTER}" in out
+
+
+def test_a_batch_bless_refuses_while_anything_but_a_better_count_fails(monkeypatch, capsys, tmp_path):
+    """Blessing writes expected.toml: it must never write over a worse number or a missing baseline."""
+    code, out = _main(monkeypatch, capsys, ["--batch", "--bless", "--reason", "train: #1 #2"], [BETTER, WORSE], tmp_path)
+    assert code == 1 and "not blessing" in out
+    code, out = _main(monkeypatch, capsys, ["--batch", "--bless", "--reason", "train: #1 #2"], [BETTER], tmp_path)
+    assert code == 0 and "blessed" in out
+
+
+def test_a_bless_still_needs_a_reason():
+    import subprocess
+
+    done = subprocess.run([sys.executable, str(Path(bench.__file__)), "--bless", "--batch"], capture_output=True, text=True)
+    assert done.returncode == 2 and "--reason" in done.stderr

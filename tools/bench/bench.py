@@ -420,55 +420,68 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
 
 
 def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
-    """{(benchmark, language, opt): counts or {"error": why} or {"known": issue}}"""
+    """{(benchmark, language, opt): counts or {"error": why} or {"known": issue}}. The levels are independent (a folder each) and are
+    measured at once, in a process each; a timed run keeps them one after the other."""
     out: dict[tuple[str, str, str], dict] = {}
-    for opt in opts:
-        folder = work / opt
-        shutil.rmtree(folder, ignore_errors=True)
-        folder.mkdir(parents=True)
-        everything = with_startup(selected, timing)
-        for _, variant in everything:
-            if reason := tools_missing(variant):
-                out[(variant.name, variant.language, opt)] = {"skip": reason}
-        todo = [(directory, variant) for directory, variant in everything if not tools_missing(variant)]
-        stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
-        objects = qbbuild.runtimes(work / "runtime") if any(v.language in OURS_BASIC for _, v in todo) else None
-        with ThreadPoolExecutor() as pool:
-            built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)], objects), todo))
-        basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
-        failed = link_basic(basic, folder)
-        jobs, plain, needs, flat = [], {}, {}, {}
-        for (directory, variant), result in zip(todo, built):
-            key = (variant.name, variant.language, opt)
-            stem = stems[(variant.name, variant.language)]
-            why = result if isinstance(result, str) else failed.get(stem)
-            if why:
-                out[key] = {"error": why}
-                continue
-            exe, listing = (folder / f"{stem}.exe", folder / f"{stem}.map") if variant.language in BASIC_LANGUAGES else result
-            if variant.language == FLAT:
-                flat[key] = (stem, exe, folder / f"{stem}.{qbbuild.FLAT}.obj", expected_output(directory), timing_input(variant, directory), listing, variant.region)
-                if directory == STARTUP:
-                    plain[key] = exe
-                else:
-                    needs[key] = flat[key][4]
-                    jobs.append((key, None))
-            elif directory == STARTUP:
-                plain[key] = exe  # timed, not counted
-            else:
-                jobs.append((key, (stem, exe, listing, None if variant.timed_only else variant.region, expected_output(directory), folder / f"{stem}.obj")))
-                needs[key] = timing_input(variant, directory)
-        with ProcessPoolExecutor() as pool:
-            counted = [(key, job) for key, job in jobs if job is not None]
-            for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
-                out[key] = counts
-        out |= measure_flat(flat, folder / "flat")
-        jobs = [(key, job if job is not None else (flat[key][0], flat[key][1], None, None, None, None)) for key, job in jobs]
-        if timing:
-            exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
-            for key, timed in time_programs(exes, folder / "time", {key: needs[key] for key in exes if needs.get(key)}).items():
-                out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
+    if timing or len(opts) < 2:
+        for opt in opts:
+            out |= measure_opt(selected, opt, work, timing)
+    else:
+        with ProcessPoolExecutor(max_workers=len(opts)) as pool:
+            for part in pool.map(measure_opt, [selected] * len(opts), opts, [work] * len(opts), [timing] * len(opts)):
+                out |= part
     return mark_known(net_times(out) if timing else out, [v for directory in benchmarks(selected) for v in variants(directory)], opts)
+
+
+def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
+    """The measurements at one optimisation level."""
+    out: dict[tuple[str, str, str], dict] = {}
+    folder = work / opt
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    everything = with_startup(selected, timing)
+    for _, variant in everything:
+        if reason := tools_missing(variant):
+            out[(variant.name, variant.language, opt)] = {"skip": reason}
+    todo = [(directory, variant) for directory, variant in everything if not tools_missing(variant)]
+    stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
+    objects = qbbuild.runtimes(work / f"runtime-{opt}") if any(v.language in OURS_BASIC for _, v in todo) else None
+    with ThreadPoolExecutor() as pool:
+        built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)], objects), todo))
+    basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
+    failed = link_basic(basic, folder)
+    jobs, plain, needs, flat = [], {}, {}, {}
+    for (directory, variant), result in zip(todo, built):
+        key = (variant.name, variant.language, opt)
+        stem = stems[(variant.name, variant.language)]
+        why = result if isinstance(result, str) else failed.get(stem)
+        if why:
+            out[key] = {"error": why}
+            continue
+        exe, listing = (folder / f"{stem}.exe", folder / f"{stem}.map") if variant.language in BASIC_LANGUAGES else result
+        if variant.language == FLAT:
+            flat[key] = (stem, exe, folder / f"{stem}.{qbbuild.FLAT}.obj", expected_output(directory), timing_input(variant, directory), listing, variant.region)
+            if directory == STARTUP:
+                plain[key] = exe
+            else:
+                needs[key] = flat[key][4]
+                jobs.append((key, None))
+        elif directory == STARTUP:
+            plain[key] = exe  # timed, not counted
+        else:
+            jobs.append((key, (stem, exe, listing, None if variant.timed_only else variant.region, expected_output(directory), folder / f"{stem}.obj")))
+            needs[key] = timing_input(variant, directory)
+    with ProcessPoolExecutor() as pool:
+        counted = [(key, job) for key, job in jobs if job is not None]
+        for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
+            out[key] = counts
+    out |= measure_flat(flat, folder / "flat")
+    jobs = [(key, job if job is not None else (flat[key][0], flat[key][1], None, None, None, None)) for key, job in jobs]
+    if timing:
+        exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
+        for key, timed in time_programs(exes, folder / "time", {key: needs[key] for key in exes if needs.get(key)}).items():
+            out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
+    return out
 
 
 def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> dict:
@@ -652,6 +665,12 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     return problems
 
 
+def split_better(problems: list[str]) -> tuple[list[str], list[str]]:
+    """(what still fails, the counts that got better): a train lets a better count pass and blesses it afterwards."""
+    better = [one for one in problems if "(better:" in one]
+    return [one for one in problems if one not in better], better
+
+
 def clock_lines(measured: dict, selected: list[str]) -> list[str]:
     """The 486 clocks of each selected benchmark's kernel beside its counts. Reported, not gated: the counts ratchet, and
     a change that trades instructions for fewer clocks is judged by these."""
@@ -700,6 +719,7 @@ def main() -> int:
     parser.add_argument("--time", action="store_true", help="also the kernel's time in DOSBox from RDTSC, net of start-up; gates the time ratio to each reference")
     parser.add_argument("--references", action="store_true", help="measure Open Watcom and BCC (C) and BC 4.5 (BASIC) again: they must equal the stored ones, or --bless records them")
     parser.add_argument("--bless", action="store_true")
+    parser.add_argument("--batch", action="store_true", help="the merge train's mode: a count below its baseline is listed as BETTER, not failed; with --bless, only when nothing else fails")
     parser.add_argument("--reason", default="")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
@@ -711,6 +731,12 @@ def main() -> int:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
+    if args.bless and args.batch:
+        # blessing a batch writes only numbers that went down: anything worse, missing or broken is not blessed over
+        if (left := split_better(judge(measured, args.select, args.opt))[0]):
+            print(*(f"FAIL {one}" for one in left), sep="\n")
+            print(f"not blessing: {len(left)} problems that are not a better count")
+            return 1
     if args.bless:
         names = {key[0] for key in measured}
         changed = 0
@@ -724,7 +750,7 @@ def main() -> int:
         print(f"blessed {len(names)} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
-    problems = judge(measured, args.select, args.opt)
+    problems, better = split_better(judge(measured, args.select, args.opt)) if args.batch else (judge(measured, args.select, args.opt), [])
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
@@ -732,7 +758,9 @@ def main() -> int:
         print(*clock_lines(measured, args.select), sep="\n")
     for one in problems:
         print("FAIL", one)
-    print(f"{len(measured)} measurements: {len(problems)} problems")
+    for one in better:
+        print("BETTER", one)
+    print(f"{len(measured)} measurements: {len(problems)} problems" + (f", {len(better)} better" if args.batch else ""))
     return 1 if problems else 0
 
 

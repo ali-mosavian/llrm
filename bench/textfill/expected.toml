@@ -1,5 +1,5 @@
-reason = "textfill's bq32 is its hand port to the flat target (textfill.flat.bas: the video address held in a variable, DEF SEG being ignored there): no segment is read per PEEK/POKE"
-blessed = "2026-10-13"
+reason = "a constant added under inttoptr is a byte offset of the pointer (algebraic): textfill bq32 -O2 instructions -4.3% (the loop counter starts at 0 and the access carries the displacement), +3 bytes (a displacement per access instead of one base register); not applied at -Os"
+blessed = "2026-10-14"
 
 [bas.O2]
 instructions = 34045
@@ -34,8 +34,8 @@ bss_bytes = 0
 kernel_ms = 0.4101
 
 [bq32.O2]
-instructions = 46035
-code_bytes = 205
+instructions = 44035
+code_bytes = 208
 data_bytes = 19
 bss_bytes = 0
 

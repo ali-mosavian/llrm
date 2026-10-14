@@ -263,6 +263,21 @@ def test_the_recolor_step_costs_what_it_did_before_the_intervals_were_shared():
     assert run["regalloc recolor"] < 680, f"cells N=448 -O2: regalloc recolor cost {run['regalloc recolor']} Minstr (680 allowed; 702 before the fix): {run}"
 
 
+def test_a_memory_phi_asks_its_own_slot_sharing_and_not_a_pass_over_every_block():
+    """`memory_phis` asked `shared_slots` of each phi it priced, and each ask built the body's block and phi tables and searched every
+    block's definitions for the values it compared: `ssa simulated` cost 693 Minstr on `branches` at N=400 and 2,597 at 800 (slope
+    1.9 to 2.0 per doubling), 6% of the compile. The tables are found once for the body and a phi looks up its own place."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](400))
+        run = steps(compiler, source, "-O2")
+    assert run["ssa simulated"] < 150, f"branches N=400 -O2: ssa simulated cost {run['ssa simulated']} Minstr (150 allowed; 693 before): {run}"
+
+
 def test_a_spill_asks_whether_a_candidate_sibling_meets_its_group_and_not_the_web_of_copies_whole():
     """`siblings` worked out the interference graph of the whole copy web (150 values at `branches` N=400, whose phi families are
     large) for each spill, to ask it of a group of one or two: `siblings interference` cost 877 Minstr at N=400 and 3,343 at 800 (slope

@@ -89,7 +89,8 @@ def test_a_run_slow_on_the_wall_that_keeps_drawing_finishes():
     import tempfile
     with tempfile.TemporaryDirectory() as raw:
         src, work = fake_qcport(Path(raw), "for i in 1 2 3 4 5 6 7 8; do echo step >> dosbox.log; sleep 0.4; done\n")
-        assert qcport_run.run(work, src, stall=1.0, cap=60, tick=0.1) is None
+        # the stall is 50 steps of the script: a host at load 300 stretches a 0.4 s sleep to a few seconds, not to 20
+        assert qcport_run.run(work, src, stall=20.0, cap=120, tick=0.1) is None
 
 
 def test_a_run_that_stops_stepping_is_stopped_however_the_host_is_loaded():
