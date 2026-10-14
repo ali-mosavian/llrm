@@ -3,21 +3,30 @@
 //! took 13 s (#830).
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use llrm_core::backend::overlap::may_overlap;
 use llrm_core::objectfile::module::{Addr, Space};
 
 struct Counting;
 
-static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// This thread's allocations: another thread's (the harness's) are no part
+    /// of what an ask costs. A `const` cell with no destructor allocates
+    /// nothing to be read.
+    static ALLOCATED: Cell<usize> = const { Cell::new(0) };
+}
+
+fn allocated() -> usize {
+    ALLOCATED.with(Cell::get)
+}
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(
         &self,
         layout: Layout,
     ) -> *mut u8 {
-        ALLOCATED.fetch_add(1, Ordering::Relaxed);
+        ALLOCATED.with(|count| count.set(count.get() + 1));
         unsafe { System.alloc(layout) }
     }
 
@@ -35,7 +44,7 @@ static COUNTING: Counting = Counting;
 
 #[test]
 fn test_asking_whether_two_frame_cells_meet_allocates_nothing() {
-    let before = ALLOCATED.load(Ordering::Relaxed);
+    let before = allocated();
     let mut met = 0;
     for a in 0..100_i64 {
         for b in 0..100_i64 {
@@ -43,7 +52,7 @@ fn test_asking_whether_two_frame_cells_meet_allocates_nothing() {
             met += usize::from(may_overlap(one, 4, other, 4));
         }
     }
-    let allocated = ALLOCATED.load(Ordering::Relaxed) - before;
+    let allocated = allocated() - before;
     assert_eq!(met, 100, "each word meets itself");
     assert_eq!(allocated, 0, "{allocated} allocations to ask 10,000 times whether two frame words meet");
 }
