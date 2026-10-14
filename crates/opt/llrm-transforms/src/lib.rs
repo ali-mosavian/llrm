@@ -19,7 +19,7 @@
 //!     s1["<b>sroa (+ splitcopy)</b><br/><small>at boundaries</small>"]:::mid
 //!     s2["<b>cleanup: fold decide dead</b><br/><small>algebraic phiopt dse gvn<br/>promote inferspace<br/>calls: tailrec<br/>loops: loopsimplify lcssa<br/>hoist loopmotion<br/>trivialunswitch indvars<br/>floatloop fill</small>"]:::mid
 //!     s3["<b>after each round: unroll</b>"]:::mid
-//!     s4["<b>after it settles: peel,</b><br/><small>unswitch, unroll-jam, merge</small>"]:::mid
+//!     s4["<b>after it settles: peel,</b><br/><small>unswitch, split, unroll-jam, merge</small>"]:::mid
 //!   end
 //!   ipa["<b>interprocedural: inline,</b><br/><small>ipacp, argpromotion,<br/>deadargs, narrowspace</small>"]:::mid
 //!   dce["<b>globaldce</b><br/><small>availableexternally<br/>calleepop</small>"]:::mid
@@ -50,9 +50,9 @@
 //! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
 //!
 //! Loops: `loopsimplify`, `lcssa` (with `lcssamerges`), `hoist`, `loopmotion`,
-//! `trivialunswitch`, `unswitch`, `indvars` (with `loopexit`, `exitfold`,
-//! `exitsink`), `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`,
-//! `unroll_jam`, `fill`, `floatloop`, `tailrec`.
+//! `trivialunswitch`, `unswitch`, `loopsplit`, `indvars` (with `loopexit`,
+//! `exitfold`, `exitsink`), `lsr` (with `mirror`), `window`, `rotate`,
+//! `unroll`, `peel`, `unroll_jam`, `fill`, `floatloop`, `tailrec`.
 //!
 //! Whole program: `globalopt`, `globaldce`, `availableexternally`, `inline`,
 //! `ipacp`, `argpromotion`, `deadargs`, `narrowspace`, `calleepop`; and
@@ -125,6 +125,7 @@ pub mod loopclone;
 pub mod loopexit;
 pub mod loopmotion;
 pub mod loopsimplify;
+pub mod loopsplit;
 pub mod lsr;
 pub mod mirror;
 pub mod narrowspace;

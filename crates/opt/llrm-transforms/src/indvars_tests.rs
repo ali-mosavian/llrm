@@ -481,3 +481,32 @@ b4:
     );
     assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
 }
+
+/// bench/sieve: `if (i <= 31)` on the narrow counter of a widened loop read
+/// `trunc i32 %widen.iv to i16` and compared that, which `split` could not see
+/// as a test of the counter: the compare is of the wide counter with the number
+/// extended, as the counter never passes the narrow width.
+#[test]
+fn an_unsigned_compare_of_a_widened_counter_reads_the_wide_one() {
+    let text = clearing("e-p:32:32-n8:16:32").replace(
+        "  store i8 1, ptr %p",
+        "  %low = icmp ule i16 %i, 31\n  %m = zext i1 %low to i8\n  store i8 %m, ptr %p",
+    );
+    let (changed, after) = widening(&text);
+    assert!(changed, "{after}");
+    assert!(after.contains("icmp ule i32 %widen.iv, 31"), "{after}");
+    assert!(!after.contains("trunc"), "{after}");
+}
+
+/// A signed compare reads the narrow value's sign, which the wide one does not
+/// have, so it stays a compare of the low part.
+#[test]
+fn a_signed_compare_of_a_widened_counter_reads_its_low_part() {
+    let text = clearing("e-p:32:32-n8:16:32").replace(
+        "  store i8 1, ptr %p",
+        "  %low = icmp slt i16 %i, 31\n  %m = zext i1 %low to i8\n  store i8 %m, ptr %p",
+    );
+    let (changed, after) = widening(&text);
+    assert!(changed, "{after}");
+    assert!(after.contains("trunc i32 %widen.iv to i16"), "{after}");
+}

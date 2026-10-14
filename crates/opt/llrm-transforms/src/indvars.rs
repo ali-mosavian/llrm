@@ -21,8 +21,10 @@
 //!    (`rises_unsigned`), becomes a counter of that width. C's `unsigned short
 //!    i` reads `a[zext i]`, a conversion per trip, which hides the loop from
 //!    idioms and strength reduction. The wide counter ends the loop against the
-//!    bound extended once in the preheader; other readers of the narrow one
-//!    read its low part.
+//!    bound extended once in the preheader; an unsigned or equality compare of
+//!    the narrow one with a value the loop leaves alone compares the wide one
+//!    with that value extended (`WidenIV::widenLoopCompare`); other readers of
+//!    the narrow one read its low part.
 //! 6. `rewound`: see below.
 //!
 //! `rewound` carries an exact inner recurrence's exit value around the outer
@@ -706,6 +708,9 @@ struct _Found {
     extensions: Vec<InstId>,
     /// Every other reader: its instruction and operand.
     rest: Vec<(InstId, u32)>,
+    /// The readers that compare it, unsigned, with a value the loop does not
+    /// define: they compare the wide counter with that value extended.
+    compares: Vec<(InstId, u32)>,
     /// The loop is tested after its trips: the compare reads the counter
     /// stepped.
     after: bool,
@@ -783,6 +788,7 @@ fn _find(
         let Some(wide) = wide else { continue };
         let mut extensions = Vec::new();
         let mut rest = Vec::new();
+        let mut compares = Vec::new();
         for one in function.users(counter) {
             let user = function.instruction(one.user);
             if one.user == proof.compare || one.user == next_inst {
@@ -790,6 +796,8 @@ fn _find(
             }
             if user.opcode == Opcode::Cast(CastOp::ZExt) && unit.int_bits(Operand::Value(user.result?)) == Some(wide) {
                 extensions.push(one.user);
+            } else if _compares_extended(user, one.index, &still) {
+                compares.push((one.user, one.index));
             } else {
                 rest.push((one.user, one.index));
             }
@@ -805,10 +813,33 @@ fn _find(
             wide,
             extensions,
             rest,
+            compares,
             after,
         });
     }
     None
+}
+
+/// `user` compares the counter, read as its `index`th operand, as unsigned
+/// numbers or for equality with a value `still` says the loop leaves alone:
+/// the counter never passes the narrow width, so its extension compares as it
+/// does (LLVM's `WidenIV::widenLoopCompare`).
+fn _compares_extended(
+    user: &llrm_mir::module::Instruction,
+    index: u32,
+    still: &induction::Invariant,
+) -> bool {
+    matches!(
+        user.opcode,
+        Opcode::ICmp(
+            IntPredicate::Eq
+                | IntPredicate::Ne
+                | IntPredicate::Ult
+                | IntPredicate::Ule
+                | IntPredicate::Ugt
+                | IntPredicate::Uge
+        )
+    ) && still.operand(user.operands[1 - index as usize])
 }
 
 /// `operand` zero-extended to `ty` at the end of `preheader`: a number is its
@@ -876,6 +907,12 @@ fn _widen(
         let old = function.instruction(extension).result.expect("a value");
         function.replace_all_uses_with(old, value);
         function.erase(extension).expect("its uses were replaced");
+    }
+    for &(user, index) in &found.compares {
+        let other = function.instruction(user).operands[1 - index as usize];
+        let other = _extended(context, function, found.preheader, other, ty);
+        function.set_operand(user, index as usize, value);
+        function.set_operand(user, 1 - index as usize, other);
     }
     // What else reads the counter reads its low part, cut where it is read.
     let narrow = function.value(counter).ty;
