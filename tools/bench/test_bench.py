@@ -540,3 +540,45 @@ def test_a_timed_run_measures_the_levels_one_after_the_other(monkeypatch, tmp_pa
     monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
     bench.measure_all([], ["O1", "O2"], tmp_path, timing=True)
     assert seen == ["O1", "O2"]
+
+
+def _main(monkeypatch, capsys, argv, problems, tmp_path):
+    monkeypatch.setattr(sys, "argv", ["bench.py", *argv, "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
+    monkeypatch.setattr(bench, "judge", lambda *a: list(problems))
+    monkeypatch.setattr(bench, "standing", lambda *a: [])
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
+    code = bench.main()
+    return code, capsys.readouterr().out
+
+
+BETTER = "a c -O2: instructions 90 < 100 (better: --bless --reason)"
+WORSE = "b c -O2: instructions 110 > 100 (worse)"
+
+
+def test_a_better_count_still_fails_the_gate_outside_a_batch(monkeypatch, capsys, tmp_path):
+    code, out = _main(monkeypatch, capsys, [], [BETTER], tmp_path)
+    assert code == 1 and f"FAIL {BETTER}" in out
+
+
+def test_in_a_batch_a_better_count_is_listed_not_failed_and_a_worse_one_still_fails(monkeypatch, capsys, tmp_path):
+    """Two PRs that improve one row: the second is below the first's baseline, and failed 'better' until someone blessed it by hand."""
+    code, out = _main(monkeypatch, capsys, ["--batch"], [BETTER], tmp_path)
+    assert code == 0 and f"BETTER {BETTER}" in out and "1 better" in out and "FAIL" not in out
+    code, out = _main(monkeypatch, capsys, ["--batch"], [BETTER, WORSE], tmp_path)
+    assert code == 1 and f"FAIL {WORSE}" in out and f"BETTER {BETTER}" in out
+
+
+def test_a_batch_bless_refuses_while_anything_but_a_better_count_fails(monkeypatch, capsys, tmp_path):
+    """Blessing writes expected.toml: it must never write over a worse number or a missing baseline."""
+    code, out = _main(monkeypatch, capsys, ["--batch", "--bless", "--reason", "train: #1 #2"], [BETTER, WORSE], tmp_path)
+    assert code == 1 and "not blessing" in out
+    code, out = _main(monkeypatch, capsys, ["--batch", "--bless", "--reason", "train: #1 #2"], [BETTER], tmp_path)
+    assert code == 0 and "blessed" in out
+
+
+def test_a_bless_still_needs_a_reason():
+    import subprocess
+
+    done = subprocess.run([sys.executable, str(Path(bench.__file__)), "--bless", "--batch"], capture_output=True, text=True)
+    assert done.returncode == 2 and "--reason" in done.stderr

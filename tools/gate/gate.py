@@ -466,7 +466,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     selected = set(p.packages or pkgs)
     ct = " ".join(f"-p {n} --test {t}" for n, t in crate_tests(pkgs) if n in selected)
     bench = (
-        'out=$(uv run -q --project tools python tools/bench/bench.py); echo "$out" | tail -3; '
+        f'out=$(uv run -q --project tools python tools/bench/bench.py{" --batch" if os.environ.get("LLRM_BENCH_BATCH") == "1" else ""}); echo "$out" | tail -3; '
         'echo "$out" | tail -1 | grep -q " 0 problems"'
     )
     steps = {

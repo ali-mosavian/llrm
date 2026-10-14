@@ -108,3 +108,31 @@ def test_a_pr_with_no_smoke_a_foreign_base_or_the_assistants_name_does_not_board
     assert any("smoke" in p for p in train.pr_problems(info, sha, False, tmp_path))
     assert any("not main" in p for p in train.pr_problems({**info, "baseRefName": "other"}, sha, True, tmp_path))
     assert any("name the assistant" in p for p in train.pr_problems({**info, "body": f"by {NAME}"}, sha, True, tmp_path))
+
+
+def test_the_tip_offered_is_the_blessed_one_and_a_bless_that_fails_its_strict_gate_offers_nothing():
+    said = []
+    ok = lambda tip, steps: train.Verdict(True)  # noqa: E731
+    code = train.run([pr(1), pr(2)], lambda prs: ("tip", []), ok, lambda s: train.Verdict(True), said.append, blessed=lambda tip, prs: ("tip+bless", train.Verdict(True)))
+    assert code == 0 and said[0] == "TRAIN PASS TIP=tip+bless PRs=#1 #2" and said[1] == "git push origin tip+bless:main"
+    said.clear()
+    code = train.run([pr(1)], lambda prs: ("tip", []), ok, lambda s: train.Verdict(True), said.append, blessed=lambda tip, prs: ("tip+bless", train.Verdict(False, ["bench"], "FAIL x")))
+    assert code == 1 and not any("TRAIN PASS" in s for s in said) and any("strict bench gate" in s for s in said)
+    said.clear()
+    train.run([pr(1)], lambda prs: ("tip", []), ok, lambda s: train.Verdict(True), said.append, blessed=lambda tip, prs: (tip, None))
+    assert said[0] == "TRAIN PASS TIP=tip PRs=#1", "nothing got better: the gated tip is offered as it is"
+
+
+def test_the_batch_gate_runs_bench_in_batch_mode_and_the_blessed_tip_is_checked_strictly(monkeypatch, tmp_path):
+    seen = []
+
+    def fake(command, **kw):
+        seen.append(kw["env"].get("LLRM_BENCH_BATCH"))
+        return subprocess.CompletedProcess(command, 0, "GATE full PASS at x in 1s\n", "")
+
+    monkeypatch.setattr(train, "git", lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+    monkeypatch.setattr(train.subprocess, "run", fake)
+    monkeypatch.setenv("LLRM_BENCH_BATCH", "stale")
+    train.full_gate("tip", tmp_path)
+    train.full_gate("tip", tmp_path, ["bench"], strict=True)
+    assert seen == ["1", None]

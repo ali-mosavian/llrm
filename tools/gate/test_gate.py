@@ -981,3 +981,12 @@ def test_a_passed_smoke_run_leaves_a_mark_for_its_head_that_the_train_reads(tmp_
     assert not gate.smoked("abc123")
     gate.record_smoke("abc123")
     assert gate.smoked("abc123") and not gate.smoked("abc124")
+
+def test_the_bench_step_runs_in_batch_mode_only_when_the_train_asks_and_still_needs_zero_problems(monkeypatch):
+    plan = gate.plan(["tools/gate/gate.py"], "full")
+    monkeypatch.delenv("LLRM_BENCH_BATCH", raising=False)
+    plain = gate.commands(plan, gate.load(), gate.packages())["bench"]
+    monkeypatch.setenv("LLRM_BENCH_BATCH", "1")
+    batch = gate.commands(plan, gate.load(), gate.packages())["bench"]
+    assert "--batch" not in plain and "bench.py --batch" in batch
+    assert '" 0 problems"' in batch, "a batch's better counts pass; its problems must still be zero"

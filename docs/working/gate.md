@@ -122,6 +122,8 @@ Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pyt
 
 A red batch: the failed steps are run on `origin/main` alone (red there too: `TRAIN ENV`, no PR blamed, exit 3); otherwise halves are re-run on the failed steps, each culprit is named with what its failing tests printed, and the rest is gated whole on its own tip before it is offered. Before starting it checks disk, `/tmp` inodes and `CARGO_TARGET_DIR`, and takes a lock so one train runs at a time.
 
+`tools/bench/bench.py --batch` is the bench step's mode in a train (`LLRM_BENCH_BATCH=1`): a count below its blessed one is printed `BETTER`, not failed, while a worse count, a missing baseline and an error still fail. `--bless --batch --reason TEXT` writes `expected.toml` only when nothing but better counts remain, so it can never bless over a worse number. Outside a batch a better count fails until its PR blesses it.
+
 ## Running it locally
 
     export CARGO_TARGET_DIR=/path/to/target
