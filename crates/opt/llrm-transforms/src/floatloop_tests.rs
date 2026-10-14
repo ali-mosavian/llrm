@@ -214,8 +214,8 @@ b2:
 }
 
 /// A body with floats and no loop whose latch touches one was solved for floats
-/// whole, every round, and never changed (d_faces.c at -O1: float-facts 169 M of
-/// 9679 M, in 55 runs, for no float loop). It is not solved.
+/// whole, every round, and never changed (d_faces.c at -O1: float-facts 169 M
+/// of 9679 M, in 55 runs, for no float loop). It is not solved.
 #[test]
 fn test_a_body_with_floats_and_no_float_loop_is_not_solved_for_floats() {
     let straight = "define float @f(float %x) {
