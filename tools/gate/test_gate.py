@@ -821,7 +821,7 @@ def _shards(tmp_path, files: dict[str, str], *extra: str):
 
     for name, body in files.items():
         (tmp_path / name).write_text(body)
-    return sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "-j", "3", "-q", "test_a.py", "test_b.py", "test_c.py", *extra], capture_output=True, text=True, cwd=tmp_path, timeout=60)
+    return sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "-j", "3", "test_a.py", "test_b.py", "test_c.py", *extra], capture_output=True, text=True, cwd=tmp_path, timeout=60)
 
 
 def test_a_failing_test_in_any_shard_fails_the_run_and_is_printed(tmp_path):
@@ -872,7 +872,7 @@ def test_a_run_that_reports_fewer_tests_than_were_collected_fails(tmp_path):
     import subprocess as sp
     import sys as _sys
 
-    done = sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "-j", "2", "-q", "test_a.py"], capture_output=True, text=True, cwd=tmp_path, timeout=60)
+    done = sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "-j", "2", "test_a.py"], capture_output=True, text=True, cwd=tmp_path, timeout=60)
     assert done.returncode == 1 and "2 tests collected, 1 reported" in done.stdout, done.stdout
 
 
@@ -882,6 +882,19 @@ def test_a_file_with_a_module_fixture_is_never_cut_into_parts():
 
     ids = [f"tools/dosbatch/test_qbrt.py::test_{i}" for i in range(40)]
     assert [a for _, a in pytest_shards.units({"tools/dosbatch/test_qbrt.py": ids}, {"tools/dosbatch/test_qbrt.py": 500.0})] == [["tools/dosbatch/test_qbrt.py"]]
+
+
+def test_flags_after_the_double_dash_reach_pytest_with_their_values(tmp_path):
+    """`-- -m slow_dos` made `slow_dos` a path and `-m` a flag with no value: nothing was collected."""
+    (tmp_path / "test_a.py").write_text("import pytest\n\n\n@pytest.mark.marked\ndef test_in():\n    pass\n\n\ndef test_out():\n    pass\n")
+    done = _shards(tmp_path, {"test_b.py": "def test_ok():\n    pass\n", "test_c.py": "def test_ok():\n    pass\n"}, "--", "-m", "marked", "-q")
+    assert done.returncode == 0 and "1 files" in done.stdout, done.stdout
+
+
+def test_the_dos_slow_step_runs_through_the_sharder_with_its_marker():
+    """One pytest process played every slow DOS test in turn: 283 s."""
+    cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
+    assert "pytest_shards.py" in cmd and "-- -m slow_dos" in cmd and "tools/dosbatch" in cmd
 
 
 def test_the_turbo_binary_runs_whole_in_the_turbo_step_and_not_in_integration():

@@ -76,9 +76,9 @@ def main() -> int:
     ap.add_argument("--ignore", action="append", default=[])
     ap.add_argument("--durations", help="JSON {file: seconds}, read for the order (longest first) and rewritten after the run")
     ap.add_argument("paths", nargs="+")
-    args, flags = ap.parse_known_args(sys.argv[1:])
-    if "--" in flags:
-        flags.remove("--")
+    argv = sys.argv[1:]
+    at = argv.index("--") if "--" in argv else len(argv)
+    args, flags = ap.parse_args(argv[:at]), argv[at + 1 :]  # what follows `--` is pytest's, whatever it looks like
     tests, broken = collect(args.paths, args.ignore, flags)
     if broken is not None:
         print(broken)
