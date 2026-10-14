@@ -181,6 +181,12 @@ pub fn merged(
                     }),
                 );
             if apart {
+                llrm_support::debug!(
+                    "memcpyopt",
+                    "{} pairs of {} bytes made one memcpy",
+                    run.len(),
+                    run.iter().map(|one| one.bytes).sum::<i64>()
+                );
                 kept.push(run);
             }
         }
