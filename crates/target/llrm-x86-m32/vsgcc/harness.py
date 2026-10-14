@@ -15,7 +15,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from iced_x86 import Decoder, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
+from iced_x86 import CpuidFeature, Decoder, MemorySize, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
 
@@ -35,6 +35,23 @@ LLRM = llrmbin.bin_dir() / "llrm-c"   # where cargo put it; build.sh and ctime.p
 STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
 BASE = 0x10000
 OMF_VARIANTS = ("llrmO1", "llrm", "llrmO3", "llrmOs")   # "llrm" is -O2
+X87 = {CpuidFeature.FPU, CpuidFeature.FPU287, CpuidFeature.FPU287XL_ONLY, CpuidFeature.FPU387, CpuidFeature.FPU387SL_ONLY}
+# The rest of the 486's x87 table (Intel 240440-002, least of each range): no compiler is favoured by a price it lacks.
+X87_CLOCKS = {
+    Mnemonic.FRNDINT: 21, Mnemonic.FSCALE: 30, Mnemonic.FXTRACT: 16, Mnemonic.FPREM: 70, Mnemonic.FPREM1: 72,
+    Mnemonic.FSIN: 257, Mnemonic.FCOS: 257, Mnemonic.FSINCOS: 292, Mnemonic.FPTAN: 200, Mnemonic.FPATAN: 218,
+    Mnemonic.F2XM1: 140, Mnemonic.FYL2X: 196, Mnemonic.FYL2XP1: 171, Mnemonic.FXAM: 8, Mnemonic.FTST: 4,
+    Mnemonic.FLDPI: 4, Mnemonic.FLDL2E: 4, Mnemonic.FLDL2T: 4, Mnemonic.FLDLG2: 4, Mnemonic.FLDLN2: 4,
+    Mnemonic.FDECSTP: 3, Mnemonic.FINCSTP: 3, Mnemonic.FFREE: 3, Mnemonic.FNCLEX: 7,
+    Mnemonic.FBLD: 70, Mnemonic.FBSTP: 172, Mnemonic.FLDENV: 44, Mnemonic.FNSTENV: 67, Mnemonic.FNSAVE: 143,
+    Mnemonic.FRSTOR: 131, Mnemonic.FNOP: 3, Mnemonic.FFREEP: 3, Mnemonic.FSTPNCE: 3, Mnemonic.FNENI: 3,
+    Mnemonic.FNDISI: 3, Mnemonic.FNSETPM: 3,
+    # Not on a 486 (P6 and later, SSE3): priced as the instruction they replace, which favours neither side.
+    Mnemonic.FCMOVB: 4, Mnemonic.FCMOVBE: 4, Mnemonic.FCMOVE: 4, Mnemonic.FCMOVNB: 4, Mnemonic.FCMOVNBE: 4,
+    Mnemonic.FCMOVNE: 4, Mnemonic.FCMOVNU: 4, Mnemonic.FCMOVU: 4, Mnemonic.FCOMI: 4, Mnemonic.FCOMIP: 4,
+    Mnemonic.FUCOMI: 4, Mnemonic.FUCOMIP: 4, Mnemonic.FISTTP: 29,
+    Mnemonic.FNINIT: 17, Mnemonic.FICOM: 15, Mnemonic.FICOMP: 15, Mnemonic.FSTCW: 3, Mnemonic.FNSTCW: 3,
+}
 MEMORY = {OpKind.MEMORY, OpKind.MEMORY_SEG_SI, OpKind.MEMORY_SEG_ESI, OpKind.MEMORY_ESDI, OpKind.MEMORY_ESEDI}
 
 
@@ -253,8 +270,21 @@ def cost(ins, taken, first_rep, mem, multiplier=None):
         return 6 if m == Mnemonic.FCHS else 3
     if m in (Mnemonic.FNSTSW, Mnemonic.FNSTCW, Mnemonic.FLDCW):
         return 3 if m == Mnemonic.FNSTSW else 4
+    # Integer memory operands (Intel 240440-002, the 486 table; the least of each range, which does not
+    # favour the compiler that uses them): m32int / m16int. They were unpriced and fell through to 1 clock,
+    # which made gcc's `fimul` (x_matmul_f) free.
+    if m in (Mnemonic.FIADD, Mnemonic.FISUB, Mnemonic.FISUBR):
+        return 19 if ins.memory_size == MemorySize.INT32 else 20
+    if m == Mnemonic.FIMUL:
+        return 22 if ins.memory_size == MemorySize.INT32 else 23
+    if m in (Mnemonic.FIDIV, Mnemonic.FIDIVR):
+        return 84 if ins.memory_size == MemorySize.INT32 else 85
+    if m in X87_CLOCKS:
+        return X87_CLOCKS[m]
     if m == Mnemonic.SAHF:
         return 2
+    if X87.intersection(ins.cpuid_features()):
+        raise ValueError(f"the model has no price for the x87 instruction {Formatter(FormatterSyntax.INTEL).format(ins)}")
     return 1
 
 
