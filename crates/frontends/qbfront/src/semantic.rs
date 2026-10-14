@@ -2235,7 +2235,7 @@ impl Compiler {
         // refused where the name is looked up.
         if let Some(sign) = name.strip_suffix(['%', '&', '!', '#', '$']).map(|base| &name[base.len()..]) {
             let base = format!("{}{marker}", canonical(name));
-            if self.variables.get(&base).is_some_and(|one| type_suffix(one.type_id) == sign) {
+            if self.variables.get(&base).is_some_and(|one| type_suffix(one.element.unwrap_or(one.type_id)) == sign) {
                 return base;
             }
         }
@@ -8565,6 +8565,7 @@ impl Compiler {
         &self,
         name: &str,
     ) -> Result<Variable, SemanticError> {
+        self.refuse_other_suffix(name, "()")?;
         match self.variables.get(&self.array_key(name)) {
             Some(variable) => Ok(variable.clone()),
             None => {
@@ -8599,14 +8600,19 @@ impl Compiler {
     }
 
     /// BC: `x%` after `DIM x AS LONG` is a Duplicate definition, not another
-    /// variable.
+    /// variable; so is `a%(1)` after `DIM a(5) AS LONG`. `marker` is the
+    /// namespace's: "" for scalars, "()" for arrays.
     fn refuse_other_suffix(
         &self,
         name: &str,
+        marker: &str,
     ) -> Result<(), SemanticError> {
         let Some(sign) = suffix(name).map(|_| &name[canonical(name).len()..]) else { return Ok(()) };
-        match self.variables.get(canonical(name)) {
-            Some(one) if one.element.is_none() && type_suffix(one.type_id) != sign => self.fail("Duplicate definition"),
+        let declared = self.variables.get(&format!("{}{marker}", canonical(name)));
+        match declared.map(|one| (one.element, one.type_id)) {
+            Some((element, type_id)) if type_suffix(element.unwrap_or(type_id)) != sign => {
+                self.fail("Duplicate definition")
+            }
             _ => Ok(()),
         }
     }
@@ -8616,7 +8622,7 @@ impl Compiler {
         name: &str,
     ) -> Result<Variable, SemanticError> {
         self.refuse_keyword(name)?;
-        self.refuse_other_suffix(name)?;
+        self.refuse_other_suffix(name, "")?;
         let key = self.variable_key(name);
         self.seen.insert(key.clone());
         if let Some(variable) = self.variables.get(&key) {
