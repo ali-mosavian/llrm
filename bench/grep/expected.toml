@@ -1,4 +1,4 @@
-reason = "commuted keeps the copy it drops as an anchor (its value was still read): runtime rows +0.001%"
+reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 3703.8059
 
 [bq32.O2]
-instructions = 623875846
-code_bytes = 1494
+instructions = 623875818
+code_bytes = 1460
 data_bytes = 127
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 623905943
-code_bytes = 1334
+instructions = 623905915
+code_bytes = 1290
 data_bytes = 127
 bss_bytes = 0
 

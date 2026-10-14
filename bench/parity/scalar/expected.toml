@@ -1,5 +1,5 @@
-reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
-blessed = "2026-10-13"
+reason = "m32 word add/sub on the whole register (no 66h): code bytes down in 50+ rows; a few runtime instructions up by under 0.001%"
+blessed = "2026-10-14"
 
 [bas.O2]
 instructions = 92
@@ -35,13 +35,13 @@ kernel_ms = 0.0138
 
 [bq32.O2]
 instructions = 94
-code_bytes = 163
+code_bytes = 160
 data_bytes = 31
 bss_bytes = 0
 
 [bq32.Os]
 instructions = 94
-code_bytes = 163
+code_bytes = 160
 data_bytes = 31
 bss_bytes = 0
 

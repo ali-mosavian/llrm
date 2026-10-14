@@ -8,7 +8,9 @@
 //! the CPU profile. Only 16- and 32-bit integer registers qualify, and an
 //! instruction with side effects beyond its operands (`plain`) never does.
 //!
-//! A chain of such steps leaves a register equal to `sum(multiple * reg) +
+//! A chain begins at a copy, or at a symbol-free `lea` (`lea_start`), and its
+//! steps may be words or the dwords the target ran them as (`promote`). A
+//! chain of such steps leaves a register equal to `sum(multiple * reg) +
 //! disp`, kept as `Terms`. `form` turns terms into the address-size-
 //! prefixed 32-bit address that names them (`[base+index*scale+disp]`, the
 //! index never the stack pointer, the scale one the target's form takes).
@@ -127,6 +129,38 @@ pub fn step(
         _ => return None,
     };
     Some((*dest, step, costs.sized(cost, width, i64::from(cpu.operand_bytes))))
+}
+
+/// A `lea` with no symbol that starts a chain: the register it makes, the
+/// terms and displacement of its address, and what `cpu` charges for it.
+pub fn lea_start(
+    regs: Regs,
+    one: &Insn,
+    cpu: &Profile,
+) -> Option<(Reg, Terms, i64, i64)> {
+    if !plain(one) {
+        return None;
+    }
+    let what = one.what.as_ref()?;
+    let ([Loc::Reg(dest)], Operation::Address, Some("lea"), [Loc::Mem(cell)]) =
+        (what.dests.as_slice(), what.op, what.name.as_deref(), what.sources.as_slice())
+    else {
+        return None;
+    };
+    let integer = |register: RegId| register != RegId::None && regs.integer(register) && !regs.is_stack(register);
+    if ![2, 4].contains(&dest.width)
+        || !regs.integer(dest.register)
+        || cell.addr.is_some()
+        || cell.selector.is_some()
+        || !integer(cell.through)
+        || !integer(cell.index_through)
+    {
+        return None;
+    }
+    let (base, index) = (cell.through.full_register32(), cell.index_through.full_register32());
+    let terms = if base == index { vec![(base, 1 + cell.scale)] } else { vec![(base, 1), (index, cell.scale)] };
+    let width = i64::from(dest.width);
+    Some((*dest, terms, cell.offset, cpu.operations.sized(cpu.operations.address, width, i64::from(cpu.operand_bytes))))
 }
 
 /// The 67h address naming `terms` plus `disp`, if one does.

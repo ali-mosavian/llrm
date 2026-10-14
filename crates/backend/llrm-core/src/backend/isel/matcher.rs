@@ -613,6 +613,21 @@ impl Selector<'_, '_, '_> {
     ) -> bool {
         let instruction = self.function.instruction(m.inst);
         let Some(bits) = self.types().int_bits(instruction.ty) else { return false };
+        // What decides most operations first: asked of every add, and / or /
+        // xor of a function, so no allocation and none of what follows
+        // for a dword.
+        if bits >= self.native_width() * 8 || self.promote.is_empty() {
+            return false;
+        }
+        let mnemonic = instruction.opcode.mnemonic();
+        let listed = |one: &String| {
+            one.strip_suffix(&format!("i{bits}"))
+                .and_then(|rest| rest.strip_suffix('.'))
+                .is_some_and(|rest| rest == mnemonic)
+        };
+        if !self.promote.iter().any(listed) {
+            return false;
+        }
         // Not where a load nothing else reads can be the operation's memory
         // operand (the other is a register, not a constant), or its cell is
         // updated in place (a store is the only reader of the result): the word
@@ -637,9 +652,18 @@ impl Selector<'_, '_, '_> {
                 ),
             );
         let foldable = instruction.operands.iter().any(|operand| loaded(*operand)) && (registers >= 2 || stored);
-        bits < self.native_width() * 8
-            && self.promote.iter().any(|one| *one == format!("{}.i{bits}", instruction.opcode.mnemonic()))
-            && !foldable
+        // Nor where a compare reads the result: the word's flags serve it, and
+        // the dword's are of bits it cannot ignore (`inc cx; jne` against
+        // `inc ecx; test cx, cx; jne`).
+        let compared = instruction
+            .result
+            .is_some_and(
+                |result| {
+                    let users = self.function.users(result);
+                    users.iter().any(|user| matches!(self.function.instruction(user.user).opcode, Opcode::ICmp(_)))
+                },
+            );
+        !foldable && !compared
     }
 
     /// The bytes of the widest integer the target computes natively.
@@ -763,7 +787,9 @@ impl Selector<'_, '_, '_> {
     ) -> Option<(Vec<(&'static str, i64)>, i64)> {
         let width = self.width(self.function.instruction(m.inst).ty).ok()?;
         let n = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && (1 < n || n < -1))?;
-        if width == 4 {
+        // Run on the whole register (`promote`) it is a dword chain, `lea`s
+        // too.
+        if width == 4 || self.is_promoted(m) {
             arithmetic::cheapest_chain(n, self.cpu)
         } else {
             arithmetic::cheapest_narrow_chain(n, self.cpu)
@@ -847,9 +873,13 @@ impl Selector<'_, '_, '_> {
         source: Operand,
         factor: Operand,
     ) -> Result<(), Unselected> {
-        let a = self.op_held(m, out, source)?;
+        let promoted = self.is_promoted(m);
+        let a = if promoted { self.op_promoted(m, out, source)? } else { self.op_held(m, out, source)? };
         let (chain, _) = self.chain(m, factor).expect("a scalable factor");
-        let Loc::Held(result) = self.op_result(m, out)? else { unreachable!("a register") };
+        let Loc::Held(result) = (if promoted { self.op_promoted_result(m, out)? } else { self.op_result(m, out)? })
+        else {
+            unreachable!("a register")
+        };
         let mut current = a.clone();
         for (index, &(name, count)) in chain.iter().enumerate() {
             let into = if index == chain.len() - 1 { result } else { self.fresh_held(result.width) };
