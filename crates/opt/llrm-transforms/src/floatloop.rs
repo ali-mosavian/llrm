@@ -101,8 +101,10 @@
 //! # Runs
 //! Per-body pipeline, after `lcssa` and before `hoist`: LICM may move an
 //! invariant preparation out of the loop afterwards. Skipped for a body with
-//! no float value (`floatfacts::touches`; `LLRM_CHECK_FLOATSKIP=1` runs it
-//! anyway and asserts it changed nothing). On at -O1 and up;
+//! no float value (`floatfacts::touches`) and for one with no loop of the
+//! shape above whose latch touches one (`float_loop`, seen without the solve;
+//! no gcc or LLVM pass is its counterpart); `LLRM_CHECK_FLOATSKIP=1` runs it
+//! anyway and asserts it changed nothing. On at -O1 and up;
 //! `Options::floatloop` turns it off for bisection. See
 //! `docs/reference/levels.md`.
 //!
@@ -154,7 +156,9 @@ impl FunctionPass for FloatLoop {
         // With no float in the body no loop is a float loop.
         // LLRM_CHECK_FLOATSKIP runs the pass anyway and says if it
         // changed anything.
-        let none = !floatfacts::touches(unit.context, unit.function);
+        // Nor does a float loop exist unless some loop has `_planned`'s shape,
+        // which is seen without the solve: that is for nothing where none has.
+        let none = !floatfacts::touches(unit.context, unit.function) || !self.float_loop(unit, analyses);
         if none && !llrm_support::env_set("LLRM_CHECK_FLOATSKIP") {
             return PreservedAnalyses::all();
         }
@@ -173,6 +177,43 @@ impl FunctionPass for FloatLoop {
 }
 
 impl FloatLoop {
+    /// Whether some loop has the shape `_planned` starts from, which needs no
+    /// solve to see: one exit that only the header reaches and no phi takes,
+    /// a phi in the header, and a latch of float work, steps and a jump.
+    fn float_loop(
+        &self,
+        unit: &passes::Unit,
+        analyses: &mut Analyses,
+    ) -> bool {
+        let function = &*unit.function;
+        let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, function);
+        let memory = Unit::within(unit.context, unit.layout, function, analyses.outer()).with_shape(&shape);
+        shape.loops.iter().any(|loop_| {
+            let (header, Some(&latch)) = (cfg::block(loop_.header), loop_.latches.first()) else { return false };
+            let latch = cfg::block(latch);
+            let [exit] = function
+                .successors(header)
+                .into_iter()
+                .filter(|one| !loop_.body.contains(&cfg::id(*one)))
+                .collect::<Vec<_>>()[..]
+            else {
+                return false;
+            };
+            function.predecessors(exit) == [header]
+                && !function.block(exit).instructions().iter().any(|&i| function.instruction(i).opcode == Opcode::Phi)
+                && function.block(header).instructions().iter().any(|&i| function.instruction(i).opcode == Opcode::Phi)
+                && function.block(latch).instructions().iter().all(|&inst| {
+                    let op = function.instruction(inst);
+                    match op.opcode {
+                        Opcode::Br => op.operands.len() == 1,
+                        Opcode::Binary(_) => true,
+                        _ => floatfacts::rule(&memory, inst).is_some(),
+                    }
+                })
+                && floatfacts::touches_in(unit.context, function, function.block(latch).instructions())
+        })
+    }
+
     fn floated(
         &mut self,
         unit: &mut passes::Unit,

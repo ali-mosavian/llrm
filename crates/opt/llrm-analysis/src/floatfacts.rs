@@ -134,19 +134,30 @@ pub fn touches(
     context: &Context,
     function: &Function,
 ) -> bool {
+    function.walk().any(|(_, inst)| touches_instruction(context, function, inst))
+}
+
+/// Whether `insts` of `function` have any floating-point value or operand.
+pub fn touches_in(
+    context: &Context,
+    function: &Function,
+    insts: &[InstId],
+) -> bool {
+    insts.iter().any(|&inst| touches_instruction(context, function, inst))
+}
+
+fn touches_instruction(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> bool {
     let types = &context.types;
-    function
-        .walk()
-        .any(
-            |(_, inst)| {
-                let instruction = function.instruction(inst);
-                instruction.result.is_some_and(|value| floating(types, function.value(value).ty))
-                    || instruction
-                        .operands
-                        .iter()
-                        .any(|&operand| function.operand_type(context, operand).is_some_and(|ty| floating(types, ty)))
-            },
-        )
+    let instruction = function.instruction(inst);
+    instruction.result.is_some_and(|value| floating(types, function.value(value).ty))
+        || instruction
+            .operands
+            .iter()
+            .any(|&operand| function.operand_type(context, operand).is_some_and(|ty| floating(types, ty)))
 }
 
 /// Python's `fractions.Fraction`: always in lowest terms, denominator positive.
