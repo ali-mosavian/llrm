@@ -1,4 +1,11 @@
 //! The machine phases and their gate: each LIR phase run, verified and checked.
+//!
+//! At -O0 (`Profile::optimized` off) the phases that only improve code are not
+//! run: peephole, loop slots, the scheduler, the coalescer and the pressure
+//! sink. gcc's and clang's -O0 improve nothing after selection and allocation;
+//! the same switch leaves out the allocator's folded reads
+//! (`allocate::RegAlloc`), the copies of returns and split tails
+//! (`assemble::assembled_by`) and the block placement (`jumps::ControlFlow`).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -49,6 +56,9 @@ pub fn machine<'a>(
         &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     )
 }
+
+/// The phases -O0 leaves out: each only makes code better.
+const UNOPTIMIZED: [&str; 5] = ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink"];
 
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where
 /// `spilling` names a run, reports to it.
@@ -130,6 +140,10 @@ pub fn machine_with<'a>(
     ];
     if spilling.is_none() {
         phases.retain(|phase| phase.class_name() != "SsaSpill");
+    }
+    // -O0: gcc and clang improve nothing after selection and allocation.
+    if !target.optimized {
+        phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
     }
     Ok(phases)
 }

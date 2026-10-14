@@ -139,6 +139,10 @@ pub struct Profile {
     /// Whether a function is made by both routes (the allocator alone and the
     /// spiller's) and the cheaper kept; else by the allocator alone.
     pub routes: bool,
+    /// Whether the backend's optional phases run: off at -O0, where like gcc's
+    /// and clang's nothing is improved after selection and allocation
+    /// (`flow::machine_with`).
+    pub optimized: bool,
     /// With `search`, whether it tries every shape (`-fallocation-search-all`,
     /// -Omax) or the one the spills suggest and the body without splitting.
     pub exhaustive: bool,
@@ -281,6 +285,7 @@ impl Profile {
             size: false,
             search: true,
             routes: true,
+            optimized: true,
             exhaustive: false,
             model: arch.cost_model(),
             multiplies: Default::default(),
@@ -406,7 +411,9 @@ fn _profile(
 /// The profiles made so far, by target, CPU and size: each made once, as the
 /// passes hold them.
 static _MADE: LazyLock<
-    std::sync::Mutex<crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool), &'static Profile>>,
+    std::sync::Mutex<
+        crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool, bool), &'static Profile>,
+    >,
 > = LazyLock::new(Default::default);
 
 /// `name`'s profile on the target `arch`, tuned for size where `size`.
@@ -460,11 +467,25 @@ pub fn tuned_routing(
     exhaustive: bool,
     routes: bool,
 ) -> Result<&'static Profile, String> {
+    tuned_optimizing(arch, name, size, search, exhaustive, routes, true)
+}
+
+/// `tuned_routing`, the backend's optional phases left out where not
+/// `optimized` (-O0).
+pub fn tuned_optimizing(
+    arch: &dyn Target,
+    name: &str,
+    size: bool,
+    search: bool,
+    exhaustive: bool,
+    routes: bool,
+    optimized: bool,
+) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
-    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes);
+    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized);
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
@@ -473,6 +494,7 @@ pub fn tuned_routing(
         search,
         exhaustive,
         routes,
+        optimized,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);

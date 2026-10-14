@@ -3565,10 +3565,16 @@ impl RegAlloc {
         // reads placed.
         let mut reloads = reloads;
         {
-            let wanted: BTreeSet<u32> = _values(&body)
-                .into_iter()
-                .filter(|value| !reloads.contains(value) && !self.pinned.contains_key(value))
-                .collect();
+            // -O0 reads every value from its register or slot as selected: this
+            // improvement alone was 13% of d_faces.c's -O0 compile.
+            let wanted: BTreeSet<u32> = if cpu.optimized {
+                _values(&body)
+                    .into_iter()
+                    .filter(|value| !reloads.contains(value) && !self.pinned.contains_key(value))
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
             let read_at_use = spiller::_folded_reads(&body, &wanted);
             if !read_at_use.is_empty() {
                 let floor = splitkit::_next_value(&body);

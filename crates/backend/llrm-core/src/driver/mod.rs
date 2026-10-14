@@ -107,13 +107,14 @@ impl Options {
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
-        cpu::tuned_routing(
+        cpu::tuned_optimizing(
             &*self.arch,
             &self.machine.cpu,
             self.pipeline.prefers_size(),
             self.pipeline.searches(),
             self.pipeline.searches_all(),
             self.pipeline.compares_routes(),
+            self.pipeline.optimize,
         )
     }
 }
