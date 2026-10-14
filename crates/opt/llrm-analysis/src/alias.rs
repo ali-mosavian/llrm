@@ -154,7 +154,7 @@ use crate::memory::{
 };
 use crate::ranges;
 use crate::regions::{self, ByteRange};
-use crate::sliceset::{Shared, SliceSet};
+use crate::sliceset::{self, Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
 pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::NONLOCAL));
@@ -870,6 +870,16 @@ pub fn callbacks_over(
 }
 
 thread_local! {
+    static CALLBACK_SLICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many slices this thread has moved between entries' owners for callbacks,
+/// for a test that a change costs what it changed.
+pub fn callback_slices_moved() -> usize {
+    CALLBACK_SLICES.with(std::cell::Cell::get)
+}
+
+thread_local! {
     static CALLBACK_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -879,12 +889,46 @@ pub fn callback_entries() -> usize {
     CALLBACK_ENTRIES.with(std::cell::Cell::get)
 }
 
-/// The callbacks as the entries' summaries add up, kept apart so that an entry
-/// whose summary changed is folded in alone: every change used to add the
-/// whole of them up again, entries times changes.
+/// The slices of `before` that `after` lacks, and the ones it has that `before`
+/// lacks: one walk of both, in order.
+fn sorted_difference<'a>(
+    before: &'a SliceSet,
+    after: &'a SliceSet,
+    gone: &mut Vec<&'a Slice>,
+    came: &mut Vec<&'a Slice>,
+) {
+    let (mut one, mut other) = (before.iter().peekable(), after.iter().peekable());
+    loop {
+        match (one.peek(), other.peek()) {
+            (Some(a), Some(b)) => match a.cmp(b) {
+                std::cmp::Ordering::Equal => {
+                    one.next();
+                    other.next();
+                }
+                std::cmp::Ordering::Less => gone.push(one.next().expect("peeked")),
+                std::cmp::Ordering::Greater => came.push(other.next().expect("peeked")),
+            },
+            (Some(_), None) => gone.push(one.next().expect("peeked")),
+            (None, Some(_)) => came.push(other.next().expect("peeked")),
+            (None, None) => break,
+        }
+    }
+}
+
+/// The callbacks as the entries' summaries add up. Each slice is owned by the
+/// entries that hold it, counted: an entry whose summary changed moves only the
+/// slices it gained and lost, and the sum is made again only when a slice
+/// gained its first owner or lost its last (every change used to add all the
+/// entries up again when one shrank: 549 of GORILLA's 1,175 changes, 545 Minstr
+/// at -O1).
 struct CalledBack {
     parts: IndexMap<String, Summary>,
-    out: Summary,
+    reads: BTreeMap<Slice, usize>,
+    writes: BTreeMap<Slice, usize>,
+    /// How many entries may read / write anything.
+    unknown: (usize, usize),
+    /// What the owners add up to, once made and until a slice comes or goes.
+    built: std::cell::RefCell<Option<Summary>>,
 }
 
 impl CalledBack {
@@ -897,30 +941,49 @@ impl CalledBack {
             CALLBACK_ENTRIES.with(|entries| entries.set(entries.get() + 1));
             parts.insert(name.clone(), known.get(name)?.instantiated(&[]));
         }
-        let mut this = Self { parts, out: Summary::default() };
-        this.add_up();
-        Some(this)
+        Some(Self::from_parts(parts))
     }
 
-    fn add_up(&mut self) {
-        let mut out = Summary::default();
-        for one in self.parts.values() {
-            out.reads.extend(one.reads.iter().cloned());
-            out.writes.extend(one.writes.iter().cloned());
-            out.unknown_read |= one.unknown_read;
-            out.unknown_write |= one.unknown_write;
+    fn from_parts(parts: IndexMap<String, Summary>) -> Self {
+        let mut this =
+            Self { parts, reads: BTreeMap::new(), writes: BTreeMap::new(), unknown: (0, 0), built: Default::default() };
+        let Self { parts, reads, writes, unknown, .. } = &mut this;
+        for one in parts.values() {
+            one.reads.iter().for_each(|item| *reads.entry(*item).or_default() += 1);
+            one.writes.iter().for_each(|item| *writes.entry(*item).or_default() += 1);
+            unknown.0 += usize::from(one.unknown_read);
+            unknown.1 += usize::from(one.unknown_write);
         }
-        self.out = out;
+        this
     }
 
     fn summary(&self) -> Option<Summary> {
+        if let Some(built) = self.built.borrow().as_ref() {
+            return Some(built.clone());
+        }
         // The run every summary that calls back holds, made once.
-        let run = |set: &SliceSet| SliceSet::shared(&Shared::of(set.coalesced().to_set()));
-        Some(Summary { reads: run(&self.out.reads), writes: run(&self.out.writes), ..self.out.clone() })
+        // Coalesced as `SliceSet::coalesced` has it: an object with every byte
+        // in the set loses its subranges.
+        let run = |owned: &BTreeMap<Slice, usize>| {
+            let wholes: BTreeSet<ObjectRef> =
+                owned.keys().filter(|one| sliceset::whole(one)).map(|one| one.object).collect();
+            let kept =
+                owned.keys().filter(|one| !wholes.contains(&one.object) || sliceset::whole(one)).copied().collect();
+            SliceSet::shared(&Shared::of(kept))
+        };
+        let made = Summary {
+            reads: run(&self.reads),
+            writes: run(&self.writes),
+            unknown_read: self.unknown.0 > 0,
+            unknown_write: self.unknown.1 > 0,
+            ..Summary::default()
+        };
+        *self.built.borrow_mut() = Some(made.clone());
+        Some(made)
     }
 
-    /// Entry `name` is now `summary`: added in when it only grew, else all
-    /// added up again.
+    /// Entry `name` is now `summary`: the slices it gained and lost change
+    /// their owners' counts.
     fn changed(
         &mut self,
         name: &str,
@@ -928,20 +991,40 @@ impl CalledBack {
     ) {
         CALLBACK_ENTRIES.with(|entries| entries.set(entries.get() + 1));
         let now = summary.instantiated(&[]);
-        let Some(then) = self.parts.get_mut(name) else { return };
-        let grew = then.reads.is_subset(&now.reads)
-            && then.writes.is_subset(&now.writes)
-            && (!then.unknown_read || now.unknown_read)
-            && (!then.unknown_write || now.unknown_write);
+        let Self { parts, reads, writes, unknown, built } = self;
+        let Some(then) = parts.get_mut(name) else { return };
+        let mut moved = false;
+        let mut move_owners = |owned: &mut BTreeMap<Slice, usize>, before: &SliceSet, after: &SliceSet| {
+            let (mut gone, mut came) = (Vec::new(), Vec::new());
+            sorted_difference(before, after, &mut gone, &mut came);
+            CALLBACK_SLICES.with(|moved| moved.set(moved.get() + gone.len() + came.len()));
+            for item in gone {
+                let count = owned.get_mut(item).expect("an owner of what it held");
+                *count -= 1;
+                if *count == 0 {
+                    owned.remove(item);
+                    moved = true;
+                }
+            }
+            for item in came {
+                let count = owned.entry(*item).or_default();
+                moved |= *count == 0;
+                *count += 1;
+            }
+        };
+        move_owners(reads, &then.reads, &now.reads);
+        move_owners(writes, &then.writes, &now.writes);
+        for (count, before, after) in [
+            (&mut unknown.0, then.unknown_read, now.unknown_read),
+            (&mut unknown.1, then.unknown_write, now.unknown_write),
+        ] {
+            let was = *count > 0;
+            *count = *count + usize::from(after) - usize::from(before);
+            moved |= was != (*count > 0);
+        }
         *then = now;
-        if grew {
-            let then = &self.parts[name];
-            self.out.reads.extend(then.reads.iter().cloned());
-            self.out.writes.extend(then.writes.iter().cloned());
-            self.out.unknown_read |= then.unknown_read;
-            self.out.unknown_write |= then.unknown_write;
-        } else {
-            self.add_up();
+        if moved {
+            *built.borrow_mut() = None;
         }
     }
 }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/floatfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/floatfold.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/floatfold.rs sha256:0a4e410ad2b69f21029cd8abc3841d254300b019b981caf73ad5249809484990 -->
+<!-- src: crates/opt/llrm-transforms/src/floatfold.rs sha256:f8b41fe710fd5b5f44348c30976d119ba90f701ad4b21b847f5579a4f62e0ca0 -->
 
 # floatfold
 
