@@ -2627,9 +2627,11 @@ impl Compiler {
         self.record_dimensions(bounds.len()).into_iter().map(|dimension| bounds[dimension].clone()).collect()
     }
 
-    /// BC allocates a static array whose bound is a LONG constant (`a(32000&)`) in far memory when the program starts, as
-    /// a $DYNAMIC one is, and keeps the rest in DGROUP (probed: `a(100&)` leaves BC_DATA at its descriptor, `a(30000)`
-    /// puts 60,002 bytes in it). Such an array is made as a $DYNAMIC one: a B$DDIM where its DIM stands. Only where
+    /// BC allocates a static array whose bound is a LONG constant (`a(32000&)`)
+    /// in far memory when the program starts, as a $DYNAMIC one is, and
+    /// keeps the rest in DGROUP (probed: `a(100&)` leaves BC_DATA at its
+    /// descriptor, `a(30000)` puts 60,002 bytes in it). Such an array is
+    /// made as a $DYNAMIC one: a B$DDIM where its DIM stands. Only where
     /// DGROUP is a segment.
     fn spills_to_far(
         &mut self,
