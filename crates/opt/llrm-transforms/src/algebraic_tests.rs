@@ -1251,3 +1251,32 @@ b0:
 ",
     );
 }
+
+/// `*(char *)(0xA0000 + o[i])` was `add esi, 655360; mov [esi], al`: the
+/// integer sum under `inttoptr` was not an address mode. A constant added to
+/// the integer of a flat pointer is a byte offset from it, which isel reads as
+/// a displacement (`mov [esi+655360], al`).
+#[test]
+fn test_a_constant_added_under_inttoptr_is_a_byte_offset_of_the_pointer() {
+    let text =
+        "define ptr @f(i32 %x) {\nb0:\n  %a = add i32 %x, 655360\n  %p = inttoptr i32 %a to ptr\n  ret ptr %p\n}\n";
+    let (_, after) = simplified_in(text, false, FLAT);
+    let after = bare(&after);
+    assert!(after.contains("getelementptr i8, ptr %0, i32 655360") && !after.contains("add i32"), "{after}");
+    // Not in a build for size: each access would carry the displacement.
+    let sized = bare(&simplified_in(text, true, FLAT).1);
+    assert!(!sized.contains("getelementptr"), "{sized}");
+    // The same on a near 16-bit pointer.
+    let near = "define ptr @f(i16 %x) {\nb0:\n  %a = add i16 %x, 4\n  %p = inttoptr i16 %a to ptr\n  ret ptr %p\n}\n";
+    let after = bare(&simplified_in(near, false, "e-p:16:16-n8:16:32").1);
+    assert!(after.contains("getelementptr i8, ptr %0, i16 4") && !after.contains("add i16"), "{after}");
+    // A sum read elsewhere, a variable addend, and a width that is not the
+    // pointer's stay.
+    for stays in [
+        "define i32 @f(i32 %x) {\nb0:\n  %a = add i32 %x, 655360\n  %p = inttoptr i32 %a to ptr\n  %v = load i8, ptr %p\n  %z = zext i8 %v to i32\n  %r = add i32 %z, %a\n  ret i32 %r\n}\n",
+        "define ptr @f(i32 %x, i32 %y) {\nb0:\n  %a = add i32 %x, %y\n  %p = inttoptr i32 %a to ptr\n  ret ptr %p\n}\n",
+    ] {
+        let after = bare(&simplified_in(stays, false, FLAT).1);
+        assert!(!after.contains("getelementptr"), "{after}");
+    }
+}
