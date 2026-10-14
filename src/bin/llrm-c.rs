@@ -1,4 +1,4 @@
-//! `python -m qbopt.cfront`, ported.
+//! Compile C to an object.
 
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;

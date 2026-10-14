@@ -190,7 +190,6 @@ fn _whole<'a>(
     objects.into_iter().filter_map(Slice::every_byte).collect()
 }
 
-/// Python `qbopt.analysis.alias:PointsTo`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PointsTo {
     pub values: IndexMap<ValueId, Provenance>,
@@ -409,7 +408,7 @@ fn _resolved_reference(
 
 /// One procedure's transitive memory effects in its own object space.
 ///
-/// Python `qbopt.analysis.alias:Summary`. `captures` holds PARAMETER
+/// `captures` holds PARAMETER
 /// object identities.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Summary {
@@ -529,7 +528,7 @@ pub struct CallFacts {
     pub sites: Vec<InstId>,
 }
 
-/// Python `qbopt.analysis.alias:Procedure`: a function, its calls by
+/// A function, its calls by
 /// callee name, and each call's actual arguments.
 #[derive(Clone)]
 pub struct Procedure<'a> {

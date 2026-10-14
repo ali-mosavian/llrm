@@ -127,7 +127,6 @@ use crate::cfg::Shape;
 use crate::consts::Known;
 use crate::globalsaa::Globals;
 
-/// Python `qbopt.model.memory:Kind`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MemoryKind {
     Unknown,
@@ -179,7 +178,6 @@ pub enum Identity {
     Tuple(Vec<Identity>),
 }
 
-/// Python `qbopt.model.memory:Object`.
 ///
 /// `addressed` and `captured` are `field(compare=False)`: equality, hashing
 /// and order ignore them.
@@ -496,7 +494,6 @@ impl From<MemoryObject> for ObjectRef {
 pub const WHOLE_LOW: i64 = -(1_i64 << 31);
 pub const WHOLE_HIGH: i64 = 1_i64 << 31;
 
-/// Python `qbopt.model.memory:Slice`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Slice {
     pub object: ObjectRef,
@@ -631,7 +628,7 @@ pub fn gcd(
     one
 }
 
-/// Python `qbopt.model.memory:Provenance`. `restrict` holds the `noalias`
+/// `restrict` holds the `noalias`
 /// parameters a pointer is based on.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Provenance {
@@ -693,7 +690,7 @@ impl Provenance {
     }
 }
 
-/// Python `qbopt.model.memory:AliasClass`: all `objects_may_alias` asks of
+/// All `objects_may_alias` asks of
 /// an object besides its identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct AliasClass {

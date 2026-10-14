@@ -1,6 +1,6 @@
 //! Source occurrences recognised as halves of a BC long operation.
 //!
-//! The decoder's classification, ported from `qbopt.legacy.lift.py`. These
+//! The decoder's classification. These
 //! are deliberately decoded OMF-source facts, not generic machine instructions.
 
 use std::cmp::Ordering;
@@ -14,8 +14,6 @@ use crate::frontends::bc::declen::Insn;
 use crate::objectfile::module::{Addr, Space, far_pointer, frame_relative, literal_only};
 
 /// The seven single-half forms `lift.classify()` recognises.
-///
-/// Direct port of `qbopt.legacy.lift.py:Kind`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Kind {
     Load,
@@ -70,8 +68,6 @@ impl PartialOrd for Kind {
 }
 
 /// One classified half of a BC long operation.
-///
-/// Direct port of `qbopt.legacy.lift.py:Decoded`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Decoded {
     pub kind: Kind,
@@ -99,14 +95,10 @@ impl Decoded {
 }
 
 /// The byte-identical restore sequences emitted after a widened operation.
-///
-/// Direct port of `qbopt.legacy.lift.py:FIXUP`.
 pub static FIXUP: LazyLock<BTreeMap<usize, [u8; 4]>> =
     LazyLock::new(|| BTreeMap::from([(0, [0x66, 0x50, 0x58, 0x5A]), (1, [0x66, 0x51, 0x59, 0x5B])]));
 
 /// The five operations, low half -> (high half, widened mnemonic).
-///
-/// Direct port of `qbopt.legacy.lift.py:PAIRED`.
 pub static PAIRED: LazyLock<BTreeMap<Code, (Code, &'static str)>> = LazyLock::new(|| {
     BTreeMap::from([
         (Code::And_r16_rm16, (Code::And_r16_rm16, "and")),
@@ -117,12 +109,9 @@ pub static PAIRED: LazyLock<BTreeMap<Code, (Code, &'static str)>> = LazyLock::ne
     ])
 });
 
-/// Direct port of `qbopt.legacy.lift.py:HIGH_HALVES`.
 pub static HIGH_HALVES: LazyLock<BTreeSet<Code>> = LazyLock::new(|| PAIRED.values().map(|(high, _)| *high).collect());
 
 /// The immediate encodings of the low-half ALU operations.
-///
-/// Direct port of `qbopt.legacy.lift.py:IMM_FAMILY`.
 pub static IMM_FAMILY: LazyLock<BTreeMap<Code, &'static str>> = LazyLock::new(|| {
     BTreeMap::from([
         (Code::Add_AX_imm16, "add"),
@@ -144,8 +133,6 @@ pub static IMM_FAMILY: LazyLock<BTreeMap<Code, &'static str>> = LazyLock::new(||
 });
 
 /// The immediate encodings that can supply an ALU high half.
-///
-/// Direct port of `qbopt.legacy.lift.py:IMM_HIGH_FAMILY`.
 pub static IMM_HIGH_FAMILY: LazyLock<BTreeMap<&'static str, BTreeSet<Code>>> = LazyLock::new(|| {
     BTreeMap::from([
         ("add", BTreeSet::from([Code::Adc_AX_imm16, Code::Adc_rm16_imm16, Code::Adc_rm16_imm8])),
@@ -156,24 +143,20 @@ pub static IMM_HIGH_FAMILY: LazyLock<BTreeMap<&'static str, BTreeSet<Code>>> = L
     ])
 });
 
-/// Direct port of `qbopt.legacy.lift.py:IMM_HIGH_HALVES`.
 pub static IMM_HIGH_HALVES: LazyLock<BTreeSet<Code>> =
     LazyLock::new(|| IMM_HIGH_FAMILY.values().flatten().copied().collect());
 
-/// Direct port of `qbopt.legacy.lift.py:LOADS`.
 pub static LOADS: LazyLock<BTreeSet<Code>> =
     LazyLock::new(|| BTreeSet::from([Code::Mov_r16_rm16, Code::Mov_AX_moffs16]));
 
-/// Direct port of `qbopt.legacy.lift.py:STORES`.
 pub static STORES: LazyLock<BTreeSet<Code>> =
     LazyLock::new(|| BTreeSet::from([Code::Mov_rm16_r16, Code::Mov_moffs16_AX]));
 
-/// Register -> (pair, half), direct port of `qbopt.legacy.lift.py:HALF_OF`.
+/// Register -> (pair, half).
 pub static HALF_OF: LazyLock<BTreeMap<Register, (usize, usize)>> = LazyLock::new(|| {
     BTreeMap::from([(Register::AX, (0, 0)), (Register::DX, (0, 1)), (Register::CX, (1, 0)), (Register::BX, (1, 1))])
 });
 
-/// Direct port of `qbopt.legacy.lift.py:REDUNDANT_DS`.
 pub static REDUNDANT_DS: LazyLock<BTreeSet<Register>> =
     LazyLock::new(|| BTreeSet::from([Register::None, Register::SI, Register::DI]));
 
@@ -184,8 +167,6 @@ pub static REDUNDANT_DS: LazyLock<BTreeSet<Register>> =
 pub type Resolver<'a> = dyn Fn(i64, i64) -> Addr + 'a;
 
 /// Where this instruction's memory operand points, or `None` if it has none.
-///
-/// Direct port of `qbopt.legacy.lift.py:operand`.
 #[must_use]
 pub fn operand(
     insn: &Insn,

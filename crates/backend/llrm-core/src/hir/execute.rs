@@ -1,4 +1,4 @@
-//! Port of `qbopt/hir/execute.py`: small executable reference semantics for
+//! Small executable reference semantics for
 //! verified common HIR.
 //!
 //! This is an oracle for frontend and target-backend tests, not a target

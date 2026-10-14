@@ -644,7 +644,7 @@ fn select_case_accepts_same_line_arm_bodies() {
 fn bare_end_inside_structured_blocks_is_not_the_block_terminator() {
     // Most compatibility cases stop immediately on a failed checkpoint.
     // Consuming that END as the prefix of END IF/SELECT rejected the whole
-    // source before the qbopt frontend could report its actual next gap.
+    // source before the frontend could report its actual next gap.
     let module = parse(
         "dim n as integer\nif n then\nprint \"FAIL if\"\nend\nend if\nselect case n\ncase 1\nend\ncase else\nn = 2\nend select\n",
         Dialect::QuickBasic45,

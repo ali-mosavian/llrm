@@ -3,7 +3,7 @@
  *
  * wcc's front end drives the cg API directly. Linked against this instead
  * of cgi86.lib, every call it makes becomes one line of a stream qbopt reads
- * as HIR (qbopt/cfront/stream.py). Handles are small integers; nothing here
+ * as HIR (crates/frontends/llrm-c/src/stream.rs). Handles are small integers; nothing here
  * generates code.
  *
  * A call this does not implement is a link error, and one it refuses is an

@@ -1,4 +1,4 @@
-//! Port of `qbopt/frontend/qb/compile.py`: QB HIR through the existing
+//! QB HIR through the existing
 //! machine pipeline to a fresh OMF module.
 //!
 //! This emission boundary is a procedure module: it emits far Pascal

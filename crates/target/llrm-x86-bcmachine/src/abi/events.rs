@@ -1,4 +1,4 @@
-//! Port of `qbopt/abi/events.py`: the compiler's near-to-far event-poll
+//! The compiler's near-to-far event-poll
 //! adapter, recognized before MIR.
 
 use std::collections::BTreeSet;

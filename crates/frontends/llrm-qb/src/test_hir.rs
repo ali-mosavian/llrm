@@ -1,7 +1,5 @@
-//! Ports of the `tests/test_hir.py` cases that exercise `qbopt/frontend/qb`
-//! and the stage dump, plus its tests and the portable
-//! `tests/test_qb_frontend_command.py` cases. The `qbopt/hir`-only cases are
-//! in `crates/backend/llrm-core/src/hir/test_hir.rs`.
+//! Tests of the QB frontend, the stage dump and the command line. The cases
+//! that need no frontend are in `crates/backend/llrm-core/src/hir/test_hir.rs`.
 //!
 //! Sources are compiled by qbfront, linked in, exactly as the driver does.
 

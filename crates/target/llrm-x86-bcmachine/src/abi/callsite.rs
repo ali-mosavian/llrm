@@ -1,4 +1,4 @@
-//! Port of `qbopt/abi/callsite.py`: a language ABI's inputs and cleanup for
+//! A language ABI's inputs and cleanup for
 //! a call the runtime table does not establish.
 
 use std::collections::BTreeSet;
