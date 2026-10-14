@@ -133,6 +133,7 @@ pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopsplit;
 pub mod lsr;
+pub mod memcpyopt;
 pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]

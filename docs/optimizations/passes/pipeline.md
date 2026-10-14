@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:ec5de1aeb445ad9ba9701699ee0e93df5e8b35fde06050506b74f059bec7855f -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:2ede83abcca98d2eca3c90ece9ce379c96bc1ce07d20591377866c99c935ea9e -->
 
 # pipeline
 
@@ -107,7 +107,7 @@ counterpart of each limit, is
 | `promote` | `sroa`, `promote` |
 | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
 | `unroll`, `peel` | the pass of that name |
-| `fill` | `fill`, `merge` |
+| `fill` | `fill`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
 | `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
