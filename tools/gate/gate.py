@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import os
+import shutil
 import signal
 import functools
 import re
@@ -709,6 +710,17 @@ def watch_main(force: bool, every: int = 5, hours: float = 2.0) -> int:
     return 1
 
 
+def scoped(argv: list[str], environ: dict | None = None, have: str | None = None) -> list[str] | None:
+    """`argv` under its own systemd user scope with a high CPU weight, or None when it already is (GATE_SCOPED) or the host has no
+    systemd-run. Session builds share one scope with the gate by default and starve it; the weight is GATE_CPU_WEIGHT (1000)."""
+    environ = os.environ if environ is None else environ
+    have = shutil.which("systemd-run") if have is None else have
+    if environ.get("GATE_SCOPED") or not have or environ.get("GATE_CPU_WEIGHT") == "0":
+        return None
+    weight = environ.get("GATE_CPU_WEIGHT") or "1000"
+    return [have, "--user", "--scope", "-q", "-p", f"CPUWeight={weight}", "--setenv=GATE_SCOPED=1", *argv]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("command", choices=["plan", "run", "bisect", "main"])
@@ -733,6 +745,8 @@ def main() -> int:
             print(f"gate: {why}")
             return 2
         print(f"gate: HEAD {head} {'dirty (allowed)' if dirty else 'clean'}", flush=True)
+        if args.command == "run" and not args.json and (wrapped := scoped([sys.executable, *sys.argv])):
+            os.execv(wrapped[0], wrapped)
     p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
     if args.steps:
         p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))

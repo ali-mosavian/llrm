@@ -116,7 +116,7 @@ Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pyt
     python3 tools/gate/gate.py run --steps lib integration
     python3 tools/gate/gate.py run --tier full --expect SHA
 
-`run` refuses a tree that differs from `HEAD` in tracked files (`--allow-dirty` runs it and says so), and `--expect SHA` refuses unless `HEAD` starts with SHA, so a pass names the commit that ran. To gate a commit while you keep working, check it out detached in a worktree of its own with its own `CARGO_TARGET_DIR`; building or switching in a tree a gate is using breaks it.
+`run` re-executes itself in its own systemd user scope with `CPUWeight=1000` (`GATE_CPU_WEIGHT`, `0` to turn off), so session builds sharing one scope do not starve it. `run` refuses a tree that differs from `HEAD` in tracked files (`--allow-dirty` runs it and says so), and `--expect SHA` refuses unless `HEAD` starts with SHA, so a pass names the commit that ran. To gate a commit while you keep working, check it out detached in a worktree of its own with its own `CARGO_TARGET_DIR`; building or switching in a tree a gate is using breaks it.
 
 Output is one `[time] STEP ok|FAIL|SKIPPED|INCOMPLETE` line per step, what each failing test printed, a per-step CPU table, and a last line `GATE TIER PASS|FAIL: steps at SHA in Ns`. Read the last line at the commit you meant. Logs are `$CARGO_TARGET_DIR/gate-logs/STEP.log`, and `STEP.failed.log` for a step that failed. A step that prints nothing and uses no CPU for `GATE_STALL_MINUTES` (default 10) is killed.
 
