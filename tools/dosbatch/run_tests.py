@@ -216,6 +216,9 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
 
 def build(program: Program, work: Path, stem: str) -> Job | str:
     """The job that runs `program`, or why it did not build."""
+    # `place` skips a name another job has placed, so a path that exists nowhere passed while it shared a launch with a job of the same name
+    if gone := [one for one in data_files(program) if not one.exists()]:
+        return f"data file missing: {gone[0]}"
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".nib" and target != dosbatch.REAL_MODE:
         exe, obj = work / f"{stem}.exe", work / f"{stem}.obj"
