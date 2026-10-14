@@ -1,4 +1,4 @@
-reason = "main moved since the bq32 frame-register bless (#perf/basic-frame-free): +-5 executed instructions in the jpeg, stft and scroll bq32 rows"
+reason = "bq32 rows re-blessed: #1669's runtime change (console.c) moved ten rows by 1 to 13 instructions in up to 10^8, and no gate re-blessed them (a runtime-only diff planned no bench). The count is the same in another cwd, with a 30 KB environment, and at virtual-time rates 5e7 to 2e8: it depends on the binary alone"
 blessed = "2026-10-14"
 
 [bas.O2]

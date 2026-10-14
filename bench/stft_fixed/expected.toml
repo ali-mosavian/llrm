@@ -1,4 +1,4 @@
-reason = "main moved since the bq32 frame-register bless (#perf/basic-frame-free): +-5 executed instructions in the jpeg, stft and scroll bq32 rows"
+reason = "merge main into the frame-register branch: re-measured against main's new jpeg/stft/scroll rows"
 blessed = "2026-10-14"
 
 [bas.O2]

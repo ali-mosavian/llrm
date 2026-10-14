@@ -21,6 +21,8 @@ PROBES = sorted(path for path in (qbruntime.dosbatch.ROOT / "tests" / "qbrt").gl
 EXAMPLES = sorted((qbruntime.dosbatch.ROOT / "examples" / "basic").glob("*.bas"))
 # Event trapping, key traps, the absent devices and VARPTR$ are what BC refuses without its /V (test_qbbc.py compares them with BC
 # under it, test_qbkeys.py the keys); they have no BCOM45 run to differ from, but they still call runtime entries.
+# Launches at once: each runs a share of the programs through the oracle and each target, in a directory of its own.
+CHUNKS = 6
 LLRM_ONLY = ("events_", "keys_", "llrm_", "bc_nodevices")
 ALL_SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_sources(), *EXAMPLES]}
 SOURCES = {name: path for name, path in ALL_SOURCES.items() if not name.startswith(LLRM_ONLY)}
@@ -39,7 +41,7 @@ def differential(sources: dict[str, Path], work: Path) -> dict[str, dict]:
         for target, built in qbbuild.build(source, work / f"b_{name}", runtime, tolerant=True).items():
             candidates[target][name] = built  # or why it did not build: that program's test says so
     # a flat program runs behind DOS/32A's banner: the raw bytes are compared there, the screens in real mode
-    return qbruntime.differential_batch(objects, candidates, work / "differential", screens={qbbuild.REAL})
+    return qbruntime.differential_batch(objects, candidates, work / "differential", screens={qbbuild.REAL}, chunks=CHUNKS)
 
 
 @pytest.fixture(scope="module")
@@ -95,3 +97,26 @@ def test_demo_introduction_matches_bcom45(demos, name: str):
         assert result.candidate.status in ("ok", "stopped"), f"{target}: {result.candidate.detail}"
         assert result.reference.status in ("ok", "stopped")
         assert result.screen_difference == "", target
+
+
+def test_a_run_of_the_programs_mounts_the_tools_as_the_whole_set_would(tmp_path, monkeypatch):
+    """Six runs at once: those with no screen job left V: unmounted on the target side only, so the mount lines on the DOS screen differed
+    from the oracle's and 58 programs failed on 'row 3: want 80 cells got 0'."""
+    monkeypatch.setattr(dosbatch, "DOSBOX", Path("/bin/true"))
+    monkeypatch.setattr(dosbatch, "virtual_time_problem", lambda: None)
+    job = dosbatch.Job("J000", "exe", tmp_path / "x.exe")
+    (tmp_path / "x.exe").write_bytes(b"MZ")
+    for forced, mounted in ((None, False), (True, True)):
+        work = tmp_path / f"run{mounted}"
+        try:
+            dosbatch.run([job], work, mount_tools=forced)
+        except Exception:  # /bin/true reports no events: only the script it was given matters
+            pass
+        assert ("mount v" in (work / "jobs.txt").read_text()) is mounted
+
+
+def test_chunks_hold_every_program_once_in_order():
+    names = [f"p{n}" for n in range(100)]
+    for chunks in (1, 6, 7, 200):
+        parts = qbruntime.chunked(names, chunks)
+        assert sum(parts, []) == names and len(parts) <= chunks
