@@ -1707,6 +1707,7 @@ fn switched(shape: &[(i64, &str, Vec<i64>)]) -> Vec<(i64, Vec<String>)> {
                         match one {
                             'c' => sem(Operation::FloatStore, "fisttp", vec![m(&cell)], vec![st(0)]),
                             'r' => sem(Operation::Return, "ret", vec![], vec![]),
+                            'b' => sem(Operation::Branch, "jne", vec![], vec![]),
                             'a' => sem(Operation::FloatArith, "fadd", vec![st(0)], vec![st(0), st(1)]),
                             _ => sem(Operation::Nothing, "", vec![], vec![]),
                         },
@@ -1746,4 +1747,22 @@ fn test_a_conversion_in_one_arm_of_a_branch_switches_in_that_arm_only() {
     for at in [6, 7] {
         assert!(!names(at).contains(&"fldcw".to_owned()), "{result:?}");
     }
+}
+
+/// Two critical edges into one block, one from a block that converts and one
+/// from a block that does not, cannot agree on its mode; every block then
+/// restores the caller's, and the restore went after the branch: B$CASP of the
+/// QB runtime failed to build with "block 12 leaves for (21, 19) with no
+/// instruction choosing".
+#[test]
+fn test_a_restore_in_a_block_that_branches_goes_before_the_branch() {
+    let result = switched(&[
+        (0, ".b", vec![1, 2]),
+        (1, "cb", vec![3, 4]),
+        (2, ".b", vec![3, 4]),
+        (3, "r", vec![]),
+        (4, "r", vec![]),
+    ]);
+    let one = result.iter().find(|(at, _)| *at == 1).unwrap();
+    assert_eq!(one.1, vec!["fldcw", "fistp", "fldcw", "jne"], "{result:?}");
 }

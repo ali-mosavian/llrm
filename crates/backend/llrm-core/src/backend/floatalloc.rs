@@ -1343,9 +1343,16 @@ fn _truncating(
         if (modes.restore || block.succ.is_empty()) && current != Mode::Caller {
             tail.push(Mode::Caller);
         }
-        let jumps = insns.last().and_then(|last| last.what.as_ref()).is_some_and(|what| what.op == Operation::Jump);
+        // Before the branches that end the block: they must stay last.
+        let branches = insns
+            .iter()
+            .rev()
+            .take_while(|one| {
+                one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch))
+            })
+            .count();
         for mode in tail {
-            insns.insert(insns.len() - usize::from(jumps), switch(mode, at));
+            insns.insert(insns.len() - branches, switch(mode, at));
         }
         if let Some(mode) = starts.get(&block.at) {
             let first = block.insns.first().map_or(block.at, |first| first.at);
