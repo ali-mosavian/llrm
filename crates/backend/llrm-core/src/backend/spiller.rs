@@ -41,6 +41,11 @@
 //!
 //! `siblings` finds the values copied to and from a spilled value that are
 //! cheaper sharing its slot; the allocator spills them together.
+//! A group grows one candidate at a time, and a candidate is asked of when it
+//! comes up: whether it interferes with the group is answered by the intervals
+//! the allocator holds where none of them meets the group's (nothing is live
+//! together), and by the interference graph of the group and the candidate
+//! alone otherwise, never by the web the copies make whole.
 //!
 //! # Example
 //! Eight values loaded from `p` are live across a call to `g`; the allocator
@@ -959,6 +964,7 @@ pub fn siblings(
     values: &BTreeSet<u32>,
     frame: Option<&mut Frame>,
     fixed: &BTreeSet<u32>,
+    live: Option<&dyn crate::backend::live::Ranges>,
 ) -> Result<BTreeSet<u32>, Error> {
     let Some(frame) = frame else {
         return Ok(BTreeSet::new());
@@ -966,7 +972,7 @@ pub fn siblings(
     if values.is_empty() {
         return Ok(BTreeSet::new());
     }
-    postings::following(body, |postings| siblings_over(body, values, frame, fixed, postings))
+    postings::following(body, |postings| siblings_over(body, values, frame, fixed, live, postings))
 }
 
 thread_local! {
@@ -1036,6 +1042,7 @@ fn siblings_over(
     values: &BTreeSet<u32>,
     frame: &mut Frame,
     fixed: &BTreeSet<u32>,
+    live: Option<&dyn crate::backend::live::Ranges>,
     postings: &Postings,
 ) -> Result<BTreeSet<u32>, Error> {
     let adjacency = llrm_support::debug::span("siblings adjacency");
@@ -1044,103 +1051,110 @@ fn siblings_over(
         return Ok(BTreeSet::new());
     }
     drop(adjacency);
-    // Only the copy webs that hold a value of `values` are grown from: the
-    // others are asked of by no one.
-    let wanted: BTreeSet<u32> = {
-        let mut web: BTreeSet<u32> = values.iter().copied().filter(|one| adjacent.has(*one)).collect();
-        let mut work: Vec<u32> = web.iter().copied().collect();
-        while let Some(one) = work.pop() {
-            for next in adjacent.of(one) {
-                if web.insert(next) {
-                    work.push(next);
-                }
-            }
-        }
-        web
-    };
+    // A group grows from a value by the copies of its members, and a candidate
+    // joins it if it does not interfere with a member: what is asked of a value
+    // is asked when a candidate comes up, of the candidate and the group alone.
+    // The web the copies make is not worked out whole (it is as large as the
+    // body's phi families, and a spill takes a group of one or two).
+    let widths_known: std::cell::RefCell<IndexMap<u32, Option<u32>>> = Default::default();
     // A shared slot holds each member at every width it is used, not just
     // moved.
-    let widths = llrm_support::debug::timed("siblings widths", || _widest_by(body, &wanted, postings));
-
-    // Only pairs among the values of those webs are asked of.
-    let near =
-        llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(&wanted)));
-    if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
-        let whole = coalesce::_interference(body);
-        for value in &wanted {
-            let among = |graph: &coalesce::Graph| {
-                graph
-                    .get(value)
-                    .map(|near| near.iter().filter(|one| wanted.contains(one)).collect::<BTreeSet<u32>>())
-                    .unwrap_or_default()
-            };
+    let width_of = |value: u32| -> Option<u32> {
+        *widths_known
+            .borrow_mut()
+            .entry(value)
+            .or_insert_with(
+                || llrm_support::debug::timed("siblings widths", || {
+                    _widest_by(body, &BTreeSet::from([value]), postings).get(&value).copied()
+                }),
+            )
+    };
+    let whole: std::cell::OnceCell<coalesce::Graph> = std::cell::OnceCell::new();
+    // Whether `candidate` is live with a member of `group` where a register
+    // could not hold both.
+    let interferes = |candidate: u32,
+                      group: &PySet<i64>,
+                      round: &BTreeSet<u32>,
+                      graph: &std::cell::OnceCell<coalesce::Graph>|
+     -> bool {
+        // Values live nowhere together are not asked of the body: no point
+        // has two of them live, and no definition of one meets the other.
+        let apart = live.is_some_and(|live| {
+            live.range(candidate).is_some_and(|mine| {
+                group.iter().all(|one| live.range(*one as u32).is_some_and(|other| !mine.overlaps(other)))
+            })
+        });
+        if apart && !llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
+            return false;
+        }
+        // The graph of the group and every candidate of this round, made once
+        // where one pair meets: a candidate that joins is a member for the
+        // ones after it.
+        let near = graph.get_or_init(|| {
+            llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(round)))
+        });
+        let found = group.iter().any(|one| near.get(&candidate).is_some_and(|found| found.contains(&(*one as u32))));
+        if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
+            let every = whole.get_or_init(|| coalesce::_interference(body));
+            let by_whole =
+                group.iter().any(|one| every.get(&candidate).is_some_and(|found| found.contains(&(*one as u32))));
             assert!(
-                among(&near) == among(&whole),
-                "{}: the interference of value#{value} among its web differs from the whole graph's",
+                found == by_whole,
+                "{}: the interference of value#{candidate} with its group differs from the whole graph's",
                 body.name
             );
-        }
-        // The copies, the web and the widths from the occurrences are those of
-        // a walk of the whole body.
-        let mut everywhere: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
-        for one in body.blocks.iter().flat_map(|block| &block.insns) {
-            let Some(pair) = _plain_move(one) else { continue };
-            if pair.0 != pair.1 {
-                everywhere.entry(pair.0).or_default().insert(pair.1);
-                everywhere.entry(pair.1).or_default().insert(pair.0);
+            assert!(
+                !apart || !found,
+                "{}: value#{candidate} is live nowhere with its group and still interferes",
+                body.name
+            );
+            let mut among: BTreeSet<u32> = group.iter().map(|one| *one as u32).collect();
+            among.insert(candidate);
+            let widths = _widest(body, &among);
+            for value in &among {
+                assert!(
+                    widths.get(value).copied() == width_of(*value),
+                    "{}: the width of value#{value} from the postings differs from a walk of the body",
+                    body.name
+                );
             }
         }
-        for value in wanted.iter().chain(values) {
-            assert!(
-                adjacent.of(*value) == everywhere.get(value).cloned().unwrap_or_default(),
-                "{}: the copies of value#{value} from its occurrences differ from a walk of the body",
-                body.name
-            );
-        }
-        assert!(
-            widths.iter().eq(_widest(body, &wanted).iter()),
-            "{}: the widths of a copy web from its occurrences differ from a walk of the body",
-            body.name
-        );
-    }
-    let deep = llrm_support::debug::timed("siblings depths", || ranges::depths(body));
-    let occurring = llrm_support::debug::span("siblings occurs");
-    let mut occurs: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
-    for &value in &wanted {
-        let mut at: Vec<At> = postings.defs(value).iter().chain(postings.uses(value)).copied().collect();
-        at.sort_unstable();
-        at.dedup();
-        if at.is_empty() {
-            continue;
-        }
-        let each = |block: u32| ranges::level(deep.get(&body.blocks[block as usize].at).copied().unwrap_or(0));
-        occurs.insert(value, at.iter().map(|one| (each(one.0), Arc::clone(_at(body, *one)))).collect());
-    }
-    if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
-        let mut everywhere: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
-        for block in &body.blocks {
-            let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
-            for one in &block.insns {
-                let named: BTreeSet<u32> = one.defines.iter().chain(&one.uses).copied().collect();
-                for value in wanted.intersection(&named) {
-                    everywhere.entry(*value).or_default().push((each, Arc::clone(one)));
+        found
+    };
+    let deep: std::cell::OnceCell<_> = std::cell::OnceCell::new();
+    let occurs_known: std::cell::RefCell<IndexMap<u32, Arc<Vec<(f64, Arc<Insn>)>>>> = Default::default();
+    let occurs_of = |value: u32| -> Arc<Vec<(f64, Arc<Insn>)>> {
+        Arc::clone(occurs_known.borrow_mut().entry(value).or_insert_with(|| {
+            let deep = deep.get_or_init(|| llrm_support::debug::timed("siblings depths", || ranges::depths(body)));
+            let mut at: Vec<At> = postings.defs(value).iter().chain(postings.uses(value)).copied().collect();
+            at.sort_unstable();
+            at.dedup();
+            let each = |block: u32| ranges::level(deep.get(&body.blocks[block as usize].at).copied().unwrap_or(0));
+            let found: Vec<(f64, Arc<Insn>)> =
+                at.iter().map(|one| (each(one.0), Arc::clone(_at(body, *one)))).collect();
+            if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
+                let mut everywhere: Vec<(f64, Arc<Insn>)> = Vec::new();
+                for block in &body.blocks {
+                    let level = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
+                    for one in &block.insns {
+                        if one.defines.contains(&value) || one.uses.contains(&value) {
+                            everywhere.push((level, Arc::clone(one)));
+                        }
+                    }
                 }
+                assert!(
+                    everywhere.len() == found.len()
+                        && everywhere.iter().zip(&found).all(|(a, b)| a.0 == b.0 && Arc::ptr_eq(&a.1, &b.1)),
+                    "{}: the occurrences of value#{value} from the postings differ from a walk of the body",
+                    body.name
+                );
             }
-        }
-        assert!(
-            occurs.len() == everywhere.len()
-                && occurs
-                    .iter()
-                    .all(|(value, found)| everywhere.get(value).is_some_and(|other| other.len() == found.len()
-                        && other.iter().zip(found).all(|(a, b)| a.0 == b.0 && Arc::ptr_eq(&a.1, &b.1)))),
-            "{}: the occurrences of a copy web from the postings differ from a walk of the body",
-            body.name
-        );
-    }
-    drop(occurring);
+            Arc::new(found)
+        }))
+    };
     let worth = |candidate: u32, group: &PySet<i64>| -> bool {
         let (mut saved, mut cost) = (0.0, 0.0);
-        for (each, one) in occurs.get(&candidate).into_iter().flatten() {
+        for (each, one) in occurs_of(candidate).iter() {
             if let Some(pair) = _plain_move(one) {
                 if [pair.0, pair.1]
                     .into_iter()
@@ -1174,17 +1188,22 @@ fn siblings_over(
                 .flat_map(|one| adjacent.of(*one))
                 .filter(|one| !members.contains(one) && !taken.contains(one) && !fixed.contains(one))
                 .collect();
+            let round: BTreeSet<u32> = members.iter().chain(&frontier).copied().collect();
+            let graph: std::cell::OnceCell<coalesce::Graph> = std::cell::OnceCell::new();
             for candidate in frontier {
-                if widths.get(&candidate) != widths.get(&first) {
+                if width_of(candidate) != width_of(first) {
                     continue;
                 }
-                if group.iter().any(|one| near.get(&candidate).is_some_and(|found| found.contains(&(*one as u32)))) {
+                // Whether it is worth joining is cheap to say and is asked
+                // first: the graph is made for the ones that would.
+                if !(values.contains(&candidate) || worth(candidate, &group)) {
                     continue;
                 }
-                if values.contains(&candidate) || worth(candidate, &group) {
-                    group.add(i64::from(candidate));
-                    growing = true;
+                if interferes(candidate, &group, &round, &graph) {
+                    continue;
                 }
+                group.add(i64::from(candidate));
+                growing = true;
             }
         }
         let slots: BTreeSet<i64> =
@@ -1194,7 +1213,7 @@ fn siblings_over(
         }
         let home = match slots.first() {
             Some(home) => *home,
-            None => frame.slot(first, widths[&first])?,
+            None => frame.slot(first, width_of(first).expect("a value with copies is named"))?,
         };
         for one in group.iter() {
             frame.slots.insert(SlotKey::Value(*one), home);
@@ -5322,7 +5341,7 @@ mod tests {
             _add(32, 12, 0x1a),
         ]);
         let mut frame = Frame::new(0);
-        super::siblings(&body, &set(&[1]), Some(&mut frame), &BTreeSet::new()).expect("sibling slots");
+        super::siblings(&body, &set(&[1]), Some(&mut frame), &BTreeSet::new(), None).expect("sibling slots");
         assert_eq!(crate::backend::coalesce::last_asked(), Some(3), "the other web's values were asked of");
     }
 
@@ -5340,7 +5359,7 @@ mod tests {
         let body = _body(insns);
         let mut frame = Frame::new(0);
         let before = super::examined();
-        super::siblings(&body, &set(&[1]), Some(&mut frame), &BTreeSet::new()).expect("sibling slots");
+        super::siblings(&body, &set(&[1]), Some(&mut frame), &BTreeSet::new(), None).expect("sibling slots");
         let looked = super::examined() - before;
         assert!(
             looked <= 12,
