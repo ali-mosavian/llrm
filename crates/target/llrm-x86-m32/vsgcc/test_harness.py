@@ -139,3 +139,11 @@ def test_an_integer_memory_x87_operand_is_not_free_and_an_unpriced_x87_instructi
     assert clocks(0xDE, 0x34, 0x24) == 85     # fidiv word ptr [esp]
     with pytest.raises(ValueError, match="no price for the x87 instruction"):
         clocks(0xD9, 0xFE)                    # fsin
+
+def test_run_sh_builds_the_programs_programs_py_lists_and_no_file():
+    """`run.sh` listed `ls bench` and tried `bench_io.h` as a program: wrap.py died on `bench_io.h/bench_io.h.c`, the table never ran."""
+    import subprocess
+    import sys
+    listed = subprocess.run([sys.executable, str(HERE / "programs.py")], capture_output=True, text=True, check=True).stdout.split()
+    assert listed and all((harness.BENCH / name).is_dir() or (HERE / "kernels" / name).is_dir() for name in listed), listed
+    assert "bench_io.h" not in listed and "programs.py" in (HERE / "run.sh").read_text()
