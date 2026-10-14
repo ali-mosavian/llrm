@@ -38,6 +38,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir fill` | x | on | on | on | on | x |
 | `mir merge` | x | on | on | on | on | x |
 | `mir unswitch` | x | x | x | on | x | x |
+| `mir split` | x | x | x | on | x | x |
 | `mir unroll-jam`: outer unroll at most 4 | x | x | x | on | x | x |
 | *MIR, whole module (`mir interprocedural`; stages as `LLRM_DEBUG=runs` names them)* | | | | | | |
 | `mir interprocedural` | x | on | on | on | on | on |
@@ -141,6 +142,7 @@ Sources read:
 | `unroll` / `unroll-loops` | complete unrolling (`cunroll`) is in the loop passes at every level with loop optimisation; it may *grow* the code only with `-O3`, `-funroll-loops` or `-fpeel-loops` (`opts.cc` [1311-1316](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L1311-L1316), `flag_cunroll_grow_size`) | -O1 and up; may grow at -O3 | -O1 and up, may grow at -O3 ([`limits.grows`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-analysis/src/peelsize.rs#L83)) |
 | `peel` / `peel-loops` | `-fpeel-loops` | -O3 ([679](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L679)) | -O3 |
 | `unswitch` / `unswitch-loops` | `-funswitch-loops` | -O3 ([685](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L685)) | -O3 |
+| `split` / `split-loops` | `-fsplit-loops` | -O3 ([681](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L681)) | -O3, after `unswitch`; not -Omax, as `unswitch` is not. A counted loop that counts up by one, tested with `<`, with a test of its counter against an invariant in its body ([`loopsplit.rs`](../optimizations/passes/loopsplit.md)) |
 | `unroll_jam` / `loop-unroll-and-jam` | `-floop-unroll-and-jam` | -O3 ([678](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L678)); the pass runs after unswitch and loop splitting ([`passes.def:282`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/passes.def#L282)) | -O3, after `unswitch` ([`pipeline.rs`](../optimizations/passes/pipeline.md)); not -Omax, as `unswitch` is not. Narrower than gcc's: an outer count the factor divides, no loads between the loops, header-tested loops ([`unroll_jam.rs`](../optimizations/passes/unroll_jam.md)). User decision 2026-10-11: particle -O3 compile +33% (169M -> 225M instructions) for 1.65x run time (165,949 -> 100,256 clocks, gcc 105,651); the extra rounds are the fixed point that merges the jammed stores. The other 65 programs and QCport: +0.07% |
 | `inline.cp_clone` / `ipa-cp-clone` | `-fipa-cp-clone` | -O3 ([676](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L676)) | -O3: `ipacp` copies a function for the constants a hot call passes |
 | (`program_parameters`) | `-fipa-cp` | -O2 ([629](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L629)) | every level above -O0: a constant every call passes is the parameter's value |

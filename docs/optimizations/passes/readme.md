@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 60 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 61 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -48,6 +48,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopexit | Replaces what a counted loop computes, as read after it, by an expression of its trip count, and deletes a loop that only counts, so the code after the loop does not wait for the loop to produce a number the compiler can write down. | Not a pipeline pass of its own: [`crate::indvars`](indvars.md) calls | [loopexit](loopexit.md) |
 | loopmotion | Sinks the stores nothing in a loop observes to the loop's single exit, so a counter or accumulator is written once, not every trip: the store half of LICM, as `promoteLoopAccessesToScalars` leaves one store after the loop. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `hoist` and | [loopmotion](loopmotion.md) |
 | loopsimplify | Loop canonical form: every reducible loop gets one preheader, one latch and dedicated exits, so the loop passes can assume them. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `tailrec` and before | [loopsimplify](loopsimplify.md) |
+| loopsplit | A loop with a test of its counter against an invariant in its body becomes two loops, one for the trips before the test flips and one for those after, neither with the test. | Once per body, after unswitching and before unroll-jam, at -O3 | [loopsplit](loopsplit.md) |
 | lsr | Strength reduction: replaces a loop's induction variables, and the address arithmetic built from them, with the cheapest set of counters the target can address, so the loop carries few registers and no multiply (LLVM's LoopStrengthReduce, gcc's ivopts). | Once per body, after the interprocedural step and `fixednarrow`, before | [lsr](lsr.md) |
 | mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: [`crate::lsr`](lsr.md) calls `found` and `applied` on each loop before | [mirror](mirror.md) |
 | narrowspace | A far pointer parameter that every call fills from one near space becomes a near pointer parameter: the caller passes the offset, and neither segment is pushed or loaded. | In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion | [narrowspace](narrowspace.md) |

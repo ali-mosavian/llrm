@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:c5a82dbc44fe5b52d000f1ca9cd2a06107fdfdf441195e53fd9b2aa6a2788a1c -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:3b0779740d2990c07327226b17f9520d8e755e7b171cb733ee8c60258f42d5d5 -->
 
 # pipeline
 
@@ -106,7 +106,7 @@ counterpart of each limit, is
 | `fill` | `fill`, `merge` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
-| `unswitch`, `unroll_jam` | the passes of that name (off by default) |
+| `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
 `pre` makes `gvn` insert on the path that lacks a value; `expensive`

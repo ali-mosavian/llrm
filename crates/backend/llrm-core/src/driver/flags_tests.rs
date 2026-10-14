@@ -315,6 +315,17 @@ fn fwrapv_makes_signed_arithmetic_wrap() {
     assert!(!parsed(&["-fwrapv", "-fno-wrapv"]).unwrap().wrapv && !parsed(&[]).unwrap().wrapv);
 }
 
+/// gcc turns `-fsplit-loops` on at -O3 and no lower.
+#[test]
+fn only_o3_splits_loops_and_the_flag_overrides_it() {
+    for level in ["-O1", "-O2", "-Os", "-Omax"] {
+        assert!(!pipeline(&[level]).split, "{level}");
+        assert!(pipeline(&[level, "-fsplit-loops"]).split, "{level}");
+    }
+    assert!(pipeline(&["-O3"]).split);
+    assert!(!pipeline(&["-O3", "-fno-split-loops"]).split);
+}
+
 /// gcc turns `-floop-unroll-and-jam` on at -O3 and no lower (opts.cc:678).
 #[test]
 fn only_o3_jams_loop_nests_and_the_flag_overrides_it() {
