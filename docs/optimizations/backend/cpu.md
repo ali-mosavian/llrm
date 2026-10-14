@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/cpu.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/cpu.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/cpu.rs sha256:cc280a50340cd4e1f240275008dc8e295d94f9e1ff64c417d279dc825f3ad65c -->
+<!-- src: crates/backend/llrm-core/src/backend/cpu.rs sha256:216c86c8a60e92bf91055d32aa3ebaffa8f1d3f7f80243b9f8efcfc5f78ed7eb -->
 
 # cpu
 

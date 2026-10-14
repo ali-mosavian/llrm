@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/exitfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitfold.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/exitfold.rs sha256:314a807ea5aed47d98f0185eefc83c953f86113c901faa84e207dc01b4ade02a -->
+<!-- src: crates/opt/llrm-transforms/src/exitfold.rs sha256:06d33f23d1fea87f4a9fc1076ca5ca00e42a83a4f73d6204d1cbbb63e05fb190 -->
 
 # exitfold
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/regclass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regclass.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/regclass.rs sha256:0dba272ed84da5a24d6946873a4310d7dbd8b5855390b2fef5545363d3839edc -->
+<!-- src: crates/backend/llrm-core/src/backend/regclass.rs sha256:ccd9c8eafbc60fbb51a4ad62cea16583da16577aa9be7add6cacaf097920f403 -->
 
 # regclass
 

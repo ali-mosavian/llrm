@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlower.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlower.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:9a666a55b1f99ae27e2d3ab0a5957dd19a4b638850720bcf8eb8157861c21954 -->
+<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:138ee979ee7e49e77deccea9ab90caf932af6a3ab119e7865ee594bf73b43f3a -->
 
 # switchlower
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/regthrash.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regthrash.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/regthrash.rs sha256:bdd93f783787eddaf74a2cc64198426df6535a9dbd382bd4984af72a3056875e -->
+<!-- src: crates/backend/llrm-core/src/backend/regthrash.rs sha256:1386ba0584ff048f5888a8bbdff3781c1ff1f9b295832e42da82fa0475c98295 -->
 
 # regthrash
 

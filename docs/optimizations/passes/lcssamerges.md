@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lcssamerges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssamerges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lcssamerges.rs sha256:177b02438bb23bbbf15df3efa41cefdcdc656840f0ee80bc2f1d534fa320fda3 -->
+<!-- src: crates/opt/llrm-transforms/src/lcssamerges.rs sha256:dfb93252dbc77b33e22dcd8de05f59ed431cb87af8f15ac92c24e6685e891051 -->
 
 # lcssamerges
 

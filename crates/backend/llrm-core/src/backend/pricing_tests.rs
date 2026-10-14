@@ -203,6 +203,67 @@ fn test_every_float_function_the_selector_emits_has_a_byte_price() {
     }
 }
 
+/// The names written after `Operation::FloatUnary,` in `text`.
+fn float_unary_names(text: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("Operation::FloatUnary,") {
+        rest = &rest[at + "Operation::FloatUnary,".len()..];
+        let Some(open) = rest.trim_start().strip_prefix('"') else { continue };
+        if let Some(close) = open.find('"') {
+            names.insert(open[..close].to_owned());
+        }
+    }
+    names
+}
+
+#[test]
+fn test_the_scan_for_float_unary_names_reads_a_literal_after_the_operation() {
+    let text = "semantics(Operation::FloatUnary, \"fnew\", d, s); sem(Operation::FloatUnary,\n  \"fchs\", a, b);
+                semantics(Operation::FloatUnary, name, d, s)";
+    assert_eq!(float_unary_names(text), BTreeSet::from(["fnew".to_owned(), "fchs".to_owned()]));
+}
+
+/// llrm#1307 was one function missing a price (`flog2`), found at -Os under
+/// `LLRM_VERIFY=1` on a demo. Every x87 unary the backend writes by name, in
+/// any of its files, has a byte price in both modes, so the next one fails
+/// here.
+#[test]
+fn test_every_float_unary_the_backend_names_has_a_byte_price() {
+    let mut names: BTreeSet<String> =
+        crate::backend::isel::FLOAT_FUNCTIONS.iter().map(|(_, name)| (*name).to_owned()).collect();
+    let mut dirs = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Sources only: not a crate's integration tests.
+                if !path.file_name().is_some_and(|name| name == "tests") {
+                    dirs.push(path);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && !path.file_name().is_some_and(|name| name.to_string_lossy().ends_with("_tests.rs"))
+            {
+                names.extend(float_unary_names(&std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+    }
+    assert!(["fabs", "fchs", "fsqrt", "flog2"].iter().all(|one| names.contains(*one)), "{names:?}");
+    let st0 = vec![ir::Loc::st(0)];
+    for bits in [16, 32] {
+        for name in &names {
+            let what = ir::Semantics {
+                name: Some(name.clone()),
+                dests: st0.clone(),
+                sources: st0.clone(),
+                ..ir::Semantics::new(ir::Operation::FloatUnary)
+            };
+            let priced = crate::backend::select::priced_in(bits, &what, 0, None, false, false, None);
+            assert!(priced.is_some_and(|code| !code.code.is_empty()), "{name} at {bits} bits has no byte price");
+        }
+    }
+}
+
 /// The sequences the encoder prices are the bytes QB's finalizer places.
 #[test]
 fn test_the_sequences_priced_are_the_bytes_the_finalizer_places() {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/copysink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/copysink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/copysink.rs sha256:e0af81f30d434c13e8eb153891e9d8d4c1b8ef83f279ea2f66b810ee8695ac9a -->
+<!-- src: crates/backend/llrm-core/src/backend/copysink.rs sha256:f23ec39c77ac0b375ec1ff2b92c5a997b83bb96a97e8a0f9d75ad8300801792a -->
 
 # copysink
 

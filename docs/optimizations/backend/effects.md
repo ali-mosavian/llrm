@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/effects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/effects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/effects.rs sha256:559b36aa91558fa66fef8dee2f502c87a84f4b7daee417b638a2ab34199426e9 -->
+<!-- src: crates/backend/llrm-core/src/backend/effects.rs sha256:c9e8390ad45f1f4d22826f8d2064b4ee44c3a309848db0bc0ffec36be831e63e -->
 
 # effects
 

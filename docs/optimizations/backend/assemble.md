@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/assemble.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/assemble.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/assemble.rs sha256:b97ac5f614a23e49e16be5065ae81824d9d93e53a168700d188184aadb42eeaa -->
+<!-- src: crates/backend/llrm-core/src/backend/assemble.rs sha256:217e82e9bdf81bb9c66dba9f71cb044707909f3422ddb6f2d887f2cdde5ad13e -->
 
 # assemble
 

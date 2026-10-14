@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/stackusage.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/stackusage.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/stackusage.rs sha256:39af8f41b415ee69a7e10737515c92fce437ed6dbba26535492b2ceef5640456 -->
+<!-- src: crates/backend/llrm-core/src/backend/stackusage.rs sha256:4fe47c2777d29ee21ad97a41a8315a6e11c6cffc58f9d2438aa436fed2f122d5 -->
 
 # stackusage
 

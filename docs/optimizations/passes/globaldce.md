@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/globaldce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globaldce.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/globaldce.rs sha256:40b6ed6cf62ff5ae79d249ab8508e71c202a47b81c2a9e0790694cb2cabea8f2 -->
+<!-- src: crates/opt/llrm-transforms/src/globaldce.rs sha256:eb4bb0dc650eef2ed2b4e53c51892617916f6dc99e82dd9820d906d8c916b42b -->
 
 # globaldce
 

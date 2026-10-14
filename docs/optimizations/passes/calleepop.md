@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/calleepop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/calleepop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:44f29975a9722249c1d95eff545316b00dde30fb1cdd0f281ab342f98890babe -->
+<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:61dff1a38f8987376fa8d3529f8107a30333988a43d9303da69b9522e3ad86dd -->
 
 # calleepop
 
