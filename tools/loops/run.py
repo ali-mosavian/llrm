@@ -149,6 +149,9 @@ def check_mir(batch: Batch, result: Result) -> None:
         except mir.Unrunnable as why:
             result.notes.append(f"{batch.config.tag} {batch.lang} {batch.stem}: MIR not runnable: {why}")
             return
+        except mir.Unparsable as why:
+            result.wrong.append(f"{batch.config.tag} {batch.lang} MIR {stage.stem} does not parse ({batch.work}): {str(why)[-300:]}")
+            return
         except RuntimeError as why:
             got = f"trapped: {str(why)[-300:]}"
         if got != want:
