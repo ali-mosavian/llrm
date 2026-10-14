@@ -69,7 +69,9 @@ At a target with one address space a pointer is the whole 32-bit linear address,
   BCOM45 output (`tests/qbrt/screen_text.flat.bas`).
 - `SADD(s$)` is the flat address of the string's characters, and `VARPTR$(v)` is the string of the variable's type byte and its flat
   address: 3 bytes at m16 (a 16-bit offset), 5 at m32 (a 32-bit address). DRAW and PLAY read through it: `=` + `VARPTR$(v)` takes the
-  value of an integer, long, single or double (rounded) variable, and `X` + `VARPTR$(s$)` runs a string variable (nesting up to 16).
+  value of an integer, single or double (rounded) variable (a long is an Illegal function call, as in BC), and `X` + `VARPTR$(s$)` runs a string
+  variable (nesting up to 16). Known difference: BC raises Illegal function call when more text follows a VARPTR$ string in the same
+  command string; ours accepts it.
 - `BLOAD name` with no address is refused: the image holds a 16-bit segment and offset, which cannot name a flat address.
   `BSAVE` writes the low 16 bits of the address it was given.
 
