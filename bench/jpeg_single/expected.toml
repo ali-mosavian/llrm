@@ -1,8 +1,8 @@
-reason = "jump tables: the QB runtime's dense switches are table jumps (jpeg/stft bq32 rows move by at most 10 instructions in 10^8)"
+reason = "jumpthread threads every branch on a phi of constants: jpeg_fixed/jpeg_single code -8..-15 B (bas, bq16, bq32) and bq32 instructions -0.003%; grep bq32 -O2 code 1471 -> 1494 B (+1.6%), instructions -0.006%"
 blessed = "2026-10-14"
 
 [bas.O2]
-code_bytes = 5230
+code_bytes = 5222
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5262
+code_bytes = 5254
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
@@ -26,8 +26,8 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63879839
-code_bytes = 6709
+instructions = 63877339
+code_bytes = 6694
 data_bytes = 29697
 bss_bytes = 0
 
