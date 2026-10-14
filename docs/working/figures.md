@@ -135,8 +135,8 @@ The pass, analysis and backend pages in `docs/optimizations/passes/`, `analyses/
 written by `python3 tools/docsbuild/build.py --sync` from the `//!` headers, one page per file, with a
 `readme.md` index in each; edit the header, not the page. A `mermaid` fence in a header is copied to the page
 as it is. A rustdoc link such as `crate::cfg` becomes a link to the sibling page, or to the source on
-GitHub when there is no page. Each page holds a digest of its header, of the tool and of the names it can
-link to; `--sync` rewrites only a page whose digest changed and deletes the page of a removed file, and
+GitHub when there is no page. Each page holds a digest of its header, of the tool and of what its own links
+resolve to (adding a source file changes only the pages that link its name, and its own page and index); `--sync` rewrites only a page whose digest changed and deletes the page of a removed file, and
 `--check` fails when a page is stale.
 
 ## Converting older figures
