@@ -1,5 +1,5 @@
-reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
-blessed = "2026-10-13"
+reason = "gvn meets blocks dominators first (#1053, #1656): a dominator laid out after the block it dominates now serves it; shellsort nib 4 loads -> 3"
+blessed = "2026-10-14"
 
 [bas.O2]
 instructions = 10790
@@ -58,19 +58,18 @@ bss_bytes = 0
 kernel_ms = 0.1262
 
 [nib.O2]
-instructions = 11274
-memory_operands = 1939
-code_bytes = 220
+instructions = 10508
+memory_operands = 1661
+code_bytes = 196
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 11682
-memory_operands = 2035
-code_bytes = 196
+instructions = 10595
+memory_operands = 1757
+code_bytes = 179
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.1583
 
 [ow.O2]
 instructions = 12654
