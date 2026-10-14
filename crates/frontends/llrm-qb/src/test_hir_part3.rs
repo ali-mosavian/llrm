@@ -1,7 +1,7 @@
 //! `tests/test_hir.py` QB cases, part 3; helpers in `test_hir`.
 //!
-//! Also `tests/test_qbstages.
-//! py::test_stage_observer_uses_one_compilation_and_preserves_object_bytes` and
+//! Also the stage observer test
+//! `test_stage_observer_uses_one_compilation_and_preserves_object_bytes` and
 //! `tests/test_qb_frontend_command.
 //! py::test_common_hir_profiles_do_not_become_qb_frontend_options`.
 // skipped: test_an_oversized_exact_loop_is_never_cloned_as_a_peel_candidate:
@@ -1209,7 +1209,7 @@ fn test_a_string_function_copies_its_result_before_freeing_other_locals() {
     assert_eq!(exit.terminator.operands, [Operand::value_ref(copied.results[0])]);
 }
 
-// ---- tests/test_qbstages.py ----------------------------------------------
+// ---- the stage dump ------------------------------------------------------
 
 fn capture_program() -> hir::Program {
     let void = hir::Type::new(0, "void", hir::TypeKind::Void, 0);

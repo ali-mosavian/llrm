@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cpulimit
@@ -186,8 +187,14 @@ def masked(name: str, screen: tuple[str, ...] | None) -> tuple[str, ...] | None:
     return screen if table is None or screen is None else tuple(row.translate(table) for row in screen)
 
 
+def chunked(names: list[str], chunks: int) -> list[list[str]]:
+    """`names` in `chunks` runs of neighbours (fewer when there are fewer names)."""
+    size = max(1, -(-len(names) // max(1, chunks)))
+    return [names[at : at + size] for at in range(0, len(names), size)]
+
+
 def differential_batch(
-    objects: dict[str, tuple[Path, ...]], candidates: dict[str, dict], work: Path, screens: set[str] | None = None
+    objects: dict[str, tuple[Path, ...]], candidates: dict[str, dict], work: Path, screens: set[str] | None = None, chunks: int = 1
 ) -> dict[str, dict[str, Differential]]:
     """Each program as BCOM45 builds it against ours at each target.
 
@@ -196,34 +203,49 @@ def differential_batch(
     at every target, the screens (what the program drew) at the targets in `screens`: a flat program runs behind DOS/32A's
     banner, which is on the screen.
 
-    Every session runs in `work/run`, so the mount lines on the DOS screen are the same text.  Jobs are named J000, J001,
-    ...: a source name is not always an 8.3 basename, or unique in 8 characters.
+    The programs go in `chunks` runs of neighbours, the runs at once. A run's sessions (the oracle, then each target) share
+    one directory `work/cK/run` and run in the same order, so the mount lines on the DOS screen are the same text on both
+    sides of a comparison. Jobs are named J000, J001, ...: a source name is not always an 8.3 basename, or unique in 8
+    characters.
     """
     names = {name: f"J{at:03d}" for at, name in enumerate(objects)}
-    run = work / "run"
+    # V: is mounted when any job of the session has a screen compared, and the mount lines are on that screen: a run's share of the
+    # programs must mount it as the whole set would, or its screens differ from the oracle's (which always mounts it) in those lines.
+    mounted = {target: any(draws_screen(n) for n in objects if not isinstance(built[n], str)) for target, built in candidates.items()}
 
-    def session(pairs: list[tuple[str, dosbatch.Job]]):
-        results = dosbatch.run([job for _, job in pairs], run)
-        return {
-            name: (results[job.stem], raw_output(run, job.stem), masked(name, screen_changes(run, at, draws_screen(name))), exe_size(run, job.stem))
-            for at, (name, job) in enumerate(pairs)
-        }
+    def sessions(group: list[str], run: Path):
+        def session(pairs: list[tuple[str, dosbatch.Job]], tools: bool | None = None):
+            results = dosbatch.run([job for _, job in pairs], run, mount_tools=tools)
+            return {
+                name: (results[job.stem], raw_output(run, job.stem), masked(name, screen_changes(run, at, draws_screen(name))), exe_size(run, job.stem))
+                for at, (name, job) in enumerate(pairs)
+            }
 
-    reference = session([(n, dosbatch.Job(names[n], "obj", objs[0], objects=extras(objs[1:], False), screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n))) for n, objs in objects.items()])
+        ref = session([(n, dosbatch.Job(names[n], "obj", objects[n][0], objects=extras(objects[n][1:], False), screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n))) for n in group])
+        got = {}
+        for target, built in candidates.items():
+            got[target] = session(
+                [
+                    (n, dosbatch.Job(names[n], "exe", built[n].exe, files=built[n].files, screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n)))
+                    for n in group
+                    if not isinstance(built[n], str)
+                ],
+                tools=mounted[target],
+            )
+        return ref, got
+
+    groups = chunked(list(objects), chunks)
+    with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+        ran = list(pool.map(lambda at_group: sessions(at_group[1], work / f"c{at_group[0]}" / "run"), enumerate(groups)))
+    reference = {n: v for ref, _ in ran for n, v in ref.items()}
+    done = {target: {n: v for _, got in ran for n, v in got[target].items()} for target in candidates}
     found: dict[str, dict[str, Differential]] = {name: {} for name in objects}
     for target, built in candidates.items():
-        candidate = session(
-            [
-                (n, dosbatch.Job(names[n], "exe", built[n].exe, files=built[n].files, screen=draws_screen(n), stdin=typed_input(n), budget_ms=budget(n)))
-                for n in objects
-                if not isinstance(built[n], str)
-            ]
-        )
         for name in objects:
             if isinstance(built[name], str):  # it did not build: why
                 found[name][target] = Differential(reference[name][0], dosbatch.Result("not built", detail=built[name]), "a differential side did not complete", "", (reference[name][3], 0))
                 continue
-            (want, want_bytes, want_screen, want_size), (got, got_bytes, got_screen, got_size) = reference[name], candidate[name]
+            (want, want_bytes, want_screen, want_size), (got, got_bytes, got_screen, got_size) = reference[name], done[target][name]
             sizes = (want_size, got_size)
             if want.status != "ok" or got.status != "ok":
                 found[name][target] = Differential(want, got, "a differential side did not complete", "", sizes)

@@ -1,5 +1,5 @@
 //! `tools/modernexe.py`'s compile, to an object rather than a linked
-//! executable, plus `tools/modernstages.py`'s `--dump DIR`.
+//! executable, plus `--dump DIR`, which writes the stages.
 //!
 //! ```text
 //! llrm-nib SOURCE [--entry ENTRY] [--dump DIR] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [OPTIONS]

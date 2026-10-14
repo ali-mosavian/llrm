@@ -1131,6 +1131,17 @@ def test_floatassign_finds_the_allocnos_at_a_spill_point_by_the_point(tmp_path):
 
 
 
+def test_counted_branches_share_what_a_counter_is_at_a_trip(tmp_path):
+    """nbody_single at -O3: `peel` asked the odds of every branch of each loop, and `counted` ran a loop's counters once but worked out the
+    compare's operands again for every branch at every trip, and found the loop's phis again for each: 118 Minstr in `mir peel` against 48
+    when a trip is found as it was and a value is worked out once at each trip. A bound of 70 fails the first."""
+    source = tmp_path / "nbody_single.c"
+    source.write_text(wrap.wrapped("nbody_single", programs.sources()["nbody_single"].read_text()))
+    own = gate.own_work([*gate.levels_time.command("llrm", "O3", source), *programs.LLRM_FLAGS])
+    assert own["mir peel"] > 20.0, f"premise: loops were peeled ({own['mir peel']:.1f} Minstr)"
+    assert own["mir peel"] <= 70.0, own["mir peel"]
+
+
 def test_the_spiller_leaves_alone_the_blocks_with_no_update_to_merge(tmp_path):
     """branches(1024) at -O2: merging a spilled value's updates (`spill short updates`, `spill local updates`) rewrote every block of the body
     for each spill, though only the blocks that define a stored value by a plain move, or update it, can have a run to merge, and gave

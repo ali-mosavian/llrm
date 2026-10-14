@@ -172,13 +172,11 @@ fn _integer_loads(
                     && (matches!(what.dests[0], Loc::Held(_))
                         || crate::backend::target::positional_place(regs, &what.dests[0]))
                 {
-                    if let Loc::Imm(Imm { value: value @ (0 | 1), .. }) = what.sources[0] {
+                    if let Loc::Imm(Imm { value: value @ (0 | 1), .. }) = what.sources[0]
+                        && let Some((name, _)) = constpool::x87_constant(value as f64)
+                    {
                         let mut made = (*one).clone();
-                        made.what = Some(Semantics {
-                            name: Some(if value == 0 { "fldz" } else { "fld1" }.to_owned()),
-                            sources: Vec::new(),
-                            ..what
-                        });
+                        made.what = Some(Semantics { name: Some(name.to_owned()), sources: Vec::new(), ..what });
                         insns.push(Arc::new(made));
                         continue;
                     }
