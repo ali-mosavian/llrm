@@ -252,6 +252,12 @@ def on_tmpfs(path: Path, mounts: str | None = None) -> bool:
     return kind == "tmpfs"
 
 
+def stale_known(args, result: Result) -> list[tuple[str, str]]:
+    """The known.toml entries a run of everything left unmatched. A narrower run sees few of the bugs, so it says nothing."""
+    narrow = args.family or args.case or args.lang or args.config or args.quick or args.inline or args.stale_ok
+    return [] if narrow else known.stale([*result.wrong, *result.unbuilt])
+
+
 def lacks_references(args, langs: list[str]) -> bool:
     """Whether a run builds no Open Watcom or gcc-ia16 loops, which `judge` takes
     as no reference meeting any bound: every ivs reads as ivs-ideal."""
@@ -614,10 +620,13 @@ def main() -> int:
     if args.write_known:
         known.write(result.short, ratchet.kept_issues, result.judged)
     report(cases, langs, configs, result, ratchet, work, time.monotonic() - started)
+    stale = stale_known(args, result)
+    for match, issue in stale:
+        print(f"STALE known.toml entry {issue}: nothing failing matches {match!r}; remove it (a bug that is fixed)")
     if build.binaries_stamp() != stamp:
         print("the llrm binaries changed during the run: rerun")
         return 2
-    bad = result.wrong or result.unbuilt or (not args.write_known and (ratchet.new or ratchet.fixed))
+    bad = result.wrong or result.unbuilt or stale or (not args.write_known and (ratchet.new or ratchet.fixed))
     return 1 if bad else 0
 
 
