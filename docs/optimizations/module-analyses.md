@@ -47,6 +47,8 @@ flowchart TB
 
 `LLRM_CHECK_MODULES=1` runs every module analysis again from scratch beside the updated one and asserts the two are equal; the panic names the summaries that differ and the dirty set. Run it over the bench programs and the test programs when changing an analysis that has a memo.
 
+`LLRM_CHECK_SUMMARIES=1` finds every body's exposed frames, point values and calls from nothing and asserts the ones `Summaries` kept are equal, named by body. `alias::summaries_updating` takes its bodies as `alias::Bodies`: calls by position, and a `Procedure` made only for the body a visit asks for, where it was made for every body on every run (150 of 700 Minstr own at chain N=2048).
+
 ## Related
 
 [early-summaries](early-summaries.md) covers what the pipeline does with summaries between edits. [analyses](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src) lists the module analyses.

@@ -34,3 +34,23 @@ def test_a_lost_continue_is_sent_again_while_the_emulator_is_frozen():
     one.limit = lambda seconds: (lambda: len(emulator.sent) > 50)
     one.wait_for_shell()
     assert "continue" in emulator.sent
+
+
+def test_two_sessions_never_pick_a_port_at_once(tmp_path):
+    """The port was free between the pick and the emulator's bind: two sessions starting together could hold one and drive each other's emulator."""
+    import threading
+    import time
+
+    inside, worst = [], []
+
+    def session():
+        with qbplay.port_claim():
+            inside.append(1)
+            worst.append(len(inside))
+            time.sleep(0.05)
+            inside.pop()
+
+    threads = [threading.Thread(target=session) for _ in range(6)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert max(worst) == 1

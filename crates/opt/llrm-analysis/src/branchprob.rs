@@ -20,9 +20,10 @@
 //!    weights).
 //! 5. `Counted`: a branch on a compare of the counters of an enclosing loop
 //!    whose trip count induction proved (`trips`, at most 4096). The counters
-//!    (header phis from a constant start) are stepped trip by trip and the edge
-//!    is taken on the share of trips the compare holds on, clamped away from 0
-//!    and 1.
+//!    (header phis from a constant start) are stepped trip by trip, once for
+//!    the loop, and a value the compares read is worked out once at each trip;
+//!    the edge is taken on the share of trips the compare holds on, clamped
+//!    away from 0 and 1.
 //! 6. `Pointer`, `Zero`, `Float`, from the compare feeding a `br`: `p == q` on
 //!    pointers fails (20:12), as do `x == 0`, `x == -1`, `x < 0` and `x <= 0`
 //!    on integers, and `x == y` on floats; `isnan` (`uno`) is 1 in 2^20. Truth
@@ -446,9 +447,9 @@ fn counted(
         let mut run = run.borrow_mut();
         let mut held = 0;
         for trip in 0..count as usize {
-            let values = run.at(context, function, one, trip)?;
+            run.at(context, function, one, trip)?;
             let (a, b) =
-                (evaluated(context, function, values, *left, 6)?, evaluated(context, function, values, *right, 6)?);
+                (run.evaluated(context, function, trip, *left)?, run.evaluated(context, function, trip, *right)?);
             held += i64::from(compared_as(predicate, a, b));
         }
         // The state after the last trip is stepped to as well: a counter that
@@ -471,6 +472,9 @@ fn counted(
 struct Run {
     values: Vec<BTreeMap<llrm_mir::module::ValueId, Option<(u128, u32)>>>,
     broken: bool,
+    /// What a value is at a trip, for the branches that compare the same
+    /// value: found for the first, not run again for each.
+    evaluations: HashMap<(usize, llrm_mir::module::ValueId), Option<(u128, u32)>>,
 }
 
 #[derive(Default)]
@@ -478,6 +482,12 @@ struct Runs(std::cell::RefCell<HashMap<i64, Rc<std::cell::RefCell<Run>>>>);
 
 thread_local! {
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static EVALUATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many values this thread has worked out at a trip for `counted`.
+pub fn values_evaluated() -> usize {
+    EVALUATIONS.with(std::cell::Cell::get)
 }
 
 /// How many loops this thread has started to run trip by trip for `counted`.
@@ -498,6 +508,26 @@ impl Runs {
 }
 
 impl Run {
+    /// `operand` at the start of trip `trip` (`at` has run it), kept per value.
+    fn evaluated(
+        &mut self,
+        context: &Context,
+        function: &Function,
+        trip: usize,
+        operand: Operand,
+    ) -> Option<(u128, u32)> {
+        let Operand::Value(value) = operand else {
+            return evaluated(context, function, self.values.get(trip)?, operand, 6);
+        };
+        if let Some(known) = self.evaluations.get(&(trip, value)) {
+            return *known;
+        }
+        EVALUATIONS.with(|runs| runs.set(runs.get() + 1));
+        let found = evaluated(context, function, self.values.get(trip)?, operand, 6);
+        self.evaluations.insert((trip, value), found);
+        found
+    }
+
     /// The counters at the start of trip `trip` of `one` (`trip` = its trips is
     /// the state after the last), run as far as that.
     fn at(
@@ -509,6 +539,11 @@ impl Run {
     ) -> Option<&BTreeMap<llrm_mir::module::ValueId, Option<(u128, u32)>>> {
         if self.broken {
             return None;
+        }
+        // A trip run for an earlier branch is found as it was, not from the
+        // loop's phis again: every branch of the loop asks every trip.
+        if trip < self.values.len() {
+            return self.values.get(trip);
         }
         let header = function.block(cfg::block(one.header));
         let phis = header

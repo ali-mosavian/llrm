@@ -3,6 +3,8 @@ import importlib
 import os
 import subprocess
 import sys
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -391,3 +393,59 @@ def test_a_new_row_of_seven_tenths_of_the_compile_on_an_axis_that_rose_still_fai
     )
     bad = measure.rises(base, grown, TOL)[1]
     assert any("pointer-values" in line for line in bad), bad
+
+
+def test_the_tree_key_covers_the_toolchain_because_the_tree_pins_it():
+    """A measurement is stored by tree: a rustc outside the tree would make two builds of one tree differ and share a key."""
+    pinned = tomllib.loads((measure.ROOT / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", pinned), f"rust-toolchain.toml channel {pinned!r} is not an exact version: put the rustc version in measure.method()"
+
+
+def _repo_with_two_commits_of_one_tree(tmp_path):
+    def run(*args, env=None):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True, env={**os.environ, "GIT_AUTHOR_NAME": "a", "GIT_AUTHOR_EMAIL": "a@a", "GIT_COMMITTER_NAME": "a", "GIT_COMMITTER_EMAIL": "a@a"}).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    (tmp_path / "f").write_text("one\n")
+    run("add", "f")
+    run("commit", "-q", "-m", "gated head")
+    head = run("rev-parse", "HEAD")
+    squash = run("commit-tree", f"{head}^{{tree}}", "-m", "the squash that lands it")  # another commit, the same tree
+    return head, squash
+
+
+def test_the_squash_that_lands_a_gated_branch_has_the_measurement_the_gate_stored(tmp_path, monkeypatch):
+    """Every gate printed 'no measurement of <main tip>; building and measuring it' (~half of measure's 458 s): the tip is the squash commit,
+    the measurement had been stored under the branch head's sha."""
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(measure, "ROOT", tmp_path)
+    head, squash = _repo_with_two_commits_of_one_tree(tmp_path)
+    assert head != squash
+    measure.save(head, made(files(a=1)))
+    which = made(files(a=1))["method"]
+    assert measure.stored(squash, which) == made(files(a=1))
+
+
+def test_a_gated_head_not_yet_on_the_reference_is_stored_for_the_commit_that_lands_it(tmp_path, monkeypatch):
+    """`check` stored the head only when already an ancestor of origin/main, which a branch under gate never is."""
+    saved = []
+    now = made(files(a=1000)) | {"binary": {"path": "/x/llrm-c", "sha": "abc123def456"}}
+    monkeypatch.setattr(measure, "measure_all", lambda jobs: now)
+    monkeypatch.setattr(measure, "git", lambda *a, **k: "" if a[0] == "status" else "f" * 40)
+    monkeypatch.setattr(measure, "base_of", lambda head, ref: "e" * 40)
+    monkeypatch.setattr(measure, "base_measurement", lambda sha, jobs: made(files(a=1000)))
+    monkeypatch.setattr(measure, "stored", lambda sha, which: None)
+    monkeypatch.setattr(measure, "save", lambda sha, data: saved.append(sha))
+    assert measure.check(1, "origin/main") == 0
+    assert saved == ["f" * 40]
+
+
+def test_measure_runs_half_the_cores_of_jobs_by_default_and_what_JOBS_says_otherwise(monkeypatch):
+    """`--jobs` defaulted to 4: 1249 CPU-s of measurement ran four wide on 32 cores. Instruction counts do not depend on the width."""
+    monkeypatch.delenv("JOBS", raising=False)
+    monkeypatch.setattr(sys, "argv", ["measure.py", "show"])
+    seen = []
+    monkeypatch.setattr(measure, "measure_all", lambda jobs: seen.append(jobs) or {"method": "m"})
+    monkeypatch.setattr(measure.gate.os, "cpu_count", lambda: 32)
+    measure.main()
+    assert seen == [16]
