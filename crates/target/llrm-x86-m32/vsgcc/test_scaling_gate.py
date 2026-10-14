@@ -1105,3 +1105,14 @@ def test_loopsimplify_groups_a_loops_edges_without_copying_the_function_for_it(t
         own[n] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir loopsimplify"]
     assert own[512] > 3.0, f"premise: loopsimplify ran ({own[512]:.1f} Minstr)"
     assert own[1024] <= 2.7 * own[512], f"mir loopsimplify {own[512]:.0f} -> {own[1024]:.0f} Minstr"
+
+
+def test_counted_branches_share_what_a_counter_is_at_a_trip(tmp_path):
+    """nbody_single at -O3: `peel` asked the odds of every branch of each loop, and `counted` ran a loop's counters once but worked out the
+    compare's operands again for every branch at every trip, and found the loop's phis again for each: 118 Minstr in `mir peel` against 48
+    when a trip is found as it was and a value is worked out once at each trip. A bound of 70 fails the first."""
+    source = tmp_path / "nbody_single.c"
+    source.write_text(wrap.wrapped("nbody_single", programs.sources()["nbody_single"].read_text()))
+    own = gate.own_work([*gate.levels_time.command("llrm", "O3", source), *programs.LLRM_FLAGS])
+    assert own["mir peel"] > 20.0, f"premise: loops were peeled ({own['mir peel']:.1f} Minstr)"
+    assert own["mir peel"] <= 70.0, own["mir peel"]
