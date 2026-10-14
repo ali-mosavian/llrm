@@ -3300,11 +3300,83 @@ impl Coloring<'_> {
         }
     }
 
+    /// Whether more values are live at one point of `value` than there are
+    /// registers for them all: the values placed in a register `value` could
+    /// take that are live at a point of `value`, with `value`, need a register
+    /// each of the registers any of them could take, and moving them about
+    /// changes neither the number of them nor the registers there are. When
+    /// they outnumber the registers no recoloring places `value`, and `recolor`
+    /// would fail whatever it tried (Hall's condition, the necessary half).
+    fn crowded(
+        &self,
+        value: u32,
+    ) -> bool {
+        let mine = &self.live[&value];
+        let mut group: Vec<u32> = vec![value];
+        for register in (self.order)(value) {
+            for other in self.union.meeting(&_whole(register), mine, self.live) {
+                if !group.contains(&other) {
+                    group.push(other);
+                }
+            }
+        }
+        let mut registers: BTreeSet<RegId> = BTreeSet::new();
+        for one in &group {
+            registers.extend((self.order)(*one).into_iter().map(|register| _whole(register)));
+        }
+        // The most of them live at once within `value`: a count at each point
+        // one of them starts.
+        let live_at = |one: u32, point: i64| {
+            self.live[&one].segments.iter().any(|segment| segment.start <= point && point < segment.end)
+        };
+        for one in &group {
+            for segment in &self.live[one].segments {
+                let point = segment.start;
+                if mine.segments.iter().any(|inside| inside.start <= point && point < inside.end)
+                    && group.iter().filter(|other| live_at(**other, point)).count() > registers.len()
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// `RAGreedy::tryLastChanceRecoloring`: a register for `value` whose
     /// holders all move elsewhere, recursively. `recolored` are the values
     /// placed in this session, never moved again. On success `value` is
     /// placed; on failure nothing has changed.
     pub fn recolor(
+        &mut self,
+        value: u32,
+        depth: usize,
+        recolored: &mut BTreeSet<u32>,
+    ) -> bool {
+        if depth >= Self::DEPTH {
+            return false;
+        }
+        if depth == 0 && self.crowded(value) {
+                        if llrm_support::env_set("LLRM_CHECK_RECOLOR") {
+                let mut again = Coloring {
+                    union: &mut *self.union,
+                    r#where: &mut *self.r#where,
+                    live: self.live,
+                    index: self.index,
+                    masks: self.masks,
+                    order: self.order,
+                    width: self.width,
+                    fenced: self.fenced,
+                    budget: Self::BUDGET,
+                    stack: Vec::new(),
+                };
+                assert!(!again.search(value, 0, &mut BTreeSet::new()), "value#{value}: crowded, and recolored all the same");
+            }
+            return false;
+        }
+        self.search(value, depth, recolored)
+    }
+
+    fn search(
         &mut self,
         value: u32,
         depth: usize,
