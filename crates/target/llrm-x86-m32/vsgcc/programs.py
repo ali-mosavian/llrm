@@ -12,3 +12,7 @@ def sources() -> dict[str, Path]:
     found = {p.name: p / f"{p.name}.c" for p in sorted((REPO / "bench").iterdir())
              if p.is_dir() and p.name not in NOT_PROGRAMS and "bench_io.h" not in (p / f"{p.name}.c").read_text(errors="replace")}  # files: no gcc build
     return found | {p.name: p / f"{p.name}.c" for p in sorted((HERE / "kernels").iterdir())}
+
+
+if __name__ == "__main__":
+    print(" ".join(sources()))  # run.sh's list

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/nativeframe.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/nativeframe.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/nativeframe.rs sha256:02d271538ec0ca7d4935e5097a0ec673fb01cef6db72065829595b3bc2036ce4 -->
+<!-- src: crates/backend/llrm-core/src/backend/nativeframe.rs sha256:7667951b3c6a97358cd72dfa07af3d612bd3a64ab19bbf40fd020b4cf53a31d4 -->
 
 # nativeframe
 

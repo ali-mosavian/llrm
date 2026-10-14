@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/arithmetic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/arithmetic.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/arithmetic.rs sha256:121f6132d9b97962a061d610a75343f39af7187dc6b0458992d51d0a050bf9cc -->
+<!-- src: crates/backend/llrm-core/src/backend/arithmetic.rs sha256:500a7bb23ab0aa2aeca8d07d76ce1105fbd14962c1f66295a18cfdb95f54a61d -->
 
 # arithmetic
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unroll_jam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll_jam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:d334a5b133677a21a9a46aeaefb7f2f6948ccfc6ebcec4dfb95d0d125248d411 -->
+<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:27a437bb0fe6c35dcc7536e3e8895277fdb9209bb33a4165d2e4a0fe5c481e38 -->
 
 # unroll_jam
 

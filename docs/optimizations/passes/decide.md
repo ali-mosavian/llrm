@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/decide.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/decide.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:8df414540ef44cbc34f31b18fae398a844105d33109a1c96372e47ceb3dbc911 -->
+<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:4f4668ef683ed315060b3e5b2177fabd7d4dbeadec183200bf671e1a52be1eb4 -->
 
 # decide
 

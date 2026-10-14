@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/nearest.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/nearest.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/nearest.rs sha256:283fbed7b626331ba355ec244b275a50bd0942dfaf50df9e7a24ca99cfa783dc -->
+<!-- src: crates/opt/llrm-analysis/src/nearest.rs sha256:b87335bd694a30ccf0594a83766ee778780254d14fe968c133cb39e3e306e110 -->
 
 # nearest
 

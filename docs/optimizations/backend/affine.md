@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/affine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/affine.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/affine.rs sha256:c7cda0a04f10f3d0e46cff61cdecd87a32991c7a70d3cacf4533cbaf2122c826 -->
+<!-- src: crates/backend/llrm-core/src/backend/affine.rs sha256:c8c512e60f279d38a94cc6c6fe79d10f93ebf2a778d5074c2ef60b600055731f -->
 
 # affine
 

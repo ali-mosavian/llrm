@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/phiopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/phiopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/phiopt.rs sha256:0e34d1952386eff31a3f05fb03397c08e466084ca7cb72991a593b8149d68370 -->
+<!-- src: crates/opt/llrm-transforms/src/phiopt.rs sha256:136afae5541725ecb57e177b714790e259a2752b993fd5c094bb19662e8632b7 -->
 
 # phiopt
 
