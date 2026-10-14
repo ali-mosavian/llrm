@@ -1,4 +1,4 @@
-reason = "a BASIC procedure at m32 holds a value in the frame register and builds no frame (the driver now records the bytes a runtime callee pops, a push of a value is sized, x87 register bytes are inert, the freed registers reach masm): bq32 -O2 instructions -0..-10.5% (fib -10.5%, nbody -9.9%, particle -6.9%, shellsort -6.6%, hanoi -3.4%), code -3%..+7% ([esp+d] is a byte longer than [ebp+d]); -Os keeps BASIC's frame where size is tuned and masm compares the bytes: -4%..+0%, instructions +0..+2.5%"
+reason = "m32 word add/sub on the whole register (no 66h): code bytes down in 50+ rows; a few runtime instructions up by under 0.001%"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -32,13 +32,13 @@ bss_bytes = 0
 
 [bq32.O2]
 instructions = 21498
-code_bytes = 837
+code_bytes = 829
 data_bytes = 29
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 21777
-code_bytes = 814
+instructions = 21771
+code_bytes = 816
 data_bytes = 29
 bss_bytes = 0
 

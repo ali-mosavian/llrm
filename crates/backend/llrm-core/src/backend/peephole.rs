@@ -2072,7 +2072,8 @@ pub fn secondary_bases<'a>(
 /// longest prefix whose flags are dead (`dead`), whose sum an address names,
 /// and which the target prices no dearer in cycles or bytes becomes one LEA.
 /// A word result keeps only the low sixteen bits, which the upper halves of
-/// the registers read cannot reach. Returns the instructions consumed.
+/// the registers read cannot reach, and a step the target ran on the whole
+/// register (`promote`) goes on the chain. Returns the instructions consumed.
 fn _affine_address(
     regs: Regs,
     mode: u32,
@@ -2096,12 +2097,15 @@ fn _affine_address(
     let bits = i64::from(dest.width) * 8;
     let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
     let (mut terms, mut disp): (affine::Terms, i64) = (vec![(full32(source.register), 1)], 0);
-    let mut best: Option<(usize, AddressRef, i64, bool)> = None;
+    let mut best: Option<(usize, AddressRef, i64, bool, Reg)> = None;
     for (at, one) in parts.iter().enumerate().skip(1) {
         let Some((written, step, cost)) = affine::step(regs, one, cpu) else {
             break;
         };
-        if written != dest {
+        // A step the target ran on the whole register (`promote`) goes on a
+        // word chain, and a word step on one so run: what lies above a word
+        // is nobody's.
+        if written != dest && !(full32(written.register) == z && written.width != dest.width) {
             break;
         }
         match step {
@@ -2126,15 +2130,15 @@ fn _affine_address(
         if !dead.contains(&id(one)) {
             continue;
         }
-        if dest.width == 2
+        if written.width == 2
             && let Some(address) = affine::word_form(&terms, disp)
         {
-            best = Some((at, address, old, true));
+            best = Some((at, address, old, true, written));
         } else if let Some(address) = affine::form(regs, &terms, disp, &wide.scales) {
-            best = Some((at, address, old, false));
+            best = Some((at, address, old, false, written));
         }
     }
-    let Some((last, address, old, word)) = best else {
+    let Some((last, address, old, word, dest)) = best else {
         return Ok(None);
     };
     let replaced = &parts[..=last];

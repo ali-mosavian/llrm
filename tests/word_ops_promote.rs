@@ -44,3 +44,63 @@ fn a_word_operation_with_a_memory_operand_stays_a_word() {
     let text = listing("unsigned short g(unsigned short x, unsigned short y) { return x ^ y; }\n");
     assert!(text.contains("xor ax, word ptr [esp+8]"), "{text}");
 }
+
+/// A word `add` of registers ran under the operand-size prefix (`add ax, 3;
+/// add dx, ax`: two prefixed instructions a trip in a loop of 16-bit counters,
+/// where gcc and clang run both on the whole register).
+#[test]
+fn a_word_add_of_registers_runs_on_the_whole_register() {
+    let text = listing(
+        "short t[256];\n\
+         short f(short a, short b, int n) {\n\
+             short s = 0; int i;\n\
+             for (i = 0; i < n; i++) { a = a + 3; b = b + a; s = s + t[(a + b) & 255]; }\n\
+             return s;\n\
+         }\n",
+    );
+    let loop_body = text.split("L0_4:").nth(1).expect("the loop").split("jne").next().unwrap();
+    let words = loop_body.lines().filter(|line| line.trim_start().starts_with("add ") && !line.contains('e')).count();
+    assert_eq!(words, 0, "a word add is left in the loop:\n{text}");
+    assert!(loop_body.contains("add ecx, 3"), "{text}");
+}
+
+/// `t(3 * n + 1)`: the word chain `mov; shl; add; add 1` is one `lea`, and the
+/// promoted `add 1` (now a dword) ended it, leaving `lea bx, [..]; inc ebx`
+/// (bintree: one more instruction a node).
+#[test]
+fn a_promoted_step_ends_a_word_address_chain_in_one_lea() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(
+        directory.join("a.bas"),
+        "DEFINT A-Z\nDECLARE FUNCTION At% (t() AS INTEGER, n AS INTEGER)\nDIM t(0 TO 99) AS INTEGER\n\
+         PRINT At%(t(), 3)\nFUNCTION At% (t() AS INTEGER, n AS INTEGER)\n    At% = t(3 * n + 1)\nEND FUNCTION\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+        .current_dir(directory)
+        .args(["a.bas", "--dialect", "qb45", "-fqb-runtime=llrm", "-O2", "-m32", "-march=i486", "-S", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(directory.join("a.s")).unwrap();
+    assert!(text.contains("+1]"), "the chain is not one lea:\n{text}");
+    assert!(!text.contains("inc e"), "an inc follows the lea:\n{text}");
+}
+
+/// A word `inc` whose flags end the loop stays a word: promoted, it needed
+/// `test cx, cx` for the flags of the word (bench/histo: `inc ecx; test cx,
+/// cx; jne` for `inc cx; jne`, 4096 instructions more).
+#[test]
+fn a_word_counter_that_ends_a_loop_keeps_its_flags() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = concat!(env!("CARGO_MANIFEST_DIR"), "/bench/histo/histo.bas");
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+        .current_dir(scratch.path())
+        .args([source, "--dialect", "qb45", "-fqb-runtime=llrm", "-O2", "-m32", "-march=i486", "-S", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(!text.contains("test cx, cx"), "the counter was promoted and tested again:\n{text}");
+}

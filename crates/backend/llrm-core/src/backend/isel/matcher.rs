@@ -637,9 +637,17 @@ impl Selector<'_, '_, '_> {
                 ),
             );
         let foldable = instruction.operands.iter().any(|operand| loaded(*operand)) && (registers >= 2 || stored);
+        // Nor where a compare reads the result: the word's flags serve it, and
+        // the dword's are of bits it cannot ignore (`inc cx; jne` against
+        // `inc ecx; test cx, cx; jne`).
+        let compared = instruction.result.is_some_and(|result| {
+            let users = self.function.users(result);
+            users.iter().any(|user| matches!(self.function.instruction(user.user).opcode, Opcode::ICmp(_)))
+        });
         bits < self.native_width() * 8
             && self.promote.iter().any(|one| *one == format!("{}.i{bits}", instruction.opcode.mnemonic()))
             && !foldable
+            && !compared
     }
 
     /// The bytes of the widest integer the target computes natively.

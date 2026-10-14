@@ -1,4 +1,4 @@
-reason = "main moved since the bq32 frame-register bless (#perf/basic-frame-free): +-5 executed instructions in the jpeg, stft and scroll bq32 rows"
+reason = "m32 word add/sub on the whole register (no 66h): code bytes down in 50+ rows; a few runtime instructions up by under 0.001%"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 72230416
-code_bytes = 1404
+instructions = 72230408
+code_bytes = 1391
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73089928
-code_bytes = 1379
+instructions = 73090430
+code_bytes = 1365
 data_bytes = 4733
 bss_bytes = 0
 
