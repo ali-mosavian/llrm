@@ -41,7 +41,9 @@
 //! write, only the buckets that can hold a cell `overlapping` does not rule
 //! out: objectless ones, the write's frame, its objects, and any class that may
 //! alias. `displaced_buckets` and `displaced_span` serve a write at fixed
-//! displacements in a frame. `Index` does the same for lists of references:
+//! displacements in a frame; `hull_buckets` and `hull_span` serve a write and
+//! cells named by provenance alone (no root), by the hull of their slices in
+//! one object. `Index` does the same for lists of references:
 //! `near` returns the entries that name an object the reference may alias,
 //! every addressed one if the reference names an addressed object, and every
 //! entry without provenance; more than needed, never fewer.
@@ -99,6 +101,7 @@ use num_traits::ToPrimitive;
 use crate::cellmap::Bucket;
 use crate::memory::{
     AliasClass, MemRef, MemoryKind, ObjectRef, Provenance, Slice, SliceError, alias_class, classes_may_alias,
+    objects_may_alias,
 };
 use crate::ranges::{Interval, covering};
 
@@ -716,6 +719,47 @@ pub fn displaced_span(reference: &MemRef) -> Option<(Frame, i128, i128)> {
 /// names them, for a `CellMap`'s spans.
 pub fn overlap_span(reference: &MemRef) -> Option<ByteRange> {
     displaced_span(reference).map(|(_, low, high)| (low, high))
+}
+
+/// The bytes of its one object a reference named by provenance alone (no root,
+/// so no frame to count displacements from) may reach: the hull of its slice,
+/// a bound `overlapping` cannot exceed. None for a reference with a root or
+/// with slices in more than one object.
+pub fn hull_span(reference: &MemRef) -> Option<ByteRange> {
+    if reference.root.is_some() {
+        return None;
+    }
+    let provenance = reference.provenance.as_ref()?;
+    let [slice] = provenance.slices.iter().collect::<Vec<_>>()[..] else { return None };
+    Some((i128::from(slice.low), i128::from(slice.high) + i128::from(slice.width)))
+}
+
+/// For each object a write through `reference` names alone (no other slice's
+/// object may alias it): the buckets held of that object's bytes with no frame,
+/// and the hull of the write's slices in it. A cell in those buckets whose
+/// `hull_span` misses it is one the write cannot reach.
+pub fn hull_buckets(
+    reference: &MemRef,
+    parts: &OverlapParts,
+) -> Vec<(HashSet<OverlapBucket>, ByteRange)> {
+    let Some(provenance) = reference.provenance.as_ref() else { return Vec::new() };
+    let mut hulls: BTreeMap<ObjectRef, ByteRange> = BTreeMap::new();
+    for slice in &provenance.slices {
+        let (low, high) = (i128::from(slice.low), i128::from(slice.high) + i128::from(slice.width));
+        let hull = hulls.entry(slice.object).or_insert((low, high));
+        *hull = (hull.0.min(low), hull.1.max(high));
+    }
+    hulls
+        .into_iter()
+        .filter(|(object, _)| {
+            !provenance.slices.iter().any(|one| one.object != *object && objects_may_alias(&one.object, object))
+        })
+        .filter_map(|(object, hull)| {
+            let held: HashSet<OverlapBucket> =
+                parts.objects.get(&object)?.iter().copied().filter(|bucket| bucket.shape().frame.is_none()).collect();
+            (!held.is_empty()).then_some((held, hull))
+        })
+        .collect()
 }
 
 /// Python `mir.displaced_buckets`: the buckets held (`parts`) in the frame
