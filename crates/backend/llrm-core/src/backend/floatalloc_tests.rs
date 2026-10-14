@@ -1766,3 +1766,16 @@ fn test_a_restore_in_a_block_that_branches_goes_before_the_branch() {
     let one = result.iter().find(|(at, _)| *at == 1).unwrap();
     assert_eq!(one.1, vec!["fldcw", "fistp", "fldcw", "jne"], "{result:?}");
 }
+
+/// fpbench's loop rounds (an `fmul`), converts, rounds and converts again each
+/// trip: entering it truncating changes nothing a trip pays, and cost two
+/// `fldcw` more, one on its entry and one on its exit (fpbench -O2: 3,005
+/// memory operands against 3,003, 487 B of code against 483).
+#[test]
+fn test_a_loop_that_rounds_between_conversions_is_not_entered_truncating() {
+    let result = switched(&[(0, ".", vec![5]), (5, "acacb", vec![5, 9]), (9, "r", vec![])]);
+    for at in [0, 9] {
+        let names = &result.iter().find(|(block, _)| *block == at).unwrap().1;
+        assert!(!names.contains(&"fldcw".to_owned()), "{result:?}");
+    }
+}

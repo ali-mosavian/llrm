@@ -1221,11 +1221,44 @@ fn _modes(body: &LirBody) -> Modes {
             break;
         }
     }
-    let agreed = graph.iter().all(|block| block.succ.iter().all(|&to| placeable(&entering, block.at, to)));
-    if agreed {
-        return Modes { entering, restore: false };
+    // The switches an assignment costs, each weighted by its block's depth:
+    // none if an edge cannot take its switch.
+    let cost = |entering: &BTreeMap<i64, Mode>, restore: bool| -> Option<i64> {
+        let mut total = 0;
+        for block in graph {
+            let at = weight.get(&block.at).copied().unwrap_or(1);
+            let mut current = entering[&block.at];
+            let mut switches = 0;
+            for one in &block.insns {
+                if let Some(needed) = _needs(one).filter(|needed| *needed != current) {
+                    switches += 1;
+                    current = needed;
+                }
+            }
+            if (restore || block.succ.is_empty()) && current != Mode::Caller {
+                switches += 1;
+            }
+            total += at * switches;
+            for &to in block.succ.iter().filter(|_| !restore) {
+                if current != entering[&to] {
+                    if !placeable(entering, block.at, to) {
+                        return None;
+                    }
+                    total += at;
+                }
+            }
+        }
+        Some(total)
+    };
+    let restoring = graph.iter().map(|block| (block.at, Mode::Caller)).collect::<BTreeMap<_, _>>();
+    // Following demand can cost more than restoring at the end of each block: a
+    // loop that converts and rounds alike in a trip gains nothing from entering
+    // in one mode and pays the switch on its entry and exit.
+    match (cost(&entering, false), cost(&restoring, true)) {
+        (Some(following), Some(restored)) if following <= restored => Modes { entering, restore: false },
+        (Some(_), None) => Modes { entering, restore: false },
+        _ => Modes { entering: restoring, restore: true },
     }
-    Modes { entering: graph.iter().map(|block| (block.at, Mode::Caller)).collect(), restore: true }
 }
 
 /// `fisttp` as a 387 has it: `fistp` with the control word set to round
