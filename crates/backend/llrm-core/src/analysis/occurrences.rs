@@ -156,19 +156,18 @@ impl Occurrences {
         let mut found = Self::default();
         for value in values {
             let mut named: std::collections::BTreeMap<Place, Named> = std::collections::BTreeMap::new();
-            for (list, defined) in [(postings.defs(*value), true), (postings.uses(*value), false)] {
-                for (block, position) in list {
-                    let place = (block as usize, position as usize);
-                    let made = named.entry(place).or_insert(Named { place, defined: false, used: false, mentions: 0 });
-                    made.defined |= defined;
-                    made.used |= !defined;
-                    made.mentions += 1;
-                }
+            let defining = postings.defs_at(*value).map(|at| (at, true));
+            for (at, defined) in defining.chain(postings.uses_at(*value).map(|at| (at, false))) {
+                let place = (at.0 as usize, at.1 as usize);
+                let made = named.entry(place).or_insert(Named { place, defined: false, used: false, mentions: 0 });
+                made.defined |= defined;
+                made.used |= !defined;
+                made.mentions += 1;
             }
             found.by_value.insert(*value, named.into_values().collect());
             found
                 .required
-                .extend(postings.needs(*value).iter().map(|&(block, position)| (block as usize, position as usize)));
+                .extend(postings.needs_at(*value).map(|(block, position)| (block as usize, position as usize)));
         }
         found
     }

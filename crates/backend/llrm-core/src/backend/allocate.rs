@@ -1399,7 +1399,7 @@ fn _copy_hints_after(
     crate::backend::postings::following(body, |postings| {
         for value in touched {
             let mut at: Vec<crate::backend::postings::At> =
-                postings.defs(*value).into_iter().chain(postings.uses(*value)).collect();
+                postings.defs_at(*value).chain(postings.uses_at(*value)).collect();
             at.sort_unstable();
             at.dedup();
             let partners: Vec<u32> = at
@@ -2602,7 +2602,7 @@ fn _named_among(
             .iter()
             .copied()
             .filter(|value| {
-                arrives.contains(value) || !postings.defs(*value).is_empty() || !postings.uses(*value).is_empty()
+                arrives.contains(value) || postings.defs_count(*value) != 0 || postings.uses_count(*value) != 0
             })
             .collect()
     });
@@ -2724,7 +2724,7 @@ fn _widest_after(
     crate::backend::postings::following(body, |postings| {
         for value in touched {
             let mut at: Vec<crate::backend::postings::At> =
-                postings.defs(*value).into_iter().chain(postings.uses(*value)).chain(postings.needs(*value)).collect();
+                postings.defs_at(*value).chain(postings.uses_at(*value)).chain(postings.needs_at(*value)).collect();
             at.sort_unstable();
             at.dedup();
             for one in at {
@@ -3954,7 +3954,7 @@ fn _sibling_free_after(
     let partners: Vec<u32> = crate::backend::postings::following(body, |postings| {
         let mut partners = Vec::new();
         for value in &changes.touched {
-            for at in postings.defs(*value).into_iter().chain(postings.uses(*value)) {
+            for at in postings.defs_at(*value).chain(postings.uses_at(*value)) {
                 let one = &body.blocks[at.0 as usize].insns[at.1 as usize];
                 if let Some((into, out_of)) = spiller::_plain_move(one).filter(|pair| pair.0 != pair.1) {
                     partners.push(if into == *value { out_of } else { into });
@@ -3971,7 +3971,7 @@ fn _sibling_free_after(
     crate::backend::postings::following(body, |postings| {
         for value in &affected {
             let mut at: Vec<crate::backend::postings::At> =
-                postings.defs(*value).into_iter().chain(postings.uses(*value)).collect();
+                postings.defs_at(*value).chain(postings.uses_at(*value)).collect();
             at.sort_unstable();
             at.dedup();
             for at in at {

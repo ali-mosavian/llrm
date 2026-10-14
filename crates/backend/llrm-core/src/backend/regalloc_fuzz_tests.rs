@@ -1090,9 +1090,8 @@ fn test_intervals_from_occurrences_are_those_of_the_walk() {
             let mut places: IndexMap<u32, Vec<ranges::Occurrence>> = IndexMap::default();
             for &value in &values {
                 let mut at: Vec<ranges::Place> = postings
-                    .defs(value)
-                    .into_iter()
-                    .chain(postings.uses(value))
+                    .defs_at(value)
+                    .chain(postings.uses_at(value))
                     .map(|(block, position)| (block as usize, position as usize))
                     .collect();
                 at.sort_unstable();

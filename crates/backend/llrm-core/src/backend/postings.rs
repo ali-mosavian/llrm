@@ -115,16 +115,106 @@ impl Postings {
         block: u32,
         slot: u32,
     ) -> u32 {
-        self.slots[block as usize].binary_search(&slot).expect("a slot the block holds") as u32
+        Self::locate(&self.slots[block as usize], slot) as u32
+    }
+
+    /// Where `slot` is in `list`: a block is first numbered `STRIDE` apart, so
+    /// the guess is the slot's place there, and it is looked for outward from
+    /// it, which is a step or two where the block has been edited little.
+    fn locate(
+        list: &[u32],
+        slot: u32,
+    ) -> usize {
+        let guess = ((slot / STRIDE) as usize).saturating_sub(1).min(list.len().saturating_sub(1));
+        if list.get(guess) == Some(&slot) {
+            return guess;
+        }
+        let (low, high);
+        if list.get(guess).is_some_and(|here| *here < slot) {
+            let mut start = guess + 1;
+            let mut step = 1;
+            while start + step < list.len() && list[start + step] < slot {
+                start += step;
+                step *= 2;
+            }
+            low = start;
+            high = (start + step + 1).min(list.len());
+        } else {
+            let mut end = guess;
+            let mut step = 1;
+            while end > step && list[end - step] >= slot {
+                end -= step;
+                step *= 2;
+            }
+            low = end.saturating_sub(step);
+            high = (end + 1).min(list.len());
+        }
+        let found = low + list[low..high].partition_point(|one| *one < slot);
+        debug_assert_eq!(list.get(found), Some(&slot), "a slot the block holds");
+        found
+    }
+
+    /// The positions of `entries`, which are by block and slot: within a block
+    /// each is looked for after the one before.
+    fn walk<'a>(
+        &'a self,
+        entries: Option<&'a Vec<Entry>>,
+    ) -> impl Iterator<Item = At> + 'a {
+        entries
+            .into_iter()
+            .flatten()
+            .map(move |&(block, slot)| (block, Self::locate(&self.slots[block as usize], slot) as u32))
     }
 
     fn positions(
         &self,
         entries: Option<&Vec<Entry>>,
     ) -> Vec<At> {
-        entries.map_or_else(Vec::new, |list| {
-            list.iter().map(|&(block, slot)| (block, self.position(block, slot))).collect()
-        })
+        self.walk(entries).collect()
+    }
+
+    /// `defs`, as it is read: no list is made.
+    pub fn defs_at(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = At> + '_ {
+        self.walk(self.defs.get(&value))
+    }
+
+    pub fn uses_at(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = At> + '_ {
+        self.walk(self.uses.get(&value))
+    }
+
+    pub fn needs_at(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = At> + '_ {
+        self.walk(self.needs.get(&value))
+    }
+
+    /// How many instructions define, read or require `value`.
+    pub fn defs_count(
+        &self,
+        value: u32,
+    ) -> usize {
+        self.defs.get(&value).map_or(0, Vec::len)
+    }
+
+    pub fn uses_count(
+        &self,
+        value: u32,
+    ) -> usize {
+        self.uses.get(&value).map_or(0, Vec::len)
+    }
+
+    pub fn needs_count(
+        &self,
+        value: u32,
+    ) -> usize {
+        self.needs.get(&value).map_or(0, Vec::len)
     }
 
     pub fn defs(
