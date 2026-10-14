@@ -184,6 +184,40 @@ def test_editing_one_header_rewrites_its_page_and_the_index_only(tmp_path, monke
     assert sorted(p.writes) == [f"{OUT}/analyses/other.md", f"{OUT}/analyses/readme.md"]
 
 
+def test_adding_a_file_rewrites_its_own_page_and_index_only(tmp_path, monkeypatch):
+    """Adding one source file rewrote every generated page: the digest covered the names of all pages and all crate files."""
+    root = repo(tmp_path, BASE)
+    synced(root)
+    (root / ANALYSIS / "fresh.rs").write_text(header("Fresh."))
+    pages = Counter(monkeypatch, sync, "page_text")
+    p = sync.plan(root)
+    assert pages.calls == 1
+    assert sorted(p.writes) == [f"{OUT}/analyses/fresh.md", f"{OUT}/analyses/readme.md"]
+
+
+def test_a_source_file_outside_the_documented_directories_writes_nothing(tmp_path, monkeypatch):
+    root = repo(tmp_path, BASE)
+    synced(root)
+    (root / "crates/frontends/x/src").mkdir(parents=True)
+    (root / "crates/frontends/x/src/new.rs").write_text("fn f() {}\n")
+    pages = Counter(monkeypatch, sync, "page_text")
+    p = sync.plan(root)
+    assert pages.calls == 0 and p.writes == {} and p.drift == []
+
+
+def test_a_link_to_a_stem_that_gains_a_second_file_rewrites_that_page_only(tmp_path, monkeypatch):
+    """A rustdoc link resolved to the one file of that name; a second file of the name makes it plain code."""
+    files = dict(BASE, **{f"{ANALYSIS}/a.rs": header("Uses [`crate::util`].", "x"), "crates/x/src/util.rs": "fn f() {}\n"})
+    root = repo(tmp_path, files)
+    synced(root)
+    assert "blob/main/crates/x/src/util.rs" in (root / OUT / "analyses/a.md").read_text()
+    (root / "crates/y/src").mkdir(parents=True)
+    (root / "crates/y/src/util.rs").write_text("fn g() {}\n")
+    pages = Counter(monkeypatch, sync, "page_text")
+    p = sync.plan(root)
+    assert pages.calls == 1 and sorted(p.writes) == [f"{OUT}/analyses/a.md"]
+
+
 def test_incremental_output_equals_a_cold_run(tmp_path):
     root = repo(tmp_path, BASE)
     synced(root)

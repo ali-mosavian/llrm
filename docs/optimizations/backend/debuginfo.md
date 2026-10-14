@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/debuginfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/debuginfo.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/debuginfo.rs sha256:11f28abe77c30bbde70f66c063d49ca5e489e6dda14c2689bdf2532ef8edfbd1 -->
+<!-- src: crates/backend/llrm-core/src/backend/debuginfo.rs sha256:d619131c3a3ee56804b03ba9412f0187677ede12867ee6ce8eb5d0c249d228a1 -->
 
 # debuginfo
 
