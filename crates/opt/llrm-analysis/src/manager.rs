@@ -319,7 +319,7 @@ impl ModuleAnalysis for Summaries {
             body_facts.values_mut().for_each(|one| (one.calls, one.values) = (None, None));
         }
         calls_found(module, &program, globals, &shapes, &mut body_facts);
-        let procedures = procedures(module, &program, globals, &shapes, &body_facts);
+        let procedures = Table::of(module, &program, globals, &shapes, &body_facts);
         // Bodies edited since the last run: those whose history is not where
         // the last run left it. What else the summaries read, the
         // globals' facts and the declarations, either is the same result as
@@ -359,6 +359,9 @@ impl ModuleAnalysis for Summaries {
         memo.marks = marks;
         memo.globals = Some(Rc::clone(&globals_held));
         memo.declarations = Some(declarations);
+        if llrm_support::env_set("LLRM_CHECK_SUMMARIES") {
+            procedures.check_against_scratch(module, &program, globals);
+        }
         if llrm_support::env_set("LLRM_CHECK_MODULES") {
             let fresh = alias::summaries(&procedures, known.as_ref());
             if found != fresh {
@@ -522,6 +525,125 @@ fn procedures<'a>(
             ))
         })
         .collect()
+}
+
+/// The bodies `Summaries` is over, as `alias::Bodies`: each body's calls as
+/// kept, and its `Procedure` made when a visit asks for it.
+struct Table<'a> {
+    module: &'a Module,
+    program: &'a ProgramProxy,
+    globals: &'a Globals,
+    shapes: &'a IndexMap<GlobalId, Rc<Shape>>,
+    facts: &'a IndexMap<GlobalId, BodyFacts>,
+    ids: Vec<GlobalId>,
+    names: Vec<&'a str>,
+    by_name: llrm_support::hash::HashMap<&'a str, usize>,
+}
+
+impl<'a> Table<'a> {
+    fn of(
+        module: &'a Module,
+        program: &'a ProgramProxy,
+        globals: &'a Globals,
+        shapes: &'a IndexMap<GlobalId, Rc<Shape>>,
+        facts: &'a IndexMap<GlobalId, BodyFacts>,
+    ) -> Self {
+        let named: Vec<(GlobalId, &str)> =
+            bodies(module).filter_map(|(id, _)| module.global(id).name.as_deref().map(|name| (id, name))).collect();
+        let by_name = named.iter().enumerate().map(|(at, (_, name))| (*name, at)).collect();
+        Self {
+            module,
+            program,
+            globals,
+            shapes,
+            facts,
+            ids: named.iter().map(|(id, _)| *id).collect(),
+            names: named.iter().map(|(_, name)| *name).collect(),
+            by_name,
+        }
+    }
+
+    /// What `LLRM_CHECK_SUMMARIES` asserts: the facts kept for every body are
+    /// those a run from nothing finds (exposed frames, point values, calls),
+    /// and so are the summaries.
+    fn check_against_scratch(
+        &self,
+        module: &Module,
+        program: &ProgramProxy,
+        globals: &Globals,
+    ) {
+        let mut fresh = body_facts(
+            module,
+            &program.layout,
+            program.target.spaces(),
+            IndexMap::default(),
+            &bodies(module).map(|(id, function)| (id, function.mark())).collect(),
+        );
+        calls_found(module, program, globals, self.shapes, &mut fresh);
+        for (&id, kept) in self.facts {
+            let then = &fresh[&id];
+            let name = module.global(id).name.clone();
+            assert!(
+                kept.exposed == then.exposed,
+                "LLRM_CHECK_SUMMARIES: exposed frames of {name:?} differ from scratch"
+            );
+            assert!(
+                kept.values.as_deref() == then.values.as_deref(),
+                "LLRM_CHECK_SUMMARIES: point values of {name:?} differ from scratch"
+            );
+            assert!(
+                format!("{:?}", kept.calls) == format!("{:?}", then.calls),
+                "LLRM_CHECK_SUMMARIES: calls of {name:?} differ from scratch"
+            );
+        }
+    }
+}
+
+impl alias::Bodies for Table<'_> {
+    fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    fn name(
+        &self,
+        at: usize,
+    ) -> &str {
+        self.names[at]
+    }
+
+    fn position(
+        &self,
+        name: &str,
+    ) -> Option<usize> {
+        self.by_name.get(name).copied()
+    }
+
+    fn facts(
+        &self,
+        at: usize,
+    ) -> &Rc<alias::CallFacts> {
+        self.facts[&self.ids[at]].calls.as_ref().expect("found before")
+    }
+
+    fn procedure(
+        &self,
+        at: usize,
+    ) -> Procedure<'_> {
+        let id = self.ids[at];
+        let one = &self.facts[&id];
+        Procedure::with(
+            summarized_in(
+                self.module,
+                self.program,
+                self.globals,
+                &self.shapes[&id],
+                &one.exposed,
+                one.values.as_deref(),
+                self.module.global(id).function().expect("a body"),
+            ),
+            Rc::clone(self.facts(at)),
+        )
+    }
 }
 
 /// For each module, the summary of each of its declarations another
