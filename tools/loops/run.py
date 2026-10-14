@@ -276,20 +276,23 @@ def reference_bars(result: Result, case: str, config: str) -> list[tuple[int, in
     return [total(r) for r in refs if r and not any(f.calls for f in r)]
 
 
-def invariant_loads_short(facts: list, bars: list[tuple[int, int]], references: bool = True) -> bool | None:
-    """Whether a loop that reloads what it never changes falls short: only where a reference compiled it with fewer
-    instructions or fewer memory operands (the bar of size-vs-ref and memory-vs-ref). A register file smaller than
-    the loop's live values makes a reload the minimum, and gcc reaches "no reload" by spilling a cell the loop
-    changes, at more memory operands: 150 of the 190 x_ kernels with a reload at 486-O2 had no more of either than
-    both references. None where no reference was built (`references` False): there is nothing to judge by. Where they were
-    built and none is a bar (it failed to build, or calls a helper that hides its cost) the loop is judged and not
-    short: a gap needs a loop to be smaller than."""
+def invariant_loads(facts: list, bars: list[tuple[int, int]], references: bool = True) -> tuple[str, bool] | None:
+    """The class a loop that may reload what it never changes is judged in, and whether it falls short.
+    `invariant-loads` where a reference gave a bar: short only if a reference compiled the loop with fewer
+    instructions or fewer memory operands (the bar of size-vs-ref and memory-vs-ref). A register file smaller than the
+    loop's live values makes a reload the minimum, and gcc reaches "no reload" by spilling a cell the loop changes,
+    at more memory operands: 150 of the 190 x_ kernels with a reload at 486-O2 had no more of either than both
+    references. `invariant-loads-ideal` where none did (gcc built no loop, or Open Watcom's calls a helper that hides
+    its cost), as `ivs-ideal` is for a bound no reference met: short while it reloads, and kept in view, since the
+    loops are not as good as they could be (an x87 loop switching its rounding mode every trip reloads two control
+    words). None where no reference was built (`references` False): there is nothing to judge by."""
     if not references:
         return None
+    reloads = sum(f.invariant_loads for f in facts) > 0
     if not bars:
-        return False
+        return "invariant-loads-ideal", reloads
     size, memory = total(facts)
-    return sum(f.invariant_loads for f in facts) > 0 and (size > min(b[0] for b in bars) or memory > min(b[1] for b in bars))
+    return "invariant-loads", reloads and (size > min(b[0] for b in bars) or memory > min(b[1] for b in bars))
 
 
 def reference_meets(result: Result, case: str, config: str, bound: int) -> bool:
@@ -340,11 +343,11 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result, re
                         if counted and max(counted) > bound:
                             result.short.add((*key, "mir-" + kind))
                 if fits and all(w.invariant_loads == 0 for w in wants):
-                    short = invariant_loads_short(facts, reference_bars(result, case.name, config.tag), references)
-                    if short is not None:
-                        result.judged.add((*key, "invariant-loads"))
-                        if short:
-                            result.short.add((*key, "invariant-loads"))
+                    judged = invariant_loads(facts, reference_bars(result, case.name, config.tag), references)
+                    if judged is not None:
+                        result.judged.add((*key, judged[0]))
+                        if judged[1]:
+                            result.short.add((*key, judged[0]))
                 if len(wants) == 1 and wants[0].shape and len(facts) == 1:
                     result.judged.add((*key, "shape"))
                     f = facts[0]
