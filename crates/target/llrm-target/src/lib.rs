@@ -59,6 +59,49 @@ impl std::hash::Hash for Foreign {
     }
 }
 
+/// A platform's port table, read when a port is first asked of, as `Foreign`
+/// is: what an access to a port may do to memory is the platform's (the PC's
+/// devices are the same under a 16-bit and a flat extender), so every target
+/// built from a description answers it. Profiles are equal by their prices, so
+/// these compare equal.
+#[derive(Clone, Copy)]
+pub struct PortTable(pub fn() -> &'static [machine::Port]);
+
+impl PortTable {
+    /// No ports stated: every port may reach any memory.
+    pub fn none() -> Self {
+        Self(|| &[])
+    }
+}
+
+impl std::fmt::Debug for PortTable {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        formatter.write_str("PortTable")
+    }
+}
+
+impl PartialEq for PortTable {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for PortTable {}
+
+impl std::hash::Hash for PortTable {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        _: &mut H,
+    ) {
+    }
+}
+
 /// What a CPU's profile states that a target prices its operations from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CpuPrices {
@@ -86,6 +129,8 @@ pub struct CpuPrices {
     /// flat target (`Machine::flat_foreign`): there is no selector to find them
     /// by.
     pub foreign: Foreign,
+    /// The platform's ports and what an access to each may do to memory.
+    pub ports: PortTable,
 }
 
 /// A cost model that is only what a target describes: its registers, address
@@ -117,6 +162,7 @@ pub fn described_by_size(
         private: prices.private.clone(),
         calling: prices.calling,
         foreign: prices.foreign,
+        ports: prices.ports,
     })
 }
 
@@ -130,9 +176,18 @@ struct Described {
     private: Option<llrm_mir::target::PrivateConvention>,
     calling: Option<&'static calling::Calling>,
     foreign: Foreign,
+    ports: PortTable,
 }
 
 impl llrm_mir::target::Machine for Described {
+    /// The platform's table: a port it does not list may reach any memory.
+    fn port_touches_memory(
+        &self,
+        ports: (i64, i64),
+    ) -> bool {
+        machine::port_reach((self.ports.0)(), ports) != machine::PortMemory::None
+    }
+
     fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
         self.private.clone()
     }
@@ -219,6 +274,12 @@ pub trait Target {
     /// worked out once, not for each profile.
     fn flat_foreign(&self) -> Foreign {
         Foreign::none()
+    }
+
+    /// The ports its platform states and what each may do to memory, worked out
+    /// once, not for each profile.
+    fn flat_ports(&self) -> PortTable {
+        PortTable::none()
     }
 
     /// Whether the machine has no instruction for `operation` (its

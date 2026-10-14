@@ -606,6 +606,23 @@ def test_the_doc_step_runs_rustdoc_only_where_a_doc_comment_has_a_fence_to_run(t
     assert skipped.returncode == 0 and gate.incomplete(skipped.stdout, None, False) is None, "a skipped doc step reads as a cut-short run: " + skipped.stdout
 
 
+def test_an_indented_block_in_a_doc_comment_is_a_doctest_the_doc_step_must_run(tmp_path):
+    """#738 (issue #1646): a module comment's pseudo-code line indented four spaces after a blank line is a Rust code block to rustdoc, and failed
+    `cargo test --doc`; the gate's check looked at fences only, skipped the step, and nothing ran it. A list item's indented
+    continuation is not a code block, nor is a block inside a ```text fence."""
+    import doctests
+
+    def has(text):
+        (tmp_path / "a.rs").write_text(text)
+        return doctests.has_doctests([tmp_path])
+
+    assert has("//! Top.\n//!\n//!     OP(...) -> Y\n")
+    assert has("/// Item.\n///\n///     f()\nfn f() {}\n")
+    assert not has("//! - an item\n//!\n//!     its continuation\n")
+    assert not has("//! ```text\n//!\n//!     indented in a text fence\n//! ```\n")
+    assert not has("//! Top.\n//!     a continuation line, no blank before\n")
+
+
 def test_the_build_makes_one_set_of_crates_for_the_binaries_and_the_tests():
     """`cargo build --bins` and `cargo test --no-run` each built every crate (238 and 136 CPU-s) and the second linked its llrm-c over
     the first's: the steps ran the test build's binary and the plain build was waste."""

@@ -2996,6 +2996,61 @@ fn a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment() {
     assert_eq!((loads, pokes), (0, 2), "{body:#?}");
 }
 
+/// A WAIT's masks sat in two byte cells of the data group and were reloaded
+/// every poll at -m32 (`xor al, byte ptr W$D1+1; mov cl, byte ptr W$D1; and al,
+/// cl`, or one word store of both): the flat target's machine took every port
+/// for one that may reach memory, so the `in` kept the loads from being
+/// forwarded across it, and -m16 (whose table says the VGA status port reaches
+/// none) did not. A target's ports are its platform's.
+#[test]
+fn a_port_poll_does_not_reload_a_cell_stored_before_it_at_either_target() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = written(&directory, "wait.bas", b"WAIT &H3DA, 8, 8\r\nEND\r\n");
+    for target in ["-m16", "-m32"] {
+        let out = directory.path().join(format!("wait{target}.asm"));
+        let argv = [source.to_str().unwrap(), target, "-O2", "-march=i486", "-S", "-o", out.to_str().unwrap()]
+            .map(str::to_owned);
+        assert_eq!(crate::cli::main(&argv), 0, "{target}");
+        let text = std::fs::read_to_string(&out).expect("the listing");
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let poll = lines.iter().position(|one| *one == "in al, dx").expect("the port read");
+        // The premise: the masks are known constants at the poll, in the
+        // instruction and not in a cell.
+        assert_eq!(&lines[poll..poll + 3], ["in al, dx", "xor al, 8", "and al, 8"], "{target}: {text}");
+        assert!(!text.contains("W$D"), "{target}: a cell held the masks: {text}");
+    }
+}
+
+/// A WAIT stored each mask into a cell of the data group and loaded it again in
+/// the poll, whatever the mask: a constant is the same in the poll block, and
+/// needs no cell to get there (the port already was used so). Unoptimized, as
+/// shipped for -O0; a mask that is not constant is still read once, before the
+/// loop, and kept in a cell.
+#[test]
+fn a_constant_wait_mask_goes_to_the_poll_as_it_is_and_a_variable_one_through_a_cell() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let listing_of = |name: &str, text: &[u8], target: &str| {
+        let source = written(&directory, name, text);
+        let out = directory.path().join(format!("{name}{target}.asm"));
+        let argv = [source.to_str().unwrap(), target, "-O0", "-march=i486", "-S", "-o", out.to_str().unwrap()]
+            .map(str::to_owned);
+        assert_eq!(crate::cli::main(&argv), 0, "{target}");
+        std::fs::read_to_string(&out).expect("the listing")
+    };
+    for target in ["-m16", "-m32"] {
+        let constant = listing_of("constant.bas", b"WAIT &H3DA, 8, 8\r\nEND\r\n", target);
+        assert!(constant.contains("xor al, 8") && constant.contains("and al, 8"), "{target}: {constant}");
+        assert!(!constant.contains("ptr W$D"), "{target}: a cell held a constant mask: {constant}");
+        let variable = listing_of("variable.bas", b"DEFINT A-Z\r\nm = 8\r\nWAIT &H3DA, m\r\nEND\r\n", target);
+        let lines: Vec<&str> = variable.lines().map(str::trim).collect();
+        let poll = lines.iter().position(|one| *one == "in al, dx").expect("the port read");
+        assert!(
+            lines[poll + 1].contains("byte ptr"),
+            "{target}: the mask is read from its cell in the poll: {variable}"
+        );
+    }
+}
+
 /// PEEK reads and POKE writes memory every time, whatever DEF SEG says: the
 /// BIOS tick wait `DO: LOOP UNTIL PEEK(&H6C) <> t` compiled to an infinite
 /// loop (`cmp ax, ax`), the second PEEK taken for the first's value, and a

@@ -77,6 +77,9 @@ program's heap in extended memory (`VARPTR` of a `$DYNAMIC` array is about 5.4 M
 program runs at m16 and is ported by hand to m32 (the array's address held in a variable) until the target has segments (a selector per
 object); that is the memory-models decision, not a runtime fix.
 
+A QuickBASIC program's `' link:` of a Nib library (examples/basic/scores.bas) is real mode only: Nib's BASIC ABI is 16-bit, so at m32
+the build stops with *a library for BASIC is not supported at a flat target* (#1542 tracks the port).
+
 ## Runtime profiles
 
 QB 4.5, PDS 7.1, and VBDOS are distinct ABI profiles; `llrm` is QB 4.5's

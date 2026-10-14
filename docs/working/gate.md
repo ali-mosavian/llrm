@@ -120,6 +120,8 @@ Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pyt
 
 Output is one `[time] STEP ok|FAIL|SKIPPED|INCOMPLETE` line per step, what each failing test printed, a per-step CPU table, and a last line `GATE TIER PASS|FAIL: steps at SHA in Ns`. Read the last line at the commit you meant. Logs are `$CARGO_TARGET_DIR/gate-logs/STEP.log`, and `STEP.failed.log` for a step that failed. A step that prints nothing and uses no CPU for `GATE_STALL_MINUTES` (default 10) is killed.
 
+A step that neither writes to its log nor uses CPU anywhere in its process tree for `GATE_STALL_MINUTES` (10) is killed and ends with the reason at the end of its log. A pytest test over its CPU limit fails with its name and its subprocess is killed (`tools/gate/pytest_cpulimit.py`).
+
 `gate.py bisect GOOD BAD STEP...` finds the first first-parent commit where the steps fail.
 
 ## What must pass
