@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exit 0 when a doc comment under the given roots holds a code fence rustdoc would run as a test, else 1.
+"""Exit 0 when a doc comment under the given roots holds a code fence, or an indented block, that rustdoc would run as a test, else 1.
 
 `cargo test --doc` runs rustdoc over every crate (456 CPU-s of a 4,340 CPU-s gate) and the tree has no doctest: its fences are all
 ```text. The gate runs that step only when this finds one."""
@@ -17,6 +17,10 @@ def runs(info: str) -> bool:
     return all(t in RUNS or t.startswith("edition") for t in tokens)
 
 
+DOC = re.compile(r"^\s*//[/!] ?(.*)$")
+ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
+
+
 def has_doctests(roots: list[Path]) -> bool:
     for root in roots:
         for path in root.rglob("*.rs"):
@@ -25,19 +29,33 @@ def has_doctests(roots: list[Path]) -> bool:
             text = path.read_text(errors="replace")
             if re.search(r"doc\s*=\s*include_str!", text):
                 return True
-            inside = False
+            inside = blank = listed = False
             for line in text.splitlines():
+                doc = DOC.match(line)
+                if not doc:
+                    inside = blank = listed = False
+                    continue
+                body = doc.group(1)
                 match = FENCE.match(line)
-                if not match:
-                    if not re.match(r"^\s*//[/!]", line):
+                if match:
+                    blank = False
+                    if inside:
                         inside = False
+                    else:
+                        inside = True
+                        if runs(match.group(2)):
+                            return True
                     continue
                 if inside:
-                    inside = False
-                else:
-                    inside = True
-                    if runs(match.group(2)):
-                        return True
+                    continue
+                if not body.strip():
+                    blank = True
+                    continue
+                # Four spaces after a blank line, outside a list item, is a code block rustdoc compiles as Rust (#738).
+                if blank and not listed and re.match(r" {4}\S", body):
+                    return True
+                listed = bool(ITEM.match(body)) or (listed and bool(re.match(r"\s+\S", body)))
+                blank = False
     return False
 
 
