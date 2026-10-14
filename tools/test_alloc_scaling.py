@@ -261,3 +261,20 @@ def test_the_recolor_step_costs_what_it_did_before_the_intervals_were_shared():
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["regalloc recolor"] < 680, f"cells N=448 -O2: regalloc recolor cost {run['regalloc recolor']} Minstr (680 allowed; 702 before the fix): {run}"
+
+
+def test_a_spill_asks_whether_a_candidate_sibling_meets_its_group_and_not_the_web_of_copies_whole():
+    """`siblings` worked out the interference graph of the whole copy web (150 values at `branches` N=400, whose phi families are
+    large) for each spill, to ask it of a group of one or two: `siblings interference` cost 877 Minstr at N=400 and 3,343 at 800 (slope
+    1.95 per doubling), 8% of the compile. A candidate is asked of the intervals the allocator holds, and of the graph of the
+    group and itself where they meet."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](400))
+        run = steps(compiler, source, "-O2")
+    spent = run.get("siblings interference", 0.0) + run["spill siblings"]
+    assert spent < 60, f"branches N=400 -O2: spill siblings cost {spent} Minstr (60 allowed; 985 before): {run}"

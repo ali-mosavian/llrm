@@ -2279,7 +2279,7 @@ fn _allocated(
                     let settled: BTreeSet<u32> =
                         fixed.keys().chain(protected.iter()).chain(unspillable.iter()).copied().collect();
                     chosen.extend(llrm_support::debug::timed("spill siblings", || {
-                        spiller::siblings(&body, &chosen, Some(frame), &settled)
+                        spiller::siblings(&body, &chosen, Some(frame), &settled, Some(&*facts.live))
                     })?);
                     llrm_support::debug!("spill", "{}: spill {value} with {:?}", body.name, chosen);
                     for one in &chosen {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/spiller.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/spiller.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/spiller.rs sha256:9a74bf1862815146cf82b286ebec16d4b310e25ca6d6c0190b32ad7995c7f4a9 -->
+<!-- src: crates/backend/llrm-core/src/backend/spiller.rs sha256:1d432455d1a3fcc1e811d435a107fa8bd2d2c8f5e94803bcb3c626958904f885 -->
 
 # spiller
 
@@ -46,6 +46,11 @@ allocator to place.
 
 `siblings` finds the values copied to and from a spilled value that are
 cheaper sharing its slot; the allocator spills them together.
+A group grows one candidate at a time, and a candidate is asked of when it
+comes up: whether it interferes with the group is answered by the intervals
+the allocator holds where none of them meets the group's (nothing is live
+together), and by the interference graph of the group and the candidate
+alone otherwise, never by the web the copies make whole.
 
 ## Example
 Eight values loaded from `p` are live across a call to `g`; the allocator
