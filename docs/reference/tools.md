@@ -18,6 +18,7 @@ name them in an environment variable, listed in the tool's header.
 | `gate/gate.py` | The gate in tiers: `plan` picks the steps a diff needs from `gate/tiers.toml`, `run` runs them concurrently |
 | `gate/tiers.toml` | The path map: which paths select which tests |
 | `gate/doctests.py` | Exit 0 when a doc comment holds a fence or an indented block rustdoc would run, so the gate runs `cargo test --doc` only then |
+| `gate/pytest_shards.py` | the pytest step: one pytest process per test file, N at a time, longest first (`PYTEST_SHARDS`, default min(16, cpus)); a SPLITTABLE slow file is dealt over several; times kept in `$CARGO_TARGET_DIR/pytest-durations.json` |
 | `gate/proctree.py`, `gate/pytest_cpulimit.py` | CPU of a process tree; a pytest plugin that fails a test by CPU seconds, not wall time |
 | `ci/nib_lsp_paths.py` | The paths whose change can change the `nib-lsp` binary; `--write` puts them in the release workflow |
 | `ci/restore_mtime.py` | Sets each file's mtime to its last commit's so a restored build cache stays valid |
