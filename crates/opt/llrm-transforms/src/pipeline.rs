@@ -22,8 +22,8 @@
 //!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
 //!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
-//!     unsw["<b>unswitch (-O3)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
-//!     jam["<b>unroll-jam (-O3)</b><br/><small>sroa, then B's rounds</small>"]:::mid
+//!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+//!     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     mrg["<b>merge (once)</b>"]:::mid
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
@@ -101,7 +101,7 @@
 //! | `fill` | `fill`, `merge` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
-//! | `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default) |
+//! | `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `expensive`
@@ -186,7 +186,7 @@ pub struct Options {
     /// too).
     pub split: bool,
     /// A nest's outer loop unrolled and its inner copies fused (gcc's
-    /// `-floop-unroll-and-jam`, -O3 only).
+    /// `-floop-unroll-and-jam`, -O3; -Omax too).
     pub unroll_jam: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
@@ -313,7 +313,9 @@ impl Options {
         Self {
             limits: Limits { target_percent: 200, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            unswitch: true,
             split: true,
+            unroll_jam: true,
             exhaustive: true,
             ..Self::default()
         }
