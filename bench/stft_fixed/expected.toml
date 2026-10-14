@@ -1,5 +1,5 @@
-reason = "on top of main's #1603 runtime change: +-1 to 5 instructions (max 0.000005%) in the readers' named runtime code, none from this PR"
-blessed = "2026-10-13"
+reason = "bq32: ASC's result is a word of the target, so the description's body for it is inlined at m32 as at m16 (crc 1533 -> 1184, jpeg -7%); stft +9 to +13 instructions of a hundred million"
+blessed = "2026-10-14"
 
 [bas.O2]
 code_bytes = 1786
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1527.6111
 
 [bq32.O2]
-instructions = 99049633
+instructions = 99049624
 code_bytes = 1636
 data_bytes = 4709
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 99053717
+instructions = 99053726
 code_bytes = 1610
 data_bytes = 4709
 bss_bytes = 0

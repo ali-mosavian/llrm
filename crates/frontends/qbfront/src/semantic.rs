@@ -7321,10 +7321,13 @@ impl Compiler {
             return Ok(Some((self.count(type_.width as i64), word)));
         }
         if intrinsic.lowering == Lowering::Asc {
+            // Its result is a word of the target, as LEN's: the description's
+            // body for the routine is of that type.
             let address = self.string_descriptor(&arguments[0])?;
-            let result = self.value(INTEGER);
+            let word = self.word_type();
+            let result = self.value(word);
             self.emit_runtime_call("B$FASC", vec![result], vec![address]);
-            return Ok(Some((Operand::Value(result), INTEGER)));
+            return Ok(Some((Operand::Value(result), word)));
         }
         if intrinsic.lowering == Lowering::Instr {
             let (callee, operands) = if arguments.len() == 2 {
