@@ -175,6 +175,7 @@ flowchart TB
   peel["<b>peel</b><br/><small>(repeat while loops drop)</small>"]:::mid
   unsw["<b>unswitch (-O3)</b>"]:::mid
   fu["<b>fuse (-Omax)</b>"]:::mid
+  di["<b>distribute (-O3)</b>"]:::mid
   uj["<b>unroll-jam (-O3)</b>"]:::mid
   merge["<b>merge</b>"]:::mid
   sroa --> round
@@ -184,7 +185,8 @@ flowchart TB
   chg -->|"no"| peel
   peel --> unsw
   unsw --> fu
-  fu --> uj
+  fu --> di
+  di --> uj
   uj --> merge
 ```
 

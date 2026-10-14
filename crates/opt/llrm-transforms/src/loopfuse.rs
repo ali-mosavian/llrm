@@ -119,7 +119,8 @@
 
 use std::collections::BTreeSet;
 
-use llrm_analysis::access::{self, Reference, Roots};
+use llrm_analysis::access::{self, Apart, Reference, Roots};
+use llrm_analysis::cfg::Canonical;
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, CountedLoop};
 use llrm_analysis::manager::Registers;
@@ -132,8 +133,9 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use num_traits::ToPrimitive;
 
-use crate::candidate::{self, Pricing};
+use crate::candidate::{self, Gain, Pricing};
 use crate::lcssa::{arms, from_arms, operations};
+use crate::loopshape;
 use crate::profit::{self, OperationCosts};
 use crate::{edges, transform};
 
@@ -197,7 +199,7 @@ pub fn optimized(
             refused.insert(key);
             continue;
         }
-        if candidate::adopted(unit, outer, costs, copy, reoptimize, Pricing::WithSpills) {
+        if candidate::adopted(unit, outer, costs, copy, reoptimize, Pricing::WithSpills, Gain::FewerLoops) {
             llrm_support::debug!("fuse", "fused the loops with headers b{}, b{}", key.0, key.1);
             changed = true;
             analyses.invalidate(unit.function, &PreservedAnalyses::none());
@@ -207,63 +209,6 @@ pub fn optimized(
         }
     }
     Ok(changed)
-}
-
-/// The shape a loop has to be fused: one latch, one way in and one way out.
-#[derive(Clone, Debug)]
-struct Shaped {
-    loop_: Loop,
-    header: BlockId,
-    latch: BlockId,
-    preheader: BlockId,
-    /// The block of the loop that leaves it, and where it leaves to.
-    exiting: BlockId,
-    exit: BlockId,
-}
-
-impl Shaped {
-    fn of(
-        function: &Function,
-        loop_: &Loop,
-    ) -> Option<Self> {
-        let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
-        let header = cfg::block(loop_.header);
-        let entering = function
-            .predecessors(header)
-            .into_iter()
-            .filter(|from| !loop_.body.contains(&cfg::id(*from)))
-            .collect::<Vec<_>>();
-        let [preheader] = entering[..] else { return None };
-        if function.successors(preheader) != [header] {
-            return None;
-        }
-        let leaving = loop_
-            .body
-            .iter()
-            .flat_map(|&at| {
-                let from = cfg::block(at);
-                function.successors(from).into_iter().map(move |to| (from, to))
-            })
-            .filter(|(_, to)| !loop_.body.contains(&cfg::id(*to)))
-            .collect::<Vec<_>>();
-        let [(exiting, exit)] = leaving[..] else { return None };
-        // Dedicated: only the loop enters its exit.
-        (function.predecessors(exit) == [exiting]).then(|| Self {
-            loop_: loop_.clone(),
-            header,
-            latch: cfg::block(latch),
-            preheader,
-            exiting,
-            exit,
-        })
-    }
-
-    fn holds(
-        &self,
-        block: BlockId,
-    ) -> bool {
-        self.loop_.body.contains(&cfg::id(block))
-    }
 }
 
 /// How the first loop's exit reaches the second.
@@ -281,8 +226,8 @@ enum Link {
 
 /// Two loops that can be fused, and what was found to prove it.
 struct Fusion {
-    first: Shaped,
-    second: Shaped,
+    first: Canonical,
+    second: Canonical,
     link: Link,
     /// Tested before each trip (in the header) or after (in the latch).
     pretested: bool,
@@ -311,7 +256,7 @@ fn found(
     let pairs = shape
         .loops
         .iter()
-        .filter_map(|loop_| Shaped::of(function, loop_))
+        .filter_map(|loop_| Canonical::of(function, loop_))
         .filter_map(|first| {
             let (second, link) = near.following(&first)?;
             let kept = !refused.contains(&(first.loop_.header, second.loop_.header))
@@ -353,17 +298,17 @@ impl Adjacent<'_> {
     fn loop_after(
         &self,
         block: BlockId,
-    ) -> Option<Shaped> {
+    ) -> Option<Canonical> {
         let [header] = self.function.successors(block)[..] else { return None };
         let found = self.loops.iter().find(|one| one.header == cfg::id(header))?;
-        Shaped::of(self.function, found).filter(|one| one.preheader == block)
+        Canonical::of(self.function, found).filter(|one| one.preheader == block)
     }
 
     /// The loop after `first`, and how its exit gets there.
     fn following(
         &self,
-        first: &Shaped,
-    ) -> Option<(Shaped, Link)> {
+        first: &Canonical,
+    ) -> Option<(Canonical, Link)> {
         let function = self.function;
         let mut between = vec![first.exit];
         for _ in 0..MAX_BETWEEN {
@@ -388,10 +333,10 @@ impl Adjacent<'_> {
     /// `between`.
     fn guarded(
         &self,
-        first: &Shaped,
+        first: &Canonical,
         between: Vec<BlockId>,
         guard: BlockId,
-    ) -> Option<(Shaped, Link)> {
+    ) -> Option<(Canonical, Link)> {
         let function = self.function;
         // The test the first loop is entered behind, through blocks of one way
         // in and one way out.
@@ -468,13 +413,14 @@ impl<'a> View<'a> {
     /// Whether `first` and `second` can be fused: the `Fusion` that says how.
     fn legal(
         &self,
-        first: Shaped,
-        second: Shaped,
+        first: Canonical,
+        second: Canonical,
         link: Link,
     ) -> Option<Fusion> {
         let function = self.function;
-        let ops =
-            |one: &Shaped| one.loop_.body.iter().map(|&at| operations(function, cfg::block(at)).len()).sum::<usize>();
+        let ops = |one: &Canonical| {
+            one.loop_.body.iter().map(|&at| operations(function, cfg::block(at)).len()).sum::<usize>()
+        };
         let pair = (first.loop_.header, second.loop_.header);
         let refused = |reason: &str| -> Option<Fusion> {
             llrm_support::debug!("fuse", "b{} then b{}: not fused, {reason}", pair.0, pair.1);
@@ -484,15 +430,8 @@ impl<'a> View<'a> {
             return refused("the loops are too big");
         }
         // One count for both, tested at the same place.
-        let controls = |proof: &CountedLoop, one: &Shaped| {
-            let place = if proof.posttested { one.latch } else { one.header };
-            function.parent(proof.branch) == Some(one.exiting)
-                && one.exiting == place
-                && !proof.leaves
-                && !proof.stops
-                && (proof.posttested || one.header != one.latch)
-        };
-        let proofs = |one: &Shaped| induction::counted(self.within, &one.loop_, None, false);
+        let controls = |proof: &CountedLoop, one: &Canonical| loopshape::controls(function, proof, one);
+        let proofs = |one: &Canonical| induction::counted(self.within, &one.loop_, None, false);
         let second_proofs = proofs(&second);
         let Some((proof, _)) = proofs(&first).into_iter().find_map(|one| {
             let other = second_proofs.iter().find(|other| induction::same_trips(&one, other))?;
@@ -532,33 +471,17 @@ impl<'a> View<'a> {
     /// header has anything but work that can run an extra time or not at all.
     fn harmless(
         &self,
-        first: &Shaped,
-        second: &Shaped,
+        first: &Canonical,
+        second: &Canonical,
         pretested: bool,
     ) -> bool {
-        let function = self.function;
-        let quiet = |inst: InstId| {
-            let opcode = &function.instruction(inst).opcode;
-            opcode.is_terminator()
-                || matches!(
-                    opcode,
-                    Opcode::Phi | Opcode::Load { .. } | Opcode::Store { .. }
-                )
-                || llrm_mir::memory::speculatable(self.context, self.outer.callees(), function, inst)
-        };
-        let body = |one: &Shaped| {
-            one.loop_
-                .body
-                .iter()
-                .flat_map(|&at| function.block(cfg::block(at)).instructions().iter().copied())
-                .all(quiet)
-        };
-        let header = |one: &Shaped| {
-            work(function, one.header)
-                .into_iter()
-                .all(|inst| llrm_mir::memory::speculatable(self.context, self.outer.callees(), function, inst))
-        };
-        body(first) && body(second) && (!pretested || (header(first) && header(second)))
+        let (function, context, outer) = (self.function, self.context, self.outer);
+        [first, second]
+            .into_iter()
+            .all(
+                |one| loopshape::quiet(context, outer, function, one)
+                    && (!pretested || loopshape::header_quiet(context, outer, function, one)),
+            )
     }
 
     /// Nothing the first loop computes is read outside it, and what the second
@@ -566,23 +489,13 @@ impl<'a> View<'a> {
     /// there; the second's body is entered from its header alone.
     fn closed_off(
         &self,
-        first: &Shaped,
-        second: &Shaped,
+        first: &Canonical,
+        second: &Canonical,
         pretested: bool,
     ) -> Option<()> {
         let function = self.function;
-        let read_outside = |one: &Shaped, inst: InstId| {
-            function
-                .instruction(inst)
-                .result
-                .is_some_and(
-                    |result| function
-                        .users(result)
-                        .iter()
-                        .any(|used| function.parent(used.user).is_none_or(|block| !one.holds(block))),
-                )
-        };
-        let all = |one: &Shaped| {
+        let read_outside = |one: &Canonical, inst: InstId| loopshape::read_outside(function, one, inst);
+        let all = |one: &Canonical| {
             one.loop_
                 .body
                 .iter()
@@ -619,8 +532,8 @@ impl<'a> View<'a> {
     /// is read only where the first loop's preheader dominates.
     fn setup(
         &self,
-        first: &Shaped,
-        second: &Shaped,
+        first: &Canonical,
+        second: &Canonical,
         link: &Link,
     ) -> Option<Vec<InstId>> {
         let function = self.function;
@@ -720,49 +633,26 @@ impl<'a> View<'a> {
     /// iteration of the first loop's access to them.
     fn memory_allows(
         &self,
-        first: &Shaped,
-        second: &Shaped,
+        first: &Canonical,
+        second: &Canonical,
         trips: Option<i64>,
     ) -> Option<()> {
         let mut roots = Roots::default();
-        let mut list = |one: &Shaped| {
+        let mut list = |one: &Canonical| {
             access::references(self.within, &[&one.loop_], &one.loop_.body, &one.loop_.body, &mut roots)
                 .filter(|found| found.len() <= MAX_ACCESSES)
         };
         let (earlier, later) = (list(first)?, list(second)?);
-        // Asked of the alias owner once, and only for a pair it is needed by.
-        let points = std::cell::OnceCell::new();
+        let apart = Apart::new(self.within);
         for x in &earlier {
             for y in &later {
-                if (x.access.write || y.access.write) && x.root != y.root && !self.apart(x, y, &points) {
+                if (x.access.write || y.access.write) && apart.unknown(x, y) {
                     return None;
                 }
             }
         }
         let accesses = |found: Vec<Reference>| found.into_iter().map(|one| one.access).collect::<Vec<_>>();
         dependence::fusable(&accesses(earlier), &accesses(later), trips).then_some(())
-    }
-
-    /// Two accesses through different roots that cannot meet: both are
-    /// objects' own addresses, or what each may reach is disjoint.
-    fn apart(
-        &self,
-        one: &Reference,
-        other: &Reference,
-        points: &std::cell::OnceCell<Option<std::borrow::Cow<'a, llrm_analysis::alias::PointsTo>>>,
-    ) -> bool {
-        if one.identified && other.identified {
-            return true;
-        }
-        let points = points.get_or_init(|| self.within.pointers().ok());
-        let provenance = |access: &Reference| {
-            let reference = self.within.reference(access.inst)?;
-            points.as_ref()?.reference(self.within, &reference)
-        };
-        match (provenance(one), provenance(other)) {
-            (Some(left), Some(right)) => !left.intersects(&right),
-            _ => false,
-        }
     }
 }
 

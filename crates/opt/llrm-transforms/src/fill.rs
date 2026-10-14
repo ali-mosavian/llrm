@@ -177,6 +177,7 @@ impl FunctionPass for Fill {
             unit.declared,
             self.size,
             &mut llrm_analysis::memory::Standing::held(&registers),
+            &|_| true,
         );
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -585,11 +586,13 @@ pub fn filled(
         declared,
         size,
         &mut llrm_analysis::memory::Standing::underived(),
+        &|_| true,
     )
 }
 
 /// `filled`, what is known of the body without memory given as `standing` says:
-/// derived once for each state of the body, not once for each loop.
+/// derived once for each state of the body, not once for each loop, and of the
+/// loops `wanted` names.
 #[allow(clippy::too_many_arguments)]
 pub fn filled_with(
     context: &mut Context,
@@ -600,13 +603,14 @@ pub fn filled_with(
     declared: &mut Declared,
     size: bool,
     standing: &mut llrm_analysis::memory::Standing,
+    wanted: &dyn Fn(&Loop) -> bool,
 ) -> bool {
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let bytes = outer.target().size_costs();
     let mut changed = false;
     'again: loop {
         let shape = cfg::Shape::of(function);
-        for loop_ in shape.loops.clone() {
+        for loop_ in shape.loops.iter().filter(|loop_| wanted(loop_)).cloned().collect::<Vec<_>>() {
             let found = {
                 let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
                 let facts = standing.of(&unit);
@@ -1430,6 +1434,35 @@ fn _chain_after(
     }
     (chain.len() == loop_.body.len() && function.successors(*chain.last().expect("a chain has blocks")).len() == 2)
         .then_some(chain)
+}
+
+/// Whether `stores`, all the stores some loop `loop_` would make were it split
+/// to give them a loop of their own, are what `fill` takes for the whole of a
+/// loop: each a fill of a value the loop does not change, or the one store of
+/// a copy. What loop distribution asks of a part before it parts it.
+pub fn takes(
+    unit: &Unit,
+    callees: &Callees,
+    loop_: &Loop,
+    stores: &[InstId],
+) -> bool {
+    let function = unit.function;
+    let still = induction::invariant(function, &loop_.body);
+    let loads = || {
+        loop_
+            .body
+            .iter()
+            .flat_map(|&at| function.block(cfg::block(at)).instructions().iter().copied())
+            .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Load { .. }))
+    };
+    match stores {
+        [] => false,
+        [store] => {
+            _stored(unit, callees, *store, &still).is_some()
+                || loads().any(|load| _copied(unit, load, *store).is_some())
+        }
+        _ => stores.iter().all(|&store| _stored(unit, callees, store, &still).is_some()),
+    }
 }
 
 /// A store's or a memset's pointer, the byte it fills with, and its bytes,

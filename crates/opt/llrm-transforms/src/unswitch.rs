@@ -153,7 +153,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 
-use crate::candidate::{self, Pricing};
+use crate::candidate::{self, Gain, Pricing};
 use crate::lcssa::{self, arms, from_arms, operations};
 use crate::profit::{self, OperationCosts};
 use crate::{edges, loopclone, transform};
@@ -201,7 +201,7 @@ pub fn optimized(
     let Some(candidate) = specialized(unit.context, unit.function)? else {
         return Ok(false);
     };
-    Ok(candidate::adopted(unit, outer, costs, candidate, reoptimize, Pricing::Work))
+    Ok(candidate::adopted(unit, outer, costs, candidate, reoptimize, Pricing::Work, Gain::FewerLoops))
 }
 
 /// `function` with its first loop that has a pure invariant condition

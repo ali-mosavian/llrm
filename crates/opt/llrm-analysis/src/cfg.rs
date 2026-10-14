@@ -98,6 +98,65 @@ use llrm_support::hash::{HashMap, HashSet};
 
 use crate::graph::loops::{self, Dominates, Loop, Node};
 
+/// A loop in the form the loop passes copy and join: one latch, one way in
+/// (a preheader that only enters it) and one way out, to a block only it
+/// enters.
+#[derive(Clone, Debug)]
+pub struct Canonical {
+    pub loop_: Loop,
+    pub header: BlockId,
+    pub latch: BlockId,
+    pub preheader: BlockId,
+    /// The block of the loop that leaves it, and where it leaves to.
+    pub exiting: BlockId,
+    pub exit: BlockId,
+}
+
+impl Canonical {
+    pub fn of(
+        function: &Function,
+        loop_: &Loop,
+    ) -> Option<Self> {
+        let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
+        let header = block(loop_.header);
+        let entering = function
+            .predecessors(header)
+            .into_iter()
+            .filter(|from| !loop_.body.contains(&id(*from)))
+            .collect::<Vec<_>>();
+        let [preheader] = entering[..] else { return None };
+        if function.successors(preheader) != [header] {
+            return None;
+        }
+        let leaving = loop_
+            .body
+            .iter()
+            .flat_map(|&at| {
+                let from = block(at);
+                function.successors(from).into_iter().map(move |to| (from, to))
+            })
+            .filter(|(_, to)| !loop_.body.contains(&id(*to)))
+            .collect::<Vec<_>>();
+        let [(exiting, exit)] = leaving[..] else { return None };
+        // Dedicated: only the loop enters its exit.
+        (function.predecessors(exit) == [exiting]).then(|| Self {
+            loop_: loop_.clone(),
+            header,
+            latch: block(latch),
+            preheader,
+            exiting,
+            exit,
+        })
+    }
+
+    pub fn holds(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        self.loop_.body.contains(&id(block))
+    }
+}
+
 /// A block's id and its successors' ids.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {

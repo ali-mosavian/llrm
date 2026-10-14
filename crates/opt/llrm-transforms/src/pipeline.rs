@@ -23,6 +23,7 @@
 //!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+//!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     mrg["<b>merge (once)</b>"]:::mid
@@ -36,7 +37,8 @@
 //!   rnd --> peel
 //!   peel --> unsw
 //!   unsw --> fuse
-//!   fuse --> jam
+//!   fuse --> dist
+//!   dist --> jam
 //!   jam --> mrg
 //!   mrg --> c
 //!   c -.->|"a changed body goes<br/>back through B"| sroa
@@ -104,6 +106,7 @@
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
 //! | `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
+//! | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 //! | `fuse` | `fuse` (off by default; on at -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
@@ -139,9 +142,9 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
-    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopfuse, loopmotion,
-    loopsimplify, loopsplit, lsr, peel, phiopt, ports, promote, rotate, switchlower, tailrec, trivialunswitch, unroll,
-    unroll_jam, unswitch, window,
+    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
+    loopfuse, loopmotion, loopsimplify, loopsplit, lsr, peel, phiopt, ports, promote, rotate, switchlower, tailrec,
+    trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -191,6 +194,9 @@ pub struct Options {
     /// Two adjacent loops of the same trips become one (LLVM's `LoopFuse`;
     /// -Omax only, `-floop-fusion`).
     pub fuse: bool,
+    /// A loop whose stores do not need each other's trips becomes a loop
+    /// for each (gcc's `-ftree-loop-distribution`, -O3; -Omax too).
+    pub distribute: bool,
     /// A nest's outer loop unrolled and its inner copies fused (gcc's
     /// `-floop-unroll-and-jam`, -O3; -Omax too).
     pub unroll_jam: bool,
@@ -241,6 +247,7 @@ impl Default for Options {
             unswitch: false,
             split: false,
             fuse: false,
+            distribute: false,
             unroll_jam: false,
             copy_headers: true,
             for_size: false,
@@ -281,6 +288,7 @@ impl Options {
             unswitch: false,
             split: false,
             fuse: false,
+            distribute: false,
             expensive: false,
             switch_conversion: false,
             ..Self::default()
@@ -298,6 +306,7 @@ impl Options {
             unswitch: false,
             split: false,
             fuse: false,
+            distribute: false,
             ..Self::default()
         }
     }
@@ -311,6 +320,7 @@ impl Options {
             unswitch: true,
             split: true,
             fuse: false,
+            distribute: true,
             unroll_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
@@ -326,6 +336,7 @@ impl Options {
             unswitch: true,
             split: true,
             fuse: true,
+            distribute: true,
             unroll_jam: true,
             exhaustive: true,
             ..Self::default()
@@ -714,12 +725,19 @@ pub struct Fixed {
     last: Vec<Box<dyn FunctionPass>>,
     unswitch: Option<unswitch::Unswitch>,
     split: Option<loopsplit::Split>,
+    distribute: Option<loopdistribute::Distribute>,
     fuse: Option<loopfuse::Fuse>,
     jam: Option<unroll_jam::UnrollJam>,
     only: bool,
     dump: Option<PathBuf>,
     /// Bodies run, naming each one's dump.
     runs: usize,
+}
+
+/// `options` less the passes that try a rewrite on a copy and judge it: what
+/// a candidate goes through before it is judged.
+fn without_candidates(options: &Options) -> Options {
+    Options { unswitch: false, split: false, fuse: false, distribute: false, unroll_jam: false, ..options.clone() }
 }
 
 impl Fixed {
@@ -737,19 +755,19 @@ impl Fixed {
         let (unrollers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "unroll");
         let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
         let (last, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "merge");
-        // A candidate is judged after the whole pipeline, unswitching off.
-        let unswitch = applied.options.unswitch.then(|| {
-            let options =
-                Options { unswitch: false, split: false, fuse: false, unroll_jam: false, ..applied.options.clone() };
-            let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
-            unswitch::Unswitch { passes: vec![Box::new(Fixed::new(&reoptimize))] }
-        });
-        let fuse = applied.options.fuse.then(|| {
-            let options =
-                Options { unswitch: false, split: false, fuse: false, unroll_jam: false, ..applied.options.clone() };
-            let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
-            loopfuse::Fuse { passes: vec![Box::new(Fixed::new(&reoptimize))] }
-        });
+        // A candidate is judged after the whole pipeline, with the passes that
+        // make candidates off.
+        let judged = || {
+            Box::new(Fixed::new(&Applied {
+                options: without_candidates(&applied.options),
+                only: None,
+                dump: None,
+                ..applied.clone()
+            }))
+        };
+        let unswitch = applied.options.unswitch.then(|| unswitch::Unswitch { passes: vec![judged()] });
+        let distribute = applied.options.distribute.then(|| loopdistribute::Distribute { passes: vec![judged()] });
+        let fuse = applied.options.fuse.then(|| loopfuse::Fuse { passes: vec![judged()] });
         Self {
             boundary,
             passes,
@@ -758,6 +776,7 @@ impl Fixed {
             last,
             unswitch,
             split: (applied.options.split && only.is_none()).then_some(loopsplit::Split),
+            distribute: distribute.filter(|_| only.is_none()),
             fuse: fuse.filter(|_| only.is_none()),
             jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
             only: only.is_some(),
@@ -815,6 +834,12 @@ impl Fixed {
         // pipeline that judged it.
         if let Some(fuse) = &mut self.fuse {
             run.step(fuse, "fuse", unit, analyses);
+        }
+        // After fusing: what is joined is no longer a loop to part, and a
+        // part is not the loops a fusion was after. The pipeline that judged a
+        // split has cleaned it.
+        if let Some(distribute) = &mut self.distribute {
+            run.step(distribute, "distribute", unit, analyses);
         }
         // After unswitching, as gcc's pass order has it: an invariant guard is
         // out of the nest by then. The fused copies are cleaned as a peeled

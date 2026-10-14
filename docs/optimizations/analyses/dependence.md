@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/dependence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/dependence.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:ed2577eab812022846c43e6c505bcc6f65305bdc940ed6a10b1ed47be11e1642 -->
+<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:742ef80ce1468cb5843fac09031e44757e56e438958c4a63e3ec1ee683c20310 -->
 
 # dependence
 
@@ -53,6 +53,12 @@ overlap where `b - a - w < c * (i - j) < b - a + v`; the pair prevents
 fusion when some `i - j` in `1..trips` does (`trips` unknown: any). A pair
 with other coefficients or symbols is `Unknown` and prevents it.
 
+`meetings(first, second, trips)` is the same question of two accesses of one
+body, `first` earlier in it: whether they meet with `first` at or before
+`second` (`forward`, `i - j` in `1 - trips..=0`) or after it (`backward`,
+`1..trips`). Loop distribution puts the two in one loop where both hold and
+in two, in body order, where only `forward` does.
+
 ```text
   loop 0: a[i] = ..        loop 1: .. = a[i + 1]     i - j = 1: prevents
   loop 0: a[i] = ..        loop 1: .. = a[i - 1]     i - j = -1: allows
@@ -82,9 +88,10 @@ From unit test
 `dependence_tests.rs`.
 
 ## Provides
-`distances`, `factor`, `fusable`. Consumers: `unroll_jam`
+`distances`, `factor`, `fusable`, `meetings`. Consumers: `unroll_jam`
 (`crates/opt/llrm-transforms/src/unroll_jam.rs`) and `loopfuse`
-(`crates/opt/llrm-transforms/src/loopfuse.rs`).
+(`crates/opt/llrm-transforms/src/loopfuse.rs`) and `loopdistribute`
+(`crates/opt/llrm-transforms/src/loopdistribute.rs`).
 
 ## See also
 gcc `tree-data-ref.cc` distance vectors read by `adjust_unroll_factor`
