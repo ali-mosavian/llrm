@@ -1388,11 +1388,11 @@ fn _copy_hints(body: &LirBody) -> IndexMap<u32, Vec<u32>> {
 /// alone: a copy between two values names both, so theirs are the only lists
 /// that can differ, and are worked out again from where they occur.
 fn _copy_hints_after(
-    held: &IndexMap<u32, Vec<u32>>,
+    held: IndexMap<u32, Vec<u32>>,
     body: &LirBody,
     touched: &crate::support::hash::HashSet<u32>,
 ) -> IndexMap<u32, Vec<u32>> {
-    let mut out = held.clone();
+    let mut out = held;
     for value in touched {
         out.swap_remove(value);
     }
@@ -1592,6 +1592,14 @@ struct Facts {
     reclassed: Option<Vec<u32>>,
 }
 
+/// What the facts of the body before hand to those of the body after, taken
+/// out of them: edited where they are, not copied (a rewrite names a few
+/// values; a copy is of all of them).
+struct Carried {
+    hints: IndexMap<u32, Vec<u32>>,
+    widths: IndexMap<u32, u32>,
+}
+
 impl Facts {
     fn of(
         body: &LirBody,
@@ -1602,7 +1610,12 @@ impl Facts {
         protected: &BTreeSet<u32>,
         busy: &Frequency,
         prior: Option<(&Facts, &ranges::Changes, &LirBody)>,
+        carried: Option<Carried>,
     ) -> Self {
+        let (mut carried_hints, mut carried_widths) = match carried {
+            Some(one) => (Some(one.hints), Some(one.widths)),
+            None => (None, None),
+        };
         let _span = llrm_support::debug::span("regalloc facts");
         let index = llrm_support::debug::timed("facts slots", || {
             let patched = prior.and_then(|(held, _, was)| held.index.patched(was, body));
@@ -1696,7 +1709,8 @@ impl Facts {
         });
         let widths = llrm_support::debug::timed("facts widths", || match prior {
             Some((before, changes, _)) => {
-                let found = _widest_after(&before.widths, body, &changes.touched);
+                let _ = before;
+                let found = _widest_after(carried_widths.take().expect("carried with the prior facts"), body, &changes.touched);
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(found == _widest(body), "{}: the widths kept from the body before differ", body.name);
                 }
@@ -1721,7 +1735,8 @@ impl Facts {
         });
         let hints = llrm_support::debug::timed("facts hints", || match prior {
             Some((before, changes, _)) => {
-                let found = _copy_hints_after(&before.hints, body, &changes.touched);
+                let _ = before;
+                let found = _copy_hints_after(carried_hints.take().expect("carried with the prior facts"), body, &changes.touched);
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(found == _copy_hints(body), "{}: the hints kept from the body before differ", body.name);
                 }
@@ -1914,7 +1929,7 @@ fn _allocated(
     // The values merging updates made: spilled in their turn they are not
     // merged again, which would make the value spilled again, without end.
     let mut plain: BTreeSet<u32> = BTreeSet::new();
-    let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body), None);
+    let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body), None, None);
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
     }
@@ -2333,6 +2348,9 @@ fn _allocated(
         floor = floor.max(splitkit::_next_value_following(&body));
         let changes = before.as_ref().and_then(|before| ranges::changes(before, &body));
         let earlier_live = Arc::clone(&facts.live);
+        let carried = changes
+            .as_ref()
+            .map(|_| Carried { hints: std::mem::take(&mut facts.hints), widths: std::mem::take(&mut facts.widths) });
         facts = Facts::of(
             &body,
             profile,
@@ -2342,6 +2360,7 @@ fn _allocated(
             protected,
             &llrm_support::debug::timed("regalloc frequency", || Frequency::of(&body)),
             changes.as_ref().zip(before.as_ref()).map(|(changes, was)| (&facts, changes, was)),
+            carried,
         );
         // What is done of the rewrite besides its facts: the pins, the placed
         // values it disturbs, the queue.
@@ -2713,11 +2732,11 @@ fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
 /// values in `touched` are named by an instruction that is in one body alone:
 /// theirs are worked out again from where they occur.
 fn _widest_after(
-    held: &IndexMap<u32, u32>,
+    held: IndexMap<u32, u32>,
     body: &LirBody,
     touched: &crate::support::hash::HashSet<u32>,
 ) -> IndexMap<u32, u32> {
-    let mut out = held.clone();
+    let mut out = held;
     for value in touched {
         out.swap_remove(value);
     }
@@ -5422,6 +5441,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeSet::new(),
             &Frequency::of(&body),
+            None,
             None,
         );
         let union = LiveUnion::of([(_whole(RegId::AX), vec![1])], &facts.live);
