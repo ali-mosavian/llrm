@@ -2712,6 +2712,9 @@ fn name_or_apply(
     name: String,
     start: Span,
 ) -> Result<Expr, ParseResult> {
+    // VARPTR$ and VARPTR are two functions, which the intrinsics find by their
+    // name without the `$`.
+    let name = if name.eq_ignore_ascii_case("VARPTR$") { "$VARPTR".to_owned() } else { name };
     let mut value = Expr::Name(name, start);
     loop {
         if matches!(
