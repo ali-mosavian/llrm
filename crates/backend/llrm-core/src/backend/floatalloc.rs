@@ -51,6 +51,20 @@
 //! The two words are saved once at entry, and a run of conversions switches
 //! once.
 //!
+//! A loop whose x87 work is only such conversions and what rounding does not
+//! touch (integer work, exact loads and compares, branches) runs in the
+//! truncating mode throughout: the switch is made on its entry edges and the
+//! saved word loaded at the start of each block the loop leaves to, instead of
+//! two `fldcw` every trip (4 clocks each on a 486, 7 on a P5). A rounding
+//! operation, a call, a return or a float stored to memory outside a conversion
+//! keeps the loop as it is. gcc does this with its mode-switching pass, which
+//! solves the placement by lazy code motion over the whole graph
+//! ([`optimize_mode_switching`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/mode-switching.cc#L495),
+//! the i386 entity
+//! [`I387_TRUNC`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/config/i386/i386.cc#L14607));
+//! this takes the loops, outermost first, the case that moves, without a
+//! graph-wide solve.
+//!
 //! # Example
 //! The same `keep` as in `floatassign`. Each value becomes `ST0`, the stack
 //! position implied by the order of the instructions. `a` is read again after
@@ -104,12 +118,13 @@
 //! `X86FloatingPoint.cpp`.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
+use crate::analysis::loops;
 use crate::backend::allocate::live;
 use crate::backend::classes::RegisterClasses;
 #[cfg(test)]
@@ -1209,7 +1224,111 @@ fn _truncating(
     }
     let mut out = body.clone();
     out.blocks = blocks;
-    Ok(out)
+    Ok(_hoisted(out, &saved, &chop))
+}
+
+/// Which control word `one` loads, if it loads one of the two.
+fn _switch(
+    one: &Insn,
+    saved: &Mem,
+    chop: &Mem,
+) -> Option<bool> {
+    let what =
+        one.what.as_ref().filter(|what| what.op == Operation::Barrier && what.name.as_deref() == Some("fldcw"))?;
+    match what.sources.as_slice() {
+        [Loc::Mem(cell)] if cell == chop => Some(true),
+        [Loc::Mem(cell)] if cell == saved => Some(false),
+        _ => None,
+    }
+}
+
+/// A loop whose x87 work is only truncating conversions and what rounding does
+/// not touch runs in the truncating mode throughout: the switch is made on its
+/// entry edges and undone at the start of the blocks it leaves to, once, not
+/// twice every trip (`fldcw` is 4 clocks on a 486, 7 on a P5, and a `fistp`
+/// loop paid two per conversion). What may stay in the loop outside a
+/// conversion's window is what no rounding mode changes: integer work, exact
+/// x87 loads and compares, branches. A rounding operation, a call, a return, or
+/// a store of a float to memory (which rounds) keeps the loop as it is.
+/// gcc's `optimize_mode_switching` (i386 `I387_TRUNC` / `I387_MASK_PM`) places
+/// the switches by lazy code motion over the whole graph; this takes the
+/// loops, outermost first, which is the case it moves, without a graph-wide
+/// solve.
+fn _hoisted(
+    body: LirBody,
+    saved: &Mem,
+    chop: &Mem,
+) -> LirBody {
+    let graph = &body.blocks;
+    let predecessors = loops::predecessors(graph);
+    let index = graph.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
+    let mut found = loops::loops(graph, Some(body.entry));
+    // Outermost first: a loop inside one that was taken is part of it.
+    found.sort_by_key(|one| std::cmp::Reverse(one.body.len()));
+    let mut blocks = body.blocks.clone();
+    let mut taken = BTreeSet::<i64>::new();
+    for one in &found {
+        if one.body.iter().any(|at| taken.contains(at)) {
+            continue;
+        }
+        let entries: Vec<i64> = predecessors[&one.header].iter().copied().filter(|at| !one.body.contains(at)).collect();
+        if entries.is_empty() || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header]) {
+            continue;
+        }
+        let (mut on, mut off, mut uniform) = (None, None, true);
+        for at in &one.body {
+            let mut open = false;
+            for insn in &blocks[index[at]].insns {
+                match _switch(insn, saved, chop) {
+                    Some(true) => {
+                        open = true;
+                        on.get_or_insert_with(|| Arc::clone(insn));
+                    }
+                    Some(false) => {
+                        open = false;
+                        off.get_or_insert_with(|| Arc::clone(insn));
+                    }
+                    None => {
+                        let branches = insn
+                            .what
+                            .as_ref()
+                            .is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch));
+                        uniform &= open || branches || _unrounded(insn);
+                    }
+                }
+            }
+            uniform &= !open;
+        }
+        let (Some(on), Some(off), true) = (on, off, uniform) else { continue };
+        let exits: BTreeSet<i64> = one
+            .body
+            .iter()
+            .flat_map(|at| blocks[index[at]].succ.iter().copied())
+            .filter(|to| !one.body.contains(to))
+            .collect();
+        if exits.is_empty() {
+            continue;
+        }
+        for at in &one.body {
+            let kept = blocks[index[at]].insns.iter().filter(|insn| _switch(insn, saved, chop).is_none()).cloned();
+            blocks[index[at]] = blocks[index[at]].with_insns(kept.collect());
+        }
+        for at in &entries {
+            let mut insns = blocks[index[at]].insns.to_vec();
+            let jumps = insns.last().and_then(|last| last.what.as_ref()).is_some_and(|what| what.op == Operation::Jump);
+            insns.insert(insns.len() - usize::from(jumps), Arc::clone(&on));
+            blocks[index[at]] = blocks[index[at]].with_insns(insns);
+        }
+        // The word is the caller's again wherever the loop is left; loading it
+        // where the mode already is the caller's changes nothing.
+        for to in &exits {
+            let mut insns = vec![Arc::clone(&off)];
+            insns.extend(blocks[index[to]].insns.iter().cloned());
+            blocks[index[to]] = blocks[index[to]].with_insns(insns);
+        }
+        taken.extend(one.body.iter().copied());
+    }
+    body.with_blocks(blocks)
 }
 
 /// Whether `one` neither rounds nor leaves the block: integer work, and

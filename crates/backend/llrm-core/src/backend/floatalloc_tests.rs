@@ -290,6 +290,51 @@ fn test_truncation_saves_the_control_word_once_per_body() {
     assert_eq!(names, vec![(0, vec!["fnstcw", "mov", "or", "mov"]), (5, vec!["fldcw", "fistp", "fistp", "fldcw"]),]);
 }
 
+/// A loop of `(int)a[i]` (entry 0, loop 5, exit 9): `body` is what its block
+/// does.
+fn truncating_loop(body: Vec<Semantics>) -> LirBody {
+    let insn = |at: i64, what: Semantics| Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]));
+    let cell = Mem { through: RegId::BP, offset: 0, disp_width: 2, ..frame_cell(-2, 2) };
+    let mut loop_body = vec![insn(5, sem(Operation::FloatStore, "fisttp", vec![m(&cell)], vec![st(0)]))];
+    loop_body.extend(body.into_iter().map(|what| insn(5, what)));
+    loop_body.push(insn(5, sem(Operation::Branch, "jne", vec![], vec![])));
+    let blocks = vec![
+        block(0, vec![insn(0, sem(Operation::Nothing, "", vec![], vec![]))], vec![5]),
+        block(5, loop_body, vec![5, 9]),
+        block(9, vec![insn(9, sem(Operation::Nothing, "", vec![], vec![]))], vec![]),
+    ];
+    let mut frame = Frame::new(-8);
+    _truncating(&LirBody::new("t", 0, blocks, IndexMap::default(), IndexMap::default()), Some(&mut frame)).unwrap()
+}
+
+fn names_of(
+    body: &LirBody,
+    at: i64,
+) -> Vec<&str> {
+    let block = body.blocks.iter().find(|block| block.at == at).unwrap();
+    block.insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect()
+}
+
+#[test]
+fn test_a_loop_of_conversions_switches_the_rounding_mode_on_its_edges_not_every_trip() {
+    // `x_elemf64_usesquare`: `fldcw` before and after each `fistp`, two control
+    // words loaded every trip (4 clocks each on a 486, 7 on a P5).
+    let result = truncating_loop(vec![]);
+    assert_eq!(names_of(&result, 0), vec!["fnstcw", "mov", "or", "mov", "fldcw"]);
+    assert_eq!(names_of(&result, 5), vec!["fistp", "jne"]);
+    assert_eq!(names_of(&result, 9), vec!["fldcw"]);
+}
+
+#[test]
+fn test_a_loop_that_rounds_outside_a_conversion_keeps_its_switches() {
+    // An `fadd` between conversions rounds in the caller's mode, so the loop
+    // cannot run in the truncating one.
+    let add = sem(Operation::FloatArith, "fadd", vec![st(0)], vec![st(0), st(1)]);
+    let result = truncating_loop(vec![add]);
+    assert_eq!(names_of(&result, 5), vec!["fldcw", "fistp", "fldcw", "fadd", "jne"]);
+    assert_eq!(names_of(&result, 0), vec!["fnstcw", "mov", "or", "mov"]);
+}
+
 #[test]
 fn test_a_load_read_by_several_arithmetics_is_loaded_once() {
     // NBODYS: `falloff` read by two multiplies. Priced by GCC's i386 table,

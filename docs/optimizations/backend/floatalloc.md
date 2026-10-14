@@ -56,6 +56,19 @@ control word with rounding set toward zero and a `fldcw` of the saved one.
 The two words are saved once at entry, and a run of conversions switches
 once.
 
+A loop whose x87 work is only such conversions and what rounding does not touch
+(integer work, exact loads and compares, branches) runs in the truncating mode
+throughout: the switch is made on its entry edges and the saved word loaded at
+the start of each block the loop leaves to, instead of two `fldcw` every trip
+(4 clocks each on a 486, 7 on a P5). A rounding operation, a call, a return or a
+float stored to memory outside a conversion keeps the loop as it is. gcc does
+this with its mode-switching pass, which solves the placement by lazy code
+motion over the whole graph
+([`optimize_mode_switching`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/mode-switching.cc#L495),
+the i386 entity [`I387_TRUNC`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/config/i386/i386.cc#L14607));
+this takes the loops, outermost first, the case that moves, without a
+graph-wide solve.
+
 ## Example
 The same `keep` as in `floatassign`. Each value becomes `ST0`, the stack
 position implied by the order of the instructions. `a` is read again after
