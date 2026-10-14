@@ -72,6 +72,14 @@ pattern store_narrowed
   emit fstp c <- float(x) volatile
 end
 
+pattern store_float_rounded
+  match store(v=fpround(x), p)
+  when only_reader(v)
+  cover v
+  let c = cell(p)
+  emit fstp c <- float(x) volatile
+end
+
 pattern store_rounded
   match store(v=call.i16|i32(x), p)
   when lrint(v), only_reader(v)

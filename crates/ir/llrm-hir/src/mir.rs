@@ -3000,6 +3000,15 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 self.define(instruction, result);
             }
+            Op::Round => {
+                let value = self.value(&instruction.operands[0])?;
+                let ty = self.result_type(instruction.results[0])?;
+                if ty != self.b.type_of(value) || !matches!(self.b.context.types.get(ty), Type::Float(_)) {
+                    return Err("a round of something that is not a float of its own type".into());
+                }
+                let result = self.b.cast(CastOp::FPRound, value, ty, "");
+                self.define(instruction, result);
+            }
             Op::Divmod | Op::Udivmod => {
                 let [a, b] = self.operands(instruction)?[..] else { return Err(format!("{op} without two operands")) };
                 let (quotient, remainder) =
