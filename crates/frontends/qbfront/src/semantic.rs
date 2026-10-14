@@ -5814,6 +5814,23 @@ impl Compiler {
                 self.emit_runtime_call(callee, vec![result], vec![length, repeated]);
                 return Ok(Operand::Value(result));
             }
+            if intrinsic.is_some_and(|one| one.lowering == Lowering::InputText) {
+                // INPUT$(n [, [#]channel]): n characters from the keyboard, or
+                // from a file; B$FINP(count, channel), 0 the keyboard.
+                let (count, count_type) = self.expression(&arguments[0])?;
+                let count = self.convert(count, count_type, INTEGER)?;
+                let channel = match arguments.get(1) {
+                    Some(channel) => {
+                        let (channel, channel_type) = self.expression(channel)?;
+                        self.convert(channel, channel_type, INTEGER)?
+                    }
+                    None => Operand::Constant(INTEGER, Number::Integer(0)),
+                };
+                let pointer_type = self.pointer_type(STRING);
+                let result = self.value(pointer_type);
+                self.emit_runtime_call("B$FINP", vec![result], vec![count, channel]);
+                return Ok(Operand::Value(result));
+            }
             if intrinsic.is_some_and(|one| one.lowering == Lowering::Space) {
                 let (count, type_id) = self.expression(&arguments[0])?;
                 let word = self.word_type();
