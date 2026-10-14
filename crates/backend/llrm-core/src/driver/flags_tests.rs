@@ -346,3 +346,15 @@ fn omax_unswitches_loops() {
     assert!(pipeline(&["-Omax"]).unswitch);
     assert!(!pipeline(&["-Omax", "-fno-unswitch-loops"]).unswitch);
 }
+
+/// LLVM's `LoopFuse` is in no default pipeline: -Omax, where every pass is on,
+/// is the only level that fuses, and the flag overrides it.
+#[test]
+fn only_omax_fuses_loops_and_the_flag_overrides_it() {
+    assert!(pipeline(&["-Omax"]).fuse);
+    assert!(!pipeline(&["-Omax", "-fno-loop-fusion"]).fuse);
+    for level in ["-O1", "-O2", "-O3", "-Os"] {
+        assert!(!pipeline(&[level]).fuse, "{level}");
+        assert!(pipeline(&[level, "-floop-fusion"]).fuse, "{level}");
+    }
+}
