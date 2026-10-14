@@ -1,12 +1,13 @@
-"""Code size and expected work of every program, two builds side by side.
+"""Code size of every program, two builds side by side.
 
     python3 tools/sizes.py BASE_BIN_DIR [NEW_BIN_DIR] [-O2|-Os|-Oz|-O3]... [--frames]
 
 Each directory holds llrm-qb, llrm-c and llrm-nib, each one whole compiler (NEW
 defaults to target/release). A program is tests/run/qb, bench and examples, plus the
-QuickBASIC demos in $QBDEMOS (~/work/qbdemos/orig). Bytes are the OMF object's code segments' (`code_bytes`);
-instructions and memory operands are the backend's `cost` estimate per call,
-summed (not a timing). With --frames, also the bytes each program reserves below BP
+QuickBASIC demos in $QBDEMOS (~/work/qbdemos/orig). Bytes are the OMF object's code segments' (`code_bytes`).
+There is no instruction or memory-operand column: the backend's per-call `cost` estimate, summed, moved 3x between
+builds whose executed counts moved under 1% (#390) and is not comparable across them; `tools/bench` counts what runs.
+With --frames, also the bytes each program reserves below BP
 (every `sub sp, N` of its -S listing). Prints the programs that changed and the totals.
 """
 
@@ -24,7 +25,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import llrmbin  # noqa: E402
 DEMOS = Path(environ.get("QBDEMOS", Path.home() / "work/qbdemos/orig"))
-COST = re.compile(r"executes (\d+) instructions, (\d+) memory operands")
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "dosbatch"))
@@ -151,14 +151,12 @@ def data_bytes(obj: Path) -> tuple[int, int]:
     return sum(one.loaded for one in kept), sum(one.size - one.loaded for one in kept)
 
 
-def measure(command: list[str], level: str) -> tuple[int, int, int] | None:
+def measure(command: list[str], level: str) -> int | None:
+    """The code bytes of the program's object, or None where it does not compile."""
     with tempfile.TemporaryDirectory() as directory:
         obj = f"{directory}/x.obj"
-        done = cpulimit.run([*command, level, "-o", obj], 300, capture_output=True, text=True, env={**environ, "LLRM_DEBUG": "cost"})
-        if not Path(obj).exists():
-            return None
-        found = [tuple(map(int, one)) for one in COST.findall(done.stderr)]
-        return code_bytes(Path(obj)), sum(i for i, _ in found), sum(m for _, m in found)
+        cpulimit.run([*command, level, "-o", obj], 300, capture_output=True, text=True)
+        return code_bytes(Path(obj)) if Path(obj).exists() else None
 
 
 SUB_SP = re.compile(r"^\s*sub sp, (\d+)\s*$", re.M)
@@ -199,10 +197,9 @@ def main() -> None:
             print(f"FAILED to compile on {side}: {name}")
         for name in both:
             if before[name] != after[name]:
-                (b0, i0, m0), (b1, i1, m1) = before[name], after[name]
-                print(f"{name:34} bytes {b0:>7} -> {b1:>7} ({b1 - b0:+})  ins {i1 - i0:+}  mem {m1 - m0:+}")
-        totals = [sum(one[at] for one in (before[n] for n in both)) for at in range(3)], [sum(one[at] for one in (after[n] for n in both)) for at in range(3)]
-        print("TOTAL bytes %d -> %d  ins %d -> %d  mem %d -> %d" % tuple(x for pair in zip(*totals) for x in pair))
+                b0, b1 = before[name], after[name]
+                print(f"{name:34} bytes {b0:>7} -> {b1:>7} ({b1 - b0:+})")
+        print("TOTAL bytes %d -> %d" % (sum(before[n] for n in both), sum(after[n] for n in both)))
         if "--frames" in sys.argv:
             before, after = frames(base, level), frames(new, level)
             both = [name for name in before if before[name] is not None and after.get(name) is not None]

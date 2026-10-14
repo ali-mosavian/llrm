@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:8cd799b68cd8d6e7fb2bc3c0ed121ab113256826f4589e33176ffa934a196e14 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:a5df1fd79fd95f784ffb3df57afbc110ec69564b0d0d68fb710cfd1f15e00217 -->
 
 # allocate
 
@@ -35,6 +35,12 @@ rewrite changes it (`Facts`):
                     the upper half only), points that need DS (the
                     data group)
 ```
+
+After a rewrite the values that compete again are those it changed, those it
+brought to life that no one has queued, and those the queue gave up on and
+has not got back (`popped`): the others are placed, spilled or waiting, so
+the live values are not all looked at (`LLRM_CHECK_IDLE` compares with the
+scan of all of them).
 
 A value may use a register when no value placed there overlaps its
 interval (`LiveUnion::busy`) and no mask point lies inside it
