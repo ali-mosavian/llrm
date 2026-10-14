@@ -6443,12 +6443,23 @@ impl Selector<'_, '_, '_> {
         let size = self.size(self.module.context.get(id).ty)?;
         let held = self.fresh_held(FLOAT);
         let value = if size == 4 { f64::from(f32::from_bits(bits as u32)) } else { f64::from_bits(bits) };
-        let (name, sources) = match value {
-            0.0 if value.is_sign_positive() => ("fldz", vec![]),
-            1.0 => ("fld1", vec![]),
-            _ => ("fld", vec![Loc::Mem(self.pool.cell(constpool::narrowest(value)))]),
+        // Tuned for size, -0.0 and -1.0 are the constant and an `fchs`
+        // (4 bytes) where a pool load is 6; not otherwise, where `fchs` takes
+        // more clocks.
+        let x87 = crate::backend::constpool::x87_constant(value).filter(|(_, negated)| !negated || self.cpu.size);
+        let Some((name, negated)) = x87 else {
+            let cell = self.pool.cell(constpool::narrowest(value));
+            out.push(insn(at, semantics(Operation::FloatLoad, "fld", vec![Loc::Held(held)], vec![Loc::Mem(cell)])));
+            return Ok(held);
         };
-        out.push(insn(at, semantics(Operation::FloatLoad, name, vec![Loc::Held(held)], sources)));
+        let loaded = if negated { self.fresh_held(FLOAT) } else { held };
+        out.push(insn(at, semantics(Operation::FloatLoad, name, vec![Loc::Held(loaded)], vec![])));
+        if negated {
+            out.push(insn(
+                at,
+                semantics(Operation::FloatUnary, "fchs", vec![Loc::Held(held)], vec![Loc::Held(loaded)]),
+            ));
+        }
         Ok(held)
     }
 

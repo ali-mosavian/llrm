@@ -1,5 +1,5 @@
 //! Ports of the `tests/test_hir.py` cases that exercise `qbopt/frontend/qb`
-//! and `tools/qbstages.py`, plus `tests/test_qbstages.py` and the portable
+//! and the stage dump, plus its tests and the portable
 //! `tests/test_qb_frontend_command.py` cases. The `qbopt/hir`-only cases are
 //! in `crates/backend/llrm-core/src/hir/test_hir.rs`.
 //!
