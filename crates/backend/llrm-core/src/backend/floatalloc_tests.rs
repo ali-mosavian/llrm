@@ -287,7 +287,9 @@ fn test_truncation_saves_the_control_word_once_per_body() {
         .iter()
         .map(|block| (block.at, block.insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect()))
         .collect();
-    assert_eq!(names, vec![(0, vec!["fnstcw", "mov", "or", "mov"]), (5, vec!["fldcw", "fistp", "fistp", "fldcw"]),]);
+    // The switch to truncation is made on the one edge in, at the end of block
+    // 0.
+    assert_eq!(names, vec![(0, vec!["fnstcw", "mov", "or", "mov", "fldcw"]), (5, vec!["fistp", "fistp", "fldcw"])]);
 }
 
 /// A loop of `(int)a[i]` (entry 0, loop 5, exit 9): `body` is what its block
@@ -1686,5 +1688,62 @@ fn test_a_join_that_reads_no_float_takes_none_on_its_other_edges() {
         assert_eq!(loads, path.len() - 2, "{path:?}: {insns:?}");
         let (_, stack) = _x87(&insns, &[(&source, 1.5)]);
         assert!(stack.is_empty(), "{path:?}");
+    }
+}
+
+/// Blocks of `(address, what it does, where it goes)` through `_truncating`: a
+/// `c` is `(int)f`, an `r` a `ret`, an `a` an `fadd`, a `.` nothing.
+fn switched(shape: &[(i64, &str, Vec<i64>)]) -> Vec<(i64, Vec<String>)> {
+    let insn = |at: i64, what: Semantics| Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]));
+    let cell = Mem { through: RegId::BP, offset: 0, disp_width: 2, ..frame_cell(-2, 2) };
+    let blocks = shape
+        .iter()
+        .map(|(at, what, succ)| {
+            let insns = what
+                .chars()
+                .map(|one| {
+                    insn(
+                        *at,
+                        match one {
+                            'c' => sem(Operation::FloatStore, "fisttp", vec![m(&cell)], vec![st(0)]),
+                            'r' => sem(Operation::Return, "ret", vec![], vec![]),
+                            'a' => sem(Operation::FloatArith, "fadd", vec![st(0)], vec![st(0), st(1)]),
+                            _ => sem(Operation::Nothing, "", vec![], vec![]),
+                        },
+                    )
+                })
+                .collect();
+            block(*at, insns, succ.clone())
+        })
+        .collect();
+    let mut frame = Frame::new(-8);
+    let result =
+        _truncating(&LirBody::new("t", 0, blocks, IndexMap::default(), IndexMap::default()), Some(&mut frame)).unwrap();
+    result
+        .blocks
+        .iter()
+        .map(|block| {
+            (block.at, block.insns.iter().map(|one| name(one).to_owned()).filter(|name| !name.is_empty()).collect())
+        })
+        .collect()
+}
+
+#[test]
+fn test_conversions_in_blocks_in_a_row_switch_the_rounding_mode_once_not_per_block() {
+    // gcc's mode switching places a mode across blocks; each block switched
+    // on and off for itself, four `fldcw` for two conversions.
+    let result = switched(&[(0, ".", vec![5]), (5, "c", vec![6]), (6, "cr", vec![])]);
+    let words = result.iter().flat_map(|(_, names)| names).filter(|name| *name == "fldcw").count();
+    assert_eq!(words, 2, "{result:?}");
+    assert_eq!(result[1].1, vec!["fistp"]);
+}
+
+#[test]
+fn test_a_conversion_in_one_arm_of_a_branch_switches_in_that_arm_only() {
+    let result = switched(&[(0, ".b", vec![5, 6]), (5, "c", vec![7]), (6, ".", vec![7]), (7, "r", vec![])]);
+    let names = |at: i64| result.iter().find(|(block, _)| *block == at).unwrap().1.clone();
+    assert_eq!(names(5), vec!["fldcw", "fistp", "fldcw"], "{result:?}");
+    for at in [6, 7] {
+        assert!(!names(at).contains(&"fldcw".to_owned()), "{result:?}");
     }
 }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatalloc.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatalloc.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatalloc.rs sha256:c0cbae445ed2d357da5ac1d5eaf847ad0b3b2b8286447b063a8dc81868f54ef8 -->
+<!-- src: crates/backend/llrm-core/src/backend/floatalloc.rs sha256:f49ec6299a8251d45a5141ce8d01ab9fd862cbd0fbabbe65fdf870c42096312c -->
 
 # floatalloc
 
@@ -53,21 +53,21 @@ storage conversions are not changed.
 
 Afterwards `fisttp` is made as a 387 has it: `fistp` between `fldcw` of a
 control word with rounding set toward zero and a `fldcw` of the saved one.
-The two words are saved once at entry, and a run of conversions switches
-once.
+The two words are saved once at entry.
 
-A loop whose x87 work is only such conversions and what rounding does not touch
-(integer work, exact loads and compares, branches) runs in the truncating mode
-throughout: the switch is made on its entry edges and the saved word loaded at
-the start of each block the loop leaves to, instead of two `fldcw` every trip
-(4 clocks each on a 486, 7 on a P5). A rounding operation, a call, a return or a
-float stored to memory outside a conversion keeps the loop as it is. gcc does
-this with its mode-switching pass, which solves the placement by lazy code
-motion over the whole graph
-([`optimize_mode_switching`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/mode-switching.cc#L495),
-the i386 entity [`I387_TRUNC`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/config/i386/i386.cc#L14607));
-this takes the loops, outermost first, the case that moves, without a
-graph-wide solve.
+Where the switches go is gcc's mode switching, in one analysis and one
+placement over the graph (`_needs`, `_modes`;
+[`optimize_mode_switching`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/mode-switching.cc#L495),
+the i386 entity
+[`I387_TRUNC`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/config/i386/i386.cc#L14607)).
+Each instruction needs a mode: truncating for a conversion, the caller's for
+whatever rounds, a call or a return, none for exact work. A block assumes on
+entry the mode its first need names, or its successors' (the heavier by loop
+depth), and a switch goes on each edge whose ends disagree, so a loop of
+conversions switches on its entry edge and its exits, not twice a trip
+(`fldcw` is 4 clocks on a 486, 7 on a P5), and a run of blocks switches
+once. Unlike gcc's lazy code motion this does not solve for the least number
+of insertions: it follows demand and takes a critical edge's source mode.
 
 ## Example
 The same `keep` as in `floatassign`. Each value becomes `ST0`, the stack
