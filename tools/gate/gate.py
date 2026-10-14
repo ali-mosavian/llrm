@@ -278,7 +278,8 @@ def narrowed(p: Plan, cfg: dict, live: list[str]) -> Plan:
         steps.append("integration")
     for directory in sorted({d for f in live if (d := data_dir(f))}):
         steps += sorted(readers(directory, cfg))
-    if any(f.startswith(("bench/", "tools/bench/")) for f in live):
+    # bench/ and the bench tool are its inputs, and so is the runtime the programs link: the bq32 rows count the kernel's calls into it.
+    if any(f.startswith(("bench/", "tools/bench/", "runtime/")) for f in live):
         steps.append("bench")
     if any(f.startswith("tools/torture/") for f in live):
         steps.append("torture")
