@@ -1107,7 +1107,6 @@ def test_loopsimplify_groups_a_loops_edges_without_copying_the_function_for_it(t
     assert own[1024] <= 2.7 * own[512], f"mir loopsimplify {own[512]:.0f} -> {own[1024]:.0f} Minstr"
 
 
-<<<<<<< HEAD
 def test_floatassign_does_not_walk_the_body_again_for_each_spill_round(tmp_path):
     """nbody_single at -O3 (35 spill rounds over a 691-instruction block): each round numbered the body's values again and worked out
     which roots each step touches, 436 Minstr in `lir floatassign` against 382 once (587 before the steps were kept). A bound of 410
@@ -1128,7 +1127,8 @@ def test_floatassign_finds_the_allocnos_at_a_spill_point_by_the_point(tmp_path):
     own = gate.own_work([*gate.levels_time.command("llrm", "O3", source), *programs.LLRM_FLAGS])
     assert own["lir floatassign"] > 100.0, f"premise: x87 values spilled ({own['lir floatassign']:.1f} Minstr)"
     assert own["lir floatassign"] <= 260.0, own["lir floatassign"]
-=======
+
+
 def test_the_spiller_leaves_alone_the_blocks_with_no_update_to_merge(tmp_path):
     """branches(1024) at -O2: merging a spilled value's updates (`spill short updates`, `spill local updates`) rewrote every block of the body
     for each spill, though only the blocks that define a stored value by a plain move, or update it, can have a run to merge, and gave
@@ -1152,4 +1152,3 @@ def test_the_allocator_requeues_the_values_a_rewrite_changed_and_the_ones_the_qu
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["after queue"] > 1.0, f"premise: events requeued ({own['after queue']:.1f} Minstr)"
     assert own["after queue"] <= 40.0, f"after queue {own['after queue']:.1f} Minstr"
->>>>>>> origin/main
