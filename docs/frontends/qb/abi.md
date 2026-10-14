@@ -28,6 +28,12 @@ declare so is read once by a counted loop (TEXTFILL, the palette loops), and the
 same holds of `DIM` and `DIM SHARED` variables. HIR records `volatile` on the
 place or indirect place and lowering preserves it as an ordered memory access.
 
+A variable passed as a `BYREF` actual goes as its own address, and a callee's write reaches it. Only a far
+pointer to a field of a far dynamic array is bridged through a near slot, copied in before the call and out after it,
+as BC does: where far pointers are the near ones (`m32`, one space) a four-byte pointer is the near address and no slot
+is made. It was, and `Hanoi%`'s two recursive calls copied three arguments in and out each, 729,041 instructions to
+`m16`'s 368,621 (`tests/qb_byref_flat.rs`).
+
 A call-site side table records the stack permutation, far-call distance, and
 cleanup owner. Those facts are applied after semantic optimization by emitting
 the existing MIR `ARG` form. The semantic `CALL` therefore keeps its typed

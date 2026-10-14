@@ -1,5 +1,5 @@
-reason = "bq32 counts the kernel's function from the program's link map (DOSBox profile), as bq16 counts entry to return: the extender's load (about 40 instructions per relocation) and the runtime's start-up are no longer in the row, so a change of an address reference outside the kernel does not move it"
-blessed = "2026-10-13"
+reason = "bq32: a BYREF variable argument is passed by its address at m32, as at m16, not copied in and out (hanoi 729041 -> 352237)"
+blessed = "2026-10-14"
 
 [bas.O2]
 instructions = 339050
@@ -31,14 +31,14 @@ data_bytes = 15
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 359665
-code_bytes = 577
+instructions = 327127
+code_bytes = 498
 data_bytes = 21
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 364224
-code_bytes = 528
+instructions = 332237
+code_bytes = 458
 data_bytes = 21
 bss_bytes = 0
 
