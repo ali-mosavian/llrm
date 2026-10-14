@@ -1052,3 +1052,62 @@ fn without_pre_a_partial_redundancy_is_left_and_with_pre_it_is_made_full() {
     assert_eq!(managed_with(&text, Gvn { pre: false }), printed(&parsed(&text)));
     assert!(managed_with(&text, Gvn { pre: true }).contains("%r.pre = xor i16 %x, %y"));
 }
+
+/// A block that dominates another but stands after it in the layout (a join
+/// removed, as `decide` does) was met second, so its computation never served
+/// the one it dominates: shellsort -O2 kept `sub`, its compare and a load
+/// (4 loads, 3 wanted). The dominating computation is met first.
+#[test]
+fn test_gvn_serves_a_computation_from_a_dominator_laid_out_after_it() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b3
+
+b2:
+  %b = sub i16 %x, %y
+  ret i16 %b
+
+b1:
+  %a = sub i16 %x, %y
+  %u = add i16 %a, 1
+  br label %b2
+
+b3:
+  ret i16 0
+}
+";
+    let out = managed(text);
+    assert_eq!(out.matches("sub i16").count(), 1, "{out}");
+}
+
+/// The same for calls: an equal call in a dominator laid out after the one it
+/// dominates served nothing, as `sub` above.
+#[test]
+fn test_equal_calls_are_one_when_the_dominator_is_laid_out_after() {
+    let text = numbered(
+        "define i16 @h(i16 %n) memory(none) {
+b0:
+  %m = mul i16 %n, 3
+  ret i16 %m
+}
+
+define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b3
+
+b2:
+  %b = call i16 @h(i16 %x)
+  ret i16 %b
+
+b1:
+  %a = call i16 @h(i16 %x)
+  %u = add i16 %a, 1
+  br label %b2
+
+b3:
+  ret i16 0
+}
+",
+    );
+    assert_eq!(text.lines().filter(|line| line.contains("call i16 @")).count(), 1, "{text}");
+}

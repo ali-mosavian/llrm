@@ -8,6 +8,15 @@ enum { CTRL_Z = 26 };
 
 int (*cn_key_hook)(void);
 
+byte cn_wait_key(void)
+{
+    cn_sync();
+    while (!llrm_os_console_key_ready())
+        if (cn_key_hook)
+            cn_key_hook();
+    return llrm_os_console_read_key();
+}
+
 /* The empty string when no key is waiting; a key is one character, and an
    extended key (function and cursor keys) is a zero and its scan code.  The end
    of redirected input ends the program. */

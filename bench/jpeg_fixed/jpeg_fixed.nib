@@ -1,5 +1,5 @@
 # flags: -O2 -march=i486 | -O2 -march=i486 -m32
-# data: ../jpeg_fixed/photo.jpg
+# data: ../jpeg_single/photo.jpg
 # JPEG to BMP, an MCU row at a time, as jpeg_fixed.c: baseline Huffman YCbCr in 4:2:0, 4:4:4, 4:2:2 or 4:4:0 with restart
 # markers. Reads PHOTO.JPG, writes a top-down 24-bit OUT.BMP and returns the Adler-32 of the BMP's bytes. IDCT and colour
 # conversion in Q10 fixed point, each product truncated toward zero: fixed `*` floors (#383), tmul() truncates.

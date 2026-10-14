@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/constpool.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/constpool.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/constpool.rs sha256:92c3190b2183b296004c86d1645bf7d175595028801be673174d98650c4e6bb0 -->
+<!-- src: crates/backend/llrm-core/src/backend/constpool.rs sha256:66290209b5ff1582f65cb3a0e964814aa6006a208bf85e265bdc3a5e3a49b644 -->
 
 # constpool
 
@@ -59,6 +59,10 @@ From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
 integer other than 0 or 1 converted to float becomes a load of its float
 constant (0 and 1 use `fldz` and `fld1`). The pool is shared by every
 function of a module, so `$K` names are module-wide.
+
+Tuned for size, `isel/matcher.rs` stores a double 0.0, -0.0, 1.0 or -1.0,
+or a float 1.0, as `fldz`/`fld1` (and `fchs`) and an `fstp`
+(`x87_store_pays`); a lone float 0.0 or -1.0 stays an integer store.
 
 ## See also
 GCC `force_const_mem`; `crate::backend`

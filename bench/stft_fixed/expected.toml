@@ -1,5 +1,5 @@
-reason = "on top of main's #1603 runtime change: +-1 to 5 instructions (max 0.000005%) in the readers' named runtime code, none from this PR"
-blessed = "2026-10-13"
+reason = "#1600 grows the flat runtime (INPUT$), which moves where the readers' strings fall: B$COPY takes its byte path when the destination is 0 to 3 bytes above the source, so a few calls change path and B$COPY/B$SMID run 13 instructions fewer (stft_single -O2: B$COPY -9, B$SMID -4; the kernel's own count, code_bytes and data_bytes are unchanged); max 0.00002%"
+blessed = "2026-10-14"
 
 [bas.O2]
 code_bytes = 1786
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1527.6111
 
 [bq32.O2]
-instructions = 99049633
+instructions = 99049630
 code_bytes = 1636
 data_bytes = 4709
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 99053717
+instructions = 99053716
 code_bytes = 1610
 data_bytes = 4709
 bss_bytes = 0
