@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/masm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/masm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:1a6be7718385f57415b4cb30244474ae1a70cb3b7e82c73b4e0bfab547d0d5bf -->
+<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:053e74a54ce3e10f3ce2a828d5d4dc7406d76505c4443e3ee7ccb779c2ce48fe -->
 
 # masm
 
@@ -35,14 +35,14 @@ rebuilt.
 Where the frame register is not needed (nothing holds a value in it), the
 frame is dropped and each cell is addressed through the stack pointer
 (`stack_addressed`): every instruction's stack effect moves the offset,
-and every way into a block must agree on it. Anything that puts that out
-of reach (the stack pointer written another way, inline code, an indirect
-call that may pop, inline code other than x87 register operations, the
+and every way into a block (a branch, or the block before it falling through
+where the next block is among its successors) must agree on it. Anything
+that puts that out of reach (the stack pointer written another way, inline
+code other than x87 register operations, an indirect call that may pop, the
 frame register read as a value) keeps the frame. A BASIC procedure's
 compiler-built frame is like any other; one the runtime builds (`B$ENRA`)
-is walked by the runtime and kept.
-Tuned for size, the stack-addressed form is kept only if it is no longer
-in bytes.
+is walked by the runtime and kept. Tuned for size, the stack-addressed form
+is kept only if it is no longer in bytes.
 
 Under `-g` the items also carry marks (line starts, body start and end,
 where a variable's value is defined) which encode to no bytes. A move of an

@@ -30,14 +30,14 @@
 //! Where the frame register is not needed (nothing holds a value in it), the
 //! frame is dropped and each cell is addressed through the stack pointer
 //! (`stack_addressed`): every instruction's stack effect moves the offset,
-//! and every way into a block must agree on it. Anything that puts that out
-//! of reach (the stack pointer written another way, inline code, an indirect
-//! call that may pop, inline code other than x87 register operations, the
+//! and every way into a block (a branch, or the block before it falling through
+//! where the next block is among its successors) must agree on it. Anything
+//! that puts that out of reach (the stack pointer written another way, inline
+//! code other than x87 register operations, an indirect call that may pop, the
 //! frame register read as a value) keeps the frame. A BASIC procedure's
 //! compiler-built frame is like any other; one the runtime builds (`B$ENRA`)
-//! is walked by the runtime and kept.
-//! Tuned for size, the stack-addressed form is kept only if it is no longer
-//! in bytes.
+//! is walked by the runtime and kept. Tuned for size, the stack-addressed form
+//! is kept only if it is no longer in bytes.
 //!
 //! Under `-g` the items also carry marks (line starts, body start and end,
 //! where a variable's value is defined) which encode to no bytes. A move of an
@@ -1131,9 +1131,20 @@ fn stack_addressed(
     // learned.
     let mut known: IndexMap<String, i64> = IndexMap::default();
     let mut dead = false;
+    // A block's code runs into the next label only if the next block is among
+    // its successors: a call that never returns leaves none, and a jump leaves
+    // another. `built` lists the blocks in the order of `body.blocks`, so the
+    // block after a block in the listing is the next of that list.
+    let after_dead_end: BTreeSet<String> = procedure
+        .body
+        .blocks
+        .windows(2)
+        .filter(|pair| !pair[0].succ.contains(&pair[1].at))
+        .map(|pair| label(number, pair[1].at))
+        .collect();
     loop {
         let before = known.len();
-        match addressed_pass(procedure, number, items.clone(), &mut known, dead) {
+        match addressed_pass(procedure, number, items.clone(), &mut known, dead, &after_dead_end) {
             // A label taken for dead that a later branch reached was addressed
             // at the wrong depth: again, with what that branch taught.
             Ok((out, assumed)) if assumed.iter().all(|one| !known.contains_key(one)) => return Some(out),
@@ -1172,6 +1183,7 @@ fn addressed_pass(
     items: Vec<Item>,
     known: &mut IndexMap<String, i64>,
     dead_ok: bool,
+    after_dead_end: &BTreeSet<String>,
 ) -> Result<(Vec<Item>, Vec<String>), Stop> {
     let registers = &procedure.registers;
     let slot = registers.slot;
@@ -1183,6 +1195,9 @@ fn addressed_pass(
     for item in items {
         match item {
             Item::Label(label) => {
+                if after_dead_end.contains(&label.name) {
+                    depth = None;
+                }
                 match (depth, known.get(&label.name).copied()) {
                     (Some(_), Some(there)) if in_dead => {
                         depth = Some(there);
@@ -2361,10 +2376,18 @@ mod tests {
         body: Vec<Arc<lir::Insn>>,
         callees: IndexMap<i64, Callee>,
     ) -> Vec<String> {
-        let body = lir::LirBody {
-            bits: 32,
-            ..lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, body)], IndexMap::default(), IndexMap::default())
-        };
+        flat_blocks(optional, reserve, vec![lir::LirBlock::new(1, body)], callees)
+    }
+
+    /// `flat`, of several blocks.
+    fn flat_blocks(
+        optional: bool,
+        reserve: i64,
+        blocks: Vec<lir::LirBlock>,
+        callees: IndexMap<i64, Callee>,
+    ) -> Vec<String> {
+        let body =
+            lir::LirBody { bits: 32, ..lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default()) };
         let registers = llrm_target::FrameRegisters {
             pointer: RegId::EBP,
             stack: RegId::ESP,
@@ -2435,6 +2458,43 @@ mod tests {
             "{lines:?}"
         );
         assert!(has(&lines, "sub esp, 12") && has(&lines, "add esp, 12"), "{lines:?}");
+    }
+
+    /// A call that never returns ends its block with no jump after it, and the
+    /// block laid out next is not entered from it. The stack depth is the
+    /// CFG's: carried across such a call it made the label after it
+    /// "reached at depth 4 and 0", and a function the frame register had
+    /// been freed for failed the compile ("the frame register was given to
+    /// a value and the frame cannot be addressed through the stack
+    /// pointer", jpeg at nib -m32 -O1, llrm#1466).
+    #[test]
+    fn test_the_block_after_a_call_that_never_returns_is_not_entered_from_it() {
+        let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "jne", vec![], vec![]) };
+        let onward = Semantics { target: Some(2), ..semantics(Operation::Jump, "jmp", vec![], vec![]) };
+        let blocks = vec![
+            lir::LirBlock {
+                succ: vec![3, 2],
+                ..lir::LirBlock::new(
+                    1,
+                    vec![
+                        insn(0, semantics(Operation::Move, "mov", vec![eax()], vec![cell(8)])),
+                        insn(1, branch),
+                        insn(2, onward),
+                    ],
+                )
+            },
+            lir::LirBlock::new(
+                2,
+                vec![
+                    insn(3, semantics(Operation::Push, "push", vec![], vec![eax()])),
+                    insn(4, semantics(Operation::Call, "call", vec![], vec![])),
+                ],
+            ),
+            lir::LirBlock::new(3, vec![ret()]),
+        ];
+        let callees = IndexMap::from_iter([(4, Callee::new("_fail", false))]);
+        let lines = flat_blocks(true, 8, blocks, callees);
+        assert!(!lines.iter().any(|one| one.contains("ebp")), "the frame register stays: {lines:?}");
     }
 
     /// A target that does not let its frame register go, and a body that reads

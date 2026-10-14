@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopmotion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopmotion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopmotion.rs sha256:01298c0f294e6bc6597a7437d831634a635e618065dbbd1f657e4bee8817b576 -->
+<!-- src: crates/opt/llrm-transforms/src/loopmotion.rs sha256:ffba72ab675a133b7f0f386fbfa6dd9d32de7b116363486e8db5bb44df9c48d8 -->
 
 # loopmotion
 
