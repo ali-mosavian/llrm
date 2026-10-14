@@ -984,9 +984,17 @@ fn staged(
             &body,
             &registers,
             &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
-            inline.values().any(|bytes| !crate::backend::framefree::x87_registers_only(bytes)),
+            // Tuned for size any inline code keeps the frame register until
+            // masm has compared the two forms; x87 register operations alone
+            // do not otherwise.
+            if target.cpu.size {
+                !inline.is_empty()
+            } else {
+                inline.values().any(|bytes| !crate::backend::framefree::x87_registers_only(bytes))
+            },
             false,
             landing.is_some(),
+            target.cpu.size,
         ) {
         registers.free = true;
         registers.saved.push((registers.pointer, registers.pointer));

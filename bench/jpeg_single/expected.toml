@@ -1,4 +1,4 @@
-reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
+reason = "commuted keeps the copy it drops as an anchor (its value was still read): runtime rows +0.001%"
 blessed = "2026-10-14"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63541088
+instructions = 63541517
 code_bytes = 6488
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64616168
+instructions = 64616599
 code_bytes = 6126
 data_bytes = 29697
 bss_bytes = 0

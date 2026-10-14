@@ -106,7 +106,7 @@ rule commuted
     match   mov t:reg, a:reg ; mov a, x:reg ; op=commutative_alu a, a, t
     when    free(@0, rewritable), free(@1, rewritable_named), free(@2, rewritable_named),
             same_width(a, t), same_width(t, x), width_in(a, [16, 32]), disjoint(lanes(a), lanes(t))
-    rewrite @0 ; drop @1 ; @2: =@2 a, a, x
+    rewrite @0 ; anchor @1 ; @2: =@2 a, a, x
 
 
 // Write a commutative result directly into its copied destination: `A =
