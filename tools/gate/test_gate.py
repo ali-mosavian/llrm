@@ -811,3 +811,72 @@ def test_the_gate_runs_in_its_own_high_weight_scope_once_and_only_when_systemd_i
 def test_steps_at_once_scale_with_the_cores_not_a_fixed_four():
     """JOBS defaulted to 4: a full gate ran four steps at a time on 32 cores, and its wall was the sum of the queue."""
     assert gate.default_jobs({}, 32) == 16 and gate.default_jobs({}, 4) == 4 and gate.default_jobs({"JOBS": "6"}, 32) == 6
+
+
+def _shards(tmp_path, files: dict[str, str], *extra: str):
+    import subprocess as sp
+    import sys as _sys
+
+    for name, body in files.items():
+        (tmp_path / name).write_text(body)
+    return sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "-j", "3", "-q", "test_a.py", "test_b.py", "test_c.py", *extra], capture_output=True, text=True, cwd=tmp_path, timeout=60)
+
+
+def test_a_failing_test_in_any_shard_fails_the_run_and_is_printed(tmp_path):
+    """Sharding must not hide a red: the failing file's output is printed whole and the exit is 1."""
+    done = _shards(tmp_path, {"test_a.py": "def test_fine():\n    pass\n", "test_b.py": "def test_broken_in_b():\n    assert 1 == 2\n", "test_c.py": "def test_ok():\n    pass\n"})
+    assert done.returncode == 1, done.stdout
+    assert "test_broken_in_b" in done.stdout and "assert 1 == 2" in done.stdout and "FAILED files: test_b.py" in done.stdout
+    assert "3 files, 3 runs, 1 failed" in done.stdout
+
+
+def test_a_collection_error_in_a_shard_fails_the_run(tmp_path):
+    """A file that cannot be imported collects no test; it must be a red, not a missing file."""
+    done = _shards(tmp_path, {"test_a.py": "def test_fine():\n    pass\n", "test_b.py": "import no_such_module_anywhere\n", "test_c.py": "def test_ok():\n    pass\n"})
+    assert done.returncode == 1 and "no_such_module_anywhere" in done.stdout
+
+
+def test_all_shards_green_exits_zero_and_records_every_files_seconds(tmp_path):
+    rec = tmp_path / "rec.json"
+    done = _shards(tmp_path, {f"test_{x}.py": "def test_ok():\n    pass\n" for x in "abc"}, "--durations", str(rec))
+    assert done.returncode == 0, done.stdout
+    import json as _json
+
+    assert sorted(_json.loads(rec.read_text())) == ["test_a.py", "test_b.py", "test_c.py"]
+
+
+def test_the_pytest_step_runs_through_the_sharder_with_the_ignores_and_the_cpu_limit():
+    cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages(), skip_py=("tests/x.py",))["pytest"]
+    assert "pytest_shards.py" in cmd and "--ignore=tests/x.py" in cmd and "-- -q" in cmd and "-p pytest_cpulimit" in cmd
+
+
+def test_a_file_recorded_slow_is_cut_into_parts_that_together_hold_every_test_once(monkeypatch):
+    """One file (test_scaling_gate.py, 429 s) was the floor of the whole sharded run: it is dealt out over several processes."""
+    import pytest_shards
+
+    monkeypatch.setattr(pytest_shards, "SPLITTABLE", frozenset({"big.py"}))
+    ids = [f"big.py::test_{i}" for i in range(10)]
+    work = pytest_shards.units({"big.py": ids, "small.py": ["small.py::test_x"]}, {"big.py": 300.0, "small.py": 2.0})
+    big = [args for label, args in work if label.startswith("big.py")]
+    assert len(big) == 10 and sorted(sum(big, [])) == sorted(ids)
+    assert [a for l, a in work if l == "small.py"] == [["small.py"]]
+    assert work[0][0].startswith("big.py"), "longest first"
+
+
+def test_a_run_that_reports_fewer_tests_than_were_collected_fails(tmp_path):
+    """A shard killed or filtered to nothing must not read as green: the counts must agree."""
+    (tmp_path / "test_a.py").write_text("def test_ok():\n    pass\n\n\ndef test_two():\n    pass\n")
+    (tmp_path / "conftest.py").write_text("def pytest_collection_modifyitems(config, items):\n    if not config.option.collectonly:\n        del items[1:]\n")
+    import subprocess as sp
+    import sys as _sys
+
+    done = sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "-j", "2", "-q", "test_a.py"], capture_output=True, text=True, cwd=tmp_path, timeout=60)
+    assert done.returncode == 1 and "2 tests collected, 1 reported" in done.stdout, done.stdout
+
+
+def test_a_file_with_a_module_fixture_is_never_cut_into_parts():
+    """test_qbrt.py's module fixture runs every program in one DOSBox launch: cut in five it ran five launches, 185 s each against 134 s whole."""
+    import pytest_shards
+
+    ids = [f"tools/dosbatch/test_qbrt.py::test_{i}" for i in range(40)]
+    assert [a for _, a in pytest_shards.units({"tools/dosbatch/test_qbrt.py": ids}, {"tools/dosbatch/test_qbrt.py": 500.0})] == [["tools/dosbatch/test_qbrt.py"]]

@@ -395,7 +395,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         if cfg["fmt"]["enforced"]
         else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
-        "pytest": "PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider -p pytest_cpulimit --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py),
+        "pytest": "PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-durations.json tools crates tests/*.py --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py) + " -- -q -p no:cacheprovider -p pytest_cpulimit",
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
         "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python -m pytest tools/dosbatch -m slow_dos -q -p no:cacheprovider',
