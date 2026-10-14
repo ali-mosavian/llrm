@@ -325,3 +325,18 @@ def test_a_candidate_sibling_that_would_join_is_asked_of_one_graph_a_round_not_o
         run = steps(compiler, source, "-O2")
     spent = run.get("siblings interference", 0.0) + run["spill siblings"]
     assert spent < 150, f"nest N=32 -O2: spill siblings cost {spent} Minstr (150 allowed; 987 asking one graph a candidate): {run}"
+
+
+def test_a_spill_rewrite_keeps_the_instructions_that_name_no_spilled_value_at_once():
+    """The rewrite loop of a spill walked every instruction of a block that held one spilled value, with a binary search of the
+    positions that name one, a clone of the instruction and a push for each: `spill rewrite` cost 167 Minstr on `cells` N=448
+    (one long block) and 648 at 896. The runs between the positions that name a value are kept at once."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["spill rewrite"] < 100, f"cells N=448 -O2: spill rewrite cost {run['spill rewrite']} Minstr (100 allowed; 167 before): {run}"

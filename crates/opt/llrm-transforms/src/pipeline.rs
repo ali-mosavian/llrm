@@ -535,6 +535,10 @@ pub fn recorded(
         ranges: applied.options.ipa_ranges,
         rate: Some(if applied.options.prefers_size() { 0 } else { applied.options.limits.milliclocks_per_byte }),
     });
+    // A global no body loads from any more (the loads were forwarded) needs
+    // none of its stores, as LLVM's GlobalOpt and gcc's ipa find a variable
+    // only written; the dead-code pass then finds nothing names it.
+    manager.add_module(globalopt::WriteOnly);
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
