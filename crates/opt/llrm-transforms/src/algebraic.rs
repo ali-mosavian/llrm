@@ -21,11 +21,12 @@
 //!   distributes; `(x + a) + a` is `x + (a << 1)`; `x - (x + y)` is `-y`.
 //! - Casts: `trunc(ext x)`, `ext(ext x)`, a mask under an extension, a mask
 //!   over a `sext` that reads only the low bits (`and (sext (trunc v)), M` is
-//!   `and v, M`; `and (sext x), 2^N-1` over an N-bit `x` is `zext x`), `inttoptr
-//!   (add x, y)` of a flat pointer as `gep i8, (inttoptr x), y` (a constant `y`
-//!   not under `size`), `sext` of a value whose sign bit is clear, logic or a
-//!   phi of like extensions done at the narrow type, `ptrtoint(inttoptr x)`, a
-//!   byte offset from a constant near address as the constant address.
+//!   `and v, M`; `and (sext x), 2^N-1` over an N-bit `x` is `zext x`),
+//!   `inttoptr (add x, y)` of a flat pointer as `gep i8, (inttoptr x), y` (a
+//!   constant `y` not under `size`), `sext` of a value whose sign bit is clear,
+//!   logic or a phi of like extensions done at the narrow type,
+//!   `ptrtoint(inttoptr x)`, a byte offset from a constant near address as the
+//!   constant address.
 //! - Compares: `icmp P (x + C1), C2` is `icmp P x, C2 - C1` (an ordered test
 //!   needs `nsw` or `nuw` for its signedness); a compare of extensions is a
 //!   compare of the sources; `xor (icmp P a b), true` is the inverse compare;
