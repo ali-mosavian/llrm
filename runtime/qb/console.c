@@ -211,7 +211,12 @@ void cn_locate(int row, int column, int cursor)
 
 void cn_cls(void)
 {
-    cn_driver()->clear();
+    const Driver *current = cn_driver();
+
+    current->clear();
+    /* the pixels are the screen's whatever standard output is: CLS cleared them under a redirected one in the MS runtime */
+    if (cn_graphics && cn_gfx_driver && current != cn_gfx_driver)
+        cn_gfx_driver->clear();
 }
 
 void cn_view(int top, int bottom)
