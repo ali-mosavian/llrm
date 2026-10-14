@@ -464,7 +464,7 @@ def _probe_virtual_time(binary: Path, seconds: int = 120) -> str | None:
     return None
 
 
-def run(jobs: list[Job], work: Path, timeout: int | None = None, stall: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF, cap: int = OUTPUT_CAP) -> dict[str, Result]:
+def run(jobs: list[Job], work: Path, timeout: int | None = None, stall: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF, cap: int = OUTPUT_CAP, mount_tools: bool | None = None) -> dict[str, Result]:
     """Every job's result. One dosrun launch: a first job builds (BC, LINK),
     then each program runs as its own job with `budget_ms` of emulated time, so
     a hang ends that program alone."""
@@ -476,7 +476,7 @@ def run(jobs: list[Job], work: Path, timeout: int | None = None, stall: int = 18
     # V: is Microsoft's BASIC install, mounted for the jobs that build with it: a program run on its own sees the same DOS whether or
     # not a host has the install, which its instruction count depends on to the instruction. A job whose screen is compared keeps
     # the mount: the messages it prints are rows of the screen the other side of the comparison also has.
-    needs_tools = any(job.kind in ("bas", "obj") or job.screen for job in jobs)
+    needs_tools = any(job.kind in ("bas", "obj") or job.screen for job in jobs) if mount_tools is None else mount_tools
     head = [f"mount c {work}", *([f"mount v {tools.mount}", r"set LIB=V:\LIB"] if needs_tools else []), "c:"]
     building = []
     for job in jobs:

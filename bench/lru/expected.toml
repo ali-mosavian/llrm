@@ -1,5 +1,5 @@
-reason = "bq32's kernel ends where its CodeView procedure record says, and leaves out code the debug info and map do not name (DOS, the extender). The map gave a function no length, so the last function of a module took in the module's main code after it and every runtime call made from there: an empty kernel beside a PRINT read 785 (about 250 to 760 of every small kernel's count, 596 of it the extender's memory request when the lazy string heap starts); the file readers lose their DOS time (72k to 3.6M). The compiler's and runtime's named code is unchanged"
-blessed = "2026-10-13"
+reason = "gvn meets blocks dominators first (#1656): the sext/mul/gep of an index and a reload of a pointer field, recomputed in a block laid out before its dominator, are served from the dominator; lru c -O2/-Os"
+blessed = "2026-10-14"
 
 [bas.O2]
 instructions = 144
@@ -46,19 +46,18 @@ data_bytes = 83
 bss_bytes = 0
 
 [c.O2]
-instructions = 127
+instructions = 124
 memory_operands = 55
-code_bytes = 390
+code_bytes = 384
 data_bytes = 0
 bss_bytes = 78
 
 [c.Os]
-instructions = 126
+instructions = 123
 memory_operands = 55
-code_bytes = 353
+code_bytes = 347
 data_bytes = 0
 bss_bytes = 78
-kernel_ms = 0.0031
 
 [nib.O2]
 instructions = 205
