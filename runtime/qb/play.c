@@ -30,7 +30,7 @@ enum {
 enum Style { NORMAL = 7, LEGATO = 8, STAGGER = 6 };
 
 typedef struct Player {
-    const char *at, *end;
+    Macro m;
     int octave, length, tempo;
     enum Style style;
     byte foreground;
@@ -41,35 +41,20 @@ static void illegal(void)
     qb_error(BE_ILLFUN);
 }
 
-/* The next command letter in upper case, or 0 at the end of the string. */
-static char next_command(Player *p)
-{
-    char c;
-
-    while (p->at < p->end && (*p->at == ' ' || *p->at == ';'))
-        p->at++;
-    if (p->at == p->end)
-        return 0;
-    c = *p->at++;
-    return c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c;
-}
-
 /* The number that follows a command, or -1 if there is none. */
 static long number(Player *p)
 {
     long value = -1;
 
-    while (p->at < p->end && *p->at == ' ')
-        p->at++;
-    while (p->at < p->end && *p->at >= '0' && *p->at <= '9') {
-        value = (value < 0 ? 0 : value) * 10 + (*p->at++ - '0');
+    while (p->m.at < p->m.end && *p->m.at == ' ')
+        p->m.at++;
+    while (p->m.at < p->m.end && *p->m.at >= '0' && *p->m.at <= '9') {
+        value = (value < 0 ? 0 : value) * 10 + (*p->m.at++ - '0');
         if (value > 30000)
             illegal();
     }
-    if (value < 0 && p->at < p->end && *p->at == '=') {
-        p->at++;
-        value = varptr_integer(&p->at, p->end);
-    }
+    if (value < 0)
+        macro_equals(&p->m, &value);
     return value;
 }
 
@@ -189,8 +174,8 @@ static int dots(Player *p)
 {
     int count = 0;
 
-    while (p->at < p->end && *p->at == '.') {
-        p->at++;
+    while (p->m.at < p->m.end && *p->m.at == '.') {
+        p->m.at++;
         count++;
     }
     return count;
@@ -198,7 +183,7 @@ static int dots(Player *p)
 
 static void style(Player *p)
 {
-    switch (next_command(p)) {
+    switch (macro_next(&p->m)) {
     case 'F':
         p->foreground = 1;
         break;
@@ -225,25 +210,22 @@ static int named_note(Player *p, char letter)
     static const int semitone[7] = {9, 11, 0, 2, 4, 5, 7};
     int note = p->octave * SEMITONES + semitone[letter - 'A'] + 1;
 
-    if (p->at < p->end && (*p->at == '#' || *p->at == '+')) {
-        p->at++;
+    if (p->m.at < p->m.end && (*p->m.at == '#' || *p->m.at == '+')) {
+        p->m.at++;
         note++;
-    } else if (p->at < p->end && *p->at == '-') {
-        p->at++;
+    } else if (p->m.at < p->m.end && *p->m.at == '-') {
+        p->m.at++;
         note--;
     }
     return note;
 }
-
-/* How many strings are being executed by X. */
-static int depth;
 
 static void run(Player *p)
 {
     char command;
     long n;
 
-    while ((command = next_command(p)) != 0) {
+    while ((command = macro_next(&p->m)) != 0) {
         switch (command) {
         case 'A':
         case 'B':
@@ -301,17 +283,11 @@ static void run(Player *p)
             break;
         case 'X': {
             /* the commands of a string variable, then on with these */
-            const SD *text = varptr_string(&p->at, p->end);
-            const char *at = p->at, *end = p->end;
+            Macro outer;
 
-            if (++depth > 16)
-                illegal();
-            p->at = text->ptr;
-            p->end = text->ptr + text->len;
+            macro_enter(&p->m, &outer);
             run(p);
-            p->at = at;
-            p->end = end;
-            depth--;
+            macro_leave(&p->m, &outer);
             break;
         }
         default:
@@ -325,14 +301,11 @@ static void run(Player *p)
    the next PLAY.  Music in the foreground has each note wait for the one
    sounding to end. */
 /* What PLAY keeps from one use to the next, and SOUND reads. */
-static Player player = {0, 0, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NORMAL, 1};
+static Player player = {{0, 0, 0}, DEFAULT_OCTAVE, DEFAULT_LENGTH, DEFAULT_TEMPO, NORMAL, 1};
 
 void B_SPLY(SD *commands)
 {
-
-    depth = 0;
-    player.at = commands->ptr;
-    player.end = commands->ptr + commands->len;
+    macro_begin(&player.m, commands);
     run(&player);
     str_tmp_free(commands);
 }

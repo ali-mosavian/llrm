@@ -11,15 +11,12 @@
 void B_PAIN(short fill, short border);
 #pragma aux B_PAIN "B$PAIN"
 
-enum { FRACTION = 256, HALF = 128, NESTING = 16 };
-
-/* How many strings are being executed by X. */
-static int depth;
+enum { FRACTION = 256, HALF = 128 };
 
 enum { NO_DRAW = 1, NO_MOVE = 2 };
 
 typedef struct Drawing {
-    const char *at, *end;
+    Macro m;
     int scale;  /* quarters; 0 for none, as QB's initial */
     int angle;  /* degrees */
     byte flags; /* B and N, for the next move */
@@ -31,15 +28,6 @@ static void illegal(void)
     qb_error(BE_ILLFUN);
 }
 
-static char next_command(Drawing *d)
-{
-    while (d->at < d->end && (*d->at == ' ' || *d->at == ';'))
-        d->at++;
-    if (d->at >= d->end)
-        return 0;
-    return *d->at >= 'a' && *d->at <= 'z' ? (char)(*d->at++ - 'a' + 'A') : *d->at++;
-}
-
 /* A number with its signs, or `fallback` where there is none.  Up to five
    digits, wrapping as a 16-bit integer does; more is an error. */
 static long number(Drawing *d, long fallback)
@@ -48,21 +36,23 @@ static long number(Drawing *d, long fallback)
     int sign = 1, digits = 0;
 
     for (;;) {
-        while (d->at < d->end && *d->at == ' ')
-            d->at++;
-        if (d->at < d->end && (*d->at == '+' || *d->at == '-'))
-            sign = *d->at++ == '-' ? -sign : sign;
+        while (d->m.at < d->m.end && *d->m.at == ' ')
+            d->m.at++;
+        if (d->m.at < d->m.end && (*d->m.at == '+' || *d->m.at == '-'))
+            sign = *d->m.at++ == '-' ? -sign : sign;
         else
             break;
     }
-    while (d->at < d->end && *d->at >= '0' && *d->at <= '9') {
-        value = value * 10 + (unsigned)(*d->at++ - '0');
+    while (d->m.at < d->m.end && *d->m.at >= '0' && *d->m.at <= '9') {
+        value = value * 10 + (unsigned)(*d->m.at++ - '0');
         if (++digits > 5)
             illegal();
     }
-    if (!digits && d->at < d->end && *d->at == '=') {
-        d->at++;
-        return sign * (long)(short)varptr_integer(&d->at, d->end);
+    if (!digits) {
+        long value;
+
+        if (macro_equals(&d->m, &value))
+            return sign * (long)(short)value;
     }
     return digits ? sign * (long)(short)value : fallback;
 }
@@ -155,13 +145,13 @@ static void move(Drawing *d)
     int relative;
     long x, y;
 
-    while (d->at < d->end && *d->at == ' ')
-        d->at++;
-    relative = d->at < d->end && (*d->at == '+' || *d->at == '-');
+    while (d->m.at < d->m.end && *d->m.at == ' ')
+        d->m.at++;
+    relative = d->m.at < d->m.end && (*d->m.at == '+' || *d->m.at == '-');
     x = number(d, 0);
-    while (d->at < d->end && *d->at == ' ')
-        d->at++;
-    if (d->at >= d->end || *d->at++ != ',')
+    while (d->m.at < d->m.end && *d->m.at == ' ')
+        d->m.at++;
+    if (d->m.at >= d->m.end || *d->m.at++ != ',')
         illegal();
     y = number(d, 0);
     if (relative)
@@ -177,7 +167,7 @@ static void execute(Drawing *d)
     char command;
     long n;
 
-    while ((command = next_command(d)) != 0) {
+    while ((command = macro_next(&d->m)) != 0) {
         switch (command) {
         case 'U':
             move_by(d, 0, -number(d, 1));
@@ -238,7 +228,7 @@ static void execute(Drawing *d)
             d->angle = (int)n * 90;
             break;
         case 'T':
-            if (next_command(d) != 'A')
+            if (macro_next(&d->m) != 'A')
                 illegal();
             n = number(d, 0);
             if (n < 0)
@@ -251,7 +241,7 @@ static void execute(Drawing *d)
             long border;
 
             n = number(d, -1);
-            if (n < 0 || d->at >= d->end || *d->at++ != ',')
+            if (n < 0 || d->m.at >= d->m.end || *d->m.at++ != ',')
                 illegal();
             border = number(d, -1);
             if (border < 0)
@@ -263,17 +253,11 @@ static void execute(Drawing *d)
         }
         case 'X': {
             /* the commands of a string variable, then on with these */
-            const SD *text = varptr_string(&d->at, d->end);
-            const char *at = d->at, *end = d->end;
+            Macro outer;
 
-            if (++depth > NESTING)
-                illegal();
-            d->at = text->ptr;
-            d->end = text->ptr + text->len;
+            macro_enter(&d->m, &outer);
             execute(d);
-            d->at = at;
-            d->end = end;
-            depth--;
+            macro_leave(&d->m, &outer);
             break;
         }
         default:
@@ -287,14 +271,12 @@ void B_DRAW(SD *commands)
 {
     /* the scale, the angle and the fractions stay as they were from one DRAW
        to the next */
-    static Drawing d = {0, 0, 0, 0, 0, HALF, HALF};
+    static Drawing d = {{0, 0, 0}, 0, 0, 0, HALF, HALF};
 
     if (!gfx_current)
         illegal();
-    d.at = commands->ptr;
-    d.end = commands->ptr + commands->len;
+    macro_begin(&d.m, commands);
     d.flags = 0;
-    depth = 0;
     execute(&d);
     str_tmp_free(commands);
 }

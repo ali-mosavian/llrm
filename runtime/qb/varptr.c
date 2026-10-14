@@ -5,7 +5,7 @@
 #include "qb.h"
 #include "varptr.h"
 
-enum { TYPE_INTEGER = 2, TYPE_STRING = 3, TYPE_SINGLE = 4, TYPE_DOUBLE = 8, TYPE_LONG = 0x14 };
+enum { TYPE_INTEGER = 2, TYPE_STRING = 3, TYPE_SINGLE = 4, TYPE_DOUBLE = 8 };
 
 /* B$VARP: the string of a variable's type byte and its address. */
 SD *B_VARP(unsigned address, short type)
@@ -60,8 +60,6 @@ long varptr_integer(const char **at, const char *end)
     switch (type) {
     case TYPE_INTEGER:
         return *(short *)variable;
-    case TYPE_LONG:
-        return *(long *)variable;
     case TYPE_SINGLE:
         return rounded(*(float *)variable);
     case TYPE_DOUBLE:
@@ -84,3 +82,48 @@ const SD *varptr_string(const char **at, const char *end)
 
 #pragma aux B_VARP "B$VARP"
 #pragma aux B_SADD "B$SADD"
+
+enum { NESTING = 16 };
+
+void macro_begin(Macro *m, const SD *commands)
+{
+    m->at = commands->ptr;
+    m->end = commands->ptr + commands->len;
+    m->depth = 0;
+}
+
+char macro_next(Macro *m)
+{
+    while (m->at < m->end && (*m->at == ' ' || *m->at == ';'))
+        m->at++;
+    if (m->at >= m->end)
+        return 0;
+    return *m->at >= 'a' && *m->at <= 'z' ? (char)(*m->at++ - 'a' + 'A') : *m->at++;
+}
+
+int macro_equals(Macro *m, long *value)
+{
+    if (m->at >= m->end || *m->at != '=')
+        return 0;
+    m->at++;
+    *value = varptr_integer(&m->at, m->end);
+    return 1;
+}
+
+void macro_enter(Macro *m, Macro *outer)
+{
+    const SD *text = varptr_string(&m->at, m->end);
+
+    *outer = *m;
+    if (++m->depth > NESTING)
+        qb_error(BE_ILLFUN);
+    m->at = text->ptr;
+    m->end = text->ptr + text->len;
+}
+
+void macro_leave(Macro *m, const Macro *outer)
+{
+    m->at = outer->at;
+    m->end = outer->end;
+    m->depth--;
+}
