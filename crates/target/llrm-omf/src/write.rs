@@ -41,10 +41,8 @@ const LINSYM: u8 = 0xC4;
 /// A COMDAT's attributes: allocated explicitly in the segment named, no
 /// duplicate allowed.
 const COMDAT_EXPLICIT: u8 = 0;
-/// The COMDAT flag bits: this data continues the one before it; the name is
-/// local to the module.
+/// The COMDAT flag bit: this data continues the one before it.
 const COMDAT_CONTINUATION: u8 = 1;
-const COMDAT_LOCAL: u8 = 4;
 
 /// The sections written as COMDATs: each is named by its symbol at offset 0,
 /// which a fixup reaches as an external (the way MSC's /Gy objects do it), the
@@ -84,8 +82,31 @@ impl Comdats {
             };
             main.insert(section, named);
         }
-        let own =
-            object.name.bytes().fold(0x811c_9dc5_u32, |hash, byte| (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193));
+        // The module's key: its name and everything it holds (not the debug
+        // sections: `-g` changes no name), so two modules of one name,
+        // as two `m.nib` of different directories, do not meet in a local
+        // function's name.
+        let mut own = 0xcbf2_9ce4_8422_2325_u64;
+        let mut feed = |bytes: &[u8]| {
+            for &byte in bytes {
+                own = (own ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            // A separator, so that two halves cannot trade bytes.
+            own = (own ^ 0xff).wrapping_mul(0x0000_0100_0000_01b3);
+        };
+        feed(object.name.as_bytes());
+        for section in object.sections.iter().filter(|section| section.role != Role::Debug) {
+            feed(section.name.as_bytes());
+            feed(&section.image);
+            for reloc in &section.relocs {
+                feed(&reloc.at.to_le_bytes());
+                feed(format!("{:?}{}", reloc.target, reloc.addend).as_bytes());
+            }
+        }
+        for symbol in &object.symbols {
+            feed(symbol.name.as_bytes());
+            feed(format!("{:?}", symbol.definition).as_bytes());
+        }
         let names = main
             .iter()
             .map(|(&section, &symbol)| {
@@ -93,7 +114,7 @@ impl Comdats {
                 let name = if one.binding == llrm_object::Binding::Public {
                     one.name.clone()
                 } else {
-                    format!("{}${own:08X}", one.name)
+                    format!("{}${own:016X}", one.name)
                 };
                 (section, name)
             })
@@ -332,11 +353,9 @@ fn comdat_record(
     Ok(Rc::new(omf::Record::new(if bits == 32 { COMDAT + 1 } else { COMDAT }, body)))
 }
 
-/// Where a COMDAT's data is named: the LNAMES index of its symbol, and whether
-/// the symbol is local.
+/// Where a COMDAT's data is named: the LNAMES index of its symbol.
 struct Named {
     name: i64,
-    local: bool,
 }
 
 /// A COMDAT's line numbers: LINSYM, which names the COMDAT's symbol where
@@ -411,8 +430,7 @@ fn ledata(
             }
             let payload = &image[start..stop];
             out.push(if let Some(named) = named {
-                let flags =
-                    if out.is_empty() { 0 } else { COMDAT_CONTINUATION } | if named.local { COMDAT_LOCAL } else { 0 };
+                let flags = if out.is_empty() { 0 } else { COMDAT_CONTINUATION };
                 comdat_record(bits, named.name, flags, group, index as i64 + 1, start, payload)?
             } else if bits == 32 {
                 omf::ledata_record32(index as i64 + 1, start as i64, payload)?
@@ -551,7 +569,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     let comdats = Comdats::of(object, undefined)?;
     let mut named_comdats: std::collections::BTreeMap<usize, Named> = std::collections::BTreeMap::new();
     for (&section, name) in &comdats.names {
-        named_comdats.insert(section, Named { name: lname(name), local: false });
+        named_comdats.insert(section, Named { name: lname(name) });
     }
     let mut data = Vec::new();
     for index in 0..object.sections.len() {
@@ -698,6 +716,63 @@ mod tests {
             omf_comdat: Vec::new(),
             debug: None,
         }
+    }
+
+    /// A COMDAT object of one local function `helper` whose bytes are `code`,
+    /// as an object named `t.c`.
+    fn with_helper(code: Vec<u8>) -> Object {
+        let mut made = object(
+            Arch::I8086,
+            vec![section("T", code, Vec::new())],
+            vec![Symbol {
+                name: "helper".into(),
+                binding: Binding::Local,
+                definition: Definition::Defined { section: 0, offset: 0 },
+                group: None,
+            }],
+        );
+        made.omf_comdat = vec![0];
+        made
+    }
+
+    /// The names of the module's COMDATs, as LNAMES holds them.
+    fn comdat_names(made: &Object) -> Vec<String> {
+        let records = crate::omf::parse(&write(made).unwrap()).unwrap();
+        let lnames = records.iter().find(|one| one.r#type == omf::LNAMES).expect("LNAMES");
+        let (mut names, mut at) = (Vec::new(), 0);
+        while at < lnames.body.len() {
+            let size = usize::from(lnames.body[at]);
+            names.push(String::from_utf8_lossy(&lnames.body[at + 1..at + 1 + size]).into_owned());
+            at += 1 + size;
+        }
+        names.into_iter().filter(|name| name.starts_with("helper")).collect()
+    }
+
+    /// A local function of one name in two modules of one name (`m.nib` of two
+    /// directories) was the same COMDAT name in both, which jwlink refused
+    /// as a redefinition (and a linker that kept the first would bind both to
+    /// one body): a local COMDAT's name carries a key of what its module
+    /// holds.
+    #[test]
+    fn a_local_comdat_of_the_same_name_in_two_modules_of_one_name_has_two_names() {
+        let (first, second) =
+            (comdat_names(&with_helper(vec![0x90, 0xC3])), comdat_names(&with_helper(vec![0x40, 0xC3])));
+        assert_eq!((first.len(), second.len()), (1, 1), "{first:?} {second:?}");
+        assert_ne!(first, second);
+        assert!(first[0].starts_with("helper$"), "{first:?}");
+        assert_eq!(first, comdat_names(&with_helper(vec![0x90, 0xC3])), "the same module has the same name each time");
+    }
+
+    /// A public function keeps its name, which other modules call it by, and
+    /// the COMDAT alone defines it.
+    #[test]
+    fn a_public_comdat_keeps_its_name_and_is_defined_by_the_comdat_alone() {
+        let mut made = with_helper(vec![0x90, 0xC3]);
+        made.symbols[0].binding = Binding::Public;
+        let records = crate::omf::parse(&write(&made).unwrap()).unwrap();
+        assert_eq!(comdat_names(&made), ["helper"]);
+        assert_eq!(records.iter().filter(|one| one.r#type == 0xC2).count(), 1);
+        assert_eq!(records.iter().filter(|one| one.r#type == omf::PUBDEF).count(), 0);
     }
 
     /// NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was

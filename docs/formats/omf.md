@@ -100,8 +100,9 @@ entered in LNAMES.
 code's class to be placed in, then a COMDAT record naming the function, allocated explicitly in that segment, with
 its FIXUPPs after it and its lines as a LINSYM. The COMDAT defines the symbol, so there is no PUBDEF for it; a
 fixup that reaches it (a call, a debug address) names an EXTDEF of the same name. A local function's name gets
-`$` and a hash of the object's name, because a linker finds a local COMDAT by no external and two modules' locals
-may share a name.
+`$` and a 64-bit key of the object's name and everything it holds (not its debug sections), because a linker
+finds a local COMDAT by no external and two modules' locals may share a name, two objects of one name (an `m.nib`
+in two directories) included.
 
 A segment per procedure of one name was tried first and is wrong for Microsoft's LINK 5.31: it reads the SEGDEFs of
 one name in an object as one segment, keeps the length of the last, and rejects each procedure longer than it
