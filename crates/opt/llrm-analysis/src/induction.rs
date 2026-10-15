@@ -554,21 +554,31 @@ fn _control(
                 Instruction { opcode: Opcode::Br, operands, .. } if operands.len() == 3
             ),
         );
-    if control.succ.len() != 2
-        || entered.len() != 1
-        || exits.len() != 1
-        || !conditional
-        || inside.iter().any(|at| function.successors(cfg::block(*at)).is_empty())
-    {
+    if control.succ.len() != 2 || entered.len() != 1 || exits.len() != 1 || !conditional {
         return None;
     }
-    // Any other way out must stop the program: the count holds whenever it goes
-    // on.
-    let elsewhere = inside
-        .iter()
-        .filter(|at| **at != control.at)
-        .flat_map(|at| block_of(*at).succ.into_iter().filter(|to| !inside.contains(to)))
-        .collect::<BTreeSet<_>>();
+    // One pass over the loop's blocks, by their terminators' operands: a block
+    // that goes nowhere ends the program, and any other way out must stop it:
+    // the count holds whenever it goes on. (`successors` made a list for each
+    // block, and a nest of loops asked it of every block of every loop.)
+    let mut elsewhere = BTreeSet::new();
+    for &at in inside {
+        let mut goes = false;
+        if let Some(last) = function.terminator(cfg::block(at)) {
+            for operand in &function.instruction(last).operands {
+                if let Operand::Block(to) = *operand {
+                    goes = true;
+                    let to = cfg::id(to);
+                    if at != control.at && !inside.contains(&to) {
+                        elsewhere.insert(to);
+                    }
+                }
+            }
+        }
+        if !goes {
+            return None;
+        }
+    }
     // Or, where `leaving`, go on: the count then holds as long as the loop
     // does.
     let leaves = !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(function, header.at));
