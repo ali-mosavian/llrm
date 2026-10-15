@@ -271,12 +271,12 @@ pub fn site(
             let block = cfg::block(at);
             unit.function.block(block).instructions().iter().map(move |&inst| (block, inst))
         })
-        .any(
-            |(_, inst)| unit.calls_out(inst)
+        .any(|(_, inst)| {
+            unit.calls_out(inst)
                 && !callee(unit.context, unit.function, inst)
                     .and_then(|id| callees.get(&id))
-                    .is_some_and(|summary| summary.effects == llrm_mir::memory::Effects::NONE),
-        );
+                    .is_some_and(|summary| summary.effects == llrm_mir::memory::Effects::NONE)
+        });
     llrm_support::debug!(
         "peelsite",
         "callees of the loop at b{}: {:?}",
