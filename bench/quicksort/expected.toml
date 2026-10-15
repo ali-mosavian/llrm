@@ -1,4 +1,4 @@
-reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
+reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -31,14 +31,14 @@ data_bytes = 17
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 225854
-code_bytes = 584
+instructions = 225855
+code_bytes = 587
 data_bytes = 23
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 220736
-code_bytes = 526
+instructions = 220737
+code_bytes = 529
 data_bytes = 23
 bss_bytes = 0
 
@@ -66,8 +66,8 @@ bss_bytes = 0
 
 [nib.Os]
 instructions = 162495
-memory_operands = 69657
-code_bytes = 396
+memory_operands = 70338
+code_bytes = 394
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 2.1772
