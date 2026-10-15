@@ -240,7 +240,7 @@ impl Frame {
                     }));
                 }
             }
-            blocks.push(crate::model::lir::LirBlock { insns: insns.into(), ..block.clone() });
+            blocks.push(crate::model::lir::LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
         }
         let mut tagged = body.with_blocks(blocks);
         let homes = body
@@ -438,7 +438,7 @@ mod tests {
 
     fn body_of(insns: Vec<Insn>) -> LirBody {
         let block = LirBlock::new(0, insns.into_iter().map(Arc::new).collect());
-        LirBody::new("entry", 0, vec![block], IndexMap::default(), IndexMap::default())
+        LirBody::new("entry", 0, vec![block.into()], IndexMap::default(), IndexMap::default())
     }
 
     #[test]

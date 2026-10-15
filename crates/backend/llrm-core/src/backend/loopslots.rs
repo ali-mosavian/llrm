@@ -1210,7 +1210,7 @@ mod tests {
         insns: Vec<Arc<Insn>>,
         succ: Vec<i64>,
     ) -> LirBlock {
-        LirBlock { succ, ..LirBlock::new(at, insns) }
+        LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
     }
 
     /// qbdemo's PLASMA once DS stopped being a selector: a slot's reload in
@@ -1227,7 +1227,7 @@ mod tests {
             "loop",
             0,
             vec![
-                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]).into(),
                 block(
                     0x10,
                     vec![
@@ -1291,7 +1291,8 @@ mod tests {
                         )),
                     ],
                     vec![0x10, 0x20],
-                ),
+                )
+                .into(),
                 block(
                     0x20,
                     vec![
@@ -1305,7 +1306,8 @@ mod tests {
                         made(0x21, Operation::Return, "ret", vec![], vec![]),
                     ],
                     vec![],
-                ),
+                )
+                .into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -1343,7 +1345,7 @@ mod tests {
             "loop",
             0,
             vec![
-                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]).into(),
                 block(
                     0x10,
                     vec![
@@ -1365,7 +1367,8 @@ mod tests {
                         )),
                     ],
                     vec![0x10, 0x20],
-                ),
+                )
+                .into(),
                 block(
                     0x20,
                     vec![Arc::new(Insn {
@@ -1373,7 +1376,8 @@ mod tests {
                         ..(*made(0x20, Operation::Return, "ret", vec![], vec![])).clone()
                     })],
                     vec![],
-                ),
+                )
+                .into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -1432,9 +1436,9 @@ mod tests {
             "loop",
             0,
             vec![
-                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
-                block(0x10, loop_body, vec![0x10, 0x40]),
-                block(0x40, vec![made(0x40, Operation::Return, "ret", vec![], vec![])], vec![]),
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]).into(),
+                block(0x10, loop_body, vec![0x10, 0x40]).into(),
+                block(0x40, vec![made(0x40, Operation::Return, "ret", vec![], vec![])], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -1497,9 +1501,9 @@ mod tests {
             "loop",
             0,
             vec![
-                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
-                block(0x10, loop_body, vec![0x10, 0x40]),
-                block(0x40, vec![made(0x40, Operation::Return, "ret", vec![], vec![])], vec![]),
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]).into(),
+                block(0x10, loop_body, vec![0x10, 0x40]).into(),
+                block(0x40, vec![made(0x40, Operation::Return, "ret", vec![], vec![])], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -1537,7 +1541,7 @@ mod tests {
             "loop",
             0,
             vec![
-                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]).into(),
                 block(
                     0x10,
                     vec![
@@ -1591,8 +1595,9 @@ mod tests {
                         )),
                     ],
                     vec![0x10, 0x20],
-                ),
-                block(0x20, vec![made(0x20, Operation::Return, "ret", vec![], vec![])], vec![]),
+                )
+                .into(),
+                block(0x20, vec![made(0x20, Operation::Return, "ret", vec![], vec![])], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),

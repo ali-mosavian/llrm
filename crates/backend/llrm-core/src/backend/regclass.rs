@@ -991,8 +991,8 @@ mod tests {
                 make(3, vec![], vec![], semantics(Operation::Jump, "jmp", vec![], vec![], Some(1))),
             ]
             .into(),
-            succ: vec![1],
-            phis: vec![],
+            succ: vec![1].into(),
+            phis: vec![].into(),
             cold: false,
         };
         let looped = LirBlock {
@@ -1007,19 +1007,25 @@ mod tests {
                 make(5, vec![], vec![], semantics(Operation::Branch, "jne", vec![], vec![], Some(1))),
             ]
             .into(),
-            succ: vec![1, 2],
-            phis: vec![Phi { result: segment, incoming: vec![(0, entry_segment), (1, segment)] }],
+            succ: vec![1, 2].into(),
+            phis: vec![Phi { result: segment, incoming: vec![(0, entry_segment), (1, segment)] }].into(),
             cold: false,
         };
         let exit = LirBlock {
             at: 2,
             insns: vec![make(6, vec![], vec![loaded], semantics(Operation::Return, "ret", vec![], vec![], None))]
                 .into(),
-            succ: vec![],
-            phis: vec![],
+            succ: vec![].into(),
+            phis: vec![].into(),
             cold: false,
         };
-        let body = LirBody::new("f", 0, vec![entry, looped, exit], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![entry.into(), looped.into(), exit.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         let segments = &target::BUILT_IN;
         let webs = classes(&body, &BTreeSet::new(), segments, &crate::backend::classes::RegisterClasses::m16());
         assert_eq!(webs.get(&entry_segment), webs.get(&segment));

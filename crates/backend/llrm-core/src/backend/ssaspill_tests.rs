@@ -84,7 +84,7 @@ fn test_a_value_only_phis_name_is_spilled_at_its_full_width() {
 #[test]
 fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
     use crate::model::ir::{Held, Operation, Semantics};
-    use crate::model::lir::{Insn, LirBlock, Phi};
+    use crate::model::lir::{Block, Insn, LirBlock, Phi};
     let links = 40;
     let wide = |value: u32, width: u32| {
         let what = Semantics {
@@ -97,11 +97,11 @@ fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
     };
     // Block k joins value 100 + links - k - 1 to 100 + links - k: the chain's
     // links come from its far end towards its start.
-    let blocks: Vec<LirBlock> = (0..links)
+    let blocks: Vec<Block> = (0..links)
         .map(|k| {
             let value = 100 + links - k;
             let mut block = LirBlock::new(i64::from(k), vec![wide(value, if k == links - 1 { 4 } else { 2 })]);
-            block.phis = vec![Phi { result: value - 1, incoming: vec![(i64::from(k), value)] }];
+            block.phis = vec![Phi { result: value - 1, incoming: vec![(i64::from(k), value)] }].into();
             block
         })
         .collect();
@@ -160,10 +160,10 @@ fn test_a_value_defined_in_the_loop_is_not_stored_on_every_trip() {
 /// leave them.
 fn with_empty_edge_blocks(body: &LirBody) -> LirBody {
     use crate::model::ir::{Operation, Semantics};
-    use crate::model::lir::LirBlock;
+    use crate::model::lir::{Block, LirBlock};
     let mut next = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
-    let mut made: Vec<LirBlock> = Vec::new();
-    let mut blocks: Vec<LirBlock> = Vec::new();
+    let mut made: Vec<Block> = Vec::new();
+    let mut blocks: Vec<Block> = Vec::new();
     let mut landing: IndexMap<(i64, i64), i64> = IndexMap::default();
     for block in &body.blocks {
         let mut succ = Vec::new();
@@ -173,7 +173,7 @@ fn with_empty_edge_blocks(body: &LirBody) -> LirBody {
                 .or_insert_with(
                     || {
                         next += 1;
-                        made.push(LirBlock { succ: vec![*to], ..LirBlock::new(next - 1, Vec::new()) });
+                        made.push(LirBlock { succ: vec![*to].into(), ..LirBlock::new(next - 1, Vec::new()) }.into());
                         next - 1
                     },
                 );
@@ -196,13 +196,14 @@ fn with_empty_edge_blocks(body: &LirBody) -> LirBody {
                 _ => std::sync::Arc::clone(one),
             })
             .collect();
-        blocks.push(LirBlock { succ, ..block.with_insns(insns) });
+        blocks.push(LirBlock { succ: succ.into(), ..block.with_insns(insns).into_inner() }.into());
     }
     for block in &mut blocks {
-        for phi in &mut block.phis {
+        let block_at = block.at;
+        for phi in block.phis.iter_mut() {
             for (from, _) in &mut phi.incoming {
                 if let Some(at) =
-                    landing.iter().find(|((_, to), _)| *to == block.at).and_then(|_| landing.get(&(*from, block.at)))
+                    landing.iter().find(|((_, to), _)| *to == block_at).and_then(|_| landing.get(&(*from, block_at)))
                 {
                     *from = *at;
                 }
@@ -222,8 +223,7 @@ fn reloads_follow_stores(body: &LirBody) -> Result<(), String> {
         let place = if reads { what.sources.first()? } else { what.dests.first()? };
         matches!(place, Loc::Mem(_)).then(|| format!("{place:?}"))
     };
-    let blocks: IndexMap<i64, &crate::model::lir::LirBlock> =
-        body.blocks.iter().map(|block| (block.at, block)).collect();
+    let blocks: IndexMap<i64, &crate::model::lir::Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
     for block in &body.blocks {
         for to in &block.succ {
@@ -400,7 +400,7 @@ fn test_a_folded_operand_is_as_wide_as_the_instruction_reads_it() {
 #[test]
 fn test_a_value_is_dead_when_nothing_reads_it_not_when_its_distance_is_unsettled() {
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
-    use crate::model::lir::{Insn, LirBlock};
+    use crate::model::lir::{Block, Insn, LirBlock};
     let held = |value: u32| Loc::Held(Held { value, width: 2 });
     let number = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
     let make = |name: &str, dest: u32, sources: Vec<Loc>, uses: Vec<u32>| {
@@ -413,14 +413,17 @@ fn test_a_value_is_dead_when_nothing_reads_it_not_when_its_distance_is_unsettled
         std::sync::Arc::new(Insn::new(0, Some((0, 2)), Some(what), vec![dest], uses))
     };
     let last = 70;
-    let mut blocks: Vec<LirBlock> = (0..=last)
+    let mut blocks: Vec<Block> = (0..=last)
         .map(|at| {
             let insns = match at {
                 0 => vec![make("mov", 0, vec![number(5)], vec![]), make("add", 1, vec![held(0), number(1)], vec![0])],
                 _ if at == last => vec![make("add", 2, vec![held(1), number(1)], vec![1])],
                 _ => Vec::new(),
             };
-            LirBlock { succ: if at == last { Vec::new() } else { vec![at + 1] }, ..LirBlock::new(at, insns) }
+            LirBlock {
+                succ: if at == last { Vec::new().into() } else { vec![at + 1].into() },
+                ..LirBlock::new(at, insns)
+            }
         })
         .collect();
     blocks.reverse();

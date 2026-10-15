@@ -81,13 +81,13 @@ fn block(
     insns: Vec<Arc<Insn>>,
     succ: Vec<i64>,
 ) -> LirBlock {
-    LirBlock { succ, ..LirBlock::new(at, insns) }
+    LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
 }
 
 fn body(
     name: &str,
     entry: i64,
-    blocks: Vec<LirBlock>,
+    blocks: Vec<Block>,
 ) -> LirBody {
     LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default())
 }
@@ -112,7 +112,7 @@ fn listed(
     masm::_procedure(&procedure, &IndexMap::default(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
 }
 
-fn _printed(blocks: Vec<LirBlock>) -> Vec<String> {
+fn _printed(blocks: Vec<Block>) -> Vec<String> {
     let entry = blocks[0].at;
     let lines = listed(threaded(&body("f", entry, blocks)), "_f");
     lines[1..lines.len() - 1].to_vec()
@@ -136,11 +136,11 @@ fn physical(result: &LirBody) -> Vec<Semantics> {
 fn test_branch_to_a_block_that_only_jumps_goes_to_its_target() {
     assert_eq!(
         _printed(vec![
-            block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]),
-            block(4, vec![_move(4, cx()), _return(5)], vec![]),
-            block(7, vec![_jump(7, 9)], vec![9]),
-            block(8, vec![_move(8, bx()), _return(8)], vec![]),
-            block(9, vec![_return(9)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]).into(),
+            block(4, vec![_move(4, cx()), _return(5)], vec![]).into(),
+            block(7, vec![_jump(7, 9)], vec![9]).into(),
+            block(8, vec![_move(8, bx()), _return(8)], vec![]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
         ]),
         ["L0_1:", "cmp ax, bx", "je L0_9", "L0_4:", "mov ax, cx", "ret", "L0_9:", "ret"]
     );
@@ -150,10 +150,10 @@ fn test_branch_to_a_block_that_only_jumps_goes_to_its_target() {
 fn test_branch_over_a_jump_is_inverted() {
     assert_eq!(
         _printed(vec![
-            block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]),
-            block(4, vec![_jump(4, 12)], vec![12]),
-            block(9, vec![_move(9, cx()), _return(10)], vec![]),
-            block(12, vec![_move(12, bx()), _return(13)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+            block(4, vec![_jump(4, 12)], vec![12]).into(),
+            block(9, vec![_move(9, cx()), _return(10)], vec![]).into(),
+            block(12, vec![_move(12, bx()), _return(13)], vec![]).into(),
         ]),
         ["L0_1:", "cmp ax, bx", "jne L0_12", "L0_9:", "mov ax, cx", "ret", "L0_12:", "mov ax, bx", "ret"]
     );
@@ -163,9 +163,9 @@ fn test_branch_over_a_jump_is_inverted() {
 fn test_branch_then_jump_in_one_block_is_inverted() {
     assert_eq!(
         _printed(vec![
-            block(1, vec![_compare(1), _branch(2, "je", 4), _jump(3, 9)], vec![4, 9]),
-            block(4, vec![_move(4, cx()), _return(5)], vec![]),
-            block(9, vec![_move(9, bx()), _return(10)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "je", 4), _jump(3, 9)], vec![4, 9]).into(),
+            block(4, vec![_move(4, cx()), _return(5)], vec![]).into(),
+            block(9, vec![_move(9, bx()), _return(10)], vec![]).into(),
         ]),
         ["L0_1:", "cmp ax, bx", "jne L0_9", "L0_4:", "mov ax, cx", "ret", "L0_9:", "mov ax, bx", "ret"]
     );
@@ -178,10 +178,10 @@ fn test_conditional_assignment_arm_is_placed_before_its_join() {
         "clamp",
         1,
         vec![
-            block(1, vec![_compare(1), _branch(2, "jg", 4)], vec![4, 3]),
-            block(3, vec![_inserted(_jump(3, 7))], vec![7]),
-            block(4, vec![_move(4, cx()), _jump(5, 7)], vec![7]),
-            block(7, vec![_return(7)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "jg", 4)], vec![4, 3]).into(),
+            block(3, vec![_inserted(_jump(3, 7))], vec![7]).into(),
+            block(4, vec![_move(4, cx()), _jump(5, 7)], vec![7]).into(),
+            block(7, vec![_return(7)], vec![]).into(),
         ],
     );
     assert_eq!(
@@ -197,9 +197,9 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         "f",
         1,
         vec![
-            block(1, vec![_compare(1), _branch(2, "je", 4)], vec![4, 9]),
-            block(4, vec![_return(4)], vec![]),
-            block(9, vec![_return(9)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "je", 4)], vec![4, 9]).into(),
+            block(4, vec![_return(4)], vec![]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
         ],
     );
 
@@ -242,10 +242,10 @@ fn test_loop_placement_ignores_non_emitting_instruction_markers() {
         "marker-loop",
         1,
         vec![
-            block(1, vec![_jump(1, 2)], vec![2]),
-            block(2, vec![marker, _compare(2), _branch(2, "je", 4), _jump(2, 3)], vec![4, 3]),
-            block(3, vec![_jump(3, 2)], vec![2]),
-            block(4, vec![_return(4)], vec![]),
+            block(1, vec![_jump(1, 2)], vec![2]).into(),
+            block(2, vec![marker, _compare(2), _branch(2, "je", 4), _jump(2, 3)], vec![4, 3]).into(),
+            block(3, vec![_jump(3, 2)], vec![2]).into(),
+            block(4, vec![_return(4)], vec![]).into(),
         ],
     );
 
@@ -259,7 +259,10 @@ fn test_loop_placement_ignores_non_emitting_instruction_markers() {
 #[test]
 fn test_jump_to_the_next_block_is_dropped() {
     assert_eq!(
-        _printed(vec![block(1, vec![_move(1, bx()), _jump(2, 4)], vec![4]), block(4, vec![_return(4)], vec![]),]),
+        _printed(vec![
+            block(1, vec![_move(1, bx()), _jump(2, 4)], vec![4]).into(),
+            block(4, vec![_return(4)], vec![]).into(),
+        ]),
         ["L0_1:", "mov ax, bx", "L0_4:", "ret"]
     );
 }
@@ -269,7 +272,7 @@ fn test_jump_to_the_next_block_is_dropped() {
 fn test_source_owned_jump_to_fallthrough_becomes_an_anchor() {
     let jump = _insn(1, Operation::Jump, "jmp", vec![], vec![], Some(4));
     let jump = Arc::new(Insn { covers: Some((1, 4)), ..(*jump).clone() });
-    let source = body("f", 1, vec![block(1, vec![jump], vec![4]), block(4, vec![_return(4)], vec![])]);
+    let source = body("f", 1, vec![block(1, vec![jump], vec![4]).into(), block(4, vec![_return(4)], vec![]).into()]);
 
     let result = threaded(&source);
 
@@ -284,9 +287,9 @@ fn test_source_owned_jump_to_fallthrough_becomes_an_anchor() {
 fn test_jump_over_a_block_nothing_reaches_is_dropped() {
     assert_eq!(
         _printed(vec![
-            block(1, vec![_move(1, bx()), _jump(2, 9)], vec![9]),
-            block(5, vec![], vec![]),
-            block(9, vec![_return(9)], vec![]),
+            block(1, vec![_move(1, bx()), _jump(2, 9)], vec![9]).into(),
+            block(5, vec![], vec![]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
         ]),
         ["L0_1:", "mov ax, bx", "L0_9:", "ret"]
     );
@@ -304,7 +307,11 @@ fn nothing(
 #[test]
 fn test_unreachable_inert_source_ownership_survives_threading() {
     let owned = nothing(5, Some((5, 9)));
-    let source = body("f", 1, vec![block(1, vec![_return(1)], vec![]), block(5, vec![Arc::clone(&owned)], vec![])]);
+    let source = body(
+        "f",
+        1,
+        vec![block(1, vec![_return(1)], vec![]).into(), block(5, vec![Arc::clone(&owned)], vec![]).into()],
+    );
 
     let result = threaded(&source);
 
@@ -322,10 +329,10 @@ fn test_a_threaded_source_jump_keeps_its_bytes() {
         "f",
         1,
         vec![
-            block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]),
-            block(4, vec![_return(4)], vec![]),
-            block(7, vec![owned], vec![9]),
-            block(9, vec![_return(9)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]).into(),
+            block(4, vec![_return(4)], vec![]).into(),
+            block(7, vec![owned], vec![9]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
         ],
     );
 
@@ -343,10 +350,10 @@ fn test_a_jump_past_a_marker_block_to_the_next_code_is_dropped() {
         "f",
         1,
         vec![
-            block(1, vec![_compare(1), _branch(2, "je", 9), _inserted(_jump(3, 7))], vec![9, 7]),
-            block(5, vec![nothing(5, Some((5, 7)))], vec![]),
-            block(7, vec![_return(7)], vec![]),
-            block(9, vec![_return(9)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "je", 9), _inserted(_jump(3, 7))], vec![9, 7]).into(),
+            block(5, vec![nothing(5, Some((5, 7)))], vec![]).into(),
+            block(7, vec![_return(7)], vec![]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
         ],
     );
 
@@ -360,7 +367,7 @@ fn test_a_jump_past_a_marker_block_to_the_next_code_is_dropped() {
 #[test]
 fn test_unreachable_inert_carrier_without_a_byte_span_does_not_crash_threading() {
     let carrier = nothing(5, None);
-    let source = body("f", 1, vec![block(1, vec![_return(1)], vec![]), block(5, vec![carrier], vec![])]);
+    let source = body("f", 1, vec![block(1, vec![_return(1)], vec![]).into(), block(5, vec![carrier], vec![]).into()]);
 
     let result = threaded(&source);
 
@@ -376,9 +383,9 @@ fn test_reachable_inert_source_ownership_is_a_passage_that_keeps_its_bytes() {
         "f",
         1,
         vec![
-            block(1, vec![_jump(1, 5)], vec![5]),
-            block(5, vec![Arc::clone(&owned)], vec![9]),
-            block(9, vec![_return(9)], vec![]),
+            block(1, vec![_jump(1, 5)], vec![5]).into(),
+            block(5, vec![Arc::clone(&owned)], vec![9]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
         ],
     );
 
@@ -397,12 +404,12 @@ fn test_threading_preserves_an_exact_empty_loop_header() {
         "nested",
         1,
         vec![
-            block(1, vec![_jump(1, 8)], vec![8]),
-            block(8, vec![], vec![10]),
-            block(10, vec![_compare(10), _branch(11, "je", 20)], vec![14, 20]),
-            block(14, vec![_move(14, cx()), _jump(15, 10)], vec![10]),
-            block(20, vec![_compare(20), _branch(21, "jne", 8)], vec![8, 30]),
-            block(30, vec![_return(30)], vec![]),
+            block(1, vec![_jump(1, 8)], vec![8]).into(),
+            block(8, vec![], vec![10]).into(),
+            block(10, vec![_compare(10), _branch(11, "je", 20)], vec![14, 20]).into(),
+            block(14, vec![_move(14, cx()), _jump(15, 10)], vec![10]).into(),
+            block(20, vec![_compare(20), _branch(21, "jne", 8)], vec![8, 30]).into(),
+            block(30, vec![_return(30)], vec![]).into(),
         ],
     );
     source.loop_trip_counts = vec![(8, 24), (10, 32)];
@@ -418,7 +425,7 @@ fn test_threading_preserves_an_exact_empty_loop_header() {
 /// `for (;;);` -- following jumps must not go round forever.
 #[test]
 fn test_a_block_that_jumps_to_itself_stays() {
-    assert_eq!(_printed(vec![block(1, vec![_jump(1, 1)], vec![1])]), ["L0_1:", "jmp L0_1"]);
+    assert_eq!(_printed(vec![block(1, vec![_jump(1, 1)], vec![1]).into()]), ["L0_1:", "jmp L0_1"]);
 }
 
 fn two_zero_tails(inserted: bool) -> LirBody {
@@ -427,10 +434,10 @@ fn two_zero_tails(inserted: bool) -> LirBody {
         "f",
         1,
         vec![
-            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]),
-            block(10, vec![fresh(_move(10, imm(0))), fresh(_jump(11, 30))], vec![30]),
-            block(20, vec![fresh(_move(20, imm(0))), fresh(_jump(21, 30))], vec![30]),
-            block(30, vec![_return(30)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![fresh(_move(10, imm(0))), fresh(_jump(11, 30))], vec![30]).into(),
+            block(20, vec![fresh(_move(20, imm(0))), fresh(_jump(21, 30))], vec![30]).into(),
+            block(30, vec![_return(30)], vec![]).into(),
         ],
     )
 }
@@ -457,10 +464,10 @@ fn test_merged_tails_share_their_values() {
         "f",
         1,
         vec![
-            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]),
-            block(10, vec![named(_move(10, imm(0)), 1), _inserted(_jump(11, 30))], vec![30]),
-            block(20, vec![named(_move(20, imm(0)), 2), _inserted(_jump(21, 30))], vec![30]),
-            block(30, vec![push, _return(31)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![named(_move(10, imm(0)), 1), _inserted(_jump(11, 30))], vec![30]).into(),
+            block(20, vec![named(_move(20, imm(0)), 2), _inserted(_jump(21, 30))], vec![30]).into(),
+            block(30, vec![push, _return(31)], vec![]).into(),
         ],
     );
     let result = merged(&placed(&source).unwrap()).unwrap();
@@ -521,10 +528,10 @@ fn test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() {
             "f",
             1,
             vec![
-                block(1, entry, vec![10]),
-                block(10, looped, vec![30, 20]),
-                block(20, vec![_jump(20, 10)], vec![10]),
-                block(30, vec![_return(30)], vec![]),
+                block(1, entry, vec![10]).into(),
+                block(10, looped, vec![30, 20]).into(),
+                block(20, vec![_jump(20, 10)], vec![10]).into(),
+                block(30, vec![_return(30)], vec![]).into(),
             ],
         );
         for (to, probability) in [(20, 124.0 / 128.0), (30, 4.0 / 128.0)] {
@@ -551,10 +558,10 @@ fn test_byte_neutral_return_duplication_removes_a_join_jump() {
         "choose",
         1,
         vec![
-            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]),
-            block(10, vec![_move(10, imm(8))], vec![30]),
-            block(30, vec![_inserted(_return(30))], vec![]),
-            block(20, vec![_move(20, imm(10)), _inserted(_jump(21, 30))], vec![30]),
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, imm(8))], vec![30]).into(),
+            block(30, vec![_inserted(_return(30))], vec![]).into(),
+            block(20, vec![_move(20, imm(10)), _inserted(_jump(21, 30))], vec![30]).into(),
         ],
     );
 
@@ -575,10 +582,10 @@ fn test_return_duplication_rejects_growth_and_source_owned_tails() {
             "f",
             1,
             vec![
-                block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]),
-                block(10, vec![_move(10, ax())], vec![30]),
-                block(30, tail, vec![]),
-                block(20, vec![_move(20, bx()), _inserted(_jump(21, 30))], vec![30]),
+                block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+                block(10, vec![_move(10, ax())], vec![30]).into(),
+                block(30, tail, vec![]).into(),
+                block(20, vec![_move(20, bx()), _inserted(_jump(21, 30))], vec![30]).into(),
             ],
         )
     };
@@ -599,10 +606,10 @@ fn test_loop_test_is_placed_after_its_latch() {
         "f",
         1,
         vec![
-            block(1, vec![_jump(1, 8)], vec![8]),
-            block(4, vec![_compare(4), _branch(5, "je", 23)], vec![23, 8]),
-            block(8, vec![_move(8, cx()), _jump(9, 4)], vec![4]),
-            block(23, vec![_return(23)], vec![]),
+            block(1, vec![_jump(1, 8)], vec![8]).into(),
+            block(4, vec![_compare(4), _branch(5, "je", 23)], vec![23, 8]).into(),
+            block(8, vec![_move(8, cx()), _jump(9, 4)], vec![4]).into(),
+            block(23, vec![_return(23)], vec![]).into(),
         ],
     );
     assert_eq!(
@@ -618,10 +625,10 @@ fn test_loop_not_known_to_run_is_entered_at_its_test_placed_last() {
         "f",
         1,
         vec![
-            block(1, vec![_move(1, cx())], vec![3]),
-            block(3, vec![_compare(3), _branch(4, "jge", 17)], vec![17, 8]),
-            block(8, vec![_move(8, bx()), _jump(9, 3)], vec![3]),
-            block(17, vec![_return(17)], vec![]),
+            block(1, vec![_move(1, cx())], vec![3]).into(),
+            block(3, vec![_compare(3), _branch(4, "jge", 17)], vec![17, 8]).into(),
+            block(8, vec![_move(8, bx()), _jump(9, 3)], vec![3]).into(),
+            block(17, vec![_return(17)], vec![]).into(),
         ],
     );
     assert_eq!(
@@ -638,11 +645,11 @@ fn test_loop_test_is_followed_by_the_block_it_leaves_for() {
         "f",
         1,
         vec![
-            block(1, vec![_move(1, cx())], vec![3]),
-            block(3, vec![_compare(3), _branch(4, "jge", 20)], vec![20, 8]),
-            block(8, vec![_move(8, bx()), _jump(9, 3)], vec![3]),
-            block(12, vec![_return(12)], vec![]),
-            block(20, vec![_move(20, cx()), _jump(21, 12)], vec![12]),
+            block(1, vec![_move(1, cx())], vec![3]).into(),
+            block(3, vec![_compare(3), _branch(4, "jge", 20)], vec![20, 8]).into(),
+            block(8, vec![_move(8, bx()), _jump(9, 3)], vec![3]).into(),
+            block(12, vec![_return(12)], vec![]).into(),
+            block(20, vec![_move(20, cx()), _jump(21, 12)], vec![12]).into(),
         ],
     );
     assert_eq!(
@@ -671,12 +678,12 @@ fn test_loop_trace_is_kept_before_its_exit() {
         "f",
         1,
         vec![
-            block(1, vec![_move(1, cx()), _jump(2, 12)], vec![12]),
-            block(12, vec![_compare(12), _branch(13, "jge", 73)], vec![73, 16]),
-            block(16, vec![_compare(16), _branch(17, "jge", 68)], vec![68, 57]),
-            block(57, vec![_compare(57), _branch(58, "jne", 68)], vec![68, 73]),
-            block(68, vec![_move(68, bx()), _jump(69, 12)], vec![12]),
-            block(73, vec![_return(73)], vec![]),
+            block(1, vec![_move(1, cx()), _jump(2, 12)], vec![12]).into(),
+            block(12, vec![_compare(12), _branch(13, "jge", 73)], vec![73, 16]).into(),
+            block(16, vec![_compare(16), _branch(17, "jge", 68)], vec![68, 57]).into(),
+            block(57, vec![_compare(57), _branch(58, "jne", 68)], vec![68, 73]).into(),
+            block(68, vec![_move(68, bx()), _jump(69, 12)], vec![12]).into(),
+            block(73, vec![_return(73)], vec![]).into(),
         ],
     );
     let printed = inner(listed(threaded(&placed(&source).unwrap()), "_f"));
@@ -692,10 +699,10 @@ fn weighted_diamond(hot: f64) -> LirBody {
         "f",
         1,
         vec![
-            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]),
-            block(10, vec![_move(10, imm(1)), _jump(11, 30)], vec![30]),
-            block(20, vec![_move(20, imm(2)), _jump(21, 30)], vec![30]),
-            block(30, vec![_return(30)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, imm(1)), _jump(11, 30)], vec![30]).into(),
+            block(20, vec![_move(20, imm(2)), _jump(21, 30)], vec![30]).into(),
+            block(30, vec![_return(30)], vec![]).into(),
         ],
     );
     let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
@@ -769,11 +776,11 @@ fn entered_at_its_test(
         "f",
         1,
         vec![
-            block(1, vec![_move(1, imm(0)), _jump(2, 30)], vec![30]),
-            block(10, body_ends, body_succ),
-            block(30, vec![_compare(30), _branch(31, "jne", 10)], vec![10, 40]),
-            block(40, vec![_return(40)], vec![]),
-            block(50, vec![_return(50)], vec![]),
+            block(1, vec![_move(1, imm(0)), _jump(2, 30)], vec![30]).into(),
+            block(10, body_ends, body_succ).into(),
+            block(30, vec![_compare(30), _branch(31, "jne", 10)], vec![10, 40]).into(),
+            block(40, vec![_return(40)], vec![]).into(),
+            block(50, vec![_return(50)], vec![]).into(),
         ],
     );
     let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
@@ -835,11 +842,11 @@ fn test_a_copy_never_makes_a_second_entry_into_a_loop() {
         "f",
         1,
         vec![
-            block(1, vec![_compare(1), _branch(2, "je", 30)], vec![30, 5]),
-            block(5, vec![_move(5, imm(2)), _jump(6, 30)], vec![30]),
-            block(10, vec![_move(10, imm(1))], vec![30]),
-            block(30, vec![_compare(30), _branch(31, "jne", 10)], vec![10, 40]),
-            block(40, vec![_return(40)], vec![]),
+            block(1, vec![_compare(1), _branch(2, "je", 30)], vec![30, 5]).into(),
+            block(5, vec![_move(5, imm(2)), _jump(6, 30)], vec![30]).into(),
+            block(10, vec![_move(10, imm(1))], vec![30]).into(),
+            block(30, vec![_compare(30), _branch(31, "jne", 10)], vec![10, 40]).into(),
+            block(40, vec![_return(40)], vec![]).into(),
         ],
     );
     let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
@@ -862,12 +869,12 @@ fn test_a_copy_from_an_implied_edge_keeps_every_blocks_frequency() {
         "f",
         1,
         vec![
-            block(1, vec![_move(1, imm(0))], vec![390]),
-            block(390, vec![_move(390, imm(1)), _branch(391, "jne", 390), _jump(392, 187)], vec![390, 187]),
-            block(40, vec![_return(40)], vec![]),
-            block(187, vec![_compare(187), _branch(188, "je", 190)], vec![190, 428]),
-            block(428, vec![_return(428)], vec![]),
-            block(190, vec![_return(190)], vec![]),
+            block(1, vec![_move(1, imm(0))], vec![390]).into(),
+            block(390, vec![_move(390, imm(1)), _branch(391, "jne", 390), _jump(392, 187)], vec![390, 187]).into(),
+            block(40, vec![_return(40)], vec![]).into(),
+            block(187, vec![_compare(187), _branch(188, "je", 190)], vec![190, 428]).into(),
+            block(428, vec![_return(428)], vec![]).into(),
+            block(190, vec![_return(190)], vec![]).into(),
         ],
     );
     let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
@@ -903,10 +910,10 @@ fn test_threading_a_split_loop_back_keeps_its_odds() {
         "f",
         1,
         vec![
-            block(1, vec![_move(1, imm(0))], vec![42]),
-            block(42, vec![_move(42, imm(1)), _branch(43, "jne", 50)], vec![50, 60]),
-            block(60, vec![_return(60)], vec![]),
-            block(50, vec![_jump(50, 42)], vec![42]),
+            block(1, vec![_move(1, imm(0))], vec![42]).into(),
+            block(42, vec![_move(42, imm(1)), _branch(43, "jne", 50)], vec![50, 60]).into(),
+            block(60, vec![_return(60)], vec![]).into(),
+            block(50, vec![_jump(50, 42)], vec![42]).into(),
         ],
     );
     let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
@@ -945,7 +952,7 @@ fn test_a_loops_proven_test_is_not_copied_into_a_loop_inside_it() {
 #[test]
 fn test_threading_a_long_run_of_jumps_does_not_copy_the_body_for_each() {
     let cloned = |n: i64| {
-        let blocks: Vec<LirBlock> = (0..n)
+        let blocks: Vec<Block> = (0..n)
             .map(|at| block(at, vec![_move(at * 2, imm(at)), _jump(at * 2 + 1, at + 1)], vec![at + 1]))
             .chain([block(n, vec![_return(n * 2)], vec![])])
             .collect();
@@ -983,9 +990,13 @@ fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
         "f",
         1,
         vec![
-            LirBlock { succ: vec![2, 3], ..LirBlock::new(1, vec![_compare(1), _branch(2, "jne", 2), _jump(3, 3)]) },
-            LirBlock { succ: vec![], ..LirBlock::new(2, vec![_return(4)]) },
-            LirBlock { succ: vec![], ..LirBlock::new(3, vec![_return(5)]) },
+            LirBlock {
+                succ: vec![2, 3].into(),
+                ..LirBlock::new(1, vec![_compare(1), _branch(2, "jne", 2), _jump(3, 3)])
+            }
+            .into(),
+            LirBlock { succ: vec![].into(), ..LirBlock::new(2, vec![_return(4)]) }.into(),
+            LirBlock { succ: vec![].into(), ..LirBlock::new(3, vec![_return(5)]) }.into(),
         ],
         IndexMap::default(),
         IndexMap::default(),
@@ -1010,12 +1021,13 @@ fn test_a_three_way_block_keeps_its_jump() {
         1,
         vec![
             LirBlock {
-                succ: vec![4, 2, 3],
+                succ: vec![4, 2, 3].into(),
                 ..LirBlock::new(1, vec![_compare(1), _branch(2, "je", 4), _branch(3, "jne", 2), _jump(4, 3)])
-            },
-            LirBlock { succ: vec![], ..LirBlock::new(2, vec![_return(5)]) },
-            LirBlock { succ: vec![], ..LirBlock::new(3, vec![_return(6)]) },
-            LirBlock { succ: vec![], ..LirBlock::new(4, vec![_return(7)]) },
+            }
+            .into(),
+            LirBlock { succ: vec![].into(), ..LirBlock::new(2, vec![_return(5)]) }.into(),
+            LirBlock { succ: vec![].into(), ..LirBlock::new(3, vec![_return(6)]) }.into(),
+            LirBlock { succ: vec![].into(), ..LirBlock::new(4, vec![_return(7)]) }.into(),
         ],
         IndexMap::default(),
         IndexMap::default(),
@@ -1031,7 +1043,7 @@ fn test_a_three_way_block_keeps_its_jump() {
 #[test]
 fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_times() {
     let count: i64 = 200;
-    let mut blocks: Vec<LirBlock> = (0..count)
+    let mut blocks: Vec<Block> = (0..count)
         .map(|at| {
             block(
                 at * 0x10,
@@ -1040,7 +1052,7 @@ fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_tim
             )
         })
         .collect();
-    blocks.push(block(count * 0x10, vec![_return(count * 0x10)], Vec::new()));
+    blocks.push(block(count * 0x10, vec![_return(count * 0x10)], Vec::new()).into());
     let source = body("f", 0, blocks);
     let result = threaded(&source);
     let jumps = result
@@ -1079,10 +1091,10 @@ fn test_a_tail_is_not_copied_over_the_likelier_way_of_the_branch_before_its_jump
             "f",
             1,
             vec![
-                block(1, vec![_move(1, imm(0))], vec![10]),
-                block(10, vec![_move(10, cx())], vec![20]),
-                block(20, vec![_compare(20), _branch(21, "jne", 10), _inserted(_jump(22, 30))], vec![10, 30]),
-                block(30, vec![_inserted(_return(30))], vec![]),
+                block(1, vec![_move(1, imm(0))], vec![10]).into(),
+                block(10, vec![_move(10, cx())], vec![20]).into(),
+                block(20, vec![_compare(20), _branch(21, "jne", 10), _inserted(_jump(22, 30))], vec![10, 30]).into(),
+                block(30, vec![_inserted(_return(30))], vec![]).into(),
             ],
         ),
         &[(20, 10, 31.0 / 32.0), (20, 30, 1.0 / 32.0)],
@@ -1101,10 +1113,10 @@ fn test_a_tail_is_copied_where_the_jump_is_the_likelier_way() {
                 "f",
                 1,
                 vec![
-                    block(1, vec![_compare(1), _branch(2, "je", 10), _inserted(_jump(3, 30))], vec![10, 30]),
-                    block(10, vec![_move(10, cx()), _jump(11, 40)], vec![40]),
-                    block(30, vec![_inserted(_return(30))], vec![]),
-                    block(40, vec![_return(40)], vec![]),
+                    block(1, vec![_compare(1), _branch(2, "je", 10), _inserted(_jump(3, 30))], vec![10, 30]).into(),
+                    block(10, vec![_move(10, cx()), _jump(11, 40)], vec![40]).into(),
+                    block(30, vec![_inserted(_return(30))], vec![]).into(),
+                    block(40, vec![_return(40)], vec![]).into(),
                 ],
             ),
             &[(1, 10, branch), (1, 30, 1.0 - branch)],
@@ -1134,7 +1146,7 @@ fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
             state % most
         };
         let count = 3 + next(7) as usize;
-        let mut blocks: Vec<LirBlock> = Vec::new();
+        let mut blocks: Vec<Block> = Vec::new();
         for at in 0..count as i64 {
             let mut insns = Vec::new();
             for step in 0..next(5) {
@@ -1149,7 +1161,7 @@ fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
             let mut block = LirBlock::new(at, insns);
             block.succ = (0..next(3)).map(|_| next(count as u64) as i64).collect();
             block.succ.dedup();
-            blocks.push(block);
+            blocks.push(block.into());
         }
         for at in 0..count {
             if next(3) == 0 {
@@ -1189,10 +1201,10 @@ fn test_a_loop_block_with_neither_way_next_branches_back_conditionally() {
         "f",
         1,
         vec![
-            block(1, vec![_move(1, imm(0))], vec![5]),
-            block(5, vec![_compare(5), _branch(6, "je", 20), _jump(7, 5)], vec![20, 5]),
-            block(10, vec![_move(10, cx()), _return(11)], vec![]),
-            block(20, vec![_return(20)], vec![]),
+            block(1, vec![_move(1, imm(0))], vec![5]).into(),
+            block(5, vec![_compare(5), _branch(6, "je", 20), _jump(7, 5)], vec![20, 5]).into(),
+            block(10, vec![_move(10, cx()), _return(11)], vec![]).into(),
+            block(20, vec![_return(20)], vec![]).into(),
         ],
     );
     // The loop goes round 31 times in 32, as isel's heuristic odds have it.
@@ -1215,10 +1227,10 @@ fn test_the_likelier_way_stays_the_conditional_jump() {
         "f",
         1,
         vec![
-            block(1, vec![_move(1, imm(0))], vec![5]),
-            block(5, vec![_compare(5), _branch(6, "jne", 5), _jump(7, 20)], vec![5, 20]),
-            block(10, vec![_move(10, cx()), _return(11)], vec![]),
-            block(20, vec![_return(20)], vec![]),
+            block(1, vec![_move(1, imm(0))], vec![5]).into(),
+            block(5, vec![_compare(5), _branch(6, "jne", 5), _jump(7, 20)], vec![5, 20]).into(),
+            block(10, vec![_move(10, cx()), _return(11)], vec![]).into(),
+            block(20, vec![_return(20)], vec![]).into(),
         ],
     );
     let certain = crate::model::lir::BlockOdds::CERTAIN;
@@ -1251,10 +1263,10 @@ fn test_a_table_entry_for_a_block_that_only_jumps_goes_to_its_target() {
         "f",
         1,
         vec![
-            block(1, vec![table_jump], vec![2, 3]),
-            block(2, vec![_jump(2, 4)], vec![4]),
-            block(3, vec![_move(3, cx()), _return(4)], vec![]),
-            block(4, vec![_return(5)], vec![]),
+            block(1, vec![table_jump], vec![2, 3]).into(),
+            block(2, vec![_jump(2, 4)], vec![4]).into(),
+            block(3, vec![_move(3, cx()), _return(4)], vec![]).into(),
+            block(4, vec![_return(5)], vec![]).into(),
         ],
     ));
     let first = &result.blocks[0];

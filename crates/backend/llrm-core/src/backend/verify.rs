@@ -56,7 +56,7 @@ use llrm_lir::registers::RegId;
 
 use crate::backend::peephole::is_frame_base;
 use crate::model::ir::{self, Loc, Operation};
-use crate::model::lir::{LirBlock, LirBody};
+use crate::model::lir::{Block, LirBlock, LirBody};
 
 /// A machine phase produced LIR that violates an established invariant.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -163,7 +163,7 @@ fn _slots(body: &LirBody) -> Vec<String> {
 /// The entry and successors exist; unreachable work is rejected.
 fn _blocks(body: &LirBody) -> Vec<String> {
     let mut out = vec![];
-    let at_of: BTreeMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let at_of: BTreeMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     if !at_of.contains_key(&body.entry) {
         out.push(format!("the entry {:#06x} is not one of this body's blocks", body.entry));
         return out;
@@ -420,7 +420,7 @@ mod tests {
 
     fn body(
         name: &str,
-        blocks: Vec<LirBlock>,
+        blocks: Vec<Block>,
     ) -> LirBody {
         LirBody::new(name, 1, blocks, IndexMap::default(), IndexMap::default())
     }
@@ -436,7 +436,7 @@ mod tests {
             vec![2],
             vec![1],
         );
-        let said = verify(&body("undefined", vec![LirBlock::new(1, vec![Arc::new(stale)])]), false);
+        let said = verify(&body("undefined", vec![LirBlock::new(1, vec![Arc::new(stale)]).into()]), false);
         assert!(
             said.iter().any(|complaint| complaint.contains("value#1 is read but never defined or supplied")),
             "{said:?}"
@@ -452,7 +452,7 @@ mod tests {
             vec![],
             vec![1],
         );
-        let mut body = body("input", vec![LirBlock::new(1, vec![Arc::new(incoming)])]);
+        let mut body = body("input", vec![LirBlock::new(1, vec![Arc::new(incoming)]).into()]);
         body.inputs = BTreeSet::from([1]);
         assert!(verify(&body, false).is_empty());
     }
@@ -478,15 +478,15 @@ mod tests {
         };
         let blocks = |table: Vec<i64>| {
             vec![
-                LirBlock { succ: vec![2, 3], ..LirBlock::new(1, vec![jump(table)]) },
+                LirBlock { succ: vec![2, 3].into(), ..LirBlock::new(1, vec![jump(table)]) },
                 LirBlock::new(2, vec![ret()]),
                 LirBlock::new(3, vec![ret()]),
             ]
         };
-        let mut body = body("table", blocks(vec![2, 3, 2]));
+        let mut body = body("table", crate::model::lir::shared(blocks(vec![2, 3, 2])));
         body.inputs = BTreeSet::from([1]);
         assert!(verify(&body, false).is_empty(), "{:?}", verify(&body, false));
-        let mut stale = self::body("stale", blocks(vec![2, 9, 2]));
+        let mut stale = self::body("stale", crate::model::lir::shared(blocks(vec![2, 9, 2])));
         stale.inputs = BTreeSet::from([1]);
         let said = verify(&stale, false);
         assert!(said.iter().any(|complaint| complaint.contains("table jump lists")), "{said:?}");
@@ -496,7 +496,10 @@ mod tests {
     fn test_unreachable_byte_ownership_markers_are_not_executable_blocks() {
         let marker =
             Insn::new(2, Some((2, 4)), Some(semantics(Operation::Nothing, "", vec![], vec![])), vec![], vec![]);
-        let body = body("dead-ownership", vec![LirBlock::new(1, vec![]), LirBlock::new(2, vec![Arc::new(marker)])]);
+        let body = body(
+            "dead-ownership",
+            vec![LirBlock::new(1, vec![]).into(), LirBlock::new(2, vec![Arc::new(marker)]).into()],
+        );
         assert!(verify(&body, false).is_empty());
     }
 
@@ -505,7 +508,8 @@ mod tests {
         let push =
             semantics(Operation::Push, "push", vec![], vec![Loc::Imm(ir::Imm { value: 1, width: 2, address: None })]);
         let work = Insn::new(2, Some((2, 4)), Some(push), vec![], vec![]);
-        let body = body("dead-work", vec![LirBlock::new(1, vec![]), LirBlock::new(2, vec![Arc::new(work)])]);
+        let body =
+            body("dead-work", vec![LirBlock::new(1, vec![]).into(), LirBlock::new(2, vec![Arc::new(work)]).into()]);
         assert!(verify(&body, false).iter().any(|complaint| complaint.contains("block 0x0002 is not reachable")));
     }
 
@@ -520,7 +524,7 @@ mod tests {
             let what = semantics(Operation::Push, "push", vec![], vec![source]);
             let mut body = body(
                 "segments",
-                vec![LirBlock::new(1, vec![Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![], uses))])],
+                vec![LirBlock::new(1, vec![Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![], uses))]).into()],
             );
             body.inputs = BTreeSet::from([1]);
             body
@@ -558,7 +562,7 @@ mod tests {
             Insn::new(2, Some((2, 4)), Some(what), vec![], vec![])
         };
         let named = |addr: ir::Addr, slotted: bool| {
-            let mut made = body("slots", vec![LirBlock::new(1, vec![Arc::new(store(addr))])]);
+            let mut made = body("slots", vec![LirBlock::new(1, vec![Arc::new(store(addr))]).into()]);
             made.slotted = slotted;
             verify(&made, false)
         };

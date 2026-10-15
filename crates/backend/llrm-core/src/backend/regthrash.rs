@@ -91,7 +91,7 @@ use crate::backend::liveness;
 use crate::backend::peephole::{_lanes, _register_effects, _register_operand, DeadAfter, Lanes, id};
 use crate::backend::select;
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 
 // Enough to settle. Each pass makes at most one rename per block, because a
 // rename changes the liveness every later candidate is judged against, and
@@ -105,7 +105,7 @@ pub fn thrashed(body: LirBody) -> LirBody {
     // depend on one another: each is renamed to a fixed point of its own.
     let exits = liveness::dead_at_exit(&body);
     let mut changed = false;
-    let blocks: Vec<LirBlock> = body
+    let blocks: Vec<Block> = body
         .blocks
         .iter()
         .map(|block| match _thrash_block(regs, body.bits, block, exits[&block.at]) {
@@ -172,7 +172,7 @@ fn _thrash_block(
     bits: u32,
     block: &LirBlock,
     dead: Lanes,
-) -> Option<LirBlock> {
+) -> Option<Block> {
     let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
     let exit = dead;
     let mut after = _dead_after_by(regs, bits, &insns, exit);
@@ -409,7 +409,7 @@ mod tests {
     use super::{_plain_copy, ROUNDS, thrashed};
     use crate::backend::{select, verify};
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
-    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::HashMap;
     use crate::support::hash::IndexMap;
 
@@ -505,8 +505,8 @@ mod tests {
                 .chain(killed)
                 .collect(),
         );
-        let first = LirBlock { succ: vec![1], ..LirBlock::new(0, insns.into_iter().map(Arc::new).collect()) };
-        LirBody::new("thrash", 0, vec![first, after], IndexMap::default(), IndexMap::default())
+        let first = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, insns.into_iter().map(Arc::new).collect()) };
+        LirBody::new("thrash", 0, vec![first.into(), after.into()], IndexMap::default(), IndexMap::default())
     }
 
     #[test]
@@ -570,7 +570,7 @@ mod tests {
         let (ecx, edx) = (_reg(RegId::ECX), _reg(RegId::EDX));
         let count = ROUNDS as i64 + 1;
         let tail = _body(vec![], RegId::EDX).blocks[1].clone();
-        let mut blocks: Vec<LirBlock> = (0..count)
+        let mut blocks: Vec<Block> = (0..count)
             .map(|at| {
                 let insns = vec![
                     Arc::new(_insn(
@@ -583,7 +583,7 @@ mod tests {
                     Arc::new(_insn(100 * at + 1, "mov", Operation::Move, vec![edx.clone()], vec![ecx.clone()])),
                 ];
                 LirBlock {
-                    succ: vec![if at + 1 == count { 1 } else { at + 2 }],
+                    succ: vec![if at + 1 == count { 1 } else { at + 2 }].into(),
                     ..LirBlock::new(if at == 0 { 0 } else { at + 1 }, insns)
                 }
             })
@@ -618,8 +618,10 @@ mod tests {
         let following = body.blocks[1].clone();
         let mut insns = following.insns.to_vec();
         insns[0] = Arc::new(Insn { uses: vec![2], ..(*insns[0]).clone() });
-        let body =
-            LirBody { blocks: vec![body.blocks[0].clone(), LirBlock { insns: insns.into(), ..following }], ..body };
+        let body = LirBody {
+            blocks: vec![body.blocks[0].clone(), LirBlock { insns: insns.into(), ..following.into_inner() }.into()],
+            ..body
+        };
 
         let result = thrashed(body);
 

@@ -314,12 +314,21 @@ fn body(
 
     let block = |at: i64, insns: Vec<Insn>, succ: Vec<i64>| {
         let mut block = LirBlock::new(at, insns.into_iter().map(Arc::new).collect());
-        block.succ = succ;
+        block.succ = succ.into();
         block
     };
     let blocks =
         vec![block(ENTRY, entry, vec![LOOP]), block(LOOP, inside, vec![LOOP, EXIT]), block(EXIT, exit, vec![])];
-    (LirBody::new(format!("fuzz{seed}"), ENTRY, blocks, IndexMap::default(), IndexMap::default()), build.notes)
+    (
+        LirBody::new(
+            format!("fuzz{seed}"),
+            ENTRY,
+            crate::model::lir::shared(blocks),
+            IndexMap::default(),
+            IndexMap::default(),
+        ),
+        build.notes,
+    )
 }
 
 /// `place` with every value it reads renamed by `map`.
@@ -426,8 +435,9 @@ fn in_ssa(body: &LirBody) -> LirBody {
             .iter()
             .map(|(value, result)| Phi { result: *result, incoming: vec![(ENTRY, *value), (LOOP, latch(*value))] })
             .collect(),
-        ..blocks[1].with_insns(inside)
-    };
+        ..blocks[1].with_insns(inside).into_inner()
+    }
+    .into();
     blocks[2] = blocks[2].with_insns(exit);
     body.with_blocks(blocks)
 }
@@ -1559,7 +1569,7 @@ fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_fi
         )
     };
     let blocks = vec![LirBlock::new(1, vec![Arc::new(read(1, 3, 1)), Arc::new(read(2, 4, 2))])];
-    let body = LirBody::new("f", 1, blocks, Default::default(), Default::default());
+    let body = LirBody::new("f", 1, crate::model::lir::shared(blocks), Default::default(), Default::default());
     let index = indexed(&body);
     let walked = _walked(&body, &index, &|_| true);
     assert_eq!(walked.keys().copied().collect::<Vec<_>>(), vec![4, 3, 2, 1]);
@@ -1794,7 +1804,7 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
         )
     };
     let blocks = vec![LirBlock::new(1, vec![Arc::new(define(1, 1)), Arc::new(define(2, 2)), Arc::new(load)])];
-    let pairs = LirBody::new("f", 1, blocks, Default::default(), Default::default());
+    let pairs = LirBody::new("f", 1, crate::model::lir::shared(blocks), Default::default(), Default::default());
     let live = intervals(&pairs, None);
     let masks = _masks(&pairs, &indexed(&pairs), &crate::backend::target::BUILT_IN);
     let given = classes_given(

@@ -62,7 +62,7 @@ use crate::backend::regclass;
 use crate::backend::storedhomes::may_write;
 use crate::backend::target::Segments;
 use crate::model::ir::{Loc, Mem, Operation};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Block, Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 
@@ -157,7 +157,7 @@ pub fn sunk(
     }
     let stack = |value: u32| widths.get(&value) == Some(&10);
     let mut changed = false;
-    let blocks: Vec<LirBlock> = body
+    let blocks: Vec<Block> = body
         .blocks
         .iter()
         .map(|block| {

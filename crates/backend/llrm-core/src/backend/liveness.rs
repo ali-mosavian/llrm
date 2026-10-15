@@ -50,7 +50,7 @@ use llrm_lir::registers::Regs;
 
 use crate::backend::peephole::{_branch_reads, _flag_lanes, _lanes, _moved_lanes, _register_effects, Lane, Lanes};
 use crate::model::ir::{Held, Loc, Operation, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
 pub fn _terminator(what: Option<&Semantics>) -> bool {
@@ -337,7 +337,7 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
         .iter()
         .map(|block| (block.at, block.succ.iter().copied().filter(|at| at_of.contains(at)).collect()))
         .collect();
-    let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, Lanes> = blocks.keys().map(|at| (*at, Lanes::new())).collect();
     let effects: IndexMap<i64, Vec<Option<Effect>>> =
         blocks.iter().map(|(at, block)| (*at, _effects(regs, body.bits, block))).collect();
@@ -442,7 +442,7 @@ mod tests {
     use super::live_into;
     use crate::backend::peephole::_lanes;
     use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
-    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     const AX: Reg = Reg { register: RegId::AX, width: 2 };
@@ -476,7 +476,7 @@ mod tests {
                 _insn(2, Operation::Return, "ret", vec![], vec![]),
             ],
         );
-        let body = LirBody::new("f", 1, vec![block], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("f", 1, vec![block.into()], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(regs, RegId::DX).is_disjoint(&into[&1]));
         assert!(_lanes(regs, RegId::AX).is_subset(&into[&1]));
@@ -506,9 +506,9 @@ mod tests {
             one.group = Some(1);
             Arc::new(one)
         };
-        let first = LirBlock { succ: vec![2], ..LirBlock::new(1, vec![grouped(1, bx, DX), grouped(2, AX, bx)]) };
+        let first = LirBlock { succ: vec![2].into(), ..LirBlock::new(1, vec![grouped(1, bx, DX), grouped(2, AX, bx)]) };
         let last = LirBlock::new(2, vec![_insn(3, Operation::Move, "mov", vec![Loc::Reg(cx)], vec![Loc::Reg(AX)])]);
-        let body = LirBody::new("f", 1, vec![first, last], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("f", 1, vec![first.into(), last.into()], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(regs, RegId::BX).is_subset(&into[&1]), "bx is read by `ax <- bx` before `bx <- dx` writes it");
         assert!(_lanes(regs, RegId::DX).is_subset(&into[&1]));
@@ -519,14 +519,17 @@ mod tests {
     /// register: the lanes live into the first.
     fn chain(blocks: i64) -> LirBody {
         let bx = Reg { register: RegId::BX, width: 2 };
-        let blocks: Vec<LirBlock> = (1..=blocks)
+        let blocks: Vec<Block> = (1..=blocks)
             .map(|at| {
                 let insns = if at == blocks {
                     vec![_insn(at, Operation::Move, "mov", vec![Loc::Reg(DX)], vec![Loc::Reg(AX)])]
                 } else {
                     vec![_insn(at, Operation::Move, "mov", vec![Loc::Reg(bx)], vec![Loc::Reg(DX)])]
                 };
-                LirBlock { succ: if at == blocks { vec![] } else { vec![at + 1] }, ..LirBlock::new(at, insns) }
+                LirBlock {
+                    succ: if at == blocks { vec![].into() } else { vec![at + 1].into() },
+                    ..LirBlock::new(at, insns)
+                }
             })
             .collect();
         LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default())
@@ -569,7 +572,7 @@ mod tests {
             1,
             vec![_insn(1, Operation::Move, "mov", vec![Loc::Reg(cx)], vec![Loc::Reg(AX)]), Arc::new(ret)],
         );
-        let body = LirBody::new("f", 1, vec![block], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("f", 1, vec![block.into()], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(regs, RegId::AX).is_subset(&into[&1]));
         assert!(_lanes(regs, RegId::SI).is_disjoint(&into[&1]));
