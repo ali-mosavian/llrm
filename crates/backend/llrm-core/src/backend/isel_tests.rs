@@ -1678,6 +1678,27 @@ define double @g(double %x, ptr %p) addrspace(1) {
     assert!(!on_p5.iter().any(|line| line.starts_with("fimul")), "{on_p5:?}");
 }
 
+/// d_faces `x < (float)p->w`: gcc and clang execute `ficomp word` for it, llrm
+/// `fild` and `fcomp`. The compare takes the integer load as its memory operand
+/// where the target prices `ficom` below the pair, as the arithmetic does.
+#[test]
+fn test_an_integer_load_is_a_ficom_operand_where_the_target_prices_it_below_the_pair() {
+    let text = "define i16 @f(double %x, ptr %p) addrspace(1) {
+  %v = load i16, ptr %p
+  %w = sitofp i16 %v to double
+  %c = fcmp ogt double %x, %w
+  %r = zext i1 %c to i16
+  ret i16 %r
+}
+";
+    let on_486 = listing_on("486", text, "f");
+    assert!(on_486.iter().any(|line| line.starts_with("ficom")), "{on_486:?}");
+    assert!(!on_486.iter().any(|line| line.starts_with("fild")), "{on_486:?}");
+    let on_p5 = listing_on("P5", text, "f");
+    assert!(on_p5.iter().any(|line| line.starts_with("fild word ptr")), "{on_p5:?}");
+    assert!(!on_p5.iter().any(|line| line.starts_with("ficom")), "{on_p5:?}");
+}
+
 /// A load read again is in a register, and x87 reads that.
 #[test]
 fn test_an_integer_load_read_again_is_converted_from_its_register() {

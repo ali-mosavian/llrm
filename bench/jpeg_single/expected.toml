@@ -1,50 +1,50 @@
-reason = "on top of main: x87 compare/store forms, priced fi* fold (jpeg_single bq32 -1.7% instructions, fewer code bytes); jpeg_fixed bq32 +-3 instructions: integer program, layout-dependent copy"
+reason = "a compare with an integer load nothing else reads is ficom/ficomp [m] where the target prices it below fild + fcom (486: 15 against 13+8): the nib/BASIC float rows fewer instructions and bytes; jpeg_fixed bq32 +1 instruction is integer code (layout-dependent copy)"
 blessed = "2026-10-15"
 
 [bas.O2]
-code_bytes = 5191
+code_bytes = 5189
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
 
 [bas.Os]
-code_bytes = 4832
+code_bytes = 4830
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5223
+code_bytes = 5221
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
 
 [bq16.Os]
-code_bytes = 4864
+code_bytes = 4862
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 62338002
-code_bytes = 6268
+instructions = 62116818
+code_bytes = 6266
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 63511199
-code_bytes = 5858
+instructions = 63290020
+code_bytes = 5856
 data_bytes = 29697
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 3184
+code_bytes = 3176
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 308.3791
 
 [c.Os]
-code_bytes = 2913
+code_bytes = 2905
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 310.1458

@@ -1,4 +1,4 @@
-reason = "a float loaded before a loop is read again from its cell where no trap is unmasked (not BASIC): d_faces-style loop invariants are memory operands of the argument cells, not fld+fstp qword before the loop; parity/qmove c: one more memory operand, one byte fewer"
+reason = "a compare with an integer load nothing else reads is ficom/ficomp [m] where the target prices it below fild + fcom (486: 15 against 13+8): the nib/BASIC float rows fewer instructions and bytes; jpeg_fixed bq32 +1 instruction is integer code (layout-dependent copy)"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -56,16 +56,16 @@ data_bytes = 4
 bss_bytes = 0
 
 [nib.O2]
-instructions = 119
+instructions = 117
 memory_operands = 37
-code_bytes = 425
+code_bytes = 421
 data_bytes = 16
 bss_bytes = 0
 
 [nib.Os]
-instructions = 115
+instructions = 113
 memory_operands = 37
-code_bytes = 363
+code_bytes = 359
 data_bytes = 16
 bss_bytes = 0
 

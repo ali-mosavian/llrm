@@ -105,6 +105,9 @@ pub fn classify(
     if matches!(mnem, "fiadd" | "fisub" | "fisubr") {
         return "x87_add_i";
     }
+    if matches!(mnem, "ficom" | "ficomp") {
+        return "x87_cmp_i";
+    }
     if mnem == "fimul" {
         return "x87_mul_i";
     }
@@ -348,6 +351,7 @@ pub fn score(rows: &[Row]) -> (Totals, Vec<Detail>) {
                 | "x87_add_i"
                 | "x87_mul_i"
                 | "x87_div_i"
+                | "x87_cmp_i"
         ) {
             srcs.insert("x87-stack".to_owned());
             dsts.insert("x87-stack".to_owned());

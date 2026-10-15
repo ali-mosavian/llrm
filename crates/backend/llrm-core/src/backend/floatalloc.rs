@@ -744,15 +744,22 @@ impl _Stack {
         cell: Loc,
     ) -> Result<(), Raised> {
         self.top(left)?;
-        if self.survives(left) {
-            self.duplicate(left)?;
-        }
         let what = self.one().what.clone().expect("a floating instruction has semantics");
-        // Fused from a home load, it is already `fcomp` or, over an integer
-        // cell, `ficomp`.
-        let name = if name_is(&what, "ficomp") { "ficomp" } else { "fcomp" };
+        // `fcom`/`fcomp` or, over an integer cell, `ficom`/`ficomp`, however it
+        // was written: the popping form where the left dies, else the
+        // one that leaves it, not a copy of it.
+        let integer = what.name.as_deref().is_some_and(|name| name.starts_with("fi"));
+        let lives = self.survives(left);
+        let name = match (integer, lives) {
+            (true, true) => "ficom",
+            (true, false) => "ficomp",
+            (false, true) => "fcom",
+            (false, false) => "fcomp",
+        };
         self.emit(Semantics { name: Some(name.to_owned()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
-        self.values.remove(0);
+        if !lives {
+            self.values.remove(0);
+        }
         self.status()
     }
 

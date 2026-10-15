@@ -24,7 +24,9 @@
 //!   the pair), per operation by the cost keys `x87_load_i`, `x87_add_i`,
 //!   `x87_mul_i` and `x87_div_i`. Where both operands qualify, the fold that
 //!   saves more clocks is taken: gcc and clang fold the integer load the same
-//!   way (`fimul`, `ficomp`).
+//!   way (`fimul`, `ficomp`). A compare whose right operand is such a load is
+//!   `ficom [m]` under the same rule, key `x87_cmp_i`; `floatalloc` emits the
+//!   popping `ficomp` where the left dies.
 //!
 //! Where the loaded cell is the left operand the operation is reversed (`fsub`
 //! becomes `fsubr`, `fdiv` becomes `fdivr`). The arithmetic then reads the
@@ -145,16 +147,14 @@ pub fn folded(
         let mut at = 0;
         while at < insns.len() {
             let one = Arc::clone(&insns[at]);
-            let Some(what) = one.what.as_ref().filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)
-            else {
-                at += 1;
-                continue;
-            };
-            let Some((name, left, right)) = _two_values(Some(what)) else {
-                at += 1;
-                continue;
-            };
-            if left.value == right.value {
+            let compared = _compare_with_integer(&insns, at, &uses, cpu);
+            let arithmetic = one
+                .what
+                .as_ref()
+                .filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)
+                .and_then(|what| _two_values(Some(what)))
+                .filter(|(_, left, right)| left.value != right.value);
+            if compared.is_none() && arithmetic.is_none() {
                 at += 1;
                 continue;
             }
@@ -163,52 +163,34 @@ pub fn folded(
             // Each operand that qualifies, and what folding it saves in clocks;
             // the dearest to leave unfolded goes, the right operand
             // first where they tie.
-            let found = [(right.value, false, left), (left.value, true, right)]
-                .into_iter()
-                .filter_map(|(value, cell_is_left, other)| {
+            let found = arithmetic
+                .iter()
+                .flat_map(|(name, left, right)| {
+                    [(name, right.value, false, *left, *right), (name, left.value, true, *right, *left)]
+                })
+                .filter_map(|(name, value, cell_is_left, other, _)| {
                     if uses.get(&value) != Some(&1) {
                         return None;
                     }
-                    let home = (0..at)
-                        .rev()
-                        .find(
-                            |&back| insns[back].what.as_ref().is_some_and(|made| {
-                                made.dests.iter().any(|d| matches!(d, Loc::Held(held) if held.value == value))
-                            }),
-                        )?;
+                    let home = _home_of(&insns, at, value)?;
                     let load = &insns[home];
-                    if !_loads_memory(load.what.as_ref())
-                        || load.volatile
-                        || !load.clobbers.is_empty()
-                        || load.group.is_some()
-                    {
-                        return None;
-                    }
-                    let cell = cell_of(load);
-                    if insns[home + 1..at].iter().any(|between| {
-                        between.volatile
-                            || between.call.is_some()
-                            || may_write(between, cell, false)
-                            || between.what.as_ref().is_none_or(|w| {
-                                matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape)
-                            })
-                    }) {
-                        return None;
-                    }
-                    let (operation, saved) = memory_form(&name, cell_is_left, load, cpu)?;
-                    Some((saved, (home, value, operation, other)))
+                    let (operation, saved) = memory_form(name, cell_is_left, load, cpu)?;
+                    let what = one.what.as_ref().expect("an arithmetic instruction");
+                    let cell = Loc::Mem(cell_of(load).clone());
+                    let fused =
+                        semantics(Operation::FloatArith, &operation, what.dests.clone(), vec![Loc::Held(other), cell]);
+                    Some((saved, (home, value, fused)))
                 })
                 .reduce(|best, next| if next.0 > best.0 { next } else { best })
-                .map(|(_, one)| one);
-            let Some((home, value, operation, other)) = found else {
+                .map(|(_, one)| one)
+                .or(compared);
+            let Some((home, value, fused_what)) = found else {
                 at += 1;
                 continue;
             };
             let load = Arc::clone(&insns[home]);
-            let cell = Loc::Mem(cell_of(&load).clone());
             let mut fused = (*one).clone();
-            fused.what =
-                Some(semantics(Operation::FloatArith, &operation, what.dests.clone(), vec![Loc::Held(other), cell]));
+            fused.what = Some(fused_what);
             let foreign =
                 |values: &[u32]| values.iter().copied().filter(|one| !floating.contains(one)).collect::<Vec<u32>>();
             fused.uses = one
@@ -240,6 +222,73 @@ pub fn folded(
         blocks.push(block.with_insns(insns));
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+/// The load that defines `value`, if it may be read again at `at` as a memory
+/// operand: the nearest definition in the block, a plain load of a cell, not
+/// volatile, with no clobbers and not part of a group, and nothing between it
+/// and `at` volatile, a call, a barrier or an escape, or able to write the
+/// cell.
+fn _home_of(
+    insns: &[Arc<Insn>],
+    at: usize,
+    value: u32,
+) -> Option<usize> {
+    let home = (0..at)
+        .rev()
+        .find(
+            |&back| insns[back]
+                .what
+                .as_ref()
+                .is_some_and(|made| made.dests.iter().any(|d| matches!(d, Loc::Held(held) if held.value == value))),
+        )?;
+    let load = &insns[home];
+    if !_loads_memory(load.what.as_ref()) || load.volatile || !load.clobbers.is_empty() || load.group.is_some() {
+        return None;
+    }
+    let cell = cell_of(load);
+    if insns[home + 1..at].iter().any(|between| {
+        between.volatile
+            || between.call.is_some()
+            || may_write(between, cell, false)
+            || between
+                .what
+                .as_ref()
+                .is_none_or(|w| matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape))
+    }) {
+        return None;
+    }
+    Some(home)
+}
+
+/// A compare of a value with an integer load nothing else reads is `ficom [m]`
+/// where the target prices it below the `fild` and the compare it replaces:
+/// gcc's and clang's `ficomp`. The cell is the right operand, as `fcom st, [m]`
+/// has it.
+fn _compare_with_integer(
+    insns: &[Arc<Insn>],
+    at: usize,
+    uses: &HashMap<u32, usize>,
+    cpu: &crate::backend::cpu::Profile,
+) -> Option<(usize, u32, crate::model::ir::Semantics)> {
+    let what = insns[at].what.as_ref().filter(|what| what.op == Operation::Compare && what.dests.is_empty())?;
+    let [Loc::Held(left), Loc::Held(right)] = what.sources.as_slice() else { return None };
+    if left.value == right.value || uses.get(&right.value) != Some(&1) {
+        return None;
+    }
+    let home = _home_of(insns, at, right.value)?;
+    let load = &insns[home];
+    if !name_is(load.what.as_ref()?, "fild") || !matches!(cell_of(load).width, 2 | 4) {
+        return None;
+    }
+    let price = |key: &str| cpu.cost(key).ok();
+    if price("x87_cmp_i")? >= price("x87_load_i")? + price("x87_add")? {
+        return None;
+    }
+    let mut made = what.clone();
+    made.name = Some("ficom".to_owned());
+    made.sources = vec![Loc::Held(*left), Loc::Mem(cell_of(load).clone())];
+    Some((home, right.value, made))
 }
 
 /// The memory form of `name` reading `load`'s cell: `fadd qword ptr [m]`,

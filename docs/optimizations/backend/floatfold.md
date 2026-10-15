@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatfold.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatfold.rs sha256:f6b55712d4a80fc36c0b4604c0488cc7bd264901432b579730e2a048d3dc0b3e -->
+<!-- src: crates/backend/llrm-core/src/backend/floatfold.rs sha256:a7b2d0714f15990921b45d6a68f3736a73591551e7f511000816fb8e6a0a1711 -->
 
 # floatfold
 
@@ -29,7 +29,9 @@ then the left. An operand qualifies when:
   the pair), per operation by the cost keys `x87_load_i`, `x87_add_i`,
   `x87_mul_i` and `x87_div_i`. Where both operands qualify, the fold that
   saves more clocks is taken: gcc and clang fold the integer load the same
-  way (`fimul`, `ficomp`).
+  way (`fimul`, `ficomp`). A compare whose right operand is such a load is
+  `ficom [m]` under the same rule, key `x87_cmp_i`; `floatalloc` emits the
+  popping `ficomp` where the left dies.
 
 Where the loaded cell is the left operand the operation is reversed (`fsub`
 becomes `fsubr`, `fdiv` becomes `fdivr`). The arithmetic then reads the
