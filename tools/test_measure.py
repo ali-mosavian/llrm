@@ -491,29 +491,26 @@ def test_the_cases_regression_as_measured_fails_the_gate_at_the_size_the_gate_us
 
 
 def test_a_wait_for_a_lock_another_session_holds_says_so_in_the_log(tmp_path, monkeypatch, capsys):
-    """#1755s
-
-
-def test_a_wait_for_a_lock_another_session_holds_says_so_in_the_log(tmp_path, monkeypatch, capsys):
-    """#1755's measure sat 10 minutes on another session's build lock, silent and idle, and the gate killed it as stalled."""
-    import threading
+    """#1755's measure sat 10 minutes on another session's build lock, silent and idle, and the gate killed it as stalled. On virtual
+    time: the version with a thread releasing the lock after 0.6 s of the wall clock failed once under load (the waiter had not waited
+    long enough when the holder let go)."""
+    import fcntl
 
     monkeypatch.setattr(measure, "CACHE", tmp_path)
-    held, release = threading.Event(), threading.Event()
+    holder = open(tmp_path / "b.lock", "w")
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    now = [0.0]
 
-    def holder():
-        with measure.locked("b"):
-            held.set()
-            release.wait(5)
+    def sleep(seconds):
+        now[0] += seconds
+        if now[0] >= 150:  # the holder lets go at 150 s
+            holder.close()
 
-    thread = threading.Thread(target=holder)
-    thread.start()
-    held.wait(5)
-    threading.Timer(0.6, release.set).start()
-    with measure.locked("b", every=0.2):
+    with measure.locked("b", every=60, clock=lambda: now[0], sleep=sleep):
         pass
-    thread.join()
-    assert capsys.readouterr().out.count("measure: waiting") >= 2
+    lines = capsys.readouterr().out.splitlines()
+    assert lines and lines[0].startswith("measure: waiting 60s for the lock b") and len(lines) == 2, lines
+
 
 # The `analysis through-memory` step of joins at 2N=128 (#1755): 254.6 -> 282.0 Minstr under mimalloc, equal under the system allocator.
 STEP = "joins O2 analysis through-memory"
@@ -573,6 +570,22 @@ def test_a_row_names_the_size_it_is_at_so_2n_is_not_read_off_the_halves():
     lines, bad = measure.rises(base, now, TOL)
     assert "2N=128" in " ".join(lines) and "2N=128" in " ".join(bad), (lines, bad)
 
+
+def test_a_step_then_linear_row_is_not_a_superlinear_slope_and_a_quadratic_one_is():
+    """`live O1 peephole` read 16.2/23.4/44.9 Minstr at n=32/64/128: copyprop and regthrash ran at 32 only, so the work steps and is linear
+    from 64 on; its second difference (7.1) was called a slope. The last doubling is x1.92: linear."""
+    tol = measure.tolerances()
+    key = "live O1 lir peephole"
+    base = {key: [10.0, 23.4, 44.9, 50.0]}  # the same work from n=64; at n=32 the base ran less
+    step = {key: [16.2, 23.4, 44.9, 50.0]}
+    assert measure.step_rises(base, step, tol)[1] == [], "a step is not a slope"
+    assert measure.grown(16.2, 23.4, 44.9) == 0.0 and measure.superlinear(16.2, 23.4, 44.9) > 0
+    base_linear = {key: [10.0, 20.0, 40.0, 50.0]}
+    quadratic = {key: [10.0, 40.0, 160.0, 170.0]}
+    assert measure.step_rises(base_linear, quadratic, tol)[1], "N^2 still fails"
+    assert measure.grown(10.0, 40.0, 160.0) > 0
+    mixed = {key: [10.0, 22.0, 56.0, 60.0]}  # 20% of the work at 2N is the quadratic term: x2.5 in the last doubling
+    assert measure.step_rises(base_linear, mixed, tol)[1], "a real quadratic part is not hidden"
 
 def test_a_base_is_measured_from_a_snapshot_that_the_next_build_in_the_shared_tree_does_not_change(tmp_path, monkeypatch):
     """Train 5's measure step died on `stale binaries in .../measure-build/.../release`: another base was checked out in the shared tree

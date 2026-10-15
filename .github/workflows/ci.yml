@@ -43,6 +43,7 @@ jobs:
       base: ${{ steps.plan.outputs.base }}
       groups: ${{ steps.plan.outputs.groups }}
       any: ${{ steps.plan.outputs.any }}
+      tier: ${{ steps.plan.outputs.tier }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,6 +57,7 @@ jobs:
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "groups=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(sorted(json.load(sys.stdin)["groups"])))')" >> "$GITHUB_OUTPUT"
           echo "any=$(echo "$json" | python3 -c 'import json,sys; print(str(bool(json.load(sys.stdin)["steps"])).lower())')" >> "$GITHUB_OUTPUT"
+          echo "tier=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tier"])')" >> "$GITHUB_OUTPUT"
           python3 tools/gate/gate.py plan --base "$base" | tee -a "$GITHUB_STEP_SUMMARY"
 
   build:
@@ -135,6 +137,14 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     steps:
+      # The line `gate.py run` prints, naming the head the run is of (a pull request's head, not the merge commit CI checks out).
       - run: |
+          head="${{ github.event.pull_request.head.sha || github.sha }}"
           echo "plan=${{ needs.plan.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }}"
-          [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ]
+          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ]; then
+            line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}"
+          else
+            line="GATE ${{ needs.plan.outputs.tier }} FAIL at ${head:0:12}: plan=${{ needs.plan.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }}"
+          fi
+          echo "$line" | tee -a "$GITHUB_STEP_SUMMARY"
+          case "$line" in *" PASS at "*) ;; *) exit 1;; esac
