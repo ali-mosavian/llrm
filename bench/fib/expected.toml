@@ -1,5 +1,5 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
+blessed = "2026-10-15"
 
 [bas.O2]
 instructions = 372147
@@ -46,12 +46,11 @@ data_bytes = 21
 bss_bytes = 0
 
 [c.O2]
-instructions = 251745
-memory_operands = 0
-code_bytes = 58
+instructions = 175546
+memory_operands = 19182
+code_bytes = 299
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.3587
 
 [c.Os]
 instructions = 284582
