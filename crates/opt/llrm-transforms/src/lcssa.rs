@@ -92,6 +92,10 @@ use crate::{edges, lcssamerges};
 pub struct LoopClosedSSA;
 
 impl FunctionPass for LoopClosedSSA {
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "lcssa"
     }

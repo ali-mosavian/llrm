@@ -376,6 +376,7 @@ pub trait ProgramAnalysis: 'static {
 #[derive(Default)]
 pub struct ProgramAnalyses {
     cache: HashMap<TypeId, Rc<dyn Any>>,
+    carried: HashMap<usize, crate::passes::Carried>,
 }
 
 impl ProgramAnalyses {
@@ -394,6 +395,23 @@ impl ProgramAnalyses {
 
     pub fn cached<P: ProgramAnalysis>(&self) -> Option<Rc<P::Result>> {
         self.cache.get(&TypeId::of::<P>()).map(|one| Rc::clone(one).downcast::<P::Result>().expect("keyed by its type"))
+    }
+
+    /// What the analyses over module `at` leave for the next ones.
+    pub fn carry(
+        &mut self,
+        at: usize,
+        carried: crate::passes::Carried,
+    ) {
+        self.carried.insert(at, carried);
+    }
+
+    /// What the last analyses over module `at` left, once.
+    pub fn uncarry(
+        &mut self,
+        at: usize,
+    ) -> Option<crate::passes::Carried> {
+        self.carried.remove(&at)
     }
 
     /// Drops every result.

@@ -224,6 +224,23 @@ def smoked(sha: str) -> bool:
     return (smoke_dir() / sha).is_file()
 
 
+# The check of tests/tracked_build_products.rs without a build, for smoke (a test ties the lists).
+PRODUCTS = ("obj", "exe", "o", "map", "lst")
+FIXTURES = ("tests/inputs/", "tests/fixtures/")
+
+
+def strays(names: list[str]) -> list[str]:
+    return [n for n in names if n.rpartition(".")[2].lower() in PRODUCTS and "." in n and not n.startswith(FIXTURES)]
+
+
+def products_main(root: Path | None = None) -> int:
+    listed = subprocess.run(["git", "ls-files"], cwd=root or ROOT, capture_output=True, text=True, check=True).stdout.split("\n")
+    if found := strays([n for n in listed if n]):
+        print(f"build products are tracked: {found}")
+        return 1
+    return 0
+
+
 def smoke_plan(files: list[str]) -> Plan:
     """The fast tier's plan cut to the smoke steps, plus docs and the diff's own tests."""
     fast = plan(files)  # narrowed when no compiler source changed
@@ -232,7 +249,7 @@ def smoke_plan(files: list[str]) -> Plan:
     keep = load()["smoke"]["steps"]
     built = "build" in fast.steps
     # the audit of target facts is integration's in the fast tier: the smoke tier runs it alone
-    steps = [s for s in keep if s in ("docs", "changed-tests") or s in fast.steps or (s == "pytest-programs" and built) or (s == "facts" and "integration" in fast.steps)]
+    steps = [s for s in keep if s in ("docs", "changed-tests", "products") or s in fast.steps or (s == "pytest-programs" and built) or (s == "facts" and "integration" in fast.steps)]
     return Plan("smoke", "the fast tier cut to the smoke steps", steps, fast.packages, fast.languages, list(files))
 
 
@@ -472,6 +489,8 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     steps = {
         "build": BUILD,
         "facts": f"{cargo} --test target_facts",
+        # #1777 tracked d1.o, d4.o and d8.o and was smoke-green: the check of tests/tracked_build_products.rs, without a build.
+        "products": "python3 -c \"import sys; sys.path.insert(0, 'tools/gate'); import gate; sys.exit(gate.products_main())\"",
         "docs": "python3 tools/docsbuild/build.py --check && python3 tools/passdocs.py --check",
         "changed-tests": changed_tests(p.files),
         "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
@@ -838,13 +857,14 @@ def default_jobs(environ: dict, cpus: int | None = None) -> int:
 
 def scoped(argv: list[str], environ: dict | None = None, have: str | None = None) -> list[str] | None:
     """`argv` under its own systemd user scope with a high CPU weight, or None when it already is (GATE_SCOPED) or the host has no
-    systemd-run. Session builds share one scope with the gate by default and starve it; the weight is GATE_CPU_WEIGHT (1000)."""
+    systemd-run. Session builds share one scope with the gate by default and starve it; the weight is GATE_CPU_WEIGHT (1000). The scope is
+    omitted from systemd-oomd: it killed two gates (SIGKILL, no verdict) for the host's memory pressure, not for their memory."""
     environ = os.environ if environ is None else environ
     have = shutil.which("systemd-run") if have is None else have
     if environ.get("GATE_SCOPED") or not have or environ.get("GATE_CPU_WEIGHT") == "0":
         return None
     weight = environ.get("GATE_CPU_WEIGHT") or "1000"
-    return [have, "--user", "--scope", "-q", "-p", f"CPUWeight={weight}", "--setenv=GATE_SCOPED=1", *argv]
+    return [have, "--user", "--scope", "-q", "-p", f"CPUWeight={weight}", "-p", "ManagedOOMPreference=omit", "--setenv=GATE_SCOPED=1", *argv]
 
 
 def main() -> int:

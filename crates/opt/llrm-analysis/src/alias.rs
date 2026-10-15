@@ -43,14 +43,17 @@
 //!  call @unknown(ptr %q)            %q's object escapes from here on
 //! ```
 //!
-//! Escape solve (`points_to`, `escapes`). Over the value solve, a forward
-//! gen/kill dataflow finds what has been published, per instruction
-//! (`EscapedBefore`): objects handed to a call that keeps them (not
-//! `nocapture`; a summary's `captures` stand where the callee has one), stored
-//! somewhere other than a frame, returned, or converted to an integer something
-//! reads, closed over pointers stored in what was published and over the
-//! initializers of published globals. A frame object not escaped before an
-//! access cannot be reached by a pointer no fact follows
+//! Escape solve (`points_to`, `escapes`). Over the value solve, what each
+//! instruction publishes is found once for the instructions that can publish
+//! (a call, a return, a stored pointer, one an instruction takes and does not
+//! carry on: `could_publish`), what reaches each block is a pass over the
+//! components of the CFG, and what had escaped before an instruction is
+//! worked out when asked and kept (`EscapedBefore`): objects handed to a call
+//! that keeps them (not `nocapture`; a summary's `captures` stand where the
+//! callee has one), stored somewhere other than a frame, returned, or converted
+//! to an integer something reads, closed over pointers stored in what was
+//! published and over the initializers of published globals. A frame object not
+//! escaped before an access cannot be reached by a pointer no fact follows
 //! (`EscapedBefore::apart`, LLVM's `EarliestEscapeInfo`).
 //!
 //! Summaries (`summaries`). Each body's `Summary` is the slices it reads and
@@ -155,7 +158,7 @@ use crate::graph::loops;
 use crate::induction;
 use crate::memory::{
     self, Addr, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
-    object_of, unmodeled_write, wrapped,
+    object_of, wrapped,
 };
 use crate::ranges;
 use crate::regions::{self, ByteRange};
@@ -203,20 +206,81 @@ pub struct PointsTo {
     pub escaped_before: EscapedBefore,
 }
 
-/// Objects escaped before each call, load and store, kept as bits over one
-/// numbering and named only when asked: most solves never read them.
+/// Objects escaped before each call, load and store, named only when asked: the
+/// answer for an instruction is what reaches its block (`entering`), what the
+/// block's publishing instructions up to it publish, and what a call passes
+/// to its callee; found when asked and kept. Most solves never ask.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EscapedBefore {
     objects: Rc<IndexSet<ObjectRef>>,
-    at: IndexMap<InstId, Bits>,
+    /// What reaches the start of each block.
+    entering: IndexMap<i64, Bits>,
+    /// The instructions asked of (calls, loads and stores): their block and
+    /// how many of its publishing instructions come at or before them: a
+    /// place that moves with no change to what is published does not
+    /// change the answer.
+    sites: IndexMap<InstId, (i64, usize)>,
+    /// What each block's publishing instructions publish, in order.
+    published: IndexMap<i64, Vec<Vec<usize>>>,
+    /// What a call lets its callee reach without keeping it.
+    during: IndexMap<InstId, Vec<usize>>,
+    found: Answers,
 }
 
+thread_local! {
+    static BEFORE_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many answers of `EscapedBefore` this thread has worked out, for a test
+/// that a solve works out none until it is asked and none twice.
+pub fn before_answers() -> usize {
+    BEFORE_ANSWERS.with(std::cell::Cell::get)
+}
+
+/// What has been found of `EscapedBefore`: no part of what it says.
+#[derive(Clone, Debug, Default)]
+struct Answers(RefCell<HashMap<InstId, Rc<Bits>>>);
+
+impl PartialEq for Answers {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for Answers {}
+
 impl EscapedBefore {
+    fn before(
+        &self,
+        at: &InstId,
+    ) -> Option<Rc<Bits>> {
+        if let Some(found) = self.found.0.borrow().get(at) {
+            return Some(Rc::clone(found));
+        }
+        let (block, upto) = *self.sites.get(at)?;
+        BEFORE_ANSWERS.with(|answers| answers.set(answers.get() + 1));
+        // The state after an instruction holds the state before it: what a
+        // call publishes itself reaches it, as its own arguments do.
+        let mut state = self.entering[&block].clone();
+        for objects in self.published[&block].iter().take(upto) {
+            objects.iter().for_each(|one| state.insert(*one));
+        }
+        if let Some(reached) = self.during.get(at) {
+            reached.iter().for_each(|one| state.insert(*one));
+        }
+        let state = Rc::new(state);
+        self.found.0.borrow_mut().insert(*at, Rc::clone(&state));
+        Some(state)
+    }
+
     pub fn get(
         &self,
         at: &InstId,
     ) -> Option<BTreeSet<ObjectRef>> {
-        self.at.get(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
+        self.before(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
     }
 
     /// What escaped before `at`, unnamed: two instructions with equal bits have
@@ -224,8 +288,8 @@ impl EscapedBefore {
     pub fn bits(
         &self,
         at: &InstId,
-    ) -> Option<&Bits> {
-        self.at.get(at)
+    ) -> Option<Rc<Bits>> {
+        self.before(at)
     }
 
     /// Whether the access `reference` at `at`, through a pointer no fact
@@ -238,7 +302,7 @@ impl EscapedBefore {
         reference: &MemRef,
         cell: &MemRef,
     ) -> bool {
-        let Some(bits) = self.at.get(&at) else { return false };
+        let Some(bits) = self.before(&at) else { return false };
         // No provenance is a pointer no fact follows: `_lost` publishes what
         // it came from.
         let escaping = reference.provenance.as_ref().is_none_or(|one| {
@@ -1100,6 +1164,7 @@ thread_local! {
     static OTHER_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static DIRECT_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static WHOLE_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many times this thread has worked out what an unknown call does other
@@ -1112,6 +1177,12 @@ pub fn other_runs() -> usize {
 /// procedure's is made once.
 pub fn direct_runs() -> usize {
     DIRECT_RUNS.with(std::cell::Cell::get)
+}
+
+/// How many runs of `summaries_updating` on this thread were worked out from
+/// nothing, for a test that a run in which every body is dirty is one.
+pub fn whole_runs() -> usize {
+    WHOLE_RUNS.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has summarized a body against its callees'
@@ -1368,7 +1439,14 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
             && names.iter().all(|name| memo.direct.contains_key(*name) && memo.result.contains_key(*name))
             && memo.direct.len() == procedures.len()
     };
-    let whole = dirty.is_none() || !same_bodies || memo.known.as_ref() != known;
+    // Where every body is dirty nothing is kept, and what the update does to
+    // keep it (waking readers, comparing what changed) costs more than the
+    // run from nothing it comes to.
+    let every = dirty.is_some_and(|dirty| (0..procedures.len()).all(|at| dirty.contains(procedures.name(at))));
+    let whole = dirty.is_none() || every || !same_bodies || memo.known.as_ref() != known;
+    if whole {
+        WHOLE_RUNS.with(|runs| runs.set(runs.get() + 1));
+    }
     if whole {
         *memo = SummaryMemo::default();
     }
@@ -1856,7 +1934,7 @@ fn _summarized(
         #[allow(clippy::type_complexity)]
         let mut others: Vec<(
             Option<GlobalId>,
-            Option<&Bits>,
+            Option<Rc<Bits>>,
             bool,
             bool,
             (BTreeSet<Slice>, BTreeSet<Slice>, bool),
@@ -2889,30 +2967,31 @@ fn escapes(
         .iter()
         .map(|(target, sources)| (number(target), sources.iter().map(number).collect::<Vec<_>>()))
         .collect::<HashMap<_, _>>();
-    // Close publication through pointer-valued fields of known objects.
-    let pointees = |objects: BTreeSet<ObjectRef>, cells: &IndexMap<CellKey, Provenance>| {
-        let mut reached = objects.iter().map(number).collect::<HashSet<_>>();
-        if reached.is_empty() {
-            return Vec::new();
+    // Close publication through pointer-valued fields of known objects: what
+    // an object reaches is found once, from the fields of every object a store
+    // put a pointer into.
+    let closures: RefCell<HashMap<usize, Rc<Vec<usize>>>> = RefCell::new(HashMap::default());
+    let closure = |object: usize| -> Rc<Vec<usize>> {
+        if let Some(found) = closures.borrow().get(&object) {
+            return Rc::clone(found);
         }
-        loop {
-            let before = reached.len();
-            for (key, provenance) in cells {
-                if let CellKey::Object(object, _, _) = key {
-                    if reached.contains(&number(object)) {
-                        reached.extend(provenance.slices.iter().map(|one| number(&one.object)));
-                    }
-                }
-            }
-            for object in reached.iter().copied().collect::<Vec<_>>() {
-                if let Some(fields) = pointer_fields.get(&object) {
-                    reached.extend(fields.iter().copied());
-                }
-            }
-            if reached.len() == before {
-                return reached.into_iter().collect();
+        let mut reached = HashSet::<usize>::default();
+        let mut work = vec![object];
+        while let Some(at) = work.pop() {
+            if reached.insert(at) {
+                work.extend(pointer_fields.get(&at).into_iter().flatten().copied());
             }
         }
+        let found = Rc::new(reached.into_iter().collect::<Vec<_>>());
+        closures.borrow_mut().insert(object, Rc::clone(&found));
+        found
+    };
+    let pointees = |objects: BTreeSet<ObjectRef>| {
+        let mut reached = HashSet::<usize>::default();
+        for object in objects.iter().map(number) {
+            reached.extend(closure(object).iter().copied());
+        }
+        reached.into_iter().collect::<Vec<_>>()
     };
 
     // Objects named by the initializers of the globals among `reached`, closed:
@@ -2956,26 +3035,15 @@ fn escapes(
     for block in &graph {
         // What a block holds of its cells on entry is not carried between
         // blocks: what a cell held anywhere is `pointer_fields`'.
-        let mut cells = CellMap::new(IndexMap::default(), _key_place);
         let mut mine: HashMap<InstId, Vec<usize>> = HashMap::default();
         for &inst in instructions(block.at) {
             let op = function.instruction(inst);
-            // What publishes an object: a call, a return, a store, an integer
-            // made of a pointer, or anything that takes a pointer
-            // or a constant that names a global. The rest holds the
-            // state it had.
-            let publishes_something = calls.contains(&inst)
-                || matches!(op.opcode, Opcode::Ret | Opcode::Store { .. })
-                || op.operands.iter().any(|&operand| match operand {
-                    Operand::Value(_) => is_pointer(unit, operand),
-                    Operand::Constant(id) => {
-                        !matches!(
-                            unit.context.get(id).kind,
-                            ConstantKind::Int(_) | ConstantKind::Float(_)
-                        )
-                    }
-                    Operand::Block(_) => false,
-                });
+            // What publishes an object: a call, a return, a store of a pointer,
+            // an integer made of a pointer, a pointer an
+            // instruction takes and does not carry on, or a
+            // constant that names a global. The rest holds the
+            // state it had (`_lost` says which carry: loads, moves and joins).
+            let publishes_something = calls.contains(&inst) || could_publish(unit, op);
             if !publishes_something {
                 continue;
             }
@@ -3033,8 +3101,11 @@ fn escapes(
             {
                 newly.extend(provenances(&op.operands, &values));
             }
-            match (&op.opcode, MemRef::of(unit, inst)) {
-                (Opcode::Store { .. }, Some(reference)) => {
+            // A store publishes the pointer it stores, where it stores outside
+            // the frame: one of no pointer fact asks nothing of
+            // where it goes.
+            if matches!(op.opcode, Opcode::Store { .. }) && _operand(unit, op.operands[0], &values).is_some() {
+                if let Some(reference) = MemRef::of(unit, inst) {
                     let destination = _resolved_reference(unit, &reference, &values);
                     let outside = destination
                         .as_ref()
@@ -3044,86 +3115,93 @@ fn escapes(
                     if outside {
                         newly.extend(provenances(&op.operands[..1], &values));
                     }
-                    let source = _operand(unit, op.operands[0], &values);
-                    let keyed = MemRef { provenance: destination, ..reference };
-                    let key = _cell_key(&keyed);
-                    _kill(&mut cells, key.as_ref());
-                    if let (Some(key), Some(source)) = (key, source) {
-                        cells.insert(key, source, _key_place);
-                    }
                 }
-                // A call may leave a cell as it was: what it held stays
-                // reachable.
-                _ if unmodeled_write(unit, inst) => {}
-                _ => {}
             }
             let lent_numbers = lent.iter().map(number).collect::<HashSet<_>>();
-            let mut published = pointees(newly, &cells);
-            published.extend(pointees(lent, &cells).into_iter().filter(|one| !lent_numbers.contains(one)));
+            let mut published = pointees(newly);
+            published.extend(pointees(lent).into_iter().filter(|one| !lent_numbers.contains(one)));
             if !published.is_empty() {
                 mine.insert(inst, published);
             }
             if calls.contains(&inst) {
-                during.insert(inst, initialized(pointees(passing, &cells)));
+                during.insert(inst, initialized(pointees(passing)));
             }
         }
         publishes.insert(block.at, mine);
     }
     let objects = objects.into_inner();
-    let generated = publishes
-        .iter()
-        .map(|(at, mine)| {
-            let mut all = Bits::new(objects.len());
-            mine.values().flatten().for_each(|one| all.insert(*one));
-            (*at, all)
-        })
-        .collect::<IndexMap<_, _>>();
-    let mut out = graph.iter().map(|block| (block.at, Bits::new(objects.len()))).collect::<IndexMap<_, _>>();
-    let entering = |at: i64, out: &IndexMap<i64, Bits>| {
-        let mut state = Bits::new(objects.len());
-        predecessors.get(&at).unwrap_or(&none).iter().for_each(|one| state.union_with(&out[one]));
-        state
-    };
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for block in &graph {
-            let mut state = entering(block.at, &out);
-            state.union_with(&generated[&block.at]);
-            if state != out[&block.at] {
-                out.insert(block.at, state);
-                changing = true;
-            }
-        }
-    }
-    let named = |bits: &Bits| bits.iter().map(|at| objects[at].clone()).collect::<BTreeSet<_>>();
-    // The state after an instruction holds the state before it: what a
-    // call publishes itself reaches it, as its own arguments do.
-    let mut before = IndexMap::<InstId, Bits>::default();
+    let width = objects.len();
+    let mut generated: Vec<Bits> = Vec::with_capacity(graph.len());
+    let mut published: IndexMap<i64, Vec<Vec<usize>>> = IndexMap::default();
+    let mut sites = IndexMap::<InstId, (i64, usize)>::default();
     for block in &graph {
-        let mut state = entering(block.at, &out);
-        for &inst in instructions(block.at) {
-            if let Some(escapes) = publishes[&block.at].get(&inst) {
-                escapes.iter().for_each(|one| state.insert(*one));
+        let mut all = Bits::new(width);
+        let mut mine: Vec<Vec<usize>> = Vec::new();
+        for inst in instructions(block.at) {
+            if let Some(objects) = publishes[&block.at].get(inst) {
+                objects.iter().for_each(|one| all.insert(*one));
+                let mut sorted = objects.clone();
+                sorted.sort_unstable();
+                mine.push(sorted);
             }
-            if calls.contains(&inst)
+            if calls.contains(inst)
                 || matches!(
-                    function.instruction(inst).opcode,
+                    function.instruction(*inst).opcode,
                     Opcode::Load { .. } | Opcode::Store { .. }
                 )
             {
-                let mut visible = state.clone();
-                if let Some(reached) = during.get(&inst) {
-                    reached.iter().for_each(|one| visible.insert(*one));
-                }
-                before.insert(inst, visible);
+                sites.insert(*inst, (block.at, mine.len()));
             }
         }
+        generated.push(all);
+        published.insert(block.at, mine);
     }
-    let mut every = Bits::new(objects.len());
-    out.values().for_each(|one| every.union_with(one));
+    // What reaches each block: the publications of every block with a path to
+    // it, a cycle's included in all of its members. The blocks in components
+    // that follow their predecessors, so that each is passed once (gcc's
+    // `ssa_propagation_engine` over reverse post order).
+    let index: IndexMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let parents: Vec<Vec<usize>> = graph
+        .iter()
+        .map(|block| {
+            predecessors.get(&block.at).unwrap_or(&none).iter().filter_map(|one| index.get(one).copied()).collect()
+        })
+        .collect();
+    let (component, cyclic) = llrm_mir::callgraph::strong_components(&parents);
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); cyclic.len()];
+    for (at, one) in component.iter().enumerate() {
+        members[*one].push(at);
+    }
+    let mut through: Vec<Bits> = Vec::with_capacity(cyclic.len());
+    let mut reaching: Vec<Bits> = Vec::with_capacity(cyclic.len());
+    for (one, blocks) in members.iter().enumerate() {
+        let mut coming = Bits::new(width);
+        let mut own = Bits::new(width);
+        for &at in blocks {
+            own.union_with(&generated[at]);
+            for &parent in &parents[at] {
+                if component[parent] != one {
+                    coming.union_with(&through[component[parent]]);
+                }
+            }
+        }
+        let mut leaving = coming.clone();
+        leaving.union_with(&own);
+        // Every member of a cycle reaches every other, itself too.
+        if cyclic[one] {
+            coming = leaving.clone();
+        }
+        reaching.push(coming);
+        through.push(leaving);
+    }
+    let entering: IndexMap<i64, Bits> =
+        graph.iter().enumerate().map(|(at, block)| (block.at, reaching[component[at]].clone())).collect();
+    let mut every = Bits::new(width);
+    generated.iter().for_each(|one| every.union_with(one));
+    let named = |bits: &Bits| bits.iter().map(|at| objects[at].clone()).collect::<BTreeSet<_>>();
     let escaped = named(&every);
-    let escaped_before = EscapedBefore { objects: Rc::new(objects), at: before };
+    let escaped_before =
+        EscapedBefore { objects: Rc::new(objects), entering, sites, published, during, found: Answers::default() };
     Ok(PointsTo { values: values.clone(), escaped, escaped_before })
 }
 
@@ -3146,6 +3224,50 @@ fn _read(
                 let user = function.instruction(one.user);
                 !llrm_mir::memory::pure_operation(&user.opcode)
                     || user.result.is_some_and(|result| _read(function, result, seen))
+            },
+        )
+}
+
+/// Whether `op` may publish an object: what `_lost` and the cases of `escapes`
+/// can find in it, told without asking for facts.
+fn could_publish(
+    unit: &Unit,
+    op: &llrm_mir::module::Instruction,
+) -> bool {
+    let carried = match &op.opcode {
+        Opcode::ICmp(_) => return false,
+        Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => return true,
+        Opcode::Store { .. } => return is_pointer(unit, op.operands[0]) || names_a_global(unit, op),
+        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
+        Opcode::Load { .. }
+        | Opcode::GetElementPtr { .. }
+        | Opcode::Phi
+        | Opcode::Select
+        | Opcode::Call(_)
+        | Opcode::Invoke(_) => true,
+        _ => false,
+    };
+    (!carried && op.operands.iter().any(|&operand| is_pointer(unit, operand))) || names_a_global(unit, op)
+}
+
+/// Whether a constant operand of `op` that is no pointer holds a global's
+/// address.
+fn names_a_global(
+    unit: &Unit,
+    op: &llrm_mir::module::Instruction,
+) -> bool {
+    op.operands
+        .iter()
+        .any(
+            |&operand| match operand {
+                Operand::Constant(id) => {
+                    !is_pointer(unit, operand)
+                        && !matches!(
+                            unit.context.get(id).kind,
+                            ConstantKind::Int(_) | ConstantKind::Float(_)
+                        )
+                }
+                _ => false,
             },
         )
 }
