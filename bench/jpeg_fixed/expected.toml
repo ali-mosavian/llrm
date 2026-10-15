@@ -1,4 +1,4 @@
-reason = "A constant multiply only an address reads is lea by 3, 5 or 9 and the address's scale (a[3*i], p[12*i]): no imul or shl, one clock; jpeg_fixed/jpeg_single bq32 and parity/qbsp bq32 -O2 fewer instructions and 1-2 bytes; no row worse"
+reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84239250
-code_bytes = 6495
+instructions = 84336394
+code_bytes = 6446
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89333638
-code_bytes = 6038
+instructions = 89430784
+code_bytes = 5990
 data_bytes = 29209
 bss_bytes = 0
 

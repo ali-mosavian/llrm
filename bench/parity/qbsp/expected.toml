@@ -1,4 +1,4 @@
-reason = "A constant multiply only an address reads is lea by 3, 5 or 9 and the address's scale (a[3*i], p[12*i]): no imul or shl, one clock; jpeg_fixed/jpeg_single bq32 and parity/qbsp bq32 -O2 fewer instructions and 1-2 bytes; no row worse"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -30,14 +30,14 @@ data_bytes = 13
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 1153
-code_bytes = 548
+instructions = 1157
+code_bytes = 547
 data_bytes = 19
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 1188
-code_bytes = 509
+instructions = 1187
+code_bytes = 506
 data_bytes = 19
 bss_bytes = 0
 

@@ -1,5 +1,5 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
+blessed = "2026-10-15"
 
 [bas.O2]
 instructions = 55208
@@ -30,14 +30,14 @@ data_bytes = 31
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 50955
-code_bytes = 847
+instructions = 50954
+code_bytes = 845
 data_bytes = 37
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 52567
-code_bytes = 732
+instructions = 52566
+code_bytes = 730
 data_bytes = 37
 bss_bytes = 0
 
