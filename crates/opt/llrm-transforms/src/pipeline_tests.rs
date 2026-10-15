@@ -1093,12 +1093,12 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
         crate::testing::managed(&mut module, fixed);
         count.get()
     };
-    assert_eq!(runs(3), 3, "the budget ends the rounds");
+    assert_eq!(runs(4), 4, "the budget ends the rounds");
     assert_eq!(runs(usize::MAX), 9, "premise: the chain runs to its end when nothing bounds it");
-    assert_eq!(pipeline::Options::basic().rounds, 3);
-    assert_eq!(pipeline::Options::standard().rounds, 3);
-    assert_eq!(pipeline::Options::speed().rounds, 3);
-    assert_eq!(pipeline::Options::size().rounds, 3);
+    assert_eq!(pipeline::Options::basic().rounds, 4);
+    assert_eq!(pipeline::Options::standard().rounds, 4);
+    assert_eq!(pipeline::Options::speed().rounds, 4);
+    assert_eq!(pipeline::Options::size().rounds, 4);
     assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
 }
 

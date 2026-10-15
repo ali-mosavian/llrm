@@ -48,14 +48,14 @@ Capping the rounds (`LLRM_MAX_ROUNDS`, measured, not kept), executed work (instr
 
 ### The rounds are bounded
 
-`Options::rounds` is 3 at -O1, -O2, -O3, -Os and -Og; -Omax runs to the fixed point. Measured with the budget as a cap (`LLRM_MAX_ROUNDS`, a temporary knob), the 71 programs of the vsgcc tables at the four levels (ins, mem and code of each row, 284 rows):
+`Options::rounds` is 4 at -O1, -O2, -O3, -Os and -Og; -Omax runs to the fixed point. Measured with the budget as a cap (`LLRM_MAX_ROUNDS`, a temporary knob), the 71 programs of the vsgcc tables at the four levels (ins, mem and code of each row, 284 rows):
 
 | rounds | rows that differ | worst |
 |---|---|---|
 | 3 | 1 of 284 (sieve -Os code -1 B) | none worse |
 | 2 | 12 to 14 of 71 at -O2, -O3 and -Os; sieve at -O1 | rectwo ins x2.33, recsum -Os x3.16, recfloat x1.46, recgcd x1.36 |
 
-Round 3 matters (the recursion programs), rounds 4 and later did not on any row. QCport and the 66 programs at -O1, -O2 and -Os: 15 of 408 objects differ and none by more than 25 bytes (net -24 B at -O2, +22 B at -Os). d_faces default flags, the assembly the same at all four levels: -O1 6246 M to 5892 M (-5.7%), -O2 6838 M to 6471 M, -O3 7587 M to 7413 M, -Os 7004 M to 6445 M (-8.0%); the 136-file corpus -0.6% to -1.5%.
+Round 3 matters (the recursion programs); round 4 matters to the bench (3 rounds: jpeg nib -Os +78 B, grep c -Os +4 B, jpeg bq32 +2,000 instructions of 8.4e7), and rounds 5 and later did not on any row of the vsgcc tables or the bench (424 measurements, 0 problems at 4). QCport and the 66 programs at -O1, -O2 and -Os: 15 of 408 objects differ and none by more than 25 bytes (net -24 B at -O2, +22 B at -Os). d_faces default flags, compile instructions with 4 rounds: -O1 6852 M to 6500 M (-5.1%), -O2 8321 M to 7791 M (-6.4%), -O3 9099 M to 8566 M (-5.9%), -Os 8230 M to 7695 M (-6.5%); the 136-file corpus -0.6% to -1.5%.
 
 `LLRM_CHECK_ROUNDS=1` says on stderr, for each body that reached the budget, the pass a further round would still change it with; nothing fails. A rounds budget is what LLVM and gcc have: InstCombine runs one iteration per run, the CGSCC devirtualization pass four, and gcc's pass list runs each pass instance once.
 

@@ -239,7 +239,7 @@ pub struct Options {
 }
 
 /// The rounds a body's passes run, short of -Omax's fixed point.
-const ROUNDS: usize = 3;
+const ROUNDS: usize = 4;
 
 impl Default for Options {
     fn default() -> Self {
