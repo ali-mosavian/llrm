@@ -25,10 +25,20 @@
 //!  are cut out of its list and the new ones spliced in, in position order.
 //! ```
 //!
-//! A block of more than 48 instructions is patched instead of remade: the kept
-//! instructions are found by pointer (`intervals::aligned_insns`) and their
-//! entries moved to their new positions, the removed ones' dropped, the added
-//! ones' put in, so the cost is the block's entries and not a hash insert each.
+//! Occurrences are kept by slot, not by position: each block numbers its
+//! instructions with ascending slots, `STRIDE` apart, and an entry names
+//! `(block, slot)`. A rewrite that keeps most of a block (`aligned_insns` finds
+//! the kept instructions by pointer) leaves their slots and entries alone, cuts
+//! the entries of the instructions it removed and puts those of the ones it
+//! added at slots between their neighbours', as LLVM's `SlotIndexes` numbers an
+//! instruction put between two (and renumbers a block only when the room is
+//! used up). The cost of an edit is the entries of the instructions it changed,
+//! not those of every instruction after it. A position, where a reader wants
+//! one, is where the slot is in the block's list of slots.
+//!
+//! A block the rewrite made over (little of it is the same, or the kept
+//! instructions changed their order) is made again: the entries of the values
+//! it names are cut out and the new ones spliced in.
 //!
 //! `LLRM_CHECK_POSTINGS` asserts after each update that the followed postings
 //! equal ones worked out whole. `redone()` counts the blocks worked again, for
@@ -52,17 +62,58 @@ use crate::support::hash::HashMap;
 /// An instruction by its block's position in the body and its own in the block.
 pub type At = (u32, u32);
 
+/// An instruction by its block and its slot: the number it was given in the
+/// block, which a rewrite of the rest of the block leaves.
+#[derive(Clone, Debug)]
+struct Entry {
+    block: u32,
+    slot: u32,
+    /// The instruction itself, so that a reader that wants the instruction and
+    /// not its place does not look the place up.
+    insn: Arc<Insn>,
+    /// Where the slot was in its block when last looked for: a guess to start
+    /// from.
+    hint: std::cell::Cell<u32>,
+}
+
+impl Entry {
+    fn key(&self) -> (u32, u32) {
+        (self.block, self.slot)
+    }
+}
+
+/// The gap between the slots a block is first numbered with: an instruction put
+/// between two takes the middle of the gap, so ten are put between two before
+/// a block is numbered again.
+const STRIDE: u32 = 1 << 10;
+
 /// The instructions that define and read each value, in body order: one entry
 /// for each time the instruction's `defines` or `uses` names it.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default)]
 pub struct Postings {
-    defs: HashMap<u32, Vec<At>>,
-    uses: HashMap<u32, Vec<At>>,
+    defs: HashMap<u32, Vec<Entry>>,
+    uses: HashMap<u32, Vec<Entry>>,
     /// The instructions that `require` the value be in a register.
-    needs: HashMap<u32, Vec<At>>,
-    /// For each block, the positions of its instructions with a frame cell
-    /// among their operands.
+    needs: HashMap<u32, Vec<Entry>>,
+    /// For each block, the slot of each of its instructions, ascending: the
+    /// position of an instruction is where its slot is in the list.
+    slots: Vec<Vec<u32>>,
+    /// For each block, the slots of its instructions with a frame cell among
+    /// their operands, ascending.
     frames: Vec<Vec<u32>>,
+}
+
+/// What `Postings` holds, by position: the equality of two sets of postings is
+/// the equality of what they say, not of the numbers they said it with.
+type Listing = (std::collections::BTreeMap<u32, Vec<At>>, [std::collections::BTreeMap<u32, Vec<At>>; 2], Vec<Vec<u32>>);
+
+impl PartialEq for Postings {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.listing() == other.listing()
+    }
 }
 
 impl Postings {
@@ -75,18 +126,199 @@ impl Postings {
         found
     }
 
+    fn position(
+        &self,
+        block: u32,
+        slot: u32,
+    ) -> u32 {
+        Self::locate(&self.slots[block as usize], slot, (slot / STRIDE) as usize) as u32
+    }
+
+    /// Where `slot` is in `list`: a block is first numbered `STRIDE` apart, so
+    /// the guess is the slot's place there, and it is looked for outward from
+    /// it, which is a step or two where the block has been edited little.
+    fn locate(
+        list: &[u32],
+        slot: u32,
+        guess: usize,
+    ) -> usize {
+        let guess = guess.min(list.len().saturating_sub(1));
+        if list.get(guess) == Some(&slot) {
+            return guess;
+        }
+        let (low, high);
+        if list.get(guess).is_some_and(|here| *here < slot) {
+            let mut start = guess + 1;
+            let mut step = 1;
+            while start + step < list.len() && list[start + step] < slot {
+                start += step;
+                step *= 2;
+            }
+            low = start;
+            high = (start + step + 1).min(list.len());
+        } else {
+            let mut end = guess;
+            let mut step = 1;
+            while end > step && list[end - step] >= slot {
+                end -= step;
+                step *= 2;
+            }
+            low = end.saturating_sub(step);
+            high = (end + 1).min(list.len());
+        }
+        let found = low + list[low..high].partition_point(|one| *one < slot);
+        debug_assert_eq!(list.get(found), Some(&slot), "a slot the block holds");
+        found
+    }
+
+    /// The positions of `entries`, which are by block and slot: within a block
+    /// each is looked for after the one before.
+    fn walk<'a>(
+        &'a self,
+        entries: Option<&'a Vec<Entry>>,
+    ) -> impl Iterator<Item = At> + 'a {
+        entries
+            .into_iter()
+            .flatten()
+            .map(
+                move |entry| {
+                    let at = Self::locate(&self.slots[entry.block as usize], entry.slot, entry.hint.get() as usize);
+                    entry.hint.set(at as u32);
+                    (entry.block, at as u32)
+                },
+            )
+    }
+
+    fn positions(
+        &self,
+        entries: Option<&Vec<Entry>>,
+    ) -> Vec<At> {
+        self.walk(entries).collect()
+    }
+
+    /// `defs`, as it is read: no list is made.
+    pub fn defs_at(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = At> + '_ {
+        self.walk(self.defs.get(&value))
+    }
+
+    pub fn uses_at(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = At> + '_ {
+        self.walk(self.uses.get(&value))
+    }
+
+    pub fn needs_at(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = At> + '_ {
+        self.walk(self.needs.get(&value))
+    }
+
+    /// The instructions that define `value`, with their blocks: no place is
+    /// looked up.
+    pub fn defs_insns(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = (u32, &Arc<Insn>)> + '_ {
+        self.defs.get(&value).into_iter().flatten().map(|entry| (entry.block, &entry.insn))
+    }
+
+    pub fn uses_insns(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = (u32, &Arc<Insn>)> + '_ {
+        self.uses.get(&value).into_iter().flatten().map(|entry| (entry.block, &entry.insn))
+    }
+
+    pub fn needs_insns(
+        &self,
+        value: u32,
+    ) -> impl Iterator<Item = (u32, &Arc<Insn>)> + '_ {
+        self.needs.get(&value).into_iter().flatten().map(|entry| (entry.block, &entry.insn))
+    }
+
+    /// The instructions that name `value` (and, if asked, require it in a
+    /// register), each once, in body order, with their blocks.
+    pub fn named_insns(
+        &self,
+        value: u32,
+        with_needs: bool,
+    ) -> Vec<(u32, &Arc<Insn>)> {
+        let empty: &[Entry] = &[];
+        let lists = [
+            self.defs.get(&value).map_or(empty, Vec::as_slice),
+            self.uses.get(&value).map_or(empty, Vec::as_slice),
+            if with_needs { self.needs.get(&value).map_or(empty, Vec::as_slice) } else { empty },
+        ];
+        let mut at = [0usize; 3];
+        let mut found: Vec<(u32, &Arc<Insn>)> = Vec::with_capacity(lists.iter().map(|list| list.len()).sum());
+        let mut last: Option<(u32, u32)> = None;
+        loop {
+            // The earliest entry not yet taken among the three lists.
+            let mut best: Option<usize> = None;
+            for (which, list) in lists.iter().enumerate() {
+                if let Some(entry) = list.get(at[which]) {
+                    if best.is_none_or(|other| entry.key() < lists[other][at[other]].key()) {
+                        best = Some(which);
+                    }
+                }
+            }
+            let Some(which) = best else { break };
+            let entry = &lists[which][at[which]];
+            at[which] += 1;
+            if last != Some(entry.key()) {
+                found.push((entry.block, &entry.insn));
+                last = Some(entry.key());
+            }
+        }
+        found
+    }
+
+    /// How many instructions define, read or require `value`.
+    pub fn defs_count(
+        &self,
+        value: u32,
+    ) -> usize {
+        self.defs.get(&value).map_or(0, Vec::len)
+    }
+
+    pub fn uses_count(
+        &self,
+        value: u32,
+    ) -> usize {
+        self.uses.get(&value).map_or(0, Vec::len)
+    }
+
+    pub fn needs_count(
+        &self,
+        value: u32,
+    ) -> usize {
+        self.needs.get(&value).map_or(0, Vec::len)
+    }
+
     pub fn defs(
         &self,
         value: u32,
-    ) -> &[At] {
-        self.defs.get(&value).map_or(&[], Vec::as_slice)
+    ) -> Vec<At> {
+        self.positions(self.defs.get(&value))
     }
 
     pub fn uses(
         &self,
         value: u32,
-    ) -> &[At] {
-        self.uses.get(&value).map_or(&[], Vec::as_slice)
+    ) -> Vec<At> {
+        self.positions(self.uses.get(&value))
+    }
+
+    pub fn needs(
+        &self,
+        value: u32,
+    ) -> Vec<At> {
+        self.positions(self.needs.get(&value))
     }
 
     /// The positions in block `block` of the instructions that read or write a
@@ -94,8 +326,10 @@ impl Postings {
     pub fn frames(
         &self,
         block: usize,
-    ) -> &[u32] {
-        self.frames.get(block).map_or(&[], Vec::as_slice)
+    ) -> Vec<u32> {
+        self.frames
+            .get(block)
+            .map_or_else(Vec::new, |list| list.iter().map(|slot| self.position(block as u32, *slot)).collect())
     }
 
     /// The largest value an instruction defines or reads, or 0.
@@ -103,11 +337,22 @@ impl Postings {
         self.defs.keys().chain(self.uses.keys()).copied().max().unwrap_or(0)
     }
 
-    pub fn needs(
-        &self,
-        value: u32,
-    ) -> &[At] {
-        self.needs.get(&value).map_or(&[], Vec::as_slice)
+    fn listing(&self) -> Listing {
+        let by_position = |map: &HashMap<u32, Vec<Entry>>| -> std::collections::BTreeMap<u32, Vec<At>> {
+            map.iter().map(|(value, list)| (*value, self.positions(Some(list)))).collect()
+        };
+        (
+            by_position(&self.defs),
+            [by_position(&self.uses), by_position(&self.needs)],
+            (0..self.frames.len()).map(|block| self.frames(block)).collect(),
+        )
+    }
+
+    /// The slots a block of `len` instructions is first numbered with.
+    fn numbered(len: usize) -> Vec<u32> {
+        (1..=len)
+            .map(|at| u32::try_from(at as u64 * u64::from(STRIDE)).expect("a block of under four million instructions"))
+            .collect()
     }
 
     /// The occurrences of the instructions of `insns`, block `block`, appended:
@@ -117,22 +362,26 @@ impl Postings {
         block: u32,
         insns: &[Arc<Insn>],
     ) {
-        let list = insns.iter().enumerate().filter(|(_, one)| is_framed(one)).map(|(at, _)| at as u32).collect();
-        if self.frames.len() <= block as usize {
+        if self.slots.len() <= block as usize {
+            self.slots.resize(block as usize + 1, Vec::new());
             self.frames.resize(block as usize + 1, Vec::new());
         }
-        self.frames[block as usize] = list;
-        for (at, one) in insns.iter().enumerate() {
+        let slots = Self::numbered(insns.len());
+        self.frames[block as usize] =
+            insns.iter().zip(&slots).filter(|(one, _)| is_framed(one)).map(|(_, slot)| *slot).collect();
+        for (at, (one, slot)) in insns.iter().zip(&slots).enumerate() {
+            let entry = || Entry { block, slot: *slot, insn: Arc::clone(one), hint: std::cell::Cell::new(at as u32) };
             for value in &one.defines {
-                self.defs.entry(*value).or_default().push((block, at as u32));
+                self.defs.entry(*value).or_default().push(entry());
             }
             for value in &one.uses {
-                self.uses.entry(*value).or_default().push((block, at as u32));
+                self.uses.entry(*value).or_default().push(entry());
             }
             for (held, _) in &one.requires {
-                self.needs.entry(held.value).or_default().push((block, at as u32));
+                self.needs.entry(held.value).or_default().push(entry());
             }
         }
+        self.slots[block as usize] = slots;
     }
 
     /// Block `block` as `old` was, as `new` is.
@@ -142,12 +391,22 @@ impl Postings {
         old: &Insns,
         new: &Insns,
     ) {
-        if old.len().max(new.len()) > LONG {
-            if let Some(found) = crate::analysis::intervals::aligned_insns(old, new) {
-                self.patched(block, new, &found);
+        if let Some(found) = crate::analysis::intervals::aligned_insns(old, new) {
+            if self.patched(block, old, new, &found) {
                 return;
             }
         }
+        self.rebuilt(block, old, new);
+    }
+
+    /// Block `block` made again: every value either list names has its entries
+    /// of the block cut out and the new ones spliced in.
+    fn rebuilt(
+        &mut self,
+        block: u32,
+        old: &Insns,
+        new: &Insns,
+    ) {
         let mut touched: Vec<u32> = old
             .iter()
             .chain(new)
@@ -159,24 +418,159 @@ impl Postings {
         touched.dedup();
         let mut fresh = Postings::default();
         fresh.add(block, new);
-        if self.frames.len() <= block as usize {
+        if self.slots.len() <= block as usize {
+            self.slots.resize(block as usize + 1, Vec::new());
             self.frames.resize(block as usize + 1, Vec::new());
         }
-        self.frames[block as usize] = fresh.frames.pop().unwrap_or_default();
+        self.slots[block as usize] = std::mem::take(&mut fresh.slots[block as usize]);
+        self.frames[block as usize] = std::mem::take(&mut fresh.frames[block as usize]);
         for value in touched {
             for (mine, theirs) in
                 [(&mut self.defs, &fresh.defs), (&mut self.uses, &fresh.uses), (&mut self.needs, &fresh.needs)]
             {
                 let list = mine.entry(value).or_default();
-                let from = list.partition_point(|at| at.0 < block);
-                let to = list.partition_point(|at| at.0 <= block);
-                list.splice(from..to, theirs.get(&value).into_iter().flatten().copied());
+                let from = list.partition_point(|at| at.block < block);
+                let to = list.partition_point(|at| at.block <= block);
+                list.splice(from..to, theirs.get(&value).into_iter().flatten().cloned());
                 if list.is_empty() {
                     mine.remove(&value);
                 }
             }
         }
     }
+
+    /// Block `block` as `found` says `new` differs from `old`: the entries of
+    /// the instructions it kept stay where they are, whatever their positions
+    /// became; those of the ones it removed are cut out and those of the ones
+    /// it added put in at slots between their neighbours'. False, and
+    /// nothing changed, where the kept instructions are not in the order
+    /// they were or there is no room between two slots.
+    fn patched(
+        &mut self,
+        block: u32,
+        old: &[Arc<Insn>],
+        new: &[Arc<Insn>],
+        found: &crate::analysis::intervals::Aligned,
+    ) -> bool {
+        let Some(old_slots) = self.slots.get(block as usize) else { return false };
+        if old_slots.len() != found.len_old || old.len() != found.len_old {
+            return false;
+        }
+        if !found.runs.windows(2).all(|pair| pair[0].1 + pair[0].2 <= pair[1].1) {
+            return false;
+        }
+        let mut new_slots = vec![0u32; new.len()];
+        let mut kept = vec![false; new.len()];
+        for &(from, now, len) in &found.runs {
+            for k in 0..len {
+                new_slots[now + k] = old_slots[from + k];
+                kept[now + k] = true;
+            }
+        }
+        let mut at = 0;
+        while at < new.len() {
+            if kept[at] {
+                at += 1;
+                continue;
+            }
+            let start = at;
+            while at < new.len() && !kept[at] {
+                at += 1;
+            }
+            let count = (at - start) as u64;
+            let low = if start == 0 { 0 } else { u64::from(new_slots[start - 1]) };
+            let high = if at == new.len() { low + (count + 1) * u64::from(STRIDE) } else { u64::from(new_slots[at]) };
+            let step = (high - low) / (count + 1);
+            if step == 0 || high > u64::from(u32::MAX) {
+                return false;
+            }
+            for k in 0..count {
+                new_slots[start + k as usize] = (low + step * (k + 1)) as u32;
+            }
+        }
+        for &position in &found.gone {
+            self.remove_entries(block, old_slots_at(&self.slots, block, position), &old[position]);
+        }
+        for &position in &found.added {
+            self.insert_entries(block, new_slots[position], position, &new[position]);
+        }
+        let frames = &mut self.frames[block as usize];
+        for &position in &found.gone {
+            if is_framed(&old[position]) {
+                let slot = self.slots[block as usize][position];
+                if let Ok(at) = frames.binary_search(&slot) {
+                    frames.remove(at);
+                }
+            }
+        }
+        for &position in &found.added {
+            if is_framed(&new[position]) {
+                let at = frames.partition_point(|slot| *slot < new_slots[position]);
+                frames.insert(at, new_slots[position]);
+            }
+        }
+        self.slots[block as usize] = new_slots;
+        true
+    }
+
+    fn remove_entries(
+        &mut self,
+        block: u32,
+        slot: u32,
+        one: &Insn,
+    ) {
+        let entry = (block, slot);
+        let cut = |map: &mut HashMap<u32, Vec<Entry>>, value: u32| {
+            if let Some(list) = map.get_mut(&value) {
+                if let Ok(at) = list.binary_search_by_key(&entry, Entry::key) {
+                    list.remove(at);
+                }
+                if list.is_empty() {
+                    map.remove(&value);
+                }
+            }
+        };
+        for value in &one.defines {
+            cut(&mut self.defs, *value);
+        }
+        for value in &one.uses {
+            cut(&mut self.uses, *value);
+        }
+        for (held, _) in &one.requires {
+            cut(&mut self.needs, held.value);
+        }
+    }
+
+    fn insert_entries(
+        &mut self,
+        block: u32,
+        slot: u32,
+        position: usize,
+        one: &Arc<Insn>,
+    ) {
+        let put = |map: &mut HashMap<u32, Vec<Entry>>, value: u32| {
+            let list = map.entry(value).or_default();
+            let at = list.partition_point(|held| held.key() < (block, slot));
+            list.insert(at, Entry { block, slot, insn: Arc::clone(one), hint: std::cell::Cell::new(position as u32) });
+        };
+        for value in &one.defines {
+            put(&mut self.defs, *value);
+        }
+        for value in &one.uses {
+            put(&mut self.uses, *value);
+        }
+        for (held, _) in &one.requires {
+            put(&mut self.needs, held.value);
+        }
+    }
+}
+
+fn old_slots_at(
+    slots: &[Vec<u32>],
+    block: u32,
+    position: usize,
+) -> u32 {
+    slots[block as usize][position]
 }
 
 /// Whether `one` has a frame cell among its operands.
@@ -194,95 +588,6 @@ fn is_framed(one: &Insn) -> bool {
                     ),
                 ),
         )
-}
-
-/// Blocks this long are patched from what a rewrite changed in them, found by
-/// pointer; shorter ones are made again.
-const LONG: usize = 48;
-
-impl Postings {
-    /// Block `block` as `found` says `new` differs from what it was: the
-    /// entries of the instructions it kept are moved to their new positions,
-    /// those of the ones it removed dropped, and those of the ones it added
-    /// put in. The cost is the block's entries, not a hash insert for each.
-    fn patched(
-        &mut self,
-        block: u32,
-        new: &[Arc<Insn>],
-        found: &crate::analysis::intervals::Aligned,
-    ) {
-        // Where each position the block had is now: `GONE` for one removed.
-        const GONE: u32 = u32::MAX;
-        let mut to_new = vec![GONE; found.len_old];
-        for (from, now, len) in &found.runs {
-            for k in 0..*len {
-                to_new[from + k] = (now + k) as u32;
-            }
-        }
-        let moved_to = |at: u32| -> Option<u32> { Some(to_new[at as usize]).filter(|now| *now != GONE) };
-        let runs = &found.runs;
-        // A run of one that was moved puts entries out of order.
-        let in_order = runs.windows(2).all(|pair| pair[0].1 + pair[0].2 <= pair[1].1);
-        let mut added: [HashMap<u32, Vec<u32>>; 3] = Default::default();
-        let mut framed_new = Vec::new();
-        for &at in &found.added {
-            let one = &new[at as usize];
-            for value in &one.defines {
-                added[0].entry(*value).or_default().push(at as u32);
-            }
-            for value in &one.uses {
-                added[1].entry(*value).or_default().push(at as u32);
-            }
-            for (held, _) in &one.requires {
-                added[2].entry(held.value).or_default().push(at as u32);
-            }
-            if is_framed(one) {
-                framed_new.push(at as u32);
-            }
-        }
-        if self.frames.len() <= block as usize {
-            self.frames.resize(block as usize + 1, Vec::new());
-        }
-        let frames = &mut self.frames[block as usize];
-        *frames = frames.iter().filter_map(|at| moved_to(*at)).chain(framed_new).collect();
-        frames.sort_unstable();
-        for (map, added) in [&mut self.defs, &mut self.uses, &mut self.needs].into_iter().zip(added) {
-            let mut emptied = false;
-            for (value, list) in map.iter_mut() {
-                let from = list.partition_point(|at| at.0 < block);
-                let to = list.partition_point(|at| at.0 <= block);
-                let put = added.get(value);
-                if from == to && put.is_none() {
-                    continue;
-                }
-                if put.is_none() && in_order && list[from..to].iter().all(|(_, at)| to_new[*at as usize] != GONE) {
-                    for entry in &mut list[from..to] {
-                        entry.1 = to_new[entry.1 as usize];
-                    }
-                    continue;
-                }
-                let mut here: Vec<At> = list[from..to]
-                    .iter()
-                    .filter_map(|(_, at)| moved_to(*at))
-                    .chain(put.into_iter().flatten().copied())
-                    .map(|at| (block, at))
-                    .collect();
-                if !in_order || put.is_some() {
-                    here.sort_unstable();
-                }
-                emptied |= here.is_empty();
-                list.splice(from..to, here);
-            }
-            for (value, put) in &added {
-                if !map.contains_key(value) {
-                    map.insert(*value, put.iter().map(|at| (block, *at)).collect());
-                }
-            }
-            if emptied {
-                map.retain(|_, list| !list.is_empty());
-            }
-        }
-    }
 }
 
 /// The body the postings were made of, held so that an instruction's address is

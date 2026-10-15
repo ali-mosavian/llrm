@@ -373,7 +373,7 @@ pub fn materialized(
     let mut touching: Vec<Vec<u32>> = vec![Vec::new(); body.blocks.len()];
     postings::following(&body, |postings| {
         for value in &relevant {
-            for at in postings.defs(*value).iter().chain(postings.uses(*value)).chain(postings.needs(*value)) {
+            for at in postings.defs_at(*value).chain(postings.uses_at(*value)).chain(postings.needs_at(*value)) {
                 touching[at.0 as usize].push(at.1);
             }
         }
@@ -650,7 +650,7 @@ pub fn materialized(
     let result = _remove_abandoned_in(result, &abandoned, &marked);
     // The values made that something still defines.
     let made = postings::following(&result, |postings| {
-        made.iter().copied().filter(|value| !postings.defs(*value).is_empty()).collect::<BTreeSet<u32>>()
+        made.iter().copied().filter(|value| postings.defs_count(*value) != 0).collect::<BTreeSet<u32>>()
     });
     Ok((result, made, merged))
 }
@@ -748,7 +748,7 @@ fn _short_update_runs<'b>(
     let relevant: BTreeSet<usize> = postings::following(body, |postings| {
         stored
             .iter()
-            .flat_map(|&value| postings.defs(value).iter().map(move |at| (value, at)))
+            .flat_map(|&value| postings.defs(value).into_iter().map(move |at| (value, at)))
             .filter(|(value, at)| {
                 let insns = &body.blocks[at.0 as usize].insns;
                 matches!(
@@ -852,8 +852,8 @@ fn _local_updates<'b>(
     let relevant: BTreeSet<usize> = postings::following(body, |postings| {
         stored
             .iter()
-            .flat_map(|&value| postings.defs(value).iter().map(move |at| (value, at)))
-            .filter(|(value, at)| _at(body, **at).uses.contains(value))
+            .flat_map(|&value| postings.defs(value).into_iter().map(move |at| (value, at)))
+            .filter(|(value, at)| _at(body, *at).uses.contains(value))
             .map(|(_, at)| at.0 as usize)
             .collect()
     });
@@ -1027,7 +1027,7 @@ fn _copied_by(
     postings: &Postings,
     value: u32,
 ) -> BTreeSet<u32> {
-    let mut at: Vec<At> = postings.defs(value).iter().chain(postings.uses(value)).copied().collect();
+    let mut at: Vec<At> = postings.defs_at(value).chain(postings.uses_at(value)).collect();
     at.sort_unstable();
     at.dedup();
     EXAMINED.with(|examined| examined.set(examined.get() + at.len()));
@@ -1160,7 +1160,7 @@ fn siblings_over(
     let occurs_of = |value: u32| -> Arc<Vec<(f64, Arc<Insn>)>> {
         Arc::clone(occurs_known.borrow_mut().entry(value).or_insert_with(|| {
             let deep = deep.get_or_init(|| llrm_support::debug::timed("siblings depths", || ranges::depths(body)));
-            let mut at: Vec<At> = postings.defs(value).iter().chain(postings.uses(value)).copied().collect();
+            let mut at: Vec<At> = postings.defs_at(value).chain(postings.uses_at(value)).collect();
             at.sort_unstable();
             at.dedup();
             let each = |block: u32| ranges::level(deep.get(&body.blocks[block as usize].at).copied().unwrap_or(0));
@@ -1645,7 +1645,7 @@ fn _copied_with(
     values: &BTreeSet<u32>,
 ) -> IndexMap<u32, Vec<Result<u32, i64>>> {
     let mut at: Vec<At> = postings::following(body, |postings| {
-        values.iter().flat_map(|value| postings.defs(*value).iter().chain(postings.uses(*value))).copied().collect()
+        values.iter().flat_map(|value| postings.defs_at(*value).chain(postings.uses_at(*value))).collect()
     });
     at.sort_unstable();
     at.dedup();
@@ -2331,7 +2331,7 @@ fn _existing_colors_by(
     let mut named: Vec<Named<'_>> = Vec::new();
     postings::following(body, |postings| {
         for (block_index, block) in body.blocks.iter().enumerate() {
-            for &at in postings.frames(block_index) {
+            for at in postings.frames(block_index) {
                 let one = &block.insns[at as usize];
                 let mut names = false;
                 let mut places = Places::default();
@@ -3385,7 +3385,7 @@ fn _remove_abandoned_in(
         body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)),
     );
     let used = |value: u32, postings: &Postings| {
-        !postings.uses(value).is_empty() || !postings.needs(value).is_empty() || elsewhere.contains(&value)
+        postings.uses_count(value) != 0 || postings.needs_count(value) != 0 || elsewhere.contains(&value)
     };
     let result = postings::following(&body, |postings| {
         let removable =
@@ -4033,7 +4033,8 @@ fn _copies_by(
 ) -> IndexMap<u32, u32> {
     let mut found: Vec<(At, u32, u32)> = Vec::new();
     for &value in values {
-        let [at] = postings.defs(value) else { continue };
+        let defs = postings.defs(value);
+        let [at] = defs.as_slice() else { continue };
         let one = _at(body, *at);
         let (Some(what), [defined], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else {
             continue;
@@ -4049,7 +4050,7 @@ fn _copies_by(
             && from.value == *source
             && dest.width == from.width
             && *defined == value
-            && postings.defs(*source).len() == 1
+            && postings.defs_count(*source) == 1
         {
             found.push((*at, value, *source));
         }
@@ -4147,7 +4148,7 @@ fn _widest_by(
 ) -> IndexMap<u32, u32> {
     let mut order: Vec<(At, u32, u32)> = Vec::new();
     for &value in values {
-        let mut at: Vec<At> = postings.defs(value).iter().chain(postings.uses(value)).copied().collect();
+        let mut at: Vec<At> = postings.defs_at(value).chain(postings.uses_at(value)).collect();
         at.sort_unstable();
         at.dedup();
         let Some(&first) = at.first() else { continue };

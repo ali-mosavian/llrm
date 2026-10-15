@@ -913,7 +913,7 @@ pub fn _interference_among(
     let touched: Option<BTreeSet<usize>> = only.map(|only| {
         crate::backend::postings::following(body, |postings| {
             only.iter()
-                .flat_map(|value| postings.defs(*value).iter().chain(postings.uses(*value)))
+                .flat_map(|value| postings.defs_at(*value).chain(postings.uses_at(*value)))
                 .map(|at| at.0 as usize)
                 .collect()
         })
@@ -924,7 +924,7 @@ pub fn _interference_among(
     let naming: Option<HashMap<usize, Vec<usize>>> = only.map(|only| {
         crate::backend::postings::following(body, |postings| {
             let mut found: HashMap<usize, Vec<usize>> = HashMap::default();
-            for at in only.iter().flat_map(|value| postings.defs(*value).iter().chain(postings.uses(*value))) {
+            for at in only.iter().flat_map(|value| postings.defs_at(*value).chain(postings.uses_at(*value))) {
                 found.entry(at.0 as usize).or_default().push(at.1 as usize);
             }
             found
