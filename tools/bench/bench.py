@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm
 sys.path.insert(0, str(next((Path(__file__).resolve().parents[2] / "crates" / "target").glob("*/vsgcc"))))  # wrap.py: the comparison with gcc and clang's
 
 import cpulimit  # noqa: E402
+import basecounts  # noqa: E402
 import maps  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
@@ -761,6 +762,29 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     return lines
 
 
+def base_dry_run(measured: dict, args, old: list[str]) -> list[str]:
+    """The verdict against the base's counts, beside the committed baselines': printed, never failing the gate (until both agree on
+    enough PRs, then the baselines go: tools/bench/basecounts.py). Where they disagree the lines say so."""
+    try:
+        import measure
+
+        head = measure.git("rev-parse", "HEAD")
+        base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
+        # the build lock too: measure.py builds its bases in one tree and target, and the binaries must stay while they are measured
+        with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"), measure.locked("build"):
+            base = basecounts.base_counts(
+                base_sha, args.opt, measure.tree_of, measure.built, lambda directory, opts: basecounts.measure_in_subprocess(directory, opts, args.work / "base")
+            )
+        worse, better, stale = basecounts.judge(measured, base, basecounts.waivers())
+        differing = basecounts.differences(old, worse, better)
+    except BaseException as why:  # noqa: BLE001: a dry run must not fail the gate
+        return [f"BASE: dry run failed: {type(why).__name__}: {str(why)[-300:]}"]
+    lines = [f"BASE {base_sha[:9]}: {len(worse)} worse, {len(better)} better; {len(differing)} differ from expected.toml" + (f"; {len(stale)} stale waivers" if stale else "")]
+    lines += [f"BASE-WORSE {one[0]}: {one[1]} {one[3]} > {one[2]}" for one in worse]
+    lines += [f"BASE-DIFF {one}" for one in differing] + [f"BASE-STALE {one}" for one in stale]
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
@@ -770,6 +794,7 @@ def main() -> int:
     parser.add_argument("--bless", action="store_true")
     parser.add_argument("--batch", action="store_true", help="the merge train's mode: a count below its baseline is listed as BETTER, not failed; with --bless, only when nothing else fails")
     parser.add_argument("--reason", default="")
+    parser.add_argument("--no-judge", action="store_true", help="measure, write --json and stop: the base's counts are made this way")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
@@ -780,6 +805,8 @@ def main() -> int:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
+    if args.no_judge:
+        return 0
     if args.bless and args.batch:
         # blessing a batch writes only numbers that went down: anything worse, missing or broken is not blessed over
         if (left := split_better(judge(measured, args.select, args.opt))[0]):
@@ -809,6 +836,8 @@ def main() -> int:
         print("FAIL", one)
     for one in better:
         print("BETTER", one)
+    if os.environ.get("LLRM_BENCH_BASE") == "dry":
+        print(*base_dry_run(measured, args, [*problems, *better]), sep="\n")
     print(f"{len(measured)} measurements: {len(problems)} problems" + (f", {len(better)} better" if args.batch else ""))
     return 1 if problems else 0
 
