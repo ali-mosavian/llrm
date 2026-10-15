@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/algebraic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/algebraic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:f4ea7d0252021bd4de94b664d3bb12cc4ad626865745efa0b2828b12136204cd -->
+<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:5def9edd644fd23d55deb9ece00ed1501f873035b294ca52c49ba254a640fa05 -->
 
 # algebraic
 
@@ -38,9 +38,9 @@ original did not. The rules fall in groups.
   `icmp ne (sext i1 x), 0` is `x`.
 - Divisions: `udiv` and `urem` by a power of two are a shift and a mask;
   `sdiv` and `srem` of a dividend proved non-negative (`ranges`, or a clear
-  sign bit) are unsigned, by a power of two always, by another constant only
-  at 32 bits in a 32-bit-pointer segment and not under `size`, where the
-  signed form is a byte shorter; other `sdiv` and `srem` by a power of two
+  sign bit) are unsigned, by a power of two always, by another constant at
+  any width and target but under `size`, where the signed form is a byte
+  shorter (selection prices the reciprocal, prefixes included); other `sdiv` and `srem` by a power of two
   are an `ashr`, a bias and a shift; a fixed-point product or quotient by a
   whole number cancels its scale.
 - Masks and demanded bits: `and x, C` where `C` covers every bit `x` may set
