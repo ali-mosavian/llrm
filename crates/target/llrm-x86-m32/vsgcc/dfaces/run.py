@@ -153,23 +153,24 @@ def run(variant, limit=400_000_000):
         if not harness.BASE <= address < ENV_BASE:
             # Out of d_faces: the call that left it, or its return, is the last instruction charged.
             if st["prev"] is not None:
-                ins, mem = cache[st["prev"]][:2]
-                total["clocks"] += cost(ins, True, True, mem, st["multiplier"])
+                ins, mem, _, prefixed = cache[st["prev"]]
+                total["clocks"] += cost(ins, True, True, mem, st["multiplier"], prefixed)
                 st["prev"] = None
             return
         info = cache.get(address)
         if info is None:
-            ins = Decoder(32, bytes(uc.mem_read(address, min(size, 15))), ip=address).decode()
+            raw = bytes(uc.mem_read(address, min(size, 15)))
+            ins = Decoder(32, raw, ip=address).decode()
             mem = 0 if ins.mnemonic == Mnemonic.LEA else sum(1 for i in range(ins.op_count) if ins.op_kind(i) in MEMORY)
             rep = ins.has_rep_prefix or ins.has_repe_prefix or ins.has_repne_prefix
-            info = cache[address] = (ins, mem, rep)
-        ins, mem, rep = info
+            info = cache[address] = (ins, mem, rep, harness.clocks.prefixes(raw))
+        ins, mem, rep, prefixed = info
         if rep and uc.reg_read(UC_X86_REG_ECX) == 0:
             return
         prev = st["prev"]
         if prev is not None and cache[prev][0].mnemonic != Mnemonic.NOP:
             pins = cache[prev][0]
-            total["clocks"] += cost(pins, address != prev + pins.len, st["firstrep"], cache[prev][1], st["multiplier"])
+            total["clocks"] += cost(pins, address != prev + pins.len, st["firstrep"], cache[prev][1], st["multiplier"], cache[prev][3])
         st["firstrep"] = not (rep and prev == address)
         st["prev"] = address
         if ins.mnemonic == Mnemonic.NOP:
