@@ -148,7 +148,9 @@
 //! the first shape in the order `Retainable`, `Scoped`, `Addressed`,
 //! `Unfolded` that the spills admit is tried, plus `Whole` without
 //! splitting. A trial is kept only if it is cheaper and spilled none of its
-//! protected values. The frame is restored between trials.
+//! protected values: it stops at the first spill of one (`ABANDONED`), since
+//! the rounds after it could not change what is kept. The frame is restored
+//! between trials.
 //!
 //! ## Applying
 //! `applied` replaces every operand's value by its register at its width
@@ -1979,6 +1981,7 @@ fn _allocated(
     // and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
     let mut splits_made = 0_usize;
+    let abandon: BTreeSet<u32> = ABANDON_IF_SPILLED.with(|set| set.borrow().clone());
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -2381,6 +2384,9 @@ fn _allocated(
                         if kept.contains(one) {
                             stage.insert(*one, Stage::Assign);
                         } else {
+                            if abandon.contains(one) {
+                                return Err(Error::Value(ABANDONED.to_owned()));
+                            }
                             spilled.insert(*one);
                             stage.insert(*one, Stage::Done);
                         }
@@ -2606,6 +2612,32 @@ fn _allocated(
         body,
         spilled,
     ))
+}
+
+/// What a trial's allocation returns once a value its shape protects is
+/// spilled: whatever else it does it is dropped (`kept` below), so the rounds
+/// after that spill are work no output reads.
+pub const ABANDONED: &str = "trial abandoned: a value it protects was spilled";
+
+thread_local! {
+    /// The values whose spilling makes the allocation running (a trial) one
+    /// that cannot be kept.
+    static ABANDON_IF_SPILLED: std::cell::RefCell<BTreeSet<u32>> = const { std::cell::RefCell::new(BTreeSet::new()) };
+    /// Whether trials are abandoned (a test turns it off to see that no output
+    /// changes), and how many were.
+    static ABANDONING: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static ABANDONED_TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many trials this thread abandoned, for a test.
+pub fn abandoned_trials() -> usize {
+    ABANDONED_TRIALS.with(std::cell::Cell::get)
+}
+
+/// Whether trials are abandoned once a protected value is spilled (on); a test
+/// turns it off.
+pub fn abandoning(on: bool) {
+    ABANDONING.with(|flag| flag.set(on));
 }
 
 thread_local! {
@@ -4062,8 +4094,18 @@ impl RegAlloc {
                     }
                     frame.borrow_mut().restore(&start);
                     TRIALS.with(|count| count.set(count.get() + 1));
-                    let trial = match run("regalloc trial", &candidate, &unspillable, &protected, splitting) {
+                    if ABANDONING.with(std::cell::Cell::get) {
+                        ABANDON_IF_SPILLED.with(|set| *set.borrow_mut() = kept.clone());
+                    }
+                    let trial = run("regalloc trial", &candidate, &unspillable, &protected, splitting);
+                    ABANDON_IF_SPILLED.with(|set| set.borrow_mut().clear());
+                    let trial = match trial {
                         Ok(trial) => trial,
+                        Err(Error::Value(text)) if text == ABANDONED => {
+                            ABANDONED_TRIALS.with(|count| count.set(count.get() + 1));
+                            llrm_support::debug!("regalloc", "  trial {shape:?} (splitting {splitting}): abandoned");
+                            continue;
+                        }
                         Err(other) => return Err(other),
                     };
                     llrm_support::debug!(

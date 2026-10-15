@@ -1151,3 +1151,46 @@ entry:
     let (gone, _) = pipelined(text, o2);
     assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
 }
+
+/// tile.c's inner sum is 40 trips of one load and one add. gcc's
+/// `max-completely-peel-times` (16) keeps it a loop at -O3, as clang's is not
+/// capped: -Omax completes it (tile -O3 8,159 clocks against clang's 4,236;
+/// -Omax unrolls it).
+#[test]
+fn test_a_forty_trip_loop_is_completed_at_omax_and_kept_at_o3() {
+    let text = "@t = global [40 x i16] zeroinitializer
+
+define i16 @f() {
+b0:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b ]
+  %s = phi i16 [ 0, %b0 ], [ %a, %b ]
+  %go = icmp slt i16 %i, 40
+  br i1 %go, label %b, label %x
+
+b:
+  %o = mul i16 %i, 2
+  %p = getelementptr i8, ptr @t, i16 %o
+  %v = load i16, ptr %p
+  %a = add i16 %s, %v
+  %n = add i16 %i, 1
+  br label %h
+
+x:
+  ret i16 %s
+}
+";
+    let looped = |options: pipeline::Options| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+            pipeline::applied(program, &Applied { options, ..Applied::default() })
+        })
+        .and_then(|done| done)
+        .unwrap();
+        llrm_mir::print::module(&module).contains("phi i16")
+    };
+    assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
+    assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
+}

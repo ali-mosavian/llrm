@@ -127,7 +127,8 @@ fn each_level_selects_gcc_s_passes() {
         (0, 225, 250)
     );
     let max = pipeline(&["-Omax"]);
-    assert_eq!(max.limits, Limits { target_percent: 200, ..Limits::default() });
+    assert_eq!(max.limits, Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() });
+    assert_eq!(pipeline(&["-O3"]).limits.max_unroll_iterations, 16, "only -Omax lifts the trip cap");
     assert_eq!((max.inline, max.unroll, max.peel), (Threshold { cp_clone: true, ..Threshold::new(250) }, true, true));
     let os = pipeline(&["-Os"]);
     assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));

@@ -1,4 +1,4 @@
-reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
+reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 72232466
-code_bytes = 1390
+instructions = 72232464
+code_bytes = 1385
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73091465
-code_bytes = 1357
+instructions = 73091459
+code_bytes = 1352
 data_bytes = 4733
 bss_bytes = 0
 
