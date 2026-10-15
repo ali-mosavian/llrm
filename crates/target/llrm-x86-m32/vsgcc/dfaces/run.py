@@ -86,18 +86,21 @@ def build_variant(variant):
     harness.code_bytes reads the sizes."""
     (OUT / "o").mkdir(parents=True, exist_ok=True)
     (OUT / "b").mkdir(parents=True, exist_ok=True)
-    level = variant[-2:] if variant[-2:] in ("O0", "O1", "O2", "O3", "Os") else "O2"
-    if variant.startswith("llrm"):
+    elf_llrm = variant.startswith("llrmElf")
+    if variant.startswith("llrm") and not elf_llrm:
         level = variant[4:] or "O2"
         obj = OUT / "o" / f"dfaces.{variant}.obj"
         sh([harness.LLRM, "-m32", "-mabi=sysv", f"-{level}", "-march=i486", *INCLUDES, "-o", obj, SOURCE])
         return obj
-    compiler = "gcc" if variant.startswith("gcc") else "clang"
-    level = variant[len(compiler):]
+    compiler = "llrm" if elf_llrm else "gcc" if variant.startswith("gcc") else "clang"
+    level = (variant[len("llrmElf"):] or "O2") if elf_llrm else variant[len(compiler):]
     obj = OUT / "b" / f"dfaces.{variant}.o"
-    sh([compiler, *GCC_FLAGS, f"-{level}", *INCLUDES, "-c", SOURCE, "-o", obj])
+    if elf_llrm:
+        sh([harness.LLRM, "-m32", "-mabi=sysv", f"-{level}", "-march=i486", "-fobject-format=elf", *INCLUDES, "-o", obj, SOURCE])
+    else:
+        sh([compiler, *GCC_FLAGS, f"-{level}", *INCLUDES, "-c", SOURCE, "-o", obj])
     runtime = []
-    if level != "O0":
+    if level != "O0" and not elf_llrm:
         runtime = [sh(["gcc", "-m32", "--print-libgcc-file-name"]).stdout.strip()] if compiler == "gcc" else [sh(["clang", "-m32", "--rtlib=compiler-rt", "-print-libgcc-file-name"]).stdout.strip()]
     elf = OUT / "b" / f"dfaces.{variant}.elf"
     sh(["ld", "-m", emulation(), "-static", "-e", "0", f"-Ttext={harness.BASE:#x}", f"--just-symbols={stub()}", f"--just-symbols={build_env()}",
@@ -117,7 +120,7 @@ def run(variant, limit=400_000_000):
     stub_elf, env_elf = stub(), build_env()
     stub_symbols, env_symbols = nm(stub_elf), nm(env_elf)
     built = build_variant(variant)
-    if variant.startswith("llrm"):
+    if variant in harness.OMF_VARIANTS:
         segments, symbols = omf_link(built, {**stub_symbols, **env_symbols})
     else:
         segments, symbols = elf_segments(built), nm(built)
@@ -133,6 +136,8 @@ def run(variant, limit=400_000_000):
         uc.mem_write(env_symbols[slot], struct.pack("<I", pick(symbols, name)))
     report_at = {stub_symbols["report"]}
     total, cache, reports = Counter(), {}, []
+    by_ins, by_clock = Counter(), Counter()   # per address, for the per-function rows
+    entries = set()                           # where a call into d_faces's own code landed: a function with no symbol begins there
     st = dict(prev=None, firstrep=True, multiplier=None)
 
     def hook(uc, address, size, _):
@@ -145,7 +150,9 @@ def run(variant, limit=400_000_000):
             # Out of d_faces: the call that left it, or its return, is the last instruction charged.
             if st["prev"] is not None:
                 ins, mem = cache[st["prev"]][:2]
-                total["clocks"] += cost(ins, True, True, mem, st["multiplier"])
+                spent = cost(ins, True, True, mem, st["multiplier"])
+                total["clocks"] += spent
+                by_clock[st["prev"]] += spent
                 st["prev"] = None
             return
         info = cache.get(address)
@@ -158,9 +165,13 @@ def run(variant, limit=400_000_000):
         if rep and uc.reg_read(UC_X86_REG_ECX) == 0:
             return
         prev = st["prev"]
+        if prev is not None and cache[prev][0].mnemonic == Mnemonic.CALL:
+            entries.add(address)
         if prev is not None and cache[prev][0].mnemonic != Mnemonic.NOP:
             pins = cache[prev][0]
-            total["clocks"] += cost(pins, address != prev + pins.len, st["firstrep"], cache[prev][1], st["multiplier"])
+            spent = cost(pins, address != prev + pins.len, st["firstrep"], cache[prev][1], st["multiplier"])
+            total["clocks"] += spent
+            by_clock[prev] += spent
         st["firstrep"] = not (rep and prev == address)
         st["prev"] = address
         if ins.mnemonic == Mnemonic.NOP:
@@ -168,10 +179,12 @@ def run(variant, limit=400_000_000):
             return
         total["ins"] += 1
         total["mem"] += mem
+        by_ins[address] += 1
         if mem and ins.mnemonic != Mnemonic.LEA:
             late = misaligned_operands(uc, ins)
             total["misaligned"] += late
             total["clocks"] += MISALIGNED * late
+            by_clock[address] += MISALIGNED * late
         st["multiplier"] = multiplier_of(uc, ins) if ins.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL) else None
 
     uc.hook_add(UC_HOOK_CODE, hook)
@@ -179,7 +192,29 @@ def run(variant, limit=400_000_000):
     assert total["ins"], f"{variant}: d_faces was never entered"
     covered = struct.unpack(f"<{len(COVERAGE)}I", bytes(uc.mem_read(env_symbols["coverage"], 4 * len(COVERAGE))))
     return dict(prog="dfaces", variant=variant, ins=total["ins"], mem=total["mem"], misaligned=total["misaligned"], nops=total["nops"],
-                clocks=total["clocks"], code=harness.code_bytes("dfaces", variant), reports=reports, coverage=dict(zip(COVERAGE, covered)))
+                clocks=total["clocks"], code=harness.code_bytes("dfaces", variant), reports=reports, coverage=dict(zip(COVERAGE, covered)),
+                functions=per_function(built, by_ins, by_clock, entries) if built.suffix == ".elf" else {})
+
+
+def per_function(elf, by_ins, by_clock, entries):
+    """Executed instructions and clocks of each function of the linked ELF, from its symbol table: a function runs to the next symbol
+    (llrm's ELF symbols carry no size, and none for a static function: `sub_ADDRESS` is where a call landed). Functions a compiler
+    inlined are not there."""
+    found = []
+    for line in sh(["nm", "-n", "--defined-only", elf]).stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 3 and parts[1] in "tT" and harness.BASE <= int(parts[0], 16) < ENV_BASE:
+            found.append((int(parts[0], 16), parts[2]))
+    named = {address for address, _ in found}
+    # llrm writes no symbol for a static function: it begins where a call landed.
+    found = sorted(found + [(address, f"sub_{address:x}") for address in entries if address not in named])
+    out = {}
+    for at, (address, name) in enumerate(found):
+        end = found[at + 1][0] if at + 1 < len(found) else ENV_BASE
+        ins = sum(count for a, count in by_ins.items() if address <= a < end)
+        if ins:
+            out[name.lstrip("_")] = (ins, sum(count for a, count in by_clock.items() if address <= a < end))
+    return out
 
 
 def geomean(values):
@@ -190,6 +225,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--levels", nargs="*", default=list(LEVELS))
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--functions", action="store_true", help="per function: executed instructions and clocks, llrm built as ELF for its symbols")
     args = parser.parse_args()
     reference = run("gccO0")
     assert len(reference["reports"]) == 1, reference["reports"]
@@ -199,6 +235,9 @@ def main():
     for level in args.levels:
         for variant in (f"llrm{'' if level == 'O2' else level}", f"gcc{level}", f"clang{level}"):
             rows[variant] = run(variant)
+    if args.functions:
+        for level in args.levels:
+            rows[f"llrmElf{level}"] = run(f"llrmElf{level}")
     keys = ("ins", "mem", "misaligned", "clocks", "code")
     print("scene reaches: " + ", ".join(f"{name} {count}" for name, count in reference["coverage"].items()))
     print(f"{'variant':10}" + "".join(f"{k:>11}" for k in keys) + "   ok")
@@ -211,6 +250,21 @@ def main():
         for other in ("gcc", "clang"):
             ref = rows[f"{other}{level}"]
             print(f"-{level} llrm/{other}: " + "  ".join(f"{k} {llrm[k] / max(1, ref[k]):.2f}" for k in keys))
+    if args.functions:
+        for level in args.levels:
+            llrm_elf = rows[f"llrmElf{level}"]
+            omf = rows[f"llrm{'' if level == 'O2' else level}"]
+            # The same compiler, another object format: the same code, so the same count.
+            assert (llrm_elf["ins"], llrm_elf["clocks"]) == (omf["ins"], omf["clocks"]), (level, llrm_elf["ins"], omf["ins"])
+            names = sorted({n for v in (f"gcc{level}", f"clang{level}", f"llrmElf{level}") for n in rows[v]["functions"]},
+                           key=lambda n: -rows[f"llrmElf{level}"]["functions"].get(n, (0, 0))[1])
+            print(f"\n-{level} per function, executed instructions / clocks")
+            print(f"{'function':22}{'gcc':>20}{'clang':>20}{'llrm':>20}   llrm/gcc clk")
+            for name in names:
+                cells = [rows[v]["functions"].get(name) for v in (f"gcc{level}", f"clang{level}", f"llrmElf{level}")]
+                text = [f"{c[0]:>9}/{c[1]:<9}" if c else f"{'inlined':>19}" for c in cells]
+                ratio = f"{cells[2][1] / cells[0][1]:.2f}" if cells[0] and cells[2] else ""
+                print(f"{name:22}" + " ".join(f"{t:>19}" for t in text) + f"   {ratio}")
     if args.json:
         args.json.write_text("".join(json.dumps({k: v for k, v in r.items() if k != "reports"}) + "\n" for r in rows.values()))
     return 0 if all(r["ok"] for r in rows.values()) else 1

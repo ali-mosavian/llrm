@@ -5,7 +5,7 @@ The code-quality scoreboard for one file: QCport's `render/d_faces.c`, the per-f
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/dfaces/run.py [--levels O1 O2 O3 Os] [--json OUT]
     uv run --project tools --group dev pytest crates/target/llrm-x86-m32/vsgcc/dfaces
 
-About a minute. Products go to `$VSGCC_WORK` (default `~/scratch/vsgcc-work`); the QCport sources are read from `$QCPORT` (default `~/scratch/qbq-llrm/src`).
+`--functions` adds executed instructions and clocks per function (llrm built as ELF for the symbols; gcc and clang inline some, llrm's static functions show as `sub_ADDRESS`, where a call landed). About a minute. Products go to `$VSGCC_WORK` (default `~/scratch/vsgcc-work`); the QCport sources are read from `$QCPORT` (default `~/scratch/qbq-llrm/src`).
 
 | File | Does |
 |---|---|
