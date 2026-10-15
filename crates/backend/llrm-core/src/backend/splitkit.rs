@@ -1900,6 +1900,7 @@ mod tests {
         assert!(std::rc::Rc::ptr_eq(&first, &again), "the second ask found the occurrences again");
         assert_eq!(body.facts.0.counted("split-names"), 3, "the three instructions naming v3, once");
         assert_eq!(blocks.names(4).len(), 2, "another value is found for itself");
+    }
 
     /// Each split made the frequency of every block of the function again
     /// from its loop depths (`split placed`: 18 M of `d_faces` -O1): they are
