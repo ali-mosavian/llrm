@@ -868,3 +868,45 @@ fn a_body_a_function_pass_edited_is_in_the_log_of_edits() {
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(LOGGED.get(), 1, "the edit the pass made was not reported");
 }
+
+/// Which edits keep every live value's meaning, from the log alone: finding a
+/// value again and erasing what it replaced do; an operand set to another
+/// value, a store made and a block made do not.
+#[test]
+fn sound_edits_are_read_from_the_log_not_promised_by_a_pass() {
+    use crate::passes::sound_edits;
+    let mut module = parse::module(
+        "define i16 @f(i16 %x, ptr %p) {\nentry:\n  %a = add i16 %x, 1\n  %b = add i16 %x, 1\n  %c = add i16 %a, %b\n  ret i16 %c\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let (_, function) = module.function_mut("f").expect("@f");
+    let find = |function: &Function, name: &str| {
+        function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| {
+                function
+                    .instruction(inst)
+                    .result
+                    .is_some_and(|value| function.value(value).name.as_deref() == Some(name))
+            })
+            .expect("the instruction")
+    };
+    let value_of = |function: &Function, inst| function.instruction(inst).result.expect("a value");
+    let (a, b, c) = (find(function, "a"), find(function, "b"), find(function, "c"));
+    let before = function.mark();
+    function.replace_value(value_of(function, b), Operand::Value(value_of(function, a)));
+    function.erase(b).expect("unused now");
+    assert!(sound_edits(function, function.changes_since(before).unwrap(), false), "found again, then erased");
+    assert!(
+        !sound_edits(function, function.changes_since(before).unwrap(), true),
+        "the same, for a result that names values"
+    );
+    let before = function.mark();
+    function.set_operand(c, 0, Operand::Value(value_of(function, a)));
+    assert!(!sound_edits(function, function.changes_since(before).unwrap(), false), "an operand set to another value");
+    let before = function.mark();
+    let ret = function.terminator(function.entry().unwrap()).unwrap();
+    function.erase(ret).expect("the last instruction");
+    assert!(!sound_edits(function, function.changes_since(before).unwrap(), false), "a terminator erased");
+}
