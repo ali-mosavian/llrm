@@ -5402,8 +5402,12 @@ impl Selector<'_, '_, '_> {
         // A convention that passes in registers states what a call destroys, by
         // the registers it used.
         let changed = placed.as_ref().map(|(entry, placement)| {
-            let result =
-                (!self.types().is_void(instruction.ty)).then(|| self.size(instruction.ty)).transpose()?.map(i64::from);
+            // A float comes back in st(0): no general register holds it.
+            let float = self.arch.float_stack() > 0 && matches!(self.types().get(instruction.ty), Type::Float(_));
+            let result = (!self.types().is_void(instruction.ty) && !float)
+                .then(|| self.size(instruction.ty))
+                .transpose()?
+                .map(i64::from);
             let names = entry.clobbers(&placement.used, result);
             // The selectors the description names no more than a contract does
             // (FS, GS) are as much the callee's to use.
