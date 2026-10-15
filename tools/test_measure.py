@@ -140,9 +140,10 @@ def test_a_base_is_built_the_way_the_gate_builds(tmp_path, monkeypatch):
     base built the other way would be measured with another compiler than the branch."""
     ran = []
     monkeypatch.setattr(measure, "BUILD", tmp_path)
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
     monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
-    assert measure.built("0" * 40) == tmp_path / "target" / "release"
+    assert measure.built("0" * 40) == tmp_path / "snapshots" / ("release" + "0" * 12)
     assert ran == [["bash", "-c", measure.gate.MEASURE_BUILD]]
 
 
@@ -318,9 +319,10 @@ def test_a_measurement_is_of_one_profile_and_the_dist_base_is_built_with_the_dis
     assert measure.method() != release
     ran = []
     monkeypatch.setattr(measure, "BUILD", tmp_path)
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
     monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
-    assert measure.built("0" * 40) == tmp_path / "target" / "dist"
+    assert measure.built("0" * 40) == tmp_path / "snapshots" / ("dist" + "0" * 12)
     assert ran == [["bash", "-c", "cargo build --profile dist -q --bins"]]
 
 
@@ -587,3 +589,48 @@ def test_a_step_then_linear_row_is_not_a_superlinear_slope_and_a_quadratic_one_i
     assert measure.grown(10.0, 40.0, 160.0) > 0
     mixed = {key: [10.0, 22.0, 56.0, 60.0]}  # 20% of the work at 2N is the quadratic term: x2.5 in the last doubling
     assert measure.step_rises(base_linear, mixed, tol)[1], "a real quadratic part is not hidden"
+
+def test_a_base_is_measured_from_a_snapshot_that_the_next_build_in_the_shared_tree_does_not_change(tmp_path, monkeypatch):
+    """Train 5's measure step died on `stale binaries in .../measure-build/.../release`: another base was checked out in the shared tree
+    and built while this one was measured, and the release directory it measured from changed under it."""
+    monkeypatch.setattr(measure, "BUILD", tmp_path)
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
+    release = tmp_path / "target" / "release"
+
+    def build(command, **kw):
+        release.mkdir(parents=True, exist_ok=True)
+        (release / "llrm-c").unlink(missing_ok=True)  # cargo links a new file, not the old inode
+        (release / "llrm-c").write_text(kw["env"]["WHO"])
+        (release / "llrm-c.d").write_text("llrm-c: src/lib.rs\n")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(measure.subprocess, "run", build)
+    monkeypatch.setenv("WHO", "first")
+    first = measure.built("a" * 40)
+    monkeypatch.setenv("WHO", "second")
+    second = measure.built("b" * 40)
+    assert (first / "llrm-c").read_text() == "first" and (second / "llrm-c").read_text() == "second" and first != second
+    assert not list(first.glob("*.d")), "dep-info is not linked: nothing is compared with a tree that has moved on"
+
+
+def test_the_build_lock_is_held_for_the_build_and_not_for_the_measurement(tmp_path, monkeypatch):
+    """A base was measured with the lock held (a bench run took 20 minutes of it): other sessions waited on a measurement, not a build."""
+    import fcntl
+
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(measure, "method", lambda: "m")
+    free = []
+
+    def measuring(jobs):
+        with open(tmp_path / "cache" / "build.lock", "w") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                free.append(True)
+            except BlockingIOError:
+                free.append(False)
+        return made(files(a=1)) | {"method": "m"}
+
+    monkeypatch.setattr(measure, "measure_all", measuring)
+    measure.base_measurement("f" * 40, 1, build=lambda sha: tmp_path)
+    assert free == [True]

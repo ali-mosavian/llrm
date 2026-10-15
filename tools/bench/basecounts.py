@@ -82,6 +82,18 @@ def waivers(root: Path = ROOT) -> list[dict]:
     return out
 
 
+def consume_waivers(root: Path, measured: dict) -> list[str]:
+    """Delete the waiver files whose every row the blessed counts now are: the baseline carries them, so the waiver is spent."""
+    spent = []
+    for path in sorted((root / "bench/waivers").glob("*.toml")):
+        rows = tomllib.loads(path.read_text()).get("row", [])
+        parts = [row["label"].split(" ") for row in rows]
+        if rows and all(measured.get((p[0], p[1], p[2].lstrip("-")), {}).get(row["counter"]) == row["to"] for p, row in zip(parts, rows)):
+            path.unlink()
+            spent.append(path.name)
+    return spent
+
+
 def judge(measured: dict, base: dict, waived: list[dict]) -> tuple[list[tuple], list[tuple], list[str]]:
     """(worse, better, stale waivers): each as (label, counter, base's, now). A row worse than the base's fails unless a waiver names
     its row and counter and the count it reaches; a waiver that excused nothing is stale. Rows the base lacks (a new program) and rows
