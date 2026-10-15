@@ -280,17 +280,16 @@ Each replacement is priced with the executed-work model where the decision is ma
 | `Addressed`, `Unfolded` | at spill time, fold or unfold per use by local cost (X86 `unfoldMemoryOperand`) |
 | route B (`SsaSpill` first) | SsaSpill's pressure victims become an input: their spill weight is lowered by the pressure excess they relieve, so the queue takes them first where pressure is over the register count |
 
-### 4.3 Proof before the default flips
+### 4.3 Recovering the rows, and the gate
 
-The single run lands behind `-fallocation-single` in shadow mode: the gate compiles every corpus object both ways and reports per row.
+One allocation and one route are the default from stage 0b, by the user's decision. Stage 0b records, per row, what dropping best-of-six cost; on the fn it was +1.2% static instructions at -O1 to -O3 and +2.5% instructions with +4.3% memory operands at -Os (review 2.2). The in-run decisions of 4.2 are the follow-up that recovers those rows. Each decision lands on its own, and the gate compiles every corpus object with and without it and reports per row.
 - **m32:** the vsgcc table (`run.sh`, `table.py`). Executed instructions, memory operands and code bytes per program and level for llrm-single, llrm-today, gcc and clang.
 - **m16:** `tools/bench` rows against `expected.toml`, and the DOS compilers' rows ([vs-borland-watcom](../comparison/vs-borland-watcom.md)); the m32-vs-m16 requirement ([m32-vs-m16](../comparison/m32-vs-m16.md)).
-- **Flip rule:** at -O1, -O2, -O3 and -Os, m16 and m32:
-  - no row has more executed instructions or memory operands than today's best-of-six;
+- **Landing rule for a decision**, at -O1, -O2, -O3 and -Os, m16 and m32:
+  - no row has more executed instructions or memory operands than without it;
   - no -Os row has more code bytes;
-  - no row where llrm is at or below min(gcc, clang) today goes above it.
-
-  Until then each decision is tuned on the rows it loses, with the per-row report naming them.
+  - no row where llrm is at or below min(gcc, clang) goes above it.
+- **Done** when no row is worse than best-of-six was. The rows still short of that are named in each decision's PR.
 
 Where today stands at m32 on this tree (`run.sh`, executed instructions, llrm over the other compiler, geomean with the worst row in brackets):
 
@@ -343,18 +342,33 @@ A budget test fails like any other test, with the counter, the budget and the fi
 
 Each stage lands alone. Stages marked *identical* must pass `tools/identical.py` (every program and QCport module at every level, byte-identical, with the `LLRM_CHECK_*` modes on). Stages that change output must pass the gate of 4.3. The expected d_faces -O1 after each stage is projected from the measured component it removes; the components are in review sections 2-7.
 
-| # | stage | output | owner | removes (measured today) | d_faces -O1 after |
+| # | stage | output | owner | removes (measured) | d_faces -O1 after |
 |---|---|---|---|---|---|
 | 0 | Counters and budget tests in report mode; corpus baseline recorded (vsgcc rows, m16 bench, compile cost); `levels_time.py` fixed to list programs only | identical | worst-rows | — | 8.3 G |
-| 1 | **The core (2.3 and 3.1), MIR and LIR**: invertible log, stable ids, `Touched`, epochs, checkpoint/rollback replacing `fork` and pricing clones; the manager's `update`/`DEPENDS`/lazy `get`, one `ModuleAnalyses`, no invalidate-all inside passes, check modes | identical | worst-rows | marks lost to forks (every gvn run), cold module caches per segment (stamp 214 M, outer analyses 406 M), mid-pass invalidations | ~7.3 G |
-| 2 | LIR representation on the core (arena, operands, slots on instructions, use lists); allocator local edits, interference cache, recolouring pre-check | identical | regalloc | per-round O(B) work and ~85% of each allocation's 0.98 G, times 21 allocations | ~5.0 G |
-| 3 | Points-to: exact update rules from the log and a downstream region re-solve (3.2), escapes per query; memory SSA updater; `Annotated` per access; GlobalsAA and Summaries read the owner | identical (check modes) | through-memory | most of the 0.82 G pointer family and the 0.94 G of accesses and annotated | ~3.9 G |
-| 4 | MIR order and uses O(1); update rules for the rest of 3.2 (Loops, CallEffects, ThroughMemory, FloatFacts, Published); every `Shape::of` and private solve asks its owner | identical | worst-rows | the rest of the 1.95 G of analyses | ~3.3 G |
-| 5 | Change-driven continuation replacing rounds; `LLRM_CHECK_FIXPOINT` | identical | worst-rows | rounds 3-5 (0.64 G) and idle runs (0.88 G, less what 1-4 removed) | ~2.7 G |
-| 6 | LIR liveness owner with dirty blocks; peephole and jumps on dirty blocks; floatassign exits before rebuilding | identical | regalloc | ~75% of LIR clean-up's 0.98 G | ~2.0 G |
-| 7 | Single allocation and one LIR pipeline, in shadow mode; flip when 4.3 holds | changes, gated | regalloc | the remaining multiplicity (21 allocations and 13 LIR runs reduced to 11 of each) | ~1.4 G |
-| 8 | Per-pass budgets: each pass brought to ≤ 300 instructions per IR instruction per full run (hoist's rescans, gvn, decide, lsr, isel's constant factor, `hir verify` off in release) | identical | each pass's owner | the passes' own 1.7 G and the front end's verifier | ≤ 0.57 G (the 1.3 budget) |
+| 0b | **One allocation and one route by default**: the trials and the second route off (the user's decision; regalloc's flag-drop PR) | changes; rows recorded for 4.3 | regalloc | `-fno-allocation-search -fno-allocation-routes`: -2.98 G (-36%) | 5.3 G (measured) |
+| 1 | **The core (2.3 and 3.1), MIR and LIR**: invertible log, stable ids, `Touched`, epochs, checkpoint/rollback replacing `fork` and pricing clones; the manager's `update`/`DEPENDS`/lazy `get`, preserved from `reads()`, no invalidate-all inside passes, check modes | identical | worst-rows | recomputations that come out identical: ~0.56 G (see below) | ~4.7 G |
+| 2 | LIR representation on the core (arena, operands, slots on instructions, use lists); allocator local edits, interference cache, recolouring pre-check | identical | regalloc | ~85% of the one allocation's 0.98 G | ~3.9 G |
+| 3 | Points-to: exact update rules from the log and a downstream region re-solve (3.2), escapes per query; memory SSA updater; `Annotated` per access; GlobalsAA and Summaries read the owner | identical (check modes) | through-memory | the pointer family and memory SSA past what stage 1 removed, ~0.6 G | ~3.3 G |
+| 4 | MIR order and uses O(1); update rules for the rest of 3.2; every `Shape::of` and private solve asks its owner | identical | worst-rows | ~half of the analyses' remaining ~0.8 G | ~2.9 G |
+| 5 | Change-driven continuation replacing rounds; `LLRM_CHECK_FIXPOINT` | identical | worst-rows | passes' own work in runs that changed nothing (0.55 G) and in rounds 3-5 | ~2.4 G |
+| 6 | LIR liveness owner with dirty blocks; peephole and jumps on dirty blocks; floatassign exits before rebuilding | identical | regalloc | ~75% of LIR clean-up's 0.51 G | ~2.0 G |
+| 7 | The in-run decisions of 4.2, one at a time, recovering the rows 0b changed | changes, gated by 4.3 | regalloc | — (compile cost unchanged or slightly up) | ~2.0 G |
+| 8 | Per-pass budgets: each pass brought to ≤ 300 instructions per IR instruction per full run (hoist's rescans, gvn, decide, lsr, isel's constant factor, `hir verify` off in release) | identical | each pass's owner | the passes' remaining own ~1.2 G and the front end's verifier | ≤ 0.57 G (the 1.3 budget) |
+
+**Stage 1's premise, measured.** `LLRM_DEBUG` alone cannot say what the core saves; `LLRM_WHY` can. It records every recomputation of a function or module analysis, the pass that caused it, and whether the result came out the same. On d_faces -O1 with one allocation (2449 records):
+
+| outcome | count | est. M |
+|---|---|---|
+| `first` (nothing held) | 840 | 438 |
+| `same`, `same-untouched` (recomputed to an equal result) | 459 | 327 |
+| `kept-rerun-same`, `-untouched` (kept for update, rerun, equal) | 398 | 229 |
+| `replayed` (updated incrementally) | 474 | 237 |
+| `diff`, `kept-rerun-diff` (a real change) | 278 | 211 |
+
+`est. M` is the count times that analysis's mean own cost per call, so it is an estimate. Equal-result recomputations total ~0.56 G. By analysis: GlobalsAA 124 M (7 of its 12 runs, as worst-rows found), ThroughMemory 88, CallEffects 75, PointerValues 64, Annotated 47, points-to 44, FloatFacts 38. The passes behind them are mostly `dead` and `fold`: erasing dead instructions drops memory facts that come out the same. These are what preserved-from-`reads()` and update rules remove.
+
+Cold module caches are not the source. worst-rows measured both: keeping one `ModuleAnalyses` across segments changed nothing, and skipping GlobalsAA/Summaries for unaffected bodies saved 27 M of 8.5 G. The `first` row (438 M) is mostly first computations per body; stage 1 does not count on it.
 
 After stage 8, d_faces is at the section 1.3 budgets at every level, and the counted tests of section 6 hold.
 
-The order puts the core first: stage 1 is what every other stage builds on, and its section (2.3, 3.1) is written so it can start before the rest. Identical-output work comes next, where the gate is exact. Once 1 lands, stages 2 (regalloc), 3 (through-memory) and 4-5 (worst-rows) touch disjoint crates and can run in parallel. Stage 6 needs 2. Stage 7 needs 2 and 6. Stage 8 needs 4 and 5.
+The order puts the core first. Stage 0b is done by the user's decision. Stage 1 is what every other stage builds on, and its section (2.3, 3.1) is written so it can start before the rest. Once 1 lands, stages 2 (regalloc), 3 (through-memory) and 4-5 (worst-rows) touch disjoint crates and can run in parallel. Stage 6 needs 2. Stage 7 needs 2 and 6. Stage 8 needs 4 and 5.
