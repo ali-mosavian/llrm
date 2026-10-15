@@ -202,11 +202,12 @@ def test_the_bless_step_runs_bench_in_the_trees_own_target(monkeypatch, tmp_path
     seen = []
 
     def fake(command, **kw):
-        seen.append(kw["env"]["CARGO_TARGET_DIR"])
+        seen.append((kw["env"]["CARGO_TARGET_DIR"], command[:6]))
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(train, "git", lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
     monkeypatch.setattr(train.subprocess, "run", fake)
     monkeypatch.setenv("CARGO_TARGET_DIR", "/t/target")
     train.bless("a" * 40, [pr(1)], tmp_path / "train5-tree")
-    assert seen == ["/t/target-train5-tree"]
+    # and in the tools' environment (uv): the train's own python has no unicorn, which bench imports (train 4 passed its gate, died here)
+    assert seen == [("/t/target-train5-tree", ["uv", "run", "-q", "--project", "tools", "python"])]

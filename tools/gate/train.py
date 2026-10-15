@@ -216,7 +216,8 @@ def bless(tip: str, prs: list[Pr], tree: Path) -> tuple[str, Verdict | None]:
     git("checkout", "-q", "--detach", tip, cwd=tree)
     names = " ".join(f"#{p.number}" for p in prs)
     env = tree_env({k: v for k, v in os.environ.items() if k != "LLRM_BENCH_BATCH"}, tree)
-    done = subprocess.run([sys.executable, "tools/bench/bench.py", "--batch", "--bless", "--reason", f"train: {names}"], cwd=tree, capture_output=True, text=True, env=env)
+    # the tools' environment, as the gate's bench step runs it: this process's python has no unicorn (train 4 passed its gate and died here)
+    done = subprocess.run(["uv", "run", "-q", "--project", "tools", "python", "tools/bench/bench.py", "--batch", "--bless", "--reason", f"train: {names}"], cwd=tree, capture_output=True, text=True, env=env)
     if done.returncode:
         return tip, Verdict(False, ["bench"], done.stdout + done.stderr)
     if not git("status", "--porcelain", "--", "bench", cwd=tree).stdout.strip():
