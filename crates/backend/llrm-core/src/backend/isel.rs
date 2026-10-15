@@ -819,7 +819,7 @@ enum Pointer {
     /// A near global's symbol, a displacement from it, and a register
     /// holding a variable one, times `scale`: a scaled one is a dword index.
     /// A second register `plus`, added unscaled, makes the `[bx+si+symbol]`
-    /// form.
+    /// form, or beside a scaled index the 386's `[plus+index*scale+symbol]`.
     Global { space: Space, index: i64, offset: i64, base: Option<Held>, scale: i64, plus: Option<Held> },
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
@@ -3907,6 +3907,14 @@ impl Selector<'_, '_, '_> {
             Pointer::Global { space, index, offset, base: None, plus: None, .. } => {
                 (Pointer::Global { space, index, offset, base: Some(wide), scale, plus: None }, None)
             }
+            // A register already added to the symbol: the scaled index beside
+            // it,
+            // `[base+index*scale+symbol]`.
+            Pointer::Global { space, index, offset, base: Some(base), scale: 1, plus: None }
+                if base.width == 4 && wide.width == 4 =>
+            {
+                (Pointer::Global { space, index, offset, base: Some(wide), scale, plus: Some(base) }, None)
+            }
             _ => return None,
         };
         self.promoted.extend(base.map(|base| base.value).into_iter().chain((!dword).then_some(wide.value)));
@@ -4245,8 +4253,12 @@ impl Selector<'_, '_, '_> {
                 index: plus,
                 ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width)
             },
-            Pointer::Global { space, index, offset, base, scale, .. } => Mem {
+            // A scaled index, and a register added unscaled beside it where
+            // there is one:
+            // `[plus+index*scale+symbol]`.
+            Pointer::Global { space, index, offset, base, scale, plus } => Mem {
                 disp_width: 2,
+                base: plus,
                 index: base,
                 scale,
                 ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width)

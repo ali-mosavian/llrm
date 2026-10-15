@@ -482,7 +482,10 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(gvn::Gvn { pre: applied.options.pre }),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
-        Box::new(indvars::IndVars { exit_values: false }),
+        Box::new(indvars::IndVars {
+            exit_values: false,
+            unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
+        }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size() }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
@@ -712,7 +715,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(algebraic::Algebraic { size: false }));
     // A counted exit's values are numbers where the copy made its test the one
     // that leaves.
-    passes.push(Box::new(indvars::IndVars { exit_values: true }));
+    passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
         passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size() }));
