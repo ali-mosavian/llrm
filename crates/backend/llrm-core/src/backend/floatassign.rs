@@ -973,6 +973,10 @@ struct Plan<'b> {
     /// Each block's allocno roots: a block is written the same way whenever
     /// the same of them are spilled.
     roots: HashMap<i64, Vec<usize>>,
+    /// Each block's place in the body, and each root's segments: what `victim`
+    /// asked of every segment of the function for each round.
+    order: IndexMap<i64, usize>,
+    members: IndexMap<usize, Vec<usize>>,
     /// Blocks as `rewritten` wrote them, by block and which of its roots
     /// were spilled, so a round re-writes only the blocks a new victim
     /// reaches.
@@ -1229,8 +1233,7 @@ impl Plan<'_> {
         position: usize,
         spilled: &BTreeSet<usize>,
     ) -> Option<usize> {
-        let order: IndexMap<i64, usize> =
-            self.body.blocks.iter().enumerate().map(|(index, one)| (one.at, index)).collect();
+        let order = &self.order;
         let here = (order[&block], position);
         let busy: BTreeSet<u32> = self
             .body
@@ -1249,11 +1252,13 @@ impl Plan<'_> {
             }
             next.entry(root).or_insert((usize::MAX, usize::MAX));
         }
-        for (index, segment) in self.allocnos.segments.iter().enumerate() {
-            let root = self.allocnos.root(index);
-            if let Some(soonest) = next.get_mut(&root) {
-                for read in
-                    segment.reads.iter().map(|(at, position)| (order[at], *position)).filter(|read| *read > here)
+        for (root, soonest) in &mut next {
+            for &index in self.members.get(root).into_iter().flatten() {
+                for read in self.allocnos.segments[index]
+                    .reads
+                    .iter()
+                    .map(|(at, position)| (order[at], *position))
+                    .filter(|read| *read > here)
                 {
                     *soonest = (*soonest).min(read);
                 }
@@ -1801,35 +1806,70 @@ impl Plan<'_> {
     }
 }
 
+// Blocks `_crowded` looked at, for a test that a round resumes where the last
+// left off.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CROWDED_BLOCKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The first instruction before which more floating values hold registers
 /// than there are, counting what each bundle's borders hold.
 fn _crowded(
     body: &LirBody,
     floating: &HashSet<u32>,
+    bundles: &spillplacement::Bundles,
+    from: usize,
 ) -> Option<(i64, usize)> {
     let registers = body.float_stack;
-    let (live_in, live_out) = live(body);
-    let bundles = spillplacement::bundles(body);
-    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
-        set.iter().copied().filter(|value| floating.contains(value)).collect()
-    };
-    let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
+    // Only the floating values are followed, as rows: a set of every live value
+    // of every block was built for each victim spilled (`fjoins` 512: 100 G).
+    let rows = crate::backend::allocate::live_rows_by(body, |value| floating.contains(&value));
+    // A bundle is asked whether more than `registers` floating values are live
+    // across it, by the blocks that enter or leave through it, and stops
+    // counting there: its blocks are not all read for it, and a spilling that
+    // leaves the first blocks within the stack asks of none of the rest.
+    let mut members: IndexMap<usize, Vec<(i64, bool)>> = IndexMap::default();
     for block in &body.blocks {
         let (entry, exit) = bundles.of[&block.at];
-        held.entry(entry).or_default().extend(floats(&live_in[&block.at]));
-        held.entry(exit).or_default().extend(floats(&live_out[&block.at]));
+        members.entry(entry).or_default().push((block.at, true));
+        members.entry(exit).or_default().push((block.at, false));
     }
-    for block in &body.blocks {
+    let mut asked: IndexMap<usize, bool> = IndexMap::default();
+    let mut crowded = |bundle: usize| -> bool {
+        *asked
+            .entry(bundle)
+            .or_insert_with(
+                || {
+                    let mut held: BTreeSet<u32> = BTreeSet::new();
+                    for &(at, entering) in members.get(&bundle).into_iter().flatten() {
+                        let values: Box<dyn Iterator<Item = u32> + '_> =
+                            if entering { Box::new(rows.entering(at)) } else { Box::new(rows.leaving(at)) };
+                        for value in values {
+                            held.insert(value);
+                            if held.len() > registers {
+                                return true;
+                            }
+                        }
+                    }
+                    false
+                },
+            )
+    };
+    for block in body.blocks.iter().skip(from) {
+        #[cfg(test)]
+        CROWDED_BLOCKS.with(|one| one.set(one.get() + 1));
         let (entry, exit) = bundles.of[&block.at];
         let cut = _terminators(block);
-        if held[&exit].len() > registers {
+        if crowded(exit) {
             return Some((block.at, cut));
         }
-        if held[&entry].len() > registers {
+        if crowded(entry) {
             return Some((block.at, 0));
         }
         let steps = _steps(block, cut);
-        let after = _live_after(block, &steps, &floats(&live_out[&block.at]), floating);
+        let leaving: BTreeSet<u32> = rows.leaving(block.at).collect();
+        let after = _live_after(block, &steps, &leaving, floating);
         for (index, (first, last)) in steps.iter().copied().enumerate() {
             let group = &block.insns[first..=last];
             let made: BTreeSet<u32> = group
@@ -1925,6 +1965,11 @@ pub fn assigned(
         list.sort_unstable();
         list.dedup();
     }
+    let order: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(index, one)| (one.at, index)).collect();
+    let mut members: IndexMap<usize, Vec<usize>> = IndexMap::default();
+    for index in 0..allocnos.segments.len() {
+        members.entry(allocnos.root(index)).or_default().push(index);
+    }
     let mut plan = Plan {
         body: &body,
         floating,
@@ -1935,6 +1980,8 @@ pub fn assigned(
         live_out,
         cells,
         roots,
+        order,
+        members,
         written: RefCell::default(),
         shaped: RefCell::default(),
         stepped: RefCell::default(),
@@ -1951,13 +1998,26 @@ pub fn assigned(
     }
     #[cfg(test)]
     let mut rounds = 0;
+    // The blocks and edges are the body's whatever is spilled, so are the
+    // bundles.
+    let bundles = spillplacement::bundles(&body);
+    let (mut start, checking) = (0, llrm_support::env_set("LLRM_CHECK_CROWDED"));
     loop {
         #[cfg(test)]
         {
             rounds += 1;
         }
         let rewritten = plan.rewritten(&spilled, &mut frame, cpu)?;
-        let Some((block, position)) = _crowded(&rewritten, &_floating_values(&rewritten)) else {
+        let floats = _floating_values(&rewritten);
+        let found = _crowded(&rewritten, &floats, &bundles, start);
+        if checking {
+            assert_eq!(
+                found,
+                _crowded(&rewritten, &floats, &spillplacement::bundles(&rewritten), 0),
+                "LLRM_CHECK_CROWDED: a block before {start} is crowded, or the bundles moved"
+            );
+        }
+        let Some((block, position)) = found else {
             #[cfg(test)]
             ROUNDS.with(|one| one.set(rounds));
             return Ok(_without_dead_loads(&rewritten));
@@ -1973,6 +2033,16 @@ pub fn assigned(
             return Err(unlowered("floating instruction requires too many stack operands"));
         };
         spilled.insert(victim);
+        // The blocks before this one, that the victim does not touch, were not
+        // crowded and are less so now: a spilled value stops being live through
+        // them. The next look begins at the first of this one and the blocks
+        // the victim is in, which are written again.
+        let crowded_at = plan.order[&block];
+        start = rewritten
+            .blocks
+            .iter()
+            .position(|one| plan.roots.get(&one.at).is_some_and(|roots| roots.contains(&victim)))
+            .map_or(crowded_at, |touching| touching.min(crowded_at));
     }
 }
 
