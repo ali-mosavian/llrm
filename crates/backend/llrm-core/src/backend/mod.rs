@@ -128,7 +128,6 @@ pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;
 pub mod allocate;
-pub mod hintwalk;
 pub mod arithmetic;
 pub mod arrival;
 pub mod asm;
@@ -161,6 +160,7 @@ pub mod fpconvert;
 pub mod frame;
 pub mod framefree;
 pub mod globals;
+pub mod hintwalk;
 pub mod inline_asm;
 pub mod isel;
 

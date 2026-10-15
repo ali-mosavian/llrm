@@ -1218,14 +1218,16 @@ def test_a_last_chance_recolor_precheck_does_not_look_each_value_up_for_each_poi
 def test_the_copy_hint_walk_is_bounded_by_the_hint_depth(tmp_path):
     """cells at -O2 (a chain of copies 221 values long from two pins at N=448): `_wanted`, the walk from the pins over the copy hints,
     ran end to end after every spill, N rounds of N steps: `after wanted` 191 Minstr at 448 and 794 at 896 (x4.2). The walk stops at
-    `allocate::HINT_DEPTH` copies (128; the corpus reaches 74 at the most): 112 and 232 (x2.1). A bound of x2.8 fails the first."""
+    `allocate::HINT_DEPTH` copies (128; the corpus reaches 74 at the most): 112 and 232 (x2.1). A bound of x2.8 fails the first. Kept up
+    to date by the rewrites (`HintWalk`) it is 1.2 and 2.3 (x1.9)."""
     rows = {}
     for n in (448, 896):
         source = tmp_path / f"cells{n}.c"
         source.write_text(scaling.AXES["cells"](n))
         rows[n] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["after wanted"]
-    assert rows[448] > 20.0, f"premise: the walk ran ({rows[448]:.1f} Minstr)"
+    assert rows[448] > 0.5, f"premise: the walk ran ({rows[448]:.1f} Minstr)"
     assert rows[896] / rows[448] <= 2.8, rows
+    assert rows[896] <= 20.0, rows
 
 
 def test_a_loop_of_many_stores_and_loads_does_not_refit_every_resident_at_every_step(tmp_path):
@@ -1246,3 +1248,14 @@ def test_a_loop_of_many_stores_and_loads_does_not_refit_every_resident_at_every_
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["mir lsr"] > 20.0, f"premise: lsr ran ({own['mir lsr']:.1f} Minstr)"
     assert own["mir lsr"] <= 500.0 and own["mir hoist"] <= 250.0, own
+
+
+def test_the_copy_hint_walk_follows_the_rewrites_of_a_chain_and_does_not_start_again_at_each(tmp_path):
+    """The walk from the pinned values over the copy hints (`after wanted`) was made again after every one of the allocator's N
+    rewrites, each walking the chain of N copies end to end: `chain` at -O1, -m16, 2.0 -> 7.7 Minstr from N=32 to 64 and 28.1 at 128.
+    It is a fact of the hint graph now (`HintWalk`), kept up to date by the values a rewrite names: 2.5 and 9.1. A step above 14 at
+    N=128 fails, as does what the compile's second difference said of it (0.0187 of the cost at 2N against 0.0109 on the axis)."""
+    source = tmp_path / "chain128.c"
+    source.write_text(scaling.chain(128))
+    walk = gate.own_work(gate.commanded("chain-m16", gate.levels_time.command)("llrm", "O1", source)).get("after wanted", 0.0)
+    assert 0.0 < walk <= 14.0, f"{walk:.1f} Minstr"

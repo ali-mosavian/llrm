@@ -2470,7 +2470,11 @@ fn _allocated(
         });
         if llrm_support::env_set("LLRM_CHECK_WANTED") {
             let whole = crate::backend::hintwalk::HintWalk::fresh(&facts.hints, &fixed, HINT_DEPTH);
-            assert!(walk.wanted() == whole.wanted(), "{}: the hint walk kept up to date differs from one made afresh", body.name);
+            assert!(
+                walk.wanted() == whole.wanted(),
+                "{}: the hint walk kept up to date differs from one made afresh",
+                body.name
+            );
         }
         claims = Claims::default();
         match &changes {

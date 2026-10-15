@@ -15,7 +15,8 @@ fn pins(list: &[(u32, u32)]) -> IndexMap<u32, RegId> {
     list.iter().map(|(one, number)| (*one, register(*number))).collect()
 }
 
-/// A value wants the register of the nearest pin, the smaller value among equals.
+/// A value wants the register of the nearest pin, the smaller value among
+/// equals.
 #[test]
 fn the_nearest_pin_wins_and_a_tie_goes_to_the_smaller_value() {
     let hints = graph(&[(10, &[1, 2]), (11, &[2]), (1, &[3]), (2, &[3]), (3, &[4])]);
@@ -60,7 +61,7 @@ fn a_walk_kept_up_to_date_is_the_walk_made_afresh() {
         state ^= state << 17;
         (state % u64::from(most)) as u32
     };
-    for round in 0..200 {
+    for round in 0..1000 {
         let values = 6 + next(30);
         let mut hints: IndexMap<u32, Vec<u32>> = IndexMap::default();
         let mut pinned: IndexMap<u32, RegId> = IndexMap::default();
@@ -96,10 +97,18 @@ fn a_walk_kept_up_to_date_is_the_walk_made_afresh() {
             }
             walk.update(&hints, &pinned, Some(&touched));
             if let Err(why) = walk.invariants() {
-                panic!("round {round} step {step}: {why}; touched {touched:?} hints {hints:?} pinned {:?}", pinned.iter().collect::<Vec<_>>());
+                panic!(
+                    "round {round} step {step}: {why}; touched {touched:?} hints {hints:?} pinned {:?}",
+                    pinned.iter().collect::<Vec<_>>()
+                );
             }
             let fresh = HintWalk::fresh(&hints, &pinned, depth);
-            assert_eq!(walk.wanted(), fresh.wanted(), "round {round} step {step}: depth {depth}, pinned {:?} touched {touched:?} hints {hints:?}", pinned.iter().collect::<Vec<_>>());
+            assert_eq!(
+                walk.wanted(),
+                fresh.wanted(),
+                "round {round} step {step}: depth {depth}, pinned {:?} touched {touched:?} hints {hints:?}",
+                pinned.iter().collect::<Vec<_>>()
+            );
         }
     }
 }

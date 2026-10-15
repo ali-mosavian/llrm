@@ -4,8 +4,8 @@
 //! # How it works
 //! `hints` says, for a value, the values it is copied to or from; a pinned
 //! value (an argument, a return) has its register fixed. A value wants the
-//! register of the pinned value that reaches it through the fewest copies, up to
-//! `depth` of them, and where two reach it equally far the one of the
+//! register of the pinned value that reaches it through the fewest copies, up
+//! to `depth` of them, and where two reach it equally far the one of the
 //! smaller value number: a property of the graph, not of the order a walk
 //! happened to take, so the walk made afresh and the walk kept up to date are
 //! the same map.
@@ -99,7 +99,8 @@ pub struct HintWalk {
     /// For a value, the walked values that name it.
     named_by: Vec<Vec<u32>>,
     wanted: IndexMap<u32, RegId>,
-    /// Values looked at since the walk was made: what a test of its slope counts.
+    /// Values looked at since the walk was made: what a test of its slope
+    /// counts.
     work: usize,
 }
 
@@ -242,7 +243,8 @@ impl HintWalk {
         self.nodes.get(value as usize).is_some_and(|node| node.dist != NONE)
     }
 
-    /// Whether `value` is pinned or reached, unmarked, `distance` copies from a pin.
+    /// Whether `value` is pinned or reached, unmarked, `distance` copies from a
+    /// pin.
     fn holds(
         &self,
         value: u32,
@@ -425,6 +427,17 @@ impl HintWalk {
         changed: &mut Vec<u32>,
     ) {
         self.ensure(value);
+        // A value named twice is named.
+        let mut list = list;
+        let mut seen: Vec<u32> = Vec::with_capacity(list.len());
+        list.retain(|one| {
+            if seen.contains(one) {
+                false
+            } else {
+                seen.push(*one);
+                true
+            }
+        });
         for target in &list {
             self.ensure(*target);
         }
