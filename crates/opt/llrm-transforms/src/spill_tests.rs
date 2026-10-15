@@ -878,3 +878,31 @@ fn test_traffic_less_some_instructions_is_the_traffic_of_the_others() {
         }
     }
 }
+
+/// A pass names the results and operands of what it edits, and nearly all are
+/// read where they were: quicksort -O3 named 1,300 values over 13 updates and
+/// 91 moved. Each was taken out of its blocks' sets and put back, 18 times the
+/// cost at 4.4 times the body. Only the values whose blocks changed are edited.
+#[test]
+fn test_a_value_read_where_it_was_is_not_edited_in_the_live_sets() {
+    use llrm_analysis::liveness::{Liveness, Range};
+    use llrm_mir::dense::{IdMap, IdSet};
+    let (a, b, c) = (ValueId(1), ValueId(2), ValueId(3));
+    let mut found = Liveness { live_in: BTreeMap::new(), live_out: BTreeMap::new() };
+    let mut placed = IdMap::<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>::new();
+    for value in [a, b, c] {
+        found.live_in.entry(0).or_default().insert(value);
+        found.live_in.entry(1).or_default().insert(value);
+        placed.insert(value, ([0, 1].into(), BTreeSet::new()));
+    }
+    let named: IdSet<ValueId> = [a, b, c].into_iter().collect();
+    let range = |into: &[i64]| Range { into: into.to_vec(), out: Vec::new() };
+    // `b` no longer reaches block 1; `c` is read nowhere.
+    let computed: IdMap<ValueId, Range> = [(a, range(&[0, 1])), (b, range(&[0]))].into_iter().collect();
+    super::RANGES_EDITED.with(|one| one.set(0));
+    super::renewed(&mut found, &mut placed, &named, computed);
+    assert_eq!(super::RANGES_EDITED.with(|one| one.get()), 2, "b and c are edited, a is not");
+    assert_eq!(found.live_in[&0], BTreeSet::from([a, b]));
+    assert_eq!(found.live_in[&1], BTreeSet::from([a]));
+    assert!(placed.get(&c).is_none());
+}

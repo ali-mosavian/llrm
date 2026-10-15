@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:94e458bbe6cf891000349dca0c28261e9b008d8775eeb02bf5bb20a60b2d92ac -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:0cd23c27bfe161c5d2462fa760dbf85fbec318db4779406dc7705fbb0b60ade6 -->
 
 # pipeline
 
@@ -37,7 +37,7 @@ flowchart TB
   end
   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>jumpthread hoist gepoffset<br/>addresssink</small>"]:::mid
+  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>jumpthread hoist gepoffset<br/>addresssink sink</small>"]:::mid
   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
   a --> sroa
   sroa --> rnd
@@ -82,7 +82,8 @@ choose a loop's counters again; `rotate{proven}` is last of the loop
 passes because `unroll` and `peel` refuse a rotated loop; `hoist`
 runs again to lift what a rotated loop (run at least once) may now leave;
 `gepoffset` follows it because it would move a constant `gep` out of its
-loop; `addresssink` follows the last `gvn`, which makes the phis it sinks.
+loop; `addresssink` follows the last `gvn`, which makes the phis it sinks;
+`sink` follows `addresssink`, once the passes that move work up have run.
 
 ## Example
 No honest example: the pipeline is the order of the passes, not one rewrite,
@@ -108,6 +109,7 @@ counterpart of each limit, is
 | `hoist` | `hoist`, `loopmotion` |
 | `forward` and `drop_loads` | `gvn`, `equalcalls` |
 | `drop_stores` | `dse` |
+| `sink` | `sink` |
 | `promote` | `sroa`, `promote` |
 | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
 | `unroll`, `peel` | the pass of that name |
