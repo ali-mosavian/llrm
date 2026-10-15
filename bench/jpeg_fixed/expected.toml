@@ -1,4 +1,4 @@
-reason = "memcpyopt makes the 170 byte copy in runtime/qb/fin.c one memcpy at -Os (-Os is bytes): jpeg_fixed bq32 -Os +6 instructions of 89M, jpeg_single bq32 -O2 +3, code bytes smaller"
+reason = "the value solve of points-to is one flow-insensitive worklist with the memory SSA of private slots (#pointers): bq32 jpeg_fixed/jpeg_single -O2/-Os run 886 to 3,026 instructions fewer; nothing else moves"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84338433
+instructions = 84337547
 code_bytes = 6496
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89432828
+instructions = 89431943
 code_bytes = 6039
 data_bytes = 29209
 bss_bytes = 0
