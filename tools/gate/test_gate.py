@@ -937,7 +937,7 @@ def test_smoke_plans_the_fast_tiers_steps_cut_to_the_smoke_list_with_docs_and_th
     assert not {"run", "bench", "torture", "qcport", "measure", "identity", "turbo", "cv4", "dos-slow", "integration", "pytest"} & set(p.steps)
     assert "facts" in gate.plan(["tools/gate/pytest_shards.py"], "smoke").steps and "facts" in p.steps
     docs_only = gate.plan(["docs/working/gate.md"], "smoke")
-    assert docs_only.steps == ["docs", "changed-tests"], "a docs-only PR still has its generated pages checked, and builds nothing"
+    assert docs_only.steps == ["products", "docs", "changed-tests"], "a docs-only PR still has its generated pages checked, and builds nothing"
 
 
 def test_the_changed_tests_step_runs_the_test_beside_a_changed_tool_and_the_root_binary_it_changed():
@@ -1028,16 +1028,57 @@ def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
 
     sleeper = f"sleep 62.{os.getpid()}"
     here = str(Path(gate.__file__).parent)
-    code = f"import sys, os, pathlib; sys.path.insert(0, {here!r}); import gate; gate.kill_on_term(); gate.run_step('s', {sleeper!r}, pathlib.Path({str(tmp_path)!r}), dict(os.environ), stall=600)"
+    ready = tmp_path / "ready"
+    command = f"touch {ready}; {sleeper}"
+    code = f"import sys, os, pathlib; sys.path.insert(0, {here!r}); import gate; gate.kill_on_term(); gate.run_step('s', {command!r}, pathlib.Path({str(tmp_path)!r}), dict(os.environ), stall=600)"
     gate_proc = sp.Popen([_sys.executable, "-c", code])
     try:
-        for _ in range(100):
-            if sleeper in ps():
+        # The step touches `ready` once it runs, so the handler is in place. Not `ps`: the gate's own argv names the sleep too (SIGTERM
+        # then came before the handler: -15, twice in #1763), and ps cuts a long argv to COLUMNS where that is set.
+        for _ in range(300):
+            if ready.exists():
                 break
             _time.sleep(0.1)
+        else:
+            raise AssertionError("the step never started")
         gate_proc.send_signal(signal.SIGTERM)
         assert gate_proc.wait(timeout=20) == 128 + signal.SIGTERM
         _time.sleep(0.3)
-        assert sleeper not in ps(), "the step outlived the gate"
+        assert sleeper not in ps().splitlines(), "the step outlived the gate"
     finally:
         sp.run(["pkill", "-f", sleeper])
+
+
+def test_the_gate_scope_is_omitted_from_systemd_oomd(tmp_path):
+    """systemd-oomd SIGKILLed two fast gates at 13:56 on memory pressure (58%, then 78%, over 50% for 20 s) with 174 G free: a gate in its
+    own scope was a victim. The scope carries user.oomd_omit, which oomd honours."""
+    import shutil
+    import subprocess as sp
+    import sys as _sys
+
+    if not shutil.which("systemd-run"):
+        pytest.skip("no systemd-run")
+    probe = "import os; cg = open('/proc/self/cgroup').read().split('::')[1].strip(); print(os.getxattr('/sys/fs/cgroup' + cg, 'user.oomd_omit').decode())"
+    done = sp.run(gate.scoped([_sys.executable, "-c", probe], {}), capture_output=True, text=True)
+    if done.returncode and "Failed to connect" in done.stderr:
+        pytest.skip("no systemd user manager")
+    assert done.stdout.strip() == "1", (done.stdout, done.stderr)
+
+
+def test_smoke_fails_a_pr_that_tracks_build_products_and_does_not_build_for_it(tmp_path):
+    """#1777 tracked d1.o, d4.o and d8.o and was smoke-green: only the train's integration step ran tests/tracked_build_products.rs."""
+    import re
+    import subprocess as sp
+
+    rust = (gate.ROOT / "tests/tracked_build_products.rs").read_text()
+    assert tuple(re.search(r"PRODUCTS: &\[&str\] = &\[(.*?)\]", rust).group(1).replace('"', "").replace(" ", "").split(",")) == gate.PRODUCTS
+    assert tuple(re.search(r"FIXTURES: &\[&str\] = &\[(.*?)\]", rust).group(1).replace('"', "").replace(" ", "").split(",")) == gate.FIXTURES
+    assert gate.strays(["d1.o", "src/x.OBJ", "tests/inputs/a.o", "a.rs", "Makefile", "x.map"]) == ["d1.o", "src/x.OBJ", "x.map"]
+    for files in (["docs/x.md"], ["tools/gate/gate.py"], ["crates/backend/llrm-core/src/lib.rs"]):
+        assert "products" in gate.plan(files, "smoke").steps, files
+    git = _repo(tmp_path)
+    assert gate.products_main(tmp_path) == 0
+    (tmp_path / "d1.o").write_text("x")
+    git("add", "d1.o")
+    assert gate.products_main(tmp_path) == 1
+    assert gate.commands(gate.plan(["docs/x.md"], "smoke"), gate.load(), gate.packages())["products"].startswith("python3 -c")

@@ -87,6 +87,45 @@ pub fn run(
     }
 }
 
+/// A wait that gives up when the process it waits on has used no CPU for
+/// `idle`, not when a wall clock runs out: DOSBox-X took over 120 s to bring
+/// its shell up at load 190 (#1776, "the shell did not come up") while it was
+/// computing.
+pub struct Progress {
+    idle: Duration,
+    ticks: u64,
+    since: Duration,
+}
+
+impl Progress {
+    pub fn new(idle: Duration) -> Progress {
+        Progress { idle, ticks: 0, since: Duration::ZERO }
+    }
+
+    /// Whether the wait is stalled: `cpu` is the process's CPU so far, `now`
+    /// the time since the wait began.
+    pub fn stalled(
+        &mut self,
+        cpu: u64,
+        now: Duration,
+    ) -> bool {
+        if cpu != self.ticks {
+            (self.ticks, self.since) = (cpu, now);
+        }
+        now - self.since > self.idle
+    }
+}
+
+/// CPU clock ticks `pid` has used (user and system), 0 where it cannot be read.
+pub fn cpu_ticks(pid: u32) -> u64 {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return 0 };
+    // the fields after the command name, which may hold spaces: state is the
+    // first, utime and stime the 12th and 13th
+    let rest = stat.rsplit_once(')').map_or("", |(_, rest)| rest);
+    let field = |at: usize| rest.split_whitespace().nth(at).and_then(|one| one.parse::<u64>().ok()).unwrap_or(0);
+    field(11) + field(12)
+}
+
 pub struct Session {
     child: Child,
     stream: TcpStream,
@@ -115,11 +154,16 @@ impl Session {
             .spawn()
             .unwrap();
         let mut stream = None;
-        for _ in 0..100 {
+        let (began, mut progress) = (std::time::Instant::now(), Progress::new(Duration::from_secs(120)));
+        while stream.is_none() {
             if let Ok(one) = TcpStream::connect(("127.0.0.1", port)) {
                 stream = Some(one);
                 break;
             }
+            assert!(
+                !progress.stalled(cpu_ticks(child.id()), began.elapsed()),
+                "the debug socket did not come up: DOSBox-X used no CPU for 120 s"
+            );
             std::thread::sleep(Duration::from_millis(200));
         }
         let stream = stream.expect("the debug socket");
@@ -140,15 +184,19 @@ impl Session {
                 }
             }
         });
-        let this = Session { child, stream, owners, replies };
+        let mut this = Session { child, stream, owners, replies };
         this.command(&serde_json::json!({"cmd": "continue"}));
         std::thread::sleep(Duration::from_secs(1));
         // The shell is up before anything is armed or run: a breakpoint on the
         // next program's load, set while the shell is still starting,
         // stops it at the shell's own load, and no command is taken after that.
-        let waiting = std::time::Instant::now();
+        let (waiting, mut progress) = (std::time::Instant::now(), Progress::new(Duration::from_secs(120)));
         while this.command(&serde_json::json!({"cmd": "wait_for_shell", "timeoutMs": 5000}))["status"] == "error" {
-            assert!(waiting.elapsed() < Duration::from_secs(120), "the shell did not come up");
+            assert!(this.child.try_wait().unwrap().is_none(), "DOSBox-X exited before its shell came up");
+            assert!(
+                !progress.stalled(cpu_ticks(this.child.id()), waiting.elapsed()),
+                "the shell did not come up: DOSBox-X used no CPU for 120 s"
+            );
         }
         this
     }
