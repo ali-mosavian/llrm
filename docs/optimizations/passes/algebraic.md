@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/algebraic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/algebraic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:5def9edd644fd23d55deb9ece00ed1501f873035b294ca52c49ba254a640fa05 -->
+<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:64889530fa76f0b7d880fe0f16468c5ea35b071cce1698a846dd5a7c09a305fa -->
 
 # algebraic
 
@@ -40,9 +40,9 @@ original did not. The rules fall in groups.
   `sdiv` and `srem` of a dividend proved non-negative (`ranges`, or a clear
   sign bit) are unsigned, by a power of two always, by another constant at
   any width and target but under `size`, where the signed form is a byte
-  shorter (selection prices the reciprocal, prefixes included); other `sdiv` and `srem` by a power of two
-  are an `ashr`, a bias and a shift; a fixed-point product or quotient by a
-  whole number cancels its scale.
+  shorter (selection prices the reciprocal, prefixes included); other `sdiv`
+  and `srem` by a power of two are an `ashr`, a bias and a shift; a
+  fixed-point product or quotient by a whole number cancels its scale.
 - Masks and demanded bits: `and x, C` where `C` covers every bit `x` may set
   is `x`; a mask, or an `or`, that touches only bits nothing reads is its
   operand.

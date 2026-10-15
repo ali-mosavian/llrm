@@ -2087,10 +2087,12 @@ join:
 
 /// A signed dword divided by a constant is a multiply by its reciprocal
 /// where the target prices that cheaper, as the old route's
-/// division::reciprocal selects: P5's imul is cheap, the 386's is not.
+/// division::reciprocal selects: P5's imul is cheap, the 386's is not for a
+/// dividend that needs the whole width (one nothing is known of is priced at
+/// the early-out minimum, as gcc does).
 #[test]
 fn test_a_dword_divided_by_a_constant_is_multiplied_where_cheaper() {
-    let text = "define i32 @f(i32 %x) addrspace(1) {
+    let text = "define i32 @f(i32 range(i32 1073741824, 2147483647) %x) addrspace(1) {
   %q = sdiv i32 %x, 10
   %r = srem i32 %x, 10
   %s = add i32 %q, %r
