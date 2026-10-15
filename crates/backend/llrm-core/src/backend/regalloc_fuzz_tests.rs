@@ -1930,7 +1930,8 @@ fn test_clobbered_does_not_look_at_every_point() {
         clobbered += usize::from(_clobbered(&one, RegId::DX, &masks, 2));
     }
     assert_eq!(clobbered, 0, "a value live between two points is not across either");
-    // Points looked at, not milliseconds (0.2 s failed at load 200): the reference walks all 20,000 for each question, the bisection none.
+    // Points looked at, not milliseconds (0.2 s failed at load 200): the
+    // reference walks all 20,000 for each question, the bisection none.
     assert!(masks.walked() < 20_000, "{} points looked at for 20,000 questions", masks.walked());
     let one = Interval::new(1, vec![Segment { start: 1, end: 2 }]);
     let _ = super::allocate::_clobbered_reference(&one, RegId::DX, &masks, 2);
