@@ -1,10 +1,10 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/alias.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/alias.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:ca0264143b75718392f69063233e65b1a6e956e5bb2d7a57d4045cc504c7b58e -->
+<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:b7196ef5dc13c90c19f97e8a037446ece76195f7bcc3d3d4431a2b9f3439fbaa -->
 
 # alias
 
-Strong, flow-sensitive alias analysis: what each pointer may point to, what
-escapes and when, and what each call reads and writes.
+Strong alias analysis: what each pointer may point to, what escapes and
+when, and what each call reads and writes.
 
 ## How it works
 One vocabulary serves every frontend. A pointer's fact is a `Provenance`: a
@@ -16,19 +16,23 @@ root, `seeds`) and, for a call whose callee returns `noalias`, a fresh
 `Allocation`. Unknown stores kill spill facts; they never manufacture a
 disjointness proof.
 
-Value solve (`point_values`). Pointer facts flow forward over the CFG to a
-fixed point:
+Value solve (`point_values`). Pointer facts flow over the values to a fixed
+point, by gcc's worklist over constraints (`solve_graph`,
+[tree-ssa-structalias.cc#L2711](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-structalias.cc#L2711)):
+an instruction is visited again only when a value it reads, or the fields of
+an object it loads from, changed. The solve is flow-insensitive through
+memory: one abstract location per object.
 
 - `alloca`, `bitcast`, `addrspacecast`, `getelementptr` give a fact from
   their operand (`_direct`); a constant displacement shifts the slices, a
   variable index widens to the whole object.
 - A `phi` or `select` joins its arms as a union; a pointer with an arm no
   fact follows is `UNKNOWN`.
-- Pointers stored to an exact slot (a spill slot) are tracked per block in a
-  `CellMap` keyed by `CellKey`; a possibly overlapping store or an unmodeled
-  call write kills them; a join keeps a cell only if every parent holds it.
-  A load of a pointer reads the cell, else the union of every pointer ever
-  stored into the object.
+- A store of a pointer adds it to the fields of the objects it may write; a
+  load of one reads every pointer ever stored into the object, and
+  `UNKNOWN`, unless the slot is one only this body writes: then it is the
+  stores that reach it (`slotstores::reaching`, the memory SSA of one
+  object), a spilled pointer read back as what was spilled.
 - A loop-carried fact is widened to whole objects (`_widened`) at a
   natural-loop header so it settles, and a fact with more than
   `MAX_FIELDS_FOR_FIELD_SENSITIVE` slices is also collapsed, as gcc and LLVM
@@ -39,8 +43,8 @@ fixed point:
 ```text
  %p = alloca [8 x i16]            %p -> {frame:%p [0,16)}
  %q = gep %p, i16 2               %q -> {frame:%p [4,6)}
- store ptr %q, ptr %slot          cell(%slot) = %q          (spill slot)
- %r = load ptr, ptr %slot         %r -> {frame:%p [4,6)}    (exact slot)
+ store ptr %q, ptr %slot          slot's stores: {this one}  (spill slot)
+ %r = load ptr, ptr %slot         %r -> {frame:%p [4,6)}     (its reaching store)
  call @unknown(ptr %q)            %q's object escapes from here on
 ```
 
@@ -125,8 +129,9 @@ From unit test `test_points_to_flows_through_memory_and_a_phi` in
 ## Needs
 [`crate::globalsaa`](globalsaa.md) (tracked globals), [`crate::cfg::Shape`](cfg.md),
 [`crate::ranges`](ranges.md) and [`crate::consts`](consts.md) (index intervals, constants),
-[`crate::cellmap`](cellmap.md), [`crate::induction`](induction.md) (strides), `llrm_mir::memory` for
-what attributes state.
+[`crate::cellmap`](cellmap.md) (the escape solve's per-block cells),
+[`crate::slotstores`](slotstores.md), [`crate::induction`](induction.md) (strides), `llrm_mir::memory`
+for what attributes state.
 
 ## See also
 LLVM `BasicAA`, `GlobalsAA`, `EarliestEscapeInfo`, `FunctionAttrs`
