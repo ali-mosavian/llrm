@@ -31,7 +31,7 @@ COUNTERS = ("instructions", "memory_operands", "code_bytes", "data_bytes", "bss_
 def method(root: Path = ROOT) -> str:
     """What the counts are made of besides the compiler: the harness, the programs and their settings. A stored base of another method is
     measured again (the base's compiler, this tree's harness and programs, as measure.py does)."""
-    files = sorted((root / "tools/bench").glob("*.py")) + sorted((root / "tools/dosbatch").glob("*.py")) + sorted((root / "crates/target/llrm-x86-m16/bench").glob("*.py"))
+    files = sorted((root / "tools/bench").glob("*.py")) + sorted((root / "tools/dosbatch").glob("*.py")) + sorted((root / "crates/target").glob("*/bench/*.py"))  # the targets' emulators
     files += sorted(path for pattern in ("*/*.c", "*/*.bas", "*/*.nib", "*/bench.toml", "*/*/*.bas", "*/*/bench.toml") for path in (root / "bench").glob(pattern))
     digest = hashlib.sha256()
     for one in files:
