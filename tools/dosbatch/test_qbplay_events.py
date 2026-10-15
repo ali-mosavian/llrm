@@ -140,3 +140,24 @@ def test_a_checkpoint_is_settled_by_what_the_guest_ran_not_by_how_often_the_host
     finally:
         one.process.kill()
         busy.kill()
+
+
+def test_a_demo_that_cannot_be_played_fails_its_own_case_and_not_the_others(monkeypatch, tmp_path):
+    """One module fixture played both demos and re-raised the first exception: GORILLA's `never settled for prompt3` was recorded for
+    NIBBLES as well, and a reader of the report looked for a cause the demos share."""
+    import qb32demos
+    import qbbuild
+
+    monkeypatch.setattr(qbbuild, "runtimes", lambda work: {})
+
+    def build(source, work, objects):
+        if "GORILLA" in str(source):
+            raise TimeoutError("the screen never settled for prompt3")
+        return {}
+
+    monkeypatch.setattr(qbbuild, "build", build)
+    monkeypatch.setattr(qb32demos, "reference_shots", lambda name, source, work: {})
+    results = qb32demos.run({"NIBBLES": Path("NIBBLES.BAS"), "GORILLA": Path("GORILLA.BAS")}, tmp_path)
+    assert qb32demos.of(results, "NIBBLES") == {}
+    with pytest.raises(TimeoutError, match="never settled for prompt3"):
+        qb32demos.of(results, "GORILLA")
