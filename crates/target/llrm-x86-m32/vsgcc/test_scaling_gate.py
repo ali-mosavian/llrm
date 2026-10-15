@@ -1179,3 +1179,18 @@ def test_promote_asks_a_write_only_the_cells_whose_bytes_it_may_reach(tmp_path):
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     assert own["mir promote"] > 5.0, f"premise: promote ran ({own['mir promote']:.1f} Minstr)"
     assert own["mir promote"] <= 150.0, own["mir promote"]
+
+
+def test_every_generator_is_an_axis_of_the_gate():
+    """`cases` was a generator and in no gated axis: its `hir to mir` step went quadratic (x15 at N=1024) and no measurement moved."""
+    missing = sorted(set(scaling.AXES) - {axis.removesuffix("-m16") for axis in gate.SIZES})
+    assert missing == [], f"generators with no size in scaling_gate.SIZES: {missing}"
+
+
+def test_a_step_below_the_share_floor_is_still_recorded_from_a_few_minstr(monkeypatch, tmp_path):
+    """A step recorded only from 1.5% of the work cannot be seen to rise from a base that did not record it."""
+    rows = iter([{}, {"a": 100.0}, {"a": 400.0, "tiny": 6.0}, {"a": 1600.0, "tiny": 9.0}])
+    monkeypatch.setattr(gate, "own_work", lambda command: next(rows))
+    monkeypatch.setattr(gate, "generated", lambda axis, n: "")
+    got = gate.pass_costs("cases", "O1", tmp_path)
+    assert "cases O1 tiny" in got and "cases O1 a" in got, got

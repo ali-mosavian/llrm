@@ -238,6 +238,7 @@ pub fn eliminated_priced(
     let body = &_exits_copied(body);
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let successors: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.succ.len())).collect();
+    let reaches = Reaches::new(body, &at_of);
     let widths = _widths(body);
     // Renaming a phi whose copies the predecessor could hold saves nothing
     // (only an edge block); an x87 value has no copy to save.
@@ -289,8 +290,8 @@ pub fn eliminated_priced(
                         && !(on_edge(w, block.at, 1) && _constant_made_in(at_of[&w], v).is_some())
                         && (once.get(&v).copied() == Some(1)
                             || !floating.contains(&phi.result)
-                                && (_observed(body, &at_of, w, block.at, phi.result)
-                                    || _observed(body, &at_of, w, block.at, v))
+                                && (_observed(&reaches, &at_of, w, block.at, phi.result)
+                                    || _observed(&reaches, &at_of, w, block.at, v))
                                 && _read_past_loop(&at_of, block.at, w, v))
                         && _defined_in_place(at_of[&w], v, phi.result)
                         && !_live_after(&at_of, block.at, w, v, phi.result)
@@ -348,8 +349,8 @@ pub fn eliminated_priced(
             let leaves = on_edge(where_, block.at, pairs.len());
             if leaves
                 || pairs.iter().any(|&(result, value)| {
-                    _observed(body, &at_of, where_, block.at, result)
-                        || _observed(body, &at_of, where_, block.at, value)
+                    _observed(&reaches, &at_of, where_, block.at, result)
+                        || _observed(&reaches, &at_of, where_, block.at, value)
                 })
             {
                 match split.entry((where_, block.at)).or_insert_with(|| Split::Pairs(Vec::new())) {
@@ -443,17 +444,126 @@ fn _exits_copied(body: &LirBody) -> LirBody {
     )
 }
 
+/// Past this many blocks the matrix is not built (N^2 bits) and every query
+/// walks.
+const MAX_REACHING: usize = 8192;
+
+thread_local! {
+    static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many blocks this thread's `_observed` walks have visited, for a test
+/// that a value nothing reads asks no walk.
+pub fn walked() -> usize {
+    WALKED.with(std::cell::Cell::get)
+}
+
+/// Which blocks reach which, and where each value is read: a walk for every
+/// (value, edge) asked was linear in the blocks, so quadratic in a function of
+/// N diamonds (`branches` 1024: 2 Ginstr of 4 runs).
+pub struct Reaches {
+    index: IndexMap<i64, usize>,
+    /// Per block, the blocks it reaches, itself included.
+    reach: Vec<Vec<u64>>,
+    /// Per value, the blocks that read it, or a phi on an edge out of them
+    /// does.
+    readers: IndexMap<u32, Vec<usize>>,
+    /// A successor with no block: the walk's answer there is "read".
+    open: bool,
+}
+
+impl Reaches {
+    pub fn new(
+        body: &LirBody,
+        at_of: &IndexMap<i64, &Block>,
+    ) -> Self {
+        let index: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+        let count = index.len();
+        let words = if count > MAX_REACHING { 0 } else { count.div_ceil(64) };
+        let open =
+            count > MAX_REACHING || body.blocks.iter().any(|block| block.succ.iter().any(|at| !at_of.contains_key(at)));
+        let successors: Vec<Vec<usize>> = body
+            .blocks
+            .iter()
+            .map(|block| block.succ.iter().filter_map(|at| index.get(at).copied()).collect())
+            .collect();
+        if open {
+            return Self { index, reach: Vec::new(), readers: IndexMap::default(), open };
+        }
+        let mut reach = vec![vec![0_u64; words]; count];
+        for (at, row) in reach.iter_mut().enumerate() {
+            row[at / 64] |= 1 << (at % 64);
+        }
+        // Later blocks first settles an acyclic function in one sweep; loops
+        // take more.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for at in (0..count).rev() {
+                for &next in &successors[at] {
+                    if next == at {
+                        continue;
+                    }
+                    let (from, to) = (reach[next].clone(), &mut reach[at]);
+                    for (word, other) in to.iter_mut().zip(&from) {
+                        if *word | other != *word {
+                            *word |= other;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        let mut readers: IndexMap<u32, Vec<usize>> = IndexMap::default();
+        for (at, block) in body.blocks.iter().enumerate() {
+            for one in &block.insns {
+                for &value in one.uses.iter().chain(one.requires.iter().map(|(held, _)| &held.value)) {
+                    readers.entry(value).or_default().push(at);
+                }
+            }
+            for phi in &block.phis {
+                for &(from, value) in &phi.incoming {
+                    if let Some(&pred) = index.get(&from) {
+                        readers.entry(value).or_default().push(pred);
+                    }
+                }
+            }
+        }
+        Self { index, reach, readers, open }
+    }
+
+    /// Whether no block reachable from `starts` reads `value`.
+    fn unread_from(
+        &self,
+        starts: &[i64],
+        value: u32,
+    ) -> bool {
+        if self.open {
+            return false;
+        }
+        let Some(readers) = self.readers.get(&value) else { return true };
+        starts
+            .iter()
+            .all(
+                |at| self.index
+                    .get(at)
+                    .is_some_and(
+                        |&start| readers.iter().all(|&reader| self.reach[start][reader / 64] >> (reader % 64) & 1 == 0),
+                    ),
+            )
+    }
+}
+
 /// Whether `value` can be read after leaving `where` other than into `into`.
 ///
 /// `into` defines it, so a path through `into` reads a new one.
 pub fn _observed(
-    body: &LirBody,
+    reaches: &Reaches,
     at_of: &IndexMap<i64, &Block>,
     where_: i64,
     into: i64,
     value: u32,
 ) -> bool {
-    let _ = body;
     let mut pending: Vec<i64> = at_of[&where_].succ.iter().copied().filter(|&at| at != into).collect();
     // A phi reads on the incoming edge, before any instruction in its block.
     if pending.iter().any(|at| {
@@ -461,8 +571,13 @@ pub fn _observed(
     }) {
         return true;
     }
+    // Nothing a successor reaches reads it, `into` or not: no walk.
+    if reaches.unread_from(&pending, value) {
+        return false;
+    }
     let mut seen: BTreeSet<i64> = pending.iter().copied().collect();
     while let Some(at) = pending.pop() {
+        WALKED.with(|walked| walked.set(walked.get() + 1));
         let Some(block) = at_of.get(&at) else {
             return true;
         };
@@ -1127,7 +1242,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{_observed, _settled, _split_edges, Split, eliminated, unsplit};
+    use super::{_observed, _settled, _split_edges, Reaches, Split, eliminated, unsplit};
     use crate::analysis::frequency::Frequency;
     use crate::backend::verify;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -1496,6 +1611,25 @@ mod tests {
         assert!(used.is_subset(&defined), "phi elimination left undefined values {:?}", used.difference(&defined));
     }
 
+    /// A value nothing after the edge reads walked every block after it, for
+    /// each (value, edge) asked: N diamonds, N^2 visits (`branches` 1024:
+    /// `lir phielim` 2087 Minstr, the slope 2).
+    #[test]
+    fn test_a_value_nothing_reads_after_the_edge_asks_no_walk() {
+        let tail = 200;
+        let mut blocks = vec![
+            block(0, vec![], vec![1, 2], vec![]),
+            block(1, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 7)] }]),
+        ];
+        blocks.extend((2..tail).map(|at| block(at, vec![], vec![at + 1], vec![])));
+        blocks.push(block(tail, vec![], vec![], vec![]));
+        let long = body("long", blocks.into_iter().collect());
+        let at_of: IndexMap<i64, &Block> = long.blocks.iter().map(|block| (block.at, block)).collect();
+        let before = super::walked();
+        assert!(!_observed(&Reaches::new(&long, &at_of), &at_of, 0, 1, 7));
+        assert_eq!(super::walked() - before, 0, "a walk down {tail} blocks that read nothing");
+    }
+
     #[test]
     fn test_phi_observation_on_an_immediate_alternate_edge_is_visible() {
         // nbody's latch passed an accumulator to phis on both of its edges.
@@ -1508,7 +1642,7 @@ mod tests {
             ],
         );
         let at_of: IndexMap<i64, &Block> = alternate.blocks.iter().map(|block| (block.at, block)).collect();
-        assert!(_observed(&alternate, &at_of, 0, 2, 7));
+        assert!(_observed(&Reaches::new(&alternate, &at_of), &at_of, 0, 2, 7));
     }
 
     #[test]

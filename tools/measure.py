@@ -310,13 +310,19 @@ def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], general: d
 def step_rises(
     base: dict[str, list[float]], now: dict[str, list[float]], general: dict, judged: frozenset[str] = frozenset()
 ) -> tuple[list[str], list[str]]:
-    """A step of `high` share or more whose second difference rose by `step_excess` of the compile's cost at 2N, or whose cost at 2N rose
+    """A step whose cost at 2N rose by `step_rise` and `step_floor` Minstr fails whatever its share. Of `high` share or more, one whose second difference rose by `step_excess` of the compile's cost at 2N, or whose cost at 2N rose
     by `pass_slack`, fails. A step the base did not read is taken to have had none; one below `high`, or on the edge of the share floor,
     does not fail either way. A new step on an axis both measurements carry whose second difference did not rise (`judged`) has no step baseline, since work
     moved into an analysis of its own was in other steps' spans before: the axis rule judges it. On an axis that rose it is new work."""
     lines, bad = [], []
     for key, (half, small, big, whole) in sorted(now.items()):
         tol = row_tolerance(general, key)
+        rise = max(tol["step_rise"], tol["pass_slack"])  # a row accepted at a higher pass_slack is accepted at that for this too
+        if key in base and big > base[key][2] * rise and big - base[key][2] >= tol["step_floor"]:
+            # whatever its share of the compile: a step that was 907 Minstr at 2N and is 13,840 was 0.4% of a compile and is not now
+            lines.append(f"{key}: 2N x{big / base[key][2]:.3f} (+{big - base[key][2]:.1f} Minstr, {half}/{small}/{big} against {'/'.join(map(str, base[key][:3]))})")
+            bad.append(f"{key}: cost at 2N x{big / base[key][2]:.3f} (> {rise}, +{big - base[key][2]:.1f} Minstr), whatever its share of the compile{risen_elsewhere(key, base, now)}")
+            continue
         if big < tol["high"] * whole:
             continue
         if key not in base and " ".join(key.split(" ")[:2]) in judged:

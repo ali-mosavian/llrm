@@ -101,8 +101,13 @@ pub fn merged(function: &mut Function) -> bool {
     // Block by block, each asked of its own neighbours (the uses of the
     // target), not of a graph of the whole body made again after each merge. A
     // block that merged is asked again: its new successor may merge too.
+    let mut gone = llrm_support::hash::HashSet::default();
     for first in function.layout().to_vec() {
-        while function.layout().contains(&first) && merged_into(function, first, entry) {
+        // Blocks go only as the target of a merge here, so the layout need not
+        // be searched for `first` (N blocks, N^2: `switchlower` of 2048 cases).
+        while !gone.contains(&first) {
+            let Some(second) = merged_into(function, first, entry) else { break };
+            gone.insert(second);
             changed = true;
         }
     }
@@ -114,17 +119,23 @@ fn merged_into(
     function: &mut Function,
     first: llrm_mir::module::BlockId,
     entry: llrm_mir::module::BlockId,
-) -> bool {
+) -> Option<llrm_mir::module::BlockId> {
     let successors = function.successors(first);
     if successors.len() != 1 {
-        return false;
+        return None;
     }
     let target = successors[0];
     if target == entry || target == first {
-        return false;
+        return None;
     }
-    if function.predecessors(target) != [first] {
-        return false;
+    // Only `first` names it: the first other terminator found ends the look,
+    // so a join of N cases is not read through once for each of its arms.
+    let named_by_another = function
+        .block_users(target)
+        .iter()
+        .any(|one| function.instruction(one.user).opcode.is_terminator() && function.parent(one.user) != Some(first));
+    if named_by_another {
+        return None;
     }
     let (source, second) = (first, target);
     let phis = edges::phis(function, second);
@@ -135,13 +146,13 @@ fn merged_into(
                 .iter()
                 .any(|&(value, _)| Operand::Value(function.instruction(phi).result.expect("a phi's value")) == value)
     }) {
-        return false;
+        return None;
     }
 
     // Only a jump: a two-way branch or any other terminator stays.
     let last = function.terminator(source).expect("a successor is a terminator's");
     if function.instruction(last).opcode != Opcode::Br || function.instruction(last).operands.len() != 1 {
-        return false;
+        return None;
     }
 
     let swaps = phis
@@ -149,7 +160,7 @@ fn merged_into(
         .map(|&phi| (function.instruction(phi).result.expect("a phi's value"), arms(function, phi)[0].0))
         .collect::<BTreeMap<ValueId, Operand>>();
     if swaps.values().any(|value| matches!(value, Operand::Value(one) if swaps.contains_key(one))) {
-        return false;
+        return None;
     }
 
     function.erase(last).expect("a jump defines nothing");
@@ -162,7 +173,7 @@ fn merged_into(
     function.move_run(&function.block(second).instructions().to_vec(), source).expect("a placed block");
     function.replace_block_uses_with(second, source);
     function.erase_block(second).expect("an emptied block nothing names");
-    true
+    Some(second)
 }
 
 #[cfg(test)]

@@ -29,6 +29,9 @@ import scaling  # noqa: E402
 # not growth. Its share is kept with its ratio; tools/measure.py fails only a step of tiers.toml [measure] high or more, so a step on
 # the edge of any one share does not flip.
 LOW = 0.015
+# A step below LOW is still recorded from this much: tools/measure.py fails one whose cost rose 1.5x whatever its share, and a step that
+# was not recorded in the base cannot be seen to rise (its share at 2N was under LOW, and then it grew).
+RECORDED_MINSTR = 5.0
 LEVELS = ("O1", "O2", "Os")
 # N per axis, by one rule: the largest N whose 2N compile costs at most 12 G instructions at -O2 (about 3 s). Measured 2026-10-08
 # on main b0342cdb2, whole-compile 2N/N at N, 2N, 4N, ...: no axis settles to a constant (the exponent drifts up with size, e.g.
@@ -36,6 +39,11 @@ LEVELS = ("O1", "O2", "Os")
 # axis as far up as it allows. A step whose ratio is a small-N artifact (branches' recolor reads 2.75 at 32->64, 1.9-2.2 at 64->256:
 # the pairwise scan fills up to its 48-holder limit) is recorded as it reads; its budget says so, not that it is superlinear.
 SIZES = {"functions": 64, "straight": 512, "branches": 32, "live": 64, "callers": 32, "chain": 32, "mulconst": 512, "nest": 16, "cells": 112}
+# The rest of the generators, by the same rule (measured 2026-10-15, -O2, 2N: cases 128 -> 2.3 G, 256 -> 5.4 G, 512 -> 13.8 G; joins 64 -> 3.6 G,
+# 128 -> 8.4 G, 256 -> 21 G; fjoins 64 -> 2.9 G, 128 -> 7.7 G; unrolled 16 -> 4.3 G, 32 -> 19 G). `cases` was in no table, and a step of it
+# (`hir to mir`, 62 -> 230 -> 884 -> 3,480 -> 13,841 Minstr at -O1 over N = 64..1024, x4 per doubling) went quadratic unseen: every
+# generator is an axis here, and a test says so.
+SIZES |= {"cases": 128, "joins": 64, "fjoins": 64, "unrolled": 8}
 # The axes that cross calls, again at -m16: another register file and calling convention, where a hang once hid (chain at N=7 never
 # finished) while every -m32 axis passed.
 SIZES |= {"chain-m16": 32, "callers-m16": 32}
@@ -116,7 +124,7 @@ def pass_costs(axis: str, level: str, work: Path, command=levels_time.command, c
     out = {}
     for name, big in net.items():
         small = own[n].get(name, 0.0) - own["empty"].get(name, 0.0)
-        if big >= LOW * whole and small > 0:
+        if (big >= LOW * whole or big >= RECORDED_MINSTR) and small > 0:
             out[f"{axis} {level} {name}"] = (own[n // 2].get(name, 0.0) - own["empty"].get(name, 0.0), small, big, whole)
     return out
 
