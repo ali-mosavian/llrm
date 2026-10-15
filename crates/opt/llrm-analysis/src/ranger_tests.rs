@@ -137,3 +137,52 @@ b50:
     assert_eq!(high("b30"), Some(3.into()));
     assert_eq!(high("b20"), Some(9.into()));
 }
+
+/// The edges' facts were a table of every block, solved whole and again for
+/// each edit (59 M of 308 M on d_faces -O1). They are answers kept by (value,
+/// block), and an edit drops those of the blocks it reaches and those they
+/// dominate, and no others.
+#[test]
+fn an_edit_drops_the_answers_below_it_and_keeps_those_above() {
+    let parsed = Parsed::new(
+        "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %c = icmp slt i16 %x, 5
+  br i1 %c, label %b1, label %b4
+
+b1:
+  %d = icmp slt i16 %y, %x
+  br i1 %d, label %b2, label %b3
+
+b2:
+  %z = mul i16 %y, 2
+  ret i16 %z
+
+b3:
+  ret i16 %x
+
+b4:
+  ret i16 %y
+}
+",
+    );
+    let unit = parsed.unit();
+    let facts = unit.registers();
+    let held = super::EdgeFacts::default();
+    let f = function(&parsed.module, "f");
+    let (x, y) = (value(f, "x"), value(f, "y"));
+    let at = |name: &str| cfg::id(block(f, name));
+    let ranger = held.over(&unit, &facts);
+    for name in ["b1", "b2", "b3", "b4"] {
+        ranger.at(x, at(name));
+        ranger.at(y, at(name));
+    }
+    let asked = held.answers();
+    assert!(asked >= 8, "premise: {asked} answers");
+    let shape = unit.shape();
+    let reached = std::collections::BTreeSet::from([at("b1")]);
+    let after = held.keeping(|block| !crate::manager::dominated_by(&shape, &reached, block));
+    // b1, b2 and b3 are b1's or below it; b4 is not.
+    assert!(after.answers() < asked, "the answers below the edit stand");
+    assert!(after.answers() >= 2, "b4's answers stand: {} of {asked}", after.answers());
+}

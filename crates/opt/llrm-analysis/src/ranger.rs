@@ -31,7 +31,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_support::hash::{HashMap, IndexMap};
 
 use crate::cfg;
@@ -48,6 +48,8 @@ struct Memo {
     edges: RefCell<HashMap<i64, Rc<Option<Intervals>>>>,
     /// Block -> what each of its assumes sets below it, in order.
     assumes: RefCell<HashMap<i64, Rc<Vec<Intervals>>>>,
+    /// Block -> the predecessor its edge is taken from.
+    sole: RefCell<HashMap<i64, Option<i64>>>,
     failed: RefCell<Option<String>>,
 }
 
@@ -135,6 +137,7 @@ impl EdgeFacts {
                 memo.own.get_mut().retain(|(_, at), _| kept(*at));
                 memo.edges.get_mut().retain(|at, _| kept(*at));
                 memo.assumes.get_mut().retain(|at, _| kept(*at));
+                memo.sole.get_mut().retain(|at, _| kept(*at));
                 self
             }
             None => {
@@ -163,6 +166,8 @@ impl EdgeFacts {
                     .filter(|(at, _)| kept(**at))
                     .map(|(k, v)| (*k, Rc::clone(v)))
                     .collect();
+                *memo.sole.borrow_mut() =
+                    self.memo.sole.borrow().iter().filter(|(at, _)| kept(**at)).map(|(k, v)| (*k, *v)).collect();
                 EdgeFacts { memo: Rc::new(memo) }
             }
         }
@@ -173,8 +178,7 @@ impl EdgeFacts {
 pub struct EdgeRanger<'a, 'u> {
     unit: &'a Unit<'u>,
     facts: &'a IndexMap<ValueId, Known>,
-    shape: Cow<'u, cfg::Shape>,
-    entry: Option<BlockId>,
+    shape: std::cell::OnceCell<Cow<'u, cfg::Shape>>,
     memo: Rc<Memo>,
 }
 
@@ -224,7 +228,11 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         unit: &'a Unit<'u>,
         facts: &'a IndexMap<ValueId, Known>,
     ) -> Self {
-        Self { unit, facts, shape: unit.shape(), entry: unit.function.entry(), memo }
+        Self { unit, facts, shape: std::cell::OnceCell::new(), memo }
+    }
+
+    fn shape(&self) -> &cfg::Shape {
+        self.shape.get_or_init(|| self.unit.shape())
     }
 
     /// The first error a transfer function gave, if one did: answers after it
@@ -252,7 +260,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         &self,
         at: i64,
     ) -> bool {
-        self.entry.map(cfg::id) == Some(at) || self.shape.dominance.immediate(at).is_some()
+        self.unit.function.entry().map(cfg::id) == Some(at) || self.shape().dominance.immediate(at).is_some()
     }
 
     fn worked(
@@ -284,26 +292,48 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         inherited.map(|found| (*found).clone())
     }
 
-    /// What `value` holds at the start of `at`.
+    /// What `value` holds at the start of `at`: walked up the blocks that start
+    /// each from the one above, to the first that says something of it (an edge
+    /// or an assume) or makes it. The blocks between keep no answer: GCC's
+    /// `range_on_entry` finds the nearest block with one the same way.
     fn inherited(
         &self,
         value: ValueId,
         at: i64,
     ) -> Option<Rc<Interval>> {
-        let parent = self.sole(at);
-        if let Some(parent) = parent {
-            let delta = self.edge(parent, at);
-            if let Some(found) = delta.as_ref().as_ref().and_then(|delta| delta.get(&value)) {
+        let function = self.unit.function;
+        let made_in = match function.value(value).def {
+            ValueDef::Instruction(inst) => function.parent(inst).map(cfg::id),
+            ValueDef::Argument(_) => None,
+        };
+        let mut here = at;
+        loop {
+            let above = match self.sole(here) {
+                Some(parent) => {
+                    let delta = self.edge(parent, here);
+                    if let Some(found) = delta.as_ref().as_ref().and_then(|delta| delta.get(&value)) {
+                        return Some(Rc::new(found.clone()));
+                    }
+                    parent
+                }
+                None => match self.shape().dominance.immediate(here) {
+                    Some(up) => up,
+                    None if self.unit.function.entry().map(cfg::id) == Some(here)
+                        && self.unit.function.parameters().contains(&value) =>
+                    {
+                        return ranges::declared_argument(self.unit, value).map(Rc::new);
+                    }
+                    None => return None,
+                },
+            };
+            let assumed = self.assumed(above);
+            if let Some(found) = assumed.iter().rev().find_map(|delta| delta.get(&value)) {
                 return Some(Rc::new(found.clone()));
             }
-            return self.below(value, parent);
-        }
-        match self.shape.dominance.immediate(at) {
-            Some(up) => self.below(value, up),
-            None if self.entry.map(cfg::id) == Some(at) && self.unit.function.parameters().contains(&value) => {
-                ranges::declared_argument(self.unit, value).map(Rc::new)
+            if made_in == Some(above) {
+                return self.at(value, above);
             }
-            None => None,
+            here = above;
         }
     }
 
@@ -313,7 +343,19 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         &self,
         at: i64,
     ) -> Option<i64> {
-        if self.entry.map(cfg::id) == Some(at) {
+        if let Some(found) = self.memo.sole.borrow().get(&at) {
+            return *found;
+        }
+        let found = self.sole_of(at);
+        self.memo.sole.borrow_mut().insert(at, found);
+        found
+    }
+
+    fn sole_of(
+        &self,
+        at: i64,
+    ) -> Option<i64> {
+        if self.unit.function.entry().map(cfg::id) == Some(at) {
             return None;
         }
         let function = self.unit.function;
@@ -346,18 +388,6 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         let delta = Rc::new(delta);
         self.memo.edges.borrow_mut().insert(at, Rc::clone(&delta));
         delta
-    }
-
-    fn below(
-        &self,
-        value: ValueId,
-        at: i64,
-    ) -> Option<Rc<Interval>> {
-        let assumed = self.assumed(at);
-        match assumed.iter().rev().find_map(|delta| delta.get(&value)) {
-            Some(found) => Some(Rc::new(found.clone())),
-            None => self.at(value, at),
-        }
     }
 
     fn assumed(

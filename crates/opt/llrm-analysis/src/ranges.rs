@@ -1340,9 +1340,9 @@ pub struct Bounds {
     /// The edges' facts it was worked out under: a loop reads them where it
     /// starts from.
     edges: IndexMap<i64, Scope>,
-    /// The edges' facts are the unit's own, asked of by value and block
+    /// The edges' facts as the manager keeps them, asked of by value and block
     /// (`ranger`), and `edges` holds none.
-    lazy: bool,
+    lazy: Option<crate::ranger::EdgeFacts>,
     within: IndexMap<i64, Scope>,
     /// The blocks two loops' facts contradict each other at: none executes
     /// them.
@@ -1385,14 +1385,10 @@ impl Bounds {
         &self,
         unit: &Unit,
     ) -> Facts {
-        if !self.lazy {
-            return self.facts();
-        }
+        let Some(edges) = &self.lazy else { return self.facts() };
         let mut found = self.loops_facts();
-        if let (Some(edges), Some(registers)) = (unit.edges, unit.registers) {
-            for (at, scope) in edges.blocks(unit, registers) {
-                found.entry(at).or_insert(scope);
-            }
+        for (at, scope) in edges.blocks(unit, &unit.registers()) {
+            found.entry(at).or_insert(scope);
         }
         found
     }
@@ -1439,15 +1435,10 @@ impl Lookup for BlockScope<'_, '_> {
         if let Some(scope) = self.bounds.within.get(&self.at) {
             return scope.get(value).map(Cow::Borrowed);
         }
-        if !self.bounds.lazy {
+        let Some(edges) = &self.bounds.lazy else {
             return self.bounds.edges.get(&self.at).and_then(|scope| scope.get(value)).map(Cow::Borrowed);
-        }
-        // The unit's own answers where it carries them; else worked out for
-        // this one question.
-        let found = match (self.unit.edges, self.unit.registers) {
-            (Some(edges), Some(registers)) => edges.over(self.unit, registers).at(*value, self.at),
-            _ => crate::ranger::EdgeRanger::new(self.unit, &self.unit.registers()).at(*value, self.at),
         };
+        let found = edges.over(self.unit, &self.unit.registers()).at(*value, self.at);
         found.map(|found| Cow::Owned((*found).clone()))
     }
 }
@@ -2213,7 +2204,13 @@ pub fn bounded_solved(
             }
         }
     }
-    Ok(Bounds { headers, edges: edges_above, lazy: ranger.is_some(), within: result, dead })
+    Ok(Bounds {
+        headers,
+        edges: edges_above,
+        lazy: unit.edges.filter(|_| ranger.is_some()).cloned(),
+        within: result,
+        dead,
+    })
 }
 
 #[cfg(test)]
