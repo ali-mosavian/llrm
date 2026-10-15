@@ -405,6 +405,12 @@ pub fn live(body: &LirBody) -> (Live, Live) {
 /// sets.
 pub struct LiveRows(Found);
 
+// Times a body's liveness was turned into a set of values for each block.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SETS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 enum Found {
     /// Rows of bits, one for each block: the fixed point over every value.
     Dense(DenseRows),
@@ -458,6 +464,8 @@ impl LiveRows {
         &self,
         entering: bool,
     ) -> Live {
+        #[cfg(test)]
+        SETS_BUILT.with(|one| one.set(one.get() + 1));
         match &self.0 {
             Found::Dense(dense) => dense.sets(if entering { &dense.into } else { &dense.out }),
             Found::Web(web) => web

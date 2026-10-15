@@ -1286,6 +1286,19 @@ fn test_the_interference_among_a_web_is_bits_not_a_tree_of_pairs() {
     assert!(rows > 0, "premise: some value of a web interferes");
 }
 
+/// Two-address fixing copied a set of every live value for each block to see
+/// which of a swap's sources live on (`joins` 1024: `lir twoaddr` 6.5 G, slope
+/// 1.8). It reads the rows of bits, and builds no set of the live values.
+#[test]
+fn test_two_address_fixing_builds_no_set_of_the_live_values() {
+    use crate::backend::allocate::SETS_BUILT;
+    let (plain, _) = body(3, &Shape { pool: 12, ops: 14 });
+    SETS_BUILT.with(|one| one.set(0));
+    let _ = crate::backend::twoaddr::tied(&plain);
+    let built = SETS_BUILT.with(|one| one.get());
+    assert_eq!(built, 0, "{built} sets of the live values built");
+}
+
 /// The whole interference graph of a body was written a pair at a time into
 /// rows that were trees, as the web's was: values live together are N^2 pairs
 /// (`joins` 1024: `lir coalesce` 73 Ginstr, slope 2.8). The rows are bits from
