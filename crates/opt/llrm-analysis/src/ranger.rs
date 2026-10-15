@@ -51,6 +51,16 @@ use crate::cfg;
 use crate::memory::{Knowns, Unit};
 use crate::ranges::{self, Interval, Intervals, Lookup};
 
+thread_local! {
+    static VIEW_EDGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many edges this thread's loop views have worked out, for a test that a
+/// box search reads the edges inside its loop and not those above it.
+pub fn view_edges() -> usize {
+    VIEW_EDGES.with(std::cell::Cell::get)
+}
+
 /// What the ranger has worked out of one body: the answers it keeps.
 #[derive(Default)]
 struct Memo {
@@ -437,6 +447,8 @@ pub struct LoopContext<'a, 'u> {
     pub positions: &'a std::collections::BTreeMap<i64, usize>,
     /// The loop's operations that compute an interval.
     pub operations: &'a [InstId],
+    /// The blocks of the loop.
+    pub body: &'a std::collections::BTreeSet<i64>,
     made: std::cell::OnceCell<IdMap<ValueId, InstId>>,
 }
 
@@ -451,8 +463,9 @@ impl<'a, 'u> LoopContext<'a, 'u> {
         predecessors: &'a std::collections::BTreeMap<i64, std::collections::BTreeSet<i64>>,
         positions: &'a std::collections::BTreeMap<i64, usize>,
         operations: &'a [InstId],
+        body: &'a std::collections::BTreeSet<i64>,
     ) -> Self {
-        Self { unit, facts, shape, assumed, graph, predecessors, positions, operations, made: Default::default() }
+        Self { unit, facts, shape, assumed, graph, predecessors, positions, operations, body, made: Default::default() }
     }
 
     /// The value each operation makes, found when first asked.
@@ -682,14 +695,17 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
         made
     }
 
-    /// The edges into blocks with no other way in, on the dominators of `at`,
-    /// in the order of the layout.
+    /// The edges into blocks with no other way in, on the dominators of `at`
+    /// inside the loop, in the order of the layout. The edges above the loop
+    /// narrow only values made outside it, which `known` holds narrowed by them
+    /// already (`bounded_solved` reads each at the loop's dominator), so they
+    /// are not worked out again for each loop.
     fn chain(
         &self,
         at: i64,
     ) -> Vec<(usize, usize, i64)> {
         let mut found = Vec::new();
-        let mut above = Some(at);
+        let mut above = Some(at).filter(|one| self.ctx.body.contains(one));
         while let Some(one) = above {
             if let Some(parents) = self.ctx.predecessors.get(&one).filter(|parents| parents.len() == 1)
                 && let Some(&from) = parents.iter().next().and_then(|parent| self.ctx.positions.get(parent))
@@ -700,7 +716,7 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
                     }
                 }
             }
-            above = self.ctx.shape.dominance.immediate(one);
+            above = self.ctx.shape.dominance.immediate(one).filter(|up| self.ctx.body.contains(up));
         }
         found.sort_unstable();
         found
@@ -725,6 +741,7 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
         let ctx = self.ctx;
         let mut deltas: Vec<Intervals> = Vec::new();
         for (from, _, successor) in self.chain(at) {
+            VIEW_EDGES.with(|count| count.set(count.get() + 1));
             let delta = ranges::edge_delta(
                 ctx.unit,
                 cfg::block(ctx.graph[from].at),
