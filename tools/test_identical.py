@@ -50,14 +50,15 @@ def test_levels_given_on_the_command_line_are_not_read_as_options(tmp_path, monk
     assert "usage:" not in done.stderr and "objects compared" in done.stdout, done.stderr[-300:] + done.stdout[-300:]
 
 
-# Oracles the corpus run does not set yet: a new one is added to identical.CHECKS, not here.
-NOT_RUN = frozenset("CALLBACKS CLASSES CLOBBERED CLOBBERS COALESCE COLORS COUNTED CYCLES DATAFLOW EFFECT FACTS FOLDS FRAME INITIALIZED INTERVALS MODULES NEEDS OCCURRENCES POINTVALUES RANGES REQUIRED SCOPES SHAPE SIMULATION THRASH UNCHANGED".split())
-
-
-def test_a_new_oracle_is_run_on_the_corpus():
+def test_every_oracle_in_the_source_is_run_on_the_corpus_but_those_named_not_run(tmp_path):
     """LLRM_CHECK_BYTES and LLRM_CHECK_GROUPS (gvn, #1342) were merged but not in identical.CHECKS: 524/0 was said of a run that never
-    asked them. An LLRM_CHECK_ oracle in the source is in CHECKS, or in NOT_RUN above, which only shrinks."""
+    asked them. CHECKS is the source's oracles less NOT_RUN, so a new oracle is run with no edit (the list each PR appended to conflicted)."""
     import re
-    names = {m for path in (HERE.parent / "crates").rglob("*.rs") for m in re.findall(r'env_set\("LLRM_CHECK_([A-Z_0-9]+)"\)', path.read_text())}
-    assert not names - set(identical.CHECKS) - NOT_RUN, sorted(names - set(identical.CHECKS) - NOT_RUN)
-    assert not NOT_RUN & set(identical.CHECKS), sorted(NOT_RUN & set(identical.CHECKS))
+
+    names = {m for path in (HERE.parent / "crates").rglob("*.rs") for m in re.findall(r'"LLRM_CHECK_([A-Z_0-9]+)"', path.read_text())}
+    assert set(identical.CHECKS) == names - identical.NOT_RUN
+    assert identical.NOT_RUN <= names, sorted(identical.NOT_RUN - names)  # a name left over from a removed oracle
+    crate = tmp_path / "crates/x/src"
+    crate.mkdir(parents=True)
+    (crate / "lib.rs").write_text('fn a() { env_set("LLRM_CHECK_BRANDNEW"); env_set("LLRM_CHECK_THRASH"); }\n')
+    assert identical.checks(tmp_path) == ("BRANDNEW",), "a new oracle is run, one named NOT_RUN is not"
