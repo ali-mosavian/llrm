@@ -3300,11 +3300,22 @@ pub fn congruences(unit: &Unit) -> Congruences {
 /// Each value's (residue, modulus): what it is congruent to.
 pub type Congruences = llrm_mir::dense::IdMap<ValueId, (BigInt, BigInt)>;
 
+thread_local! {
+    static CONGRUENCES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has found a body's congruences, for a test that
+/// the proofs of one body share them.
+pub fn congruences_found() -> usize {
+    CONGRUENCES.with(std::cell::Cell::get)
+}
+
 /// `congruences`, given what `consts::known` finds without memory.
 pub fn congruences_with(
     unit: &Unit,
     constants: &IndexMap<ValueId, Known>,
 ) -> Congruences {
+    CONGRUENCES.with(|count| count.set(count.get() + 1));
     let function = unit.function;
     let mut result = Congruences::default();
     let zero = BigInt::from(0);
