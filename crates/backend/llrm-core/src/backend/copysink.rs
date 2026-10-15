@@ -357,7 +357,7 @@ mod tests {
         insns: Vec<Arc<Insn>>,
         succ: Vec<i64>,
     ) -> LirBlock {
-        LirBlock { succ, ..LirBlock::new(at, insns) }
+        LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
     }
 
     fn _copies(body: &LirBody) -> HashMap<i64, Vec<Loc>> {

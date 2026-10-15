@@ -1982,7 +1982,7 @@ impl HomesStructure {
     fn of(body: &LirBody) -> Self {
         Self {
             entry: body.entry,
-            blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone(), block.phis.clone())).collect(),
+            blocks: body.blocks.iter().map(|block| (block.at, block.succ.to_vec(), block.phis.to_vec())).collect(),
             odds: body.odds.clone(),
             trips: body.loop_trip_counts.clone(),
         }
@@ -5600,10 +5600,13 @@ mod tests {
             0x10,
             vec![
                 LirBlock {
-                    succ: vec![0x20],
+                    succ: vec![0x20].into(),
                     ..LirBlock::new(0x10, vec![Arc::new(source), Arc::new(extension), Arc::new(jump)])
                 },
-                LirBlock { succ: vec![0x20, 0x30], ..LirBlock::new(0x20, vec![Arc::new(use_), Arc::new(branch)]) },
+                LirBlock {
+                    succ: vec![0x20, 0x30].into(),
+                    ..LirBlock::new(0x20, vec![Arc::new(use_), Arc::new(branch)])
+                },
                 LirBlock::new(0x30, vec![]),
             ],
             IndexMap::default(),
@@ -6146,7 +6149,7 @@ mod tests {
     fn test_whether_a_loaded_cell_holds_asks_of_each_instruction_once() {
         let cell = Loc::Mem(mem(Addr::new(Space::Frame, 4), 2, RegId::BP, 4, 1));
         let load = insn(0, (0, 1), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell]), &[1], &[]);
-        let mut blocks = vec![LirBlock { succ: vec![1], ..LirBlock::new(0, vec![Arc::new(load)]) }];
+        let mut blocks = vec![LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![Arc::new(load)]) }];
         for at in 1..=40_i64 {
             let work = insn(
                 at * 10,
@@ -6161,7 +6164,7 @@ mod tests {
                 &[100 + at as u32 - 1],
             );
             blocks.push(LirBlock {
-                succ: if at < 40 { vec![at + 1] } else { vec![] },
+                succ: if at < 40 { vec![at + 1].into() } else { vec![].into() },
                 ..LirBlock::new(at, vec![Arc::new(work)])
             });
         }
@@ -6545,7 +6548,7 @@ mod tests {
     /// Three blocks, a value in the middle one, a value in the last.
     fn _three_blocks() -> LirBody {
         let block = |at: i64, insns: Vec<Insn>, succ: Vec<i64>| LirBlock {
-            succ,
+            succ: succ.into(),
             ..LirBlock::new(at, insns.into_iter().map(Arc::new).collect())
         };
         LirBody::new(
@@ -6662,7 +6665,10 @@ mod tests {
                             insns[*position] = naming(0x3000 + 4 * at + *position as i64, defined, used);
                         }
                     }
-                    LirBlock { succ: if at < 1599 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, insns) }
+                    LirBlock {
+                        succ: if at < 1599 { vec![at + 1].into() } else { vec![].into() },
+                        ..LirBlock::new(at, insns)
+                    }
                 })
                 .collect();
             LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default())
@@ -6925,7 +6931,7 @@ mod tests {
         let home = mem(Addr::new(Space::Frame, -0x2A), 2, RegId::BP, -0x2A, 1);
         let at = |at: i64, what: Semantics, defines: &[u32], uses: &[u32]| insn(at, (at, at + 2), what, defines, uses);
         let block = |at: i64, insns: Vec<Insn>, succ: Vec<i64>| LirBlock {
-            succ,
+            succ: succ.into(),
             ..LirBlock::new(at, insns.into_iter().map(Arc::new).collect())
         };
         let jump = Semantics { target: Some(0x20), ..semantics(Operation::Jump, "jmp", vec![], vec![]) };

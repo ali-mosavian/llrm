@@ -78,7 +78,7 @@ fn block(
     insns: Vec<Arc<Insn>>,
     succ: Vec<i64>,
 ) -> LirBlock {
-    LirBlock { succ, ..LirBlock::new(at, insns) }
+    LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
 }
 
 fn body(

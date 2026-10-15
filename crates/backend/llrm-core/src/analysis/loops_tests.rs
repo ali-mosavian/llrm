@@ -12,7 +12,7 @@ fn block(
     at: i64,
     succ: &[i64],
 ) -> LirBlock {
-    LirBlock { succ: succ.to_vec(), ..LirBlock::new(at, vec![]) }
+    LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, vec![]) }
 }
 
 fn set(items: &[i64]) -> BTreeSet<i64> {
@@ -146,7 +146,7 @@ fn reached(
         if Some(at) == removed || !seen.insert(at) {
             continue;
         }
-        pending.extend(graph.iter().find(|one| one.at == at).map(|one| one.succ.clone()).unwrap_or_default());
+        pending.extend(graph.iter().find(|one| one.at == at).map(|one| one.succ.to_vec()).unwrap_or_default());
     }
     seen
 }

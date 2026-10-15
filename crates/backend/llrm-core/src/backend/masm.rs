@@ -1591,7 +1591,7 @@ pub fn _falls_to(
     };
     let mut rest: Vec<i64> = block.succ.iter().copied().filter(|one| Some(*one) != taken).collect();
     if rest.is_empty() {
-        rest = block.succ.clone();
+        rest = block.succ.to_vec();
     }
     // Both edges of a branch may meet at one block (two cases of a switch
     // emptied to the same place): it falls there.
@@ -2508,7 +2508,7 @@ mod tests {
         let onward = Semantics { target: Some(2), ..semantics(Operation::Jump, "jmp", vec![], vec![]) };
         let blocks = vec![
             lir::LirBlock {
-                succ: vec![3, 2],
+                succ: vec![3, 2].into(),
                 ..lir::LirBlock::new(
                     1,
                     vec![
@@ -2624,7 +2624,7 @@ mod tests {
         let si = || Loc::Reg(ir::Reg { register: RegId::SI, width: 2 });
         let blocks = vec![
             lir::LirBlock {
-                succ: vec![3, 2],
+                succ: vec![3, 2].into(),
                 ..lir::LirBlock::new(
                     1,
                     vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()])), insn(2, branch)],
@@ -2670,9 +2670,9 @@ mod tests {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
         let si = || Loc::Reg(ir::Reg { register: RegId::SI, width: 2 });
         let blocks = vec![
-            lir::LirBlock { succ: vec![3, 2], ..lir::LirBlock::new(1, vec![insn(1, branch)]) },
+            lir::LirBlock { succ: vec![3, 2].into(), ..lir::LirBlock::new(1, vec![insn(1, branch)]) },
             lir::LirBlock {
-                succ: vec![3],
+                succ: vec![3].into(),
                 ..lir::LirBlock::new(
                     2,
                     vec![insn(3, semantics(Operation::Move, "mov", vec![si()], vec![through_bp()]))],

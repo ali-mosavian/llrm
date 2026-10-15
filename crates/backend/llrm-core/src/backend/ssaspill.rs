@@ -435,7 +435,7 @@ impl Flow {
             depth: ranges::depths_in(body, loops),
             from_top: body.blocks.iter().map(|block| (block.at, IndexMap::default())).collect(),
             length,
-            succ: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect(),
+            succ: body.blocks.iter().map(|block| (block.at, block.succ.to_vec())).collect(),
         };
         flow.distances(body);
         flow
@@ -2281,7 +2281,7 @@ fn written(
             );
             jump.call = beside.call.clone();
             insns.push(Arc::new(jump));
-            bridges.push(LirBlock { succ: vec![*to], ..LirBlock::new(at, insns) });
+            bridges.push(LirBlock { succ: vec![*to].into(), ..LirBlock::new(at, insns) });
             odds.rerouted(*from, &source.succ, *to, &[(at, 1.0)]);
             retarget.insert((*from, *to), at);
         }
@@ -2376,7 +2376,7 @@ fn written(
     }
     for ((from, to), at) in &retarget {
         if let Some(target) = blocks.iter_mut().find(|block| block.at == *to) {
-            for phi in &mut target.phis {
+            for phi in target.phis.iter_mut() {
                 for (source, _) in &mut phi.incoming {
                     if source == from {
                         *source = *at;

@@ -88,7 +88,7 @@ fn block(
     insns: Vec<Arc<Insn>>,
     succ: Vec<i64>,
 ) -> LirBlock {
-    LirBlock { succ, ..LirBlock::new(at, insns) }
+    LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
 }
 
 /// As the pipeline runs it: phis are copies by now.
@@ -906,7 +906,8 @@ fn test_floating_loop_phis_swap_in_parallel_on_the_critical_backedge() {
                 phis: vec![
                     Phi { result: 3, incoming: vec![(0, 1), (16, 4)] },
                     Phi { result: 4, incoming: vec![(0, 2), (16, 3)] },
-                ],
+                ]
+                .into(),
                 ..block(16, insns[2..].to_vec(), vec![16, 48])
             },
             block(48, vec![], vec![]),
@@ -1505,7 +1506,7 @@ fn test_a_loop_accumulator_stays_on_the_stack_across_the_back_edge() {
     body.blocks = vec![
         block(0, insns[..1].to_vec(), vec![16]),
         LirBlock {
-            phis: vec![Phi { result: 2, incoming: vec![(0, 1), (16, 4)] }],
+            phis: vec![Phi { result: 2, incoming: vec![(0, 1), (16, 4)] }].into(),
             ..block(16, insns[1..4].to_vec(), vec![16, 48])
         },
         block(48, insns[4..].to_vec(), vec![]),

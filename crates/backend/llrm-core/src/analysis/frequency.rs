@@ -33,7 +33,7 @@ impl Cfg {
     fn of(body: &LirBody) -> Self {
         Self {
             entry: body.entry,
-            shape: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect(),
+            shape: body.blocks.iter().map(|block| (block.at, block.succ.to_vec())).collect(),
             odds: body.odds.clone(),
             trips: body.loop_trip_counts.clone(),
         }
@@ -294,7 +294,7 @@ impl Frequency {
         let kept: Vec<LirBlock> = blocks
             .iter()
             .filter(|block| successors.contains_key(&block.at))
-            .map(|block| LirBlock { succ: successors[&block.at].clone(), ..LirBlock::new(block.at, Vec::new()) })
+            .map(|block| LirBlock { succ: successors[&block.at].clone().into(), ..LirBlock::new(block.at, Vec::new()) })
             .collect();
         let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
         for (from, list) in &successors {
@@ -405,7 +405,7 @@ mod tests {
         op: Operation,
         succ: Vec<i64>,
     ) -> LirBlock {
-        LirBlock { succ, ..LirBlock::new(at, vec![insn(at, op, name)]) }
+        LirBlock { succ: succ.into(), ..LirBlock::new(at, vec![insn(at, op, name)]) }
     }
 
     /// entry 1 -> loop 2 (back to 2, out to 3) -> 3.
@@ -475,7 +475,7 @@ mod tests {
         body.odds.rerouted(2, &loop_.succ, 3, &[(4, 1.0)]);
         let blocks = vec![
             body.blocks[0].clone(),
-            LirBlock { succ: vec![2, 4], ..body.blocks[1].clone() },
+            LirBlock { succ: vec![2, 4].into(), ..body.blocks[1].clone() },
             body.blocks[2].clone(),
             block(4, "jmp", Operation::Jump, vec![3]),
         ];
@@ -553,7 +553,7 @@ mod tests {
                 let before = Frequency::of(&body);
                 let mut split = body.clone();
                 let bridge = 9;
-                let succ: Vec<i64> = split.blocks.iter().find(|one| one.at == from).expect("a block").succ.clone();
+                let succ: Vec<i64> = split.blocks.iter().find(|one| one.at == from).expect("a block").succ.to_vec();
                 split.odds.rerouted(from, &succ, old, &[(bridge, 1.0)]);
                 for one in &mut split.blocks {
                     if one.at == from {
@@ -586,12 +586,12 @@ mod tests {
         let before = Frequency::of(&body);
         let mut split = body.clone();
         split.odds.rerouted(2, &[2, 3], 2, &[(9, 1.0)]);
-        split.blocks[1].succ = vec![9, 3];
+        split.blocks[1].succ = vec![9, 3].into();
         split
             .blocks
             .push(
                 LirBlock {
-                    succ: vec![2],
+                    succ: vec![2].into(),
                     ..LirBlock::new(9, vec![insn(9, Operation::Move, "mov"), insn(9, Operation::Jump, "jmp")])
                 },
             );
@@ -627,18 +627,18 @@ mod tests {
         // 1 -> 3 is gone and 3 is reached by 2 -> 9 -> 3, 9 taking 1 in 32
         // from 2: block 3 now runs a thirty-second as often.
         let mut moved = body.clone();
-        moved.blocks[0].succ = vec![2];
+        moved.blocks[0].succ = vec![2].into();
         moved.blocks[1] = block(2, "jne", Operation::Branch, vec![4, 9]);
         moved.blocks.push(block(4, "ret", Operation::Return, vec![]));
-        moved.blocks.push(LirBlock { succ: vec![3], ..LirBlock::new(9, vec![insn(9, Operation::Jump, "jmp")]) });
+        moved.blocks.push(LirBlock { succ: vec![3].into(), ..LirBlock::new(9, vec![insn(9, Operation::Jump, "jmp")]) });
         moved.odds.taken.insert((2, 9), (BlockOdds::CERTAIN / 32.0).round() as u32);
         moved.odds.taken.insert((2, 4), (BlockOdds::CERTAIN * 31.0 / 32.0).round() as u32);
         let said = Frequency::violations(&moved);
         assert!(said.iter().any(|one| one.contains("block 0x3 runs")), "{said:?}");
         let mut gone = body.clone();
         gone.blocks.retain(|one| one.at != 3);
-        gone.blocks[0].succ = vec![2];
-        gone.blocks[1].succ = vec![];
+        gone.blocks[0].succ = vec![2].into();
+        gone.blocks[1].succ = vec![].into();
         gone.frequencies = body.frequencies.clone();
         assert!(Frequency::violations(&gone).iter().any(|one| one.contains("gone")));
         assert!(Frequency::violations(&gone.with_blocks(gone.blocks.clone())).is_empty());
@@ -653,10 +653,11 @@ mod tests {
         body.frequencies = Some(Frequency::of(&body).table());
         let mut more = body.clone();
         // 2 -> 3 now goes through a new self loop 9.
-        more.blocks[1].succ = vec![2, 8];
-        more.blocks.push(LirBlock { succ: vec![9], ..LirBlock::new(8, vec![insn(8, Operation::Jump, "jmp")]) });
-        more.blocks.push(LirBlock { succ: vec![9, 3], ..LirBlock::new(9, vec![insn(9, Operation::Branch, "jne")]) });
-        more.blocks[2].succ = vec![];
+        more.blocks[1].succ = vec![2, 8].into();
+        more.blocks.push(LirBlock { succ: vec![9].into(), ..LirBlock::new(8, vec![insn(8, Operation::Jump, "jmp")]) });
+        more.blocks
+            .push(LirBlock { succ: vec![9, 3].into(), ..LirBlock::new(9, vec![insn(9, Operation::Branch, "jne")]) });
+        more.blocks[2].succ = vec![].into();
         for (from, to, probability) in
             [(2, 8, 1.0 / 32.0), (2, 2, 31.0 / 32.0), (9, 9, 31.0 / 32.0), (9, 3, 1.0 / 32.0)]
         {

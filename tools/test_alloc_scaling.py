@@ -389,3 +389,17 @@ def test_the_facts_of_a_rewrite_are_edited_where_they_are_not_copied():
         run = steps(compiler, source, "-O2")
     spent = run["facts slots"] + run["facts hints"]
     assert spent < 110, f"cells N=448 -O2: facts slots and facts hints cost {spent} Minstr (110 allowed; 222 before): {run}"
+
+
+def test_a_spill_shares_the_lists_of_the_blocks_it_does_not_change():
+    """Copying a `LirBlock` copied its successor and phi lists, and the spiller copied every block of the body at every round:
+    `regalloc spill` own cost 590 Minstr on `branches` at N=800 and 2,256 at 1600. A copy of a block shares the lists until one changes."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](800))
+        run = steps(compiler, source, "-O2")
+    assert run["regalloc spill"] < 450, f"branches N=800 -O2: regalloc spill cost {run['regalloc spill']} Minstr (450 allowed; 590 before): {run}"

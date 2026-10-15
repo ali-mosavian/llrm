@@ -469,7 +469,7 @@ fn duplicated(
             // The parent's own branches keep their targets.
             let mut succ: Vec<i64> = parent.succ.iter().copied().filter(|at| *at != tail.at).collect();
             succ.extend(tail.succ.iter().filter(|at| !succ.contains(at)).copied().collect::<Vec<_>>());
-            Some((LirBlock { succ, ..parent.with_insns(insns) }, tail.at, into))
+            Some((LirBlock { succ: succ.into(), ..parent.with_insns(insns) }, tail.at, into))
         })();
         if let Some((made, tail, into)) = made {
             copies.push((index, made, tail, into));
@@ -1954,8 +1954,8 @@ pub fn _step(
                     .map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&inverted) } else { Arc::clone(one) })
                     .collect();
                 let succ = vec![onward.expect("checked above"), beyond.expect("a branch names its target")];
-                blocks[index] = LirBlock { insns, succ, ..block };
-                blocks[index + 1] = LirBlock { succ: Vec::new(), ..over };
+                blocks[index] = LirBlock { insns, succ: succ.into(), ..block };
+                blocks[index + 1] = LirBlock { succ: Vec::new().into(), ..over };
                 body.blocks = blocks;
                 _stranded(body, at);
                 return Some(at.get(&here).copied().unwrap_or(0));
@@ -2114,7 +2114,8 @@ fn _stranded(
         if kept.is_empty() {
             keep[index] = false;
         } else {
-            body.blocks[index] = LirBlock { succ: Vec::new(), phis: Vec::new(), ..block.with_insns(kept) };
+            body.blocks[index] =
+                LirBlock { succ: Vec::new().into(), phis: Vec::new().into(), ..block.with_insns(kept) };
         }
     }
     if keep.contains(&false) {
@@ -2152,7 +2153,11 @@ pub fn _prune(body: &mut LirBody) {
             }
             let kept: Vec<Arc<Insn>> =
                 block.insns.iter().filter(|one| !one.owned().is_empty()).map(lir::bytes_only).collect();
-            (!kept.is_empty()).then(|| LirBlock { succ: Vec::new(), phis: Vec::new(), ..block.with_insns(kept) })
+            (!kept.is_empty()).then(|| LirBlock {
+                succ: Vec::new().into(),
+                phis: Vec::new().into(),
+                ..block.with_insns(kept)
+            })
         })
         .collect();
 }

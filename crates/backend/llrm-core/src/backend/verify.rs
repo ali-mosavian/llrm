@@ -478,7 +478,7 @@ mod tests {
         };
         let blocks = |table: Vec<i64>| {
             vec![
-                LirBlock { succ: vec![2, 3], ..LirBlock::new(1, vec![jump(table)]) },
+                LirBlock { succ: vec![2, 3].into(), ..LirBlock::new(1, vec![jump(table)]) },
                 LirBlock::new(2, vec![ret()]),
                 LirBlock::new(3, vec![ret()]),
             ]

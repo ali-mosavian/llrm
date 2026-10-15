@@ -1210,7 +1210,7 @@ mod tests {
         insns: Vec<Arc<Insn>>,
         succ: Vec<i64>,
     ) -> LirBlock {
-        LirBlock { succ, ..LirBlock::new(at, insns) }
+        LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
     }
 
     /// qbdemo's PLASMA once DS stopped being a selector: a slot's reload in

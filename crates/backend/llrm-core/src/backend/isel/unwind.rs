@@ -127,7 +127,7 @@ impl Selector<'_, '_, '_> {
             insn(at, semantics(Operation::Compare, "cmp", vec![], vec![sp, zero])),
             insn(at, Semantics { target: Some(pad), ..semantics(Operation::Branch, "je", vec![], vec![]) }),
         ];
-        let root = LirBlock { succ: vec![pad, entry], ..LirBlock::new(at, never.to_vec()) };
+        let root = LirBlock { succ: vec![pad, entry].into(), ..LirBlock::new(at, never.to_vec()) };
         (std::iter::once(root).chain(blocks).collect(), at)
     }
 }

@@ -314,7 +314,7 @@ fn body(
 
     let block = |at: i64, insns: Vec<Insn>, succ: Vec<i64>| {
         let mut block = LirBlock::new(at, insns.into_iter().map(Arc::new).collect());
-        block.succ = succ;
+        block.succ = succ.into();
         block
     };
     let blocks =

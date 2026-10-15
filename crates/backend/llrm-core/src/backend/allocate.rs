@@ -4770,10 +4770,10 @@ mod tests {
             block(15, vec![count_again, test_again, back_again]),
             block(20, vec![push, ret]),
         );
-        first.succ = vec![10];
-        looping.succ = vec![10, 15];
-        again.succ = vec![15, 20];
-        last.succ = vec![];
+        first.succ = vec![10].into();
+        looping.succ = vec![10, 15].into();
+        again.succ = vec![15, 20].into();
+        last.succ = vec![].into();
         let mut body =
             LirBody::new("t", 0, vec![first, looping, again, last], IndexMap::default(), IndexMap::default());
         body.loop_trip_counts = vec![(10, 3), (15, 7)];
@@ -5514,9 +5514,9 @@ mod tests {
             vec![],
         );
         let mut first = block(0, vec![define]);
-        first.succ = vec![0x10];
+        first.succ = vec![0x10].into();
         let mut second = block(0x10, vec![]);
-        second.phis = vec![crate::model::lir::Phi { result: 2, incoming: vec![(0, 1)] }];
+        second.phis = vec![crate::model::lir::Phi { result: 2, incoming: vec![(0, 1)] }].into();
         let body = LirBody::new("phi", 0, vec![first, second], IndexMap::default(), IndexMap::default());
         let (live_in, live_out) = live(&body);
         assert!(live_out[&0].contains(&1), "the argument leaves its predecessor: {live_out:?}");

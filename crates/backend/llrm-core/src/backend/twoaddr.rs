@@ -659,7 +659,7 @@ mod tests {
         let input = LirBody::new(
             "update",
             0,
-            vec![LirBlock { succ: vec![0], ..LirBlock::new(0, vec![Arc::new(add), Arc::new(back)]) }],
+            vec![LirBlock { succ: vec![0].into(), ..LirBlock::new(0, vec![Arc::new(add), Arc::new(back)]) }],
             IndexMap::default(),
             IndexMap::default(),
         );
@@ -713,7 +713,10 @@ mod tests {
         let input = LirBody::new(
             "update",
             0,
-            vec![LirBlock { succ: vec![0], ..LirBlock::new(0, vec![Arc::new(add), Arc::new(back), Arc::new(old)]) }],
+            vec![LirBlock {
+                succ: vec![0].into(),
+                ..LirBlock::new(0, vec![Arc::new(add), Arc::new(back), Arc::new(old)])
+            }],
             IndexMap::default(),
             IndexMap::default(),
         );

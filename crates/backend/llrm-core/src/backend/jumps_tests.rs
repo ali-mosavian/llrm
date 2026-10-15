@@ -81,7 +81,7 @@ fn block(
     insns: Vec<Arc<Insn>>,
     succ: Vec<i64>,
 ) -> LirBlock {
-    LirBlock { succ, ..LirBlock::new(at, insns) }
+    LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
 }
 
 fn body(
@@ -983,9 +983,12 @@ fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
         "f",
         1,
         vec![
-            LirBlock { succ: vec![2, 3], ..LirBlock::new(1, vec![_compare(1), _branch(2, "jne", 2), _jump(3, 3)]) },
-            LirBlock { succ: vec![], ..LirBlock::new(2, vec![_return(4)]) },
-            LirBlock { succ: vec![], ..LirBlock::new(3, vec![_return(5)]) },
+            LirBlock {
+                succ: vec![2, 3].into(),
+                ..LirBlock::new(1, vec![_compare(1), _branch(2, "jne", 2), _jump(3, 3)])
+            },
+            LirBlock { succ: vec![].into(), ..LirBlock::new(2, vec![_return(4)]) },
+            LirBlock { succ: vec![].into(), ..LirBlock::new(3, vec![_return(5)]) },
         ],
         IndexMap::default(),
         IndexMap::default(),
@@ -1010,12 +1013,12 @@ fn test_a_three_way_block_keeps_its_jump() {
         1,
         vec![
             LirBlock {
-                succ: vec![4, 2, 3],
+                succ: vec![4, 2, 3].into(),
                 ..LirBlock::new(1, vec![_compare(1), _branch(2, "je", 4), _branch(3, "jne", 2), _jump(4, 3)])
             },
-            LirBlock { succ: vec![], ..LirBlock::new(2, vec![_return(5)]) },
-            LirBlock { succ: vec![], ..LirBlock::new(3, vec![_return(6)]) },
-            LirBlock { succ: vec![], ..LirBlock::new(4, vec![_return(7)]) },
+            LirBlock { succ: vec![].into(), ..LirBlock::new(2, vec![_return(5)]) },
+            LirBlock { succ: vec![].into(), ..LirBlock::new(3, vec![_return(6)]) },
+            LirBlock { succ: vec![].into(), ..LirBlock::new(4, vec![_return(7)]) },
         ],
         IndexMap::default(),
         IndexMap::default(),

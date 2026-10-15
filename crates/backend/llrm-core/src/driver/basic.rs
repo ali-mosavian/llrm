@@ -1201,8 +1201,8 @@ pub fn ends_program(
         // Only the rewritten return becomes non-returning. Branch and jump
         // blocks retain their CFG edges; MASM listing uses the untaken edge to
         // insert an explicit jump when it is not the next laid-out block.
-        let succ = if exits { vec![] } else { block.succ.clone() };
-        blocks.push(lir::LirBlock { succ, ..block.with_insns(instructions) });
+        let succ = if exits { vec![] } else { block.succ.to_vec() };
+        blocks.push(lir::LirBlock { succ: succ.into(), ..block.with_insns(instructions) });
     }
     (lir::LirBody { noreturn: true, ..body.with_blocks(blocks) }, sites)
 }

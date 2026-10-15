@@ -101,7 +101,7 @@ fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
         .map(|k| {
             let value = 100 + links - k;
             let mut block = LirBlock::new(i64::from(k), vec![wide(value, if k == links - 1 { 4 } else { 2 })]);
-            block.phis = vec![Phi { result: value - 1, incoming: vec![(i64::from(k), value)] }];
+            block.phis = vec![Phi { result: value - 1, incoming: vec![(i64::from(k), value)] }].into();
             block
         })
         .collect();
@@ -173,7 +173,7 @@ fn with_empty_edge_blocks(body: &LirBody) -> LirBody {
                 .or_insert_with(
                     || {
                         next += 1;
-                        made.push(LirBlock { succ: vec![*to], ..LirBlock::new(next - 1, Vec::new()) });
+                        made.push(LirBlock { succ: vec![*to].into(), ..LirBlock::new(next - 1, Vec::new()) });
                         next - 1
                     },
                 );
@@ -196,10 +196,10 @@ fn with_empty_edge_blocks(body: &LirBody) -> LirBody {
                 _ => std::sync::Arc::clone(one),
             })
             .collect();
-        blocks.push(LirBlock { succ, ..block.with_insns(insns) });
+        blocks.push(LirBlock { succ: succ.into(), ..block.with_insns(insns) });
     }
     for block in &mut blocks {
-        for phi in &mut block.phis {
+        for phi in block.phis.iter_mut() {
             for (from, _) in &mut phi.incoming {
                 if let Some(at) =
                     landing.iter().find(|((_, to), _)| *to == block.at).and_then(|_| landing.get(&(*from, block.at)))
@@ -420,7 +420,10 @@ fn test_a_value_is_dead_when_nothing_reads_it_not_when_its_distance_is_unsettled
                 _ if at == last => vec![make("add", 2, vec![held(1), number(1)], vec![1])],
                 _ => Vec::new(),
             };
-            LirBlock { succ: if at == last { Vec::new() } else { vec![at + 1] }, ..LirBlock::new(at, insns) }
+            LirBlock {
+                succ: if at == last { Vec::new().into() } else { vec![at + 1].into() },
+                ..LirBlock::new(at, insns)
+            }
         })
         .collect();
     blocks.reverse();

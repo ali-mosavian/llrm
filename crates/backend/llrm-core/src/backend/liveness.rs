@@ -506,7 +506,7 @@ mod tests {
             one.group = Some(1);
             Arc::new(one)
         };
-        let first = LirBlock { succ: vec![2], ..LirBlock::new(1, vec![grouped(1, bx, DX), grouped(2, AX, bx)]) };
+        let first = LirBlock { succ: vec![2].into(), ..LirBlock::new(1, vec![grouped(1, bx, DX), grouped(2, AX, bx)]) };
         let last = LirBlock::new(2, vec![_insn(3, Operation::Move, "mov", vec![Loc::Reg(cx)], vec![Loc::Reg(AX)])]);
         let body = LirBody::new("f", 1, vec![first, last], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
@@ -526,7 +526,10 @@ mod tests {
                 } else {
                     vec![_insn(at, Operation::Move, "mov", vec![Loc::Reg(bx)], vec![Loc::Reg(DX)])]
                 };
-                LirBlock { succ: if at == blocks { vec![] } else { vec![at + 1] }, ..LirBlock::new(at, insns) }
+                LirBlock {
+                    succ: if at == blocks { vec![].into() } else { vec![at + 1].into() },
+                    ..LirBlock::new(at, insns)
+                }
             })
             .collect();
         LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default())

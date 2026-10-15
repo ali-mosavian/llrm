@@ -255,7 +255,7 @@ pub fn checked(
 /// `body` without meta instructions, and without the unreachable blocks
 /// that held only those.
 fn without_meta(body: LirBody) -> LirBody {
-    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
     let (mut reached, mut work) = (std::collections::BTreeSet::new(), vec![body.entry]);
     while let Some(at) = work.pop() {
         if succ.contains_key(&at) && reached.insert(at) {

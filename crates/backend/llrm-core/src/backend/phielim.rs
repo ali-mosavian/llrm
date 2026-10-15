@@ -856,7 +856,7 @@ pub fn placed_on_edges(
         }
         return out;
     }
-    let kept: IndexMap<i64, Vec<Phi>> = body.blocks.iter().map(|block| (block.at, block.phis.clone())).collect();
+    let kept: IndexMap<i64, Vec<Phi>> = body.blocks.iter().map(|block| (block.at, block.phis.to_vec())).collect();
     _split_edges(body, &split, &copies, &IndexMap::default(), &kept, &IndexMap::default(), true, &|_, _| false)
         .expect("an empty rename cannot cycle")
 }
@@ -938,8 +938,8 @@ pub fn _split_edges(
             LirBlock {
                 at,
                 insns: insns.iter().map(|one| _renamed(one, rename)).collect::<Result<_, _>>()?,
-                succ: vec![into],
-                phis: vec![],
+                succ: vec![into].into(),
+                phis: vec![].into(),
                 cold: false,
             },
         );
@@ -967,7 +967,7 @@ pub fn _split_edges(
         blocks.push(LirBlock {
             at: block.at,
             insns: insns.iter().map(|one| _renamed(one, rename)).collect::<Result<_, _>>()?,
-            succ,
+            succ: succ.into(),
             phis: kept[&block.at]
                 .iter()
                 .map(|phi| {
@@ -1144,7 +1144,7 @@ mod tests {
         succ: Vec<i64>,
         phis: Vec<Phi>,
     ) -> LirBlock {
-        LirBlock { at, insns: insns.into(), succ, phis, cold: false }
+        LirBlock { at, insns: insns.into(), succ: succ.into(), phis: phis.into(), cold: false }
     }
 
     fn body(

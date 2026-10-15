@@ -1971,10 +1971,10 @@ impl Selector<'_, '_, '_> {
                     succ.push(block_at[&one]);
                 }
             }
-            blocks.push(LirBlock { succ, phis, ..LirBlock::new(block_at[&block], insns) });
+            blocks.push(LirBlock { succ: succ.into(), phis: phis.into(), ..LirBlock::new(block_at[&block], insns) });
         }
         for block in made.values_mut().flatten() {
-            for phi in &mut block.phis {
+            for phi in block.phis.iter_mut() {
                 for (_, value) in &mut phi.incoming {
                     *value = self.stand_ins.get(value).copied().unwrap_or(*value);
                 }
@@ -2683,10 +2683,10 @@ impl Selector<'_, '_, '_> {
                 Ok(())
             };
         branched(self, a, target, &mut insns)?;
-        blocks.push(LirBlock { succ: vec![target, other], phis, ..LirBlock::new(from, insns) });
+        blocks.push(LirBlock { succ: vec![target, other].into(), phis: phis.into(), ..LirBlock::new(from, insns) });
         let mut tail = Vec::new();
         branched(self, b, taken, &mut tail)?;
-        blocks.push(LirBlock { succ: vec![taken, otherwise], ..LirBlock::new(second, tail) });
+        blocks.push(LirBlock { succ: vec![taken, otherwise].into(), ..LirBlock::new(second, tail) });
         Ok(())
     }
 
@@ -2742,7 +2742,7 @@ impl Selector<'_, '_, '_> {
                 succ.push(target);
             }
         }
-        blocks.push(LirBlock { succ, phis, ..LirBlock::new(from, insns) });
+        blocks.push(LirBlock { succ: succ.into(), phis: phis.into(), ..LirBlock::new(from, insns) });
         Ok(())
     }
 
@@ -2764,7 +2764,11 @@ impl Selector<'_, '_, '_> {
         let (default, cases) = self.cases(inst);
         if cases.is_empty() {
             insns.push(insn(at, jump(block_at[&default])));
-            blocks.push(LirBlock { succ: vec![block_at[&default]], phis, ..LirBlock::new(from, insns) });
+            blocks.push(LirBlock {
+                succ: vec![block_at[&default]].into(),
+                phis: phis.into(),
+                ..LirBlock::new(from, insns)
+            });
             return Ok(());
         }
         // A selector wider than a register (an i64 on a 32-bit target) is
@@ -2789,8 +2793,8 @@ impl Selector<'_, '_, '_> {
             insns.push(insn(at, branch));
             let succ = vec![block_at[&target], next];
             blocks.push(LirBlock {
-                succ,
-                phis: std::mem::take(&mut phis),
+                succ: succ.into(),
+                phis: std::mem::take(&mut phis).into(),
                 ..LirBlock::new(chain[index], std::mem::take(&mut insns))
             });
         }

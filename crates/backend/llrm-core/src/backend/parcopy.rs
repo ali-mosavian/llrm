@@ -746,7 +746,7 @@ mod tests {
                 Arc::new(grouped(reg(RegId::CX, 4), reg(RegId::SI, 4), 1)),
             ],
         );
-        first.succ = vec![1];
+        first.succ = vec![1].into();
         let reader = Insn::new(
             1,
             Some((1, 2)),
@@ -786,7 +786,7 @@ mod tests {
                 Arc::new(grouped(reg(RegId::DX, 4), reg(RegId::AX, 4), 1)),
             ],
         );
-        first.succ = vec![1];
+        first.succ = vec![1].into();
         let reader = Insn::new(
             1,
             Some((1, 2)),

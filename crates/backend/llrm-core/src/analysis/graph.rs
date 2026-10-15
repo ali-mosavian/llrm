@@ -42,7 +42,7 @@ pub struct Shape {
 
 impl Shape {
     pub fn of(body: &LirBody) -> Self {
-        Shape { entry: body.entry, blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect() }
+        Shape { entry: body.entry, blocks: body.blocks.iter().map(|block| (block.at, block.succ.to_vec())).collect() }
     }
 
     /// Whether `body` has this entry, these labels and these successors.
@@ -121,7 +121,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn diamond() -> LirBody {
-        let block = |at: i64, succ: &[i64]| LirBlock { succ: succ.to_vec(), ..LirBlock::new(at, Vec::new()) };
+        let block = |at: i64, succ: &[i64]| LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, Vec::new()) };
         LirBody::new(
             "g",
             1,
@@ -144,7 +144,7 @@ mod tests {
         Graph::of(&rewritten);
         assert_eq!(body.facts.0.runs::<Edges>(), 1, "a rewrite of the instructions asked the edges again");
         let mut moved = body.blocks.clone();
-        moved[1].succ = vec![];
+        moved[1].succ = vec![].into();
         let moved = body.with_blocks(moved);
         assert_eq!(Graph::of(&moved).parents[2], [0], "an edge that moved");
         assert_eq!(body.facts.0.runs::<Edges>(), 2, "a moved edge was answered from the old graph");
@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(body.facts.0.runs::<crate::backend::spillplacement::EdgeBundles>(), 1, "bundles asked again");
         assert_eq!(body.facts.0.runs::<super::LoopDepths>(), 1, "depths asked again");
         let mut moved = body.blocks.clone();
-        moved[1].succ = vec![];
+        moved[1].succ = vec![].into();
         let moved = body.with_blocks(moved);
         crate::backend::spillplacement::edge_bundles(&moved);
         assert_eq!(body.facts.0.runs::<crate::backend::spillplacement::EdgeBundles>(), 2, "a moved edge, old bundles");

@@ -187,7 +187,8 @@ pub fn repaired(
     let mut next = spiller::_next_value(body);
     let mut stacks: IndexMap<u32, Vec<u32>> = IndexMap::default();
     let mut insns_of: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
-    let mut phis_of: IndexMap<i64, Vec<Phi>> = body.blocks.iter().map(|block| (block.at, block.phis.clone())).collect();
+    let mut phis_of: IndexMap<i64, Vec<Phi>> =
+        body.blocks.iter().map(|block| (block.at, block.phis.to_vec())).collect();
     // The result of the phi placed for a value in a block.
     let mut made: IndexMap<(i64, u32), u32> = IndexMap::default();
     // (block, value) whose phi still needs its operand from a predecessor, in
@@ -291,7 +292,7 @@ pub fn repaired(
         .map(|block| {
             let insns = insns_of.get(&block.at).cloned().unwrap_or_else(|| block.insns.to_vec());
             let phis = phis_of.get(&block.at).cloned().unwrap_or_default();
-            LirBlock { phis, ..block.with_insns(insns) }
+            LirBlock { phis: phis.into(), ..block.with_insns(insns) }
         })
         .collect();
     body.with_blocks(rebuilt)

@@ -1635,7 +1635,7 @@ mod tests {
                     .map(Arc::new)
                     .collect(),
             );
-            block.succ = vec![0x20];
+            block.succ = vec![0x20].into();
             block
         };
         let last = LirBlock::new(0x20, vec![Arc::new(_use(0x20, 2))]);

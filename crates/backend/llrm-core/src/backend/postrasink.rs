@@ -112,7 +112,7 @@ fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
     let decoded: IndexMap<i64, _> =
         body.blocks.iter().map(|block| (block.at, _effects(regs, body.bits, block))).collect();
     let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
-    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
     dataflow::solve(
         &nodes,
         Direction::Backward,
@@ -126,7 +126,7 @@ fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
 /// Blocks reachable from the entry, each before the successors it does not come
 /// back to (reverse post-order).
 fn reverse_post_order(body: &LirBody) -> Vec<i64> {
-    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
     let mut seen = crate::support::hash::HashSet::default();
     let mut order = Vec::new();
     let mut stack = vec![(body.entry, 0usize)];
@@ -295,7 +295,7 @@ impl Reads {
         }
         // Backwards to a fixed point: what a block reads, and what is read
         // after it.
-        let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+        let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
         let mut later = reading;
         let order: Vec<i64> = reverse_post_order(body).into_iter().rev().collect();
         loop {
@@ -356,7 +356,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
             *preds.entry(*to).or_insert(0) += 1;
         }
     }
-    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
     let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut insns: IndexMap<i64, Vec<Arc<Insn>>> =
         body.blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect();
@@ -452,7 +452,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
         stored.push(Arc::new(jump));
         let source = by_at[from];
         odds.rerouted(*from, &source.succ, *target, &[(next_at, 1.0)]);
-        bridges.push(LirBlock { succ: vec![*target], ..LirBlock::new(next_at, stored) });
+        bridges.push(LirBlock { succ: vec![*target].into(), ..LirBlock::new(next_at, stored) });
         retarget.insert(*from, (*target, next_at));
         next_at += 1;
     }
@@ -559,7 +559,7 @@ mod tests {
         insns: Vec<Arc<Insn>>,
         succ: Vec<i64>,
     ) -> LirBlock {
-        LirBlock { succ, ..LirBlock::new(at, insns) }
+        LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
     }
 
     /// `mov di, dx; cmp ax, bx; jl 9`, the loop at 9 reading DI, the exit at 5

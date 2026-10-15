@@ -433,7 +433,7 @@ mod tests {
             (Loc::Reg(Reg { register: RegId::EBX, width: 4 }), Loc::Reg(Reg { register: RegId::BX, width: 2 }));
         let word = || Loc::Imm(Imm { value: 5, width: 2, address: None });
         let entry = LirBlock {
-            succ: vec![1],
+            succ: vec![1].into(),
             ..LirBlock::new(
                 0,
                 vec![
@@ -443,7 +443,7 @@ mod tests {
             )
         };
         let looped = LirBlock {
-            succ: vec![1, 2],
+            succ: vec![1, 2].into(),
             ..LirBlock::new(
                 1,
                 vec![

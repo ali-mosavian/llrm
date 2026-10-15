@@ -687,12 +687,12 @@ pub fn carved_moving(
         );
         jump.call = beside.call.clone();
         made.push(LirBlock {
-            succ: vec![outside],
+            succ: vec![outside].into(),
             ..LirBlock::new(bridge, vec![copy(&beside, entering), Arc::new(jump)])
         });
         // A phi in the target now arrives from the bridge.
         if let Some(&target) = graph.position.get(&outside) {
-            for phi in &mut out[target].phis {
+            for phi in out[target].phis.iter_mut() {
                 for (from, _) in &mut phi.incoming {
                     if *from == source {
                         *from = bridge;
@@ -1734,7 +1734,7 @@ mod tests {
         insns: Vec<Arc<Insn>>,
         succ: &[i64],
     ) -> LirBlock {
-        LirBlock { succ: succ.to_vec(), ..LirBlock::new(at, insns) }
+        LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, insns) }
     }
 
     fn body(
@@ -1889,7 +1889,7 @@ mod tests {
         use crate::model::lir::Phi;
         let mut join =
             block(0x20, vec![_insn(0x20, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[])], &[]);
-        join.phis = vec![Phi { result: 7, incoming: vec![(0x10, 3), (0x0, 4)] }];
+        join.phis = vec![Phi { result: 7, incoming: vec![(0x10, 3), (0x0, 4)] }].into();
         let body = body(
             "phi",
             vec![

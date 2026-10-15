@@ -1104,7 +1104,7 @@ mod tests {
         insns: Vec<Arc<lir::Insn>>,
         succ: Vec<i64>,
     ) -> lir::LirBlock {
-        lir::LirBlock { succ, ..lir::LirBlock::new(at, insns) }
+        lir::LirBlock { succ: succ.into(), ..lir::LirBlock::new(at, insns) }
     }
 
     fn body(

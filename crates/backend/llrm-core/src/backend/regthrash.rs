@@ -505,7 +505,7 @@ mod tests {
                 .chain(killed)
                 .collect(),
         );
-        let first = LirBlock { succ: vec![1], ..LirBlock::new(0, insns.into_iter().map(Arc::new).collect()) };
+        let first = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, insns.into_iter().map(Arc::new).collect()) };
         LirBody::new("thrash", 0, vec![first, after], IndexMap::default(), IndexMap::default())
     }
 
@@ -583,7 +583,7 @@ mod tests {
                     Arc::new(_insn(100 * at + 1, "mov", Operation::Move, vec![edx.clone()], vec![ecx.clone()])),
                 ];
                 LirBlock {
-                    succ: vec![if at + 1 == count { 1 } else { at + 2 }],
+                    succ: vec![if at + 1 == count { 1 } else { at + 2 }].into(),
                     ..LirBlock::new(if at == 0 { 0 } else { at + 1 }, insns)
                 }
             })

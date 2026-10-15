@@ -366,7 +366,8 @@ mod tests {
     fn test_a_loop_reading_an_incoming_argument_home_reloads_it_each_trip() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let home = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, 8)), 2));
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let blocks = vec![
             block(
                 1,
@@ -401,7 +402,8 @@ mod tests {
     fn test_a_loop_tested_at_its_header_runs_its_body_every_trip() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let blocks = vec![
             block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
             block(2, vec![insn(2, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]),
@@ -430,7 +432,8 @@ mod tests {
     fn test_a_loop_counted_at_its_one_exit_runs_its_count() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let blocks = vec![
             block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
             block(2, vec![insn(2, Operation::Move, "mov", vec![ax], vec![bx])], vec![3]),
@@ -453,7 +456,8 @@ mod tests {
     fn test_a_guard_into_a_preheader_enters_its_loop_as_into_the_header() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let looped = |preheader: bool| {
             let mut blocks = vec![block(
                 1,
@@ -489,7 +493,8 @@ mod tests {
     fn test_an_uncounted_loop_runs_as_often_as_its_exits_odds_say() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let moved = |at| insn(at, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]);
         let tested = |at| insn(at, Operation::Branch, "jne", vec![], vec![]);
         let stay = 124.0 / 128.0;
@@ -545,7 +550,8 @@ mod tests {
     fn test_a_diamonds_jumps_are_counted_taken_or_not_and_priced() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let targeted = |at, op, name, target| {
             let mut one = (*insn(at, op, name, vec![], vec![])).clone();
             one.what.as_mut().unwrap().target = Some(target);
@@ -584,7 +590,8 @@ mod tests {
     fn test_work_after_a_branch_runs_as_often_as_it_falls_through() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let targeted = |at, op, name, target| {
             let mut one = (*insn(at, op, name, vec![], vec![])).clone();
             one.what.as_mut().unwrap().target = Some(target);
