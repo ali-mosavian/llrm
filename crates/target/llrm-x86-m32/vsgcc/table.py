@@ -58,7 +58,7 @@ if __name__ == '__main__':
     for r in rows: P.setdefault(r['prog'],{})[r['variant']]=r
     complete(P)
     assert all(r['ok'] for r in rows), [(r['prog'], r['variant']) for r in rows if not r['ok']]
-    print("| program | compiler | instr | mem ops | 486 clk | nops | code B | llrm/gcc clk | llrm/gcc ins | llrm/clang clk |"); print("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|")
+    print("| program | compiler | instr | mem ops | misaligned | 486 clk | nops | code B | llrm/gcc clk | llrm/gcc ins | llrm/clang clk |"); print("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
     for p,d in P.items():
         for lvl in LEVELS:
             L, G, C = llrm(lvl), 'gcc'+lvl, 'clang'+lvl
@@ -67,5 +67,5 @@ if __name__ == '__main__':
                 cells = ['', '', '']
                 if v == L:
                     cells = [f"{r['clocks'] / max(1, d[G]['clocks']):.2f}", f"{r['ins'] / max(1, d[G]['ins']):.2f}", f"{r['clocks'] / max(1, d[C]['clocks']):.2f}"]
-                print(f"| {p} | {v[:-2] if v[-2:] == lvl else v} -{lvl} | {r['ins']} | {r['mem']} | {r['clocks']} | {r['nops']} | {r['code']} | " + " | ".join(cells) + " |")
+                print(f"| {p} | {v[:-2] if v[-2:] == lvl else v} -{lvl} | {r['ins']} | {r['mem']} | {r.get('misaligned', 0)} | {r['clocks']} | {r['nops']} | {r['code']} | " + " | ".join(cells) + " |")
     print(*grouped(P), sep='\n')
