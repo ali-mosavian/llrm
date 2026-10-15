@@ -26,6 +26,7 @@ import gate
 ROOT = gate.ROOT
 BASE = "origin/main"
 MIN_FREE_GB = 50
+LOGS = Path(os.environ.get("LLRM_TRAIN_LOGS") or Path.home() / "scratch/train-logs")
 MIN_FREE_INODE_PERCENT = 10
 # A PR that touches these is gated alone: its change is to what judges the others.
 SOLO = ("tools/gate/", "tools/bench/", "tools/measure.py", "tools/compile-cost.py")
@@ -124,8 +125,14 @@ def full_gate(tip: str, tree: Path, steps: list[str] | None = None, strict: bool
     git("checkout", "-q", "--detach", tip, cwd=tree)
     command = [sys.executable, "tools/gate/gate.py", "run", "--tier", "full", "--expect", tip, *(["--steps", *steps] if steps else [])]
     env = {k: v for k, v in os.environ.items() if k != "LLRM_BENCH_BATCH"} | ({} if strict else {"LLRM_BENCH_BATCH": "1"})
+    if target := env.get("CARGO_TARGET_DIR"):
+        # One target and one set of gate logs per tree: the tip's gate and the re-run on main shared both, and main's pytest read the tip's
+        # llrm-c, which names the tip's tree (the first run's failure was overwritten, and the second failed on that path).
+        env["CARGO_TARGET_DIR"] = f"{target}-{tree.name}"
     done = subprocess.run(command, cwd=tree, capture_output=True, text=True, env=env)
     text = done.stdout + done.stderr
+    LOGS.mkdir(parents=True, exist_ok=True)
+    (LOGS / f"{tip[:12]}-{tree.name}-{'-'.join(steps or ['full'])}.log").write_text(text)
     last = [l for l in text.splitlines() if l.startswith("GATE ")][-1:] or [""]
     failed = re.findall(r"^\[time\] (\S+) (?:FAIL|INCOMPLETE)", text, re.M)
     return Verdict(done.returncode == 0 and " PASS" in last[0], failed, text)
