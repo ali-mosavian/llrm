@@ -60,3 +60,12 @@ def test_the_map_names_its_commit_and_commands_and_flags_unowned_rows():
     assert "WARNING" not in text
     result["rows_sum_M"] = 900.0
     assert "WARNING" in m.show(result)
+
+
+def test_counters_are_read_by_event_and_the_best_cycle_count_is_the_figure(monkeypatch):
+    """perf's `cycles:u` suffix once hid the event: the cycles read as zero and IPC as infinite."""
+    out = ["1000,,cycles:u,1,100.00,,\n2000,,instructions:u,1,100.00,,\n", "1500,,cycles:u,1,100.00,,\n2000,,instructions:u,1,100.00,,\n"]
+    runs = iter(out)
+    monkeypatch.setattr(m, "run", lambda *a, **k: type("D", (), {"stderr": next(runs)})())
+    got = m.cycles(["x"], runs=2)
+    assert got["cycles_M"] == 0.001 and got["spread_pct"] == 50 and got["ipc"] == 2
