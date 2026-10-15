@@ -1,4 +1,4 @@
-reason = "A phi that takes a branch's own condition from its block reads the arm's constant after rotation (no setcc+test+jne for the flag after a loop): jpeg_fixed/jpeg_single/stft bq32 differ by 3 to 10 instructions in 10^7-10^8 (six up, two down), no other row moves"
+reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84337550
-code_bytes = 6496
+instructions = 84336394
+code_bytes = 6446
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89431944
-code_bytes = 6039
+instructions = 89430784
+code_bytes = 5990
 data_bytes = 29209
 bss_bytes = 0
 
