@@ -1,4 +1,4 @@
-reason = "merge of main into the stacked x87 branch: re-bless of rows the x87 forms (#1767) move; the liveness change itself is output-identical"
+reason = "merge of main: re-bless of the rows the x87 forms move"
 blessed = "2026-10-15"
 
 [bas.O2]
