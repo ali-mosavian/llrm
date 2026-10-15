@@ -220,34 +220,44 @@ impl Indexes {
         before: &LirBody,
         body: &LirBody,
     ) -> Option<Indexes> {
+        let mut copy = self.clone();
+        copy.patch(before, body).then_some(copy)
+    }
+
+    /// `patched`, in this numbering: it is the numbering of `body` if true, and
+    /// of nothing if false (a fresh one takes its place). Nothing is copied
+    /// that the rewrite left.
+    pub fn patch(
+        &mut self,
+        before: &LirBody,
+        body: &LirBody,
+    ) -> bool {
         if self.plain
             || before.blocks.len() != body.blocks.len()
             || self.placed.len() != body.blocks.len()
             || before.blocks.iter().zip(&body.blocks).any(|(one, two)| one.at != two.at)
         {
-            return None;
+            return false;
         }
         let mut changed = Vec::new();
         for (position, (old, new)) in before.blocks.iter().zip(&body.blocks).enumerate() {
             if old.insns.same_insns(&new.insns) {
                 continue;
             }
-            let found = aligned_insns(&old.insns, &new.insns)?;
+            let Some(found) = aligned_insns(&old.insns, &new.insns) else { return false };
             if !found.runs.windows(2).all(|pair| pair[0].1 + pair[0].2 <= pair[1].1) {
-                return None;
+                return false;
             }
             changed.push((position, found));
         }
-        let mut at = self.at.clone();
         for (position, found) in &changed {
             for gone in &found.gone {
-                at.swap_remove(&key(&before.blocks[*position].insns[*gone]));
+                self.at.swap_remove(&key(&before.blocks[*position].insns[*gone]));
             }
         }
-        let mut placed = self.placed.clone();
         for (position, found) in &changed {
             let (old, new) = (&before.blocks[*position].insns, &body.blocks[*position].insns);
-            let was = &self.placed[*position];
+            let was = Arc::clone(&self.placed[*position]);
             // A block with no instruction that takes no slot: its slots are
             // copied, run by run, with the added ones put between.
             if !was.metas && !found.added.iter().any(|at| new[*at].is_meta()) {
@@ -267,18 +277,18 @@ impl Indexes {
                 };
                 for (old_at, new_at, length) in &found.runs {
                     if !spread(&mut slots, new_at - from, was.all[*old_at]) {
-                        return None;
+                        return false;
                     }
                     slots.extend_from_slice(&was.all[*old_at..old_at + length]);
                     from = new_at + length;
                 }
                 if !spread(&mut slots, new.len() - from, was.last) {
-                    return None;
+                    return false;
                 }
                 for position in found.added.iter().copied() {
-                    at.insert(key(&new[position]), slots[position]);
+                    self.at.insert(key(&new[position]), slots[position]);
                 }
-                placed[*position] =
+                self.placed[*position] =
                     Arc::new(Placed { first: was.first, last: was.last, all: slots.clone(), slots, metas: false });
                 continue;
             }
@@ -298,7 +308,7 @@ impl Indexes {
             while run < taking.len() {
                 if let Some(slot) = kept[taking[run]] {
                     if slots.last().is_some_and(|before| *before >= slot) {
-                        return None;
+                        return false;
                     }
                     slots.push(slot);
                     run += 1;
@@ -312,7 +322,7 @@ impl Indexes {
                 let high = taking.get(end).map_or(was.last, |at| kept[*at].expect("kept"));
                 let step = (high - low) / (end - run + 1) as i64 & !1;
                 if step < PER_INSN {
-                    return None;
+                    return false;
                 }
                 for number in 0..end - run {
                     slots.push(low + step * (number as i64 + 1));
@@ -320,7 +330,7 @@ impl Indexes {
                 run = end;
             }
             if slots.windows(2).any(|pair| pair[0] >= pair[1]) || slots.last().is_some_and(|slot| *slot >= was.last) {
-                return None;
+                return false;
             }
             // A meta instruction has the slot of the next that takes one, or
             // the end.
@@ -335,6 +345,7 @@ impl Indexes {
             }
             // Only an instruction added, or one that takes no slot (whose slot
             // is its neighbour's), is written.
+            let at = &mut self.at;
             let mut written = |position: usize| match at.get_mut(&key(&new[position])) {
                 Some(held) => *held = all[position],
                 None => {
@@ -348,23 +359,15 @@ impl Indexes {
                 written(position);
             }
             let metas = slots.len() != new.len();
-            placed[*position] = Arc::new(Placed { first: was.first, last: was.last, slots, all, metas });
+            self.placed[*position] = Arc::new(Placed { first: was.first, last: was.last, slots, all, metas });
         }
-        let mut bases = Vec::with_capacity(placed.len());
+        self.bases.clear();
         let mut base = 0;
-        for block in &placed {
-            bases.push(base);
+        for block in &self.placed {
+            self.bases.push(base);
             base += PER_INSN + PER_INSN * block.slots.len() as i64;
         }
-        Some(Indexes {
-            at,
-            span: self.span.clone(),
-            order: self.order.clone(),
-            placed,
-            bases,
-            epoch: self.epoch,
-            plain: false,
-        })
+        true
     }
 
     /// The number the consecutive numbering gave the point `slot`: two for each
@@ -1425,7 +1428,18 @@ pub fn intervals_by_occurrences(
     let count = body.blocks.len();
     let graph = crate::analysis::graph::Graph::of(body);
     let predecessors = &graph.parents;
-    let spans: Vec<(i64, i64)> = body.blocks.iter().map(|block| index.span[&block.at]).collect();
+    // The blocks are numbered in the order of the body, so the span of the
+    // block at a position is the entry at that position; one that is not
+    // is looked up.
+    let spans: Vec<(i64, i64)> = body
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(at, block)| match index.span.get_index(at) {
+            Some((held, span)) if *held == block.at => *span,
+            _ => index.span[&block.at],
+        })
+        .collect();
     // Marks by block, a mark current when it equals the value's turn: no table
     // is cleared between values.
     let (mut in_mark, mut out_mark, mut written_mark, mut run_mark, mut reach_mark) =

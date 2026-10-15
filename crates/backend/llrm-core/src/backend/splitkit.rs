@@ -946,7 +946,7 @@ fn named_in(
 ) -> std::collections::BTreeMap<usize, Vec<usize>> {
     let mut names: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
     crate::backend::postings::following(body, |postings| {
-        for &(block, position) in postings.defs(value).iter().chain(postings.uses(value)) {
+        for (block, position) in postings.defs_at(value).chain(postings.uses_at(value)) {
             names.entry(block as usize).or_default().push(position as usize);
         }
     });

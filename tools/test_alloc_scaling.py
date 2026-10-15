@@ -356,3 +356,36 @@ def test_a_spill_asks_no_slot_colouring_of_the_homes_it_leaves_behind():
         run = steps(compiler, source, "-O2")
     spent = run.get("intervals homes", 0.0) + run.get("spill color slots", 0.0)
     assert spent < 20, f"branches N=400 -O2: intervals homes and spill color slots cost {spent} Minstr (20 allowed; 202 before): {run}"
+
+
+def test_a_reload_inserted_in_a_long_block_renumbers_no_occurrence_after_it():
+    """The postings named each occurrence by its position in its block, so one reload put in a block of thousands renumbered the
+    entries of every value named after it: `spill cleanup` cost 452 Minstr on `cells` at N=448 and 1,882 at 896 (x4.2 per doubling), 
+    `regalloc split` 207 and 777. An occurrence is named by a slot its block gave the instruction, which an insertion leaves."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    spent = run["spill cleanup"] + run["regalloc split"]
+    assert spent < 360, f"cells N=448 -O2: spill cleanup and regalloc split cost {spent} Minstr (360 allowed; 660 before): {run}"
+
+
+def test_the_facts_of_a_rewrite_are_edited_where_they_are_not_copied():
+    """After each spill or split the allocator's facts of the body (the numbering of the instructions, the copy hints, the intervals) were
+    copied whole and then edited for the few values the rewrite named: `facts slots` cost 83 Minstr and `facts hints` 139 on `cells` at
+    N=448 (316 and 519 at 896), one copy of every instruction's slot and every value's hints for each of ~1,800 rounds. They are carried
+    to the next round and edited where they are."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    spent = run["facts slots"] + run["facts hints"]
+    assert spent < 110, f"cells N=448 -O2: facts slots and facts hints cost {spent} Minstr (110 allowed; 222 before): {run}"

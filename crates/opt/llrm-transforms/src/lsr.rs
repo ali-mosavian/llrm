@@ -480,7 +480,7 @@ fn _calls(
         Change::Cloned { to, .. } => to,
         // What an operand was is told before the `Rewritten` that decides.
         Change::Operand { .. } | Change::Operands { .. } => return false,
-        Change::BlockCreated(_) | Change::BlockErased(_) => return true,
+        Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return true,
     };
     matches!(
         function.instruction(inst).opcode,
