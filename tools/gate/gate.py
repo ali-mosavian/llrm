@@ -528,7 +528,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # and tests/test_readme.py in the train.
         "pytest-quick": cfg_pytest(skip_py + tuple(cfg["smoke"]["slow_pytest"]), "pytest-quick-durations"),
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
-        "qcport": "[ -f ~/scratch/qcport-env.sh ] || { echo SKIPPED: no ~/scratch/qcport-env.sh; exit 77; }; . ~/scratch/qcport-env.sh && uv run -q --project tools python tools/qcport-run.py",
+        "qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; uv run -q --project tools python tools/qcport-run.py',
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
         "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} --test run -- test_every_program_under_tests_run_prints_its_out",
     }
@@ -730,6 +730,11 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
     if code == 0 and check and (why := incomplete(path.read_text(), *check)):
         path.open("a").write(f"\nINCOMPLETE: {why}\n")
         code = 78
+    if code == 77 and os.environ.get("GATE_ALLOW_MISSING"):
+        # A step that skips itself (no env file, no demos) on a runner meant to have its tools did not run: the missing ones allowed were
+        # skipped by the plan, before this. CI's `qcport` said SKIPPED and passed.
+        path.open("a").write("\nFAILED: the step skipped itself where only the capabilities in GATE_ALLOW_MISSING may be missing\n")
+        code = 1
     if code not in (0, 77):
         # The next run of the step overwrites its log; the failure is evidence, kept.
         (logs / f"{name}.failed.log").write_text(path.read_text())

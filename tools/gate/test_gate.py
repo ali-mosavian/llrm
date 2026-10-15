@@ -1234,3 +1234,24 @@ def test_a_plan_that_builds_nothing_on_a_fresh_target_says_so_instead_of_a_trace
     monkeypatch.setattr(gate, "expected", lambda *a, **k: {})
     code, _ = gate.execute(gate.Plan("fast", "docs", ["docs"], None, [], ["docs/x.md"]))
     assert code == 0
+
+
+def test_the_qcport_step_does_not_skip_itself_where_the_variables_are_set_and_fails_where_they_are_not(tmp_path):
+    """CI's run of the reference group said `qcport SKIPPED` and passed: the step looked for ~/scratch/qcport-env.sh, which only the
+    development host has, and exited 77 without running QCport."""
+    command = gate.commands(gate.plan(["crates/frontends/llrm-c/src/lib.rs"]), gate.load(), gate.packages())["qcport"]
+    command = command.replace("uv run -q --project tools python tools/qcport-run.py", "echo ran")
+    base = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    both = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env={**base, "QCPORT": "a", "QCPORT_INC": "b", "QCPORT_BORLAND": "c"})
+    assert (both.returncode, both.stdout.strip()) == (0, "ran"), both
+    none = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env=base)
+    assert none.returncode not in (0, 77) and "QCPORT is not set" in none.stderr, none
+
+
+def test_a_step_that_skips_itself_fails_where_only_named_capabilities_may_be_missing(tmp_path, monkeypatch):
+    """CI passed with `qcport SKIPPED` (the step found no env file): a skip the plan did not make is a step that did not run."""
+    env = {**__import__("os").environ}
+    monkeypatch.delenv("GATE_ALLOW_MISSING", raising=False)
+    assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 77
+    monkeypatch.setenv("GATE_ALLOW_MISSING", "perf")
+    assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 1
