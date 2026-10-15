@@ -18,6 +18,7 @@ For maintainers running llrm's `m32` output against gcc and clang. Method, comma
 | `programs.py`, `kernels/x_*` | the programs; `x_*` are kernels written for this comparison, each with a `.out` self-check from gcc `-O0` on the host, which every variant must reproduce or `table.py` refuses |
 | `levels_time.py`, `ctime.py` | compile cost per level, compile wall clock |
 | `scaling.py`, `scaling_gate.py` | compile cost against program size: [scaling](scaling.md) |
+| `dfaces/` | QCport's `d_faces.c` executed on a seeded scene: the code-quality scoreboard for that file ([dfaces](dfaces/readme.md)) |
 | `stub.s` | `report`, `memset`, `memcpy`, `memmove` for every variant |
 
 A rerun with another llrm shows a change in the table's llrm columns; gcc and clang do not move.
