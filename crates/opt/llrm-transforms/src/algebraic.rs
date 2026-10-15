@@ -138,6 +138,10 @@ pub struct Algebraic {
 }
 
 impl FunctionPass for Algebraic {
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "algebraic"
     }

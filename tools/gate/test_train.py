@@ -6,7 +6,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import pytest
 import train  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _own_logs(tmp_path, monkeypatch):
+    """A test that gates writes its logs under its own directory, not the real ~/scratch/train-logs."""
+    monkeypatch.setattr(train, "LOGS", tmp_path / "train-logs")
 
 NAME = "Clau" + "de"  # spelt in halves: the smoke tier refuses a diff that carries the word
 
@@ -156,3 +163,50 @@ def test_the_tip_and_main_are_gated_in_targets_and_logs_of_their_own(monkeypatch
     train.full_gate("b" * 40, main, ["pytest"])
     assert targets == ["/t/target-train-tree", "/t/target-train-main"]
     assert sorted(p.name for p in (tmp_path / "logs").iterdir()) == [f"{'a' * 12}-train-tree-full.log", f"{'b' * 12}-train-main-pytest.log"]
+
+
+def test_a_gating_test_writes_its_logs_under_its_own_directory(tmp_path):
+    """#1784's tests wrote tip-test_*.log into ~/scratch/train-logs, where the real train keeps its evidence."""
+    assert train.LOGS.is_relative_to(tmp_path), train.LOGS
+
+
+def test_trains_of_different_names_share_no_lock_worktree_or_target(tmp_path):
+    """One train at a time left 17 PRs waiting: the lock, the tip's and main's worktrees were fixed paths, so a second train would have
+    removed the first one's trees (and the target is named after the tree, so a tree of its own is a target of its own)."""
+    first, second = train.places("train", tmp_path), train.places("train5", tmp_path)
+    assert train.places("train", tmp_path) == (tmp_path / "scratch/train.lock", tmp_path / "scratch/train-tree", tmp_path / "scratch/train-main")
+    assert not set(first) & set(second) and len({p.name for p in (*first, *second)}) == 6
+
+
+def test_prs_that_bless_the_same_benchmark_do_not_bounce_each_other_and_the_batchs_file_stands(tmp_path):
+    """Train 5 bounced four of its five PRs: each blessed its own counts in bench/jpeg_fixed/expected.toml, and two edits of one file conflict."""
+    git = _repo(tmp_path)
+    (tmp_path / "bench/j").mkdir(parents=True)
+    (tmp_path / "bench/j/expected.toml").write_text("instructions = 100\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "bench")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    a = _branch(git, tmp_path, "a", "bench/j/expected.toml", "instructions = 90\n")
+    b = _branch(git, tmp_path, "b", "bench/j/expected.toml", "instructions = 95\n")
+    c = _branch(git, tmp_path, "c", "f", "from c\n")
+    git("checkout", "-q", "--detach", "main")
+    tip, bounced = train.build_tip([pr(1, sha=a), pr(2, sha=b), pr(3, sha=c)], tmp_path)
+    assert bounced == [], bounced
+    assert (tmp_path / "bench/j/expected.toml").read_text() == "instructions = 90\n" and (tmp_path / "f").read_text() == "from c\n"
+    assert git("rev-parse", "HEAD") == tip and not git("status", "--porcelain")
+
+
+def test_the_bless_step_runs_bench_in_the_trees_own_target(monkeypatch, tmp_path):
+    """Train 5's bless step ran bench in the shared target, whose binaries another tree had built: `stale binaries in .../release`, and
+    the batch failed its strict bench gate."""
+    seen = []
+
+    def fake(command, **kw):
+        seen.append(kw["env"]["CARGO_TARGET_DIR"])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(train, "git", lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+    monkeypatch.setattr(train.subprocess, "run", fake)
+    monkeypatch.setenv("CARGO_TARGET_DIR", "/t/target")
+    train.bless("a" * 40, [pr(1)], tmp_path / "train5-tree")
+    assert seen == ["/t/target-train5-tree"]
