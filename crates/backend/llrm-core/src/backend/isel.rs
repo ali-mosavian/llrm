@@ -2961,16 +2961,14 @@ impl Selector<'_, '_, '_> {
         let width = self.width(ty)?;
         if let Some(value) = self.constant(operand, width) {
             let held = Held { value: self.fresh(), width };
-            // A narrow constant is written whole where the target runs narrow
-            // operations on the whole register: no operand-size prefix, and
-            // the half above is what no reader of the word looks at. Where
-            // size is wanted, only zero: `xor` is shorter, `mov r32,imm32` is
-            // a byte longer than `mov r16,imm16`.
+            // A narrow zero is written whole where the target runs narrow
+            // operations on the whole register: `xor r32,r32` has no operand-
+            // size prefix, and the half above is what no reader of the word
+            // looks at. Another constant stays a word: `mov r32,imm32` is a
+            // byte longer, and widening it moved allocations (shellsort at
+            // m32 -O2 lost a folded load: +63 instructions).
             let whole = self.layout.largest_legal_integer() / 8;
-            let wide = if width < whole
-                && self.types().int_bits(ty).is_some()
-                && !self.promote.is_empty()
-                && (value == 0 || !self.cpu.size)
+            let wide = if width < whole && self.types().int_bits(ty).is_some() && !self.promote.is_empty() && value == 0
             {
                 whole
             } else {

@@ -19,19 +19,13 @@ fn listing(
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// A short constant was `xor ax, ax` / `mov ax, 3`: an operand-size prefix
-/// each (d_faces -Os: 57 of them) where the dword form reads the same.
+/// A short zero was `xor ax, ax`: an operand-size prefix (d_faces -Os: 27 of
+/// them) where `xor eax, eax` reads the same. Another constant stays a word:
+/// `mov eax, 3` is a byte longer, and widening it lost shellsort a folded load.
 #[test]
-fn a_short_constant_is_written_whole() {
-    let text = listing("short f(int c) { return c ? 3 : 0; }\n", &["-m32", "-mabi=sysv", "-O2", "-march=i486"]);
-    assert!(text.contains("xor eax, eax") && text.contains("mov eax, 3"), "{text}");
-    assert!(!text.contains(" ax, "), "{text}");
-}
-
-/// At -Os only zero is written whole: `mov eax, 3` is a byte longer than
-/// `mov ax, 3`.
-#[test]
-fn a_short_constant_at_os_is_whole_only_when_zero() {
-    let text = listing("short f(int c) { return c ? 3 : 0; }\n", &["-m32", "-mabi=sysv", "-Os", "-march=i486"]);
-    assert!(text.contains("xor eax, eax") && text.contains("mov ax, 3"), "{text}");
+fn a_short_zero_is_written_whole() {
+    for level in ["-O2", "-Os"] {
+        let text = listing("short f(int c) { return c ? 3 : 0; }\n", &["-m32", "-mabi=sysv", level, "-march=i486"]);
+        assert!(text.contains("xor eax, eax") && text.contains("mov ax, 3"), "{level}: {text}");
+    }
 }
