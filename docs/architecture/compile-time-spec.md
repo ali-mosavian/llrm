@@ -95,19 +95,27 @@ Function / LirFunction
 Every mutation goes through `Editor` (MIR today has `edit.rs`; LIR gets the same). The editor appends to the change log. llrm's log already names instructions and old operands ([module.rs:135-176](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/ir/llrm-mir/src/module.rs#L135-L176), [module.rs:625-632](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/ir/llrm-mir/src/module.rs#L625-L632)), which is finer than LLVM's `PreservedAnalyses` or gcc's TODO flags. A consumer asks for the digest since its mark:
 
 ```
-Touched {
-  blocks:   BitSet<BlockId>          any instruction added, removed, moved or rewritten
-  cfg:      Vec<(BlockId, BlockId, Added|Removed)>
-  values:   added, removed, operands_changed: BitSet<ValueId>
-  memory:   added, removed, moved: BitSet<InstId>   loads, stores, calls
-  pointers: BitSet<ValueId>          pointer-typed values added, removed or with changed operands, and the values of
-                                     changed pointer constraints (stores and loads of pointers, calls passing them)
-}
-```
+Touched {                                   as built in #1744 (llrm-mir/src/touched.rs), plus `pointers`
+  blocks:            BitSet<BlockId>        any instruction added, removed, moved or rewritten
+  blocks_created, blocks_erased: BitSet<BlockId>
+  cfg:               Vec<(BlockId, BlockId, Added|Removed)>   net edges
+  values_added, values_removed, operands_changed: BitSet<ValueId>
+  memory_added, memory_removed, memory_moved, memory_rewritten: BitSet<InstId>   loads, stores, calls;
+                                            rewritten = a store or call whose operands changed in place
+  parameters:        bool
+  pointers:          BitSet<ValueId>        pointer-typed values added, removed or with changed operands, and the values
+                                            of changed pointer constraints (stores and loads of pointers, calls passing
+                                            them): what PointerValues' keep-or-re-solve rule reads (3.2)
+}```
 
-- `Touched` is derived from the log on demand and cached per mark, so a consumer pays for the edits since its mark only.
+- `Function::touched_since(mark) -> Option<Touched>` is derived from the log on demand, so a consumer pays for the edits since its mark only. `None` means the mark no longer resolves (another lineage, or trimmed) and the consumer recomputes.
+- **Interim, as of #1744** (to close in the next core PRs):
+  - `Touched` is returned by value, not yet cached per mark;
+  - classification is by the instruction's current opcode until the log carries old opcodes, which comes with the invertible log and checkpoint/rollback;
+  - `pointers` is not yet in `Touched`; the `pointers` epoch stands in for it until then;
+  - there is no `globals` epoch yet: the editor has no `Context` to tell a global from an integer constant.
 - **Speculation without copies.** `editor.checkpoint()` returns a mark, and `editor.rollback(mark)` replays the log backwards; the log already holds old operands and positions. Pricing a hoist, a numbering or a candidate transform edits the live function and rolls back if rejected. `fork`, and every `clone` used for pricing, go. A rolled-back edit leaves no `Touched` behind for consumers, because the log is truncated to the checkpoint.
-- **Epochs.** Each function also keeps never-reset counters, bumped by the editor from each change: cfg, memory instructions, pointer values, calls and global names. A module-level memo (GlobalsAA's and Summaries' per-body contributions) stores the epochs it read and is valid iff they are equal. That is an O(1) check, coarser than `Touched`. Function analyses use `update(prev, &Touched)`; memos that only need "did anything of this kind change in this body" use the epochs.
+- **Epochs.** Each function also keeps never-reset counters, bumped by the editor from each change: `Function::epochs() -> Epochs { cfg, memory, pointers, calls }`, and `globals` once the editor can see the `Context`. A module-level memo (GlobalsAA's and Summaries' per-body contributions) stores the epochs it read and is valid iff they are equal. That is an O(1) check, coarser than `Touched`. Function analyses use `update(prev, &Touched)`; memos that only need "did anything of this kind change in this body" use the epochs.
 - **Liveness and intervals** (LIR):
   - per-block use/def and live-in/out as dense bitsets indexed by vreg, kept on the block with its version;
   - per-vreg live intervals as a sorted `Vec<Segment>`, computed once per function and edited by the allocator's edits (LLVM `LiveRangeEdit`, [LiveRangeEdit.cpp:55](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/lib/CodeGen/LiveRangeEdit.cpp#L55));
