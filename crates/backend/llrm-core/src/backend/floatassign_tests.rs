@@ -82,8 +82,8 @@ fn test_a_compare_crowded_before_its_branches_spills() {
     let mut premise = frame.clone();
     let loaded = _integer_loads(&body, Some(&mut premise), None).unwrap();
     let stored = _aliased(&_integer_stores(&loaded, Some(&mut premise), false).unwrap());
-    let (block, position) =
-        _crowded(&stored, &_floating_values(&stored)).expect("more than eight floats live somewhere");
+    let (block, position) = _crowded(&stored, &_floating_values(&stored), &spillplacement::bundles(&stored), 0)
+        .expect("more than eight floats live somewhere");
     let insns = &stored.blocks.iter().find(|one| one.at == block).unwrap().insns;
     let shared: Vec<&Insn> = insns.iter().filter(|one| one.at == insns[position].at).map(|one| &**one).collect();
     let op = |one: &Insn| one.what.as_ref().map(|what| what.op);
@@ -177,4 +177,22 @@ fn test_a_round_writes_only_the_steps_a_new_spill_reaches() {
     let insns: usize = body.blocks.iter().map(|one| one.insns.len()).sum();
     assert!(rounds > 2, "the premise: a body that spills ({rounds} rounds)");
     assert!(stepped < rounds * insns / 2, "{stepped} steps written in {rounds} rounds over {insns} instructions");
+}
+
+/// Every round looked for the first crowded block from the first block, and
+/// the blocks before the last victim's were as they had been: R rounds over B
+/// blocks looked at R x B (`fjoins` 512: `lir floatassign` 100 G, cubic). The
+/// look resumes at the earlier of the last crowded block and the first block
+/// the victim is in.
+#[test]
+fn test_a_round_looks_for_the_crowded_block_from_where_the_last_left_off() {
+    let (body, mut frame) = before_float_assign();
+    let cpu = crate::backend::cpu::profile("486").unwrap();
+    CROWDED_BLOCKS.with(|one| one.set(0));
+    assigned(&body, Some(&mut frame), None, false, cpu).unwrap();
+    let (rounds, looked) = (ROUNDS.with(|one| one.get()), CROWDED_BLOCKS.with(|one| one.get()));
+    assert!(rounds > 1, "the premise: a body that spills ({rounds} rounds)");
+    let blocks = body.blocks.len();
+    // Resumed it is 37 for these 9 rounds; from the first block each time, 49.
+    assert!(looked < 45, "{looked} blocks looked at over {rounds} rounds of {blocks}");
 }
