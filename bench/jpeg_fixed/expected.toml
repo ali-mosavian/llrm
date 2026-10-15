@@ -1,4 +1,4 @@
-reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
+reason = "A phi that takes a branch's own condition from its block reads the arm's constant after rotation (no setcc+test+jne for the flag after a loop): jpeg_fixed/jpeg_single/stft bq32 differ by 3 to 10 instructions in 10^7-10^8 (six up, two down), no other row moves"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84337547
+instructions = 84337550
 code_bytes = 6496
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89431943
+instructions = 89431944
 code_bytes = 6039
 data_bytes = 29209
 bss_bytes = 0

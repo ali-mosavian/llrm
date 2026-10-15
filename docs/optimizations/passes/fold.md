@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fold.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fold.rs sha256:9a2aad83857bdc38b5f79598666c68044d87878af8dad85e0a5992b649ece49b -->
+<!-- src: crates/opt/llrm-transforms/src/fold.rs sha256:17db1df24b2ac132811677b5bb03f13191c0562647a32ac2e00643d7b40378b9 -->
 
 # fold
 
@@ -41,6 +41,12 @@ pure `Binary` or `Cast` in the block (or in the single-predecessor chain
 below it) that reads one of its phis, and whose answer is a number on every
 incoming edge, becomes a phi of those numbers. An operation that also reads
 an unknown value stays.
+
+A phi in one arm of a `br i1` that takes the branch's own condition from the
+branch's block reads that arm's constant (GVN's `propagateEquality`, over
+the edge's phi uses): loop rotation and `lcssa` make `phi i1 [%c, %latch]`
+for a test after the loop, and no GVN runs after them. The branch on the phi
+then decides itself, with no `setcc` and `test` for the flag.
 
 Then [`crate::floatfold`](../backend/floatfold.md) runs on the same body (exact floats, and the
 integers of exact conversions), and [`crate::canonical`](canonical.md) swaps a compare
