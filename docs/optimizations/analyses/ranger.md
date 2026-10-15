@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranger.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranger.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranger.rs sha256:9e87e77d181a71413d2b3fef4bf515b54bd890df20a7e88e6feae30953a3ab5d -->
+<!-- src: crates/opt/llrm-analysis/src/ranger.rs sha256:dbd9a7cd6bfc87f80fb41f5e0050cdafe8f6a91f36d968660aae7bb9a98e4cbd -->
 
 # ranger
 
@@ -17,8 +17,14 @@ immediate dominator's), else what the program declares of it. Nothing is
 solved for a value nobody asks of, and an answer is the one the table
 gives: `LLRM_CHECK_REPLAY` asks every value at every block both ways.
 
+A loop's blocks are asked the same way (`LoopView`): the facts the edges and
+assumes above a block give, and the loop's operations worked from them, one
+value at a block. An answer keeps the boxed values it read, so the next
+round of `ranges::inductive_boxes` works out only what a changed box
+reaches.
+
 ## Provides
-`EdgeRanger::at`.
+`EdgeRanger::at`, `LoopView::at`.
 
 ## Needs
 [`crate::ranges`](ranges.md) (the transfer functions), [`crate::cfg`](cfg.md).
