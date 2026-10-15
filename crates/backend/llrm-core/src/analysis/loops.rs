@@ -231,6 +231,18 @@ pub fn dominance<N: Node>(
     )
 }
 
+// Blocks visited and dominator-tree steps climbed by `_dominance`: the work a
+// test counts, as the wall clock moves with the host's load.
+#[cfg(test)]
+thread_local! {
+    static WORK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn counted() {
+    #[cfg(test)]
+    WORK.with(|work| work.set(work.get() + 1));
+}
+
 /// Cooper, Harvey and Kennedy's iteration over reverse postorder, on the blocks
 /// the entry reaches.
 fn _dominance<N: Node>(
@@ -290,6 +302,7 @@ fn _dominance<N: Node>(
             if at == start {
                 continue;
             }
+            counted();
             let mut now = NONE;
             for &from in &predecessors[at] {
                 if idom[from as usize] == NONE {
@@ -301,9 +314,11 @@ fn _dominance<N: Node>(
                     let (mut one, mut other) = (now, from);
                     while one != other {
                         while number[one as usize] < number[other as usize] {
+                            counted();
                             one = idom[one as usize];
                         }
                         while number[other as usize] < number[one as usize] {
+                            counted();
                             other = idom[other as usize];
                         }
                     }

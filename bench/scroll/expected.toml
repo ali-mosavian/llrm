@@ -1,4 +1,4 @@
-reason = "work-priced: the hoisted zeroing of a word register adds one instruction at loop entry (stft bq32 +2..+5 of ~1e8) and turns the loop's movzx into a mov (fewer 486/P5 clocks); the memory-source flag fix, the hoist and the back-edge copy remove instructions and bytes elsewhere (shellsort, queens nib, recpow, jpeg code bytes)"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -34,14 +34,14 @@ bss_bytes = 0
 kernel_ms = 16.2058
 
 [bq32.O2]
-instructions = 58318
-code_bytes = 243
+instructions = 58322
+code_bytes = 241
 data_bytes = 8019
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 58318
-code_bytes = 243
+instructions = 58322
+code_bytes = 241
 data_bytes = 8019
 bss_bytes = 0
 
