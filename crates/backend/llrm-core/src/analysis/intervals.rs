@@ -1756,7 +1756,8 @@ pub fn depths_shared(body: &LirBody) -> Arc<IndexMap<i64, u32>> {
 
 /// `depths`, worked out from the body whatever the manager holds.
 pub fn depths_afresh(body: &LirBody) -> IndexMap<i64, u32> {
-    depths_in(body, &loopy::loops(&body.blocks, Some(body.entry)))
+    let forest = loopy::forest_of(&body.blocks, Some(body.entry));
+    body.blocks.iter().map(|block| (block.at, forest.depth(block.at))).collect()
 }
 
 /// `depths`, from loops already found.

@@ -196,3 +196,79 @@ fn test_dominance_of_a_body_laid_out_against_its_flow_is_not_quadratic() {
     assert!(found.dominates(0, n) && found.dominates(1500, 2000) && !found.dominates(2000, 1500));
     assert!(started.elapsed().as_secs_f64() < 0.1, "{:?} for 4,000 blocks", started.elapsed());
 }
+
+/// A nest of `depth` loops: header k (block k) goes into the next loop, or its
+/// own latch for the innermost, and out to the latch of the loop outside it;
+/// latch k (block depth + k) goes back to header k.
+fn nest(depth: i64) -> Vec<LirBlock> {
+    let exit = 2 * depth;
+    let mut blocks = Vec::new();
+    for k in 0..depth {
+        let inside = if k + 1 < depth { k + 1 } else { depth + k };
+        let outside = if k == 0 { exit } else { depth + k - 1 };
+        blocks.push(block(k, &[inside, outside]));
+    }
+    for k in 0..depth {
+        blocks.push(block(depth + k, &[k]));
+    }
+    blocks.push(block(exit, &[]));
+    blocks
+}
+
+/// Every loop's body was a flood from its latch that took in the loops inside
+/// it again: a nest of d loops took d times its blocks, 5 deep in quicksort
+/// -O3 at 4.4 times the body (frequency, depths, coalesce, loopslots each paid
+/// it). The forest takes each block once.
+#[test]
+fn test_the_forest_visits_each_block_once_however_deep_the_nest() {
+    let visits = |depth: i64| {
+        let blocks = nest(depth);
+        FLOOD_VISITS.with(|one| one.set(0));
+        let before = llrm_mir::forest::forest_visits();
+        let found = forest_of(&blocks, Some(0));
+        let forest_visits = llrm_mir::forest::forest_visits() - before;
+        let flood = flooded(&blocks, Some(0));
+        assert_eq!(named(&found), flood);
+        (forest_visits, FLOOD_VISITS.with(|one| one.get()))
+    };
+    let (small_forest, small_flood) = visits(30);
+    let (large_forest, large_flood) = visits(60);
+    assert!(large_forest < 3 * small_forest, "forest: {small_forest} blocks at depth 30, {large_forest} at 60");
+    assert!(large_flood > 3 * small_flood, "premise: a flood is quadratic in the nest ({small_flood}, {large_flood})");
+}
+
+/// The forest names the loops a flood from each latch names, and a block's
+/// depth and loops, on graphs of every shape: shared headers, loops sharing
+/// blocks through a header's two latches, irreducible tangles, unreachable
+/// blocks.
+#[test]
+fn test_the_forest_is_the_loops_a_flood_names_on_any_graph() {
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let mut next = move |bound: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed % bound
+    };
+    for _ in 0..400 {
+        let size = 2 + next(12) as i64;
+        let graph: Vec<LirBlock> = (0..size)
+            .map(|at| {
+                let count = next(3);
+                let succ: Vec<i64> = (0..count).map(|_| next(size as u64) as i64).collect();
+                block(at, &succ)
+            })
+            .collect();
+        let found = forest_of(&graph, Some(0));
+        let want = flooded(&graph, Some(0));
+        assert_eq!(named(&found), want, "{:?}", graph.iter().map(|one| (one.at, one.succ.clone())).collect::<Vec<_>>());
+        for at in 0..size {
+            let depth = want.iter().filter(|one| one.body.contains(&at)).count() as u32;
+            assert_eq!(found.depth(at), depth, "depth of {at}");
+            for (index, one) in found.loops.iter().enumerate() {
+                let holds = want.iter().find(|loop_| loop_.header == one.header).unwrap().body.contains(&at);
+                assert_eq!(found.contains(index, at), holds, "loop {} holding {at}", one.header);
+            }
+        }
+    }
+}
