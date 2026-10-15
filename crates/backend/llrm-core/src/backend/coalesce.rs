@@ -896,7 +896,17 @@ pub fn _interference_among(
     // Asked of a few values, their rows are bits from the start: a group of N
     // live together is N rows given N bits at once, not N^2 pairs each
     // written into a tree.
-    let mut graph = if only.is_some() { Building::bits() } else { Building::default() };
+    // A matrix of rows of bits, as long as it is no more than 64 MB; the trees
+    // that turn to bits as they fill are for what does not fit.
+    let highest = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insns)
+        .flat_map(|one| one.defines.iter().chain(&one.uses))
+        .max()
+        .copied();
+    let matrix = highest.is_some_and(|highest| rows.numbered() * (highest as usize / 64 + 1) <= 8_000_000);
+    let mut graph = if only.is_some() || matrix { Building::bits() } else { Building::default() };
 
     let all_pairs = |graph: &mut Building, alive: &Alive| {
         let named: Vec<u32> = alive.iter().filter(|one| wanted(*one)).collect();
