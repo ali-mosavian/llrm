@@ -130,7 +130,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::Type;
-use llrm_support::hash::SparseIdMap;
+use llrm_support::hash::{HashSet, SparseIdMap};
 
 /// How many integer values the target holds in registers, and how many of
 /// them a call leaves; none leaves pressure unpriced.
@@ -1885,7 +1885,7 @@ impl Run {
                 // take away. Else each is asked of a set, not
                 // of the list.
                 if wanted != now {
-                    let (is_wanted, was): (std::collections::HashSet<K>, std::collections::HashSet<K>) =
+                    let (is_wanted, was): (HashSet<K>, HashSet<K>) =
                         (wanted.iter().copied().collect(), now.iter().copied().collect());
                     for gone in now.iter().filter(|one| !is_wanted.contains(one)) {
                         kinds[0].remove(*gone);
