@@ -201,6 +201,11 @@ pub fn work_on(
     body: &LirBody,
     cpu: &Profile,
 ) -> Option<f64> {
+    // Where bytes are the measure the compact form is the cheap one: nothing is
+    // priced up.
+    if cpu.size {
+        return executed(body).map(|done| done.instructions + done.memory);
+    }
     let priced = |form: &str| cpu.cost(form).ok();
     let separate = priced("mov_rm")? + priced("alu_rr")? + priced("mov_mr")?;
     let surcharge = if priced("alu_mr").is_some_and(|update| update >= separate) { 2.0 } else { 0.0 };
@@ -693,5 +698,34 @@ mod tests {
         let cpu = cpu::named("486").unwrap();
         assert_eq!(super::work_on(&update, cpu), super::work_on(&parts, cpu));
         assert!(super::work_on(&update, cpu) > super::work(&update), "the count alone priced it cheaper");
+    }
+
+    /// mandel nib -Os grew from 170 to 172 bytes when a tie between two routes
+    /// was broken by the clocks of a cell's update: at -Os the update (`add
+    /// [m],1`, the compact form) is what the bytes want, so the
+    /// profile that prices size does not price it up.
+    #[test]
+    fn test_at_os_an_update_of_a_cell_is_not_priced_up() {
+        let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -4)), 2));
+        let one = Loc::Imm(crate::model::ir::Imm { value: 1, width: 2, address: None });
+        let update = LirBody::new(
+            "update",
+            1,
+            vec![
+                LirBlock::new(
+                    1,
+                    vec![
+                        insn(1, Operation::Binary, "add", vec![cell.clone()], vec![cell, one]),
+                        insn(2, Operation::Return, "ret", vec![], vec![]),
+                    ],
+                )
+                .into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let size = cpu::tuned_for(&llrm_x86_m16::M16, "486", true).unwrap();
+        assert_eq!(super::work_on(&update, size), super::work(&update));
+        assert!(super::work_on(&update, cpu::named("486").unwrap()) > super::work(&update));
     }
 }
