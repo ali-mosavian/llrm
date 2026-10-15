@@ -719,6 +719,7 @@ impl Function {
             self.parameter_attrs.splice(at..at, made.iter().map(|_| Vec::new()));
         }
         self.parameters_changed(context);
+        self.log(Change::Parameters);
         made
     }
 
@@ -738,6 +739,7 @@ impl Function {
             self.parameter_attrs.remove(at);
         }
         self.parameters_changed(context);
+        self.log(Change::Parameters);
     }
 
     /// From the first change of the parameters on, each one's origin is kept.

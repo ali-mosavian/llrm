@@ -170,6 +170,10 @@ pub enum Change {
     },
     BlockCreated(BlockId),
     BlockErased(BlockId),
+    /// Parameters were inserted or removed: what a body says of its arguments
+    /// (a parameter's index, the function's type) is other than it was, though
+    /// no instruction is.
+    Parameters,
 }
 
 /// A function's log of changes. A copy is another function (`Lineage`), whose
