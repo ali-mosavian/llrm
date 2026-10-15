@@ -269,8 +269,8 @@ impl Default for Options {
             expensive: true,
             switch_conversion: true,
             jump_tables: true,
-            search: true,
-            routes: true,
+            search: false,
+            routes: false,
             exhaustive: false,
         }
     }
@@ -279,7 +279,7 @@ impl Default for Options {
 impl Options {
     /// -O0.
     pub fn none() -> Self {
-        Self { optimize: false, search: false, routes: false, ..Self::default() }
+        Self { optimize: false, ..Self::default() }
     }
 
     /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a

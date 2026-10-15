@@ -4688,6 +4688,56 @@ fn test_without_the_allocation_search_a_function_takes_one_route() {
     assert_eq!(routes_not, functions, "{routes_not} routes for {functions} functions without the search");
 }
 
+/// Every level made each function by two routes and, when it spilled, tried
+/// other shapes of its body: d_faces compiled 30-37% slower than with one
+/// allocation, for under 1% of the geomean against gcc. A level's default
+/// options make one allocation and one route per function, at -O0 to -Omax.
+#[test]
+fn test_by_default_a_function_is_allocated_once_at_every_level() {
+    use llrm_transforms::pipeline::Options;
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
+    let once = |options: &Options| {
+        let profile = crate::backend::cpu::tuned_optimizing(
+            &llrm_x86_m16::M16,
+            "486",
+            options.prefers_size(),
+            options.searches(),
+            options.searches_all(),
+            options.compares_routes(),
+            options.optimize,
+        )
+        .expect("a profile");
+        let (routes, machinings, trials) =
+            (assemble::routes(), assemble::machinings(), crate::backend::allocate::trials());
+        assemble::assembled(
+            &parsed(&text),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(profile),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
+        (assemble::routes() - routes, assemble::machinings() - machinings, crate::backend::allocate::trials() - trials)
+    };
+    let (routes, functions, _) = once(&Options { search: true, routes: true, ..Options::default() });
+    assert!(routes > functions, "premise: both routes are made when asked ({routes} routes, {functions} functions)");
+    for (level, options) in [
+        ("-O0", Options::none()),
+        ("-O1", Options::basic()),
+        ("-O2", Options::standard()),
+        ("-O3", Options::speed()),
+        ("-Os", Options::size()),
+        ("-Omax", Options::aggressive()),
+    ] {
+        let (routes, functions, trials) = once(&options);
+        assert_eq!(
+            (routes, trials),
+            (functions, 0),
+            "{level}: {routes} routes and {trials} trials for {functions} functions"
+        );
+    }
+}
+
 /// Each route through the machine phases selected the function's instructions
 /// again, though the selector's output is the same for all of them: the routes
 /// of one function share one selection (4-5% of a file's compile time on the

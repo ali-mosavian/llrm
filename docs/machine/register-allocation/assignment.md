@@ -71,7 +71,7 @@ When the queue is empty, `_recolored_hints` moves a value to a copy partner's re
 
 ## Search over shapes of the body
 
-`transform` first runs the body as is, with splitting (`regalloc base`). If it spilled something and `Profile::search` is on (`-fallocation-search`, off at -O0), it builds other shapes the spills suggest, runs each as a `regalloc trial`, and keeps a trial only if it is cheaper and spilled none of the values the shape protects.
+`transform` first runs the body as is, with splitting (`regalloc base`). If it spilled something and `Profile::search` is on (`-fallocation-search`; off at every level by default), it builds other shapes the spills suggest, runs each as a `regalloc trial`, and keeps a trial only if it is cheaper and spilled none of the values the shape protects.
 
 | `Shape` | Body |
 |---|---|

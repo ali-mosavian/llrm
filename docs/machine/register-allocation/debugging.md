@@ -6,15 +6,15 @@ Audience: an engineer who has a wrong or poor allocation and needs to see what t
 
 | Switch | Effect |
 |---|---|
-| `-fallocation-search` | try other shapes of a body after the first allocation; on at every level but -O0 ([assignment](assignment.md#search-over-shapes-of-the-body)) |
+| `-fallocation-search` | try other shapes of a body after the first allocation; off by default ([assignment](assignment.md#search-over-shapes-of-the-body)) |
 | `-fallocation-search-all` | try every shape, with and without splitting; -Omax |
-| `-fallocation-routes` | make each function by the allocator alone and by the SSA spiller's route and keep the cheaper; on at every level but -O0 ([ssa-spill-route](ssa-spill-route.md)) |
+| `-fallocation-routes` | make each function by the allocator alone and by the SSA spiller's route and keep the cheaper; off by default ([ssa-spill-route](ssa-spill-route.md)) |
 | `-Os`, `-Oz` | candidates and routes are priced in bytes, each block counted once |
 | `-march=`, `-mtune=` | the CPU's prices: fold discounts, cycle breaking, edge copies |
 | `-mstack-is-data` | `ds` is a fourth selector register |
 | `LLRM_CANDIDATES=allocator\|spiller` | one route only |
 
-The flags are rows of `PASSES` in [`flags.rs`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/driver/flags.rs#L67), set per level in `pipeline::Options` ([levels](../../reference/levels.md)). A flag may be turned off with `-fno-`: `-fno-allocation-search` keeps the routes.
+The flags are rows of `PASSES` in [`flags.rs`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/driver/flags.rs#L67), set per level in `pipeline::Options` ([levels](../../reference/levels.md)). A flag may be turned off with `-fno-`; the search and the routes are independent.
 
 ## What prints
 

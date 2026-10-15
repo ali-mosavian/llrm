@@ -88,7 +88,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | Second selection and machine run without callee facts, cheaper kept | x | x | x | x | on | x |
 | `lir frame` | on | on | on | on | on | on |
 | `lir far-indirect-calls` | on | on | on | on | on | on |
-| `lir ssaspill`: the spiller's route, kept if cheaper (`-fallocation-routes`) | x | spill traffic >= 0.5% | spill traffic >= 0.5% | spill traffic >= 0.5% | on | spill traffic >= 0.5% |
+| `lir ssaspill`: the spiller's route, kept if cheaper (`-fallocation-routes`) | x | off | off | off | off | off |
 | `candidate spiller` | x | spill traffic >= 0.5% | spill traffic >= 0.5% | spill traffic >= 0.5% | on | spill traffic >= 0.5% |
 | `candidate cost` | x | spill traffic >= 0.5% | spill traffic >= 0.5% | spill traffic >= 0.5% | on | spill traffic >= 0.5% |
 | `candidate allocator alone` | on | on | on | on | on | on |
@@ -100,7 +100,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `lir twoaddr` | on | on | on | on | on | on |
 | `lir coalesce` | on | on | on | on | on | on |
 | `lir regalloc` | on | on | on | on | on | on |
-| `regalloc candidates`, `regalloc trial`: allocations beyond the first (`-fallocation-search`) | x | <= 2 | <= 2 | <= 2 | <= 12 | <= 2 |
+| `regalloc candidates`, `regalloc trial`: allocations beyond the first (`-fallocation-search`) | x | off | off | off | off | off |
 | `lir parcopy` | on | on | on | on | on | on |
 | `lir peephole` | on | on | on | on | on | on |
 | `lir loopslots` | on | on | on | on | on | on |
@@ -254,4 +254,4 @@ We match -O0 only: `Options::none()` has no allocation search, so a function is 
 
 -Os does not match. gcc's one region is the allocator without loop-tree regions; the counterpart here is no live-range splitting. Measured on 131 files: compile -35% (`d_faces`) and -20% (`d_alias`), but bytes +0.49% geomean, worst `pl_trace` +5.8%. Splitting earns its bytes in this allocator, so -Os splits.
 
-The allocator tries other shapes of a body (`-fallocation-search`) at every level but -O0, and every level but -O0 makes each function by the allocator alone and by the spiller's route and keeps the cheaper (`-fallocation-routes`). The switches are independent: `-fno-allocation-search` keeps the route. The search is the default because the 16-bit bench kernels lose 5-20% of their instructions without it (quicksort -O2 +20%: the `Scoped` shape keeps a loop's address base in a register). gcc runs IRA once at -O1, -O2 and -Os.
+A function is allocated once at every level, as gcc's IRA and LLVM's greedy allocator do. The trial search of other shapes of a body (`-fallocation-search`) and the second, spiller route kept if cheaper (`-fallocation-routes`) are off; the flags turn each back on, independently, for measurement. User decision 2026-10-15, on the vsgcc rows: both off together cost under 1% of the geomean against gcc, the worst rows are unchanged or better, and `d_faces` compiles 30-37% faster at every level. The 16-bit bench rows that moved are blessed with this reason (`bench/*/expected.toml`).

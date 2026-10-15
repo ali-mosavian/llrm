@@ -4,6 +4,9 @@ For contributors to the register allocator. The measurements come first; the des
 
 ## What is run today
 
+Since 2026-10-15 (user decision) a function is allocated once by default: `-fallocation-search` and `-fallocation-routes` are off at every level and turn the trials and the second route back on for measurement. What follows is what they decide, measured before the switch.
+
+
 `assemble::directed` allocates a function on up to two routes (the allocator alone; the spiller's `SsaSpill` first, then the allocator) and keeps the cheaper. `RegAlloc::transform` runs the base allocation and, if it spilled, up to two trials (the first of `Scoped`, `Retainable`, `Addressed`, `Unfolded` that its spills admit, and `Whole`, the body without splitting) and keeps the cheapest. That is up to six allocations of one body. The allocator inside each is already LLVM's `RegAllocGreedy` in shape (priority queue, eviction with cascade numbers, region splitting, recolouring).
 
 ## What they buy

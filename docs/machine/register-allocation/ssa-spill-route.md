@@ -48,10 +48,10 @@ The allocator alone sees every constraint and spills one value at a time by weig
 
 | Condition | Routes made |
 |---|---|
-| `LLRM_CANDIDATES=allocator`, or `-fno-allocation-routes` (-O0) | A only |
+| `LLRM_CANDIDATES=allocator`, or `-fno-allocation-routes` (the default at every level) | A only |
 | `LLRM_CANDIDATES=spiller` | B only |
-| below -Omax, otherwise (`directed`) | A; B too if [spill or frame traffic is at least `SPILLER_TRAFFIC`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/assemble.rs#L496) of the work, counting printed instructions by block frequency (once each at -Os) |
-| -Omax | both |
+| `-fallocation-routes` below -Omax, otherwise (`directed`) | A; B too if [spill or frame traffic is at least `SPILLER_TRAFFIC`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/assemble.rs#L496) of the work, counting printed instructions by block frequency (once each at -Os) |
+| `-fallocation-routes` at -Omax | both |
 
 B is dropped if the spiller changed nothing (`Run::changed`). The winner is [`cheaper_route`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/assemble.rs#L675): the lower `route_cost` (bytes at -Os, else `executed` work, plus two per register the function must save); where equal or unpriced, the other measure decides. Where bytes tie and B admitted a loop's entry loads on trips alone (`Run::ties`), a third run without admission is made and the plainer of the two kept. `LLRM_DEBUG=candidates` prints the two costs.
 
