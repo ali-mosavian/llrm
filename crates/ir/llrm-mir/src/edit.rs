@@ -112,7 +112,7 @@ impl Function {
     ) -> String {
         // One pass over the names, not one per candidate: a function whose
         // `iv` is taken N times scanned every value N times for each new one.
-        let names: std::collections::HashSet<&str> = self
+        let names: crate::hash::HashSet<&str> = self
             .values
             .iter()
             .filter_map(|one| one.name.as_deref())
