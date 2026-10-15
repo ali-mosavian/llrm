@@ -491,29 +491,26 @@ def test_the_cases_regression_as_measured_fails_the_gate_at_the_size_the_gate_us
 
 
 def test_a_wait_for_a_lock_another_session_holds_says_so_in_the_log(tmp_path, monkeypatch, capsys):
-    """#1755s
-
-
-def test_a_wait_for_a_lock_another_session_holds_says_so_in_the_log(tmp_path, monkeypatch, capsys):
-    """#1755's measure sat 10 minutes on another session's build lock, silent and idle, and the gate killed it as stalled."""
-    import threading
+    """#1755's measure sat 10 minutes on another session's build lock, silent and idle, and the gate killed it as stalled. On virtual
+    time: the version with a thread releasing the lock after 0.6 s of the wall clock failed once under load (the waiter had not waited
+    long enough when the holder let go)."""
+    import fcntl
 
     monkeypatch.setattr(measure, "CACHE", tmp_path)
-    held, release = threading.Event(), threading.Event()
+    holder = open(tmp_path / "b.lock", "w")
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    now = [0.0]
 
-    def holder():
-        with measure.locked("b"):
-            held.set()
-            release.wait(5)
+    def sleep(seconds):
+        now[0] += seconds
+        if now[0] >= 150:  # the holder lets go at 150 s
+            holder.close()
 
-    thread = threading.Thread(target=holder)
-    thread.start()
-    held.wait(5)
-    threading.Timer(0.6, release.set).start()
-    with measure.locked("b", every=0.2):
+    with measure.locked("b", every=60, clock=lambda: now[0], sleep=sleep):
         pass
-    thread.join()
-    assert capsys.readouterr().out.count("measure: waiting") >= 2
+    lines = capsys.readouterr().out.splitlines()
+    assert lines and lines[0].startswith("measure: waiting 60s for the lock b") and len(lines) == 2, lines
+
 
 # The `analysis through-memory` step of joins at 2N=128 (#1755): 254.6 -> 282.0 Minstr under mimalloc, equal under the system allocator.
 STEP = "joins O2 analysis through-memory"

@@ -11,6 +11,17 @@ import train  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _git_as_on_a_bare_runner(monkeypatch):
+    """No git configuration of the host's, and an identity of the test's: every merge the train makes in these tests failed on a CI runner
+    (no user.name), so every PR looked like a conflict ('conflicts with the batch before it'), and main's CI was red on it."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for who in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{who}_NAME", "train test")
+        monkeypatch.setenv(f"GIT_{who}_EMAIL", "train@test")
+
+
+@pytest.fixture(autouse=True)
 def _own_logs(tmp_path, monkeypatch):
     """A test that gates writes its logs under its own directory, not the real ~/scratch/train-logs."""
     monkeypatch.setattr(train, "LOGS", tmp_path / "train-logs")
@@ -202,14 +213,15 @@ def test_the_bless_step_runs_bench_in_the_trees_own_target(monkeypatch, tmp_path
     seen = []
 
     def fake(command, **kw):
-        seen.append(kw["env"]["CARGO_TARGET_DIR"])
+        seen.append((kw["env"]["CARGO_TARGET_DIR"], command[:6]))
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(train, "git", lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
     monkeypatch.setattr(train.subprocess, "run", fake)
     monkeypatch.setenv("CARGO_TARGET_DIR", "/t/target")
     train.bless("a" * 40, [pr(1)], tmp_path / "train5-tree")
-    assert seen == ["/t/target-train5-tree"]
+    # and in the tools' environment (uv): the train's own python has no unicorn, which bench imports (train 4 passed its gate, died here)
+    assert seen == [("/t/target-train5-tree", ["uv", "run", "-q", "--project", "tools", "python"])]
 
 
 def test_a_member_a_rebuilt_tip_leaves_out_is_reported_dropped_and_never_offered():

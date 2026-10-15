@@ -163,6 +163,7 @@ def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():
     p = gate.plan(["tools/qcport-run.py"])
     assert "timeout" not in gate.commands(p, gate.load(), gate.packages())["qcport"]
 
+
 def test_the_torture_step_has_no_wall_clock_limit_of_its_own():
     """`timeout 600` killed a full gate's torture step at 150 of 474 programs under load: every program's budget is guest time, so
     the step's wall time is the host's load. dosbatch stops an emulator that stops reporting."""
@@ -476,9 +477,10 @@ def test_the_full_tier_has_every_step_the_fast_tier_has_for_the_same_paths():
     assert "scans" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full").steps
 
 
-def test_a_failed_step_keeps_its_log_past_the_next_run_of_the_step(tmp_path):
+def test_a_failed_step_keeps_its_log_past_the_next_run_of_the_step(tmp_path, monkeypatch):
     """A pytest failure under host load was lost: the gate prints the last 30 lines of the log and a rerun overwrote it, so the
     failing test was never named (#1184)."""
+    monkeypatch.delenv("GATE_ALLOW_MISSING", raising=False)  # CI sets it, and a step that skips itself there fails
     env = {**__import__("os").environ}
     assert gate.run_step("probe", "echo FAILED tests/test_x.py::test_y; exit 1", tmp_path, env)[1] == 1
     assert gate.run_step("probe", "echo fine", tmp_path, env)[1] == 0
@@ -982,6 +984,7 @@ def test_a_passed_smoke_run_leaves_a_mark_for_its_head_that_the_train_reads(tmp_
     gate.record_smoke("abc123")
     assert gate.smoked("abc123") and not gate.smoked("abc124")
 
+
 def test_the_bench_step_runs_in_batch_mode_only_when_the_train_asks_and_still_needs_zero_problems(monkeypatch):
     plan = gate.plan(["tools/gate/gate.py"], "full")
     monkeypatch.delenv("LLRM_BENCH_BATCH", raising=False)
@@ -1002,6 +1005,7 @@ def test_a_step_that_gets_little_cpu_on_a_loaded_host_is_not_stalled(tmp_path, m
     assert gate.run_step("slow", "sleep 2.5", tmp_path, {**os.environ}, stall=1)[1] == 0
     monkeypatch.setattr(gate.proctree, "tree_cpu", lambda pid: 0.0)
     assert gate.run_step("hung", "sleep 30", tmp_path, {**os.environ}, stall=1)[1] == gate.STALL_CODE
+
 
 def test_a_step_log_is_a_new_file_so_an_orphan_of_a_killed_gate_cannot_write_into_it(tmp_path):
     """#1758 failed `integration INCOMPLETE: 95 results of 83 test binaries`: a cargo left running by a killed gate wrote into the
@@ -1103,6 +1107,7 @@ def test_smoke_runs_the_pytest_files_that_are_not_slow_and_the_full_step_does_no
         assert "tests/test_loops.py" not in named and "tests/test_programs_compile.py" not in named and "tests/*.py" not in named, step
     assert "tests/test_loops.py" in full["pytest-programs"] and "tests/test_programs_compile.py" in full["pytest-programs"]
 
+
 def test_the_bench_step_prints_every_problem_row_not_the_last_three_lines(tmp_path):
     """Train 3's bench step said `424 measurements: 22 problems, 2 better` under only the 2 BETTER lines: `tail -3` cut the 20 FAIL rows."""
     import os
@@ -1154,3 +1159,100 @@ def test_the_facts_step_fails_on_a_failing_target_facts_and_on_a_run_that_ran_no
         logs.mkdir()
         _, code, _, _ = gate.run_step("facts", command, logs, {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}"}, check)
         assert code == {"ok": 0, "failed": 101, "silent": 78}[outcome], (outcome, code)
+
+
+def test_a_comma_list_allows_only_those_capabilities_to_be_missing(tmp_path):
+    """CI allowed any missing tool ("1") and passed Turbo, CodeView, QB 4.5 and QCport by skipping them; now it allows `perf` and nothing else."""
+    env = {"HOME": str(tmp_path), "TCPP30_DIR": str(tmp_path / "none"), "GATE_ALLOW_MISSING": "perf"}
+    assert "turbo" not in gate.missing_capabilities(env)
+    allowed = gate.missing_capabilities({**env, "GATE_ALLOW_MISSING": "perf,turbo"}).keys()  # perf too where this host has no counters
+    assert "turbo" in allowed and allowed <= {"turbo", "perf"}
+
+
+def test_the_hosted_workflow_allows_only_perf_to_be_missing():
+    allowed = re.findall(r"^\s+GATE_ALLOW_MISSING: *(\S+)", (ROOT / ".github/workflows/ci.yml").read_text(), re.M)
+    assert allowed == ["perf"]
+
+
+def test_the_groups_that_need_private_tools_are_named_in_the_plan():
+    """A job reads the private checkout only for these; a fork's pull request fails them by name."""
+    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
+    private = gate.private_groups(p)
+    assert {"reference", "run", "tools", "python"} <= set(private), private
+    assert "unit" not in private and "cost" not in private
+
+
+def test_every_tool_directory_a_private_capability_needs_is_set_for_the_jobs_that_run_it():
+    """A variable the checkout does not set falls back to a path on the developer's host: the job fails by "not found", or skips in a test."""
+    cfg = gate.load()
+    for group, steps in cfg["groups"].items():
+        env = gate.private_env("/p", group)
+        for step in steps:
+            for name in cfg["requires"].get(step, []):
+                for need in cfg["capability"][name]["needs"] if cfg["capability"][name].get("private") else []:
+                    assert need["env"] in env, (group, step, name, need["env"])
+
+
+def test_a_group_may_point_a_variable_somewhere_else():
+    """test_identical read the qb-quake variant as QCport (10 modules of 65) when QCPORT was its src: dfaces has a variable of its own."""
+    assert gate.private_env("/p", "reference")["QCPORT"] == "/p/rm-quake/src"
+    assert gate.private_env("/p", "python")["QCPORT"] == "/p/rm-quake/src"
+    assert gate.private_env("/p", "python")["DFACES_SRC"] == "/p/qbq-llrm/src"
+    assert "QCPORT" not in gate.private_env("/p", "unit")
+def test_what_ci_runs_for_a_diff_is_what_gate_run_plans_for_it():
+    """CI's jobs come from `gate.py plan --json` (ci.yml lists no step): the steps of its groups, with the build, are the steps `gate.py run`
+    plans for the same diff, so a green CI is the local pass. Checked for diffs of each kind, and that the workflow asks the planner."""
+    import json
+    import subprocess as sp
+
+    for files in (["docs/x.md"], ["tools/gate/gate.py"], ["bench/fib/fib.c"], ["crates/backend/llrm-core/src/lib.rs"], ["tests/turbo.rs"]):
+        local = gate.plan(files)
+        out = sp.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", *files], capture_output=True, text=True, cwd=gate.ROOT)
+        ci = json.loads(out.stdout)
+        in_groups = sorted(step for steps in ci["groups"].values() for step in steps)
+        assert ci["tier"] == local.tier, files
+        assert sorted(in_groups + list(ci["skipped"])) == sorted(s for s in local.steps if s != "build"), (files, ci)
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "gate.py plan --json" in workflow and "gate.py run --group ${{ matrix.group }}" in workflow, "the jobs come from the planner"
+    assert all(f"--tier {t}" not in workflow for t in ("fast", "full", "smoke")), "the workflow does not choose a tier of its own"
+
+
+def test_the_ci_summary_prints_the_gate_line_with_the_head_it_is_of():
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}" in workflow and "github.event.pull_request.head.sha" in workflow
+
+
+def test_a_plan_that_builds_nothing_on_a_fresh_target_says_so_instead_of_a_traceback(tmp_path, monkeypatch, capsys):
+    """#1832 (tools only: the plan has no build) on a fresh target dir died in snapshot_binaries with FileNotFoundError on target/release."""
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "fresh"))
+    monkeypatch.delenv("LLRM_BIN", raising=False)
+    plan = gate.Plan("fast", "tools only", ["pytest-quick", "docs"], None, [], ["tools/gate/train.py"])
+    code, failed = gate.execute(plan)
+    out = capsys.readouterr().out
+    assert code == 2 and failed == ["build"] and "does not exist and this plan builds nothing" in out and "pytest-quick" in out, out
+    # a plan whose steps read the tree only needs no binaries
+    monkeypatch.setattr(gate, "commands", lambda *a, **k: {"docs": "true"})
+    monkeypatch.setattr(gate, "expected", lambda *a, **k: {})
+    code, _ = gate.execute(gate.Plan("fast", "docs", ["docs"], None, [], ["docs/x.md"]))
+    assert code == 0
+
+
+def test_the_qcport_step_does_not_skip_itself_where_the_variables_are_set_and_fails_where_they_are_not(tmp_path):
+    """CI's run of the reference group said `qcport SKIPPED` and passed: the step looked for ~/scratch/qcport-env.sh, which only the
+    development host has, and exited 77 without running QCport."""
+    command = gate.commands(gate.plan(["crates/frontends/llrm-c/src/lib.rs"]), gate.load(), gate.packages())["qcport"]
+    command = command.replace("uv run -q --project tools python tools/qcport-run.py", 'echo ran "$JWLINK"')
+    base = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "LLRM_BIN": "/t/release"}
+    both = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env={**base, "QCPORT": "a", "QCPORT_INC": "b", "QCPORT_BORLAND": "c"})
+    assert (both.returncode, both.stdout.strip()) == (0, "ran /t/release/jwlink"), both  # the linker the build made: a runner has none on PATH
+    none = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env=base)
+    assert none.returncode not in (0, 77) and "QCPORT is not set" in none.stderr, none
+
+
+def test_a_step_that_skips_itself_fails_where_only_named_capabilities_may_be_missing(tmp_path, monkeypatch):
+    """CI passed with `qcport SKIPPED` (the step found no env file): a skip the plan did not make is a step that did not run."""
+    env = {**__import__("os").environ}
+    monkeypatch.delenv("GATE_ALLOW_MISSING", raising=False)
+    assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 77
+    monkeypatch.setenv("GATE_ALLOW_MISSING", "perf")
+    assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 1
