@@ -84,6 +84,7 @@ toolchain = ["wccq", "jw", "dosrun"]
 wccq = ["llrm-c/toolchain"]
 jw = []
 dosrun = []
+system-alloc = []
 
 [dev-dependencies]
 llrm-target = { workspace = true }

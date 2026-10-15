@@ -1028,16 +1028,22 @@ def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
 
     sleeper = f"sleep 62.{os.getpid()}"
     here = str(Path(gate.__file__).parent)
-    code = f"import sys, os, pathlib; sys.path.insert(0, {here!r}); import gate; gate.kill_on_term(); gate.run_step('s', {sleeper!r}, pathlib.Path({str(tmp_path)!r}), dict(os.environ), stall=600)"
+    ready = tmp_path / "ready"
+    command = f"touch {ready}; {sleeper}"
+    code = f"import sys, os, pathlib; sys.path.insert(0, {here!r}); import gate; gate.kill_on_term(); gate.run_step('s', {command!r}, pathlib.Path({str(tmp_path)!r}), dict(os.environ), stall=600)"
     gate_proc = sp.Popen([_sys.executable, "-c", code])
     try:
-        for _ in range(100):
-            if sleeper in ps():
+        # The step touches `ready` once it runs, so the handler is in place. Not `ps`: the gate's own argv names the sleep too (SIGTERM
+        # then came before the handler: -15, twice in #1763), and ps cuts a long argv to COLUMNS where that is set.
+        for _ in range(300):
+            if ready.exists():
                 break
             _time.sleep(0.1)
+        else:
+            raise AssertionError("the step never started")
         gate_proc.send_signal(signal.SIGTERM)
         assert gate_proc.wait(timeout=20) == 128 + signal.SIGTERM
         _time.sleep(0.3)
-        assert sleeper not in ps(), "the step outlived the gate"
+        assert sleeper not in ps().splitlines(), "the step outlived the gate"
     finally:
         sp.run(["pkill", "-f", sleeper])
