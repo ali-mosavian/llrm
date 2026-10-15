@@ -74,6 +74,15 @@ class CountTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_only_the_code_named_is_counted_and_the_region_still_ends_at_its_return(self):
+        """A scene around the code under test (d_faces' stand-ins) was counted with it: `only` limits the count to a range of the
+        image, and the `ret` that ends the region is outside the range here."""
+        entry = maps.find(maps.symbols(self.listing), "region")
+        # `mov cx, 5` and `dec cx` (4 bytes) are 1 + 5 instructions; the rest of the region is outside.
+        result = icount.run(self.exe, entry, self.directory, only=(entry, entry + 4))
+        self.assertEqual(result.error, "")
+        self.assertEqual(result.region.instructions, 6)
+
     def test_a_region_costs_what_its_instructions_add_up_to(self):
         """The first count read 155 for this region: a REP fires the hook once per iteration and the count also multiplied by CX."""
         entry = maps.find(maps.symbols(self.listing), "region")

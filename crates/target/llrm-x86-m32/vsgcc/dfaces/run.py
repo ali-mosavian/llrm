@@ -70,13 +70,22 @@ def write_source():
     SOURCE.write_text("".join(f"#define {word}\n" for word in KEYWORDS.split()) + f'#include "{D_FACES}"\n')
 
 
+def write_env_source():
+    """env.c for the flat build: `FLAT` empties the segmented keywords."""
+    path = OUT / "dfaces" / "env_flat.c"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    trace = {"1": "#define TRACE 1\n", "all": "#define TRACE 1\n#define TRACE_ALL 1\n"}.get(os.environ.get("DFACES_TRACE", ""), "")
+    path.write_text(f'#define FLAT 1\n{trace}#include "{HERE / "env.c"}"\n')
+    return path
+
+
 def build_env():
     """env.c, once per change of the file or the scene's headers: gcc -O0, linked at ENV_BASE against the stub."""
     work = OUT / "dfaces"
     work.mkdir(parents=True, exist_ok=True)
     elf = work / "env.elf"
     if not elf.exists() or elf.stat().st_mtime < max((HERE / "env.c").stat().st_mtime, (QCPORT / "render/qcshared.h").stat().st_mtime):
-        sh(["gcc", *GCC_FLAGS, "-O0", "-I", QCPORT / "render", "-c", HERE / "env.c", "-o", work / "env.o"])
+        sh(["gcc", *GCC_FLAGS, "-O0", "-I", QCPORT / "render", "-c", write_env_source(), "-o", work / "env.o"])
         sh(["ld", "-m", emulation(), "-static", "-e", "0", f"-Ttext={ENV_BASE:#x}", f"--just-symbols={stub()}", "-o", elf, work / "env.o"])
     return elf
 
@@ -217,6 +226,43 @@ def per_function(elf, by_ins, by_clock, entries):
     return out
 
 
+def run_m16(level):
+    """d_faces.c as llrm builds it for the 16-bit target, as it is written (`far`, `pascal`), linked with env.c built the same way
+    and run in icount's real-mode emulator; only what executes in d_faces' own code segment is counted. Its answer is judged
+    against the flat reference: the 16-bit build is to do what gcc and clang do in 32 bits, not less."""
+    for path in (harness.REPO / "tools" / "dosbatch", harness.REPO / "tools" / "bench", harness.REPO / "crates/target/llrm-x86-m16/bench"):
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
+    import dosbatch
+    import icount
+    import maps
+
+    work = OUT / "dfaces" / f"m16-{level}"
+    work.mkdir(parents=True, exist_ok=True)
+    compiled = {}
+    for name, source, flag in (("d", D_FACES, f"-{level}"), ("e", HERE / "env.c", "-O1")):
+        obj = work / f"{name}.obj"
+        sh([dosbatch.BIN / "llrm-c", "-m16", flag, "-march=i486", *INCLUDES, "-o", obj, source])
+        compiled[name] = obj
+    exe, listing = work / "d.exe", work / "d.map"
+    dosbatch.link_c(compiled["d"], exe, work, listing, after=("file", str(compiled["e"])))
+    entry = maps.locate(exe, listing, "bench_dfaces")
+    code = [one for one in maps.segments(listing) if one[0] == "D_FACES_TEXT"][0]
+    done = icount.run(exe, entry, work, only=(code[1], code[1] + code[2]))
+    assert not done.error, done.error
+    reports = [int(word) for word in done.output.decode().split()]
+    return dict(prog="dfaces", variant=f"m16{level}", ins=done.region.instructions, mem=done.region.memory_operands, misaligned=0,
+                clocks=done.region.clocks, code=code[2], reports=reports, coverage={}, functions={})
+
+
+def agree(reports, reference):
+    """Whether a run did what the reference did: the hash of what was drawn exactly, and the sums of the floats handed to the
+    rasteriser to a tolerance (a float on a rounding boundary differs between compilers; see env.c)."""
+    if len(reports) != len(reference) or reports[:1] != reference[:1]:
+        return False
+    return all(abs(a - b) <= 2 + 1e-4 * abs(b) for a, b in zip(reports[1:], reference[1:]))
+
+
 def geomean(values):
     return math.exp(sum(math.log(v) for v in values) / len(values))
 
@@ -225,16 +271,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--levels", nargs="*", default=list(LEVELS))
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--m16", action="store_true", help="llrm's 16-bit build as well, run in the real-mode emulator (misaligned operands are not counted there)")
     parser.add_argument("--functions", action="store_true", help="per function: executed instructions and clocks, llrm built as ELF for its symbols")
     args = parser.parse_args()
     reference = run("gccO0")
-    assert len(reference["reports"]) == 1, reference["reports"]
+    assert len(reference["reports"]) == 6, reference["reports"]
     rows = {"gccO0": reference}
     missing = [name for name, count in reference["coverage"].items() if not count and name not in ("flat",)]
     assert not missing, f"the scene reaches none of: {missing}"
     for level in args.levels:
         for variant in (f"llrm{'' if level == 'O2' else level}", f"gcc{level}", f"clang{level}"):
             rows[variant] = run(variant)
+    if args.m16:
+        for level in args.levels:
+            rows[f"m16{level}"] = run_m16(level)
     if args.functions:
         for level in args.levels:
             rows[f"llrmElf{level}"] = run(f"llrmElf{level}")
@@ -242,7 +292,7 @@ def main():
     print("scene reaches: " + ", ".join(f"{name} {count}" for name, count in reference["coverage"].items()))
     print(f"{'variant':10}" + "".join(f"{k:>11}" for k in keys) + "   ok")
     for variant, r in rows.items():
-        r["ok"] = r["reports"] == reference["reports"]
+        r["ok"] = agree(r["reports"], reference["reports"])
         print(f"{variant:10}" + "".join(f"{r[k]:>11}" for k in keys) + f"   {'yes' if r['ok'] else 'WRONG'}")
     print()
     for level in args.levels:
@@ -250,6 +300,13 @@ def main():
         for other in ("gcc", "clang"):
             ref = rows[f"{other}{level}"]
             print(f"-{level} llrm/{other}: " + "  ".join(f"{k} {llrm[k] / max(1, ref[k]):.2f}" for k in keys))
+    if args.m16:
+        print("\nllrm -m16 against gcc and clang -m32 (the reference the 16-bit target is held to)")
+        for level in args.levels:
+            small = rows[f"m16{level}"]
+            for other in ("gcc", "clang"):
+                ref = rows[f"{other}{level}"]
+                print(f"-{level} m16/{other}: " + "  ".join(f"{k} {small[k] / max(1, ref[k]):.2f}" for k in ("ins", "mem", "clocks", "code")))
     if args.functions:
         for level in args.levels:
             llrm_elf = rows[f"llrmElf{level}"]
