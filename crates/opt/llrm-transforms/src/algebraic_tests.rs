@@ -1346,3 +1346,20 @@ fn test_a_sum_of_two_values_under_inttoptr_is_a_base_and_an_index() {
     let shared = "define i32 @f(i32 %x, i32 %y) {\nb0:\n  %a = add i32 %x, %y\n  %p = inttoptr i32 %a to ptr\n  %v = load i8, ptr %p\n  %z = zext i8 %v to i32\n  %r = add i32 %z, %a\n  ret i32 %r\n}\n";
     assert!(!bare(&simplified_in(shared, false, FLAT).1).contains("getelementptr"));
 }
+
+/// Every round of the pass derived what is known of the body and its shape
+/// afresh to find the values that advance with a loop, though the manager held
+/// both from the pass before (d_faces -O1: 19 ms of the pass's 53). The pass
+/// asks the manager.
+#[test]
+fn test_the_recurrences_of_a_body_are_asked_of_the_manager_not_derived_again() {
+    let mut module = parsed(&masked_sum("%n"));
+    module.datalayout = Some(LEGAL.to_owned());
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(crate::fold::Fold);
+    passes.add(super::Algebraic { size: false });
+    let before = llrm_analysis::consts::register_derivations();
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let derived = llrm_analysis::consts::register_derivations() - before;
+    assert!(derived <= 1, "{derived} derivations of the registers for one body");
+}
