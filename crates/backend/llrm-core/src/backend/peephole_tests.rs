@@ -4902,3 +4902,54 @@ fn test_a_compare_of_other_operands_or_a_block_with_two_ways_in_is_made_again() 
     ];
     assert_eq!(compares(&compares_again(&body("joined", 0, crate::model::lir::shared(joined))), 2), 1);
 }
+
+/// `secondary_bases` tried every definition of the body for every candidate
+/// (a copy of its uses each): 80 independent word loads were 6,400 tries, and
+/// an `-O1` module's peephole spent 36 M instructions on it.
+#[test]
+fn secondary_bases_tries_only_what_uses_the_candidate() {
+    let insns: Vec<Arc<Insn>> = (1..=80u32)
+        .map(|value| {
+            Arc::new(insn(
+                i64::from(value),
+                Some((i64::from(value), i64::from(value))),
+                Some(sem(
+                    Operation::Move,
+                    "mov",
+                    vec![rl(RegId::DX, 2)],
+                    vec![Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(6), 2) })],
+                )),
+                vec![value],
+                vec![],
+            ))
+        })
+        .collect();
+    let input = body("many-candidates", 1, vec![block(1, insns, vec![]).into()]);
+    SECONDARY_TRIES.with(|count| count.set(0));
+
+    secondary_bases(&input, "386").unwrap();
+
+    assert!(SECONDARY_TRIES.with(std::cell::Cell::get) <= 80);
+}
+
+/// A sub-pass that matched nothing in a block rebuilt it anyway: 17,255 of the
+/// 24,456 block visits of an `-O1` module's peephole allocated and dropped a
+/// block for 514 that changed. An untouched block is the same allocation.
+#[test]
+fn a_pass_that_changes_nothing_returns_every_block_as_it_was() {
+    let nop = |at: i64| {
+        Arc::new(insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![rl(RegId::BX, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let input = body("untouched", 1, vec![block(1, vec![nop(1), nop(2)], vec![]).into()]);
+
+    for result in [commuted(rules(), &input), borrows(rules(), &input), shuttles(rules(), &input)] {
+        assert!(result.blocks[0].same_as(&input.blocks[0]));
+        assert!(result.blocks[0].insns.same_as(&input.blocks[0].insns));
+    }
+}
