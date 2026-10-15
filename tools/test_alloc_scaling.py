@@ -462,3 +462,31 @@ def test_a_short_update_looks_at_the_definitions_of_the_spilled_values_and_not_a
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["spill short updates"] < 20, f"cells N=448 -O2: spill short updates cost {run['spill short updates']} Minstr (20 allowed; 84 before): {run}"
+
+
+def test_an_update_made_local_looks_at_the_definitions_of_the_spilled_values_and_copies_a_block_only_where_it_makes_one():
+    """`_local_updates` copied each block holding a definition of a spilled value and looked at every instruction of it: `spill local updates`
+    cost 70 Minstr on `cells` at N=448 (x4.2 for x2 the program). It looks at the positions the postings give."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["spill local updates"] < 25, f"cells N=448 -O2: spill local updates cost {run['spill local updates']} Minstr (25 allowed; 70 before): {run}"
+
+
+def test_the_liveness_of_the_pieces_a_split_made_is_asked_of_their_postings_and_not_of_a_pass_over_the_body():
+    """`split after liveness` scanned the whole body for the occurrences of the pieces it had made: 98.6 Minstr on `cells` at N=448, 401 at 896.
+    It reads them from the postings the body is followed with."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["split after liveness"] < 60, f"cells N=448 -O2: split after liveness cost {run['split after liveness']} Minstr (60 allowed; 98.6 before): {run}"

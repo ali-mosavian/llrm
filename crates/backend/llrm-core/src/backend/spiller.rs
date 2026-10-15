@@ -866,29 +866,34 @@ fn _local_updates<'b>(
     frame: &mut Frame,
     fresh: u32,
 ) -> Result<(Cow<'b, LirBody>, u32), Error> {
-    // An update defines a stored value and reads it.
-    let relevant: BTreeSet<usize> = postings::following(body, |postings| {
+    // An update defines a stored value and reads it: only a definition of one
+    // can be one, so only those positions are looked at.
+    let mut starts: Vec<(u32, u32)> = postings::following(body, |postings| {
         stored
             .iter()
             .flat_map(|&value| postings.defs(value).into_iter().map(move |at| (value, at)))
             .filter(|(value, at)| _at(body, *at).uses.contains(value))
-            .map(|(_, at)| at.0 as usize)
+            .map(|(_, at)| at)
             .collect()
     });
-    if relevant.is_empty() {
+    starts.sort_unstable();
+    starts.dedup();
+    if starts.is_empty() {
         return Ok((Cow::Borrowed(body), fresh));
     }
-    let (made, next) = _local_updates_whole(body, stored, frame, fresh, &relevant)?;
-    Ok((Cow::Owned(made), next))
+    let (made, next) = _local_updates_whole(body, stored, frame, fresh, &starts)?;
+    Ok((made.map_or(Cow::Borrowed(body), Cow::Owned), next))
 }
 
+/// `body` with the updates at `starts` (block, position) made local, or none
+/// where none is worth it.
 fn _local_updates_whole(
     body: &LirBody,
     stored: &BTreeSet<u32>,
     frame: &mut Frame,
     mut fresh: u32,
-    relevant: &BTreeSet<usize>,
-) -> Result<(LirBody, u32), Error> {
+    starts: &[(u32, u32)],
+) -> Result<(Option<LirBody>, u32), Error> {
     let (index, live) = match crate::backend::live::held(body) {
         Some(held) => (Arc::clone(held.index()), Shared::Held(held)),
         None => {
@@ -907,35 +912,35 @@ fn _local_updates_whole(
                 !what.dests.iter().chain(&what.sources).any(|operand| matches!(operand, Loc::Mem(_)))
             })
     };
-    let mut blocks = Vec::new();
-    for (block_index, block) in body.blocks.iter().enumerate() {
-        // An update defines a stored value and reads it: a block with none is
-        // as it was.
-        if !relevant.contains(&block_index) {
-            blocks.push(block.clone());
-            continue;
-        }
-        let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
-        let mut position = 0;
-        while position < insns.len() {
-            let update = Arc::clone(&insns[position]);
-            let Some(&value) = update.defines.first() else {
-                position += 1;
-                continue;
-            };
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut changed = false;
+    let mut next = 0;
+    while next < starts.len() {
+        let block_index = starts[next].0 as usize;
+        let end = next + starts[next..].iter().take_while(|(block, _)| *block as usize == block_index).count();
+        let block = &body.blocks[block_index];
+        let mut insns: Option<Vec<Arc<Insn>>> = None;
+        // How many instructions the runs made so far put in front of a
+        // position of the block as it was.
+        let mut shift = 0;
+        for &(_, at) in &starts[next..end] {
+            // The block is copied at the first update made.
+            let working: &[Arc<Insn>] = insns.as_deref().unwrap_or(&block.insns);
+            let position = at as usize + shift;
+            let update = Arc::clone(&working[position]);
+            let Some(&value) = update.defines.first() else { continue };
             let is_update = stored.contains(&value)
                 && update.defines.len() == 1
                 && update.uses.contains(&value)
                 && register_only(&update)
                 && update.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Binary | Operation::Unary));
             if !is_update {
-                position += 1;
                 continue;
             }
             // The reads that follow, up to a redefinition or anything a
             // register may not survive.
             let mut reads = Vec::new();
-            for (at, one) in insns.iter().enumerate().skip(position + 1) {
+            for (at, one) in working.iter().enumerate().skip(position + 1) {
                 if one.defines.contains(&value) || !register_only(one) {
                     break;
                 }
@@ -943,17 +948,13 @@ fn _local_updates_whole(
                     reads.push(at);
                 }
             }
-            let Some(&last) = reads.last() else {
-                position += 1;
-                continue;
-            };
-            let slot = index.at[&key(&insns[last])];
+            let Some(&last) = reads.last() else { continue };
+            let slot = index.at[&key(&working[last])];
             let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
             let kept = live.get(&value).expect("live").segments.iter().any(|segment| segment.overlaps(&after));
             // Worth it when it saves a memory operand: the update's own
             // and each read's, against one reload and perhaps one store.
             if reads.len() + 1 <= 1 + usize::from(kept) {
-                position += 1;
                 continue;
             }
             let width = _width(&update, value);
@@ -961,20 +962,33 @@ fn _local_updates_whole(
             let register = fresh;
             fresh += 1;
             let renamed = IndexMap::from_iter([(value, register)]);
+            let working = insns.get_or_insert_with(|| block.insns.to_vec());
             for at in &reads {
-                insns[*at] = _renamed(&insns[*at], &renamed);
+                working[*at] = _renamed(&working[*at], &renamed);
             }
             let mut run = vec![_reload(&update, register, &cell), _renamed(&update, &renamed)];
             if kept {
                 run.push(_store(&update, register, &cell));
             }
-            let length = run.len();
-            insns.splice(position..=position, run);
-            position += length;
+            shift += run.len() - 1;
+            working.splice(position..=position, run);
         }
-        blocks.push(block.with_insns(insns));
+        if let Some(insns) = insns {
+            while blocks.len() < block_index {
+                blocks.push(body.blocks[blocks.len()].clone());
+            }
+            blocks.push(block.with_insns(insns));
+            changed = true;
+        }
+        next = end;
     }
-    Ok((body.with_blocks(blocks), fresh))
+    if !changed {
+        return Ok((None, fresh));
+    }
+    while blocks.len() < body.blocks.len() {
+        blocks.push(body.blocks[blocks.len()].clone());
+    }
+    Ok((Some(body.with_blocks(blocks)), fresh))
 }
 
 /// A move between two spilled values that share one slot.
