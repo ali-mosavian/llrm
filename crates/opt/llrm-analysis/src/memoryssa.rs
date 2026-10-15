@@ -1565,6 +1565,6 @@ impl<'a> Writers<'a> {
     ) -> bool {
         read.unwritable()
             || (!self.anywhere
-                && self.index.near(read).into_iter().all(|(writer, _)| spares(accesses, program, read, writer)))
+                && self.index.all_near(read, |writer, _| spares(accesses, program, read, writer)))
     }
 }
