@@ -3316,6 +3316,12 @@ fn _forced(
 
 thread_local! {
     static TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SHAPES_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many other shapes of a body the search made (not those it allocated).
+pub fn shapes_made() -> usize {
+    SHAPES_MADE.with(std::cell::Cell::get)
 }
 
 /// How many allocations this thread has made to try another shape of a body
@@ -3841,30 +3847,87 @@ impl RegAlloc {
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");
             let mut candidates: Vec<(Shape, LirBody, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
-            let (separated, opened) = constrain::addressed(&body, &spilled);
-            if !opened.is_empty() {
-                candidates.push((Shape::Addressed, separated, reloads.clone(), BTreeSet::new(), opened));
-            }
-            let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
-            if !opened.is_empty() {
-                candidates.push((Shape::Unfolded, unfolded, reloads.clone(), BTreeSet::new(), BTreeSet::new()));
-            }
-            let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
-            if !keep.is_empty() {
-                let folded = _scoped_foldable_indexes(&scoped, &keep);
-                let (opened_body, opened) = spiller::unfolded_indexes(&scoped, &folded);
+            if cpu.exhaustive {
+                let (separated, opened) = constrain::addressed(&body, &spilled);
                 if !opened.is_empty() {
-                    candidates.push((Shape::ScopedOpened, opened_body, reloads.clone(), keep.clone(), keep.clone()));
+                    candidates.push((Shape::Addressed, separated, reloads.clone(), BTreeSet::new(), opened));
                 }
-                candidates.push((Shape::Scoped, scoped, reloads.clone(), keep.clone(), keep.clone()));
-            }
-            for candidate in _retainable_bases(&body, &spilled) {
-                let keep = BTreeSet::from([candidate]);
-                candidates.push((Shape::Retainable, body.clone(), reloads.clone(), keep.clone(), keep));
+                let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
+                if !opened.is_empty() {
+                    candidates.push((Shape::Unfolded, unfolded, reloads.clone(), BTreeSet::new(), BTreeSet::new()));
+                }
+                let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
+                if !keep.is_empty() {
+                    let folded = _scoped_foldable_indexes(&scoped, &keep);
+                    let (opened_body, opened) = spiller::unfolded_indexes(&scoped, &folded);
+                    if !opened.is_empty() {
+                        candidates.push((
+                            Shape::ScopedOpened,
+                            opened_body,
+                            reloads.clone(),
+                            keep.clone(),
+                            keep.clone(),
+                        ));
+                    }
+                    candidates.push((Shape::Scoped, scoped, reloads.clone(), keep.clone(), keep.clone()));
+                }
+                for candidate in _retainable_bases(&body, &spilled) {
+                    let keep = BTreeSet::from([candidate]);
+                    candidates.push((Shape::Retainable, body.clone(), reloads.clone(), keep.clone(), keep));
+                }
+            } else {
+                // Only the first shape of `Shape::PICKED` the spills admit is
+                // allocated, so only it is made (LLVM makes no shape the run
+                // does not take).
+                for want in Shape::PICKED {
+                    match want {
+                        Shape::Retainable => {
+                            if let Some(candidate) = _retainable_bases(&body, &spilled).into_iter().next() {
+                                let keep = BTreeSet::from([candidate]);
+                                candidates.push((Shape::Retainable, body.clone(), reloads.clone(), keep.clone(), keep));
+                            }
+                        }
+                        Shape::Scoped => {
+                            let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
+                            if !keep.is_empty() {
+                                candidates.push((Shape::Scoped, scoped, reloads.clone(), keep.clone(), keep));
+                            }
+                        }
+                        Shape::Addressed => {
+                            let (separated, opened) = constrain::addressed(&body, &spilled);
+                            if !opened.is_empty() {
+                                candidates.push((
+                                    Shape::Addressed,
+                                    separated,
+                                    reloads.clone(),
+                                    BTreeSet::new(),
+                                    opened,
+                                ));
+                            }
+                        }
+                        Shape::Unfolded => {
+                            let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
+                            if !opened.is_empty() {
+                                candidates.push((
+                                    Shape::Unfolded,
+                                    unfolded,
+                                    reloads.clone(),
+                                    BTreeSet::new(),
+                                    BTreeSet::new(),
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                    if !candidates.is_empty() {
+                        break;
+                    }
+                }
             }
             // Splitting is priced one value at a time, against registers its
             // pieces may later lose; the whole output without it is the check.
             let whole = candidates.len();
+            SHAPES_MADE.with(|count| count.set(count.get() + whole));
             candidates.push((Shape::Whole, body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
             drop(building);
             // Unless the search is exhaustive (-Omax): the first shape of
