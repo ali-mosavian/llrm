@@ -295,13 +295,32 @@ fn shared_code_holds_no_copy_of_a_target_fact() {
     assert!(wrong.is_empty(), "read the target's description instead of copying it:\n{}", wrong.join("\n"));
 }
 
+/// This process's own directory under the build's scratch: two runs of this
+/// binary at once (a gate's steps, two sessions' smokes on one target) shared
+/// the trees by name, and one removed the other's under its `git init`. The
+/// directories of processes that are gone, and the old layout's, are removed.
+fn scratch() -> PathBuf {
+    let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("target_facts");
+    for entry in fs::read_dir(&base).into_iter().flatten().flatten() {
+        let alive = entry
+            .file_name()
+            .to_string_lossy()
+            .parse::<u32>()
+            .is_ok_and(|pid| Path::new(&format!("/proc/{pid}")).exists());
+        if !alive {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+    base.join(std::process::id().to_string())
+}
+
 /// A tree of one shared file holding `source`, under the build's scratch
 /// directory.
 fn tree(
     name: &str,
     source: &str,
 ) -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("target_facts").join(name);
+    let root = scratch().join(name);
     let _ = fs::remove_dir_all(&root);
     let directory = root.join("crates/ir/sample/src");
     fs::create_dir_all(&directory).unwrap();
@@ -473,4 +492,42 @@ fn a_size_written_beside_long_double_is_a_copy() {
     assert!(facts.is_match(r#"        "TY_LONG_DOUBLE" => 10,"#));
     assert!(facts.is_match("define(\"__SIZEOF_LONG_DOUBLE__\", 12)"));
     assert!(!facts.is_match("long double x = 3;"));
+}
+
+/// Runs of this binary side by side must not share a tree: six at once failed
+/// at `git init` and `git add` (the gate's facts step and a smoke on one
+/// target).
+#[test]
+fn runs_of_this_binary_side_by_side_do_not_share_a_tree() {
+    if std::env::var_os("LLRM_TARGET_FACTS_CHILD").is_some() {
+        return;
+    }
+    let tests = [
+        "a_copy_added_to_shared_code_fails_the_guard",
+        "a_copy_removed_without_shrinking_the_baseline_fails_the_guard",
+        "comments_and_test_modules_are_not_counted",
+        "an_untracked_copy_is_not_counted",
+        "a_file_a_test_module_declares_is_not_counted",
+    ];
+    let me = std::env::current_exe().unwrap();
+    let children: Vec<_> = (0..6)
+        .map(|_| {
+            Command::new(&me)
+                .env("LLRM_TARGET_FACTS_CHILD", "1")
+                .arg("--exact")
+                .args(tests)
+                .arg("-q")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    let done: Vec<_> = children.into_iter().map(|one| one.wait_with_output().unwrap()).collect();
+    let failed: Vec<String> = done
+        .iter()
+        .filter(|one| !one.status.success())
+        .map(|one| String::from_utf8_lossy(&one.stdout).into_owned())
+        .collect();
+    assert!(failed.is_empty(), "{} of 6 runs failed:\n{}", failed.len(), failed.join("\n"));
 }
