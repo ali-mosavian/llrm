@@ -1170,11 +1170,19 @@ impl Run {
         }
         let _span = llrm_support::debug::span("settled remember");
         let slice = self.slice(unit, analyses);
+        let mut classified: Vec<(usize, llrm_mir::footprint::Footprint)> = Vec::new();
         for &(name, mark, bits, reads) in &self.idle_at {
-            let reached = unit
-                .function
-                .changes_since(mark)
-                .map_or(llrm_mir::footprint::Footprint::ALL, |changes| llrm_mir::footprint::of(unit.function, changes));
+            let reached = match classified.iter().find(|(at, _)| *at == mark.position()) {
+                Some(&(_, found)) => found,
+                None => {
+                    let found =
+                        unit.function.changes_since(mark).map_or(llrm_mir::footprint::Footprint::ALL, |changes| {
+                            llrm_mir::footprint::of(unit.function, changes)
+                        });
+                    classified.push((mark.position(), found));
+                    found
+                }
+            };
             if !reached.meets(reads) {
                 self.records.note(name, unit.function, slice, bits);
             }

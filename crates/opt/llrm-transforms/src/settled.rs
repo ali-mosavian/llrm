@@ -71,7 +71,7 @@
 //! test, which this extends across runs.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 
 use llrm_analysis::manager::{Callbacks, GlobalsAA, Summaries};
@@ -79,6 +79,7 @@ use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::footprint::{self, Footprint};
 use llrm_mir::module::{Change, Function, GlobalKind, Mark, MetadataOperand, Operand};
 use llrm_mir::passes::{Outer, Unit, read};
+use llrm_support::hash::HashMap;
 
 /// A module's records: by the body's history and the pass.
 #[derive(Default)]
@@ -87,6 +88,10 @@ pub struct Settled {
     /// The stretches of a body's change log a stage vouched for, by history:
     /// first position and one past the last.
     sound: RefCell<HashMap<u64, Vec<(usize, usize)>>>,
+    /// What the last asked stretch of a log reached, for the passes that ask of
+    /// the same stretch one after the other: history, from, to, vouched
+    /// stretches, reached.
+    last: RefCell<Option<(u64, usize, usize, usize, Footprint)>>,
 }
 
 struct Record {
@@ -138,19 +143,38 @@ impl Settled {
         if now.position() == record.mark.position() {
             return true;
         }
-        let Some(changes) = function.changes_since(record.mark) else { return false };
+        !self.reached(function, record.mark).meets(reads)
+    }
+
+    /// What the edits since `from` reach, the vouched ones left out.
+    fn reached(
+        &self,
+        function: &Function,
+        from: Mark,
+    ) -> Footprint {
+        let now = function.mark();
+        let stretches = self.sound.borrow().get(&now.lineage()).map_or(0, Vec::len);
+        let key = (now.lineage(), from.position(), now.position(), stretches);
+        if let Some((a, b, c, d, found)) = *self.last.borrow()
+            && (a, b, c, d) == key
+        {
+            return found;
+        }
+        let Some(changes) = function.changes_since(from) else { return Footprint::ALL };
         let sound = self.sound.borrow();
         let vouched = sound.get(&now.lineage());
         let reached: Vec<Change> = changes
             .iter()
             .enumerate()
             .filter(|&(at, _)| {
-                let at = record.mark.position() + at;
+                let at = from.position() + at;
                 !vouched.is_some_and(|ranges| ranges.iter().any(|&(from, to)| (from..to).contains(&at)))
             })
             .map(|(_, change)| change.clone())
             .collect();
-        !footprint::of(function, &reached).meets(reads)
+        let found = footprint::of(function, &reached);
+        *self.last.borrow_mut() = Some((key.0, key.1, key.2, key.3, found));
+        found
     }
 
     /// Whether any pass has a record on `function`'s history.
