@@ -347,10 +347,12 @@ impl Options {
     }
 
     /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the
-    /// target's unroll budget and a 250 inline threshold.
+    /// target's unroll budget, loops of up to 64 trips copied out completely
+    /// (gcc's `max-completely-peel-times` is 16; clang has no cap) and a 250
+    /// inline threshold.
     pub fn aggressive() -> Self {
         Self {
-            limits: Limits { target_percent: 200, ..Limits::default() },
+            limits: Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
             split: true,
