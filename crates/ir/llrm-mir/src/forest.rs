@@ -159,6 +159,16 @@ impl Body {
         self.forest.contains(self.index, *at) || self.added.contains(at)
     }
 
+    /// This loop's place in its forest's `loops`.
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// The forest this loop is in.
+    pub fn forest(&self) -> &std::rc::Rc<Forest> {
+        &self.forest
+    }
+
     /// Puts `at` in; whether it was not.
     pub fn insert(
         &mut self,
