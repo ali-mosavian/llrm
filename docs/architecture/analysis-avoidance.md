@@ -1,6 +1,6 @@
 # Analyses gcc and LLVM do not compute
 
-TL;DR: analyses are 1,278 M of d_faces -O1's 6,246 M (20%). About 320 M of that is recomputes that came out equal. gcc and LLVM keep most of these facts on the IR or answer them per query, not as whole-function tables. That, not an update rule per analysis, is the next structural step.
+TL;DR: analyses are 1,278 M of d_faces -O1's 6,246 M (20%). About 320 M of that is recomputes that came out equal. gcc and LLVM keep most pointer and range facts on the IR or answer them per query. For the three largest tables (annotated, through-memory, float-facts) that does not apply: their consumers sweep everything. The next structural step is the pointer facts on the IR.
 
 Measured on `d_faces.c` -O1, default flags, main 736e47aab: `LLRM_DEBUG=time` (own M), `LLRM_WHY` (recomputes and how they came out), the edits between a result and its recompute. "Equal M" is equal recomputes times the analysis's mean M per recompute, an upper bound. The idle passes' work (796 M: hoist 197, indvars 102, decide 100, gvn 85) is largely these analyses computed for a pass that then found nothing, and is not added again. gcc is `releases/gcc-13.4.0`, LLVM is `llvmorg-20.1.8`.
 
@@ -27,6 +27,6 @@ Measured on `d_faces.c` -O1, default flags, main 736e47aab: `LLRM_DEBUG=time` (o
 ## What follows
 
 1. A fact stored on the IR beats an analysis kept in step with it. gcc's points-to sets, nonzero bits and addressable flag live on the SSA name or declaration, are copied when a value is copied, and a new value starts as the conservative answer. That removes the equal recomputes by construction, with no per-edit proof. Candidates: points-to (181 recomputes here; gcc's pass list asks for it at two points), exposed-frames, registers.
-2. A table built for every access (annotated, through-memory, float-facts: 349 M own) is a per-query answer in both compilers. The passes that ask (gvn, dse, hoist, promote) ask of a few loads. This is the largest single item, and a change in how the passes ask, not in how the table is kept.
+2. A table built for every access (annotated, through-memory, float-facts: 349 M own) is not made cheaper by asking per query here: its consumers read all of it. `fold` visits every value that has a user, and memory SSA numbers every access. gcc's CCP and FRE do the same sweep ([`do_ssa_ccp`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-ccp.cc#L2978), [`pass_fre::execute`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-sccvn.cc#L8753)) but inside the pass instance, and keep nothing for the next. What is avoidable is the equal re-solve (through-memory 78 M, annotated 45 M, float-facts 33 M), which no edit class proves: a query form leaves it as it is.
 3. Ranger's three (bounded, dominated-edges, counted: 242 M) are whole-function tables here; both compilers compute them per query. The owner's call.
 4. An edit class that proves a result unchanged is already in the tree (`Analysis::SKIPS`, `Depends`) for the pointer family. Applied to what still lacks it (assumptions, followers, published) it saves about 14 M.
