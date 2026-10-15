@@ -1154,3 +1154,18 @@ def test_the_facts_step_fails_on_a_failing_target_facts_and_on_a_run_that_ran_no
         logs.mkdir()
         _, code, _, _ = gate.run_step("facts", command, logs, {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}"}, check)
         assert code == {"ok": 0, "failed": 101, "silent": 78}[outcome], (outcome, code)
+
+
+def test_a_plan_that_builds_nothing_on_a_fresh_target_says_so_instead_of_a_traceback(tmp_path, monkeypatch, capsys):
+    """#1832 (tools only: the plan has no build) on a fresh target dir died in snapshot_binaries with FileNotFoundError on target/release."""
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "fresh"))
+    monkeypatch.delenv("LLRM_BIN", raising=False)
+    plan = gate.Plan("fast", "tools only", ["pytest-quick", "docs"], None, [], ["tools/gate/train.py"])
+    code, failed = gate.execute(plan)
+    out = capsys.readouterr().out
+    assert code == 2 and failed == ["build"] and "does not exist and this plan builds nothing" in out and "pytest-quick" in out, out
+    # a plan whose steps read the tree only needs no binaries
+    monkeypatch.setattr(gate, "commands", lambda *a, **k: {"docs": "true"})
+    monkeypatch.setattr(gate, "expected", lambda *a, **k: {})
+    code, _ = gate.execute(gate.Plan("fast", "docs", ["docs"], None, [], ["docs/x.md"]))
+    assert code == 0
