@@ -1,8 +1,8 @@
-reason = "Spill slots are shared once over the kept allocation (LLVM StackSlotColoring, GCC IRA slot reuse): hot slots nearest the displacement reach (huge bq16 -O2 code -2.3%, grep bq16 -O2 -2.7%, jpeg c -O2 -2.3%) and identity copies between slots that now share one dropped; no row worse"
-blessed = "2026-10-14"
+reason = "ssaspill: a value a loop reloads each trip on any edge is not held at its header; nbody_fixed and queens improve at clocks prices, matmul -O2 gains one reload per inner trip"
+blessed = "2026-10-15"
 
 [bas.O2]
-code_bytes = 1010
+code_bytes = 1007
 data_bytes = 113
 bss_bytes = 0
 kernel_ms = 3753.5253
@@ -38,7 +38,7 @@ data_bytes = 127
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 557
+code_bytes = 530
 data_bytes = 81
 bss_bytes = 3056
 kernel_ms = 3547.0561
@@ -50,7 +50,7 @@ bss_bytes = 3056
 kernel_ms = 3682.6052
 
 [nib.O2]
-code_bytes = 1514
+code_bytes = 1524
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4514.089

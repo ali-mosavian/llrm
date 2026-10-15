@@ -1,5 +1,5 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "ssaspill: a value a loop reloads each trip on any edge is not held at its header; nbody_fixed and queens improve at clocks prices, matmul -O2 gains one reload per inner trip"
+blessed = "2026-10-15"
 
 [bas.O2]
 instructions = 1446168
@@ -62,12 +62,11 @@ bss_bytes = 96
 kernel_ms = 19.3456
 
 [nib.O2]
-instructions = 2928103
-memory_operands = 615070
-code_bytes = 796
+instructions = 2855108
+memory_operands = 548068
+code_bytes = 771
 data_bytes = 96
 bss_bytes = 0
-kernel_ms = 39.0579
 
 [nib.Os]
 instructions = 2922115
