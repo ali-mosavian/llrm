@@ -1,12 +1,13 @@
-reason = "ssaspill: a value a loop reloads each trip on any edge is not held at its header; nbody_fixed and queens improve at clocks prices, matmul -O2 gains one reload per inner trip"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
 blessed = "2026-10-15"
 
 [bas.O2]
-instructions = 8652
-memory_operands = 2289
-code_bytes = 462
+instructions = 8255
+memory_operands = 2471
+code_bytes = 454
 data_bytes = 15
 bss_bytes = 0
+kernel_ms = 0.1253
 
 [bas.Os]
 instructions = 8299
@@ -17,9 +18,9 @@ bss_bytes = 0
 kernel_ms = 0.126
 
 [bq16.O2]
-instructions = 10412
-memory_operands = 2138
-code_bytes = 469
+instructions = 10013
+memory_operands = 2320
+code_bytes = 464
 data_bytes = 15
 bss_bytes = 0
 
@@ -31,21 +32,21 @@ data_bytes = 15
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 7557
-code_bytes = 559
+instructions = 7556
+code_bytes = 554
 data_bytes = 21
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 7636
-code_bytes = 535
+instructions = 7635
+code_bytes = 530
 data_bytes = 21
 bss_bytes = 0
 
 [c.O2]
-instructions = 5806
-memory_operands = 1609
-code_bytes = 232
+instructions = 5742
+memory_operands = 1545
+code_bytes = 229
 data_bytes = 0
 bss_bytes = 0
 
@@ -57,11 +58,12 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 6033
-memory_operands = 1753
-code_bytes = 282
+instructions = 5969
+memory_operands = 1689
+code_bytes = 279
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0818
 
 [nib.Os]
 instructions = 6345
