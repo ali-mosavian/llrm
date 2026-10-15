@@ -1194,3 +1194,23 @@ def test_a_step_below_the_share_floor_is_still_recorded_from_a_few_minstr(monkey
     monkeypatch.setattr(gate, "generated", lambda axis, n: "")
     got = gate.pass_costs("cases", "O1", tmp_path)
     assert "cases O1 tiny" in got and "cases O1 a" in got, got
+
+
+def test_a_loop_of_many_stores_and_loads_does_not_refit_every_resident_at_every_step(tmp_path):
+    """A loop of 300 stores to address-taken globals and 300 loads of others (the shape of d_faces' long loops): lsr weighed each
+    candidate set by a pressure sweep that rebuilt the residents of every step and diffed them with the step before by list search, 1,715
+    Minstr in `mir lsr`; a step that wants what the one before did changes nothing, and a diff is asked of sets: 166. `mir hoist` asked each
+    load a list of its stores built and sorted for the question (430 Minstr), now each is asked once (139). Bounds 500 and 250 fail the
+    first."""
+    n = 300
+    out = ["extern void sink(int *);\n"]
+    out += [f"int a{k}, k{k};\n" for k in range(n)]
+    out.append("void taken(void) {\n" + "".join(f"    sink(&a{k}); sink(&k{k});\n" for k in range(n)) + "}\n")
+    out.append("int fn(int m) {\n    int s = 0, i;\n    for (i = 0; i < m; i++) {\n")
+    out += [f"        a{k} += i;\n        s += k{k};\n" for k in range(n)]
+    out.append("    }\n    return s;\n}\n")
+    source = tmp_path / "stores.c"
+    source.write_text("".join(out))
+    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    assert own["mir lsr"] > 20.0, f"premise: lsr ran ({own['mir lsr']:.1f} Minstr)"
+    assert own["mir lsr"] <= 500.0 and own["mir hoist"] <= 250.0, own
