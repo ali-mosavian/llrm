@@ -25,7 +25,8 @@ looks at the definitions of the spilled values, which the postings give, and
 copies a block only where a run is made: on `cells` at N=896, `spill short
 updates` was 335 Minstr, 3.6 now; `spill local updates` 258, 35.
 `live_among` reads the occurrences of the pieces a split made from the postings
-too (`split after liveness`: 401 Minstr, 162).
+too (`split after liveness`: 401 Minstr, 162), as does a local split for the references
+of its value (`split local`: 291, 57).
 A stable load asks only the writers that may meet its cell (`Writers`). A
 frame cell is never met by a store to a data cell. A data cell is met, by its
 bytes, by the stores to its own symbol; the stores to another external symbol

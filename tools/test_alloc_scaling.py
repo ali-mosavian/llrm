@@ -507,3 +507,17 @@ def test_a_load_is_asked_of_the_stores_to_its_own_symbol_and_not_of_every_store_
         source.write_text("\n".join(lines) + "\n")
         run = steps(compiler, source, "-O2")
     assert run["spill stable loads"] < 500, f"300 stores and 300 loads: spill stable loads cost {run['spill stable loads']} Minstr (500 allowed; 1,226 before)"
+
+
+def test_a_local_split_asks_the_postings_for_the_references_of_the_value_and_not_every_instruction_of_its_block():
+    """`splitkit::local` collected a value's references by asking each instruction of its block whether it names it: `split local` cost 82
+    Minstr on `cells` at N=448 and 291 at 896. They are read from the postings."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["split local"] < 45, f"cells N=448 -O2: split local cost {run['split local']} Minstr (45 allowed; 82 before): {run}"

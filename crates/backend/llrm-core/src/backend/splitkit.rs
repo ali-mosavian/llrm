@@ -1693,10 +1693,11 @@ pub fn local(
     if one.live_in || one.live_out || !analysis.through.is_empty() {
         return None;
     }
-    let block = body.blocks.iter().find(|block| block.at == one.block)?;
-    let named: Vec<usize> = (0..block.insns.len())
-        .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
-        .collect();
+    let place = body.blocks.iter().position(|block| block.at == one.block)?;
+    let block = &body.blocks[place];
+    // Its references, from the postings: not every instruction of the block
+    // asked.
+    let named: Vec<usize> = named_in(body, value).remove(&place).unwrap_or_default();
     let slot = |position: usize| index.slot(block, position);
     let mut best: Option<(usize, usize, usize, usize)> = None;
     let mut tried = BTreeSet::new();
