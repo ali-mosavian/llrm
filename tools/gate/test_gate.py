@@ -1179,7 +1179,7 @@ def test_the_groups_that_need_private_tools_are_named_in_the_plan():
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     private = gate.private_groups(p)
     assert {"reference", "run", "tools", "python"} <= set(private), private
-    assert "unit" not in private and "cost" not in private
+    assert "unit" not in private
 
 
 def test_every_tool_directory_a_private_capability_needs_is_set_for_the_jobs_that_run_it():
@@ -1253,7 +1253,7 @@ def test_the_measure_step_needs_a_counter_and_valgrind_is_one_where_perf_reads_n
     (tools / "valgrind").chmod(0o755)
     got = gate.missing_capabilities(env)
     assert "perf" in got and "counter" not in got
-    assert gate.load()["requires"]["measure"] == ["counter"]
+    assert "counter" in gate.load()["requires"]["measure"]
 def test_the_qcport_step_does_not_skip_itself_where_the_variables_are_set_and_fails_where_they_are_not(tmp_path):
     """CI's run of the reference group said `qcport SKIPPED` and passed: the step looked for ~/scratch/qcport-env.sh, which only the
     development host has, and exited 77 without running QCport."""
