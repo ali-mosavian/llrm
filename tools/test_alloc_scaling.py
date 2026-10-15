@@ -356,3 +356,19 @@ def test_a_spill_asks_no_slot_colouring_of_the_homes_it_leaves_behind():
         run = steps(compiler, source, "-O2")
     spent = run.get("intervals homes", 0.0) + run.get("spill color slots", 0.0)
     assert spent < 20, f"branches N=400 -O2: intervals homes and spill color slots cost {spent} Minstr (20 allowed; 202 before): {run}"
+
+
+def test_carving_the_loop_bases_reads_the_body_once_not_once_a_loop():
+    """`splitkit::loop_bases` (the Scoped shape) found the references of the spilled values by a pass over the body for every loop, the
+    width of each candidate and the next free value by two more for every candidate, and whether a loop addresses through a value by a walk
+    of the loop for every value: `regalloc candidates` cost 767 Minstr on `branches` at N=800 and 3,114 at 1600 (x4.1 per doubling).
+    They are read again only after a carve has changed the body."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](800))
+        run = steps(compiler, source, "-O2")
+    assert run["regalloc candidates"] < 300, f"branches N=800 -O2: regalloc candidates cost {run['regalloc candidates']} Minstr (300 allowed; 767 before): {run}"

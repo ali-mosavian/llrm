@@ -112,42 +112,52 @@ pub fn loop_bases(
     }
     let mut result = body.clone();
     let mut kept: BTreeSet<u32> = BTreeSet::new();
+    // What is read of the body is read again only after a carve has changed
+    // it: most loops carve nothing.
+    let mut references = _references_of(&result, values);
+    let mut widths = _widths(&result);
+    let mut next = _next_value(&result);
     for found in loops::loops(&result.blocks, Some(result.entry)) {
         let inside = &found.body;
-        let references = _references_of(&result, values);
+        // The values this loop's operands address through, found in one pass.
+        let addressing: BTreeSet<u32> = result
+            .blocks
+            .iter()
+            .filter(|block| inside.contains(&block.at))
+            .flat_map(|block| &block.insns)
+            .filter_map(|one| one.what.as_ref())
+            .flat_map(|what| what.dests.iter().chain(&what.sources))
+            .filter_map(|place| if let Loc::Mem(cell) = place { Some(cell) } else { None })
+            .flat_map(|cell| [cell.base, cell.index, cell.selector].into_iter().flatten().map(|operand| operand.value))
+            .collect();
         let candidates: BTreeSet<u32> = references
             .iter()
             .filter(|(value, found)| {
                 found.keys().any(|at| inside.contains(at))
                     && found.keys().any(|at| !inside.contains(at))
-                    && result
-                        .blocks
-                        .iter()
-                        .filter(|block| inside.contains(&block.at))
-                        .flat_map(|block| &block.insns)
-                        .filter_map(|one| one.what.as_ref())
-                        .flat_map(|what| what.dests.iter().chain(&what.sources))
-                        .any(|place| {
-                            matches!(
-                                place,
-                                Loc::Mem(cell) if [cell.base, cell.index, cell.selector] .iter() .flatten() .any(|operand| operand.value == **value)
-                            )
-                        })
+                    && addressing.contains(*value)
             })
             .map(|(value, _found)| *value)
             .collect();
+        let mut carved_here = false;
         for value in candidates {
-            let widths = _widths(&result);
             let Some(width) = widths.get(&value).copied() else {
                 continue;
             };
-            let fresh = _next_value(&result);
+            let fresh = next;
             let Some(carved) = carved(&result, value, fresh, width, &Region::blocks(&result, inside.iter().copied()))
             else {
                 continue;
             };
             result = carved;
             kept.insert(fresh);
+            next = fresh + 1;
+            carved_here = true;
+        }
+        if carved_here {
+            references = _references_of(&result, values);
+            widths = _widths(&result);
+            next = _next_value(&result);
         }
     }
     (result, kept)
