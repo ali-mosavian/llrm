@@ -193,16 +193,25 @@ def run(prs: list[Pr], tip_of: Callable[[list[Pr]], tuple[str, list]], gate_at: 
         report(f"TRAIN ENV: {', '.join(verdict.failed)} fail on origin/main alone; no PR is blamed")
         return 3
 
+    lost: list[Pr] = []  # members a rebuilt tip left out: a conflict that shows only without the others, never tested, never offered
+
     def gated(some: list[Pr], steps: list[str]) -> Verdict:
-        part, _ = tip_of(some)
+        part, left_out = tip_of(some)
+        lost.extend(pr for pr, _ in left_out if pr not in lost)
         return gate_at(part, steps)
 
     green, culprits = search(merged, gated, verdict.failed)
     for pr, why in culprits:
         report(f"TRAIN FAIL #{pr.number}:\n{why}")
+    green = [pr for pr in green if pr not in lost]
+    if green:
+        tip, left_out = tip_of(green)
+        lost.extend(pr for pr, _ in left_out if pr not in lost)
+        green = [pr for pr in green if pr not in lost]
+    for pr in lost:
+        report(f"TRAIN DROPPED #{pr.number}: it conflicts when merged without the rest of the batch; not tested, not offered")
     if not green:
         return 1
-    tip, _ = tip_of(green)
     final = gate_at(tip, None)
     if not final.ok:
         report(f"TRAIN FAIL: the green rest ({' '.join('#%d' % p.number for p in green)}) fails the full gate together: {', '.join(final.failed)}")

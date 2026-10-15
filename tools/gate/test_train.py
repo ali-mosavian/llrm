@@ -210,3 +210,24 @@ def test_the_bless_step_runs_bench_in_the_trees_own_target(monkeypatch, tmp_path
     monkeypatch.setenv("CARGO_TARGET_DIR", "/t/target")
     train.bless("a" * 40, [pr(1)], tmp_path / "train5-tree")
     assert seen == ["/t/target-train5-tree"]
+
+
+def test_a_member_a_rebuilt_tip_leaves_out_is_reported_dropped_and_never_offered():
+    """Train 4 offered `PRs=#1765 #1768 #1780` for a tip holding #1768 and #1780: after the bisect it rebuilt the tip of the green rest, and
+    a member that conflicted only there was dropped without a word and still listed."""
+    said = []
+    one, two, three = pr(1), pr(2), pr(3)
+
+    def tip_of(some):
+        names = "".join(str(p.number) for p in some)
+        if len(some) < 3 and two in some:  # 2 conflicts once it is merged without 3
+            return f"tip{names.replace('2', '')}", [(two, "conflicts")]
+        return f"tip{names}", []
+
+    def gate_at(tip, steps):
+        return train.Verdict("3" not in tip, [] if "3" not in tip else ["bench"], "FAIL x\n")
+
+    code = train.run([one, two, three], tip_of, gate_at, lambda steps: train.Verdict(True), said.append)
+    assert not any("#2" in line and "PRs=" in line for line in said), said
+    assert any(line.startswith("TRAIN DROPPED #2") for line in said), said
+    assert code == 0 and any(line == "TRAIN PASS TIP=tip1 PRs=#1" for line in said), said
