@@ -2,6 +2,10 @@
 
 For maintainers: how to measure what the compiler costs, per level and per pass, and what to read the result against. No figure is kept here; each tool below prints its own.
 
+## The map
+
+`tools/compile_map.py` ranks llrm's compile of one file by step, names each step's owner, flags a step of 2% or more with none, and sets the categories beside gcc's and clang's (`-ftime-report`, `-ftime-trace`). The rows are checked against the `perf` total, and `--diff` against a saved `--json` shows what a merge moved. Its header names the commit and the command lines, so that two maps made under other flags are not compared.
+
 ## Unit
 
 User instructions retired (`perf stat -e instructions:u`, children included), one process per compile, source to object. A count of work done, so a loaded host does not move it. Each tool exits 77 where perf cannot count. Address-space randomisation moves a count, so the measured command runs under `setarch -R`.
