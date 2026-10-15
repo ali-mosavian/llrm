@@ -100,6 +100,21 @@ def test_a_text_step_gives_the_emulator_cpu_seconds_not_wall_seconds(monkeypatch
         one.process.kill()
 
 
+def test_a_checkpoint_that_never_settles_says_how_it_looked(monkeypatch, tmp_path):
+    """CI's GORILLA failed `the screen never settled for prompt3` on a hosted runner and nothing said whether the picture moved for ever,
+    never left the one before the step, or was never looked at."""
+    import qb32demos
+
+    one = session_without_a_process()
+    pictures = iter(range(10**6))
+    one.screen_hash = lambda: str(next(pictures))
+    monkeypatch.setattr(qb32demos, "LONGEST", 0.3)
+    monkeypatch.setattr(qb32demos, "LOOK_CPU", 0)
+    monkeypatch.setattr(qb32demos, "guest_seconds", lambda session: time.monotonic())
+    with pytest.raises(TimeoutError, match=r"never settled for prompt3: \d+ looks in [\d.]+ CPU s and [\d.]+ s wall, \d+ distinct pictures, last "):
+        qb32demos.settled(one, tmp_path, "prompt3", "before")
+
+
 def test_a_checkpoint_is_settled_by_what_the_guest_ran_not_by_how_often_the_host_looked(monkeypatch, tmp_path):
     """GORILLA's prompt3 differed by 56 pixels from BCOM45's whenever the emulator's core was starved: three looks 0.03 s apart on the wall
     saw one half-drawn frame three times and the checkpoint was taken at once. Pinned among 40 busy loops, 3 runs of 3 failed."""

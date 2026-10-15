@@ -116,6 +116,7 @@ def settled(session, work: Path, name: str | None, before: bytes | None) -> None
     if not name:
         return
     late, same, last, at = expiry(session, LONGEST), 0, None, None
+    began, cpu, seen, shown = time.monotonic(), guest_seconds(session), [], []
     while not late():
         now = guest_seconds(session)
         if at is None or now - at >= LOOK_CPU:
@@ -124,8 +125,13 @@ def settled(session, work: Path, name: str | None, before: bytes | None) -> None
             if same >= LOOKS and (before is None or look != before):
                 return
             last = look
+            seen.append(look)
         time.sleep(LOOK_EVERY)
-    raise TimeoutError(f"the screen never settled for {name}")
+    # What a runner that never settled looked like: a picture that moves for ever, one that never left `before`, or no looks at all.
+    raise TimeoutError(
+        f"the screen never settled for {name}: {len(seen)} looks in {guest_seconds(session) - cpu:.1f} CPU s and {time.monotonic() - began:.1f} s wall, "
+        f"{len(set(seen))} distinct pictures, {'still the one before the step' if set(seen) <= {before} else 'last ' + ' '.join(map(str, seen[-5:]))}"
+    )
 
 
 def play(exe: Path, work: Path, steps: list, demo: str | None = None) -> dict[str, Path]:
