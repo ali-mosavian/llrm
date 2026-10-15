@@ -75,7 +75,7 @@ Flags, from [build.sh](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de0581
 
 ### Caveats
 
-- Instruction counts are not cycles. The clock column is a table: no address-generation stalls, no prefix penalties (16-bit operations in `m32` cost a clock on a 486), no cache or memory system, no pairing. It ranks code for an in-order 486; it says nothing about a Pentium or later.
+- Instruction counts are not cycles. The clock column is a table, the compiler's own: `cost()` reads each form's clocks from the targets' `timings.times` (`vsgcc/clocks.py`; the few forms it has no row for are listed there) and adds a clock for each operand-size or address-size prefix, which is every 16-bit operation in `m32` and every dword one in `m16`. No address-generation stalls, no cache or memory system, no pairing. It ranks code for an in-order 486; it says nothing about a Pentium or later.
 - The rounding of the `imul` early-out's logarithm is not stated by the data sheet.
 - `memset`, `memcpy` and `memmove` run in a `rep stosd`/`rep movsd` stand-in, counted per iteration. A real libc differs. The stand-in copies backwards where the ranges overlap (a forward copy once made gcc's and clang's `scroll` print the wrong value).
 - gcc and clang are linked with their own 32-bit runtime for the 64-bit divides they call (`libgcc`, compiler-rt), counted in the kernel's callees.
