@@ -90,6 +90,12 @@ x87_convert_store 35 7
 x87_add_m    8   3
 x87_mul_m    14  3
 x87_div_m    73  39
+# Integer memory operands (fild, fiadd, fimul, fidiv, m16/m32int): 486 is Intel's i486 data sheet 240440-002, Table 10.3, the least of
+# each range; P5 is the pair the form replaces (`fild` as a load plus the operation), as no source here states a cheaper one.
+x87_load_i   13   1
+x87_add_i    20   4
+x87_mul_i    23   4
+x87_div_i    85  40
 x87_control_load 4 8
 x87_control_store 3 2
 mul_r16      13  11
@@ -165,6 +171,12 @@ x87_convert_store 35 7
 x87_add_m    8   3
 x87_mul_m    14  3
 x87_div_m    73  39
+# Integer memory operands (fild, fiadd, fimul, fidiv, m16/m32int): 486 is Intel's i486 data sheet 240440-002, Table 10.3, the least of
+# each range; P5 is the pair the form replaces (`fild` as a load plus the operation), as no source here states a cheaper one.
+x87_load_i   13   1
+x87_add_i    20   4
+x87_mul_i    23   4
+x87_div_i    85  40
 x87_control_load 4 8
 x87_control_store 3 2
 mul_r16      13  11

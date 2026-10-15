@@ -93,9 +93,11 @@ use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexSet};
 
-pub struct FloatFold;
+pub struct FloatFold<'a> {
+    pub cpu: &'a crate::backend::cpu::Profile,
+}
 
-impl LIRTransform for FloatFold {
+impl LIRTransform for FloatFold<'_> {
     fn class_name(&self) -> &'static str {
         "FloatFold"
     }
@@ -108,12 +110,15 @@ impl LIRTransform for FloatFold {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(folded(&body))
+        Ok(folded(&body, self.cpu))
     }
 }
 
 /// `body` with each float load its one reader takes from memory read there.
-pub fn folded(body: &LirBody) -> LirBody {
+pub fn folded(
+    body: &LirBody,
+    cpu: &crate::backend::cpu::Profile,
+) -> LirBody {
     let mut uses: HashMap<u32, usize> = HashMap::default();
     let mut floating: HashSet<u32> = HashSet::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
@@ -150,9 +155,11 @@ pub fn folded(body: &LirBody) -> LirBody {
             }
             // The right operand's load first: the left is on the stack top, as
             // `fadd st, [m]` has it.
+            // Each operand that qualifies, and what folding it saves in clocks; the dearest to leave unfolded goes, the right
+            // operand first where they tie.
             let found = [(right.value, false, left), (left.value, true, right)]
                 .into_iter()
-                .find_map(
+                .filter_map(
                     |(value, cell_is_left, other)| {
                         if uses.get(&value) != Some(&1) {
                             return None;
@@ -183,10 +190,12 @@ pub fn folded(body: &LirBody) -> LirBody {
                         }) {
                             return None;
                         }
-                        let operation = memory_form(&name, cell_is_left, load)?;
-                        Some((home, value, operation, other))
+                        let (operation, saved) = memory_form(&name, cell_is_left, load, cpu)?;
+                        Some((saved, (home, value, operation, other)))
                     },
-                );
+                )
+                .reduce(|best, next| if next.0 > best.0 { next } else { best })
+                .map(|(_, one)| one);
             let Some((home, value, operation, other)) = found else {
                 at += 1;
                 continue;
@@ -236,7 +245,8 @@ fn memory_form(
     name: &str,
     cell_is_left: bool,
     load: &Insn,
-) -> Option<String> {
+    cpu: &crate::backend::cpu::Profile,
+) -> Option<(String, i64)> {
     let reversed = |name: &str| -> String {
         match name {
             "fsub" => "fsubr".to_owned(),
@@ -245,10 +255,36 @@ fn memory_form(
         }
     };
     let name = if cell_is_left { reversed(name) } else { name.to_owned() };
-    // An integer load stays: `fild` then `fadd` is faster than `fiadd` on the
-    // 486, and the other operand may take the memory form instead.
-    if name_is(load.what.as_ref()?, "fild") || !matches!(cell_of(load).width, 4 | 8) {
+    // An integer load folds into the `fi` form where the target prices that form below the `fild` and the operation it
+    // replaces, per operation: the 486 has `fimul` at 23 clocks against 13 and 16, `fiadd` at 20 against 13 and 8.
+    if name_is(load.what.as_ref()?, "fild") {
+        let (integer, float) = match name.as_str() {
+            "fadd" => ("x87_add_i", "x87_add"),
+            "fsub" | "fsubr" => ("x87_add_i", "x87_add"),
+            "fmul" => ("x87_mul_i", "x87_mul"),
+            "fdiv" | "fdivr" => ("x87_div_i", "x87_div"),
+            _ => return None,
+        };
+        let price = |key: &str| cpu.cost(key).ok();
+        let replaced = price("x87_load_i")? + price(float)?;
+        if !matches!(cell_of(load).width, 2 | 4) || price(integer)? >= replaced {
+            return None;
+        }
+        return Some((format!("fi{}", &name[1..]), replaced - price(integer)?));
+    }
+    if !matches!(cell_of(load).width, 4 | 8) {
         return None;
     }
-    Some(name)
+    // A float or double cell: the load is saved, and the memory form may cost more than the register one.
+    let class = match name.as_str() {
+        "fadd" | "fsub" | "fsubr" => "add",
+        "fmul" => "mul",
+        _ => "div",
+    };
+    let price = |key: String| cpu.cost(&key).ok();
+    let saved = match (price("x87_load".to_owned()), price(format!("x87_{class}")), price(format!("x87_{class}_m"))) {
+        (Some(load), Some(register), Some(memory)) => load + register - memory,
+        _ => 1,
+    };
+    Some((name, saved))
 }

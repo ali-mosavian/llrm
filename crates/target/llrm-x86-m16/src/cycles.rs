@@ -96,8 +96,20 @@ pub fn classify(
     if mnem == "nop" {
         return "nop";
     }
-    if matches!(mnem, "fld" | "fild") {
+    if mnem == "fild" {
+        return "x87_load_i";
+    }
+    if mnem == "fld" {
         return "x87_load";
+    }
+    if matches!(mnem, "fiadd" | "fisub" | "fisubr") {
+        return "x87_add_i";
+    }
+    if mnem == "fimul" {
+        return "x87_mul_i";
+    }
+    if matches!(mnem, "fidiv" | "fidivr") {
+        return "x87_div_i";
     }
     if mnem == "fxch" {
         return "x87_exchange";
@@ -321,7 +333,7 @@ pub fn score(rows: &[Row]) -> (Totals, Vec<Detail>) {
 
         // The x87 stack is implicit in the printed operands. One token keeps
         // the accumulator chain without allocating all eight positions.
-        if kind == "x87_load" {
+        if matches!(kind, "x87_load" | "x87_load_i") {
             dsts.insert("x87-stack".to_owned());
         } else if matches!(
             kind,
@@ -333,6 +345,9 @@ pub fn score(rows: &[Row]) -> (Totals, Vec<Detail>) {
                 | "x87_mul_m"
                 | "x87_div"
                 | "x87_div_m"
+                | "x87_add_i"
+                | "x87_mul_i"
+                | "x87_div_i"
         ) {
             srcs.insert("x87-stack".to_owned());
             dsts.insert("x87-stack".to_owned());
