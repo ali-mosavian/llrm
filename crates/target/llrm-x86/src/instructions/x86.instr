@@ -78,6 +78,9 @@ fld1      fload      s/-                -          x87_load     -               
 fstp      fstore     m/s                -          x87_store    -                       -       -       -/C0,C1,C2,C3   Fstp_m64fp
 fistp     fstore     m/s                -          x87_convert_store  -                       -       -       -/C0,C1,C2,C3   Fistp_m32int
 fisttp    fstore     m/s                -          x87_convert_store  -                       -       -       -/C0,C1,C2,C3   Fisttp_m32int
+# fistt: fisttp that leaves its value on the stack. Like fisttp, never emitted as it is: floatalloc rewrites it to fist under a
+# truncating control word.
+fistt     fstore     m/s                -          x87_convert_store  -                       -       -       -/C0,C1,C2,C3   Fist_m32int
 fadd      farith     s/s,ms             -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fadd_m64fp
 fsub      farith     s/s,ms             -          x87_add      -                       -       -       -/C0,C1,C2,C3   Fsub_m64fp
 fmul      farith     s/s,ms             -          x87_mul      -                       -       -       -/C0,C1,C2,C3   Fmul_m64fp

@@ -1793,3 +1793,67 @@ fn test_a_loop_that_rounds_between_conversions_is_not_entered_truncating() {
         assert!(!names.contains(&"fldcw".to_owned()), "{result:?}");
     }
 }
+
+fn names_in_order(result: &LirBody) -> Vec<String> {
+    result.insns().iter().map(|one| name(one).to_owned()).filter(|name| name.starts_with('f')).collect()
+}
+
+/// d_faces ifloor: `(long)x` and then `x` again was `fld x; fld st(0); fistp m`: a copy and a popping store. The 387 stores a
+/// word or a dword without popping (`fist`; here its truncating pseudo `fistt`), as gcc's reg-stack and LLVM's X86FloatingPoint do.
+#[test]
+fn test_a_conversion_store_of_a_value_read_again_does_not_copy_it() {
+    let cells = _cells([-4, -8, -12], 4);
+    let body = _body(vec![
+        _load(1, &cells[0]),
+        sem(Operation::FloatStore, "fisttp", vec![m(&cells[1])], vec![fl(1)]),
+        _store(&cells[2], 1),
+    ]);
+    let names = names_in_order(&with_frame(&body, &mut Frame::new(-12)));
+    assert_eq!(names, ["fnstcw", "fld", "fldcw", "fist", "fldcw", "fstp"], "{names:?}");
+}
+
+/// A quadword has only the popping form: a copy is made.
+#[test]
+fn test_a_quadword_conversion_store_of_a_live_value_keeps_its_copy() {
+    let (x, wide, out) = (frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8));
+    let body = _body(vec![
+        _load(1, &x),
+        sem(Operation::FloatStore, "fisttp", vec![m(&wide)], vec![fl(1)]),
+        _store(&out, 1),
+    ]);
+    let names = names_in_order(&with_frame(&body, &mut Frame::new(-24)));
+    assert_eq!(names, ["fnstcw", "fld", "fld", "fldcw", "fistp", "fldcw", "fstp"], "{names:?}");
+}
+
+fn compare_body(left_lives: bool, right_lives: bool) -> LirBody {
+    let (a, b, store_a, store_b) = (frame_cell(-4, 4), frame_cell(-8, 4), frame_cell(-12, 4), frame_cell(-16, 4));
+    // negated loads: a plain load beside its one reader is fused into the compare as a memory operand
+    let mut body = _body(vec![_load(3, &a), fchs(1, 3), _load(4, &b), fchs(2, 4)]);
+    let mut insns = body.blocks[0].insns.to_vec();
+    insns.push(Arc::new(Insn::new(
+        16,
+        Some((16, 24)),
+        Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])),
+        vec![],
+        vec![1, 2],
+    )));
+    let mut at = 24;
+    for (lives, value, cell) in [(left_lives, 1, &store_a), (right_lives, 2, &store_b)] {
+        if lives {
+            insns.push(Arc::new(Insn::new(at, Some((at, at + 8)), Some(_store(cell, value)), vec![], vec![value])));
+            at += 8;
+        }
+    }
+    body.blocks[0].insns = insns.into();
+    body
+}
+
+/// d_faces ifloor: `x < 0.0` was `fldz; fld st(1); fxch st(1); fcompp` and a `fstp st(0)` after; `fcom` and `fcomp` take any
+/// slot, so the live value is compared where it lies.
+#[test]
+fn test_a_compare_against_a_value_read_again_does_not_copy_it() {
+    let one_lives = names_in_order(&with_frame(&compare_body(false, true), &mut Frame::new(-16)));
+    assert_eq!(one_lives, ["fld", "fchs", "fld", "fchs", "fxch", "fcomp", "fnstsw", "fstp"], "{one_lives:?}");
+    let both_live = names_in_order(&with_frame(&compare_body(true, true), &mut Frame::new(-16)));
+    assert_eq!(both_live, ["fld", "fchs", "fld", "fchs", "fxch", "fcom", "fnstsw", "fstp", "fstp"], "{both_live:?}");
+}

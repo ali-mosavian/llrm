@@ -43,7 +43,13 @@
 //!  fsubp st(1), st(0)   ; left' - right'      [result, right, left]
 //! ```
 //!
-//! More than eight operands on the stack is refused. Order, rounding and
+//! A store or a compare that reads a value still live does not copy it first:
+`fst`, `fist` (a word or a dword; `fistt` for `fisttp`) leave the value on
+the stack, and `fcom`/`fcomp st(i)` compare it where it lies, as gcc's
+reg-stack and LLVM's `X86FloatingPoint` do. A quadword conversion has only
+its popping form and keeps the copy.
+
+More than eight operands on the stack is refused. Order, rounding and
 //! storage conversions are not changed.
 //!
 //! Afterwards `fisttp` is made as a 387 has it: `fistp` between `fldcw` of a
@@ -700,10 +706,19 @@ impl _Stack {
         self.top(source)?;
         let name = if name_is(&what, "fst") { Some("fstp".to_owned()) } else { what.name.clone() };
         if self.survives(source) {
-            if name.as_deref() == Some("fstp")
-                && what.dests.iter().all(|dest| matches!(dest, Loc::Mem(dest) if dest.width == 4 || dest.width == 8))
-            {
-                self.emit(Semantics { name: Some("fst".to_owned()), sources: vec![st(0)], ..what });
+            let sized = |widths: &[u32]| {
+                what.dests.iter().all(|dest| matches!(dest, Loc::Mem(dest) if widths.contains(&u32::from(dest.width))))
+            };
+            // The value stays: the store that does not pop it (`fst`, `fist`; the 387 has `fist` for a word and a dword
+            // only), not a copy and a popping store, as gcc's reg-stack and LLVM's X86FloatingPoint have it.
+            let kept = match name.as_deref() {
+                Some("fstp") if sized(&[4, 8]) => Some("fst"),
+                Some("fistp") if sized(&[2, 4]) => Some("fist"),
+                Some("fisttp") if sized(&[2, 4]) => Some("fistt"),
+                _ => None,
+            };
+            if let Some(kept) = kept {
+                self.emit(Semantics { name: Some(kept.to_owned()), sources: vec![st(0)], ..what });
                 return Ok(());
             }
             self.duplicate(source)?;
@@ -739,6 +754,24 @@ impl _Stack {
         left: u32,
         right: u32,
     ) -> Result<(), Raised> {
+        // Right still read, left not: left on top, `fcomp st(i)` pops it and leaves right where it lies. Both still read:
+        // `fcom st(i)`. As gcc's reg-stack and LLVM's X86FloatingPoint compare against any slot, not a copy of it.
+        if right != left && !self.survives(right) == false {
+            let top_left = index_of(&self.values, left) == 0 || {
+                let slot = index_of(&self.values, left);
+                self.exchange(slot);
+                true
+            };
+            if top_left {
+                let slot = index_of(&self.values, right);
+                let name = if self.survives(left) { "fcom" } else { "fcomp" };
+                self.emit(semantics(Operation::Compare, name, Vec::new(), vec![st(0), st(slot)]));
+                if name == "fcomp" {
+                    self.values.remove(0);
+                }
+                return self.status();
+            }
+        }
         // Left on top and right beneath it, each a copy where it is read again:
         // `fld st(i)` copies from any slot.
         if self.survives(left) {
@@ -1127,7 +1160,7 @@ pub fn allocated<'a>(
 /// instructions, x87 loads, exchanges, compares, sign changes, branches)
 /// needs none.
 fn _needs(one: &Insn) -> Option<Mode> {
-    if one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && name_is(what, "fisttp")) {
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && (name_is(what, "fisttp") || name_is(what, "fistt"))) {
         return Some(Mode::Chop);
     }
     let branches = one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch));
@@ -1340,10 +1373,13 @@ fn _truncating(
                     current = needed;
                 }
             }
-            if one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && name_is(what, "fisttp")) {
+            if one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && (name_is(what, "fisttp") || name_is(what, "fistt"))) {
                 let mut made = (**one).clone();
-                made.what =
-                    Some(Semantics { name: Some("fistp".to_owned()), ..one.what.clone().expect("checked above") });
+                let kept = name_is(one.what.as_ref().expect("checked above"), "fistt");
+                made.what = Some(Semantics {
+                    name: Some(if kept { "fist" } else { "fistp" }.to_owned()),
+                    ..one.what.clone().expect("checked above")
+                });
                 insns.push(Arc::new(made));
             } else {
                 insns.push(Arc::clone(one));

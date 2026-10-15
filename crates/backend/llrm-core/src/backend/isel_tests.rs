@@ -1308,9 +1308,8 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
             "or ax, 3072",
             "mov word ptr [bp-8], ax",
             "fld qword ptr [bp+6]",
-            "fld st(0)",
             "fldcw word ptr [bp-8]",
-            "fistp word ptr [bp-2]",
+            "fist word ptr [bp-2]",
             "mov ax, word ptr [bp-2]",
             "fistp dword ptr [bp-4]",
             "mov bx, word ptr [bp-4]",
@@ -1717,12 +1716,10 @@ define void @f(double %x) addrspace(1) {
             "or ax, 3072",
             "mov word ptr [bp-4], ax",
             "fld qword ptr [bp+6]",
-            "fld st(0)",
             "fldcw word ptr [bp-4]",
-            "fistp word ptr b",
-            "fld st(0)",
+            "fist word ptr b",
             "fldcw word ptr [bp-2]",
-            "fistp word ptr b",
+            "fist word ptr b",
             "fstp dword ptr o",
             "leave",
             "retf"
@@ -3594,8 +3591,9 @@ fn test_a_float_to_a_byte_is_a_stored_word_low_byte() {
 }
 ";
     let got = listing(text, "f");
-    let stores: Vec<&String> = got.iter().filter(|one| one.starts_with("fistp")).collect();
-    assert!(stores.len() == 2 && stores.iter().all(|one| one.starts_with("fistp word ptr")), "{got:#?}");
+    // the value is read by both conversions: the first stores without popping it
+    let stores: Vec<&String> = got.iter().filter(|one| one.starts_with("fist")).collect();
+    assert!(stores.len() == 2 && stores.iter().all(|one| one.contains(" word ptr")), "{got:#?}");
 }
 
 /// mathlib.c's `ent_step_to`: a compare consuming one operand and keeping
