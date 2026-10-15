@@ -751,6 +751,10 @@ def snapshot_binaries(release: Path, into: Path) -> Path:
     return into
 
 
+# The steps that run the compiler's binaries (the others build what they test, or read the tree).
+USES_BINARIES = ("pytest", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
+
+
 def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     target = os.environ.get("CARGO_TARGET_DIR")
     if not target:
@@ -800,7 +804,14 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
             print(verdict_line(p.tier, ["build"], [], time.time() - start, [], head_state()[0]))
             return 1, ["build"]
     if env["LLRM_BIN"] == f"{target}/release":
-        env["LLRM_BIN"] = str(snapshot_binaries(Path(target) / "release", Path(target) / "gate-bins"))
+        if not (Path(target) / "release").is_dir():
+            # A plan with no build assumes the binaries are there (a tools-only diff): on a fresh target dir say so, not FileNotFoundError.
+            if needing := [s for s in p.steps if s in USES_BINARIES]:
+                print(f"gate: {target}/release does not exist and this plan builds nothing; its steps ({' '.join(needing)}) run the compiler's binaries: "
+                      "build them first (`gate.py run --group build`, or `cargo build --release --bins`), or set LLRM_BIN", flush=True)
+                return 2, ["build"]
+        else:
+            env["LLRM_BIN"] = str(snapshot_binaries(Path(target) / "release", Path(target) / "gate-bins"))
     alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
     jobs = default_jobs(os.environ)

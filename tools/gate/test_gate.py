@@ -163,6 +163,7 @@ def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():
     p = gate.plan(["tools/qcport-run.py"])
     assert "timeout" not in gate.commands(p, gate.load(), gate.packages())["qcport"]
 
+
 def test_the_torture_step_has_no_wall_clock_limit_of_its_own():
     """`timeout 600` killed a full gate's torture step at 150 of 474 programs under load: every program's budget is guest time, so
     the step's wall time is the host's load. dosbatch stops an emulator that stops reporting."""
@@ -982,6 +983,7 @@ def test_a_passed_smoke_run_leaves_a_mark_for_its_head_that_the_train_reads(tmp_
     gate.record_smoke("abc123")
     assert gate.smoked("abc123") and not gate.smoked("abc124")
 
+
 def test_the_bench_step_runs_in_batch_mode_only_when_the_train_asks_and_still_needs_zero_problems(monkeypatch):
     plan = gate.plan(["tools/gate/gate.py"], "full")
     monkeypatch.delenv("LLRM_BENCH_BATCH", raising=False)
@@ -1002,6 +1004,7 @@ def test_a_step_that_gets_little_cpu_on_a_loaded_host_is_not_stalled(tmp_path, m
     assert gate.run_step("slow", "sleep 2.5", tmp_path, {**os.environ}, stall=1)[1] == 0
     monkeypatch.setattr(gate.proctree, "tree_cpu", lambda pid: 0.0)
     assert gate.run_step("hung", "sleep 30", tmp_path, {**os.environ}, stall=1)[1] == gate.STALL_CODE
+
 
 def test_a_step_log_is_a_new_file_so_an_orphan_of_a_killed_gate_cannot_write_into_it(tmp_path):
     """#1758 failed `integration INCOMPLETE: 95 results of 83 test binaries`: a cargo left running by a killed gate wrote into the
@@ -1103,6 +1106,7 @@ def test_smoke_runs_the_pytest_files_that_are_not_slow_and_the_full_step_does_no
         assert "tests/test_loops.py" not in named and "tests/test_programs_compile.py" not in named and "tests/*.py" not in named, step
     assert "tests/test_loops.py" in full["pytest-programs"] and "tests/test_programs_compile.py" in full["pytest-programs"]
 
+
 def test_the_bench_step_prints_every_problem_row_not_the_last_three_lines(tmp_path):
     """Train 3's bench step said `424 measurements: 22 problems, 2 better` under only the 2 BETTER lines: `tail -3` cut the 20 FAIL rows."""
     import os
@@ -1192,3 +1196,39 @@ def test_a_group_may_point_a_variable_somewhere_else():
     assert gate.private_env("/p", "reference")["QCPORT"] == "/p/rm-quake/src"
     assert gate.private_env("/p", "python")["QCPORT"] == "/p/qbq-llrm/src"
     assert "QCPORT" not in gate.private_env("/p", "unit")
+def test_what_ci_runs_for_a_diff_is_what_gate_run_plans_for_it():
+    """CI's jobs come from `gate.py plan --json` (ci.yml lists no step): the steps of its groups, with the build, are the steps `gate.py run`
+    plans for the same diff, so a green CI is the local pass. Checked for diffs of each kind, and that the workflow asks the planner."""
+    import json
+    import subprocess as sp
+
+    for files in (["docs/x.md"], ["tools/gate/gate.py"], ["bench/fib/fib.c"], ["crates/backend/llrm-core/src/lib.rs"], ["tests/turbo.rs"]):
+        local = gate.plan(files)
+        out = sp.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", *files], capture_output=True, text=True, cwd=gate.ROOT)
+        ci = json.loads(out.stdout)
+        in_groups = sorted(step for steps in ci["groups"].values() for step in steps)
+        assert ci["tier"] == local.tier, files
+        assert in_groups + sorted(ci["skipped"]) == sorted(s for s in local.steps if s != "build"), (files, ci)
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "gate.py plan --json" in workflow and "gate.py run --group ${{ matrix.group }}" in workflow, "the jobs come from the planner"
+    assert all(f"--tier {t}" not in workflow for t in ("fast", "full", "smoke")), "the workflow does not choose a tier of its own"
+
+
+def test_the_ci_summary_prints_the_gate_line_with_the_head_it_is_of():
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}" in workflow and "github.event.pull_request.head.sha" in workflow
+
+
+def test_a_plan_that_builds_nothing_on_a_fresh_target_says_so_instead_of_a_traceback(tmp_path, monkeypatch, capsys):
+    """#1832 (tools only: the plan has no build) on a fresh target dir died in snapshot_binaries with FileNotFoundError on target/release."""
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "fresh"))
+    monkeypatch.delenv("LLRM_BIN", raising=False)
+    plan = gate.Plan("fast", "tools only", ["pytest-quick", "docs"], None, [], ["tools/gate/train.py"])
+    code, failed = gate.execute(plan)
+    out = capsys.readouterr().out
+    assert code == 2 and failed == ["build"] and "does not exist and this plan builds nothing" in out and "pytest-quick" in out, out
+    # a plan whose steps read the tree only needs no binaries
+    monkeypatch.setattr(gate, "commands", lambda *a, **k: {"docs": "true"})
+    monkeypatch.setattr(gate, "expected", lambda *a, **k: {})
+    code, _ = gate.execute(gate.Plan("fast", "docs", ["docs"], None, [], ["docs/x.md"]))
+    assert code == 0

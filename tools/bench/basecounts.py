@@ -148,5 +148,5 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path) -> dict:
     env.pop("LLRM_BENCH_BASE", None)
     done = subprocess.run([sys.executable, str(HERE / "bench.py"), "--opt", *opts, "--json", str(out), "--no-judge", "--work", str(work / "run")], env=env, capture_output=True, text=True)
     if not out.is_file():
-        raise SystemExit(f"bench: the base did not measure:\n{(done.stdout + done.stderr)[-1500:]}")
+        raise SystemExit("the base did not measure: " + " | ".join(line.strip() for line in (done.stdout + done.stderr).splitlines()[-4:] if line.strip()))
     return rows_of(json.loads(out.read_text()))

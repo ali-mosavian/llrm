@@ -87,6 +87,26 @@ def test_a_dry_run_that_fails_prints_why_and_never_fails_the_gate(monkeypatch):
     assert lines == ["BASE: dry run failed: RuntimeError: no git"]
 
 
+def test_a_base_that_does_not_measure_says_why_on_one_line_the_gate_prints(monkeypatch, tmp_path):
+    """Train 5's gate printed `BASE: dry run failed: SystemExit: se did not measure:`: the reason was on the lines below, which the gate's
+    filter drops."""
+    import subprocess
+    import types
+
+    monkeypatch.setattr(bc.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "Traceback\nBuildError: llrm-c: unrecognized arguments: -mbss-begin\n"))
+    try:
+        bc.measure_in_subprocess(tmp_path, ["O2"], tmp_path / "w")
+    except SystemExit as why:
+        assert "\n" not in str(why) and "unrecognized arguments: -mbss-begin" in str(why), str(why)
+    else:
+        raise AssertionError("a base that wrote nothing was taken for measured")
+    import bench
+
+    boom = types.SimpleNamespace(git=lambda *a: (_ for _ in ()).throw(SystemExit("a\nb")))
+    monkeypatch.setitem(sys.modules, "measure", boom)
+    (line,) = bench.base_dry_run({}, types.SimpleNamespace(opt=["O2"], work=Path("/x")), [])
+    assert line == "BASE: dry run failed: SystemExit: a b"
+
 def test_a_waiver_excuses_the_one_count_the_committed_judge_would_fail_and_the_bless_spends_it(tmp_path, monkeypatch):
     """Train 5's batch of clean PRs moved jpeg_fixed bq32 -Os by +2 together: the train may not raise a count, so the owner's waiver (the
     row, the counter, the count it may reach) lets exactly that count through, and the bless that writes it removes the waiver."""
