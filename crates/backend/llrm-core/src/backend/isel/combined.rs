@@ -126,7 +126,7 @@ pub(super) fn combined(
     blocks
         .into_iter()
         .map(|block| LirBlock {
-            insns: made.shift_remove(&block.at).expect("every block").into(),
+            insns: made.swap_remove(&block.at).expect("every block").into(),
             ..block.into_inner()
         })
         .collect()
