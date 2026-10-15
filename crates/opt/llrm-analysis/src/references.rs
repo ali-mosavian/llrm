@@ -9,10 +9,10 @@
 //! access is decomposed on its first ask and kept as an `Rc<MemRef>`, with the
 //! values its chain read.
 //!
-//! The table is held by the module's `Context` (as `typed`'s names are), one for
-//! each function history (`Mark::lineage`; a copy of a function has its own).
-//! Asked after the function changed, it reads the change log since its mark
-//! and drops the references the changes reach: an access whose operand was
+//! The table is held by the module's `Context` (as `typed`'s names are), one
+//! for each function history (`Mark::lineage`; a copy of a function has its
+//! own). Asked after the function changed, it reads the change log since its
+//! mark and drops the references the changes reach: an access whose operand was
 //! rewritten or erased, and each access whose chain holds a value whose
 //! definition was. A history it cannot read is dropped whole, as is one made
 //! under other metadata. Moves change nothing: a reference does not read where
@@ -25,8 +25,8 @@
 //!  an unrelated add rewritten                   → keeps it
 //! ```
 //!
-//! `LLRM_CHECK_REFERENCES=1` decomposes afresh on every ask and asserts the kept
-//! one equal.
+//! `LLRM_CHECK_REFERENCES=1` decomposes afresh on every ask and asserts the
+//! kept one equal.
 //!
 //! # Provides
 //! `of` (what `MemRef::of` reads through), `built` (decompositions made on this
@@ -130,7 +130,10 @@ pub(crate) fn of(
     inst: InstId,
 ) -> Option<Rc<MemRef>> {
     use llrm_mir::opcode::Opcode;
-    if !matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. } | Opcode::Store { .. }) {
+    if !matches!(
+        unit.function.instruction(inst).opcode,
+        Opcode::Load { .. } | Opcode::Store { .. }
+    ) {
         return None;
     }
     let bases = unit.context.extension::<Bases>();
@@ -161,3 +164,7 @@ pub(crate) fn of(
     table.made.insert(inst, Rc::clone(&made));
     Some(made)
 }
+
+#[cfg(test)]
+#[path = "references_tests.rs"]
+mod tests;

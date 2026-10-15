@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 37 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 38 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -40,6 +40,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 37 documented, 0 undoc
 | peelsize | Decides whether a counted loop is worth copying out completely, from the size the copy would have once constants fold, before anything is cloned. | `admitted`, `Limits`, `Site`. Consumers: the `peel` and `unroll` passes in | [peelsize](peelsize.md) |
 | pointerfacts | Finds constant byte offsets between pointer values, and so whether two accesses off one base overlap, without any alias reasoning. | `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`](memoryssa.md), | [pointerfacts](pointerfacts.md) |
 | ranges | Bounds each integer value in each block by a non-wrapping interval, from the branch edges that dominate the block and the counted loops that hold it. | The interval facts above. In the manager they are `DominatedEdges` and | [ranges](ranges.md) |
+| references | The base reference of each load and store, decomposed once and shared. | `of` (what `MemRef::of` reads through), `built` (decompositions made on this | [references](references.md) |
 | regions | Decides whether a write through one memory reference can land on another (`may_alias`, `overlapping`), and indexes cells so a write checks only those that might meet it instead of every pair. | `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`, | [regions](regions.md) |
 | sliceset | An ordered set of memory slices that holds most of itself as a run shared with other sets, so the callback effects every call summary repeats are built, compared and listed once. | `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call | [sliceset](sliceset.md) |
 | ssa | SSA helpers the transformations share: use lists, dead-phi pruning, value substitution and an updater that places the phis a new definition needs. | The helpers above. Consumers in llrm-transforms: `dead`, `promote` | [ssa](ssa.md) |

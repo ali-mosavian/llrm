@@ -1129,6 +1129,15 @@ impl<'a> Unit<'a> {
         self.operand_type(operand).and_then(|ty| self.context.types.int_bits(ty))
     }
 
+    /// The base reference of the load or store `inst`: its pointer decomposed,
+    /// with no provenance, made once and kept (`references`).
+    pub fn base_reference(
+        &self,
+        inst: InstId,
+    ) -> Option<std::rc::Rc<MemRef>> {
+        crate::references::of(self, inst)
+    }
+
     /// An integer constant's bits, if `operand` is one.
     pub fn int_constant(
         &self,
@@ -1301,10 +1310,14 @@ pub fn is_object(
     root: Operand,
 ) -> bool {
     match root {
-        Operand::Value(_) => unit.defining(root).is_some_and(|(_, instruction)| matches!(instruction.opcode, Opcode::Alloca { .. })),
+        Operand::Value(_) => {
+            unit.defining(root).is_some_and(|(_, instruction)| matches!(instruction.opcode, Opcode::Alloca { .. }))
+        }
         Operand::Constant(id) => {
-            matches!(unit.context.get(id).kind, ConstantKind::Global(global)
-                if matches!(unit.globals.get(global.0 as usize).map(|one| &one.kind), Some(GlobalKind::Variable(_))))
+            matches!(
+                unit.context.get(id).kind,
+                ConstantKind::Global(global) if matches!(unit.globals.get(global.0 as usize).map(|one| &one.kind), Some(GlobalKind::Variable(_)))
+            )
         }
         Operand::Block(_) => false,
     }
@@ -1477,8 +1490,8 @@ impl MemRef {
         crate::references::of(unit, inst).map(|one| (*one).clone())
     }
 
-    /// The access `inst` makes, decomposed afresh: what `references` keeps for the
-    /// loads and stores, with the values its pointer chain read.
+    /// The access `inst` makes, decomposed afresh: what `references` keeps for
+    /// the loads and stores, with the values its pointer chain read.
     pub(crate) fn decomposed(
         unit: &Unit,
         inst: InstId,
