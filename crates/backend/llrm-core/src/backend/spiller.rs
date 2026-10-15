@@ -316,6 +316,7 @@ pub fn spilled_apart(
     if values.is_empty() {
         return Ok((body.clone(), BTreeSet::new(), BTreeSet::new()));
     }
+    llrm_mir::counters::bump(llrm_mir::counters::Count::Spills, 1);
     let plan = planned(body, values, frame)?;
     materialized(body, &plan, frame, floor, classes, plain)
 }

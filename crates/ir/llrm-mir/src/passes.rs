@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use crate::context::{Context, GlobalId};
+use crate::counters::Count;
 use crate::datalayout::DataLayout;
 use crate::dominators::DominatorTree;
 use crate::hash::{HashMap, HashSet};
@@ -71,6 +72,12 @@ pub fn in_function<T>(
     let (mut run, mut out) = (Some(run), None);
     (observer.function)(function, &mut || out = run.take().map(|run| run()));
     out.expect("the observer ran the step")
+}
+
+/// A function pass is about to run over `function`.
+pub fn count_pass_run(function: &Function) {
+    crate::counters::bump(Count::PassRuns, 1);
+    crate::counters::bump(Count::PassRunInstructions, function.instruction_slots() as u64);
 }
 
 pub(crate) fn counted(
@@ -973,6 +980,7 @@ impl Analyses {
         if let Some(entry) = self.cache.get(&key) {
             let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
             counted(A::NAME, true);
+            crate::counters::bump(Count::AnalysisHits, 1);
             return Rc::clone(&entry.result);
         }
         counted(A::NAME, false);
@@ -1035,10 +1043,12 @@ impl Analyses {
                             .collect::<Vec<_>>()
                     );
                 }
+                crate::counters::bump(Count::AnalysisKept, 1);
                 return Some(Rc::clone(&result));
             }
             let made =
                 spanned_as("analysis", A::NAME, || A::update_owned(result, changes, context, layout, function, self))?;
+            crate::counters::bump(Count::AnalysisUpdated, 1);
             if check_replay() {
                 let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                 assert!(
@@ -1052,7 +1062,10 @@ impl Analyses {
         let replayed = updated.is_some();
         let result = match updated {
             Some(made) => made,
-            None => Rc::new(spanned_as("analysis", A::NAME, || A::run(context, layout, function, self))),
+            None => {
+                crate::counters::bump(Count::AnalysisComputed, 1);
+                Rc::new(spanned_as("analysis", A::NAME, || A::run(context, layout, function, self)))
+            }
         };
         if why() {
             let class = match self.evicted.remove(&key) {
@@ -1290,6 +1303,7 @@ fn computed<M: ModuleAnalysis>(
     analyses: &mut ModuleAnalyses,
 ) -> Rc<dyn Any> {
     RUNS.with(|runs| runs.set(runs.get() + 1));
+    crate::counters::bump(Count::ModuleComputed, 1);
     Rc::new(spanned_as("analysis", M::NAME, || M::run(module, analyses)))
 }
 
@@ -1975,6 +1989,7 @@ impl PassManager {
                     continue;
                 }
                 let cache = analyses.manager(id, &outer);
+                count_pass_run(function);
                 let before = function.mark();
                 let preserved = in_function(global.name.as_deref().unwrap_or_default(), || {
                     spanned(name, || {

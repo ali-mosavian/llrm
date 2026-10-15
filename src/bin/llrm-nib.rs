@@ -10,5 +10,6 @@ fn main() {
         std::process::exit(2);
     }
     let code = llrm_core::support::debug::run_main(|| llrm_nib::cli::main(&argv));
+    llrm_mir::counters::report();
     std::process::exit(code);
 }

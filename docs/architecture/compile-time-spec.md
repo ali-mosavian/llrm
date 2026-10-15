@@ -342,6 +342,8 @@ Today `Fixed::fixed` reruns the whole list until a round changes nothing ([pipel
 
 The budgets are counts, not times, so a test can assert them exactly. `llrm-support` gets always-on counters: an integer increment at each site, read by tests and by `LLRM_DEBUG=counts`. Today's `debug::counted` only works with the `time` channel on ([debug.rs:343](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/support/llrm-support/src/debug.rs#L343)), and `assemble::machinings`/`routes`/`selections` are the only counters that exist without it ([backend/assemble.rs:688-712](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/backend/llrm-core/src/backend/assemble.rs#L688-L712)).
 
+Built so far (report mode): `llrm_mir::counters` (per thread, read by tests; the binaries print them with `LLRM_DEBUG=counts`): pass runs and the instructions of the functions they ran on, analyses computed, updated, kept and held, module analyses computed, function forks, allocations, LIR pipeline runs, spills and splits. `tools/budgets.py [--axes]` prints them with the ratios the budgets are stated in and marks those over; it fails nothing yet. d_faces -O1 today: 917 pass runs, 1,922 analyses computed + 358 updated (2.5 per pass run against the 0.5 budget), 21 allocations for 15 LIR pipelines, 522 spills, 285 splits, 35 forks.
+
 | counter | site | budget asserted on fixtures (the fn, the scaling axes at N and 2N, the bench) |
 |---|---|---|
 | `function_clones` | `Function::clone`/`fork`, `LirBody` copies | 0 in the pipeline |

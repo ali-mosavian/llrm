@@ -1974,6 +1974,7 @@ fn _allocated(
     classes: &RegisterClasses,
     rewrite: Option<(&mut Frame, bool)>,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
+    llrm_mir::counters::bump(llrm_mir::counters::Count::Allocations, 1);
     let splitting = rewrite.as_ref().is_some_and(|(_, splitting)| *splitting);
     let mut rewrite: Option<&mut Frame> = rewrite.map(|(frame, _)| frame);
     let profile = targets::profile(cpu).map_err(Error::Value)?;

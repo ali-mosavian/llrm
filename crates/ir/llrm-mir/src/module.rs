@@ -605,6 +605,12 @@ impl Function {
         self.changes.0.push(change);
     }
 
+    /// How many instructions the function has made, erased ones included: the
+    /// size a pass that reads it all reads.
+    pub fn instruction_slots(&self) -> usize {
+        self.instructions.len()
+    }
+
     /// Where the function stands now.
     pub fn mark(&self) -> Mark {
         Mark { uid: self.lineage.uid, at: self.lineage.logged }
@@ -615,6 +621,7 @@ impl Function {
     /// the copy logs follows it. For a copy that replaces the function, not
     /// one kept beside it (`clone` is that: its edits are its own).
     pub fn fork(&self) -> Self {
+        crate::counters::bump(crate::counters::Count::FunctionForks, 1);
         let mut copy = self.clone();
         copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged };
         copy

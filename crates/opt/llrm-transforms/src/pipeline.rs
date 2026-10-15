@@ -1138,6 +1138,7 @@ impl Run {
             return false;
         }
         self.steps += 1;
+        llrm_mir::passes::count_pass_run(unit.function);
         let before = unit.function.mark();
         let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
         let preserved =

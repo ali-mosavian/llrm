@@ -76,6 +76,7 @@ pub fn machine_with<'a>(
     rules: &'static crate::backend::peep::Rules,
     registers: &llrm_target::FrameRegisters,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
+    llrm_mir::counters::bump(llrm_mir::counters::Count::LirPipelineRuns, 1);
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
     if let Some(frame) = &frame {

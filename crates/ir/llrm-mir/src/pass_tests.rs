@@ -131,6 +131,30 @@ fn an_analysis_is_computed_once_until_a_pass_drops_it() {
     assert_eq!(COMPUTED.get(), 2);
 }
 
+/// The budgets are counts (docs/architecture/compile-time-spec.md, section 6):
+/// a count that read nothing would report every budget met. Three passes over
+/// one function are three runs, and the analysis they share is worked out
+/// again after the pass that drops it.
+#[test]
+fn the_counters_see_pass_runs_and_analysis_computations() {
+    use crate::counters::{Count, get, reset};
+    reset();
+    COMPUTED.set(0);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(get(Count::PassRuns), 3);
+    // The analyses the manager itself asks (dominators) are counted too.
+    assert!(
+        get(Count::AnalysisComputed) >= COMPUTED.get() as u64 && COMPUTED.get() == 2,
+        "{}",
+        get(Count::AnalysisComputed)
+    );
+    assert!(get(Count::PassRunInstructions) > 0);
+}
+
 /// A pass that says it dropped everything and edited nothing (1272 of 17,000
 /// drops in QCport, `gvn` and `dead` the most) cost every analysis a fresh run,
 /// and the next to ask got no more than the one before.

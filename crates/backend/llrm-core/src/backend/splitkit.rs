@@ -589,6 +589,7 @@ pub fn carved_moving(
     width: u32,
     region: &Region,
 ) -> Option<(LirBody, Moved)> {
+    llrm_mir::counters::bump(llrm_mir::counters::Count::Splits, 1);
     // Trimming to the references can end a range inside a parallel group; snap
     // last.
     let region = region.trimmed(body, value).snapped(body);
