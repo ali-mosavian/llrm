@@ -1,4 +1,4 @@
-reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
+reason = "the value solve of points-to is one flow-insensitive worklist with the memory SSA of private slots (#1756): bq32 jpeg_fixed/jpeg_single -O2/-Os run 886 to 3,026 instructions fewer; nothing else moves"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,25 +26,25 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84338433
+instructions = 84337547
 code_bytes = 6496
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89432828
+instructions = 89431943
 code_bytes = 6039
 data_bytes = 29209
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 3416
+code_bytes = 3423
 data_bytes = 474
 bss_bytes = 15849
 kernel_ms = 443.7384
 
 [c.Os]
-code_bytes = 3079
+code_bytes = 3086
 data_bytes = 474
 bss_bytes = 15849
 kernel_ms = 445.4513
