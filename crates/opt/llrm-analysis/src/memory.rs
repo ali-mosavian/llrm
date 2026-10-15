@@ -1335,6 +1335,20 @@ pub struct MemRef {
     pub provenance: Option<Provenance>,
 }
 
+/// The accesses worked out for a version of a function, and which version.
+struct Held {
+    mark: llrm_mir::module::Mark,
+    seen: std::rc::Rc<std::cell::RefCell<llrm_support::hash::HashMap<InstId, Option<MemRef>>>>,
+}
+
+/// The most versions kept: the analyses of one function ask in a run, and a call
+/// summary asks of its callees in between.
+const ACCESS_VERSIONS: usize = 8;
+
+thread_local! {
+    static ACCESSES: std::cell::RefCell<Vec<Held>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl MemRef {
     /// Whether every object it may reach is constant, so that no write
     /// changes it.
@@ -1408,8 +1422,45 @@ impl MemRef {
         made
     }
 
-    /// The access instruction `inst` makes: a load's or a store's.
+    /// The access instruction `inst` makes: a load's or a store's. It is a fact
+    /// of the function's text alone (the pointer's chain of casts and offsets,
+    /// the access's type and width), so it is worked out once for each version
+    /// of the function, whichever of the analyses that read it asks first: a
+    /// quarter of the compile of d_faces was this, asked again by `escapes`,
+    /// `annotated`, `slotstores`, the summaries and the memory walks.
     pub fn of(
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Self> {
+        let mark = unit.function.mark();
+        let held = ACCESSES.with(|held| {
+            let held = held.borrow();
+            held.iter().find(|one| one.mark == mark).map(|one| std::rc::Rc::clone(&one.seen))
+        });
+        let seen = match held {
+            Some(seen) => seen,
+            None => ACCESSES.with(|held| {
+                let mut held = held.borrow_mut();
+                if held.len() >= ACCESS_VERSIONS {
+                    held.remove(0);
+                }
+                let seen = std::rc::Rc::new(std::cell::RefCell::new(llrm_support::hash::HashMap::default()));
+                held.push(Held { mark, seen: std::rc::Rc::clone(&seen) });
+                seen
+            }),
+        };
+        if let Some(found) = seen.borrow().get(&inst) {
+            if llrm_support::env_set("LLRM_CHECK_ACCESSES") {
+                assert!(*found == Self::derived(unit, inst), "the held access of {inst:?} is not what deriving it again gives");
+            }
+            return found.clone();
+        }
+        let made = Self::derived(unit, inst);
+        seen.borrow_mut().insert(inst, made.clone());
+        made
+    }
+
+    fn derived(
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
