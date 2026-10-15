@@ -515,12 +515,12 @@ pub fn sunk(body: &LirBody) -> LirBody {
     out
 }
 
-/// A block of copies alone on an edge, entered from the one block that branches
-/// to it and left by a jump, has its copies run in that block before the branch
-/// where the other way out does not read what they write (`x_cordic -Os`: the
-/// back edge's `mov eax,ebx; jmp` on 2,200 trips, a taken jump more than the
-/// loop that had the copy in its arms). The edge block is left holding its
-/// jump, which the layout drops.
+/// A block of copies alone on a back edge, entered from the one block that
+/// branches to it and left by a jump, has its copies run in that block before
+/// the branch where the other way out does not read what they write (`x_cordic
+/// -Os`: the back edge's `mov eax,ebx; jmp` on 2,200 trips, a taken jump more
+/// than the loop that had the copy in its arms). The edge block is left holding
+/// its jump, which the layout drops.
 pub fn latched(body: &LirBody) -> LirBody {
     let regs = body.regs();
     let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
@@ -551,6 +551,8 @@ pub fn latched(body: &LirBody) -> LirBody {
         (jumped && !copies.is_empty()).then_some(copies)
     };
     let mut live = None;
+    let mut busy = None;
+    let mut natural = None;
     let mut moves: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut emptied: Vec<i64> = Vec::new();
     for edge in &body.blocks {
@@ -590,6 +592,18 @@ pub fn latched(body: &LirBody) -> LirBody {
                 },
             );
         if !dead {
+            continue;
+        }
+        // Only a back edge needs its jump: any other edge block the layout puts
+        // before its target.
+        let natural = natural.get_or_insert_with(|| crate::analysis::loops::loops(&body.blocks, Some(body.entry)));
+        if !natural.iter().any(|one| one.header == edge.succ[0] && one.body.contains(&edge.at)) {
+            continue;
+        }
+        // The other way out then runs the copies for nothing: only where it
+        // runs less than the edge saves a jump.
+        let busy = busy.get_or_insert_with(|| crate::analysis::frequency::Frequency::of(body));
+        if busy.block(other) * copies.len() as f64 >= busy.block(edge.at) * 2.0 {
             continue;
         }
         moves.insert(*from, copies);
@@ -952,29 +966,26 @@ mod tests {
     /// compare, where the exit does not read EAX, leaves one `jl`.
     #[test]
     fn test_an_edge_copy_runs_in_the_branching_block_where_the_other_way_does_not_read_it() {
-        let build = |exit_reads: bool| {
+        let build = |exit_reads: bool, back_edge: bool| {
             let cmp = insn(2, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None);
             let branch = insn(3, Operation::Branch, "jge", vec![], vec![], Some(5));
-            let ret = Arc::new(Insn {
-                reads_complete: true,
-                ..Arc::unwrap_or_clone(insn(5, Operation::Return, "ret", vec![], vec![], None))
-            });
+            let ret = |at| {
+                Arc::new(Insn {
+                    reads_complete: true,
+                    ..Arc::unwrap_or_clone(insn(at, Operation::Return, "ret", vec![], vec![], None))
+                })
+            };
             let use_di = insn(5, Operation::Binary, "add", vec![r(AX)], vec![r(AX), r(DI)], None);
-            let blocks = vec![
+            let to = if back_edge { 1 } else { 9 };
+            let mut blocks = vec![
                 block(1, vec![cmp, branch], vec![5, 7]).into(),
-                block(5, if exit_reads { vec![use_di, ret] } else { vec![ret] }, vec![]).into(),
-                block(7, vec![copy(7, DI, DX), insn(8, Operation::Jump, "jmp", vec![], vec![], Some(9))], vec![9])
+                block(5, if exit_reads { vec![use_di, ret(6)] } else { vec![ret(6)] }, vec![]).into(),
+                block(7, vec![copy(7, DI, DX), insn(8, Operation::Jump, "jmp", vec![], vec![], Some(to))], vec![to])
                     .into(),
-                block(
-                    9,
-                    vec![
-                        insn(9, Operation::Binary, "add", vec![r(AX)], vec![r(AX), r(DI)], None),
-                        insn(10, Operation::Jump, "jmp", vec![], vec![], Some(1)),
-                    ],
-                    vec![1],
-                )
-                .into(),
             ];
+            if !back_edge {
+                blocks.push(block(9, vec![ret(9)], vec![]).into());
+            }
             LirBody::new("edge", 1, blocks, IndexMap::default(), IndexMap::default())
         };
         let names = |body: &LirBody, at: i64| {
@@ -987,11 +998,15 @@ mod tests {
                 .filter_map(|one| one.what.as_ref()?.name.clone())
                 .collect::<Vec<_>>()
         };
-        let after = latched(&build(false));
+        let after = latched(&build(false, true));
         assert_eq!(names(&after, 1), ["cmp", "mov", "jge"]);
         assert_eq!(names(&after, 7), ["jmp"]);
-        let kept = latched(&build(true));
+        let kept = latched(&build(true, true));
         assert_eq!(names(&kept, 1), ["cmp", "jge"], "the exit reads DI: the copy stays on its edge");
         assert_eq!(names(&kept, 7), ["mov", "jmp"]);
+        // The layout puts a forward edge's block before its target, with no
+        // jump to save.
+        let forward = latched(&build(false, false));
+        assert_eq!(names(&forward, 1), ["cmp", "jge"]);
     }
 }
