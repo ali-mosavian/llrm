@@ -10,6 +10,9 @@ run applied to the one-file `perf stat` total, so a row's target is in the same 
 throughout, what users get; the command lines and the commit are in the header, so that two maps made under other flags are not
 compared. Every row names its owner, and a row of 2% or more with none is flagged.
 
+Cycles (`perf stat -e cycles:u`, best of 7 with the spread) are given for the whole compile of each compiler, because an edit can cut instructions and
+lose cycles; per-step cycles are not measurable.
+
 llrm's counts are exact and repeat to the instruction; gcc's and clang's shares are times, summed over three runs, and move by
 about 15% on a small category between runs, so read their columns as a target, not a measurement of the last digit.
 
@@ -37,6 +40,7 @@ INCLUDES = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I
 FOREIGN = [*KEYWORDS, "-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", "-fcf-protection=none", "-w", *INCLUDES]
 COPIES = 24
 REPEATS = 3
+CYCLE_RUNS = 7   # cycles are noisy on a shared host
 FLAG_AT = 2.0   # percent of the total: an unowned row at or above it is flagged
 
 # (pattern on a step's name, category, owner). The first that matches. Owners are the sessions' current work; None is unowned.
@@ -104,6 +108,26 @@ def instructions(cmd, env=None):
     done = run(["perf", "stat", "-e", "instructions:u", "-x,", *cmd], env=env)
     line = [one for one in done.stderr.splitlines() if "instructions" in one][-1]
     return int(line.split(",")[0])
+
+
+def parse_counters(stderr: str) -> dict:
+    """{event: count} from `perf stat -x,` output."""
+    counts = {}
+    for line in stderr.splitlines():
+        fields = line.split(",")
+        if len(fields) > 2 and fields[0].isdigit():
+            counts[fields[2].split(":")[0]] = int(fields[0])
+    return counts
+
+
+def cycles(cmd, env=None, runs=CYCLE_RUNS):
+    """Cycles and instructions of `runs` runs. Instructions repeat; cycles move with the machine's load, so the best run is the
+    figure and the spread (max - min over the best) says how far to trust it."""
+    seen = [parse_counters(run(["perf", "stat", "-e", "cycles:u,instructions:u", "-x,", *cmd], env=env).stderr) for _ in range(runs)]
+    best = min(one["cycles"] for one in seen)
+    worst = max(one["cycles"] for one in seen)
+    return {"cycles_M": best / 1e6, "spread_pct": 100 * (worst - best) / best,
+            "ipc": min(one["instructions"] for one in seen) / best}
 
 
 def parse_steps(stderr: str):
@@ -185,6 +209,7 @@ def build_map(args) -> dict:
     base = [str(llrm), "-m32", args.level, *INCLUDES, "-S", "-o", "/dev/null", str(source)]
     env = {"PATH": os.environ["PATH"]}
     total = instructions(base, env)
+    timing = {"llrm": cycles(base, env)}
     timed_env = {**env, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "1000"}
     timed = run(base, env=timed_env)
     instrumented = instructions(base, timed_env)
@@ -210,6 +235,8 @@ def build_map(args) -> dict:
         many = copies(source, work)
         gcc_one = instructions(["gcc", *FOREIGN, args.level, "-S", "-o", "/dev/null", str(source)], env) / 1e6
         clang_one = instructions(["clang", *FOREIGN, args.level, "-S", "-o", "/dev/null", str(source)], env) / 1e6
+        for name in ("gcc", "clang"):
+            timing[name] = cycles([name, *FOREIGN, args.level, "-S", "-o", "/dev/null", str(source)], env)
         # Their timers are time, not instructions: three runs, summed.
         sums, gtotal = collections.Counter(), 0.0
         for _ in range(REPEATS):
@@ -239,6 +266,7 @@ def build_map(args) -> dict:
             "clang_M": ccat.get(cat, 0.0) / (ctotal or 1) * clang_one,
         }
     result["gcc_total_M"], result["clang_total_M"] = gcc_one, clang_one
+    result["cycles"] = timing
     result["detail"] = {"gcc": {cat: sorted(((u / (gtotal or 1) * gcc_one, n) for n, u in grows if (category(n, GCC) or "other") == cat), reverse=True)[:5]
                                 for cat in gcat},
                         "clang": {cat: sorted(((m / (ctotal or 1) * clang_one, n) for n, m in selfs.items() if (category(n, CLANG) or "other") == cat), reverse=True)[:5]
@@ -259,6 +287,11 @@ def show(result: dict, old: dict | None = None) -> str:
     if abs(gap) > 0.02 * inst:
         out.append("WARNING: the rows are not within 2% of the instrumented total; read nothing off this map until that is explained.")
     out.append(f"gcc {result['gcc_total_M']:,.0f} M, clang {result['clang_total_M']:,.0f} M (perf total, one file). llrm/gcc {total / result['gcc_total_M']:.1f}x, llrm/clang {total / result['clang_total_M']:.1f}x.")
+    if "cycles" in result:
+        out += ["", f"Cycles (best of {CYCLE_RUNS}; spread = worst over best, how far the host's load moved them; per-step cycles are not available)"]
+        for name, one in result["cycles"].items():
+            ratio = f", {one['cycles_M'] / result['cycles']['gcc']['cycles_M']:.1f}x gcc" if name != "gcc" else ""
+            out.append(f"  {name:6}{one['cycles_M']:>9,.0f} M cycles, IPC {one['ipc']:.2f}, spread {one['spread_pct']:.0f}%{ratio}")
     out += ["", f"By category (llrm's rows scaled by {result['scale']:.3f} to the plain total; gcc and clang: their time-share applied to their totals)",
             f"{'category':22}{'llrm':>9}{'%':>6}{'gcc':>9}{'clang':>9}{'llrm/gcc':>10}"]
     for cat, v in sorted(result["categories"].items(), key=lambda kv: -kv[1]["llrm_M"]):
