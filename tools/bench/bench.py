@@ -13,6 +13,7 @@ the gate until its mark goes.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import json
 import math
@@ -30,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 # The real-mode DOS emulator is x86-m16 code: it lives with the target.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm-x86-m16/bench"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm-x86-m32/vsgcc"))
 
 import cpulimit  # noqa: E402
 import maps  # noqa: E402
@@ -42,6 +44,7 @@ import qb32  # noqa: E402
 import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 import run_tests  # noqa: E402
+import wrap  # noqa: E402
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
@@ -157,6 +160,27 @@ def c_include_arguments(work: Path) -> list[str]:
     return ["-I", str(dosbatch.c_include(dosbatch.REAL_MODE, work))]
 
 
+def kept_a_call(variant: Variant, work: Path, stem: str) -> tuple[Path, Path] | None:
+    """A C kernel's sources that keep it a call without `-fno-inline-functions`, which also kept a recursive function from inlining
+    itself, as gcc and clang do (`rectwo` ran 4.2x gcc's clocks, 2.6x with it on): `main` calling it through a volatile pointer
+    (vsgcc's `wrap.py`, which a kernel of constants cannot be folded out of), to run and count, and the kernel `noinline` with `main` as
+    it was, whose object is the one sized: the pointer is 18 bytes of code and 4 of data no reference compiler's object has. The
+    attribute is added to what llrm-c reads; the reference compilers read the source as it is. None where the source has no such kernel
+    (the build then keeps the flag)."""
+    text = variant.source.read_text()
+    found = re.search(rf"^([a-z][a-z ]*[ *]){re.escape(variant.region)}\(", text, re.M)
+    if found is None:
+        return None
+    try:
+        wrapped = wrap.wrapped(variant.region.removeprefix("bench_"), text)
+    except SystemExit:
+        return None
+    (counted, sized) = (work / f"{stem}.wrapped.c", work / f"{stem}.noinline.c")
+    counted.write_text(wrapped)
+    sized.write_text(text[: found.start()] + "__attribute__((noinline)) " + text[found.start():])
+    return counted, sized
+
+
 def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | None = None) -> tuple[Path, Path] | str:
     """(exe, linker map) of the variant at -`opt`, or why it did not build. BASIC is only compiled here: LINK runs in DOSBox."""
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
@@ -164,6 +188,10 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
     # LLRM_BENCH_FLAGS: more compiler flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it.
     more = os.environ.get("LLRM_BENCH_FLAGS", "").split()
     flags = [f"-{opt}", "-fno-inline-functions", *more]
+    source, counted = variant.source, None
+    if variant.language == "c" and (kept := kept_a_call(variant, work, stem)) is not None:
+        flags.remove("-fno-inline-functions")
+        counted, source = kept
     # A BASIC kernel is a private SUB called once from main: it stays a call only where called-once inlining is off (a C one is public).
     if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
         flags.append("-fno-inline-functions-called-once")
@@ -185,13 +213,18 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             arguments = ["--dialect", "qb45", "-fqb-runtime=llrm"]
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
         if variant.language == "c":
-            extra += c_include_arguments(work)
-        done = cpulimit.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], 300, capture_output=True, text=True)
+            extra += [*c_include_arguments(work), "-I", str(variant.source.parent)]
+        done = cpulimit.run([str(BIN / tool), str(source), *arguments, *extra, *flags, "-o", str(obj)], 300, capture_output=True, text=True)
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == "c":
-            exe = work / f"{stem}.exe"
-            dosbatch.link_c(obj, exe, work, listing)
+            exe, linked = work / f"{stem}.exe", obj
+            if counted is not None:
+                linked = work / f"{stem}.counted.obj"
+                done = cpulimit.run([str(BIN / tool), str(counted), *arguments, *extra, *flags, "-o", str(linked)], 300, capture_output=True, text=True)
+                if done.returncode != 0 or not linked.exists():
+                    return "compile: " + (done.stderr or done.stdout).strip()[-300:]
+            dosbatch.link_c(linked, exe, work, listing)
             return exe, listing
         if variant.language in OURS_BASIC:
             exe = work / f"{stem}.exe"
