@@ -1290,11 +1290,11 @@ entry:
     // nothing grows without bound, and nothing needs the limit.
     let (settled, collapsed) = solve(&known);
     assert_eq!(collapsed, 0, "the solve with the right shape reached the limit");
-    assert!(settled < 20, "{settled} rounds with the right shape");
+    assert!(settled < 200, "{settled} visits with the right shape");
     // The stale shape: the pointers walk past the limit and are taken whole.
     let (rounds, collapsed) = solve(&stale);
     assert!(collapsed > 0, "the premise: the pointers walked past the limit");
-    assert!(rounds < 4 * crate::alias::MAX_FIELDS_FOR_FIELD_SENSITIVE, "{rounds} rounds");
+    assert!(rounds < 10 * crate::alias::MAX_FIELDS_FOR_FIELD_SENSITIVE, "{rounds} visits");
 }
 
 /// An entry whose summary shrank made the callbacks add every entry up again:
@@ -1442,4 +1442,61 @@ fn pointers_made_restrict_are_apart_and_a_lone_one_is_not() {
     assert!(!restricted_overlap(both));
     assert!(restricted_overlap(first));
     assert!(restricted_overlap(none));
+}
+
+/// The value solve visited every instruction of every block each round (a
+/// chain of N diamonds spilling and reloading a pointer: d_faces, 178 solves of
+/// 0.3 G for 1.2 G); it visits an instruction again only when a value or an
+/// object's fields it reads changed, so a body of N pointer instructions costs
+/// a small multiple of N visits.
+#[test]
+fn the_value_solve_visits_each_pointer_instruction_a_few_times() {
+    let mut text = String::from(
+        "define void @f(i1 %c, ptr %p, ptr %q) {\nb0:\n  %slot = alloca ptr\n  store ptr %p, ptr %slot\n  br label %d0\n",
+    );
+    let n = 60;
+    for k in 0..n {
+        text += &format!(
+            "d{k}:\n  %l{k} = load ptr, ptr %slot\n  %g{k} = getelementptr i8, ptr %l{k}, i16 {k}\n  store ptr %g{k}, ptr %slot\n  br i1 %c, label %a{k}, label %d{next}\na{k}:\n  store ptr %q, ptr %slot\n  br label %d{next}\n",
+            next = k + 1
+        );
+    }
+    text += &format!("d{n}:\n  ret void\n}}\n");
+    let parsed = Parsed::new(&text);
+    let before = crate::alias::value_rounds();
+    crate::alias::point_values(&parsed.unit()).unwrap();
+    let visits = crate::alias::value_rounds() - before;
+    let pointer_instructions = 5 * n + 2;
+    assert!(visits <= 4 * pointer_instructions, "{visits} visits for {pointer_instructions} pointer instructions");
+}
+
+/// A pointer carried around a loop through a spill slot, with no phi to widen
+/// it, grew a slice a trip until the limit: qcport/cmd -O1 took 7.3 G
+/// instructions where 2.6 G was (a 170-instruction body solved in 4,691
+/// visits). A fact a store after the load carries back is widened as a
+/// loop-carried phi is.
+#[test]
+fn a_pointer_walking_a_loop_through_a_slot_settles_in_a_few_visits() {
+    let parsed = Parsed::new(
+        "define void @f(i1 %c, ptr %base) {
+b0:
+  %slot = alloca ptr
+  store ptr %base, ptr %slot
+  br label %loop
+
+loop:
+  %p = load ptr, ptr %slot
+  %q = getelementptr i8, ptr %p, i16 1
+  store ptr %q, ptr %slot
+  br i1 %c, label %loop, label %out
+
+out:
+  ret void
+}
+",
+    );
+    let before = crate::alias::value_rounds();
+    crate::alias::point_values(&parsed.unit()).unwrap();
+    let visits = crate::alias::value_rounds() - before;
+    assert!(visits < 40, "{visits} visits for a loop of three pointer instructions");
 }
