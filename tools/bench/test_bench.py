@@ -634,9 +634,9 @@ def test_a_pr_that_makes_a_row_worse_than_its_base_fails_and_only_a_waiver_for_t
 
     base = {key: row for key, row in rows(100).items() if "skip" not in row}
     monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: [])
-    problems = bench.judge(rows(101), ["fib"], ["O2"], base, {"fib"})
-    assert problems == ["fib c -O2: instructions 101 > 100 (worse)"]
+    own = lambda problems: [one for one in problems if "instructions 10" in one and "> 100 (worse)" in one]  # the ratio to a reference is judged too
+    assert own(bench.judge(rows(101), ["fib"], ["O2"], base, {"fib"})) == ["fib c -O2: instructions 101 > 100 (worse)"]
     waiver = [{"label": "fib c -O2", "counter": "instructions", "to": 101, "reason": "r", "file": "w.toml"}]
     monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: waiver)
-    assert bench.judge(rows(101), ["fib"], ["O2"], base, {"fib"}) == []
-    assert bench.judge(rows(102), ["fib"], ["O2"], base, {"fib"}) == ["fib c -O2: instructions 102 > 100 (worse)"]
+    assert own(bench.judge(rows(101), ["fib"], ["O2"], base, {"fib"})) == []
+    assert own(bench.judge(rows(102), ["fib"], ["O2"], base, {"fib"})) == ["fib c -O2: instructions 102 > 100 (worse)"]
