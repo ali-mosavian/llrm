@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatfold.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatfold.rs sha256:e68e3d3eb12ffe668a2f25589991da114ab7720c6a337cb62f3c3aa2ab45f98a -->
+<!-- src: crates/backend/llrm-core/src/backend/floatfold.rs sha256:f6b55712d4a80fc36c0b4604c0488cc7bd264901432b579730e2a048d3dc0b3e -->
 
 # floatfold
 
@@ -23,8 +23,13 @@ then the left. An operand qualifies when:
   not part of a group;
 - nothing between the load and the arithmetic is volatile, a call, a barrier
   or an escape, or may write the cell (`storedhomes::may_write`);
-- the cell is 4 or 8 bytes. An integer load stays: `fild` then `fadd` is
-  faster than `fiadd` on a 486.
+- the cell is 4 or 8 bytes, or a 2 or 4 byte integer the target prices below
+  the pair it replaces: `fimul word [m]` for `fild word [m]` and `fmul` (23
+  clocks against 13 and 16 on a 486; the P5 has no cheaper form, so it keeps
+  the pair), per operation by the cost keys `x87_load_i`, `x87_add_i`,
+  `x87_mul_i` and `x87_div_i`. Where both operands qualify, the fold that
+  saves more clocks is taken: gcc and clang fold the integer load the same
+  way (`fimul`, `ficomp`).
 
 Where the loaded cell is the left operand the operation is reversed (`fsub`
 becomes `fsubr`, `fdiv` becomes `fdivr`). The arithmetic then reads the

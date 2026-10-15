@@ -18,8 +18,13 @@
 //!   not part of a group;
 //! - nothing between the load and the arithmetic is volatile, a call, a barrier
 //!   or an escape, or may write the cell (`storedhomes::may_write`);
-//! - the cell is 4 or 8 bytes. An integer load stays: `fild` then `fadd` is
-//!   faster than `fiadd` on a 486.
+//! - the cell is 4 or 8 bytes, or a 2 or 4 byte integer the target prices below
+//!   the pair it replaces: `fimul word [m]` for `fild word [m]` and `fmul` (23
+//!   clocks against 13 and 16 on a 486; the P5 has no cheaper form, so it keeps
+//!   the pair), per operation by the cost keys `x87_load_i`, `x87_add_i`,
+//!   `x87_mul_i` and `x87_div_i`. Where both operands qualify, the fold that
+//!   saves more clocks is taken: gcc and clang fold the integer load the same
+//!   way (`fimul`, `ficomp`).
 //!
 //! Where the loaded cell is the left operand the operation is reversed (`fsub`
 //! becomes `fsubr`, `fdiv` becomes `fdivr`). The arithmetic then reads the
@@ -155,45 +160,44 @@ pub fn folded(
             }
             // The right operand's load first: the left is on the stack top, as
             // `fadd st, [m]` has it.
-            // Each operand that qualifies, and what folding it saves in clocks; the dearest to leave unfolded goes, the right
-            // operand first where they tie.
+            // Each operand that qualifies, and what folding it saves in clocks;
+            // the dearest to leave unfolded goes, the right operand
+            // first where they tie.
             let found = [(right.value, false, left), (left.value, true, right)]
                 .into_iter()
-                .filter_map(
-                    |(value, cell_is_left, other)| {
-                        if uses.get(&value) != Some(&1) {
-                            return None;
-                        }
-                        let home = (0..at)
-                            .rev()
-                            .find(
-                                |&back| insns[back].what.as_ref().is_some_and(|made| {
-                                    made.dests.iter().any(|d| matches!(d, Loc::Held(held) if held.value == value))
-                                }),
-                            )?;
-                        let load = &insns[home];
-                        if !_loads_memory(load.what.as_ref())
-                            || load.volatile
-                            || !load.clobbers.is_empty()
-                            || load.group.is_some()
-                        {
-                            return None;
-                        }
-                        let cell = cell_of(load);
-                        if insns[home + 1..at].iter().any(|between| {
-                            between.volatile
-                                || between.call.is_some()
-                                || may_write(between, cell, false)
-                                || between.what.as_ref().is_none_or(|w| {
-                                    matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape)
-                                })
-                        }) {
-                            return None;
-                        }
-                        let (operation, saved) = memory_form(&name, cell_is_left, load, cpu)?;
-                        Some((saved, (home, value, operation, other)))
-                    },
-                )
+                .filter_map(|(value, cell_is_left, other)| {
+                    if uses.get(&value) != Some(&1) {
+                        return None;
+                    }
+                    let home = (0..at)
+                        .rev()
+                        .find(
+                            |&back| insns[back].what.as_ref().is_some_and(|made| {
+                                made.dests.iter().any(|d| matches!(d, Loc::Held(held) if held.value == value))
+                            }),
+                        )?;
+                    let load = &insns[home];
+                    if !_loads_memory(load.what.as_ref())
+                        || load.volatile
+                        || !load.clobbers.is_empty()
+                        || load.group.is_some()
+                    {
+                        return None;
+                    }
+                    let cell = cell_of(load);
+                    if insns[home + 1..at].iter().any(|between| {
+                        between.volatile
+                            || between.call.is_some()
+                            || may_write(between, cell, false)
+                            || between.what.as_ref().is_none_or(|w| {
+                                matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape)
+                            })
+                    }) {
+                        return None;
+                    }
+                    let (operation, saved) = memory_form(&name, cell_is_left, load, cpu)?;
+                    Some((saved, (home, value, operation, other)))
+                })
                 .reduce(|best, next| if next.0 > best.0 { next } else { best })
                 .map(|(_, one)| one);
             let Some((home, value, operation, other)) = found else {
@@ -255,8 +259,10 @@ fn memory_form(
         }
     };
     let name = if cell_is_left { reversed(name) } else { name.to_owned() };
-    // An integer load folds into the `fi` form where the target prices that form below the `fild` and the operation it
-    // replaces, per operation: the 486 has `fimul` at 23 clocks against 13 and 16, `fiadd` at 20 against 13 and 8.
+    // An integer load folds into the `fi` form where the target prices that
+    // form below the `fild` and the operation it replaces, per operation:
+    // the 486 has `fimul` at 23 clocks against 13 and 16, `fiadd` at 20 against
+    // 13 and 8.
     if name_is(load.what.as_ref()?, "fild") {
         let (integer, float) = match name.as_str() {
             "fadd" => ("x87_add_i", "x87_add"),
@@ -275,7 +281,8 @@ fn memory_form(
     if !matches!(cell_of(load).width, 4 | 8) {
         return None;
     }
-    // A float or double cell: the load is saved, and the memory form may cost more than the register one.
+    // A float or double cell: the load is saved, and the memory form may cost
+    // more than the register one.
     let class = match name.as_str() {
         "fadd" | "fsub" | "fsubr" => "add",
         "fmul" => "mul",

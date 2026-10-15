@@ -1,4 +1,4 @@
-reason = "on top of main: x87 compare puts its left on top and names the right's slot (jpeg_single bq32 -1.7% instructions, fewer code bytes); jpeg_fixed bq32 +-3 instructions is an integer program (layout-dependent copy path)"
+reason = "an integer load folds into fiadd/fimul/fidiv where the target prices the fi form below the fild and the operation (the 486 does for fimul, fiadd, fidiv; the P5 keeps the pair): jpeg_single and stft_single fewer code bytes; jpeg_fixed/jpeg_single bq32 +-6 instructions are layout-dependent copies in integer code"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84338434
+instructions = 84338435
 code_bytes = 6496
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89432825
+instructions = 89432831
 code_bytes = 6039
 data_bytes = 29209
 bss_bytes = 0

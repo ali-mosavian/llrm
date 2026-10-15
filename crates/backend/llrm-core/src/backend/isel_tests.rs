@@ -1647,6 +1647,37 @@ fn test_an_integer_load_only_a_conversion_reads_is_the_x87_operand() {
     );
 }
 
+/// d_faces `gv[v] * (float)K`: gcc and clang execute `fimul word` for it (3,420
+/// of them in the scene), llrm `fild` and `fmul`. An integer load folds into
+/// the `fi` form where the target prices that form below the `fild` and the
+/// operation it replaces: the 486 has `fimul` at 23 clocks against 13 and 16,
+/// the P5 no cheaper one.
+#[test]
+fn test_an_integer_load_is_a_fimul_operand_where_the_target_prices_it_below_the_pair() {
+    let text = "define double @f(double %x, ptr %p) addrspace(1) {
+  %v = load i16, ptr %p
+  %w = sitofp i16 %v to double
+  %q = fmul double %x, %w
+  ret double %q
+}
+define double @g(double %x, ptr %p) addrspace(1) {
+  %v = load i16, ptr %p
+  %w = sitofp i16 %v to double
+  %y = fmul double %x, %x
+  %q = fadd double %y, %w
+  ret double %q
+}
+";
+    let on_486 = listing_on("486", text, "f");
+    assert!(on_486.iter().any(|line| line.starts_with("fimul word ptr")), "{on_486:?}");
+    assert!(!on_486.iter().any(|line| line.starts_with("fild")), "{on_486:?}");
+    let added = listing_on("486", text, "g");
+    assert!(added.iter().any(|line| line.starts_with("fiadd word ptr")), "{added:?}");
+    let on_p5 = listing_on("P5", text, "f");
+    assert!(on_p5.iter().any(|line| line.starts_with("fild word ptr")), "{on_p5:?}");
+    assert!(!on_p5.iter().any(|line| line.starts_with("fimul")), "{on_p5:?}");
+}
+
 /// A load read again is in a register, and x87 reads that.
 #[test]
 fn test_an_integer_load_read_again_is_converted_from_its_register() {
