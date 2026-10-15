@@ -694,6 +694,25 @@ pub(super) fn width_of(
     }
 }
 
+/// The alignment the hardware wants of an object of `ty`: its widest scalar's
+/// size, up to 8, whatever the data layout promises (it gives a double 1).
+fn natural_align(
+    types: &llrm_mir::types::Types,
+    layout: &DataLayout,
+    ty: TypeId,
+) -> i64 {
+    match types.get(ty) {
+        Type::Array { element, .. } | Type::Vector { element, .. } => natural_align(types, layout, *element),
+        Type::Struct { .. } | Type::Named(_) => {
+            types.fields(ty).unwrap_or_default().iter().map(|&one| natural_align(types, layout, one)).max().unwrap_or(1)
+        }
+        Type::Int(_) | Type::Float(_) | Type::Pointer(_) => {
+            i64::try_from(layout.store_size(types, ty).clamp(1, 8).next_power_of_two()).unwrap_or(1)
+        }
+        _ => 1,
+    }
+}
+
 /// The conditions of the flags that answer a comparison: one, both of two,
 /// or either of two.
 #[derive(Clone, Copy, Debug)]
@@ -1642,11 +1661,20 @@ impl Selector<'_, '_, '_> {
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     let group = group_of[&inst];
+                    // An object lies on its type's alignment, or its size's
+                    // where the front end typed it as
+                    // bytes, up to the stack's where the
+                    // function keeps it: a local `double[4]` at 4 mod
+                    // 8 costs a 486 3 clocks an access (nbody -O2: 18,404).
+                    let align = natural_align(&self.module.context.types, &self.layout, allocated)
+                        .max(1 << size.clamp(1, 8).ilog2())
+                        .min(self.callee_facts.stack_alignment(self.arch, name))
+                        .max(1);
                     let disp = *homes
                         .entry(group)
                         .or_insert_with(
                             || {
-                                self.depth += capacity[group];
+                                self.depth = (self.depth + capacity[group] + align - 1).div_euclid(align) * align;
                                 self.extents.push((-self.depth, capacity[group]));
                                 -self.depth
                             },

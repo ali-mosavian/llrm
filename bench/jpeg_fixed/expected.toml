@@ -1,4 +1,4 @@
-reason = "stack alignment: a call's pad and aligned slots shift jpeg bq32 by 1 instruction"
+reason = "frame objects and the relaid hole are 8-aligned in functions holding doubles: jpeg bq32 +9 code bytes, +-1 instruction"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -27,13 +27,13 @@ kernel_ms = 1084.7928
 
 [bq32.O2]
 instructions = 84338433
-code_bytes = 6496
+code_bytes = 6505
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89432827
-code_bytes = 6039
+instructions = 89432826
+code_bytes = 6048
 data_bytes = 29209
 bss_bytes = 0
 

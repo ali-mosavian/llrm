@@ -33,6 +33,8 @@ import llrmbin  # noqa: E402
 
 LLRM = llrmbin.bin_dir() / "llrm-c"   # where cargo put it; build.sh and ctime.py use the same
 STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
+# main is entered as after a call from code that keeps the System V stack boundary: esp + 4, the caller's, a multiple of 16.
+ENTRY_ESP = STACK_TOP - 4
 BASE = 0x10000
 OMF_VARIANTS = ("llrmO1", "llrm", "llrmO3", "llrmOs")   # "llrm" is -O2
 X87 = {CpuidFeature.FPU, CpuidFeature.FPU287, CpuidFeature.FPU287XL_ONLY, CpuidFeature.FPU387, CpuidFeature.FPU387SL_ONLY}
@@ -362,7 +364,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
     for va, blob, msz in segs + elf_segments(OUT / "stub.elf"):
         uc.mem_write(va, blob)
     uc.mem_write(SENT, b"\xf4")
-    esp = STACK_TOP - 8
+    esp = ENTRY_ESP
     uc.mem_write(esp, struct.pack("<III", SENT, 0, 0))
     uc.reg_write(UC_X86_REG_ESP, esp)
     code_end = max(va + len(b) for va, b, _ in segs)
