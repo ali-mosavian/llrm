@@ -1551,6 +1551,7 @@ b0:
     assert_eq!(crate::alias::before_answers() - before, 1, "an answer was worked out twice");
     let a = parsed.object("a");
     assert!(first.contains(&a), "a kept argument has escaped by the call that keeps it: {first:?}");
+}
 
 /// An access was held for each version of its function, and a type tag
 /// attached afterwards logs no change: the held access kept no type, so a
