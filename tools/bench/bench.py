@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm
 sys.path.insert(0, str(next((Path(__file__).resolve().parents[2] / "crates" / "target").glob("*/vsgcc"))))  # wrap.py: the comparison with gcc and clang's
 
 import cpulimit  # noqa: E402
+import benchlist  # noqa: E402
 import basecounts  # noqa: E402
 import maps  # noqa: E402
 import corpus  # noqa: E402
@@ -128,8 +129,7 @@ def directory_name(directory: Path) -> str:
 
 
 def benchmarks(selected: list[str]) -> list[Path]:
-    dirs = [one for one in sorted(BENCH.glob("*/bench.toml"))] + [one for one in sorted(BENCH.glob("parity/*/bench.toml"))]
-    found = [one.parent for one in dirs]
+    found = benchlist.directories(BENCH)
     return [one for one in found if not selected or one.name in selected or str(one.relative_to(BENCH)) in selected]
 
 
@@ -609,7 +609,7 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
 
 
 def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -> list[str]:
-    """What fails the gate for one measurement: no baseline, a count above it (worse) unless a waiver (bench/waivers) names its row,
+    """What fails the gate for one measurement: no baseline, a count above it (worse) unless a waiver (tools/bench/waivers) names its row,
     counter and this count, one below it (better, to bless)."""
     if want is None:
         return [f"{label}: no baseline; run --bless --reason"]
@@ -758,15 +758,15 @@ def base_dry_run(measured: dict, args, old: list[str]) -> list[str]:
 
         head = measure.git("rev-parse", "HEAD")
         base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
-        # the build lock too: measure.py builds its bases in one tree and target, and the binaries must stay while they are measured
-        with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"), measure.locked("build"):
-            base = basecounts.base_counts(
+        with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
+            base, was = basecounts.base_counts(
                 base_sha, args.opt, measure.tree_of, measure.built, lambda directory, opts: basecounts.measure_in_subprocess(directory, opts, args.work / "base")
             )
-        worse, better, stale = basecounts.judge(measured, base, basecounts.waivers())
+        now = basecounts.programs(ROOT)
+        worse, better, stale = basecounts.judge(measured, base, basecounts.waivers(), {name for name in now if was.get(name) == now[name]})
         differing = basecounts.differences(old, worse, better)
     except BaseException as why:  # noqa: BLE001: a dry run must not fail the gate
-        return [f"BASE: dry run failed: {type(why).__name__}: {str(why)[-300:]}"]
+        return ["BASE: dry run failed: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:]]
     lines = [f"BASE {base_sha[:9]}: {len(worse)} worse, {len(better)} better; {len(differing)} differ from expected.toml" + (f"; {len(stale)} stale waivers" if stale else "")]
     lines += [f"BASE-WORSE {one[0]}: {one[1]} {one[3]} > {one[2]}" for one in worse]
     lines += [f"BASE-DIFF {one}" for one in differing] + [f"BASE-STALE {one}" for one in stale]
