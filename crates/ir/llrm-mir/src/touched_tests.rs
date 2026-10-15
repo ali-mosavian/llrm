@@ -127,3 +127,27 @@ fn a_retargeted_branch_removes_one_edge_and_adds_another() {
     assert_eq!(cfg, [(entry, yes, Edge::Removed), (entry, join, Edge::Added)]);
     let _ = no;
 }
+
+/// A pointer solve was redone for an integer edit, and kept for a pointer one:
+/// `pointers` names the pointer values an edit reached and no integer.
+#[test]
+fn pointers_name_the_pointer_values_an_edit_reached_and_no_integer() {
+    let mut module = module();
+    let digest = |module: &mut Module, edit: &dyn Fn(&mut Function)| {
+        let (context, f) = module.function_mut("f").expect("@f");
+        let mark = f.mark();
+        edit(f);
+        f.touched_since(mark).expect("history").with_pointers(f, context)
+    };
+    let integer = digest(&mut module, &|f| {
+        let (x, _) = named(f, "x");
+        f.set_operand(x, 1, Operand::Value(f.parameters()[0]));
+    });
+    assert!(integer.pointers.is_empty(), "{:?}", integer.pointers);
+    let pointer = digest(&mut module, &|f| {
+        let st = store(f);
+        f.erase(st).expect("erased");
+    });
+    let p = module.function_mut("f").expect("@f").1.parameters()[2];
+    assert_eq!(pointer.pointers.iter().collect::<Vec<_>>(), [p]);
+}

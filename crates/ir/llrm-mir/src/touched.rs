@@ -15,9 +15,11 @@
 //! changed an opcode is seen as the new one; the old opcode goes into the log
 //! with the invertible log (rollback), and the epochs then read it.
 
+use crate::context::Context;
 use crate::dense::IdSet;
 use crate::module::{BlockId, Change, Function, InstId, Mark, Operand, ValueId};
 use crate::opcode::Opcode;
+use crate::types::Type;
 
 /// A CFG edge that was added or removed.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -53,11 +55,59 @@ pub struct Touched {
     pub memory_rewritten: IdSet<InstId>,
     /// The function's parameters were inserted or removed.
     pub parameters: bool,
+    /// Pointer (and aggregate) values added, removed or with changed operands,
+    /// and those that loads, stores and calls added, removed, moved or
+    /// rewritten name: what a flow-insensitive points-to solve is built from.
+    /// Empty until `with_pointers` fills it (it needs the types).
+    pub pointers: IdSet<ValueId>,
 }
 
 impl Touched {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// `self` with `pointers` found, as `context` types the values.
+    #[must_use]
+    pub fn with_pointers(
+        mut self,
+        function: &Function,
+        context: &Context,
+    ) -> Self {
+        let wide = |value: ValueId| {
+            !matches!(
+                context.types.get(function.value(value).ty),
+                Type::Int(_) | Type::Float(_) | Type::Void
+            )
+        };
+        let mut pointers = IdSet::<ValueId>::new();
+        for value in self.values_added.iter().chain(self.values_removed.iter()).chain(self.operands_changed.iter()) {
+            if wide(value) {
+                pointers.insert(value);
+            }
+        }
+        let memory = self
+            .memory_added
+            .iter()
+            .chain(self.memory_removed.iter())
+            .chain(self.memory_moved.iter())
+            .chain(self.memory_rewritten.iter());
+        for inst in memory {
+            let one = function.instruction(inst);
+            for value in one.operands.iter().filter_map(|operand| match operand {
+                Operand::Value(value) => Some(*value),
+                _ => None,
+            }) {
+                if wide(value) {
+                    pointers.insert(value);
+                }
+            }
+            if let Some(result) = one.result.filter(|&result| wide(result)) {
+                pointers.insert(result);
+            }
+        }
+        self.pointers = pointers;
+        self
     }
 
     /// Whether a load, a store or a call was added, removed, moved or
