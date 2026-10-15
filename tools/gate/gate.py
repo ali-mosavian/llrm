@@ -528,7 +528,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # and tests/test_readme.py in the train.
         "pytest-quick": cfg_pytest(skip_py + tuple(cfg["smoke"]["slow_pytest"]), "pytest-quick-durations"),
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
-        "qcport": "[ -f ~/scratch/qcport-env.sh ] || { echo SKIPPED: no ~/scratch/qcport-env.sh; exit 77; }; . ~/scratch/qcport-env.sh && uv run -q --project tools python tools/qcport-run.py",
+        "qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/qcport-run.py',
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
         "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} --test run -- test_every_program_under_tests_run_prints_its_out",
     }
@@ -562,6 +562,7 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     out = {
         **({"lib": (None, False), "doc": (None, False)} if libs else {}),
         "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole and t not in skip_bins), False),
+        "facts": (1, False),  # one binary that must report: a log with none (a build that ran no test) is incomplete, not a pass
         "run": (1, True),
         "scans": (None, True),
         "rfmt-post": (None, False),
@@ -578,12 +579,16 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
 def missing_capabilities(environ: dict | None = None) -> dict[str, str]:
     """capability -> why this host lacks it: a directory its [capability] table names is not there.
     Only where GATE_ALLOW_MISSING is set (the CI workflow): elsewhere a moved tool directory must turn the gate red, not skip.
+    "1" allows every capability to be missing; a comma list ("perf") allows those and no others: a tool CI should have turns red.
     One whose LLRM_REQUIRE_* variable the caller set is never missing: its tests fail, as they always did."""
     environ = os.environ if environ is None else environ
     out = {}
     if not environ.get("GATE_ALLOW_MISSING"):
         return out
+    allowed = environ["GATE_ALLOW_MISSING"]
     for name, cap in load().get("capability", {}).items():
+        if allowed != "1" and name not in allowed.split(","):
+            continue
         if any(environ.get(v) for v in cap["require"]):
             continue
         for need in cap["needs"]:
@@ -632,6 +637,23 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
     out = {k: [c for c in needs if c in missing] for k, needs in load().get("requires", {}).items()}
     langs = [k[5:] for k, hit in out.items() if hit and k.startswith("lang:")]
     return langs, frozenset(k[4:] for k, hit in out.items() if hit and k.startswith("bin:"))
+
+
+def private_groups(p: Plan, root: Path = ROOT) -> list[str]:
+    """The groups of this plan that need a capability only the private checkout has: their jobs read it, and a fork's pull request fails them."""
+    cfg = load()
+    private = {name for name, cap in cfg["capability"].items() if cap.get("private")}
+    steps = {"lang": "run", "bin": "integration"}  # the step that runs a language or a cheap test binary
+    need = {steps.get(key.split(":")[0], key) if ":" in key else key for key, caps in cfg["requires"].items() if private & set(caps)}
+    if any(private & set(caps) for caps in declared_requirements(root).values()):
+        need |= {"pytest", "pytest-programs", "pytest-quick", "changed-tests"}
+    return sorted(g for g, members in cfg["groups"].items() if any(s in p.steps and s in need for s in members))
+
+
+def private_env(directory: str, group: str = "") -> dict[str, str]:
+    """The tool variables for a job: each points into the private checkout at `directory`; the group's table replaces the general one."""
+    cfg = load()["private"]
+    return {name: str(Path(directory) / sub) for name, sub in {**cfg["env"], **cfg.get("group_env", {}).get(group, {})}.items()}
 
 
 def groups_of(p: Plan, skipped: dict[str, str]) -> dict[str, list[str]]:
@@ -708,6 +730,11 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
     if code == 0 and check and (why := incomplete(path.read_text(), *check)):
         path.open("a").write(f"\nINCOMPLETE: {why}\n")
         code = 78
+    if code == 77 and os.environ.get("GATE_ALLOW_MISSING"):
+        # A step that skips itself (no env file, no demos) on a runner meant to have its tools did not run: the missing ones allowed were
+        # skipped by the plan, before this. CI's `qcport` said SKIPPED and passed.
+        path.open("a").write("\nFAILED: the step skipped itself where only the capabilities in GATE_ALLOW_MISSING may be missing\n")
+        code = 1
     if code not in (0, 77):
         # The next run of the step overwrites its log; the failure is evidence, kept.
         (logs / f"{name}.failed.log").write_text(path.read_text())
@@ -727,6 +754,10 @@ def snapshot_binaries(release: Path, into: Path) -> Path:
             os.link(one, staged)
             os.replace(staged, into / one.name)
     return into
+
+
+# The steps that run the compiler's binaries (the others build what they test, or read the tree).
+USES_BINARIES = ("pytest", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
 
 
 def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
@@ -778,7 +809,14 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
             print(verdict_line(p.tier, ["build"], [], time.time() - start, [], head_state()[0]))
             return 1, ["build"]
     if env["LLRM_BIN"] == f"{target}/release":
-        env["LLRM_BIN"] = str(snapshot_binaries(Path(target) / "release", Path(target) / "gate-bins"))
+        if not (Path(target) / "release").is_dir():
+            # A plan with no build assumes the binaries are there (a tools-only diff): on a fresh target dir say so, not FileNotFoundError.
+            if needing := [s for s in p.steps if s in USES_BINARIES]:
+                print(f"gate: {target}/release does not exist and this plan builds nothing; its steps ({' '.join(needing)}) run the compiler's binaries: "
+                      "build them first (`gate.py run --group build`, or `cargo build --release --bins`), or set LLRM_BIN", flush=True)
+                return 2, ["build"]
+        else:
+            env["LLRM_BIN"] = str(snapshot_binaries(Path(target) / "release", Path(target) / "gate-bins"))
     alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
     jobs = default_jobs(os.environ)
@@ -883,7 +921,7 @@ def scoped(argv: list[str], environ: dict | None = None, have: str | None = None
 def main() -> int:
     kill_on_term()
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["plan", "run", "bisect", "main"])
+    ap.add_argument("command", choices=["plan", "run", "bisect", "main", "private-env", "private-repo", "private-public"])
     ap.add_argument("rest", nargs="*")
     ap.add_argument("--base", default="origin/main")
     ap.add_argument("--files", nargs="*")
@@ -898,6 +936,14 @@ def main() -> int:
     args = ap.parse_args()
     if args.command == "main":
         return watch_main(args.force)
+    if args.command in ("private-repo", "private-public"):
+        cfg = load()["private"]
+        print(cfg["repo"] if args.command == "private-repo" else "\n".join(f"{k}={v}" for k, v in cfg["public"].items()))
+        return 0
+    if args.command == "private-env":  # for `>> "$GITHUB_ENV"`: paths only, nothing read from the checkout
+        for name, value in private_env(args.rest[0], args.group or "").items():
+            print(f"{name}={value}")
+        return 0
     if args.command == "bisect":
         return bisect(args.rest[0], args.rest[1], args.rest[2:])
     if args.command == "run" and args.tier == "smoke":
@@ -917,7 +963,7 @@ def main() -> int:
         p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))
     skipped = skipped_steps(p.steps, missing_capabilities(), p.languages)
     if args.json:
-        print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "skipped": skipped}))
+        print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "private": private_groups(p), "skipped": skipped}))
         return 0
     print(f"tier {p.tier}: {p.reason}")
     for step, why in skipped.items():
