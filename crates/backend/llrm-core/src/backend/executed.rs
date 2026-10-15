@@ -81,7 +81,7 @@
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops;
 use crate::backend::cpu::Profile;
-use crate::model::ir::{Addr, Loc, Operation, Semantics, Space};
+use crate::model::ir::{Addr, Loc, Operation, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexSet;
 
@@ -98,8 +98,6 @@ pub struct Executed {
     pub reloads: f64,
     pub stores: f64,
     pub remats: f64,
-    /// Read-modify-write instructions on a cell (`add [m],1`).
-    pub updates: f64,
     pub branches: f64,
     pub taken: f64,
     pub jumps: f64,
@@ -183,28 +181,6 @@ pub fn summary(
         ),
         None => format!("{} executes an unbounded amount", body.name),
     }
-}
-
-/// Whether `what` reads and writes the same cell: `add [m],1`, `inc [m]`.
-fn updates_cell(what: &Semantics) -> bool {
-    matches!(what.op, Operation::Binary | Operation::Unary)
-        && what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_)) && what.sources.contains(dest))
-}
-
-/// What a body costs to run on `cpu`: `work`, with each update of a cell priced
-/// as the load, the operation and the store it replaces where the CPU's table
-/// has it no cheaper (`alu_mr` at least `mov_rm` + `alu_rr` + `mov_mr`: three
-/// clocks of the 486 and the P5 for three). One instruction and two operands
-/// undercounted it by two, and x_cordic -Os kept three counters in memory for
-/// the route that reloaded them.
-pub fn work_on(
-    body: &LirBody,
-    cpu: &Profile,
-) -> Option<f64> {
-    let priced = |form: &str| cpu.cost(form).ok();
-    let separate = priced("mov_rm")? + priced("alu_rr")? + priced("mov_mr")?;
-    let surcharge = if priced("alu_mr").is_some_and(|update| update >= separate) { 2.0 } else { 0.0 };
-    executed(body).map(|done| done.instructions + done.memory + done.updates * surcharge)
 }
 
 /// What a body costs to run, one unit for an instruction and one for a memory
@@ -293,9 +269,6 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
                 *count += runs;
             }
             if let Some(what) = &one.what {
-                if updates_cell(what) {
-                    out.updates += runs;
-                }
                 out.memory +=
                     runs * what.dests.iter().chain(&what.sources).filter(|at| matches!(at, Loc::Mem(_))).count() as f64;
             }
@@ -664,34 +637,5 @@ mod tests {
         // cmp and jne every time, mov and jmp a quarter, block 3's mov three
         // quarters, ret.
         assert!((done.instructions - 4.25).abs() < 1e-3, "{}", done.instructions);
-    }
-
-    /// x_cordic -Os kept three outer counters in memory as `add [m],imm`,
-    /// counted one instruction and two operands each, against the three
-    /// instructions and two operands of the load, add and store the other
-    /// route had: the cheaper by the count, 202 clocks slower, since the 486
-    /// takes three clocks for either. Where the table has the update no
-    /// cheaper than its three parts, it is priced as them.
-    #[test]
-    fn test_an_update_of_a_cell_is_priced_as_its_load_operation_and_store_where_the_table_says_so() {
-        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
-        let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -4)), 2));
-        let one = Loc::Imm(crate::model::ir::Imm { value: 1, width: 2, address: None });
-        let body = |insns: Vec<Arc<Insn>>| {
-            LirBody::new("update", 1, vec![LirBlock::new(1, insns).into()], IndexMap::default(), IndexMap::default())
-        };
-        let update = body(vec![
-            insn(1, Operation::Binary, "add", vec![cell.clone()], vec![cell.clone(), one.clone()]),
-            insn(2, Operation::Return, "ret", vec![], vec![]),
-        ]);
-        let parts = body(vec![
-            insn(1, Operation::Move, "mov", vec![ax.clone()], vec![cell.clone()]),
-            insn(2, Operation::Binary, "add", vec![ax.clone()], vec![ax.clone(), one]),
-            insn(3, Operation::Move, "mov", vec![cell], vec![ax]),
-            insn(4, Operation::Return, "ret", vec![], vec![]),
-        ]);
-        let cpu = cpu::named("486").unwrap();
-        assert_eq!(super::work_on(&update, cpu), super::work_on(&parts, cpu));
-        assert!(super::work_on(&update, cpu) > super::work(&update), "the count alone priced it cheaper");
     }
 }

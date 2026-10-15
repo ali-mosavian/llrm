@@ -761,7 +761,7 @@ fn other_cost(
     target: &Target<'_>,
 ) -> Option<f64> {
     if target.cpu.size {
-        executed::work_on(&made.body, target.cpu)
+        executed::work(&made.body)
     } else {
         made.body
             .insns()
@@ -894,7 +894,7 @@ fn cost(
             })
             .sum()
     } else {
-        executed::work_on(&made.body, target.cpu)
+        executed::work(&made.body)
     }
 }
 
