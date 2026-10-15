@@ -75,9 +75,11 @@ def _decode(raw: bytes) -> tuple[int, bool, bool]:
     return memory, one.mnemonic in RETURNS, one.has_rep_prefix or one.has_repe_prefix or one.has_repne_prefix
 
 
-def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None) -> Run:
+def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None, only: tuple[int, int] | None = None) -> Run:
     """`exe` to its exit; `entry` is the linear address, from the image's first byte, of the function whose
-    work is counted (None: count nothing, only run). Files the program opens live in `cwd`."""
+    work is counted (None: count nothing, only run). `only` is a range of such addresses: of the region, what runs outside it
+    (the scene around the code under test) is not counted, and the region still ends where `entry` returns. Files the program
+    opens live in `cwd`."""
     data = exe.read_bytes()
     (_, last, pages, nrel, header, _, _, ss, sp, _, ip, cs, relocations, _) = struct.unpack("<2sHHHHHHHHHHHHH", data[:28])
     size = (pages - 1) * 512 + (last or 512)
@@ -118,6 +120,16 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         memory, returns, repeated = info
         # A repeated string instruction fires the hook once per iteration, and once more with CX at 0, when it does nothing.
         if repeated and uc.reg_read(UC_X86_REG_CX) == 0:
+            return
+        if only is not None and not only[0] <= address - LOAD * 16 < only[1]:
+            # Outside the code counted: what left it (a call, a return) is charged as taken, and nothing here is.
+            before = state.get("before")
+            if before is not None:
+                counts.clocks += price(before[1], True, state["first"], before[2], before[3])
+                state["before"] = None
+            if returns and uc.reg_read(UC_X86_REG_SP) == state["entry_sp"]:
+                state["active"] = False
+                state["done"] = True
             return
         one = instructions.get(address)
         if one is None:

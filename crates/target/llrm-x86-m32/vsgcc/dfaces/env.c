@@ -4,82 +4,122 @@
    Everything a stand-in is asked is folded into one hash (integers exactly, floats rounded coarsely enough that the x87's
    extended intermediates and a float rounded at every store agree), and a stand-in answers from its arguments alone, so a
    build of d_faces.c that computes anything differently reports another hash. */
+/* FLAT (m32 for gcc, clang and llrm): the segmented keywords mean nothing. Otherwise (llrm -m16) they are the file's own, and so is
+   the calling convention d_faces.c is written to. Integers are `short` and `long` throughout: an `int` is 16 bits in one and 32 in
+   the other, and the hash must come out the same. */
+#ifdef FLAT
 #define pascal
 #define far
 #define near
 #define huge
+#define PF
+#define FAR(p) ((long)(p))
+#else
+#define PF pascal far
+#define FAR(p) ((long)(void far *)(p))
+#endif
 #include "qcshared.h"
 
 typedef struct { float x, y, z, u, v; } QglVtxView;
 extern void report(long value);
 
-enum { NF = 96, NN = 16, NT = 12, NM = 10, NB = 3, ROWS = 4, GEOM_BYTES = 8192 };
+enum { NF = 96, NN = 16, NT = 12, NM = 10, NB = 4, ROWS = 4, GEOM_BYTES = 8192 };
 
-static unsigned hash = 2166136261u;
-static void fold(unsigned v) { hash = (hash ^ v) * 16777619u; }
-static void fold_f(float x, float scale) { fold((unsigned)(int)(x * scale + (x < 0 ? -0.5f : 0.5f))); }
+static unsigned long hash = 2166136261UL;
+static void fold(unsigned long v)
+{
+#ifdef TRACE_ALL
+    report((long)v);
+#endif
+    hash = (hash ^ v) * 16777619UL;
+}
+#ifdef TRACE_ALL
+static void mark(long k) { report(-1000 - k); }
+#else
+#define mark(k) ((void)0)
+#endif
+/* The floats the rasteriser is handed are summed, not hashed: a float that lands on a rounding boundary differs between a compiler
+   that keeps extended precision and one that rounds at every store, and a hash would call that a miscompile. The runner compares
+   the sums with a tolerance, and the structure (what was drawn, in what order, with what ints) exactly. */
+static double fsum[5];
+static void accumulate(float x, float y, float z, float u, float v)
+{
+    fsum[0] += x; fsum[1] += y; fsum[2] += z; fsum[3] += u; fsum[4] += v;
+}
 
 /* Paths the scene must reach, read back by the runner (readme.md lists them). */
-unsigned coverage[24];
+unsigned long coverage[24];
 enum { C_FLAT, C_TEX, C_PTEX, C_WIRE, C_REFUSED, C_SC_HIT, C_SC_MISS, C_ALLOC, C_ALLOC_FAIL, C_BUILD, C_NOZ, C_NODST };
 #define COVER(k) (coverage[k]++)
 
 static short frame_z = 1;
-static unsigned tick = 0;
-static unsigned lcg = 12345;
-static unsigned next(void) { lcg = lcg * 1103515245u + 12345u; return lcg >> 8; }
+static unsigned long tick = 0;
+static unsigned long lcg = 12345UL;
+static unsigned long next(void) { lcg = lcg * 1103515245UL + 12345UL; return lcg >> 8; }
 
 /* ---- what d_faces.c calls ---- */
+static short gv_buf[9 + 33 * 3 + 8];
+#ifdef TRACE_ALL
+#define DUMPGV do { short q; report(-6000); for (q = 0; q < 116; q++) report(gv_buf[q]); } while (0)
+#else
+#define DUMPGV ((void)0)
+#endif
 static short geom[ROWS][GEOM_BYTES / 2];
 
-void qglClRect(short x0, short y0, short x1, short y1) { fold(x0); fold(y0); fold(x1); fold(y1); }
-short qglSfZMode(long surf, short mode) { fold((unsigned)surf); fold(mode); return frame_z; }
-void qglRsCoverClear(void) { fold(0x77); }
-void qglRsCover(short on) { fold(0x78 + on); }
-void qglDrLine(long d, short x0, short y0, short x1, short y1, short col) { fold((unsigned)d); fold(x0 + y0 + x1 + y1 + col); }
+void PF qglClRect(short x0, short y0, short x1, short y1) { mark(0); fold((unsigned long)x0); fold((unsigned long)y0); fold((unsigned long)x1); fold((unsigned long)y1); }
+short PF qglSfZMode(long surf, short mode) { mark(1); fold((unsigned long)surf); fold(mode); return frame_z; }
+void PF qglRsCoverClear(void) { mark(2); fold(0x77); }
+void PF qglRsCover(short on) { mark(3); fold((unsigned long)(0x78 + on)); }
+void PF qglDrLine(long d, short x0, short y0, short x1, short y1, short col) { mark(4); fold((unsigned long)d); fold((unsigned long)(x0 + y0 + x1 + y1 + col)); }
 
-short qglRsPoly(long dst, void *v, short cnt, short mode, long src)
+short PF qglRsPoly(long dst, void far *v, short cnt, short mode, long src)
 {
-    QglVtxView *p = (QglVtxView *)v;
+    QglVtxView far *p = (QglVtxView far *)v;
     short i;
-    fold((unsigned)dst); fold(cnt); fold(mode); fold((unsigned)src);
+    mark(5);
+    fold((unsigned long)dst); fold((unsigned long)cnt); fold((unsigned long)mode); fold((unsigned long)src);
     for (i = 0; i < cnt; i++) {
-        fold_f(p[i].x, 8.0f); fold_f(p[i].y, 8.0f); fold_f(p[i].z, 100000.0f);
-        fold_f(p[i].u, 16.0f); fold_f(p[i].v, 16.0f);
+        accumulate(p[i].x, p[i].y, p[i].z * 100000.0f, p[i].u, p[i].v);
+#ifdef TRACE_ALL
+        report(-4000); report((long)(p[i].x * 8)); report((long)(p[i].y * 8)); report((long)(p[i].z * 100000.0f)); report((long)(p[i].u * 16)); report((long)(p[i].v * 16));
+#endif
     }
+#ifdef TRACE_ALL
+    report(-2000); report((long)fsum[0]); report((long)fsum[1]); report((long)fsum[3]);
+#endif
     COVER(mode == 0 ? C_WIRE : mode == 1 ? C_FLAT : mode == 2 ? C_TEX : C_PTEX);
     if (mode >= 2 && (src & 15) == 7) { COVER(C_REFUSED); return -1; }
     return cnt;
 }
 
-long mod_geom_map(void *g, short row) { fold(row); return (long)geom[row & (ROWS - 1)]; }
-long mod_tex_raw(void *g, short k, short mip) { fold(k * 8 + mip); return 7000 + k * 4 + mip; }
-long mod_tex_shaded(void *g, short k, short mip) { fold(k * 8 + mip + 1); return 9000 + k * 4 + mip; }
-short sc_ready(void) { return 1; }
-short sc_held(short face) { fold(face); return face % 4 == 0 ? -1 : face % 3; }
-long sc_find(short face, short mip, short a, short b, short stag)
-{
-    fold(face); fold(mip); fold(a); fold(b); fold(stag);
+long PF mod_geom_map(void *g, short row) { mark(6); fold((unsigned long)row); return FAR(geom[row & (ROWS - 1)]); }
+long PF mod_tex_raw(void *g, short k, short mip) { mark(7); fold((unsigned long)(k * 8 + mip)); return 7000 + k * 4 + mip; }
+long PF mod_tex_shaded(void *g, short k, short mip) { mark(8); DUMPGV; fold((unsigned long)(k * 8 + mip + 1)); return 9000 + k * 4 + mip; }
+short PF sc_ready(void) { mark(9); return 1; }
+short PF sc_held(short face) { mark(10); fold((unsigned long)face); return face % 4 == 0 ? -1 : face % 3; }
+long PF sc_find(short face, short mip, short a, short b, short stag)
+{ mark(11);
+    fold((unsigned long)face); fold((unsigned long)mip); fold((unsigned long)a); fold((unsigned long)b); fold((unsigned long)stag);
     if (stag == -1 || (face + mip) % 4 == 1) { COVER(C_SC_MISS); return 0; }
     COVER(C_SC_HIT);
     return 100 + face * 8 + mip;
 }
-long sc_alloc(void *g, short face, short mip, short w, short h, short fw, short fh, short stag)
-{
-    fold(face); fold(mip); fold(w); fold(h); fold(fw); fold(fh); fold(stag);
+long PF sc_alloc(void *g, short face, short mip, short w, short h, short fw, short fh, short stag)
+{ mark(12);
+    fold((unsigned long)face); fold((unsigned long)mip); fold((unsigned long)w); fold((unsigned long)h); fold((unsigned long)fw); fold((unsigned long)fh); fold((unsigned long)stag);
     if (face % 7 == 3) { COVER(C_ALLOC_FAIL); return 0; }
     COVER(C_ALLOC);
     return 5000 + face;
 }
-long sc_view_ofs(void) { return 77; }
-short ls_epoch(short style) { fold(style); return style + 1; }
-long sys_rdtsc(void) { tick += 977; return (long)tick; }
-long qglTmrCycles(void) { tick += 311; return (long)tick; }
-void sb_build(void *g, long lm_dc, long tex_dc, short face, short mip, short pw, short ph,
+long PF sc_view_ofs(void) { mark(13); return 77; }
+short PF ls_epoch(short style) { mark(14); fold((unsigned long)style); return style + 1; }
+long PF sys_rdtsc(void) { mark(15); tick += 977; return (long)tick; }
+long PF qglTmrCycles(void) { mark(16); tick += 311; return (long)tick; }
+void PF sb_build(void *g, long lm_dc, long tex_dc, short face, short mip, short pw, short ph,
               BASARRAY *tri, BASARRAY *texinf, BASARRAY *gv, BASARRAY *mip_inf, BASARRAY *planes)
-{
-    fold((unsigned)lm_dc); fold((unsigned)tex_dc); fold(face); fold(mip); fold(pw); fold(ph);
-    fold(((short *)gv->farptr)[0]);
+{ mark(17);
+    fold((unsigned long)lm_dc); fold((unsigned long)tex_dc); fold((unsigned long)face); fold((unsigned long)mip); fold((unsigned long)pw); fold((unsigned long)ph);
+    fold((unsigned long)((short far *)gv->farptr)[0]);
     COVER(C_BUILD);
 }
 
@@ -92,7 +132,6 @@ static Node nodes[NN];
 static MipTex mipinf[NM];
 static short order[NN];
 static short pflag[(NF + 15) / 16];
-static short gv_buf[9 + 33 * 3 + 8];
 static long tex_ofs[NM * 4];
 static float turb_sin[256];
 static BASARRAY a_tri, a_texinf, a_gv, a_brush, a_planes, a_nodes, a_mipinf, a_order, a_pflag;
@@ -102,6 +141,14 @@ static char world;
 static const short COS[12] = { 1000, 866, 500, 0, -500, -866, -1000, -866, -500, 0, 500, 866 };
 static const short SIN[12] = { 0, 500, 866, 1000, 866, 500, 0, -500, -866, -1000, -866, -500 };
 
+/* Word `k` of the record at byte `ofs` of a row, if the row holds it: a record that meets the end of its row is cut there (d_faces
+   clamps its copy to the row, and what lies past the row is not the scene's to overwrite). */
+static void put(long row, long ofs, long k, long v)
+{
+    long at = ofs + 2 * k;
+    if (at + 2 <= GEOM_BYTES) *(short *)((char *)geom[row] + at) = (short)v;
+}
+
 static void array(BASARRAY *a, void *data)
 {
     a->farptr = data;
@@ -110,7 +157,7 @@ static void array(BASARRAY *a, void *data)
 
 static void build(void)
 {
-    int i, k, j;
+    long i, k, j;
     for (i = 0; i < NM; i++) {
         mipinf[i].wdth = (float)(16 << (i % 4));
         mipinf[i].hght = (float)(16 << ((i + 1) % 4));
@@ -129,16 +176,18 @@ static void build(void)
     brush[0].ofs.x = 0; brush[0].ofs.y = 0; brush[0].ofs.z = 0;
     brush[1].ofs.x = 50; brush[1].ofs.y = 0; brush[1].ofs.z = -20;
     brush[2].ofs.x = -30; brush[2].ofs.y = 100; brush[2].ofs.z = 10;
+    brush[3].ofs.x = 10; brush[3].ofs.y = -5; brush[3].ofs.z = 15;      /* side >> 1 reaches 3 */
     for (i = 0; i < NB; i++) { brush[i].draw = 1; brush[i].solid = 1; brush[i].node = (short)i; }
-    for (i = 0; i < 256; i++) turb_sin[i] = (float)((i * 7) % 33 - 16) * 0.5f;
+    /* Four steps, not a wave: the index is floor(coordinate * 326 + phase), and a rounding the compilers disagree on, 1 in 10^7,
+       would move a vertex to another entry. Steps move it only at the 64th. */
+    for (i = 0; i < 256; i++) turb_sin[i] = (float)(i >> 6) * 0.25f;
     for (i = 0; i < NM * 4; i++) tex_ofs[i] = 1000 + i * 3;
     for (i = 0; i < NF; i++) {
-        int n = 3 + (int)(next() % 4);                   /* triangles to hexagons */
-        int row = i % ROWS, ofs = (i / ROWS) * 64;
-        int radius = 40 + (int)(next() % 160);
-        int cx = (int)(next() % 900) - 450, cz = (int)(next() % 700) - 350;
-        int cy = 60 + (int)(next() % 1700);
-        short *r;
+        long n = 3 + (long)(next() % 4);                   /* triangles to hexagons */
+        long row = i % ROWS, ofs = (i / ROWS) * 64;
+        long radius = 40 + (long)(next() % 160);
+        long cx = (long)(next() % 900) - 450, cz = (long)(next() % 700) - 350;
+        long cy = 60 + (long)(next() % 1700);
         if (i % 19 == 0) cy = -150 + (int)(next() % 200);         /* across or behind the near plane */
         if (i % 23 == 0) cy = 1650 + (int)(next() % 500);         /* across or beyond the far plane */
         if (i % 29 == 0) n = 2;                                   /* too few corners: clipped away */
@@ -149,26 +198,24 @@ static void build(void)
         tri[i].geom_row = (short)row;
         tri[i].geom_ofs = (short)ofs;
         tri[i].tex_info_id = (short)(i % NT);
-        r = (short *)((char *)geom[row] + ofs);
-        r[0] = (short)(n == 33 && i == 62 ? 40 : n);              /* one record claims more than 33: clamped */
-        r[1] = (short)(i % 3 == 0 ? -1 : 0);                      /* no lightmap on every third face */
-        r[2] = 0;
-        r[3] = (short)(i * 5 % 64); r[4] = (short)(i * 3 % 48);
-        r[5] = (short)(2 + i % 4 * 2); r[6] = (short)(2 + (i + 1) % 4 * 2);
-        r[7] = (short)(i % 5);
-        r[8] = 0;
+        put(row, ofs, 0, n == 33 && i == 62 ? 40 : n);             /* one record claims more than 33: clamped */
+        put(row, ofs, 1, i % 3 == 0 ? -1 : 0);                     /* no lightmap on every third face */
+        put(row, ofs, 2, 0);
+        put(row, ofs, 3, i * 5 % 64); put(row, ofs, 4, i * 3 % 48);
+        put(row, ofs, 5, 2 + i % 4 * 2); put(row, ofs, 6, 2 + (i + 1) % 4 * 2);
+        put(row, ofs, 7, i % 5);
+        put(row, ofs, 8, 0);
         for (j = 0; j < n && j < 33; j++) {
-            int a = j * 12 / (n < 12 ? n : 12) + (n > 12 ? j / 12 : 0);
-            int rr = radius - (n > 12 ? j * 3 : 0);
-            if (ofs == GEOM_BYTES - 20 && j > 4) break;
-            r[9 + j * 3 + 0] = (short)((cx + rr * COS[a % 12] / 1000) * 8);
-            r[9 + j * 3 + 1] = (short)((cy + (j & 1) * 6) * 8);
-            r[9 + j * 3 + 2] = (short)((cz + rr * SIN[a % 12] / 1000) * 8);
+            long a = j * 12 / (n < 12 ? n : 12) + (n > 12 ? j / 12 : 0);
+            long rr = radius - (n > 12 ? j * 3 : 0);
+            put(row, ofs, 9 + j * 3 + 0, (cx + rr * COS[a % 12] / 1000) * 8);
+            put(row, ofs, 9 + j * 3 + 1, (cy + (j & 1) * 6) * 8);
+            put(row, ofs, 9 + j * 3 + 2, (cz + rr * SIN[a % 12] / 1000) * 8);
         }
-        planes[i].norm.x = (float)((int)(next() % 200) - 100) * 0.01f;
-        planes[i].norm.y = (float)((int)(next() % 200) - 100) * 0.01f;
+        planes[i].norm.x = (float)((long)(next() % 200) - 100) * 0.01f;
+        planes[i].norm.y = (float)((long)(next() % 200) - 100) * 0.01f;
         planes[i].norm.z = 0.5f;
-        planes[i].dist = (float)((int)(next() % 600) - 300);
+        planes[i].dist = (float)((long)(next() % 600) - 300);
     }
     for (i = 0; i < NN; i++) {
         nodes[i].plane_id = (short)i;
@@ -181,24 +228,51 @@ static void build(void)
     array(&a_tri, tri); array(&a_texinf, texinf); array(&a_gv, gv_buf); array(&a_brush, brush); array(&a_planes, planes);
     array(&a_nodes, nodes); array(&a_mipinf, mipinf); array(&a_order, order); array(&a_pflag, pflag);
     world = 1;
+#ifdef TRACE_ALL
+    {
+        long sum = 0, r2;
+        for (r2 = 0; r2 < ROWS; r2++) for (i = 0; i < GEOM_BYTES / 2; i++) sum += geom[r2][i] * (i % 7 + 1);
+        report(-3000); report(sum);
+        sum = 0;
+        for (i = 0; i < NF; i++) sum += (long)(planes[i].norm.x * 1000) + (long)(planes[i].norm.y * 1000) + (long)planes[i].dist;
+        report(sum);
+        sum = 0;
+        for (i = 0; i < NF; i++) sum += tri[i].geom_row * 3 + tri[i].geom_ofs + tri[i].side * 5 + tri[i].tex_info_id * 7;
+        report(sum);
+    }
+#endif
 }
 
+#ifdef FLAT
 typedef void (*DrawFn)(void *, DrawParams *, float *, Vec3f *, BASARRAY *, BASARRAY *, BASARRAY *, BASARRAY *, BASARRAY *,
                        BASARRAY *, BASARRAY *, BASARRAY *, BASARRAY *);
 typedef short (*LayoutFn)(long, long);
+#endif
+#ifdef FLAT
 /* Where the compiler under test put the two functions: the runner writes them in before it starts. */
 DrawFn entry_draw;
 LayoutFn entry_layout;
+#define DRAW entry_draw
+#define LAYOUT entry_layout
+#else
+extern void PF d_draw_faces(void *, DrawParams *, float *, Vec3f *, BASARRAY *, BASARRAY *, BASARRAY *, BASARRAY *, BASARRAY *,
+                            BASARRAY *, BASARRAY *, BASARRAY *, BASARRAY *);
+extern short PF d_faces_layout_ok(long, long);
+#define DRAW d_draw_faces
+#define LAYOUT d_faces_layout_ok
+#endif
 
-static void frame(int which, float *m, Vec3f *campos)
+static void frame(short which, float *m, Vec3f *campos)
 {
     static const short mode[5] = { 0, 1, 2, 0, 0 };
     dp.h_dst_dc = which == 3 ? 0 : 424242;
-    dp.tex_ofs_ptr = (long)tex_ofs;
-    dp.turb_ptr = (long)turb_sin;
+    dp.tex_ofs_ptr = FAR(tex_ofs);
+    dp.turb_ptr = FAR(turb_sin);
     dp.xresh = 160.0f; dp.yresh = 100.0f;
     dp.z_near = 4.0f; dp.z_far = 1800.0f;
-    dp.anim_time = 1.37f + (float)which * 0.31f;
+    /* floor(time * 10) picks the animation frame: a time whose tenths sit on a whole number (2.30 * 10 is 22.999998 or 23.000002) picks
+       another frame by the compiler. */
+    dp.anim_time = 1.373f + (float)which * 0.317f;
     dp.dl_x = 100.0f; dp.dl_y = 700.0f; dp.dl_z = 20.0f; dp.dl_radius = which == 4 ? 600.0f : 90.0f;
     dp.ord_count = NN;
     dp.use_lm = (short)(which != 3);
@@ -211,26 +285,36 @@ static void frame(int which, float *m, Vec3f *campos)
     frame_z = (short)(which != 1);
     if (!frame_z) COVER(C_NOZ);
     if (!dp.h_dst_dc) COVER(C_NODST);
-    entry_draw((void *)&world, &dp, m, campos, &a_tri, &a_texinf, &a_gv, &a_brush, &a_planes, &a_nodes, &a_mipinf, &a_order, &a_pflag);
-    fold(dp.polys); fold(dp.tris); fold(dp.lm_want); fold(dp.lm_fallback); fold(dp.qgl_faces); fold(dp.qgl_drop);
-    fold((unsigned)dp.build_us); fold((unsigned)dp.cy_geom);
+    DRAW((void *)&world, &dp, m, campos, &a_tri, &a_texinf, &a_gv, &a_brush, &a_planes, &a_nodes, &a_mipinf, &a_order, &a_pflag);
+    fold((unsigned long)dp.polys); fold((unsigned long)dp.tris); fold((unsigned long)dp.lm_want); fold((unsigned long)dp.lm_fallback);
+    fold((unsigned long)dp.qgl_faces); fold((unsigned long)dp.qgl_drop);
+    fold((unsigned long)dp.build_us); fold((unsigned long)dp.cy_geom);
+#ifdef TRACE
+    report((long)hash);
+#endif
 }
 
-long bench_dfaces(int n)
+long bench_dfaces(short n)
 {
     static float m0[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0 };
     static float m1[16] = { 1.3f, 0, 0, 0, 0, 1.1f, 0, 0, 0, 0, 1, 1, 12.5f, -7.25f, 0, 0 };
     Vec3f here = { 0, 0, 0 }, there = { 20, -10, 5 };
-    int f;
+    short f;
     if (!world) build();
-    hash = 2166136261u;
-    fold(entry_layout((long)sizeof(DrawParams), (long)((char *)&dp.qgl_drop - (char *)&dp)));
+#ifdef TRACE_ALL
+    for (f = 0; f < NF; f++) { report(-5000 - f); report(tri[f].geom_row); report(tri[f].geom_ofs); report(tri[f].side); report(tri[f].tex_info_id); }
+#endif
+    hash = 2166136261UL;
+    for (f = 0; f < 5; f++) fsum[f] = 0;
+    fold((unsigned long)LAYOUT((long)sizeof(DrawParams), (long)((char *)&dp.qgl_drop - (char *)&dp)));
     for (f = 0; f < 5; f++) frame(f, f == 4 ? m1 : m0, f == 4 ? &there : &here);
     return (long)hash;
 }
 
 int main(void)
 {
+    short k;
     report(bench_dfaces(0));
+    for (k = 0; k < 5; k++) report((long)(fsum[k] + 0.5));
     return 0;
 }
