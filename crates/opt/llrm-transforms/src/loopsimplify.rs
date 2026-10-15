@@ -164,6 +164,10 @@ use crate::edges;
 pub struct LoopSimplify;
 
 impl FunctionPass for LoopSimplify {
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "loopsimplify"
     }

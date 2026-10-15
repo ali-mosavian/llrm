@@ -156,11 +156,11 @@ build-script-reruns = "build_script_reruns"
 # and the pass pages are current) and `changed-tests` (the test files the diff touches or sits beside). `pytest-programs` (every program
 # compiles) joins when the build does. A smoke PASS is never a merge licence: the train's full gate on the tip is.
 [smoke]
-steps = ["build", "lib", "crate-tests", "scans", "facts", "fmt", "docs", "pytest-programs", "changed-tests"]
+steps = ["build", "lib", "crate-tests", "scans", "facts", "products", "fmt", "docs", "pytest-programs", "changed-tests"]
 
 # Every step the planner can produce is in exactly one group (a test checks).
 [groups]
-unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post", "docs", "facts"]
+unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post", "docs", "facts", "products"]
 integration = ["integration", "build-script-reruns"]
 run = ["run"]
 python = ["pytest", "pytest-programs", "changed-tests"]
