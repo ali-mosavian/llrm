@@ -417,6 +417,7 @@ fn _rereadable(
     sequence: &[Arc<Insn>],
     position: usize,
     reads: &VecDeque<i64>,
+    ordered: bool,
 ) -> bool {
     let load = &sequence[position];
     if !_loads_memory(load.what.as_ref()) || !load.delivers.is_empty() || reads.is_empty() {
@@ -427,7 +428,9 @@ fn _rereadable(
         return false;
     }
     let what = load.what.as_ref().expect("checked above");
-    let mut quiet = (name_is(what, "fild") || cell.width == 10).then_some(true);
+    // Where no trap is unmasked (not BASIC's runtime) the order of the
+    // exceptions an instruction raises is not observable.
+    let mut quiet = (!ordered || name_is(what, "fild") || cell.width == 10).then_some(true);
     let last = *reads.back().expect("checked above") as usize;
     for step in position + 1..last {
         let one = &sequence[step];
@@ -1385,6 +1388,7 @@ fn _without_dead_loads(body: &LirBody) -> LirBody {
 fn _homes(
     body: &LirBody,
     floating: &HashSet<u32>,
+    ordered: bool,
 ) -> IndexMap<u32, Arc<Insn>> {
     let (live_in, live_out) = live(body);
     let mut defined: IndexMap<u32, usize> = IndexMap::default();
@@ -1404,7 +1408,7 @@ fn _homes(
                 continue;
             }
             if live_out[&block.at].contains(&result.value) {
-                if _rereadable_across(body, block, position, result.value, &live_in) {
+                if _rereadable_across(body, block, position, result.value, &live_in, ordered) {
                     homes.insert(result.value, Arc::clone(one));
                 }
                 continue;
@@ -1420,7 +1424,7 @@ fn _homes(
             // A volatile read happens once, where it is: only its one reader,
             // right after it, may take it.
             let once = !one.volatile() || reads.iter().eq([position as i64 + 1].iter());
-            if once && _rereadable(&block.insns, position, &reads) {
+            if once && _rereadable(&block.insns, position, &reads, ordered) {
                 homes.insert(result.value, Arc::clone(one));
             }
         }
@@ -1438,6 +1442,7 @@ fn _rereadable_across(
     position: usize,
     value: u32,
     live_in: &Live,
+    ordered: bool,
 ) -> bool {
     let load = &block.insns[position];
     if !_loads_memory(load.what.as_ref()) || !load.delivers.is_empty() || load.volatile() {
@@ -1455,7 +1460,7 @@ fn _rereadable_across(
         return false;
     }
     let what = load.what.as_ref().expect("checked above");
-    if name_is(what, "fild") || cell.width == 10 {
+    if !ordered || name_is(what, "fild") || cell.width == 10 {
         return true;
     }
     let reads = |one: &Insn| one.what.as_ref().is_some_and(|what| _held_floats(&what.sources).contains(&value));
@@ -1938,7 +1943,7 @@ pub fn assigned(
     }
     let body = _aliased(&body);
     let floating = _floating_values(&body);
-    let mut homes = _homes(&body, &floating);
+    let mut homes = _homes(&body, &floating, basic_semantics);
     let stored = _stored_homes(&body, &floating);
     let stored_values: HashSet<u32> = stored.keys().copied().collect();
     homes.extend(stored);

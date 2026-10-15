@@ -1,4 +1,4 @@
-reason = "x87: a store or compare of a live value no longer copies it (fist, fcom/fcomp st(i)), and by default a float conversion stays in its register without a store and load (gcc's -fexcess-precision=fast; -fexcess-precision=standard rounds): float rows fewer instructions and bytes; jpeg_fixed bq32 -O2 +1 instruction is an integer program (layout-dependent copy path), not x87"
+reason = "a float loaded before a loop is read again from its cell where no trap is unmasked (not BASIC): d_faces-style loop invariants are memory operands of the argument cells, not fld+fstp qword before the loop; parity/qmove c: one more memory operand, one byte fewer"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -43,29 +43,29 @@ bss_bytes = 0
 
 [c.O2]
 instructions = 83
-memory_operands = 27
-code_bytes = 298
+memory_operands = 28
+code_bytes = 297
 data_bytes = 4
 bss_bytes = 0
 
 [c.Os]
 instructions = 80
-memory_operands = 27
-code_bytes = 242
+memory_operands = 28
+code_bytes = 237
 data_bytes = 4
 bss_bytes = 0
 
 [nib.O2]
-instructions = 122
-memory_operands = 39
-code_bytes = 433
+instructions = 119
+memory_operands = 37
+code_bytes = 425
 data_bytes = 16
 bss_bytes = 0
 
 [nib.Os]
-instructions = 118
-memory_operands = 39
-code_bytes = 374
+instructions = 115
+memory_operands = 37
+code_bytes = 363
 data_bytes = 16
 bss_bytes = 0
 
