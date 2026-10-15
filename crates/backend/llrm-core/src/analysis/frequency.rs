@@ -141,8 +141,8 @@ impl Frequency {
         let mut taken = IndexMap::default();
         let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
         for block in &body.blocks {
-            for to in block.succ.iter().copied().collect::<BTreeSet<_>>() {
-                taken.insert((block.at, to), body.odds.chance(block.at, &block.succ, to));
+            for (to, chance) in body.odds.chances(block.at, &block.succ) {
+                taken.insert((block.at, to), chance);
                 predecessors.entry(to).or_default().push(block.at);
             }
         }
@@ -257,8 +257,8 @@ impl Frequency {
     ) -> Self {
         let mut taken = IndexMap::default();
         for block in blocks {
-            for to in block.succ.iter().copied().collect::<BTreeSet<_>>() {
-                taken.insert((block.at, to), body.odds.chance(block.at, &block.succ, to));
+            for (to, chance) in body.odds.chances(block.at, &block.succ) {
+                taken.insert((block.at, to), chance);
             }
         }
         // A block that only jumps on says nothing about the loops, and a loop
@@ -649,6 +649,23 @@ mod tests {
         let _ = Frequency::of(&body);
         let scanned = super::SCANNED.with(|one| one.get());
         assert!(scanned <= 3 * bridges as usize, "{scanned} blocks looked at for {bridges} bridges");
+    }
+
+    /// Each edge of a dispatch read the probability of every other edge of it
+    /// (`chance` asks all the successors): N cases, N^2 reads, 3 calls of
+    /// `Frequency::of` in `lir jumps` (`cases` 1024).
+    #[test]
+    fn test_a_dispatch_of_n_cases_reads_n_probabilities_not_n_squared() {
+        let cases = 60;
+        let targets: Vec<i64> = (0..cases).map(|case| 10 + case).collect();
+        let mut blocks = vec![block(1, "jmp", Operation::Jump, targets.clone())];
+        blocks.extend(targets.iter().map(|&at| block(at, "ret", Operation::Return, vec![])));
+        let body = LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default());
+        crate::model::lir::ASKED.with(|one| one.set(0));
+        let table = Frequency::of(&body);
+        let asked = crate::model::lir::ASKED.with(|one| one.get());
+        assert!((table.block(10) - 1.0 / cases as f64).abs() < 1e-9);
+        assert!(asked <= 8 * cases as usize, "{asked} probabilities read for {cases} cases");
     }
 
     /// A table left as it was after an edge moved (block 3 reached only through
