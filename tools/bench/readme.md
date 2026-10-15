@@ -7,7 +7,9 @@ level, against `bench/NAME/expected.toml`.
     uv run --project tools python tools/bench/bench.py sieve --opt O2        # one benchmark
     uv run --project tools python tools/bench/bench.py --bless --reason "why the counts moved"
 
-Each variant is built (`-fno-inline-functions`, so the kernel stays a call), run in a real-mode emulator
+Each variant is built (BASIC and Nib with `-fno-inline-functions`, so the kernel stays a call; C with its inlining on, the
+kernel called through a volatile pointer as the m32 table does, since the flag also kept a recursive function from inlining itself),
+run in a real-mode emulator
 (`crates/target/llrm-x86-m16/bench/icount.py`, unicorn) and counted from the kernel's entry to its return, runtime calls included.
 The kernel is `bench.toml`'s `[region]`: found by name in the linker map (C, BASIC), or for Nib, which
 publishes no function, as the one function `main` calls from its own segment.
@@ -57,7 +59,8 @@ the compiler wrote (BC's for the BASIC references), never the image, a map or th
 LEDATA/LIDATA records carry in every other segment, bss the rest of those segments. The stack and debug classes
 are not counted. BC's runtime cells (`BC_DATA`, `BC_DS`, `BC_SA`) are in its object and are data. Sizes are gated
 like the counts: growth fails, a shrink fails until blessed, and the llrm/reference ratio may not worsen. They are
-of the build the counts use (`-fno-inline-functions`). BC leaves `BC_DATA` unloaded (bss) where llrm-qb stores it
+of the build the counts use, except that a C program's size is of the object with the kernel `noinline` and `main` as written, not the
+one with the pointer (18 bytes of code, 4 of data). BC leaves `BC_DATA` unloaded (bss) where llrm-qb stores it
 as zeros (data): compare data+bss.
 
 BASIC `huge` is built with `/AH` and builds, returns and prints right on all three BCs. Turbo C and C++ do not build the C `huge`
